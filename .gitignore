@@ -1,0 +1,14 @@
+# .NET
+bin/
+obj/
+*.user
+# Node / Vite / Tauri
+node_modules/
+dist/
+app/src-tauri/target/
+app/src-tauri/gen/
+# Python
+.venv/
+__pycache__/
+# Training data downloaded from Zenodo (CC BY 4.0); see model/README.md
+model/data/
