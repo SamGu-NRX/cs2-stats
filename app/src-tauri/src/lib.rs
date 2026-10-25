@@ -358,11 +358,63 @@ async fn read_valve(path: String) -> Result<tauri::ipc::Response, String> {
     read_valve_in(&valve_dir()?, &path).map(tauri::ipc::Response::new)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ValveImport {
     code: Option<i32>,
     summary: Option<serde_json::Value>,
     error: Option<String>,
+}
+
+/// The importer's state, for `valve_import_state`: a page that did not start the running import (one
+/// opened or reloaded since) shows it from this.
+#[derive(Serialize, Clone, Default)]
+struct ImportState {
+    running: bool,
+    /// the running (or last) import's latest progress line
+    at: Option<serde_json::Value>,
+    /// the last import's end
+    last: Option<ValveImport>,
+}
+
+/// Admits one import at a time (review of #29: a second press started a second importer over the same
+/// folder) and keeps its state.
+struct ImportGate(std::sync::Mutex<ImportState>);
+
+impl ImportGate {
+    const fn new() -> Self {
+        ImportGate(std::sync::Mutex::new(ImportState { running: false, at: None, last: None }))
+    }
+    fn state(&self) -> std::sync::MutexGuard<'_, ImportState> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    /// Marks an import as running; refuses while one is.
+    fn begin(&self) -> Result<(), String> {
+        let mut s = self.state();
+        if s.running {
+            return Err("an import is already running".into());
+        }
+        s.running = true;
+        s.at = None;
+        Ok(())
+    }
+    fn progress(&self, ev: serde_json::Value) {
+        self.state().at = Some(ev);
+    }
+    /// Ends the running import with `last` (None when it could not report one).
+    fn end(&self, last: Option<ValveImport>) {
+        let mut s = self.state();
+        s.running = false;
+        if last.is_some() {
+            s.last = last;
+        }
+    }
+}
+
+static IMPORT: ImportGate = ImportGate::new();
+
+#[tauri::command]
+fn valve_import_state() -> ImportState {
+    IMPORT.state().clone()
 }
 
 /// Runs extractor/valve_import.py over the CS2 replays folder into the Valve folder. Until the extractor is
@@ -387,7 +439,8 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
         return Err(format!("no Python at {}; create the extractor's .venv or set CS2_EXTRACTOR_PYTHON", python.display()));
     }
     let out = valve_dir()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    IMPORT.begin()?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(&python);
         cmd.arg("-I").arg(&script).arg("--progress").arg("--out").arg(&out).current_dir(&dir);
         if let Some(m) = std::env::var_os("CS2_MAPDATA") {
@@ -405,6 +458,7 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
             let line = line.map_err(|e| e.to_string())?;
             match serde_json::from_str::<serde_json::Value>(&line) {
                 Ok(ev) if ev.get("event").is_some() => {
+                    IMPORT.progress(ev.clone());
                     let _ = app.emit("valve-import-progress", ev);
                 }
                 _ if !line.trim().is_empty() => {
@@ -423,13 +477,16 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
         Ok(ValveImport { code, summary, error })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    IMPORT.end(result.as_ref().ok().cloned());
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_matches, read_match, import_match, read_pack, list_valve, read_valve, import_valve])
+        .invoke_handler(tauri::generate_handler![list_matches, read_match, import_match, read_pack, list_valve, read_valve, import_valve, valve_import_state])
         .run(tauri::generate_context!())
         .expect("error while running CS2 Stats");
 }
@@ -557,6 +614,23 @@ mod tests {
         assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/rounds.parquet")).is_err());
         fs::write(s.0.join("match730_a").join(V1).join("match.parquet"), b"abcd").unwrap();
         assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/match.parquet")).is_err());
+    }
+
+    #[test]
+    fn admits_one_import_at_a_time_and_keeps_its_state_for_a_later_page() {
+        // fails if a second press starts a second importer over the same folder (review of #29), or a page
+        // opened during an import cannot see it
+        let gate = ImportGate::new();
+        gate.begin().unwrap();
+        assert!(gate.begin().is_err());
+        gate.progress(serde_json::json!({"event": "start", "i": 2, "n": 6}));
+        let seen = gate.state().clone();
+        assert!(seen.running && seen.at.as_ref().unwrap()["i"] == 2);
+        gate.end(Some(ValveImport { code: Some(0), summary: None, error: None }));
+        let done = gate.state().clone();
+        assert!(!done.running && done.last.unwrap().code == Some(0));
+        gate.begin().unwrap();
+        assert!(gate.state().at.is_none());
     }
 
     #[test]
