@@ -1462,6 +1462,28 @@ def cross_check_awpy(ours: dict, theirs: dict) -> list[dict]:
 STAGES = [("awpy", stage_awpy), ("demoparser2", stage_demoparser2)]
 
 
+def recover_output(out: Path) -> None:
+    """Finish or undo a replace_dir() that a crash interrupted, so out is a whole map again."""
+    aside = out.with_name(out.name + ".old")
+    if aside.exists():
+        if out.exists():
+            shutil.rmtree(aside)  # the swap finished; only deleting the old copy was interrupted
+        else:
+            aside.rename(out)  # the crash came between the two renames: put the old map back
+
+
+def replace_dir(new: Path, out: Path) -> None:
+    """Swap a finished output folder in: the old map is renamed aside, the new one renamed in, and only
+    then is the old copy deleted. A crash at any step leaves a valid map, or one recover_output() restores."""
+    recover_output(out)
+    aside = out.with_name(out.name + ".old")
+    if out.exists():
+        out.rename(aside)
+    new.rename(out)
+    if aside.exists():
+        shutil.rmtree(aside)
+
+
 def file_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -1665,6 +1687,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
     tmp = out_dir.with_name(out_dir.name + ".tmp")
+    recover_output(out_dir)
     try:
         for name, fn in STAGES:
             with Timer(ctx, f"stage_{name}"):
@@ -1738,9 +1761,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
             # Read back every file so a truncated write cannot pass.
             for p in tmp.rglob("*.parquet"):
                 pl.read_parquet_schema(p)
-            if out_dir.exists():
-                shutil.rmtree(out_dir)
-            tmp.rename(out_dir)
+            replace_dir(tmp, out_dir)
         result["output_bytes"] = sum(result["bytes"].values())
         result["ok"] = True
     except Exception as e:  # noqa: BLE001 - every failure is reported, the RAR is kept

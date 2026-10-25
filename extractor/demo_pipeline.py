@@ -898,6 +898,8 @@ def main(argv=None) -> int:
     pipeline.sweep_work(force=True)
     for d in DEMOS_DIR.glob("*/*.tmp"):
         safe_rmtree(d, ignore_errors=True)
+    for d in DEMOS_DIR.glob("*/*.old"):  # a map replacement a crash interrupted
+        extract.recover_output(d.with_name(d.name.removesuffix(".old")))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")

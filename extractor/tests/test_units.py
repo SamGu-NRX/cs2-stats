@@ -831,3 +831,46 @@ def test_an_archive_too_big_to_ever_fit_fails_with_a_reason(tmp_path, monkeypatc
     p.archives[a.id] = a
     p.start_extractions()
     assert a.id not in p.archives and "larger than the" in p.ledger["u"]["reason"]
+
+
+
+def _map(d, content):
+    d.mkdir(parents=True)
+    (d / "match.parquet").write_text(content)
+
+
+def test_replacing_a_map_swaps_it_in_and_leaves_nothing_behind(tmp_path):
+    out, new = tmp_path / "m1", tmp_path / "m1.tmp"
+    _map(out, "old")
+    _map(new, "new")
+    ex.replace_dir(new, out)
+    assert (out / "match.parquet").read_text() == "new" and sorted(p.name for p in tmp_path.iterdir()) == ["m1"]
+
+
+def test_a_crash_between_the_renames_leaves_the_old_map_recoverable(tmp_path, monkeypatch):
+    # The old code deleted the map before renaming the new one in; a crash there left no map at all.
+    out, new = tmp_path / "m1", tmp_path / "m1.tmp"
+    _map(out, "old")
+    _map(new, "new")
+    real_rename, calls = Path.rename, []
+
+    def crash_on_second(self, target):
+        calls.append(self)
+        if len(calls) == 2:
+            raise OSError("power cut")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", crash_on_second)
+    with pytest.raises(OSError):
+        ex.replace_dir(new, out)
+    monkeypatch.setattr(Path, "rename", real_rename)
+    ex.recover_output(out)
+    assert (out / "match.parquet").read_text() == "old"
+
+
+def test_a_crash_after_the_swap_keeps_the_new_map(tmp_path):
+    out = tmp_path / "m1"
+    _map(out, "new")
+    _map(tmp_path / "m1.old", "old")  # the swap finished; only deleting the old copy was interrupted
+    ex.recover_output(out)
+    assert (out / "match.parquet").read_text() == "new" and not (tmp_path / "m1.old").exists()
