@@ -6,6 +6,7 @@ import path from "node:path";
 import { CS2RB } from "../model-params";
 import { describe, expect, it } from "vitest";
 import type { SprayFact } from "../aim";
+import { ON_SCREEN_NOTE } from "../facts";
 import { derive } from "../derive";
 import { rollup } from "../rollup";
 import { pluginToTables } from "./adapter";
@@ -146,12 +147,17 @@ describe("plugin sprays", () => {
     expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(0);
   });
 
-  it("reads a mixed file's line of sight up to the failure and the spotted mask after it", () => {
-    // fails if a "mixed" file (line of sight turned off mid-map) is read from the mask throughout, which
-    // drops bullets the line of sight saw
+  it("reads a mixed file's spotted mask for the whole match and says so", () => {
+    // fails if a "mixed" file (line of sight failed partway) reads line of sight up to a guessed failure
+    // point: the LOS rows say visible from 1990 to 2015, the mask only at the fourth bullet
     const shots = SPRAYS.slice(0, 4);
     const m = pluginMatch(shots, { visTarget: [0, 0, 0, 1], env: { visSource: "mixed", losError: "trace returned no result" }, los: [[1990, 1], [2015, 0]] });
-    expect(sprays(m).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
+    const f = derive(pluginToTables(m), CS2RB);
+    const read = (sp: SprayFact[]) => sp.map((x) => [x.bullets, x.dp.length]);
+    const maskOnly = read(sprays(pluginMatch(shots, { visTarget: [0, 0, 0, 1] })));
+    expect(maskOnly).not.toEqual([[4, 3]]);
+    expect(read(f.aim.filter((x): x is SprayFact => x.k === "spray"))).toEqual(maskOnly);
+    expect(ON_SCREEN_NOTE[f.match.inputs.onScreen!]).toBe("line of sight lost partway; using the game's spotted flags");
   });
 
   it("counts a bullet at the kill tick as on screen whether the death's hidden row is at the kill tick or the next", () => {
