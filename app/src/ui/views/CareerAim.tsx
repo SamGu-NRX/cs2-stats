@@ -9,15 +9,21 @@ import { useData } from "../data/provider";
 import { AimIcon } from "../icons/ui";
 import { fmtMatchDay, plural } from "../lib/format";
 import { BENCH } from "../lib/verdict";
+import { pageHref } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
 import { Delta, Empty, NeedsDemo, SectionAside } from "./shared";
 
-/** Aim metrics drawn per match; bench is a reference line on the chart. */
+/**
+ * Aim metrics drawn per match; bench is a reference line on the chart. Spray path vs pros is an
+ * identity metric (a comparison with pros, not a grade), so its change is shown without a verdict.
+ */
 const TRENDS: { id: string; bench?: number }[] = [
   { id: "accuracy", bench: BENCH.acc.ref },
+  { id: "headAccuracy" },
   { id: "firstBulletAccuracy" },
+  { id: "sprayDeviation" },
   { id: "counterStrafe" },
 ];
 
@@ -38,7 +44,7 @@ export default function CareerAim() {
       <BarContent crumbs={[{ label: "Career aim" }]} tools={<><MapFilter /><TimeFilter /></>} />
       <div className="view__in careeraim">
         {!query ? (
-          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} /></Card>
+          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="aim-head">
@@ -47,6 +53,7 @@ export default function CareerAim() {
                 <p className="meta">{plural(shots, "shot")} with guns. Converted logs are left out because they have no shots.</p>
               </div>
               <div className="toolbar__end">
+                <SectionAside label="Accuracy" value={fmtMetric("accuracy", career ? career.v.accuracy : null)} color="var(--cream)" />
                 <SectionAside label="Visibility" value={visibility ? "Measured" : "Not in these files"} color={visibility ? "var(--good-text)" : "var(--ink2)"} />
               </div>
             </div>
@@ -56,21 +63,26 @@ export default function CareerAim() {
                 const pts = oldestFirst.map((s, i) => ({ key: s.file, value: series[k][i], label: fmtMatchDay(s.match) }));
                 const tr = trends?.[k] ?? null;
                 const fmt = (v: number) => fmtMetric(t.id, v);
+                const graded = m.kind === "performance";
                 const better = tr && (m.lowerIsBetter ? tr.slope < 0 : tr.slope > 0);
+                const word = !tr || tr.slope === 0 ? "Steady" : !graded ? (tr.slope > 0 ? "Rising" : "Falling") : better ? "Improving" : "Slipping";
+                const changeTip = tr ? `Change per match over ${tr.n} matches (least-squares slope)` : undefined;
                 return (
                   <Card key={t.id} title={m.label} aside={
                     <span className="trend-aside">
-                      {tr && <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={m.lowerIsBetter} fmt={fmt} title={`Change per match over ${tr.n} matches (least-squares slope)`} />}
+                      {tr && (graded
+                        ? <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={m.lowerIsBetter} fmt={fmt} title={changeTip} />
+                        : <span className="delta faint" data-tip={changeTip}>{tr.slope > 0 ? "+" : tr.slope < 0 ? "−" : ""}{fmt(Math.abs(tr.slope))}</span>)}
                       <b className="num cream" data-tip={m.def}>{fmtMetric(t.id, career ? career.v[t.id] : null)}</b>
                     </span>
                   }>
                     <TrendLine points={pts} fmt={fmt} height={120} bench={t.bench} benchLabel="ref" lowerIsBetter={m.lowerIsBetter} />
-                    <p className="meta trend-note">{!trends ? "" : tr === null ? "Three recorded matches with a value are needed to show a trend." : `${tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}: ${fmt(Math.abs(tr.slope))} per match over ${tr.n} matches.`}</p>
+                    <p className="meta trend-note">{!trends ? "" : tr === null ? "Three recorded matches with a value are needed to show a trend." : `${word}: ${fmt(Math.abs(tr.slope))} per match over ${tr.n} matches.`}</p>
                   </Card>
                 );
               })}
             </div>
-            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} statuses={list.map((s) => s.match.visibility)} />
           </>
         )}
       </div>
