@@ -133,6 +133,7 @@
 .tile__top .verdict { font-size: 10px; }
 .tile__v { font: 800 28px/1.05 var(--f); letter-spacing: -0.02em; color: var(--cream); white-space: nowrap; }
 .tile__foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; min-height: 28px; }
+.tile__delta { font-size: 12px; }
 .tile .spark { width: 120px; height: 28px; }
 .tile__sub { font-size: 12px; color: var(--ink3); }
 
