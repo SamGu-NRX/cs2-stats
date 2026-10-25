@@ -39,6 +39,12 @@ export interface MatchInfo {
    * covered share of a match is not that match's rating.
    */
   roundsPlayed: number;
+  /**
+   * round numbers the source holds only as totals (a converted log's first rounds, rounds the plugin
+   * marked partial), from match.extra "totals_only_rounds": played, but absent from rounds and every
+   * rate. Empty for demos.
+   */
+  totalsOnly: number[];
   /** when the match began, an ISO timestamp from match.extra "started_at"; null when the source has no clock time */
   startedAt: string | null;
   /** seconds from the first round's start to the last round's end (match.extra "duration_s" when the source knows it) */

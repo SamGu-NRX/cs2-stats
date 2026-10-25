@@ -144,6 +144,8 @@ export function pluginToTables(m: MatchFile): MatchTables {
       // files before plugin 1.0.0 have no throw log; throws are rebuilt from detonations (facts.ts SourceInputs.throws)
       ...(m.throws ? {} : { throws: "rebuilt" }),
       on_screen: onScreenSource(m),
+      // rounds the file holds only as totals, left out of the tables (MatchInfo.totalsOnly)
+      totals_only_rounds: m.rounds.winSide.flatMap((_, ri) => (covered(ri) ? [] : [ri + 1])),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));

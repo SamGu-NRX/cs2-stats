@@ -190,3 +190,21 @@ it("scores a match across the half-time side swap from the human's side each rou
   const usTeam = f.players[f.players.findIndex((p) => p.id === HUMAN)].team!;
   expect([f.match.score[usTeam], f.match.score[1 - usTeam], f.match.complete]).toEqual([11, 13, true]);
 });
+
+it("names the rounds a converted log holds only as totals", () => {
+  // fails if those rounds are dropped without a trace, so the round grid cannot show them: rounds 1-3
+  // come before firstFullRound and round 10 is marked partial
+  const base = pluginMatch([]);
+  const won = Array(12).fill(3) as (2 | 3)[];
+  const r = base.rounds;
+  const m: MatchFile = {
+    ...base, firstFullRound: 3, recon: { ...base.recon, partial: [9] },
+    rounds: {
+      ...r, winSide: won, how: won.map(() => "elim"), freezeTick: won.map((_, i) => 1000 + i * 5000), durTicks: won.map(() => 4000),
+      bombSite: won.map(() => null), plantTick: won.map(() => null), planter: won.map(() => null), defuser: won.map(() => null),
+      ctSetup: won.map(() => null), score: won.map(() => [0, 0] as [number, number]), side: won.map((): (2 | 3)[] => [3, 2]), equip: won.map(() => [4000, 4000]), money: won.map(() => [800, 800]),
+    },
+  };
+  const f = derive(pluginToTables(m), CS2RB);
+  expect([f.match.totalsOnly, f.rounds.map((x) => x.number)]).toEqual([[1, 2, 3, 10], [4, 5, 6, 7, 8, 9, 11, 12]]);
+});
