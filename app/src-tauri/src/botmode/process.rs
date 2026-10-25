@@ -107,6 +107,22 @@ pub fn file_time_now() -> u64 {
     imp::file_time_now()
 }
 
+/// A file's identity: its volume serial number and file index. Two paths with the same
+/// identity are the same file, however they are spelled (case, `\\?\`, 8.3 names, links).
+pub fn file_id(path: &std::path::Path) -> Result<(u32, u64), String> {
+    imp::file_id(path)
+}
+
+/// Whether the process with this id and creation time is still running.
+pub fn alive(pid: u32, created: u64) -> bool {
+    imp::alive(pid, created)
+}
+
+/// This process's id and creation time.
+pub fn this_process() -> Listed {
+    imp::this_process()
+}
+
 /// One process opened once, with query-limited, terminate and synchronize access. Reading its
 /// details and ending it all go through this one handle, never a fresh open by id.
 pub struct OpenProcess(imp::Handle);
@@ -286,6 +302,51 @@ mod imp {
         }
         Ok(())
     }
+
+    pub fn file_id(path: &std::path::Path) -> Result<(u32, u64), String> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_READ_ATTRIBUTES};
+        const SHARE_ALL: u32 = 7;
+        let f = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(SHARE_ALL)
+            .open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // SAFETY: zeroed plain-data struct filled by the call for a handle `f` owns.
+        unsafe {
+            let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+            if GetFileInformationByHandle(f.as_raw_handle() as HANDLE, &mut info) == 0 {
+                return Err(format!("{}: {}", path.display(), std::io::Error::last_os_error()));
+            }
+            Ok((info.dwVolumeSerialNumber, (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)))
+        }
+    }
+
+    pub fn alive(pid: u32, created: u64) -> bool {
+        use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+        const STILL_ACTIVE: u32 = 259;
+        // SAFETY: the handle is closed by Handle's Drop.
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if h.is_null() {
+            return false;
+        }
+        let h = Handle(h);
+        let mut code = 0u32;
+        // SAFETY: writes one u32 for a handle this function owns.
+        let running = unsafe { GetExitCodeProcess(h.0, &mut code) } != 0 && code == STILL_ACTIVE;
+        running && creation_time(&h).is_ok_and(|t| t == created)
+    }
+
+    pub fn this_process() -> super::Listed {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
+        // SAFETY: the pseudo-handle needs no closing; it is wrapped only to read times, and
+        // forgotten so Drop does not close it.
+        let pseudo = Handle(unsafe { GetCurrentProcess() });
+        let created = creation_time(&pseudo).unwrap_or(0);
+        std::mem::forget(pseudo);
+        super::Listed { pid: unsafe { GetCurrentProcessId() }, created }
+    }
 }
 
 #[cfg(not(windows))]
@@ -314,6 +375,15 @@ mod imp {
     }
     pub fn terminate(_h: &Handle) -> Result<(), String> {
         unsupported()
+    }
+    pub fn file_id(_p: &std::path::Path) -> Result<(u32, u64), String> {
+        unsupported()
+    }
+    pub fn alive(_pid: u32, _created: u64) -> bool {
+        false
+    }
+    pub fn this_process() -> super::Listed {
+        super::Listed { pid: std::process::id(), created: 0 }
     }
 }
 

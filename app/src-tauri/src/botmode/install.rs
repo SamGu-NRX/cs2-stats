@@ -4,8 +4,9 @@
 //! out, and copy the remaining files into `game\csgo`. Install does that, with four
 //! differences, each for a reason given where it happens:
 //! - The Panel executable (any `.exe` at the zip's root) is not installed.
-//! - The root `gameinfo.gi` is not copied; its two search paths are merged into the game's
-//!   own file instead (see `gameinfo.rs`).
+//! - The root `gameinfo.gi` is not copied, and install does not turn Bot Mode on: a launched
+//!   session adds the two search paths to the game's own file and removes them when CS2 exits
+//!   (see `gameinfo.rs` and `session.rs`).
 //! - Protected user files are kept or merged (see `paths::Protection`).
 //! - The `my_bot_*_config.cfg` files are the release's copies with the user's own convar
 //!   values put back. The Panel's Rules page, and the user, add lines to them
@@ -237,7 +238,7 @@ pub fn index_zip(zip: &Path, tag: &str, asset: &str, sha256: &str, source: Sourc
             continue;
         }
         if rel.eq_ignore_ascii_case("gameinfo.gi") {
-            skipped.push(Skipped { path: rel, reason: "not copied; its two Bot Mode search paths are merged into the game's gameinfo.gi".into() });
+            skipped.push(Skipped { path: rel, reason: "not copied; a launched Bot Mode session adds its two search paths to the game's gameinfo.gi and removes them when CS2 exits".into() });
             continue;
         }
         let e = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -273,7 +274,6 @@ pub struct InstallSummary {
     pub merged: Vec<String>,
     /// Mod cfgs installed with the user's own convar values kept.
     pub user_values_kept: Vec<String>,
-    pub bot_mode_enabled: bool,
     pub difficulty_kept: Option<Difficulty>,
     /// Overlays whose files the release replaced; `botmode overlay` puts them back.
     pub overlays_replaced: Vec<String>,
@@ -366,13 +366,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
             installed.insert(rel.clone(), digest.clone());
         }
 
-        let gi = layout.confined("gameinfo.gi")?;
-        let text = std::fs::read_to_string(&gi).map_err(|e| format!("{}: {e}", gi.display()))?;
-        let on = gameinfo::enable(&text)?;
-        let bot_mode_enabled = on != text;
-        if bot_mode_enabled {
-            cs.put_bytes("gameinfo.gi", on.as_bytes())?;
-        }
+        // gameinfo.gi is left as it is: Bot Mode is on only during a launched session.
 
         let mut st = state::load(layout)?;
         let overlays_replaced: Vec<String> = st
@@ -401,7 +395,6 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
             kept,
             merged,
             user_values_kept,
-            bot_mode_enabled,
             difficulty_kept: level,
             overlays_replaced,
         })

@@ -174,6 +174,11 @@ async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Bot Mode left on by a session that lost its supervisor is dealt with at once.
+        .setup(|app| {
+            botmode::commands::on_app_start(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_matches,
             read_match,
@@ -187,7 +192,7 @@ pub fn run() {
             botmode::commands::botmode_rollback,
             botmode::commands::botmode_backups,
             botmode::commands::botmode_launch,
-            botmode::commands::botmode_launch_check,
+            botmode::commands::botmode_session,
             botmode::commands::botmode_set_difficulty,
             botmode::commands::botmode_set_cosmetics,
             botmode::commands::botmode_set_launch_options,

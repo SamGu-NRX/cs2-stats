@@ -20,6 +20,7 @@ pub mod hash;
 pub mod install;
 pub mod launch;
 pub mod monitor;
+pub mod session;
 pub mod overlay;
 pub mod paths;
 pub mod process;

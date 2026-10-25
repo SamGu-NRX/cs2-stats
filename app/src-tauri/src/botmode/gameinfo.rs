@@ -111,6 +111,28 @@ pub fn enable(text: &str) -> Result<String, String> {
     Ok(joined)
 }
 
+/// Returns `text` without the bot search paths, keeping every other line and the file's line
+/// endings. The mod's files stay on disk; without these lines CS2 does not load them.
+pub fn disable(text: &str) -> Result<String, String> {
+    let block = search_paths(text)?;
+    let drop: Vec<usize> = block
+        .entries
+        .iter()
+        .filter(|(_, k, v)| BOT_SEARCH_PATHS.iter().any(|p| is_game(k, v, p)))
+        .map(|(i, _, _)| *i)
+        .collect();
+    if drop.is_empty() {
+        return Ok(text.to_string());
+    }
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let kept: Vec<&str> = text.lines().enumerate().filter(|(i, _)| !drop.contains(i)).map(|(_, l)| l).collect();
+    let mut joined = kept.join(eol);
+    if text.ends_with('\n') {
+        joined.push_str(eol);
+    }
+    Ok(joined)
+}
+
 /// The `Game` search paths `with_bots` has and `online` lacks. Install checks that a
 /// release's two shipped copies differ by exactly [`BOT_SEARCH_PATHS`].
 pub fn added_search_paths(online: &str, with_bots: &str) -> Result<Vec<String>, String> {
@@ -140,6 +162,8 @@ mod tests {
         assert_eq!(kept, ONLINE_SAMPLE.split("\r\n").collect::<Vec<_>>());
         assert_eq!(added_search_paths(ONLINE_SAMPLE, &on).unwrap(), ["Game csgo/overrides/botprofile.vpk", "Game csgo/addons/metamod"]);
         assert_eq!(enable(&on).unwrap(), on, "enabling twice changes nothing");
+        assert_eq!(disable(&on).unwrap(), ONLINE_SAMPLE, "disabling restores the file exactly");
+        assert_eq!(disable(ONLINE_SAMPLE).unwrap(), ONLINE_SAMPLE);
     }
 
     #[test]

@@ -7,7 +7,9 @@ use super::gameinfo;
 use super::hash;
 use super::install;
 use super::paths::{self, Layout, Protection};
-use super::process::{Phase, ProcessProbe};
+use super::monitor::System;
+use super::process::{is_secure_token, Phase, ProcessProbe};
+use super::session;
 use super::settings::{self, CosmeticsState};
 use super::state::{self, OverlayRecord, SourceLink};
 use super::steam::Cs2Install;
@@ -76,6 +78,10 @@ pub struct Status {
     pub build_id: Option<String>,
     pub cs2_running: Option<bool>,
     pub bot_mode: Option<bool>,
+    /// Whether a live Bot Mode session (the app or the CLI) is watching CS2.
+    pub supervised: bool,
+    /// [`session::UNPROTECTED`], for the Bot Mode view.
+    pub notice: &'static str,
     pub release: ReleaseStatus,
     pub difficulty: Option<settings::Difficulty>,
     pub cosmetics: CosmeticsState,
@@ -136,7 +142,13 @@ fn classify(
 }
 
 /// Builds the report. Reads only; writes nothing anywhere.
-pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Install>, steam_launch_options: Option<String>) -> Result<Status, String> {
+pub fn status(
+    layout: &Layout,
+    probe: &dyn ProcessProbe,
+    sys: &dyn System,
+    install: Option<&Cs2Install>,
+    steam_launch_options: Option<String>,
+) -> Result<Status, String> {
     let mut warnings = Vec::new();
     let cs2_running = match probe.cs2_running(Phase::Status) {
         Ok(r) => Some(r),
@@ -214,11 +226,16 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
         .map(|n| classify(n, present.get(n), reference.as_ref(), &st.overlays))
         .collect();
 
-    let steam_has_insecure = steam_launch_options
-        .as_deref()
-        .is_some_and(|o| o.split_whitespace().any(|a| a.eq_ignore_ascii_case("-insecure")));
-    if bot_mode == Some(true) && !steam_has_insecure {
-        warnings.push("Bot Mode is on in gameinfo.gi, but CS2's launch options in Steam lack -insecure: starting the game from Steam would load the mod with VAC on. Start it with `botmode launch`.".into());
+    // Safe only with -insecure and no token that turns VAC back on (`-insecure -secure` is not).
+    let steam_tokens = steam_launch_options.as_deref().and_then(|o| super::launch::split(o).ok()).unwrap_or_default();
+    let steam_safe = steam_tokens.iter().any(|a| a.eq_ignore_ascii_case("-insecure")) && !steam_tokens.iter().any(|a| is_secure_token(a));
+    let supervised = session::supervised(layout, sys);
+    if bot_mode == Some(true) && !supervised {
+        warnings.push(format!(
+            "Bot Mode is on in gameinfo.gi with no session watching CS2{}. The next Bot Mode command or app start turns it off. {}",
+            if steam_safe { "" } else { ", and CS2's launch options in Steam would start it with VAC on" },
+            session::UNPROTECTED
+        ));
     }
     let backups = changes::list(layout)?;
     for m in &backups {
@@ -233,6 +250,8 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
         build_id: install.and_then(|i| i.build_id.clone()),
         cs2_running,
         bot_mode,
+        supervised,
+        notice: session::UNPROTECTED,
         release,
         difficulty: settings::current_difficulty(&layout.csgo)?,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
