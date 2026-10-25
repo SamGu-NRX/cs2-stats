@@ -138,6 +138,7 @@ def rows(root: Path) -> list[dict]:
             continue
         if not data.get("roundHistory"):
             continue
+        counts = round_history_side_counts(data, path.stem)
         if len(data.get("performance", {}).get("rounds", {})) > 24:
             continue
         try:
@@ -145,7 +146,6 @@ def rows(root: Path) -> list[dict]:
             total, ct, t, _ = side_tables(data)
         except (KeyError, ValueError):
             continue
-        counts = round_history_side_counts(data, path.stem)
         for team, board in enumerate(total):
             side_rows = {
                 "ct": {str(row["pid"]): row for row in ct[team]["rows"]},
