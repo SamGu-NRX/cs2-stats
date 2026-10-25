@@ -4,7 +4,7 @@
 
 use super::changes::{self, Meta, RollbackReport};
 use super::install::{self, InstallReport, ReleaseIndex};
-use super::launch::{self, LaunchPlan};
+use super::launch::{self, LaunchReport};
 use super::overlay::{self, OverlayReport};
 use super::process::SystemProbe;
 use super::settings::{self, AppSettings, Cosmetics, Difficulty};
@@ -74,7 +74,7 @@ pub async fn botmode_backups(game: Option<String>) -> Result<Vec<Meta>, String> 
 }
 
 #[tauri::command]
-pub async fn botmode_launch(game: Option<String>) -> Result<LaunchPlan, String> {
+pub async fn botmode_launch(game: Option<String>) -> Result<LaunchReport, String> {
     blocking(game, |ctx| {
         launch::launch(&ctx.layout, &SystemProbe, &ctx.steam_config()?)
     })

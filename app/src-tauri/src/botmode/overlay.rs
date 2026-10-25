@@ -18,7 +18,7 @@ use super::github;
 use super::hash;
 use super::install::UnpackBudget;
 use super::paths::{self, Layout, Protection};
-use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use super::state::{self, OverlayRecord, SourceLink};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -298,7 +298,7 @@ pub struct OverlayReport {
 
 /// Applies every entry of the manifest at `manifest_path`, as one change.
 pub fn apply(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path) -> Result<OverlayReport, String> {
-    ensure_cs2_closed(probe)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let manifest = Manifest::load(manifest_path)?;
     let resolved = manifest.entries.iter().map(|e| resolve(layout, e)).collect::<Result<Vec<_>, _>>()?;
@@ -338,7 +338,7 @@ pub fn apply(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path) ->
 
 /// Writes the example manifest to `path`, which must be inside the app's Bot Mode folder.
 /// Takes the operation lock, and creates the file new: the content goes to a synced temporary
-/// file that is then hard-linked into place, which fails rather than replace an existing file.
+/// file that is then renamed into place without replacing, which fails if the file exists.
 pub fn init_manifest(layout: &Layout, path: &Path) -> Result<(), String> {
     Manifest::parse(EXAMPLE)?;
     let _lock = OpLock::acquire(layout)?;
@@ -354,9 +354,11 @@ pub fn init_manifest(layout: &Layout, path: &Path) -> Result<(), String> {
     std::fs::File::create(&tmp)
         .and_then(|mut f| std::io::Write::write_all(&mut f, EXAMPLE.as_bytes()).and_then(|_| f.sync_all()))
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
-    let linked = std::fs::hard_link(&tmp, &target);
-    let _ = std::fs::remove_file(&tmp);
-    linked.map_err(|e| match e.kind() {
+    let moved = paths::rename_no_replace(&tmp, &target);
+    if moved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    moved.map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => format!("{} already exists", target.display()),
         _ => format!("{}: {e}", target.display()),
     })?;

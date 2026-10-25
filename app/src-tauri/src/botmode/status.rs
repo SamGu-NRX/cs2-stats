@@ -7,7 +7,7 @@ use super::gameinfo;
 use super::hash;
 use super::install;
 use super::paths::{self, Layout, Protection};
-use super::process::ProcessProbe;
+use super::process::{Phase, ProcessProbe};
 use super::settings::{self, CosmeticsState};
 use super::state::{self, OverlayRecord, SourceLink};
 use super::steam::Cs2Install;
@@ -138,7 +138,7 @@ fn classify(
 /// Builds the report. Reads only; writes nothing anywhere.
 pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Install>, steam_launch_options: Option<String>) -> Result<Status, String> {
     let mut warnings = Vec::new();
-    let cs2_running = match probe.cs2_running() {
+    let cs2_running = match probe.cs2_running(Phase::Status) {
         Ok(r) => Some(r),
         Err(e) => {
             warnings.push(format!("Could not check whether CS2 is running: {e}."));
@@ -164,7 +164,11 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
         ));
     }
     let st = state::load(layout)?;
-    let present = components::scan(&layout.csgo)?;
+    let scan = components::scan(&layout.csgo)?;
+    for link in &scan.links {
+        warnings.push(format!("{link} is a junction or symbolic link; Bot Mode does not read or write through it, so its files are not shown."));
+    }
+    let present = scan.components;
     let all_present: BTreeMap<&String, &String> = present.values().flat_map(|m| m.iter()).collect();
 
     let (reference, release) = match &st.official {
@@ -216,6 +220,12 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
     if bot_mode == Some(true) && !steam_has_insecure {
         warnings.push("Bot Mode is on in gameinfo.gi, but CS2's launch options in Steam lack -insecure: starting the game from Steam would load the mod with VAC on. Start it with `botmode launch`.".into());
     }
+    let backups = changes::list(layout)?;
+    for m in &backups {
+        for w in &m.warnings {
+            warnings.push(format!("Change {}: {w}.", m.id));
+        }
+    }
     let app = settings::load_app(layout)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),
@@ -229,9 +239,9 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
         steam_launch_options,
         launch_options: app.launch_options,
         components: comps,
-        protected: components::protected(&layout.csgo)?,
+        protected: scan.protected,
         overlays: st.overlays,
-        backups: changes::list(layout)?,
+        backups,
         unfinished,
         warnings,
     })

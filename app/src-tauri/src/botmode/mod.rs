@@ -40,13 +40,16 @@ use std::path::PathBuf;
 pub struct Ctx {
     pub layout: Layout,
     pub install: Option<steam::Cs2Install>,
+    /// Why Steam discovery failed, when it did, for the launch refusal.
+    pub discovery_error: Option<String>,
 }
 
 /// Which game folder to use.
 pub enum Game {
     /// Found through Steam.
     Steam,
-    /// Named directly. It must pass the same identity check as a folder found through Steam.
+    /// Named directly. It must be the same folder as the CS2 install Steam reports (a machine
+    /// can have several Steam libraries, and only that one is the game Steam will start).
     Folder(PathBuf),
     /// Named directly, without the `...\steamapps\common\Counter-Strike Global Offensive`
     /// identity check, to run the CLI against a scratch copy. Debug builds only; release builds
@@ -61,34 +64,43 @@ impl Ctx {
             Some(d) => d,
             None => paths::default_data_dir()?,
         };
-        // A named folder is checked before Steam is searched.
-        let found = || steam::steam_root().and_then(|s| steam::find_cs2(&s));
-        let (csgo, install) = match game {
+        let found = steam::steam_root().and_then(|s| steam::find_cs2(&s)).map_err(|e| {
+            format!(
+                "{e}. Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged"
+            )
+        });
+        let (csgo, install, discovery_error) = match game {
             Game::Steam => {
-                let i = found()?;
-                (i.csgo.clone(), Some(i))
+                let i = found?;
+                (i.csgo.clone(), Some(i), None)
             }
             Game::Folder(g) => {
-                steam::check_game_folder(&g)?;
-                (g, found().ok())
+                let i = same_install(&g, found)?;
+                (g, Some(i), None)
             }
             #[cfg(debug_assertions)]
             Game::UncheckedForTesting(g) => {
                 if !g.join("gameinfo.gi").is_file() {
                     return Err(format!("{}: no gameinfo.gi", g.display()));
                 }
-                (g, found().ok())
+                match found {
+                    Ok(i) => (g, Some(i), None),
+                    Err(e) => (g, None, Some(e)),
+                }
             }
         };
-        Ok(Ctx { layout: Layout { csgo, data }, install })
+        Ok(Ctx { layout: Layout { csgo, data }, install, discovery_error })
     }
 
-    /// Steam's folder and the file holding CS2's launch options. Launch needs both; with no
-    /// Steam install found, or no known owner, it refuses.
+    /// Steam's folder and the file holding CS2's launch options, both from the same app
+    /// manifest as the game folder. Launch needs them; without them it refuses.
     pub fn steam_config(&self) -> Result<steam::SteamConfig, String> {
-        let i = self.install.as_ref().ok_or(
-            "CS2 was not found through Steam, so the launch options Steam adds cannot be checked; Bot Mode will not launch",
-        )?;
+        let i = self.install.as_ref().ok_or_else(|| {
+            format!(
+                "CS2 was not found through Steam ({}), so the launch options Steam adds cannot be checked; Bot Mode will not launch",
+                self.discovery_error.as_deref().unwrap_or("no Steam install")
+            )
+        })?;
         steam::SteamConfig::for_install(i)
     }
 
@@ -96,4 +108,20 @@ impl Ctx {
     pub fn steam_launch_options(&self) -> Option<String> {
         self.install.as_ref().and_then(steam::launch_options)
     }
+}
+
+/// Checks that a folder named with `--game` is the CS2 install Steam reports, and returns
+/// that install. Both paths are compared with every link resolved.
+pub fn same_install(named: &std::path::Path, found: Result<steam::Cs2Install, String>) -> Result<steam::Cs2Install, String> {
+    let named_canon = steam::check_game_folder(named)?;
+    let i = found.map_err(|e| format!("--game {} cannot be checked against Steam: {e}; or omit --game", named.display()))?;
+    let steam_canon = i.csgo.canonicalize().map_err(|e| format!("{}: {e}", i.csgo.display()))?;
+    if named_canon != steam_canon {
+        return Err(format!(
+            "--game names {}, but Steam reports CS2 at {}; Bot Mode only works on the install Steam starts. Omit --game, or point it at that folder.",
+            named_canon.display(),
+            steam_canon.display()
+        ));
+    }
+    Ok(i)
 }

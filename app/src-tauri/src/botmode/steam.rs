@@ -115,7 +115,7 @@ impl SteamConfig {
     /// and so the options Steam will add, are unknown.
     pub fn for_install(i: &Cs2Install) -> Result<SteamConfig, String> {
         let owner = i.owner.filter(|o| *o > STEAMID64_BASE).ok_or_else(|| {
-            "CS2's app manifest names no valid owner (LastOwner), so the Steam account whose launch options apply is unknown".to_string()
+            "CS2's app manifest names no valid owner (LastOwner), so the Steam account whose launch options apply is unknown. Start CS2 once from Steam so Steam records its owner in appmanifest_730.acf, or repair LastOwner there".to_string()
         })?;
         let localconfig = i.steam.join("userdata").join((owner - STEAMID64_BASE).to_string()).join("config").join("localconfig.vdf");
         Ok(SteamConfig { steam: i.steam.clone(), localconfig })
@@ -123,16 +123,30 @@ impl SteamConfig {
 
     /// CS2's launch options from Steam; empty when the file sets none. A missing or unreadable
     /// file is an error, never "no options".
+    /// Every key on the way to the options must appear once and be a block; a missing block
+    /// means Steam has no options stored for CS2.
     pub fn read_options(&self) -> Result<String, String> {
-        let root = read_vdf(&self.localconfig)?;
-        if root.get("UserLocalConfigStore").is_none() {
-            return Err(format!("{}: not a Steam localconfig.vdf", self.localconfig.display()));
+        let path = self.localconfig.display();
+        if !self.localconfig.exists() {
+            return Err(format!("{path} does not exist. Start Steam and sign in once so it writes this file"));
         }
-        Ok(root
-            .path(&["UserLocalConfigStore", "Software", "Valve", "Steam", "apps", CS2_APP_ID, "LaunchOptions"])
-            .and_then(Node::str)
-            .unwrap_or("")
-            .to_string())
+        let root = read_vdf(&self.localconfig)?;
+        let mut node = match root.get_unique("UserLocalConfigStore").map_err(|e| format!("{path}: {e}"))? {
+            Some(n @ Node::Map(_)) => n,
+            _ => return Err(format!("{path}: no UserLocalConfigStore block; not a Steam localconfig.vdf")),
+        };
+        for key in ["Software", "Valve", "Steam", "apps", CS2_APP_ID] {
+            match node.get_unique(key).map_err(|e| format!("{path}: {e}"))? {
+                Some(n @ Node::Map(_)) => node = n,
+                Some(Node::Str(_)) => return Err(format!("{path}: \"{key}\" is a value where a block belongs")),
+                None => return Ok(String::new()),
+            }
+        }
+        match node.get_unique("LaunchOptions").map_err(|e| format!("{path}: {e}"))? {
+            Some(Node::Str(s)) => Ok(s.clone()),
+            Some(Node::Map(_)) => Err(format!("{path}: LaunchOptions is a block, not a value")),
+            None => Ok(String::new()),
+        }
     }
 }
 
@@ -277,7 +291,7 @@ mod tests {
         assert_eq!(config.localconfig, steam.join("userdata/1178094897/config/localconfig.vdf"));
 
         // Missing, unreadable and not-a-localconfig files are errors, never "no options".
-        assert!(config.read_options().is_err(), "missing file");
+        assert!(config.read_options().unwrap_err().contains("Start Steam and sign in once"), "missing file says how to fix it");
         write(&config.localconfig, "\"UserLocalConfigStore\"\n{\n\"Software\"\n");
         assert!(config.read_options().is_err(), "unbalanced file");
         write(&config.localconfig, "\"SomethingElse\"\n{\n}\n");
@@ -290,10 +304,24 @@ mod tests {
         write(&config.localconfig, &crate::botmode::testutil::localconfig("-condebug +exec autoexec -insecure"));
         assert_eq!(config.read_options().unwrap(), "-condebug +exec autoexec -insecure");
 
+        // Strict on the way to the options: duplicate keys and values where blocks belong.
+        let good = crate::botmode::testutil::localconfig("-insecure");
+        for (why, from, to) in [
+            ("duplicate LaunchOptions", "\"LaunchOptions\"\t\t\"-insecure\"", "\"LaunchOptions\" \"-insecure\" \"LaunchOptions\" \"-secure\""),
+            ("duplicate app block", "\"730\"\n", "\"730\" { }\n\"730\"\n"),
+            ("apps is a value", "\"apps\"\n", "\"apps\" \"x\"\n\"other\"\n"),
+        ] {
+            assert!(good.contains(from), "{why}: the sample must contain the text to change");
+            write(&config.localconfig, &good.replace(from, to));
+            assert!(config.read_options().is_err(), "{why}");
+        }
+        write(&config.localconfig, "\"UserLocalConfigStore\" \"x\"\n");
+        assert!(config.read_options().is_err(), "UserLocalConfigStore is a value");
+
         // Without a known owner the account, and so the options, are unknown.
         for owner in [None, Some(0), Some(42)] {
             let err = SteamConfig::for_install(&Cs2Install { owner, ..install.clone() }).unwrap_err();
-            assert!(err.contains("no valid owner"), "{owner:?}: {err}");
+            assert!(err.contains("no valid owner") && err.contains("Start CS2 once from Steam"), "{owner:?}: {err}");
         }
     }
 }
