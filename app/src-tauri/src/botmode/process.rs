@@ -1,5 +1,5 @@
-//! Whether CS2 is running, the lock that keeps two Bot Mode operations apart, and the check
-//! on the CS2 process a launch starts.
+//! Whether CS2 is running, the lock that keeps two Bot Mode operations apart, and the system
+//! calls the post-launch check (`monitor.rs`) uses.
 //!
 //! Every operation that writes game files checks for `cs2.exe` first and refuses while it
 //! is up: the game holds plugin DLLs open, and a half-swapped mod in a live process is exactly
@@ -7,6 +7,7 @@
 //! right before Steam is asked to start the game. CS2 starting in the middle of a write cannot
 //! be prevented; the change journal (`changes.rs`) is what recovers from that.
 
+use super::monitor::Listed;
 use super::paths::Layout;
 use std::fs::{self, File};
 
@@ -64,23 +65,6 @@ pub fn conclude(seen: usize, end_error: u32) -> Result<(), String> {
     }
 }
 
-/// Process ids of every running `cs2.exe`, from a complete walk of the process list.
-pub fn cs2_pids() -> Result<Vec<u32>, String> {
-    imp::pids("cs2.exe")
-}
-
-/// The CS2 process a launch started: the one `cs2.exe` that was not running before Steam was
-/// asked to start the game. More than one new `cs2.exe` is an error, because which one is
-/// ours would be a guess.
-pub fn new_process(before: &[u32], now: &[u32]) -> Result<Option<u32>, String> {
-    let new: Vec<u32> = now.iter().copied().filter(|p| !before.contains(p)).collect();
-    match new.as_slice() {
-        [] => Ok(None),
-        [pid] => Ok(Some(*pid)),
-        many => Err(format!("{} new cs2.exe processes appeared ({many:?}); cannot tell which one this launch started", many.len())),
-    }
-}
-
 /// Whether a command-line token turns VAC back on: after stripping leading `-` and `+`,
 /// lowercasing, and cutting at `=` or whitespace, it is `secure`. So `-secure`, `+secure`,
 /// `--secure`, `-secure=1` and `-SECURE` all are; `-insecure` is not.
@@ -89,9 +73,9 @@ pub fn is_secure_token(token: &str) -> bool {
     t.split(|c: char| c == '=' || c.is_whitespace()).next() == Some("secure")
 }
 
-/// What to do with the CS2 process a launch started, given its command line (`None` when it
-/// could not be read). Anything but a readable command line with `-insecure` and no
-/// secure-enabling token means: end it now.
+/// Whether a CS2 process may keep running, given its command line (`None` when it could not
+/// be read). Anything but a readable command line with `-insecure` and no secure-enabling
+/// token means: end it now.
 pub fn judge_command_line(command_line: Option<&str>) -> Result<(), String> {
     let Some(line) = command_line else {
         return Err("its command line could not be read, so -insecure could not be confirmed".into());
@@ -106,25 +90,76 @@ pub fn judge_command_line(command_line: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads a process's command line without changing it.
-pub fn command_line(pid: u32) -> Result<String, String> {
-    imp::command_line(pid)
+/// Every running `cs2.exe` with its creation time, from a complete walk of the process list.
+/// A process that exits during the walk is left out.
+pub fn cs2_listed() -> Result<Vec<Listed>, String> {
+    let mut out = Vec::new();
+    for pid in imp::pids("cs2.exe")? {
+        if let Some(p) = OpenProcess::open(pid)? {
+            out.push(Listed { pid, created: p.creation()? });
+        }
+    }
+    Ok(out)
 }
 
-/// Ends one process, by id. Only ever called with the id [`new_process`] picked for this
-/// launch's `cs2.exe`.
-pub fn terminate(pid: u32) -> Result<(), String> {
-    imp::terminate(pid)
+/// The current time as a Windows FILETIME.
+pub fn file_time_now() -> u64 {
+    imp::file_time_now()
+}
+
+/// One process opened once, with query-limited, terminate and synchronize access. Reading its
+/// details and ending it all go through this one handle, never a fresh open by id.
+pub struct OpenProcess(imp::Handle);
+
+impl OpenProcess {
+    /// `None` when no process has that id any more.
+    pub fn open(pid: u32) -> Result<Option<OpenProcess>, String> {
+        Ok(imp::open(pid)?.map(OpenProcess))
+    }
+
+    fn creation(&self) -> Result<u64, String> {
+        imp::creation_time(&self.0)
+    }
+}
+
+impl super::monitor::Cs2Process for OpenProcess {
+    fn created(&self) -> Result<u64, String> {
+        self.creation()
+    }
+    fn image(&self) -> Result<std::path::PathBuf, String> {
+        imp::image(&self.0)
+    }
+    fn command_line(&self) -> Result<String, String> {
+        imp::command_line(&self.0)
+    }
+    fn terminate(&self) -> Result<(), String> {
+        imp::terminate(&self.0)
+    }
 }
 
 #[cfg(windows)]
 mod imp {
     use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessCommandLineInformation};
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE, UNICODE_STRING};
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, FILETIME, HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
     };
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
+
+    pub struct Handle(HANDLE);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from OpenProcess and is closed once.
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
 
     pub fn pids(exe: &str) -> Result<Vec<u32>, String> {
         // SAFETY: plain Win32 calls on a snapshot handle this function owns and closes.
@@ -152,61 +187,133 @@ mod imp {
         }
     }
 
-    pub fn command_line(pid: u32) -> Result<String, String> {
-        // SAFETY: the handle is closed before returning; the buffer holds the UNICODE_STRING
-        // header and the string it points into, and the pointer and length are bounds-checked.
-        unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h.is_null() {
-                return Err(format!("opening process {pid}: {}", std::io::Error::last_os_error()));
-            }
-            let mut buf = vec![0u8; 1 << 16];
-            let mut ret = 0u32;
-            let status = NtQueryInformationProcess(h, ProcessCommandLineInformation, buf.as_mut_ptr().cast(), buf.len() as u32, &mut ret);
-            CloseHandle(h);
-            if status < 0 {
-                return Err(format!("reading the command line of process {pid}: NTSTATUS {status:#x}"));
-            }
-            let us = &*(buf.as_ptr() as *const UNICODE_STRING);
-            let start = us.Buffer as usize;
-            let (lo, hi) = (buf.as_ptr() as usize, buf.as_ptr() as usize + buf.len());
-            let len = us.Length as usize;
-            if us.Buffer.is_null() || start < lo || start + len > hi || len % 2 != 0 {
-                return Err(format!("process {pid} returned a malformed command line"));
-            }
-            let chars = std::slice::from_raw_parts(us.Buffer, len / 2);
-            Ok(String::from_utf16_lossy(chars))
-        }
+    pub fn file_time_now() -> u64 {
+        let mut ft = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        // SAFETY: writes one FILETIME.
+        unsafe { GetSystemTimeAsFileTime(&mut ft) };
+        (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime)
     }
 
-    pub fn terminate(pid: u32) -> Result<(), String> {
-        // SAFETY: the handle is closed before returning.
-        unsafe {
-            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if h.is_null() {
-                return Err(format!("opening process {pid} to end it: {}", std::io::Error::last_os_error()));
+    pub fn open(pid: u32) -> Result<Option<Handle>, String> {
+        const ERROR_INVALID_PARAMETER: i32 = 87;
+        // SAFETY: plain call; the handle is owned by the returned Handle.
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+        if h.is_null() {
+            let e = std::io::Error::last_os_error();
+            // The process exited between the list and the open.
+            if e.raw_os_error() == Some(ERROR_INVALID_PARAMETER) {
+                return Ok(None);
             }
-            let ok = TerminateProcess(h, 1);
-            let err = std::io::Error::last_os_error();
-            CloseHandle(h);
-            if ok == 0 {
-                return Err(format!("ending process {pid}: {err}"));
-            }
-            Ok(())
+            return Err(format!("opening process {pid}: {e}"));
         }
+        Ok(Some(Handle(h)))
+    }
+
+    pub fn creation_time(h: &Handle) -> Result<u64, String> {
+        let z = || FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut c, mut e, mut k, mut u) = (z(), z(), z(), z());
+        // SAFETY: writes four FILETIMEs for a handle this module owns.
+        if unsafe { GetProcessTimes(h.0, &mut c, &mut e, &mut k, &mut u) } == 0 {
+            return Err(format!("reading its creation time: {}", std::io::Error::last_os_error()));
+        }
+        Ok((u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime))
+    }
+
+    pub fn image(h: &Handle) -> Result<std::path::PathBuf, String> {
+        let mut buf = vec![0u16; 32_768];
+        let mut len = buf.len() as u32;
+        // SAFETY: `len` holds the buffer's size in characters and is updated to the length written.
+        if unsafe { QueryFullProcessImageNameW(h.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) } == 0 {
+            return Err(format!("reading its executable path: {}", std::io::Error::last_os_error()));
+        }
+        let len = (len as usize).min(buf.len());
+        Ok(std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len])))
+    }
+
+    /// `ProcessCommandLineInformation` (class 60), in two calls: the first asks for the size,
+    /// the second fills a buffer of that size, aligned for the `UNICODE_STRING` header. Every
+    /// length and the string's pointer are checked against the bytes actually returned.
+    pub fn command_line(h: &Handle) -> Result<String, String> {
+        const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
+        const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023_u32 as i32;
+        const MAX: u32 = 1 << 20;
+        let header = std::mem::size_of::<UNICODE_STRING>() as u32;
+        let mut needed = 0u32;
+        // SAFETY: a zero-length query only writes `needed`.
+        let status = unsafe { NtQueryInformationProcess(h.0, ProcessCommandLineInformation, std::ptr::null_mut(), 0, &mut needed) };
+        if status != STATUS_INFO_LENGTH_MISMATCH && status != STATUS_BUFFER_TOO_SMALL {
+            return Err(format!("asking for its command line size: NTSTATUS {status:#x}"));
+        }
+        if needed < header || needed > MAX {
+            return Err(format!("its command line size {needed} is out of range"));
+        }
+        // u64 elements keep the buffer aligned for the header's pointer field.
+        let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
+        let cap = (buf.len() * 8) as u32;
+        let mut ret = 0u32;
+        // SAFETY: the buffer has `cap` writable bytes.
+        let status = unsafe { NtQueryInformationProcess(h.0, ProcessCommandLineInformation, buf.as_mut_ptr().cast(), cap, &mut ret) };
+        if status < 0 {
+            return Err(format!("reading its command line: NTSTATUS {status:#x}"));
+        }
+        if ret < header || ret > cap {
+            return Err(format!("its command line came back with an invalid length {ret}"));
+        }
+        // SAFETY: the buffer is aligned and holds at least a header, checked above.
+        let us = unsafe { &*(buf.as_ptr() as *const UNICODE_STRING) };
+        let (len, max) = (us.Length as usize, us.MaximumLength as usize);
+        if len % 2 != 0 || len > max {
+            return Err("its command line has invalid lengths".into());
+        }
+        if len == 0 {
+            return Ok(String::new());
+        }
+        let base = buf.as_ptr() as usize;
+        let start = us.Buffer as usize;
+        let end = start.checked_add(len).ok_or("its command line points out of range")?;
+        if us.Buffer.is_null() || start < base + header as usize || end > base + ret as usize || start % 2 != 0 {
+            return Err("its command line points outside what Windows returned".into());
+        }
+        // SAFETY: [start, end) lies inside the returned bytes of `buf`, checked above.
+        let chars = unsafe { std::slice::from_raw_parts(us.Buffer, len / 2) };
+        Ok(String::from_utf16_lossy(chars))
+    }
+
+    pub fn terminate(h: &Handle) -> Result<(), String> {
+        // SAFETY: plain call on a handle this module owns.
+        if unsafe { TerminateProcess(h.0, 1) } == 0 {
+            return Err(format!("ending it: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
     }
 }
 
 #[cfg(not(windows))]
 mod imp {
+    pub struct Handle;
+    fn unsupported<T>() -> Result<T, String> {
+        Err("only implemented on Windows".into())
+    }
     pub fn pids(_exe: &str) -> Result<Vec<u32>, String> {
-        Err("checking for cs2.exe is only implemented on Windows".into())
+        unsupported()
     }
-    pub fn command_line(_pid: u32) -> Result<String, String> {
-        Err("reading a command line is only implemented on Windows".into())
+    pub fn file_time_now() -> u64 {
+        0
     }
-    pub fn terminate(_pid: u32) -> Result<(), String> {
-        Err("ending a process is only implemented on Windows".into())
+    pub fn open(_pid: u32) -> Result<Option<Handle>, String> {
+        unsupported()
+    }
+    pub fn creation_time(_h: &Handle) -> Result<u64, String> {
+        unsupported()
+    }
+    pub fn image(_h: &Handle) -> Result<std::path::PathBuf, String> {
+        unsupported()
+    }
+    pub fn command_line(_h: &Handle) -> Result<String, String> {
+        unsupported()
+    }
+    pub fn terminate(_h: &Handle) -> Result<(), String> {
+        unsupported()
     }
 }
 
@@ -223,44 +330,41 @@ pub struct OpLock {
     _game: GameMutex,
 }
 
-/// The game folder's mutex. It is created in the `Global\` namespace, so that operations in
-/// two Windows sessions (fast user switching, a remote desktop session) also exclude each
-/// other. If Windows refuses a `Global\` object to this user, it falls back to `Local\`, which
-/// only excludes operations within one session; two sessions could then each run an operation
-/// on the same game folder at once.
+/// The game folder's mutex, in the `Global\` namespace, so operations in two Windows sessions
+/// (fast user switching, a remote desktop session) exclude each other too. A standard user can
+/// create it (checked on the user's machine without administrator rights). If Windows refuses
+/// it, the operation is refused rather than fall back to a per-session lock.
 #[cfg(windows)]
 struct GameMutex(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl GameMutex {
     fn acquire(csgo: &std::path::Path) -> Result<GameMutex, String> {
-        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS};
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
         use windows_sys::Win32::System::Threading::CreateMutexW;
         let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
         let key = super::hash::bytes(canon.to_string_lossy().to_lowercase().as_bytes());
-        for scope in ["Global", "Local"] {
-            let name: Vec<u16> = format!("{scope}\\cs2-stats-botmode-{}", &key[..32]).encode_utf16().chain(Some(0)).collect();
-            // SAFETY: `name` is NUL-terminated and outlives the call; the handle is closed in Drop.
-            unsafe {
-                let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
-                let err = GetLastError();
-                if h.is_null() {
-                    if err == ERROR_ACCESS_DENIED && scope == "Global" {
-                        continue;
-                    }
-                    return Err(format!("creating the game folder lock: {}", std::io::Error::from_raw_os_error(err as i32)));
-                }
-                if err == ERROR_ALREADY_EXISTS {
-                    CloseHandle(h);
-                    return Err(format!(
-                        "another Bot Mode operation is working on {} (possibly with a different app folder); wait for it to finish",
-                        canon.display()
-                    ));
-                }
-                return Ok(GameMutex(h));
+        let name: Vec<u16> = format!("Global\\cs2-stats-botmode-{}", &key[..32]).encode_utf16().chain(Some(0)).collect();
+        // SAFETY: `name` is NUL-terminated and outlives the call; the handle is closed in Drop.
+        unsafe {
+            let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            let err = GetLastError();
+            if h.is_null() {
+                return Err(format!(
+                    "Windows refused the machine-wide lock for {} ({}), so Bot Mode cannot make sure no other session is changing it; nothing was changed",
+                    canon.display(),
+                    std::io::Error::from_raw_os_error(err as i32)
+                ));
             }
+            if err == ERROR_ALREADY_EXISTS {
+                CloseHandle(h);
+                return Err(format!(
+                    "another Bot Mode operation is working on {} (possibly with a different app folder); wait for it to finish",
+                    canon.display()
+                ));
+            }
+            Ok(GameMutex(h))
         }
-        Err("creating the game folder lock: Windows refused both the Global and Local namespaces".into())
     }
 }
 
@@ -356,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn the_launched_process_is_kept_only_with_insecure_and_nothing_secure() {
+    fn a_process_is_kept_only_with_insecure_and_nothing_secure() {
         let exe = r#""C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe""#;
         assert_eq!(judge_command_line(Some(&format!("{exe} -insecure -novid +exec autoexec"))), Ok(()));
         assert_eq!(judge_command_line(Some(&format!("{exe} -INSECURE"))), Ok(()));
@@ -375,19 +479,15 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn the_command_line_of_a_running_process_can_be_read() {
-        // This test's own process: read-only, and its executable name is known.
-        let line = command_line(std::process::id()).unwrap();
+    fn a_running_process_is_read_through_one_handle() {
+        use super::super::monitor::Cs2Process;
+        // This test's own process: opened read-only here (it is never ended).
+        let me = OpenProcess::open(std::process::id()).unwrap().expect("this process exists");
         let exe = std::env::current_exe().unwrap();
-        let stem = exe.file_stem().unwrap().to_string_lossy().to_string();
-        assert!(line.contains(&stem), "{line}");
-    }
-
-    #[test]
-    fn only_the_cs2_process_this_launch_started_is_ever_picked() {
-        assert_eq!(new_process(&[], &[4120]), Ok(Some(4120)));
-        assert_eq!(new_process(&[900], &[900]), Ok(None), "an older cs2.exe is never ours");
-        assert_eq!(new_process(&[900], &[900, 4120]), Ok(Some(4120)));
-        assert!(new_process(&[], &[4120, 4121]).is_err(), "two candidates: refuse to guess");
+        let line = me.command_line().unwrap();
+        assert!(line.contains(&*exe.file_stem().unwrap().to_string_lossy()), "{line}");
+        assert_eq!(me.image().unwrap().canonicalize().unwrap(), exe.canonicalize().unwrap());
+        assert!(me.created().unwrap() > 0 && me.created().unwrap() <= file_time_now());
+        assert!(OpenProcess::open(u32::MAX - 3).unwrap().is_none(), "an id with no process");
     }
 }

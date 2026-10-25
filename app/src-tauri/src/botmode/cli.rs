@@ -2,7 +2,7 @@
 
 use super::process::SystemProbe;
 use super::settings::{self, Difficulty};
-use super::{changes, install, launch, overlay, status, Ctx, Game};
+use super::{changes, install, launch, monitor, overlay, status, Ctx, Game};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -205,20 +205,34 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let report = launch::launch(layout, &probe, &ctx.steam_config()?)?;
-            print(a.json, &report, |r| {
-                let mut o = String::new();
-                if let Some(m) = &r.plan.bot_mode_change {
-                    o.push_str(&format!("Turned Bot Mode on in gameinfo.gi (change {}).\n", m.id));
+            let sys = monitor::Windows;
+            let (plan, base) = launch::launch(layout, &probe, &ctx.steam_config()?, &sys)?;
+            if !a.json {
+                if let Some(m) = &plan.bot_mode_change {
+                    print!("Turned Bot Mode on in gameinfo.gi. {}", meta_line(m));
                 }
-                o.push_str(&format!("Started: \"{}\" {}\n", r.plan.steam_exe, r.plan.args.join(" ")));
-                match (r.pid, &r.warning) {
-                    (Some(pid), _) => o.push_str(&format!("CS2 is running as process {pid} with -insecure confirmed on its command line.\n")),
-                    (None, Some(w)) => o.push_str(&format!("warning: {w}\n")),
-                    (None, None) => {}
+                println!("Started: \"{}\" {}", plan.steam_exe, plan.args.join(" "));
+            }
+            // The CLI waits at most this long for CS2, then fails with safety unverified.
+            const CLI_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+            let outcome = monitor::watch(&sys, &base, Some(CLI_WAIT), &|| false, &|m| eprintln!("{m}..."));
+            #[derive(Serialize)]
+            struct Report<'a> {
+                #[serde(flatten)]
+                plan: &'a launch::LaunchPlan,
+                check: &'a monitor::Outcome,
+            }
+            if a.json {
+                print(true, &Report { plan: &plan, check: &outcome }, |_| String::new());
+            }
+            match outcome {
+                monitor::Outcome::Safe { .. } => {
+                    if !a.json {
+                        println!("{}", monitor::describe(&outcome));
+                    }
                 }
-                o
-            });
+                _ => return Err(monitor::describe(&outcome)),
+            }
         }
         ["set", "difficulty", level] => {
             let m = settings::set_difficulty(layout, &probe, Difficulty::parse(level)?)?;
@@ -283,3 +297,24 @@ fn attach_console() {
 
 #[cfg(not(windows))]
 fn attach_console() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_change_line_shows_its_durability_warnings() {
+        let meta = changes::Meta {
+            seq: 1,
+            id: "0001-x-bot-mode-on".into(),
+            operation: "bot-mode-on".into(),
+            created: String::new(),
+            status: changes::Status::Complete,
+            files: 1,
+            error: None,
+            warnings: vec!["Windows would not flush folder X".into()],
+        };
+        let line = meta_line(&meta);
+        assert!(line.contains("0001-x-bot-mode-on") && line.contains("warning: Windows would not flush folder X"), "{line}");
+    }
+}

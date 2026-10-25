@@ -8,28 +8,22 @@
 //! - Steam's stored CS2 options get the same check, before and right after preparing.
 //! - Steam itself uses the options it holds in memory, which no file read can see, so the
 //!   checks above cannot be the last word. After Steam is asked to start the game, Bot Mode
-//!   waits for the `cs2.exe` that appears, reads its actual command line, and ends that one
-//!   process at once if `-insecure` is missing, a secure-enabling token is present, or the
-//!   command line cannot be read. That check is on the running game itself, so it closes the
-//!   gap left by every earlier check, whatever Steam added.
+//!   checks every new `cs2.exe` of this install (`monitor.rs`) and ends the unsafe ones. That
+//!   check is on the running game itself, so it closes the gap left by every earlier check,
+//!   whatever Steam added.
 
 use super::changes::{self, Meta};
 use super::gameinfo;
 use super::paths::Layout;
-use super::process::{self, is_secure_token, OpLock, Phase, ProcessProbe};
+use super::monitor::{self, Baseline, System};
+use super::process::{is_secure_token, OpLock, Phase, ProcessProbe};
 use super::settings;
 use super::steam::SteamConfig;
 use serde::Serialize;
-use std::time::{Duration, Instant};
 
 /// Files without which Bot Mode would start an unmodded game: Metamod's loader and
 /// CounterStrikeSharp.
 const REQUIRED: [&str; 2] = ["addons/metamod.vdf", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll"];
-
-/// How long to wait for CS2 to appear after Steam is asked to start it. Steam can take a while
-/// when it first has to validate or update; after this the launch reports that it could not
-/// confirm `-insecure` rather than wait without end.
-const START_WAIT: Duration = Duration::from_secs(60);
 
 /// Splits launch options as a command line: whitespace separates, double quotes group.
 pub fn split(options: &str) -> Result<Vec<String>, String> {
@@ -85,19 +79,6 @@ pub struct LaunchPlan {
 }
 
 /// What the check on the started game found.
-#[derive(Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct LaunchReport {
-    #[serde(flatten)]
-    pub plan: LaunchPlan,
-    /// The `cs2.exe` this launch started, when it appeared in time.
-    pub pid: Option<u32>,
-    /// Its command line, when read.
-    pub command_line: Option<String>,
-    /// Set when CS2 did not appear within the wait, so `-insecure` is unconfirmed.
-    pub warning: Option<String>,
-}
-
 /// Reads Steam's own CS2 launch options and refuses them when any token turns VAC back on:
 /// Steam adds them to every start. Not being able to read them is also a refusal.
 fn check_steam_options(steam: &SteamConfig) -> Result<(), String> {
@@ -178,48 +159,37 @@ pub fn check_start(plan: &LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe,
     Ok(())
 }
 
-/// Hands the plan to Steam, then checks the `cs2.exe` it starts (see the module notes).
-pub fn start(plan: LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig) -> Result<LaunchReport, String> {
-    check_start(&plan, layout, probe, steam)?;
-    let before = process::cs2_pids()?;
+/// Hands the plan to Steam, after the last checks. Returns the baseline the post-launch
+/// watcher (`monitor::watch`) compares new CS2 processes with, taken right before the spawn.
+pub fn start(plan: &LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, sys: &dyn System) -> Result<Baseline, String> {
+    check_start(plan, layout, probe, steam)?;
+    let base = monitor::baseline(sys, &layout.csgo)?;
     std::process::Command::new(&plan.steam_exe)
         .args(&plan.args)
         .spawn()
         .map_err(|e| format!("{}: {e}", plan.steam_exe))?;
-    let deadline = Instant::now() + START_WAIT;
-    let pid = loop {
-        if let Some(pid) = process::new_process(&before, &process::cs2_pids()?)? {
-            break pid;
-        }
-        if Instant::now() >= deadline {
-            return Ok(LaunchReport {
-                plan,
-                pid: None,
-                command_line: None,
-                warning: Some(format!(
-                    "CS2 did not start within {} seconds, so its -insecure could not be confirmed. If it starts later, check its launch options before playing.",
-                    START_WAIT.as_secs()
-                )),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    };
-    let line = process::command_line(pid).ok();
-    if let Err(why) = process::judge_command_line(line.as_deref()) {
-        let ended = match process::terminate(pid) {
-            Ok(()) => "it was ended at once".to_string(),
-            Err(e) => format!("ending it failed ({e}); close CS2 now"),
-        };
-        return Err(format!("CS2 (process {pid}) started without VAC safely off: {why}; {ended}."));
-    }
-    Ok(LaunchReport { plan, pid: Some(pid), command_line: line, warning: None })
+    Ok(base)
 }
 
-/// The whole launch under one operation lock.
-pub fn launch(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig) -> Result<LaunchReport, String> {
+/// Prepares and starts the launch under one operation lock, which is released before the
+/// watch so other operations (a rollback, say) are not held up while Steam updates.
+pub fn launch(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, sys: &dyn System) -> Result<(LaunchPlan, Baseline), String> {
     let lock = OpLock::acquire(layout)?;
     let plan = prepare(layout, probe, steam, &lock)?;
-    start(plan, layout, probe, steam)
+    let base = start(&plan, layout, probe, steam, sys)?;
+    Ok((plan, base))
+}
+
+/// Whether Bot Mode is still on for this game folder: the mod's files are there and
+/// `gameinfo.gi` has the Bot Mode search paths. The app's watcher stops when this turns false.
+pub fn still_bot_mode(layout: &Layout) -> bool {
+    let files = REQUIRED.iter().all(|r| layout.confined(r).is_ok_and(|p| p.is_file()));
+    let gi = layout
+        .confined("gameinfo.gi")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| gameinfo::is_bot_mode(&t).unwrap_or(false));
+    files && gi
 }
 
 #[cfg(test)]
