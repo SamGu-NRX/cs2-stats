@@ -27,6 +27,7 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 |---|---|---|---|
 | rating3 | Rating 3.0 | approx | `model/rating3/SPEC.md`. A linear model in eco-adjusted KPR, ADR, DPR and KAST, raw multi-kill % and swing: `params.json` `rating.intercept` plus `rating.coefficients` times each input (ordinary least squares on HLTV's displayed inputs, PR #17). `rating3.ts` throws on any other `rating.basis`. Per side it is the rating of that side's rounds (`rating3BySide`); the total is the side inputs weighted by each side's rated rounds (`rating3Of`), so a side too thin to rate adds nothing. |
 | kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. Each KAST round is also credited to the first of those that earned it, so the parts sum to KAST: `killRounds + kastA + kastS + kastT`. |
+| ecoKpr | Eco-adjusted KPR | approx | Rating 3.0's own `kpr_eco` input: kills weighted by the duel's economy (kill points), per rated round. It shares `rating3Of`, so the row and the rating breakdown cannot disagree. |
 | swing | Round swing | approx | `swing.ts`: each kill's and plant's change in win probability (HLTV's lookup from the private pack when installed, else the CS2RB round model, which also reads the living players' health, team equipment and time; `model-params.ts`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). An eligible flash (the gaining side's, still blinding the victim at the kill, not the killer's, a team flash or an ambiguous one) takes `params.json`'s flash share first. |
 
 Eco adjustment (`rating3.ts`): a player's duel group comes from the best primary held at the kill,
@@ -77,6 +78,17 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | sniperKillsPct, awpKillsPct | Sniper Kills %, AWP Kills % | exact | Share of kills |
 | smokesPR, flashesPR, molotovsPR, hesPR | Smokes, Flashbangs, Molotovs, HE Grenades Thrown per Round | exact | Throws per round (molotovs include incendiaries) |
 
+Restored from main's unscored rows (E20): shown under the attributes, not part of any score.
+
+| id | Status | Definition |
+|---|---|---|
+| failedTradesPR | approx | Deaths less than 5 s after a teammate's death to the same enemy, per round |
+| baitKillsPR | approx | Kills less than 5 s after a teammate died, on any enemy, per round (ours; HLTV's rule is unpublished) |
+| flashAssistsPR | exact | The game's flash assists per round |
+| clutchPointsPR | approx | Won 1vX clutches weighted by X (1v1 = 1, 1v3 = 3), per round; the weighting is main's, no fit |
+| tradeAssistShare | exact | Trade kills plus assists (flash assists included), over kills plus assists; the role card's Support signal reads it against main's 45% |
+| teamDistance | exact | Mean distance to your nearest teammate (`nearestDistSum` over `spacingSamples`): sampled every 3 s from 10 s after freeze end until the plant, while all five of your side are alive (`positioning.ts`). The role card's Lurker sentence reads it on T against main's 1,100 units, set for main's 2D measure and not re-checked on this one. |
+
 ### HLTV's "how good" metrics (performance)
 | id | HLTV name | Status | Definition |
 |---|---|---|---|
@@ -89,6 +101,8 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | grenadeDmgTaken | Grenade Damage Received | exact | Enemy grenade and fire damage you took, per round |
 | dmgPerHe | Damage per HE Thrown | exact | Enemy HE damage per HE thrown |
 | oneVsOne | 1v1 win rate | exact | 1v1 clutches won |
+| openingWinPct | Rounds won after an opening kill | exact | Rounds your team won, of the rounds where you made the opening kill |
+| perfectKillsPct | Perfect kills % | approx | Share of your kills where the victim had not damaged you earlier in the round (`perfectKpr` as a share of kills) |
 
 ## Utility quality (performance)
 
@@ -146,6 +160,10 @@ pitch). Ticks after either player's death are cut. Needs v1 maps with visibility
 | trackingError | approx | Mean angle to the eye while tracking: from 2 degrees or less until 10 degrees or lost sight, on ticks where the sightline turns at 10 deg/s or more. Ours, no fit. |
 | accuracy | exact | Gun shots with an enemy hit on the same tick, over gun shots. Per gun with the weapon filter. |
 | sightAccuracy | approx | Hits per shot fired while an enemy was visible within 30 degrees of the shot (the extractor's shot trigger) |
+| headAccuracy | exact | Gun hits on the head, of all your gun hits on enemies; a hit the game files under no body part counts in the total only |
+| adjustedAccuracy | approx | Accuracy at visible enemies without the shots fired on a tick where your kill went through a wall or object (the game's penetration flag); a kill shot with no recorded penetration is set aside |
+| sprayAccuracy | approx | Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within 30 degrees |
+| shotsThroughSmoke | approx, identity | Gun shots fired while every enemy mesh-visible within 30 degrees stood behind a smoke (the extractor's smoke spheres), of your gun shots on maps with mesh visibility; null without mesh visibility |
 | firstBulletAccuracy | approx | Hits per first bullet at a visible enemy. A first bullet has recoil index 0 to 0.01 and comes 0.3 s or more after the previous shot (the recoil asset's reset rule). |
 | counterStrafe | approx | Rifle and sniper first bullets fired on the ground at or under 34% of the gun's max speed (NextFrag via `research-data-sources.md`; max speed is `m_flMaxSpeed` from the weapons vdata, scoped speed for scoped guns) |
 | csTooEarly, csLateReversal, csNoStop | approx, identity | Among inaccurate first bullets: no stop when at or above the peak speed of the previous 0.25 s or above 90% of it; late reversal when moving against the peak's direction; too early otherwise. 0.25 s and 0.9: ours. |
