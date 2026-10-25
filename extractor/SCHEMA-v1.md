@@ -5,9 +5,9 @@ The contract between the extractor (`extractor/extract.py`, Python) and the TS l
 `extractor/schema_v1.py` declares every column's type, and the writer casts to it and fails on any mismatch, so a type never changes from one map to the next. `tests/test_schema_doc.py` fails if this document and that declaration disagree.
 
 ## Finding a map's tables
-Each map has a folder `cs2-stats-data/demos/<archive slug>/<map>/`. From extractor 1.5.0 its tables are in a version folder inside it, `v-<extractor version>-<8 hex>/`, and the file `CURRENT` holds that folder's name on one line. To read a map:
+Each map has a folder `cs2-stats-data/demos/<archive slug>/<map>/`. From extractor 1.5.0 its tables are in a version folder inside it, `v-<extractor version>-<8 hex>/`, and the file `CURRENT` holds that folder's name on one line. From 1.6.0 the 8 hex digits are a random nonce, so every extraction has its own folder, and the folder's `COMPLETE` file lists its table files with their sizes in bytes (JSON, written after every table). To read a map:
 1. If `<map>/RETIRED` exists, skip the folder: it was replaced by a re-extraction elsewhere and is being deleted.
-2. If `<map>/CURRENT` exists, read its one line. It must match `v-[0-9A-Za-z.+_]+-[0-9a-f]{8}`; refuse anything else. Read the tables from `<map>/<that name>/`.
+2. If `<map>/CURRENT` exists, read its one line. It must match `v-[0-9A-Za-z.+_]+-[0-9a-f]{8}`; refuse anything else. Read `<map>/<that name>/COMPLETE`: the map is there only if every file it lists exists at its listed size. Read the tables from that folder.
 3. Otherwise a `<map>/match.parquet` is a map written before 1.5.0, with its tables in `<map>/` itself.
 4. Otherwise the folder holds no complete map (a pre-v1 map has `meta.parquet` instead; see Versions).
 
