@@ -1,0 +1,869 @@
+{
+ "description": "50 test-split states sampled with seed 42 (7 per map, 8 on Dust2) and edge cases; expected = Python predict_from_json over export/model.json",
+ "rows": [
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 3,
+    "ctHp": 200.0,
+    "tHp": 203.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_dust2",
+   "expected": 0.2200037878194081
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 11400.0,
+    "tEquip": 27650.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 0.0
+   },
+   "map": "de_dust2",
+   "expected": 0.2612345144548801
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 25900.0,
+    "tEquip": 22600.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 5.0
+   },
+   "map": "de_dust2",
+   "expected": 0.5113708961918234
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 1,
+    "ctHp": 179.0,
+    "tHp": 93.0,
+    "ctEquip": 29850.0,
+    "tEquip": 8150.0,
+    "planted": 1,
+    "secondsSincePlant": 28.299999237060547,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_dust2",
+   "expected": 0.8968794385366424
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 23450.0,
+    "tEquip": 27250.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 20.0
+   },
+   "map": "de_dust2",
+   "expected": 0.4224226078908434
+  },
+  {
+   "state": {
+    "ctAlive": 1,
+    "tAlive": 1,
+    "ctHp": 100.0,
+    "tHp": 46.0,
+    "ctEquip": 27750.0,
+    "tEquip": 21500.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 85.0
+   },
+   "map": "de_dust2",
+   "expected": 0.6231662761243849
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 5,
+    "ctHp": 200.0,
+    "tHp": 360.0,
+    "ctEquip": 27250.0,
+    "tEquip": 23350.0,
+    "planted": 1,
+    "secondsSincePlant": 12.100000381469727,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_dust2",
+   "expected": 0.004320851151949619
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 33600.0,
+    "tEquip": 28750.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 0.0
+   },
+   "map": "de_dust2",
+   "expected": 0.5179560256424751
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 1,
+    "ctHp": 355.0,
+    "tHp": 100.0,
+    "ctEquip": 21650.0,
+    "tEquip": 14550.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_mirage",
+   "expected": 0.9976018280655845
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 478.0,
+    "tHp": 500.0,
+    "ctEquip": 21350.0,
+    "tEquip": 1700.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 40.0
+   },
+   "map": "de_mirage",
+   "expected": 0.9094442229942603
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 29700.0,
+    "tEquip": 7000.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 10.0
+   },
+   "map": "de_mirage",
+   "expected": 0.8256555970263787
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 499.0,
+    "tHp": 500.0,
+    "ctEquip": 30000.0,
+    "tEquip": 21900.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 10.0
+   },
+   "map": "de_mirage",
+   "expected": 0.5841339278153996
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 1,
+    "ctHp": 353.0,
+    "tHp": 53.0,
+    "ctEquip": 3900.0,
+    "tEquip": 4300.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 70.0
+   },
+   "map": "de_mirage",
+   "expected": 0.9968100611776622
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 4,
+    "ctHp": 155.0,
+    "tHp": 374.0,
+    "ctEquip": 30950.0,
+    "tEquip": 25950.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 85.0
+   },
+   "map": "de_mirage",
+   "expected": 0.04466892876315133
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 474.0,
+    "tHp": 400.0,
+    "ctEquip": 33100.0,
+    "tEquip": 25500.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 20.0
+   },
+   "map": "de_mirage",
+   "expected": 0.7388045923633741
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 5,
+    "ctHp": 400.0,
+    "tHp": 500.0,
+    "ctEquip": 29250.0,
+    "tEquip": 21150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 20.0
+   },
+   "map": "de_inferno",
+   "expected": 0.2880616682665724
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 459.0,
+    "tHp": 423.0,
+    "ctEquip": 27250.0,
+    "tEquip": 23800.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_inferno",
+   "expected": 0.5228320416218143
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 459.0,
+    "ctEquip": 12850.0,
+    "tEquip": 27750.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_inferno",
+   "expected": 0.2948092459067488
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 27100.0,
+    "tEquip": 27650.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 0.0
+   },
+   "map": "de_inferno",
+   "expected": 0.45015888967207296
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 472.0,
+    "tHp": 378.0,
+    "ctEquip": 30100.0,
+    "tEquip": 15150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 55.0
+   },
+   "map": "de_inferno",
+   "expected": 0.8012571865646636
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 477.0,
+    "ctEquip": 25350.0,
+    "tEquip": 27550.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 30.0
+   },
+   "map": "de_inferno",
+   "expected": 0.43748004930141365
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 4,
+    "ctHp": 342.0,
+    "tHp": 289.0,
+    "ctEquip": 27350.0,
+    "tEquip": 25200.0,
+    "planted": 1,
+    "secondsSincePlant": 15.899999618530273,
+    "secondsSinceFreezeEnd": 105.0
+   },
+   "map": "de_inferno",
+   "expected": 0.18022104228116287
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 5,
+    "ctHp": 399.0,
+    "tHp": 477.0,
+    "ctEquip": 21450.0,
+    "tEquip": 13450.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 20.0
+   },
+   "map": "de_ancient",
+   "expected": 0.3748088613194859
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 3,
+    "ctHp": 200.0,
+    "tHp": 276.0,
+    "ctEquip": 30000.0,
+    "tEquip": 27550.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 45.0
+   },
+   "map": "de_ancient",
+   "expected": 0.15764357525598255
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 4250.0,
+    "tEquip": 4350.0,
+    "planted": 1,
+    "secondsSincePlant": 3.5,
+    "secondsSinceFreezeEnd": 30.0
+   },
+   "map": "de_ancient",
+   "expected": 0.21913474024301424
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 14050.0,
+    "tEquip": 22350.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 5.0
+   },
+   "map": "de_ancient",
+   "expected": 0.3666187740374403
+  },
+  {
+   "state": {
+    "ctAlive": 1,
+    "tAlive": 3,
+    "ctHp": 98.0,
+    "tHp": 217.0,
+    "ctEquip": 10300.0,
+    "tEquip": 20250.0,
+    "planted": 1,
+    "secondsSincePlant": 9.5,
+    "secondsSinceFreezeEnd": 90.0
+   },
+   "map": "de_ancient",
+   "expected": 0.003661465488353365
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 4250.0,
+    "tEquip": 4250.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 10.0
+   },
+   "map": "de_ancient",
+   "expected": 0.4974114945798903
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 500.0,
+    "tHp": 399.0,
+    "ctEquip": 22850.0,
+    "tEquip": 1650.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 75.0
+   },
+   "map": "de_ancient",
+   "expected": 0.9670024217499257
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 4200.0,
+    "tEquip": 4350.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 10.0
+   },
+   "map": "de_nuke",
+   "expected": 0.49599229905660214
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 16900.0,
+    "tEquip": 25700.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 55.0
+   },
+   "map": "de_nuke",
+   "expected": 0.3693180450769959
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 326.0,
+    "ctEquip": 25450.0,
+    "tEquip": 1900.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 10.0
+   },
+   "map": "de_nuke",
+   "expected": 0.9654750369295894
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 0,
+    "ctHp": 200.0,
+    "tHp": 0.0,
+    "ctEquip": 30950.0,
+    "tEquip": 17800.0,
+    "planted": 1,
+    "secondsSincePlant": 11.100000381469727,
+    "secondsSinceFreezeEnd": 55.0
+   },
+   "map": "de_nuke",
+   "expected": 0.9982949816033231
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 4,
+    "ctHp": 200.0,
+    "tHp": 342.0,
+    "ctEquip": 10350.0,
+    "tEquip": 20950.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 65.0
+   },
+   "map": "de_nuke",
+   "expected": 0.023411307966780624
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 3,
+    "ctHp": 294.0,
+    "tHp": 220.0,
+    "ctEquip": 33800.0,
+    "tEquip": 23000.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_nuke",
+   "expected": 0.6056264797535111
+  },
+  {
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 4,
+    "ctHp": 115.0,
+    "tHp": 306.0,
+    "ctEquip": 16800.0,
+    "tEquip": 23850.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 30.0
+   },
+   "map": "de_nuke",
+   "expected": 0.02647540006166701
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 5,
+    "ctHp": 300.0,
+    "tHp": 370.0,
+    "ctEquip": 23450.0,
+    "tEquip": 27350.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 85.0
+   },
+   "map": "de_anubis",
+   "expected": 0.09578727495301305
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 3,
+    "ctHp": 291.0,
+    "tHp": 287.0,
+    "ctEquip": 20500.0,
+    "tEquip": 22100.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 50.0
+   },
+   "map": "de_anubis",
+   "expected": 0.5740476608332024
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 31550.0,
+    "tEquip": 26750.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 25.0
+   },
+   "map": "de_anubis",
+   "expected": 0.5022338110734176
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 500.0,
+    "tHp": 400.0,
+    "ctEquip": 27050.0,
+    "tEquip": 25250.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 50.0
+   },
+   "map": "de_anubis",
+   "expected": 0.6910416819786053
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 330.0,
+    "tHp": 412.0,
+    "ctEquip": 30150.0,
+    "tEquip": 18850.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_anubis",
+   "expected": 0.5079822325187078
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 5,
+    "ctHp": 300.0,
+    "tHp": 341.0,
+    "ctEquip": 23100.0,
+    "tEquip": 27250.0,
+    "planted": 1,
+    "secondsSincePlant": 24.5,
+    "secondsSinceFreezeEnd": 110.0
+   },
+   "map": "de_anubis",
+   "expected": 0.005476343098002618
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 4,
+    "ctHp": 300.0,
+    "tHp": 400.0,
+    "ctEquip": 29750.0,
+    "tEquip": 25500.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 40.0
+   },
+   "map": "de_anubis",
+   "expected": 0.18118852777720076
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 27750.0,
+    "tEquip": 23300.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 5.0
+   },
+   "map": "de_overpass",
+   "expected": 0.568326413542196
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 30000.0,
+    "tEquip": 22000.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 5.0
+   },
+   "map": "de_overpass",
+   "expected": 0.6043770425355585
+  },
+  {
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 3,
+    "ctHp": 228.0,
+    "tHp": 220.0,
+    "ctEquip": 28950.0,
+    "tEquip": 24900.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_overpass",
+   "expected": 0.5089013360646326
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 5,
+    "ctHp": 500.0,
+    "tHp": 500.0,
+    "ctEquip": 3000.0,
+    "tEquip": 20750.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 5.0
+   },
+   "map": "de_overpass",
+   "expected": 0.13985212363965
+  },
+  {
+   "state": {
+    "ctAlive": 4,
+    "tAlive": 5,
+    "ctHp": 396.0,
+    "tHp": 475.0,
+    "ctEquip": 20150.0,
+    "tEquip": 26300.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 20.0
+   },
+   "map": "de_overpass",
+   "expected": 0.234646533705998
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 495.0,
+    "tHp": 344.0,
+    "ctEquip": 30350.0,
+    "tEquip": 19450.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "de_overpass",
+   "expected": 0.8403996572664248
+  },
+  {
+   "state": {
+    "ctAlive": 5,
+    "tAlive": 4,
+    "ctHp": 470.0,
+    "tHp": 394.0,
+    "ctEquip": 26950.0,
+    "tEquip": 22400.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 40.0
+   },
+   "map": "de_overpass",
+   "expected": 0.7340580605457715
+  }
+ ],
+ "edgeCases": [
+  {
+   "case": "unknown map uses training-share map effects",
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 3,
+    "ctHp": 200.0,
+    "tHp": 203.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_vertigo",
+   "expected": 0.22788079589237203
+  },
+  {
+   "case": "unknown map, planted",
+   "state": {
+    "ctAlive": 3,
+    "tAlive": 1,
+    "ctHp": 179.0,
+    "tHp": 93.0,
+    "ctEquip": 29850.0,
+    "tEquip": 8150.0,
+    "planted": 1,
+    "secondsSincePlant": 28.299999237060547,
+    "secondsSinceFreezeEnd": 60.0
+   },
+   "map": "cs_office",
+   "expected": 0.9009969008747031
+  },
+  {
+   "case": "CT eliminated",
+   "state": {
+    "ctAlive": 0,
+    "tAlive": 3,
+    "ctHp": 0.0,
+    "tHp": 203.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_dust2",
+   "expected": 0.0
+  },
+  {
+   "case": "T eliminated without a plant",
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 0,
+    "ctHp": 200.0,
+    "tHp": 0.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 80.0
+   },
+   "map": "de_mirage",
+   "expected": 1.0
+  },
+  {
+   "case": "bomb timer expired",
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 3,
+    "ctHp": 200.0,
+    "tHp": 203.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 1,
+    "secondsSincePlant": 40.0,
+    "secondsSinceFreezeEnd": 90.0
+   },
+   "map": "de_nuke",
+   "expected": 0.0
+  },
+  {
+   "case": "round clock expired",
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 3,
+    "ctHp": 200.0,
+    "tHp": 203.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 0,
+    "secondsSincePlant": null,
+    "secondsSinceFreezeEnd": 115.0
+   },
+   "map": "de_inferno",
+   "expected": 1.0
+  },
+  {
+   "case": "T eliminated after a plant (CT must defuse)",
+   "state": {
+    "ctAlive": 2,
+    "tAlive": 0,
+    "ctHp": 200.0,
+    "tHp": 0.0,
+    "ctEquip": 31450.0,
+    "tEquip": 27150.0,
+    "planted": 1,
+    "secondsSincePlant": 12.0,
+    "secondsSinceFreezeEnd": 70.0
+   },
+   "map": "de_ancient",
+   "expected": 0.9974321916747616
+  }
+ ]
+}
