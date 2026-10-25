@@ -1,7 +1,7 @@
 """Extract Valve matchmaking demos (match730_*.dem) into schema v1 tables, one folder per demo.
 
 Usage: python -I valve_import.py --out DIR [DEMO ...] [--mapdata DIR] [--steam DIR] [--user STEAMID64]
-       [--force] [--result FILE]
+       [--force] [--allow-in-repo] [--result FILE]
 
 With no DEMO, every match730_*.dem in the CS2 replays folder of the local Steam install is imported. Each
 demo goes to DIR/<demo file name without .dem>/ in the versioned layout of SCHEMA-v1.md (CURRENT names the
@@ -11,9 +11,11 @@ came from the same file and the same extractor version is skipped unless --force
 The user is identified by SteamID64: --user, else the one already in DIR/valve-user.local.json, else the
 most recent account in Steam's config/loginusers.vdf. That file is written with the id and where it came
 from, and each result says whether the user played in that match. It holds the user's own id, so it lives
-next to the outputs, never in the repository.
+next to the outputs, never in the repository: an --out inside a git work tree is refused unless
+--allow-in-repo.
 
-Prints a JSON summary (also written to --result) and exits 0 only if every demo validated.
+Prints a JSON summary (also written to --result). Exit code 0: every demo validated; 1: at least one failed;
+2: bad arguments, an --out inside a repository, or no demo to import.
 """
 
 from __future__ import annotations
@@ -115,6 +117,14 @@ def replays_dir(steam: Path) -> Path:
     raise FileNotFoundError(f"no CS2 replays folder in the Steam libraries {[str(x) for x in libs]}")
 
 
+def git_work_tree(path: Path) -> Path | None:
+    """The git work tree path is in (an ancestor holding .git, a folder or a worktree's file), or None."""
+    for d in [path.resolve(), *path.resolve().parents]:
+        if (d / ".git").exists():
+            return d
+    return None
+
+
 def resolve_user(out: Path, steam: Path | None, explicit: int | None) -> dict:
     """{steamid, source}: --user, else the saved file, else Steam's most recent login. Writes the file."""
     path = out / USER_FILE
@@ -180,9 +190,16 @@ def main(argv=None) -> int:
     ap.add_argument("--steam", type=Path, help="Steam install folder (default: found from the system)")
     ap.add_argument("--user", type=int, help="the user's SteamID64 (default: saved, else Steam's most recent login)")
     ap.add_argument("--force", action="store_true", help="re-extract demos that are already up to date")
+    ap.add_argument("--allow-in-repo", action="store_true",
+                    help="allow --out inside a git work tree (it receives the user's SteamID64)")
     ap.add_argument("--result", type=Path, help="also write the JSON summary here")
     a = ap.parse_args(argv)
+    if (repo := git_work_tree(a.out)) and not a.allow_in_repo:
+        ap.error(f"--out {a.out} is inside the git work tree {repo}, and {USER_FILE} would hold the user's "
+                 "SteamID64; choose a folder outside it, or pass --allow-in-repo")
     demos = a.demos or sorted(replays_dir(a.steam or steam_root()).glob(DEMO_GLOB))
+    if not demos:
+        ap.error("no demo to import: none given, and no match730_*.dem in the replays folder")
     if missing := [str(d) for d in demos if not d.is_file()]:
         ap.error(f"no such demo: {missing}")
     user = resolve_user(a.out, a.steam, a.user)

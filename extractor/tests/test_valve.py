@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+import polars as pl
 import pandas as pd
 import pytest
 
@@ -224,3 +225,67 @@ def test_a_saved_user_survives_a_later_steam_login_and_an_explicit_one_replaces_
     assert json.loads((out / vi.USER_FILE).read_text(encoding="utf-8"))["steamid"] == U2
     with pytest.raises(ValueError):
         vi.resolve_user(out, steam, 12345)
+
+
+# --- import CLI: runs ---------------------------------------------------------
+
+def _fake_extractor(calls: list, failing: set):
+    """Stands in for extract.extract_demo: publishes a minimal map for a demo that passes, nothing otherwise."""
+
+    def fake(dem, out_dir, source, mapdata=None, archive="", meta_extra=None):
+        calls.append(Path(dem).name)
+        ok = Path(dem).name not in failing
+        if ok:
+            tmp = Path(out_dir) / ".tmp-test"
+            tmp.mkdir(parents=True)
+            pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION]}) \
+                .write_parquet(tmp / "match.parquet")
+            pl.DataFrame({"steamid": pl.Series([U1], dtype=pl.UInt64)}).write_parquet(tmp / "players.parquet")
+            ex.publish_version(tmp, Path(out_dir), ex.EXTRACTOR_VERSION)
+        return dict(ok=ok, errors=[] if ok else ["ValidationFailed: deaths"], validation={})
+    return fake
+
+
+def _run(args, out):
+    code = vi.main([*map(str, args), "--out", str(out), "--user", str(U1), "--result", str(out / "summary.json")])
+    return code, json.loads((out / "summary.json").read_text(encoding="utf-8"))
+
+
+def test_a_rerun_extracts_only_what_failed_or_changed_and_the_exit_code_says_whether_all_passed(tmp_path, monkeypatch):
+    calls, failing = [], {"b.dem"}
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, failing))
+    a, b, out = tmp_path / "a.dem", tmp_path / "b.dem", tmp_path / "out"
+    a.write_bytes(b"demo a")
+    b.write_bytes(b"demo b")
+    code, summary = _run([a, b], out)
+    assert (code, calls, summary["ok"]) == (1, ["a.dem", "b.dem"], 1)
+    assert [r["user_in_match"] for r in summary["results"]] == [True, None]
+    calls.clear()
+    failing.clear()
+    assert _run([a, b], out)[0] == 0 and calls == ["b.dem"]  # a was already extracted from this file
+    calls.clear()
+    a.write_bytes(b"demo a, downloaded again")
+    assert _run([a, b], out)[0] == 0 and calls == ["a.dem"]  # same name, different file
+    calls.clear()
+    assert _run([a, b, "--force"], out)[0] == 0 and calls == ["a.dem", "b.dem"]
+
+
+def test_the_importer_refuses_to_write_the_users_id_inside_a_repository(tmp_path, monkeypatch):
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], set()))
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    dem = tmp_path / "a.dem"
+    dem.write_bytes(b"demo")
+    out = tmp_path / "repo" / "data" / "valve"
+    with pytest.raises(SystemExit) as e:
+        vi.main([str(dem), "--out", str(out), "--user", str(U1)])
+    assert e.value.code == 2 and not (out / vi.USER_FILE).exists()
+    assert vi.main([str(dem), "--out", str(out), "--user", str(U1), "--allow-in-repo"]) == 0
+
+
+def test_an_empty_replays_folder_is_an_error_not_a_successful_import(tmp_path):
+    steam = tmp_path / "Steam"
+    (steam / "steamapps").mkdir(parents=True)
+    (steam / vi.REPLAYS).mkdir(parents=True)
+    with pytest.raises(SystemExit) as e:
+        vi.main(["--out", str(tmp_path / "out"), "--steam", str(steam), "--user", str(U1)])
+    assert e.value.code == 2
