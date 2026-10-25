@@ -149,7 +149,6 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void OnTick()
     {
-        _mapGate.ServerTick();
         long t0 = Stopwatch.GetTimestamp();
         long a0 = GC.GetAllocatedBytesForCurrentThread();
         try
@@ -209,7 +208,15 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         {
             DrainMessages();
             if (_disabled || _rec == null) return;
-            if (_needInit) { if (_mapGate.MapRunning && EntityListReady()) TryInit(); return; }
+            if (_needInit)
+            {
+                // Server.MapName reads the game server's globals and returns null when there is no game
+                // server (CounterStrikeSharp 1.0.378 natives_engine.cpp GetMapName, globals.cpp
+                // getGlobalVars); it never touches the entity system, so it is safe at the main menu.
+                if (_mapGate.AwaitingHotReload && !string.IsNullOrEmpty(Server.MapName)) _mapGate.MapNamed();
+                if (_mapGate.MapRunning && EntityListReady()) TryInit();
+                return;
+            }
             _tick = Server.TickCount;
             if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
             if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }

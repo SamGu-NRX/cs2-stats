@@ -22,23 +22,35 @@ public class MapGateTests
     {
         var g = new MapGate();
         g.PluginLoaded(hotReload: false);
-        g.ServerTick();
+        Assert.False(g.AwaitingHotReload); // the map name is not even polled
+        g.MapNamed();
         Assert.False(g.MapRunning);
         g.MapStarted();
         Assert.True(g.MapRunning);
         g.MapEnded();
-        g.ServerTick(); // a tick between maps does not reopen it
         Assert.False(g.MapRunning);
     }
 
-    /// <summary>Fails if a hot reload touches entities before a server tick shows a map is running, or never resumes.</summary>
+    /// <summary>Fails if a hot reload opens before the server names a map (OnTick also runs at the menu), or never resumes.</summary>
     [Fact]
-    public void HotReloadWaitsForTheFirstServerTick()
+    public void HotReloadWaitsForAMapName()
     {
         var g = new MapGate();
         g.PluginLoaded(hotReload: true);
+        Assert.True(g.AwaitingHotReload);
         Assert.False(g.MapRunning);
-        g.ServerTick();
+        g.MapNamed();
         Assert.True(g.MapRunning);
+    }
+
+    /// <summary>Fails if a hot reload at the menu followed by a map start and end leaves the gate open.</summary>
+    [Fact]
+    public void AMapEndCancelsAHotReloadWait()
+    {
+        var g = new MapGate();
+        g.PluginLoaded(hotReload: true);
+        g.MapEnded();
+        g.MapNamed();
+        Assert.False(g.MapRunning);
     }
 }
