@@ -31,3 +31,20 @@ it("counts damage to teammates apart from ADR damage", () => {
   const a = f.pr.find((r) => f.players[r.pi].id === "a")!.m;
   expect([a.dmg, a.teamDmg]).toEqual([27, 27]);
 });
+
+it("gives damage whose attacker the demo lost to nobody, in ADR or in swing's damage share", () => {
+  // fails if a rebuilt hit with no attacker (match.unattributed_damage_hp) is credited to anyone
+  const hit = (attacker: string | null, dmg: number, tick: number) => ({ tick, attacker_steamid: attacker, victim_steamid: "v", weapon: attacker ? "ak47" : null, dmg_health: attacker ? dmg : null, dmg_health_capped: dmg, health_before: 100 });
+  const equip = { equip_value_game: 4000 };
+  const f = oneRound({
+    round: 5,
+    players: { k: "CT", h: "CT", v: "T", w: "T" },
+    player_rounds: { k: equip, h: equip, v: equip, w: equip },
+    damages: [hit(null, 60, t(3)), hit("h", 40, t(4))],
+    kills: [{ tick: t(4), killer: "k", victim: "v" }],
+  });
+  const dmg = (id: string) => f.pr.find((r) => f.players[r.pi].id === id)!.m.dmg ?? 0;
+  expect([dmg("k"), dmg("h"), dmg("w")]).toEqual([0, 40, 0]);
+  const credited = f.kills[0].credits.filter(([, x]) => x > 0).map(([p]) => f.players[p].id);
+  expect(credited).toEqual(["h"]);
+});

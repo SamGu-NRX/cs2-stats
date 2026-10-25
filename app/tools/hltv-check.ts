@@ -1,10 +1,9 @@
 // Compares the engine's scoreboard with HLTV's on every pro map that joins. Prints each mismatch and
 // a per-column tally. Usage: pnpm hltv-check [--sides]
-import path from "node:path";
 import { derive } from "../src/stats/derive";
 import { rollup } from "../src/stats/rollup";
 import { hltvMaps, joinHltv, type HltvLine } from "./hltv";
-import { loadDir, proMapDirs, WINPROB } from "./node-read";
+import { loadDir, mapLabel, proMapDirs, WINPROB } from "./node-read";
 
 const sides = process.argv.includes("--sides");
 const cols = ["k", "d", "a", "fa", "td", "hs", "kast", "adr", "opK", "opD", "mks", "clutches"] as const;
@@ -17,7 +16,7 @@ const perMap = new Map<string, number>();
 for (const dir of proMapDirs()) {
   const facts = derive(await loadDir(dir, []), WINPROB);
   const j = joinHltv(facts, hltvMaps());
-  const name = path.relative(path.join(dir, "../.."), dir);
+  const name = mapLabel(dir);
   if (!j) { misses.push(`${name}: no HLTV map joins`); continue; }
   joined++;
   perMap.set(name, j.unmatched.length);
