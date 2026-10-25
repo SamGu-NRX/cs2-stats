@@ -2,8 +2,8 @@
 // these functions, so engine changes land here and the views do not change.
 //
 // Engine v2 (app/src/stats/README.md) supplies Rating 3.0 (approx., uncalibrated), per-round player
-// data (roundDetails), the four-way economy (econ), roles and HLTV-named sub-stats. Rating 3.0 is
-// not split by side, so per-side lines fall back to Rating 2.0 and say so.
+// data (roundDetails), the four-way economy (econ), roles and HLTV-named sub-stats. The engine
+// does not split Rating 3.0 by side yet; data/sideRating.ts does it in the meantime.
 import { scoreAttributes, type GroupScore } from "../../stats/attributes";
 import { addCounters, emptyCounters, type Counters } from "../../stats/counters";
 import type { KillView, MatchView, PlayerRow, RoundView } from "../../stats/derive";
@@ -36,7 +36,8 @@ export const RATING_POOLED = "Pooled over rounds: kills, damage, deaths, KAST, m
  * hold totals only would get a rating from one round, so below half coverage there is no rating.
  */
 export const R3_MIN_COVERAGE = 0.5;
-export const r3Usable = (c: Counters) => c.r3.rounds > 0 && c.r3.rounds >= R3_MIN_COVERAGE * c.rounds;
+const covered = (logRounds: number, rounds: number) => logRounds > 0 && logRounds >= R3_MIN_COVERAGE * rounds;
+export const r3Usable = (c: Counters) => covered(c.r3.rounds, c.rounds);
 export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log.";
 
 export const playerRating = (p: PlayerRow): number | null => (r3Usable(p.c) ? p.rating3.value : null);
@@ -46,8 +47,9 @@ export const countersRating3 = (c: Counters) => rating3(c.r3);
 export const summaryRating = (s: LightSummary): number | null => (r3Usable(s.human.c) ? s.human.rating3 : null);
 /** Rating 2.0 for any additive slice, for tooltips only. */
 export const sliceRating = (x: RatingInputs) => rating2(x);
-/** Rating 3.0 from side inputs (data/sideRating.ts). */
-export const r3Value = (x: R3Inputs | null | undefined) => (x && x.rounds ? rating3(x).value : null);
+/** Rating 3.0 from one side's inputs (data/sideRating.ts), under the same coverage rule: `rounds`
+ *  is every round played on that side, with or without the kill log. */
+export const r3Value = (x: R3Inputs | null | undefined, rounds: number) => (x && covered(x.rounds, rounds) ? rating3(x).value : null);
 
 export const ratingLabel = (_v?: unknown) => RATING_LABEL;
 
@@ -116,7 +118,7 @@ export function statLine(v: MatchView, pi: number, side: SideKey, sides?: SideIn
     rounds: sl.rounds, kills: sl.kills, deaths: sl.deaths, assists: sl.assists, diff: sl.kills - sl.deaths,
     adr: per(sl.dmg, sl.rounds), kast: sl.rounds ? (100 * sl.kastRounds) / sl.rounds : null,
     hs: sl.kills ? (100 * hs) / sl.kills : null, kpr: per(sl.kills, sl.rounds), dpr: per(sl.deaths, sl.rounds),
-    swing: swingRounds ? swing / swingRounds : null, rating: sides ? r3Value(sides[pi][side]) : null, rating2: r2,
+    swing: swingRounds ? swing / swingRounds : null, rating: sides ? r3Value(sides[pi][side], sl.rounds) : null, rating2: r2,
   };
 }
 
@@ -132,7 +134,7 @@ export function counterLine(c: Counters, side: SideKey, sideR3?: R3Inputs | null
     hs: both && c.kills ? (100 * c.hsKills) / c.kills : null,
     kpr: per(sl.kills, sl.rounds), dpr: per(sl.deaths, sl.rounds),
     swing: both && c.swingRounds ? c.swing / c.swingRounds : null,
-    rating: both ? countersRating(c) : r3Value(sideR3), rating2: r2,
+    rating: both ? countersRating(c) : r3Value(sideR3, sl.rounds), rating2: r2,
   };
 }
 

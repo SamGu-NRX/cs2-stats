@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { deriveMatch, summarize } from "../../stats/derive";
 import { loadPluginMatch, loadSample, PLUGIN_MATCHES, SAMPLE_1714 } from "../../stats/testing/load";
-import { countersRating, r3Usable, r3Value, roundMatrix, statLine, summaryRating } from "./engine";
+import { rating3 } from "../../stats/rating3";
+import { counterLine, countersRating, r3Usable, roundMatrix, statLine, summaryRating } from "./engine";
 import { sideInputs } from "./sideRating";
 import { sourceOfSummary, sourceOfView } from "./sources";
 
@@ -44,7 +45,7 @@ describe("statLine", async () => {
   it("rates one side only from that side's Rating 3.0 inputs, never from Rating 2.0", async () => {
     expect(statLine(v, v.human, "t").rating).toBeNull();
     const sides = sideInputs(await loadPluginMatch(PLUGIN_MATCHES[2]));
-    expect(statLine(v, v.human, "t", sides).rating).toBe(r3Value(sides[v.human].t));
+    expect(statLine(v, v.human, "t", sides).rating).toBe(rating3(sides[v.human].t).value);
   });
 });
 
@@ -56,6 +57,13 @@ describe("Rating 3.0 coverage", async () => {
     expect(r3Usable(s.human.c)).toBe(false);
     expect(summaryRating(s)).toBeNull();
     expect(countersRating(s.human.c)).toBeNull();
+  });
+  it("has no T or CT rating either, though one side holds the kill-log round", async () => {
+    const sides = sideInputs(await loadSample(SAMPLE_1714));
+    for (const side of ["t", "ct"] as const) {
+      expect(statLine(v, v.human, side, sides).rating).toBeNull();
+      expect(counterLine(s.human.c, side, sides[v.human][side]).rating).toBeNull();
+    }
   });
   it("uses Rating 3.0 on a fully recorded match", async () => {
     const r = summarize(deriveMatch(await loadPluginMatch(PLUGIN_MATCHES[1]), PLUGIN_MATCHES[1]));
