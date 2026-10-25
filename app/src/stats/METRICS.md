@@ -27,7 +27,7 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 |---|---|---|---|
 | rating3 | Rating 3.0 | approx | `model/rating3/SPEC.md`. A linear model in eco-adjusted KPR, ADR, DPR and KAST, raw multi-kill % and swing: `params.json` `rating.intercept` plus `rating.coefficients` times each input (ordinary least squares on HLTV's displayed inputs, PR #17). `rating3()` throws on any other `rating.basis`. Per side it is the rating of that side's rounds (`rating3BySide`). |
 | kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. Each KAST round is also credited to the first of those that earned it, so the parts sum to KAST: `killRounds + kastA + kastS + kastT`. |
-| swing | Round swing | approx | `swing.ts`: each kill's and plant's change in win probability (HLTV's lookup from the private pack when installed, else the CS2RB round model, which also reads the living players' health, team equipment and time; `model-params.ts`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). Flash assists get no credit until `params.json` carries the share. |
+| swing | Round swing | approx | `swing.ts`: each kill's and plant's change in win probability (HLTV's lookup from the private pack when installed, else the CS2RB round model, which also reads the living players' health, team equipment and time; `model-params.ts`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). An eligible flash (the gaining side's, still blinding the victim at the kill, not the killer's, a team flash or an ambiguous one) takes `params.json`'s flash share first. |
 
 Eco adjustment (`rating3.ts`): a player's duel group comes from the best primary held at the kill,
 else their equipment value; a kill is worth `k (1 - P(killer wins))` from the Bradley-Terry table in
@@ -84,7 +84,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | tradedDeathSuccess | Traded Death Success % | approx | Traded deaths over tradeable deaths |
 | openingSwing, clutchSwing, awpSwing | Opening, Clutch, AWP Swing | approx | Swing from opening kills and deaths; from kills and deaths after you became your side's last player; from AWP kills and deaths holding the AWP. Per round. |
 | awpDuelWin | AWP Duel Win % | approx | Your AWP kills over AWP kills plus deaths holding the AWP |
-| flashSwing | Flash Swing | unavailable | `params.json` has no flash share yet |
+| flashSwing | Flash Swing | approx | Swing your flashes earned: a kill on an enemy your flash was still blinding gives you `params.json`'s flash share (0.154) of its credit; several flashers split it equally (ours) |
 | assistsPerFlash | Assists per Flash | approx | The game's flash assists per flashbang thrown |
 | grenadeDmgTaken | Grenade Damage Received | exact | Enemy grenade and fire damage you took, per round |
 | dmgPerHe | Damage per HE Thrown | exact | Enemy HE damage per HE thrown |

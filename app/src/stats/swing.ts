@@ -3,9 +3,9 @@
 // describes. Values are win-probability fractions (0.05 = 5 points); HLTV shows a player's mean per
 // round in percent.
 //
-// Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and flash assists get no
-// credit because params.json does not fix the flash share (SPEC.md rule 5 forbids inventing one).
-// VALIDATION.md compares the result with HLTV's per-player swing.
+// Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and the flash share
+// (params.json swing.flash_credit_fraction) comes from 23 clean observations. VALIDATION.md compares
+// the result with HLTV's per-player swing.
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact } from "./facts";
@@ -13,6 +13,7 @@ import type { Side } from "./tables";
 import { pTWins, type RoundState } from "./winprob";
 
 const W = params.swing.round_end_remainder;
+const FLASH = params.swing.flash_credit_fraction;
 
 /** P(the side) wins, from P(T wins). */
 const pSide = (pT: number, s: Side) => (s === "T" ? pT : 1 - pT);
@@ -57,7 +58,7 @@ export function swing(c: Ctx): void {
     const credit = new Map<number, number>();
     const add = (p: number, v: number) => credit.set(p, (credit.get(p) ?? 0) + v);
     const killSwingPlayers = new Set<number>();
-    const part = { opening: new Map<number, number>(), clutch: new Map<number, number>(), awp: new Map<number, number>() };
+    const part = { opening: new Map<number, number>(), clutch: new Map<number, number>(), awp: new Map<number, number>(), flash: new Map<number, number>() };
     const addPart = (m: Map<number, number>, p: number, v: number) => m.set(p, (m.get(p) ?? 0) + v);
     // a player's clutch starts when they are the last of their side alive
     const inClutch = new Set<number>();
@@ -99,8 +100,14 @@ export function swing(c: Ctx): void {
       }
       const total = [...ledger.values()].reduce((s, v) => s + v, 0);
       const gain = Math.max(0, delta);
-      if (total > 0) for (const [a, d] of ledger) credits.push([a, (gain * d) / total]);
-      else if (k.enemy && k.killer !== null) credits.push([k.killer, gain]);
+      // SPEC.md: an eligible flash (the gaining side's, on the victim, still blinding him at the kill;
+      // not the killer's, a team flash or an ambiguous one) takes the flash share; the rest follows the
+      // damage ledger, else the killer. Several flashers split the share equally (ours).
+      const flashers = [...new Set(flashersOf(c, ri, k, gainer))];
+      const rest = flashers.length ? gain * (1 - FLASH) : gain;
+      for (const f of flashers) { credits.push([f, (gain * FLASH) / flashers.length]); addPart(part.flash, f, (gain * FLASH) / flashers.length); }
+      if (total > 0) for (const [a, d] of ledger) credits.push([a, (rest * d) / total]);
+      else if (k.enemy && k.killer !== null) credits.push([k.killer, rest]);
       k.credits = credits;
       const awpDuel = k.weapon === "awp" || k.victimWeapon === "AWP";
       for (const [pl, v] of credits) {
@@ -149,7 +156,21 @@ export function swing(c: Ctx): void {
       p.m.openingSwing += part.opening.get(p.pi) ?? 0;
       p.m.clutchSwing += part.clutch.get(p.pi) ?? 0;
       p.m.awpSwing += part.awp.get(p.pi) ?? 0;
+      p.m.flashSwing += part.flash.get(p.pi) ?? 0;
       if (p.side === winner) { p.m.rwsRounds++; p.m.rws += teamGain > 0 ? Math.max(0, v) / teamGain : 1 / winners; }
     }
   }
+}
+
+/** Players on the gaining side whose flash was blinding the victim at the kill (SPEC.md's eligible flashes). */
+function flashersOf(c: Ctx, ri: number, k: KillFact, gainer: Side): number[] {
+  const b = c.t.blinds;
+  const out: number[] = [];
+  for (const i of c.byRound("blinds")[ri]) {
+    if (b.is_team_flash[i] || b.is_self[i] || b.ambiguous[i] || b.tick[i] > k.tick || k.tick > b.tick[i] + b.duration[i] * c.tickRate) continue;
+    if (c.pi.get(b.victim_steamid[i]) !== k.victim) continue;
+    const a = c.idOf(b.attacker_steamid[i]);
+    if (a !== null && a !== k.killer && c.side[ri][a] === gainer) out.push(a);
+  }
+  return out;
 }
