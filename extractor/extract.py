@@ -422,12 +422,20 @@ def match_start_tick(begin_new_match: list[int], real_round_end_ticks: list[int]
     return max(followed) if followed else 0
 
 
-def split_restores(windows: list[tuple[int, int]], kills_plus_deaths: dict[int, int]):
+RESTORE_SETTLE_S = 1.0  # how long after a restore tick its counters are read
+
+
+def restore_settle_ticks(rate: float) -> int:
+    return int(round(RESTORE_SETTLE_S * rate))
+
+
+def split_restores(windows: list[tuple[int, int]], kills_plus_deaths: dict[int, int], rate: float):
     """(rolled_back, aborted): an attempt is rolled back when the players' kills plus deaths are the same
-    64 ticks after its restore tick as at its start; otherwise the game kept its stats."""
+    RESTORE_SETTLE_S after its restore tick as at its start; otherwise the game kept its stats."""
+    settle = restore_settle_ticks(rate)
     rolled_back, aborted = [], []
     for a, b in windows:
-        same = kills_plus_deaths.get(b + 64, 0) == kills_plus_deaths.get(a, 0)
+        same = kills_plus_deaths.get(b + settle, 0) == kills_plus_deaths.get(a, 0)
         (rolled_back if same else aborted).append((a, b))
     return rolled_back, aborted
 
@@ -725,15 +733,22 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                              match_start)
         if rounds.empty:
             raise RuntimeError("no round_end events after match start")
+        if ctx.truncated:
+            # Without awpy's playback header, measure the tick rate from game time across the match.
+            fe_t = sorted(int(t) for t in ev("round_freeze_end").tick if t >= match_start)
+            gt = parser.parse_ticks(["game_time"], ticks=[fe_t[0], fe_t[-1]]).drop_duplicates("tick") \
+                .set_index("tick").game_time
+            rate = ctx.tick_rate = round((fe_t[-1] - fe_t[0]) / float(gt[fe_t[-1]] - gt[fe_t[0]]), 3)
         # A winnerless round end does not always roll stats back. The game's counters decide: if kills plus
         # deaths are the same just after the restore as at the attempt's start, the attempt was rolled back
         # and stays voided; otherwise its events count, and it becomes a round with aborted = true and no
         # winner (one pro demo: a world suicide at 78957 inside the 78153-97787 attempt raised
         # deaths_total 7 -> 8 and stayed counted, while the 45420-57646 attempt rolled back).
+        settle = restore_settle_ticks(rate)
         counters = parser.parse_ticks(["kills_total", "deaths_total"],
-                                      ticks=sorted({t for a_, b_ in voided for t in (a_, b_ + 64)}))
+                                      ticks=sorted({t for a_, b_ in voided for t in (a_, b_ + settle)}))
         total_at = (counters.kills_total + counters.deaths_total).groupby(counters.tick).sum()
-        rolled_back, aborted = split_restores(voided, total_at.to_dict())
+        rolled_back, aborted = split_restores(voided, total_at.to_dict(), rate)
         if aborted:
             fe_all = np.sort(ev("round_freeze_end").tick.to_numpy())
             extra = []
@@ -763,11 +778,6 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 rounds = rounds.iloc[:-1].reset_index(drop=True)
             if rounds.empty:
                 raise RuntimeError(f"{TRUNCATED}: no complete round before the cut")
-            # Without awpy's playback header, measure the tick rate from game time across the match.
-            fe_t = [int(t) for t in rounds.freeze_end_tick.dropna()]
-            gt = parser.parse_ticks(["game_time"], ticks=[fe_t[0], fe_t[-1]]).drop_duplicates("tick") \
-                .set_index("tick").game_time
-            rate = ctx.tick_rate = round((fe_t[-1] - fe_t[0]) / float(gt[fe_t[-1]] - gt[fe_t[0]]), 3)
 
     # The final scoreboard is read at game over: the win panel. A demo without one (the first part of a
     # split recording, or a recording that stops) is read at the next round start after its last round,
