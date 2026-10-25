@@ -27,7 +27,7 @@ public sealed partial class BotMatchStatsPlugin
 
     private bool Recording => _rec is { RoundActive: true } && !_needInit;
 
-    private void EvError(string name, Exception ex) => Logger.LogError(ex, "BotMatchStats {Event} handler failed", name);
+    private void EvError(string name, Exception ex) => Log(LogLevel.Error, $"{name} handler failed: {ex}");
 
     private HookResult OnRoundStart(EventRoundStart e, GameEventInfo info)
     {
@@ -63,7 +63,7 @@ public sealed partial class BotMatchStatsPlugin
                     _finalizeAt = Nil.V;
                     _matchEndAt = Nil.V;
                     _winPanelSeen = false;
-                    Logger.LogInformation("BotMatchStats: game restarted (round {R}, warmup={Warm}); closing capture as restarted", r, warm);
+                    Log(LogLevel.Information, $"game restarted (round {r}, warmup={warm}); closing capture as restarted");
                     rec.EndCapture("restarted", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
                 }
                 else
@@ -112,7 +112,7 @@ public sealed partial class BotMatchStatsPlugin
             bool wasInventory = _equipFromInventory;
             _equipFromInventory = anyBot && !anyBotEquip;
             if (_equipFromInventory && !wasInventory)
-                Logger.LogWarning("BotMatchStats: every bot reads 0 for m_unCurrentEquipmentValue at freeze end; equipment values come from inventory prices instead.");
+                Log(LogLevel.Warning, "every bot reads 0 for m_unCurrentEquipmentValue at freeze end; equipment values come from inventory prices instead.");
             rec.SetEquipSource(_equipFromInventory ? Recorder.EquipFromInventory : Recorder.EquipFromPawn);
             if (_humanSlot >= 0)
             {
@@ -277,7 +277,10 @@ public sealed partial class BotMatchStatsPlugin
             int a = PiOf(attacker);
             string weapon = WeaponNames.Strip(e.Weapon);
             if (a != Nil.V && WeaponNames.NeedsVariantCheck(weapon))
-                weapon = WeaponNames.HurtVariant(weapon, ActiveItemDef(attacker)) ?? weapon;
+            {
+                nint ap = attacker != null && attacker.IsValid ? PawnOfSlot(attacker.Slot) : 0;
+                weapon = WeaponNames.HurtVariant(weapon, ap == 0 ? -1 : Mem.ActiveItemDef(ap)) ?? weapon;
+            }
             int tick = Server.TickCount;
             rec.Hurt(tick, a, v, e.DmgHealth, e.DmgArmor, e.Health,
                 weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), e.Hitgroup,
@@ -289,7 +292,7 @@ public sealed partial class BotMatchStatsPlugin
                 if (vp != 0)
                 {
                     Mem.SpottedState(vp, out uint m0, out uint m1, out bool spotted);
-                    rec.HitMask(tick, a, v, m0, m1, spotted);
+                    rec.HitMask(tick, a, v, m0, m1, spotted, LosAtHit(vp));
                 }
             }
         }
@@ -297,10 +300,30 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("player_hurt");
     }
 
-    private static int ActiveItemDef(CCSPlayerController? c)
+    /// <summary>
+    /// Line of sight from the human's eye to the victim at the moment of a hit (aim.hitMask.los): 1 when
+    /// any of the tracker's points is clear, 0 when all are blocked, Nil when line of sight is off.
+    /// Validation data for the 16 Hz signal, at the cost of up to three traces per human hit.
+    /// </summary>
+    private int LosAtHit(nint victimPawn)
     {
-        var w = c?.PlayerPawn.Value?.WeaponServices?.ActiveWeapon.Value;
-        return w == null || !w.IsValid ? -1 : w.AttributeManager.Item.ItemDefinitionIndex;
+        var probe = _losProbe;
+        if (probe == null || !_rec!.Los.Enabled || _humanSlot < 0) return Nil.V;
+        nint hp = PawnOfSlot(_humanSlot);
+        if (hp == 0) return Nil.V;
+        Mem.Origin(hp, out float hx, out float hy, out float hz);
+        Mem.Origin(victimPawn, out float vx, out float vy, out float vz);
+        if (float.IsNaN(hx) || float.IsNaN(vx)) return Nil.V;
+        double ez = hz + Mem.Read<float>(hp, Mem.ViewZ);
+        float vview = Mem.Read<float>(victimPawn, Mem.ViewZ);
+        probe.SetIgnore(hp);
+        foreach (double frac in LosTracker.PointHeights)
+        {
+            bool? clear = probe.Clear(hx, hy, ez, vx, vy, vz + vview * frac);
+            if (clear == null) return Nil.V;
+            if (clear.Value) return 1;
+        }
+        return 0;
     }
 
     private HookResult OnBlind(EventPlayerBlind e, GameEventInfo info)
@@ -387,7 +410,7 @@ public sealed partial class BotMatchStatsPlugin
                 if (pawn != 0) Mem.Origin(pawn, out x, out y, out z);
                 _rec!.Throw(Server.TickCount, pi, type, x, y, z);
             }
-            else Logger.LogWarning("BotMatchStats: grenade_thrown with unrecognized weapon '{Weapon}'", e.Weapon);
+            else Log(LogLevel.Warning, $"grenade_thrown with unrecognized weapon '{e.Weapon}'");
         }
         catch (Exception ex) { EvError("grenade_thrown", ex); }
         return EvEnd("grenade_thrown");
@@ -438,9 +461,13 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
-            var target = Utilities.GetEntityFromIndex<CBombTarget>(e.Site);
-            int site = target == null || !target.IsValid ? Nil.V : target.IsBombSiteB ? 1 : 0;
-            if (site == Nil.V) Logger.LogWarning("BotMatchStats: bomb_planted site entity {Site} is not a bomb target; bombSite is null", e.Site);
+            // Sites are read once per map (BuildBombSites); the wrapper path is a fallback for a site added later.
+            if (!_bombSites.TryGetValue(e.Site, out int site))
+            {
+                var target = Utilities.GetEntityFromIndex<CBombTarget>(e.Site);
+                site = target == null || !target.IsValid ? Nil.V : target.IsBombSiteB ? 1 : 0;
+                if (site == Nil.V) Log(LogLevel.Warning, $"bomb_planted site entity {e.Site} is not a bomb target; bombSite is null");
+            }
             _rec!.BombPlanted(Server.TickCount, PiOf(e.Userid), site);
         }
         catch (Exception ex) { EvError("bomb_planted", ex); }
@@ -483,7 +510,7 @@ public sealed partial class BotMatchStatsPlugin
                     break;
                 }
             }
-            if (price == Nil.V) Logger.LogWarning("BotMatchStats: price of {Item} bought by {Name} not readable; utilSpent is null for that player this round", e.Weapon, c.PlayerName);
+            if (price == Nil.V) Log(LogLevel.Warning, $"price of {e.Weapon} bought by {c.PlayerName} not readable; utilSpent is null for that player this round");
             _rec!.UtilBought(pi, type, price);
         }
         catch (Exception ex) { EvError("item_purchase", ex); }

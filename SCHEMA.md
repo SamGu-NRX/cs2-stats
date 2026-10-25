@@ -158,3 +158,19 @@ Files under `inprogress\` have `status: "inprogress"` and a `resume: {gameStart,
 ### `pos`
 - `pos.enc` is `"delta"`. `tick`, `x`, `y` and `z` are then differences from the previous row with the same `pi`; each player's first row is absolute. Decode by a running sum per player. The encoding is lossless, and `ri`, `pi`, `place` and `alive` stay absolute. On the 21-round fixture replay the final file went from 52.6 KB to 35.6 KB.
 - Only alive players are sampled, so `alive` is always 1 in plugin 1.0.0.
+
+## Optional fields (plugin 1.1.0)
+Additions to v1; the version stays `1` and every field may be absent. Files from 1.0.0 and earlier read as before.
+
+### Line of sight (`aim.los`, `aim.hitMask.los`, `env.visSource`, `env.losError`)
+Visibility for the human now comes from a physics trace instead of the spotted mask, which the 2026-10-25 recordings showed is set for only 53 of 93 bullet hits (`app/src/stats/README.md`, "Visibility").
+- **How:** 16 times a second during live rounds, a ray from the human's eye to each living enemy, at the enemy's eye, chest and waist (1.0, 0.65 and 0.35 of the view offset), stopping at the first clear one. The trace is CounterStrikeSharp's `Trace.TraceEndShape` with mask `SolidBrushOnly` (world geometry, no players). Smoke does not block it; `aim.shots.smoke` still approximates smoke.
+- **Not traced:** enemies outside 60° either side of the human's horizontal view direction, or more than 5,000 units away, count as hidden. A check stops tracing after 250 µs; enemies it did not reach keep their previous state.
+- `aim.los`: `ri, tick, enemy, vis`, one row each time an enemy becomes visible (`vis` 1) or hidden (0). Every enemy starts a round hidden. A dying enemy is hidden at the kill tick; every enemy is hidden when the human dies and at round end. Resolution is the check interval, 4 ticks at 64 tick.
+- Engagements and `aim.shots.visTarget` use this signal when it is on (held between checks), else the spotted mask as before.
+- `aim.hitMask.los`: a trace made at each human hit, at the same three points: 1 clear, 0 blocked, null when line of sight was off. This validates the signal.
+- `env.visSource`: `los`, `mask`, or `mixed` when line of sight was off for some rounds. `env.losError`: why it turned off. Line of sight turns off for the rest of the map when a trace throws or returns a non-number, and when a trace from the human's eye to a point 4 units above it is blocked at the start of the map; recording continues with the spotted mask.
+- `recon.dropped.los`: rows lost to a full per-round buffer (2048).
+
+### `perf` (plugin 1.1.0)
+Extra columns per round: `losChecks`, `losTraces`, `losBudgetHits` (checks cut short by the 250 µs budget), `losAvgUs` and `losMaxUs` (time per check, included in the tick times). The event names `warmup` and `log` time the game-thread warm-up and the queued log lines, which run only outside live rounds.
