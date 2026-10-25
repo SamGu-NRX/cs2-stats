@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 7;
+export const DERIVE_VERSION = 8;
 
 export interface MatchInfo {
   id: string;
@@ -21,8 +21,13 @@ export interface MatchInfo {
   maxRounds: number;
   /** team names: [the team that started CT, the team that started T] */
   teams: [string, string];
-  /** rounds won, same order as teams */
+  /** rounds won over the whole match, same order as teams (match.extra "final_score" when the source holds rounds it does not cover) */
   score: [number, number];
+  /**
+   * The match was played to its end: the source says so (match.extra "status", the plugin's), else a
+   * team passed half the round limit or the teams tied on it. Career views leave out the rest.
+   */
+  complete: boolean;
   nRounds: number;
   /** ok when the extractor computed mesh visibility; aim families that need it are unavailable otherwise */
   visibility: string;

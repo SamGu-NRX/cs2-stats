@@ -186,6 +186,15 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
   return map ? all.filter((s) => s.match.map === map) : all;
 }
 
+/**
+ * The matches career views read (Home, Profile, Playstyle, Career aim): finished ones only, so an
+ * abandoned match neither appears in Form nor moves an average. The Matches list shows every match
+ * and labels the unfinished ones.
+ */
+export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete);
+
+export const INCOMPLETE_TIP = "Not finished: left out of Home, Profile, Playstyle and Career aim.";
+
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {
   const n = new Map<string, number>();

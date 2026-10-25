@@ -62,3 +62,8 @@ it("rates traded death success over tradeable deaths only, so it cannot pass 100
   const s = rollup([near, unlogged, unlogged], { player: "v" });
   expect([s.m.tradedDeaths, s.m.tradeableDeaths, METRIC.tradedDeathSuccess.value(s)]).toEqual([2, 1, 0]);
 });
+
+it("marks a demo match that stopped before either team won as incomplete", () => {
+  // fails if an abandoned one-round match counts as finished in career views
+  expect(oneRound({ players: { a: "CT", b: "T" } }).match).toMatchObject({ score: [1, 0], complete: false });
+});

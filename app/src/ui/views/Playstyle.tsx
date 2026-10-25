@@ -10,7 +10,7 @@ import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
 import { Select } from "../components/controls";
 import { frameFor, RadarView } from "../components/MapArt";
-import { BOTS_TIP, filterEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
+import { BOTS_TIP, careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
 import { useCall } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
@@ -25,7 +25,7 @@ import { Empty, Provisional } from "./shared";
 export default function Playstyle() {
   const { matches, you } = useData();
   const { map, n } = useFilters();
-  const list = useMemo(() => { const f = filterEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const q = useMemo(() => (list.length && you.length ? { files: list.map((e) => e.file), filter: { player: you } } : null), [list, you]);
   return (
     <div className="view view--capped">

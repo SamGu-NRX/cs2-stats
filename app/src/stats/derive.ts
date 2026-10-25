@@ -39,6 +39,8 @@ function matchMeta(t: MatchTables) {
     roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
     startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
     durationS: typeof extra.duration_s === "number" ? extra.duration_s : null,
+    finalScore: Array.isArray(extra.final_score) ? (extra.final_score as [number, number]) : null,
+    status: typeof extra.status === "string" ? extra.status : null,
   };
 }
 
@@ -282,7 +284,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -297,13 +299,15 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   swing(c);
   const weapons = guns(c);
 
-  const score: [number, number] = [0, 0];
-  for (const rf of c.rounds) if (rf.winner) score[rf.winner === "CT" ? rf.ctTeam : 1 - rf.ctTeam]++;
+  const counted: [number, number] = [0, 0];
+  for (const rf of c.rounds) if (rf.winner) counted[rf.winner === "CT" ? rf.ctTeam : 1 - rf.ctTeam]++;
+  const score = finalScore ?? counted;
+  const complete = status !== null ? status === "complete" : Math.max(...score) > maxRounds / 2 || (score[0] === score[1] && 2 * score[0] >= maxRounds);
   return {
     v: DERIVE_VERSION,
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
-      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
+      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
       roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind,
     },
     players: c.players, rounds: c.rounds,
