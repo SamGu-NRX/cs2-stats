@@ -25,9 +25,9 @@ import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
 
-export function SectionHead({ title, tip, id }: { title: string; tip: string; id?: string }) {
+export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
-    <div className="shead" id={id}>
+    <div className="shead" id={id} ref={sectionRef}>
       <h2 className="shead__t"><span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span></h2>
     </div>
   );
@@ -357,7 +357,7 @@ export function RatingLegend({ children }: { children?: ReactNode }) {
 // ---------------------------------------------------------------- how good
 
 /** HLTV's "how good" metrics, in the order HLTV lists them beside Rating 3.0. */
-const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
+export const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
 
 /** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros on the page's side. */
 export function HowGood({ q, side }: { q: Query; side: PoolSide }) {

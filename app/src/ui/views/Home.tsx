@@ -24,7 +24,8 @@ import { ChevronRightIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
-import { matchHref, openMatch, pageHref } from "../router";
+import { matchHref, openMatch, pageHref, sectionHref } from "../router";
+import { HOW_GOOD } from "./profile/parts";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
@@ -392,13 +393,16 @@ function WorkOn({ t }: { t: Totals | null }) {
       .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
   }, [r]);
+  /** Where a weak metric lives: its Profile section, or Career aim for aim metrics. */
+  const workOnHref = (m: { id: string; group: string }) => (m.group === "aim" ? pageHref("aim")
+    : sectionHref("profile", m.group === "firepower" ? "firepower" : HOW_GOOD.includes(m.id) ? "howgood" : "performance"));
   const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
       {weak.length === 0 ? <p className="meta">Not enough rounds to compare with pros.</p> : (
         <div className="workon">
           {weak.map(({ m, pct, value }) => (
-            <a key={m.id} className="workon__item" href={pageHref("profile", m.group in ATTR_ICON ? { attr: m.group } : undefined)} data-tip={m.def}>
+            <a key={m.id} className="workon__item" href={workOnHref(m)} data-tip={m.def}>
               <AttrIcon id={icon(m.group)} size={20} className="workon__ico" />
               <div className="workon__body">
                 <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }} data-tip="Percentile against pros: the share of pros below you">{rankText(pct)}</b></div>

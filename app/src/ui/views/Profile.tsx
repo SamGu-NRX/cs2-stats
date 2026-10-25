@@ -34,7 +34,7 @@ import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
-import { matchHref, openMatch, setQuery, useRoute } from "../router";
+import { matchHref, openMatch, setQuery, useRoute, useSection } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside } from "./shared";
@@ -74,6 +74,12 @@ export default function ProfileView() {
     ...(bots.length ? [{ files, filter: { player: bots, ...sidesOf(side) } }] : []),
   ] : null), [list, files, ids, bots, side]);
   const sums = useRollups(qs);
+  // ?sec= links (Home's "Work on", typed links) scroll to their section once it renders (router.ts useSection)
+  const identityRef = useSection("identity");
+  const styleRef = useSection("style");
+  const performanceRef = useSection("performance");
+  const firepowerRef = useSection("firepower");
+  const howGoodRef = useSection("howgood");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
@@ -104,20 +110,20 @@ export default function ProfileView() {
           )} />
           <FormRail p={p} />
         </div>
-        <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" />
-        <StyleAttributes q={base} side={side} />
+        <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" sectionRef={identityRef} />
+        <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} /></div>
         <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
         <div className="identity">
           <RoleCard q={base} maps={mapsIn(list)} />
           <WhereYouPlay />
         </div>
-        <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" />
+        <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" sectionRef={performanceRef} />
         <SwingCard you={p.you} list={list} bots={p.bots} />
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         {baselines && (
           <div className="profile__cols">
-            <Firepower q={base} side={side} />
-            <HowGood q={base} side={ratingKey(side)} />
+            <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} /></div>
+            <div id="howgood" ref={howGoodRef} className="psec"><HowGood q={base} side={ratingKey(side)} /></div>
           </div>
         )}
         <div className="profile__trend">
