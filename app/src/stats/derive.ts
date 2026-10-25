@@ -2,7 +2,7 @@
 // it. Deterministic and per event; rollup.ts sums the facts under filters. Each family module fills
 // its own measures (facts.ts MEASURES) from the shared indexes built here.
 import { deriveAggro } from "./aggression";
-import { deriveAim } from "./aim";
+import { deriveAim, markSight } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
@@ -325,6 +325,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   ecoAdjust(c);
   swing(c);
   valuedRounds(c);
+  markSight(c);
   const weapons = guns(c);
 
   const counted: [number, number] = [0, 0];

@@ -1,0 +1,67 @@
+// The contact measures (aim.ts sighting, METRICS.md "Contact") on a hand-built round at 64 ticks/s.
+// a (CT) runs along +x at 4 units a tick (256 u/s) from x = 0 at tick 1000 and stops at x = 80 on
+// tick 1020; b (T) stands at x = 1,000. Both become visible to each other at tick 1010, when a is at
+// x = 40. a fires at 1030, b at 1040, and a kills b at 1050.
+import { describe, expect, it } from "vitest";
+import type { SightFact } from "./aim";
+import { compare, type Baselines } from "./compare";
+import { METRIC, METRICS } from "./metrics";
+import { rollup } from "./rollup";
+import { oneRound } from "./testing/match";
+
+const ax = (tick: number) => 4 * (Math.min(tick, 1020) - 1000);
+const av = (tick: number) => (tick <= 1020 ? 256 : 0);
+
+function ticks(id: number, aIsAttacker: boolean, shotAt: number) {
+  const rows = [];
+  for (let tick = 1000; tick <= 1100; tick++) {
+    const a = { x: ax(tick), vx: av(tick), yaw: 3 };
+    const b = { x: 1000, vx: 0, yaw: 180 };
+    const [att, vic] = aIsAttacker ? [a, b] : [b, a];
+    rows.push({
+      engagement_id: id, tick, a_x: att.x, a_y: 0, a_z: 0, a_eye_z: 64, a_pitch: 0, a_yaw: att.yaw, a_vel_x: att.vx, a_vel_y: 0,
+      a_shot_fired: tick === shotAt, v_x: vic.x, v_y: 0, v_z: 0, v_eye_z: 64, v_vel_x: vic.vx, v_vel_y: 0,
+      mesh_visible: tick >= 1010, smoke_blocked: false,
+    });
+  }
+  return rows;
+}
+
+const window = { start_tick: 1000, end_tick: 1100, first_visible_tick: 1010 };
+const match = oneRound({
+  players: { a: "CT", b: "T" },
+  engagements: [{ engagement_id: 0, attacker_steamid: "a", victim_steamid: "b", ...window }, { engagement_id: 1, attacker_steamid: "b", victim_steamid: "a", ...window }],
+  engagement_ticks: [...ticks(0, true, 1030), ...ticks(1, false, 1040)],
+  kills: [{ tick: 1050, killer: "a", victim: "b" }],
+});
+
+describe("contact measures", () => {
+  const sight = (pi: number) => match.aim.find((f): f is SightFact => f.k === "sight" && f.pi === pi)!;
+
+  it("measures distance, peek travel, the first shot, the stop and the duel from the onset", () => {
+    // fails if a window, the moving cut or the stop buffer's one-tick offset moves: a is 960 units
+    // from b at the onset, moves 40 units by tick 1026 (stopped at 1020), shoots standing at 1030
+    // with the crosshair 3 degrees off, 9 ticks after his last moving tick, and wins the duel 40 ticks in
+    expect(sight(0)).toMatchObject({ dist: 960, travel: 40, shotSpeed: 0, stopBuf: 9 / 64, duelS: 40 / 64, duelWon: true, first: true });
+    expect(sight(0).shotErr).toBeCloseTo(3, 3);
+    // b never moved, so he has no stop buffer, and he fired 10 ticks after a
+    expect(sight(1)).toMatchObject({ dist: 960, travel: 0, stopBuf: null, duelWon: false, first: false });
+  });
+
+  it("turns the sightings into the contact metrics", () => {
+    // fails if a metric reads the wrong sample or scale (ms, percent)
+    const s = rollup([match], { player: "a" });
+    expect(["peekTravel", "engageDistance", "duelExposure", "firedFirst", "shotSpeed", "stopBuffer"].map((id) => METRIC[id].value(s)))
+      .toEqual([40, 960, 0.625, 100, 0, (1000 * 9) / 64]);
+    expect(METRIC.firedFirst.value(rollup([match], { player: "b" }))).toBe(0);
+  });
+
+  it("gives no value and says why on a match without line of sight", () => {
+    // fails if a plugin match (no engagements) gets a contact value from anything but line of sight
+    const plugin = oneRound({ players: { a: "CT", b: "T" }, kills: [{ tick: 1050, killer: "a", victim: "b" }] });
+    const s = rollup([plugin], { player: "a" });
+    const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } };
+    const pros: Baselines = { version: 1, built: "x", source: "t", model: plugin.match.model, n: {}, pools: { ...pools, rifler: pools.all } };
+    expect(compare(s, pros).peekTravel).toMatchObject({ value: null, pct: null, reason: "Not compared: line of sight known for 0 of 1 rounds" });
+  });
+});
