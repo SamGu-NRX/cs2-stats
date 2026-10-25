@@ -11,7 +11,7 @@ import { metric as meta } from "../../data/meta";
 import { fmtDiff } from "../../lib/format";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
-import { PlayerName, SectionAside } from "../shared";
+import { NEEDS_DEMO, PlayerName, SectionAside } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Duels({ v }: TabProps) {
@@ -105,7 +105,7 @@ export default function Duels({ v }: TabProps) {
  *  reaction need mesh visibility, which plugin recordings do not carry. */
 function YourRounds({ v }: { v: TabProps["v"] }) {
   const gated = !v.visibility;
-  const gate = "Needs view angles and mesh line of sight, which this match file does not carry.";
+  const gate = `${NEEDS_DEMO}: these need view angles and mesh line of sight, which this match file does not carry.`;
   const human = v.human;
   const rows = useMemo(() => v.rounds.filter((r) => killsBy(r, human).length || deathOf(r, human)).map((r) => ({
     r, kills: killsBy(r, human), death: deathOf(r, human), s: v.b.yourRounds[r.ri],
@@ -132,8 +132,8 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
                   <td className="l"><span className="yrounds__names">{kills.map((k, i) => <span key={i} className="yrounds__kill"><SkullIcon hs={k.headshot} size={10} className={k.headshot ? "skull skull--hs" : "skull"} />{v.players[k.victim].name}</span>)}{!kills.length && <span className="faint">–</span>}</span></td>
                   <td className="l">{death ? <span className="yrounds__kill"><DeathIcon size={10} className="poor-text" />{death.killer === null ? "World" : v.players[death.killer].name}{death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
                   <td><Num v={v.entry.hasAim ? metric(s, "accuracy") : "–"} /></td>
-                  <td>{gated ? <span className="chip chip--outline" data-tip={gate}>Gated</span> : <Num v={metric(s, "timeToDamage")} />}</td>
-                  <td>{gated ? <span className="chip chip--outline" data-tip={gate}>Gated</span> : <Num v={metric(s, "reactionTime")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "timeToDamage")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "reactionTime")} />}</td>
                 </tr>
               );
             })}

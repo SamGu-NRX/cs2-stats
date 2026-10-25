@@ -9,11 +9,10 @@ import { useData } from "../data/provider";
 import { AimIcon } from "../icons/ui";
 import { fmtMatchDay, plural } from "../lib/format";
 import { BENCH } from "../lib/verdict";
-import { pageHref } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
-import { Delta, Empty, SectionAside } from "./shared";
+import { Delta, Empty, NeedsDemo, SectionAside } from "./shared";
 
 /** Aim metrics drawn per match; bench is a reference line on the chart. */
 const TRENDS: { id: string; bench?: number }[] = [
@@ -39,7 +38,7 @@ export default function CareerAim() {
       <BarContent crumbs={[{ label: "Career aim" }]} tools={<><MapFilter /><TimeFilter /></>} />
       <div className="view__in careeraim">
         {!query ? (
-          <Card><Empty icon={<AimIcon size={40} />} text="No recorded matches yet. Aim comes from matches recorded with the capture plugin; converted logs have no shots." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} /></Card>
         ) : (
           <>
             <div className="aim-head">

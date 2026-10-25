@@ -10,11 +10,7 @@ export interface TileDef {
   id: string;
   label: string;
   fmt: (v: number) => string;
-  /** format for a delta (absolute value; the sign is drawn as ▲ / ▼) */
-  fmtDelta: (v: number) => string;
   bench: BenchId;
-  /** the difference that reads as fully good or bad in a delta */
-  deltaSpan: number;
   /** needs shots, which only recorded matches carry */
   aim?: boolean;
   /** needs mesh visibility (MatchInfo.visibility "ok") */
@@ -22,16 +18,16 @@ export interface TileDef {
 }
 
 export const TILES: TileDef[] = [
-  { id: "rating3", label: "Rating 3.0", fmt: fmtRating, fmtDelta: (v) => v.toFixed(2), bench: "rating", deltaSpan: 0.3 },
-  { id: "kpr", label: "KPR", fmt: (v) => fmtDec(v), fmtDelta: (v) => v.toFixed(2), bench: "kpr", deltaSpan: 0.2 },
-  { id: "adr", label: "ADR", fmt: fmtAdr, fmtDelta: (v) => v.toFixed(1), bench: "adr", deltaSpan: 20 },
-  { id: "kast", label: "KAST", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "kast", deltaSpan: 10 },
+  { id: "rating3", label: "Rating 3.0", fmt: fmtRating, bench: "rating" },
+  { id: "kpr", label: "KPR", fmt: (v) => fmtDec(v), bench: "kpr" },
+  { id: "adr", label: "ADR", fmt: fmtAdr, bench: "adr" },
+  { id: "kast", label: "KAST", fmt: (v) => fmtPct(v), bench: "kast" },
   // the swing metric is in percent; fmtSwing takes a fraction
-  { id: "swing", label: "Swing", fmt: (v) => fmtSwing(v / 100), fmtDelta: (v) => `${v.toFixed(2)}%`, bench: "swing", deltaSpan: 3 },
-  { id: "hs", label: "HS%", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "hs", deltaSpan: 15 },
-  { id: "accuracy", label: "Accuracy", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "acc", deltaSpan: 8, aim: true },
-  { id: "reactionTime", label: "Reaction", fmt: fmtMs, fmtDelta: (v) => `${Math.round(v)} ms`, bench: "reaction", deltaSpan: 120, aim: true, visibility: true },
-  { id: "timeToDamage", label: "Time to damage", fmt: fmtMs, fmtDelta: (v) => `${Math.round(v)} ms`, bench: "ttd", deltaSpan: 200, aim: true, visibility: true },
+  { id: "swing", label: "Swing", fmt: (v) => fmtSwing(v / 100), bench: "swing" },
+  { id: "hs", label: "HS%", fmt: (v) => fmtPct(v), bench: "hs" },
+  { id: "accuracy", label: "Accuracy", fmt: (v) => fmtPct(v), bench: "acc", aim: true },
+  { id: "reactionTime", label: "Reaction", fmt: fmtMs, bench: "reaction", aim: true, visibility: true },
+  { id: "timeToDamage", label: "Time to damage", fmt: fmtMs, bench: "ttd", aim: true, visibility: true },
 ];
 
 /** A tile's value over a filter; its rating is the pooled one the caller passes (under the coverage rule). */

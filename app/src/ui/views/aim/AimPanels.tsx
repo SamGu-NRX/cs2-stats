@@ -29,7 +29,7 @@ import { AimIcon, ChevronIcon, HeadHitIcon, SprayIcon, StrafeIcon } from "../../
 import { fmtPct, fmtRatio, plural } from "../../lib/format";
 import { scoreFill, toScore } from "../../lib/scale";
 import { BENCH, verdictOf } from "../../lib/verdict";
-import { Empty } from "../shared";
+import { Empty, NeedsDemo } from "../shared";
 import { BodyFigure } from "./BodyFigure";
 
 type SideFilter = "all" | "t" | "ct";
@@ -156,7 +156,7 @@ function AimHero({ s, side, visibility }: { s: Rolled | null; side: SideFilter; 
             <Row id="csNoStop" s={s} />
           </Disclose>
         </div>
-        {!visibility && <p className="meta">Stats that need view angles or mesh line of sight show a dash: this match file does not carry them.</p>}
+        {!visibility && <p className="meta">Dashed stats: <NeedsDemo detail="They need view angles or mesh line of sight, which this match file does not carry." /></p>}
       </div>
     </section>
   );
@@ -401,8 +401,7 @@ function TimingsCard({ s, visibility }: { s: Rolled | null; visibility: boolean 
         </div>
         <div className="gated__why">
           <Coverage s={s} />
-          <p>These need your view angles and mesh line of sight to each enemy. Plugin match files carry neither.</p>
-          <p className="meta">They appear for matches recorded as demos and run through the extractor, which computes visibility on the map's mesh.</p>
+          <p><NeedsDemo detail="These need your view angles and mesh line of sight to each enemy. Plugin match files carry neither; the extractor computes visibility on the map's mesh for recorded demos." /></p>
         </div>
       </div>
     </Card>

@@ -134,7 +134,6 @@
 .tile__v { font: 800 28px/1.05 var(--f); letter-spacing: -0.02em; color: var(--cream); white-space: nowrap; }
 .tile__foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; min-height: 28px; }
 .tile .spark { width: 120px; height: 28px; }
-.tile__delta { font-size: 12px; }
 .tile__sub { font-size: 12px; color: var(--ink3); }
 
 .home__cols { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; align-items: start; }
@@ -516,7 +515,7 @@ canvas.radar-img { image-rendering: auto; }
 .attr:not(.attr--wide) .subs { grid-template-columns: minmax(0, 1fr); }
 .sub { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; padding-top: 6px; }
 .sub__label { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.sub__status { margin-left: 5px; color: var(--tan); font-weight: 700; }
+.sub .nocmp { grid-column: 1 / -1; justify-self: start; margin-top: 4px; }
 .sub__v { font-weight: 700; color: var(--cream); }
 .sub__bar { grid-column: 1 / -1; position: relative; height: 2px; margin-top: 6px; background: var(--raise); border-radius: 1px; overflow: hidden; }
 .sub__bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--tan); opacity: 0.85; }
@@ -867,7 +866,8 @@ canvas.radar-img { image-rendering: auto; }
 .spray__n { fill: var(--ink); }
 
 /* populations: style ranks against bot careers, performance against pros (worker/ranking.ts) */
-.chip--prov { height: auto; min-height: 22px; padding: 4px 8px; white-space: normal; line-height: 1.3; background: transparent; color: var(--tan); box-shadow: inset 0 0 0 1px var(--tan); }
+.chip--prov, .chip--approx { background: transparent; color: var(--tan); box-shadow: inset 0 0 0 1px var(--tan); }
+.chip--prov { cursor: help; }
 .attrs__prov { margin-bottom: 12px; }
 .attrs__thin { margin-bottom: 12px; }
 .probanner__score { display: grid; justify-items: end; gap: 6px; align-self: center; }
@@ -897,3 +897,21 @@ canvas.radar-img { image-rendering: auto; }
 .echart__ring { fill: none; stroke: none; }
 .echart__col:focus-visible .echart__ring { stroke: var(--cream); stroke-width: 2; }
 .echart__readout { min-height: 18px; margin-top: 6px; }
+
+/* Missing data, uncompared values and approximations (views/shared.tsx). Each carries its detail in a
+   tooltip; the dotted underline says there is one. */
+.needs { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--ink2); }
+.needs__t[data-tip] { text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; cursor: help; }
+.needs__link { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; transition: color var(--d-hover) ease, text-decoration-color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .needs__link:hover { color: var(--cream); text-decoration-color: var(--cream); } }
+.nocmp { font-size: 12px; color: var(--ink2); white-space: nowrap; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; cursor: help; }
+.approx { margin-left: 5px; color: var(--tan); font-weight: 700; cursor: help; }
+
+/* Home hero: the one place a delta shows, with the average it is measured from. */
+.hero-stat__d { display: inline-flex; align-items: baseline; gap: 6px; }
+.hero-stat__vs { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+
+/* Weapons: a count built only from converted logs. */
+.convcell { display: inline-flex; align-items: baseline; gap: 6px; }
+.convcell[data-tip] { text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
+.convtag { font: 600 10px/1 var(--f); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink2); cursor: help; }

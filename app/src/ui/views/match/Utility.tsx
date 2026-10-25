@@ -11,7 +11,7 @@ import type { MPlayer as PlayerRow } from "../../data/match";
 import { metric } from "../../data/meta";
 import { NadeIcon, NADE_LABEL, type Nade } from "../../icons/game";
 import { fmtSecs, plural } from "../../lib/format";
-import { PlayerName, SectionAside, Empty } from "../shared";
+import { PlayerName, SectionAside, Empty, NeedsDemo } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Utility({ v }: TabProps) {
@@ -65,24 +65,32 @@ const COLOR: Record<Nade, string> = { smoke: "var(--ink)", flash: "var(--cream)"
 /** GrenadeFact.weapon (the grenade class) as the grenade glyphs name it. */
 const NADE_OF: Record<string, Nade> = { smokegrenade: "smoke", flashbang: "flash", hegrenade: "he", molotov: "molotov", incgrenade: "molotov", decoy: "decoy" };
 
-/** Where grenades landed, with the throw origin when it was recorded (grenadesOf in the worker). */
+/**
+ * Where grenades landed, with the throw origin when it was recorded (grenadesOf in the worker). Plugin
+ * files before 1.0.0 have no throw log, so the adapter rebuilt one throw per detonation, placed at the
+ * detonation and with no landing point (MatchInfo.inputs.throws "rebuilt", plugin/adapter.ts). There
+ * the throw point is the detonation: it is drawn as the landing point, marked approximate, with no
+ * throw line.
+ */
 function Landing({ v }: { v: TabProps["v"] }) {
+  const rebuilt = v.facts.match.inputs.throws === "rebuilt";
   const [who, setWho] = useState<"you" | "team" | "all">("you");
   const [types, setTypes] = useState<Set<Nade>>(new Set(TYPES));
   const nades = useMemo(() => v.b.grenades.flatMap((g) => {
     const type = NADE_OF[g.weapon];
-    return g.land && type ? [{ x: g.land[0], y: g.land[1], type, from: g.from, pi: g.pi }] : [];
-  }), [v]);
+    const at = rebuilt ? g.from : g.land;
+    return at && type ? [{ x: at[0], y: at[1], type, from: rebuilt ? null : g.from, pi: g.pi }] : [];
+  }), [v, rebuilt]);
   const frame = useMemo(() => frameFor(v.map, nades.map((n) => [n.x, n.y])), [v.map, nades]);
   const mine = (pi: number) => who === "all" || (who === "you" ? pi === v.human : v.players[pi]?.team === "us");
   const shown = nades.filter((n) => types.has(n.type) && mine(n.pi));
   const toggle = (t: Nade) => setTypes((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; });
   return (
-    <Card title="Where grenades landed" aside={<span className="meta">{plural(shown.length, "grenade")}</span>} collapsible id="match-landing">
+    <Card title="Where grenades landed" aside={<span className="card__aside-row">{rebuilt && nades.length > 0 && <span className="chip chip--approx">Approximate</span>}<span className="meta">{plural(shown.length, "grenade")}</span></span>} collapsible id="match-landing">
       {!nades.length || !frame ? (
-        <Empty icon={<NadeIcon type="smoke" size={36} />} text={v.b.grenades.some((g) => g.from)
-          ? "This match file records where grenades were thrown from, but not where they landed, so there is nothing to place on the map."
-          : "This match has no grenade positions. Recorded matches carry them."} />
+        <Empty icon={<NadeIcon type="smoke" size={36} />} text={<NeedsDemo detail={v.b.grenades.some((g) => g.from)
+          ? "This match file records where grenades were thrown from, but not where they landed."
+          : "This match has no grenade positions."} />} />
       ) : (
         <div className="landing">
           <div className="landing__side">
@@ -97,7 +105,9 @@ function Landing({ v }: { v: TabProps["v"] }) {
                 );
               })}
             </div>
-            <p className="meta">Lines run from where the grenade was thrown, when the plugin recorded it.</p>
+            <p className="meta">{rebuilt
+              ? "Approximate: this file logs detonations, not throws, so each point is where a grenade went off (flashes and HEs often in the air), and where it was thrown from is unknown."
+              : "Lines run from where the grenade was thrown, when the plugin recorded it."}</p>
           </div>
           <div className="landing__map">
             <RadarView map={v.map} frame={frame} label={`${shown.length} grenade landing points`}>

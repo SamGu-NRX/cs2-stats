@@ -15,7 +15,7 @@ import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { scoreText, swingScore } from "../../lib/scale";
-import { Provisional } from "../shared";
+import { ApproxMark, NeedsDemo, NotCompared, Provisional } from "../shared";
 import { BENCH, verdictOf } from "../../lib/verdict";
 import { matchHref, openMatch, setQuery } from "../../router";
 
@@ -49,7 +49,7 @@ export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]
           <b className="num" style={{ color: swing === null ? undefined : scoreText(swingScore(swing)) }}>{fmtSwing(swing)}</b>
           <span className="verdict" data-v={v}>{v === "good" ? "Good" : v === "poor" ? "Poor" : v === "avg" ? "Average" : ""}</span>
           <p className="swingcard__say">
-            {swing === null ? "No round in these matches has swing data."
+            {swing === null ? <NeedsDemo detail="No round in these matches has swing: a converted log values a round only where every player's equipment is known." />
               : `Each round you ${swing >= 0 ? "add" : "take"} ${Math.abs(100 * swing).toFixed(2)} percentage points ${swing >= 0 ? "to" : "from"} your team's chance of winning it, through your kills and deaths.`}
           </p>
           {botSwing !== null && <p className="meta">Bots in the same matches: <b className="num">{fmtSwing(botSwing)}</b>. <Delta d={swing === null ? null : 100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} /> against them.</p>}
@@ -112,7 +112,7 @@ export function RoleCard({ q }: { q: Query }) {
                   </li>
                 ))}
               </ul>
-            ) : <p className="meta">The blend needs kills, deaths and position samples on this side; converted logs have no positions.</p>}
+            ) : <p className="meta"><NeedsDemo detail="The blend needs kills, deaths and position samples on this side; converted logs have no positions." /></p>}
           </div>
         );
       })}
@@ -190,7 +190,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   if (!pick) {
     return (
       <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
-        <p className="meta">No style scores to compare yet: they need bot careers in your matches to rank against.</p>
+        <p className="meta"><NeedsDemo detail="Your style scores rank against the bot careers in your matches, and these matches hold too few to score." /></p>
         <Provisional c={careers} />
       </Card>
     );
@@ -288,12 +288,15 @@ export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
         <ul className="howgood">
           {HOW_GOOD.map((id) => {
             const m = metric(id);
+            const x = p[id];
             return (
               <li key={id} data-tip={m.def}>
-                <span>{m.label}</span>
+                <span>{m.label}{m.status === "approx" && <ApproxMark />}</span>
                 <span className="howgood__v">
-                  <span className="meta num">{m.status === "unavailable" ? "Not measured yet" : rankText(p[id].pct)}</span>
-                  <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, p[id].value)}</b>
+                  {m.status === "unavailable" ? <span className="meta">Not measured yet</span>
+                    : x.reason ? <NotCompared reason={x.reason} />
+                    : <span className="meta num">{rankText(x.pct)}</span>}
+                  <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, x.value)}</b>
                 </span>
               </li>
             );

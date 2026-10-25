@@ -14,7 +14,7 @@ import { diffScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, useFilters } from "../shell/filters";
-import { Empty, SectionAside } from "./shared";
+import { Empty, SectionAside, swingSumTip } from "./shared";
 
 const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(file)}"]`)?.closest("tr") ?? null;
 
@@ -84,7 +84,7 @@ export function MatchesView() {
               { key: "adr", label: "ADR", tip: "Damage per round", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },
               { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (s) => line(s).kast, render: (s) => <Num v={fmtPct(line(s).kast)} /> },
               { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (s) => line(s).hs, render: (s) => <Num v={fmtPct(line(s).hs)} /> },
-              { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win probability you caused per round", sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }}><Num v={fmtSwing(x)} /></span>; } },
+              { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win probability you caused per round", sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}><Num v={fmtSwing(x)} /></span>; } },
               { key: "rating", label: RATING_LABEL, colored: true, tip: RATING_POOLED, sort: (s) => entryRating(s), render: (s) => (!s.match.complete ? <span className="chip chip--outline" data-tip={INCOMPLETE_TIP}>Unfinished</span> : entryRating(s) === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b>) },
               { key: "rounds", label: "Rounds", tip: "Rounds played; rounds with a kill-by-kill log in brackets when fewer. Only those count in any number.", sort: (s) => s.match.roundsPlayed, render: (s) => <span className="num">{s.match.roundsPlayed}{s.match.nRounds < s.match.roundsPlayed && <span className="faint"> ({s.match.nRounds})</span>}</span> },
             ]}

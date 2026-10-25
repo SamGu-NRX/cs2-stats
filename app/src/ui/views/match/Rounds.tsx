@@ -10,7 +10,9 @@ import { killSlots, moveIndex } from "../../lib/layout";
 import { fmtSwing } from "../../lib/format";
 import { roundSwingScore, scoreText, scoreTint, swingScore } from "../../lib/scale";
 import { setQuery } from "../../router";
-import { PlayerName, RoundCardBody } from "../shared";
+import { PlayerName, RoundCardBody, swingSumTip } from "../shared";
+import { statLine } from "../../data/engine";
+import type { Line } from "../../../worker/protocol";
 import type { TabProps } from "./MatchView";
 import { RoundDrawer } from "./RoundDrawer";
 
@@ -113,24 +115,24 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
               </HoverCard>
             );
           })}
-          <div className="ig__total ig__total--head" role="columnheader"><span className="caps">Swing</span></div>
+          <div className="ig__total ig__total--head" role="columnheader" data-tip="Swing per round over the match"><span className="caps">Swing</span></div>
         </div>
         {teamRow("us")}
-        {us.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
+        {us.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} line={lines[p.pi]} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
         {teamRow("them")}
-        {them.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
+        {them.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} line={lines[p.pi]} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
       </div>
     </div>
   );
 }
 
-function PlayerRowView({ v, pi, r, cells, total: m, sel, focus, setFocus, onOpen, opening }: {
-  v: MatchView; pi: number; r: number; cells: RoundCell[]; total: { swing: number; swingRounds: number }; sel: number | null; focus: { r: number; c: number };
+function PlayerRowView({ v, pi, r, cells, line, sel, focus, setFocus, onOpen, opening }: {
+  v: MatchView; pi: number; r: number; cells: RoundCell[]; line: Line; sel: number | null; focus: { r: number; c: number };
   setFocus: (f: { r: number; c: number }) => void; onOpen: (ri: number) => void; opening: (number | null)[];
 }) {
   const p = v.players[pi];
-  // the match's swing summed over the player's valued rounds, a fraction
-  const total = m.swingRounds ? m.swing : null;
+  // the match's swing per valued round, as the hero and the scoreboard show it; the sum is in the tooltip
+  const swing = statLine(line).swing;
   return (
     <div className={`ig__row ${p.isHuman ? "is-you" : ""}`} role="row">
       <div className="ig__name" role="rowheader">
@@ -166,7 +168,7 @@ function PlayerRowView({ v, pi, r, cells, total: m, sel, focus, setFocus, onOpen
           </div>
         );
       })}
-      <div className="ig__total num" style={{ color: total === null ? "var(--ink3)" : scoreText(swingScore(total / Math.max(1, v.nRounds))) }}>{total === null ? "–" : fmtSwing(total)}</div>
+      <div className="ig__total num" style={{ color: swing === null ? "var(--ink3)" : scoreText(swingScore(swing)) }} data-tip={swingSumTip(line.m)}>{fmtSwing(swing)}</div>
     </div>
   );
 }
