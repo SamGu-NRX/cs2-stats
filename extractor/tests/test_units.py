@@ -793,10 +793,10 @@ def test_an_archive_whose_demos_would_break_the_budget_is_not_extracted(tmp_path
     monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: started.append(x))
     p = dp.Pipeline()
     p.archives[a.id] = a
-    monkeypatch.setattr(p, "our_bytes", lambda: int(0.5e9))  # 0.5 GB on disk + 0.6 GB of demos > 1 GB
+    monkeypatch.setattr(p, "disk_usage", lambda: (int(0.5e9), 0))  # 0.5 GB on disk + 0.6 GB of demos > 1 GB
     p.start_extractions()
     assert started == [] and a.state == "pending"
-    monkeypatch.setattr(p, "our_bytes", lambda: int(0.3e9))  # 0.3 + 0.6 fits
+    monkeypatch.setattr(p, "disk_usage", lambda: (int(0.3e9), 0))  # 0.3 + 0.6 fits
     p.start_extractions()
     assert len(started) == 1 and a.state == "extracting"
 
@@ -1162,3 +1162,38 @@ def test_a_version_folder_resolves_only_with_every_file_its_completion_list_name
     _tables(m / "v-1.6.0-0123abcd", "no list")  # a folder with tables but no completion list
     (m / "CURRENT").write_text("v-1.6.0-0123abcd\n")
     assert ex.resolve_map_dir(m) is None
+
+
+def test_a_write_between_the_size_reads_cannot_hide_a_running_extraction(tmp_path, monkeypatch):
+    # Usage and the running archive's hold were read separately: if 7-Zip wrote its demo after usage was
+    # read but before the hold was, the bytes counted in neither and the next archive started over budget.
+    # Sizes in bytes: the budget is 1000, each archive lists 600 bytes of demos.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0)
+    archives = []
+    for name in ("a", "b"):
+        rar = dp.DOWNLOADS / name
+        rar.write_bytes(dp.RAR_MAGIC + bytes(10))
+        archives.append(dp.Archive(rar=rar, id=name))
+    started = []
+    monkeypatch.setattr(dp, "list_archive", lambda rar: {"m1.dem": dict(size=600, modified=None)})
+    monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: started.append(x))
+    p = dp.Pipeline()
+    first, second = sorted(archives, key=lambda a: a.rar.stat().st_mtime)
+    p.archives[first.id] = first
+    p.start_extractions()
+    assert first.state == "extracting"
+    p.archives[second.id] = second
+    real, wrote = dp.tree_bytes, []
+
+    def write_after_first_work_read(path):
+        n = real(path)
+        if not wrote and (Path(path) == dp.WORK_DIR or dp.WORK_DIR in Path(path).parents):
+            (first.work / "m1.dem").write_bytes(b"x" * 600)  # 7-Zip finishes the demo mid-check
+            wrote.append(path)
+        return n
+
+    monkeypatch.setattr(dp, "tree_bytes", write_after_first_work_read)
+    p.start_extractions()
+    assert wrote and len(started) == 1 and second.state == "pending"
