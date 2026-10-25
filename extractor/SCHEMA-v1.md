@@ -63,7 +63,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `archive` | String | no | archive id the demo came from |
 | `awpy_convars` | String | no | JSON of convars as awpy read them |
 | `awpy_version` | String | no | parser version |
-| `build_num` | Int32 | no | demo header build number |
+| `build_num` | Int32 | yes | demo header build number; null for a truncated demo, which has no playback header |
 | `convars` | String | no | JSON of server convars from the demo |
 | `dem_bytes` | Int64 | no | demo size, bytes |
 | `dem_file` | String | no | demo file name |
@@ -86,7 +86,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `pandas_version` | String | no | library version |
 | `parsed_at_utc` | String | no | ISO-8601 extraction time |
 | `patch_version` | String | no | demo header network protocol |
-| `playback_ticks` | Int32 | no | demo length, ticks |
+| `playback_ticks` | Int32 | yes | demo length, ticks; null for a truncated demo, which has no playback header |
 | `polars_version` | String | no | library version |
 | `position_stride_ticks` | Int16 | no | positions sampling stride, ticks |
 | `price_file` | String | no | item price table used |
@@ -98,8 +98,8 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `server_name` | String | no | server name |
 | `smoke_model` | String | no | how smoke_blocked is computed (an approximation) |
 | `source` | String | no | local | valve | faceit | hltv |
-| `team1_file` | String | no | first team slug in the file name |
-| `team2_file` | String | no | second team slug in the file name |
+| `team1_file` | String | yes | first team slug in the file name; null when the file name does not start `<team1>-vs-<team2>-` |
+| `team2_file` | String | yes | second team slug in the file name; null when team1_file is |
 | `team_ct_start` | String | no | clan name of the team on CT in round 1 |
 | `team_t_start` | String | no | clan name of the team on T in round 1 |
 | `tick_rate` | Float32 | no | ticks per second (playback ticks / playback time). Divide tick differences by this; never assume 64 |
@@ -118,8 +118,8 @@ One row per player. Key: steamid.
 | `is_bot` | Boolean | no | true for a bot (id below 2^40) |
 | `name` | String | no | last seen name |
 | `rounds_present` | Int16 | no | rounds the player was on a team at freeze end |
-| `side_h1` | String | no | CT | T in the first half |
-| `side_h2` | String | no | CT | T in the second half |
+| `side_h1` | String | yes | CT | T in the first half; null if the player played none of it |
+| `side_h2` | String | yes | CT | T in the second half; null if the player played none of it, as when the demo ends before halftime |
 | `side_ot` | List(String) | no | side in each overtime half |
 | `steamid` | UInt64 | no | player id (see Conventions) |
 | `team` | String | yes | clan name |
@@ -136,7 +136,7 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `ct_team_score_after` | Int16 | no | score of ct_team after the round |
 | `defuse_tick` | Int32 | yes | tick |
 | `defuser_steamid` | UInt64 | yes | player id (see Conventions) |
-| `duration_s` | Float32 | no | freeze end to round end, s |
+| `duration_s` | Float32 | no | freeze end to round end, s; from the round start for a round recorded already live (no freeze end) |
 | `end_tick` | Int32 | no | tick |
 | `explode_tick` | Int32 | yes | tick |
 | `freeze_end_tick` | Int32 | yes | tick |
@@ -329,13 +329,13 @@ Every weapon_fire, misses included. Shooter state is read before the shot. Key: 
 | `shots_fired` | Int32 | no | consecutive shots in the current spray |
 | `side` | String | no | CT | T |
 | `silenced` | Boolean | no |  |
-| `speed_2d` | Float32 | no | horizontal speed, units/s |
+| `speed_2d` | Float32 | yes | horizontal speed, units/s; null with vel_x |
 | `spread` | Float32 | yes |  |
 | `steamid` | UInt64 | no | player id (see Conventions) |
 | `tick` | Int32 | no | tick |
-| `vel_x` | Float32 | no | networked velocity, units/s |
-| `vel_y` | Float32 | no |  |
-| `vel_z` | Float32 | no |  |
+| `vel_x` | Float32 | yes | networked velocity, units/s; null when the parser has no velocity for the shooter on that tick |
+| `vel_y` | Float32 | yes |  |
+| `vel_z` | Float32 | yes |  |
 | `velocity_modifier` | Float32 | no | movement slowdown from being hit, 0..1 |
 | `walking` | Boolean | no |  |
 | `weapon` | String | no | weapon class |
@@ -426,9 +426,9 @@ Every player every POSITION_STRIDE_TICKS ticks (4 Hz at 64 tick) inside counted 
 | `steamid` | UInt64 | no | player id (see Conventions) |
 | `tick` | Int32 | no | tick |
 | `user_id` | Int32 | no | server user id |
-| `vel_x` | Float32 | no | units/s |
-| `vel_y` | Float32 | no |  |
-| `vel_z` | Float32 | no |  |
+| `vel_x` | Float32 | yes | units/s; null when the parser has no velocity for the player on that tick |
+| `vel_y` | Float32 | yes |  |
+| `vel_z` | Float32 | yes |  |
 | `velocity_modifier` | Float32 | no | 0..1 |
 | `x` | Float32 | no | Hammer units |
 | `y` | Float32 | no |  |

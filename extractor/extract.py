@@ -48,7 +48,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import polars as pl  # noqa: E402
 
-from schema_v1 import TYPES  # noqa: E402
+from schema_v1 import KEYS, NULLABLE, TYPES  # noqa: E402
 from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z, group_triggers,  # noqa: E402
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
@@ -599,6 +599,12 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
     return out
 
 
+def round_duration_s(rounds: pd.DataFrame, rate: float) -> pd.Series:
+    """Freeze end to round end in seconds; a round recorded already live has no freeze end and is timed
+    from its start."""
+    return (rounds.end_tick - rounds.freeze_end_tick.fillna(rounds.start_tick)) / rate
+
+
 def buy_type(round_no: int, team_equip: float, max_rounds: int) -> str:
     # Thresholds are a convention chosen here, not fitted to data; the raw team
     # equipment value sits next to this label so analysis can reclassify.
@@ -878,7 +884,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         t_after.append(score.get(r.t_team))
     rounds["ct_team_score_after"] = ct_after
     rounds["t_team_score_after"] = t_after
-    rounds["duration_s"] = (rounds.end_tick - rounds.freeze_end_tick) / rate
+    rounds["duration_s"] = round_duration_s(rounds, rate)
 
     # ----- scoreboard (final tick)
     sb = sb[sb.team_num.isin([2, 3]) & sb.steamid.notna()].copy()
@@ -1666,7 +1672,14 @@ def _to_polars(df, table: str) -> pl.DataFrame:
     if extra or missing:
         raise ValueError(f"table {table}: columns not in schema v1 {sorted(extra)}, missing {sorted(missing)}")
     # strict: a fractional value in an integer column, or an out-of-range value, raises.
-    return out.select([pl.col(c).cast(_DTYPES[t], strict=True) for c, t in declared.items()])
+    out = out.select([pl.col(c).cast(_DTYPES[t], strict=True) for c, t in declared.items()])
+    nulls = {c: n for c in declared if c not in NULLABLE[table]
+             and (n := out[c].null_count() + (int(out[c].is_nan().sum()) if out[c].dtype == pl.Float32 else 0))}
+    if nulls:
+        raise ValueError(f"table {table}: nulls in non-nullable columns {nulls}")
+    if table in KEYS and (dup := int(out.select(KEYS[table]).is_duplicated().sum())):
+        raise ValueError(f"table {table}: {dup} rows share a key {KEYS[table]}")
+    return out
 
 
 def map_key_for(dem: Path, map_name: str) -> str:
