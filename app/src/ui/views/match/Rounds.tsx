@@ -73,11 +73,28 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
   const selRef = useRef(sel);
   selRef.current = sel;
 
-  const measure = () => {
+  // The edge fades follow two observers on the first and last round columns, so scrolling never reads
+  // layout; state changes only when an edge's visibility flips.
+  useEffect(() => {
     const s = scroller.current;
-    if (!s) return;
-    setEdges({ left: s.scrollLeft > 2, right: s.scrollLeft + s.clientWidth < s.scrollWidth - 2 });
-  };
+    const first = s?.querySelector<HTMLElement>('[data-col="0"]'), last = s?.querySelector<HTMLElement>(`[data-col="${v.nRounds - 1}"]`);
+    const frozen = s?.querySelector<HTMLElement>(".ig__corner");
+    if (!s || !first || !last || !frozen) return;
+    const io = new IntersectionObserver((entries) => {
+      setEdges((e) => {
+        let next = e;
+        for (const en of entries) {
+          const hidden = en.intersectionRatio < 0.99;
+          if (en.target === first && hidden !== e.left) next = { ...next, left: hidden };
+          if (en.target === last && hidden !== e.right) next = { ...next, right: hidden };
+        }
+        return next;
+      });
+    }, { root: s, rootMargin: `0px 0px 0px -${frozen.offsetWidth}px`, threshold: [0.99] });
+    io.observe(first);
+    io.observe(last);
+    return () => io.disconnect();
+  }, [v.nRounds]);
   // Brings a round's column between the frozen name column and the right edge, instantly; at the
   // ends it scrolls all the way, so no fade covers the first or last round.
   const reveal = (ri: number | null) => {
@@ -97,9 +114,8 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
   useLayoutEffect(() => {
     const s = scroller.current;
     if (!s) return;
-    measure();
     // the drawer's arrival narrows the grid after its open animation: keep the open round in view
-    const ro = new ResizeObserver(() => { reveal(selRef.current); measure(); });
+    const ro = new ResizeObserver(() => reveal(selRef.current));
     ro.observe(s);
     return () => ro.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -107,7 +123,6 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
     if (sel === null) return;
     setFocus((f) => ({ ...f, c: sel }));
     reveal(sel);
-    measure();
   }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const page = (dir: 1 | -1) => scroller.current?.scrollBy({ left: dir * 8 * 34, behavior: "instant" as ScrollBehavior });
@@ -122,7 +137,10 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
     else return;
     e.preventDefault();
     setFocus(next);
-    scroller.current?.querySelector<HTMLElement>(`[data-cell="${next.r}-${next.c}"]`)?.focus({ preventScroll: true });
+    const cell = scroller.current?.querySelector<HTMLElement>(`[data-cell="${next.r}-${next.c}"]`);
+    cell?.focus({ preventScroll: true });
+    // the row into view vertically (the page scrolls, instantly), the column horizontally
+    cell?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" as ScrollBehavior });
     reveal(next.c);
   };
 
@@ -141,7 +159,7 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
 
   return (
     <div className="inspector card" data-left={edges.left || undefined} data-right={edges.right || undefined}>
-      <div className="inspector__scroll" ref={scroller} onScroll={measure}>
+      <div className="inspector__scroll" ref={scroller}>
         <div className="ig" role="grid" aria-label="Round inspector: players by rounds" aria-rowcount={order.length + 3} aria-colcount={v.nRounds + 2} onKeyDown={onKey}>
           <div className="ig__row ig__row--head" role="row">
             <div className="ig__name ig__corner" role="columnheader"><span className="caps">Round</span></div>
@@ -164,8 +182,8 @@ function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell
           {them.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} line={lines[p.pi]} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} />)}
         </div>
       </div>
-      <button className="inspector__more inspector__more--l" tabIndex={-1} aria-hidden onClick={() => page(-1)}><ChevronLeftIcon size={16} /></button>
-      <button className="inspector__more inspector__more--r" tabIndex={-1} aria-hidden onClick={() => page(1)}><ChevronRightIcon size={16} /></button>
+      <button className="inspector__more inspector__more--l" tabIndex={-1} aria-label="Previous rounds" onClick={() => page(-1)}><ChevronLeftIcon size={16} /></button>
+      <button className="inspector__more inspector__more--r" tabIndex={-1} aria-label="Next rounds" onClick={() => page(1)}><ChevronRightIcon size={16} /></button>
     </div>
   );
 }
