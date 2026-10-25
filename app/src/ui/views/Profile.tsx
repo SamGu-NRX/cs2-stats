@@ -21,7 +21,7 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  botIds, botPoolName, botPopulation, clutchRows, entryRating, careerEntries, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
+  botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   R3_INPUT_LABEL, rankText, thinPoolText,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
 } from "../data/engine";
@@ -57,6 +57,35 @@ interface ProfileData {
   ct: Rolled;
   ratings: SideRatings;
   botRatings: SideRatings | null;
+  /** each match's rating and swing (a fraction) on the page's side, for the per-match charts */
+  perMatch: (e: MatchEntry) => MatchOnSide;
+}
+
+/** One match on the page's side: its Rating 3.0 and its swing per round, a fraction; null where it has none. */
+export interface MatchOnSide { rating: number | null; swing: number | null }
+
+/**
+ * Each career match on the page's side. Both sides is the match entry itself; T or CT rolls up and
+ * rates each match on that side (the worker batches the calls). Null while those load.
+ */
+function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: MatchEntry) => MatchOnSide) | null {
+  const one = side !== "both";
+  const qs = useMemo(() => (one ? list.map((e) => ({ files: [e.file], filter: { player: ids, ...sidesOf(side) } })) : null), [one, list, ids, side]);
+  const rq = useMemo(() => (one ? list.map((e) => ({ files: [e.file], filter: { player: ids } })) : null), [one, list, ids]);
+  const sums = useRollups(qs).data;
+  const rats = useRatings(rq).data;
+  return useMemo(() => {
+    if (!one) return (e: MatchEntry) => ({ rating: entryRating(e), swing: e.line.v.swing === null ? null : e.line.v.swing / 100 });
+    if (!sums || !rats || sums.length !== list.length || rats.length !== list.length) return null;
+    const at = new Map(list.map((e, i) => [e.file, i]));
+    const key = ratingKey(side);
+    return (e: MatchEntry) => {
+      const i = at.get(e.file);
+      if (i === undefined) return { rating: null, swing: null };
+      const sw = sums[i].v.swing;
+      return { rating: rats[i][key].value, swing: sw === null ? null : sw / 100 };
+    };
+  }, [one, sums, rats, list, side]);
 }
 
 export default function ProfileView() {
@@ -83,9 +112,10 @@ export default function ProfileView() {
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
-  const p: ProfileData | null = sums.data && rats && sums.data.length === (qs?.length ?? 0) ? {
+  const perMatch = usePerMatch(list, ids, side);
+  const p: ProfileData | null = sums.data && rats && perMatch && sums.data.length === (qs?.length ?? 0) ? {
     list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
-    ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null,
+    ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null, perMatch,
   } : null;
 
   if (!p) {
@@ -108,17 +138,17 @@ export default function ProfileView() {
             <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
               options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
           )} />
-          <FormRail p={p} />
+          <FormRail p={p} side={side} />
         </div>
         <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" sectionRef={identityRef} />
         <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} /></div>
         <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
         <div className="identity">
           <RoleCard q={base} maps={mapsIn(list)} />
-          <WhereYouPlay />
+          <WhereYouPlay list={list} side={side} />
         </div>
         <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" sectionRef={performanceRef} />
-        <SwingCard you={p.you} list={list} bots={p.bots} />
+        <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         {baselines && (
           <div className="profile__cols">
@@ -127,7 +157,7 @@ export default function ProfileView() {
           </div>
         )}
         <div className="profile__trend">
-          <FormTrend p={p} />
+          <FormTrend p={p} side={side} />
           <MapsTable p={p} side={side} />
         </div>
         <div className="profile__cols3">
@@ -247,15 +277,15 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   );
 }
 
-function FormRail({ p }: { p: ProfileData }) {
+function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
   const rows = p.list.slice(0, 7);
   return (
     <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form}>{RATING_LABEL}</span><ApproxMark /></span>} flush className="form-rail">
-      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: entryRating(f), label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings.both.value} avgLabel="pooled" />
+      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings[ratingKey(side)].value} avgLabel="pooled" />
       <table className="tbl tbl--compact">
         <tbody>
           {rows.map((f) => {
-            const r = entryRating(f);
+            const r = p.perMatch(f).rating;
             return (
               <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
                 <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtMatchDay(f.match)}</small></span></td>
@@ -275,8 +305,9 @@ function FormRail({ p }: { p: ProfileData }) {
 type StylePool = "role" | "all";
 
 /** One metric of the block as the panel's percentile row. */
+/** One metric of an attribute as a percentile row; a pro percentile names the pool it was read in. */
 function panelMetric(p: Pct, kind: "performance" | "style", population: string): PanelMetric {
-  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population };
+  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population: kind === "performance" ? proPopulation(p.pool) : population };
 }
 
 function panelAttr(a: AttributeScore, kind: "performance" | "style", population: string, extra: Partial<PanelAttribute> = {}): PanelAttribute {
@@ -352,11 +383,11 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
 
 // ---------------------------------------------------------------- breakdowns
 
-function FormTrend({ p }: { p: ProfileData }) {
-  const pooled = p.ratings.both.value;
+function FormTrend({ p, side }: { p: ProfileData; side: SideKey }) {
+  const pooled = p.ratings[ratingKey(side)].value;
   return (
     <Card title="Rating by match" tip={PANEL_TIP.ratingByMatch} collapsible id="profile-form" className="trendcard" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
-      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: entryRating(f), label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
+      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
       <RatingLegend />
     </Card>
   );

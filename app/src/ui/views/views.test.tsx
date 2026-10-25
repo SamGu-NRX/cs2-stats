@@ -30,6 +30,10 @@ import { sourceOf } from "../data/sources";
 import { fmtPct, fmtSwing, signed } from "../lib/format";
 import { go, matchHref } from "../router";
 import { MatchesView } from "./Matches";
+import CareerAim from "./CareerAim";
+import { RoleCard } from "./profile/parts";
+import { WhereYouPlay } from "./Playstyle";
+import { fmtRating } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
 import Playstyle from "./Playstyle";
@@ -78,6 +82,8 @@ const calls = rankingCalls({
 let data: Pick<Data, "matches" | "you"> = { matches: [], you: [] };
 const baselines = { source: PROS.source, built: PROS.built, n: PROS.n };
 let answers: Partial<Record<Method, unknown>> = {};
+/** the arguments of each worker call the views made last, by method */
+const asked: Partial<Record<Method, unknown[]>> = {};
 const done = <T,>(x: T | null) => ({ data: x, error: null, loading: false });
 
 vi.mock("../data/provider", () => ({
@@ -87,7 +93,7 @@ vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
   useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => rolled(summary(q))) : null),
   useRatings: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })) : null),
-  useCall: (method: Method, args: unknown[] | null) => done(args ? answers[method] ?? null : null),
+  useCall: (method: Method, args: unknown[] | null) => { if (args) asked[method] = args; return done(args ? answers[method] ?? null : null); },
   useMatch: () => done(null),
 }));
 
@@ -344,6 +350,88 @@ describe("Style compass", () => {
   });
 });
 
+describe("review round 1 (PR #28)", () => {
+  it("reads Where you play from the page's matches and side, on the scoped map", () => {
+    // fails if the card reads every match in the folder, ignores the side, or keeps its own stale map
+    use(samples);
+    const career = careerEntries(data.matches, null);
+    const two = career.slice(0, 2);
+    render(<WhereYouPlay list={two} side="t" />);
+    const [q] = asked.positions as [Query];
+    const map = two[0].match.map;
+    expect(q.files).toEqual(two.filter((e) => e.match.map === map).map((e) => e.file));
+    expect(q.filter.sides).toEqual(["T"]);
+    expect(q.filter.maps).toEqual([map]);
+  });
+
+  it("charts each match on the page's side: Form shows the T rating when Side is T", () => {
+    // fails if Form, Rating by match or the swing bars keep the both-sides value under a side filter
+    use(samples);
+    try {
+      act(() => go("#/profile?side=t"));
+      render(<ProfileView />);
+      const career = careerEntries(data.matches, null);
+      const ids = data.you;
+      const first = career[0];
+      const q = { files: [first.file], filter: { player: ids } };
+      const t = ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) }).T.value;
+      const cell = host.querySelector(".form-rail tbody tr:first-child td:last-child");
+      expect(text(cell)).toBe(t === null ? "–" : fmtRating(t));
+    } finally {
+      act(() => go("#/"));
+    }
+  });
+
+  it("divides the AWP share by rounds with a recorded loadout, and shows none without one", () => {
+    // fails if the tile divides by every round (0% for files that record no loadout)
+    use(samples);
+    const q = queryOf(samples);
+    answers.roles = { T: { side: "T", blend: null, evidence: [], rounds: 1 }, CT: { side: "CT", blend: null, evidence: [], rounds: 1 } };
+    render(<RoleCard q={q} />);
+    const m = rolled(summary(q)).m;
+    const tile = host.querySelector(".rtiles li")!;
+    if (m.loadoutRounds) expect(text(tile.querySelector("b"))).toBe(fmtPct((100 * m.roundsWithAwp) / m.loadoutRounds, 0));
+    else {
+      expect(text(tile.querySelector("b"))).toBe("–");
+      expect(tile.getAttribute("data-tip")).toBe("No loadout recorded, so the AWP share is unknown.");
+    }
+  });
+
+  it("names each How good row's population from the pool it was ranked in", async () => {
+    // fails if an AWP row ranked against every pro reads "of pro riflers"
+    const q = queryOf(samples);
+    const r = await calls.compare(q, { side: "both" });
+    answers.compare = { ...r, p: { ...r.p, awpDuelWin: { ...r.p.awpDuelWin, value: 0.5, pct: 80, reason: null, pool: "all" } } };
+    render(<HowGood q={q} side="both" />);
+    const row = Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric("awpDuelWin").label)!;
+    expect(row.getAttribute("data-tip")).toMatch(/^Top 20% of pros\./);
+  });
+
+  it("shows a thin log's recorded kills and deaths, marked partial, and sorts by them", () => {
+    // fails if a converted log with few logged rounds hides its K–D behind a dash
+    use(samples);
+    const base = samples[0].entry;
+    const thin = { ...base, file: "samples/thin.json.gz", match: { ...base.match, nRounds: 1, roundsPlayed: 16 } };
+    data = { ...data, matches: [...data.matches, thin] };
+    render(<MatchesView />);
+    const row = Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector("[data-file='samples/thin.json.gz']") || text(tr).includes("1 of 16"))!;
+    expect(row).toBeTruthy();
+    const kd = Array.from(row.querySelectorAll("[data-tip^='Partial']"));
+    expect(kd.length).toBeGreaterThan(0);
+    expect(text(kd[0])).toBe(`${thin.line.m.kills}–${thin.line.m.deaths}`);
+  });
+
+  it("brings back main's Weapons columns and advice, and Career aim's head accuracy trend", () => {
+    // fails if HS kills, head share or the advice column, or the head accuracy card, goes missing again
+    use(samples);
+    render(<Weapons />);
+    const heads = Array.from(host.querySelectorAll("thead th")).map(text);
+    for (const h of ["HS kills", "Head share", "Advice"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
+    render(<CareerAim />);
+    expect(Array.from(host.querySelectorAll(".card__title")).map(text)).toContain("Head accuracy");
+  });
+});
+
 describe("Profile clutches", () => {
   it("opens a clutch row into its rounds, each linking to the round drawer", async () => {
     // fails if a clutch row with clutches behind it is not a control, or its rounds do not open the round
@@ -446,11 +534,12 @@ it("plots a rebuilt file's detonations as approximate landing points, and a logg
 describe("Weapons", () => {
   const all = queryOf(samples);
   const rowOf = (gun: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell")?.childNodes[1]?.textContent === weaponLabel(gun)) ?? null;
-  const col = (tr: Element | null, i: number) => tr?.querySelectorAll("td")[i] ?? null;
-  // Every gun table columns: gun, kills, shots, accuracy, first bullet, rounds used, proficiency, vs your other guns
-  const KILLS = 1;
-  const ROUNDS = 5;
-  const EDGE = 7;
+  const col = (tr: Element | null, label: string) => tr?.querySelectorAll("td")[at(label)] ?? null;
+  // Every gun's columns, found by their header so a new column does not shift what a test reads
+  const at = (label: string) => Array.from(host.querySelectorAll("thead th")).findIndex((th) => text(th).startsWith(label));
+  const KILLS = "Kills";
+  const ROUNDS = "Rounds used";
+  const EDGE = "Vs your other guns";
   /** your kills or rounds with one gun in the converted logs, summed one match at a time */
   const fromConverted = (gun: string, k: "kills" | "rounds") => converted.reduce((a, s) => a + (rollup([s.facts], { player: s.facts.match.pov! }).weapons[gun]?.[k] ?? 0), 0);
 
