@@ -9,7 +9,7 @@ const SNIPER_DISPLAY = new Set(["AWP", "SSG 08", "SCAR-20", "G3SG1"]);
 export function sniping(c: Ctx): void {
   const inv = c.t.player_rounds;
   const carried = new Map<number, string[]>();
-  for (let i = 0; i < inv.n; i++) carried.set((inv.round[i] - 1) * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i]);
+  for (let i = 0; i < inv.n; i++) { const ri = c.riOf(inv.round[i]); if (ri !== undefined) carried.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i]); }
   for (let ri = 0; ri < c.nRounds; ri++) {
     for (const p of c.pr[ri]) {
       if (!p) continue;

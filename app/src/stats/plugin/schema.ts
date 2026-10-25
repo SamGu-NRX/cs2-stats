@@ -1,9 +1,7 @@
-// Types and validation for match files, schema v1 (see ../../../SCHEMA.md).
-// Tables are columnar: each table is an object of equal-length arrays.
+// TRANSITIONAL (see adapter.ts): the capture plugin's match file format, as SCHEMA.md at the repo
+// root describes it. Tables are columnar: each table is an object of equal-length arrays.
 
 export type Side = 2 | 3; // 2 = T, 3 = CT
-export const T: Side = 2;
-export const CT: Side = 3;
 
 export type RoundHow = "elim" | "defuse" | "time" | "bomb";
 export type GrenadeType = "he" | "flash" | "smoke" | "molotov" | "decoy";
@@ -93,7 +91,6 @@ export type BasicCounts = [number, number, number, number, number];
 
 /** Grenade counts in the order [he, flash, smoke, molotov, incgrenade, decoy]. */
 export type UtilCounts = [number, number, number, number, number, number];
-export const UTIL_ORDER = ["hegrenade", "flashbang", "smokegrenade", "molotov", "incgrenade", "decoy"] as const;
 
 export interface Kills {
   ri: number[];
@@ -359,20 +356,3 @@ export function decodePositions(p: Pos): void {
   }
   delete p.enc;
 }
-
-/** Empty columnar tables, used by tools and tests that build match files. */
-export function emptyTables(): Pick<MatchFile, "kills" | "damage" | "blinds" | "grenades" | "pos" | "aim"> {
-  return {
-    kills: { ri: [], tick: [], killer: [], victim: [], assister: [], flashAssister: [], weapon: [], flags: [], kpos: [], vpos: [], state: [] },
-    damage: { ri: [], tick: [], attacker: [], victim: [], dmg: [], dmgArmor: [], weapon: [], hitgroup: [] },
-    blinds: { ri: [], tick: [], attacker: [], victim: [], ms: [] },
-    grenades: { ri: [], tick: [], thrower: [], type: [], pos: [] },
-    pos: { ri: [], tick: [], pi: [], x: [], y: [], z: [], place: [], alive: [] },
-    aim: {
-      engagements: { ri: [], enemy: [], tVis: [], angVis: [], angVisYaw: [], angVisPitch: [], dist: [], tAimStart: [], tFirstShot: [], tFirstDmg: [], tEnd: [], outcome: [] },
-      shots: { ri: [], tick: [], weapon: [], burst: [], idx: [], speed: [], maxSpeed: [], scoped: [], ducked: [], target: [], aimErr: [], impact: [], hit: [] },
-    },
-  };
-}
-
-export const KILL_FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32 } as const;

@@ -69,7 +69,8 @@ export function ecoAdjust(c: Ctx): void {
     const p = c.pi.get(pr.steamid[i])!;
     const prim = pr.best_primary[i] === null ? null : weaponGroup(classFromDisplay(pr.best_primary[i]!));
     const g = prim ?? (pr.equip_value_game[i] === null ? null : groupFromEquip(pr.equip_value_game[i]!));
-    if (g) freeze.set((pr.round[i] - 1) * 1024 + p, g);
+    const ri = c.riOf(pr.round[i]);
+    if (g && ri !== undefined) freeze.set(ri * 1024 + p, g);
   }
   const groupAt = (ri: number, p: number, primary: string | null, equip: number | null): EcoGroup | null => {
     const prim = primary === null ? null : weaponGroup(classFromDisplay(primary));

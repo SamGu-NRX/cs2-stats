@@ -26,11 +26,14 @@ export const asSide = (s: string | null | undefined): Side | null => (s === "CT"
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
  * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
  */
-export function matchMeta(t: MatchTables): { date: string | null; maxRounds: number } {
+export function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null } {
   const extra = JSON.parse(t.match.extra[0]) as Record<string, unknown>;
   const convars = JSON.parse(t.match.convars[0]) as Record<string, unknown>;
   const raw = extra.date ?? extra.dem_modified_in_archive;
-  return { date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24) };
+  return {
+    date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
+    pov: typeof extra.pov === "string" ? extra.pov : null,
+  };
 }
 
 /** Indexes shared by the families. */
@@ -53,13 +56,20 @@ export interface Ctx {
   byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb") => number[][];
   /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
   posAt: (ri: number, pi: number, tick: number) => [number, number, number] | null;
-  /** the player's id */
+  /** a player index from a steamid column value */
   idOf: (id: string | null) => number | null;
+  /** row index of a round number in the rounds table; undefined for rounds the tables do not cover */
+  riOf: (round: number) => number | undefined;
 }
 
 export function buildCtx(t: MatchTables): Ctx {
   const tickRate = t.match.tick_rate[0];
   const nRounds = t.rounds.n;
+  // Rounds are addressed by row. Demos cover every round, but a source may cover only some (the
+  // plugin adapter leaves out rounds it has only totals for), so round numbers can skip.
+  const rowOf = new Map<number, number>();
+  for (let i = 0; i < nRounds; i++) rowOf.set(t.rounds.round[i], i);
+  const riOf = (round: number) => rowOf.get(round);
   const teams = [t.match.team_ct_start[0], t.match.team_t_start[0]];
   const pi = new Map<string, number>();
   const players: PlayerInfo[] = [];
@@ -74,8 +84,8 @@ export function buildCtx(t: MatchTables): Ctx {
 
   const side: (Side | null)[][] = Array.from({ length: nRounds }, () => new Array<Side | null>(players.length).fill(null));
   for (let i = 0; i < t.player_rounds.n; i++) {
-    const ri = t.player_rounds.round[i] - 1;
-    if (ri >= 0 && ri < nRounds) side[ri][pi.get(t.player_rounds.steamid[i])!] = asSide(t.player_rounds.side[i]);
+    const ri = riOf(t.player_rounds.round[i]);
+    if (ri !== undefined) side[ri][pi.get(t.player_rounds.steamid[i])!] = asSide(t.player_rounds.side[i]);
   }
   // The team on CT each round: by name when the tables carry team names, else the CT players' teams.
   const ctTeam = Array.from({ length: nRounds }, (_, ri): 0 | 1 => {
@@ -105,7 +115,7 @@ export function buildCtx(t: MatchTables): Ctx {
     if (out) return out;
     out = Array.from({ length: nRounds }, () => []);
     const tab = t[name];
-    if (tab) for (let i = 0; i < tab.n; i++) { const ri = tab.round[i] - 1; if (ri >= 0 && ri < nRounds) out[ri].push(i); }
+    if (tab) for (let i = 0; i < tab.n; i++) { const ri = riOf(tab.round[i]); if (ri !== undefined) out[ri].push(i); }
     cache.set(name, out);
     return out;
   };
@@ -116,7 +126,9 @@ export function buildCtx(t: MatchTables): Ctx {
   if (P) for (let i = 0; i < P.n; i++) {
     const p = pi.get(P.steamid[i]);
     if (p === undefined) continue;
-    const key = (P.round[i] - 1) * 1024 + p;
+    const ri = riOf(P.round[i]);
+    if (ri === undefined) continue;
+    const key = ri * 1024 + p;
     let l = pos.get(key);
     if (!l) pos.set(key, (l = []));
     l.push(i);
@@ -135,7 +147,7 @@ export function buildCtx(t: MatchTables): Ctx {
   const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
 
   return {
-    t, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf,
+    t, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf, riOf,
   };
 }
 
@@ -156,7 +168,7 @@ export const enemyHit = (t: MatchTables, i: number) => t.damages.attacker_steami
 function killFacts(c: Ctx): KillFact[][] {
   const k = c.t.kills;
   const rows: number[][] = Array.from({ length: c.nRounds }, () => []);
-  for (let i = 0; i < k.n; i++) { const ri = k.round[i] - 1; if (ri >= 0 && ri < c.nRounds) rows[ri].push(i); }
+  for (let i = 0; i < k.n; i++) { const ri = c.riOf(k.round[i]); if (ri !== undefined) rows[ri].push(i); }
   return rows.map((list, ri) => {
     // A suicide after the round has ended is not a death (HLTV: 4 of 4 such deaths left out on the
     // pro maps, while bomb deaths after the end tick count).
@@ -190,9 +202,9 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
   const pr = c.t.player_rounds;
   const equip = Array.from({ length: c.nRounds }, () => ({ CT: 0 as number | null, T: 0 as number | null, nCT: 0, nT: 0 }));
   for (let i = 0; i < pr.n; i++) {
-    const ri = pr.round[i] - 1;
+    const ri = c.riOf(pr.round[i]);
     const s = asSide(pr.side[i]);
-    if (ri < 0 || ri >= c.nRounds || !s) continue;
+    if (ri === undefined || !s) continue;
     const e = pr.equip_value_game[i];
     const x = equip[ri];
     x[s] = e === null || x[s] === null ? null : x[s]! + e;
@@ -200,12 +212,12 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
   }
   return Array.from({ length: c.nRounds }, (_, ri): RoundFact => {
     const x = equip[ri];
-    const pistol = isPistolRound(ri, maxRounds);
+    const pistol = isPistolRound(r.round[ri] - 1, maxRounds);
     const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
     const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
     const fe = r.freeze_end_tick[ri];
     return {
-      ri, ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
+      ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
       durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
       plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
       equip: team, buy: { CT: buy("CT"), T: buy("T") }, winProb: null,
@@ -216,7 +228,7 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
 function playerRounds(c: Ctx): (PlayerRound | null)[][] {
   const t = c.t.player_rounds;
   const row = new Map<number, number>();
-  for (let i = 0; i < t.n; i++) row.set((t.round[i] - 1) * 1024 + c.pi.get(t.steamid[i])!, i);
+  for (let i = 0; i < t.n; i++) { const ri = c.riOf(t.round[i]); if (ri !== undefined) row.set(ri * 1024 + c.pi.get(t.steamid[i])!, i); }
   return c.rounds.map((rf) => c.players.map((_, p) => {
     const side = c.side[rf.ri][p];
     if (!side) return null;
@@ -237,7 +249,7 @@ function playerRounds(c: Ctx): (PlayerRound | null)[][] {
 
 export function derive(t: MatchTables): MatchFacts {
   const c = buildCtx(t);
-  const { date, maxRounds } = matchMeta(t);
+  const { date, maxRounds, pov } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -257,7 +269,7 @@ export function derive(t: MatchTables): MatchFacts {
     v: DERIVE_VERSION,
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
-      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0],
+      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is PlayerRound => x !== null),
