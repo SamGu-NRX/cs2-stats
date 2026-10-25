@@ -269,6 +269,25 @@ def test_the_replays_folder_is_found_in_the_library_that_holds_cs2(tmp_path):
     assert vi.replays_dir(steam) == other / vi.REPLAYS
 
 
+def test_the_user_file_is_replaced_whole_and_only_when_it_changes(tmp_path, monkeypatch):
+    # The app reads it while it lists matches: a write cut short must leave the old file whole, and a
+    # rerun for the same user must not touch it (review of #29)
+    out = tmp_path / "out"
+    vi.resolve_user(out, None, U1)
+    f = out / vi.USER_FILE
+    first = (f.read_text(encoding="utf-8"), f.stat().st_mtime_ns)
+    vi.resolve_user(out, None, U1)
+    assert (f.read_text(encoding="utf-8"), f.stat().st_mtime_ns) == first
+
+    def cut(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(vi.os, "replace", cut)
+    with pytest.raises(OSError):
+        vi.resolve_user(out, None, U2)
+    assert f.read_text(encoding="utf-8") == first[0]
+    assert [p.name for p in out.iterdir()] == [vi.USER_FILE]  # no staged copy left behind
+
+
 def test_a_saved_user_survives_a_later_steam_login_and_an_explicit_one_replaces_it(tmp_path):
     steam = tmp_path / "Steam"
     (steam / "config").mkdir(parents=True)

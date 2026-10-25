@@ -29,7 +29,15 @@ export interface ValveImport {
   error: string | null;
 }
 /** The Valve folder as last listed: where it is, whose matches they are, and folders without a complete match. */
-export interface ValveFolder { folder: string; user: string | null; skipped: { file: string; why: string }[] }
+export interface ValveFolder {
+  folder: string | null;
+  user: string | null;
+  /** why the user file could not be read; its matches are listed without a user */
+  userError: string | null;
+  /** why the folder could not be listed at all; the other matches are still listed */
+  error?: string;
+  skipped: { file: string; why: string }[];
+}
 
 export const VALVE_FOLDER = String.raw`%APPDATA%\BotMatchStats\valve`;
 export const isValve = (f: string) => f.startsWith("valve/");
@@ -57,6 +65,19 @@ export interface Host {
 
 interface ValveListing extends ValveFolder { files: FileEntry[] }
 const valveEntries = (l: ValveListing): FileEntry[] => l.files.map((f) => (l.user ? { ...f, pov: l.user } : f));
+
+/**
+ * Lists the Valve folder without letting it fail the whole match list: a listing that throws becomes an
+ * error the Settings page shows, and the plugin's matches still load (review of #29).
+ */
+async function listValveSafely(list: () => Promise<ValveListing | null>): Promise<{ folder: ValveFolder | null; files: FileEntry[] }> {
+  try {
+    const v = await list();
+    return v ? { folder: { folder: v.folder, user: v.user, userError: v.userError ?? null, skipped: v.skipped }, files: valveEntries(v) } : { folder: null, files: [] };
+  } catch (e) {
+    return { folder: { folder: null, user: null, userError: null, error: e instanceof Error ? e.message : String(e), skipped: [] }, files: [] };
+  }
+}
 
 export const PACKS_FOLDER = String.raw`%APPDATA%\BotMatchStats\packs`;
 
@@ -100,9 +121,9 @@ async function tauriHost(): Promise<Host> {
     async list() {
       const l = await invoke<{ folder: string; files: FileEntry[] }>("list_matches");
       folder = l.folder;
-      const v = await invoke<ValveListing>("list_valve");
-      valve = { folder: v.folder, user: v.user, skipped: v.skipped };
-      const files = [...l.files, ...valveEntries(v)];
+      const v = await listValveSafely(() => invoke<ValveListing>("list_valve"));
+      valve = v.folder;
+      const files = [...l.files, ...v.files];
       return samplesShown() ? [...files, ...(await sampleEntries())] : files;
     },
     read: (file) => (isSample(file) ? readSample(file)
@@ -204,9 +225,9 @@ function webHost(): Host {
         }
       } catch { /* no dev server: bundled and picked files only */ }
       if (failed) throw new Error(failed);
-      const v = await webValve();
-      valve = v && { folder: v.folder, user: v.user, skipped: v.skipped };
-      return [...local, ...recorded, ...(v ? valveEntries(v) : []), ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
+      const v = await listValveSafely(webValve);
+      valve = v.folder;
+      return [...local, ...recorded, ...v.files, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
     },
     async read(file) {
       const p = picked.get(file);

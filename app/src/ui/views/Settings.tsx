@@ -166,7 +166,13 @@ function ValveSource({ n }: { n: number }) {
         <span className="mono selectable">{folder}</span>
         <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied")} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
       </div>
-      <p className="meta">{host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{host.valve.user}</span>.</> : "The first import takes your SteamID64 from Steam's most recent login."}{host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}</p>
+      <p className="meta">
+        {host?.valve?.error ? <span className="poor-text selectable">{host.valve.error}</span>
+          : host?.valve?.userError ? <span className="poor-text selectable">{host.valve.userError}. Matches are listed without you until it is fixed.</span>
+          : host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{host.valve.user}</span>.</>
+          : "The first import takes your SteamID64 from Steam's most recent login."}
+        {host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}
+      </p>
       <button className="btn press" onClick={() => void run()} disabled={!host || state.phase === "running"} aria-busy={state.phase === "running"}>
         <RefreshIcon size={14} />{state.phase === "running" ? "Importing" : "Import Valve matches"}
       </button>
