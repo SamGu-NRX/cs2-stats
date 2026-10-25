@@ -1,6 +1,6 @@
 # Rating 3.02 reference specification
 
-This document describes the research model. The shipped implementation belongs in TypeScript and must read `params.json`. Python fits coefficients and checks the implementation; it is not a second production model.
+This document describes the shipped approximation and the research model around it. The shipped implementation belongs in TypeScript and must read `params.json`. Python fits coefficients and checks the implementation; it is not a second production model.
 
 ## Data contract
 
@@ -27,7 +27,7 @@ Each cell stores the median observed P(T wins) and its count. `last_kill_side` i
 
 Equipment is represented by HLTV's round-start buy labels: `PISTOL`, `ECO`, `HALF`, and `FULL`. A terminal event returns the terminal winner exactly. An unknown state is an error in strict validation and `null` in a general engine adapter. Do not infer a terminal winner from alive counts alone after a bomb plant.
 
-On a chronological 70/15/15 match split, the selected lookup has 0.153 pp test MAE over 20,235 events and 0.160 pp over non-terminal events. Pre-plant MAE is 0.0019 pp. Post-plant timing is still open. The current valid joins provide 1,311 aligned post-plant events across 350 rounds. They are consistent with the nominal 10-second no-kit and 5-second kit defuse limits, but kills can still change elimination probability after defusing becomes impossible, so a threshold cannot be claimed from zero deltas alone.
+On a chronological 70/15/15 match split, the approximate selected lookup has 0.153 pp test MAE over 20,235 events and 0.160 pp over non-terminal events. Pre-plant MAE is 0.0019 pp. Post-plant timing is still open. The current valid joins provide 1,311 aligned post-plant events across 350 rounds. They are consistent with the nominal 10-second no-kit and 5-second kit defuse limits, but kills can still change elimination probability after defusing becomes impossible, so a threshold cannot be claimed from zero deltas alone.
 
 ## Swing credits
 
@@ -62,6 +62,38 @@ killPoints = k * (1 - p)
 For each player-map, eKPR is the sum of kill points divided by rounds. eDPR charges the same point value to the victim. eADR weights damage at the attacker/victim group and side at the damage tick. Unknown groups fall back to raw value and are counted.
 
 The map scoreboard exposes eKPR, eDPR, eADR, and eKAST. It does not expose eMK. The reference fit therefore uses raw multi-kill percent for the MK term. Career cards expose an eco multi-kill value, but that value is on a different scale. Do not silently mix the two. `eKAST`'s 3.0.1 reduced-power transformation remains unresolved.
+
+## Shipped approximation
+
+The shipped rating block in `params.json` is a plain six-term ordinary-least-squares approximation over all 733 regulation and overtime maps and 7,330 player-map rows:
+
+```
+Rating_hat = 0.4912169184
+           + 0.4435502433 * eKPR
+           + 0.0043052663 * eADR
+           - 0.3625584417 * eDPR
+           + 0.0029272188 * eKAST
+           + 0.0022287379 * MK
+           + 0.0398680331 * Swing
+```
+
+The inputs use HLTV's displayed eco-adjusted KPR, ADR, DPR, and KAST, raw multi-kill rate, and displayed Round Swing. A five-fold map-grouped holdout gives MAE 0.0462157, p95 0.1179361, and maximum error 0.4583706. The block has `status: "approximation"`; it is not a recovered HLTV formula.
+
+The following pieces are recovered well enough to keep in the shipped approximation:
+
+- The total rating is the round-weighted mean of the displayed CT and T side ratings. The display-level reconstruction has MAE 0.00284, p95 0.00652, and maximum error 0.00924 over 7,330 rows.
+- The pre-plant win-probability lookup reproduces the observed graph with 0.0019 percentage-point MAE on pre-plant events. The lookup remains approximate because post-plant timing is unresolved.
+- The display floors are known: rating ±0.005, eK/eD count rounding ±0.5 count, eADR/eKAST ±0.05 displayed units, and Swing ±0.005 percentage points.
+
+The following items remain open:
+
+- **eKAST transform.** HLTV says the October 2025 update added a transformation that treats winning-team KAST more fairly. Adding simple result interactions reduced map holdout MAE from 0.0462 to 0.0430, but exact demo result-conditioned KAST was slightly worse than the unconditioned probe, 0.03482 versus 0.03468. This does not identify the transform.
+- **Per-round sub-rating transforms.** The available 25-term round model reaches 0.0893 MAE over 21,990 equations. Exact damage and action features improve a 220-map probe to 0.0341, still far above the display floor.
+- **Exact eco function.** A plain linear fit on career eco inputs reaches about 0.0058 MAE, while the same six inputs on map totals reach about 0.0462. The demo duel reconstruction has objective MAE 0.1095 when CT/T eco counts are included. Neither result recovers HLTV's eco function.
+- **Post-plant timing.** The joined data contains 1,311 aligned post-plant events across 350 rounds. The observations are consistent with nominal defuse limits, but no timing threshold is claimed because kills can still change the graph after defusing becomes impossible.
+- **Mixed-case Swing allocation.** Tooltip credits are the ground truth, but per-player round Swing is not additive over those event tooltips. The clean no-damage, one-flash ratio of about 0.846 killer and 0.154 flash assister is approximate. The round-end remainder and mixed damage, flash, and trade cases remain provisional.
+
+A future investigator should not apply the map fit to career aggregates. The map-fitted linear coefficients overpredict the 275 career ratings by a near-constant +0.053, with MAE 0.0529. A career-fitted linear model reaches MAE 0.006. This supports HLTV's statement that eco adjustment has less influence on smaller samples, but it does not reveal the career transformation.
 
 ## Rating target and per-round fit
 
