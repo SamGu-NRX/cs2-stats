@@ -10,34 +10,43 @@ ground truth is the private per-map JSON (733 maps). The targets are the accepta
 ## Scoreboard: `pnpm hltv-check`, `hltv-exact.test.ts`
 
 Demo maps join HLTV maps by map, at least 7 shared player names, the same final score, then the
-nearest date (`tools/hltv.ts`). 245 of 250 maps joined; the other five are halves of split recordings
-(`-p1`, `-p2`), whose partial scores match no HLTV map.
+nearest date (`tools/hltv.ts`). Maps that join nothing are listed by `pnpm hltv-check` (121 on the run
+below): halves of split recordings (`-p1`, `-p2`), whose partial scores match no HLTV map, and matches
+whose HLTV pages were not collected.
 
-| Column | Exact, of 2,450 player-maps | Target |
+Rerun on 395 joined maps (3,950 player-maps). Ours is rounded to one decimal as HLTV displays it,
+halves to the even digit (`tools/hltv.ts` `hltvRound1`): 13 of 16 rounds is 81.2%, not 81.3%.
+
+| Column | Exact, of 3,950 player-maps | Target |
 |---|---|---|
-| Kills | 2,450 | exact |
-| Deaths | 2,433 | exact |
-| KAST | 2,281 (93.1%) | exact |
-| ADR within 0.5 | 2,394 (97.7%) | within 0.5 |
-| Headshot kills, multi-kill rounds | 2,450, 2,450 | |
-| Traded deaths | 2,236 | |
-| Opening kills, opening deaths | 2,433, 2,416 | |
+| Kills | 3,950 | exact |
+| Deaths | 3,916 | exact |
+| KAST | 3,679 (93.1%) | exact |
+| ADR within 0.5 | 3,857 (97.6%) | within 0.5 |
+| Headshot kills, multi-kill rounds | 3,950, 3,950 | |
+| Traded deaths | 3,620 | |
+| Opening kills, opening deaths | 3,926, 3,903 | |
+| Assists, flash assists | 2,396, 2,545 | |
 
-107 of the 245 maps match for every player on K, D, KAST and ADR. `hltv-exact.test.ts` pins 24 of
-them and checks kills on every joined map. Known misses: the ten demos recorded from round 1 live
-disagree with HLTV's ADR in both directions while kills still match; elsewhere a few players miss ADR
-by 0.6 to 0.9, low, which fits hits the extractor rebuilt without a unique attacker.
+171 of the 395 maps match for every player on K, D, KAST and ADR. `hltv-exact.test.ts` pins 24 maps
+(`pnpm hltv-check` covers every joined map and lists each miss). The KAST misses are a round or two
+off, in both directions, and none of the candidate rules below fixes more than it breaks. Where assists miss, HLTV's assists and flash assists usually run higher than the
+kill feed's by the same count, so HLTV credits flash assists the kill feed does not; KAST excludes flash assists, so it is not
+affected. ADR misses: the ten demos recorded from round 1 live, and a few players 0.6 to 0.9 low,
+which fits hits the extractor rebuilt without a unique attacker.
 
 ## Why these definitions: `pnpm scoreboard-variants`
 
-Each candidate scored against HLTV on 2,410 player-maps (241 joined maps):
+Each candidate scored against HLTV on 3,950 player-maps (395 joined maps); bold is the engine's rule:
 
 | Question | Candidate: exact matches |
 |---|---|
-| ADR damage | health removed (the game's own scoreboard): 1,184; the hurt event's damage capped at health: **2,354** |
-| Deaths | every death: 2,361; every death except post-round suicides: **2,393** |
-| Traded deaths | 5 s, every avenged death (CS Demo Manager): 1,528; 5 s, earliest only: 2,057; 5.4 s, every death: 1,576; 5.4 s, earliest only: **2,199** |
-| KAST | 5.4 s earliest only, without flash assists: **2,245**; with flash assists: 2,010; 5 s every death without flash assists: 1,915 |
+| ADR damage | health removed (the game's own scoreboard): 1,966; the hurt event's damage capped at health: **3,857** |
+| Deaths | every death: 3,868; every death except post-round suicides: **3,916** |
+| Traded deaths | 5 s, every avenged death (CS Demo Manager): 2,509; 5 s, earliest only: 3,349; 5.4 s, every death: 2,587; 5.4 s, earliest only: **3,620** |
+| KAST trade rule | 5.4 s earliest only, without flash assists: **3,679**; with flash assists: 3,299; 5 s earliest only without flash assists: 3,576 |
+| KAST assist rule | the game's non-flash assister: **3,679**; the assister or 40+ enemy damage on the victim: 3,650; 40+ damage only: 2,771; 41+ damage only: 2,737 |
+| KAST deaths | every death: **3,679**; team kills and suicides not deaths: 3,607 |
 
 HLTV's round buy labels over every HLTV map: PISTOL $3,000 to $4,700 (2,932 team-rounds), ECO $800 to
 $4,950 (1,794), HALF $5,000 to $16,200 (3,773), FULL $16,250 to $38,100 (23,469). The engine's cuts,
@@ -45,26 +54,33 @@ $1,000 and $3,250 per player, are those bands for five players.
 
 ## Rating 3.0 and swing: `pnpm rating-check`
 
-Rating 3.0 is `params.json`'s six-term linear model (PR #17). Against HLTV on every joined player-map,
-395 maps and 3,950 player-maps, with each win-probability source (`pnpm rating-check` uses the pack
-when installed; `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB):
+Rating 3.0 is `params.json`'s six-term linear model (PR #17, duel strengths of `2197873`). Against
+HLTV on 395 joined maps (3,950 player-maps), with each win-probability source: `pnpm rating-check`
+uses the HLTV pack when installed, `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB (394 maps
+there: the pipeline replaced one mid-run). Raw rows compare the engine's counts with HLTV's
+traditional columns, so an eco input's error can be told from a counting error.
 
-| Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV (HLTV lookup) |
+| Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV |
 |---|---|---|---|
-| eKPR | 0.020 / 0.993 | same | 0.661 / 0.653 |
-| eDPR | 0.023 / 0.981 | same | 0.661 / 0.676 |
-| eADR | 3.12 / 0.983 | same | 73.3 / 71.3 |
-| eKAST | 4.52 / 0.884 | same | 70.1 / 68.8 |
-| Swing (points per round) | 1.02 / 0.952 | 1.51 / 0.906 | 0.00 / -0.02 |
-| Rating 3.0 | 0.071 / 0.973 | 0.085 / 0.961 | 1.100 / 1.078 |
-| Rating 3.0, CT rounds | 0.124 / 0.966 | 0.137 / 0.953 | 1.175 / 1.097 |
-| Rating 3.0, T rounds | 0.102 / 0.970 | 0.123 / 0.957 | 1.027 / 1.071 |
+| KPR, raw | 0.0000 / 1.000 | same | 0.655 / 0.655 |
+| eKPR | 0.026 / 0.987 | same | 0.660 / 0.653 |
+| DPR, raw | 0.0004 / 0.999 | same | 0.659 / 0.659 |
+| eDPR | 0.026 / 0.975 | same | 0.660 / 0.676 |
+| ADR, raw | 0.075 / 1.000 | same | 71.73 / 71.74 |
+| eADR | 2.45 / 0.989 | same | 72.84 / 71.35 |
+| KAST, raw (percentage points) | 0.34 / 0.994 | same | 71.06 / 71.08 |
+| eKAST | 4.55 / 0.886 | same | 70.47 / 68.84 |
+| Swing (points per round) | 1.01 / 0.953 | 1.51 / 0.906 | 0.00 / -0.02 |
+| Rating 3.0 | 0.072 / 0.972 | 0.086 / 0.961 | 1.099 / 1.078 |
+| Rating 3.0, CT rounds | 0.128 / 0.966 | 0.141 / 0.952 | 1.182 / 1.097 |
+| Rating 3.0, T rounds | 0.106 / 0.970 | 0.125 / 0.957 | 1.018 / 1.071 |
 
-Targets: swing r above 0.95 (met with the HLTV lookup, not with CS2RB); rating MAE under 0.04 (not
-met) and r above 0.97 (met with the HLTV lookup). `params.json` reports a held-out MAE of 0.046 when the
-model reads HLTV's own displayed inputs; the gap to 0.071 is the error in the engine's inputs, mostly
-eKAST (whose transform `params.json` marks unresolved) and eADR. Per-side ratings apply the map model
-to one side's rounds, which HLTV does not.
+The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting:
+eKAST most (its transform `params.json` marks unresolved), then eADR, which runs 1.5 HP per round high
+while raw ADR is level. Targets: swing r above 0.95 (met with the HLTV lookup); rating MAE under 0.04
+(not met) and r above 0.97 (met with the HLTV lookup). `params.json` reports a held-out MAE of 0.046
+when the model reads HLTV's own displayed inputs. Per-side ratings apply the map model to one side's
+rounds, which HLTV does not.
 
 ## Plugin adapter: `plugin/adapter.test.ts`
 

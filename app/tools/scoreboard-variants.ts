@@ -3,7 +3,7 @@
 // bands of HLTV's round buy labels over all HLTV maps.   pnpm scoreboard-variants
 import { derive, hitDamage } from "../src/stats/derive";
 import type { KillFact } from "../src/stats/facts";
-import { hltvMaps, joinHltv } from "./hltv";
+import { hltvMaps, hltvRound1, joinHltv } from "./hltv";
 import { WINPROB, proMaps } from "./node-read";
 
 const score: Record<string, number> = {};
@@ -51,7 +51,7 @@ for await (const { t } of proMaps([])) {
       removed += t.damages.dmg_health_capped[i];
       reported += hitDamage(t, i);
     }
-    const adr = (x: number) => Math.round((10 * x) / R) / 10;
+    const adr = (x: number) => hltvRound1(x / R);
     ok("ADR: health removed", Math.abs(adr(removed) - h.total.adr) <= 0.5 + 1e-9);
     ok("ADR: reported damage capped at health", Math.abs(adr(reported) - h.total.adr) <= 0.5 + 1e-9);
     // deaths: every death in the tables, against dropping suicides after the round ended
@@ -79,7 +79,7 @@ for await (const { t } of proMaps([])) {
           }
           if (ev || !died) kast++;
         });
-        ok(`KAST, ${name}, ${flash ? "with" : "without"} flash assists`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
+        ok(`KAST, ${name}, ${flash ? "with" : "without"} flash assists`, hltvRound1((100 * kast) / R) === h.total.kast);
       }
       if (name !== "5.4 s, earliest only") continue;
       // the assist: the game's (non-flash) assister, a teammate with 40+ or 41+ enemy damage on the
@@ -98,7 +98,7 @@ for await (const { t } of proMaps([])) {
           }
           if (ev || !died) kast++;
         });
-        ok(`KAST assist rule: ${vname}`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
+        ok(`KAST assist rule: ${vname}`, hltvRound1((100 * kast) / R) === h.total.kast);
       }
     }
   }
