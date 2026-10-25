@@ -74,8 +74,55 @@ function matchFolder(): Plugin {
   };
 }
 
+/**
+ * Development only: extracted match folders (schema v1 parquet, one folder per map) from the folder
+ * named by CS2_DEV_MATCHES, such as cs2-stats-data/dev-matches, so views can be checked on demo data
+ * before local recordings come through the extractor. Never the user's match folder: matches there
+ * count in the user's career. `vite dev` only; preview, the static build and the desktop app never
+ * serve it. GET /__dev-matches/list lists folders holding match.parquet as "dev/<folder>/";
+ * GET /__dev-matches/file?f=<folder>/ returns the folder's parquet file names, and
+ * ?f=<folder>/<table>.parquet one file's bytes.
+ */
+function devMatches(): Plugin {
+  const root = process.env.CS2_DEV_MATCHES ? path.resolve(process.env.CS2_DEV_MATCHES) : null;
+  const handler: Connect.NextHandleFunction = async (req, res, next) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (!root || !url.pathname.startsWith("/__dev-matches/")) return next();
+    const send = (code: number, body: string | Buffer, type = "application/json") => {
+      res.statusCode = code;
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "no-store");
+      res.end(body);
+    };
+    try {
+      if (url.pathname === "/__dev-matches/list") {
+        const files: { file: string; size: number; mtime: number }[] = [];
+        for (const d of await fs.readdir(root, { withFileTypes: true })) {
+          const m = path.join(root, d.name, "match.parquet");
+          if (!d.isDirectory() || !existsSync(m)) continue;
+          const st = await fs.stat(m);
+          files.push({ file: `dev/${d.name}/`, size: st.size, mtime: Math.round(st.mtimeMs) });
+        }
+        return send(200, JSON.stringify({ folder: root, files }));
+      }
+      if (url.pathname === "/__dev-matches/file") {
+        const rel = url.searchParams.get("f") ?? "";
+        const abs = path.resolve(root, rel);
+        if (!abs.startsWith(root + path.sep)) return send(400, JSON.stringify({ error: "not inside the dev match folder" }));
+        if (rel.endsWith("/")) return send(200, JSON.stringify((await fs.readdir(abs)).filter((f) => f.endsWith(".parquet"))));
+        if (!rel.endsWith(".parquet")) return send(400, JSON.stringify({ error: "not a parquet file" }));
+        return send(200, await fs.readFile(abs), "application/octet-stream");
+      }
+      return send(404, JSON.stringify({ error: "unknown endpoint" }));
+    } catch (e) {
+      return send(500, JSON.stringify({ error: (e as Error).message }));
+    }
+  };
+  return { name: "cs2-dev-matches", apply: "serve", configureServer: (s) => { s.middlewares.use(handler); } };
+}
+
 export default defineConfig({
-  plugins: [react(), matchFolder()],
+  plugins: [react(), matchFolder(), devMatches()],
   clearScreen: false,
   server: {
     port: 1420,
