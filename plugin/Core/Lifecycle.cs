@@ -36,3 +36,30 @@ public static class Lifecycle
     /// </summary>
     public static bool MatchOverAtResume(bool winPanelSeen, int gamePhase) => winPanelSeen || gamePhase == GamePhaseMatchEnded;
 }
+
+/// <summary>
+/// Whether a map is known to be running, so engine entities (and traces) may be touched. A game launch
+/// loads plugins at the main menu, where entity reads fail and CounterStrikeSharp caches the failure
+/// for every plugin until restart. So nothing touches entities until OnMapStart, or, after a hot
+/// reload (no OnMapStart follows), until the server reports a map name. OnTick cannot stand in for
+/// that: it also fires at the main menu (CS2-Smarter-Bot's BotState.Tick.cs saw the menu's
+/// one-player limit from it).
+/// </summary>
+public sealed class MapGate
+{
+    public bool MapRunning { get; private set; }
+    /// <summary>Hot-reloaded and not yet sure a map is running; the plugin polls the map name meanwhile.</summary>
+    public bool AwaitingHotReload { get; private set; }
+
+    public void PluginLoaded(bool hotReload) { MapRunning = false; AwaitingHotReload = hotReload; }
+    public void MapStarted() { MapRunning = true; AwaitingHotReload = false; }
+    public void MapEnded() { MapRunning = false; AwaitingHotReload = false; }
+
+    /// <summary>The server reported a non-empty map name while a hot reload was waiting.</summary>
+    public void MapNamed()
+    {
+        if (!AwaitingHotReload) return;
+        AwaitingHotReload = false;
+        MapRunning = true;
+    }
+}

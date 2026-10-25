@@ -20,7 +20,7 @@ namespace BotMatchStats.Game;
 public sealed partial class BotMatchStatsPlugin : BasePlugin
 {
     public override string ModuleName => "BotMatchStats";
-    public override string ModuleVersion => "1.0.0";
+    public override string ModuleVersion => "1.1.0";
     public override string ModuleDescription => "Records bot matches into compact columnar files";
 
     private const int MaxSlots = 64;
@@ -55,9 +55,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private CCSGameRules? _rules;
     private CCSTeam? _teamT, _teamCt;
     private bool _needInit = true, _scanPending, _disabled, _memReady;
-    // A game launch loads plugins at the main menu. Reading entities there throws, and CounterStrikeSharp
-    // caches that failure for every plugin until restart, so TryInit waits for a loaded map.
-    private bool _mapLoaded;
+    /// <summary>No entity read or trace until this says a map is running (see <see cref="MapGate"/>).</summary>
+    private readonly MapGate _mapGate = new();
     private int _tick, _nextRefresh, _finalizeAt = Nil.V, _matchEndAt = Nil.V, _humanSlot = -1;
     private int _perRoundStride;
     // Scan generations (see Lifecycle.AcceptResume): bumped for every new scan request; answers with
@@ -90,7 +89,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _writer = new MatchWriter(root, gameDir);
         _rec = new Recorder(_writer, _frames, _perf, Warn);
         Array.Fill(_piSlot, -1);
-        _mapLoaded = hotReload && EntityListReady();
+        StartCoreWarmup();
+        _mapGate.PluginLoaded(hotReload);
 
         RegisterListener<Listeners.OnTick>(OnTick);
         // Everything that can allocate (worker messages, init, slot refresh, economy, round finalization)
@@ -131,6 +131,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         // hot-reloaded instance can resume, then stop the worker.
         try
         {
+            FlushLogs();
             if (_rec is { Capturing: true }) _rec.Flush();
             if (_writer != null && !_writer.Drain(TimeSpan.FromSeconds(2)))
                 Logger.LogWarning("BotMatchStats: writer did not finish within 2 s during unload; the last write may be missing.");
@@ -142,7 +143,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         }
     }
 
-    private void Warn(string message) => Logger.LogWarning("BotMatchStats: {Message}", message);
+    private void Warn(string message) => Log(LogLevel.Warning, message);
 
     // ---- per tick -------------------------------------------------------------------------------
 
@@ -156,7 +157,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         }
         catch (Exception ex)
         {
-            if (_tickErrors++ < 5) Logger.LogError(ex, "BotMatchStats tick failed");
+            if (_tickErrors++ < 5) Log(LogLevel.Error, $"tick failed: {ex}");
         }
         _perf.Tick(Stopwatch.GetTimestamp() - t0, GC.GetAllocatedBytesForCurrentThread() - a0);
     }
@@ -187,6 +188,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
             bool place = botPos || (isHuman && humanPos) || (ct && team == 3);
             ReadFrame(slot, ref _frames.ByPi[pi], place);
         }
+        if (aim && _losProbe != null && _humanSlot >= 0) _losProbe.SetIgnore(PawnOfSlot(_humanSlot));
         _rec.Tick(_tick);
     }
 
@@ -194,12 +196,27 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void Housekeeping()
     {
+        // Queued log lines are written outside live rounds, timed under their own name.
+        if (_logQueue.Count > 0 && _rec is not { Live: true })
+        {
+            EvBegin();
+            FlushLogs();
+            EvEnd("log");
+        }
         EvBegin();
         try
         {
             DrainMessages();
             if (_disabled || _rec == null) return;
-            if (_needInit) { if (_mapLoaded && EntityListReady()) TryInit(); return; }
+            if (_needInit)
+            {
+                // Server.MapName reads the game server's globals and returns null when there is no game
+                // server (CounterStrikeSharp 1.0.378 natives_engine.cpp GetMapName, globals.cpp
+                // getGlobalVars); it never touches the entity system, so it is safe at the main menu.
+                if (_mapGate.AwaitingHotReload && !string.IsNullOrEmpty(Server.MapName)) _mapGate.MapNamed();
+                if (_mapGate.MapRunning && EntityListReady()) TryInit();
+                return;
+            }
             _tick = Server.TickCount;
             if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
             if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }
@@ -212,11 +229,18 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         }
         catch (Exception ex)
         {
-            if (_tickErrors++ < 5) Logger.LogError(ex, "BotMatchStats housekeeping failed");
+            if (_tickErrors++ < 5) Log(LogLevel.Error, $"housekeeping failed: {ex}");
         }
         finally
         {
             EvEnd("housekeeping");
+        }
+        // Outside live rounds only, each timed under its own name so a perf row shows what it cost.
+        if (_rec is { Live: false } && !_needInit && !_disabled)
+        {
+            EvBegin();
+            try { WarmStep(); } catch (Exception ex) { Log(LogLevel.Warning, $"warm-up step failed: {ex.Message}"); }
+            EvEnd("warmup");
         }
     }
 
@@ -295,15 +319,10 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (w == null) return;
         while (w.Messages.TryDequeue(out var m))
         {
-            switch (m.Level)
-            {
-                case MessageLevel.Error: Logger.LogError("BotMatchStats writer: {Text}", m.Text); break;
-                case MessageLevel.Warn: Logger.LogWarning("BotMatchStats writer: {Text}", m.Text); break;
-                default: Logger.LogInformation("BotMatchStats writer: {Text}", m.Text); break;
-            }
+            Log(m.Level switch { MessageLevel.Error => LogLevel.Error, MessageLevel.Warn => LogLevel.Warning, _ => LogLevel.Information }, "writer: " + m.Text);
             if ((m.Resume != null || m.ScanDone) && (!_scanPending || m.Gen != _scanGen))
             {
-                if (m.Resume != null) Logger.LogInformation("BotMatchStats: ignoring stale scan answer (generation {Got}, current {Cur})", m.Gen, _scanGen);
+                if (m.Resume != null) Log(LogLevel.Information, $"ignoring stale scan answer (generation {m.Gen}, current {_scanGen})");
                 continue;
             }
             if (m.Resume != null) ResumeCapture(m.Resume, m.ResumeRounds, m.Gen);
@@ -328,11 +347,11 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
             if (err != null)
             {
                 _disabled = true;
-                Logger.LogError("BotMatchStats DISABLED: raw entity access is not usable ({Error}). Nothing will be recorded.", err);
+                Log(LogLevel.Error, $"DISABLED: raw entity access is not usable ({err}). Nothing will be recorded.");
                 return;
             }
             _perRoundStride = Schema.GetSchemaOffset("CSMatchStats_t", "m_iEnemy5Ks");
-            if (_perRoundStride <= 0) Logger.LogError("BotMatchStats: CSPerRoundStats_t size unknown; reconciliation disabled.");
+            if (_perRoundStride <= 0) Log(LogLevel.Error, "CSPerRoundStats_t size unknown; reconciliation disabled.");
             _memReady = true;
         }
         _rules = proxy.GameRules;
@@ -347,6 +366,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _tick = Server.TickCount;
         RefreshSlots(true);
         _winPanelSeen = false;
+        OnMapReady();
         Rescan("map start");
     }
 
@@ -358,7 +378,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _scanPending = true;
         _scanGameStart = rules.GameStartTime;
         _scanRounds = rules.TotalRoundsPlayed;
-        Logger.LogInformation("BotMatchStats: scan {Gen} requested ({Why})", _scanGen, why);
+        Log(LogLevel.Information, $"scan {_scanGen} requested ({why})");
         _writer!.RequestScan(_map, _scanGameStart, _scanGen);
     }
 
@@ -495,7 +515,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         }
         catch (Exception ex)
         {
-            Logger.LogWarning("BotMatchStats: could not read {Name}: {Message}", name, ex.Message);
+            Log(LogLevel.Warning, $"could not read {name}: {ex.Message}");
             return Nil.V;
         }
     }
@@ -517,7 +537,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _rec!.StartCapture(meta);
         ResetSlotPis();
         RefreshSlots(true);
-        Logger.LogInformation("BotMatchStats: capture {Id} started on {Map}, firstFullRound={First}", meta.Id, _map, firstFullRound);
+        Log(LogLevel.Information, $"capture {meta.Id} started on {_map}, firstFullRound={firstFullRound}");
     }
 
     private void ResumeCapture(MatchMeta meta, int roundsInFile, int gen)
@@ -528,7 +548,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         {
             // The file is from another game than the one running now (e.g. a restart during the scan).
             // Rescanning with the live identity writes that file out as abandoned.
-            Logger.LogInformation("BotMatchStats: in-progress match {Id} does not match the live game; not resuming it", meta.Id);
+            Log(LogLevel.Information, $"in-progress match {meta.Id} does not match the live game; not resuming it");
             Rescan("resume rejected");
             return;
         }
@@ -542,11 +562,11 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         int r = rules.TotalRoundsPlayed;
         AddPriorRounds(roundsInFile, r);
         if (!postRound && roundsInFile <= r) BeginRoundMidway(r);
-        Logger.LogInformation("BotMatchStats: resumed {Id}; last known round {Last}", meta.Id, _rec.LastRound);
+        Log(LogLevel.Information, $"resumed {meta.Id}; last known round {_rec.LastRound}");
         if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase))
         {
             // The match ended while capture was unavailable; nothing later would close it.
-            Logger.LogInformation("BotMatchStats: match already over at resume; writing the final file");
+            Log(LogLevel.Information, "match already over at resume; writing the final file");
             _matchEndAt = _tick + _rec.TickRate;
         }
     }
@@ -598,17 +618,25 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         {
             ref var s = ref _slots[slot];
             if (!s.Valid || (uint)s.Pi >= Limits.MaxPlayers) continue;
-            var ats = new CCSPlayerController(s.Ctrl).ActionTrackingServices;
-            if (ats == null) continue;
-            nint vec = ats.PerRoundStats.Handle;
-            int count = Marshal.ReadInt32(vec);
-            nint elems = Marshal.ReadIntPtr(vec + 8);
-            if (ri < 0 || ri >= count || count > 512 || elems == 0) continue;
-            var st = new CSPerRoundStats_t(elems + ri * _perRoundStride);
-            _gameStats[s.Pi] = new GameRoundStats { Kills = st.Kills, Deaths = st.Deaths, Assists = st.Assists, Damage = st.Damage };
-            _haveStats[s.Pi] = true;
+            if (ReadPerRoundStats(slot, ri, out var st)) { _gameStats[s.Pi] = st; _haveStats[s.Pi] = true; }
         }
         rec.Reconcile(ri, _gameStats, _haveStats);
+    }
+
+    /// <summary>The game's own kills, deaths, assists and damage for one player in round <paramref name="ri"/>.</summary>
+    private bool ReadPerRoundStats(int slot, int ri, out GameRoundStats stats)
+    {
+        stats = default;
+        if (_perRoundStride <= 0) return false;
+        var ats = new CCSPlayerController(_slots[slot].Ctrl).ActionTrackingServices;
+        if (ats == null) return false;
+        nint vec = ats.PerRoundStats.Handle;
+        int count = Marshal.ReadInt32(vec);
+        nint elems = Marshal.ReadIntPtr(vec + 8);
+        if (ri < 0 || ri >= count || count > 512 || elems == 0) return false;
+        var st = new CSPerRoundStats_t(elems + ri * _perRoundStride);
+        stats = new GameRoundStats { Kills = st.Kills, Deaths = st.Deaths, Assists = st.Assists, Damage = st.Damage };
+        return true;
     }
 
     private void EndMatch()
@@ -625,7 +653,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         var rec = _rec!;
         if (!rec.Capturing) return;
         _finalizeAt = Nil.V;
-        Logger.LogInformation("BotMatchStats: capture abandoned ({Why})", why);
+        Log(LogLevel.Information, $"capture abandoned ({why})");
         rec.EndCapture("abandoned", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
     }
 
@@ -638,7 +666,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void OnMapStart(string map)
     {
-        _mapLoaded = true;
+        _mapGate.MapStarted();
         _winPanelSeen = false;
         // Normally OnMapEnd already closed the capture; this covers a map change without it.
         Abandon("map change");
@@ -649,7 +677,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void OnMapEnd()
     {
-        _mapLoaded = false;
+        _mapGate.MapEnded();
+        FlushLogs();
         if (_rec == null) return;
         if (_matchEndAt != Nil.V) { _matchEndAt = Nil.V; EndMatch(); }
         else Abandon("map end");

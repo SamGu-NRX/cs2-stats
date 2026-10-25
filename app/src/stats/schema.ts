@@ -22,6 +22,10 @@ export interface Env {
   visibilityValidated?: boolean;
   /** where equipment values came from over the match */
   equipSource?: "pawn" | "inventory" | "mixed";
+  /** plugin 1.1.0: what decided visibility; null before any live round */
+  visSource?: "los" | "mask" | "mixed" | null;
+  /** plugin 1.1.0: why line of sight turned off */
+  losError?: string;
 }
 
 export interface Players {
@@ -225,7 +229,8 @@ export interface MatchFile {
   blinds: Blinds;
   grenades: Grenades;
   pos: Pos;
-  aim: { engagements: Engagements; shots: Shots };
+  /** los (plugin 1.1.0): an enemy entering (vis 1) or leaving (vis 0) the human's line of sight */
+  aim: { engagements: Engagements; shots: Shots; los?: { ri: number[]; tick: number[]; enemy: number[]; vis: (0 | 1)[] } };
   throws?: Throws;
   recon?: Recon;
   /** players who disconnected during a recorded round */
