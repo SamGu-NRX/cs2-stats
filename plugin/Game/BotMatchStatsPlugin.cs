@@ -20,7 +20,7 @@ namespace BotMatchStats.Game;
 public sealed partial class BotMatchStatsPlugin : BasePlugin
 {
     public override string ModuleName => "BotMatchStats";
-    public override string ModuleVersion => "1.1.0";
+    public override string ModuleVersion => "1.2.0";
     public override string ModuleDescription => "Records bot matches into compact columnar files";
 
     private const int MaxSlots = 64;
