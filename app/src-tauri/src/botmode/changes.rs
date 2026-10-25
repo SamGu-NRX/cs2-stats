@@ -317,11 +317,20 @@ impl<'p> ChangeSet<'p> {
         Ok(true)
     }
 
-    /// Finishes the change. A change that wrote nothing leaves no backup behind.
+    /// Whether `state.json` differs from the copy saved when the change began, so the change
+    /// did something rollback must undo even when it wrote no game file.
+    fn state_changed(&self) -> Result<bool, String> {
+        let before = hash::file_if_exists(&self.dir.join(STATE_BEFORE))?;
+        let now = hash::file_if_exists(&self.layout.state_file())?;
+        Ok(before != now)
+    }
+
+    /// Finishes the change. A change that changed neither a game file nor the app state
+    /// leaves no backup behind.
     fn commit(&mut self) -> Result<Meta, String> {
         self.meta.files = self.entries.len();
         self.meta.warnings = self.flusher.warnings();
-        if self.entries.is_empty() {
+        if self.entries.is_empty() && !self.state_changed()? {
             fs::remove_dir_all(&self.dir).map_err(|e| format!("{}: {e}", self.dir.display()))?;
             self.flusher.parent_of(&self.dir)?;
         } else {

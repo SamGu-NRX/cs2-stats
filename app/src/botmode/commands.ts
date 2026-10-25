@@ -161,15 +161,28 @@ export interface LaunchPlan {
   botModeChange: Change | null;
 }
 
-/** What launch found once Steam started the game. */
-export interface LaunchReport extends LaunchPlan {
-  /** the cs2.exe this launch started, when it appeared within 60 s */
-  pid: number | null;
-  /** its command line, read to confirm -insecure */
-  commandLine: string | null;
-  /** set when CS2 did not appear in time, so -insecure is unconfirmed */
-  warning: string | null;
+/** One CS2 process the post-launch check looked at. */
+export type Checked =
+  | { verdict: "safe"; pid: number; commandLine: string }
+  | { verdict: "ended"; pid: number; why: string; ended: { Ok: null } | { Err: string } }
+  | { verdict: "otherInstall"; pid: number; image: string };
+
+export type Outcome =
+  | { outcome: "safe"; checked: Checked[] }
+  | { outcome: "unsafe"; checked: Checked[] }
+  | { outcome: "timedOut"; lastError: string | null }
+  | { outcome: "stopped" };
+
+/** The post-launch check, from botmode.launchCheck() or the LAUNCH_CHECK_EVENT event. */
+export interface LaunchCheck {
+  phase: "waiting" | "done";
+  /** e.g. "waiting for CS2 to start (Steam may be updating)" */
+  message: string;
+  outcome: Outcome | null;
 }
+
+/** Event emitted by the app as the post-launch check progresses; the payload is a LaunchCheck. */
+export const LAUNCH_CHECK_EVENT = "botmode-launch-check";
 
 export interface AppSettings { launchOptions: string }
 
@@ -187,8 +200,14 @@ export const botmode = {
   /** Undoes the newest change; `id` must name that change when given. */
   rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
   backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
-  /** Rejects if the started CS2 lacked -insecure or had a secure-enabling token; that process is ended. */
-  launch: (t: Target = {}) => invoke<LaunchReport>("botmode_launch", { ...t }),
+  /**
+   * Asks Steam to start CS2 and resolves at once. The app then checks every new CS2 of this
+   * install, with no time limit, and ends any without -insecure; follow it with launchCheck()
+   * or the LAUNCH_CHECK_EVENT event.
+   */
+  launch: (t: Target = {}) => invoke<LaunchPlan>("botmode_launch", { ...t }),
+  /** The latest post-launch check, or null before the first launch. */
+  launchCheck: () => invoke<LaunchCheck | null>("botmode_launch_check"),
   setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
   /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
   setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),

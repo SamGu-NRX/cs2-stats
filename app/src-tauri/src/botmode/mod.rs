@@ -19,6 +19,7 @@ pub mod github;
 pub mod hash;
 pub mod install;
 pub mod launch;
+pub mod monitor;
 pub mod overlay;
 pub mod paths;
 pub mod process;

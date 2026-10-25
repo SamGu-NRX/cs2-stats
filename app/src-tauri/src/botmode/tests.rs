@@ -143,7 +143,7 @@ fn nothing_changes_while_cs2_runs_or_cannot_be_checked() {
             ("rollback", changes::rollback(&layout, probe, None).map(|_| ())),
             ("difficulty", settings::set_difficulty(&layout, probe, Difficulty::Low).map(|_| ())),
             ("cosmetics", settings::set_cosmetics(&layout, probe, Cosmetics::default()).map(|_| ())),
-            ("launch", launch::launch(&layout, probe, &steam).map(|_| ())),
+            ("launch", launch::launch(&layout, probe, &steam, &super::monitor::Windows).map(|_| ())),
         ];
         for (op, r) in results {
             let err = r.expect_err(op);
@@ -919,4 +919,48 @@ fn new_folders_are_listed_deepest_first_for_flushing() {
     assert_eq!(super::paths::missing_ancestors(&deep), [deep.clone(), s.0.join("a").join("b"), s.0.join("a")]);
     fs::create_dir_all(s.0.join("a")).unwrap();
     assert_eq!(super::paths::missing_ancestors(&deep), [deep.clone(), s.0.join("a").join("b")]);
+}
+
+// --- round 4 review -------------------------------------------------------------------------
+
+#[test]
+fn a_change_that_only_updates_the_app_state_can_still_be_rolled_back() {
+    let s = Scratch::new("state-only");
+    let layout = fake_game(&s);
+    // Installed by hand from the same zip: every game file already matches the release.
+    for (rel, data) in release_files("v1.4.7") {
+        if !rel.ends_with(".exe") {
+            write(&layout.target(&rel), &data);
+        }
+    }
+    let r = install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.7")).unwrap();
+    assert_eq!(r.change.files, 0, "no game file needed writing");
+    assert!(state::load(&layout).unwrap().official.is_some());
+    assert_eq!(changes::list(&layout).unwrap().len(), 1, "the state change is recorded");
+    changes::rollback(&layout, &CLOSED, None).unwrap();
+    assert!(state::load(&layout).unwrap().official.is_none(), "rollback put the app state back");
+}
+
+#[cfg(windows)]
+#[test]
+fn the_game_lock_is_machine_wide() {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::OpenMutexW;
+    let s = Scratch::new("global-lock");
+    let layout = fake_game(&s);
+    let _lock = OpLock::acquire(&layout).unwrap();
+    let key = super::hash::bytes(layout.csgo.canonicalize().unwrap().to_string_lossy().to_lowercase().as_bytes());
+    let exists = |scope: &str| {
+        let name: Vec<u16> = format!("{scope}{}cs2-stats-botmode-{}", '\u{5c}', &key[..32]).encode_utf16().chain(Some(0)).collect();
+        // SAFETY: NUL-terminated name; the handle, if any, is closed at once.
+        unsafe {
+            let h = OpenMutexW(0x0010_0000, 0, name.as_ptr());
+            if !h.is_null() {
+                CloseHandle(h);
+            }
+            !h.is_null()
+        }
+    };
+    assert!(exists("Global"), "the lock is in the Global namespace");
+    assert!(!exists("Local"), "and never in the per-session one");
 }
