@@ -126,8 +126,8 @@ export interface AttributesResult { scores: AttributeScore[]; role: "awper" | "r
 export interface Careers {
   /** what one sample in the pool is: a bot career, or one bot in one match */
   unit: "careers" | "matches";
-  /** the pool the samples come from: the role asked for, or "all" when the AWPer pool had too few (ranking.ts botPopulation) */
-  pool: string;
+  /** the pool the samples come from: the role asked for, or "all" when the AWPer pool had too few (ranking.ts botPopulation); careersFor always sets it */
+  pool?: string;
   /** bot matches in the query's matches (one per bot per match) */
   botMatches: number;
   /** careers with `minRounds` or more rounds in the query's matches */
