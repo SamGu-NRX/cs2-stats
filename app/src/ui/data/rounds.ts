@@ -11,20 +11,19 @@ export interface RoundCell {
   died: boolean;
   /** this player made ("k") or took ("d") the round's opening kill */
   opening: "k" | "d" | null;
-  /** the player's swing that round (sum of their kill and death credits), a fraction; null when the round is not valued */
+  /** the player's swing that round, the engine's own measure (stats/swing.ts), a fraction; null when the round is not valued */
   swing: number | null;
 }
 
 /** cells[pi][ri]; null where the player did not play the round. */
 export function roundCells(f: MatchFacts): (RoundCell | null)[][] {
   const cells: (RoundCell | null)[][] = f.players.map(() => f.rounds.map(() => null));
-  for (const r of f.pr) cells[r.pi][r.ri] = { side: r.side, kills: r.m.kills ?? 0, died: (r.m.deaths ?? 0) > 0, opening: null, swing: null };
+  for (const r of f.pr) cells[r.pi][r.ri] = { side: r.side, kills: r.m.kills ?? 0, died: (r.m.deaths ?? 0) > 0, opening: null, swing: r.m.swingRounds ? r.m.swing ?? 0 : null };
   for (const k of f.kills) {
     if (k.opening) {
       if (k.killer !== null && cells[k.killer][k.ri]) cells[k.killer][k.ri]!.opening = "k";
       if (cells[k.victim][k.ri]) cells[k.victim][k.ri]!.opening = "d";
     }
-    for (const [pi, pts] of k.credits) { const c = cells[pi]?.[k.ri]; if (c) c.swing = (c.swing ?? 0) + pts; }
   }
   return cells;
 }
