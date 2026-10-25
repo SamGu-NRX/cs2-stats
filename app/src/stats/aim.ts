@@ -609,8 +609,9 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
   let n = 0;
   while (n < run.length && refEligible(c, run[n], ps !== null) && atVisible(run[n])) n++;
   const dp: number[] = [], dy: number[] = [];
-  // plugin shots without absolute view angles give a path relative to the target (relative below)
-  const relative = ps !== null && (S.pitch[run[0]] === null || S.yaw[run[0]] === null);
+  // plugin shots give an absolute path only when every bullet carries view angles (plugin 1.2.0); else
+  // the path is relative to the target and is not compared with the pros'
+  const relative = ps !== null && run.slice(0, Math.max(n, 1)).some((i) => S.pitch[i] === null || S.yaw[i] === null);
   if (n >= SPRAY_MIN && relative) {
     const e0 = ps.err[run[0]]!;
     for (let j = 1; j < Math.min(n, ref.length); j++) {
