@@ -43,7 +43,9 @@ const VERSION_DIR = /^v-[0-9A-Za-z.+_]+-[0-9a-f]{8}$/;
  * folder holds no map at all.
  */
 export function mapTablesDir(mapDir: string): MapTables | null {
-  if (existsSync(path.join(mapDir, "RETIRED"))) return { skipped: "retired, a re-extraction replaced it" };
+  // RETIRED's first line says why: "replaced" (a successor exists) or "stale: <reason>"
+  const retired = path.join(mapDir, "RETIRED");
+  if (existsSync(retired)) return { skipped: `retired (${readFileSync(retired, "utf-8").split("\n")[0].trim() || "no reason given"})` };
   const pointer = path.join(mapDir, "CURRENT");
   if (existsSync(pointer)) {
     const name = readFileSync(pointer, "utf-8").trim();
