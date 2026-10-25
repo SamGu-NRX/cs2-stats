@@ -6,7 +6,7 @@ import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
-import { fmtMetric, rankText, type Attr } from "../../data/engine";
+import { attrsOf, BOTS_TIP, fmtMetric, rankText } from "../../data/engine";
 import { useCall } from "../../data/hooks";
 import { metric, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
@@ -15,6 +15,7 @@ import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtDate, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { scoreText, swingScore } from "../../lib/scale";
+import { Provisional } from "../shared";
 import { BENCH, verdictOf } from "../../lib/verdict";
 import { matchHref, openMatch, setQuery } from "../../router";
 
@@ -143,12 +144,13 @@ const styleOf = (v: (number | null)[]) => styleIds().map((id) => v[ATTRIBUTE_ORD
 
 /**
  * "Plays like": the shape of your six style attributes on T and on CT against each pro's (identity.ts
- * mostSimilar in the worker, cosine similarity over the twelve scores, design/identity.md). The radar
- * and table show the selected side.
+ * mostSimilar in the worker, cosine similarity over the twelve scores, design/identity.md). Your scores
+ * rank against the bot careers in your matches and a pro's against pros, so only the shape compares;
+ * the radar and table show the selected side, each number labelled with its population.
  */
-export function PlaysLike({ q, attrs, side, initial }: { q: Query; attrs: Attr[]; side: PoolSide; initial: string | null }) {
+export function PlaysLike({ q, side, initial }: { q: Query; side: PoolSide; initial: string | null }) {
   const pack = usePros();
-  if (pack.state === "ready") return <PlaysLikeBody q={q} attrs={attrs} side={side} initial={initial} pros={pack.pros} />;
+  if (pack.state === "ready") return <PlaysLikeBody q={q} side={side} initial={initial} pros={pack.pros} />;
   return (
     <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
       {pack.state === "loading" ? <div className="skel" style={{ height: 220 }} /> : (
@@ -167,27 +169,39 @@ export function PlaysLike({ q, attrs, side, initial }: { q: Query; attrs: Attr[]
   );
 }
 
-function PlaysLikeBody({ q, attrs, side, initial, pros }: { q: Query; attrs: Attr[]; side: PoolSide; initial: string | null; pros: Pro[] }) {
+function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; initial: string | null; pros: Pro[] }) {
   const bySlug = useMemo(() => new Map(pros.map((p) => [p.slug, p])), [pros]);
   const pack = useMemo(() => pros.map((p) => ({ slug: p.slug, both: p.both, ct: p.ct, t: p.t })), [pros]);
   const res = useCall("playsLike", [q, pack]);
-  const ranked = useMemo(() => (res.data ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
+  // your scores on the radar's side, in the role pool "plays like" reads
+  const mine = useCall("style", [q, { side }]);
+  const ranked = useMemo(() => (res.data?.ranked ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
+  const attrs = useMemo(() => (mine.data ? attrsOf(mine.data.scores) : []), [mine.data]);
   const [sel, setSel] = useState<string | null>(initial);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
-  if (!res.data) {
-    return <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>{res.error ? <p className="meta">{res.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
+  const error = res.error ?? mine.error;
+  if (!res.data || !mine.data) {
+    return <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>{error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
+  const careers = res.data.careers;
   const top = ranked.slice(0, 6);
   const pick = (sel && ranked.find((x) => x.item.slug === sel)) || top[0];
-  if (!pick) return null;
+  if (!pick) {
+    return (
+      <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
+        <p className="meta">No style scores to compare yet: they need bot careers in your matches to rank against.</p>
+        <Provisional c={careers} />
+      </Card>
+    );
+  }
   const style = styleIds();
   const you = style.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
   const labels = style.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
   const sideLabel = side === "both" ? "both sides" : side;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" aside={<span className="meta">Six style attributes on T and CT; radar: {sideLabel}</span>} foot={<><span>The match compares the shape of your twelve style scores (six attributes, T and CT) with a pro's, not how high they sit.</span><span>Pro scores and photos: HLTV</span></>}>
+      <Card title="Plays like" aside={<span className="card__aside-row"><Provisional c={careers} /><span className="meta">Six style attributes on T and CT; radar: {sideLabel}</span></span>} foot={<><span data-tip={BOTS_TIP}>Your scores rank against the bots in your matches, a pro's against pros, so the match compares the shape of the twelve scores (six attributes, T and CT), not how high they sit.</span><span>Pro scores and photos: HLTV</span></>}>
         <div className="likes">
           <div className="likes__left">
             <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens the player's HLTV page">
@@ -197,9 +211,12 @@ function PlaysLikeBody({ q, attrs, side, initial, pros }: { q: Query; attrs: Att
                 <b className="probanner__name">{pick.item.name}</b>
                 <span className="meta">Rating 3.0 {pick.item.rating3.toFixed(2)} against top-20 teams</span>
               </div>
-              <b className="probanner__pct num">{pick.pct}<small>%</small></b>
+              <span className="probanner__score">
+                <b className="probanner__pct num">{pick.pct}<small>%</small></b>
+                {careers.provisional && <span className="calib">provisional</span>}
+              </span>
             </a>
-            <ul className="prolist" role="radiogroup" aria-label="Pros by style match">
+            <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>
                   <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={() => { setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
@@ -213,8 +230,8 @@ function PlaysLikeBody({ q, attrs, side, initial, pros }: { q: Query; attrs: Att
           </div>
           <div className="likes__right">
             <AttrRadar labels={labels} you={you} other={styleOf(proScores(pick.item, side))} otherLabel={pick.item.name} size={380} />
-            <div className="legend likes__legend"><span><i className="swatch" style={{ background: "var(--cream)" }} />You</span><span><i className="swatch swatch--dash" />{pick.item.name}</span></div>
-            <VsTable attrs={attrs} pro={pick.item} side={side} />
+            <div className="legend likes__legend"><span><i className="swatch" style={{ background: "var(--cream)" }} />You, against bot careers</span><span><i className="swatch swatch--dash" />{pick.item.name}, against pros</span></div>
+            <VsTable you={you} labels={labels} pro={pick.item} side={side} />
           </div>
         </div>
       </Card>
@@ -222,24 +239,23 @@ function PlaysLikeBody({ q, attrs, side, initial, pros }: { q: Query; attrs: Att
   );
 }
 
-function VsTable({ attrs, pro, side }: { attrs: Attr[]; pro: Pro; side: PoolSide }) {
+/**
+ * Your score and the pro's on each style attribute, side by side. No difference column: the two rank
+ * against different populations, so their gap is not a level either player could close.
+ */
+function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: string[]; pro: Pro; side: PoolSide }) {
   const theirs = styleOf(proScores(pro, side));
   return (
-    <div className="vs vs--wide">
-      <div className="vs__head"><span className="caps">You</span><span /><span className="vs__pro">{pro.name}</span><span className="caps">Diff</span></div>
-      {styleIds().map((id, i) => {
-        const a = attrs.find((x) => x.id === id);
-        const pv = theirs[i];
-        const d = !a || a.score === null || pv === null ? null : a.score - pv;
-        return (
-          <div key={id} className="vs__row">
-            <span className="num cream">{!a || a.score === null ? "–" : Math.round(a.score)}</span>
-            <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{a?.label ?? id}</span>
-            <span className="num">{pv ?? "–"}</span>
-            <Delta d={d} span={30} fmt={(x) => Math.round(x).toString()} />
-          </div>
-        );
-      })}
+    <div className="vs vs--wide vs--pair">
+      <div className="vs__head"><span className="caps" data-tip="Percentile against the bot careers in your matches">You</span><span /><span className="vs__pro" data-tip="Percentile against pros">{pro.name}</span></div>
+      {styleIds().map((id, i) => (
+        <div key={id} className="vs__row">
+          <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
+          <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{labels[i]}</span>
+          <span className="num">{theirs[i] ?? "–"}</span>
+        </div>
+      ))}
+      <p className="meta vs__note">You against bot careers, {pro.name} against pros, both 0 to 100.</p>
     </div>
   );
 }

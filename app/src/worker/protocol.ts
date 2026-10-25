@@ -87,6 +87,7 @@ export interface RoundLine { m: Measures; v: Values; aim: Pick<AimAgg, "shots" |
 
 export interface RoundBundle { number: number; players: (RoundLine | null)[] }
 
+/** Performance percentiles against the pros (public/baselines.json); identity metrics are left out. */
 export interface CompareResult {
   p: Record<string, Percentile>;
   /** the player's role pool (compare.ts roleOf) and the pool's size on that side */
@@ -94,7 +95,45 @@ export interface CompareResult {
   n: number;
 }
 
+/** The performance attributes (Firepower) against the pros; the style attributes come from `style`. */
 export interface AttributesResult { scores: AttributeScore[]; role: "awper" | "rifler"; n: number }
+
+/**
+ * The bots in the user's matches that the user's style ranks against (design/identity.md): their
+ * careers (compare.ts careerBaselines), or while fewer than `minPool` careers qualify, the bots'
+ * single matches (worker/ranking.ts botPopulation).
+ */
+export interface Careers {
+  /** what one sample in the pool is: a bot career, or one bot in one match */
+  unit: "careers" | "matches";
+  /** bot matches in the query's matches (one per bot per match) */
+  botMatches: number;
+  /** careers with `minRounds` or more rounds in the query's matches */
+  qualified: number;
+  /** BOT_CAREERS_MIN: career scores are provisional below it (match-pool scores always are) */
+  needed: number;
+  /** CAREER_MIN_ROUNDS */
+  minRounds: number;
+  provisional: boolean;
+  /** MIN_UNITS: a pool smaller than this has no quantiles, so every score in it is null; careers below it fall back to matches */
+  minPool: number;
+}
+
+/** The user's style against the bot careers: the six style attributes and every identity metric's percentile. */
+export interface StyleResult {
+  scores: AttributeScore[];
+  p: Record<string, Percentile>;
+  role: "awper" | "rifler";
+  /** samples (careers or bot matches, per `careers.unit`) in the pool the scores read, on the asked side */
+  n: number;
+  careers: Careers;
+}
+
+export interface PlaysLikeResult {
+  ranked: { slug: string; similarity: number }[];
+  /** the population the user's twelve style scores ranked against */
+  careers: Careers;
+}
 
 /** A pro in the pack, as the pack file holds it (scores in ATTRIBUTE_ORDER). */
 export interface PackPro { slug: string; both: (number | null)[]; ct: (number | null)[]; t: (number | null)[] }
@@ -120,12 +159,16 @@ export interface Api {
   ratings(qs: Query[]): SideRatings[];
   guns(q: Query): GunProficiency[];
   positions(q: Query): PositionsResult;
+  /** performance metrics against the pros */
   compare(q: Query, opt: CompareOptions): CompareResult;
+  /** performance attributes against the pros */
   attributes(q: Query, opt: CompareOptions): AttributesResult;
+  /** the user's style attributes and identity metrics against the bot careers in the query's matches */
+  style(q: Query, opt: CompareOptions): StyleResult;
   /** the role blend on T and on CT (the query's side filter is replaced) */
   roles(q: Query): Record<"T" | "CT", RoleBlend>;
-  /** pros ranked by style similarity over T and CT (identity.ts mostSimilar) */
-  playsLike(q: Query, pros: PackPro[]): { slug: string; similarity: number }[];
+  /** pros ranked by style similarity over T and CT (identity.ts mostSimilar), the user's side scored against the bot careers */
+  playsLike(q: Query, pros: PackPro[]): PlaysLikeResult;
   /** least-squares trend of each series over match order (trends.ts trend) */
   trends(series: (number | null)[][]): ({ slope: number; r: number; n: number } | null)[];
 }

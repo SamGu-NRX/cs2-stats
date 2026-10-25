@@ -2,14 +2,15 @@
 // - Role: the engine's role blend per side, with its evidence in words.
 // - Where you play: a radar of your movement, kills and deaths, for any map you have played, with the
 //   places you spend your time.
-// - Where you rank: one ranked list of percentiles against pro players, grouped by kind.
+// - Where you rank: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
+//   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
 // - Rotations and first contact wait for analysis that has not been built; the page says so.
 import { useMemo, useState } from "react";
 import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
 import { Select } from "../components/controls";
 import { frameFor, RadarView } from "../components/MapArt";
-import { filterEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
+import { BOTS_TIP, filterEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
 import { useCall } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
@@ -17,8 +18,9 @@ import { DeathIcon } from "../icons/game";
 import { fmtPct, mapName, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import type { Query } from "../../worker/protocol";
 import { RoleCard } from "./profile/parts";
-import { Empty } from "./shared";
+import { Empty, Provisional } from "./shared";
 
 export default function Playstyle() {
   const { matches, you } = useData();
@@ -105,13 +107,23 @@ const RANKS: { tag: string; ids: string[] }[] = [
   { tag: "Utility", ids: ["flashesPR", "assistsPerFlash", "dmgPerHe"] },
 ];
 
-function Ranks({ q }: { q: { files: string[]; filter: { player: string[] } } }) {
+function Ranks({ q }: { q: Query }) {
   const { baselines, baselinesError } = useData();
-  const r = useCall("compare", [q, { pool: "all" }]);
-  const p = r.data?.p ?? null;
+  const pros = useCall("compare", baselines ? [q, { pool: "all" }] : null);
+  const bots = useCall("style", [q, { pool: "all" }]);
+  const proP = pros.data?.p ?? null;
+  const botP = bots.data?.p ?? null;
+  const careers = bots.data?.careers ?? null;
+  const error = pros.error ?? bots.error ?? (baselines ? null : baselinesError);
+  const n = { pros: baselines?.n.all?.both ?? 0, bots: bots.data?.n ?? 0 };
   return (
-    <Card title="Where you rank" aside={<span className="meta">{baselines ? `Against ${baselines.n.all?.both ?? 0} pro players` : ""}</span>}>
-      {!p ? <p className="meta">{r.error ?? baselinesError ?? "Loading the pro baselines."}</p> : (
+    <Card title="Where you rank" aside={
+      <span className="card__aside-row">
+        {careers && <Provisional c={careers} />}
+        <span className="meta">{proP && botP ? `How well against ${n.pros} pros; style against ${n.bots} bot ${n.bots === 1 ? "career" : "careers"}` : ""}</span>
+      </span>
+    }>
+      {!proP || !botP ? (error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 240 }} />) : (
         <div className="ranks">
           {RANKS.map((g) => (
             <section key={g.tag} className="ranks__group">
@@ -119,21 +131,22 @@ function Ranks({ q }: { q: { files: string[]; filter: { player: string[] } } }) 
               <ul>
                 {g.ids.map((id) => {
                   const m = metric(id);
-                  const x = p[id];
-                  const tone = x.pct === null || m.kind === "identity" ? "" : x.pct >= 67 ? "is-high" : x.pct < 33 ? "is-low" : "";
+                  const style = m.kind === "identity";
+                  const x = (style ? botP : proP)[id];
+                  const tone = x.pct === null || style ? "" : x.pct >= 67 ? "is-high" : x.pct < 33 ? "is-low" : "";
                   return (
                     <li key={id} className={tone} data-tip={m.def}>
-                      <span className="ranks__l">{m.label}</span>
+                      <span className="ranks__l">{m.label}<span className="ranks__pop" data-tip={style ? BOTS_TIP : undefined}>{style ? "vs bots" : "vs pros"}</span></span>
                       <b className="num ranks__v">{fmtMetric(id, x.value)}</b>
-                      <span className="ranks__track"><i style={{ left: `${x.pct ?? 0}%` }} /><em style={{ left: "50%" }} /></span>
-                      <span className="ranks__p num">{m.kind === "identity" ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}%`) : rankText(x.pct)}</span>
+                      <span className={`ranks__track ${style ? "is-style" : ""}`}>{x.pct !== null && <i style={{ left: `${x.pct}%` }} />}<em style={{ left: "50%" }} /></span>
+                      <span className="ranks__p num">{style ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}% of bots`) : rankText(x.pct)}</span>
                     </li>
                   );
                 })}
               </ul>
             </section>
           ))}
-          <p className="meta ranks__note">The dot shows where you sit among pro players, lowest on the left; the tick is the middle. Style numbers have no better or worse, so they say how many pros you are above.</p>
+          <p className="meta ranks__note">The dot shows where you sit, lowest on the left; the tick is the middle. Rows marked vs pros measure how well you play and rank against pro players. Rows marked vs bots describe your style and rank against the bots in your own matches, each bot name one career; style has no better or worse, so they say how many bot careers you are above.</p>
         </div>
       )}
     </Card>

@@ -9,7 +9,7 @@
 // over the files, and each sums its own matches with addMatch as the pass goes by.
 import type { FileEntry } from "../host/host";
 import { trend } from "../stats/trends";
-import type { Baselines } from "../stats/compare";
+import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
@@ -18,13 +18,12 @@ import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
 import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
-import type { MatchTables, Side } from "../stats/tables";
+import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
-import {
-  addPositions, attributesOf, compareOf, entryOf, matchBundle, metaOf, playsLikeOf, ratedMatches, ratingsOf, rolled, roundBundle,
-} from "./views";
+import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
+import { addPositions, entryOf, matchBundle, metaOf, ratedMatches, ratingsOf, rolled, roundBundle } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -33,6 +32,8 @@ const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(
 const LRU_FACTS = 4;
 /** Summaries kept for repeated questions (the same card re-rendering, two cards asking the same thing). */
 const SUMMARY_CACHE = 48;
+/** Bot career baselines kept, one per set of matches the pages ask about (Profile's and Playstyle's filters). */
+const CAREER_CACHE = 6;
 /** Bump when MatchEntry's shape or what entryOf computes into it changes, so cached entries are rebuilt. */
 const ENTRY_VERSION = 1;
 
@@ -175,11 +176,28 @@ function summaryOf(q: Query): Promise<Summary> {
   return p;
 }
 
-/** The query narrowed to one side's rounds, or to every round for "both". */
-function sideQuery(q: Query, side: "both" | Side): Query {
-  const { sides: _sides, ...rest } = q.filter;
-  return { files: q.files, filter: side === "both" ? rest : { ...rest, sides: [side] } };
+const careerSets = new Map<string, Promise<BotPopulation>>();
+
+/**
+ * The bot careers in a query's matches, as the user's style population (ranking.ts). One pass sums
+ * every bot of every match on both sides and on each; the result is kept per file set and scope.
+ */
+function careersOf(q: Query): Promise<BotPopulation> {
+  const scope = careerScope(q.filter);
+  const k = `${gen}|${JSON.stringify([q.files, scope])}`;
+  const hit = careerSets.get(k);
+  if (hit) { careerSets.delete(k); careerSets.set(k, hit); return hit; }
+  const careers = new Map<string, Record<SideKey, Summary>>();
+  const matches: Record<SideKey, Summary>[] = [];
+  const p = stream(q.files, (f) => addCareerMatch(careers, matches, f, scope))
+    .then(() => botPopulation([...careers.values()], matches, new Date().toISOString().slice(0, 10)));
+  p.catch(() => careerSets.delete(k));
+  careerSets.set(k, p);
+  while (careerSets.size > CAREER_CACHE) careerSets.delete(careerSets.keys().next().value!);
+  return p;
 }
+
+const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf });
 
 /** The matches a query keeps by its map and date filters, for the coverage rule. */
 function keptMatches(q: Query) {
@@ -228,6 +246,7 @@ const api: Impl = {
     if (next.size !== index.size || [...next].some(([f, x]) => index.get(f)?.key !== x.key)) {
       gen++;
       summaries.clear();
+      careerSets.clear();
     }
     index = next;
     for (const [f, x] of [...lru]) if (index.get(f)?.key !== x.key) lru.delete(f);
@@ -277,22 +296,14 @@ const api: Impl = {
     out.presence = map ? s.presence[map] ?? null : null;
     return out;
   },
-  async compare(q, opt) {
-    const [s, b] = await Promise.all([summaryOf(sideQuery(q, opt.side ?? "both")), baselines()]);
-    return compareOf(s, b, opt);
-  },
-  async attributes(q, opt) {
-    const [s, b] = await Promise.all([summaryOf(sideQuery(q, opt.side ?? "both")), baselines()]);
-    return attributesOf(s, b, opt);
-  },
+  compare: ranking.compare,
+  attributes: ranking.attributes,
+  style: ranking.style,
   async roles(q) {
     const [t, ct] = await Promise.all([summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT"))]);
     return { T: roleBlend(t, "T"), CT: roleBlend(ct, "CT") };
   },
-  async playsLike(q, pros) {
-    const [t, ct, b] = await Promise.all([summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT")), baselines()]);
-    return playsLikeOf(t, ct, b, pros);
-  },
+  playsLike: ranking.playsLike,
   async trends(series) {
     return series.map((values) => trend(values.map((value, i) => ({ match: String(i), date: null, value, won: null }))));
   },

@@ -1,20 +1,18 @@
-// What the worker computes for the views, from MatchFacts and summaries: every metric value, rating,
-// percentile, role blend, similarity and economy view the UI shows comes out of here as plain data.
+// What the worker computes for the views, from MatchFacts and summaries: metric values, ratings,
+// match bundles and economy views come out of here as plain data (percentiles and similarity: ranking.ts).
 // It runs in the stats worker (and in node tests), never on the UI thread.
 import { visibilityCoverage } from "../stats/aim";
-import { attributes, compare, roleOf, type Baselines, type CompareOptions } from "../stats/compare";
 import { economyOf } from "../stats/economy";
 import { DERIVE_VERSION, emptyMeasures, type MatchFacts } from "../stats/facts";
 import { isGun } from "../stats/guns";
-import { mostSimilar, STYLE, styleScores, type PackPlayer } from "../stats/identity";
+import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import { RATING3_DIAGNOSTIC, RATING3_LABEL, rating3, type Rating3 } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
 import { ratedMatch } from "../ui/data/engine";
 import type { MatchEntry } from "../ui/data/match";
-import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
 import type {
-  AttributesResult, CompareResult, Line, MatchBundle, Meta, PackPro, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
+  Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
 } from "./protocol";
 
 export function metaOf(): Meta {
@@ -110,24 +108,6 @@ export function roundBundle(f: MatchFacts, number: number): RoundBundle {
       return s.m.rounds ? { m: s.m, v: valuesOf(s), aim: { shots, hits, first, firstHits }, headHits: gunHeadHits(s) } : null;
     }),
   };
-}
-
-// ---------------------------------------------------------------- comparisons
-
-/** The pool compare() reads for a summary: its role unless "all" is asked for. */
-const poolSize = (s: Summary, b: Baselines, opt: CompareOptions) => b.n[opt.pool === "all" ? "all" : roleOf(s)]?.[opt.side ?? "both"] ?? 0;
-
-export const compareOf = (s: Summary, b: Baselines, opt: CompareOptions): CompareResult => ({ p: compare(s, b, opt), role: roleOf(s), n: poolSize(s, b, opt) });
-export const attributesOf = (s: Summary, b: Baselines, opt: CompareOptions): AttributesResult => ({ scores: attributes(s, b, opt), role: roleOf(s), n: poolSize(s, b, opt) });
-
-/** A pack pro's six style scores, from the pack's ATTRIBUTE_ORDER arrays. */
-const styleOf = (scores: (number | null)[]) => Object.fromEntries(STYLE.map((id) => [id, scores[ATTRIBUTE_ORDER.indexOf(id)] ?? null]));
-
-/** "Plays like": the T and CT style profiles against each pro's, by identity.ts mostSimilar. */
-export function playsLikeOf(t: Summary, ct: Summary, b: Baselines, pros: PackPro[]) {
-  const mine = { T: styleScores(attributes(t, b, { side: "T" })), CT: styleScores(attributes(ct, b, { side: "CT" })) };
-  const pack: PackPlayer[] = pros.map((p) => ({ name: p.slug, sides: { both: { style: styleOf(p.both) }, CT: { style: styleOf(p.ct) }, T: { style: styleOf(p.t) } } }));
-  return mostSimilar(mine, pack, "style", pros.length).map((x) => ({ slug: x.name, similarity: x.similarity }));
 }
 
 // ---------------------------------------------------------------- positions

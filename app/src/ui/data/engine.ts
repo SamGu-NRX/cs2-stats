@@ -7,7 +7,7 @@ import type { AttributeScore } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { Kind, Status } from "../../stats/metrics";
 import type { Side } from "../../stats/tables";
-import type { Line, Values } from "../../worker/protocol";
+import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs } from "../lib/format";
 import type { MatchEntry } from "./match";
 import { metric, ratingInfo } from "./meta";
@@ -139,7 +139,7 @@ export const rankText = (pct: number | null) => (pct === null ? "–" : pct >= 5
 export interface Sub { id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: Status }
 export interface Attr { id: AttributeId; label: string; kind: Kind; score: number | null; subs: Sub[] }
 
-/** The engine's attribute scores (percentiles against the pro pool) with each metric's label and format. */
+/** The engine's attribute scores (percentiles in the pool the worker ranked them against) with each metric's label and format. */
 export const attrsOf = (scores: AttributeScore[]): Attr[] => scores.map((a) => ({
   id: a.id as AttributeId, label: a.label, kind: a.kind, score: a.score,
   subs: a.metrics.map((p) => {
@@ -152,8 +152,28 @@ export const WEAPON_CLASS_LABEL: Record<string, string> = {
   rifle: "Rifles", sniper: "Snipers", smg: "SMGs", heavy: "Heavy", pistol: "Pistols", grenade: "Grenades", knife: "Knife", other: "Other",
 };
 
-/** A comparison pool's name and size, for a card's aside. */
-export const poolText = (role: "awper" | "rifler" | "all", n: number) => `Percentile against ${n} ${role === "all" ? "pros" : role === "awper" ? "AWPers" : "riflers"}`;
+// ---------------------------------------------------------------- populations
+// Performance ranks against the pros, the user's style against the bot careers in their own matches
+// (design/identity.md, worker/ranking.ts). Every percentile on screen names one of the two.
+
+/** A pro pool's name and size, for a card's aside. */
+export const poolText = (role: "awper" | "rifler" | "all", n: number) => `Percentile against ${n} ${role === "all" ? "pros" : role === "awper" ? "pro AWPers" : "pro riflers"}`;
+
+/** A bot career pool's name and size. */
+export const botPoolText = (role: "awper" | "rifler" | "all", n: number) =>
+  `Percentile against ${n} ${role === "all" ? "" : role === "awper" ? "AWPer " : "rifler "}bot ${n === 1 ? "career" : "careers"}`;
+
+/** The provisional label the style scores carry until enough bot careers qualify. */
+export const provisionalText = (c: Careers) => (c.unit === "matches"
+  ? `Provisional: against ${c.botMatches} bot ${c.botMatches === 1 ? "match" : "matches"}; career scores need ${c.minPool} bot careers with ${c.minRounds}+ rounds`
+  : `Provisional: ${c.qualified} of ${c.needed} bot careers with ${c.minRounds}+ rounds`);
+
+export const BOTS_TIP = "Style is ranked against the bots in your own matches: each bot name is one career, summed over the same matches as you. Pros are ranked against pros.";
+
+/** Why a style pool shows no scores: fewer careers in it than the engine needs to write its quantiles. */
+export const thinPoolText = (c: Careers, n: number) => (c.unit === "matches"
+  ? `No style scores yet: this pool has ${n} bot ${n === 1 ? "match" : "matches"}, and a score needs ${c.minPool}.`
+  : `No style scores yet: this pool has ${n} bot ${n === 1 ? "career" : "careers"} with ${c.minRounds}+ rounds, and a score needs ${c.minPool}.`);
 
 // ---------------------------------------------------------------- lists
 
