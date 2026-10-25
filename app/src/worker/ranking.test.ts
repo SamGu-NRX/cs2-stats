@@ -1,0 +1,70 @@
+// design/identity.md: the user's style is ranked against the bot careers in their matches, never
+// against pros; performance is ranked against pros.
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { expect, it } from "vitest";
+import type { Baselines } from "../stats/compare";
+import { derive } from "../stats/derive";
+import { METRIC, METRICS } from "../stats/metrics";
+import { pluginToTables } from "../stats/plugin/adapter";
+import { decodeMatch } from "../stats/plugin/decode";
+import { emptySummary, rollup } from "../stats/rollup";
+import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
+import { botPopulation, rankingCalls } from "./ranking";
+
+const SAMPLE = path.resolve(import.meta.dirname, "../../public/samples/synthetic-demo.json.gz");
+
+/** Baselines whose every quantile is `q`: a real value sits at 0 against a huge q and at 100 against a tiny one. */
+const flat = (q: number): Baselines => {
+  const side = Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(q)]));
+  const pool = { both: side, CT: side, T: side };
+  return { version: 1, built: "x", source: "test", n: { all: { both: 20 }, rifler: { both: 20 }, awper: { both: 20 } }, pools: { all: pool, rifler: pool, awper: pool } };
+};
+
+it("ranks the user's style against the bot careers and performance against the pros", async () => {
+  // fails if the user's style scores, identity rows or "plays like" read the pro baselines, or a
+  // pro percentile is offered for an identity metric
+  const m = await decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz");
+  const facts = derive(pluginToTables(m));
+  const calls = rankingCalls({
+    summary: async (q) => rollup([facts], q.filter),
+    pros: async () => flat(1e9),
+    careers: async () => ({ baselines: flat(-1e9), careers: { unit: "careers", botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8, provisional: true } }),
+  });
+  const q = { files: ["synthetic-demo.json.gz"], filter: { player: facts.match.pov! } };
+
+  const style = await calls.style(q, {});
+  const scored = style.scores.filter((a) => a.score !== null);
+  expect(scored.length).toBeGreaterThanOrEqual(4);
+  for (const a of scored) expect(a.score, a.id).toBe(100);
+  const rows = Object.values(style.p).filter((x) => x.pct !== null);
+  expect(rows.length).toBeGreaterThan(0);
+  for (const x of rows) expect(x.pct, x.id).toBe(100);
+  expect(style.careers).toMatchObject({ provisional: true, qualified: 6 });
+
+  // your scores all sit at 100 against the bots: a pro high on every attribute has the same shape
+  const pro = (slug: string, v: number) => ({ slug, both: ATTRIBUTE_ORDER.map(() => v), ct: ATTRIBUTE_ORDER.map(() => v), t: ATTRIBUTE_ORDER.map(() => v) });
+  const like = await calls.playsLike(q, [pro("low", 10), pro("high", 90)]);
+  expect(like.ranked.map((x) => x.slug)).toEqual(["high", "low"]);
+
+  const perf = await calls.compare(q, {});
+  expect(Object.keys(perf.p).length).toBeGreaterThan(0);
+  expect(Object.keys(perf.p).filter((id) => METRIC[id].kind === "identity")).toEqual([]);
+});
+
+it("ranks style against single bot matches until 8 bot careers qualify, and shows nothing below 8 matches", () => {
+  // fails if a user with few long bot careers gets no style scores although 8+ bot matches exist, or
+  // the match pool is used once the careers can carry the scores
+  const bot = (rounds: number, kills: number) => {
+    const s = emptySummary();
+    s.m.rounds = rounds; s.m.kills = kills;
+    return { both: s, CT: s, T: s };
+  };
+  const matches = Array.from({ length: 9 }, (_, i) => bot(24, 10 + i));
+  const fallback = botPopulation([bot(150, 100)], matches, "x");
+  expect(fallback.careers).toMatchObject({ unit: "matches", botMatches: 9, qualified: 1, provisional: true });
+  expect(fallback.baselines.pools.all.both!.kpr![0]).toBeCloseTo(10 / 24);
+  expect(botPopulation([], matches.slice(0, 7), "x").baselines.pools.all.both!.kpr).toBeNull();
+  const careers = Array.from({ length: 8 }, (_, i) => bot(150, 100 + i));
+  expect(botPopulation(careers, matches, "x").careers).toMatchObject({ unit: "careers", qualified: 8, provisional: true });
+});

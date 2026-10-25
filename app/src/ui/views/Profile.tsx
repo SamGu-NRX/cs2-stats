@@ -1,7 +1,8 @@
 // Profile: HLTV's night-mode player card, then two sections: Performance (how well you play: swing,
 // attributes, rating by match, breakdowns) and Identity (how you play: role blend per side, style
 // attributes, the pro whose style matches yours). The side switch in the app bar drives the whole
-// page: every summary is rolled up over that side's rounds and compared with that side's pros.
+// page: every summary is rolled up over that side's rounds. Performance is compared with that side's
+// pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
@@ -15,7 +16,8 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  attrsOf, botIds, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
+  attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
+  thinPoolText,
   ratingDiagnostic, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
@@ -32,7 +34,7 @@ import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, SideFilter, TimeFilter, useFilters } from "../shell/filters";
-import { BreakRows, Empty, SectionAside } from "./shared";
+import { BreakRows, Empty, Provisional, SectionAside } from "./shared";
 import { HowGood, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 import { Segmented } from "../components/controls";
@@ -76,7 +78,7 @@ export default function ProfileView() {
     list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null,
   } : null;
-  // the page's side, compared with pros on that side (the worker rolls the query up over that side's rounds)
+  // Firepower on the page's side, compared with pros on that side (the worker rolls the query up over that side's rounds)
   const scored = useCall("attributes", list.length && ids.length && baselines ? [base, { side: ratingKey(side) }] : null).data;
   const attrs = useMemo(() => (scored ? attrsOf(scored.scores) : []), [scored]);
 
@@ -122,13 +124,13 @@ export default function ProfileView() {
           <Multis m={p.you.m} />
           <Openings s={p.you} />
         </div>
-        <SectionHead title="Identity" sub="How and where you play, apart from how well: style attributes, role and positions. A strong and a weak player can share a style." id="identity" />
-        {baselines && <StyleAttributes q={base} side={side} />}
+        <SectionHead title="Identity" sub="How and where you play, apart from how well: style attributes, role and positions. A strong and a weak player can share a style. Your style is ranked against the bots in your matches; pros are ranked against pros." id="identity" />
+        <StyleAttributes q={base} side={side} />
         <div className="identity">
           <RoleCard q={base} />
           <WhereYouPlay />
         </div>
-        {baselines && <PlaysLike q={base} attrs={attrs} side={ratingKey(side)} initial={r.query.get("pro")} />}
+        <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
       </div>
     </div>
   );
@@ -256,14 +258,14 @@ function FormRail({ p }: { p: ProfileData }) {
 
 // ---------------------------------------------------------------- attributes
 
-const SCORED_TIP = "Each score is the mean of its metrics' percentiles against anonymous pro players (public/baselines.json), on the same side.";
+const PRO_TIP = "The score is the mean of its metrics' percentiles against anonymous pro players (public/baselines.json), on the same side.";
 
-/** Firepower, the one attribute on the performance side (design/identity.md). */
+/** Firepower, the one attribute on the performance side (design/identity.md), ranked against pros. */
 function Firepower({ attrs, pool }: { attrs: Attr[]; pool: string }) {
   const a = attrs.find((x) => x.id === "firepower");
   if (!a) return null;
   return (
-    <Card title="Firepower" aside={<span className="meta" data-tip={SCORED_TIP}>{pool}</span>}>
+    <Card title="Firepower" aside={<span className="meta" data-tip={PRO_TIP}>{pool}</span>}>
       <div className="attrs attrs--one"><AttrCard a={a} wide open /></div>
     </Card>
   );
@@ -271,31 +273,39 @@ function Firepower({ attrs, pool }: { attrs: Attr[]; pool: string }) {
 
 type StyleCompare = "role" | "everyone";
 
-/** The six style attributes: how you play, not how well (HLTV: "rating covers performance, attributes cover style"). */
+/**
+ * The six style attributes: how you play, not how well (HLTV: "rating covers performance, attributes
+ * cover style"), ranked against the bot careers in the same matches (design/identity.md).
+ */
 function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [cmp, setCmp] = useState<StyleCompare>("role");
   const pool = cmp === "role" ? "role" : "all";
-  const res = useCall("attributes", [q, { pool, side: ratingKey(side) }]).data;
+  const call = useCall("style", [q, { pool, side: ratingKey(side) }]);
+  const res = call.data;
   const attrs = useMemo(() => (res ? attrsOf(res.scores) : []), [res]);
-  const peers = res?.role === "awper" ? "AWPers" : "Riflers";
+  const peer = res?.role === "awper" ? "AWPer" : "Rifler";
   return (
     <Card title="Style attributes" aside={
       <span className="card__aside-row">
-        <span className="meta" data-tip={SCORED_TIP}>{res ? poolText(pool === "all" ? "all" : res.role, res.n) : ""}</span>
+        <span className="meta" data-tip={BOTS_TIP}>{res ? botPoolText(pool === "all" ? "all" : res.role, res.n) : ""}</span>
         <Segmented label="Compared to" value={cmp} onChange={setCmp} options={[
-          { value: "role", label: peers, tip: `You are compared with ${peers.toLowerCase()}: more than 0.20 AWP kills per round makes an AWPer.` },
-          { value: "everyone", label: "Everyone" },
+          { value: "role", label: `${peer} bots`, tip: `You are compared with ${peer.toLowerCase()} bot careers: more than 0.20 AWP kills per round makes an AWPer.` },
+          { value: "everyone", label: "All bots" },
         ]} />
       </span>
     }>
-      {!res ? <div className="skel" style={{ height: 220 }} /> : (
-        <div className="attrs">
-          {attrs.filter((a) => a.id !== "firepower").map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
-        </div>
+      {res?.careers.provisional && <div className="attrs__prov"><Provisional c={res.careers} /></div>}
+      {!res ? (call.error ? <Empty text={call.error} /> : <div className="skel" style={{ height: 220 }} />) : (
+        <>
+          {res.n < res.careers.minPool && <p className="meta attrs__thin">{thinPoolText(res.careers, res.n)}{pool === "role" ? " All bots may have more." : ""}</p>}
+          <div className="attrs">
+            {attrs.map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
+          </div>
+        </>
       )}
-      <p className="meta attrs__note">Each attribute weighs intent as well as outcome: opening attempts as well as opening kills, tradeable deaths as well as traded ones. As on HLTV, riflers are compared with riflers and AWPers with AWPers; Sniping always compares with everyone.</p>
+      <p className="meta attrs__note">Each score is the mean of its metrics' percentiles against the bots in your own matches, on the same side: each bot name is one career, summed over the same matches as you. Pros are ranked against pros, not in this pool. Each attribute weighs intent as well as outcome: opening attempts as well as opening kills, tradeable deaths as well as traded ones. Riflers compare with rifler careers and AWPers with AWPer careers; Sniping always compares with every career.</p>
     </Card>
   );
 }

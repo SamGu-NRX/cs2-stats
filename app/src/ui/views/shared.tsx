@@ -3,7 +3,8 @@
 import type { ReactNode } from "react";
 import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
-import { ratingHeadline, statLine } from "../data/engine";
+import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
+import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, type MatchModel, type MRound } from "../data/match";
 import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
@@ -195,3 +196,12 @@ export function SectionAside({ label, value, color }: { label: string; value: Re
 
 export const deltaOf = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
 export { Delta };
+
+/**
+ * The label the user's style scores carry while fewer bot careers qualify than the engine's minimum
+ * (compare.ts BOT_CAREERS_MIN): the scores still show, marked provisional with the count.
+ */
+export function Provisional({ c }: { c: Careers }) {
+  if (!c.provisional) return null;
+  return <span className="chip chip--prov" data-tip={`${BOTS_TIP} Until ${c.needed} bot careers have ${c.minRounds} or more rounds, the population is small and the scores can move as you play more.`}>{provisionalText(c)}</span>;
+}
