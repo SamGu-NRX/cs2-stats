@@ -2,6 +2,7 @@
 // additive counters, and whether the definition is CS Demo Manager's.
 import type { Counters } from "./counters";
 import { hsPercent, impact, rating2 } from "./rating";
+import { rating3, RATING3_LABEL } from "./rating3";
 import { sideSlices, type UtilSlice } from "./utility";
 
 export interface Metric {
@@ -22,6 +23,8 @@ const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 const M: Metric[] = [
   { id: "rating", label: "Rating 2.0", fmt: "dec2", csdm: true, value: (c) => (c.rounds ? rating2(c) : null),
     def: "Rating 2.0 (public approximation): 0.0073·KAST + 0.3591·KPR − 0.5329·DPR + 0.2372·Impact + 0.0032·ADR + 0.1587." },
+  { id: "rating3", label: RATING3_LABEL, fmt: "dec2", value: (c) => rating3(c.r3).value,
+    def: "Approximation of HLTV's Rating 3.0 from eco-adjusted kills, damage, deaths, KAST and multi-kills per round plus round swing, over rounds with the kill log. Uncalibrated until fitted to HLTV's published ratings." },
   { id: "impact", label: "Impact", fmt: "dec2", csdm: true, value: (c) => (c.rounds ? impact(c) : null),
     def: "2.13·kills per round + 0.42·assists per round − 0.41." },
   { id: "kpr", label: "Kills per round", fmt: "dec2", csdm: true, value: (c) => per(c.kills, c.rounds), def: "Enemy kills divided by rounds played." },
