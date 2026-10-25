@@ -3,13 +3,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
-import { packerFeatures } from "../../../stats/identity";
+import { packerFeatures, type RoleBlend } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
 import { GameIcon } from "../../components/GameIcon";
-import { attrsOf, fmtMetric, proPoolName, rankText } from "../../data/engine";
+import { attrsOf, fmtMetric, proPoolName } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, TIP, tipOf } from "../../data/tips";
 import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
@@ -19,9 +19,10 @@ import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } fro
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
-import { scoreText, swingScore } from "../../lib/scale";
-import { ApproxMark, NeedsDemo, NotCompared } from "../shared";
-import { BENCH, verdictOf } from "../../lib/verdict";
+import { swingScore } from "../../lib/scale";
+import { NeedsDemo } from "../shared";
+import { Percentile } from "../../components/Percentile";
+import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
 
 export function SectionHead({ title, tip, id }: { title: string; tip: string; id?: string }) {
@@ -37,6 +38,12 @@ export function SectionHead({ title, tip, id }: { title: string; tip: string; id
 /** The swing metric is in percent; fmtSwing and swingScore take a fraction. */
 const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
 
+/**
+ * Round swing per match. The career number is the hero card's; this panel shows the matches behind it,
+ * the best and worst, and the bots' swing in the same matches. Where the swing comes from (kills,
+ * damage, flashes, deaths) needs a per-source split the engine does not keep yet (swing.ts sums each
+ * player's credits into one measure; only the flash share is kept apart).
+ */
 export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null }) {
   const swing = swingOf(you.v);
   const botSwing = bots ? swingOf(bots.v) : null;
@@ -45,21 +52,9 @@ export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]
   const best = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v > b.v ? x : b), null);
   const worst = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v < b.v ? x : b), null);
   const positive = known.filter((x) => x.v > 0).length;
-  const v = verdictOf(swing === null ? null : 100 * swing, BENCH.swing);
   return (
     <Card title="Round swing" tip={PANEL_TIP.swing} aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing</span>} className="swingcard">
-      <div className="swingcard__grid">
-        <div className="swingcard__big">
-          <b className="num" style={{ color: swing === null ? undefined : scoreText(swingScore(swing)) }}>{fmtSwing(swing)}</b>
-          <span className="verdict" data-v={v}>{v === "good" ? "Good" : v === "poor" ? "Poor" : v === "avg" ? "Average" : ""}</span>
-          {swing === null && <p className="swingcard__say"><NeedsDemo detail="Swing needs every player's equipment, which converted logs lack." /></p>}
-          {botSwing !== null && (
-            <span className="swingcard__bots" data-tip="Bots in the same matches.">
-              <span className="meta">Bots</span><b className="num">{fmtSwing(botSwing)}</b>
-              <Delta d={swing === null ? null : 100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} />
-            </span>
-          )}
-        </div>
+      {swing === null ? <div className="meta"><NeedsDemo detail="Swing needs every player's equipment, which converted logs lack." /></div> : (
         <div className="swingcard__chart">
           <FormBars height={150} refValue={0} fmt={(x) => fmtSwing(x / 100)} score={(x) => swingScore(x / 100)} bars={per.map((x) => ({
             key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), sub: x.s.result, result: x.s.result,
@@ -69,30 +64,42 @@ export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]
             <span><b className="num">{positive}</b><span className="faint">/{known.length}</span> matches with positive swing</span>
             {best && <a href={matchHref(best.s.file)}>Best <b className="num good-text">{fmtSwing(best.v)}</b> {fmtMatchDay(best.s.match)}</a>}
             {worst && <a href={matchHref(worst.s.file)}>Worst <b className="num poor-text">{fmtSwing(worst.v)}</b> {fmtMatchDay(worst.s.match)}</a>}
+            {botSwing !== null && (
+              <span className="swingcard__bots" data-tip="Bots in the same matches.">
+                <span className="meta">Bots</span><b className="num">{fmtSwing(botSwing)}</b>
+                <Delta d={100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} />
+              </span>
+            )}
           </div>
         </div>
-      </div>
+      )}
     </Card>
   );
 }
 
 // ---------------------------------------------------------------- role blend
 
+/** What each role means, for the role name's tooltip. */
 const ROLE_WHAT: Record<string, string> = {
   Entry: "Takes space first on T.",
   Lurker: "Plays away from the team on T.",
   "Half-lurker": "Starts with the team on T, then splits off.",
   Anchor: "Holds a bombsite on CT.",
   Rotator: "Moves between sites on CT.",
-  Mixed: "Neither anchors nor rotates most CT rounds.",
+  Mixed: "Neither anchors nor rotates in most CT rounds.",
   AWPer: "Carries the AWP.",
 };
 
+/** Role shades: categorical, never good or bad; the top role is cream, the rest step down in tan. */
+const SHADES = ["var(--cream)", "var(--tan)", "rgba(196, 160, 118, 0.6)", "rgba(196, 160, 118, 0.35)", "rgba(196, 160, 118, 0.2)"];
+
+const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : []);
+
 /**
- * The evidence behind a side's role as three numbers: how often you carried an AWP, how often you were
- * in the opening duel, and when you died. They are the role model's own inputs (identity.ts
- * packerFeatures, roleBlend's AWP share), read from the side's rollup rather than parsed from the
- * evidence sentences.
+ * The evidence behind the role as three numbers over every round: how often you carried an AWP, how
+ * often you were in the opening duel, and when you died. They are the role model's own inputs
+ * (identity.ts packerFeatures, roleBlend's AWP share), read from the rollup rather than parsed from the
+ * engine's evidence sentences.
  */
 function evidenceOf(m: Measures | undefined) {
   const x = m ? packerFeatures(m) : null;
@@ -123,37 +130,75 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   );
 }
 
-/** The engine's role blend per side (identity.ts): shares of each role from a model fitted on labelled pros. */
-export function RoleCard({ q }: { q: Query }) {
+/** One side's blend: the top role and its fit on one line, every role as a segment of one bar. */
+function SideFit({ b }: { b: RoleBlend }) {
+  const roles = rankedRoles(b);
+  const top = roles[0];
+  return (
+    <div className="rfit">
+      <span className={`rfit__side ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}</span>
+      {top ? (
+        <>
+          <span className="rfit__role" data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span>
+          <b className="num rfit__pct">{fmtPct(100 * top[1], 0)}</b>
+          <span className="rfit__bar" role="group" aria-label={`${b.side} role fit`}>
+            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={`${r} ${fmtPct(100 * v, 0)}`} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${r} ${fmtPct(100 * v, 0)}. ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
+          </span>
+        </>
+      ) : <span className="meta rfit__none"><NeedsDemo detail="The role needs positions, which converted logs lack." /></span>}
+    </div>
+  );
+}
+
+/** A map's role on each side, from the engine's role call narrowed to that map. */
+function MapRoles({ q, map }: { q: Query; map: string }) {
+  const mq = useMemo(() => ({ ...q, filter: { ...q.filter, maps: [map] } }), [q, map]);
+  const r = useCall("roles", [mq]).data;
+  const cell = (b: RoleBlend | undefined) => {
+    const top = rankedRoles(b)[0];
+    return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
+  };
+  return (
+    <li>
+      <span className="rmaps__map"><MapThumb map={map} size={18} />{mapName(map)}</span>
+      <span className="t-text rmaps__side">T</span>{cell(r?.T)}
+      <span className="ct-text rmaps__side">CT</span>{cell(r?.CT)}
+    </li>
+  );
+}
+
+/**
+ * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend.
+ * The headline is the two sides' roles; the engine has no single role over both sides (roles() answers
+ * per side only), so none is made up here. Below: the evidence over every round, each side's fit, and
+ * each map's roles.
+ */
+export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
   const r = useCall("roles", [q]);
-  const sideQs = useMemo(() => (["T", "CT"] as const).map((side) => ({ ...q, filter: { ...q.filter, sides: [side] } })), [q]);
-  const sums = useRollups(sideQs).data;
+  const all = useRollups(useMemo(() => [q], [q])).data?.[0];
   if (!r.data) {
     return <Card title="Role" tip={PANEL_TIP.role} className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
   const sides = [r.data.T, r.data.CT];
+  const tops = sides.map((b) => rankedRoles(b)[0]?.[0] ?? null);
   return (
     <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
-      {sides.map((b, si) => {
-        const roles = b.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : [];
-        return (
-          <section key={b.side} className="rolecard__side" aria-label={`${b.side} side`}>
-            <b className={`role__label ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}: {roles[0]?.[0] ?? "Not enough data"}</b>
-            <RoleTiles m={sums?.[si]?.m} />
-            {b.blend ? (
-              <ul className="signals2">
-                {roles.map(([role, share], i) => (
-                  <li key={role} className={i === 0 ? "is-on" : ""}>
-                    <div className="signals2__top"><b>{role}</b><span className="meta">{ROLE_WHAT[role] ?? ""}</span></div>
-                    <div className="signals2__track" aria-hidden><i style={{ width: `${100 * share}%` }} /></div>
-                    <p className="signals2__you">{fmtPct(100 * share, 0)}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="meta"><NeedsDemo detail="The role needs positions, which converted logs lack." /></p>}
-          </section>
-        );
-      })}
+      <div className="role__head">
+        {sides.map((b, i) => (
+          <span key={b.side} className="role__headpart">
+            <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
+            <b className="role__label" {...(tops[i] ? { "data-tip": ROLE_WHAT[tops[i]!], tabIndex: 0 } : {})}>{tops[i] ?? "Not enough data"}</b>
+          </span>
+        ))}
+      </div>
+      <RoleTiles m={all?.m} />
+      <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
+      {maps.length > 0 && (
+        <>
+          <h3 className="caps rmaps__h">By map</h3>
+          <ul className="rmaps">{maps.map((m) => <MapRoles key={m} q={q} map={m} />)}</ul>
+        </>
+      )}
     </Card>
   );
 }
@@ -321,23 +366,11 @@ export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
   return (
     <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? `Against ${r.data.n} ${proPoolName(r.data.role)}` : "Against pros"}</span>}>
       {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
-        <ul className="howgood">
-          {HOW_GOOD.map((id) => {
-            const m = metric(id);
-            const x = p[id];
-            return (
-              <li key={id} data-tip={tipOf(id)}>
-                <span>{m.label}{m.status === "approx" && <ApproxMark />}</span>
-                <span className="howgood__v">
-                  {m.status === "unavailable" ? <span className="meta">Not measured yet</span>
-                    : x.reason ? <NotCompared reason={x.reason} />
-                    : <span className="meta num">{rankText(x.pct)}</span>}
-                  <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, x.value)}</b>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="howgood">
+          {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => (
+            <Percentile key={id} variant="quiet" {...pctProps(id, p[id], p[id].value)} kind="performance" population={proPoolName(r.data!.role)} />
+          ))}
+        </div>
       )}
     </Card>
   );
