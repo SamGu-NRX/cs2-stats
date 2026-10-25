@@ -1,6 +1,6 @@
 [package]
 name = "cs2-stats"
-version = "0.1.0"
+version = "0.2.0"
 description = "Stats for CS2 bot matches"
 edition = "2021"
 # MSRV-aware dependency resolution: the machine has Rust 1.85.
