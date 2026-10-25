@@ -101,6 +101,9 @@ function targetOnScreen(m: MatchFile): (i: number) => boolean {
 }
 
 
+/** An angle from the plugin, null when missing or not a number (files before plugin 1.2.0). */
+const angle = (x: number | null | undefined) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+
 export function pluginToTables(m: MatchFile): MatchTables {
   const key = m.players.key;
   const human = key[m.human];
@@ -251,10 +254,9 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const e = s.aimErr[i];
     add(t.shots!, "shots", {
       tick: s.tick[i], round: ri + 1, steamid: human, weapon: weapon(s.weapon[i]), side: sideOf(ri, m.human), ducked: s.ducked[i], scoped: s.scoped[i], speed_2d: s.speed[i],
-      // the plugin stores aimErr in hundredths of a degree. It records no absolute view angles yet; when it
-      // does, write them to pitch and yaw here, and its sprays get absolute paths that compare with the
-      // pros' (aim.ts spray), instead of paths relative to the target
-      pitch: null, yaw: null,
+      // the plugin stores aimErr in hundredths of a degree; plugin 1.2.0 adds absolute view angles, which
+      // give its sprays absolute paths that compare with the pros' (aim.ts spray); older files lack them
+      pitch: angle(s.pitch?.[i]), yaw: angle(s.yaw?.[i]),
       aim_err_yaw: e ? e[0] / 100 : null, aim_err_pitch: e ? e[1] / 100 : null,
       target_steamid: s.target[i] === null ? null : key[s.target[i]!], target_on_screen: onScreen(i),
     });

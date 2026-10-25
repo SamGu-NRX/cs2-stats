@@ -61,7 +61,7 @@ const HUMAN = "76561190000000001";
  * A one-round plugin file at 64 ticks/s: the human (CT) fires an AK standing still at one bot (T).
  * visTarget defaults to 1 for every shot; `los` rows are the bot's line-of-sight transitions.
  */
-function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0 | 1][]; killTick?: number; env?: Partial<Env> } = {}): MatchFile {
+function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0 | 1][]; killTick?: number; env?: Partial<Env>; angles?: [number, number][] } = {}): MatchFile {
   const col = <T,>(v: T) => shots.map(() => v);
   const none = { ri: [], tick: [] };
   return {
@@ -87,6 +87,7 @@ function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0
         scoped: col(false), ducked: col(false), target: shots.map((s) => (s[1] ? 1 : null)),
         aimErr: shots.map((s) => (s[1] ? [Math.round(s[1][0] * 100), Math.round(s[1][1] * 100)] : null)), impact: col(null), hit: col(null),
         visTarget: o.visTarget ?? col(1),
+        ...(o.angles && { pitch: o.angles.map((a) => a[0]), yaw: o.angles.map((a) => a[1]) }),
       },
       ...(o.los && { los: { ri: o.los.map(() => 0), tick: o.los.map((r) => r[0]), enemy: o.los.map(() => 1), vis: o.los.map((r) => r[1]) } }),
     },
@@ -123,6 +124,26 @@ describe("plugin sprays", () => {
     expect(p.n).toEqual([2, 2, 1, 1]);
     [0.8, 1.7, 1.5, 2].forEach((x, j) => expect(p.dp[j]).toBeCloseTo(x, 9));
     [-0.1, -0.1, -0.6, -0.8].forEach((x, j) => expect(p.dy[j]).toBeCloseTo(x, 9));
+  });
+
+  it("compares a plugin 1.2.0 spray with the pros' from its absolute view angles", () => {
+    // fails if recorded view angles are ignored (the spray stays relative to the target) or the path
+    // is not the view's change from bullet 1
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [1.2, 9.8], [2, 9.8], [2.6, 9.7]];
+    const f = derive(pluginToTables(pluginMatch(SPRAYS.slice(0, 5), { angles })), CS2RB);
+    const [spray] = f.aim.filter((x): x is SprayFact => x.k === "spray");
+    expect(spray.relative).toBe(false);
+    [0.5, 1.2, 2, 2.6].forEach((x, j) => expect(spray.dp[j]).toBeCloseTo(x, 9));
+    [-0.1, -0.2, -0.2, -0.3].forEach((x, j) => expect(spray.dy[j]).toBeCloseTo(x, 9));
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(4);
+  });
+
+  it("keeps a plugin spray relative to the target when a bullet has no angles", () => {
+    // fails if a file before 1.2.0, or a spray with one missing angle, is compared with the pros
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [NaN, NaN], [2, 9.8], [2.6, 9.7]];
+    const f = derive(pluginToTables(pluginMatch(SPRAYS.slice(0, 5), { angles })), CS2RB);
+    expect(f.aim.filter((x): x is SprayFact => x.k === "spray").map((x) => x.relative)).toEqual([true]);
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(0);
   });
 
   it("reads a mixed file's line of sight up to the failure and the spotted mask after it", () => {
