@@ -7,8 +7,8 @@ import type { Side } from "./tables";
  * A trade: killing the killer within this many seconds. HLTV does not publish its window; 5.4 s
  * reproduces its traded deaths and KAST best on the joined maps (5.4 s: 3,620 traded-death and 3,679
  * KAST exact of 3,950 player-maps; 5 s: 3,349 and 3,576; VALIDATION.md, pnpm scoreboard-variants).
- * CS Demo Manager uses 5 s, and so does the extractor's kills.trade_kill_5s column, which the engine
- * does not read.
+ * CS Demo Manager uses 5 s, and so does the extractor's internal kills.extractor_trade_kill_5s column
+ * (for model/rating3's round fit), which the engine does not read.
  */
 export const TRADE_WINDOW_S = 5.4;
 

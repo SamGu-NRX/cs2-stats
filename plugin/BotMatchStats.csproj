@@ -8,7 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>BotMatchStats</RootNamespace>
     <AssemblyName>BotMatchStats</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <!-- The test project lives below this folder; keep its sources and build output out of the plugin. -->
     <DefaultItemExcludes>$(DefaultItemExcludes);BotMatchStats.Tests/**</DefaultItemExcludes>
   </PropertyGroup>

@@ -6,6 +6,7 @@ import path from "node:path";
 import { CS2RB } from "../model-params";
 import { describe, expect, it } from "vitest";
 import type { SprayFact } from "../aim";
+import { ON_SCREEN_NOTE } from "../facts";
 import { derive } from "../derive";
 import { rollup } from "../rollup";
 import { pluginToTables } from "./adapter";
@@ -61,7 +62,7 @@ const HUMAN = "76561190000000001";
  * A one-round plugin file at 64 ticks/s: the human (CT) fires an AK standing still at one bot (T).
  * visTarget defaults to 1 for every shot; `los` rows are the bot's line-of-sight transitions.
  */
-function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0 | 1][]; killTick?: number; env?: Partial<Env> } = {}): MatchFile {
+function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0 | 1][]; killTick?: number; env?: Partial<Env>; angles?: [number, number][] } = {}): MatchFile {
   const col = <T,>(v: T) => shots.map(() => v);
   const none = { ri: [], tick: [] };
   return {
@@ -87,6 +88,7 @@ function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0
         scoped: col(false), ducked: col(false), target: shots.map((s) => (s[1] ? 1 : null)),
         aimErr: shots.map((s) => (s[1] ? [Math.round(s[1][0] * 100), Math.round(s[1][1] * 100)] : null)), impact: col(null), hit: col(null),
         visTarget: o.visTarget ?? col(1),
+        ...(o.angles && { pitch: o.angles.map((a) => a[0]), yaw: o.angles.map((a) => a[1]) }),
       },
       ...(o.los && { los: { ri: o.los.map(() => 0), tick: o.los.map((r) => r[0]), enemy: o.los.map(() => 1), vis: o.los.map((r) => r[1]) } }),
     },
@@ -114,14 +116,48 @@ describe("plugin sprays", () => {
     ]);
   });
 
-  it("puts the plugin's sprays in the summary's per-bullet path and the pro comparison", () => {
-    // fails if plugin sprays never reach Summary.aim.path, the spray chart and spray deviation
+  it("shows the plugin's sprays relative to the target and keeps them out of the pro comparison", () => {
+    // fails if a path that includes the target's movement is compared with the pros' view paths, or the
+    // plugin's sprays never reach the summary's relative per-bullet path
     const a = rollup([derive(pluginToTables(pluginMatch(SPRAYS)), CS2RB)], { player: HUMAN }).aim;
-    const p = a.path.ak47;
+    expect([a.cmp, Object.keys(a.path)]).toEqual([0, []]);
+    const p = a.relPath.ak47;
     expect(p.n).toEqual([2, 2, 1, 1]);
     [0.8, 1.7, 1.5, 2].forEach((x, j) => expect(p.dp[j]).toBeCloseTo(x, 9));
     [-0.1, -0.1, -0.6, -0.8].forEach((x, j) => expect(p.dy[j]).toBeCloseTo(x, 9));
-    expect(a.cmp).toBe(6);
+  });
+
+  it("compares a plugin 1.2.0 spray with the pros' from its absolute view angles", () => {
+    // fails if recorded view angles are ignored (the spray stays relative to the target) or the path
+    // is not the view's change from bullet 1
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [1.2, 9.8], [2, 9.8], [2.6, 9.7]];
+    const f = derive(pluginToTables(pluginMatch(SPRAYS.slice(0, 5), { angles })), CS2RB);
+    const [spray] = f.aim.filter((x): x is SprayFact => x.k === "spray");
+    expect(spray.relative).toBe(false);
+    [0.5, 1.2, 2, 2.6].forEach((x, j) => expect(spray.dp[j]).toBeCloseTo(x, 9));
+    [-0.1, -0.2, -0.2, -0.3].forEach((x, j) => expect(spray.dy[j]).toBeCloseTo(x, 9));
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(4);
+  });
+
+  it("keeps a plugin spray relative to the target when a bullet has no angles", () => {
+    // fails if a file before 1.2.0, or a spray with one missing angle, is compared with the pros
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [NaN, NaN], [2, 9.8], [2.6, 9.7]];
+    const f = derive(pluginToTables(pluginMatch(SPRAYS.slice(0, 5), { angles })), CS2RB);
+    expect(f.aim.filter((x): x is SprayFact => x.k === "spray").map((x) => x.relative)).toEqual([true]);
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(0);
+  });
+
+  it("reads a mixed file's spotted mask for the whole match and says so", () => {
+    // fails if a "mixed" file (line of sight failed partway) reads line of sight up to a guessed failure
+    // point: the LOS rows say visible from 1990 to 2015, the mask only at the fourth bullet
+    const shots = SPRAYS.slice(0, 4);
+    const m = pluginMatch(shots, { visTarget: [0, 0, 0, 1], env: { visSource: "mixed", losError: "trace returned no result" }, los: [[1990, 1], [2015, 0]] });
+    const f = derive(pluginToTables(m), CS2RB);
+    const read = (sp: SprayFact[]) => sp.map((x) => [x.bullets, x.dp.length]);
+    const maskOnly = read(sprays(pluginMatch(shots, { visTarget: [0, 0, 0, 1] })));
+    expect(maskOnly).not.toEqual([[4, 3]]);
+    expect(read(f.aim.filter((x): x is SprayFact => x.k === "spray"))).toEqual(maskOnly);
+    expect(ON_SCREEN_NOTE[f.match.inputs.onScreen!]).toBe("line of sight lost partway; using the game's spotted flags");
   });
 
   it("counts a bullet at the kill tick as on screen whether the death's hidden row is at the kill tick or the next", () => {
@@ -132,4 +168,25 @@ describe("plugin sprays", () => {
     expect(at(2019).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
     expect(at(2020).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
   });
+});
+
+it("scores a match across the half-time side swap from the human's side each round", () => {
+  // fails if the score is read as [T, CT] or from the starting sides after the swap: the human starts
+  // T and wins 9 of the first 12, then as CT wins 2 of the last 12, so loses 11-13 (the Oct 25 12:40
+  // PM recording's shape)
+  const base = pluginMatch([]);
+  const won = [...[3, 3, 3], ...Array(9).fill(2), 2, 2, 2, 3, 2, 2, 2, 2, 3, 2, 2, 2] as (2 | 3)[];
+  const side = won.map((_, ri): (2 | 3)[] => (ri < 12 ? [2, 3] : [3, 2]));
+  const r = base.rounds;
+  const m: MatchFile = {
+    ...base,
+    rounds: {
+      ...r, winSide: won, how: won.map(() => "elim"), freezeTick: won.map((_, i) => 1000 + i * 5000), durTicks: won.map(() => 4000),
+      bombSite: won.map(() => null), plantTick: won.map(() => null), planter: won.map(() => null), defuser: won.map(() => null),
+      ctSetup: won.map(() => null), score: won.map(() => [0, 0] as [number, number]), side, equip: won.map(() => [4000, 4000]), money: won.map(() => [800, 800]),
+    },
+  };
+  const f = derive(pluginToTables(m), CS2RB);
+  const usTeam = f.players[f.players.findIndex((p) => p.id === HUMAN)].team!;
+  expect([f.match.score[usTeam], f.match.score[1 - usTeam], f.match.complete]).toEqual([11, 13, true]);
 });

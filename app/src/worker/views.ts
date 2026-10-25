@@ -3,12 +3,12 @@
 // It runs in the stats worker (and in node tests), never on the UI thread.
 import { visibilityCoverage } from "../stats/aim";
 import { economyOf } from "../stats/economy";
-import { DERIVE_VERSION, emptyMeasures, type MatchFacts } from "../stats/facts";
+import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { isGun } from "../stats/guns";
 import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
-import { RATING3_LABEL, rating3, rating3Of } from "../stats/rating3";
+import { RATING3_LABEL, RATING3_STATUS, rating3Of } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
 import type { MatchEntry } from "../ui/data/match";
 import type {
@@ -17,9 +17,9 @@ import type {
 
 export function metaOf(wp: WinProbSource): Meta {
   return {
-    metrics: METRICS.map(({ value: _value, ...m }) => m),
+    metrics: METRICS.map(({ value: _value, why: _why, ...m }) => m),
     attributes: ATTRIBUTES,
-    rating: { label: RATING3_LABEL, status: rating3(emptyMeasures()).status },
+    rating: { label: RATING3_LABEL, status: RATING3_STATUS },
     winProb: { kind: wp.kind, label: wp.label },
     style: [...STYLE],
     deriveVersion: DERIVE_VERSION,
@@ -28,14 +28,15 @@ export function metaOf(wp: WinProbSource): Meta {
 
 export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((m) => [m.id, m.value(s)]));
 export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
-// Every rating here goes through rating3Of, the engine's one coverage gate; so does the rating3 metric
-// in valuesOf, and with it the comparisons and "Work on".
+// Every rating here is rating3Of's, the one definition (side-weighted, under the one coverage gate);
+// so is the rating3 metric in valuesOf, and with it the comparisons and "Work on". A line's eco values
+// are the rating's own inputs, over the rounds it rated.
 const lineOf = (s: Summary): Line => {
   const r = rating3Of(s);
-  const q = r.value === null ? null : r.inputs;
+  const q = r.inputs;
   return {
     m: s.m, v: valuesOf(s), rating: r.value,
-    eco: q ? { ek: s.m.vEcoKills, ed: s.m.vEcoDeaths, eadr: q.adr_eco, ekast: q.kast_eco } : null,
+    eco: q ? { ek: q.kpr_eco * r.rounds, ed: q.dpr_eco * r.rounds, eadr: q.adr_eco, ekast: q.kast_eco } : null,
   };
 };
 
@@ -57,7 +58,8 @@ const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them 
 
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
   const { you, usTeam } = pov(file, f);
-  const s = rollup([f], { player: f.players[you].id });
+  const id = f.players[you].id;
+  const s = rollup([f], { player: id });
   const us = f.match.score[usTeam];
   const them = f.match.score[1 - usTeam];
   return {

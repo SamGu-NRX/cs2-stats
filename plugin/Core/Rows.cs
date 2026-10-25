@@ -124,6 +124,11 @@ public struct ShotRow
     public int VisTarget;
     /// <summary>WeaponClass of the weapon, or Nil.</summary>
     public int Class;
+    /// <summary>
+    /// The human's view at the fire tick: m_angEyeAngles, degrees, pitch down positive, without aim
+    /// punch (m_aimPunchAngle is a separate field). NaN when the human's frame was not readable.
+    /// </summary>
+    public float Pitch, Yaw;
 }
 
 public enum ReconField : byte { Kills = 0, Deaths = 1, Assists = 2, Damage = 3 }

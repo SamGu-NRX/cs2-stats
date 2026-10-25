@@ -11,7 +11,7 @@ import { BUY_CLASSES } from "../stats/economy";
 import { METRIC } from "../stats/metrics";
 import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
-import { trend, winCorrelationOf } from "../stats/trends";
+import { matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
@@ -19,7 +19,7 @@ import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
 import { loadTables } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
-import { entryKey as entryKeyOf, factsKey as factsKeyOf } from "./keys";
+import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
 import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
@@ -86,7 +86,7 @@ const factsKey = (e: FileEntry) => factsKeyOf(e, modelFingerprint(source()));
 let baselinesHash = "none";
 const entryKey = (k: string) => entryKeyOf(k, baselinesHash);
 
-let index = new Map<string, { key: string; entry: MatchEntry }>();
+let index = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
 /** Increments when the index changes, so cached summaries of the old file set are not reused. */
 let gen = 0;
 const lru = new Map<string, { key: string; facts: MatchFacts }>();
@@ -247,19 +247,20 @@ const api: Impl = {
     // entries are keyed by the baselines they were shown against
     await baselines().catch(() => undefined);
     const errors: { file: string; message: string }[] = [];
-    const next = new Map<string, { key: string; entry: MatchEntry }>();
+    const next = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
     let done = 0;
     for (const e of entries) {
       const key = factsKey(e);
       try {
         const prev = index.get(e.file);
-        let entry = prev?.key === key ? prev.entry : await idbGet<MatchEntry>("entries", entryKey(key));
+        const ekey = entryKey(key);
+        let entry = sameEntry(prev, key, ekey) ? prev!.entry : await idbGet<MatchEntry>("entries", ekey);
         if (!entry) {
           const c = await cached(e.file, key);
           entry = entryOf(e.file, c.origin, c.facts);
-          await idbPut("entries", entryKey(key), entry);
+          await idbPut("entries", ekey, entry);
         }
-        next.set(e.file, { key, entry });
+        next.set(e.file, { key, ekey, entry });
       } catch (err) {
         errors.push({ file: e.file, message: (err as Error).message });
       }
@@ -350,8 +351,7 @@ const api: Impl = {
     await stream(q.files, (f) => {
       const s = rollup([f], q.filter);
       if (!s.m.rounds) return;
-      const p = f.players.find((x) => me.has(x.id));
-      const won = !p || p.team === null ? null : f.match.score[p.team] > f.match.score[1 - p.team];
+      const won = matchWon(f, me);
       for (const id of metricIds) points[id].push({ value: METRIC[id].value(s), won });
     });
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));

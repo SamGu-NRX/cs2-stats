@@ -6,8 +6,7 @@ import type { Side } from "./tables";
 // $5,000, FULL from $16,250, and PISTOL on the first round of each half (bands read from HLTV's labels
 // over every HLTV map, VALIDATION.md, pnpm scoreboard-variants). For five players that is $1,000 and
 // $3,250 per player, which is how the engine classifies, so a short-handed team classifies the same.
-// The extractor's rounds.*_buy_type columns use other team totals ($5k, $10k, $20k, CS Demo
-// Manager's); the engine does not read them.
+// The extractor no longer writes buy types (#24); the engine classifies from equipment value alone.
 export const BUY_CLASSES = ["pistol", "eco", "half", "full"] as const;
 export type BuyClass = (typeof BUY_CLASSES)[number];
 

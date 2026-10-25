@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_paths import demo_layout
+from demo_paths import column, demo_layout
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -366,9 +366,9 @@ def build_round_rows(root: Path, joins: list[dict], duel_model: dict) -> list[di
                     assist_count[(round_number, assister_id)] += 1
                     if kill.get("assistedflash"):
                         flash_assist_count[(round_number, assister_id)] += 1
-            if kill.get("trade_kill_5s"):
+            if column(kill, "extractor_trade_kill_5s"):
                 trade_kill_count[(round_number, attacker_id)] += 1
-            if kill.get("traded_death_5s"):
+            if column(kill, "extractor_traded_death_5s"):
                 traded_death_count[(round_number, victim_id)] += 1
             attacker_row = round_player.get((round_number, attacker_id))
             victim_row = round_player.get((round_number, victim_id))

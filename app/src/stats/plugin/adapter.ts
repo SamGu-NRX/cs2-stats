@@ -5,11 +5,13 @@
 // recording is proven (architecture.md, migration step 1: tv_autorecord on the local server, run
 // through the extractor) and the user's matches arrive as demos. Nothing else reads plugin files.
 //
-// What the plugin files cannot provide stays null: view angles, inventories, health before a hit,
-// smoke and fire lifetimes, engagements and radar spotting. Rounds the file holds only as totals
-// (converted logs before firstFullRound, and rounds the plugin marked partial) are left out, so
-// every derived rate covers the rounds with a kill-by-kill log. The plugin's per-shot aim error,
-// target and on-screen state go to the shots columns only plugin rows fill (tables.ts SOURCE_COLUMNS).
+// What the plugin files cannot provide stays null: inventories, health before a hit, smoke and fire
+// lifetimes, engagements and radar spotting, and view angles in files before plugin 1.2.0 (1.2.0
+// records each shot's pitch and yaw, which go to shots.pitch and shots.yaw). Rounds the file holds
+// only as totals (converted logs before firstFullRound, and rounds the plugin marked partial) are left
+// out, so every derived rate covers the rounds with a kill-by-kill log. The plugin's per-shot aim
+// error, target and on-screen state go to the shots columns only plugin rows fill (tables.ts
+// SOURCE_COLUMNS).
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
 import type { GrenadeType, MatchFile } from "./schema";
 
@@ -52,6 +54,12 @@ function finalScore(m: MatchFile): [number, number] {
   return out;
 }
 
+/** Which record targetOnScreen reads: MatchInfo.inputs.onScreen, from match.extra "on_screen". */
+function onScreenSource(m: MatchFile): "los" | "spotted" | "spotted-los-lost" {
+  if (m.env.visSource === "mixed") return "spotted-los-lost";
+  return m.env.visSource === "los" && m.aim.los?.ri.length ? "los" : "spotted";
+}
+
 /**
  * Whether each shot's target was on screen, by shots row. Line-of-sight files (env.visSource "los",
  * plugin 1.1.0) read aim.los: the target's state at a tick is that of its last transition at or before
@@ -59,12 +67,16 @@ function finalScore(m: MatchFile): [number, number] {
  * + 1, so a read at the kill tick sees the victim; older files stamp it at the death tick, so a hidden
  * row at the target's or the human's death tick is read from the next tick and both give one answer.
  * Other files read visTarget (the spotted mask); files before visTarget named only a visible enemy as
- * the target (SCHEMA.md, aim.shots).
+ * the target (SCHEMA.md, aim.shots). A "mixed" file lost line of sight partway (env.losError) and reads
+ * the mask for the whole match: the file does not say exactly when the trace stopped answering, so no
+ * cutoff is guessed. MatchInfo.inputs.onScreen records which was used (facts.ts ON_SCREEN_NOTE).
  */
 function targetOnScreen(m: MatchFile): (i: number) => boolean {
   const s = m.aim.shots;
   const los = m.aim.los;
-  if (los && m.env.visSource === "los") {
+  const visTarget = s.visTarget;
+  const mask = visTarget ? (i: number) => visTarget[i] === 1 : (i: number) => s.target[i] !== null;
+  if (los && los.ri.length && m.env.visSource === "los") {
     const at = (ri: number, pi: number) => ri * 256 + pi;
     const death = new Map<number, number>();
     m.kills.ri.forEach((ri, k) => death.set(at(ri, m.kills.victim[k]), m.kills.tick[k]));
@@ -88,11 +100,12 @@ function targetOnScreen(m: MatchFile): (i: number) => boolean {
       return vis;
     };
   }
-  const visTarget = s.visTarget;
-  if (visTarget) return (i) => visTarget[i] === 1;
-  return (i) => s.target[i] !== null;
+  return mask;
 }
 
+
+/** An angle from the plugin, null when missing or not a number (files before plugin 1.2.0). */
+const angle = (x: number | null | undefined) => (typeof x === "number" && Number.isFinite(x) ? x : null);
 
 export function pluginToTables(m: MatchFile): MatchTables {
   const key = m.players.key;
@@ -130,6 +143,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
       pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m),
       // files before plugin 1.0.0 have no throw log; throws are rebuilt from detonations (facts.ts SourceInputs.throws)
       ...(m.throws ? {} : { throws: "rebuilt" }),
+      on_screen: onScreenSource(m),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
@@ -244,7 +258,9 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const e = s.aimErr[i];
     add(t.shots!, "shots", {
       tick: s.tick[i], round: ri + 1, steamid: human, weapon: weapon(s.weapon[i]), side: sideOf(ri, m.human), ducked: s.ducked[i], scoped: s.scoped[i], speed_2d: s.speed[i],
-      // the plugin stores aimErr in hundredths of a degree
+      // the plugin stores aimErr in hundredths of a degree; plugin 1.2.0 adds absolute view angles, which
+      // give its sprays absolute paths that compare with the pros' (aim.ts spray); older files lack them
+      pitch: angle(s.pitch?.[i]), yaw: angle(s.yaw?.[i]),
       aim_err_yaw: e ? e[0] / 100 : null, aim_err_pitch: e ? e[1] / 100 : null,
       target_steamid: s.target[i] === null ? null : key[s.target[i]!], target_on_screen: onScreen(i),
     });

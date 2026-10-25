@@ -7,7 +7,7 @@ import type { BuyClass } from "./economy";
 import { emptyInfo, foldInfo, type InfoAgg } from "./information";
 import { emptyMove, foldMove, type MoveAgg } from "./movement";
 import { emptyUtilQ, foldUtilQ, type UtilQAgg } from "./utilq";
-import { emptyMeasures, HIT_GROUPS, INPUTS, MEASURES, type Input, type GrenadeFact, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
+import { emptyMeasures, HIT_GROUPS, MEASURES, type GrenadeFact, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
 import { foldPresence, type Presence } from "./positions";
 import type { Side } from "./tables";
 
@@ -41,10 +41,11 @@ export interface Summary {
   matches: number;
   /** over the kept matches: the rounds the facts cover and the rounds played (Rating 3.0's coverage gate) */
   covered: { nRounds: number; roundsPlayed: number };
-  /** kept matches whose source lacks each input, and the distinct model fingerprints they were derived with */
-  missing: Record<Input, number>;
+  /** the distinct model fingerprints the kept matches were derived with */
   models: string[];
   m: Measures;
+  /** m split by the side each kept round was played on: Rating 3.0 rates each side over its own rounds (rating3.ts rating3Of) */
+  sides: Record<Side, Measures>;
   /** by weapon class name */
   weapons: Record<string, WeaponTotals>;
   aim: AimAgg;
@@ -79,7 +80,7 @@ function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
 }
 
 export const emptySummary = (): Summary => ({
-  matches: 0, covered: { nRounds: 0, roundsPlayed: 0 }, missing: Object.fromEntries(INPUTS.map((i) => [i, 0])) as Record<Input, number>, models: [], m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
+  matches: 0, covered: { nRounds: 0, roundsPlayed: 0 }, models: [], m: emptyMeasures(), sides: { CT: emptyMeasures(), T: emptyMeasures() }, weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
 });
 
 /** Event facts whose weapon the filter rejects are dropped; facts without a weapon field always pass. */
@@ -98,10 +99,12 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   s.matches++;
   s.covered.nRounds += f.match.nRounds;
   s.covered.roundsPlayed += f.match.roundsPlayed;
-  for (const i of INPUTS) if (!f.match.inputs[i]) s.missing[i]++;
   if (!s.models.includes(f.match.model)) s.models.push(f.match.model);
   const kept = new Set(rows.map((r) => r.ri * 1024 + r.pi));
-  for (const r of rows) for (const k of MEASURES) s.m[k] += r.m[k] ?? 0;
+  for (const r of rows) {
+    const side = s.sides[r.side];
+    for (const k of MEASURES) { const v = r.m[k] ?? 0; s.m[k] += v; side[k] += v; }
+  }
   const roundsWith = new Map<string, Set<number>>();
   for (const w of f.weapons) {
     if (!kept.has(w.ri * 1024 + w.pi) || (filter.weapons && !filter.weapons.includes(w.weapon))) continue;

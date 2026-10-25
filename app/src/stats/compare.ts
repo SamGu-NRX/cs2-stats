@@ -4,7 +4,7 @@
 //
 // Pools: "all"; "rifler" and "awper" (design/identity.md: an AWPer has more than 0.20 AWP kills per
 // round in the sample); "map:<name>", whose units are player-maps rather than players.
-import type { Input } from "./facts";
+import { INPUT_COVERAGE } from "./facts";
 import { ATTRIBUTES, METRICS, type Kind, type Metric } from "./metrics";
 import type { Summary } from "./rollup";
 
@@ -61,16 +61,22 @@ export interface Percentile {
   reason: string | null;
 }
 
-const INPUT_LABEL: Record<Input, string> = { loadout: "inventories", activeWeapon: "the weapon in hand at each death" };
-
-/** Why summary s cannot be compared with baselines b on metric m; null when it can. */
+/**
+ * Why summary s cannot be compared with baselines b on metric m; null when it can. An input counts
+ * only when it is known on every row the metric uses; otherwise the reason says how many were known,
+ * which is also the coverage note for the value computed over the known rows. A metric with its own
+ * rule for having no value (Metric.why) gives that rule's reason first.
+ */
 export function notComparable(m: Metric, s: Summary, b: Baselines): string | null {
+  const gap = m.why?.(s) ?? null;
+  if (gap) return `No value: ${gap}`;
   for (const need of m.needs ?? []) {
     if (need === "model") {
       if (b.model === undefined || s.models.some((x) => x !== b.model)) return "Not compared: the pro pool was built with another rating or win-probability model";
-    } else if (s.missing[need] > 0) {
-      return `Not compared: ${s.missing[need]} of ${s.matches} matches record no ${INPUT_LABEL[need]}`;
+      continue;
     }
+    const [known, total, what, unit] = INPUT_COVERAGE[need];
+    if (s.m[known] < s.m[total]) return `Not compared: ${what} known for ${s.m[known]} of ${s.m[total]} ${unit}`;
   }
   return null;
 }

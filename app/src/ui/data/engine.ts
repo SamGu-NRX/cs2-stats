@@ -31,7 +31,7 @@ export const rating3Note = () => {
   const r = ratingInfo();
   return `Rating 3.0 (approx.): HLTV Rating 3.02 as reconstructed in model/rating3 (${r.status}).`;
 };
-export const RATING_POOLED = "Pooled over rounds: the six inputs are summed over every round before the formula runs once, as HLTV does for careers.";
+export const RATING_POOLED = "Rated per side over the rounds it can value; a side with under half its rounds valued is left out. The total averages the side ratings, weighted by those rounds.";
 
 /**
  * A match whose kill-by-kill log covers under half its rounds (a converted log that holds the first
