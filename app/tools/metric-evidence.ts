@@ -16,7 +16,7 @@
 // The report (no names or ids either) goes to <data>/derived/metric-evidence-v2.json by default.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { aggroParts, aggressionScore, AGGRO_PARTS, type AggroScale } from "../src/stats/aggro-scale";
+import { aggroParts, AGGRO_PARTS, scoreOf, type AggroScale } from "../src/stats/aggro-scale";
 import { XDUEL_FEATURES, type SightFact } from "../src/stats/aim";
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
@@ -62,14 +62,51 @@ const sb = (r: number | null) => (r === null || r <= -1 ? null : (2 * r) / (1 + 
 const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length;
 const round3 = (x: number | null) => (x === null ? null : Math.round(x * 1000) / 1000);
 
+// ---------------------------------------------------------------- the candidates
+
+const per = (a: number, b: number) => (b > 0 ? a / b : null);
+const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
+const registry = (id: string) => (s: Summary) => METRIC[id].value(s);
+
+/** Candidates read straight from a player-map's summary, with the research key each is checked against. */
+const DIRECT: Record<string, { value: (s: Summary) => number | null; research?: string }> = {
+  shotSpeed: { value: registry("shotSpeed"), research: "analysis.json shot_speed" },
+  timeToShot: { value: registry("timeToShot"), research: "analysis.json time_to_shot" },
+  movingSpray: { value: registry("movingSpray"), research: "analysis.json moving_spray" },
+  crosshairPlacement: { value: registry("crosshairPlacement"), research: "analysis.json preaim (median placement)" },
+  preAim: { value: registry("preAim") },
+  stopBuffer: { value: registry("stopBuffer"), research: "analysis.json stop_buffer" },
+  shotError: { value: registry("shotError"), research: "analysis.json shot_error" },
+  peekTravel: { value: registry("peekTravel"), research: "analysis.json peek_travel" },
+  duelExposure: { value: registry("duelExposure"), research: "analysis.json exposure" },
+  firedFirst: { value: registry("firedFirst"), research: "analysis.json fired_first" },
+  engageDistance: { value: registry("engageDistance"), research: "analysis.json distance" },
+  buyDeviation: { value: registry("buyDeviation"), research: "candidate_summary.json buy_deviation" },
+  saveConversion: { value: (s) => per(s.m.saveCarrySum, s.m.saveCarryKnown), research: "candidate_summary.json save_conversion_proxy" },
+  ecoFights: { value: (s) => pct(s.aggression.lowFights, s.aggression.lowVis) },
+  ecoKills: { value: (s) => per(s.aggression.lowKills, s.aggression.lowPlayed) },
+};
+
+/** The research's existing stats, per player-map, for the overlap check. */
+const EXISTING: Record<string, (s: Summary) => number | null> = {
+  kpr: registry("kpr"), adr: registry("adr"), hs: registry("hs"), accuracy: registry("accuracy"),
+  swing: registry("swing"), rating: registry("rating3"), awp_share: (s) => per(s.m.awpKills, s.m.kills),
+};
+
 // ---------------------------------------------------------------- the pass
 
-interface MapPlayer { pid: string; map: number; group: string; s: Summary; duels: { x: number[]; won: 0 | 1 }[] }
+/** One player-map: only the numbers the evidence needs, so the pass holds no summaries per map. */
+interface MapPlayer {
+  pid: string; map: number;
+  v: Record<string, number | null>; existing: Record<string, number | null>; parts: (number | null)[]; entry: number | null;
+  duels: { x: number[]; won: 0 | 1 }[];
+}
 const mapPlayers: MapPlayer[] = [];
 const careers = new Map<string, Summary>();
 /** per player, in match order: saved rounds' carried equipment, and settled duels with their features */
 const saves = new Map<string, number[]>();
 const duels = new Map<string, { x: number[]; won: 0 | 1; group: string }[]>();
+const listOf = <T>(m: Map<string, T[]>, k: string) => m.get(k) ?? m.set(k, []).get(k)!;
 
 let maps = 0;
 for await (const { dir, t } of proMaps()) {
@@ -80,16 +117,18 @@ for await (const { dir, t } of proMaps()) {
     const s = rollup([f], { player: p.id });
     const own = (f.aim.filter((a) => a.k === "sight" && f.players[a.pi].id === p.id && a.xf !== null && a.duelWon !== null) as SightFact[])
       .map((a) => ({ x: a.xf!, won: (a.duelWon ? 1 : 0) as 0 | 1 }));
-    (duels.get(p.id) ?? duels.set(p.id, []).get(p.id)!).push(...own.map((d) => ({ ...d, group })));
-    for (const r of f.pr) {
-      if (f.players[r.pi].id === p.id && r.m.saveCarryKnown) (saves.get(p.id) ?? saves.set(p.id, []).get(p.id)!).push(r.m.saveCarrySum ?? 0);
-    }
-    const c = careers.get(p.id) ?? careers.set(p.id, emptySummary()).get(p.id)!;
-    addMatch(c, f, { player: p.id });
-    if (s.m.rounds >= MAP_MIN_ROUNDS) mapPlayers.push({ pid: p.id, map: maps, group, s, duels: own });
+    listOf(duels, p.id).push(...own.map((d) => ({ ...d, group })));
+    for (const r of f.pr) if (f.players[r.pi].id === p.id && r.m.saveCarryKnown) listOf(saves, p.id).push(r.m.saveCarrySum ?? 0);
+    addMatch(careers.get(p.id) ?? careers.set(p.id, emptySummary()).get(p.id)!, f, { player: p.id });
+    if (s.m.rounds < MAP_MIN_ROUNDS) continue;
+    mapPlayers.push({
+      pid: p.id, map: maps, duels: own, parts: aggroParts(s), entry: METRIC.entryAttempts.value(s),
+      v: Object.fromEntries(Object.entries(DIRECT).map(([id, c]) => [id, c.value(s)])),
+      existing: Object.fromEntries(Object.entries(EXISTING).map(([k, g]) => [k, g(s)])),
+    });
   }
   maps++;
-  if (maps % 50 === 0) console.error(`${maps} maps`);
+  if (maps % 25 === 0) console.error(`${maps} maps, ${mapPlayers.length} player-maps, heap ${(process.memoryUsage().heapUsed / 2 ** 20).toFixed(0)} MB`);
 }
 console.error(`${maps} maps, ${mapPlayers.length} player-maps`);
 
@@ -125,39 +164,16 @@ const scale: AggroScale = {
   source: `${maps} pro maps, players with ${MIN_ROUNDS}+ rounds and all four parts`,
 };
 
-// ---------------------------------------------------------------- candidates
+// ---------------------------------------------------------------- results
 
-const per = (a: number, b: number) => (b > 0 ? a / b : null);
-const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
-const expected = (mp: MapPlayer) => (mp.duels.length ? (100 * mean(mp.duels.map((d) => xduelP(d.x, xparams)))) : null);
-const over = (mp: MapPlayer) => (mp.duels.length ? (100 * mean(mp.duels.map((d) => d.won - xduelP(d.x, xparams)))) : null);
-const registry = (id: string) => (mp: MapPlayer) => METRIC[id].value(mp.s);
-
-/** Each candidate's per player-map value, and the research key it is checked against, if any. */
-const CANDIDATES: Record<string, { value: (mp: MapPlayer) => number | null; research?: string }> = {
-  shotSpeed: { value: registry("shotSpeed"), research: "analysis.json shot_speed" },
-  timeToShot: { value: registry("timeToShot"), research: "analysis.json time_to_shot" },
-  movingSpray: { value: registry("movingSpray"), research: "analysis.json moving_spray" },
-  crosshairPlacement: { value: registry("crosshairPlacement"), research: "analysis.json preaim (median placement)" },
-  preAim: { value: registry("preAim") },
-  stopBuffer: { value: registry("stopBuffer"), research: "analysis.json stop_buffer" },
-  shotError: { value: registry("shotError"), research: "analysis.json shot_error" },
-  peekTravel: { value: registry("peekTravel"), research: "analysis.json peek_travel" },
-  duelExposure: { value: registry("duelExposure"), research: "analysis.json exposure" },
-  firedFirst: { value: registry("firedFirst"), research: "analysis.json fired_first" },
-  engageDistance: { value: registry("engageDistance"), research: "analysis.json distance" },
-  aggressionScore: { value: (mp) => aggressionScore(mp.s, scale) },
-  buyDeviation: { value: registry("buyDeviation"), research: "candidate_summary.json buy_deviation" },
-  saveConversion: { value: (mp) => per(mp.s.m.saveCarrySum, mp.s.m.saveCarryKnown), research: "candidate_summary.json save_conversion_proxy" },
-  ecoFights: { value: (mp) => pct(mp.s.aggression.lowFights, mp.s.aggression.lowVis) },
-  ecoKills: { value: (mp) => per(mp.s.aggression.lowKills, mp.s.aggression.lowPlayed) },
-  expectedDuel: { value: expected, research: "analysis.json expected_duel" },
-  duelsOverExpected: { value: over, research: "analysis.json execution_over_expected" },
+const fitted: Record<string, { value: (mp: MapPlayer) => number | null; research?: string }> = {
+  aggressionScore: { value: (mp) => scoreOf(mp.parts, scale) },
+  expectedDuel: { value: (mp) => (mp.duels.length ? 100 * mean(mp.duels.map((d) => xduelP(d.x, xparams))) : null), research: "analysis.json expected_duel" },
+  duelsOverExpected: { value: (mp) => (mp.duels.length ? 100 * mean(mp.duels.map((d) => d.won - xduelP(d.x, xparams))) : null), research: "analysis.json execution_over_expected" },
 };
-
-const EXISTING: Record<string, (s: Summary) => number | null> = {
-  kpr: (s) => METRIC.kpr.value(s), adr: (s) => METRIC.adr.value(s), hs: (s) => METRIC.hs.value(s), accuracy: (s) => METRIC.accuracy.value(s),
-  swing: (s) => METRIC.swing.value(s), rating: (s) => METRIC.rating3.value(s), awp_share: (s) => per(s.m.awpKills, s.m.kills),
+const CANDIDATES = {
+  ...Object.fromEntries(Object.entries(DIRECT).map(([id, c]) => [id, { value: (mp: MapPlayer) => mp.v[id], research: c.research }])),
+  ...fitted,
 };
 
 function mapSplit(vals: { pid: string; map: number; v: number }[]) {
@@ -187,15 +203,15 @@ function eventBins(events: Map<string, number[]>) {
 }
 const gateOf = (bins: ReturnType<typeof eventBins>) => bins.find((b) => b.sb !== null && b.sb >= RELIABLE)?.n ?? null;
 
-const entry = mapPlayers.map((mp) => METRIC.entryAttempts.value(mp.s));
+const entry = mapPlayers.map((mp) => mp.entry);
 const results = Object.entries(CANDIDATES).map(([id, c]) => {
   const v = mapPlayers.map((mp) => c.value(mp));
-  const corrs = Object.fromEntries(Object.entries(EXISTING).map(([k, f]) => [k, round3(spearman(mapPlayers.map((mp, i) => [v[i], f(mp.s)])))]));
+  const corrs = Object.fromEntries(Object.keys(EXISTING).map((k) => [k, round3(spearman(mapPlayers.map((mp, i) => [v[i], mp.existing[k]])))]));
   const known = Object.values(corrs).filter((x): x is number => x !== null);
   const maxAbs = known.length ? Math.max(...known.map(Math.abs)) : null;
   const split = mapSplit(mapPlayers.flatMap((mp, i) => (v[i] === null ? [] : [{ pid: mp.pid, map: mp.map, v: v[i]! }])));
   return {
-    id, research: c.research ?? null, playerMaps: v.filter((x) => x !== null).length, mapSplit: split, maxAbsExisting: round3(maxAbs), corrs,
+    id, research: (c as { research?: string }).research ?? null, playerMaps: v.filter((x) => x !== null).length, mapSplit: split, maxAbsExisting: round3(maxAbs), corrs,
     withEntryAttempts: round3(spearman(mapPlayers.map((_, i) => [v[i], entry[i]]))),
     passes: split.sb !== null && split.sb >= RELIABLE && maxAbs !== null && maxAbs < OVERLAP,
   };
