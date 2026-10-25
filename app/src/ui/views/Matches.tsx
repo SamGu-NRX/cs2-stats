@@ -1,13 +1,15 @@
-// Matches: every match in one sortable, filterable table, edge to edge. Filters live in the hash.
+// Matches: every finished match in one sortable, filterable table, edge to edge. Filters live in the hash.
+// Unfinished and 0–0 matches are not listed (engine.ts listedEntries).
 import { useMemo } from "react";
-import { MapThumb, Num, ScoreCell } from "../components/bits";
+import { MapThumb, Num, ScoreCell, SourceBadge } from "../components/bits";
 import { Segmented } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
-import { entryLine, entryRating, filterEntries, INCOMPLETE_TIP, NO_RATING_TIP, RATING_LABEL, RATING_POOLED } from "../data/engine";
+import { entryLine, entryRating, isWingman, listedEntries, NO_RATING_TIP, RATING_LABEL, RATING_POOLED, WINGMAN_TIP } from "../data/engine";
 import { useRatings, useYourQuery } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
+import { sourceOf } from "../data/sources";
 import { MatchesIcon, SearchIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, fmtDiff, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
 import { diffScore, scoreText, swingScore, ratingText } from "../lib/scale";
@@ -25,9 +27,10 @@ export function MatchesView() {
   const q = r.query.get("q") ?? "";
   const result = (r.query.get("result") ?? "all") as "all" | "W" | "L";
 
+  const listed = useMemo(() => listedEntries(summaries, null), [summaries]);
   const rows = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return filterEntries(summaries, map).filter((s) => {
+    return listedEntries(summaries, map).filter((s) => {
       if (result !== "all" && s.result !== result) return false;
       if (!terms.length) return true;
       const hay = `${mapName(s.match.map)} ${s.match.map} ${fmtMatchDay(s.match)} ${s.score.us}:${s.score.them} ${s.result === "W" ? "win" : "loss"} ${s.players.filter((p) => p.bot).map((b) => b.name).join(" ")}`.toLowerCase();
@@ -58,7 +61,7 @@ export function MatchesView() {
       </div>
       {rows.length === 0 ? (
         <div style={{ padding: "8px var(--gutter)" }}>
-          <Empty icon={<MatchesIcon size={36} />} text={summaries.length ? "No match fits these filters." : "No matches yet. Play a match with the capture plugin loaded."} action={summaries.length ? <a className="btn" href={pageHref("matches")}>Clear filters</a> : <a className="btn" href={pageHref("settings")}>Open Data & settings</a>} />
+          <Empty icon={<MatchesIcon size={36} />} text={listed.length ? "No match fits these filters." : "No matches yet. Play a match with the capture plugin loaded."} action={listed.length ? <a className="btn" href={pageHref("matches")}>Clear filters</a> : <a className="btn" href={pageHref("settings")}>Open Data & settings</a>} />
         </div>
       ) : (
         <div className="matches__table">
@@ -77,7 +80,7 @@ export function MatchesView() {
             ])}
             columns={[
               { key: "date", label: "Date", align: "l", sort: (s) => `${s.match.date ?? ""}|${s.file}`, firstDir: "desc", render: (s) => <span className="two" data-file={s.file}><b>{fmtMatchDay(s.match)}</b>{s.match.startedAt && <small>{fmtTime(s.match.startedAt)}</small>}</span>, width: 110 },
-              { key: "map", label: "Map", align: "l", sort: (s) => mapName(s.match.map), render: (s) => <span className="mapcell"><MapThumb map={s.match.map} size={26} /><b data-vt="map">{mapName(s.match.map)}</b></span>, width: 150 },
+              { key: "map", label: "Map", align: "l", sort: (s) => mapName(s.match.map), render: (s) => <span className="mapcell"><MapThumb map={s.match.map} size={26} /><b data-vt="map">{mapName(s.match.map)}</b>{sourceOf(s).id === "valve" && <SourceBadge s={sourceOf(s)} compact />}</span>, width: 190 },
               { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span>, width: 110 },
               { key: "kd", label: "K–D", tip: "Kills and deaths", sort: (s) => line(s).kills, render: (s) => <span className="num">{line(s).kills}<span className="faint">–</span>{line(s).deaths}</span> },
               { key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths", sort: (s) => line(s).diff, render: (s) => <span style={{ color: scoreText(diffScore(line(s).diff)) }}>{fmtDiff(line(s).diff)}</span> },
@@ -85,7 +88,7 @@ export function MatchesView() {
               { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (s) => line(s).kast, render: (s) => <Num v={fmtPct(line(s).kast)} /> },
               { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (s) => line(s).hs, render: (s) => <Num v={fmtPct(line(s).hs)} /> },
               { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win probability you caused per round", sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}><Num v={fmtSwing(x)} /></span>; } },
-              { key: "rating", label: RATING_LABEL, colored: true, tip: RATING_POOLED, sort: (s) => entryRating(s), render: (s) => (!s.match.complete ? <span className="chip chip--outline" data-tip={INCOMPLETE_TIP}>Unfinished</span> : entryRating(s) === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b>) },
+              { key: "rating", label: RATING_LABEL, colored: true, tip: RATING_POOLED, sort: (s) => entryRating(s), render: (s) => (isWingman(s) ? <span className="chip chip--outline" data-tip={WINGMAN_TIP} tabIndex={0}>Wingman</span> : entryRating(s) === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b>) },
               { key: "rounds", label: "Rounds", tip: "Rounds played; rounds with a kill-by-kill log in brackets when fewer. Only those count in any number.", sort: (s) => s.match.roundsPlayed, render: (s) => <span className="num">{s.match.roundsPlayed}{s.match.nRounds < s.match.roundsPlayed && <span className="faint"> ({s.match.nRounds})</span>}</span> },
             ]}
           />
