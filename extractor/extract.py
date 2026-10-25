@@ -55,7 +55,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.11.0"
+EXTRACTOR_VERSION = "1.12.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -65,7 +65,10 @@ MESH_MIN_KILL_AGREEMENT = 0.9
 # A demo cut off mid-file: awpy refuses it with one of these, demoparser2 reads it up to the cut.
 TRUNCATION_MESSAGES = ("unexpected end of data", "outside command stream")
 TRUNCATED = "truncated_demo"
-TRADE_WINDOW_S = 5.0  # set explicitly; awpy 3.1.1 hard-codes 5.25 s and exposes no parameter.
+# Window of the extractor-internal trade flags (kills.extractor_trade_kill_5s / extractor_traded_death_5s),
+# kept for model/rating3's round fit. They are not the engine's trade, which uses 5.4 s and reproduces
+# HLTV's traded deaths better; nothing the UI shows reads them. awpy 3.1.1 hard-codes 5.25 s.
+TRADE_WINDOW_S = 5.0
 POSITION_STRIDE_TICKS = 16  # 4 Hz at 64 tick.
 # Ticks per parse_ticks call in the every-tick flash/spotted pass. Each call re-reads the demo
 # (about 1-2 s on the Dust2 test demo), and one whole-demo call peaked at 1.79 GB there, so
@@ -613,21 +616,6 @@ def round_duration_s(rounds: pd.DataFrame, rate: float) -> pd.Series:
     return (rounds.end_tick - rounds.freeze_end_tick.fillna(rounds.start_tick)) / rate
 
 
-def buy_type(round_no: int, team_equip: float, max_rounds: int) -> str:
-    # Thresholds are a convention chosen here, not fitted to data; the raw team
-    # equipment value sits next to this label so analysis can reclassify.
-    half = max_rounds // 2 if max_rounds else 12
-    if round_no in (1, half + 1):
-        return "pistol"
-    if team_equip < 5000:
-        return "eco"
-    if team_equip < 10000:
-        return "semi_eco"
-    if team_equip < 20000:
-        return "semi_buy"
-    return "full"
-
-
 # ---------------------------------------------------------------------------
 # demoparser2 stage
 # ---------------------------------------------------------------------------
@@ -1146,8 +1134,6 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     team_eq = econ.groupby(["round", "side"]).equip_value_game.sum().unstack()
     for s in ("CT", "T"):
         rounds[f"{s.lower()}_equip_value"] = rounds["round"].map(team_eq[s] if s in team_eq else {})
-        rounds[f"{s.lower()}_buy_type"] = [buy_type(int(r), v, max_rounds) if not pd.isna(v) else None
-                                           for r, v in zip(rounds["round"], rounds[f"{s.lower()}_equip_value"])]
     teams_money = econ.groupby(["round", "side"]).money_start.sum().unstack()
     for s in ("CT", "T"):
         rounds[f"{s.lower()}_money_start"] = rounds["round"].map(teams_money[s] if s in teams_money else {})
@@ -1229,7 +1215,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                 & kills.attacker_steamid.notna()).astype(bool)
         tk_, td_ = _trade_flags(kills.rename(columns={"v_side": "victim_side", "a_side": "attacker_side"}),
                                 rate, TRADE_WINDOW_S)
-        kills["trade_kill_5s"], kills["traded_death_5s"] = tk_, td_
+        kills["extractor_trade_kill_5s"], kills["extractor_traded_death_5s"] = tk_, td_
         T["kills"] = kills
         died = set(zip(kills["round"].astype(int), kills.victim_steamid.astype("Int64")))
         player_rounds["survived"] = [(int(r), int(s)) not in died
@@ -2274,7 +2260,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     polars_version=pl.__version__, pandas_version=pd.__version__,
                     python_version=platform.python_version(),
                     parsed_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
+                    price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, extractor_trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
                     voided_windows=json.dumps(info["voided_windows"]),
                     convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {

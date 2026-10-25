@@ -1,6 +1,6 @@
 # Match tables, schema v1
 
-The contract between the extractor (`extractor/extract.py`, Python) and the TS loader and engine. One CS2 demo becomes one folder of zstd parquet files, one file per table below. The extractor computes no metric the UI shows: every number here is read from the demo, or is a documented geometric test (visibility) or bookkeeping (round assignment, HP capping).
+The contract between the extractor (`extractor/extract.py`, Python) and the TS loader and engine. One CS2 demo becomes one folder of zstd parquet files, one file per table below. The extractor computes no metric the UI shows: every number here is read from the demo, or is a documented geometric test (visibility) or bookkeeping (round assignment, HP capping). The few derived columns another component needs are named `extractor_*`, say who reads them, and are not the engine's definitions; the engine computes trades and buy types itself.
 
 `extractor/schema_v1.py` declares every column's type, and the writer casts to it and fails on any mismatch, so a type never changes from one map to the next. `tests/test_schema_doc.py` fails if this document and that declaration disagree.
 
@@ -120,7 +120,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `team_ct_start` | String | no | clan name of the team on CT in round 1 |
 | `team_t_start` | String | no | clan name of the team on T in round 1 |
 | `tick_rate` | Float32 | no | ticks per second (playback ticks / playback time). Divide tick differences by this; never assume 64 |
-| `trade_window_s` | Float32 | no | window for trade flags, s |
+| `extractor_trade_window_s` | Float32 | no | window of kills.extractor_trade_kill_5s and extractor_traded_death_5s, s |
 | `unavailable_fields` | String | no | JSON: data the demo does not carry, and what replaces it |
 | `visibility_status` | String | no | ok | no_mapdata | no_mesh | mesh_mismatch. Anything but ok means mesh_visible is null and only damage and kills trigger engagements |
 | `voided_windows` | String | no | JSON [[from, to], ...] tick ranges dropped as backup restores |
@@ -146,7 +146,6 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 
 | field | type | null | meaning, units |
 |---|---|---|---|
-| `ct_buy_type` | String | no | pistol | eco | semi_eco | semi_buy | full (thresholds $5k/$10k/$20k; a convention, not fitted) |
 | `ct_equip_value` | Int32 | no | sum of CT players' game equipment value at freeze end, $ |
 | `ct_money_start` | Int32 | no | sum of CT money before buying, $ |
 | `ct_team` | String | no | clan name on CT |
@@ -165,7 +164,6 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `round` | Int16 | no | 1-based round number |
 | `start_tick` | Int32 | no | tick |
 | `started_live` | Boolean | no | true when the recording began mid-round 1 (no freeze end) |
-| `t_buy_type` | String | no | as ct_buy_type |
 | `t_equip_value` | Int32 | no | as ct_equip_value |
 | `t_money_start` | Int32 | no | as ct_money_start |
 | `t_team` | String | no | clan name on T |
@@ -250,8 +248,8 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `s_since_plant` | Float32 | yes | s; null before the plant or without one |
 | `thrusmoke` | Boolean | no |  |
 | `tick` | Int32 | no | tick |
-| `trade_kill_5s` | Boolean | no | the victim had killed the attacker's teammate within 5 s |
-| `traded_death_5s` | Boolean | no | this death was traded within 5 s |
+| `extractor_trade_kill_5s` | Boolean | no | the victim had killed the attacker's teammate within 5 s; extractor-internal, for model/rating3's round fit only; not the engine's trade (5.4 s), and the UI must not show it |
+| `extractor_traded_death_5s` | Boolean | no | this death was traded within 5 s; extractor-internal, for model/rating3's round fit only; not the engine's trade (5.4 s), and the UI must not show it |
 | `v_active_weapon` | String | no |  |
 | `v_airborne` | Boolean | no |  |
 | `v_armor` | Int32 | no |  |
