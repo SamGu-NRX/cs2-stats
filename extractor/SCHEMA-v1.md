@@ -291,8 +291,8 @@ Every player_hurt in a counted round, plus hits rebuilt from health drops the ev
 | `dmg_health_capped` | Int32 | no | HP actually removed (health_before - health_after); enemy hits sum exactly to the scoreboard |
 | `grenade_entity_id` | Int32 | yes | the grenade or inferno that did it |
 | `grenade_link` | String | yes | he | inferno | impact |
-| `source` | String | no | event (a player_hurt), or health: rebuilt from a health drop whose player_hurt the demo lost. A rebuilt row names an attacker only from its own tick: the player_death attacker for a lethal drop, else the one enemy with a weapon_fire or bullet_impact on that tick. Event-only fields are null |
-| `reconstructed_ambiguous` | Boolean | no | a rebuilt row with no player_death and not exactly one enemy shot on its tick; attacker_steamid is null, and its HP is part of match.unattributed_damage_hp |
+| `source` | String | no | event (a player_hurt), or health: rebuilt from a health drop whose player_hurt the demo lost. A rebuilt row names an attacker only for a lethal drop whose player_death weapon matches a cause checked on that tick: the killer's burning inferno within 300 units of the victim, his HE detonating within 400 units, or a world cause (the victim himself). A gun or knife kill is not enough (GOTV demos carry no bullet_impact), and a shot on the tick is never evidence. Event-only fields are null |
+| `reconstructed_ambiguous` | Boolean | no | a rebuilt row whose cause the tick does not show (see source); attacker_steamid is null, and its HP is part of match.unattributed_damage_hp |
 | `health_after` | Int32 | no | HP |
 | `health_before` | Int32 | no | HP before the hit (chained within a tick) |
 | `hitgroup` | String | yes |  |
