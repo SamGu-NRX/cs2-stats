@@ -291,7 +291,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   c.pr = playerRounds(c);
 
   scoreboard(c);
-  closing(c);
+  const clutches = closing(c);
   sniping(c);
   duels(c);
   positioning(c);
@@ -319,7 +319,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
-    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), presence: derivePresence(c),
+    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c),
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
 }

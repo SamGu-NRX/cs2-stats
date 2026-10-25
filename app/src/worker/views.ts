@@ -30,7 +30,14 @@ export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((
 export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
 // Every rating here goes through rating3Of, the engine's one coverage gate; so does the rating3 metric
 // in valuesOf, and with it the comparisons and "Work on".
-const lineOf = (s: Summary): Line => ({ m: s.m, v: valuesOf(s), rating: rating3Of(s).value });
+const lineOf = (s: Summary): Line => {
+  const r = rating3Of(s);
+  const q = r.value === null ? null : r.inputs;
+  return {
+    m: s.m, v: valuesOf(s), rating: r.value,
+    eco: q ? { ek: s.m.vEcoKills, ed: s.m.vEcoDeaths, eadr: q.adr_eco, ekast: q.kast_eco } : null,
+  };
+};
 
 /** Rating 3.0 on both sides and on each, as rating3BySide defines it, from the three summaries a caller streamed. */
 export const ratingsOf = (s: Record<"both" | "T" | "CT", Summary>): SideRatings => ({ both: rating3Of(s.both), T: rating3Of(s.T), CT: rating3Of(s.CT) });

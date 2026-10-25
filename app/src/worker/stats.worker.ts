@@ -7,8 +7,11 @@
 // matches, the ones the match views have open. A career question streams facts from IndexedDB one
 // match at a time: the calls the UI sends together (worker/client.ts batches them) share one pass
 // over the files, and each sums its own matches with addMatch as the pass goes by.
+import { BUY_CLASSES } from "../stats/economy";
+import { METRIC } from "../stats/metrics";
+import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
-import { trend } from "../stats/trends";
+import { trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
@@ -24,7 +27,7 @@ import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
-import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
+import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { addPositions, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle } from "./views";
 
@@ -325,6 +328,59 @@ const api: Impl = {
     return { T: roleBlend(t, "T"), CT: roleBlend(ct, "CT") };
   },
   playsLike: ranking.playsLike,
+  async buySplits(q) {
+    const split = (key: "ownBuy" | "oppBuy") => Promise.all(BUY_CLASSES.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, [key]: [b] } }))] as const))
+      .then((xs) => Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0)));
+    const [own, opp] = await Promise.all([split("ownBuy"), split("oppBuy")]);
+    return { own, opp };
+  },
+  async opponents(q) {
+    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    const opp = new Set<string>();
+    await stream(q.files, (f) => {
+      const mine = f.players.find((p) => me.has(p.id));
+      if (mine) for (const p of f.players) if (p.team !== null && p.team !== mine.team) opp.add(p.id);
+    });
+    const [mine, ...theirs] = await Promise.all([summaryOf(q), ...[...opp].map((id) => summaryOf({ files: q.files, filter: { ...q.filter, player: id } }))]);
+    return vsOpponentsOf(mine, theirs);
+  },
+  async winCorrelation(q, metricIds) {
+    const points: Record<string, { value: number | null; won: boolean | null }[]> = Object.fromEntries(metricIds.map((id) => [id, []]));
+    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    await stream(q.files, (f) => {
+      const s = rollup([f], q.filter);
+      if (!s.m.rounds) return;
+      const p = f.players.find((x) => me.has(x.id));
+      const won = !p || p.team === null ? null : f.match.score[p.team] > f.match.score[1 - p.team];
+      for (const id of metricIds) points[id].push({ value: METRIC[id].value(s), won });
+    });
+    return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
+  },
+  async rolesBySpawn(q) {
+    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    const spawns: Record<"T" | "CT", Map<string, number>> = { T: new Map(), CT: new Map() };
+    await stream(q.files, (f) => {
+      for (const r of f.pr) if (r.spawn && me.has(f.players[r.pi].id)) spawns[r.side].set(r.spawn, (spawns[r.side].get(r.spawn) ?? 0) + 1);
+    });
+    const side = (s: "T" | "CT") => Promise.all([...spawns[s]].sort((a, b) => b[1] - a[1]).map(async ([spawn, rounds]) =>
+      ({ spawn, rounds, blend: roleBlend(await summaryOf({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [spawn] } }), s) })));
+    const [T, CT] = await Promise.all([side("T"), side("CT")]);
+    return { T, CT };
+  },
+  async clutches(q) {
+    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    const out: ClutchRow[] = [];
+    const fileOf = new Map<string, string>();
+    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
+    await stream(q.files, (f) => {
+      for (const c of f.clutches) {
+        if (!me.has(f.players[c.pi].id)) continue;
+        const pr = f.pr.find((r) => r.ri === c.ri && r.pi === c.pi);
+        out.push({ file: fileOf.get(f.match.id) ?? f.match.id, round: f.rounds[c.ri].number, side: pr?.side ?? "T", opponents: c.opponents, won: c.won });
+      }
+    });
+    return out;
+  },
   async trends(series) {
     return series.map((values) => trend(values.map((value, i) => ({ match: String(i), date: null, value, won: null }))));
   },
