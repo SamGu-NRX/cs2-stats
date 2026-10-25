@@ -98,6 +98,29 @@ export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
   return { ...out, blend };
 }
 
+/** One role blend over all rounds, from the two sides' blends. */
+export interface OverallRole {
+  /** role name -> share, summing to 1; null when neither side has a blend */
+  blend: Record<string, number> | null;
+  /** rounds per side behind it; a side without a blend adds no weight */
+  rounds: Record<"T" | "CT", number>;
+}
+
+/**
+ * The role over all rounds: each side's blend weighted by its rounds. The model is fitted per side and
+ * the sides' roles differ (Entry and Lurker on T, Anchor and Rotator on CT), so a role's overall share
+ * is its share of the side it belongs to times that side's share of the rounds.
+ */
+export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
+  const sides = [t, ct].filter((b) => b.blend && b.rounds > 0);
+  const total = sides.reduce((a, b) => a + b.rounds, 0);
+  const rounds = { T: t.rounds, CT: ct.rounds };
+  if (!total) return { blend: null, rounds };
+  const blend: Record<string, number> = {};
+  for (const b of sides) for (const [role, share] of Object.entries(b.blend!)) blend[role] = (blend[role] ?? 0) + (share * b.rounds) / total;
+  return { blend, rounds };
+}
+
 /** Support tendency 0-100: mean percentile of utility thrown and trading against the comparison pool. */
 export const SUPPORT_METRICS = ["flashesPR", "smokesPR", "tradeKillsPct", "assistedKillsPct"] as const;
 export function supportTendency(s: Summary, b: Baselines, opt: CompareOptions = {}): { score: number | null; evidence: string[] } {

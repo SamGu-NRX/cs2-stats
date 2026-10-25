@@ -34,6 +34,7 @@ it("ranks the user's style against the bot careers and performance against the p
       baselines: flat(-1e9), unit: { all: { both: "careers", T: "careers", CT: "careers" }, rifler: { both: "careers", T: "careers", CT: "careers" }, awper: { both: "careers", T: "careers", CT: "careers" } },
       counts: { botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8 },
     }),
+    mapRounds: async () => ({}),
   });
   const q = { files: ["synthetic-demo.json.gz"], filter: { player: facts.match.pov! } };
 
@@ -84,10 +85,31 @@ it("returns Firepower against the pros and the six style attributes against the 
     summary: async (q) => rollup([facts], q.filter),
     pros: async () => flat(1e9),
     careers: async () => ({ baselines: flat(-1e9), unit: all, counts: { botMatches: 40, qualified: 9, needed: 15, minRounds: 150, minPool: 8 } }),
+    mapRounds: async () => ({}),
   });
   const b = await attributeBlock({ files: ["x"], filter: { player: facts.match.pov! } }, { side: "T" });
   expect(b.firepower?.metrics.length).toBe(8);
   expect(b.firepower?.metrics.every((x) => x.pct === null || x.pct === 0)).toBe(true);
   expect(b.style.scores.map((a) => a.id)).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
   expect(b.style.scores.every((a) => a.metrics.length === 4 && a.metrics.every((x) => x.pct === null || x.pct === 100))).toBe(true);
+});
+
+it("gives the role over all rounds and per map, maps with the most rounds first", async () => {
+  // fails if the overall role is not the rounds-weighted mix of the sides, or a map's role reads
+  // another map's rounds. The second map is the same match under another name, played twice
+  const m = await decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz");
+  const facts = derive(pluginToTables(m), CS2RB);
+  const other = { ...facts, match: { ...facts.match, map: "de_other" } };
+  const all = [facts, other, other];
+  const calls = rankingCalls({
+    summary: async (q) => rollup(all, q.filter), pros: async () => flat(0), careers: async () => { throw new Error("not used"); },
+    mapRounds: async () => ({ [facts.match.map]: 1, de_other: 2 }),
+  });
+  const q = { files: ["x"], filter: { player: facts.match.pov! } };
+  const one = await calls.roles({ ...q, filter: { ...q.filter, maps: [facts.match.map] } });
+  const byMap = await calls.rolesByMap(q);
+  expect(byMap.map((r) => [r.map, r.T.rounds, r.CT.rounds])).toEqual([["de_other", 2 * one.T.rounds, 2 * one.CT.rounds], [facts.match.map, one.T.rounds, one.CT.rounds]]);
+  const t = one.T.rounds, ct = one.CT.rounds;
+  expect(one.T.blend).not.toBeNull();
+  for (const [role, share] of Object.entries(one.T.blend!)) expect(one.all.blend![role]).toBeCloseTo((share * t) / (t + ct), 12);
 });
