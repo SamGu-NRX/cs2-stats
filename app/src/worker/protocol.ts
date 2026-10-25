@@ -122,6 +122,8 @@ export interface Careers {
 }
 
 /** The user's style against the bot careers: the six style attributes and every identity metric's percentile. */
+export interface AttributeBlock { firepower: AttributeScore | null; style: StyleResult; proPool: number }
+
 export interface StyleResult {
   scores: AttributeScore[];
   p: Record<string, Percentile>;
@@ -168,6 +170,8 @@ export interface Api {
   attributes(q: Query, opt: CompareOptions): AttributesResult;
   /** the user's style attributes and identity metrics against the bot careers in the query's matches */
   style(q: Query, opt: CompareOptions): StyleResult;
+  /** HLTV's attribute block in one call: Firepower against the pros and the six style attributes against the bots, each with its four metrics' values, percentiles and reasons, for one side and pool */
+  attributeBlock(q: Query, opt: CompareOptions): AttributeBlock;
   /** the role blend on T and on CT (the query's side filter is replaced) */
   roles(q: Query): Record<"T" | "CT", RoleBlend>;
   /** pros ranked by style similarity over T and CT (identity.ts mostSimilar), the user's side scored against the bot careers */

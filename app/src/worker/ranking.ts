@@ -9,7 +9,7 @@
 // The worker builds its compare, attributes, style and playsLike calls here from its summary, pro
 // baseline and bot career sources, so the choice of population is made in one place.
 import {
-  attributes, BOT_CAREERS_MIN, buildPools, CAREER_MIN_ROUNDS, careerBaselines, compare, MIN_UNITS, roleOf,
+  attributes, BOT_CAREERS_MIN, buildPools, CAREER_MIN_ROUNDS, careerBaselines, compare, MIN_UNITS, modelOf, roleOf,
   type Baselines, type CompareOptions, type Percentile, type PoolUnit, type SideKey,
 } from "../stats/compare";
 import type { MatchFacts } from "../stats/facts";
@@ -18,10 +18,25 @@ import { METRIC, type Kind } from "../stats/metrics";
 import { addMatch, emptySummary, type Filter, type Summary } from "../stats/rollup";
 import type { Side } from "../stats/tables";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import type { AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, StyleResult } from "./protocol";
+import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, StyleResult } from "./protocol";
 
-/** The population the user's style ranks against, and what it is made of. */
-export interface BotPopulation { baselines: Baselines; careers: Careers }
+/**
+ * The population the user's style ranks against. Each pool (role) and side is ranked against bot
+ * careers when MIN_UNITS of them qualify there, else against the bots' single matches; `unit` says
+ * which, per pool and side.
+ */
+export interface BotPopulation {
+  baselines: Baselines;
+  unit: Record<string, Partial<Record<SideKey, "careers" | "matches">>>;
+  /** counts behind the choice, the same for every pool */
+  counts: Omit<Careers, "unit" | "provisional">;
+}
+
+/** What the population is made of for one pool and side, as the UI labels it. */
+export function careersFor(p: BotPopulation, pool: string, side: SideKey): Careers {
+  const unit = p.unit[pool]?.[side] ?? "matches";
+  return { ...p.counts, unit, provisional: unit === "matches" || p.counts.qualified < BOT_CAREERS_MIN };
+}
 
 /** The query narrowed to one side's rounds, or to every round for "both". */
 export function sideQuery(q: Query, side: SideKey): Query {
@@ -62,17 +77,29 @@ export function addCareerMatch(careers: Map<string, Sided>, matches: Sided[], f:
   }
 }
 
-/** Bot careers when MIN_UNITS of them qualify, else the bots' single matches (see the header). */
+/** Per pool and side, bot careers when MIN_UNITS of them qualify there, else the bots' single matches (see the header). */
 export function botPopulation(careers: Sided[], matches: Sided[], built: string): BotPopulation {
   const c = careerBaselines(careers, built);
-  const info = { qualified: c.careers, needed: BOT_CAREERS_MIN, minRounds: CAREER_MIN_ROUNDS, minPool: MIN_UNITS, botMatches: matches.length };
-  if (c.careers >= MIN_UNITS) return { baselines: c.baselines, careers: { ...info, unit: "careers", provisional: c.provisional } };
   const units: PoolUnit[] = matches.flatMap((x) => {
     const pools = ["all", roleOf(x.both)];
     return (["both", "CT", "T"] as const).filter((side) => x[side].m.rounds > 0).map((side) => ({ pools, side, s: x[side] }));
   });
-  const baselines: Baselines = { version: 1, built, source: `${matches.length} bot matches`, ...buildPools(units) };
-  return { baselines, careers: { ...info, unit: "matches", provisional: true } };
+  const byMatch: Baselines = { version: 1, built, source: `${matches.length} bot matches`, model: modelOf(units), ...buildPools(units) };
+  const baselines: Baselines = { version: 1, built, source: `${c.careers} bot careers and ${matches.length} bot matches`, model: c.baselines.model, n: {}, pools: {} };
+  const unit: BotPopulation["unit"] = {};
+  for (const pool of new Set([...Object.keys(c.baselines.pools), ...Object.keys(byMatch.pools)])) {
+    baselines.pools[pool] = {}; baselines.n[pool] = {}; unit[pool] = {};
+    for (const side of ["both", "CT", "T"] as const) {
+      const careersHere = (c.baselines.n[pool]?.[side] ?? 0) >= MIN_UNITS;
+      const from = careersHere ? c.baselines : byMatch;
+      if (!from.pools[pool]?.[side]) continue;
+      baselines.pools[pool][side] = from.pools[pool][side];
+      baselines.n[pool][side] = from.n[pool][side];
+      unit[pool][side] = careersHere ? "careers" : "matches";
+    }
+  }
+  if (c.baselines.model !== byMatch.model && units.length && c.careers) baselines.model = "mixed";
+  return { baselines, unit, counts: { qualified: c.careers, needed: BOT_CAREERS_MIN, minRounds: CAREER_MIN_ROUNDS, minPool: MIN_UNITS, botMatches: matches.length } };
 }
 
 // ---------------------------------------------------------------- the calls
@@ -93,7 +120,7 @@ const ofKind = (p: Record<string, Percentile>, kind: Kind) => Object.fromEntries
 const proStyle = (scores: (number | null)[]) => Object.fromEntries(STYLE.map((id) => [id, scores[ATTRIBUTE_ORDER.indexOf(id)] ?? null]));
 
 export function rankingCalls(src: Sources) {
-  return {
+  const calls = {
     async compare(q: Query, opt: CompareOptions): Promise<CompareResult> {
       const [s, b] = await Promise.all([src.summary(sideQuery(q, opt.side ?? "both")), src.pros()]);
       return { p: ofKind(compare(s, b, opt), "performance"), role: roleOf(s), n: poolSize(s, b, opt) };
@@ -107,8 +134,12 @@ export function rankingCalls(src: Sources) {
       const b = c.baselines;
       return {
         scores: attributes(s, b, opt).filter((a) => a.kind === "identity"), p: ofKind(compare(s, b, opt), "identity"),
-        role: roleOf(s), n: poolSize(s, b, opt), careers: c.careers,
+        role: roleOf(s), n: poolSize(s, b, opt), careers: careersFor(c, opt.pool === "all" ? "all" : roleOf(s), opt.side ?? "both"),
       };
+    },
+    async attributeBlock(q: Query, opt: CompareOptions): Promise<AttributeBlock> {
+      const [perf, style] = await Promise.all([calls.attributes(q, opt), calls.style(q, opt)]);
+      return { firepower: perf.scores.find((a) => a.id === "firepower") ?? null, style, proPool: perf.n };
     },
     /** "Plays like": the user's T and CT style scores (against the bot careers) against each pro's (against pros), by shape. */
     async playsLike(q: Query, pros: PackPro[]): Promise<PlaysLikeResult> {
@@ -117,7 +148,11 @@ export function rankingCalls(src: Sources) {
       const mine = { T: styleScores(attributes(t, b, { side: "T" })), CT: styleScores(attributes(ct, b, { side: "CT" })) };
       const pack: PackPlayer[] = pros.map((p) => ({ name: p.slug, sides: { both: { style: proStyle(p.both) }, CT: { style: proStyle(p.ct) }, T: { style: proStyle(p.t) } } }));
       const ranked = mostSimilar(mine, pack, "style", pros.length).map((x) => ({ slug: x.name, similarity: x.similarity }));
-      return { ranked, careers: c.careers };
+      // the population of the less settled side labels the result
+      const pool = (x: Summary) => roleOf(x);
+      const sides = [careersFor(c, pool(t), "T"), careersFor(c, pool(ct), "CT")];
+      return { ranked, careers: sides.find((x) => x.unit === "matches") ?? sides[0] };
     },
   };
+  return calls;
 }

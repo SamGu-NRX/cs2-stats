@@ -11,7 +11,7 @@ import { pluginToTables } from "../stats/plugin/adapter";
 import { decodeMatch } from "../stats/plugin/decode";
 import { emptySummary, rollup } from "../stats/rollup";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import { botPopulation, rankingCalls } from "./ranking";
+import { botPopulation, careersFor, rankingCalls } from "./ranking";
 
 const SAMPLE = path.resolve(import.meta.dirname, "../../public/samples/synthetic-demo.json.gz");
 
@@ -30,7 +30,10 @@ it("ranks the user's style against the bot careers and performance against the p
   const calls = rankingCalls({
     summary: async (q) => rollup([facts], q.filter),
     pros: async () => flat(1e9),
-    careers: async () => ({ baselines: flat(-1e9), careers: { unit: "careers", botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8, provisional: true } }),
+    careers: async () => ({
+      baselines: flat(-1e9), unit: { all: { both: "careers", T: "careers", CT: "careers" }, rifler: { both: "careers", T: "careers", CT: "careers" }, awper: { both: "careers", T: "careers", CT: "careers" } },
+      counts: { botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8 },
+    }),
   });
   const q = { files: ["synthetic-demo.json.gz"], filter: { player: facts.match.pov! } };
 
@@ -53,19 +56,38 @@ it("ranks the user's style against the bot careers and performance against the p
   expect(Object.keys(perf.p).filter((id) => METRIC[id].kind === "identity")).toEqual([]);
 });
 
-it("ranks style against single bot matches until 8 bot careers qualify, and shows nothing below 8 matches", () => {
-  // fails if a user with few long bot careers gets no style scores although 8+ bot matches exist, or
-  // the match pool is used once the careers can carry the scores
-  const bot = (rounds: number, kills: number) => {
+it("ranks each role's style against bot careers where 8 qualify in that role, else against single bot matches", () => {
+  // fails if the choice is made once for every pool (riflers with 8 careers fall back with the AWPers),
+  // or a pool with under 8 bot matches shows scores
+  const bot = (rounds: number, kills: number, awpKills = 0) => {
     const s = emptySummary();
-    s.m.rounds = rounds; s.m.kills = kills;
+    s.m.rounds = rounds; s.m.kills = kills; s.m.awpKills = awpKills;
     return { both: s, CT: s, T: s };
   };
-  const matches = Array.from({ length: 9 }, (_, i) => bot(24, 10 + i));
-  const fallback = botPopulation([bot(150, 100)], matches, "x");
-  expect(fallback.careers).toMatchObject({ unit: "matches", botMatches: 9, qualified: 1, provisional: true });
-  expect(fallback.baselines.pools.all.both!.kpr![0]).toBeCloseTo(10 / 24);
+  const riflerCareers = Array.from({ length: 8 }, (_, i) => bot(150, 100 + i));
+  const awperCareer = bot(150, 100, 60);
+  const matches = [...Array.from({ length: 9 }, (_, i) => bot(24, 10 + i)), ...Array.from({ length: 9 }, (_, i) => bot(24, 12 + i, 8))];
+  const p = botPopulation([...riflerCareers, awperCareer], matches, "x");
+  expect(careersFor(p, "rifler", "both")).toMatchObject({ unit: "careers", qualified: 9 });
+  expect(careersFor(p, "awper", "both")).toMatchObject({ unit: "matches", provisional: true });
+  expect(p.baselines.pools.rifler.both!.kpr![0]).toBeCloseTo(100 / 150);
+  expect(p.baselines.pools.awper.both!.kpr![0]).toBeCloseTo(12 / 24);
   expect(botPopulation([], matches.slice(0, 7), "x").baselines.pools.all.both!.kpr).toBeNull();
-  const careers = Array.from({ length: 8 }, (_, i) => bot(150, 100 + i));
-  expect(botPopulation(careers, matches, "x").careers).toMatchObject({ unit: "careers", qualified: 8, provisional: true });
+});
+
+it("returns Firepower against the pros and the six style attributes against the bots in one call", async () => {
+  // fails if the attribute block mixes populations or drops an attribute's metrics
+  const m = await decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz");
+  const facts = derive(pluginToTables(m), CS2RB);
+  const all = { all: { both: "careers", T: "careers", CT: "careers" }, rifler: { both: "careers", T: "careers", CT: "careers" }, awper: { both: "careers", T: "careers", CT: "careers" } } as const;
+  const { attributeBlock } = rankingCalls({
+    summary: async (q) => rollup([facts], q.filter),
+    pros: async () => flat(1e9),
+    careers: async () => ({ baselines: flat(-1e9), unit: all, counts: { botMatches: 40, qualified: 9, needed: 15, minRounds: 150, minPool: 8 } }),
+  });
+  const b = await attributeBlock({ files: ["x"], filter: { player: facts.match.pov! } }, { side: "T" });
+  expect(b.firepower?.metrics.length).toBe(8);
+  expect(b.firepower?.metrics.every((x) => x.pct === null || x.pct === 0)).toBe(true);
+  expect(b.style.scores.map((a) => a.id)).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
+  expect(b.style.scores.every((a) => a.metrics.length === 4 && a.metrics.every((x) => x.pct === null || x.pct === 100))).toBe(true);
 });
