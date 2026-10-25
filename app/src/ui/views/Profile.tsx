@@ -28,7 +28,7 @@ import type { Query, Rolled, SideRatings } from "../../worker/protocol";
 import { AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, WeaponClassIcon } from "../icons/game";
 import { ChevronIcon } from "../icons/ui";
-import { fmtAdr, fmtDate, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
@@ -237,14 +237,14 @@ function FormRail({ p }: { p: ProfileData }) {
   const rows = p.list.slice(0, 7);
   return (
     <Card title="Form" aside={<span className="meta" data-tip={RATING_POOLED}>{RATING_LABEL}, pooled line</span>} flush className="form-rail">
-      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: entryRating(f), label: fmtDate(f.match.date) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings.both.value} avgLabel="pooled" />
+      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: entryRating(f), label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings.both.value} avgLabel="pooled" />
       <table className="tbl tbl--compact">
         <tbody>
           {rows.map((f) => {
             const r = entryRating(f);
             return (
               <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
-                <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtDate(f.match.date)}</small></span></td>
+                <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtMatchDay(f.match)}</small></span></td>
                 <td><span className={`wl wl--${f.result}`}>{f.result}</span> <span className="num">{f.score.us}:{f.score.them}</span></td>
                 <td>{r === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
               </tr>
@@ -350,7 +350,7 @@ function FormTrend({ p }: { p: ProfileData }) {
   const pooled = p.ratings.both.value;
   return (
     <Card title="Rating by match" collapsible id="profile-form" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
-      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: entryRating(f), label: fmtDate(f.match.date) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
+      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: entryRating(f), label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
       <RatingLegend />
     </Card>
   );

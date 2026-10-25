@@ -13,7 +13,7 @@ import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
-import { fmtDate, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
+import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { scoreText, swingScore } from "../../lib/scale";
 import { Provisional } from "../shared";
 import { BENCH, verdictOf } from "../../lib/verdict";
@@ -56,13 +56,13 @@ export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]
         </div>
         <div className="swingcard__chart">
           <FormBars height={150} refValue={0} fmt={(x) => fmtSwing(x / 100)} score={(x) => swingScore(x / 100)} bars={per.map((x) => ({
-            key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtDate(x.s.match.date), sub: x.s.result, result: x.s.result,
+            key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), sub: x.s.result, result: x.s.result,
             onClick: () => openMatch(matchHref(x.s.file)), tip: `${mapName(x.s.match.map)} ${x.s.score.us}:${x.s.score.them}: ${fmtSwing(x.v)} per round`,
           }))} />
           <div className="swingcard__facts">
             <span><b className="num">{positive}</b><span className="faint">/{known.length}</span> matches with positive swing</span>
-            {best && <a href={matchHref(best.s.file)}>Best <b className="num good-text">{fmtSwing(best.v)}</b> {fmtDate(best.s.match.date)}</a>}
-            {worst && <a href={matchHref(worst.s.file)}>Worst <b className="num poor-text">{fmtSwing(worst.v)}</b> {fmtDate(worst.s.match.date)}</a>}
+            {best && <a href={matchHref(best.s.file)}>Best <b className="num good-text">{fmtSwing(best.v)}</b> {fmtMatchDay(best.s.match)}</a>}
+            {worst && <a href={matchHref(worst.s.file)}>Worst <b className="num poor-text">{fmtSwing(worst.v)}</b> {fmtMatchDay(worst.s.match)}</a>}
           </div>
         </div>
       </div>

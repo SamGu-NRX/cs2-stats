@@ -11,7 +11,7 @@ import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
 import { useData } from "../data/provider";
 import { sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
-import { fmtDate, plural } from "../lib/format";
+import { fmtMatchDay, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { SHORTCUTS } from "../shell/Palette";
 
@@ -47,7 +47,7 @@ export default function Settings() {
                 <span className="mono selectable">{host?.folder ?? "%APPDATA%\\BotMatchStats\\matches"}</span>
                 {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied")} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
               </div>
-              <p className="meta">{newest("recorded") ? `Newest ${fmtDate(newest("recorded")!.match.date)}.` : "None yet."} {lastSync ? `Scanned ${new Date(lastSync).toLocaleTimeString()}.` : ""}</p>
+              <p className="meta">{newest("recorded") ? `Newest ${fmtMatchDay(newest("recorded")!.match)}.` : "None yet."} {lastSync ? `Scanned ${new Date(lastSync).toLocaleTimeString()}.` : ""}</p>
             </div>
             <div className="source">
               <div className="source__head"><SourceBadge s={{ id: "converted", label: SOURCE_LABEL.converted, missing: [] }} compact /><b className="num source__n">{counts.converted}</b></div>
