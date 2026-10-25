@@ -29,6 +29,18 @@ for (const dir of proMapDirs()) {
   const R = f.match.nRounds;
   const byRound = f.rounds.map((r) => f.kills.filter((k) => k.ri === r.ri));
   const rules = { "5 s, every avenged death": [5, "all"], "5 s, earliest only": [5, "earliest"], "5.4 s, every avenged death": [5.4, "all"], "5.4 s, earliest only": [5.4, "earliest"] } as const;
+  // enemy damage per (round, attacker, victim) up to each tick, for damage-threshold assists
+  const hits = t.damages;
+  const hitsOf = new Map<string, [number, number][]>();
+  for (let i = 0; i < hits.n; i++) {
+    if (hits.attacker_steamid[i] === null || hits.is_team_damage[i] || hits.is_self[i]) continue;
+    const key = `${hits.round[i]}|${hits.attacker_steamid[i]}|${hits.victim_steamid[i]}`;
+    let l = hitsOf.get(key);
+    if (!l) hitsOf.set(key, (l = []));
+    l.push([hits.tick[i], hitDamage(t, i)]);
+  }
+  const dmgBefore = (ri: number, a: number, v: number, tick: number) =>
+    (hitsOf.get(`${f.rounds[ri].number}|${f.players[a].id}|${f.players[v].id}`) ?? []).reduce((x, [tk, d]) => (tk <= tick ? x + d : x), 0);
   const tradedBy = Object.fromEntries(Object.entries(rules).map(([name, [w, p]]) => [name, byRound.map((l) => traded(l, f.match.tickRate, w, p))]));
   for (const [pi, h] of j.player) {
     const id = f.players[pi].id;
@@ -69,6 +81,25 @@ for (const dir of proMapDirs()) {
           if (ev || !died) kast++;
         });
         ok(`KAST, ${name}, ${flash ? "with" : "without"} flash assists`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
+      if (name !== "5.4 s, earliest only") continue;
+      // the assist: the game's (non-flash) assister, a teammate with 40+ or 41+ enemy damage on the
+      // victim before the kill, or either; and whether team kills and suicides count as deaths
+      const variants = { "game assist": [0, false, true], "40+ damage": [40, true, true], "41+ damage": [41, true, true], "game assist or 40+ damage": [40, false, true], "game assist, team kills and suicides not deaths": [0, false, false] } as const;
+      for (const [vname, [thr, dmgOnly, worldDeaths]] of Object.entries(variants)) {
+        let kast = 0;
+        byRound.forEach((l, ri) => {
+          if (!f.pr.some((r) => r.ri === ri && r.pi === pi)) return;
+          let died = false, ev = false;
+          for (const k of l) {
+            const game = k.assister === pi && !k.flashAssist;
+            const byDmg = thr > 0 && k.enemy && k.killer !== pi && k.victimSide !== null && f.pr.some((r) => r.ri === ri && r.pi === pi && r.side !== k.victimSide) && dmgBefore(ri, pi, k.victim, k.tick) >= thr;
+            if (k.enemy && (k.killer === pi || (dmgOnly ? byDmg : game || byDmg))) ev = true;
+            if (k.victim === pi && (worldDeaths || k.enemy)) { died = true; if (sets[ri].has(k)) ev = true; }
+          }
+          if (ev || !died) kast++;
+        });
+        ok(`KAST assist rule: ${vname}`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
+      }
       }
     }
   }
