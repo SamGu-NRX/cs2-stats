@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildCtx } from "./context";
 import { roundStateBefore } from "./swing";
 import { MatchBuilder } from "./testing/build";
-import { modelFromModule, stubModel, type RoundState } from "./winprob";
+import { modelFromModule, rating3WinProbabilityCT, stubModel, type Rating3RoundState, type RoundState } from "./winprob";
 
 const state = (ct: number, t: number): RoundState => ({ ctAlive: ct, tAlive: t, ctHp: 100 * ct, tHp: 100 * t, ctEquip: 20000, tEquip: 20000, planted: 0, secondsSincePlant: null, secondsSinceFreezeEnd: 30 });
 
@@ -24,6 +24,26 @@ describe("model adapter (model/export/winprob.ts → winProbabilityCT(state, map
   test("the placeholder is labelled as such", () => {
     expect(stubModel.kind).toBe("stub");
     expect(stubModel.label).toMatch(/Placeholder/);
+  });
+});
+
+describe("HLTV Rating 3.02 probability", () => {
+  test("the same 3v3 state differs by the side of the most recent kill", () => {
+    // HLTV 240256 round 15 and 240272 round 8, full buys on Ancient.
+    // Fails if history is omitted from the key or T probability is returned as CT.
+    const base: Rating3RoundState = { ctAlive: 3, tAlive: 3, planted: 0,
+      ctBuy: "FULL", tBuy: "FULL", lastKillSide: "t" };
+    expect(rating3WinProbabilityCT(base, "de_ancient")).toBeCloseTo(0.533670526272, 10);
+    expect(rating3WinProbabilityCT({ ...base, lastKillSide: "ct" }, "Ancient")).toBeCloseTo(0.453953953954, 10);
+  });
+
+  test("eliminating the last T does not settle a planted round", () => {
+    // HLTV 242126 round 12: 0 T vs 3 CT, before the defuse.
+    // Fails if the pre-plant elimination rule overrides bomb state.
+    const planted: Rating3RoundState = { ctAlive: 3, tAlive: 0, planted: 1,
+      ctBuy: "FULL", tBuy: "FULL", lastKillSide: "ct" };
+    expect(rating3WinProbabilityCT(planted, "de_ancient")).toBeCloseTo(0.995036194415719, 12);
+    expect(rating3WinProbabilityCT({ ...planted, terminalWinner: "ct" }, "de_ancient")).toBe(1);
   });
 });
 

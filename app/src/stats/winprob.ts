@@ -2,6 +2,54 @@
 // exports winProbabilityCT(state: RoundState, map): P(CT wins). The worker imports it at build
 // time when it exists (see app/README.md); this file adapts it and keeps a placeholder otherwise.
 
+import rating3Params from "../../../model/rating3/params.json";
+
+export type BuyType = "PISTOL" | "ECO" | "HALF" | "FULL";
+
+/** State used by the HLTV 3.02 lookup. Equipment is the freeze-end team total. */
+export interface Rating3RoundState {
+  ctAlive: number;
+  tAlive: number;
+  planted: 0 | 1;
+  ctBuy: BuyType;
+  tBuy: BuyType;
+  /** Side benefiting from the last death; for a suicide, the opposite side. */
+  lastKillSide: "t" | "ct" | "none";
+  /** Set only when the end event has occurred, not from the eventual round winner. */
+  terminalWinner?: "t" | "ct";
+}
+
+interface ProbabilityTable {
+  columns: readonly string[];
+  states: Record<string, { p_t: number; n: number } | undefined>;
+}
+const rating3Tables: readonly ProbabilityTable[] = rating3Params.winProbability.tables;
+
+/**
+ * HLTV probability reconstruction. The held-out error and fitting population live
+ * beside the lookup in params.json. Most post-plant misses are frozen graph values
+ * after the bomb becomes unpreventable; this state has no timing to detect that.
+ * Unknown maps use the pooled-map fallback, not a guessed map identity.
+ */
+export function rating3WinProbabilityCT(state: Rating3RoundState, map: string): number | null {
+  if (![state.ctAlive, state.tAlive].every((n) => Number.isInteger(n) && n >= 0 && n <= 5)) {
+    throw new RangeError("Rating 3 alive counts must be integers from 0 to 5");
+  }
+  if (state.terminalWinner !== undefined) return state.terminalWinner === "ct" ? 1 : 0;
+  const name = map.replace(/^de_/, "").toLowerCase();
+  const canonicalMap = name === "dust2" ? "Dust2" : name[0]?.toUpperCase() + name.slice(1);
+  const row: Record<string, string | number> = {
+    map: canonicalMap, alive_t: state.tAlive, alive_ct: state.ctAlive,
+    planted: state.planted, buy_t: state.tBuy, buy_ct: state.ctBuy,
+    last_kill_side: state.lastKillSide,
+  };
+  for (const table of rating3Tables) {
+    const cell = table.states[table.columns.map((col) => row[col]).join("|")];
+    if (cell) return 1 - cell.p_t;
+  }
+  return null;
+}
+
 /** The model's input, as defined in model/export/winprob.ts. */
 export interface RoundState {
   ctAlive: number;
