@@ -51,6 +51,7 @@ export function utility(c: Ctx): void {
       if (c.kills[ri].some((k) => k.enemy && k.victim === v && k.killerSide === p.side && k.tick >= b.tick[i] && k.tick <= until)) p.m.flashKills++;
     }
 
+    const burned = new Set<string>();
     for (const i of c.byRound("damages")[ri]) {
       const w = d.weapon[i] ?? "";
       if (!isUtility(w) || !enemyHit(c.t, i)) continue;
@@ -61,7 +62,12 @@ export function utility(c: Ctx): void {
       if (!a) continue;
       a.m.utilDmg += x;
       if (w === "hegrenade") a.m.heDmg += x;
-      if (FIRE.has(w)) a.m.fireDmg += x;
+      if (FIRE.has(w)) {
+        a.m.fireDmg += x;
+        // each enemy a molotov burned counts once for that molotov
+        const burn = `${d.grenade_entity_id[i] ?? "?"}:${d.victim_steamid[i]}`;
+        if (!burned.has(burn)) { burned.add(burn); a.m.molotovHits++; }
+      }
     }
 
     // grenades bought, less those refunded in the buy zone

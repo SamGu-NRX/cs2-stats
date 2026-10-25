@@ -159,7 +159,7 @@ export const MEASURES = [
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
-  "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg",
+  "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)

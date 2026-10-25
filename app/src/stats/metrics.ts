@@ -197,6 +197,12 @@ const M: Metric[] = [
   { id: "utilSpentPR", label: "Utility bought per round", kind: "identity", group: "utility", unit: "money", status: "exact",
     def: "Money spent on grenades per round, less grenades refunded in the buy zone. Needs the purchases table (demos through the extractor).",
     value: (s) => per(s.m.utilSpent, s.m.purchaseRounds) },
+  { id: "molotovEnemiesHit", label: "Enemies burned per molotov", kind: "performance", group: "utility", unit: "perRound", status: "approx",
+    def: "Distinct enemies your molotov or incendiary damaged, per one thrown (a fire that burned two enemies counts 2). Ours; nobody publishes a molotov usefulness definition, and its link to round wins is weak (VALIDATION.md).",
+    value: (s) => per(s.m.molotovHits, s.m.molotovs) },
+  { id: "molotovDmg", label: "Fire damage per molotov", kind: "performance", group: "utility", unit: "dmg", status: "approx",
+    def: "Enemy damage from your molotovs and incendiaries per one thrown. Ours; its link to round wins is weak (VALIDATION.md).",
+    value: (s) => per(s.m.fireDmg, s.m.molotovs) },
   { id: "fireDmgPR", label: "Fire damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
     def: "Enemy damage from your molotovs and incendiaries, per round.", value: (s) => per(s.m.fireDmg, s.m.rounds) },
 

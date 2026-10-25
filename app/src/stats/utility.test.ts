@@ -1,7 +1,7 @@
 // Utility usage on hand-built rounds: who a flash blinded, grenade damage by kind, and thrown grenades.
 import { expect, it } from "vitest";
 import { METRIC } from "./metrics";
-import { emptySummary } from "./rollup";
+import { emptySummary, rollup } from "./rollup";
 import { FREEZE_END, oneRound } from "./testing/match";
 
 it("splits blinds into enemies and teammates and grenade damage into fire and the rest", () => {
@@ -44,4 +44,16 @@ it("rates flash-to-kills per flash and unused utility per death", () => {
   const s = emptySummary();
   Object.assign(s.m, { rounds: 10, flashes: 4, flashKills: 1, deaths: 5, utilDeaths: 2, utilUnused: 600 });
   expect([METRIC.flashKillsPerFlash.value(s), METRIC.utilUnused.value(s)]).toEqual([0.25, 300]);
+});
+
+it("counts each enemy a molotov burned once for that molotov", () => {
+  // fails if every tick of fire damage counts as another enemy burned, or a second enemy is missed
+  const burn = (victim: string, tick: number) => ({ tick, attacker_steamid: "a", victim_steamid: victim, weapon: "inferno", dmg_health: 8, dmg_health_capped: 8, health_before: 100, grenade_entity_id: 7 });
+  const f = oneRound({
+    players: { a: "CT", c: "T", d: "T" },
+    grenade_throws: [{ tick: FREEZE_END + 100, steamid: "a", weapon: "molotov", x: 0, y: 0, land_x: 10, land_y: 10 }],
+    damages: [burn("c", FREEZE_END + 200), burn("c", FREEZE_END + 210), burn("d", FREEZE_END + 220)],
+  });
+  const s = rollup([f], { player: "a" });
+  expect([s.m.molotovHits, METRIC.molotovEnemiesHit.value(s), METRIC.molotovDmg.value(s)]).toEqual([2, 2, 24]);
 });

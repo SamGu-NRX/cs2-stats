@@ -1,9 +1,8 @@
 // Smoke quality: how often a smoke hid the thrower's team from an enemy whose line of sight to them
-// had just opened. Nobody publishes a smoke or molotov quality definition
-// (design/research-data-sources.md), so this one is ours. Flash quality stays in utility.ts, on
-// Leetify's definitions.
-//
-// Why this metric, and why no molotov metric: the round-outcome analysis in VALIDATION.md.
+// had just opened, and for how long it kept enemy lines of sight blocked. Nobody publishes a smoke or
+// molotov quality definition (design/research-data-sources.md), so these are ours. Flash quality and
+// molotov usefulness stay in utility.ts. The user asked for smoke and molotov usefulness by name, so
+// they stay even where the round-outcome analysis (VALIDATION.md) finds only a weak link to winning.
 import type { Ctx } from "./derive";
 import type { Metric } from "./metrics";
 
@@ -19,11 +18,13 @@ export interface UtilQFact {
   pi: number;
   /** enemy sightlines to the thrower's team that opened through this smoke; a share when several smokes blocked one */
   sights: number;
+  /** seconds an enemy's line of sight to the thrower's team ran through this smoke (engagement ticks), shared the same way */
+  blockedSecs: number;
 }
 
-export interface UtilQAgg { smokes: number; sights: number }
-export const emptyUtilQ = (): UtilQAgg => ({ smokes: 0, sights: 0 });
-export function foldUtilQ(a: UtilQAgg, f: UtilQFact): void { a.smokes++; a.sights += f.sights; }
+export interface UtilQAgg { smokes: number; sights: number; blockedSecs: number }
+export const emptyUtilQ = (): UtilQAgg => ({ smokes: 0, sights: 0, blockedSecs: 0 });
+export function foldUtilQ(a: UtilQAgg, f: UtilQFact): void { a.smokes++; a.sights += f.sights; a.blockedSecs += f.blockedSecs; }
 
 type V3 = [number, number, number];
 
@@ -56,14 +57,16 @@ export function deriveUtilQ(c: Ctx): UtilQFact[] {
     const pi = c.idOf(S.steamid[i]);
     if (ri === undefined || pi === null || !c.side[ri][pi]) continue;
     byRound[ri].push(out.length);
-    out.push({ ri, pi, sights: 0, start: S.start_tick[i], end: S.end_tick[i] ?? Infinity, centre: [S.x[i], S.y[i], S.z[i] + SMOKE_HEIGHT] });
+    out.push({ ri, pi, sights: 0, blockedSecs: 0, start: S.start_tick[i], end: S.end_tick[i] ?? Infinity, centre: [S.x[i], S.y[i], S.z[i] + SMOKE_HEIGHT] });
   }
 
-  const onset = new Map<number, number>();
-  for (let e = 0; e < E.n; e++) if (E.first_visible_tick[e] !== null) onset.set(E.engagement_id[e], e);
+  const ofId = new Map<number, number>();
+  for (let e = 0; e < E.n; e++) ofId.set(E.engagement_id[e], e);
   for (let i = 0; i < T.n; i++) {
-    const e = onset.get(T.engagement_id[i]);
-    if (e === undefined || T.tick[i] !== E.first_visible_tick[e] || !T.smoke_blocked[i]) continue;
+    // a tick where the mesh sees the pair but the smoke flag says a smoke is in the way
+    if (T.mesh_visible[i] !== true || T.smoke_blocked[i] !== true) continue;
+    const e = ofId.get(T.engagement_id[i]);
+    if (e === undefined) continue;
     const ri = c.riOf(E.round[e]);
     const att = c.idOf(E.attacker_steamid[e]);
     if (ri === undefined || att === null) continue;
@@ -73,13 +76,21 @@ export function deriveUtilQ(c: Ctx): UtilQFact[] {
     if (ax === null || ay === null || az === null || vx === null || vy === null || vz === null) continue;
     const a: V3 = [ax, ay, az], v: V3 = [vx, vy, vz];
     const blocking = byRound[ri].filter((k) => tick >= out[k].start && tick <= out[k].end && segmentHitsSphere(a, v, out[k].centre, SMOKE_RADIUS));
-    for (const k of blocking) if (c.side[ri][out[k].pi] !== c.side[ri][att]) out[k].sights += 1 / blocking.length;
+    const onset = tick === E.first_visible_tick[e];
+    for (const k of blocking) {
+      if (c.side[ri][out[k].pi] === c.side[ri][att]) continue;
+      out[k].blockedSecs += 1 / (blocking.length * c.tickRate);
+      if (onset) out[k].sights += 1 / blocking.length;
+    }
   }
-  return out.map(({ ri, pi, sights }) => ({ ri, pi, sights }));
+  return out.map(({ ri, pi, sights, blockedSecs }) => ({ ri, pi, sights, blockedSecs }));
 }
 
 export const UTILQ_METRICS: Metric[] = [
   { id: "smokeSights", label: "Enemy sightlines blocked per smoke", kind: "performance", group: "utility", unit: "count", status: "approx",
     def: `Times an enemy's mesh line of sight to your team opened through your smoke (modelled as a sphere of radius ${SMOKE_RADIUS} centred ${SMOKE_HEIGHT} units above the detonation), per smoke. Maps without mesh visibility are left out.`,
     value: (s) => (s.utilq.smokes ? s.utilq.sights / s.utilq.smokes : null) },
+  { id: "smokeBlockedSecs", label: "Enemy sight blocked per smoke", kind: "performance", group: "utility", unit: "secs", status: "approx",
+    def: `Seconds an enemy's mesh line of sight to your team ran through your smoke (the same sphere), per smoke, from the engagement ticks: a smoke that sat on a contested line scores, one thrown where nobody looks does not. Maps without mesh visibility are left out.`,
+    value: (s) => (s.utilq.smokes ? s.utilq.blockedSecs / s.utilq.smokes : null) },
 ];
