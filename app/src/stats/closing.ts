@@ -2,10 +2,13 @@
 // HLTV's "Closing" attribute shows time alive, alive for post-plant, last alive and clutches per 24
 // rounds; it publishes no formulas, so each definition is ours and says so in METRICS.md.
 import type { Ctx } from "./derive";
+import type { ClutchFact } from "./facts";
 import { detectClutches } from "./rules";
 import type { Side } from "./tables";
 
-export function closing(c: Ctx): void {
+/** Fills the closing measures and returns the match's clutches, for the clutch list. */
+export function closing(c: Ctx): ClutchFact[] {
+  const out: ClutchFact[] = [];
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rf = c.rounds[ri];
     const list = c.kills[ri];
@@ -26,6 +29,7 @@ export function closing(c: Ctx): void {
     }
 
     for (const cl of detectClutches(list.filter((k) => k.tick <= rf.endTick), alive, rf.winner)) {
+      out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won });
       const m = c.pr[ri][cl.pi]!.m;
       const n = Math.min(5, cl.opponents) as 1 | 2 | 3 | 4 | 5;
       m[`clutch${n}`]++;
@@ -49,4 +53,5 @@ export function closing(c: Ctx): void {
       if (p.won === false && (!death || death.tick > rf.endTick)) m.saves = 1;
     }
   }
+  return out;
 }

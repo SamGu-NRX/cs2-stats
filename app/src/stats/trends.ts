@@ -40,7 +40,12 @@ export function correlation(facts: MatchFacts[], filter: Filter, a: string, b: s
 
 /** Pearson r between a metric and winning the match (point-biserial); null with fewer than 3 decided matches. */
 export function winCorrelation(facts: MatchFacts[], filter: Filter, metricId: string): { r: number; n: number } | null {
-  const pts = series(facts, filter, metricId).filter((p) => p.value !== null && p.won !== null);
+  return winCorrelationOf(series(facts, filter, metricId));
+}
+
+/** The same from per-match points, for a caller that streams matches. */
+export function winCorrelationOf(points: { value: number | null; won: boolean | null }[]): { r: number; n: number } | null {
+  const pts = points.filter((p) => p.value !== null && p.won !== null);
   return pts.length < 3 ? null : { r: pearson(pts.map((p) => p.value!), pts.map((p) => (p.won ? 1 : 0))), n: pts.length };
 }
 

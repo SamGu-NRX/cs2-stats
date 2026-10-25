@@ -12,6 +12,8 @@ import type { RoleBlend } from "../stats/identity";
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
+import type { BuyClass } from "../stats/economy";
+import type { VsOpponents } from "../stats/opponents";
 import type { Filter, Summary } from "../stats/rollup";
 import type { MatchEntry } from "../ui/data/match";
 
@@ -25,9 +27,15 @@ export type Values = Record<string, number | null>;
 export type Rolled = Summary & { v: Values; coverage: number | null };
 
 /** A summary cut down to what a table row needs: the measures and the metric values. */
+export interface BuySplits { own: Partial<Record<BuyClass, Rolled>>; opp: Partial<Record<BuyClass, Rolled>> }
+
+export interface ClutchRow { file: string; round: number; side: "T" | "CT"; opponents: number; won: boolean }
+
 export interface Line {
   m: Measures;
   v: Values;
+  /** the eco-adjusted scoreboard (rating3.ts inputs over valued rounds): eK and eD totals, eADR, eKAST; null under the coverage gate. A(f) and D(t) are m.flashAssists and m.tradedDeaths. */
+  eco: { ek: number; ed: number; eadr: number; ekast: number } | null;
   /** Rating 3.0 under the coverage rule (ui/data/engine.ts ratedMatch); null below it */
   rating: number | null;
 }
@@ -178,6 +186,16 @@ export interface Api {
   playsLike(q: Query, pros: PackPro[]): PlaysLikeResult;
   /** least-squares trend of each series over match order (trends.ts trend) */
   trends(series: (number | null)[][]): ({ slope: number; r: number; n: number } | null)[];
+  /** the query split by the player's own and the opponents' buy class (pistol, eco, half, full): aggression by economy and round type, pistol and eco splits */
+  buySplits(q: Query): BuySplits;
+  /** each metric for the player against the opponents of the same matches (stats/opponents.ts) */
+  opponents(q: Query): VsOpponents[];
+  /** Pearson r of each metric per match with winning it (stats/trends.ts winCorrelationOf) */
+  winCorrelation(q: Query, metricIds: string[]): Record<string, { r: number; n: number } | null>;
+  /** the role blend per side and per spawn the player used (the spawns filter) */
+  rolesBySpawn(q: Query): Record<"T" | "CT", { spawn: string; rounds: number; blend: RoleBlend }[]>;
+  /** every clutch of the player in the query's matches, by round */
+  clutches(q: Query): ClutchRow[];
 }
 
 export type Method = keyof Api;

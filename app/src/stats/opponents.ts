@@ -3,7 +3,7 @@
 // fairest "how did I do" line for a single match.
 import type { MatchFacts } from "./facts";
 import { METRICS } from "./metrics";
-import { rollup, type Filter } from "./rollup";
+import { rollup, type Filter, type Summary } from "./rollup";
 
 export interface VsOpponents {
   id: string;
@@ -25,8 +25,11 @@ export function vsOpponents(facts: MatchFacts[], filter: Filter): VsOpponents[] 
     const myTeam = f.players[mine].team;
     for (const p of f.players) if (p.team !== null && p.team !== myTeam) opp.add(p.id);
   }
-  const mineS = rollup(facts, filter);
-  const theirs = [...opp].map((id) => rollup(facts, { ...filter, player: id }));
+  return vsOpponentsOf(rollup(facts, filter), [...opp].map((id) => rollup(facts, { ...filter, player: id })));
+}
+
+/** The same from summaries: the player's, and each opponent's over the same matches and filter. */
+export function vsOpponentsOf(mineS: Summary, theirs: Summary[]): VsOpponents[] {
   return METRICS.map((m) => {
     const v = m.value(mineS);
     const o = theirs.map((s) => m.value(s)).filter((x): x is number => x !== null);

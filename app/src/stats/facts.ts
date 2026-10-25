@@ -236,6 +236,9 @@ export interface PresenceFact {
   places: Record<string, number>;
 }
 
+/** One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts detectClutches). */
+export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean }
+
 export interface MatchFacts {
   v: number;
   match: MatchInfo;
@@ -246,6 +249,7 @@ export interface MatchFacts {
   kills: KillFact[];
   weapons: WeaponFact[];
   grenades: GrenadeFact[];
+  clutches: ClutchFact[];
   presence: PresenceFact[];
   /** event facts of the families with their own modules; each carries ri and pi */
   aim: AimFact[];

@@ -82,3 +82,13 @@ it("counts trade opportunities, attempts and successes for the trader and for th
   expect([m("m").tradeOpps, m("m").tradeAttempts ?? 0, m("m").tradeOppsTaken ?? 0]).toEqual([1, 1, 0]);
   expect([m("v").tradeableDeaths, m("v").tradedAttempts, m("v").tradeableTraded ?? 0]).toEqual([1, 1, 0]);
 });
+
+it("lists each clutch with its round, opponents and result", () => {
+  // fails if the clutch list loses the 1vX that the clutch measures count
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" },
+    kills: [{ tick: t(5), killer: "c", victim: "b" }, { tick: t(8), killer: "a", victim: "c" }, { tick: t(9), killer: "a", victim: "d" }],
+  });
+  // a goes 1v2 after b dies; once c dies, d is left 1v1 against a
+  expect(f.clutches.map((c) => [f.players[c.pi].id, c.opponents, c.won])).toEqual([["a", 2, true], ["d", 1, false]]);
+});
