@@ -1,4 +1,5 @@
-// Team buy types, as in CS Demo Manager's computeTeamEconomyType (pkg/api/economy.go).
+// Team buy types: CS Demo Manager's five (computeTeamEconomyType, pkg/api/economy.go) for the existing
+// tables, a four-way pistol/eco/force/full class for the round inspector, and the economy views.
 import type { MatchCtx } from "./context";
 import type { RoundDetail, TeamId, TeamRound } from "./rounds";
 import { CT, type Side } from "./schema";
