@@ -124,10 +124,10 @@ function PlayerCard({ p, side, cmp, bots, sides }: { p: PV; side: SideKey; cmp: 
   ];
   // One rating, Rating 3.0 pooled over rounds: overall from the engine's inputs, T and CT from the
   // same inputs split by side (data/sideRating.ts), so the overall always lies between T and CT.
-  const tR = r3Value(sides?.you.t);
-  const ctR = r3Value(sides?.you.ct);
+  const tR = r3Value(sides?.you.t, p.total.sideT.rounds);
+  const ctR = r3Value(sides?.you.ct, p.total.sideCT.rounds);
   const gaugeV = side === "both" ? countersRating(p.total) : side === "t" ? tR : ctR;
-  const botRating = side === "both" ? (bots ? countersRating(bots) : null) : r3Value(side === "t" ? sides?.bots.t : sides?.bots.ct);
+  const botRating = side === "both" ? (bots ? countersRating(bots) : null) : !bots ? null : side === "t" ? r3Value(sides?.bots.t, bots.sideT.rounds) : r3Value(sides?.bots.ct, bots.sideCT.rounds);
   const gaugeVerdict = verdictOf(gaugeV, cmp === "bots" && botRating !== null ? benchAround(BENCH.rating, botRating) : BENCH.rating);
   const r2 = side === "both" ? sliceRating(p.total) : sliceRating(side === "t" ? p.total.sideT : p.total.sideCT);
   const parts = ratingParts(side === "both" ? p.total.r3 : side === "t" ? (sides?.you.t ?? emptyR3()) : (sides?.you.ct ?? emptyR3()));
@@ -313,8 +313,8 @@ function FormTrend({ p }: { p: PV }) {
 }
 
 function MapsTable({ p, side, sides }: { p: PV; side: SideKey; sides: SideTotals | null }) {
-  const bySide = (map: string, s: "t" | "ct") => r3Value(sides?.byMap.get(map)?.[s]);
-  const rating = (m: PV["maps"][number]) => (side === "both" ? countersRating(m.c) : bySide(m.map, side));
+  const bySide = (m: PV["maps"][number], s: "t" | "ct") => r3Value(sides?.byMap.get(m.map)?.[s], s === "t" ? m.c.sideT.rounds : m.c.sideCT.rounds);
+  const rating = (m: PV["maps"][number]) => (side === "both" ? countersRating(m.c) : bySide(m, side));
   return (
     <Card title="Maps" collapsible id="profile-maps" flush aside={<span className="meta">{plural(p.maps.length, "map")}</span>}>
       <DataTable
@@ -328,8 +328,8 @@ function MapsTable({ p, side, sides }: { p: PV; side: SideKey; sides: SideTotals
           { key: "wl", label: "W–L", sort: (m) => m.wins / m.matches, render: (m) => <span className="num">{m.wins}<span className="faint">–</span>{m.matches - m.wins}</span> },
           { key: "adr", label: "ADR", sort: (m) => counterLine(m.c, side).adr, render: (m) => fmtAdr(counterLine(m.c, side).adr) },
           { key: "kast", label: "KAST", sort: (m) => counterLine(m.c, side).kast, render: (m) => <Num v={fmtPct(counterLine(m.c, side).kast)} /> },
-          { key: "t", label: "T", tip: "Rating 3.0 on T, pooled over rounds", colored: true, sort: (m) => bySide(m.map, "t"), render: (m) => <span className="t-text">{fmtRating(bySide(m.map, "t"))}</span> },
-          { key: "ct", label: "CT", tip: "Rating 3.0 on CT, pooled over rounds", colored: true, sort: (m) => bySide(m.map, "ct"), render: (m) => <span className="ct-text">{fmtRating(bySide(m.map, "ct"))}</span> },
+          { key: "t", label: "T", tip: "Rating 3.0 on T, pooled over rounds", colored: true, sort: (m) => bySide(m, "t"), render: (m) => <span className="t-text">{fmtRating(bySide(m, "t"))}</span> },
+          { key: "ct", label: "CT", tip: "Rating 3.0 on CT, pooled over rounds", colored: true, sort: (m) => bySide(m, "ct"), render: (m) => <span className="ct-text">{fmtRating(bySide(m, "ct"))}</span> },
           { key: "rating", label: RATING_LABEL, tip: RATING_POOLED, colored: true, sort: (m) => rating(m), render: (m) => { const x = rating(m); return <b style={{ color: ratingText(x) }}>{fmtRating(x)}</b>; } },
         ]}
       />
