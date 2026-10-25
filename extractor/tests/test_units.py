@@ -749,3 +749,32 @@ def test_a_malformed_line_before_the_end_still_fails_loudly(tmp_path, monkeypatc
     dp.LEDGER.write_text('{"id": "a"}\nnot json\n{"id": "b"}\n', encoding="utf-8")
     with pytest.raises(json.JSONDecodeError):
         dp.read_ledger()
+
+
+
+def test_deletes_refuse_paths_outside_the_data_and_download_roots(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x")
+    with pytest.raises(ValueError):
+        dp.safe_rmtree(outside)
+    with pytest.raises(ValueError):
+        dp.safe_rmtree(dp.DATA_ROOT)  # the root itself is never deleted
+    with pytest.raises(ValueError):
+        dp.safe_unlink(outside / "keep.txt")
+    assert (outside / "keep.txt").exists()
+
+
+def test_a_ledger_row_cannot_point_a_delete_outside_the_data_folder(tmp_path, monkeypatch):
+    # replace_old_extractions deletes the folder a needs_reextract row names; a crafted row must not escape.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    victim = tmp_path.parent / f"{tmp_path.name}-victim"
+    victim.mkdir()
+    rows = [dict(dem_file="a.dem", dem_bytes=1, out_dir=f"../{victim.name}"),
+            dict(dem_file="b.dem", dem_bytes=2, out_dir=str(victim))]
+    dp.NEEDS_REEXTRACT.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1),
+                                "y": dict(ok=True, dem_file="b.dem", dem_bytes=2)}, set())
+    assert victim.exists()

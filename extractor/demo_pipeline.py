@@ -290,6 +290,23 @@ def bind_children_to_this_process() -> None:
     bind_children_to_this_process.job = job  # keep the handle open for the process lifetime
 
 
+def _deletable(path: Path) -> Path:
+    """The resolved path, if it lies strictly inside DATA_ROOT, or inside DOWNLOADS (a finished RAR)."""
+    r = Path(path).resolve()
+    for root in (DATA_ROOT.resolve(), DOWNLOADS.resolve()):
+        if r != root and root in r.parents:
+            return r
+    raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT} or {DOWNLOADS}")
+
+
+def safe_rmtree(path: Path, ignore_errors: bool = False) -> None:
+    shutil.rmtree(_deletable(path), ignore_errors=ignore_errors)
+
+
+def safe_unlink(path: Path, missing_ok: bool = False) -> None:
+    _deletable(path).unlink(missing_ok=missing_ok)
+
+
 def append_jsonl(path: Path, obj: dict) -> None:
     """Append one JSON line in a single write, flushed and fsynced. A torn tail left by a crash is cut first,
     so the new line never lands in the middle of a broken one."""
@@ -349,9 +366,14 @@ def replace_old_extractions(results: dict, new_dirs: set[Path]) -> None:
     keep = []
     for row in rows:
         if (row["dem_file"], row["dem_bytes"]) in sizes:
-            old = DATA_ROOT / row["out_dir"]
+            rel = Path(row["out_dir"])
+            if rel.is_absolute() or ".." in rel.parts:
+                log.error("needs_reextract row with an unsafe out_dir %r; not deleting anything", row["out_dir"])
+                keep.append(row)
+                continue
+            old = DATA_ROOT / rel
             if old.exists() and old.resolve() not in new_dirs:
-                shutil.rmtree(old)
+                safe_rmtree(old)
                 log.info("replaced %s with its re-extraction", row["out_dir"])
             continue
         keep.append(row)
@@ -467,7 +489,7 @@ class Pipeline:
             a.slug = slug_for(sorted(a.listing), a.id)
             a.work = WORK_DIR / a.slug
             if a.work.exists():
-                shutil.rmtree(a.work)
+                safe_rmtree(a.work)
             a.work.mkdir(parents=True)
             a.extract_log = LOG_DIR / f"7z-{a.slug}.log"
             a.size_at_extract = a.rar.stat().st_size
@@ -492,7 +514,7 @@ class Pipeline:
                 grew = a.rar.exists() and a.rar.stat().st_size != a.size_at_extract
                 if truncated and (recent or grew) and a.rar.parent.parent != FAILED_DIR:
                     log.warning("7z says %s is incomplete; watching it again", a.id)
-                    shutil.rmtree(a.work, ignore_errors=True)
+                    safe_rmtree(a.work, ignore_errors=True)
                     del self.archives[a.id]
                     continue
                 self.fail_archive(a, f"7z exit {rc}: {text[-800:]}")
@@ -501,7 +523,7 @@ class Pipeline:
             if not a.dems:
                 self.fail_archive(a, "7z extracted no .dem files")
                 continue
-            a.extract_log.unlink(missing_ok=True)
+            safe_unlink(a.extract_log, missing_ok=True)
             a.state = "parsing"
             keys: set[str] = set()
             for dem in a.dems:
@@ -609,14 +631,14 @@ class Pipeline:
             replace_old_extractions(a.results, {(DEMOS_DIR / a.slug / (r.get("map") or "")).resolve()
                                                 for r in a.results.values()})
             # Every map is written and validated: the inputs can go.
-            shutil.rmtree(a.work, ignore_errors=True)
+            safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
                 log.error("could not remove %s; keeping RAR %s", a.work, a.rar)
                 continue
             if a.rar.parent.parent == FAILED_DIR:
-                shutil.rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
+                safe_rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
             else:
-                a.rar.unlink()
+                safe_unlink(a.rar)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
             append_jsonl(LEDGER, rec)
@@ -635,11 +657,11 @@ class Pipeline:
             append_jsonl(DROPPED, dict(id=a.id, slug=a.slug, dems=sorted(a.listing), reason=TRUNCATED,
                                        detail=reason[:2000], dropped_utc=now))
             if retried:
-                shutil.rmtree(a.rar.parent, ignore_errors=True)
+                safe_rmtree(a.rar.parent, ignore_errors=True)
             elif a.rar.exists():
-                a.rar.unlink()
+                safe_unlink(a.rar)
             if a.work and a.work.exists():
-                shutil.rmtree(a.work, ignore_errors=True)
+                safe_rmtree(a.work, ignore_errors=True)
             self._record_failure(a, reason, kept=None, retry=False)
             return
         dest = a.rar.parent if retried else FAILED_DIR / (a.slug or a.id)
@@ -658,7 +680,7 @@ class Pipeline:
                                                           dems=sorted(a.listing), reason=reason, failed_utc=now),
                                                      default=str, indent=1), encoding="utf-8")
         if a.work and a.work.exists():
-            shutil.rmtree(a.work, ignore_errors=True)
+            safe_rmtree(a.work, ignore_errors=True)
         self.retried.add(dest / "archive.rar")  # a fresh failure is not retried again in this run
         self._record_failure(a, reason, kept=str(dest), retry=True, ledger_id=dest.name if retried else a.id)
         self.enforce_failed_cap()
@@ -684,7 +706,7 @@ class Pipeline:
             append_jsonl(DROPPED, dict(id=info.get("id", d.name), slug=info.get("slug", d.name),
                                        dems=info.get("dems"), bytes=sizes[d], reason=str(info.get("reason"))[:4000],
                                        dropped_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
-            shutil.rmtree(d, ignore_errors=True)
+            safe_rmtree(d, ignore_errors=True)
             total -= sizes[d]
             log.warning("failed/ over %.0f GB; deleted the oldest kept failure %s (%.0f MB)", MAX_FAILED_GB, d.name,
                         sizes[d] / 1e6)
@@ -724,7 +746,7 @@ class Pipeline:
                 continue
             if age > STALE_WORK_S:
                 log.info("removing stale work folder %s (%.1f h old)", d.name, age / 3600)
-                shutil.rmtree(d, ignore_errors=True)
+                safe_rmtree(d, ignore_errors=True)
 
     # --- status
     def snapshot(self) -> dict:
@@ -868,7 +890,7 @@ def main(argv=None) -> int:
     # place and get processed again.
     pipeline.sweep_work(force=True)
     for d in DEMOS_DIR.glob("*/*.tmp"):
-        shutil.rmtree(d, ignore_errors=True)
+        safe_rmtree(d, ignore_errors=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")
