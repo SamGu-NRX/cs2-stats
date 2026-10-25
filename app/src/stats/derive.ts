@@ -12,7 +12,8 @@ import { computeSwing } from "./swing";
 import { stubModel, type WinModel } from "./winprob";
 
 /** Bump when a definition changes, so cached summaries are rebuilt. */
-export const DERIVE_VERSION = 6;
+// 7: swing for plugin 1.0.0 files removes the victim's HP after a kill (was unknown for every round).
+export const DERIVE_VERSION = 7;
 
 export type TeamId = "us" | "them";
 
