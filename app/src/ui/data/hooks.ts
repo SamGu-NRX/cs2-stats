@@ -37,7 +37,7 @@ export function useCall<K extends Method>(method: K, args: Parameters<Api[K]> | 
 // the same match). At most BUNDLES are kept; the worker holds the facts themselves.
 const BUNDLES = 3;
 const bundles = new Map<string, Promise<MatchBundle>>();
-function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
+export function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
   const k = `${version}|${file}`;
   let p = bundles.get(k);
   if (p) { bundles.delete(k); bundles.set(k, p); return p; }

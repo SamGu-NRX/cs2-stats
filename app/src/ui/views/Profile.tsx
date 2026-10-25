@@ -4,17 +4,18 @@
 // app bar drives the whole page: every summary is rolled up over that side's rounds. Performance is
 // compared with that side's pros; style with the bot careers in the same matches on that side
 // (worker/ranking.ts).
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import { weaponClass } from "../../stats/weapons";
+import { isGun } from "../../stats/guns";
+import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../components/bits";
 import { Card } from "../components/Card";
 import { Gauge, TrendLine } from "../components/charts";
 import { GameIcon } from "../components/GameIcon";
-import { ApproxMark } from "../components/Percentile";
+import { ApproxMark, Percentile } from "../components/Percentile";
 import { Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
@@ -24,20 +25,20 @@ import {
   R3_INPUT_LABEL, rankText, thinPoolText,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
 } from "../data/engine";
-import { useCall, useRatings, useRollups } from "../data/hooks";
-import type { MatchEntry } from "../data/match";
+import { bundleOf, useCall, useRatings, useRollups, type Loaded } from "../data/hooks";
+import { killsBy, matchModel, sideOf, type MatchEntry } from "../data/match";
 import { PANEL_TIP, TIP, tipOf } from "../data/tips";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings } from "../../worker/protocol";
-import { FirstKillIcon, WeaponClassIcon } from "../icons/game";
+import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
-import { scoreText, toScore, ratingText } from "../lib/scale";
+import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside } from "./shared";
-import { Attribute, AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { HowGood, pctProps, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 
@@ -103,7 +104,14 @@ export default function ProfileView() {
           )} />
           <FormRail p={p} />
         </div>
-        <SectionHead title="Performance" tip={PANEL_TIP.performance} />
+        <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" />
+        <StyleAttributes q={base} side={side} />
+        <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
+        <div className="identity">
+          <RoleCard q={base} maps={mapsIn(list)} />
+          <WhereYouPlay />
+        </div>
+        <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" />
         <SwingCard you={p.you} list={list} bots={p.bots} />
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         {baselines && (
@@ -119,16 +127,9 @@ export default function ProfileView() {
         <div className="profile__cols3">
           <Weapons p={p} files={files} side={side} />
           <Clutches m={p.you.m} q={base} side={side} list={list} />
-          <Multis m={p.you.m} />
+          <Multis m={p.you.m} list={list} side={side} />
           <Openings s={p.you} />
         </div>
-        <SectionHead title="Identity" tip={PANEL_TIP.identity} id="identity" />
-        <StyleAttributes q={base} side={side} />
-        <div className="identity">
-          <RoleCard q={base} />
-          <WhereYouPlay />
-        </div>
-        <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
       </div>
     </div>
   );
@@ -276,13 +277,30 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
   return { id: a.id as PanelAttribute["id"], label: a.label, score: a.score, metrics: a.metrics.map((p) => panelMetric(p, kind, population)), ...extra };
 }
 
-/** Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the page's side. */
+/**
+ * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the
+ * page's side. Unlike the style scores it is a quality, so its score and bar take the performance
+ * colours.
+ */
 function Firepower({ q, side }: { q: Query; side: SideKey }) {
   const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
   const fp = scored?.scores.find((a) => a.id === "firepower");
+  const t = fp?.score == null ? 0 : toScore(fp.score, 50, 50);
   return (
     <Card title="Firepower" tip={PANEL_TIP.firepower} aside={<span className="meta">{scored ? `Against ${scored.n} ${proPoolName(scored.role)}` : ""}</span>}>
-      {!fp ? <div className="skel" style={{ height: 200 }} /> : <Attribute a={panelAttr(fp, "performance", proPoolName(scored!.role), { open: true })} wide />}
+      {!fp ? <div className="skel" style={{ height: 200 }} /> : (
+        <div className="fpw">
+          <div className="fpw__head">
+            <span className="fpw__score num" style={{ color: fp.score === null ? undefined : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>
+            <span className="fpw__bar" aria-hidden><i style={{ width: `${fp.score ?? 0}%`, background: fp.score === null ? "transparent" : scoreFill(t) }} /></span>
+          </div>
+          <div className="fpw__more">
+            {panelAttr(fp, "performance", proPoolName(scored!.role)).metrics.map((m) => (
+              <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def} approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
@@ -373,40 +391,48 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
   );
 }
 
-/** The game's icon for each weapon class on the Weapons card: one gun that stands for the class. */
-const CLASS_ICON: Record<string, string> = { rifle: "ak47", sniper: "awp", smg: "mp9", heavy: "nova", pistol: "glock", knife: "knife", grenade: "hegrenade", other: "taser" };
+const CLASS_ORDER = ["rifle", "sniper", "smg", "heavy", "pistol"];
 
+/**
+ * Every gun you got kills with on the page's side, most kills first within its class, each with the
+ * game's own icon from the pack (components/GameIcon.tsx; the app's glyph only when the pack is missing).
+ * Accuracy is from recorded matches (converted logs have no shots); headshots are a share of the gun's kills.
+ */
 function Weapons({ p, files, side }: { p: ProfileData; files: string[]; side: SideKey }) {
   const { you: ids } = useData();
-  // kills per weapon class, summed from the per-weapon totals
-  const byClass = new Map<string, string[]>();
-  for (const w of Object.keys(p.you.weapons)) {
-    const c = weaponClass(w);
-    byClass.set(c, [...(byClass.get(c) ?? []), w]);
-  }
-  const rows = [...byClass].map(([cls, ws]) => ({ cls, ws, kills: ws.reduce((t, w) => t + p.you.weapons[w].kills, 0) })).filter((r) => r.kills > 0).sort((a, b) => b.kills - a.kills);
-  const total = rows.reduce((a, r) => a + r.kills, 0);
-  const key = rows.map((r) => r.cls).join(",");
-  const accs = useRollups(useMemo(() => rows.map((r) => ({ files, filter: { player: ids, weapons: r.ws, ...sidesOf(side) } })), [key, files, ids, side])).data; // eslint-disable-line react-hooks/exhaustive-deps
-  const acc = (i: number) => (accs?.length === rows.length && accs[i].aim.shots ? { acc: accs[i].v.accuracy, shots: accs[i].aim.shots } : null);
-  const anyAim = rows.some((_, i) => acc(i));
+  const guns = Object.entries(p.you.weapons).filter(([w, t]) => isGun(w) && t.kills > 0).map(([w, t]) => ({ w, cls: weaponClass(w), kills: t.kills, hs: t.kills ? (100 * t.hsKills) / t.kills : null }))
+    .sort((a, b) => CLASS_ORDER.indexOf(a.cls) - CLASS_ORDER.indexOf(b.cls) || b.kills - a.kills);
+  const total = guns.reduce((a, r) => a + r.kills, 0);
+  const key = guns.map((g) => g.w).join(",");
+  const accs = useRollups(useMemo(() => guns.map((g) => ({ files, filter: { player: ids, weapons: [g.w], ...sidesOf(side) } })), [key, files, ids, side])).data; // eslint-disable-line react-hooks/exhaustive-deps
+  const acc = (i: number) => (accs?.length === guns.length && accs[i].aim.shots ? accs[i].v.accuracy : null);
+  const most = Math.max(1, ...guns.map((g) => g.kills));
   return (
     <Card title="Weapons" tip={PANEL_TIP.weapons} collapsible id="profile-weapons" aside={<span className="meta">{plural(total, "kill")}</span>}>
-      <ul className="wlist">
-        {rows.map((r, i) => {
-          const a = acc(i);
-          return (
-            <li key={r.cls} data-tip={a ? `Accuracy ${fmtPct(a.acc)} from ${a.shots} shots.` : undefined}>
-              <span className="wlist__ico"><GameIcon id={CLASS_ICON[r.cls] ?? null} width={40} height={14} fallback={<WeaponClassIcon cls={r.cls} size={14} />} /></span>
-              <span>{WEAPON_CLASS_LABEL[r.cls]}</span>
-              <span className="hbar"><i style={{ width: `${(100 * r.kills) / Math.max(1, rows[0].kills)}%` }} /></span>
-              <b className="num">{r.kills}</b>
-              <span className="meta num">{a ? fmtPct(a.acc, 0) : ""}</span>
-            </li>
-          );
-        })}
-      </ul>
-      {anyAim && <p className="meta wlist__note">The last column is accuracy, from recorded matches.</p>}
+      <table className="guns">
+        <thead>
+          <tr>
+            <th scope="col" className="l" colSpan={2}><span className="sr-only">Gun</span></th>
+            <th scope="col" data-tip="Your kills with the gun." tabIndex={0}>Kills</th>
+            <th scope="col" data-tip="Shots that hit, from recorded matches." tabIndex={0} aria-label="Accuracy">Acc</th>
+            <th scope="col" data-tip="Kills that were headshots." tabIndex={0}><span className="guns__hs"><GameIcon id="headshot" width={13} label="Headshots" fallback={<HeadshotIcon size={13} label="Headshots" />} /></span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {guns.map((g, i) => (
+            <Fragment key={g.w}>
+              {(i === 0 || guns[i - 1].cls !== g.cls) && <tr className="guns__cls"><th scope="rowgroup" colSpan={5}>{WEAPON_CLASS_LABEL[g.cls]}</th></tr>}
+              <tr>
+                <td className="guns__ico"><GameIcon id={g.w} width={48} height={16} fallback={<WeaponIcon name={g.w} size={16} />} /></td>
+                <td className="l guns__name">{weaponLabel(g.w)}<span className="guns__bar" aria-hidden><i style={{ width: `${(100 * g.kills) / most}%` }} /></span></td>
+                <td><b className="num">{g.kills}</b></td>
+                <td className="num">{acc(i) === null ? <span className="faint">–</span> : fmtPct(acc(i), 0)}</td>
+                <td className="num">{g.hs === null ? "–" : fmtPct(g.hs, 0)}</td>
+              </tr>
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
     </Card>
   );
 }
@@ -472,17 +498,99 @@ function ClutchLink({ c, e }: { c: ClutchRow; e: MatchEntry | undefined }) {
   );
 }
 
-function Multis({ m }: { m: Measures }) {
+/** A round where you got k kills: the match, its number and your side. */
+interface MultiRound { file: string; round: number; side: "T" | "CT" }
+
+/** Matches read at once while listing multi-kill rounds: enough to keep the worker busy, few enough not to flood it. */
+const MULTI_CONCURRENCY = 3;
+
+/**
+ * The rounds where you got exactly k kills (5 or more for an ace) on the page's side, read from each
+ * match's bundle once the user opens a row (the engine has no multi-kill list like its clutch list).
+ * Bundles come through the shared cache (data/hooks.ts bundleOf), MULTI_CONCURRENCY at a time; a
+ * failed read is an error, not an empty list.
+ */
+function useMultiRounds(list: MatchEntry[], side: SideKey, k: number | null): Loaded<MultiRound[]> {
+  const { client, version } = useData();
+  const [st, setSt] = useState<Loaded<MultiRound[]>>({ data: null, error: null, loading: false });
+  useEffect(() => {
+    if (!client || k === null) { setSt({ data: null, error: null, loading: false }); return; }
+    let alive = true;
+    setSt({ data: null, error: null, loading: true });
+    const want = side === "both" ? null : ratingKey(side);
+    const out: MultiRound[][] = new Array(list.length);
+    let next = 0;
+    const worker = async () => {
+      while (alive && next < list.length) {
+        const i = next++;
+        const e = list[i];
+        const v = matchModel(e, await bundleOf(client, version, e.file));
+        out[i] = v.rounds.flatMap((r) => {
+          const n = killsBy(r, v.human).length;
+          const s = sideOf(v, r, v.human);
+          return (k === 5 ? n >= 5 : n === k) && (!want || s === want) ? [{ file: e.file, round: r.number, side: s }] : [];
+        });
+      }
+    };
+    Promise.all(Array.from({ length: Math.min(MULTI_CONCURRENCY, list.length) }, worker)).then(
+      () => { if (alive) setSt({ data: out.flat(), error: null, loading: false }); },
+      (err: Error) => { if (alive) setSt({ data: null, error: `The rounds could not be read: ${err.message}`, loading: false }); },
+    );
+    return () => { alive = false; };
+  }, [client, version, list, side, k]);
+  return st;
+}
+
+function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: SideKey }) {
   const rows = multiKillRows(m);
+  const [open, setOpen] = useState<number | null>(null);
+  const shown = useMultiRounds(list, side, open);
+  const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
+  const listId = useId();
+  const share = (n: number) => (m.rounds ? (100 * n) / m.rounds : 0);
+  const most = Math.max(1, ...rows.map((r) => share(r.rounds)));
   return (
     <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<SectionAside label="Rounds" value={m.multiKillRounds} />}>
       <ul className="mlist">
-        {rows.map((r) => (
-          <li key={r.k}>
-            <MultiBadge k={r.k} />
-            <b className="num">{r.rounds}</b>
-          </li>
-        ))}
+        {rows.map((r) => {
+          const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
+          const body = (
+            <>
+              <MultiBadge k={r.k} />
+              <span className="hbar"><i style={{ width: `${(100 * share(r.rounds)) / most}%` }} /></span>
+              <span className="num mlist__pct">{fmtPct(share(r.rounds), 1)}</span>
+              <b className="num">{r.rounds}</b>
+            </>
+          );
+          return (
+            <li key={r.k}>
+              {r.rounds === 0 ? <div className="clist__row mlist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`}
+                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r.rounds), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
+                  onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
+                  {body}<span className="clist__chev" aria-hidden />
+                </button>
+              )}
+              {open === r.k && (
+                <ul id={`${listId}-${r.k}`} className="clutchlist" aria-label={`Your ${label}`}>
+                  {shown.error ? <li className="meta">{shown.error}</li> : !shown.data ? <li className="meta">Loading the rounds…</li> : shown.data.map((x) => {
+                    const e = byFile.get(x.file);
+                    return (
+                      <li key={`${x.file}|${x.round}`}>
+                        <a href={matchHref(x.file, "rounds", { round: x.round })} className="clutchlist__a">
+                          <MultiBadge k={r.k} />
+                          <span className={x.side === "T" ? "t-text" : "ct-text"}>{x.side}</span>
+                          <span className="meta">{e ? `${mapName(e.match.map)}, ${fmtMatchDay(e.match)}` : ""}</span>
+                          <span className="meta num">Round {x.round}</span>
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </Card>
   );
