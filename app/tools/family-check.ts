@@ -66,4 +66,6 @@ const pooled = rollup(facts, { player: [...names.keys()] });
 const within = (xs: number[]) => `${xs.length} samples, ${((100 * xs.filter((x) => x >= 0.15 && x <= 0.4).length) / xs.length).toFixed(1)}% within 150-400 ms, ${((100 * xs.filter((x) => x < 0.15).length) / xs.length).toFixed(1)}% under`;
 console.log(`pooled reaction: median ${(1000 * q(pooled.aim.react, 0.5)).toFixed(0)} ms, ${within(pooled.aim.react)}`);
 console.log(`pooled time to first shot: median ${(1000 * q(pooled.aim.shot, 0.5)).toFixed(0)} ms, ${within(pooled.aim.shot)}`);
+// the time-to-damage cut (aim.ts TTD_MAX_S) against the pros' distribution
+console.log(`pooled time to damage: ${pooled.aim.ttd.length} samples, p95 ${q(pooled.aim.ttd, 0.95).toFixed(3)} s, ${(100 * pooled.aim.ttd.filter((x) => x >= 1).length / pooled.aim.ttd.length).toFixed(1)}% at 1 s or more`);
 console.log(`radar spotted seconds ${spottedSecs.toFixed(0)} against mesh line-of-sight seconds ${sightSecs.toFixed(0)} (maps with both)`);

@@ -33,6 +33,12 @@ export const ON_HEAD_DEG = 2;
 /** The movement that answers a sighting is the one that halves the onset error within this time. Ours. */
 export const ACQUIRE_FRAC = 0.5;
 export const ACQUIRE_WINDOW_S = 1;
+/**
+ * Time to damage of this or more is not a reaction and the metric leaves it out, as Leetify does. On
+ * the pro maps a few percent of the values are 1 s or more and the 95th percentile is under it
+ * (VALIDATION.md, pnpm family-check), so the cut drops the stragglers and keeps the pros' body.
+ */
+export const TTD_MAX_S = 1;
 /** That movement's peak speed toward the head must reach this (deg/s), well above idle view drift. Ours, no fit. */
 export const PEAK_MIN_DPS = 60;
 /** The movement starts at the first tick of the run whose speed toward the head stays at or above this fraction of the peak. Ours, no fit. */
@@ -85,8 +91,12 @@ export interface SightFact {
   weapon: string | null;
   /** angle from the view to the victim's eye at the onset */
   place: number;
-  /** onset to the attacker's first damage on the victim */
+  /** onset to the attacker's first damage on the victim, within the visible stretch (the metric drops TTD_MAX_S and over) */
   ttd: number | null;
+  /** onset to the attacker's kill of the victim, within the visible stretch */
+  ttk: number | null;
+  /** degrees the view turned from the onset to the first damage (the angle between the two view directions) */
+  moved: number | null;
   /** onset to the start of the movement that brought the crosshair to the head */
   react: number | null;
   /** onset to the first shot, when the attacker was not already firing */
@@ -168,6 +178,9 @@ export interface AimAgg {
   /** samples for medians: placement (deg), time to damage, reaction and first shot (s), overshoot (deg) */
   place: number[];
   ttd: number[];
+  /** sighting to kill (s), and degrees the view turned from sighting to first damage */
+  ttk: number[];
+  moved: number[];
   react: number[];
   shot: number[];
   over: number[];
@@ -196,7 +209,7 @@ export interface AimAgg {
 }
 
 export const emptyAim = (): AimAgg => ({
-  sightings: 0, preAimed: 0, place: [], ttd: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
+  sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
   sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {},
 });
@@ -207,6 +220,8 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     if (f.place <= ON_HEAD_DEG) a.preAimed++;
     a.place.push(f.place);
     if (f.ttd !== null) a.ttd.push(f.ttd);
+    if (f.ttk !== null) a.ttk.push(f.ttk);
+    if (f.moved !== null) a.moved.push(f.moved);
     if (f.react !== null) a.react.push(f.react);
     if (f.shot !== null) a.shot.push(f.shot);
     if (f.over !== null) a.over.push(f.over);
@@ -355,6 +370,16 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
 
   const fd = E.first_damage_tick[e];
   const ttd = fd !== null && fd >= t0 && fd < visibleUntil ? (fd - t0) / rate : null;
+  const victim = c.idOf(E.victim_steamid[e]);
+  const kill = c.kills[ri].find((k) => k.killer === pi && k.victim === victim && k.tick >= t0 && k.tick < visibleUntil);
+  const ttk = kill ? (kill.tick - t0) / rate : null;
+  // the view turn from the onset to the first damage tick (or the nearest tick before it)
+  let moved: number | null = null;
+  if (ttd !== null) {
+    let kd = o;
+    while (kd + 1 < v && tick(kd + 1) <= fd!) kd++;
+    moved = r3(aimAngle(T.a_pitch[r[o]]!, T.a_yaw[r[o]]!, [0, 0, 0], forward(T.a_pitch[r[kd]]!, T.a_yaw[r[kd]]!)));
+  }
 
   let firing = false;
   for (let k = o - 1; k >= 0 && t0 - tick(k) <= RESET_GAP_S * rate; k--) if (T.a_shot_fired[r[k]]) firing = true;
@@ -414,7 +439,7 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
   }
 
   return {
-    k: "sight", ri, pi, weapon, place: r3(place), ttd, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
+    k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
     over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
   };
 }
@@ -622,8 +647,11 @@ const PLUGIN_PATH = "The view path there is the change in aim error to bullet 1'
 
 export const AIM_METRICS: Metric[] = [
   { id: "timeToDamage", label: "Time to damage", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
-    def: "Median time from an enemy becoming visible on your screen (mesh line of sight, not behind a smoke, within 45 by 36.87 degrees of your view) to your first damage on him, over sightings where you damaged him after that onset.",
-    value: (s) => ms(median(s.aim.ttd)) },
+    def: `Median time from an enemy becoming visible on your screen (mesh line of sight, not behind a smoke, within 45 by 36.87 degrees of your view) to your first damage on him while he stayed visible; values of ${TTD_MAX_S} s or more are left out, as Leetify does.`,
+    value: (s) => ms(median(s.aim.ttd.filter((x) => x < TTD_MAX_S))) },
+  { id: "timeToKill", label: "Time to kill", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
+    def: "Median time from an enemy becoming visible on your screen to your kill on him while he stayed visible.",
+    value: (s) => ms(median(s.aim.ttk)) },
   { id: "reactionTime", label: "Reaction time", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
     def: `Median time from a sighting to the start of the mouse movement that halves the error to his head within ${ACQUIRE_WINDOW_S} s. The movement must peak at ${PEAK_MIN_DPS} deg/s or more toward the head; it starts where its speed first stays above ${ONSET_FRAC * 100}% of that peak. Sightings within ${ON_HEAD_DEG} degrees of the head, and movements already under way at the onset, are left out.`,
     value: (s) => ms(median(s.aim.react)) },
@@ -633,6 +661,9 @@ export const AIM_METRICS: Metric[] = [
   { id: "crosshairPlacement", label: "Crosshair placement", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
     def: "Median angle between your view and the enemy's eye at the first tick he is visible on your screen.",
     value: (s) => median(s.aim.place) },
+  { id: "crosshairMoved", label: "Degrees moved to damage", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
+    def: "Median angle your view turned from the tick an enemy became visible to your first damage on him (Leetify reports it beside the error at sighting): placement says where the crosshair was, this how far it had to travel.",
+    value: (s) => median(s.aim.moved) },
   { id: "preAim", label: "Pre-aimed sightings", kind: "performance", group: "aim", unit: "pct", status: "approx",
     def: `Sightings where your crosshair was already within ${ON_HEAD_DEG} degrees of the enemy's eye when he became visible.`,
     value: (s) => pct(s.aim.preAimed, s.aim.sightings) },
