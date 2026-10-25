@@ -8,7 +8,7 @@ import { FirstKillIcon, TradingGlyph } from "./glyphs";
 import { fmtMetric } from "../../data/engine";
 import { deathOf, killMatrix, killsBy, type MPlayer as PlayerRow } from "../../data/match";
 import { metric as meta } from "../../data/meta";
-import { fmtDiff } from "../../lib/format";
+import { fmtDiff, fmtRatio } from "../../lib/format";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
 import { NEEDS_DEMO, PlayerName, SectionAside } from "../shared";
@@ -77,6 +77,8 @@ export default function Duels({ v }: TabProps) {
               { key: "fd", label: "FD", tip: "Opening deaths", sort: (p) => m(p).openingDeaths, firstDir: "asc", render: (p) => m(p).openingDeaths },
               { key: "att", label: "Attempts", tip: meta("openingAttempts").def, sort: (p) => metric(p, "openingAttempts"), render: (p) => <Num v={fmtMetric("openingAttempts", metric(p, "openingAttempts"))} /> },
               { key: "succ", label: "Success", colored: true, tip: meta("openingSuccess").def, sort: (p) => metric(p, "openingSuccess"), render: (p) => { const x = metric(p, "openingSuccess"); return <span style={{ color: x === null ? undefined : scoreText(toScore(x, 50, 40)) }}><Num v={fmtMetric("openingSuccess", x)} /></span>; } },
+              // openingWins counts the rounds won in which the player made the opening kill (scoreboard.ts)
+              { key: "win", label: "Won after", tip: "Rounds won after your opening kill", sort: (p) => (m(p).openingKills ? m(p).openingWins / m(p).openingKills : null), render: (p) => <Num v={fmtRatio(m(p).openingWins, m(p).openingKills)} /> },
             ]}
           />
         </Card>
@@ -102,7 +104,9 @@ export default function Duels({ v }: TabProps) {
 }
 
 /** Your fights round by round: who you killed, who killed you, and how you shot. Time to damage and
- *  reaction need mesh visibility, which plugin recordings do not carry. */
+ *  reaction need mesh visibility, which plugin recordings do not carry. main's footnote promised
+ *  reaction per opponent "with the metrics update"; the engine keeps one median per round, so the
+ *  footnote now says that. */
 function YourRounds({ v }: { v: TabProps["v"] }) {
   const gated = !v.visibility;
   const gate = `${NEEDS_DEMO}: these need view angles and mesh line of sight, which this match file does not carry.`;
@@ -140,6 +144,7 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
           </tbody>
         </table>
       </div>
+      <p className="meta yrounds__note">Time to damage and reaction are medians over all your sightings that round; the engine does not split them by opponent.</p>
     </Card>
   );
 }

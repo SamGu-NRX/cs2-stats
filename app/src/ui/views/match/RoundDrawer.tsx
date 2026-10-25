@@ -2,12 +2,14 @@
 // It always docks beside the grid and never covers it (the user found the overlay hid the rounds);
 // the grid scrolls sideways instead. It opens with the drawer spring (320 ms) and only then narrows
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
+// It steps over the inspector's columns, so a round held only as totals opens too, with its number
+// and a sentence saying no more exists.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Measure } from "../../../stats/facts";
 import { Num } from "../../components/bits";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
-import { killSwing, roundSecs, sideOf, type MatchModel as MatchView } from "../../data/match";
+import { killSwing, roundSecs, sideOf, type MatchModel as MatchView, type MRound, type RoundColumn } from "../../data/match";
 import { metric } from "../../data/meta";
 import { BUY_LABEL, BuyIcon, FirstKillIcon, KillFlags, NadeIcon, NADE_LABEL, WeaponIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
@@ -19,19 +21,20 @@ const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
 const MAX = 640;
 
-export function RoundDrawer({ v, ri, onClose, onStep, children }: {
-  v: MatchView; ri: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
+/** sel: the open column of `cols` (data/match.ts roundColumns), null when closed. */
+export function RoundDrawer({ v, cols, sel, onClose, onStep, children }: {
+  v: MatchView; cols: RoundColumn[]; sel: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
 }) {
   const [w, setW] = useState(() => Math.max(MIN, Math.min(MAX, Number(localStorage.getItem(W_KEY)) || 420)));
-  const [shown, setShown] = useState<number | null>(ri);
-  const [phase, setPhase] = useState<"closed" | "opening" | "open" | "closing">(ri === null ? "closed" : "open");
+  const [shown, setShown] = useState<number | null>(sel);
+  const [phase, setPhase] = useState<"closed" | "opening" | "open" | "closing">(sel === null ? "closed" : "open");
   const firstOpen = useRef(true);
   const opener = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (ri !== null) {
-      setShown(ri);
+    if (sel !== null) {
+      setShown(sel);
       if (phase === "closed" || phase === "closing") {
         opener.current = document.activeElement as HTMLElement | null;
         setPhase("opening");
@@ -45,7 +48,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
       const t = window.setTimeout(() => { setPhase("closed"); setShown(null); firstOpen.current = false; }, reduce ? 120 : 200);
       return () => clearTimeout(t);
     }
-  }, [ri]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = (x: number) => { localStorage.setItem(W_KEY, String(x)); return x; };
   // drag to resize, 1:1 with the pointer, no transition
@@ -67,15 +70,16 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
   };
 
   const gridPad = phase === "open" ? w + 12 : 0;
+  const col = shown === null ? null : cols[shown] ?? null;
   return (
     <div className="dhost">
       <div className="dhost__main" style={{ paddingRight: gridPad }}>{children}</div>
-      {phase !== "closed" && shown !== null && (
+      {phase !== "closed" && shown !== null && col && (
         <aside
           className={`drawer drawer--${phase}`}
           style={{ width: w }}
           role="dialog"
-          aria-label={`Round ${v.rounds[shown].number}`}
+          aria-label={`Round ${col.number}`}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
         >
           <div
@@ -93,7 +97,13 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
               if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setW((x) => save(Math.max(MIN, x - 20))); }
             }}
           />
-          <RoundDetail v={v} ri={shown} onClose={onClose} onStep={onStep} stagger={firstOpen.current && phase === "opening"} />
+          <div className="drawer__in">
+            {/* one header for both kinds, so stepping keeps focus on the step button */}
+            <DrawerHead col={col} first={shown === 0} last={shown === cols.length - 1} onClose={onClose} onStep={onStep} />
+            {col.kind === "round"
+              ? <RoundDetail v={v} r={col.r} stagger={firstOpen.current && phase === "opening"} />
+              : <TotalsDetail v={v} col={col} />}
+          </div>
         </aside>
       )}
     </div>
@@ -109,18 +119,74 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
   );
 }
 
+/** The drawer's header: the round's glyph, title and score, then previous, next and close. Focuses close when the drawer opens. */
+function DrawerHead({ col, first, last, onClose, onStep }: { col: RoundColumn; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void }) {
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
+  // a totals-only round has a number and nothing else
+  const r = col.kind === "round" ? col.r : null;
+  const side = r?.winSide === "T" ? "t" : r?.winSide === "CT" ? "ct" : null;
+  return (
+    <header className="drawer__head">
+      <WinIcon how={r?.how ?? null} size={18} className={side ? `${side}-text` : "faint"} />
+      <div className="drawer__title">
+        <b>Round {col.number}</b>
+        {r && <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>}
+      </div>
+      {r?.scoreAfter && <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>}
+      <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
+      <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+      <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
+    </header>
+  );
+}
+
 /** Grenades a player threw, by the measure that counts them. */
 const NADES: [Nade, Measure][] = [["flash", "flashes"], ["smoke", "smokes"], ["he", "hes"], ["molotov", "molotovs"]];
 
-function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: number; onClose: () => void; onStep: (d: number) => void; stagger: boolean }) {
-  const r = v.rounds[ri];
-  const close = useRef<HTMLButtonElement>(null);
-  useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
+/**
+ * A round held only as totals: no killfeed, and the game's own damage per player when the file has
+ * it. A player's side comes from the half (regulation only); in overtime the bars are uncoloured.
+ */
+function TotalsDetail({ v, col }: { v: MatchView; col: Extract<RoundColumn, { kind: "totals" }> }) {
+  const rows = col.totals?.players ?? [];
+  const max = Math.max(1, ...rows.map((t) => t.dmg));
+  const half = v.maxRounds / 2;
+  const side = (pi: number) => {
+    if (col.number > v.maxRounds) return null;
+    const us = col.number <= half ? v.usStartSide : v.usStartSide === "CT" ? "T" : "CT";
+    return v.players[pi].team === "us" ? us : us === "CT" ? "T" : "CT";
+  };
+  return (
+    <div className="drawer__body">
+      <Section title="Killfeed"><p className="meta">Only the game's round totals exist for this round.</p></Section>
+      {rows.length > 0 && (
+        <Section title="Damage" aside="To enemies, game totals">
+          <ul className="ddmg">
+            {[...rows].sort((a, b) => b.dmg - a.dmg).map((t) => {
+              const p = v.players[t.pi];
+              const s = side(t.pi);
+              return (
+                <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: ${t.kills}–${t.deaths}, ${t.assists} ${t.assists === 1 ? "assist" : "assists"}`}>
+                  <span className={`kf__p ${s === "T" ? "t" : s === "CT" ? "ct" : ""}`}>{p.name}</span>
+                  <span className="hbar"><i style={{ width: `${(t.dmg / max) * 100}%`, background: s === "T" ? "var(--t)" : s === "CT" ? "var(--ct)" : "var(--ink3)", opacity: 0.8 }} /></span>
+                  <b className="num">{t.dmg}</b>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+function RoundDetail({ v, r, stagger }: { v: MatchView; r: MRound; stagger: boolean }) {
+  const ri = r.ri;
   // every round's numbers per player, rolled up once in the worker when the drawer first opens, so
   // stepping rounds swaps the content without waiting
   const all = useCall("rounds", [v.file]).data;
   const rd = all?.[ri] ?? null;
-  const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
   const opening = r.kills.find((k) => k.opening);
   const m = (pi: number) => rd?.players[pi]?.m ?? null;
@@ -135,154 +201,141 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
   const f = r.fact;
   const name = (pi: number | null) => (pi === null ? "someone" : v.players[pi].name);
   return (
-    <div className="drawer__in">
-      <header className="drawer__head">
-        <WinIcon how={r.how} size={18} className={side ? `${side}-text` : "faint"} />
-        <div className="drawer__title">
-          <b>Round {r.number}</b>
-          <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
-        </div>
-        {r.scoreAfter && <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>}
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={ri === 0} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={ri === v.nRounds - 1} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
-        <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
-      </header>
-      <div className="drawer__body">
-        <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
-          {r.kills.length ? (
-            <ol className="kf">
-              {r.kills.map((k, i) => {
-                const sw = killSwing(k, k.killer);
-                const anim = stagger && i < 12;
-                return (
-                  <li key={i} className={anim ? "kf__in" : undefined} style={anim ? { animationDelay: `${i * 20}ms` } : undefined}>
-                    <span className="mono faint kf__t">{fmtClock(k.t)}</span>
-                    <span className={`kf__p ${k.killer !== null ? sideCls(k.killer) : ""}`}>{k.killer === null ? "World" : <PlayerName v={v} pi={k.killer} />}</span>
-                    <span className="kf__w">
-                      {opening === k && <FirstKillIcon size={11} className="cream" label="Opening kill" />}
-                      <WeaponIcon name={k.weapon} size={13} />
-                      <KillFlags kill={k} size={12} />
-                    </span>
-                    <span className={`kf__p ${sideCls(k.victim)}`}><PlayerName v={v} pi={k.victim} /></span>
-                    <span className="kf__tags">{k.tradeKill && <span className="chip chip--outline" data-tip="Killed an enemy who had just killed a teammate">trade</span>}</span>
-                    <b className="kf__sw num" style={{ color: sw === null ? "var(--ink3)" : scoreText(roundSwingScore(sw)) }} data-tip="Swing credited to the killer">{sw === null ? "" : fmtSwing(sw)}</b>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : <p className="meta">No kills.</p>}
-          {f.plantTick !== null && (
-            <p className="meta" data-tip="Round clock: time since freeze time ended">
-              Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
-              {f.defused ? `; defused by ${name(f.defuser)} at ${fmtClock(roundSecs(v, r, f.endTick))}` : f.exploded ? `; exploded at ${fmtClock(roundSecs(v, r, f.endTick))}` : ""}.
-            </p>
-          )}
-        </Section>
-
-        <Section title="Economy">
-          <div className="deco">
-            {(["us", "them"] as const).map((t) => {
-              const tr = econ[t];
+    <div className="drawer__body">
+      <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
+        {r.kills.length ? (
+          <ol className="kf">
+            {r.kills.map((k, i) => {
+              const sw = killSwing(k, k.killer);
+              const anim = stagger && i < 12;
               return (
-                <div key={t} className="deco__team">
-                  <div className="deco__head">
-                    <BuyIcon buy={tr.buy} size={16} className={t === "us" ? "cream" : "muted"} />
-                    <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
-                    <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
-                  </div>
-                  <ul className="deco__players">
-                    {team(t).map((p) => {
-                      const x = r.pr[p.pi];
-                      return (
-                        <li key={p.key}>
-                          <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                          <span className="deco__buy">{x?.ownBuy && <BuyIcon buy={x.ownBuy} size={11} />}</span>
-                          <span className="num" data-tip="Equipment value at freeze end">{fmtMoney(x?.equip)}</span>
-                          <span className="num faint" data-tip="Money left after buying">{fmtMoney(x?.money)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  <div className="deco__foot meta">
-                    <span>Bank {fmtMoney(tr.money)}</span>
-                    {tr.spent !== null && <span data-tip="Money the team spent in the buy time">Spent {fmtMoney(tr.spent)}</span>}
-                    {tr.saves > 0 && <span>{tr.saves} saved</span>}
-                  </div>
-                </div>
+                <li key={i} className={anim ? "kf__in" : undefined} style={anim ? { animationDelay: `${i * 20}ms` } : undefined}>
+                  <span className="mono faint kf__t">{fmtClock(k.t)}</span>
+                  <span className={`kf__p ${k.killer !== null ? sideCls(k.killer) : ""}`}>{k.killer === null ? "World" : <PlayerName v={v} pi={k.killer} />}</span>
+                  <span className="kf__w">
+                    {opening === k && <FirstKillIcon size={11} className="cream" label="Opening kill" />}
+                    <WeaponIcon name={k.weapon} size={13} />
+                    <KillFlags kill={k} size={12} />
+                  </span>
+                  <span className={`kf__p ${sideCls(k.victim)}`}><PlayerName v={v} pi={k.victim} /></span>
+                  <span className="kf__tags">{k.tradeKill && <span className="chip chip--outline" data-tip="Killed an enemy who had just killed a teammate">trade</span>}</span>
+                  <b className="kf__sw num" style={{ color: sw === null ? "var(--ink3)" : scoreText(roundSwingScore(sw)) }} data-tip="Swing credited to the killer">{sw === null ? "" : fmtSwing(sw)}</b>
+                </li>
               );
             })}
-          </div>
-        </Section>
-
-        <Section title="Utility thrown">
-          {!rd ? <SkeletonLines n={3} /> : (
-            <ul className="dutil">
-              {v.players.filter((p) => thrown(p.pi).length > 0 || (m(p.pi)?.utilDmg ?? 0) > 0).map((p) => {
-                const x = m(p.pi)!;
-                return (
-                  <li key={p.key}>
-                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
-                    <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
-                    <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
-                  </li>
-                );
-              })}
-              {!anyNades && <li className="meta">No grenades thrown this round.</li>}
-            </ul>
-          )}
-        </Section>
-
-        <Section title="Damage" aside="To enemies">
-          {!rd ? <SkeletonLines n={5} /> : (
-            <ul className="ddmg">
-              {[...v.players].sort((a, b) => (m(b.pi)?.dmg ?? 0) - (m(a.pi)?.dmg ?? 0)).map((p) => {
-                const d = m(p.pi)?.dmg ?? 0;
-                const own = m(p.pi)?.teamDmg ?? 0;
-                const rm = m(p.pi);
-                const sw = rm && rm.swingRounds ? rm.swing : null;
-                return (
-                  <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`}>
-                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                    <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
-                    <b className="num">{d}{own > 0 && <small className="poor-text"> +{own} team</small>}</b>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Section>
-
-        {Object.keys(spent).length > 0 && (
-          <Section title="Where you spent the round" aside="Seconds alive">
-            <PlaceList places={spent} n={5} />
-          </Section>
+          </ol>
+        ) : <p className="meta">No kills.</p>}
+        {f.plantTick !== null && (
+          <p className="meta" data-tip="Round clock: time since freeze time ended">
+            Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
+            {f.defused ? `; defused by ${name(f.defuser)} at ${fmtClock(roundSecs(v, r, f.endTick))}` : f.exploded ? `; exploded at ${fmtClock(roundSecs(v, r, f.endTick))}` : ""}.
+          </p>
         )}
+      </Section>
 
-        <Section title="Your aim this round">
-          {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
-            <>
-              <div className="daim">
-                <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
-                <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{you.aim.hits}</span><span className="stat__s">{you.headHits} head</span></div>
-                <div className="stat" data-tip={metric("accuracy").def}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
-                <div className="stat" data-tip="Share of your gun hits that landed on the head"><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
-                <div className="stat" data-tip={metric("firstBulletAccuracy").def}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
-                <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
-              </div>
-              {!v.visibility ? (
-                <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="These need view angles and mesh line of sight, which this match file does not carry." /></p>
-              ) : (
-                <div className="daim">
-                  <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
-                  <div className="stat" data-tip={metric("reactionTime").def}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
-                  <div className="stat" data-tip={metric("crosshairPlacement").def}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
+      <Section title="Economy">
+        <div className="deco">
+          {(["us", "them"] as const).map((t) => {
+            const tr = econ[t];
+            return (
+              <div key={t} className="deco__team">
+                <div className="deco__head">
+                  <BuyIcon buy={tr.buy} size={16} className={t === "us" ? "cream" : "muted"} />
+                  <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
+                  <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
                 </div>
-              )}
-            </>
-          )}
+                <ul className="deco__players">
+                  {team(t).map((p) => {
+                    const x = r.pr[p.pi];
+                    return (
+                      <li key={p.key}>
+                        <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                        <span className="deco__buy">{x?.ownBuy && <BuyIcon buy={x.ownBuy} size={11} />}</span>
+                        <span className="num" data-tip="Equipment value at freeze end">{fmtMoney(x?.equip)}</span>
+                        <span className="num faint" data-tip="Money left after buying">{fmtMoney(x?.money)}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="deco__foot meta">
+                  <span>Bank {fmtMoney(tr.money)}</span>
+                  {tr.spent !== null && <span data-tip="Money the team spent in the buy time">Spent {fmtMoney(tr.spent)}</span>}
+                  {tr.saves > 0 && <span>{tr.saves} saved</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Utility thrown">
+        {!rd ? <SkeletonLines n={3} /> : (
+          <ul className="dutil">
+            {v.players.filter((p) => thrown(p.pi).length > 0 || (m(p.pi)?.utilDmg ?? 0) > 0).map((p) => {
+              const x = m(p.pi)!;
+              return (
+                <li key={p.key}>
+                  <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                  <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                  <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
+                  <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
+                </li>
+              );
+            })}
+            {!anyNades && <li className="meta">No grenades thrown this round.</li>}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Damage" aside="To enemies">
+        {!rd ? <SkeletonLines n={5} /> : (
+          <ul className="ddmg">
+            {[...v.players].sort((a, b) => (m(b.pi)?.dmg ?? 0) - (m(a.pi)?.dmg ?? 0)).map((p) => {
+              const d = m(p.pi)?.dmg ?? 0;
+              const own = m(p.pi)?.teamDmg ?? 0;
+              const rm = m(p.pi);
+              const sw = rm && rm.swingRounds ? rm.swing : null;
+              return (
+                <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`}>
+                  <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                  <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
+                  <b className="num">{d}{own > 0 && <small className="poor-text"> +{own} team</small>}</b>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Section>
+
+      {Object.keys(spent).length > 0 && (
+        <Section title="Where you spent the round" aside="Seconds alive">
+          <PlaceList places={spent} n={5} />
         </Section>
-      </div>
+      )}
+
+      <Section title="Your aim this round">
+        {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
+          <>
+            <div className="daim">
+              <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
+              <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{you.aim.hits}</span><span className="stat__s">{you.headHits} head</span></div>
+              <div className="stat" data-tip={metric("accuracy").def}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
+              <div className="stat" data-tip="Share of your gun hits that landed on the head"><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
+              <div className="stat" data-tip={metric("firstBulletAccuracy").def}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
+              <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
+            </div>
+            {!v.visibility ? (
+              <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="These need view angles and mesh line of sight, which this match file does not carry." /></p>
+            ) : (
+              <div className="daim">
+                <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
+                <div className="stat" data-tip={metric("reactionTime").def}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
+                <div className="stat" data-tip={metric("crosshairPlacement").def}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
+              </div>
+            )}
+          </>
+        )}
+      </Section>
     </div>
   );
 }
