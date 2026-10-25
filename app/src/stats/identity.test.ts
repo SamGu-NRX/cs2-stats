@@ -21,6 +21,17 @@ it("takes the AWP share over the rounds with a recorded loadout and says how man
   expect(r.evidence[0]).toBe("Carried an AWP in 100% of the 5 T rounds with a recorded loadout (of 10).");
 });
 
+it("states the opening, death-time and trade evidence, and no teammate-distance line", () => {
+  // fails if the evidence again cites the distance-to-teammates ranks, which the UI owner asked to drop:
+  // 4 opening duels in 10 rounds is 40%, 300 s over 6 deaths is 50 s, 2 of 6 deaths and 2 of 7 kills traded
+  expect(roleBlend(tRounds(5, 5), "T").evidence).toEqual([
+    "Carried an AWP in 100% of the 5 T rounds with a recorded loadout (of 10).",
+    "In the opening duel in 40% of rounds.",
+    "Died 50 s into the round on average.",
+    "33% of deaths were traded; 29% of kills were trades.",
+  ]);
+});
+
 it("gives no AWP share when no round has a recorded loadout", () => {
   // fails if a plugin file's rounds (no loadouts) read as never carrying an AWP
   const r = roleBlend(tRounds(0, 0), "T");

@@ -91,7 +91,6 @@ export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
     `In the opening duel in ${pct(x.oap)} of rounds.`,
     `Died ${Math.round(x.tapd)} s into the round on average.`,
     `${pct(x.podt)} of deaths were traded; ${pct(x.pokt)} of kills were trades.`,
-    `Distance to the nearest teammate ranks ${x.adnt.toFixed(2)} in the team (0.2 = closest, 1.0 = farthest), to the team's centre ${x.adat.toFixed(2)}.`,
   );
   const post = roleProbabilities(MODEL.sides[side], x);
   const blend: Record<string, number> = awp === null ? {} : { AWPer: awp };
