@@ -147,6 +147,11 @@ export interface SprayFact {
    * angles: there it is the view's change relative to the line to the target (aim error at bullet 1
    * minus aim error at this bullet), which equals the view change when shooter and target hold still.
    */
+  /**
+   * The path is relative to the target (the plugin's change in aim error, which includes the target's
+   * own movement), not the view's absolute change: it is shown, but never compared with the pros'.
+   */
+  relative: boolean;
   dp: number[];
   dy: number[];
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
@@ -206,12 +211,14 @@ export interface AimAgg {
   pull: number;
   /** per weapon and bullet (index 0 is bullet 2): bullets, and sums of the view change from bullet 1 */
   path: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** the same for sprays whose path is relative to the target (plugin recordings): shown, not compared with pros */
+  relPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
 }
 
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
-  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {},
+  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
 });
 
 export function foldAim(a: AimAgg, f: AimFact): void {
@@ -238,6 +245,11 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.switches += f.sw;
     a.switchHits += f.swHits;
     if (!f.dp.length) return;
+    if (f.relative) {
+      const r = (a.relPath[f.weapon] ??= { n: [], dp: [], dy: [] });
+      f.dp.forEach((dp, j) => { r.n[j] = (r.n[j] ?? 0) + 1; r.dp[j] = (r.dp[j] ?? 0) + dp; r.dy[j] = (r.dy[j] ?? 0) + f.dy[j]; });
+      return;
+    }
     const ref = RECOIL[f.weapon].path;
     const w = (a.path[f.weapon] ??= { n: [], dp: [], dy: [] });
     f.dp.forEach((dp, j) => {
@@ -597,7 +609,9 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
   let n = 0;
   while (n < run.length && refEligible(c, run[n], ps !== null) && atVisible(run[n])) n++;
   const dp: number[] = [], dy: number[] = [];
-  if (n >= SPRAY_MIN && ps) {
+  // plugin shots without absolute view angles give a path relative to the target (relative below)
+  const relative = ps !== null && (S.pitch[run[0]] === null || S.yaw[run[0]] === null);
+  if (n >= SPRAY_MIN && relative) {
     const e0 = ps.err[run[0]]!;
     for (let j = 1; j < Math.min(n, ref.length); j++) {
       const e = ps.err[run[j]]!;
@@ -626,7 +640,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     cur = t;
     if (run.slice(j).some((i) => hitOn.get(key(S.tick[i], pi))?.has(t))) swHits++;
   }
-  return { k: "spray", ri, pi, weapon, bullets: run.length, dp, dy, sw, swHits };
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits };
 }
 
 // ---- metrics
@@ -643,7 +657,7 @@ const per = (a: number, b: number) => (b > 0 ? a / b : null);
 const csKnown = (s: { aim: AimAgg }) => s.aim.cs[1] + s.aim.cs[2] + s.aim.cs[3];
 /** How sprays differ on plugin recordings, which have no recoil index, ammo count or view angles. */
 const PLUGIN_SPRAYS = `On plugin recordings a spray is cut by timing alone (shots of one gun each within one tick of its cycle time, from a shot ${RESET_GAP_S} s after the previous one), and only speed and scope filter its bullets.`;
-const PLUGIN_PATH = "The view path there is the change in aim error to bullet 1's target (the alive enemy nearest the view within 10 degrees, on screen by the plugin's line of sight, else its spotted mask), which leaves out the target's own movement.";
+const PLUGIN_PATH = "There the path is the change in aim error to bullet 1's target (the alive enemy nearest the view within 10 degrees, on screen by the plugin's line of sight, else its spotted mask), which includes the target's own movement: those sprays are shown relative to the target and are not compared with the pros.";
 
 export const AIM_METRICS: Metric[] = [
   { id: "timeToDamage", label: "Time to damage", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
