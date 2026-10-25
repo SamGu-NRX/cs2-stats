@@ -1598,3 +1598,17 @@ def test_a_writer_survives_a_retirement_that_deletes_its_map_folder_first(tmp_pa
     assert not retirer.is_alive() and not writer.is_alive() and not errors, errors
     assert ex.resolve_map_dir(m) is not None
 
+
+
+def test_a_kill_whose_event_lacks_the_killfeed_modifiers_writes_null_not_a_failed_map():
+    # attackerblind / attackerinair were copied with col(), which fills NaN for a field the event lacks,
+    # into columns declared non-null: the writer then rejected the whole map. They are now null there.
+    without = pd.DataFrame(dict(tick=[100, 200]))
+    flags = ex.kill_modifiers(without)
+    assert {c: s.isna().tolist() for c, s in flags.items()} == {"attackerblind": [True, True],
+                                                               "attackerinair": [True, True]}
+    ex._to_polars(_one_row("kills", attackerblind=None, attackerinair=None), "kills")
+    # When the event has them, they come through as recorded.
+    with_flags = pd.DataFrame(dict(tick=[100, 200], attackerblind=[True, False], attackerinair=[False, True]))
+    flags = ex.kill_modifiers(with_flags)
+    assert flags["attackerblind"].tolist() == [True, False] and flags["attackerinair"].tolist() == [False, True]
