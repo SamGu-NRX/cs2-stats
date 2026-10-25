@@ -55,7 +55,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.12.0"
+EXTRACTOR_VERSION = "1.13.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -372,6 +372,16 @@ def resolve_ids(steamid: pd.Series, name: pd.Series, bots: dict[str, int]) -> pd
 
 def col(df: pd.DataFrame, name: str, default=np.nan) -> pd.Series:
     return df[name] if name in df.columns else pd.Series(default, index=df.index)
+
+
+KILL_MODIFIERS = ("attackerblind", "attackerinair")  # the killfeed's flashed and in-air marks
+
+
+def kill_modifiers(k: pd.DataFrame) -> dict[str, pd.Series]:
+    """player_death's killfeed modifiers as nullable booleans: null where the event carries no such field,
+    never a guessed False."""
+    return {c: k[c].astype("boolean") if c in k.columns else pd.Series(pd.NA, index=k.index, dtype="boolean")
+            for c in KILL_MODIFIERS}
 
 
 @dataclass
@@ -1205,9 +1215,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         kills["victim_steamid"] = pid(k, "user")
         kills["assister_steamid"] = pid(k, "assister")
         kills["assister_side"] = col(k, "assister_team_num").map(SIDE)
-        for c in ("assistedflash", "weapon", "headshot", "penetrated", "thrusmoke", "attackerblind", "noscope",
-                  "attackerinair", "distance", "dmg_health", "dmg_armor", "hitgroup"):
+        for c in ("assistedflash", "weapon", "headshot", "penetrated", "thrusmoke", "noscope",
+                  "distance", "dmg_health", "dmg_armor", "hitgroup"):
             kills[c] = col(k, c)
+        for c, flag in kill_modifiers(k).items():
+            kills[c] = flag
         kills = pd.concat([kills, pd.DataFrame(_state_block(k, "attacker", "a")),
                            pd.DataFrame(_state_block(k, "user", "v"))], axis=1)
         kills["is_suicide"] = (kills.attacker_steamid == kills.victim_steamid).fillna(False).astype(bool)

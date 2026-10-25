@@ -512,7 +512,7 @@ NULLABLE: dict[str, list[str]] = {
     "grenade_paths": ["steamid"],
     "grenade_throws": ["entity_id", "flight_s", "land_tick", "land_x", "land_y", "land_z", "link_distance", "projectile"],
     "infernos": ["duration_s", "end_tick"],
-    "kills": ["a_active_weapon", "a_airborne", "a_armor", "a_best_primary", "a_best_primary_price", "a_best_secondary", "a_best_secondary_price", "a_ducking", "a_equip_value_game", "a_flash_duration", "a_health", "a_helmet", "a_inventory_value", "a_money", "a_pitch", "a_place", "a_scoped", "a_side", "a_walking", "a_x", "a_y", "a_yaw", "a_z", "assister_side", "assister_steamid", "attacker_steamid", "s_since_freeze_end", "s_since_plant", "v_best_primary", "v_best_primary_price", "v_best_secondary", "v_best_secondary_price"],
+    "kills": ["a_active_weapon", "a_airborne", "a_armor", "a_best_primary", "a_best_primary_price", "a_best_secondary", "a_best_secondary_price", "a_ducking", "a_equip_value_game", "a_flash_duration", "a_health", "a_helmet", "a_inventory_value", "a_money", "a_pitch", "a_place", "a_scoped", "a_side", "a_walking", "a_x", "a_y", "a_yaw", "a_z", "assister_side", "assister_steamid", "attacker_steamid", "attackerblind", "attackerinair", "s_since_freeze_end", "s_since_plant", "v_best_primary", "v_best_primary_price", "v_best_secondary", "v_best_secondary_price"],
     "match": ["build_num", "playback_ticks", "team1_file", "team2_file"],
     "player_rounds": ["best_primary", "best_primary_price", "best_secondary", "best_secondary_price", "game_damage"],
     "players": ["side_h1", "side_h2", "team"],
