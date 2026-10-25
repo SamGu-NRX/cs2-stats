@@ -9,7 +9,7 @@
 // - Time to damage, reaction, first shot and crosshair placement need view angles and mesh line of
 //   sight; their distributions draw only for matches with mesh visibility, and the card shows the
 //   visibility coverage either way.
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { RECOIL } from "../../../stats/aim-ref";
 import { HIT_GROUPS } from "../../../stats/facts";
 import type { Side } from "../../../stats/tables";
@@ -18,7 +18,7 @@ import type { Query, Rolled } from "../../../worker/protocol";
 import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { binSamples, Histogram, meanPath, SprayPattern, useWidth, type BodyShare, type ProPath, type SprayPath } from "../../components/charts";
-import { Segmented, Select } from "../../components/controls";
+import { rovingIndex, Segmented, Select } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { AgentImg } from "../../components/Agent";
 import { fmtMetric, WEAPON_CLASS_LABEL } from "../../data/engine";
@@ -176,6 +176,7 @@ function SprayCard({ s }: { s: Rolled | null }) {
   const [pick, setPick] = useState<string | null>(null);
   const w = pick && path[pick] ? pick : weapons[0]?.w ?? null;
   const [bands, setBands] = useState(true);
+  const group = useRef<HTMLDivElement>(null);
   const top = weapons.slice(0, 5);
   const more = weapons.slice(5);
   const cur = weapons.find((x) => x.w === w);
@@ -183,15 +184,25 @@ function SprayCard({ s }: { s: Rolled | null }) {
     return <Card title="Spray"><Empty icon={<SprayIcon size={32} />} text="No sprays to show. A spray is three or more bullets in one burst, tracked through each shot's recoil index and ammo count, which these match files do not record." /></Card>;
   }
   const pro = RECOIL[w]?.path.length ? RECOIL[w].path : null;
+  // a gun picked from the menu takes the fifth button's place
+  const shown = top.some((x) => x.w === w) ? top : [...top.slice(0, 4), cur];
+  // one tab stop, the picked gun; arrows pick and move focus, as Segmented does
+  const onKey = (e: KeyboardEvent) => {
+    const to = rovingIndex(e.key, shown.findIndex((x) => x.w === w), shown.length, true);
+    if (to === null) return;
+    e.preventDefault();
+    setPick(shown[to].w);
+    group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(shown[to].w)}"]`)?.focus();
+  };
   return (
     <Card title="Spray" aside={<span className="meta">{plural(cur.bursts, "spray")} {cur.deep < THIN_SPRAY ? <span className="chip chip--outline" data-tip={`Fewer than ${THIN_SPRAY} sprays reached bullet 4, so the pattern past the first bullets is noisy.`}>Few sprays</span> : null}</span>}>
       <div className="gunpick">
-        <div className="gunpick__btns" role="radiogroup" aria-label="Gun">
-          {(top.some((x) => x.w === w) ? top : [...top.slice(0, 4), cur]).map((x) => (
-            <button key={x.w} role="radio" aria-checked={x.w === w} className="gunbtn" onClick={() => setPick(x.w)} data-tip={`${plural(x.bursts, "spray")}${x.deep < THIN_SPRAY ? ", few sprays" : ""}`}>
+        <div ref={group} className="gunpick__btns" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
+          {shown.map((x) => (
+            <button key={x.w} data-w={x.w} role="radio" aria-checked={x.w === w} tabIndex={x.w === w ? 0 : -1} className="gunbtn" onClick={() => setPick(x.w)} data-tip={`${plural(x.bursts, "spray")}${x.deep < THIN_SPRAY ? ", few sprays" : ""}`}>
               <WeaponIcon name={x.w} size={13} label={undefined} />
               <span>{weaponLabel(x.w)}</span>
-              {x.deep < THIN_SPRAY && <i className="gunbtn__thin" aria-label="few sprays" />}
+              {x.deep < THIN_SPRAY && <><i className="gunbtn__thin" aria-hidden /><span className="sr-only">, few sprays</span></>}
             </button>
           ))}
         </div>
@@ -208,10 +219,15 @@ function SprayCard({ s }: { s: Rolled | null }) {
 
 function SprayBody({ path, pro, bands }: { path: SprayPath; pro: ProPath | null; bands: boolean }) {
   const [ref, width] = useWidth<HTMLDivElement>(420);
-  const size = Math.max(300, Math.min(480, width - 230));
+  // Beside the legend the chart gets the width less 230 px (the legend's 180 px minimum, the 20 px gap
+  // and some air), down to 300 px; below that the legend drops under it and the chart takes the whole
+  // width. The svg also caps itself at its container (.spray), keeping its square, before the width
+  // is measured.
+  const stacked = width - 230 < 300;
+  const size = Math.min(480, stacked ? width : width - 230);
   return (
     <div className="spray-body" ref={ref}>
-      <div className="spray-main">
+      <div className={`spray-main ${stacked ? "is-stacked" : ""}`}>
         <SprayPattern path={path} pro={pro} size={size} bands={bands} />
         <div className="legend spray-legend">
           <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="var(--cream)" /></svg>Your average view movement from the first bullet, bullet by bullet</span>

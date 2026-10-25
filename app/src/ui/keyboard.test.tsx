@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// Keyboard contracts a mouse user never exercises: table rows, the row menu, the palette and opening
-// a match without motion. jsdom has no layout, so these check focus, events and state, not pixels.
+// Keyboard contracts a mouse user never exercises: table rows, the row menu, the palette, opening
+// a match without motion, and the spray gun picker. jsdom has no layout, so these check focus, events
+// and state, not pixels.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,15 +10,27 @@ import { MenuLayer, openMenu } from "./components/overlay";
 import { navWasInstant, openMatch } from "./router";
 import type { Data } from "./data/provider";
 import { Palette } from "./shell/Palette";
+import { RECOIL } from "../stats/aim-ref";
+import { emptySummary } from "../stats/rollup";
+import { metaOf, rolled } from "../worker/views";
+import type { Rolled } from "../worker/protocol";
+import { setMeta } from "./data/meta";
+import { AimPanels } from "./views/aim/AimPanels";
 
 // The palette's data: no matches and no pro pack. The mock is typed against the provider's Data, so
 // renaming a field the palette reads fails to compile here instead of failing at render (it once
 // returned "summaries" after the provider had renamed it to "matches").
 vi.mock("./data/provider", () => ({ useData: (): Pick<Data, "matches"> => ({ matches: [] }) }));
-vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }) }));
+vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }), useAgents: () => null }));
+// AimPanels' summaries: the worker's answer, set per test (no plugin file records sprays yet).
+let scoped: Rolled | null = null;
+vi.mock("./data/hooks", async (orig) => ({ ...(await orig<object>()), useScoped: () => (scoped ? [scoped] : null) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollIntoView = () => {}; // not in jsdom
+globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+// not in jsdom; the ids escaped here (data-v values, gun names) are plain words
+globalThis.CSS ??= { escape: (x: string) => x } as unknown as typeof CSS;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -146,5 +159,34 @@ describe("opening a match", () => {
     openMatch("#/match/b.json.gz/overview");
     expect(location.hash).toBe("#/match/b.json.gz/overview");
     expect(transition).toHaveBeenCalledOnce();
+  });
+});
+
+describe("spray gun picker", () => {
+  it("is one tab stop; arrows, Home and End pick a gun and move focus with it", () => {
+    setMeta(metaOf());
+    const s = rolled(emptySummary());
+    // sprays on six guns: five get buttons, the sixth goes to the More menu
+    const guns = Object.keys(RECOIL).slice(0, 6);
+    s.aim.path = Object.fromEntries(guns.map((w, i) => [w, { n: [60 - i, 50 - i, 40 - i], dp: [1, 2, 3], dy: [0, 0.5, 1] }]));
+    scoped = s;
+    render(<AimPanels query={{ files: [], filter: { player: "x" } }} label="test" visibility={false} />);
+    const radios = () => Array.from(host.querySelectorAll<HTMLElement>('[aria-label="Gun"] [role=radio]'));
+    const picked = () => radios().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.w;
+    expect(radios().map((b) => b.dataset.w)).toEqual(guns.slice(0, 5));
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    act(() => radios()[0].focus());
+    key(document.activeElement!, "ArrowRight");
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[1], guns[1]]);
+    key(document.activeElement!, "End");
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[4], guns[4]]);
+    key(document.activeElement!, "ArrowDown");
+    expect(picked()).toBe(guns[0]);
+    key(document.activeElement!, "ArrowUp");
+    expect(picked()).toBe(guns[4]);
+    key(document.activeElement!, "Home");
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[0], guns[0]]);
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    scoped = null;
   });
 });
