@@ -254,7 +254,7 @@ function RecentMatches({ list }: { list: LightSummary[] }) {
         rowKey={(s) => s.file}
         defaultSort={null}
         onOpen={(s) => openMatch(matchHref(s.file), document.querySelector(`[data-file="${CSS.escape(s.file)}"]`)?.closest("tr"))}
-        onRowContext={(s, e) => openMenu(e, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied") }])}
+        onRowContext={(s, at) => openMenu(at, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied") }])}
         columns={[
           { key: "map", label: "Map", align: "l", sort: (s) => s.map, render: (s) => <span className="mapcell" data-file={s.file}><MapThumb map={s.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.map)}</b><small>{fmtDate(s.startUtc)}</small></span></span> },
           { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span> },

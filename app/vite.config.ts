@@ -103,7 +103,7 @@ export default defineConfig({
   // One test process, files in sequence: the suite takes about a second, and this keeps it light
   // on a machine that may be running the game.
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
