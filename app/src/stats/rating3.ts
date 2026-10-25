@@ -223,6 +223,17 @@ export interface Rating3 {
 
 export const RATING3_STATUS: string = params.rating.status;
 
+/**
+ * The rating's terms in params.json's order, for a breakdown: each term's contribution is its
+ * coefficient times inputs[input], and intercept plus the contributions is rating3FromInputs(inputs).
+ */
+export const RATING3_TERMS: { name: string; input: Feature; coefficient: number }[] =
+  params.rating.features.map((f) => ({ name: f, input: INPUT_OF[f], coefficient: params.rating.coefficients[f] }));
+export const RATING3_INTERCEPT: number = params.rating.intercept;
+
+/** Where the weights come from, for Settings: params.json's fit and dataset. */
+export const RATING3_WEIGHTS = `${params.rating.fit.method.replaceAll("_", " ")} on HLTV's displayed inputs, ${params.rating.dataset.maps} maps (${params.rating.dataset.player_maps.toLocaleString("en")} player-maps, ${params.rating.dataset.date}); held-out mean error ${params.rating.fit.held_out_mae.toFixed(3)}`;
+
 /** The coverage gate's reason (coverage.ts), or null when the summary passes it. */
 const coverageGap = (s: Summary) =>
   coveredEnough(s.covered) ? null : `the kill-by-kill log covers ${s.covered.nRounds} of ${s.covered.roundsPlayed} rounds; the rating needs half`;
