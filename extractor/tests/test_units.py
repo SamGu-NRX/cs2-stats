@@ -721,7 +721,15 @@ def test_a_winnerless_attempt_is_voided_only_if_the_game_rolled_its_stats_back()
     # A pro demo: kills plus deaths stay put across the 45420-57646 restore (rolled back), but a
     # world suicide inside 78153-97787 raised deaths_total and stayed counted (the game kept that attempt).
     totals = {45420: 120, 57646 + 64: 120, 78153: 131, 97787 + 64: 132}
-    assert ex.split_restores([(45420, 57646), (78153, 97787)], totals) == ([(45420, 57646)], [(78153, 97787)])
+    assert ex.split_restores([(45420, 57646), (78153, 97787)], totals, 64.0) == ([(45420, 57646)],
+                                                                                [(78153, 97787)])
+
+
+def test_restores_are_judged_one_second_after_the_restore_at_any_tick_rate():
+    # The counters were sampled 64 ticks after the restore, which is half a second on a 128-tick demo.
+    # Here a 128-tick demo's kept attempt only shows its counted death one second (128 ticks) later.
+    totals = {1000: 50, 5000 + 64: 50, 5000 + 128: 51}
+    assert ex.split_restores([(1000, 5000)], totals, 128.0) == ([], [(1000, 5000)])
 
 
 
