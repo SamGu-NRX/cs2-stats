@@ -1,10 +1,10 @@
 // Pieces several views share: stat tiles, hover cards for players and rounds, empty states and
 // skeletons shaped like the content they stand in for.
-import type { ReactNode } from "react";
-import type { MatchView, RoundView } from "../../stats/derive";
+import { useMemo, type ReactNode } from "react";
 import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
-import { killSwing, playerSide, ratingLabel, statLine } from "../data/engine";
+import { playerLine, RATING_HEADLINE } from "../data/engine";
+import { roundSwing, sideOf, type MatchModel, type MRound } from "../data/match";
 import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
@@ -70,18 +70,16 @@ export function BreakRows({ rows }: { rows: { label: ReactNode; value: ReactNode
 
 // ---------------------------------------------------------------- player hover card
 
-export function PlayerCardBody({ v, pi }: { v: MatchView; pi: number }) {
+export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
   const p = v.players[pi];
-  const both = statLine(v, pi, "both");
-  const t = statLine(v, pi, "t");
-  const ct = statLine(v, pi, "ct");
+  const [both, t, ct] = useMemo(() => (["both", "t", "ct"] as const).map((k) => playerLine(v, pi, k)), [v, pi]);
   return (
     <div className="pcard">
       <div className="pcard__head">
         <span className={`pcard__dot ${p.team === "us" ? "us" : "them"}`} />
         <div>
           <b>{p.name}</b>
-          <div className="meta">{p.isHuman ? "You" : p.team === "us" ? "Teammate, bot" : "Opponent, bot"}</div>
+          <div className="meta">{p.isHuman ? "You" : `${p.team === "us" ? "Teammate" : "Opponent"}${p.bot ? ", bot" : ""}`}</div>
         </div>
         <span className="pcard__rating num" style={{ color: ratingText(both.rating ?? 1) }}>{fmtRating(both.rating)}</span>
       </div>
@@ -95,12 +93,12 @@ export function PlayerCardBody({ v, pi }: { v: MatchView; pi: number }) {
         <div><span className="t-text caps">T</span><b className="num">{fmtRating(t.rating)}</b><small className="meta">{t.kills}–{t.deaths}</small></div>
         <div><span className="ct-text caps">CT</span><b className="num">{fmtRating(ct.rating)}</b><small className="meta">{ct.kills}–{ct.deaths}</small></div>
       </div>
-      <div className="meta">{ratingLabel(v)}</div>
+      <div className="meta">{RATING_HEADLINE}</div>
     </div>
   );
 }
 
-export function PlayerName({ v, pi, children }: { v: MatchView; pi: number; children?: ReactNode }) {
+export function PlayerName({ v, pi, children }: { v: MatchModel; pi: number; children?: ReactNode }) {
   return (
     <HoverCard prefer="right" card={() => <PlayerCardBody v={v} pi={pi} />} className="pname">
       {children ?? v.players[pi].name}
@@ -110,18 +108,19 @@ export function PlayerName({ v, pi, children }: { v: MatchView; pi: number; chil
 
 // ---------------------------------------------------------------- round hover card
 
-export function RoundCardBody({ v, r }: { v: MatchView; r: RoundView }) {
-  const side = r.winSide === 2 ? "t" : r.winSide === 3 ? "ct" : null;
+export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
+  const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const human = v.human;
-  const hSide = playerSide(v, r, human);
-  const top = r.swing ? r.swing.map((s, pi) => ({ s, pi })).sort((a, b) => b.s - a.s)[0] : null;
+  const hSide = sideOf(v, r, human);
+  const you = roundSwing(r.pr[human]);
+  const top = r.pr.map((row, pi) => ({ s: roundSwing(row), pi })).filter((x): x is { s: number; pi: number } => x.s !== null).sort((a, b) => b.s - a.s)[0] ?? null;
   return (
     <div className="rcard">
       <div className="rcard__head">
         <WinIcon how={r.how} size={16} className={side ? `${side}-text` : "faint"} />
-        <b>Round {r.ri + 1}</b>
+        <b>Round {r.number}</b>
         <span className="meta">{r.how ? WIN_LABEL[r.how] : "Result unknown"}</span>
-        <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>
+        {r.scoreAfter && <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>}
       </div>
       <div className="rcard__eco">
         <span><BuyIcon buy={r.buy.us} size={14} /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
@@ -132,20 +131,20 @@ export function RoundCardBody({ v, r }: { v: MatchView; r: RoundView }) {
         <ol className="kf kf--compact">
           {r.kills.slice(0, 10).map((k, i) => (
             <li key={i}>
-              <span className="mono faint">{fmtClock(k.secs)}</span>
+              <span className="mono faint">{fmtClock(k.t)}</span>
               <span className={k.killer !== null && v.players[k.killer].team === "us" ? "us-text" : "them-text"}>{k.killer === null ? "World" : v.players[k.killer].name}</span>
               <WeaponIcon name={k.weapon} size={11} />
-              <KillFlags flags={k.flags} size={11} />
+              <KillFlags kill={k} size={11} />
               <span className={v.players[k.victim].team === "us" ? "us-text" : "them-text"}>{v.players[k.victim].name}</span>
             </li>
           ))}
           {r.kills.length > 10 && <li className="faint">{r.kills.length - 10} more</li>}
         </ol>
-      ) : <p className="meta">{r.lite ? "Totals only for this round." : "No kills recorded."}</p>}
+      ) : <p className="meta">No kills recorded.</p>}
       <div className="rcard__foot">
-        {r.swing && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(r.swing[human])) }}>{fmtSwing(r.swing[human])}</b></span>}
+        {you !== null && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(you)) }}>{fmtSwing(you)}</b></span>}
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
-        <span className={hSide === 2 ? "t-text" : "ct-text"}>You on {hSide === 2 ? "T" : "CT"}</span>
+        <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
       </div>
     </div>
   );
@@ -155,8 +154,6 @@ export function RoundCardBody({ v, r }: { v: MatchView; r: RoundView }) {
 export function Skulls({ kills, size = 10 }: { kills: { hs: boolean }[]; size?: number }) {
   return <span className="skulls">{kills.map((k, i) => <SkullIcon key={i} hs={k.hs} size={size} className={k.hs ? "skull skull--hs" : "skull"} />)}</span>;
 }
-
-export { killSwing };
 
 // ---------------------------------------------------------------- states
 

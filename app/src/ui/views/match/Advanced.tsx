@@ -1,44 +1,34 @@
-// Advanced: team-level facts for both teams side by side. Every number comes from the engine's
-// per-round details (roundDetails) and economy view.
-import type { ReactNode } from "react";
-import type { MatchView } from "../../../stats/derive";
+// Advanced: team-level facts for both teams side by side. Rates come from METRIC over a rollup of
+// the team's five players; counts come from the round facts.
+import { useMemo, type ReactNode } from "react";
+import { METRIC } from "../../../stats/metrics";
+import { rollup } from "../../../stats/rollup";
 import { ClutchBadge } from "../../components/bits";
 import { Card } from "../../components/Card";
-import { BUY_CLASSES, BUY_CLASS_LABEL } from "../../data/engine";
+import { BUY_CLASSES, BUY_CLASS_LABEL, clutchRows } from "../../data/engine";
+import { buyTally, type MatchModel, type Team } from "../../data/match";
 import { BombIcon, BuyIcon, DefuseIcon, FirstKillIcon, TimeIcon } from "../../icons/game";
 import { TradingIcon } from "../../icons/attributes";
-import { fmtPct, fmtSecs } from "../../lib/format";
+import { fmtPct } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 import type { TabProps } from "./MatchView";
 
-type Team = "us" | "them";
-const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
-
-function teamFacts(v: MatchView, t: Team) {
-  let fk = 0, fkWon = 0, deaths = 0, traded = 0, tradeKills = 0, clutchN = 0, clutchW = 0;
-  let tRounds = 0, tWon = 0, ctRounds = 0, ctWon = 0, plants = 0, exploded = 0, defused = 0, winSecs = 0, winN = 0;
-  const pistols: { ri: number; won: boolean }[] = [];
-  const clutchByVs = [0, 0, 0, 0, 0].map(() => ({ n: 0, w: 0 }));
-  for (const r of v.roundDetails) {
-    if (!r.captured) continue;
-    const side = r.teams.t.team === t ? "t" : "ct";
-    const tr = r.teams[side];
+function teamFacts(v: MatchModel, t: Team) {
+  const s = rollup([v.facts], { player: v.players.filter((p) => p.team === t).map((p) => p.key) });
+  let tWon = 0, ctWon = 0, plants = 0, exploded = 0, defused = 0;
+  const pistols: boolean[] = [];
+  for (const r of v.rounds) {
+    const side = t === "us" ? r.usSide : r.usSide === "T" ? "CT" : "T";
     const won = r.winner === t;
-    if (side === "t") { tRounds++; if (won) tWon++; } else { ctRounds++; if (won) ctWon++; }
-    if (won && r.durSecs !== null) { winSecs += r.durSecs; winN++; }
-    if (tr.buy === "pistol") pistols.push({ ri: r.ri, won });
-    if (side === "t" && r.bomb.plantTick !== null) { plants++; if (r.bomb.exploded) exploded++; }
-    if (side === "ct" && r.bomb.defused) defused++;
-    for (const pi of tr.players) {
-      const pr = r.players[pi];
-      if (!pr) continue;
-      if (pr.kills.some((k) => k.opening)) { fk++; if (won) fkWon++; }
-      tradeKills += pr.kills.filter((k) => k.tradeKill).length;
-      if (pr.death) { deaths++; if (pr.traded) traded++; }
-      if (pr.clutch) { clutchN++; clutchByVs[pr.clutch.opponents - 1].n++; if (pr.clutch.won) { clutchW++; clutchByVs[pr.clutch.opponents - 1].w++; } }
-    }
+    if (won) { if (side === "T") tWon++; else ctWon++; }
+    if (r.buy[t] === "pistol") pistols.push(won);
+    if (side === "T" && r.planted) { plants++; if (r.exploded) exploded++; }
+    if (side === "CT" && r.defused) defused++;
   }
-  return { fk, fkWon, deaths, traded, tradeKills, clutchN, clutchW, clutchByVs, tRounds, tWon, ctRounds, ctWon, plants, exploded, defused, avgWin: winN ? winSecs / winN : null, pistols };
+  return {
+    fk: s.m.openingKills, openingSuccess: METRIC.openingSuccess.value(s), tradeKills: s.m.tradeKills, deathsTraded: METRIC.deathsTradedPct.value(s),
+    clutches: clutchRows(s.m), tWon, ctWon, plants, exploded, defused, pistols,
+  };
 }
 
 function Pair({ label, tip, us, them, fmt, good }: { label: string; tip: string; us: number | null; them: number | null; fmt: (x: number | null) => string; good?: (x: number) => number }) {
@@ -62,58 +52,60 @@ function Block({ title, icon, children }: { title: string; icon: ReactNode; chil
 }
 
 export default function Advanced({ v }: TabProps) {
-  const a = teamFacts(v, "us");
-  const b = teamFacts(v, "them");
-  const n = (x: number) => String(x);
+  const a = useMemo(() => teamFacts(v, "us"), [v]);
+  const b = useMemo(() => teamFacts(v, "them"), [v]);
+  const buys = useMemo(() => buyTally(v), [v]);
+  const n = (x: number | null) => String(x ?? 0);
   const p = (x: number | null) => fmtPct(x, 0);
+  const won = (rows: { won: number }[]) => rows.reduce((t, r) => t + r.won, 0);
+  const played = (rows: { played: number }[]) => rows.reduce((t, r) => t + r.played, 0);
   return (
     <div className="tabpad advanced">
       <div className="grid-2">
         <Block title="Opening duels" icon={<FirstKillIcon size={15} />}>
-          <Pair label="Opening kills" tip="Rounds where your team made the first kill" us={a.fk} them={b.fk} fmt={(x) => n(x ?? 0)} />
-          <Pair label="Rounds won after the opening kill" tip="Of the rounds a team opened, the share it won" us={pct(a.fkWon, a.fk)} them={pct(b.fkWon, b.fk)} fmt={p} good={(x) => toScore(x, 65, 25)} />
+          <Pair label="Opening kills" tip="Rounds where the team made the first kill" us={a.fk} them={b.fk} fmt={n} />
+          <Pair label="Opening duels won" tip={METRIC.openingSuccess.def} us={a.openingSuccess} them={b.openingSuccess} fmt={p} good={(x) => toScore(x, 50, 25)} />
         </Block>
         <Block title="Trading" icon={<TradingIcon size={15} />}>
-          <Pair label="Trade kills" tip="Kills on an enemy who had made a kill less than 5 s earlier" us={a.tradeKills} them={b.tradeKills} fmt={(x) => n(x ?? 0)} />
-          <Pair label="Deaths traded" tip="Share of a team's deaths avenged within 5 s" us={pct(a.traded, a.deaths)} them={pct(b.traded, b.deaths)} fmt={p} good={(x) => toScore(x, 25, 20)} />
+          <Pair label="Trade kills" tip="Kills on an enemy who had just killed a teammate" us={a.tradeKills} them={b.tradeKills} fmt={n} />
+          <Pair label="Deaths traded" tip={METRIC.deathsTradedPct.def} us={a.deathsTraded} them={b.deathsTraded} fmt={p} good={(x) => toScore(x, 25, 20)} />
         </Block>
         <Block title="Sides" icon={<span className="adv__sides"><i className="t-dot" /><i className="ct-dot" /></span>}>
-          <Pair label="T rounds won" tip="Rounds won on T, of those played on T" us={pct(a.tWon, a.tRounds)} them={pct(b.tWon, b.tRounds)} fmt={p} good={(x) => toScore(x, 50, 30)} />
-          <Pair label="CT rounds won" tip="Rounds won on CT, of those played on CT" us={pct(a.ctWon, a.ctRounds)} them={pct(b.ctWon, b.ctRounds)} fmt={p} good={(x) => toScore(x, 50, 30)} />
-          <Pair label="Average winning round" tip="Seconds from freeze end to the end of rounds the team won" us={a.avgWin} them={b.avgWin} fmt={(x) => fmtSecs(x, 0)} />
+          <Pair label="T rounds won" tip="Rounds won on T" us={a.tWon} them={b.tWon} fmt={n} />
+          <Pair label="CT rounds won" tip="Rounds won on CT" us={a.ctWon} them={b.ctWon} fmt={n} />
         </Block>
         <Block title="The bomb" icon={<BombIcon size={15} />}>
-          <Pair label="Plants as T" tip="Rounds the team planted on T" us={a.plants} them={b.plants} fmt={(x) => n(x ?? 0)} />
-          <Pair label="Plants that exploded" tip="Share of a team's plants that exploded" us={pct(a.exploded, a.plants)} them={pct(b.exploded, b.plants)} fmt={p} />
-          <Pair label="Defuses as CT" tip="Rounds the team defused" us={a.defused} them={b.defused} fmt={(x) => n(x ?? 0)} />
+          <Pair label="Plants as T" tip="Rounds the team planted on T" us={a.plants} them={b.plants} fmt={n} />
+          <Pair label="Plants that exploded" tip="The team's plants that exploded" us={a.exploded} them={b.exploded} fmt={n} />
+          <Pair label="Defuses as CT" tip="Rounds the team defused" us={a.defused} them={b.defused} fmt={n} />
         </Block>
         <Card title={<span className="adv__title"><BuyIcon buy="full" size={15} />Buys won</span>}>
           <ul className="buyrates">
-            {BUY_CLASSES.map((buy, i) => {
-              const x = v.econ.winRate.us[i];
-              const y = v.econ.winRate.them[i];
+            {BUY_CLASSES.map((buy) => {
+              const x = buys.us[buy];
+              const y = buys.them[buy];
               if (!x.rounds && !y.rounds) return null;
-              const ours = pct(x.wins, x.rounds);
+              // bar lengths only; wins and rounds are the numbers shown
+              const ours = x.rounds ? (100 * x.wins) / x.rounds : null;
               return (
                 <li key={buy} data-tip={`Opponents won ${y.wins} of ${y.rounds} on this buy`}>
                   <BuyIcon buy={buy} size={16} className="cream" />
                   <b>{BUY_CLASS_LABEL[buy]}</b>
-                  <span className="hbar">{ours !== null && <i style={{ width: `${ours}%`, background: ours >= 50 ? "var(--good)" : "var(--poor)" }} />}{y.rounds > 0 && <em className="hbar__ref" style={{ left: `${pct(y.wins, y.rounds)}%` }} />}</span>
-                  <b className="num">{fmtPct(ours, 0)}</b>
-                  <span className="num faint">{x.wins}/{x.rounds}</span>
+                  <span className="hbar">{ours !== null && <i style={{ width: `${ours}%`, background: ours >= 50 ? "var(--good)" : "var(--poor)" }} />}{y.rounds > 0 && <em className="hbar__ref" style={{ left: `${(100 * y.wins) / y.rounds}%` }} />}</span>
+                  <b className="num">{x.wins}<span className="faint">/{x.rounds}</span></b>
                 </li>
               );
             })}
           </ul>
-          <p className="meta" style={{ marginTop: 8 }}>The tick marks the opponents' rate on the same buy. Pistol rounds: {a.pistols.map((r) => (r.won ? "won" : "lost")).join(", ") || "none"}.</p>
+          <p className="meta" style={{ marginTop: 8 }}>The tick marks the opponents' share of wins on the same buy. Pistol rounds: {a.pistols.map((w) => (w ? "won" : "lost")).join(", ") || "none"}.</p>
         </Card>
-        <Card title={<span className="adv__title"><DefuseIcon size={15} />Clutches</span>} aside={<span className="meta"><span className="cream num">{a.clutchW}/{a.clutchN}</span> you, <span className="num">{b.clutchW}/{b.clutchN}</span> them</span>}>
+        <Card title={<span className="adv__title"><DefuseIcon size={15} />Clutches</span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> you, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> them</span>}>
           <ul className="clist">
-            {a.clutchByVs.map((c, i) => (
-              <li key={i}>
-                <ClutchBadge vs={i + 1} won={c.w > 0} />
-                <span className="hbar"><i style={{ width: c.n ? `${(100 * c.w) / c.n}%` : 0, background: "var(--good)" }} /></span>
-                <b className="num">{c.w}<span className="faint">/{c.n}</span></b>
+            {a.clutches.map((c) => (
+              <li key={c.vs}>
+                <ClutchBadge vs={c.vs} won={c.won > 0} />
+                <span className="hbar"><i style={{ width: c.played ? `${(100 * c.won) / c.played}%` : 0, background: "var(--good)" }} /></span>
+                <b className="num">{c.won}<span className="faint">/{c.played}</span></b>
               </li>
             ))}
           </ul>

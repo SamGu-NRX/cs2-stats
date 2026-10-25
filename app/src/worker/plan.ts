@@ -1,9 +1,9 @@
-// Decides, for each listed file, whether the in-memory summary is still valid. A file is reused
-// only when its cache key (path, size, mtime, derive version, model) is unchanged from the previous
-// sync; anything else must be re-read, and its cached match view dropped.
+// Decides, for each listed file, whether the in-memory facts are still valid. A file is reused only
+// when its cache key (path, size, mtime, derive version) is unchanged from the previous sync;
+// anything else must be read again.
 export interface SyncPlan {
   keys: Map<string, string>;
-  /** files whose summary from the previous sync is still valid */
+  /** files whose facts from the previous sync are still valid */
   reuse: Set<string>;
   /** files that are new or changed since the previous sync */
   changed: string[];

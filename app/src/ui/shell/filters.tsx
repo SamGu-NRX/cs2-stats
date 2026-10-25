@@ -13,9 +13,9 @@ export function useFilters() {
 }
 
 export function MapFilter() {
-  const { summaries } = useData();
+  const { matches } = useData();
   const { map } = useFilters();
-  const maps = mapsIn(summaries);
+  const maps = mapsIn(matches);
   return (
     <Select
       label="Map"

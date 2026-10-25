@@ -45,14 +45,16 @@ export function fmtClock(secs: number | null | undefined): string {
 
 const dateFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 const yearFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
-const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
-export const fmtDate = (iso: string) => dateFmt.format(new Date(iso));
-export const fmtDateYear = (iso: string) => yearFmt.format(new Date(iso));
-export const fmtTime = (iso: string) => timeFmt.format(new Date(iso));
-export const fmtDuration = (a: string, b: string) => {
-  const m = Math.round((Date.parse(b) - Date.parse(a)) / 60000);
-  return Number.isFinite(m) && m > 0 ? `${m} min` : DASH;
-};
+/**
+ * Match dates are calendar days ("2026-10-24"). Date parses that form as UTC midnight, which
+ * formats as the previous day west of UTC, so it is read as a local date.
+ */
+function day(d: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d);
+}
+export const fmtDate = (d: string | null) => (d ? dateFmt.format(day(d)) : DASH);
+export const fmtDateYear = (d: string | null) => (d ? yearFmt.format(day(d)) : DASH);
 
 /** "3 matches", "1 match" */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

@@ -1,17 +1,24 @@
 import type { FileEntry } from "../host/host";
-import type { PosAgg } from "../stats/positions";
-import type { MatchSummary, MatchView } from "../stats/derive";
-import type { ProfileFilter, ProfileView } from "../stats/profile";
+import type { GunProficiency } from "../stats/guns";
+import type { MatchFacts } from "../stats/facts";
+import type { Rating3 } from "../stats/rating3";
+import type { Filter, Summary } from "../stats/rollup";
+import type { MatchEntry } from "../ui/data/match";
 
-/** Summary without positions: what the UI and the profile keep in memory. */
-export type LightSummary = Omit<MatchSummary, "pos">;
+/** Which matches a question covers (the map and time filters, resolved to files) and whose rounds. */
+export interface Query { files: string[]; filter: Filter }
+
+/** Per side, as rating3BySide returns it. */
+export type SideRatings = Record<"both" | "CT" | "T", Rating3>;
 
 export interface Api {
-  sync(entries: FileEntry[]): { summaries: LightSummary[]; errors: { file: string; message: string }[] };
-  match(file: string): MatchView;
-  profile(filter: ProfileFilter): ProfileView | null;
-  profilePositions(map: string): PosAgg;
-  modelInfo(): { kind: "stub" | "model"; label: string; error: string | null };
+  sync(entries: FileEntry[]): { matches: MatchEntry[]; errors: { file: string; message: string }[] };
+  facts(file: string): MatchFacts;
+  rollup(qs: Query[]): Summary[];
+  ratings(qs: Query[]): SideRatings[];
+  guns(q: Query): GunProficiency[];
+  /** world [x, y] of the players' enemy kills (where the killer stood) and of their deaths */
+  positions(q: Query): { kills: [number, number][]; deaths: [number, number][] };
 }
 
 export type Method = keyof Api;
