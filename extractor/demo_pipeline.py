@@ -473,19 +473,26 @@ class Pipeline:
                         if a.rar.exists() else 0):
             if self.extracted_count() >= MAX_EXTRACTED:
                 return
-            our, ok = self.budget(fresh=True)
-            if not ok:
-                log.warning("disk budget: ours %.2f GB (max %.0f), free %.1f GB (min %.0f); not extracting %s",
-                            our, MAX_OUR_GB, free_gb(), MIN_FREE_GB, a.id)
-                return
-            try:
-                a.listing = list_archive(a.rar)
-            except Exception as e:  # noqa: BLE001
-                self.fail_archive(a, f"7z listing failed: {e}")
-                continue
             if not a.listing:
-                self.fail_archive(a, "archive lists no .dem files")
+                try:
+                    a.listing = list_archive(a.rar)
+                except Exception as e:  # noqa: BLE001
+                    self.fail_archive(a, f"7z listing failed: {e}")
+                    continue
+                if not a.listing:
+                    self.fail_archive(a, "archive lists no .dem files")
+                    continue
+            # The budget counts what the extraction will add: the uncompressed .dem sizes from the listing.
+            expand = sum(int(e.get("size") or 0) for e in a.listing.values()) / 1e9
+            if expand > MAX_OUR_GB:
+                self.fail_archive(a, f"its demos ({expand:.1f} GB) are larger than the {MAX_OUR_GB:.0f} GB budget")
                 continue
+            our = self.our_bytes() / 1e9
+            free = free_gb()
+            if our + expand > MAX_OUR_GB or free - expand < MIN_FREE_GB:
+                log.warning("disk budget: ours %.2f + %.2f GB of demos (max %.0f), free %.1f GB (min %.0f after "
+                            "extracting); %s waits", our, expand, MAX_OUR_GB, free, MIN_FREE_GB, a.id)
+                return
             a.slug = slug_for(sorted(a.listing), a.id)
             a.work = WORK_DIR / a.slug
             if a.work.exists():

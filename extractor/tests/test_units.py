@@ -778,3 +778,56 @@ def test_a_ledger_row_cannot_point_a_delete_outside_the_data_folder(tmp_path, mo
     dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1),
                                 "y": dict(ok=True, dem_file="b.dem", dem_bytes=2)}, set())
     assert victim.exists()
+
+
+
+def _pending_archive(tmp_path, dem_bytes):
+    rar = dp.DOWNLOADS / "u"
+    rar.write_bytes(dp.RAR_MAGIC + bytes(10))
+    return dp.Archive(rar=rar, id="u"), {"m1.dem": dict(size=dem_bytes, modified=None)}
+
+
+def test_an_archive_whose_demos_would_break_the_budget_is_not_extracted(tmp_path, monkeypatch):
+    # The budget counted only what was already on disk, so a 2 GB expansion could push it past 12 GB.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1.0)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0)
+    a, listing = _pending_archive(tmp_path, int(0.6e9))
+    (dp.DEMOS_DIR / "existing.parquet").write_bytes(b"x" * 100)
+    started = []
+    monkeypatch.setattr(dp, "list_archive", lambda rar: listing)
+    monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: started.append(x))
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    monkeypatch.setattr(p, "our_bytes", lambda: int(0.5e9))  # 0.5 GB on disk + 0.6 GB of demos > 1 GB
+    p.start_extractions()
+    assert started == [] and a.state == "pending"
+    monkeypatch.setattr(p, "our_bytes", lambda: int(0.3e9))  # 0.3 + 0.6 fits
+    p.start_extractions()
+    assert len(started) == 1 and a.state == "extracting"
+
+
+def test_an_archive_that_breaks_the_free_space_floor_waits(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 46.0)  # 46 GB free, 2 GB of demos -> 44 < 45
+    a, listing = _pending_archive(tmp_path, int(2e9))
+    started = []
+    monkeypatch.setattr(dp, "list_archive", lambda rar: listing)
+    monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: started.append(x))
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.start_extractions()
+    assert started == [] and a.state == "pending"
+
+
+def test_an_archive_too_big_to_ever_fit_fails_with_a_reason(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1.0)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0)
+    a, listing = _pending_archive(tmp_path, int(1.5e9))
+    monkeypatch.setattr(dp, "list_archive", lambda rar: listing)
+    monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: pytest.fail("must not extract"))
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.start_extractions()
+    assert a.id not in p.archives and "larger than the" in p.ledger["u"]["reason"]
