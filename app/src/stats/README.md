@@ -37,7 +37,7 @@ Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginTo
 ### Facts
 | Call | Returns | Notes |
 |---|---|---|
-| `derive(tables, winProb)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`), which changes whenever a definition does, and by the win-probability source, which swing depends on. |
+| `derive(tables, winProb)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`), which changes whenever a definition does, and by `modelFingerprint(winProb)` (`model-params.ts`: the rating parameters and win-probability source by content), which facts record as `match.model`. `match.inputs` says which source fields some metrics need are present (inventories, the weapon in hand at death, logged or rebuilt throws). |
 | `winProbSource(pack)`, `CS2RB` (`model-params.ts`) | `WinProbSource` | The one loader for the rating model and the win-probability source: HLTV's lookup from the private pack `%APPDATA%\BotMatchStats\packs\winprob-hltv.json` (pass its parsed JSON), or the CS2RB round model in `model/export` when the pack is missing (pass null). A pack that is present but malformed throws. `facts.match.winProb` records which one a match used. |
 
 `MatchFacts` holds:
@@ -70,12 +70,12 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 | `visibilityCoverage(summary.aim)` (`aim.ts`) | 0-1 or null | Share of gun hits fired with an enemy mesh-visible near the view: the visibility coverage meter. |
 | `METRICS`, `METRIC[id]` (`metrics.ts`) | `Metric` | Every metric once: `label`, `hltv` name, `kind` (performance or identity), `group`, `unit`, `status` (exact, approx, unavailable), `def`, `value(summary)`. |
 | `ATTRIBUTES` (`metrics.ts`) | groups | HLTV's Firepower (performance) and six style attributes (identity), with their metric ids. |
-| `rating3(m)`, `rating3BySide(facts, filter)` (`rating3.ts`) | `Rating3` | Rating 3.0 (approx.): `params.json` `rating.intercept` plus `rating.coefficients` times eKPR, eADR, eDPR, eKAST, MK and swing. Per side it is the rating of that side's rounds, pooled. Label it `RATING3_LABEL`; `status` is params.json's word for the model ("approximation"). |
+| `rating3Of(summary)`, `rating3BySide(facts, filter)` (`rating3.ts`) | `Rating3` | Rating 3.0 (approx.): `params.json` `rating.intercept` plus `rating.coefficients` times eKPR, eADR, eDPR, eKAST, MK and swing, all six averaged over the rounds swing valued; no rating when under half are valued, or when the kept matches cover under half their rounds (`coverage.ts`, the one gate every rating, the rating metric and its percentile pass). Per side it is the rating of that side's rounds, pooled. Label it `RATING3_LABEL`; `status` is params.json's word for the model ("approximation"). |
 
 ### Comparisons
 | Call | Returns | Notes |
 |---|---|---|
-| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). |
+| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). Each `Percentile` has `reason` when it is withheld: a metric's `needs` (an input a kept match lacks, or a model other than the baselines' `model`). Show the value and the reason, never a rank. |
 | `careerBaselines(careers, built)` | `{ baselines, provisional, careers }` | The user's own population for identity (`design/identity.md`): baselines from the bot careers in the user's matches (each `{ both, CT, T }` summaries; careers under 150 rounds are left out). Style attributes and "plays like" rank the user against these, never against pros. `provisional` is true until 15 careers qualify; say so beside the scores. |
 | `buildPools(units)` | quantiles per pool and side | What both baselines are built from; `tools/baselines.ts` uses it for the pros. |
 | `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
@@ -86,6 +86,23 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 | `gunProficiency(all, perMatch)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. `all` is the rollup over the kept matches, `perMatch` each match's `Summary.weapons`. |
 | `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
 | `cellOf`, `cellCentre`, `GRID`, `CELL` (`positions.ts`) | | The presence grid: 128-unit cells over ±4096 world units. Roll up every player's ids for a map's walkable backdrop. |
+
+### Worker calls (`worker/protocol.ts` `Api`)
+
+Views read engine numbers through the stats worker. Besides `rollup` (every metric's value in `v`), `ratings`,
+`compare`, `attributes`, `style`, `roles`, `playsLike`, `guns`, `positions`, `match`, `rounds` and `places`:
+
+| Call | Returns |
+|---|---|
+| `attributeBlock(q, opt)` | Firepower against the pros and the six style attributes against the bots, each with its metrics' values, percentiles and reasons, for one side and pool |
+| `buySplits(q)` | The query by own and opponent buy class: aggression by economy, pistol and eco splits |
+| `opponents(q)` | Every metric against the opponents of the same matches, with a rank for performance metrics |
+| `winCorrelation(q, ids)` | Each metric's per-match correlation with winning |
+| `rolesBySpawn(q)` | The role blend per side and per spawn used |
+| `clutches(q)` | Every clutch by round |
+
+Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
+and `m.tradedDeaths`.
 
 ### Baselines
 `pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
