@@ -149,6 +149,11 @@ rows (`pr`) 146, aim 96, kills 66, movement 47, presence 44, grenades 37, weapon
 information 17, rounds 15, utilq 3, players 1. Presence per player-round, at the same 128-unit cells,
 was 119 KB at the median (600 KB facts) on 332 maps.
 
+Time-to-damage cut (`aim.ts` TTD_MAX_S, the same command on 489 maps): of 55,903 pro times to damage,
+2.9% are 1 s or more and the 95th percentile is 0.859 s, so Leetify's 1 s cut drops the stragglers and
+keeps the body of the distribution. On that run a map's cached facts are 562 KB at the median (1,259 KB
+at most): per-player-round rows 172, aim 102, kills 66, movement 47, presence 44 KB.
+
 Radar spotting: 19,327 spotter-target seconds against 70,644 seconds of mesh line of sight on the
 maps with both, so the information metrics measure radar state, not sight. Jiggle peeks are rare
 because the mesh test sees eyes and chests, not shoulders.
