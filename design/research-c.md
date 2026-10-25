@@ -1,5 +1,8 @@
 # Research for direction C
 
+> **Superseded in part (2026-10-25).** The "Decisions for C" and "Decisions for H" below are historical. Where they conflict with `architecture.md` or `identity.md` (the rating label, the comparison population, the similarity formula, the use of game assets), those documents win.
+
+
 hltv.org returned 403 to every direct fetch, so the HLTV evidence comes from HLTV's own news articles and from a maintained scraper. Leetify's match page renders on the client and fetched empty. Each finding below is marked **verified** (read on a page) or **inferred**.
 
 ## HLTV scoreboard
