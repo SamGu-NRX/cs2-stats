@@ -95,10 +95,10 @@ Violated `temporal`. [Bounds](PublishPruneDangling.cfg).
 
 ```text
 1. Initial: loc=(0 :> "version" @@ 1 :> "version"); marker="none"; current=1; pc=<<11>>
-2. owner=2; ppc=<<"branch">>
-3. locks={}
-4. ppc=<<"cache">>
-5. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
+2. locks={}
+3. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
+4. owner=2; ppc=<<"branch">>
+5. ppc=<<"cache">>
 6. ppc=<<"idle">>
 7. Stuttering
 Then stutter forever (no further state changes).
