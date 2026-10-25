@@ -58,5 +58,24 @@ export function proMapDirs(root = path.join(DATA_DIR, "demos")): string[] {
   return out.sort();
 }
 
+/**
+ * Every pro map's tables, one at a time. The extraction pipeline replaces folders while it runs (until
+ * PR #16 makes the replacement atomic), so a map whose tables vanish between listing and reading is
+ * skipped with a line on stderr naming it; any other load error throws.
+ */
+export async function* proMaps(optional?: readonly TableName[]): AsyncGenerator<{ dir: string; t: MatchTables }> {
+  for (const dir of proMapDirs()) {
+    let t: MatchTables;
+    try {
+      t = await loadDir(dir, optional);
+    } catch (e) {
+      if (existsSync(path.join(dir, "match.parquet")) || existsSync(path.join(dir, "meta.parquet"))) throw e;
+      console.error(`SKIPPED ${mapLabel(dir)}: its tables were removed while reading (${(e as Error).message})`);
+      continue;
+    }
+    yield { dir, t };
+  }
+}
+
 /** "<archive>/<map>" for a tables folder from proMapDirs, for messages. */
 export const mapLabel = (dir: string) => path.relative(path.join(DATA_DIR, "demos"), dir).split(path.sep).filter((s) => !s.startsWith("v-")).join("/");

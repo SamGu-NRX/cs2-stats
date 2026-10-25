@@ -4,7 +4,7 @@
 import { derive, hitDamage } from "../src/stats/derive";
 import type { KillFact } from "../src/stats/facts";
 import { hltvMaps, joinHltv } from "./hltv";
-import { loadDir, proMapDirs, WINPROB } from "./node-read";
+import { WINPROB, proMaps } from "./node-read";
 
 const score: Record<string, number> = {};
 let n = 0;
@@ -21,14 +21,14 @@ function traded(list: KillFact[], tickRate: number, window: number, pairing: "al
   return out;
 }
 
-for (const dir of proMapDirs()) {
-  const t = await loadDir(dir, []);
+for await (const { t } of proMaps([])) {
   const f = derive(t, WINPROB);
   const j = joinHltv(f, hltvMaps());
   if (!j) continue;
   const R = f.match.nRounds;
   const byRound = f.rounds.map((r) => f.kills.filter((k) => k.ri === r.ri));
   const rules = { "5 s, every avenged death": [5, "all"], "5 s, earliest only": [5, "earliest"], "5.4 s, every avenged death": [5.4, "all"], "5.4 s, earliest only": [5.4, "earliest"] } as const;
+  const tradedBy = Object.fromEntries(Object.entries(rules).map(([name, [w, p]]) => [name, byRound.map((l) => traded(l, f.match.tickRate, w, p))]));
   // enemy damage per (round, attacker, victim) up to each tick, for damage-threshold assists
   const hits = t.damages;
   const hitsOf = new Map<string, [number, number][]>();
@@ -41,7 +41,6 @@ for (const dir of proMapDirs()) {
   }
   const dmgBefore = (ri: number, a: number, v: number, tick: number) =>
     (hitsOf.get(`${f.rounds[ri].number}|${f.players[a].id}|${f.players[v].id}`) ?? []).reduce((x, [tk, d]) => (tk <= tick ? x + d : x), 0);
-  const tradedBy = Object.fromEntries(Object.entries(rules).map(([name, [w, p]]) => [name, byRound.map((l) => traded(l, f.match.tickRate, w, p))]));
   for (const [pi, h] of j.player) {
     const id = f.players[pi].id;
     n++;
@@ -81,6 +80,7 @@ for (const dir of proMapDirs()) {
           if (ev || !died) kast++;
         });
         ok(`KAST, ${name}, ${flash ? "with" : "without"} flash assists`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
+      }
       if (name !== "5.4 s, earliest only") continue;
       // the assist: the game's (non-flash) assister, a teammate with 40+ or 41+ enemy damage on the
       // victim before the kill, or either; and whether team kills and suicides count as deaths
@@ -99,7 +99,6 @@ for (const dir of proMapDirs()) {
           if (ev || !died) kast++;
         });
         ok(`KAST assist rule: ${vname}`, Math.round((1000 * kast) / R) / 10 === h.total.kast);
-      }
       }
     }
   }

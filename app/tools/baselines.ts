@@ -10,7 +10,7 @@ import { performanceScores, styleScores, type PackPlayer } from "../src/stats/id
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
-import { DATA_DIR, loadDir, proMapDirs, WINPROB } from "./node-read";
+import { DATA_DIR, WINPROB, proMapDirs, proMaps } from "./node-read";
 
 /** Rounds a player needs, over all maps, to count in the player pools; per side, half of it. */
 export const MIN_ROUNDS = 40;
@@ -22,10 +22,9 @@ const OUT = path.resolve(arg("--out", "public/baselines.json"));
 const NAMED = path.resolve(arg("--named", path.join(DATA_DIR, "derived", "baselines-named.json")));
 const SIDES: SideKey[] = ["both", "CT", "T"];
 
-const dirs = proMapDirs();
-if (!dirs.length) throw new Error(`no pro tables under ${DATA_DIR}/demos (set CS2_STATS_DATA)`);
+if (!proMapDirs().length) throw new Error(`no pro tables under ${DATA_DIR}/demos (set CS2_STATS_DATA)`);
 const facts: MatchFacts[] = [];
-for (const d of dirs) facts.push(derive(await loadDir(d), WINPROB));
+for await (const { t } of proMaps()) facts.push(derive(t, WINPROB));
 
 const players = new Map<string, string>();
 for (const f of facts) for (const p of f.players) if (!p.bot) players.set(p.id, p.name);
