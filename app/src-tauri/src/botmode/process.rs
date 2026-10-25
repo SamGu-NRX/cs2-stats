@@ -91,8 +91,64 @@ mod imp {
 /// Held for the whole of an operation that writes game files or app data. On Windows the lock
 /// file is opened with no sharing, so a second Bot Mode process (or a second operation in this
 /// one) cannot open it, and the OS releases it if the process dies.
+///
+/// The file lock alone would let two app folders (`--data`) work on one game folder at once,
+/// so the lock also holds a named mutex derived from the canonical game folder. The mutex
+/// exists exactly while a holder keeps its handle open; creating it when it already exists
+/// means another operation is working on that game folder.
 pub struct OpLock {
     _file: File,
+    _game: GameMutex,
+}
+
+#[cfg(windows)]
+struct GameMutex(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl GameMutex {
+    fn acquire(csgo: &std::path::Path) -> Result<GameMutex, String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+        use windows_sys::Win32::System::Threading::CreateMutexW;
+        let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
+        let key = super::hash::bytes(canon.to_string_lossy().to_lowercase().as_bytes());
+        let name: Vec<u16> = format!("Local\\cs2-stats-botmode-{}", &key[..32]).encode_utf16().chain(Some(0)).collect();
+        // SAFETY: `name` is NUL-terminated and outlives the call; the handle is closed in Drop.
+        unsafe {
+            let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            let err = GetLastError();
+            if h.is_null() {
+                return Err(format!("creating the game folder lock: {}", std::io::Error::last_os_error()));
+            }
+            if err == ERROR_ALREADY_EXISTS {
+                CloseHandle(h);
+                return Err(format!(
+                    "another Bot Mode operation is working on {} (possibly with a different app folder); wait for it to finish",
+                    canon.display()
+                ));
+            }
+            Ok(GameMutex(h))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for GameMutex {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateMutexW and is closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct GameMutex;
+
+#[cfg(not(windows))]
+impl GameMutex {
+    fn acquire(_csgo: &std::path::Path) -> Result<GameMutex, String> {
+        Ok(GameMutex)
+    }
 }
 
 impl OpLock {
@@ -103,15 +159,15 @@ impl OpLock {
         opts.read(true).write(true).create(true).truncate(false);
         #[cfg(windows)]
         std::os::windows::fs::OpenOptionsExt::share_mode(&mut opts, 0);
-        match opts.open(&path) {
-            Ok(file) => Ok(OpLock { _file: file }),
+        let file = match opts.open(&path) {
+            Ok(file) => file,
             // ERROR_SHARING_VIOLATION: another holder has it open.
-            Err(e) if e.raw_os_error() == Some(32) => Err(format!(
-                "another Bot Mode operation is running (it holds {}); wait for it to finish",
-                path.display()
-            )),
-            Err(e) => Err(format!("{}: {e}", path.display())),
-        }
+            Err(e) if e.raw_os_error() == Some(32) => {
+                return Err(format!("another Bot Mode operation is running (it holds {}); wait for it to finish", path.display()))
+            }
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        Ok(OpLock { _file: file, _game: GameMutex::acquire(&layout.csgo)? })
     }
 }
 

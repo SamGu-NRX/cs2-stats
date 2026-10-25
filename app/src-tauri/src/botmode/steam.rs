@@ -71,12 +71,7 @@ pub fn find_cs2(steam: &Path) -> Result<Cs2Install, String> {
         if !csgo.join("gameinfo.gi").is_file() {
             return Err(format!("{}: CS2 is listed here but {} has no gameinfo.gi", manifest.display(), csgo.display()));
         }
-        // A junction anywhere on the way could make that path lead somewhere else.
-        let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
-        let tail: Vec<String> = canon.components().rev().take(5).map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
-        if tail != ["csgo", "game", &CS2_INSTALL_DIR.to_ascii_lowercase(), "common", "steamapps"] {
-            return Err(format!("{} resolves to {}, which is not a ...\\steamapps\\common\\{CS2_INSTALL_DIR}\\game\\csgo folder", csgo.display(), canon.display()));
-        }
+        check_game_folder(&csgo)?;
         return Ok(Cs2Install {
             steam: steam.to_path_buf(),
             library,
@@ -88,24 +83,62 @@ pub fn find_cs2(steam: &Path) -> Result<Cs2Install, String> {
     Err(format!("CS2 is not installed in any Steam library listed in {}", lf.display()))
 }
 
-/// The launch options set for CS2 in Steam (Properties > General), from the owner's
-/// `userdata\<account>\config\localconfig.vdf`. Steam adds these itself when it starts the
-/// game, so Bot Mode only reads them, to report them.
-pub fn launch_options(steam: &Path, owner: Option<u64>) -> Result<Option<String>, String> {
-    let Some(owner) = owner.filter(|o| *o > STEAMID64_BASE) else { return Ok(None) };
-    let path = steam
-        .join("userdata")
-        .join((owner - STEAMID64_BASE).to_string())
-        .join("config")
-        .join("localconfig.vdf");
-    if !path.is_file() {
-        return Ok(None);
+/// Checks that `csgo` is a CS2 `game\csgo` folder: it has `gameinfo.gi`, and with every link
+/// resolved it ends in `steamapps\common\Counter-Strike Global Offensive\game\csgo`, so a
+/// junction anywhere on the way cannot make it lead somewhere else. Returns the canonical path.
+pub fn check_game_folder(csgo: &Path) -> Result<PathBuf, String> {
+    if !csgo.join("gameinfo.gi").is_file() {
+        return Err(format!("{}: not a CS2 game\\csgo folder (no gameinfo.gi)", csgo.display()));
     }
-    let root = read_vdf(&path)?;
-    Ok(root
-        .path(&["UserLocalConfigStore", "Software", "Valve", "Steam", "apps", CS2_APP_ID, "LaunchOptions"])
-        .and_then(Node::str)
-        .map(str::to_string))
+    let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
+    let tail: Vec<String> = canon.components().rev().take(5).map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
+    if tail != ["csgo", "game", &CS2_INSTALL_DIR.to_ascii_lowercase(), "common", "steamapps"] {
+        return Err(format!(
+            "{} resolves to {}, which is not a ...\\steamapps\\common\\{CS2_INSTALL_DIR}\\game\\csgo folder",
+            csgo.display(),
+            canon.display()
+        ));
+    }
+    Ok(canon)
+}
+
+/// Where Steam keeps CS2's launch options for the account that owns the install:
+/// `userdata\<account>\config\localconfig.vdf`. Steam adds these options to every start.
+#[derive(Debug, Clone)]
+pub struct SteamConfig {
+    pub steam: PathBuf,
+    pub localconfig: PathBuf,
+}
+
+impl SteamConfig {
+    /// Needs the install's owner (`LastOwner` in the app manifest); without it the account,
+    /// and so the options Steam will add, are unknown.
+    pub fn for_install(i: &Cs2Install) -> Result<SteamConfig, String> {
+        let owner = i.owner.filter(|o| *o > STEAMID64_BASE).ok_or_else(|| {
+            "CS2's app manifest names no valid owner (LastOwner), so the Steam account whose launch options apply is unknown".to_string()
+        })?;
+        let localconfig = i.steam.join("userdata").join((owner - STEAMID64_BASE).to_string()).join("config").join("localconfig.vdf");
+        Ok(SteamConfig { steam: i.steam.clone(), localconfig })
+    }
+
+    /// CS2's launch options from Steam; empty when the file sets none. A missing or unreadable
+    /// file is an error, never "no options".
+    pub fn read_options(&self) -> Result<String, String> {
+        let root = read_vdf(&self.localconfig)?;
+        if root.get("UserLocalConfigStore").is_none() {
+            return Err(format!("{}: not a Steam localconfig.vdf", self.localconfig.display()));
+        }
+        Ok(root
+            .path(&["UserLocalConfigStore", "Software", "Valve", "Steam", "apps", CS2_APP_ID, "LaunchOptions"])
+            .and_then(Node::str)
+            .unwrap_or("")
+            .to_string())
+    }
+}
+
+/// The launch options, for the status report only: anything unreadable shows as none.
+pub fn launch_options(install: &Cs2Install) -> Option<String> {
+    SteamConfig::for_install(install).and_then(|c| c.read_options()).ok()
 }
 
 #[cfg(windows)]
@@ -236,14 +269,31 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_owners_cs2_launch_options() {
+    fn reads_the_owners_cs2_launch_options_and_never_guesses_them() {
         let s = Scratch::new("steam-opts");
         let (steam, _) = fake_steam(&s);
-        write(
-            &steam.join("userdata/1178094897/config/localconfig.vdf"),
-            "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"730\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"-condebug +exec autoexec -insecure\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n",
-        );
-        let opts = launch_options(&steam, Some(76_561_199_138_360_625)).unwrap();
-        assert_eq!(opts.as_deref(), Some("-condebug +exec autoexec -insecure"));
+        let install = find_cs2(&steam).unwrap();
+        let config = SteamConfig::for_install(&install).unwrap();
+        assert_eq!(config.localconfig, steam.join("userdata/1178094897/config/localconfig.vdf"));
+
+        // Missing, unreadable and not-a-localconfig files are errors, never "no options".
+        assert!(config.read_options().is_err(), "missing file");
+        write(&config.localconfig, "\"UserLocalConfigStore\"\n{\n\"Software\"\n");
+        assert!(config.read_options().is_err(), "unbalanced file");
+        write(&config.localconfig, "\"SomethingElse\"\n{\n}\n");
+        assert!(config.read_options().is_err(), "another file");
+        fs::remove_file(&config.localconfig).unwrap();
+        fs::create_dir_all(&config.localconfig).unwrap();
+        assert!(config.read_options().is_err(), "a folder in its place");
+        fs::remove_dir(&config.localconfig).unwrap();
+
+        write(&config.localconfig, &crate::botmode::testutil::localconfig("-condebug +exec autoexec -insecure"));
+        assert_eq!(config.read_options().unwrap(), "-condebug +exec autoexec -insecure");
+
+        // Without a known owner the account, and so the options, are unknown.
+        for owner in [None, Some(0), Some(42)] {
+            let err = SteamConfig::for_install(&Cs2Install { owner, ..install.clone() }).unwrap_err();
+            assert!(err.contains("no valid owner"), "{owner:?}: {err}");
+        }
     }
 }

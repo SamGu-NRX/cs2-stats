@@ -9,7 +9,7 @@
 use super::cfg;
 use super::changes::{self, write_atomic, Meta};
 use super::hash;
-use super::paths::{join_rel, Layout, SERVER_CFG};
+use super::paths::{confined_read, Layout, SERVER_CFG};
 use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -55,9 +55,9 @@ impl Difficulty {
 /// The active level, found by matching the active bot profile against the three shipped
 /// copies. `None` when the active profile matches none of them, or there is none.
 pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
-    let Some(active) = hash::file_if_exists(&join_rel(csgo, ACTIVE_PROFILE))? else { return Ok(None) };
+    let Some(active) = hash::file_if_exists(&confined_read(csgo, ACTIVE_PROFILE)?)? else { return Ok(None) };
     for d in Difficulty::ALL {
-        if hash::file_if_exists(&join_rel(csgo, d.variant()))?.as_deref() == Some(active.as_str()) {
+        if hash::file_if_exists(&confined_read(csgo, d.variant())?)?.as_deref() == Some(active.as_str()) {
             return Ok(Some(d));
         }
     }
@@ -67,7 +67,7 @@ pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
 pub fn set_difficulty(layout: &Layout, probe: &dyn ProcessProbe, level: Difficulty) -> Result<Meta, String> {
     ensure_cs2_closed(probe)?;
     let lock = OpLock::acquire(layout)?;
-    let src = layout.target(level.variant());
+    let src = layout.confined(level.variant())?;
     let sha = hash::file_if_exists(&src)?
         .ok_or_else(|| format!("{} is missing; install the mod first", level.variant()))?;
     let (_, meta) = changes::run(layout, probe, &lock, &format!("difficulty-{}", level.name()), |cs| {
@@ -111,7 +111,7 @@ fn parse_bool(v: &str) -> Option<bool> {
 }
 
 pub fn read_cosmetics(csgo: &Path) -> Result<CosmeticsState, String> {
-    let path = join_rel(csgo, SERVER_CFG);
+    let path = confined_read(csgo, SERVER_CFG)?;
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -136,7 +136,7 @@ fn check_music_kit(csgo: &Path, id: i32) -> Result<(), String> {
     if id == 0 || id == -1 {
         return Ok(());
     }
-    let path = join_rel(csgo, CATALOG);
+    let path = confined_read(csgo, CATALOG)?;
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("{}: {e}; cannot check music kit {id}", path.display()))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -154,7 +154,7 @@ pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) ->
     ensure_cs2_closed(probe)?;
     let lock = OpLock::acquire(layout)?;
     check_music_kit(&layout.csgo, c.music_kit)?;
-    let path = layout.target(SERVER_CFG);
+    let path = layout.confined(SERVER_CFG)?;
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => NEW_CFG_HEADER.to_string(),

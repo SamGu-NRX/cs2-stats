@@ -336,14 +336,29 @@ pub fn apply(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path) ->
     Ok(OverlayReport { manifest: manifest_path.display().to_string(), change, entries })
 }
 
-/// Writes the example manifest to `path`, refusing to replace an existing one.
-pub fn init_manifest(path: &Path) -> Result<(), String> {
+/// Writes the example manifest to `path`, which must be inside the app's Bot Mode folder.
+/// Takes the operation lock, and creates the file new: the content goes to a synced temporary
+/// file that is then hard-linked into place, which fails rather than replace an existing file.
+pub fn init_manifest(layout: &Layout, path: &Path) -> Result<(), String> {
     Manifest::parse(EXAMPLE)?;
-    if path.exists() {
-        return Err(format!("{} already exists", path.display()));
+    let _lock = OpLock::acquire(layout)?;
+    let data = layout.data.canonicalize().map_err(|e| format!("{}: {e}", layout.data.display()))?;
+    let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
+    let name = path.file_name().ok_or_else(|| format!("{}: no file name", path.display()))?;
+    let parent_canon = parent.canonicalize().map_err(|e| format!("{}: {e}", parent.display()))?;
+    if !parent_canon.starts_with(&data) {
+        return Err(format!("{}: the manifest must live inside the app folder {}", path.display(), data.display()));
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    std::fs::write(path, EXAMPLE).map_err(|e| format!("{}: {e}", path.display()))
+    let target = parent_canon.join(name);
+    let tmp = parent_canon.join(format!("{}{}", name.to_string_lossy(), paths::TMP_SUFFIX));
+    std::fs::File::create(&tmp)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, EXAMPLE.as_bytes()).and_then(|_| f.sync_all()))
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let linked = std::fs::hard_link(&tmp, &target);
+    let _ = std::fs::remove_file(&tmp);
+    linked.map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => format!("{} already exists", target.display()),
+        _ => format!("{}: {e}", target.display()),
+    })?;
+    paths::flush_dir(&parent_canon).map(|_| ())
 }

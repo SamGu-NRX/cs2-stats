@@ -88,6 +88,8 @@ pub struct Status {
     pub protected: BTreeMap<String, String>,
     pub overlays: Vec<OverlayRecord>,
     pub backups: Vec<Meta>,
+    /// An interrupted or partly undone change; it must be rolled back before anything else.
+    pub unfinished: Option<Meta>,
     /// Problems found while reading, each a full sentence.
     pub warnings: Vec<String>,
 }
@@ -143,14 +145,24 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
             None
         }
     };
-    let gi = layout.target("gameinfo.gi");
-    let bot_mode = match std::fs::read_to_string(&gi).map_err(|e| e.to_string()).and_then(|t| gameinfo::is_bot_mode(&t)) {
+    let gi = layout
+        .confined("gameinfo.gi")
+        .and_then(|p| std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display())))
+        .and_then(|t| gameinfo::is_bot_mode(&t));
+    let bot_mode = match gi {
         Ok(b) => Some(b),
         Err(e) => {
-            warnings.push(format!("Could not read {}: {e}.", gi.display()));
+            warnings.push(format!("Could not read gameinfo.gi: {e}."));
             None
         }
     };
+    let unfinished = changes::unfinished(layout)?;
+    if let Some(m) = &unfinished {
+        warnings.push(format!(
+            "Change {} ({}) was interrupted or only partly undone, so the game folder may be half-written. Run `botmode rollback` to put it back.",
+            m.id, m.operation
+        ));
+    }
     let st = state::load(layout)?;
     let present = components::scan(&layout.csgo)?;
     let all_present: BTreeMap<&String, &String> = present.values().flat_map(|m| m.iter()).collect();
@@ -220,6 +232,7 @@ pub fn status(layout: &Layout, probe: &dyn ProcessProbe, install: Option<&Cs2Ins
         protected: components::protected(&layout.csgo)?,
         overlays: st.overlays,
         backups: changes::list(layout)?,
+        unfinished,
         warnings,
     })
 }
