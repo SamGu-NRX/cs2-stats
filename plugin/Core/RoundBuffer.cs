@@ -15,6 +15,7 @@ public sealed class RoundBuffer
     public readonly FixedBuffer<BlindRow> Blinds = new(512);
     public readonly FixedBuffer<GrenadeRow> Grenades = new(256);
     public readonly FixedBuffer<ThrowRow> Throws = new(256);
+    public readonly FixedBuffer<LeaveRow> Leaves = new(64);
     public readonly FixedBuffer<PosRow> Pos = new(4096);
     public readonly FixedBuffer<EngagementRow> Engagements = new(512);
     public readonly FixedBuffer<ShotRow> Shots = new(2048);
@@ -40,7 +41,7 @@ public sealed class RoundBuffer
 
     public void Clear()
     {
-        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Pos.Clear();
+        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Leaves.Clear(); Pos.Clear();
         Engagements.Clear(); Shots.Clear(); Mismatches.Clear(); ReconRounds.Clear(); Perf.Clear();
         RoundCount = 0;
         CapUnknown = 0;

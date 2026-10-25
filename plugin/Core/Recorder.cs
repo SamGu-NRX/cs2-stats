@@ -18,6 +18,8 @@ public struct KillInput
     public bool AssistedFlash, HasKillerPos;
     public float KX, KY, KZ, VX, VY, VZ;
     public UtilCounts VictimUtil;
+    /// <summary>pi of the bot whose pawn the killer / victim controlled, else Nil.</summary>
+    public int KillerBody, VictimBody;
 }
 
 public struct ShotInput
@@ -37,6 +39,11 @@ public struct ShotInput
 public sealed class Recorder
 {
     public const int KillFlagHeadshot = 1, KillFlagWallbang = 2, KillFlagSmoke = 4, KillFlagBlind = 8, KillFlagNoscope = 16, KillFlagInAir = 32;
+    /// <summary>The victim killed itself (bomb, fall, own grenade); killer is null. World deaths have killer null without this flag.</summary>
+    public const int KillFlagSuicide = 64;
+    /// <summary>The death happened before freeze end.</summary>
+    public const int KillFlagFreeze = 128;
+    public const int EquipFromPawn = 0, EquipFromInventory = 1;
 
     private readonly IRecorderSink _sink;
     private readonly Action<string> _warn;
@@ -95,6 +102,9 @@ public sealed class Recorder
     public int HumanPi => Meta.Human;
     public int TickRate => Meta.Env.TickRate;
     public int PlayerCount => _players.Count;
+    /// <summary>Highest round index known to this capture (in the file or begun), or Nil. Survives a resume.</summary>
+    public int LastRound { get; private set; } = Nil.V;
+    private bool _freezeOver;
     private int _plantTick = Nil.V;
     private bool _roundPartial;
 
@@ -129,6 +139,7 @@ public sealed class Recorder
         Capturing = true;
         RoundActive = false;
         Ri = Nil.V;
+        LastRound = Nil.V;
         Perf.Reset();
     }
 
@@ -143,7 +154,15 @@ public sealed class Recorder
         _partial.AddRange(meta.PartialRounds);
         _unknownResults.AddRange(meta.UnknownResults);
         _burst = new BurstTracker(meta.NextBurst);
+        LastRound = meta.RoundCount > 0 ? meta.RoundCount - 1 : Nil.V;
     }
+
+    /// <summary>
+    /// A round_start with this round counter belongs to a new game: the counter went back to or
+    /// below a round this capture already has, or the server is in warmup. Uses <see cref="LastRound"/>,
+    /// so it also works right after a resume, before any round has begun.
+    /// </summary>
+    public bool IsRestart(int roundsPlayed, bool warmup) => warmup || (LastRound != Nil.V && roundsPlayed <= LastRound);
 
     /// <summary>
     /// Adds a round that happened before capture began, known only from the game's round results.
@@ -157,6 +176,7 @@ public sealed class Recorder
         SetResult(row, ri, resultCode, Nil.V);
         _buf.AddRound(row);
         if (!_partial.Contains(ri)) _partial.Add(ri);
+        if (LastRound == Nil.V || ri > LastRound) LastRound = ri;
     }
 
     public void BeginRound(int ri, int tick, int scoreT, int scoreCt, bool partial, int freezeTickIfLive)
@@ -183,10 +203,13 @@ public sealed class Recorder
         RoundActive = true;
         RoundFinalized = false;
         Live = false;
+        _freezeOver = false;
+        if (LastRound == Nil.V || ri > LastRound) LastRound = ri;
         if (freezeTickIfLive != Nil.V)
         {
             _round.FreezeTick = freezeTickIfLive;
             Live = true;
+            _freezeOver = true;
         }
     }
 
@@ -196,6 +219,7 @@ public sealed class Recorder
         if (side == 2 || side == 3) _round.Side[pi] = side;
         _round.Money[pi] = money;
         _round.Equip[pi] = equip;
+        _round.Alive0[pi] = alive ? 1 : 0;
         _team[pi] = side;
         _alive[pi] = alive;
         _hp[pi] = alive ? hp : 0;
@@ -208,6 +232,26 @@ public sealed class Recorder
         if (!RoundActive) return;
         _round.FreezeTick = tick;
         Live = true;
+        _freezeOver = true;
+    }
+
+    /// <summary>Records which source this round's equipment values came from (see EquipFromPawn/EquipFromInventory).</summary>
+    public void SetEquipSource(int source)
+    {
+        if (!RoundActive) return;
+        _round.EquipSrc = source;
+        string name = source == EquipFromInventory ? "inventory" : "pawn";
+        var env = Meta.Env;
+        if (env.EquipSource == null) env.EquipSource = name;
+        else if (env.EquipSource != name) env.EquipSource = "mixed";
+    }
+
+    /// <summary>A player left the server during the round.</summary>
+    public void Leave(int tick, int pi)
+    {
+        if (!RoundActive || (uint)pi >= Limits.MaxPlayers) return;
+        _buf.Leaves.Add(new LeaveRow { Ri = Ri, Tick = tick, Pi = pi, Alive = _alive[pi] ? 1 : 0 });
+        _alive[pi] = false;
     }
 
     // ---- players ----------------------------------------------------------------------------
@@ -266,6 +310,9 @@ public sealed class Recorder
         if (!RoundActive || (uint)k.Victim >= Limits.MaxPlayers) return;
         int v = k.Victim;
         int killer = k.Killer == v ? Nil.V : k.Killer;
+        int flags = k.Flags;
+        if (k.Killer == v) flags |= KillFlagSuicide;
+        if (!_freezeOver) flags |= KillFlagFreeze;
         int assister = Nil.V, flash = Nil.V;
         if (killer != Nil.V && k.Assister != Nil.V && k.Assister != v)
         {
@@ -275,7 +322,7 @@ public sealed class Recorder
         var row = new KillRow
         {
             Ri = Ri, Tick = k.Tick, Killer = killer, Victim = v, Assister = assister, FlashAssister = flash,
-            Weapon = k.Weapon, Flags = k.Flags,
+            Weapon = k.Weapon, Flags = flags, KBody = killer == Nil.V ? Nil.V : k.KillerBody, VBody = k.VictimBody,
             KX = Nil.V, KY = Nil.V, KZ = Nil.V,
             VX = AimMath.Round(k.VX), VY = AimMath.Round(k.VY), VZ = AimMath.Round(k.VZ),
             Planted = Planted ? 1 : 0,
@@ -722,8 +769,15 @@ public sealed class Recorder
     /// </summary>
     public void Reconcile(int ri, ReadOnlySpan<GameRoundStats> game, ReadOnlySpan<bool> have)
     {
-        if (!Capturing || ri != Ri || _roundPartial) return;
+        if (!Capturing || ri != Ri) return;
         var rr = new ReconRound { Ri = ri };
+        if (_roundPartial)
+        {
+            // Partial rounds are not compared (events are missing), but their coverage is still recorded.
+            for (int pi = 0; pi < _players.Count; pi++) if (_round.Side[pi] != Nil.V) rr.Missing++;
+            _buf.ReconRounds.Add(rr);
+            return;
+        }
         int n = Math.Min(_players.Count, game.Length);
         for (int pi = 0; pi < n; pi++)
         {

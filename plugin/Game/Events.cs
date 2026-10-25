@@ -31,7 +31,16 @@ public sealed partial class BotMatchStatsPlugin
 
     private HookResult OnRoundStart(EventRoundStart e, GameEventInfo info)
     {
-        if (_rec == null || _needInit || _scanPending || _disabled || _rules == null) return HookResult.Continue;
+        if (_rec == null || _needInit || _disabled || _rules == null) return HookResult.Continue;
+        if (_scanPending)
+        {
+            // Not capturing yet, but a restart here changes which match the pending scan must find.
+            var rl = _rules;
+            if (Lifecycle.ScanStale(rl.WarmupPeriod, rl.TotalRoundsPlayed, rl.GameStartTime, _scanRounds, _scanGameStart))
+                Rescan("game changed during scan");
+            _winPanelSeen = false;
+            return HookResult.Continue;
+        }
         EvBegin();
         try
         {
@@ -46,12 +55,14 @@ public sealed partial class BotMatchStatsPlugin
                 // mp_restartgame and a return to warmup both reset the round counter, so the index
                 // alone detects them. GameStartTime is not compared: when the engine sets it relative
                 // to round 0's round_start is unverified, and a late write would fake a restart.
-                bool restart = warm || (rec.Ri != Nil.V && r <= rec.Ri);
+                // LastRound includes rounds loaded from the file, so this also holds right after a resume.
+                bool restart = rec.IsRestart(r, warm);
                 if (!restart) rec.Meta.GameStart = gs;
                 if (restart)
                 {
                     _finalizeAt = Nil.V;
                     _matchEndAt = Nil.V;
+                    _winPanelSeen = false;
                     Logger.LogInformation("BotMatchStats: game restarted (round {R}, warmup={Warm}); closing capture as restarted", r, warm);
                     rec.EndCapture("restarted", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
                 }
@@ -61,7 +72,7 @@ public sealed partial class BotMatchStatsPlugin
                     FinalizeRound();
                     Reconcile();
                     rec.Flush();
-                    if (rec.Ri != Nil.V) AddPriorRounds(rec.Ri + 1, r);
+                    if (rec.LastRound != Nil.V) AddPriorRounds(rec.LastRound + 1, r);
                     rec.BeginRound(r, _tick, _teamT?.Score ?? Nil.V, _teamCt?.Score ?? Nil.V, partial: false, Nil.V);
                     return EvEnd("round_start");
                 }
@@ -86,7 +97,23 @@ public sealed partial class BotMatchStatsPlugin
             var rec = _rec!;
             _tick = Server.TickCount;
             RefreshSlots(true);
+            // m_unCurrentEquipmentValue is trusted unless every bot reads 0, which would record false ecos;
+            // then this round's values are rebuilt from inventory for every player.
             bool anyBotEquip = false, anyBot = false;
+            for (int slot = 0; slot < MaxSlots; slot++)
+            {
+                ref var s = ref _slots[slot];
+                if (!s.Valid || s.Pi == Nil.V || !s.IsBot || (s.Team != 2 && s.Team != 3)) continue;
+                nint pawn = PawnOfSlot(slot);
+                if (pawn == 0 || !Mem.Alive(pawn)) continue;
+                anyBot = true;
+                anyBotEquip |= Mem.EquipValue(pawn) > 0;
+            }
+            bool wasInventory = _equipFromInventory;
+            _equipFromInventory = anyBot && !anyBotEquip;
+            if (_equipFromInventory && !wasInventory)
+                Logger.LogWarning("BotMatchStats: every bot reads 0 for m_unCurrentEquipmentValue at freeze end; equipment values come from inventory prices instead.");
+            rec.SetEquipSource(_equipFromInventory ? Recorder.EquipFromInventory : Recorder.EquipFromPawn);
             for (int slot = 0; slot < MaxSlots; slot++)
             {
                 ref var s = ref _slots[slot];
@@ -94,13 +121,10 @@ public sealed partial class BotMatchStatsPlugin
                 nint pawn = PawnOfSlot(slot);
                 bool alive = pawn != 0 && Mem.Alive(pawn);
                 int hp = pawn != 0 ? Mem.Read<int>(pawn, Mem.Health) : 0;
-                int equip = pawn != 0 ? Mem.EquipValue(pawn) : Nil.V;
+                int equip = pawn != 0 ? EquipOf(pawn) : Nil.V;
                 int money = new CCSPlayerController(s.Ctrl).InGameMoneyServices?.Account ?? Nil.V;
                 rec.SetFreezePlayer(s.Pi, s.Team, money, equip, hp, alive);
-                if (s.IsBot) { anyBot = true; anyBotEquip |= equip > 0; }
             }
-            if (anyBot && !anyBotEquip)
-                Logger.LogWarning("BotMatchStats: every bot reads 0 equipment value at freeze end (m_unCurrentEquipmentValue); equip and kill-state equipment may be wrong.");
             rec.FreezeEnd(_tick);
         }
         catch (Exception ex) { EvError("round_freeze_end", ex); }
@@ -122,7 +146,7 @@ public sealed partial class BotMatchStatsPlugin
                 if (!s.Valid || s.Pi == Nil.V || (s.Team != 2 && s.Team != 3)) continue;
                 nint pawn = PawnOfSlot(slot);
                 bool alive = pawn != 0 && Mem.Alive(pawn);
-                rec.SetRoundEndEconomy(s.Pi, alive ? Mem.EquipValue(pawn) : 0, alive && HasPrimary(slot));
+                rec.SetRoundEndEconomy(s.Pi, alive ? EquipOf(pawn) : 0, alive && HasPrimary(slot));
             }
             _finalizeAt = _tick + rec.TickRate;
         }
@@ -146,6 +170,8 @@ public sealed partial class BotMatchStatsPlugin
 
     private HookResult OnWinPanel(EventCsWinPanelMatch e, GameEventInfo info)
     {
+        // Remembered even when not capturing, so a capture resumed afterwards knows the match is over.
+        _winPanelSeen = true;
         if (_rec is not { Capturing: true }) return HookResult.Continue;
         EvBegin();
         // The last round's per-round stats settle after the event; the snapshot probe read them 1 s later.
@@ -167,6 +193,8 @@ public sealed partial class BotMatchStatsPlugin
                 ref var s = ref _slots[slot];
                 s.DeathUtil = Mem.Utility(pawn, _ammoSlot, out s.DeathWeapons);
                 s.DeathUtilTick = Server.TickCount;
+                s.DeathEquip = EquipOf(pawn);
+                s.DeathEquipTick = s.DeathUtilTick;
             }
         }
         catch (Exception ex) { EvError("player_death(pre)", ex); }
@@ -204,7 +232,11 @@ public sealed partial class BotMatchStatsPlugin
                 Weapon = weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), Flags = flags,
                 NadeType = WeaponNames.NadeSourceOf(weapon), Bullet = WeaponNames.IsBulletWeapon(weapon),
                 VictimUtil = vs.DeathUtilTick == tick && vs.DeathWeapons > 0 ? vs.DeathUtil : vs.Util,
+                VictimBody = BodyPi(vslot),
+                KillerBody = attacker != null && attacker.IsValid ? BodyPi(attacker.Slot) : Nil.V,
             };
+            // The victim's own value comes from the pre-hook, so a weapon picked up just before death counts.
+            if (vs.DeathEquipTick == tick && vs.DeathEquip != Nil.V) rec.SetEquipNow(v, vs.DeathEquip);
             nint vp = PawnOfSlot(vslot);
             if (vp != 0) Mem.Origin(vp, out k.VX, out k.VY, out k.VZ);
             else k.VX = k.VY = k.VZ = float.NaN;
@@ -219,7 +251,7 @@ public sealed partial class BotMatchStatsPlugin
                 ref var s = ref _slots[slot];
                 if (!s.Valid || s.Pi == Nil.V || slot == vslot) continue;
                 nint p = PawnOfSlot(slot);
-                if (p != 0 && Mem.Alive(p)) rec.SetEquipNow(s.Pi, Mem.EquipValue(p));
+                if (p != 0 && Mem.Alive(p)) rec.SetEquipNow(s.Pi, EquipOf(p));
             }
             rec.Kill(k);
         }
@@ -482,7 +514,7 @@ public sealed partial class BotMatchStatsPlugin
             }
             else if (c != null && (uint)c.Slot < MaxSlots && _slots[c.Slot].Pi != Nil.V)
             {
-                _rec.SetAlive(_slots[c.Slot].Pi, false, 0);
+                _rec.Leave(Server.TickCount, _slots[c.Slot].Pi);
             }
         }
         catch (Exception ex) { EvError("player_disconnect", ex); }

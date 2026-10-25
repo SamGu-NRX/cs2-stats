@@ -126,73 +126,108 @@ public sealed class NameTable
 }
 
 /// <summary>
-/// Place-name table keyed by the raw UTF-8 bytes of <c>m_szLastPlaceName</c>, so the per-tick
-/// sampler can resolve a place without creating a string. A string is allocated only the first time
-/// a new place appears in a match.
+/// Place-name table keyed by the raw UTF-8 bytes of <c>m_szLastPlaceName</c>. Lookup and the first
+/// sight of a new place are allocation-free: bytes are copied into storage sized at construction, and
+/// the map's area names are pre-encoded. Strings are created only by <see cref="ToArray"/> and the
+/// indexer, which run at hand-off time, never in the tick path.
 /// </summary>
 public sealed class PlaceTable
 {
-    private readonly List<byte[]> _bytes = new();
-    private readonly List<string> _names = new();
-    private readonly List<int> _area = new();
-    private Dictionary<string, int>? _areaTable;
+    /// <summary>Longest stored name; m_szLastPlaceName is 18 bytes including the terminator.</summary>
+    public const int MaxNameBytes = 32;
+
+    private readonly byte[] _store;
+    private readonly int[] _len;
+    private readonly int[] _area;
+    private readonly string?[] _names;
+    private (byte[] name, int area)[] _areaTable = Array.Empty<(byte[], int)>();
     public int Cap { get; }
+    public int Count { get; private set; }
+    public bool HasAreas { get; private set; }
 
-    public PlaceTable(int cap) => Cap = cap;
+    public PlaceTable(int cap)
+    {
+        Cap = cap;
+        _store = new byte[cap * MaxNameBytes];
+        _len = new int[cap];
+        _area = new int[cap];
+        _names = new string?[cap];
+    }
 
-    public int Count => _names.Count;
-    public string this[int i] => _names[i];
+    public string this[int i] => _names[i] ??= Encoding.UTF8.GetString(Bytes(i));
+
+    private ReadOnlySpan<byte> Bytes(int i) => new(_store, i * MaxNameBytes, _len[i]);
 
     public void SetMap(string map)
     {
-        _areaTable = MapAreas.For(map);
-        for (int i = 0; i < _area.Count; i++) _area[i] = AreaOf(_names[i]);
+        var t = MapAreas.For(map);
+        HasAreas = t != null;
+        _areaTable = t == null ? Array.Empty<(byte[], int)>() : t.Select(kv => (Encoding.UTF8.GetBytes(kv.Key), kv.Value)).ToArray();
+        for (int i = 0; i < Count; i++) _area[i] = AreaOf(Bytes(i));
     }
 
-    public bool HasAreas => _areaTable != null;
-
     /// <summary>Area index (see <see cref="CtSetupCounter"/>) for a place index; Other for unknown names.</summary>
-    public int Area(int place) => (uint)place < (uint)_area.Count ? _area[place] : CtSetupCounter.Other;
+    public int Area(int place) => (uint)place < (uint)Count ? _area[place] : CtSetupCounter.Other;
 
-    /// <summary>Returns the place index for a null-terminated UTF-8 name, or Nil for an empty name.</summary>
+    /// <summary>Returns the place index for a null-terminated UTF-8 name, or Nil for an empty name or a full table.</summary>
     public int Lookup(ReadOnlySpan<byte> raw)
     {
         int len = raw.IndexOf((byte)0);
         if (len < 0) len = raw.Length;
         if (len == 0) return Nil.V;
+        if (len > MaxNameBytes) len = MaxNameBytes;
         var name = raw[..len];
-        for (int i = 0; i < _bytes.Count; i++)
-            if (name.SequenceEqual(_bytes[i])) return i;
-        if (_names.Count >= Cap) return Nil.V;
-        return Add(Encoding.UTF8.GetString(name));
+        for (int i = 0; i < Count; i++)
+            if (name.SequenceEqual(Bytes(i))) return i;
+        return Add(name, null);
     }
 
     public int Get(string name)
     {
-        int i = _names.IndexOf(name);
-        return i >= 0 ? i : (_names.Count >= Cap ? Nil.V : Add(name));
+        Span<byte> buf = stackalloc byte[MaxNameBytes * 3];
+        int n = Encoding.UTF8.GetBytes(name.AsSpan(), buf);
+        var bytes = buf[..Math.Min(n, MaxNameBytes)];
+        for (int i = 0; i < Count; i++)
+            if (bytes.SequenceEqual(Bytes(i))) return i;
+        return Add(bytes, name);
     }
 
-    private int Add(string name)
+    private int Add(ReadOnlySpan<byte> name, string? str)
     {
-        _bytes.Add(Encoding.UTF8.GetBytes(name));
-        _names.Add(name);
-        _area.Add(AreaOf(name));
-        return _names.Count - 1;
+        if (Count >= Cap) return Nil.V;
+        int i = Count++;
+        name.CopyTo(_store.AsSpan(i * MaxNameBytes));
+        _len[i] = name.Length;
+        _area[i] = AreaOf(name);
+        _names[i] = str;
+        return i;
     }
 
-    private int AreaOf(string name) =>
-        _areaTable != null && _areaTable.TryGetValue(name, out int a) ? a : CtSetupCounter.Other;
+    private int AreaOf(ReadOnlySpan<byte> name)
+    {
+        foreach (var (n, a) in _areaTable)
+            if (name.SequenceEqual(n)) return a;
+        return CtSetupCounter.Other;
+    }
 
-    public string[] ToArray() => _names.ToArray();
+    public string[] ToArray()
+    {
+        var a = new string[Count];
+        for (int i = 0; i < Count; i++) a[i] = this[i];
+        return a;
+    }
 
     public void Load(IEnumerable<string> names)
     {
         Clear();
-        foreach (var n in names) Add(n);
+        foreach (var n in names) Get(n);
     }
 
-    public void Clear() { _bytes.Clear(); _names.Clear(); _area.Clear(); }
+    public void Clear()
+    {
+        Count = 0;
+        Array.Clear(_names);
+    }
 }
 
 public static class MapAreas

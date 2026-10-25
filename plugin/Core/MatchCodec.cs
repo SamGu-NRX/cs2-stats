@@ -33,6 +33,7 @@ public static class MatchCodec
         IntProp(w, "tickrate", m.Env.TickRate);
         IntProp(w, "maxrounds", m.Env.MaxRounds);
         IntProp(w, "botDifficulty", m.Env.BotDifficulty);
+        StrOrNull(w, "equipSource", m.Env.EquipSource);
         w.WriteEndObject();
 
         w.WriteNumber("firstFullRound", m.FirstFullRound);
@@ -67,6 +68,8 @@ public static class MatchCodec
         }
         w.WriteEndArray();
         Col(w, "nade", k, static r => r.Nade);
+        Col(w, "kBody", k, static r => r.KBody);
+        Col(w, "vBody", k, static r => r.VBody);
         w.WriteStartArray("vUtil"); foreach (ref readonly var r in k) Util(w, r.VUtil); w.WriteEndArray();
         w.WriteEndObject();
 
@@ -104,12 +107,13 @@ public static class MatchCodec
         w.WriteStartArray("pos"); foreach (ref readonly var r in th) Triple(w, r.X, r.Y, r.Z); w.WriteEndArray();
         w.WriteEndObject();
 
-        var ps = s.Pos.Span;
-        w.WriteStartObject("pos");
-        Col(w, "ri", ps, static r => r.Ri); Col(w, "tick", ps, static r => r.Tick); Col(w, "pi", ps, static r => r.Pi);
-        Col(w, "x", ps, static r => r.X); Col(w, "y", ps, static r => r.Y); Col(w, "z", ps, static r => r.Z);
-        Col(w, "place", ps, static r => r.Place); Col(w, "alive", ps, static r => r.Alive);
+        var lv = s.Leaves.Span;
+        w.WriteStartObject("leaves");
+        Col(w, "ri", lv, static r => r.Ri); Col(w, "tick", lv, static r => r.Tick);
+        Col(w, "pi", lv, static r => r.Pi); Col(w, "alive", lv, static r => r.Alive);
         w.WriteEndObject();
+
+        WritePos(w, s.Pos.Span);
 
         w.WriteStartObject("aim");
         var e = s.Engagements.Span;
@@ -194,6 +198,10 @@ public static class MatchCodec
         // Optional economy fields beyond schema v1: equipment kept at round end and survive-with-primary.
         PerPlayer(w, "equipEnd", s, np, static r => r.EquipEnd);
         PerPlayer(w, "survPrimary", s, np, static r => r.SurvPrimary);
+        PerPlayer(w, "alive0", s, np, static r => r.Alive0);
+        w.WriteStartArray("equipSrc");
+        for (int i = 0; i < n; i++) { int e = s.Round(i).EquipSrc; if (e == Nil.V) w.WriteNullValue(); else w.WriteStringValue(e == Recorder.EquipFromInventory ? "inventory" : "pawn"); }
+        w.WriteEndArray();
         // Optional utility-economy fields: grenades bought (counts by type) and money spent on them; null when the player was absent.
         w.WriteStartArray("utilBought");
         for (int i = 0; i < n; i++)
@@ -222,16 +230,52 @@ public static class MatchCodec
         w.WriteEndObject();
     }
 
+    /// <summary>
+    /// Positions are delta-encoded per player: tick, x, y and z are differences from the previous row
+    /// with the same pi (the first row of each player is absolute). Lossless; ri, pi, place and alive
+    /// stay absolute. Samples of one player are 16 or 64 ticks apart and move little, so the deltas
+    /// are short repeated numbers that compress far better than absolute coordinates.
+    /// </summary>
+    private static void WritePos(Utf8JsonWriter w, ReadOnlySpan<PosRow> ps)
+    {
+        w.WriteStartObject("pos");
+        w.WriteString("enc", "delta");
+        Col(w, "ri", ps, static r => r.Ri);
+        Col(w, "pi", ps, static r => r.Pi);
+        Span<int> prev = stackalloc int[Limits.MaxPlayers * 4];
+        Span<bool> seen = stackalloc bool[Limits.MaxPlayers];
+        for (int c = 0; c < 4; c++)
+        {
+            seen.Clear();
+            w.WriteStartArray(c switch { 0 => "tick", 1 => "x", 2 => "y", _ => "z" });
+            foreach (ref readonly var r in ps)
+            {
+                int v = c switch { 0 => r.Tick, 1 => r.X, 2 => r.Y, _ => r.Z };
+                int slot = (uint)r.Pi < Limits.MaxPlayers ? r.Pi : -1;
+                if (slot < 0 || v == Nil.V) { Int(w, v); continue; }
+                ref int p = ref prev[slot * 4 + c];
+                Int(w, seen[slot] ? v - p : v);
+                seen[slot] = true;
+                p = v;
+            }
+            w.WriteEndArray();
+        }
+        Col(w, "place", ps, static r => r.Place);
+        Col(w, "alive", ps, static r => r.Alive);
+        w.WriteEndObject();
+    }
+
     private static void WriteRecon(Utf8JsonWriter w, MatchStore s)
     {
         var m = s.Meta;
         w.WriteStartObject("recon");
         var rr = s.ReconRounds.Span;
         w.WriteStartObject("rounds");
-        Col(w, "ri", rr, static r => r.Ri); Col(w, "checked", rr, static r => r.Checked);
+        Col(w, "ri", rr, static r => r.Ri);
+        Col(w, "checkedPlayers", rr, static r => r.Checked);
+        Col(w, "expectedPlayers", rr, static r => r.Checked + r.Missing);
         Col(w, "kOk", rr, static r => r.KillsOk); Col(w, "dOk", rr, static r => r.DeathsOk);
         Col(w, "aOk", rr, static r => r.AssistsOk); Col(w, "dmgOk", rr, static r => r.DamageOk);
-        Col(w, "missing", rr, static r => r.Missing);
         w.WriteEndObject();
         var mm = s.Mismatches.Span;
         w.WriteStartObject("mismatch");
@@ -248,6 +292,7 @@ public static class MatchCodec
         w.WriteNumber("blinds", s.TotalDropped("blinds", s.Blinds.Dropped));
         w.WriteNumber("grenades", s.TotalDropped("grenades", s.Grenades.Dropped));
         w.WriteNumber("throws", s.TotalDropped("throws", s.Throws.Dropped));
+        w.WriteNumber("leaves", s.TotalDropped("leaves", s.Leaves.Dropped));
         w.WriteNumber("pos", s.TotalDropped("pos", s.Pos.Dropped));
         w.WriteNumber("engagements", s.TotalDropped("engagements", s.Engagements.Dropped));
         w.WriteNumber("shots", s.TotalDropped("shots", s.Shots.Dropped));
@@ -390,6 +435,7 @@ public static class MatchCodec
             TickRate = OptInt(env.GetProperty("tickrate")),
             MaxRounds = OptInt(env.GetProperty("maxrounds")),
             BotDifficulty = OptInt(env.GetProperty("botDifficulty")),
+            EquipSource = OptString(env, "equipSource"),
         };
         var pl = root.GetProperty("players");
         var keys = Strings(pl.GetProperty("key"));
@@ -419,6 +465,7 @@ public static class MatchCodec
         ReadBlinds(root.GetProperty("blinds"), s);
         ReadGrenades(root.GetProperty("grenades"), s);
         ReadThrows(root.GetProperty("throws"), s);
+        ReadLeaves(root.GetProperty("leaves"), s);
         ReadPos(root.GetProperty("pos"), s);
         var aim = root.GetProperty("aim");
         ReadEngagements(aim.GetProperty("engagements"), s);
@@ -426,6 +473,7 @@ public static class MatchCodec
         ReadRecon(recon, s);
         ReadPerf(root.GetProperty("perf"), s);
         m.GrenadeCount = s.Grenades.Count;
+        m.RoundCount = s.RoundCount;
         m.ThrowCount = s.Throws.Count;
     }
 
@@ -446,6 +494,8 @@ public static class MatchCodec
         r.TryGetProperty("survPrimary", out var surv);
         r.TryGetProperty("utilBought", out var ub);
         r.TryGetProperty("utilSpent", out var us);
+        r.TryGetProperty("alive0", out var al0);
+        r.TryGetProperty("equipSrc", out var esrc);
         var row = new RoundRow();
         for (int i = 0; i < win.Length; i++)
         {
@@ -472,6 +522,14 @@ public static class MatchCodec
             FillPerPlayer(money[i], row.Money);
             if (equipEnd.ValueKind == JsonValueKind.Array) FillPerPlayer(equipEnd[i], row.EquipEnd);
             if (surv.ValueKind == JsonValueKind.Array) FillPerPlayer(surv[i], row.SurvPrimary);
+            if (al0.ValueKind == JsonValueKind.Array) FillPerPlayer(al0[i], row.Alive0);
+            if (esrc.ValueKind == JsonValueKind.Array && esrc[i].ValueKind == JsonValueKind.String)
+                row.EquipSrc = esrc[i].GetString() switch
+                {
+                    "pawn" => Recorder.EquipFromPawn,
+                    "inventory" => Recorder.EquipFromInventory,
+                    var other => throw new InvalidDataException($"Unknown equipSrc '{other}'."),
+                };
             if (ub.ValueKind == JsonValueKind.Array)
             {
                 int pi = 0;
@@ -508,6 +566,7 @@ public static class MatchCodec
         var weapon = Ints(t.GetProperty("weapon")); var flags = Ints(t.GetProperty("flags"));
         var kpos = t.GetProperty("kpos"); var vpos = t.GetProperty("vpos"); var state = t.GetProperty("state");
         var nade = Ints(t.GetProperty("nade")); var vutil = t.GetProperty("vUtil");
+        var kb = Ints(t.GetProperty("kBody")); var vb = Ints(t.GetProperty("vBody"));
         for (int i = 0; i < ri.Length; i++)
         {
             var r = new KillRow
@@ -521,6 +580,8 @@ public static class MatchCodec
             r.CtAlive = OptInt(st[0]); r.TAlive = OptInt(st[1]); r.CtHp = OptInt(st[2]); r.THp = OptInt(st[3]);
             r.CtEquip = OptInt(st[4]); r.TEquip = OptInt(st[5]); r.Planted = OptInt(st[6]); r.SincePlant = OptInt(st[7]);
             r.Nade = nade[i];
+            r.KBody = kb[i];
+            r.VBody = vb[i];
             if (vutil[i].ValueKind == JsonValueKind.Array)
             {
                 r.VUtil.Known = true;
@@ -564,6 +625,13 @@ public static class MatchCodec
         }
     }
 
+    private static void ReadLeaves(JsonElement t, MatchStore s)
+    {
+        var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick"));
+        var pi = Ints(t.GetProperty("pi")); var alive = Ints(t.GetProperty("alive"));
+        for (int i = 0; i < ri.Length; i++) s.Leaves.Add(new LeaveRow { Ri = ri[i], Tick = tick[i], Pi = pi[i], Alive = alive[i] });
+    }
+
     private static void ReadThrows(JsonElement t, MatchStore s)
     {
         var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var th = Ints(t.GetProperty("thrower"));
@@ -583,6 +651,25 @@ public static class MatchCodec
         var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var pi = Ints(t.GetProperty("pi"));
         var x = Ints(t.GetProperty("x")); var y = Ints(t.GetProperty("y")); var z = Ints(t.GetProperty("z"));
         var place = Ints(t.GetProperty("place")); var alive = Ints(t.GetProperty("alive"));
+        string? enc = t.TryGetProperty("enc", out var e) ? e.GetString() : null;
+        if (enc == "delta")
+        {
+            var cols = new[] { tick, x, y, z };
+            var prev = new int[Limits.MaxPlayers * 4];
+            foreach (var (col, c) in cols.Select((a, c) => (a, c)))
+            {
+                var seen = new bool[Limits.MaxPlayers];
+                for (int i = 0; i < col.Length; i++)
+                {
+                    int slot = (uint)pi[i] < Limits.MaxPlayers ? pi[i] : -1;
+                    if (slot < 0 || col[i] == Nil.V) continue;
+                    if (seen[slot]) col[i] += prev[slot * 4 + c];
+                    seen[slot] = true;
+                    prev[slot * 4 + c] = col[i];
+                }
+            }
+        }
+        else if (enc != null) throw new InvalidDataException($"Unknown pos encoding '{enc}'.");
         for (int i = 0; i < ri.Length; i++)
             s.Pos.Add(new PosRow { Ri = ri[i], Tick = tick[i], Pi = pi[i], X = x[i], Y = y[i], Z = z[i], Place = place[i], Alive = alive[i] });
     }
@@ -639,11 +726,11 @@ public static class MatchCodec
     private static void ReadRecon(JsonElement recon, MatchStore s)
     {
         var r = recon.GetProperty("rounds");
-        var ri = Ints(r.GetProperty("ri")); var ch = Ints(r.GetProperty("checked"));
+        var ri = Ints(r.GetProperty("ri")); var ch = Ints(r.GetProperty("checkedPlayers")); var ex = Ints(r.GetProperty("expectedPlayers"));
         var k = Ints(r.GetProperty("kOk")); var d = Ints(r.GetProperty("dOk")); var a = Ints(r.GetProperty("aOk"));
-        var dm = Ints(r.GetProperty("dmgOk")); var mi = Ints(r.GetProperty("missing"));
+        var dm = Ints(r.GetProperty("dmgOk"));
         for (int i = 0; i < ri.Length; i++)
-            s.ReconRounds.Add(new ReconRound { Ri = ri[i], Checked = ch[i], KillsOk = k[i], DeathsOk = d[i], AssistsOk = a[i], DamageOk = dm[i], Missing = mi[i] });
+            s.ReconRounds.Add(new ReconRound { Ri = ri[i], Checked = ch[i], KillsOk = k[i], DeathsOk = d[i], AssistsOk = a[i], DamageOk = dm[i], Missing = ex[i] - ch[i] });
         var m = recon.GetProperty("mismatch");
         var mri = Ints(m.GetProperty("ri")); var mpi = Ints(m.GetProperty("pi")); var f = m.GetProperty("field");
         var ours = Ints(m.GetProperty("ours")); var game = Ints(m.GetProperty("game")); var hits = Ints(m.GetProperty("hits"));

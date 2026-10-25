@@ -24,7 +24,8 @@ internal static unsafe class Mem
 
     public static int CtrlPawn, Team, LifeState, Health, BodyComponent, SceneNode, AbsOrigin, ViewZ,
         EyeAngles, SpottedMask, Place, AbsVelocity, Scoped, MovementServices, Ducked, WeaponServices,
-        MyWeapons, ActiveWeapon, Ammo, EquipCurrent, PawnController, OwnerEntity, EntityIdentity, DesignerName;
+        MyWeapons, ActiveWeapon, Ammo, EquipCurrent, PawnController, OwnerEntity, EntityIdentity, DesignerName,
+        OriginalControllerOfPawn, Armor, ItemServices, HasHelmet, HasDefuser;
 
     public const int PlaceBytes = 18;
 
@@ -64,6 +65,11 @@ internal static unsafe class Mem
         OwnerEntity = O("CBaseEntity", "m_hOwnerEntity");
         EntityIdentity = O("CEntityInstance", "m_pEntity");
         DesignerName = O("CEntityIdentity", "m_designerName");
+        OriginalControllerOfPawn = O("CCSPlayerController", "m_hOriginalControllerOfCurrentPawn");
+        Armor = O("CCSPlayerPawn", "m_ArmorValue");
+        ItemServices = O("CBasePlayerPawn", "m_pItemServices");
+        HasHelmet = O("CCSPlayer_ItemServices", "m_bHasHelmet");
+        HasDefuser = O("CCSPlayer_ItemServices", "m_bHasDefuser");
         return bad;
     }
 
@@ -160,6 +166,59 @@ internal static unsafe class Mem
     }
 
     private static ReadOnlySpan<byte> PrefixWeapon => "weapon_"u8;
+
+    /// <summary>Fills <paramref name="dest"/> with the pawn's weapon entities; returns the count, or -1 if unreadable.</summary>
+    public static int Weapons(nint pawn, Span<nint> dest)
+    {
+        nint ws = Ptr(pawn, WeaponServices);
+        if (ws == 0) return -1;
+        int count = *(int*)(ws + MyWeapons);
+        nint elems = *(nint*)(ws + MyWeapons + 8);
+        if (count < 0 || count > dest.Length || elems == 0) return -1;
+        int n = 0;
+        for (int i = 0; i < count; i++)
+        {
+            nint w = ByHandle(((uint*)elems)[i]);
+            if (w != 0) dest[n++] = w;
+        }
+        return n;
+    }
+
+    /// <summary>FNV-1a hash of an entity's designer name, without creating a string; 0 if unreadable.</summary>
+    public static ulong DesignerNameHash(nint entity)
+    {
+        nint name = Ptr(Ptr(entity, EntityIdentity), DesignerName);
+        if (name == 0) return 0;
+        byte* s = (byte*)name;
+        ulong h = 14695981039346656037UL;
+        for (int i = 0; i < 64 && s[i] != 0; i++) { h ^= s[i]; h *= 1099511628211UL; }
+        return h;
+    }
+
+    /// <summary>Grenades of one type held: the ammo count at the type's ammo slot, at least 1.</summary>
+    public static int GrenadeCount(nint pawn, int ammoSlot)
+    {
+        nint ws = Ptr(pawn, WeaponServices);
+        if (ws == 0 || ammoSlot < 0) return 1;
+        return Math.Max(1, (int)*(ushort*)(ws + Ammo + 2 * ammoSlot));
+    }
+
+    public static int ArmorValue(nint pawn) => *(int*)(pawn + Armor);
+
+    public static bool HasHelmetItem(nint pawn)
+    {
+        nint s = Ptr(pawn, ItemServices);
+        return s != 0 && *(byte*)(s + HasHelmet) != 0;
+    }
+
+    public static bool HasDefuserItem(nint pawn)
+    {
+        nint s = Ptr(pawn, ItemServices);
+        return s != 0 && *(byte*)(s + HasDefuser) != 0;
+    }
+
+    /// <summary>The controller handle recorded as the original owner of the pawn this controller drives.</summary>
+    public static uint OriginalControllerHandle(nint ctrl) => *(uint*)(ctrl + OriginalControllerOfPawn);
 
     /// <summary>Counts grenades held, by designer name; reads ammo for stacked grenades when the ammo slot is known.</summary>
     public static UtilCounts Utility(nint pawn, ReadOnlySpan<int> ammoSlotByType, out int weaponCount)

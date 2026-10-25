@@ -10,6 +10,8 @@ public sealed class EnvInfo
     public int MaxRounds = Nil.V, BotDifficulty = Nil.V;
     /// <summary>mp_halftime; used to derive startSide for players first seen after round 0. Not written to the file.</summary>
     public bool Halftime = true;
+    /// <summary>"pawn", "inventory" or "mixed": the source(s) of equipment values in this match; null before any round.</summary>
+    public string? EquipSource;
 
     public EnvInfo Clone() => (EnvInfo)MemberwiseClone();
 }
@@ -41,6 +43,8 @@ public sealed class MatchMeta
     public int NextBurst = 1;
     /// <summary>Rows already in the grenades and throws tables, i.e. the next row's match-wide index. Not written to the file.</summary>
     public int GrenadeCount, ThrowCount;
+    /// <summary>Rounds already in the file (set when decoding). Not written to the file.</summary>
+    public int RoundCount;
 
     /// <summary>Copy that shares no mutable state, for handing between the game thread and the worker.</summary>
     public MatchMeta Clone()
