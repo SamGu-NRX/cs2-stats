@@ -121,10 +121,17 @@ public class LosTests
         f.ByPi[H] = new PlayerFrame { Present = true, Alive = true, Team = 2, X = -279, Y = 1122, Z = -76, ViewZ = 64, Yaw = 108 };
         f.ByPi[E1] = new PlayerFrame { Present = true, Alive = true, Team = 3, X = -467, Y = 1684, Z = -125, ViewZ = 64 };
         // Cover hides every point on the victim's axis; a point to one side is clear.
-        _probe.Answer = (x, y, _) => Math.Abs(x - -467) > 1 || Math.Abs(y - 1684) > 1;
+        var ends = new List<(double X, double Y)>();
+        _probe.Answer = (x, y, _) => { ends.Add((x, y)); return Math.Abs(x - -467) > 1 || Math.Abs(y - 1684) > 1; };
         _los.Check(0, 3528, H, f, _rows);
         Assert.True(_los.IsVisible(E1));
         Assert.Equal(LosTracker.Points.Count(p => p.Side == 0) + 1, _probe.Calls); // three axis points, then the first side point
+        // The side point sits 12 units from the body axis, at right angles to the human-to-victim ray
+        // (world-axis offsets, or offsets along the enemy's facing, would not).
+        var (sx, sy) = (ends[^1].X - -467, ends[^1].Y - 1684);
+        var (rx, ry) = (-467.0 - -279, 1684.0 - 1122);
+        Assert.Equal(LosTracker.SideOffset, Math.Sqrt(sx * sx + sy * sy), 6);
+        Assert.Equal(0, (sx * rx + sy * ry) / Math.Sqrt(rx * rx + ry * ry), 6);
     }
 
     [Fact]
@@ -181,18 +188,23 @@ public class RecorderLosTests
     }
 
     /// <summary>
-    /// Fails if a read at the kill tick sees the victim hidden. The 2026-10-25 17:40 match had 0 of 20
-    /// kills visible at the kill tick and 17 of 20 one tick earlier: the death row shared the kill tick.
+    /// Fails if a read at the kill tick sees the victim hidden, in either order of the death event and
+    /// a check in the same tick (2004 is a scheduled check: freeze 2000, every 4 ticks). The 2026-10-25
+    /// 17:40 match had 0 of 20 kills visible at the kill tick and 17 of 20 one tick earlier.
     /// </summary>
-    [Fact]
-    public void AKilledEnemyIsVisibleAtTheKillTickAndHiddenAfter()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AKilledEnemyIsVisibleAtTheKillTickAndHiddenAfter(bool deathEventFirst)
     {
-        Ticks(2000, 2003);
-        _r.Kill(new KillInput { Tick = 2003, Killer = H, Victim = B, Assister = Nil.V, Weapon = 0, NadeType = Nil.V });
-        _frames.ByPi[B].Alive = false;
-        Ticks(2003, 2010); // a check in the kill tick, after the death, must not stamp it earlier
+        Ticks(2000, 2004);
+        var kill = new KillInput { Tick = 2004, Killer = H, Victim = B, Assister = Nil.V, Weapon = 0, NadeType = Nil.V };
+        _frames.ByPi[B].Alive = false; // the pawn is dead for the whole of tick 2004
+        if (deathEventFirst) { _r.Kill(kill); _r.Tick(2004); }
+        else { _r.Tick(2004); _r.Kill(kill); }
+        Ticks(2005, 2012);
         _r.Flush();
-        Assert.Equal(new[] { (2000, 1), (2004, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
+        Assert.Equal(new[] { (2000, 1), (2005, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
     }
 
     [Fact]
