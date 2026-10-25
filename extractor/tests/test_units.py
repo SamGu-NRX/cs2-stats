@@ -1162,3 +1162,62 @@ def test_a_stale_map_is_skipped_by_readers_but_kept_until_a_re_extraction_replac
     assert ex.prune_map(m) == [] and (m / "match.parquet").exists()
     ex.retire_map(m)  # its re-extraction landed in another folder
     assert not m.exists()
+
+
+def test_a_marker_that_cannot_be_read_keeps_the_map(tmp_path, monkeypatch):
+    # Any OSError reading RETIRED counted as "not stale", so an unreadable marker was pruned as replaced.
+    m = tmp_path / "m1"
+    _tables(m, "legacy")
+    ex.mark_stale(m, "extractor 1.1.0")
+    real = Path.read_text
+
+    def locked(self, *a, **k):
+        if self.name == "RETIRED":
+            raise PermissionError(13, "Access is denied", str(self))
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", locked)
+    assert ex.prune_map(m) == [] and (m / "match.parquet").exists() and ex.resolve_map_dir(m) is None
+
+
+def test_only_a_marker_reading_replaced_or_empty_lets_the_prune_delete(tmp_path):
+    for text, kept in (("replaced\n", False), ("", False), ("stale: x\n", True), ("garbled \x00\n", True)):
+        m = tmp_path / f"m-{len(text)}-{kept}"
+        _tables(m, "x")
+        (m / "RETIRED").write_text(text, encoding="utf-8")
+        ex.prune_map(m)
+        assert m.exists() == kept, text
+
+
+def _withdrawn(tmp_path, reason):
+    m = tmp_path / "m1"
+    _tables(m, "old")
+    if reason == "stale":
+        ex.mark_stale(m, "extractor 1.1.0")
+    else:
+        (m / "RETIRED").write_text("replaced\n", encoding="utf-8")  # retired, its delete not yet done
+    return m
+
+
+@pytest.mark.parametrize("reason", ["stale", "replaced"])
+def test_a_failed_publish_into_a_withdrawn_folder_leaves_its_old_tables_withdrawn(tmp_path, monkeypatch, reason):
+    # Extraction removed RETIRED before writing, so a failed write left the old, withdrawn tables resolvable.
+    m = _withdrawn(tmp_path, reason)
+
+    def fail(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ex, "publish_version", fail)
+    with pytest.raises(OSError):
+        ex.write_output({"match": _one_row("match")}, m, dict(rows={}, bytes={}))
+    assert (m / "RETIRED").exists() and ex.resolve_map_dir(m) is None
+    assert not any(x.name.startswith(".tmp-") for x in m.iterdir())
+
+
+@pytest.mark.parametrize("reason", ["stale", "replaced"])
+def test_a_publish_into_a_withdrawn_folder_makes_it_live_only_once_published(tmp_path, reason):
+    m = _withdrawn(tmp_path, reason)
+    result = dict(rows={}, bytes={})
+    ex.write_output({"match": _one_row("match")}, m, result)
+    assert not (m / "RETIRED").exists() and ex.resolve_map_dir(m) == m / result["version_dir"]
+    assert sorted(x.name for x in m.iterdir()) == ["CURRENT", result["version_dir"]]  # old tables pruned
