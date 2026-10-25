@@ -102,8 +102,7 @@ def test_a_kill_with_no_damage_row_opens_an_engagement():
     smokes = pd.DataFrame(dict(start_tick=[], end_tick=[], x=[], y=[], z=[]))
     velocity = pd.DataFrame(dict(tick=pd.Series([], dtype="int32"), steamid=pd.Series([], dtype="UInt64"),
                                  vel_x=[], vel_y=[], vel_z=[]))
-    eng, rows, vis = ex.engagement_tables(S, rounds, shots, dmg, kills, smokes, {a: 0, v: 1}, velocity,
-                                          "de_test", None, RATE)
-    assert vis["status"] == "no_mapdata"
+    eng, rows = ex.engagement_tables(ex.player_state(S), rounds, shots, dmg, kills, smokes, {a: 0, v: 1},
+                                     velocity, None, RATE)
     got = eng[["attacker_steamid", "victim_steamid", "start_tick", "end_tick", "outcome"]].values.tolist()
     assert sorted(got) == sorted([[v, a, 1200 - 64, 1200 + 64, "damage-only"], [a, v, 1500 - 64, 1500 + 64, "kill"]])

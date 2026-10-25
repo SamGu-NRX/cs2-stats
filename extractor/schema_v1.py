@@ -64,6 +64,7 @@ TYPES: dict[str, dict[str, str]] = {
         "victim_steamid": "UInt64",
         "weapon": "String",
         "source": "String",
+        "reconstructed_ambiguous": "Boolean",
     },
     "engagement_ticks": {
         "a_duck": "Float32",

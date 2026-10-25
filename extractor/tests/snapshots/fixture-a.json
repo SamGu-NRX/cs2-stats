@@ -112,7 +112,7 @@
     ],
     "a_side": [
      "String",
-     "ad5554dc5893632c"
+     "a6914054e812fa65"
     ],
     "a_x": [
      "Float32",
@@ -136,7 +136,7 @@
     ],
     "attacker_steamid": [
      "UInt64",
-     "7acae3093f0bffb2"
+     "db4f6dcc411ef995"
     ],
     "distance": [
      "Float32",
@@ -186,6 +186,10 @@
      "Boolean",
      "619ba2b9b083f288"
     ],
+    "reconstructed_ambiguous": [
+     "Boolean",
+     "85f233eee04ed081"
+    ],
     "round": [
      "Int16",
      "2a22b82ea845db81"
@@ -233,118 +237,118 @@
    "columns": {
     "a_duck": [
      "Float32",
-     "10adb8da1bfdf8bb"
+     "4c4eb876eee2d837"
     ],
     "a_eye_z": [
      "Float32",
-     "3f6dd8e2349518cd"
+     "1bcd3629cb3a0a17"
     ],
     "a_pitch": [
      "Float32",
-     "ae043d2ef9412119"
+     "090748e303f9e73f"
     ],
     "a_shot_fired": [
      "Boolean",
-     "3e5cf3e7417c674f"
+     "205ee7c7cd7401a2"
     ],
     "a_spotted_by_v": [
      "Boolean",
-     "34c14d0d152c39e7"
+     "f79a53dc697c8969"
     ],
     "a_vel_x": [
      "Float32",
-     "a1acf8934a52668c"
+     "9ff93080093cbaec"
     ],
     "a_vel_y": [
      "Float32",
-     "c59cf8856a39958e"
+     "5cf0dca49d9c9762"
     ],
     "a_vel_z": [
      "Float32",
-     "22ada536f239e5c6"
+     "a1ebdf3725a08c61"
     ],
     "a_x": [
      "Float32",
-     "ff66a0ba322b3a4a"
+     "23e0401011c26c03"
     ],
     "a_y": [
      "Float32",
-     "87507c0bfc595e84"
+     "bd2c4f1bde4d1232"
     ],
     "a_yaw": [
      "Float32",
-     "676675f331abe34f"
+     "cfede10a741ca4fa"
     ],
     "a_z": [
      "Float32",
-     "d1219bd0202f670a"
+     "fd5d4485f7c0c24a"
     ],
     "engagement_id": [
      "Int32",
-     "c28e38a5a6001597"
+     "babd97b59719eda4"
     ],
     "mesh_visible": [
      "Boolean",
-     "09569f1063ef7ded"
+     "67c9abd0b441a089"
     ],
     "smoke_blocked": [
      "Boolean",
-     "3efed5e07d5051ea"
+     "a8cb084d636124a2"
     ],
     "tick": [
      "Int32",
-     "0b7ddec0d38651ee"
+     "8ecad1cc27f22fef"
     ],
     "v_duck": [
      "Float32",
-     "8331c5a0637bb92a"
+     "f5fd57d8ea2e436c"
     ],
     "v_eye_z": [
      "Float32",
-     "79da7919452a3e42"
+     "0874404eca1a10a9"
     ],
     "v_pitch": [
      "Float32",
-     "23e5dd6d6cd9bd97"
+     "fc3bbad6d72ed3c6"
     ],
     "v_shot_fired": [
      "Boolean",
-     "1bf43b61cf1a6e43"
+     "481dbeeaf735c3f3"
     ],
     "v_spotted_by_a": [
      "Boolean",
-     "ec7ed8b49a5e64a4"
+     "729589ce18681ee0"
     ],
     "v_vel_x": [
      "Float32",
-     "59edc4421b99d555"
+     "e676fbb7682ec9e2"
     ],
     "v_vel_y": [
      "Float32",
-     "5b5e4274691601bc"
+     "1ab94c48142163e4"
     ],
     "v_vel_z": [
      "Float32",
-     "a89f696b7bf9bccd"
+     "6918a5bcf7dc7b11"
     ],
     "v_x": [
      "Float32",
-     "b1410543f667b5e2"
+     "63a9615ad02ba6be"
     ],
     "v_y": [
      "Float32",
-     "545caeabb8d21d81"
+     "0c3b259cd7517bba"
     ],
     "v_yaw": [
      "Float32",
-     "30f9c5320d7768d8"
+     "7111f6b9ed7a83ec"
     ],
     "v_z": [
      "Float32",
-     "4402d1080bcf68d0"
+     "5592b125647066f4"
     ]
    },
-   "rows": 105788
+   "rows": 105724
   },
   "engagements": {
    "columns": {
@@ -354,7 +358,7 @@
     ],
     "damage": [
      "Int32",
-     "8044006bb4c2f3b4"
+     "3d64f0ba96bbc292"
     ],
     "end_tick": [
      "Int32",
@@ -366,7 +370,7 @@
     ],
     "first_damage_tick": [
      "Int32",
-     "38017cbfc9c92483"
+     "80fa5d942f0a49c4"
     ],
     "first_shot_tick": [
      "Int32",
@@ -374,11 +378,11 @@
     ],
     "first_visible_tick": [
      "Int32",
-     "bd8049947b6d9736"
+     "f568e0386a0cc205"
     ],
     "hits": [
      "Int16",
-     "c287c03d34f06030"
+     "d846a39c10ae8f77"
     ],
     "outcome": [
      "String",
@@ -390,7 +394,7 @@
     ],
     "start_tick": [
      "Int32",
-     "a56b99cd140a4249"
+     "a6e60c486003449a"
     ],
     "truncated": [
      "Boolean",
@@ -965,7 +969,7 @@
     ],
     "extractor_version": [
      "String",
-     "abfc7b3d53bb5d57"
+     "538bca3bbf987939"
     ],
     "final_tick": [
      "Int32",

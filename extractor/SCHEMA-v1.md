@@ -38,7 +38,7 @@ The extractor fails a map unless the tables reproduce the demo's own final score
 - **deaths** count every cause;
 - **assists** include flash assists, except an assist on the assister's own teammate, which the event names but the scoreboard does not count;
 - **damage, the rating input:** `player_rounds.game_damage` summed over rounds equals the scoreboard's `damage_total` exactly. The game commits `damage_total` once per round, between round end and the next round start, so a round's damage is the counter's rise across its boundary;
-- **damage, the hit table:** the sum of `damages.dmg_health_capped` on enemies equals `damage_total` exactly, per player and per round (against `game_damage`). `dmg_health_capped` is the HP actually removed: `player_hurt` reports a truncated amount (25 reported, 26 removed). A demo can lose a stretch of events; a health drop with no `player_hurt` on that tick is rebuilt as a `damages` row with `source = health` (see `damages`);
+- **damage, the hit table:** the sum of `damages.dmg_health_capped` on enemies equals `damage_total` exactly, per player and per round (against `game_damage`). `dmg_health_capped` is the HP actually removed: `player_hurt` reports a truncated amount (25 reported, 26 removed). A demo can lose a stretch of events; a health drop with no `player_hurt` on that tick is rebuilt as a `damages` row with `source = health` (see `damages`). When no evidence names the attacker of a rebuilt row, the row keeps a null attacker with `reconstructed_ambiguous = true`; a round's shortfall on one side that those rows account for exactly (every gap a shortfall, summing to their damage) is reported as unattributed and does not fail the map, while any other gap does;
 - **rounds:** every round has ordered start, freeze-end and end ticks (except a round recorded already live), and the wins per team add up to the final score.
 - **Split recordings.** One map can arrive as two demos (`-p1`, `-p2`). Every count is checked as the final counter minus the same counter at round 1's freeze end (`scoreboard.*_at_start`): zero for a whole match, the earlier parts' totals for a later part. The match starts at the last `begin_new_match` before the first real round end, because a first part can end with one after its last round. A demo without a win panel reads its final scoreboard at the next round start after its last round, the tick on which the game commits that round's damage. Merge parts by `match.archive` and `match.map_key` without the `-pN` suffix.
 
@@ -281,12 +281,13 @@ Every player_hurt in a counted round, plus hits rebuilt from health drops the ev
 | `dmg_health_capped` | Int32 | no | HP actually removed (health_before - health_after); enemy hits sum exactly to the scoreboard |
 | `grenade_entity_id` | Int32 | yes | the grenade or inferno that did it |
 | `grenade_link` | String | yes | he | inferno | impact |
-| `source` | String | no | event (a player_hurt), or health: rebuilt from a health drop whose player_hurt the demo lost. A rebuilt row's attacker is the player_death attacker for a lethal drop, else the one enemy whose game_damage that round exceeds his recorded hits by exactly the drop (null if none is unique); event-only fields are null |
+| `source` | String | no | event (a player_hurt), or health: rebuilt from a health drop whose player_hurt the demo lost. A rebuilt row names an attacker only on evidence from its own tick: the player_death attacker for a lethal drop; else the one enemy who fired on that tick (and is in line of fire when the mesh is usable); else, with no enemy shot on that tick, the one enemy in line of fire (alive, the victim mesh-visible in his 60° view cone). Event-only fields are null |
+| `reconstructed_ambiguous` | Boolean | no | a rebuilt row whose attacker no evidence names; its attacker_steamid is null and validation reports its damage as unattributed |
 | `health_after` | Int32 | no | HP |
 | `health_before` | Int32 | no | HP before the hit (chained within a tick) |
 | `hitgroup` | String | yes |  |
 | `is_self` | Boolean | no |  |
-| `is_team_damage` | Boolean | no |  |
+| `is_team_damage` | Boolean | no | false when the attacker is unknown |
 | `round` | Int16 | no | round |
 | `tick` | Int32 | no | tick |
 | `v_place` | String | yes |  |
