@@ -13,7 +13,7 @@ import { stubModel, STUB_TABLE } from "./winprob";
 const count = (b: MatchBuilder) => {
   const ctx = buildCtx(b.build());
   const trades = computeTrades(ctx);
-  return { ctx, trades, ...countMatch(ctx, trades, []) };
+  return { ctx, trades, ...countMatch(ctx, trades) };
 };
 
 describe("opening duel", () => {
@@ -186,7 +186,7 @@ describe("round swing", () => {
   test("victim is charged the full drop; the killer side splits it by damage share", () => {
     const b = new MatchBuilder().kill(0, 10, 5, 1, { state: s0 }).damage(0, 8, 6, 1, 40).damage(0, 10, 5, 1, 60);
     const ctx = buildCtx(b.build());
-    const [s] = computeSwing(ctx, stubModel);
+    const [s] = computeSwing(ctx, stubModel).swings;
     const drop = 0.5 - 16 / 41; // CT 5v5 → 4v5
     expect(s.before).toBe(0.5);
     expect(s.after).toBeCloseTo(16 / 41, 12);
@@ -197,7 +197,7 @@ describe("round swing", () => {
   });
   test("no damage logged: the killer gets it all", () => {
     const ctx = buildCtx(new MatchBuilder().kill(0, 10, 0, 5, { state: s0 }).build());
-    const [s] = computeSwing(ctx, stubModel);
+    const [s] = computeSwing(ctx, stubModel).swings;
     expect(new Map(s.credits).get(0)).toBeCloseTo(0.5 - 16 / 41, 12);
   });
 });

@@ -54,7 +54,7 @@ function Row({ s, top }: { s: LightSummary; top: number }) {
       <span>
         <div className="list__map">{mapName(s.map)}</div>
         <div className="list__sub">
-          {resultText} · {s.nRounds} rounds{s.captured < s.nRounds ? ` · kill log from round ${s.nRounds - s.captured + 1}` : ""}
+          {resultText} · {s.nRounds} rounds{s.captured < s.nRounds ? ` · kill log for ${s.captured} of ${s.nRounds} rounds` : ""}
         </div>
       </span>
       <span className={`list__score num ${s.result === "W" ? "pos" : s.result === "L" ? "neg" : ""}`}>{s.score.us}–{s.score.them}</span>

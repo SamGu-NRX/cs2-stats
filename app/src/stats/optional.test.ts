@@ -11,7 +11,7 @@ import { MatchBuilder } from "./testing/build";
 
 const counters = (b: MatchBuilder) => {
   const ctx = buildCtx(b.build());
-  return countMatch(ctx, computeTrades(ctx), []).counters;
+  return countMatch(ctx, computeTrades(ctx)).counters;
 };
 
 describe("saves with rounds.survPrimary", () => {

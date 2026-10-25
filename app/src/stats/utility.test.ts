@@ -7,7 +7,7 @@ import { MatchBuilder } from "./testing/build";
 // Players 0..4 are CT, 5..9 are T; player 0 is the human.
 const util = (b: MatchBuilder, pi = 0) => {
   const ctx = buildCtx(b.build());
-  return countMatch(ctx, computeTrades(ctx), []).counters[pi].util.ct;
+  return countMatch(ctx, computeTrades(ctx)).counters[pi].util.ct;
 };
 
 describe("flashes", () => {
@@ -49,7 +49,7 @@ describe("HE and fire", () => {
     b.round(12, 3, "elim", { side: [2, 2, 2, 2, 2, 3, 3, 3, 3, 3] });
     b.grenade(0, 5, 0, "smoke").grenade(12, 5, 0, "smoke").grenade(12, 6, 0, "smoke");
     const ctx = buildCtx(b.build());
-    const c = countMatch(ctx, computeTrades(ctx), []).counters[0].util;
+    const c = countMatch(ctx, computeTrades(ctx)).counters[0].util;
     expect([c.ct.smokes, c.t.smokes, c.ct.rounds, c.t.rounds]).toEqual([1, 2, 12, 1]);
   });
 });

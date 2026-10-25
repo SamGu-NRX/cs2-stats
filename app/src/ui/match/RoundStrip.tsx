@@ -9,7 +9,7 @@ import { ModelBadge } from "../ModelBadge";
 
 /** Our win chance over a round: [x 0..1 by time, p] steps, ending at the result. */
 function lanePoints(r: RoundView): [number, number][] | null {
-  if (!r.captured) return null;
+  if (!r.captured || !r.swing) return null;
   const us = (p: number) => (r.usSide === 3 ? p : 1 - p);
   const ks = r.kills.filter((k) => k.ctWinBefore !== null && k.ctWinAfter !== null);
   const dur = r.durSecs ?? Math.max(1, ...r.kills.map((k) => k.secs ?? 0));
@@ -44,7 +44,7 @@ function Lane({ r }: { r: RoundView }) {
 }
 
 function tipFor(v: MatchView, r: RoundView): string {
-  const sw = r.captured ? ` · Your swing ${swingPct(r.swing[v.human])}` : " · Not captured";
+  const sw = !r.captured ? " · Not captured" : r.swing ? ` · Your swing ${swingPct(r.swing[v.human])}` : " · Swing unknown (equipment not recorded)";
   if (r.winner === null || r.how === null) return `Round ${r.ri + 1} · Result unknown${sw}`;
   const who = r.winner === "us" ? "Your team won" : "Opponents won";
   const left = r.left !== null ? `, ${r.left} left` : "";
@@ -103,7 +103,7 @@ export function RoundStrip({ v, onRound }: { v: MatchView; onRound?: (ri: number
       <div className="strip" role="group" aria-label="Round history. Use the arrow keys to move between rounds; Enter opens the round." onKeyDown={onKey}>
         <div className="strip__label">Your team<small>{firstSide} → {secondSide}</small></div>
         <div className="strip__rounds">{row("us")}</div>
-        <div className="strip__label has-tip" tabIndex={0} data-tip={`Your team's chance to win the round, after each kill. ${v.model.kind === "stub" ? "From the alive-count stub until the trained model is added." : "From the trained win-probability model."}`}>
+        <div className="strip__label has-tip" tabIndex={0} data-tip={`Your team's chance to win the round, after each kill. ${v.model.kind === "stub" ? "From the alive-count placeholder until the trained model is added." : "From a model fitted to CS2RB data (Bishop 2026, CC BY 4.0) on alive players, HP, freeze-end equipment, the bomb and the clock."}`}>
           Win chance<small>after each kill</small>
         </div>
         <div className="strip__rounds">

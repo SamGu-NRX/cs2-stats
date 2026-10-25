@@ -30,7 +30,7 @@ const M: Metric[] = [
   { id: "kast", label: "KAST", fmt: "pct", csdm: true, value: (c) => pct(c.kastRounds, c.rounds), def: "Rounds with a kill, assist, survival or traded death. In rounds captured as totals only, traded deaths are unknown and do not count." },
   { id: "hs", label: "HS%", fmt: "int", csdm: true, value: (c) => (c.kills ? hsPercent(c.hsKills, c.kills) : null), def: "Headshot kills as a share of kills, rounded down." },
   { id: "swing", label: "Round swing", fmt: "pct", value: (c) => (c.swingRounds ? (100 * c.swing) / c.swingRounds : null),
-    def: "Average change in your team's round win probability you caused per round: your share of each kill (split by damage on the victim), minus the drop when you died (WPA, Xenopoulos et al. 2020)." },
+    def: "Average change in your team's round win probability you caused per round: your share of each kill (split by damage on the victim), minus the drop when you died (WPA, Xenopoulos et al. 2020). Win probability comes from a model fitted to CS2RB data (Bishop 2026, CC BY 4.0) when it is bundled, else an alive-count placeholder. Rounds with unknown equipment have no swing." },
 
   // Firepower
   { id: "killsPerWin", label: "Kills per round won", fmt: "dec2", value: (c) => per(c.killsWon, c.roundsWon), def: "Kills in rounds your team won, divided by those rounds." },

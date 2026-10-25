@@ -89,7 +89,7 @@ export default function Detailed({ v }: TabProps) {
       {v.captured < v.nRounds && (
         <p className="note" style={{ padding: "0 6px" }}>
           <span className="pill pill--warn" style={{ marginRight: 8 }}>Partial</span>
-          Opening K:D, clutches, sniper kills, trades, utility, flashes and saves need the kill-by-kill log, so they cover {v.captured} of {v.nRounds} rounds (from round {v.firstFullRound + 1}). Multi-kills cover all rounds with stats.
+          Opening K:D, clutches, sniper kills, trades, utility, flashes and saves need the kill-by-kill log, so they cover {v.captured} of {v.nRounds} rounds (without round{v.nRounds - v.captured === 1 ? "" : "s"} {v.rounds.filter((r) => !r.captured).map((r) => r.ri + 1).join(", ")}). Multi-kills cover all rounds with stats.
         </p>
       )}
       <TeamTable rows={by("us")} title="Your team" />
