@@ -27,8 +27,11 @@ export const WINPROB = winProbSource(PACK && existsSync(PACK) ? JSON.parse(readF
 
 export const loadDir = (dir: string, optional?: readonly TableName[]): Promise<MatchTables> => loadTables(dirReader(dir), optional);
 
-/** One map folder resolved: its tables folder, or why it has no complete map now. */
-export type MapTables = { dir: string } | { skipped: string };
+/**
+ * One map folder resolved: its tables folder (with the COMPLETE manifest, file name to bytes, for a
+ * version folder), or why it has no complete map now.
+ */
+export type MapTables = { dir: string; manifest?: Record<string, number> } | { skipped: string };
 
 const VERSION_DIR = /^v-[0-9A-Za-z.+_]+-[0-9a-f]{8}$/;
 
@@ -53,7 +56,7 @@ export function mapTablesDir(mapDir: string): MapTables | null {
       const f = path.join(dir, file);
       if (!existsSync(f) || statSync(f).size !== bytes) return { skipped: `${name}/${file} is not at its listed ${bytes} bytes` };
     }
-    return { dir };
+    return { dir, manifest: sizes };
   }
   return existsSync(path.join(mapDir, "match.parquet")) || existsSync(path.join(mapDir, "meta.parquet")) ? { dir: mapDir } : null;
 }
@@ -82,26 +85,55 @@ export function proMapDirs(): string[] {
   return out;
 }
 
+/** The version a map resolved to changed or lost a file while it was read. */
+class Republished extends Error {}
+
+/**
+ * One resolved map's tables. For a version folder every read is held to the COMPLETE manifest: a file
+ * it does not list is absent, a listed file must read at its listed size, and after loading every
+ * listed file (optional tables included) must still be there at its size; otherwise the attempt is
+ * discarded as Republished.
+ */
+export async function loadMapTables(r: { dir: string; manifest?: Record<string, number> }, optional?: readonly TableName[]): Promise<MatchTables> {
+  const m = r.manifest;
+  if (!m) return loadDir(r.dir, optional);
+  const intact = (f: string) => { const p = path.join(r.dir, f); return existsSync(p) && statSync(p).size === m[f]; };
+  const read = dirReader(r.dir);
+  const t = await loadTables(async (name) => {
+    if (!(name in m)) return null;
+    let b: ArrayBuffer | null;
+    try { b = await read(name); } catch { b = null; }
+    if (!b || b.byteLength !== m[name]) throw new Republished(`${name} changed while it was read`);
+    return b;
+  }, optional);
+  for (const f of Object.keys(m)) if (!intact(f)) throw new Republished(`${f} changed while the map was read`);
+  return t;
+}
+
 /**
  * Every pro map's tables, one at a time. The extractor publishes a version by renaming CURRENT, so a
- * file that vanishes while it is read means the map was just republished: it is resolved once more
- * and read again, and skipped by name only when it then has no complete version. Any other load
- * error throws.
+ * version that changes while it is read means the map was just republished: the whole attempt is
+ * discarded, CURRENT is resolved again and read once more, and the map is skipped by name only when it
+ * then has no complete version. For a flat folder, a vanished match table is the same case. Any other
+ * load error throws.
  */
 export async function* proMaps(optional?: readonly TableName[]): AsyncGenerator<{ dir: string; t: MatchTables }> {
   for (const m of mapFolders()) {
     let r = mapTablesDir(m);
     for (let attempt = 0; r; attempt++) {
       if (!("dir" in r)) { skip(m, r.skipped); break; }
+      let t: MatchTables;
       try {
-        yield { dir: r.dir, t: await loadDir(r.dir, optional) };
-        break;
+        t = await loadMapTables(r, optional);
       } catch (e) {
-        const again = mapTablesDir(m);
-        const vanished = !existsSync(path.join(r.dir, "match.parquet")) && !existsSync(path.join(r.dir, "meta.parquet"));
-        if (attempt > 0 || !(vanished || (again && "dir" in again && again.dir !== r.dir))) throw e;
-        r = again;
+        const vanished = !r.manifest && !existsSync(path.join(r.dir, "match.parquet")) && !existsSync(path.join(r.dir, "meta.parquet"));
+        if (!(e instanceof Republished) && !vanished) throw e;
+        if (attempt > 0) { skip(m, (e as Error).message); break; }
+        r = mapTablesDir(m);
+        continue;
       }
+      yield { dir: r.dir, t };
+      break;
     }
   }
 }
