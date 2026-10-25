@@ -5,6 +5,8 @@
 // peek and firing first read as aggressive; a longer wait before the duel settles and a longer
 // engagement distance read as passive. METRICS.md lists the parts' correlations with entry attempts.
 import { CONTACT_METRICS } from "./aim";
+import scale from "./aggression-scale.json";
+import type { Metric } from "./metrics";
 import type { Summary } from "./rollup";
 
 export const AGGRO_PARTS = ["peekTravel", "firedFirst", "duelExposure", "engageDistance"] as const;
@@ -32,3 +34,12 @@ export function scoreOf(v: (number | null)[], scale: AggroScale): number | null 
 }
 
 export const aggressionScore = (s: Summary, scale: AggroScale) => scoreOf(aggroParts(s), scale);
+
+/** The shipped scale: the pros' mean and spread of each part, from `pnpm metric-evidence --fit`. */
+export const AGGRO_SCALE: AggroScale = scale;
+
+export const AGGRO_SCALE_METRICS: Metric[] = [
+  { id: "aggressionScore", label: "Aggressive to passive", kind: "identity", group: "aggression", unit: "count", status: "approx", needs: ["sight"],
+    def: "How aggressively you take fights, in pro standard deviations.",
+    value: (s) => aggressionScore(s, AGGRO_SCALE) },
+];
