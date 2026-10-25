@@ -87,7 +87,12 @@ export function ecoAdjust(c: Ctx): void {
 
   const known = loadouts(c);
   for (let ri = 0; ri < c.nRounds; ri++) {
-    // players with an eco event this round whose value cannot be computed
+    // Players with an eco event this round whose value cannot be computed. An eco value counts as known
+    // when both economy groups can be worked out, from the weapon or else the equipment value; it does
+    // not need both loadouts recorded. That stricter rule would null every plugin match's rating
+    // (plugin files record no loadouts) and remove a metric the user relies on. The stricter rule
+    // gates only the comparison with pros (INPUT_COVERAGE.eco, the `both` count below), so plugin
+    // ratings keep a value and get no percentile.
     const unknown = new Set<number>();
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
