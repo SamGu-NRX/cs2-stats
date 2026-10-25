@@ -44,20 +44,25 @@ export function findingTitle(gun: string, f: SprayFinding): string {
 
 const S = 26, W = 330, H = 360, TOP = 24;
 
-export function SprayPath({ gun, reference, path }: { gun: string; reference: RecoilRef; path: PlayerPath | null }) {
+/**
+ * `relative`: the path is measured against the target, not as absolute view angles (plugin recordings
+ * until the plugin stores view angles), so it cannot be set against the pro path: the chart draws your
+ * path only, says why in one sentence, and shows no band, no pro line and no distance bars.
+ */
+export function SprayPath({ gun, reference, path, relative = false }: { gun: string; reference: RecoilRef; path: PlayerPath | null; relative?: boolean }) {
   const pts = path ? meanPath(path) : [];
-  const ref = reference.path;
-  const until = Math.min(ref.length, Math.max(pts.length, 12));
+  const ref = relative ? [] : reference.path;
+  const until = relative ? 0 : Math.min(ref.length, Math.max(pts.length, 12));
   const X = (yaw: number) => W / 2 + yaw * S, Y = (pitch: number) => TOP + pitch * S;
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
-  const finding = path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
+  const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
   return (
     <figure className="spray">
       <figcaption className="spray__title">{finding}</figcaption>
       <svg viewBox={`0 0 ${W} ${H + 30}`} className="spray__plot" role="img" aria-label={finding}>
-        <polygon points={band} className="spray__band" />
+        {relative ? null : <polygon points={band} className="spray__band" />}
         {ref.slice(1, until).map((b, i) => <line key={i} x1={X(b[1])} x2={X(b[1])} y1={Y(b[2])} y2={Y(b[3])} className="spray__tick" />)}
-        <polyline points={ref.slice(0, until).map((b) => `${X(b[1])},${Y(b[0])}`).join(" ")} className="spray__pro" />
+        {relative ? null : <polyline points={ref.slice(0, until).map((b) => `${X(b[1])},${Y(b[0])}`).join(" ")} className="spray__pro" />}
         {pts.length ? <polyline points={pts.map((p) => `${X(p.yaw)},${Y(p.pitch)}`).join(" ")} className="spray__mine" /> : null}
         {pts.map((p, i) => (
           <g key={p.bullet} opacity={p.n >= MIN_SPRAYS ? 1 : 0.4}>
@@ -70,6 +75,7 @@ export function SprayPath({ gun, reference, path }: { gun: string; reference: Re
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
+      {relative ? <p className="spray__note">This recording measures your aim against the target rather than your absolute view angles, so it isn't compared with the pro path.</p> : null}
     </figure>
   );
 }
