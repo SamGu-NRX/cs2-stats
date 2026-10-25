@@ -13,7 +13,7 @@ const kill = (tick: number, killer: number, victim: number, credits: [number, nu
 const facts = {
   players: [0, 1, 2, 3].map((pi) => ({ id: `p${pi}`, name: `p${pi}`, team: pi < 2 ? 0 : 1, bot: true })),
   rounds: [{ ri: 0, number: 1, winner: "T" }],
-  pr: [0, 1, 2, 3].map((pi) => ({ ri: 0, pi, side: pi < 2 ? "T" : "CT", team: pi < 2 ? 0 : 1, m: { kills: pi === 1 ? 2 : pi === 2 ? 1 : 0, deaths: pi === 1 ? 0 : 1 } })),
+  pr: [0, 1, 2, 3].map((pi) => ({ ri: 0, pi, side: pi < 2 ? "T" : "CT", team: pi < 2 ? 0 : 1, m: { kills: pi === 1 ? 2 : pi === 2 ? 1 : 0, deaths: pi === 1 ? 0 : 1, ...(pi === 1 ? { swing: 0.8, swingRounds: 1 } : {}) } })),
   kills: [kill(640, 2, 0, [[2, 0.2], [0, -0.2]], true), kill(960, 1, 2, [[1, 0.25], [2, -0.25]]), kill(1280, 1, 3, [[1, 0.55], [3, -0.55]])],
 } as unknown as MatchFacts;
 
@@ -28,6 +28,7 @@ describe("round views", () => {
     expect(cells[2][0]!.opening).toBe("k");
     expect(cells[0][0]!.opening).toBe("d");
     expect(cells[1][0]).toMatchObject({ kills: 2, died: false, swing: 0.8 });
+    expect(cells[0][0]!.swing).toBeNull(); // not valued: no tint
   });
   it("finds each clutch once, from the moment a player is alone, with the kills that followed", () => {
     expect(clutchesOf(facts)).toEqual([
