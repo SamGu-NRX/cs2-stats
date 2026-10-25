@@ -54,7 +54,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.6.0"
+EXTRACTOR_VERSION = "1.7.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -555,10 +555,12 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
     against. That needs a lethal drop with a player_death on the tick whose weapon matches a cause:
     - an inferno weapon: the killer's inferno, burning on the tick, within INFERNO_REACH of the victim;
     - hegrenade: the killer's HE detonating on the tick within HE_REACH of the victim;
-    - a world cause with no other player (a fall, the map): the victim himself, or nobody.
-    A gun or knife kill is not enough: GOTV demos carry no bullet_impact (none in 13 checked), so nothing
-    places that shot at the victim. A shot on the tick is no evidence either: another player's molotov or
-    HE can cause the same drop while someone fires. Every other drop keeps a null attacker with
+    - a world cause with no other player (a fall, the map): the victim himself, or nobody;
+    - any other weapon (a gun, a knife): the killer the game names, unless any burning inferno or any HE
+      detonating on the tick reaches the victim, when the fire or the blast may have taken the last HP.
+    A non-lethal drop never names anyone: a shot on the tick is no evidence (another player's molotov or HE
+    can cause the same drop while someone fires), and GOTV demos carry no bullet_impact (none in 13
+    checked) to place a shot at the victim. Every other drop keeps a null attacker with
     reconstructed_ambiguous = true.
     drops: (tick, steamid, health_before, health_after, round, x, y, z) from the every-tick pass, the
     position being the victim's feet on that tick. infernos: (steamid, start_tick, end_tick, x, y, z), end
@@ -571,9 +573,10 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
                                                      kills.itertuples())}
 
     def near(df, owner, feet, reach):
+        """Whether any row of df (of that owner, unless owner is None) lies within reach of feet."""
         if df.empty:
             return False
-        own = df[df.steamid.astype("Int64") == owner]
+        own = df if owner is None else df[df.steamid.astype("Int64") == owner]
         d = np.sqrt((own.x.astype(float) - feet[0]) ** 2 + (own.y.astype(float) - feet[1]) ** 2
                     + (own.z.astype(float) - feet[2]) ** 2)
         return bool((d <= reach).any())
@@ -585,13 +588,15 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
             return a in (None, v)
         if a is None:
             return False
+        burning = infernos[(infernos.start_tick <= t)
+                           & (infernos.end_tick.isna() | (infernos.end_tick.astype("Float64") >= t))]
+        blasts = detonations[detonations.tick == t]
         if w in INFERNO_WEAPONS:
-            burning = infernos[(infernos.start_tick <= t)
-                               & (infernos.end_tick.isna() | (infernos.end_tick.astype("Float64") >= t))]
             return near(burning, a, feet, INFERNO_REACH)
         if w == "hegrenade":
-            return near(detonations[detonations.tick == t], a, feet, HE_REACH)
-        return False  # a gun or a knife: no impact on the tick to check
+            return near(blasts, a, feet, HE_REACH)
+        # A gun or a knife: the game names this killer and weapon, unless a grenade could have done it.
+        return not (near(burning, None, feet, INFERNO_REACH) or near(blasts, None, feet, HE_REACH))
 
     rows = []
     for t, v, hp0, hp1, rnd, x, y, z in zip(lost.tick, lost.steamid, lost.health_before, lost.health_after,
