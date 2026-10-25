@@ -9,7 +9,7 @@ import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
 import { GameIcon } from "../../components/GameIcon";
-import { attrsOf, fmtMetric, proPoolName } from "../../data/engine";
+import { attrsOf, fmtMetric, proPoolName, proPopulation } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, TIP, tipOf } from "../../data/tips";
 import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
@@ -44,10 +44,10 @@ const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
  * damage, flashes, deaths) needs a per-source split the engine does not keep yet (swing.ts sums each
  * player's credits into one measure; only the flash share is kept apart).
  */
-export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null }) {
+export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: MatchEntry) => number | null }) {
   const swing = swingOf(you.v);
   const botSwing = bots ? swingOf(bots.v) : null;
-  const per = [...list].reverse().map((s) => ({ s, v: swingOf(s.line.v) }));
+  const per = [...list].reverse().map((s) => ({ s, v: matchSwing(s) }));
   const known = per.filter((x) => x.v !== null) as { s: MatchEntry; v: number }[];
   const best = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v > b.v ? x : b), null);
   const worst = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v < b.v ? x : b), null);
@@ -104,7 +104,10 @@ const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.b
 function evidenceOf(m: Measures | undefined) {
   const x = m ? packerFeatures(m) : null;
   return {
-    awp: m?.rounds ? (100 * m.roundsWithAwp) / m.rounds : null,
+    // the AWP share counts only rounds whose freeze-end loadout was recorded (identity.ts roleBlend)
+    awp: m?.loadoutRounds ? (100 * m.roundsWithAwp) / m.loadoutRounds : null,
+    loadoutRounds: m?.loadoutRounds ?? 0,
+    rounds: m?.rounds ?? 0,
     opening: x?.oap ?? null,
     deathTime: x?.tapd ?? null,
   };
@@ -114,7 +117,7 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   const e = evidenceOf(m);
   return (
     <ul className="rtiles">
-      <li data-tip={TIP.roundsWithAwp}>
+      <li data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : TIP.roundsWithAwp}>
         <span className="rtiles__ico"><GameIcon id="awp" width={34} height={12} fallback={<WeaponIcon name="awp" size={12} />} /></span>
         <b className="num">{e.awp === null ? "–" : fmtPct(e.awp, 0)}</b><span>AWP rounds</span>
       </li>
@@ -359,16 +362,22 @@ export function RatingLegend({ children }: { children?: ReactNode }) {
 /** HLTV's "how good" metrics, in the order HLTV lists them beside Rating 3.0. */
 export const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
 
+/** The aside's population: the role pool, and every pro for the rows that always compare with everyone (sniping). */
+function howGoodPool(r: { n: number; role: "awper" | "rifler" }, p: Record<string, Pct>) {
+  const own = `Against ${r.n} ${proPoolName(r.role)}`;
+  return HOW_GOOD.some((id) => p[id]?.pool === "all") ? `${own}, AWP rows against all pros` : own;
+}
+
 /** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros on the page's side. */
 export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
   const r = useCall("compare", [q, { side }]);
   const p = r.data?.p ?? null;
   return (
-    <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? `Against ${r.data.n} ${proPoolName(r.data.role)}` : "Against pros"}</span>}>
+    <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? howGoodPool(r.data, p!) : "Against pros"}</span>}>
       {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
         <div className="howgood">
           {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => (
-            <Percentile key={id} variant="quiet" {...pctProps(id, p[id], p[id].value)} kind="performance" population={proPoolName(r.data!.role)} />
+            <Percentile key={id} variant="quiet" {...pctProps(id, p[id], p[id].value)} kind="performance" population={proPopulation(p[id].pool)} />
           ))}
         </div>
       )}

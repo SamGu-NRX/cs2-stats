@@ -183,6 +183,11 @@ export const WEAPON_CLASS_LABEL: Record<string, string> = {
 
 /** The words a percentile phrase names its population with: "pro riflers", "pros". */
 export const proPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "pros" : role === "awper" ? "pro AWPers" : "pro riflers");
+/**
+ * The population a pro percentile was read in, from its pool (compare.ts Percentile.pool): the role
+ * pools, everyone ("all": sniping metrics always compare with every pro), or one map's player-maps.
+ */
+export const proPopulation = (pool: string) => (pool === "awper" ? "pro AWPers" : pool === "rifler" ? "pro riflers" : pool.startsWith("map:") ? "pros on this map" : "pros");
 /** The same for the bot pools the user's style ranks against: "rifler bots", "all bots". */
 export const botPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "all bots" : role === "awper" ? "AWPer bots" : "rifler bots");
 

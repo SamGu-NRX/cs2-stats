@@ -68,7 +68,7 @@ export function Percentile({ label, value, unit, pct, kind, population, sample, 
   return (
     <div className={`pctl pctl--${variant}`} data-tone={percentileTone(unranked ? null : pct, kind)} data-na={na || undefined}
       {...(quiet ? { "data-tip": rowTip, tabIndex: 0 } : {})}>
-      <span className="pctl__label" data-tip={quiet ? undefined : def}>{label}{approx ? <ApproxMark plain={quiet} /> : null}</span>
+      <span className="pctl__label" {...(!quiet && def ? { "data-tip": def, tabIndex: 0 } : {})}>{label}{approx ? <ApproxMark plain={quiet} /> : null}</span>
       <span className="pctl__val num">{na || value === null ? "–" : value}{!na && value !== null && unit ? <small>{unit}</small> : null}</span>
       <span className="pctl__bar" aria-hidden>{!unranked && pct !== null ? <i style={{ left: `${Math.max(0, Math.min(100, pct))}%` }} /> : null}</span>
       {quiet ? null : <span className="pctl__phrase">{Array.isArray(phrase) ? <><b>{phrase[0]}</b>{phrase.slice(1)}</> : phrase}</span>}

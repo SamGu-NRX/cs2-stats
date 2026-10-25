@@ -4,6 +4,7 @@
 // rounds with no shots behind them) is marked. Proficiency (familiarity and consistency rather than
 // raw results) is the engine's gunProficiency.
 import { useMemo } from "react";
+import { HIT_GROUPS } from "../../stats/facts";
 import type { GunProficiency } from "../../stats/guns";
 import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { Num } from "../components/bits";
@@ -17,7 +18,7 @@ import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import type { Query, Rolled } from "../../worker/protocol";
 import { WeaponIcon } from "../icons/game";
-import { fmtInt, fmtPct, signed } from "../lib/format";
+import { fmtInt, fmtPct, fmtRatio, plural, signed } from "../lib/format";
 import { scoreText, toScore } from "../lib/scale";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
@@ -43,10 +44,35 @@ interface Judged {
   others: { acc: number | null; shots: number };
   /** acc minus others.acc, percentage points; null unless both sides have MIN_SHOTS shots */
   edge: number | null;
+  /** headshot kills, hits on enemies and of those on the head (recorded matches only for hits) */
+  hsKills: number;
+  hits: number;
+  headHits: number;
+  /** first bullets fired and on target (the first-bullet accuracy's sample), and your other guns' first-bullet accuracy */
+  firstShots: number;
+  othersFirst: number | null;
   prof: GunProficiency | null;
 }
 
 const acc = (s: Rolled) => (s.aim.shots >= MIN_SHOTS ? s.v.accuracy : null);
+const HEAD = HIT_GROUPS.indexOf("head");
+const share = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
+
+/**
+ * Advice read off the gun's own numbers, against your other guns (main's Weapons advice, with "your
+ * other guns" in place of the class average the old data model kept): accuracy, then the first bullet,
+ * then how many hits land on the head.
+ */
+function advice(g: Judged): string {
+  if (g.shots < MIN_SHOTS) return g.kills.n ? `${plural(g.kills.n, "kill")} so far; ${MIN_SHOTS} recorded shots are needed to judge your aim with it.` : "Fire it in a recorded match to see how you shoot with it.";
+  const lines: string[] = [];
+  if (g.edge !== null) lines.push(g.edge >= 0 ? `You hit ${g.edge.toFixed(1)} points more often than with your other guns.` : `You hit ${Math.abs(g.edge).toFixed(1)} points less often than with your other guns.`);
+  if (g.first !== null && g.othersFirst !== null && g.firstShots >= 10 && g.first < g.othersFirst - 5) lines.push(`Your first bullet lands ${(g.othersFirst - g.first).toFixed(0)} points less often than with your other guns: stop moving before you fire.`);
+  const head = share(g.headHits, g.hits);
+  if (head !== null && g.hits >= 15 && head < 15 && g.cls !== "sniper") lines.push(`Only ${head.toFixed(0)}% of hits are on the head: keep the crosshair at head height.`);
+  if (!lines.length) lines.push("In line with your other guns; keep using it.");
+  return lines.join(" ");
+}
 
 /**
  * Each gun's numbers from the worker's rollups: `all` over every kept match, `recorded` over the ones
@@ -65,6 +91,8 @@ function judge(names: string[], all: Rolled, recorded: Rolled | null, per: Rolle
       rounds: { n: t.rounds, converted: t.rounds - (r?.rounds ?? 0) },
       acc: a, first: per[i].v.firstBulletAccuracy, others: { acc: o, shots: others[i].aim.shots },
       edge: a !== null && o !== null ? a - o : null, prof: prof?.find((p) => p.weapon === w) ?? null,
+      hsKills: t.hsKills, hits: t.hits, headHits: t.groups[HEAD] ?? 0,
+      firstShots: per[i].aim.first, othersFirst: others[i].v.firstBulletAccuracy,
     };
   });
 }
@@ -148,9 +176,11 @@ function GunTable({ guns }: { guns: Judged[] }) {
         columns={[
           { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><WeaponIcon name={g.weapon} size={13} label={undefined} />{weaponLabel(g.weapon)}<small className="faint">{WEAPON_CLASS_LABEL[g.cls]}</small></span>, width: 220 },
           { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
+          { key: "hsk", label: "HS kills", tip: "Kills that were headshots, as a share of the gun's kills", sort: (g) => share(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} /> },
           { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
           { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => <span style={{ color: g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8)) }}><Num v={fmtMetric("accuracy", g.acc)} /></span>, tip: `${metric("accuracy").def} Coloured against your accuracy with your other guns.` },
           { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: metric("firstBulletAccuracy").def },
+          { key: "head", label: "Head share", tip: "Share of your hits that landed on the head, from recorded matches", sort: (g) => share(g.headHits, g.hits), render: (g) => <Num v={fmtRatio(g.headHits, g.hits)} /> },
           { key: "rounds", label: "Rounds used", sort: (g) => g.rounds.n, render: (g) => <SplitCell s={g.rounds} what="rounds" /> },
           { key: "prof", label: "Proficiency", tip: "Familiarity (rounds used) times consistency (how steady your accuracy is from match to match), 0 to 100. Not a measure of how good your numbers are.", sort: (g) => g.prof?.proficiency ?? null, render: (g) => <span data-tip={g.prof?.evidence}><Num v={fmtInt(g.prof?.proficiency)} /></span> },
           {
@@ -158,6 +188,7 @@ function GunTable({ guns }: { guns: Judged[] }) {
             tip: `Accuracy with this gun minus your pooled accuracy with every other gun, in percentage points. Shown when both have ${MIN_SHOTS}+ recorded shots.`,
             render: (g) => (g.edge === null ? <span className="faint">–</span> : <span className="num" style={{ color: scoreText(toScore(g.edge, 0, 8)) }} data-tip={edgeTip(g)}>{edgeText(g.edge)}</span>),
           },
+          { key: "advice", label: "Advice", align: "l", render: (g) => <span className="advice">{advice(g)}</span>, width: 360 },
         ]}
       />
     </Card>
@@ -176,6 +207,7 @@ function GunHero({ g, tone }: { g: Judged; tone: "best" | "worst" }) {
           <span data-tip={edgeTip(g)}><b className="num" style={{ color: scoreText(toScore(g.edge ?? 0, 0, 8)) }}>{g.edge === null ? "–" : edgeText(g.edge)}</b><small className="meta">vs your other guns</small></span>
           <span><b className="num">{g.kills.n}</b><small className="meta">kills</small></span>
         </div>
+        <p className="gunhero__advice">{advice(g)}</p>
       </div>
     </section>
   );

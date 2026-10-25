@@ -15,7 +15,7 @@ import { Card } from "../components/Card";
 import { Select } from "../components/controls";
 import { useWidth } from "../components/charts";
 import { frameFor, RadarView } from "../components/MapArt";
-import { botIds, careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
+import { botIds, careerEntries, fmtMetric, mapsIn, rankText, sidesOf, type SideKey } from "../data/engine";
 import { useCall, useRollups } from "../data/hooks";
 import { metric } from "../data/meta";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
@@ -46,7 +46,7 @@ export default function Playstyle() {
               <StyleCompass list={list} q={q} />
               <RoleCard q={q} maps={mapsIn(list)} />
             </div>
-            <WhereYouPlay />
+            <WhereYouPlay list={list} side="both" />
             <Ranks q={q} />
             <p className="meta ps-next">Rotations between callouts and where you first meet the enemy arrive with the movement analysis and line-of-sight tracing.</p>
           </>
@@ -163,13 +163,19 @@ function Compass({ dots }: { dots: Dot[] }) {
 
 // ---------------------------------------------------------------- where you play
 
-export function WhereYouPlay() {
-  const { matches, you } = useData();
-  const maps = mapsIn(matches);
-  const { map: filtered } = useScope();
-  const [map, setMap] = useState<string>(filtered ?? maps[0] ?? "de_dust2");
-  const onMap = useMemo(() => matches.filter((s) => s.match.map === map), [matches, map]);
-  const q = useMemo(() => (onMap.length && you.length ? { files: onMap.map((e) => e.file), filter: { player: you, maps: [map] } } : null), [onMap, you, map]);
+/**
+ * Where you moved, killed and died, over the page's career matches (`list`, already narrowed by the
+ * title bar's Map and Matches) on the page's side. The title bar's map wins; without one, the card's
+ * own map menu picks among the maps in `list`.
+ */
+export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey }) {
+  const { you } = useData();
+  const maps = useMemo(() => mapsIn(list), [list]);
+  const { map: scoped } = useScope();
+  const [pick, setPick] = useState<string | null>(null);
+  const map = scoped ?? (pick && maps.includes(pick) ? pick : maps[0] ?? "de_dust2");
+  const onMap = useMemo(() => list.filter((s) => s.match.map === map), [list, map]);
+  const q = useMemo(() => (onMap.length && you.length ? { files: onMap.map((e) => e.file), filter: { player: you, maps: [map], ...sidesOf(side) } } : null), [onMap, you, map, side]);
   const pos = useCall("positions", q ? [q] : null).data;
   const cells = useMemo(() => Object.entries(pos?.presence?.cells ?? {}).map(([c, secs]) => ({ c: +c, secs, at: cellCentre(+c) })), [pos]);
   const frame = useMemo(() => (pos ? frameFor(map, [...pos.kills, ...pos.deaths, ...cells.map((c) => c.at)]) : null), [map, pos, cells]);
@@ -180,7 +186,7 @@ export function WhereYouPlay() {
   // deaths are marked with the game's skull from the icon pack, tinted; without the pack, a cross
   const skull = useGameIcon("elimination");
   return (
-    <Card title="Where you play" tip={PANEL_TIP.whereYouPlay} aside={<Select label="Map" prefix="Map" value={map} onChange={setMap} options={maps.map((m) => ({ value: m, label: mapName(m) }))} />}>
+    <Card title="Where you play" tip={PANEL_TIP.whereYouPlay} aside={scoped ? <span className="meta">{mapName(map)}</span> : <Select label="Map" prefix="Map" value={map} onChange={setPick} options={maps.map((m) => ({ value: m, label: mapName(m) }))} />}>
       {!pos ? <div className="skel" style={{ height: 360 }} /> : !frame ? <Empty text={`No kill, death or movement positions on ${mapName(map)} yet.`} /> : (
         <div className="wyp">
           <div className="wyp__map">

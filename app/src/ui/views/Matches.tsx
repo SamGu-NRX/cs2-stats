@@ -5,7 +5,7 @@
 // demo", an abandoned match "Unfinished", and a converted log with under half its rounds logged shows
 // "1 of 16" rounds and no per-round values. The summary's W–L and rating count only the user's own
 // finished (and, for the rating, logged) matches, so they agree with the sidebar and Home.
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
@@ -17,8 +17,8 @@ import { startMs, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
-import { fmtAdr, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
-import { swingScore, scoreText, ratingText } from "../lib/scale";
+import { fmtAdr, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
+import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
@@ -31,6 +31,12 @@ const DASH = "–";
 function Val({ s, text, tip, className }: { s: MatchEntry; text: string; tip?: string; className?: string }) {
   if (!isLogged(s)) return <span className="faint" data-tip={`${loggedText(s.match)}: too few for match values.`}>{DASH}</span>;
   return <span className={tip ? `${className ?? ""} has-def` : className} data-tip={tip}><Num v={text} /></span>;
+}
+
+/** A count from the logged rounds: as it is, with a partial-log tooltip when some rounds have no log. */
+function Counted({ s, children }: { s: MatchEntry; children: ReactNode }) {
+  if (isLogged(s) && s.match.nRounds >= s.match.roundsPlayed) return <span className="num">{children}</span>;
+  return <span className="num has-def" data-tip={`Partial: ${loggedText(s.match)}.`}>{children}</span>;
 }
 
 export function MatchesView() {
@@ -144,7 +150,12 @@ export function MatchesView() {
                     </span>
                   )),
               },
-              { key: "kd", label: "K–D", tip: "Kills and deaths", sort: (s) => (isLogged(s) ? line(s).kills : null), render: (s) => <Val s={s} text={`${line(s).kills}–${line(s).deaths}`} /> },
+              // kills and deaths are counts, so a thin log still shows the ones it recorded, marked partial
+              { key: "kd", label: "K–D", tip: "Kills and deaths", sort: (s) => line(s).kills, render: (s) => <Counted s={s}>{line(s).kills}<span className="faint">–</span>{line(s).deaths}</Counted> },
+              {
+                key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths", sort: (s) => line(s).kills - line(s).deaths,
+                render: (s) => { const d = line(s).kills - line(s).deaths; return <span style={{ color: isLogged(s) ? scoreText(diffScore(d)) : undefined }}><Counted s={s}>{fmtDiff(d)}</Counted></span>; },
+              },
               { key: "adr", label: "ADR", tip: "Damage per round", sort: (s) => line(s).adr, render: (s) => <Val s={s} text={fmtAdr(line(s).adr)} /> },
               { key: "kast", label: "KAST", tip: "Share of rounds with a kill, assist, survival or traded death", sort: (s) => line(s).kast, render: (s) => <Val s={s} text={fmtPct(line(s).kast)} /> },
               { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (s) => line(s).hs, render: (s) => <Val s={s} text={fmtPct(line(s).hs)} /> },
