@@ -22,6 +22,22 @@ export interface Env {
   visibilityValidated?: boolean;
   /** where equipment values came from over the match */
   equipSource?: "pawn" | "inventory" | "mixed";
+  /** the human's player slot, controller entity index and pawn entity index (plugin 1.0.0), for aim.hitMask */
+  humanSlot?: number | null;
+  humanController?: number | null;
+  humanPawn?: number | null;
+}
+
+/** Optional (plugin 1.0.0): the victim's raw spotted mask at each hit by the human. */
+export interface HitMask {
+  ri: number[];
+  tick: number[];
+  victim: number[];
+  /** m_bSpottedByMask words, unsigned 32-bit */
+  m0: number[];
+  m1: number[];
+  /** m_bSpotted */
+  spotted: boolean[];
 }
 
 export interface Players {
@@ -225,7 +241,7 @@ export interface MatchFile {
   blinds: Blinds;
   grenades: Grenades;
   pos: Pos;
-  aim: { engagements: Engagements; shots: Shots };
+  aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask };
   throws?: Throws;
   recon?: Recon;
   /** players who disconnected during a recorded round */
@@ -259,6 +275,7 @@ const TABLE_COLUMNS = {
     "impact", "hit",
   ],
   throws: ["ri", "tick", "thrower", "type", "pos"],
+  hitMask: ["ri", "tick", "victim", "m0", "m1", "spotted"],
 } as const;
 
 function checkTable(where: string, table: unknown, name: keyof typeof TABLE_COLUMNS): number {
@@ -297,6 +314,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
   if (typeof aim !== "object" || aim === null) throw new SchemaError(where, `field "aim" must be an object`);
   checkTable(where, aim.engagements, "engagements");
   checkTable(where, aim.shots, "shots");
+  if (aim.hitMask !== undefined) checkTable(where, aim.hitMask, "hitMask");
 
   const human = m.human as number;
   if (human < 0 || human >= nPlayers) throw new SchemaError(where, `human index ${human} is outside players (0..${nPlayers - 1})`);
