@@ -1,11 +1,15 @@
 // derive(tables) -> facts: the one path from a match's tables to everything the engine knows about
 // it. Deterministic and per event; rollup.ts sums the facts under filters. Each family module fills
 // its own measures (facts.ts MEASURES) from the shared indexes built here.
+import { deriveAggro } from "./aggression";
+import { deriveAim } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
 import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
 import { guns } from "./guns";
+import { deriveInfo } from "./information";
+import { deriveMove } from "./movement";
 import { ecoAdjust } from "./rating3";
 import { markOpening, markTrades } from "./rules";
 import { scoreboard } from "./scoreboard";
@@ -13,6 +17,7 @@ import { sniping } from "./sniping";
 import { swing } from "./swing";
 import type { MatchTables, Side } from "./tables";
 import { utility } from "./utility";
+import { deriveUtilQ } from "./utilq";
 
 export const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
 
@@ -257,5 +262,6 @@ export function derive(t: MatchTables): MatchFacts {
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is PlayerRound => x !== null),
     kills: c.kills.flat(), weapons,
+    aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
 }
