@@ -100,4 +100,33 @@ The target display floor remains MAE 0.0025 and maximum 0.005. For each stage, l
 
 Of the 220 accepted folders, 192 contain schema-v1 `player_rounds.game_damage`; 28 legacy folders use the capped-damage fallback. The exact game-owned damage input is therefore available for most, but not all, joins. The listed feature families and their tested interactions do not reach the rounding floor. The remaining mismatch is not assigned to a production constant; exact eKAST transformation, sub-rating transforms, and any omitted input remain open. No demo-derived coefficients are accepted into `params.json`.
 
+## Held-out structural hypothesis tests
+
+`hypothesis_fit.py` evaluates map-level models with five outer `GroupKFold` splits by map and three inner group splits for Ridge-alpha selection. The full HLTV set contains 7,330 player-map rows over 733 maps. Round-graph outcome features are exact only for kills, deaths, survival, and per-round Swing; the KAST proxy does not include unobserved assists or traded deaths. Parenthetical scoreboard values are parsed as headshots, traded deaths, and flash assists. Side features use the displayed CT and T tables and their round counts.
+
+| Hypothesis | Rows | Held-out MAE | p95 | Max |
+| --- | ---: | ---: | ---: | ---: |
+| Displayed eco baseline | 7,330 | 0.046210 | 0.118155 | 0.457171 |
+| KAST/result interaction and transforms | 7,330 | 0.043031 | 0.107542 | 0.339835 |
+| Per-round result sub-ratings | 7,330 | 0.043800 | 0.110593 | 0.395798 |
+| Assists and flash assists | 7,330 | 0.046198 | 0.118295 | 0.455845 |
+| Opening/clutch/traded-death/headshot | 7,330 | 0.044330 | 0.112903 | 0.477171 |
+| Winner/loser normalisation | 7,330 | 0.042546 | 0.108230 | 0.341428 |
+| Swing on won rounds | 7,330 | 0.045593 | 0.115260 | 0.433803 |
+| All scoreboard columns | 7,330 | 0.043556 | 0.111362 | 0.433350 |
+| Displayed CT/T columns | 7,330 | 0.045260 | 0.114226 | 0.472424 |
+| Displayed CT/T plus result | 7,330 | 0.042201 | 0.106270 | 0.370337 |
+| All map features | 7,330 | 0.039526 | 0.102480 | 0.306290 |
+| All map features plus CT/T | 7,330 | 0.038696 | 0.099608 | 0.314038 |
+| Displayed plus exact demo damage | 2,200 | 0.045276 | 0.116348 | 0.337944 |
+| Displayed plus exact demo action counts | 2,200 | 0.044506 | 0.113448 | 0.334384 |
+| Displayed plus exact demo action outcomes | 2,200 | 0.041731 | 0.107014 | 0.286333 |
+| Displayed plus exact demo equipment interactions | 2,200 | 0.042205 | 0.107383 | 0.325308 |
+| Displayed plus exact demo result-conditioned features | 2,200 | 0.042952 | 0.113466 | 0.289779 |
+| Displayed plus all exact demo features | 2,200 | 0.034682 | 0.091235 | 0.266950 |
+| Displayed plus all exact demo and result-conditioned features | 2,200 | 0.034822 | 0.092183 | 0.260737 |
+| All map features plus CT/T and exact demo | 2,200 | 0.034133 | 0.091033 | 0.240318 |
+
+The strongest all-map model is a standardized linear model over the displayed eco and traditional columns, round-outcome proxies, nonlinear KAST terms, and displayed CT/T features; it reaches MAE 0.038696 and is not an exact formula. The strongest joined-demo probe reaches MAE 0.034133, but it covers only 220 maps and uses demo-owned damage/action/equipment features in addition to displayed HLTV values. Conditioning exact demo KAST components on won versus lost rounds slightly worsens that probe, so this test does not support a simple winning-team KAST split as the missing input. Assists, flash assists, opening duels, clutches, traded deaths, and headshots do not independently approach the floor. The residual therefore remains unexplained by the tested observable inputs; no fitted coefficients are accepted into `params.json`.
+
 All numeric constants belong in `params.json`. The engine must not duplicate them in TypeScript.

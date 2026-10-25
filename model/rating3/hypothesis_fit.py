@@ -31,6 +31,11 @@ FEATURES = (
     "logit_ekast", "sqrt_ekast", "op_diff",
 )
 BASE = ("ekpr", "eadr", "edpr", "ekast", "mk", "swing")
+SIDE_FEATURES = tuple(
+    f"{side}_{feature}"
+    for side in ("ct", "t")
+    for feature in ("ekpr", "eadr", "edpr", "ekast", "mk", "swing")
+) + ("ct_fraction",)
 
 
 def normalize(value: object) -> str:
@@ -45,9 +50,14 @@ def number(value: object) -> float:
 
 
 def pair(value: object) -> tuple[float, float]:
-    left = str(value).split("(", 1)[0].replace(":", " ").split()
+    text = str(value)
+    left = text.split("(", 1)[0].replace(":", " ").split()
     if not left:
         return float("nan"), float("nan")
+    parenthetical = text.split("(", 1)[1].split(")", 1)[0] if "(" in text else ""
+    right = parenthetical.replace(":", " ").split()
+    if right:
+        return float(left[0]), float(right[0])
     return float(left[0]), float(left[1]) if len(left) > 1 else 0.0
 
 
@@ -140,12 +150,18 @@ def map_rows(root: Path) -> list[dict]:
             continue
         try:
             total = boards(data, "totalstats")
-            if len(total) != 2:
+            ct_tables = boards(data, "ctstats")
+            t_tables = boards(data, "tstats")
+            if len(total) != 2 or len(ct_tables) != 2 or len(t_tables) != 2:
                 continue
             winners, sides, round_names = round_assignments(data)
         except (KeyError, ValueError, IndexError):
             continue
         rounds = len(winners)
+        side_counts = {team: {"CT": 0, "T": 0} for team in (0, 1)}
+        for round_number, team0_side in sides.items():
+            side_counts[0][team0_side] += 1
+            side_counts[1]["CT" if team0_side == "T" else "T"] += 1
         team_of = {
             str(row["pid"]): team
             for team, board in enumerate(total)
@@ -156,6 +172,31 @@ def map_rows(root: Path) -> list[dict]:
             for board in total for row in board["rows"]
         }
         events = round_event_stats(data, team_of, names_by_pid)
+        side_rows = {
+            "ct": [{str(row["pid"]): row for row in board["rows"]} for board in ct_tables],
+            "t": [{str(row["pid"]): row for row in board["rows"]} for board in t_tables],
+        }
+
+        def side_values(team: int, pid: str, side: str) -> dict[str, float]:
+            count = side_counts[team][side]
+            source = side_rows[side.lower()][team].get(pid)
+            if count <= 0 or source is None:
+                return {f"{side.lower()}_{feature}": float("nan") for feature in ("ekpr", "eadr", "edpr", "ekast", "mk", "swing")}
+            side_ek, _ = pair(cell(source, "st-kills", True))
+            side_ed, _ = pair(cell(source, "st-deaths", True))
+            side_eadr = number(cell(source, "st-adr", True))
+            side_ekast = number(cell(source, "st-kast", True))
+            side_mks = number(cell(source, "st-mks"))
+            side_swing = number(cell(source, "st-roundSwing"))
+            return {
+                f"{side.lower()}_ekpr": side_ek / count,
+                f"{side.lower()}_eadr": side_eadr,
+                f"{side.lower()}_edpr": side_ed / count,
+                f"{side.lower()}_ekast": side_ekast,
+                f"{side.lower()}_mk": 100.0 * side_mks / count,
+                f"{side.lower()}_swing": side_swing,
+            }
+
         for team, board in enumerate(total):
             for row in board["rows"]:
                 pid = str(row["pid"])
@@ -197,6 +238,9 @@ def map_rows(root: Path) -> list[dict]:
                     "clutch_pr": clutch / rounds,
                     "hs_rate": hs / k if k else 0.0,
                     "op_diff": (opening_kills - opening_deaths) / rounds,
+                    **side_values(team, pid, "CT"),
+                    **side_values(team, pid, "T"),
+                    "ct_fraction": side_counts[team]["CT"] / rounds,
                 }
                 observations = [events[number][pid] for number in events if pid in events[number]]
                 won = [obs for number, obs in ((number, events[number][pid]) for number in events if pid in events[number]) if winners[number - 1] == team]
@@ -267,6 +311,36 @@ def held_out(rows: list[dict], feature_names: tuple[str, ...], folds: int = 5) -
     return {"features": list(feature_names), "rows": len(valid), "maps": len(set(groups)), "cv": score(y, prediction), "folds": fold_scores}
 
 
+def fit_formula(rows: list[dict], feature_names: tuple[str, ...]) -> dict:
+    valid = [row for row in rows if np.isfinite([row.get(feature, np.nan) for feature in feature_names]).all() and np.isfinite(row["rating"])]
+    x = np.asarray([[row[feature] for feature in feature_names] for row in valid], dtype=float)
+    y = np.asarray([row["rating"] for row in valid], dtype=float)
+    groups = np.asarray([row["map"] for row in valid])
+    model = Pipeline([
+        ("impute", SimpleImputer(strategy="median")),
+        ("scale", StandardScaler()),
+        ("ridge", Ridge()),
+    ])
+    search = GridSearchCV(
+        model,
+        {"ridge__alpha": [1e-8, 1e-5, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0]},
+        scoring="neg_mean_absolute_error",
+        cv=GroupKFold(n_splits=3),
+        n_jobs=1,
+    )
+    search.fit(x, y, groups=groups)
+    best = search.best_estimator_
+    return {
+        "features": list(feature_names),
+        "alpha": float(search.best_params_["ridge__alpha"]),
+        "intercept_standardised": float(best.named_steps["ridge"].intercept_),
+        "means": best.named_steps["scale"].mean_.tolist(),
+        "scales": best.named_steps["scale"].scale_.tolist(),
+        "coefficients_standardised": best.named_steps["ridge"].coef_.tolist(),
+        "fit": score(y, best.predict(x)),
+    }
+
+
 def add_derived_rows(rows: list[dict]) -> None:
     for row in rows:
         row["kast_result_proxy"] = row["ekast"] * row["win_rate"]
@@ -334,6 +408,7 @@ def main() -> None:
         "split": "5-fold GroupKFold by map; inner 3-fold GroupKFold selects Ridge alpha by MAE",
         "hypotheses": {},
     }
+    row_sets: dict[str, list[dict]] = {}
     hypotheses: dict[str, tuple[str, ...]] = {
         "base_displayed_eco": BASE,
         "kast_result_interaction": BASE + ("win_rate", "ekast_x_win", "ekast_x_loss", "logit_ekast", "sqrt_ekast"),
@@ -351,10 +426,14 @@ def main() -> None:
         ),
         "swing_on_won_rounds": BASE + ("win_rate", "swing_won", "swing_lost", "swing_diff"),
         "all_scoreboard_columns": all_scoreboard,
+        "side_displayed_columns": BASE + SIDE_FEATURES,
+        "side_displayed_plus_result": BASE + SIDE_FEATURES + ("win_rate", "ekast_x_win", "ekast_x_loss", "swing_won", "swing_lost"),
         "all_map_features": FEATURES,
+        "all_map_features_plus_side": FEATURES + SIDE_FEATURES,
     }
     for name, feature_names in hypotheses.items():
         result["hypotheses"][name] = held_out(rows, feature_names)
+        row_sets[name] = rows
         print(name, result["hypotheses"][name]["cv"])
 
     if args.data and args.joins and args.demo_metrics:
@@ -382,20 +461,38 @@ def main() -> None:
         for family, feature_names in demo_names_by_family.items():
             name = f"displayed_plus_demo_{family}"
             result["hypotheses"][name] = held_out(demo_rows, BASE + feature_names)
+            row_sets[name] = demo_rows
             print(name, result["hypotheses"][name]["cv"])
         conditional_names = tuple(demo_info["result_conditioned_features"])
         result["hypotheses"]["displayed_plus_demo_result_conditioned"] = held_out(demo_rows, BASE + conditional_names)
+        row_sets["displayed_plus_demo_result_conditioned"] = demo_rows
         print("displayed_plus_demo_result_conditioned", result["hypotheses"]["displayed_plus_demo_result_conditioned"]["cv"])
         all_demo_names = tuple(result["hypotheses"]["all_map_features"]["features"] + demo_info["features"])
         result["hypotheses"]["displayed_plus_exact_demo"] = held_out(demo_rows, all_demo_names)
+        row_sets["displayed_plus_exact_demo"] = demo_rows
         print("displayed_plus_exact_demo", result["hypotheses"]["displayed_plus_exact_demo"]["cv"])
         result["hypotheses"]["displayed_plus_exact_demo_result_conditioned"] = held_out(
             demo_rows, all_demo_names + conditional_names
         )
+        row_sets["displayed_plus_exact_demo_result_conditioned"] = demo_rows
         print("displayed_plus_exact_demo_result_conditioned", result["hypotheses"]["displayed_plus_exact_demo_result_conditioned"]["cv"])
+        side_demo_names = tuple(result["hypotheses"]["all_map_features_plus_side"]["features"] + demo_info["features"])
+        result["hypotheses"]["all_map_features_plus_side_and_demo"] = held_out(demo_rows, side_demo_names)
+        row_sets["all_map_features_plus_side_and_demo"] = demo_rows
+        print("all_map_features_plus_side_and_demo", result["hypotheses"]["all_map_features_plus_side_and_demo"]["cv"])
 
     best_name = min(result["hypotheses"], key=lambda name: result["hypotheses"][name]["cv"]["mae"])
-    result["best"] = {"name": best_name, "cv": result["hypotheses"][best_name]["cv"]}
+    result["best"] = {
+        "name": best_name,
+        "cv": result["hypotheses"][best_name]["cv"],
+        "formula": fit_formula(row_sets[best_name], tuple(result["hypotheses"][best_name]["features"])),
+    }
+    all_maps_name = "all_map_features_plus_side"
+    result["best_all_maps"] = {
+        "name": all_maps_name,
+        "cv": result["hypotheses"][all_maps_name]["cv"],
+        "formula": fit_formula(row_sets[all_maps_name], tuple(result["hypotheses"][all_maps_name]["features"])),
+    }
     args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result["best"], indent=2))
 
