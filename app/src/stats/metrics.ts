@@ -11,6 +11,7 @@ import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
 import { rating3 } from "./rating3";
 import { UTILQ_METRICS } from "./utilq";
+import { FLASHED_MIN_S } from "./utility";
 import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
@@ -160,12 +161,24 @@ const M: Metric[] = [
   { id: "oneVsOne", label: "1v1 win rate", kind: "performance", group: "closing", unit: "pct", status: "exact",
     def: "1v1 clutches won.", value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
 
-  // ---- utility quality (performance; Leetify's flash definitions). utilDmgPR, enemiesPerFlash,
-  // blindPerFlash and teamFlashPR were removed: duplicates or no link to round wins (METRICS.md, "Pruned").
+  // ---- utility quality (performance; Leetify's flash definitions)
   { id: "flashKillsPR", label: "Flashes that led to a kill per round", kind: "performance", group: "utility", unit: "perRound", status: "exact",
     def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per round.", value: (s) => per(s.m.flashKills, s.m.rounds) },
   { id: "utilUnused", label: "Unused utility on death", kind: "performance", group: "utility", unit: "money", status: "approx", lowerIsBetter: true,
     def: "Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen.", value: (s) => per(s.m.utilUnused, s.m.rounds) },
+
+  // ---- utility description (identity). Not scored as performance: on pro team-rounds these duplicate
+  // other metrics or show no lasting link to winning rounds (METRICS.md, "Descriptive utility").
+  { id: "enemiesPerFlash", label: "Enemies flashed per flash", kind: "identity", group: "utility", unit: "perRound", status: "exact",
+    def: `Enemies blinded for more than ${FLASHED_MIN_S} s (Leetify's cut) per flashbang thrown.`, value: (s) => per(s.m.enemiesFlashed, s.m.flashes) },
+  { id: "blindPerFlash", label: "Enemy blind time per flash", kind: "identity", group: "utility", unit: "secs", status: "exact",
+    def: `Seconds of enemy blindness (blinds over ${FLASHED_MIN_S} s) per flashbang thrown.`, value: (s) => per(s.m.enemyBlindSecs, s.m.flashes) },
+  { id: "teamFlashPR", label: "Teammates flashed per round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
+    def: `Teammates you blinded for more than ${FLASHED_MIN_S} s, per round.`, value: (s) => per(s.m.teamFlashed, s.m.rounds) },
+  { id: "utilDmgPR", label: "Utility damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
+    def: "Enemy damage from your grenades and fire, per round.", value: (s) => per(s.m.utilDmg, s.m.rounds) },
+  { id: "fireDmgPR", label: "Fire damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
+    def: "Enemy damage from your molotovs and incendiaries, per round.", value: (s) => per(s.m.fireDmg, s.m.rounds) },
 
   // ---- sniping and clutching extras kept from the old attribute cards
   { id: "sniperKpr", label: "Sniper kills per round", kind: "performance", group: "sniping", unit: "perRound", status: "exact", def: "Sniper rifle kills per round.", value: (s) => per(s.m.sniperKills, s.m.rounds) },

@@ -119,6 +119,10 @@ out at a scripted tick against a known crosshair offset, logged mouse deltas, sc
 counter-strafe sequences, full sprays at a stationary target, a bot strafing at known speed, and two
 bots at a known angular separation.
 
+Cached facts (the same command, rerun on 332 maps after presence facts were added at 128-unit cells):
+a map's `MatchFacts` JSON is 600 KB at the median and 1,383 KB at most; presence is 119 KB of that at
+the median and 250 KB at most.
+
 Radar spotting: 19,327 spotter-target seconds against 70,644 seconds of mesh line of sight on the
 maps with both, so the information metrics measure radar state, not sight. Jiggle peeks are rare
 because the mesh test sees eyes and chests, not shoulders.

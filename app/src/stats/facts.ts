@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 3;
+export const DERIVE_VERSION = 4;
 
 export interface MatchInfo {
   id: string;
@@ -34,6 +34,10 @@ export interface MatchInfo {
    * covered share of a match is not that match's rating.
    */
   roundsPlayed: number;
+  /** when the match began, an ISO timestamp from match.extra "started_at"; null when the source has no clock time */
+  startedAt: string | null;
+  /** seconds from the first round's start to the last round's end (match.extra "duration_s" when the source knows it) */
+  durationS: number | null;
 }
 
 export interface PlayerInfo {
@@ -58,6 +62,9 @@ export interface RoundFact {
   endTick: number;
   plantTick: number | null;
   plantSite: string | null;
+  /** player indexes of the planter and the defuser */
+  planter: number | null;
+  defuser: number | null;
   defused: boolean;
   exploded: boolean;
   /** team equipment at freeze end and HLTV's buy class, per side */
@@ -110,7 +117,9 @@ export interface KillFact {
  */
 export const MEASURES = [
   // scoreboard (scoreboard.ts)
-  "rounds", "won", "kills", "deaths", "assists", "flashAssists", "hsKills", "dmg", "dmgTaken", "kast", "survived",
+  "rounds", "won", "kills", "deaths", "assists", "flashAssists", "hsKills", "dmg", "dmgTaken", "teamDmg", "kast", "survived",
+  // what earned each KAST round, first match in K, A, S, T order: kast = killRounds + kastA + kastS + kastT
+  "kastA", "kastS", "kastT",
   "tradeKills", "tradedDeaths", "openingKills", "openingDeaths", "openingTraded", "openingWins",
   "killRounds", "multiKillRounds", "k3Rounds", "k4Rounds", "k5Rounds", "killsInWins", "dmgInWins", "teamKills",
   "perfectKills", "tradeDenials", "failedTrades", "assistedKills", "savedTeammate", "savedByTeammate", "baitKills",
@@ -127,6 +136,7 @@ export const MEASURES = [
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused",
+  "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
 ] as const;
@@ -145,6 +155,8 @@ export interface PlayerRound {
   /** at freeze end */
   equip: number | null;
   moneyStart: number | null;
+  /** money left after buying */
+  money: number | null;
   spent: number | null;
   /** the primary in hand at freeze end */
   primary: string | null;
@@ -160,13 +172,37 @@ export interface WeaponFact {
   pi: number;
   weapon: string;
   shots: number;
-  /** damaging hits on enemies and their damage */
+  /** damaging hits on enemies, those hits by body part (HIT_GROUPS order), and their damage */
   hits: number;
-  headHits: number;
+  groups: number[];
   dmg: number;
   kills: number;
   hsKills: number;
   deaths: number;
+}
+
+/** Body parts in the order of WeaponFact.groups. Hits the game files under "generic" count in hits only. */
+export const HIT_GROUPS = ["head", "neck", "chest", "stomach", "left_arm", "right_arm", "left_leg", "right_leg"] as const;
+
+/** One grenade a player threw. Positions are world [x, y]; land is null when the projectile was not tracked. */
+export interface GrenadeFact {
+  ri: number;
+  pi: number;
+  /** the grenade class: smokegrenade, flashbang, hegrenade, molotov, incgrenade, decoy */
+  weapon: string;
+  /** seconds since freeze end */
+  t: number | null;
+  from: [number, number] | null;
+  land: [number, number] | null;
+}
+
+/** Where one player spent one round alive (positions.ts): seconds per grid cell and per place name. */
+export interface PresenceFact {
+  ri: number;
+  pi: number;
+  /** [cell, seconds, cell, seconds, ...]; cells are positions.ts cellOf */
+  cells: number[];
+  places: Record<string, number>;
 }
 
 export interface MatchFacts {
@@ -178,6 +214,8 @@ export interface MatchFacts {
   pr: PlayerRound[];
   kills: KillFact[];
   weapons: WeaponFact[];
+  grenades: GrenadeFact[];
+  presence: PresenceFact[];
   /** event facts of the families with their own modules; each carries ri and pi */
   aim: AimFact[];
   movement: MoveFact[];

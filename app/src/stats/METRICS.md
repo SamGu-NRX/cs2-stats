@@ -26,7 +26,7 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 | id | HLTV name | Status | Definition |
 |---|---|---|---|
 | rating3 | Rating 3.0 | approx | `model/rating3/SPEC.md`. `params.json` now marks the degree-two polynomial in z-scored eco-adjusted KPR, ADR, DPR, KAST, raw multi-kill % and swing as a retired diagnostic while a per-round model is fitted; `rating3()` still computes it, sets `diagnostic: true` and carries the params' status text, and throws on a basis it does not implement. Every constant is in `model/rating3/params.json`. Per side it is the rating of that side's rounds (`rating3BySide`); SPEC.md defines HLTV's map rating as the round-weighted mean of the side ratings, which the per-round model will satisfy by construction. |
-| kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. |
+| kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. Each KAST round is also credited to the first of those that earned it, so the parts sum to KAST: `killRounds + kastA + kastS + kastT`. |
 | swing | Round swing | approx | `swing.ts`: each kill's change in win probability (the lookup in `params.json`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). Flash assists get no credit until `params.json` carries the share. |
 
 Eco adjustment (`rating3.ts`): a player's duel group comes from the best primary held at the kill,
@@ -101,11 +101,24 @@ blind, and a flash-to-kill is a flashed enemy dying to the team while still blin
 | utilUnused | approx | Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen. |
 | smokeSights | approx | Enemy sightlines blocked per smoke thrown (`utilq.ts`). A sightline is the onset of a directed engagement (`first_visible_tick`); one that opened through a smoke (`smoke_blocked`) counts for the smoke(s) whose sphere crosses it, split equally, and only for a smoke thrown by the victim's team. Smoke model: the extractor's, a sphere of radius 144 centred 60 units above the detonation (awpy 3.1.1 defaults). Needs v1 maps with visibility. |
 
-**Pruned**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`; numbers in
-VALIDATION.md): blindPerFlash and utilDmgPR duplicated enemiesPerFlash and dmgPerHe; enemiesPerFlash
-and teamFlashPR showed no lasting link to winning; two smoke variants duplicated smokeSights; no molotov
-candidate earned a place. Kept with caveats: grenadeDmgTaken (HLTV parity), utilUnused (mostly measures
-dying early).
+**Pruned from performance**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`;
+numbers in VALIDATION.md): blindPerFlash and utilDmgPR duplicated enemiesPerFlash and dmgPerHe;
+enemiesPerFlash and teamFlashPR showed no lasting link to winning; two smoke variants duplicated
+smokeSights; no molotov candidate earned a place. Kept with caveats: grenadeDmgTaken (HLTV parity),
+utilUnused (mostly measures dying early).
+
+### Descriptive utility (identity)
+
+The pruned flash and damage counts stay as description: what a player's utility did, with no claim
+that more is better. They are identity metrics, so no view scores them or lists them under "Work on".
+
+| id | Status | Definition |
+|---|---|---|
+| enemiesPerFlash | exact | Enemies blinded for more than 1.1 s per flashbang thrown |
+| blindPerFlash | exact | Seconds of enemy blindness (blinds over 1.1 s) per flashbang thrown |
+| teamFlashPR | exact | Teammates blinded for more than 1.1 s, per round |
+| utilDmgPR | exact | Enemy damage from your grenades and fire, per round |
+| fireDmgPR | exact | Enemy damage from your molotovs and incendiaries, per round |
 
 ## Aim (performance unless noted)
 

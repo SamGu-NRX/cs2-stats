@@ -33,6 +33,9 @@ function add<N extends TableName>(t: Table<N>, name: N, values: Record<string, u
   t.n++;
 }
 
+/** Source engine hit group numbers, named as the demo parser names them. */
+const HITGROUP: Record<number, string> = { 1: "head", 2: "chest", 3: "stomach", 4: "left_arm", 5: "right_arm", 6: "left_leg", 7: "right_leg", 8: "neck" };
+
 export function pluginToTables(m: MatchFile): MatchTables {
   const key = m.players.key;
   const human = key[m.human];
@@ -62,7 +65,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
     team_ct_start: humanStart === "CT" ? humanTeam : "Opponents", team_t_start: humanStart === "T" ? humanTeam : "Opponents",
     schema_version: 1, extractor_version: `plugin ${m.env.plugin} via plugin/adapter.ts`,
     convars: JSON.stringify({ mp_maxrounds: m.env.maxrounds ?? 24 }),
-    extra: JSON.stringify({ date: m.startUtc.slice(0, 10), pov: human, rounds_played: m.rounds.winSide.length }), visibility_status: "no_mapdata",
+    extra: JSON.stringify({
+      date: m.startUtc.slice(0, 10), started_at: m.startUtc, duration_s: (Date.parse(m.endUtc) - Date.parse(m.startUtc)) / 1000,
+      pov: human, rounds_played: m.rounds.winSide.length,
+    }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
 
@@ -127,7 +133,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     add(t.damages, "damages", {
       tick: d.tick[i], round: ri + 1, attacker_steamid: a === null ? null : key[a], victim_steamid: key[v], weapon: weapon(d.weapon[i]),
       // the plugin stores each hit's damage already capped at the victim's health
-      dmg_health: d.dmg[i], dmg_health_capped: d.dmg[i], dmg_armor: d.dmgArmor[i], hitgroup: d.hitgroup[i] === 1 ? "head" : null,
+      dmg_health: d.dmg[i], dmg_health_capped: d.dmg[i], dmg_armor: d.dmgArmor[i], hitgroup: d.hitgroup[i] === null ? null : HITGROUP[d.hitgroup[i]!] ?? "generic",
       a_side: sideOf(ri, a), v_side: sideOf(ri, v), is_team_damage: a !== null && a !== v && sideOf(ri, a) === sideOf(ri, v),
       is_self: a === v, grenade_entity_id: d.nade?.[i] ?? null,
     });

@@ -16,6 +16,12 @@ export function scoreboard(c: Ctx): void {
     const d = c.t.damages;
     const dealt = new Map<number, number>();
     const taken = new Map<number, number>();
+    const teamDealt = new Map<number, number>();
+    for (const i of c.byRound("damages")[ri]) {
+      if (!d.is_team_damage[i] || d.is_self[i]) continue;
+      const a = c.idOf(d.attacker_steamid[i]);
+      if (a !== null) teamDealt.set(a, (teamDealt.get(a) ?? 0) + hitDamage(c.t, i));
+    }
     for (const i of dmgRows) {
       const a = c.idOf(d.attacker_steamid[i])!;
       const v = c.pi.get(d.victim_steamid[i])!;
@@ -68,9 +74,16 @@ export function scoreboard(c: Ctx): void {
       }
       m.dmg = dealt.get(p.pi) ?? 0;
       m.dmgTaken = taken.get(p.pi) ?? 0;
+      m.teamDmg = teamDealt.get(p.pi) ?? 0;
       m.kast = kastRound(list, p.pi) ? 1 : 0;
       m.survived = list.some((k) => k.victim === p.pi) ? 0 : 1;
       if (m.kills > 0) m.killRounds = 1;
+      else if (m.kast) {
+        // the first of A, S, T that earned the round (K is killRounds)
+        if (list.some((k) => k.enemy && k.assister === p.pi && !k.flashAssist)) m.kastA = 1;
+        else if (m.survived) m.kastS = 1;
+        else m.kastT = 1;
+      }
       if (m.kills >= 2) m.multiKillRounds = 1;
       if (m.kills >= 3) m.k3Rounds = 1;
       if (m.kills >= 4) m.k4Rounds = 1;

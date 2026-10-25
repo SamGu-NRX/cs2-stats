@@ -88,7 +88,8 @@ const api: { [K in Method]: (...a: Parameters<Api[K]>) => Promise<ReturnType<Api
     return qs.map((q) => rating3BySide(factsOf(q.files), q.filter));
   },
   async guns(q) {
-    return gunProficiency(factsOf(q.files), q.filter);
+    const fs = factsOf(q.files);
+    return gunProficiency(rollup(fs, q.filter), fs.map((f) => rollup([f], q.filter).weapons));
   },
   async positions(q: Query) {
     const ids = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);

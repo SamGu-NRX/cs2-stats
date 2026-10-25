@@ -1,6 +1,7 @@
 // Face validity on the pro maps for every metric without ground truth: per-player p10 / p50 / p90,
 // AWPers against riflers, the players at the top of selected identity metrics, pooled reaction and
-// time-to-shot against the 150 to 400 ms human range, and radar spotting against mesh line of sight.
+// time-to-shot against the 150 to 400 ms human range, radar spotting against mesh line of sight, and
+// the size of the cached facts.
 //   pnpm family-check [--min-rounds 60]
 import { roleOf } from "../src/stats/compare";
 import { derive } from "../src/stats/derive";
@@ -26,6 +27,13 @@ for (const dir of proMapDirs()) {
     sightSecs += n / f.match.tickRate;
     spottedSecs += f.information.reduce((s, x) => s + x.spotSecs, 0);
   }
+}
+// cached facts per map (IndexedDB holds them as JSON): whole facts and the presence part, median and max KB
+{
+  const kb = (x: unknown) => JSON.stringify(x).length / 1024;
+  const med = (xs: number[]) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const all = facts.map(kb), pres = facts.map((f) => kb(f.presence));
+  console.log(`facts per map: median ${med(all).toFixed(0)} KB, max ${Math.max(...all).toFixed(0)} KB; presence median ${med(pres).toFixed(0)} KB, max ${Math.max(...pres).toFixed(0)} KB`);
 }
 const names = new Map<string, string>();
 for (const f of facts) for (const p of f.players) if (!p.bot) names.set(p.id, p.name);
