@@ -32,8 +32,15 @@ export interface MatchEntry {
   line: Line;
 }
 
-/** Newest first: by date, then by file name (plugin files are named by their start time). */
-export const byNewest = (a: MatchEntry, b: MatchEntry) => (b.match.date ?? "").localeCompare(a.match.date ?? "") || b.file.localeCompare(a.file);
+/**
+ * When a match began, ms since epoch: its start time, else the start of its UTC date (a source with a
+ * day but no clock time), else 0. "Newest" everywhere means this, not the file name or the day: a
+ * converted log and a recording from the same evening are ordered by the clock.
+ */
+export const startMs = (m: Pick<MatchInfo, "startedAt" | "date">) => (m.startedAt ? Date.parse(m.startedAt) : m.date ? Date.parse(`${m.date}T00:00:00Z`) : 0) || 0;
+
+/** Newest first by start time, then by file name for matches that share one. */
+export const byNewest = (a: MatchEntry, b: MatchEntry) => startMs(b.match) - startMs(a.match) || b.file.localeCompare(a.file);
 
 // ---------------------------------------------------------------- the match model
 

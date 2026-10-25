@@ -10,7 +10,7 @@ import { AimIcon } from "../icons/ui";
 import { fmtMatchDay, plural } from "../lib/format";
 import { BENCH } from "../lib/verdict";
 import { BarContent } from "../shell/Bar";
-import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import { useScope } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
 import { Delta, Empty, NeedsDemo, SectionAside } from "./shared";
 
@@ -23,7 +23,7 @@ const TRENDS: { id: string; bench?: number }[] = [
 
 export default function CareerAim() {
   const { matches } = useData();
-  const { map, n } = useFilters();
+  const { map, n } = useScope();
   const list = useMemo(() => { const f = careerEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const career = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
@@ -35,7 +35,7 @@ export default function CareerAim() {
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Career aim" }]} tools={<><MapFilter /><TimeFilter /></>} />
+      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in careeraim">
         {!query ? (
           <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} /></Card>

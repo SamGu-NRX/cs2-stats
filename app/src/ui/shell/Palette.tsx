@@ -1,23 +1,37 @@
-// Command palette (Ctrl K): views, matches, pros and actions. Opens and closes with no animation,
-// since it is used many times a day.
-import { useEffect, useMemo, useRef, useState } from "react";
+// Command palette (Ctrl K): matches, actions, views and pros. Opens, closes and runs commands with no
+// animation, since it is used many times a day (design/shell-and-motion.md: palette commands are
+// keyboard actions). With an empty query it lists the five newest matches, then the actions, then
+// the views.
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { entryRating } from "../data/engine";
 import { usePros } from "../data/packs";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
-import { fmtMatchDay, fmtRating, mapName } from "../lib/format";
-import { go, matchHref, openMatch, pageHref } from "../router";
+import { fmtMatchDay, fmtRating, fmtWhen, mapName } from "../lib/format";
+import { go, matchHref, pageHref } from "../router";
 import { NAV } from "./Sidebar";
 
-interface Item { id: string; group: string; label: string; hint?: string; run: () => void; text: string }
+interface Item { id: string; group: string; label: string; hint?: string; keys?: string; run: () => void; text: string }
 
 export const SHORTCUTS: [string, string][] = [
-  ["Ctrl K", "Command palette"], ["Ctrl 1–6", "Views"], ["Ctrl ,", "Data & settings"], ["Ctrl B", "Collapse the sidebar"],
+  ["Ctrl K", "Command palette"], ["Ctrl 1–4", "Views"], ["Ctrl ,", "Data & settings"], ["Ctrl B", "Collapse the sidebar"],
   ["Ctrl R", "Rescan the match folder"], ["J / K", "Move between table rows"], ["Enter", "Open the row"], ["/", "Search the table"],
   ["[ / ]", "Previous or next match"], ["Alt 1–8", "Match tabs"], ["← / →", "Previous or next round"], ["Esc", "Close the drawer or palette"],
 ];
+
+/** A shortcut as key chips: "Ctrl K" is two chips; in "J / K" the slash between alternatives reads "or". */
+export function KeyChips({ keys }: { keys: string }) {
+  const parts = keys.split(" ");
+  return (
+    <span className="kbd">
+      {parts.map((p, i) => (p === "/" && parts.length > 1 ? <span key={i} className="kbd__or">or</span> : <kbd key={i}>{p}</kbd>))}
+    </span>
+  );
+}
+
+const RECENT = 5;
 
 export function Palette({ open, onClose, actions }: { open: boolean; onClose: () => void; actions: { label: string; hint?: string; run: () => void }[] }) {
   const { matches } = useData();
@@ -44,27 +58,33 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
   }, [open]);
 
   const items = useMemo<Item[]>(() => {
+    const instant = (href: string) => () => go(href, { instant: true });
     const out: Item[] = [];
-    for (const n of NAV) out.push({ id: `v:${n.page}`, group: "Views", label: n.label, hint: `Ctrl ${n.key}`, run: () => go(pageHref(n.page as never)), text: n.label });
-    out.push({ id: "v:settings", group: "Views", label: "Data & settings", hint: "Ctrl ,", run: () => go(pageHref("settings")), text: "data settings import folder" });
     for (const s of matches) {
-      const label = `${mapName(s.match.map)} ${s.score.us}:${s.score.them}`;
       const src = sourceOf(s);
+      const result = !s.match.complete ? "unfinished" : s.result;
+      const r = entryRating(s);
       out.push({
-        id: `m:${s.file}`, group: "Matches", label, hint: `${fmtMatchDay(s.match)}  ${fmtRating(entryRating(s))}`,
-        run: () => openMatch(matchHref(s.file)),
-        text: `${s.match.map} ${mapName(s.match.map)} ${fmtMatchDay(s.match)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
+        id: `m:${s.file}`, group: "Matches", label: `${mapName(s.match.map)} ${s.score.us}:${s.score.them} ${result}`,
+        hint: [fmtWhen(s.match), src.id === "recorded" ? null : src.label, r === null ? null : `Rating ${fmtRating(r)}`].filter(Boolean).join(" · "),
+        run: instant(matchHref(s.file)),
+        text: `${s.match.map} ${fmtMatchDay(s.match)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
       });
     }
-    for (const p of pros) out.push({ id: `p:${p.slug}`, group: "Pros", label: p.name, hint: p.team, run: () => go(pageHref("profile", { pro: p.slug })), text: `${p.name} ${p.team} ${p.country}` });
-    for (const a of actions) out.push({ id: `a:${a.label}`, group: "Actions", label: a.label, hint: a.hint, run: a.run, text: a.label });
+    for (const a of actions) out.push({ id: `a:${a.label}`, group: "Actions", label: a.label, keys: a.hint, run: a.run, text: a.label });
+    for (const n of NAV) out.push({ id: `v:${n.page}`, group: "Views", label: n.label, keys: `Ctrl ${n.key}`, run: instant(pageHref(n.page)), text: n.label });
+    out.push({ id: "v:settings", group: "Views", label: "Data & settings", keys: "Ctrl ,", run: instant(pageHref("settings")), text: "data settings import folder sources" });
+    for (const p of pros) out.push({ id: `p:${p.slug}`, group: "Pros", label: p.name, hint: p.team, run: instant(pageHref("profile", { pro: p.slug })), text: `${p.team} ${p.country}` });
     return out;
   }, [matches, actions, pros]);
 
   const filtered = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     if (q.trim() === "?") return [];
-    if (!terms.length) return items.filter((i) => i.group !== "Pros").slice(0, 40);
+    if (!terms.length) {
+      const recent = items.filter((i) => i.group === "Matches").slice(0, RECENT);
+      return [...recent, ...items.filter((i) => i.group === "Actions" || i.group === "Views")];
+    }
     return items.filter((i) => terms.every((t) => `${i.label} ${i.text} ${i.hint ?? ""}`.toLowerCase().includes(t))).slice(0, 60);
   }, [q, items]);
 
@@ -86,7 +106,7 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
             ref={input}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search matches, pros and views. Type ? for shortcuts"
+            placeholder="Search matches, pros, views and actions · ? for shortcuts"
             aria-label="Search matches, pros, views and actions"
             role="combobox"
             aria-expanded="true"
@@ -99,25 +119,26 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
               else if (e.key === "Enter") { e.preventDefault(); run(filtered[active]); }
             }}
           />
-          <span className="kbd"><kbd>Esc</kbd></span>
+          <KeyChips keys="Esc" />
         </div>
         <div className="palette__list" id="pal-list" role="listbox" aria-label="Results">
           {q.trim() === "?" ? (
             <div className="shortcut-list">
-              {SHORTCUTS.map(([k, l]) => <div key={k} className="opt" role="option" aria-selected="false"><span>{l}</span><small className="kbd">{k.split(" ").map((p) => <kbd key={p}>{p}</kbd>)}</small></div>)}
+              {SHORTCUTS.map(([k, l]) => <div key={k} className="opt" role="option" aria-selected="false"><span>{l}</span><small><KeyChips keys={k} /></small></div>)}
             </div>
           ) : filtered.length === 0 ? (
-            <p className="palette__empty">Nothing matches "{q}".</p>
+            <p className="palette__empty">Nothing matches "{q}". Try a map, a date or a pro's name.</p>
           ) : filtered.map((i, n) => {
             const head = i.group !== lastGroup ? (lastGroup = i.group) : null;
+            const label = head === "Matches" && !q.trim() ? "Recent matches" : head;
             return (
-              <div key={i.id}>
-                {head && <div className="palette__group caps">{head}</div>}
+              <Fragment key={i.id}>
+                {head && <div className="palette__group caps" role="presentation">{label}</div>}
                 <div id={`pal-${n}`} role="option" aria-selected={n === active} className="opt" data-active={n === active} onPointerMove={() => setActive(n)} onClick={() => run(i)}>
-                  <span>{i.label}</span>
-                  {i.hint && <small>{i.hint}</small>}
+                  <span className="opt__label">{i.label}</span>
+                  {i.keys ? <small><KeyChips keys={i.keys} /></small> : i.hint && <small>{i.hint}</small>}
                 </div>
-              </div>
+              </Fragment>
             );
           })}
         </div>

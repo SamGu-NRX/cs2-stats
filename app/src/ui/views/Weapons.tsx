@@ -20,7 +20,7 @@ import { WeaponIcon } from "../icons/game";
 import { fmtInt, fmtPct, signed } from "../lib/format";
 import { scoreText, toScore } from "../lib/scale";
 import { BarContent } from "../shell/Bar";
-import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import { useScope } from "../shell/filters";
 import { Empty } from "./shared";
 
 /** A gun, or your other guns pooled, needs this many shots before its accuracy is judged. */
@@ -85,7 +85,7 @@ function gunQueries(query: Query, list: MatchEntry[], names: string[]): { record
 
 export default function Weapons() {
   const { matches } = useData();
-  const { map, n } = useFilters();
+  const { map, n } = useScope();
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const base = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
@@ -108,7 +108,7 @@ export default function Weapons() {
   const worst = ranked.length > 1 ? ranked[ranked.length - 1] : null;
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Weapons" }]} tools={<><MapFilter /><TimeFilter /></>} />
+      <BarContent crumbs={[{ label: "Weapons" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in weapons">
         {!list.length ? <Card><Empty text="No gun kills or shots in this filter." /></Card> : !guns ? <div className="skel" style={{ height: 240 }} /> : !guns.length ? <Card><Empty text="No gun kills or shots in this filter." /></Card> : (
           <>

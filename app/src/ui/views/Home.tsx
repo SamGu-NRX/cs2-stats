@@ -26,7 +26,7 @@ import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, openMatch, pageHref } from "../router";
 import { BarContent } from "../shell/Bar";
-import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
 import { RoundRail } from "./match/RoundRail";
 import type { AttributeId } from "../data/proPack";
@@ -44,7 +44,7 @@ function useTotals(list: MatchEntry[]): Totals | null {
 
 export function HomeView() {
   const { matches, status } = useData();
-  const { map, n } = useFilters();
+  const { map, n } = useScope();
   const list = useMemo(() => {
     const f = careerEntries(matches, map);
     return n ? f.slice(0, n) : f;
@@ -62,7 +62,7 @@ export function HomeView() {
   }
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Home" }]} tools={<><MapFilter /><TimeFilter /></>} />
+      <BarContent crumbs={[{ label: "Home" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in home">
         {!last ? (
           <Card><Empty icon={<WinIcon how="elim" size={40} />} text="No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
