@@ -159,3 +159,19 @@ def iter_demo_roots(root: Path):
             except IncompleteDemoVersion:
                 continue
             yield relative, layout
+
+
+
+# Columns the extractor renamed (1.12.0); a map written earlier has the old name.
+RENAMED_COLUMNS = {
+    "extractor_trade_kill_5s": "trade_kill_5s",
+    "extractor_traded_death_5s": "traded_death_5s",
+}
+
+
+def column(row: dict, name: str):
+    """row[name], or for a map written before the extractor renamed that column, its old name; None if the
+    map has neither (as row.get would give)."""
+    if name in row:
+        return row[name]
+    return row.get(RENAMED_COLUMNS.get(name, name))

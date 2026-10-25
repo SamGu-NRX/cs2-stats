@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_paths import load_demo_tables
+from demo_paths import column, load_demo_tables
 
 
 class DemoTableLoadTests(unittest.TestCase):
@@ -63,6 +63,18 @@ class DemoTableLoadTests(unittest.TestCase):
         }
         (directory / "COMPLETE").write_text(json.dumps(manifest), encoding="utf-8")
 
+
+
+
+class RenamedColumnTests(unittest.TestCase):
+    def test_a_trade_flag_is_read_under_its_new_name_or_its_old_one(self):
+        # The extractor renamed kills.trade_kill_5s to extractor_trade_kill_5s in 1.12.0; reading only the
+        # new name would count no trades on every map written before it, silently.
+        self.assertTrue(column({"extractor_trade_kill_5s": True}, "extractor_trade_kill_5s"))
+        self.assertTrue(column({"trade_kill_5s": True}, "extractor_trade_kill_5s"))
+        self.assertFalse(column({"extractor_traded_death_5s": False, "traded_death_5s": True},
+                                "extractor_traded_death_5s"))
+        self.assertIsNone(column({}, "extractor_trade_kill_5s"))
 
 if __name__ == "__main__":
     unittest.main()
