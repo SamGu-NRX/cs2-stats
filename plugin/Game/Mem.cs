@@ -25,7 +25,7 @@ internal static unsafe class Mem
     public static int CtrlPawn, Team, LifeState, Health, BodyComponent, SceneNode, AbsOrigin, ViewZ,
         EyeAngles, SpottedMask, Place, AbsVelocity, Scoped, MovementServices, Ducked, WeaponServices,
         MyWeapons, ActiveWeapon, Ammo, EquipCurrent, PawnController, OwnerEntity, EntityIdentity, DesignerName,
-        OriginalControllerOfPawn, Armor, ItemServices, HasHelmet, HasDefuser, SpottedFlag;
+        OriginalControllerOfPawn, Armor, ItemServices, HasHelmet, HasDefuser, SpottedFlag, ItemDefIndex;
 
     public const int PlaceBytes = 18;
 
@@ -71,6 +71,10 @@ internal static unsafe class Mem
         ItemServices = O("CBasePlayerPawn", "m_pItemServices");
         HasHelmet = O("CCSPlayer_ItemServices", "m_bHasHelmet");
         HasDefuser = O("CCSPlayer_ItemServices", "m_bHasDefuser");
+        // Optional: without it the hurt handler cannot tell weapon variants apart (as when the old wrapper chain returned -1).
+        int am = Schema.GetSchemaOffset("CEconEntity", "m_AttributeManager"), it = Schema.GetSchemaOffset("CAttributeContainer", "m_Item"),
+            di = Schema.GetSchemaOffset("CEconItemView", "m_iItemDefinitionIndex");
+        ItemDefIndex = am > 0 && it > 0 && di > 0 ? am + it + di : -1;
         return bad;
     }
 
@@ -169,6 +173,14 @@ internal static unsafe class Mem
     {
         nint ws = Ptr(pawn, WeaponServices);
         return ws == 0 ? InvalidHandle : *(uint*)(ws + ActiveWeapon);
+    }
+
+    /// <summary>Item definition index of the pawn's active weapon, or -1. Replaces a chain of CSSharp wrappers in the hurt handler.</summary>
+    public static int ActiveItemDef(nint pawn)
+    {
+        if (ItemDefIndex <= 0) return -1;
+        nint w = ByHandle(ActiveWeaponHandle(pawn));
+        return w == 0 ? -1 : *(ushort*)(w + ItemDefIndex);
     }
 
     /// <summary>The player slot of an entity's owner pawn's controller (grenade projectiles, infernos), or -1.</summary>

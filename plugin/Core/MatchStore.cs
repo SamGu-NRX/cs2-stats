@@ -15,6 +15,7 @@ public sealed class MatchStore
     public readonly GrowBuffer<ThrowRow> Throws = new(512, 32_768);
     public readonly GrowBuffer<LeaveRow> Leaves = new(64, 4096);
     public readonly GrowBuffer<HitMaskRow> HitMask = new(512, 32_768);
+    public readonly GrowBuffer<LosRow> Los = new(1024, 131_072);
     public readonly GrowBuffer<PosRow> Pos = new(16_384, 524_288);
     public readonly GrowBuffer<EngagementRow> Engagements = new(512, 32_768);
     public readonly GrowBuffer<ShotRow> Shots = new(2048, 131_072);
@@ -55,6 +56,7 @@ public sealed class MatchStore
         Throws.Append(b.Throws.Span); Drop("throws", b.Throws.Dropped);
         Leaves.Append(b.Leaves.Span); Drop("leaves", b.Leaves.Dropped);
         HitMask.Append(b.HitMask.Span); Drop("hitMask", b.HitMask.Dropped);
+        Los.Append(b.Los.Span); Drop("los", b.Los.Dropped);
         Pos.Append(b.Pos.Span); Drop("pos", b.Pos.Dropped);
         Engagements.Append(b.Engagements.Span); Drop("engagements", b.Engagements.Dropped);
         Shots.Append(b.Shots.Span); Drop("shots", b.Shots.Dropped);
@@ -75,7 +77,7 @@ public sealed class MatchStore
 
     public void Clear()
     {
-        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Leaves.Clear(); HitMask.Clear(); Pos.Clear();
+        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Leaves.Clear(); HitMask.Clear(); Los.Clear(); Pos.Clear();
         Engagements.Clear(); Shots.Clear(); Mismatches.Clear(); ReconRounds.Clear(); Perf.Clear();
         RoundCount = 0;
         CapUnknown = 0;

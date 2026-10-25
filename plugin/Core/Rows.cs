@@ -61,6 +61,8 @@ public struct HitMaskRow
     public int Ri, Tick, Victim;
     public uint M0, M1;
     public bool Spotted;
+    /// <summary>Line of sight traced at the hit: 1 clear, 0 blocked, Nil when not traced.</summary>
+    public int Los;
 }
 
 /// <summary>A player leaving the server during a recorded round.</summary>
@@ -145,6 +147,9 @@ public struct PerfRow
     public double TickAvgUs, TickMaxUs, EventAvgUs, EventMaxUs;
     public long TickAllocBytes, EventAllocBytes;
     public string? EventMaxName;
+    /// <summary>Line-of-sight checks this round, traces made, checks cut short by the time budget, and µs per check.</summary>
+    public int LosChecks, LosTraces, LosBudgetHits;
+    public double LosAvgUs, LosMaxUs;
 }
 
 /// <summary>One entry of the rounds table. Reused across rounds; copy with <see cref="CopyFrom"/>.</summary>

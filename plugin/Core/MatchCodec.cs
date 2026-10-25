@@ -37,6 +37,8 @@ public static class MatchCodec
         IntProp(w, "humanSlot", m.Env.HumanSlot);
         IntProp(w, "humanController", m.Env.HumanController);
         IntProp(w, "humanPawn", m.Env.HumanPawn);
+        StrOrNull(w, "visSource", m.Env.VisSource);
+        if (m.Env.LosError != null) w.WriteString("losError", m.Env.LosError);
         w.WriteEndObject();
 
         w.WriteNumber("firstFullRound", m.FirstFullRound);
@@ -153,6 +155,11 @@ public static class MatchCodec
         w.WriteStartArray("m0"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M0); w.WriteEndArray();
         w.WriteStartArray("m1"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M1); w.WriteEndArray();
         w.WriteStartArray("spotted"); foreach (ref readonly var r in hm) w.WriteBooleanValue(r.Spotted); w.WriteEndArray();
+        Col(w, "los", hm, static r => r.Los);
+        w.WriteEndObject();
+        var lo = s.Los.Span;
+        w.WriteStartObject("los");
+        Col(w, "ri", lo, static r => r.Ri); Col(w, "tick", lo, static r => r.Tick); Col(w, "enemy", lo, static r => r.Enemy); Col(w, "vis", lo, static r => r.Vis);
         w.WriteEndObject();
         w.WriteEndObject(); // aim
 
@@ -304,6 +311,7 @@ public static class MatchCodec
         w.WriteNumber("throws", s.TotalDropped("throws", s.Throws.Dropped));
         w.WriteNumber("leaves", s.TotalDropped("leaves", s.Leaves.Dropped));
         w.WriteNumber("hitMask", s.TotalDropped("hitMask", s.HitMask.Dropped));
+        w.WriteNumber("los", s.TotalDropped("los", s.Los.Dropped));
         w.WriteNumber("pos", s.TotalDropped("pos", s.Pos.Dropped));
         w.WriteNumber("engagements", s.TotalDropped("engagements", s.Engagements.Dropped));
         w.WriteNumber("shots", s.TotalDropped("shots", s.Shots.Dropped));
@@ -326,6 +334,11 @@ public static class MatchCodec
         w.WriteStartArray("tickAllocB"); foreach (ref readonly var r in p) w.WriteNumberValue(r.TickAllocBytes); w.WriteEndArray();
         w.WriteStartArray("evAllocB"); foreach (ref readonly var r in p) w.WriteNumberValue(r.EventAllocBytes); w.WriteEndArray();
         Col(w, "gen0", p, static r => r.Gen0);
+        Col(w, "losChecks", p, static r => r.LosChecks);
+        Col(w, "losTraces", p, static r => r.LosTraces);
+        Col(w, "losBudgetHits", p, static r => r.LosBudgetHits);
+        Dbl(w, "losAvgUs", p, static r => r.LosAvgUs);
+        Dbl(w, "losMaxUs", p, static r => r.LosMaxUs);
         w.WriteStartObject("write");
         w.WriteNumber("lastMs", Math.Round(s.LastWriteMs, 2));
         w.WriteNumber("maxMs", Math.Round(s.MaxWriteMs, 2));
@@ -450,6 +463,8 @@ public static class MatchCodec
             HumanSlot = env.TryGetProperty("humanSlot", out var hs) ? OptInt(hs) : Nil.V,
             HumanController = env.TryGetProperty("humanController", out var hc) ? OptInt(hc) : Nil.V,
             HumanPawn = env.TryGetProperty("humanPawn", out var hp) ? OptInt(hp) : Nil.V,
+            VisSource = OptString(env, "visSource"),
+            LosError = OptString(env, "losError"),
         };
         var pl = root.GetProperty("players");
         var keys = Strings(pl.GetProperty("key"));
@@ -485,6 +500,7 @@ public static class MatchCodec
         ReadEngagements(aim.GetProperty("engagements"), s);
         ReadShots(aim.GetProperty("shots"), s);
         if (aim.TryGetProperty("hitMask", out var hmEl)) ReadHitMask(hmEl, s);
+        if (aim.TryGetProperty("los", out var losEl)) ReadLos(losEl, s);
         ReadRecon(recon, s);
         ReadPerf(root.GetProperty("perf"), s);
         m.GrenadeCount = s.Grenades.Count;
@@ -644,8 +660,15 @@ public static class MatchCodec
     {
         var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var v = Ints(t.GetProperty("victim"));
         var m0 = t.GetProperty("m0"); var m1 = t.GetProperty("m1"); var sp = t.GetProperty("spotted");
+        var los = t.TryGetProperty("los", out var losEl) ? Ints(losEl) : null;
         for (int i = 0; i < ri.Length; i++)
-            s.HitMask.Add(new HitMaskRow { Ri = ri[i], Tick = tick[i], Victim = v[i], M0 = m0[i].GetUInt32(), M1 = m1[i].GetUInt32(), Spotted = sp[i].GetBoolean() });
+            s.HitMask.Add(new HitMaskRow { Ri = ri[i], Tick = tick[i], Victim = v[i], M0 = m0[i].GetUInt32(), M1 = m1[i].GetUInt32(), Spotted = sp[i].GetBoolean(), Los = los?[i] ?? Nil.V });
+    }
+
+    private static void ReadLos(JsonElement t, MatchStore s)
+    {
+        var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var e = Ints(t.GetProperty("enemy")); var vis = Ints(t.GetProperty("vis"));
+        for (int i = 0; i < ri.Length; i++) s.Los.Add(new LosRow { Ri = ri[i], Tick = tick[i], Enemy = e[i], Vis = vis[i] });
     }
 
     private static void ReadLeaves(JsonElement t, MatchStore s)
@@ -771,6 +794,10 @@ public static class MatchCodec
         var tavg = p.GetProperty("tickAvgUs"); var tmax = p.GetProperty("tickMaxUs");
         var eavg = p.GetProperty("evAvgUs"); var emax = p.GetProperty("evMaxUs"); var ename = p.GetProperty("evMaxName");
         var ta = p.GetProperty("tickAllocB"); var ea = p.GetProperty("evAllocB"); var g0 = Ints(p.GetProperty("gen0"));
+        bool los = p.TryGetProperty("losChecks", out var lc);
+        int[]? lcs = los ? Ints(lc) : null, lts = los ? Ints(p.GetProperty("losTraces")) : null, lbs = los ? Ints(p.GetProperty("losBudgetHits")) : null;
+        var lavg = los ? p.GetProperty("losAvgUs") : default;
+        var lmax = los ? p.GetProperty("losMaxUs") : default;
         for (int i = 0; i < ri.Length; i++)
             s.Perf.Add(new PerfRow
             {
@@ -778,6 +805,8 @@ public static class MatchCodec
                 TickAvgUs = tavg[i].GetDouble(), TickMaxUs = tmax[i].GetDouble(), EventAvgUs = eavg[i].GetDouble(), EventMaxUs = emax[i].GetDouble(),
                 EventMaxName = ename[i].ValueKind == JsonValueKind.Null ? null : ename[i].GetString(),
                 TickAllocBytes = ta[i].GetInt64(), EventAllocBytes = ea[i].GetInt64(),
+                LosChecks = lcs?[i] ?? 0, LosTraces = lts?[i] ?? 0, LosBudgetHits = lbs?[i] ?? 0,
+                LosAvgUs = los ? lavg[i].GetDouble() : 0, LosMaxUs = los ? lmax[i].GetDouble() : 0,
             });
         var w = p.GetProperty("write");
         s.LastWriteMs = w.GetProperty("lastMs").GetDouble();

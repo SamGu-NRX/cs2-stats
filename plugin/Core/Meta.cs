@@ -14,6 +14,10 @@ public sealed class EnvInfo
     public string? EquipSource;
     /// <summary>The human's entity slot, controller entity index and pawn entity index, set once per match.</summary>
     public int HumanSlot = Nil.V, HumanController = Nil.V, HumanPawn = Nil.V;
+    /// <summary>"los", "mask" or "mixed": what decided visibility (engagements, visTarget); null before any live round.</summary>
+    public string? VisSource;
+    /// <summary>Why line of sight turned off, when it did.</summary>
+    public string? LosError;
 
     public EnvInfo Clone() => (EnvInfo)MemberwiseClone();
 }
@@ -111,7 +115,7 @@ public sealed class PerfCounter
 
     public double MaxEventUsSoFar => Us(_evMax);
 
-    private static double Us(long ts) => ts * 1_000_000.0 / Stopwatch.Frequency;
+    public static double Us(long ts) => ts * 1_000_000.0 / Stopwatch.Frequency;
 
     public PerfRow Take(int ri)
     {
