@@ -16,9 +16,11 @@ A desktop app (Tauri 2, React, TypeScript) that reads match files written by the
 
 The app installs ed0ard's CS2-Bot-Improver release, overlays your own plugin builds, and starts CS2 with the mod. The code is in `src-tauri/src/botmode/`; the same operations run from a terminal as `cs2-stats botmode <command>` (`cs2-stats botmode --help` lists them).
 
-Bot Mode is on only while a session runs. Launching from the app or with `cs2-stats botmode launch` turns it on, starts CS2 through Steam with `-insecure`, watches CS2 until it exits, and then turns Bot Mode off again. While it watches, any CS2 of this install that runs without `-insecure`, or with an option that turns VAC back on, is ended. If Bot Mode is found on with nothing watching (the app or the terminal closed mid-session), the next app start or Bot Mode command turns it off once CS2 has exited.
+Bot Mode is on only while a session runs. Launching from the app or with `cs2-stats botmode launch` starts a separate supervisor process. It turns Bot Mode on, starts CS2 through Steam with `-insecure`, watches CS2 until it exits, and then turns Bot Mode off again. While it watches, any CS2 of this install that runs without `-insecure`, or with an option that turns VAC back on, is ended. Closing the app or the terminal does not stop the supervisor.
 
-**Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.** The case Bot Mode cannot cover: the app crashes during a session, and CS2 is then started from Steam before the app or a Bot Mode command runs again.
+If Bot Mode is found on with no supervisor running, the next app start or Bot Mode command turns it off once CS2 has exited, and starts a supervisor to watch a CS2 that is still running. That includes Bot Mode left on by the mod's own Panel.
+
+**Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.** The case Bot Mode cannot cover: the supervisor dies during a session, and CS2 is then started from Steam before the app or a Bot Mode command runs again.
 
 ## Win-probability model interface
 

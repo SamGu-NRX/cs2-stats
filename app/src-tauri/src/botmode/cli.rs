@@ -18,9 +18,8 @@ usage: cs2-stats botmode <command> [options]
   init-manifest              Write the example overlay manifest, if there is none yet.
   rollback [id]              Undo the newest change (or name it).
   backups                    List recorded changes.
-  launch                     Start CS2 in Bot Mode through Steam, always with -insecure, and
-                             watch it until it exits; Bot Mode is on only for that session.
-  supervise                  Watch a CS2 left running with Bot Mode on, until it exits.
+  launch                     Start a Bot Mode session: CS2 through Steam, always with -insecure,
+                             watched until it exits; Bot Mode is on only for that session.
   set difficulty low|medium|high
   set knife-skins 0|1
   set knife-premium 0|1
@@ -47,10 +46,13 @@ struct Args {
     asset: Option<String>,
     sha256: Option<String>,
     json: bool,
+    /// `supervise-session` only.
+    mode: Option<String>,
+    run: Option<String>,
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
-    let mut a = Args { words: Vec::new(), game: None, unchecked_game: None, data: None, manifest: None, asset: None, sha256: None, json: false };
+    let mut a = Args { words: Vec::new(), game: None, unchecked_game: None, data: None, manifest: None, asset: None, sha256: None, json: false, mode: None, run: None };
     let mut it = argv.iter();
     while let Some(arg) = it.next() {
         let mut value = |flag: &str| it.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
@@ -63,6 +65,8 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             "--asset" => a.asset = Some(value(arg)?),
             "--sha256" => a.sha256 = Some(value(arg)?),
             "--json" => a.json = true,
+            "--mode" => a.mode = Some(value(arg)?),
+            "--run" => a.run = Some(value(arg)?),
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             s => a.words.push(s.to_string()),
         }
@@ -90,91 +94,29 @@ fn meta_line(m: &changes::Meta) -> String {
     o
 }
 
-fn event_text(e: &monitor::Event) -> String {
-    match e {
-        monitor::Event::Waiting { message } => format!("{message}..."),
-        monitor::Event::Checked { message, .. } => message.clone(),
-    }
+/// Starts a supervisor that adopts a CS2 running with Bot Mode on (see `session::cleanup`).
+fn start_adopter(layout: &super::paths::Layout) -> Result<(), String> {
+    session::start_supervisor(layout, session::RunMode::Adopt, &session::new_run_id())
 }
 
-fn cleanup_text(c: &session::Cleanup) -> String {
-    let checked = |list: &[monitor::Checked]| list.iter().map(|c| format!("{}. ", monitor::sentence(c))).collect::<String>();
-    match c {
-        session::Cleanup::Off => "Bot Mode is off.".into(),
-        session::Cleanup::Supervised => "A Bot Mode session is running and supervised.".into(),
-        session::Cleanup::TurnedOff { checked: list, .. } => {
-            format!("{}Bot Mode had been left on with no session watching CS2; it was turned off.", checked(list))
-        }
-        session::Cleanup::Adopt { checked: list } => format!(
-            "{}A CS2 is running with Bot Mode on and nothing watching it. Run `cs2-stats botmode supervise` to watch it and turn Bot Mode off when it exits.",
-            checked(list)
-        ),
-        session::Cleanup::LeftOn { why, checked: list } => format!("{}Bot Mode is on and could not be turned off: {why}.", checked(list)),
-    }
-}
-
-/// Prints how a session ended, and fails when CS2 never started, had to be ended, or Bot Mode
-/// could not be turned off.
-fn report_end(json: bool, end: &session::SessionEnd) -> Result<(), String> {
-    if json {
-        print(true, end, |_| String::new());
+/// The hidden `supervise-session` command: the supervisor process itself. It has no console;
+/// everything it reports goes to the status file.
+fn supervise_session(a: &Args, ctx: &Ctx, probe: &SystemProbe) -> i32 {
+    // A panic must end this process at once, in every build, so its lease is freed.
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("{info}");
+        std::process::abort();
+    }));
+    let Some(mode) = a.mode.as_deref().map(session::RunMode::parse) else { return 2 };
+    let Ok(mode) = mode else { return 2 };
+    let run_id = a.run.clone().unwrap_or_else(session::new_run_id);
+    let steam = ctx.steam_config();
+    let status = session::supervise_session(&ctx.layout, probe, &monitor::Windows, steam.as_ref().ok(), mode, &run_id, &launch::spawn_steam);
+    if status.state == "done" && status.left_on.is_none() {
+        0
     } else {
-        for e in &end.errors {
-            eprintln!("warning: {e}");
-        }
-        if let Some(m) = &end.bot_mode_off {
-            print!("Turned Bot Mode off. {}", meta_line(m));
-        }
+        1
     }
-    let mut problems = Vec::new();
-    match &end.outcome {
-        monitor::Outcome::NoStart { .. } => problems.push(format!("{} VAC safety is unverified.", monitor::describe(&end.outcome))),
-        o if o.had_unsafe() => problems.push(monitor::describe(o)),
-        o => {
-            if !json {
-                println!("{}", monitor::describe(o));
-            }
-        }
-    }
-    if let Some(why) = &end.left_on {
-        problems.push(format!("Bot Mode is still on ({why}); the next Bot Mode command or app start turns it off once CS2 has exited."));
-    }
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(problems.join(" "))
-    }
-}
-
-/// Ctrl+C during a watch: the first press stops the watch (Bot Mode is then turned off if CS2
-/// is not running); a second press ends the program as usual.
-mod ctrl_c {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    static REQUESTED: AtomicBool = AtomicBool::new(false);
-
-    pub fn requested() -> bool {
-        REQUESTED.load(Ordering::SeqCst)
-    }
-
-    #[cfg(windows)]
-    pub fn install() {
-        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
-        unsafe extern "system" fn handler(kind: u32) -> i32 {
-            // CTRL_C_EVENT or CTRL_BREAK_EVENT, the first time only.
-            if kind <= 1 && !REQUESTED.swap(true, Ordering::SeqCst) {
-                return 1;
-            }
-            0
-        }
-        // SAFETY: registers a handler that only touches an atomic.
-        unsafe {
-            SetConsoleCtrlHandler(Some(handler), 1);
-        }
-    }
-
-    #[cfg(not(windows))]
-    pub fn install() {}
 }
 
 fn run(a: Args) -> Result<(), String> {
@@ -203,18 +145,23 @@ fn run(a: Args) -> Result<(), String> {
     };
     let ctx = Ctx::new(game, a.data.clone())?;
     let layout = &ctx.layout;
+    if words.as_slice() == ["supervise-session"] {
+        return match supervise_session(&a, &ctx, &probe) {
+            0 => Ok(()),
+            _ => Err(format!("the Bot Mode session did not end cleanly; see {}", session::status_path(layout).display())),
+        };
+    }
     if !matches!(words.as_slice(), ["status"] | ["rollback"] | ["rollback", _] | ["backups"]) {
         if let Some(m) = changes::unfinished(layout)? {
             eprintln!("warning: change {} ({}) is unfinished; run `botmode rollback` before anything else.", m.id, m.operation);
         }
     }
-    // Bot Mode left on by a session that lost its supervisor is dealt with before anything that
-    // changes game files. Status and the other read-only commands only report it.
+    // Bot Mode left on with no supervisor is dealt with before anything that changes game
+    // files, and those commands wait while a session runs. Read-only commands only report it.
     let writes = matches!(words.first().copied(), Some("install" | "overlay" | "rollback" | "set" | "launch"));
     if writes {
-        match session::cleanup(layout, &probe, &monitor::Windows) {
-            session::Cleanup::Off | session::Cleanup::Supervised => {}
-            other => eprintln!("{}", cleanup_text(&other)),
+        if let Some(notice) = session::guard(layout, &probe, &monitor::Windows, &|| start_adopter(layout))? {
+            eprintln!("{notice}");
         }
     }
     match words.as_slice() {
@@ -224,7 +171,7 @@ fn run(a: Args) -> Result<(), String> {
             println!("Wrote {}. Check each entry's checkout, branch and build folder.", path.display());
         }
         ["status"] => {
-            let s = status::status(layout, &probe, &monitor::Windows, ctx.install.as_ref(), ctx.steam_launch_options())?;
+            let s = status::status(layout, &probe, ctx.install.as_ref(), ctx.steam_launch_options())?;
             print(a.json, &s, status::render);
         }
         ["download", tag] => {
@@ -300,37 +247,30 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let sys = monitor::Windows;
-            ctrl_c::install();
-            let started = session::begin(layout, &probe, &ctx.steam_config()?, &sys, &launch::spawn_steam)?;
+            let run_id = session::new_run_id();
+            session::start_supervisor(layout, session::RunMode::Launch, &run_id)?;
             if !a.json {
-                if let Some(m) = &started.bot_mode_on {
-                    print!("Turned Bot Mode on for this session. {}", meta_line(m));
-                }
-                println!("Started: \"{}\" {}", started.plan.steam_exe, started.plan.args.join(" "));
-                println!("Bot Mode stays on until CS2 exits; this command watches CS2 until then. Ctrl+C stops the watch.");
+                println!("Bot Mode is on only for this session: a supervisor turns it on, starts CS2 through Steam, watches CS2 until it exits, and turns Bot Mode off.");
+                println!("Closing this window or pressing Ctrl+C stops only this view; the session keeps running.");
                 eprintln!("{}", session::UNPROTECTED);
             }
-            // The CLI waits at most this long for CS2 to start, then turns Bot Mode off.
-            const START_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-            let control = session::control_until_off(layout, &ctrl_c::requested, &|m| eprintln!("{m}"));
-            let end = session::run(layout, &probe, &sys, &started, Some(START_WAIT), &control, &|e| eprintln!("{}", event_text(e)));
-            report_end(a.json, &end)?;
-        }
-        ["supervise"] => {
-            let sys = monitor::Windows;
-            ctrl_c::install();
-            match session::cleanup(layout, &probe, &sys) {
-                session::Cleanup::Adopt { checked } => {
-                    for c in &checked {
-                        eprintln!("{}", monitor::sentence(c));
-                    }
-                    println!("Watching the CS2 that runs with Bot Mode on until it exits. Ctrl+C stops the watch.");
-                    let control = session::control_until_off(layout, &ctrl_c::requested, &|m| eprintln!("{m}"));
-                    let end = session::adopt(layout, &probe, &sys, &control, &|e| eprintln!("{}", event_text(e)))?;
-                    report_end(a.json, &end)?;
+            let status = session::follow(layout, &monitor::Windows, &run_id, &|_| false, &|s| {
+                if !a.json {
+                    eprintln!("{}", s.message);
                 }
-                other => print(a.json, &other, cleanup_text),
+            })?;
+            if a.json {
+                print(true, &status, |_| String::new());
+            }
+            for m in status.bot_mode_on.iter().chain(status.bot_mode_off.iter()) {
+                for w in &m.warnings {
+                    eprintln!("warning: {w}");
+                }
+            }
+            let unsafe_seen = status.outcome.as_ref().is_some_and(|o| o.had_unsafe());
+            let no_start = matches!(status.outcome, Some(monitor::Outcome::NoStart { .. }));
+            if status.state != "done" || unsafe_seen || no_start || status.left_on.is_some() {
+                return Err(status.message);
             }
         }
         ["set", "difficulty", level] => {

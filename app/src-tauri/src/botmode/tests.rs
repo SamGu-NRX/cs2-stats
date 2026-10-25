@@ -142,7 +142,7 @@ fn nothing_changes_while_cs2_runs_or_cannot_be_checked() {
             ("rollback", changes::rollback(&layout, probe, None).map(|_| ())),
             ("difficulty", settings::set_difficulty(&layout, probe, Difficulty::Low).map(|_| ())),
             ("cosmetics", settings::set_cosmetics(&layout, probe, Cosmetics::default()).map(|_| ())),
-            ("launch", super::session::begin(&layout, probe, &steam, &FakeSystem::new(), &|_| Ok(())).map(|_| ())),
+            ("launch", OpLock::acquire(&layout).and_then(|l| launch::prepare(&layout, probe, &steam, &l)).map(|_| ())),
         ];
         for (op, r) in results {
             let err = r.expect_err(op);
@@ -233,7 +233,7 @@ fn a_change_interrupted_by_a_crash_can_be_rolled_back() {
     fs::write(&journal, text).unwrap();
 
     // The next start finds it: status names it, and no new change may begin on top of it.
-    let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, None).unwrap();
+    let st = status::status(&layout, &CLOSED, None, None).unwrap();
     assert_eq!(st.unfinished.as_ref().map(|m| m.id.as_str()), Some(id.as_str()));
     assert!(st.warnings.iter().any(|w| w.contains("botmode rollback")), "{:?}", st.warnings);
     let err = settings::set_cosmetics(&layout, &CLOSED, Cosmetics::default()).unwrap_err();
@@ -446,7 +446,7 @@ fn status_reports_each_component_against_the_installed_release() {
     write(&layout.target("addons/counterstrikesharp/plugins/BotMatchStats/BotMatchStats.dll"), b"hand copied");
     write(&layout.target("addons/BotHider/logs/today.log"), b"log line");
 
-    let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, Some("-insecure".into())).unwrap();
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
     let state_of = |name: &str| st.components.iter().find(|c| c.name == name).map(|c| c.state);
     assert_eq!(state_of(components::METAMOD), Some(ComponentState::Official));
     assert_eq!(state_of("BotState"), Some(ComponentState::Official));
@@ -475,7 +475,7 @@ fn status_finds_the_version_of_a_hand_installed_mod_and_writes_nothing() {
     cached_release(&layout, "v1.4.7");
     let before = (snapshot(&layout.csgo), snapshot(&layout.data));
 
-    let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, Some("-novid".into())).unwrap();
+    let st = status::status(&layout, &CLOSED, None, Some("-novid".into())).unwrap();
     assert!(st.release.installed.is_none());
     assert_eq!(st.release.reference.as_deref(), Some("v1.4.6 (CS2BotImprover.zip)"));
     assert_eq!(st.release.matching, st.release.total);
@@ -888,7 +888,7 @@ fn status_reports_a_junction_and_does_not_read_through_it() {
     let outside = s.0.join("outside");
     write(&outside.join("Evil.dll"), b"not ours");
     junction(&layout.target("addons/counterstrikesharp/plugins/Evil"), &outside);
-    let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, Some("-insecure".into())).unwrap();
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
     assert!(st.components.iter().all(|c| c.name != "Evil"), "the junction's files are not listed");
     assert!(
         st.warnings.iter().any(|w| w.contains("addons/counterstrikesharp/plugins/Evil is a junction")),
@@ -905,7 +905,7 @@ fn status_repeats_the_durability_warnings_of_recorded_changes() {
     let mut meta: changes::Meta = serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
     meta.warnings.push("Windows would not flush folder X to disk".into());
     fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
-    let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, Some("-insecure".into())).unwrap();
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
     assert!(st.warnings.iter().any(|w| w.contains(&meta.id) && w.contains("would not flush")), "{:?}", st.warnings);
 }
 
@@ -962,10 +962,11 @@ fn the_game_lock_is_machine_wide() {
     assert!(!exists("Local"), "and never in the per-session one");
 }
 
-// --- round 5 review: supervised sessions -------------------------------------------------
+// --- round 6 review: one supervisor process, liveness by lease -----------------------------
 
-use super::monitor::{Control, Outcome as Watch};
-use super::session::{self, BotMode, Cleanup};
+use super::monitor::Outcome as Watch;
+use super::process::{session_held, LockKind, NamedLock};
+use super::session::{self, Cleanup, RunMode};
 
 /// An installed fake game with the game executable in place, and that executable's path as
 /// the fake system's processes report it.
@@ -980,203 +981,316 @@ fn bot_mode_on(layout: &Layout) -> bool {
     gameinfo::is_bot_mode(&read(layout, "gameinfo.gi")).unwrap()
 }
 
-fn go() -> Control {
-    Control::Go
+fn turn_on_by_hand(layout: &Layout) {
+    write(&layout.target("gameinfo.gi"), gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap().as_bytes());
+}
+
+const NO_ADOPTER: &dyn Fn() -> Result<(), String> = &|| panic!("no adopter should be started");
+
+const CHILD_ENV: &str = "CS2STATS_TEST_LEASE_CHILD";
+
+/// Not a test on its own: run as a child process by the lease test, it holds the session lease
+/// for the game folder named in its environment until it is killed.
+#[test]
+fn lease_child_process_holds_the_lease() {
+    let Ok(csgo) = std::env::var(CHILD_ENV) else { return };
+    let _lease = NamedLock::acquire(LockKind::Session, Path::new(&csgo)).unwrap();
+    println!("LEASE-HELD");
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(120));
 }
 
 #[test]
-fn a_session_turns_bot_mode_on_for_the_launch_and_off_when_cs2_exits() {
-    let s = Scratch::new("session");
+fn the_session_lease_is_freed_when_its_process_dies() {
+    use std::io::BufRead;
+    let s = Scratch::new("lease");
+    let layout = fake_game(&s);
+    assert!(!session_held(&layout.csgo).unwrap());
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "botmode::tests::lease_child_process_holds_the_lease", "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, &layout.csgo)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("LEASE-HELD") {
+                let _ = tx.send(());
+            }
+        }
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the child took the lease");
+    assert!(session_held(&layout.csgo).unwrap(), "held while the child lives");
+    let err = NamedLock::acquire(LockKind::Session, &layout.csgo).err().expect("a second holder is refused");
+    assert!(err.contains("already running"), "{err}");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(!session_held(&layout.csgo).unwrap(), "the OS freed the lease when the process died");
+    NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+}
+
+#[test]
+fn a_supervisor_turns_bot_mode_on_for_its_session_and_off_when_cs2_exits() {
+    let s = Scratch::new("supervisor");
     let steam = fake_steam_config(&s, Some("-novid"));
     let (layout, image) = session_game(&s);
     let sys = FakeSystem::new();
     sys.script(vec![vec![], vec![(10, 2000)], vec![(10, 2000)], vec![]]);
     sys.proc_at(10, 2000, &image, Some(SAFE_LINE));
-
-    let started = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    assert!(bot_mode_on(&layout), "on for the session");
-    assert!(session::supervised(&layout, &sys), "the session is recorded");
-    let end = session::run(&layout, &CLOSED, &sys, &started, Some(std::time::Duration::from_secs(900)), &go, &|_| {});
-    assert!(matches!(end.outcome, Watch::Exited { .. }) && !end.outcome.had_unsafe(), "{:?}", end.outcome);
+    let on_at_spawn = std::cell::Cell::new(false);
+    let held_at_spawn = std::cell::Cell::new(false);
+    let spawn = |_: &launch::LaunchPlan| {
+        on_at_spawn.set(bot_mode_on(&layout));
+        held_at_spawn.set(session_held(&layout.csgo).unwrap());
+        Ok(())
+    };
+    let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "run-1", &spawn);
+    assert!(on_at_spawn.get() && held_at_spawn.get(), "on, and leased, when Steam was asked");
+    assert_eq!(st.state, "done", "{}", st.message);
+    assert!(matches!(st.outcome, Some(Watch::Exited { .. })));
+    assert!(st.bot_mode_on.is_some() && st.bot_mode_off.is_some() && st.left_on.is_none());
     assert!(!bot_mode_on(&layout), "off once CS2 exited");
-    assert!(end.bot_mode_off.is_some() && end.left_on.is_none());
-    assert!(!session::supervised(&layout, &sys));
-    // The session's two toggles are never what `rollback` takes off.
+    assert!(!session_held(&layout.csgo).unwrap(), "the lease ends with the supervisor");
+    let file = session::read_status(&layout).unwrap();
+    assert_eq!((file.run_id.as_str(), file.state.as_str()), ("run-1", "done"));
+}
+
+#[test]
+fn a_supervisor_that_cannot_ask_steam_turns_bot_mode_off_again() {
+    let s = Scratch::new("supervisor-spawn");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let st = session::supervise_session(&layout, &CLOSED, &FakeSystem::new(), Some(&steam), RunMode::Launch, "r", &|_| Err("steam.exe: not found".into()));
+    assert_eq!(st.state, "failed");
+    assert!(st.message.contains("turned off again"), "{}", st.message);
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn a_second_supervisor_for_the_same_game_changes_nothing() {
+    let s = Scratch::new("supervisor-twice");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let _first = NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+    let before = snapshot(&layout.csgo);
+    let st = session::supervise_session(&layout, &CLOSED, &FakeSystem::new(), Some(&steam), RunMode::Launch, "r", &|_| panic!("must not spawn"));
+    assert_eq!(st.state, "failed");
+    assert!(st.message.contains("already running"), "{}", st.message);
+    assert_eq!(snapshot(&layout.csgo), before);
+}
+
+#[test]
+fn a_launch_where_cs2_never_starts_turns_bot_mode_off() {
+    let s = Scratch::new("supervisor-nostart");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "r", &|_| Ok(()));
+    assert!(matches!(st.outcome, Some(Watch::NoStart { .. })), "{:?}", st.outcome);
+    assert!(sys.clock() >= session::START_LIMIT);
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn a_process_list_outage_shows_in_the_status_file() {
+    let s = Scratch::new("supervisor-outage");
+    let (layout, image) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    let mut lists: Vec<Result<Vec<(u32, u64)>, String>> = vec![Ok(vec![(10, 5)])];
+    lists.extend(vec![Err("snapshot failed".into()); 12]);
+    lists.push(Ok(vec![]));
+    sys.script_results(lists);
+    sys.proc_at(10, 5, &image, Some(SAFE_LINE));
+    let st = session::supervise_session(&layout, &CLOSED, &sys, None, RunMode::Adopt, "r", &|_| Ok(()));
+    assert!(st.errors.iter().any(|e| e.contains("keeps failing")), "{:?}", st.errors);
+    assert!(!bot_mode_on(&layout), "the adopted session still ends off");
+}
+
+#[test]
+fn cleanup_leaves_a_leased_session_alone() {
+    let s = Scratch::new("cleanup-leased");
+    let (layout, _) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &FakeSystem::new(), NO_ADOPTER), Cleanup::Supervised));
+    assert!(bot_mode_on(&layout));
+    // And commands that change anything wait for it.
+    let err = session::guard(&layout, &CLOSED, &FakeSystem::new(), NO_ADOPTER).unwrap_err();
+    assert!(err.contains("session is running"), "{err}");
+}
+
+#[test]
+fn cleanup_turns_off_bot_mode_another_tool_left_on_and_says_so() {
+    let s = Scratch::new("cleanup-panel");
+    let (layout, _) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let c = session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER);
+    assert!(matches!(&c, Cleanup::TurnedOff { message, .. } if message == session::LEFT_BY_OTHER_TOOL), "{c:?}");
+    assert!(!bot_mode_on(&layout));
+    assert_eq!(session::guard(&layout, &CLOSED, &sys, NO_ADOPTER).unwrap(), None, "nothing more to do");
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::Off));
+}
+
+#[test]
+fn cleanup_after_a_dead_session_says_it_was_a_session() {
+    let s = Scratch::new("cleanup-ours");
+    let (layout, _) = session_game(&s);
+    // A session turned Bot Mode on, then its supervisor died.
+    let lock = OpLock::acquire(&layout).unwrap();
+    let on = gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap();
+    changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-on", changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", on.as_bytes())).unwrap();
+    drop(lock);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let c = session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER);
+    assert!(matches!(&c, Cleanup::TurnedOff { message, .. } if message.contains("session ended without")), "{c:?}");
+}
+
+#[test]
+fn cleanup_with_cs2_running_starts_an_adopting_supervisor_and_changes_nothing() {
+    let s = Scratch::new("cleanup-adopt");
+    let (layout, image) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![(10, 5)]]);
+    sys.proc_at(10, 5, &image, Some(SAFE_LINE));
+    let started = std::cell::Cell::new(0);
+    let c = session::cleanup(&layout, &CLOSED, &sys, &|| {
+        started.set(started.get() + 1);
+        Ok(())
+    });
+    assert!(matches!(c, Cleanup::Adopting { .. }), "{c:?}");
+    assert_eq!(started.get(), 1);
+    assert!(bot_mode_on(&layout), "never changed while CS2 runs");
+    // The adopting supervisor watches it and turns Bot Mode off when it exits.
+    sys.script(vec![vec![(10, 5)], vec![]]);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, None, RunMode::Adopt, "r", &|_| Ok(()));
+    assert_eq!(st.state, "done");
+    assert!(!sys.ended(10) && !bot_mode_on(&layout));
+}
+
+/// A session toggle left `InProgress`, as if the process died before recording it finished.
+fn interrupted_toggle(layout: &Layout, op: &str, text: &str) -> String {
+    let lock = OpLock::acquire(layout).unwrap();
+    let (_, meta) = changes::run_kind(layout, &CLOSED, &lock, op, changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", text.as_bytes())).unwrap();
+    let path = layout.backups().join(&meta.id).join("meta.json");
+    fs::write(&path, fs::read_to_string(&path).unwrap().replace("\"complete\"", "\"inProgress\"")).unwrap();
+    meta.id
+}
+
+#[test]
+fn an_interrupted_session_toggle_is_finished_off_and_never_rolled_back_on() {
+    let s = Scratch::new("recover-off");
+    let (layout, _) = session_game(&s);
+    let on = gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap();
+    write(&layout.target("gameinfo.gi"), on.as_bytes());
+    // Interrupted while turning Bot Mode off: rolling it back would turn Bot Mode on again.
+    let id = interrupted_toggle(&layout, "bot-mode-off", gameinfo::ONLINE_SAMPLE);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::TurnedOff { .. }));
+    assert!(!bot_mode_on(&layout));
+    let m = changes::list(&layout).unwrap().into_iter().find(|m| m.id == id).unwrap();
+    assert_eq!(m.status, changes::Status::Superseded);
+
+    // Interrupted while turning it on: finished off as well.
+    let _ = interrupted_toggle(&layout, "bot-mode-on", &on);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::TurnedOff { .. }));
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn an_interrupted_toggle_with_cs2_running_is_adopted_not_changed() {
+    let s = Scratch::new("recover-adopt");
+    let (layout, image) = session_game(&s);
+    let on = gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap();
+    let _ = interrupted_toggle(&layout, "bot-mode-on", &on);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![(10, 5)]]);
+    sys.proc_at(10, 5, &image, Some(SAFE_LINE));
+    let adopted = std::cell::Cell::new(false);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, &|| { adopted.set(true); Ok(()) }), Cleanup::Adopting { .. }));
+    assert!(adopted.get() && bot_mode_on(&layout));
+}
+
+#[test]
+fn a_compare_and_swap_never_overwrites_a_newer_gameinfo() {
+    let s = Scratch::new("cas");
+    let (layout, _) = session_game(&s);
+    // The primitive: a stale read is refused and nothing is written.
+    let lock = OpLock::acquire(&layout).unwrap();
+    let before = read(&layout, "gameinfo.gi");
+    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| cs.put_bytes_if("gameinfo.gi", b"x", &"0".repeat(64))).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(read(&layout, "gameinfo.gi"), before);
+    drop(lock);
+
+    // A Valve update lands between the toggle's read and its write: the toggle reads again and
+    // keeps Valve's change.
+    turn_on_by_hand(&layout);
+    let gi = layout.target("gameinfo.gi");
+    let updated = std::sync::atomic::AtomicBool::new(false);
+    let probe = Scripted(move |p| {
+        if p == Phase::ChangeBegin && !updated.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let text = fs::read_to_string(&gi).unwrap().replace("\"SkyOccluder\"", "\"SkyOccluder\"\r\n\t\"game\" \"NewValveLayer\"");
+            fs::write(&gi, text).unwrap();
+        }
+        false
+    });
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &probe, &sys, NO_ADOPTER), Cleanup::TurnedOff { .. }));
+    let now = read(&layout, "gameinfo.gi");
+    assert!(now.contains("NewValveLayer"), "Valve's update was kept");
+    assert!(!gameinfo::is_bot_mode(&now).unwrap(), "and Bot Mode is off");
+}
+
+#[test]
+fn rollback_refuses_session_changes() {
+    let s = Scratch::new("rollback-session");
+    let (layout, _) = session_game(&s);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let on = gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap();
+    let (_, on_meta) = changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-on", changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", on.as_bytes())).unwrap();
+    let (_, off_meta) = changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-off", changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", gameinfo::ONLINE_SAMPLE.as_bytes())).unwrap();
+    drop(lock);
+    for id in [&off_meta.id, &on_meta.id] {
+        let err = changes::rollback(&layout, &CLOSED, Some(id)).unwrap_err();
+        assert!(err.contains("never rolled back"), "{err}");
+    }
+    // Without an id, rollback skips them and takes off the install instead.
     let r = changes::rollback(&layout, &CLOSED, None).unwrap();
     assert!(r.operation.starts_with("install"), "{}", r.operation);
     assert!(!bot_mode_on(&layout));
 }
 
 #[test]
-fn the_session_start_time_is_taken_before_bot_mode_is_on() {
-    // Every CS2 created at or after `since` is checked, so `since` must come before the first
-    // moment the mod could be loaded.
-    let s = Scratch::new("session-since");
-    let steam = fake_steam_config(&s, Some("-novid"));
+fn following_a_supervisor_that_died_reports_it() {
+    let s = Scratch::new("follow-dead");
     let (layout, _) = session_game(&s);
-    let sys = FakeSystem::new();
-    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (seen2, gi) = (seen.clone(), layout.target("gameinfo.gi"));
-    *sys.on_file_time.borrow_mut() = Some(Box::new(move || {
-        seen2.borrow_mut().push(gameinfo::is_bot_mode(&fs::read_to_string(&gi).unwrap()).unwrap());
-    }));
-    session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    assert_eq!(seen.borrow().as_slice(), [false], "the time was read once, with Bot Mode still off");
-    assert!(bot_mode_on(&layout));
-}
-
-#[test]
-fn a_launch_where_cs2_never_starts_turns_bot_mode_off() {
-    let s = Scratch::new("session-nostart");
-    let steam = fake_steam_config(&s, Some("-novid"));
-    let (layout, _) = session_game(&s);
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![]]);
-    let started = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    let end = session::run(&layout, &CLOSED, &sys, &started, Some(std::time::Duration::from_secs(60)), &go, &|_| {});
-    assert!(matches!(end.outcome, Watch::NoStart { .. }), "{:?}", end.outcome);
-    assert!(!bot_mode_on(&layout));
-}
-
-#[test]
-fn steam_failing_to_start_turns_bot_mode_off_again() {
-    let s = Scratch::new("session-spawn");
-    let steam = fake_steam_config(&s, Some("-novid"));
-    let (layout, _) = session_game(&s);
-    let sys = FakeSystem::new();
-    let err = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Err("steam.exe: not found".into())).unwrap_err();
-    assert!(err.contains("turned off again"), "{err}");
-    assert!(!bot_mode_on(&layout));
-    assert!(!session::supervised(&layout, &sys));
-}
-
-#[test]
-fn a_watcher_panic_fails_closed_and_the_session_still_ends_off() {
-    let s = Scratch::new("session-panic");
-    let steam = fake_steam_config(&s, Some("-novid"));
-    let (layout, image) = session_game(&s);
-    let sys = FakeSystem::new();
-    // Poll 1 sees the safe CS2; poll 2 panics; the sweep after it sees a second, unsafe one.
-    sys.script(vec![vec![(10, 2000)], vec![(10, 2000), (11, 3000)], vec![(10, 2000)], vec![]]);
-    sys.proc_at(10, 2000, &image, Some(SAFE_LINE));
-    sys.proc_at(11, 3000, &image, Some("cs2.exe -novid"));
-    *sys.panic_on_polls.borrow_mut() = vec![2];
-    let started = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    let end = session::run(&layout, &CLOSED, &sys, &started, None, &go, &|_| {});
-    assert!(end.errors.iter().any(|e| e.contains("staged watcher failure")), "{:?}", end.errors);
-    assert!(sys.ended(11), "the unsafe CS2 was ended after the failure");
-    assert!(!sys.ended(10), "the safe one kept running and was watched again");
-    assert!(!bot_mode_on(&layout), "off once CS2 exited");
-}
-
-#[test]
-fn a_watcher_that_keeps_failing_still_ends_an_unsafe_cs2() {
-    let s = Scratch::new("session-panics");
-    let steam = fake_steam_config(&s, Some("-novid"));
-    let (layout, image) = session_game(&s);
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![(10, 2000), (11, 3000)]]);
-    sys.proc_at(10, 2000, &image, Some(SAFE_LINE));
-    sys.proc_at(11, 3000, &image, Some("cs2.exe -novid"));
-    // Every watcher poll panics (1, 3, 5); only the sweeps after them (2, 4, 6) get a list.
-    *sys.panic_on_polls.borrow_mut() = vec![1, 3, 5];
-    let started = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    let end = session::run(&layout, &CLOSED, &sys, &started, None, &go, &|_| {});
-    assert!(sys.ended(11), "the fail-closed sweep ended the unsafe CS2");
-    assert!(end.errors.iter().any(|e| e.contains("kept failing")), "{:?}", end.errors);
-    assert!(end.left_on.is_some() && bot_mode_on(&layout), "Bot Mode stays on while the safe CS2 runs, and says why");
-}
-
-#[test]
-fn a_watcher_that_cannot_start_undoes_the_launch() {
-    let s = Scratch::new("session-abort");
-    let steam = fake_steam_config(&s, Some("-novid"));
-    let (layout, image) = session_game(&s);
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![(10, 2000)]]);
-    sys.proc_at(10, 2000, &image, Some(SAFE_LINE));
-    let started = session::begin(&layout, &CLOSED, &steam, &sys, &|_| Ok(())).unwrap();
-    let msg = session::abort(&layout, &CLOSED, &sys, &started, "the CS2 watcher could not be started (no threads)");
-    assert!(sys.ended(10), "the CS2 the launch started was ended");
-    assert!(!bot_mode_on(&layout) && msg.contains("Bot Mode was turned off"), "{msg}");
-}
-
-#[test]
-fn leftover_bot_mode_is_turned_off_when_no_session_and_no_cs2() {
-    let s = Scratch::new("cleanup-off");
-    let (layout, _) = session_game(&s);
-    write(&layout.target("gameinfo.gi"), gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap().as_bytes());
-    // A marker from a supervisor that is no longer running.
-    write(&layout.data.join("session.json"), br#"{"pid": 77, "created": 5, "csgo": "x"}"#);
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![]]);
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys), Cleanup::TurnedOff { .. }));
-    assert!(!bot_mode_on(&layout));
-}
-
-#[test]
-fn a_live_supervisor_keeps_its_session() {
-    let s = Scratch::new("cleanup-live");
-    let (layout, _) = session_game(&s);
-    write(&layout.target("gameinfo.gi"), gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap().as_bytes());
-    write(&layout.data.join("session.json"), br#"{"pid": 77, "created": 5, "csgo": "x"}"#);
-    let sys = FakeSystem::new();
-    sys.alive.borrow_mut().insert((77, 5));
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys), Cleanup::Supervised));
-    assert!(bot_mode_on(&layout));
-}
-
-#[test]
-fn leftover_bot_mode_with_cs2_running_ends_an_unsafe_one_and_adopts_a_safe_one() {
-    let s = Scratch::new("cleanup-cs2");
-    let (layout, image) = session_game(&s);
-    let on = gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap();
-    write(&layout.target("gameinfo.gi"), on.as_bytes());
-
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![(11, 5)]]);
-    sys.proc_at(11, 5, &image, Some("cs2.exe -novid"));
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys), Cleanup::TurnedOff { .. }));
-    assert!(sys.ended(11) && !bot_mode_on(&layout), "unsafe: ended, then Bot Mode off");
-
-    write(&layout.target("gameinfo.gi"), on.as_bytes());
-    let sys = FakeSystem::new();
-    sys.script(vec![vec![(10, 5)], vec![(10, 5)], vec![(10, 5)], vec![]]);
-    sys.proc_at(10, 5, &image, Some(SAFE_LINE));
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys), Cleanup::Adopt { .. }));
-    assert!(bot_mode_on(&layout), "never changed while CS2 runs");
-    let end = session::adopt(&layout, &CLOSED, &sys, &go, &|_| {}).unwrap();
-    assert!(matches!(end.outcome, Watch::Exited { .. }) && !sys.ended(10));
-    assert!(!bot_mode_on(&layout), "off once the adopted CS2 exited");
-}
-
-#[test]
-fn an_unreadable_gameinfo_is_neither_on_nor_off() {
-    let s = Scratch::new("tri-state");
-    let (layout, _) = session_game(&s);
-    fs::remove_file(layout.target("gameinfo.gi")).unwrap();
-    fs::create_dir_all(layout.target("gameinfo.gi")).unwrap();
-    assert!(matches!(session::bot_mode(&layout), BotMode::Unknown(_)));
-    // The watch keeps going (and says why) rather than stopping on it.
-    let said = std::cell::RefCell::new(Vec::new());
-    let report = |m: &str| said.borrow_mut().push(m.to_string());
-    let control = session::control_until_off(&layout, &|| false, &report);
-    assert_eq!(control(), Control::Go);
-    assert!(said.borrow()[0].contains("could not be read"));
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &FakeSystem::new()), Cleanup::LeftOn { .. }));
-    // Confirmed off stops it.
-    fs::remove_dir(layout.target("gameinfo.gi")).unwrap();
-    write(&layout.target("gameinfo.gi"), gameinfo::ONLINE_SAMPLE.as_bytes());
-    assert_eq!(control(), Control::Stop);
+    let status = serde_json::json!({
+        "runId": "r9", "mode": "launch", "state": "running", "message": "watching", "verdicts": [],
+        "errors": [], "heartbeat": 0, "outcome": null, "botModeOn": null, "botModeOff": null, "leftOn": null
+    });
+    write(&session::status_path(&layout), status.to_string().as_bytes());
+    let st = session::follow(&layout, &FakeSystem::new(), "r9", &|_| false, &|_| {}).unwrap();
+    assert_eq!(st.state, "failed");
+    assert!(st.message.contains("stopped unexpectedly"), "{}", st.message);
 }
 
 #[test]
 fn status_counts_insecure_then_secure_as_unsafe() {
     let s = Scratch::new("status-secure");
     let (layout, _) = session_game(&s);
-    write(&layout.target("gameinfo.gi"), gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap().as_bytes());
+    turn_on_by_hand(&layout);
     let warn = |opts: &str| {
-        let st = status::status(&layout, &CLOSED, &FakeSystem::new(), None, Some(opts.into())).unwrap();
+        let st = status::status(&layout, &CLOSED, None, Some(opts.into())).unwrap();
         st.warnings.iter().find(|w| w.contains("no session watching CS2")).cloned().unwrap()
     };
     assert!(warn("-insecure -secure").contains("VAC on"));

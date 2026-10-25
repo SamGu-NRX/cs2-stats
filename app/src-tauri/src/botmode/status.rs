@@ -7,8 +7,7 @@ use super::gameinfo;
 use super::hash;
 use super::install;
 use super::paths::{self, Layout, Protection};
-use super::monitor::System;
-use super::process::{is_secure_token, Phase, ProcessProbe};
+use super::process::{is_secure_token, session_held, Phase, ProcessProbe};
 use super::session;
 use super::settings::{self, CosmeticsState};
 use super::state::{self, OverlayRecord, SourceLink};
@@ -145,7 +144,6 @@ fn classify(
 pub fn status(
     layout: &Layout,
     probe: &dyn ProcessProbe,
-    sys: &dyn System,
     install: Option<&Cs2Install>,
     steam_launch_options: Option<String>,
 ) -> Result<Status, String> {
@@ -229,7 +227,7 @@ pub fn status(
     // Safe only with -insecure and no token that turns VAC back on (`-insecure -secure` is not).
     let steam_tokens = steam_launch_options.as_deref().and_then(|o| super::launch::split(o).ok()).unwrap_or_default();
     let steam_safe = steam_tokens.iter().any(|a| a.eq_ignore_ascii_case("-insecure")) && !steam_tokens.iter().any(|a| is_secure_token(a));
-    let supervised = session::supervised(layout, sys);
+    let supervised = session_held(&layout.csgo).unwrap_or(false);
     if bot_mode == Some(true) && !supervised {
         warnings.push(format!(
             "Bot Mode is on in gameinfo.gi with no session watching CS2{}. The next Bot Mode command or app start turns it off. {}",

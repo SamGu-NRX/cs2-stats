@@ -113,15 +113,6 @@ pub fn file_id(path: &std::path::Path) -> Result<(u32, u64), String> {
     imp::file_id(path)
 }
 
-/// Whether the process with this id and creation time is still running.
-pub fn alive(pid: u32, created: u64) -> bool {
-    imp::alive(pid, created)
-}
-
-/// This process's id and creation time.
-pub fn this_process() -> Listed {
-    imp::this_process()
-}
 
 /// One process opened once, with query-limited, terminate and synchronize access. Reading its
 /// details and ending it all go through this one handle, never a fresh open by id.
@@ -323,30 +314,6 @@ mod imp {
         }
     }
 
-    pub fn alive(pid: u32, created: u64) -> bool {
-        use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-        const STILL_ACTIVE: u32 = 259;
-        // SAFETY: the handle is closed by Handle's Drop.
-        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if h.is_null() {
-            return false;
-        }
-        let h = Handle(h);
-        let mut code = 0u32;
-        // SAFETY: writes one u32 for a handle this function owns.
-        let running = unsafe { GetExitCodeProcess(h.0, &mut code) } != 0 && code == STILL_ACTIVE;
-        running && creation_time(&h).is_ok_and(|t| t == created)
-    }
-
-    pub fn this_process() -> super::Listed {
-        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
-        // SAFETY: the pseudo-handle needs no closing; it is wrapped only to read times, and
-        // forgotten so Drop does not close it.
-        let pseudo = Handle(unsafe { GetCurrentProcess() });
-        let created = creation_time(&pseudo).unwrap_or(0);
-        std::mem::forget(pseudo);
-        super::Listed { pid: unsafe { GetCurrentProcessId() }, created }
-    }
 }
 
 #[cfg(not(windows))]
@@ -379,12 +346,6 @@ mod imp {
     pub fn file_id(_p: &std::path::Path) -> Result<(u32, u64), String> {
         unsupported()
     }
-    pub fn alive(_pid: u32, _created: u64) -> bool {
-        false
-    }
-    pub fn this_process() -> super::Listed {
-        super::Listed { pid: std::process::id(), created: 0 }
-    }
 }
 
 /// Held for the whole of an operation that writes game files or app data. On Windows the lock
@@ -397,49 +358,105 @@ mod imp {
 /// means another operation is working on that game folder.
 pub struct OpLock {
     _file: File,
-    _game: GameMutex,
+    _game: NamedLock,
 }
 
-/// The game folder's mutex, in the `Global\` namespace, so operations in two Windows sessions
-/// (fast user switching, a remote desktop session) exclude each other too. A standard user can
-/// create it (checked on the user's machine without administrator rights). If Windows refuses
-/// it, the operation is refused rather than fall back to a per-session lock.
-#[cfg(windows)]
-struct GameMutex(windows_sys::Win32::Foundation::HANDLE);
+/// A named mutex in the `Global` namespace, keyed to the canonical game folder, so it covers
+/// every Windows session (fast user switching, remote desktop) and every app folder. It exists
+/// exactly while a holder keeps its handle open, and the OS closes that handle when the holder
+/// dies, so "the mutex exists" means "a live holder has it". A standard user can create it
+/// (checked on the user's machine without administrator rights); if Windows refuses it, the
+/// caller is refused rather than fall back to a per-session lock.
+pub struct NamedLock(#[cfg(windows)] windows_sys::Win32::Foundation::HANDLE);
 
-#[cfg(windows)]
-impl GameMutex {
-    fn acquire(csgo: &std::path::Path) -> Result<GameMutex, String> {
+/// What a named lock is for, as part of its name.
+#[derive(Clone, Copy, Debug)]
+pub enum LockKind {
+    /// One Bot Mode operation at a time on a game folder.
+    Operation,
+    /// The lease a session supervisor holds for its whole life.
+    Session,
+}
+
+fn lock_name(kind: LockKind, csgo: &std::path::Path) -> Result<(Vec<u16>, std::path::PathBuf), String> {
+    let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
+    let key = super::hash::bytes(canon.to_string_lossy().to_lowercase().as_bytes());
+    let what = match kind {
+        LockKind::Operation => "cs2-stats-botmode",
+        LockKind::Session => "cs2-stats-botmode-session",
+    };
+    let name = format!("Global\\{what}-{}", &key[..32]);
+    Ok((name.encode_utf16().chain(Some(0)).collect(), canon))
+}
+
+impl NamedLock {
+    /// Takes the lock; an error when another holder has it.
+    #[cfg(windows)]
+    pub fn acquire(kind: LockKind, csgo: &std::path::Path) -> Result<NamedLock, String> {
         use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
         use windows_sys::Win32::System::Threading::CreateMutexW;
-        let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
-        let key = super::hash::bytes(canon.to_string_lossy().to_lowercase().as_bytes());
-        let name: Vec<u16> = format!("Global\\cs2-stats-botmode-{}", &key[..32]).encode_utf16().chain(Some(0)).collect();
+        let (name, canon) = lock_name(kind, csgo)?;
         // SAFETY: `name` is NUL-terminated and outlives the call; the handle is closed in Drop.
         unsafe {
             let h = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
             let err = GetLastError();
             if h.is_null() {
                 return Err(format!(
-                    "Windows refused the machine-wide lock for {} ({}), so Bot Mode cannot make sure no other session is changing it; nothing was changed",
+                    "Windows refused the machine-wide lock for {} ({}), so Bot Mode cannot make sure nothing else is changing it; nothing was changed",
                     canon.display(),
                     std::io::Error::from_raw_os_error(err as i32)
                 ));
             }
             if err == ERROR_ALREADY_EXISTS {
                 CloseHandle(h);
-                return Err(format!(
-                    "another Bot Mode operation is working on {} (possibly with a different app folder); wait for it to finish",
-                    canon.display()
-                ));
+                return Err(match kind {
+                    LockKind::Operation => format!(
+                        "another Bot Mode operation is working on {} (possibly with a different app folder); wait for it to finish",
+                        canon.display()
+                    ),
+                    LockKind::Session => format!("a Bot Mode session is already running for {}", canon.display()),
+                });
             }
-            Ok(GameMutex(h))
+            Ok(NamedLock(h))
         }
+    }
+
+    #[cfg(not(windows))]
+    pub fn acquire(_kind: LockKind, _csgo: &std::path::Path) -> Result<NamedLock, String> {
+        Ok(NamedLock())
+    }
+
+    /// Whether a live holder has the lock.
+    #[cfg(windows)]
+    pub fn held(kind: LockKind, csgo: &std::path::Path) -> Result<bool, String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_FILE_NOT_FOUND};
+        use windows_sys::Win32::System::Threading::OpenMutexW;
+        const SYNCHRONIZE: u32 = 0x0010_0000;
+        let (name, canon) = lock_name(kind, csgo)?;
+        // SAFETY: `name` is NUL-terminated; a returned handle is closed at once.
+        unsafe {
+            let h = OpenMutexW(SYNCHRONIZE, 0, name.as_ptr());
+            if !h.is_null() {
+                CloseHandle(h);
+                return Ok(true);
+            }
+            match GetLastError() {
+                ERROR_FILE_NOT_FOUND => Ok(false),
+                // It exists but cannot be opened: a holder has it.
+                5 => Ok(true),
+                err => Err(format!("checking the lock for {}: {}", canon.display(), std::io::Error::from_raw_os_error(err as i32))),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn held(_kind: LockKind, _csgo: &std::path::Path) -> Result<bool, String> {
+        Ok(false)
     }
 }
 
 #[cfg(windows)]
-impl Drop for GameMutex {
+impl Drop for NamedLock {
     fn drop(&mut self) {
         // SAFETY: the handle came from CreateMutexW and is closed once.
         unsafe {
@@ -448,14 +465,12 @@ impl Drop for GameMutex {
     }
 }
 
-#[cfg(not(windows))]
-struct GameMutex;
+// SAFETY: a mutex handle may be closed from any thread.
+unsafe impl Send for NamedLock {}
 
-#[cfg(not(windows))]
-impl GameMutex {
-    fn acquire(_csgo: &std::path::Path) -> Result<GameMutex, String> {
-        Ok(GameMutex)
-    }
+/// Whether a session supervisor is alive for this game folder: it holds the session lease.
+pub fn session_held(csgo: &std::path::Path) -> Result<bool, String> {
+    NamedLock::held(LockKind::Session, csgo)
 }
 
 impl OpLock {
@@ -474,7 +489,7 @@ impl OpLock {
             }
             Err(e) => return Err(format!("{}: {e}", path.display())),
         };
-        Ok(OpLock { _file: file, _game: GameMutex::acquire(&layout.csgo)? })
+        Ok(OpLock { _file: file, _game: NamedLock::acquire(LockKind::Operation, &layout.csgo)? })
     }
 }
 

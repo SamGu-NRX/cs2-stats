@@ -34,6 +34,9 @@ pub enum Status {
     /// Failed part-way, and the automatic rollback could not finish (CS2 was running, or a
     /// file had changed). Must be rolled back before anything else.
     RollbackPending,
+    /// An interrupted session toggle that was closed without being rolled back: Bot Mode was
+    /// turned off by a newer change instead (see `session::turn_off`).
+    Superseded,
 }
 
 impl Status {
@@ -76,8 +79,8 @@ pub enum Kind {
     #[default]
     Normal,
     /// A session turning Bot Mode on or off in `gameinfo.gi`. Journaled for crash safety, but
-    /// once complete never taken off by `rollback`: undoing the "off" of a finished session
-    /// would turn Bot Mode on with nothing watching CS2. Sessions turn it off themselves.
+    /// never taken off by `rollback`: undoing an "off" would turn Bot Mode on with nothing
+    /// watching CS2. An interrupted one is finished in the off direction instead.
     Session,
 }
 
@@ -88,6 +91,9 @@ pub struct Entry {
     pub before: Option<String>,
     pub after: String,
 }
+
+/// In the error of a compare-and-swap whose file changed after it was read.
+pub const CHANGED_SINCE_READ: &str = "changed since it was read";
 
 const META: &str = "meta.json";
 const ENTRIES: &str = "entries.jsonl";
@@ -160,7 +166,11 @@ impl<'p> ChangeSet<'p> {
     fn begin_kind(layout: &Layout, probe: &'p dyn ProcessProbe, _lock: &OpLock, operation: &str, kind: Kind) -> Result<ChangeSet<'p>, String> {
         ensure_cs2_closed(probe, Phase::ChangeBegin)?;
         let existing = list(layout)?;
-        if let Some(m) = existing.iter().find(|m| m.status.unfinished()) {
+        // Turning Bot Mode off must work even with an install left half-done: it only touches
+        // gameinfo.gi, which installs leave alone. Interrupted session toggles must be
+        // superseded first.
+        let blocks = |m: &&Meta| m.status.unfinished() && (kind == Kind::Normal || m.kind == Kind::Session);
+        if let Some(m) = existing.iter().find(blocks) {
             return Err(format!(
                 "change {} ({}) is unfinished, so the game folder may be half-written; run `botmode rollback` first",
                 m.id, m.operation
@@ -237,6 +247,17 @@ impl<'p> ChangeSet<'p> {
             return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
         }
         self.put_inner(rel, expected, fill)
+    }
+
+    /// [`put_bytes`](Self::put_bytes) as a compare-and-swap: refused, with nothing written, unless the
+    /// file still hashes to `read_hash`, the content the caller computed `data` from.
+    pub fn put_bytes_if(&mut self, rel: &str, data: &[u8], read_hash: &str) -> Result<bool, String> {
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &paths::rel(rel)?, false)?;
+        let now = hash::file_if_exists(&path)?;
+        if now.as_deref() != Some(read_hash) {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        self.put_bytes(rel, data)
     }
 
     pub fn put_bytes(&mut self, rel: &str, data: &[u8]) -> Result<bool, String> {
@@ -503,9 +524,21 @@ pub fn list(layout: &Layout) -> Result<Vec<Meta>, String> {
 }
 
 /// The newest change left interrupted or partly undone, which must be rolled back before any
-/// other change. Shown by status and by every CLI command.
+/// other change. Shown by status and by every CLI command. Session toggles are not counted:
+/// session cleanup finishes them.
 pub fn unfinished(layout: &Layout) -> Result<Option<Meta>, String> {
-    Ok(list(layout)?.into_iter().find(|m| m.status.unfinished()))
+    Ok(list(layout)?.into_iter().find(|m| m.status.unfinished() && m.kind == Kind::Normal))
+}
+
+/// Closes every interrupted session toggle as superseded, without restoring anything. The
+/// caller then turns Bot Mode off with a new change, so recovery always ends with Bot Mode off.
+pub fn supersede_unfinished_sessions(layout: &Layout) -> Result<(), String> {
+    for mut m in list(layout)?.into_iter().filter(|m| m.kind == Kind::Session && m.status.unfinished()) {
+        m.status = Status::Superseded;
+        m.error = Some("interrupted; closed without rollback, and Bot Mode turned off by a newer change".into());
+        write_meta(&layout.backups().join(&m.id), &m)?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -528,9 +561,16 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     ensure_cs2_closed(probe, Phase::Operation)?;
     let _lock = OpLock::acquire(layout)?;
     let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
-    // A finished session toggle is never taken off; an interrupted one is, like any change.
-    let active: Vec<Meta> =
-        list(layout)?.into_iter().filter(|m| m.status.in_effect() && (m.kind == Kind::Normal || m.status.unfinished())).collect();
+    let all = list(layout)?;
+    if let Some(m) = id.and_then(|id| all.iter().find(|m| m.id == id)).filter(|m| m.kind == Kind::Session) {
+        return Err(format!(
+            "{} turned Bot Mode {} for a session; session changes are never rolled back (Bot Mode is turned off when the session ends, or by the next Bot Mode command)",
+            m.id,
+            if m.operation == "bot-mode-on" { "on" } else { "off" }
+        ));
+    }
+    // Session toggles are never taken off; interrupted ones are finished by session cleanup.
+    let active: Vec<Meta> = all.into_iter().filter(|m| m.status.in_effect() && m.kind == Kind::Normal).collect();
     let newest = active.first().ok_or("no change to roll back")?;
     if let Some(id) = id {
         if id != newest.id {

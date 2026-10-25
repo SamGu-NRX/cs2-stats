@@ -180,28 +180,32 @@ export type Outcome =
   | { outcome: "noStart"; lastError: string | null }
   | { outcome: "stopped"; cs2Running: boolean; checked: Checked[] };
 
-/** How a session ended. */
-export interface SessionEnd {
-  outcome: Outcome;
-  /** the change that turned Bot Mode off */
-  botModeOff: Change | null;
-  /** why Bot Mode is still on, when it could not be turned off */
-  leftOn: string | null;
-  /** watcher failures that were caught and recovered from */
-  errors: string[];
-}
-
-/** The Bot Mode session, from botmode.session() or the SESSION_EVENT event. */
-export interface SessionState {
-  /** waiting: no CS2 yet; running: CS2 is being watched; done: the session ended */
-  phase: "waiting" | "running" | "done";
-  /** e.g. "waiting for CS2 to start (Steam may be updating)" */
+/** What the session supervisor reports in its status file. */
+export interface SessionStatus {
+  runId: string;
+  mode: "launch" | "adopt";
+  /** cannotSee: the process list cannot be read; show the message ("close CS2 now") */
+  state: "starting" | "waiting" | "running" | "cannotSee" | "done" | "failed";
   message: string;
-  end: SessionEnd | null;
+  verdicts: Checked[];
+  errors: string[];
+  /** Unix seconds of the supervisor's last poll */
+  heartbeat: number;
+  outcome: Outcome | null;
+  botModeOn: Change | null;
+  botModeOff: Change | null;
+  /** why Bot Mode was left on at the end, if it was */
+  leftOn: string | null;
 }
 
-/** Event emitted by the app as a session progresses; the payload is a SessionState. */
-export const SESSION_EVENT = "botmode-session";
+/** The Bot Mode session, from botmode.session(). Poll it while a session runs. */
+export interface SessionView {
+  /** whether a supervisor process holds the session lease right now */
+  supervised: boolean;
+  status: SessionStatus | null;
+  /** what session cleanup last said, e.g. that it turned off Bot Mode another tool left on */
+  notice: string | null;
+}
 
 /** Show this with Bot Mode: the one case a session cannot protect. */
 export const UNPROTECTED_NOTICE =
@@ -224,13 +228,12 @@ export const botmode = {
   rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
   backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
   /**
-   * Turns Bot Mode on for a session, asks Steam to start CS2, and resolves at once. The app
-   * then watches CS2 until it exits, ends any CS2 of this install without -insecure, and turns
-   * Bot Mode off; follow it with session() or the SESSION_EVENT event.
+   * Starts a session supervisor process, which turns Bot Mode on, starts CS2 through Steam,
+   * watches it until it exits (ending any CS2 of this install without -insecure) and turns
+   * Bot Mode off. Resolves once Steam has been asked; closing the app does not end the session.
    */
-  launch: (t: Target = {}) => invoke<LaunchPlan>("botmode_launch", { ...t }),
-  /** The latest session state, or null before the first session. */
-  session: () => invoke<SessionState | null>("botmode_session"),
+  launch: (t: Target = {}) => invoke<SessionView>("botmode_launch", { ...t }),
+  session: (t: Target = {}) => invoke<SessionView>("botmode_session", { ...t }),
   setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
   /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
   setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),
