@@ -27,7 +27,7 @@ export function percentilePhrase(pct: number, kind: PercentileKind): string {
 export const percentileTone = (pct: number | null, kind: PercentileKind) =>
   kind === "performance" && pct !== null ? (pct >= 70 ? "good" : pct < 30 ? "poor" : undefined) : undefined;
 
-export function Percentile({ label, value, unit, pct, kind, population, sample, unavailable, coverage, approx, def, variant = "stack" }: {
+export function Percentile({ label, value, unit, pct, kind, population, sample, unavailable, coverage, reason, approx, def, variant = "stack" }: {
   label: ReactNode;
   /** formatted value; null shows a dash */
   value: string | null;
@@ -42,6 +42,8 @@ export function Percentile({ label, value, unit, pct, kind, population, sample, 
   unavailable?: string;
   /** partial inputs: what the value rests on (e.g. "weapon known for 3 of 7 deaths"); the engine gives no percentile then */
   coverage?: string;
+  /** why the engine withheld the percentile (compare.ts Percentile.reason, a full sentence); the value stays, the reason stands where the rank would */
+  reason?: string | null;
   /** the metric's status is "approx" */
   approx?: boolean;
   /** the metric's definition, shown on hover */
@@ -49,13 +51,15 @@ export function Percentile({ label, value, unit, pct, kind, population, sample, 
   variant?: "stack" | "row";
 }) {
   const na = unavailable !== undefined;
-  const phrase = na ? unavailable : coverage !== undefined ? `${coverage.charAt(0).toUpperCase()}${coverage.slice(1)}; not compared with ${population}` : pct === null ? `Not ranked: too few ${population} to compare with`
+  const unranked = na || coverage !== undefined || !!reason;
+  const phrase = na ? unavailable : coverage !== undefined ? `${coverage.charAt(0).toUpperCase()}${coverage.slice(1)}; not compared with ${population}` : reason ? reason
+    : pct === null ? `Not ranked: too few ${population} to compare with`
     : [percentilePhrase(pct, kind), kind === "performance" ? ` of ${population}` : ` against ${population}`, sample ? ` · ${sample}` : ""];
   return (
-    <div className={`pctl pctl--${variant}`} data-tone={percentileTone(na || coverage !== undefined ? null : pct, kind)} data-na={na || undefined}>
+    <div className={`pctl pctl--${variant}`} data-tone={percentileTone(unranked ? null : pct, kind)} data-na={na || undefined}>
       <span className="pctl__label" data-tip={def}>{label}{approx ? <ApproxMark /> : null}</span>
       <span className="pctl__val num">{na || value === null ? "–" : value}{!na && value !== null && unit ? <small>{unit}</small> : null}</span>
-      <span className="pctl__bar" aria-hidden>{!na && coverage === undefined && pct !== null ? <i style={{ left: `${Math.max(0, Math.min(100, pct))}%` }} /> : null}</span>
+      <span className="pctl__bar" aria-hidden>{!unranked && pct !== null ? <i style={{ left: `${Math.max(0, Math.min(100, pct))}%` }} /> : null}</span>
       <span className="pctl__phrase">{Array.isArray(phrase) ? <><b>{phrase[0]}</b>{phrase.slice(1)}</> : phrase}</span>
     </div>
   );

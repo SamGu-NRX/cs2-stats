@@ -1,7 +1,7 @@
 // Hand-drawn SVG charts. Every chart labels its extremes, marks your average and, where one exists,
 // a reference line (rating 1.00, a benchmark). Charts never replay an entrance on tab switch,
 // filter or refresh.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ratingScore, scoreFill, scoreText } from "../lib/scale";
 
 // ---------------------------------------------------------------- shared
@@ -96,6 +96,8 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
   const avg = avgValue ?? vals.reduce((a, v) => a + v, 0) / vals.length;
   const best = lowerIsBetter ? Math.min(...vals) : Math.max(...vals);
   const worst = lowerIsBetter ? Math.max(...vals) : Math.min(...vals);
+  // the worst point is red only when it is worse than the benchmark: a worst of 1.02 against 1.00 is not poor
+  const worstPoor = bench === undefined || (lowerIsBetter ? worst > bench : worst < bench);
   const path = points.map((p, i) => (p.value === null ? null : `${X(i)},${Y(p.value)}`)).filter(Boolean).join(" ");
   return (
     <div ref={ref} className="chart">
@@ -113,10 +115,11 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
           if (p.value === null) return null;
           const ext = p.value === best || p.value === worst;
           const good = p.value === best;
+          const tone = good ? "var(--good-text)" : worstPoor ? "var(--poor-text)" : "var(--ink)";
           return (
             <g key={p.key}>
-              <circle cx={X(i)} cy={Y(p.value)} r={ext ? 3.5 : 2.5} fill={ext ? (good ? "var(--good-text)" : "var(--poor-text)") : color} stroke="var(--bg1)" strokeWidth="1.5" />
-              {ext && vals.length > 1 && <text x={X(i)} y={Y(p.value) + (good !== !!lowerIsBetter ? -8 : 14)} textAnchor="middle" className="ax ax--strong" style={{ fill: good ? "var(--good-text)" : "var(--poor-text)" }}>{fmt(p.value)}</text>}
+              <circle cx={X(i)} cy={Y(p.value)} r={ext ? 3.5 : 2.5} fill={ext ? tone : color} stroke="var(--bg1)" strokeWidth="1.5" />
+              {ext && vals.length > 1 && <text x={X(i)} y={Y(p.value) + (good !== !!lowerIsBetter ? -8 : 14)} textAnchor="middle" className="ax ax--strong" style={{ fill: tone }}>{fmt(p.value)}</text>}
             </g>
           );
         })}
@@ -152,59 +155,6 @@ export function DivergingBars({ rows, cap }: { rows: DivRow[]; cap: number }) {
         );
       })}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- attribute radar
-
-/**
- * Seven-axis radar: you (cream, filled) and a comparison (dashed). When the comparison changes, its
- * polygon lerps from where it is now (320 ms, ease-in-out); with reduced motion it jumps.
- */
-export function AttrRadar({ labels, you, other, otherLabel, size = 260 }: { labels: string[]; you: (number | null)[]; other: (number | null)[] | null; otherLabel?: string; size?: number }) {
-  const n = labels.length;
-  const c = size / 2;
-  const R = c - 62;
-  const pt = (i: number, v: number) => {
-    const a = (Math.PI * 2 * i) / n - Math.PI / 2;
-    return [c + Math.cos(a) * R * (v / 100), c + Math.sin(a) * R * (v / 100)] as const;
-  };
-  const target = (other ?? []).map((v) => v ?? 0);
-  const [shown, setShown] = useState<number[]>(target);
-  const cur = useRef<number[]>(target);
-  useEffect(() => {
-    if (!other) return;
-    const from = cur.current.length === target.length ? [...cur.current] : target.map(() => 0);
-    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) { cur.current = target; setShown(target); return; }
-    const t0 = performance.now();
-    const D = 320;
-    const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-    let raf = 0;
-    const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / D);
-      const e = ease(t);
-      const next = target.map((v, i) => from[i] + (v - from[i]) * e);
-      cur.current = next;
-      setShown(next);
-      if (t < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [other?.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
-  const poly = (vals: number[]) => vals.map((v, i) => pt(i, v).join(",")).join(" ");
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Attribute shape: ${labels.map((l, i) => `${l} you ${you[i] === null ? "none" : Math.round(you[i]!)}${other ? `, ${otherLabel} ${other[i] ?? "none"}` : ""}`).join("; ")}`} className="radar">
-      {[25, 50, 75, 100].map((r) => <polygon key={r} points={poly(labels.map(() => r))} fill="none" stroke="var(--line)" />)}
-      {labels.map((_, i) => { const [x, y] = pt(i, 100); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="var(--line)" />; })}
-      {other && <polygon points={poly(shown)} fill="rgba(163,167,164,.08)" stroke="var(--ink2)" strokeDasharray="4 3" strokeWidth="1.5" />}
-      <polygon points={poly(you.map((v) => v ?? 0))} fill="rgba(255,215,173,.14)" stroke="var(--cream)" strokeWidth="1.75" strokeLinejoin="round" />
-      {you.map((v, i) => { const [x, y] = pt(i, v ?? 0); return <circle key={i} cx={x} cy={y} r="2.5" fill="var(--cream)" />; })}
-      {labels.map((l, i) => {
-        const [x, y] = pt(i, 116);
-        return <text key={l} x={x} y={y + 4} textAnchor={Math.abs(x - c) < 4 ? "middle" : x > c ? "start" : "end"} className="ax ax--label">{l}</text>;
-      })}
-    </svg>
   );
 }
 
@@ -373,59 +323,3 @@ export function SprayPattern({ path, pro, size = 320, bands = true }: { path: Sp
 // ---------------------------------------------------------------- body hit map
 
 export type BodyShare = { head: number; neck: number; chest: number; stomach: number; leftArm: number; rightArm: number; leftLeg: number; rightLeg: number };
-
-// ---------------------------------------------------------------- HLTV gauge
-
-let gaugeWoke = false;
-
-/**
- * The card's gauge: a 240° arc filled to rating / 2, green when good, grey when average, red when
- * poor. On the first view of the session the arc draws and the number counts up (600 ms); after
- * that it is static, and a side switch only recolours it.
- */
-export function Gauge({ value, verdict, label, size = 176 }: { value: number | null; verdict: "good" | "avg" | "poor" | "na"; label: ReactNode; size?: number }) {
-  const sweep = 240;
-  const r = size / 2 - 10;
-  const c = size / 2;
-  const len = (Math.PI * 2 * r * sweep) / 360;
-  const frac = value === null ? 0 : Math.max(0, Math.min(1, value / 2));
-  const [wake] = useState(() => !gaugeWoke && value !== null && !matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const [shown, setShown] = useState(wake ? 0 : value ?? 0);
-  useEffect(() => {
-    if (value === null) return;
-    if (!wake) { setShown(value); return; }
-    gaugeWoke = true;
-    const t0 = performance.now();
-    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
-    let raf = 0;
-    const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / 600);
-      setShown(value * ease(t));
-      if (t < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
-  const start = 90 + (360 - sweep) / 2;
-  const arc = (deg: number) => {
-    const a = (Math.PI / 180) * deg;
-    return [c + r * Math.cos(a), c + r * Math.sin(a)];
-  };
-  const [sx, sy] = arc(start);
-  const [ex, ey] = arc(start + sweep);
-  const d = `M${sx} ${sy} A${r} ${r} 0 1 1 ${ex} ${ey}`;
-  const stroke = verdict === "good" ? "var(--good)" : verdict === "poor" ? "var(--poor)" : "var(--avg)";
-  return (
-    <div className="gauge" style={{ width: size, height: size * 0.8 }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
-        <path d={d} fill="none" stroke="var(--track)" strokeWidth="7" strokeLinecap="round" />
-        <path d={d} fill="none" stroke={stroke} strokeWidth="7" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - frac)} className={wake ? "gauge__arc gauge__arc--wake" : "gauge__arc"} style={{ transition: "stroke var(--d-color) ease" }} />
-      </svg>
-      <div className="gauge__in">
-        <span className="verdict" data-v={verdict}>{verdict === "na" ? "" : verdict === "avg" ? "Average" : verdict === "good" ? "Good" : "Poor"}</span>
-        <b className="gauge__v num">{value === null ? "–" : shown.toFixed(2)}</b>
-        <span className="gauge__l">{label}</span>
-      </div>
-    </div>
-  );
-}
