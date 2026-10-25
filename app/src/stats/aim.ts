@@ -317,13 +317,20 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
   const t0 = tick(o);
   const place = angle(o);
 
+  // Timings run within the visible stretch that starts at the onset: v is the first tick after it
+  // (r.length when the enemy stays visible to the window's end). Damage, a shot or a flick after the
+  // enemy left sight measures a later sighting, not this one.
+  let v = o;
+  while (v < r.length && seen(c, r[v])) v++;
+  const visibleUntil = v < r.length ? tick(v) : Infinity;
+
   const fd = E.first_damage_tick[e];
-  const ttd = fd !== null && fd >= t0 ? (fd - t0) / rate : null;
+  const ttd = fd !== null && fd >= t0 && fd < visibleUntil ? (fd - t0) / rate : null;
 
   let firing = false;
   for (let k = o - 1; k >= 0 && t0 - tick(k) <= RESET_GAP_S * rate; k--) if (T.a_shot_fired[r[k]]) firing = true;
   let shotK = -1;
-  for (let k = o; k < r.length && shotK < 0; k++) if (T.a_shot_fired[r[k]]) shotK = k;
+  for (let k = o; k < v && shotK < 0; k++) if (T.a_shot_fired[r[k]]) shotK = k;
   const shotRow = shotK < 0 ? undefined : view.shotAt.get(key(tick(shotK), pi));
   const shotWeapon = shotRow === undefined ? null : c.t.shots!.weapon[shotRow];
   const weapon = shotWeapon !== null && isGun(shotWeapon) ? shotWeapon : null;
@@ -332,7 +339,7 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
   const n0 = Math.hypot(e0[0], e0[1]);
   if (place > ON_HEAD_DEG) {
     let a = -1;
-    for (let k = o + 1; k < r.length && tick(k) - t0 <= ACQUIRE_WINDOW_S * rate && a < 0; k++) {
+    for (let k = o + 1; k < v && tick(k) - t0 <= ACQUIRE_WINDOW_S * rate && a < 0; k++) {
       const d = err(k);
       if (Math.hypot(d[0], d[1]) <= ACQUIRE_FRAC * n0) a = k;
     }
@@ -498,9 +505,12 @@ function spray(c: Ctx, view: View | null, ri: number, pi: number, run: number[],
   const S = c.t.shots!;
   const weapon = S.weapon[run[0]];
   const ref = RECOIL[weapon].path;
-  // The reference part: the run's prefix whose every shot passes the asset's filters.
+  // The reference part: the run's prefix whose every shot passes the asset's filters and was fired with
+  // an enemy on screen in one of the shooter's engagements (mesh-visible, not behind a smoke), so the
+  // path is a spray at someone, comparable with the pros'.
+  const atVisible = (i: number) => !!view?.visible && (view.atTick.get(key(S.tick[i], pi)) ?? []).some((row) => seen(c, row));
   let n = 0;
-  while (n < run.length && refEligible(c, run[n])) n++;
+  while (n < run.length && refEligible(c, run[n]) && atVisible(run[n])) n++;
   const dp: number[] = [], dy: number[] = [];
   if (n >= SPRAY_MIN) {
     let yaw = 0;

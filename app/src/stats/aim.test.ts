@@ -34,7 +34,8 @@ function velAt(tick: number): [number, number] {
   return [0, 0];
 }
 
-function match(): MatchTables {
+/** hideAt: V leaves sight from this tick; sprayVisible: whether V is on screen during the round-2 spray. */
+function match({ hideAt, sprayVisible = true }: { hideAt?: number; sprayVisible?: boolean } = {}): MatchTables {
   const t = {
     match: emptyTable("match"), players: emptyTable("players"), rounds: emptyTable("rounds"), player_rounds: emptyTable("player_rounds"),
     kills: emptyTable("kills"), damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
@@ -60,7 +61,19 @@ function match(): MatchTables {
     add(t.engagement_ticks, "engagement_ticks", {
       engagement_id: 0, tick, a_x: 0, a_y: 0, a_z: 0, a_eye_z: 64, a_pitch: 0, a_yaw: yawAt(tick), a_vel_x: vx, a_vel_y: vy, a_duck: 0,
       a_shot_fired: shotTicks.includes(tick), v_x: 1000, v_y: 0, v_z: 0, v_eye_z: 64, v_pitch: 0, v_yaw: 180, v_vel_x: 0, v_vel_y: 0, v_duck: 0,
-      mesh_visible: tick >= ENG.onset, smoke_blocked: false,
+      mesh_visible: tick >= ENG.onset && (hideAt === undefined || tick < hideAt), smoke_blocked: false,
+    });
+  }
+  // Round 2: V in front of A for the whole spray (or hidden, with sprayVisible false).
+  add(t.engagements, "engagements", {
+    engagement_id: 1, round: 2, attacker_steamid: "1", victim_steamid: "2", start_tick: 1090, end_tick: 1140,
+    first_visible_tick: sprayVisible ? 1090 : null, first_shot_tick: 1100, first_damage_tick: null, hits: 0, damage: 0, outcome: "sight-only", truncated: false,
+  });
+  for (let tick = 1090; tick <= 1140; tick++) {
+    add(t.engagement_ticks, "engagement_ticks", {
+      engagement_id: 1, tick, a_x: 0, a_y: 0, a_z: 0, a_eye_z: 64, a_pitch: 0, a_yaw: 180, a_vel_x: 0, a_vel_y: 0, a_duck: 0,
+      a_shot_fired: false, v_x: -1000, v_y: 0, v_z: 0, v_eye_z: 64, v_pitch: 0, v_yaw: 0, v_vel_x: 0, v_vel_y: 0, v_duck: 0,
+      mesh_visible: sprayVisible, smoke_blocked: false,
     });
   }
   // Counter-strafe shots: [tick, velocity at the shot]. 73.1 u/s is 34% of the AK's 215.
@@ -123,5 +136,18 @@ describe("deriveAim on a hand-built match", () => {
     expect(s[0].bullets).toBe(4);
     expect(s[0].dp).toEqual([0.5, 1.5, 3]);
     expect(s[0].dy.map((x) => +x.toFixed(9))).toEqual([1.5, 2, 2.5]);
+  });
+
+  it("compares a spray with the pros' only while an enemy is on screen", () => {
+    // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
+    const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s.map((f) => [f.bullets, f.dp.length])).toEqual([[4, 0]]);
+  });
+
+  it("times a sighting only within the stretch the enemy stays visible", () => {
+    // fails if damage or a shot after the enemy left sight is timed from this onset
+    const f = derive(match({ hideAt: 140 }), CS2RB).aim.find((x): x is SightFact => x.k === "sight")!;
+    expect([f.ttd, f.shot]).toEqual([null, null]);
+    expect(f.react).toBe((131 - 120) / RATE);
   });
 });
