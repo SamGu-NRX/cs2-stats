@@ -1,10 +1,15 @@
 """Resolve extractor demo folders and their legacy table aliases."""
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+from typing import TypeVar
+
+
+T = TypeVar("T")
 
 
 _CURRENT_NAME = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}\Z")
@@ -94,6 +99,46 @@ def demo_layout(root: Path, demo: str | Path) -> DemoLayout:
         f"demo folder is neither schema v1 (match.parquet + player_rounds.parquet) "
         f"nor legacy (meta.parquet + economy.parquet): {directory}"
     )
+
+
+def _current_target(root: Path, demo: str | Path) -> str | None:
+    current = _map_directory(root, demo) / "CURRENT"
+    try:
+        if not current.is_file():
+            return None
+        return current.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+
+
+def load_demo_tables(
+    root: Path,
+    demo: str | Path,
+    names: Iterable[str],
+    read_table: Callable[[Path], T],
+) -> tuple[DemoLayout, dict[str, T]]:
+    """Load every table from one layout, retrying once after a CURRENT republish.
+
+    A publish can retire the resolved version while a consumer is opening its
+    next table. The failed attempt is discarded so callers never combine tables
+    from two versions of one map.
+    """
+    table_names = tuple(names)
+    for attempt in range(2):
+        try:
+            layout = demo_layout(root, demo)
+            target = _current_target(root, demo)
+            tables = {name: read_table(layout.table(name)) for name in table_names}
+        except FileNotFoundError:
+            if attempt == 1:
+                raise
+            continue
+        if _current_target(root, demo) != target:
+            if attempt == 1:
+                raise FileNotFoundError(f"demo was republished while loading: {demo}")
+            continue
+        return layout, tables
+    raise AssertionError("load_demo_tables exhausted without returning or raising")
 
 
 def iter_demo_roots(root: Path):

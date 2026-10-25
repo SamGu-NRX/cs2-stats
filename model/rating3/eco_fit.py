@@ -13,7 +13,7 @@ from scipy.optimize import least_squares
 import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_paths import demo_layout
+from demo_paths import load_demo_tables
 
 
 GROUPS = ("sniper", "rifle1", "rifle2", "smg", "pistolPlus", "pistol")
@@ -59,13 +59,18 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None):
     duels = []
     provenance = provenance if provenance is not None else empty_provenance()
     for join in joins:
-        layout = demo_layout(root, join["demo"])
         try:
+            layout, tables = load_demo_tables(
+                root,
+                join["demo"],
+                ("match", "player_rounds", "kills", "damages"),
+                pq.read_table,
+            )
             hltv = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
-            metadata = pq.read_table(layout.table("match")).to_pylist()[0]
-            economy = pq.read_table(layout.table("player_rounds")).to_pylist()
-            kills = pq.read_table(layout.table("kills")).to_pylist()
-            damages = pq.read_table(layout.table("damages")).to_pylist()
+            metadata = tables["match"].to_pylist()[0]
+            economy = tables["player_rounds"].to_pylist()
+            kills = tables["kills"].to_pylist()
+            damages = tables["damages"].to_pylist()
         except FileNotFoundError as error:
             provenance["skipped_joins"] += 1
             provenance["skipped"].append({"demo": join["demo"], "reason": str(error)})
