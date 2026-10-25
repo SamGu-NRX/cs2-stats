@@ -1,0 +1,7 @@
+# CS2RB archive, extracted state tables and reference downloads (about 3 GB; see README "Retraining")
+data/
+# Training outputs other than the export (large prediction dumps, fitted boosters)
+runs/
+.venv/
+node_modules/
+__pycache__/
