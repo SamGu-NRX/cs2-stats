@@ -52,7 +52,9 @@ export interface MetricMeta {
 export interface Meta {
   metrics: MetricMeta[];
   attributes: { id: string; label: string; kind: Kind; metrics: string[] }[];
-  rating: { label: string; diagnostic: boolean; status: string };
+  rating: { label: string; status: string };
+  /** the round win-probability source facts are derived with (model-params.ts), for Settings */
+  winProb: { kind: "hltv" | "cs2rb"; label: string };
   /** the six style attributes "plays like" compares (identity.ts STYLE) */
   style: string[];
   deriveVersion: number;
@@ -147,7 +149,8 @@ export interface PositionsResult {
 }
 
 export interface Api {
-  meta(): Meta;
+  /** Starts the engine: `winprobPack` is the bytes of packs/winprob-hltv.json, null when it is not installed. */
+  meta(winprobPack: ArrayBuffer | null): Meta;
   baselines(): BaselineInfo;
   sync(entries: FileEntry[]): { matches: MatchEntry[]; errors: { file: string; message: string }[] };
   match(file: string): MatchBundle;

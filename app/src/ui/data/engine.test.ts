@@ -2,6 +2,7 @@
 // kill and death the scoreboard counts, a side's line covers that side's rounds, the running score
 // ends at the match score, a thinly covered match shows no rating on any side, and each bundled file
 // is labelled with its source.
+import { CS2RB } from "../../stats/model-params";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,7 +19,7 @@ const FILES = readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"));
 
 async function load(file: string): Promise<MatchModel> {
   const m = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
-  const facts = derive(pluginToTables(m));
+  const facts = derive(pluginToTables(m), CS2RB);
   const entry = entryOf(`samples/${file}`, m.env.plugin ?? "", facts);
   return matchModel(entry, matchBundle(entry, facts));
 }

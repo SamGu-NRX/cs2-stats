@@ -7,7 +7,7 @@ import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
-import { rating3Note, ratingDiagnostic, ratingHeadline } from "../data/engine";
+import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
 import { useData } from "../data/provider";
 import { sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
@@ -86,9 +86,9 @@ export default function Settings() {
           <Card title="Models and versions">
             <dl className="facts facts--wide">
               <dt>Round win probability</dt>
-              <dd className="meta">The lookup in model/rating3/params.json, which also drives round swing.</dd>
+              <dd className="meta">{winProbText()}</dd>
               <dt>Rating</dt>
-              <dd><span>{ratingHeadline()}</span>{ratingDiagnostic() && <span className="chip chip--outline" data-tip={rating3Note()}>Diagnostic</span>}</dd>
+              <dd><span data-tip={rating3Note()}>{ratingHeadline()}</span></dd>
               <dt>Pro baselines</dt>
               <dd className="meta">{baselines ? `${baselines.source}. Built ${baselines.built}.` : baselinesError ?? "Loading"}</dd>
               <dt>Visibility timings</dt>

@@ -1,16 +1,18 @@
 // Compares the engine's Rating 3.0 inputs and rating with HLTV's on every joined pro map: eKPR, eDPR,
-// eADR, eKAST, swing and the rating. Prints MAE and Pearson r per column. Usage: pnpm rating-check
+// eADR, eKAST, swing and the rating. Prints MAE and Pearson r per column, and the win-probability source
+// swing used (node-read.ts WINPROB; CS2_WINPROB_PACK=none forces CS2RB). Usage: pnpm rating-check
 import { derive } from "../src/stats/derive";
 import { r3Inputs, rating3, rating3BySide } from "../src/stats/rating3";
 import { pearson } from "../src/stats/trends";
 import { rollup } from "../src/stats/rollup";
 import { hltvMaps, joinHltv } from "./hltv";
-import { loadDir, proMapDirs } from "./node-read";
+import { loadDir, proMapDirs, WINPROB } from "./node-read";
 
 const cols = { eKPR: [[], []], eDPR: [[], []], eADR: [[], []], eKAST: [[], []], swing: [[], []], rating: [[], []], "rating CT": [[], []], "rating T": [[], []] } as Record<string, [number[], number[]]>;
 let maps = 0;
+console.log(`win probability: ${WINPROB.label}`);
 for (const dir of proMapDirs()) {
-  const f = derive(await loadDir(dir));
+  const f = derive(await loadDir(dir), WINPROB);
   const j = joinHltv(f, hltvMaps());
   if (!j) continue;
   maps++;

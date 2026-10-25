@@ -16,6 +16,7 @@ import { markOpening, markTrades } from "./rules";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
 import { swing } from "./swing";
+import type { WinProbSource } from "./model-params";
 import type { MatchTables, Side } from "./tables";
 import { grenadeFacts, utility } from "./utility";
 import { derivePresence } from "./positions";
@@ -47,6 +48,8 @@ export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
 /** Indexes shared by the families. */
 export interface Ctx {
   t: MatchTables;
+  /** the round win-probability source (model-params.ts) */
+  wp: WinProbSource;
   tickRate: number;
   nRounds: number;
   map: string;
@@ -70,7 +73,7 @@ export interface Ctx {
   riOf: (round: number) => number | undefined;
 }
 
-export function buildCtx(t: MatchTables): Ctx {
+export function buildCtx(t: MatchTables, wp: WinProbSource): Ctx {
   const tickRate = t.match.tick_rate[0];
   const nRounds = t.rounds.n;
   // Rounds are addressed by row. Demos cover every round, but a source may cover only some (the
@@ -155,7 +158,7 @@ export function buildCtx(t: MatchTables): Ctx {
   const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
 
   return {
-    t, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf, riOf,
+    t, wp, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf, riOf,
   };
 }
 
@@ -272,8 +275,13 @@ function ticksSpan(c: Ctx): number | null {
 
 const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));
 
-export function derive(t: MatchTables): MatchFacts {
-  const c = buildCtx(t);
+/**
+ * One match's facts. `wp` is the round win-probability source (model-params.ts winProbSource: HLTV's
+ * lookup when its pack is installed, else CS2RB); swing and the win-probability path depend on it, so
+ * cache facts by it too.
+ */
+export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
+  const c = buildCtx(t, wp);
   const { date, maxRounds, pov, roundsPlayed, startedAt, durationS } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
@@ -296,7 +304,7 @@ export function derive(t: MatchTables): MatchFacts {
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
-      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c),
+      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind,
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

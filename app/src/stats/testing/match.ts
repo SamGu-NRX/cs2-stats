@@ -2,6 +2,7 @@
 // from tick 0, freezes until FREEZE_END and ends at ROUND_END, at 64 ticks per second. Team A is
 // CT and team B is T. Columns a test does not give are null.
 import { derive } from "../derive";
+import { CS2RB } from "../model-params";
 import type { MatchFacts } from "../facts";
 import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "../tables";
 import { pushRow } from "./tables";
@@ -39,7 +40,7 @@ export interface OneRound {
   round?: number;
 }
 
-export const oneRound = (m: OneRound): MatchFacts => derive(oneRoundTables(m));
+export const oneRound = (m: OneRound): MatchFacts => derive(oneRoundTables(m), CS2RB);
 
 export function oneRoundTables(m: OneRound): MatchTables {
   const ids = Object.keys(m.players);

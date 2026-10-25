@@ -9,7 +9,7 @@ import type { MatchFacts } from "../src/stats/facts";
 import { FEATURES, packerFeatures, roleBlend } from "../src/stats/identity";
 import { pearson } from "../src/stats/trends";
 import { rollup } from "../src/stats/rollup";
-import { loadDir, proMapDirs } from "./node-read";
+import { loadDir, proMapDirs, WINPROB } from "./node-read";
 
 const csv = process.argv[2];
 if (!csv) throw new Error("usage: pnpm identity-check <cs2_playstyle_roles_2024.csv>");
@@ -19,7 +19,7 @@ const packer = new Map(lines.map((l) => { const r = Object.fromEntries(l.split("
 const COL = { tapd: "tapd", oap: "oap", podt: "podt", pokt: "pokt", adnt: "adnt_rank", adat: "adat_rank" } as const;
 
 const facts: MatchFacts[] = [];
-for (const d of proMapDirs()) facts.push(derive(await loadDir(d)));
+for (const d of proMapDirs()) facts.push(derive(await loadDir(d), WINPROB));
 const ids = new Set(facts.flatMap((f) => f.players.map((p) => p.id)).filter((id) => packer.has(id)));
 
 const MIN_ROUNDS = 20;

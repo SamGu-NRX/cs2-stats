@@ -10,7 +10,7 @@ import type { Side } from "../../stats/tables";
 import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs } from "../lib/format";
 import type { MatchEntry } from "./match";
-import { metric, ratingInfo } from "./meta";
+import { metric, ratingInfo, winProbInfo } from "./meta";
 import type { AttributeId } from "./proPack";
 
 // ---------------------------------------------------------------- rating
@@ -18,12 +18,16 @@ import type { AttributeId } from "./proPack";
 export const RATING_LABEL = "Rating 3.0";
 /** The engine's own label for the rating, "Rating 3.0 (approx.)". */
 export const ratingHeadline = () => ratingInfo().label;
-export const ratingDiagnostic = () => ratingInfo().diagnostic;
+/** Where round win probability (and so swing) comes from, as Settings states it. */
+export const winProbText = () => {
+  const w = winProbInfo();
+  return w.kind === "hltv"
+    ? `${w.label}, from packs/winprob-hltv.json; it drives round swing.`
+    : `${w.label}. Install packs/winprob-hltv.json for HLTV's lookup; it drives round swing.`;
+};
 export const rating3Note = () => {
   const r = ratingInfo();
-  return r.diagnostic
-    ? `Rating 3.0 (approx.) uses the diagnostic formula in params.json, not the accepted Rating 3.02: ${r.status}`
-    : "Rating 3.0 (approx.): HLTV Rating 3.02 as reconstructed in model/rating3.";
+  return `Rating 3.0 (approx.): HLTV Rating 3.02 as reconstructed in model/rating3 (${r.status}).`;
 };
 export const RATING_POOLED = "Pooled over rounds: the six inputs are summed over every round before the formula runs once, as HLTV does for careers.";
 

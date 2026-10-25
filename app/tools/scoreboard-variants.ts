@@ -4,7 +4,7 @@
 import { derive, hitDamage } from "../src/stats/derive";
 import type { KillFact } from "../src/stats/facts";
 import { hltvMaps, joinHltv } from "./hltv";
-import { loadDir, proMapDirs } from "./node-read";
+import { loadDir, proMapDirs, WINPROB } from "./node-read";
 
 const score: Record<string, number> = {};
 let n = 0;
@@ -23,7 +23,7 @@ function traded(list: KillFact[], tickRate: number, window: number, pairing: "al
 
 for (const dir of proMapDirs()) {
   const t = await loadDir(dir, []);
-  const f = derive(t);
+  const f = derive(t, WINPROB);
   const j = joinHltv(f, hltvMaps());
   if (!j) continue;
   const R = f.match.nRounds;

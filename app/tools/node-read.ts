@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { loadTables, type ReadFile } from "../src/stats/load";
+import { winProbSource } from "../src/stats/model-params";
 import type { MatchTables, TableName } from "../src/stats/tables";
 
 /** The private data folder; override with CS2_STATS_DATA. */
@@ -15,6 +16,14 @@ export function dirReader(dir: string): ReadFile {
     return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
   };
 }
+
+/**
+ * The round win-probability source the tools derive with: HLTV's lookup from the private pack
+ * (%APPDATA%\BotMatchStats\packs\winprob-hltv.json, or CS2_WINPROB_PACK) when present, else CS2RB.
+ * Results that depend on swing (Rating 3.0, swing, the baselines) name the source they used.
+ */
+const PACK = process.env.CS2_WINPROB_PACK ?? (process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs", "winprob-hltv.json") : "");
+export const WINPROB = winProbSource(PACK && existsSync(PACK) ? JSON.parse(readFileSync(PACK, "utf-8")) : null);
 
 export const loadDir = (dir: string, optional?: readonly TableName[]): Promise<MatchTables> => loadTables(dirReader(dir), optional);
 

@@ -38,6 +38,8 @@ export interface MatchInfo {
   startedAt: string | null;
   /** seconds from the first round's start to the last round's end (match.extra "duration_s" when the source knows it) */
   durationS: number | null;
+  /** the round win-probability source swing was valued with (model-params.ts) */
+  winProb: "hltv" | "cs2rb";
 }
 
 export interface PlayerInfo {

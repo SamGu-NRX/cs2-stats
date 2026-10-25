@@ -82,7 +82,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           (baselines) => alive && setState((s) => ({ ...s, baselines })),
           (e: Error) => alive && setState((s) => ({ ...s, baselinesError: e.message })),
         );
-        setMeta(await client.meta());
+        setMeta(await client.meta(await host.readPack("winprob-hltv.json")));
         if (!alive) return;
         setState((s) => ({ ...s, host, client, meta: true }));
         await sync();

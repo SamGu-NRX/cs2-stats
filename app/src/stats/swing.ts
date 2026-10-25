@@ -1,11 +1,12 @@
-// Round swing, HLTV's "Swing": each event's change in the round win probability (winprob.ts), credited
-// to players as model/rating3/SPEC.md "Swing credits" describes. Values are win-probability fractions
-// (0.05 = 5 points); HLTV shows a player's mean per round in percent.
+// Round swing, HLTV's "Swing": each event's change in the round win probability (winprob.ts, from the
+// source the match was derived with), credited to players as model/rating3/SPEC.md "Swing credits"
+// describes. Values are win-probability fractions (0.05 = 5 points); HLTV shows a player's mean per
+// round in percent.
 //
 // Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and flash assists get no
-// credit because params.json does not yet carry the flash share (SPEC.md rule 5 forbids inventing one).
+// credit because params.json does not fix the flash share (SPEC.md rule 5 forbids inventing one).
 // VALIDATION.md compares the result with HLTV's per-player swing.
-import { PARAMS as params } from "./rating3-params";
+import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact } from "./facts";
 import type { Side } from "./tables";
@@ -23,12 +24,36 @@ export function swing(c: Ctx): void {
     if (rf.winner === null) continue;
     const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
     rows.forEach((p) => { if (p) alive[p.side].add(p.pi); });
-    const state: RoundState = {
-      map: c.map, aliveT: alive.T.size, aliveCT: alive.CT.size, planted: false, buyT: rf.buy.T, buyCT: rf.buy.CT, lastKillSide: "none",
+    // health of the living, from the round's damage up to each event (CS2RB reads it)
+    const hp = new Map<number, number>();
+    rows.forEach((p) => { if (p) hp.set(p.pi, 100); });
+    const dmgRows = c.byRound("damages")[ri];
+    let nextDmg = 0;
+    const hpUntil = (tick: number) => {
+      const d = c.t.damages;
+      for (; nextDmg < dmgRows.length && d.tick[dmgRows[nextDmg]] <= tick; nextDmg++) {
+        const i = dmgRows[nextDmg];
+        const v = c.pi.get(d.victim_steamid[i])!;
+        if (hp.has(v)) hp.set(v, Math.max(0, d.health_after[i] ?? hp.get(v)! - d.dmg_health_capped[i]));
+      }
+      const sum = (s: Side) => [...alive[s]].reduce((t, p) => t + Math.min(100, hp.get(p) ?? 100), 0);
+      state.hpT = sum("T"); state.hpCT = sum("CT");
     };
-    let pT = pTWins(state);
+    const fe = rf.freezeEndTick;
+    const at = (tick: number) => {
+      hpUntil(tick);
+      state.secondsSinceFreezeEnd = fe === null ? null : Math.max(0, (tick - fe) / c.tickRate);
+      state.secondsSincePlant = state.planted && rf.plantTick !== null ? Math.max(0, (tick - rf.plantTick) / c.tickRate) : null;
+      return pTWins(c.wp, state);
+    };
+    const state: RoundState = {
+      map: c.map, aliveT: alive.T.size, aliveCT: alive.CT.size, hpT: 100 * alive.T.size, hpCT: 100 * alive.CT.size,
+      equipT: rf.equip.T, equipCT: rf.equip.CT, planted: false, secondsSincePlant: null, secondsSinceFreezeEnd: null,
+      buyT: rf.buy.T, buyCT: rf.buy.CT, lastKillSide: "none",
+    };
+    let pT = at(fe ?? 0);
     if (pT === null) continue;
-    const path: NonNullable<typeof rf.winProb> = [{ tick: rf.freezeEndTick ?? c.t.rounds.start_tick[ri] ?? 0, event: "start", pT }];
+    const path: NonNullable<typeof rf.winProb> = [{ tick: fe ?? c.t.rounds.start_tick[ri] ?? 0, event: "start", pT }];
     const credit = new Map<number, number>();
     const add = (p: number, v: number) => credit.set(p, (credit.get(p) ?? 0) + v);
     const killSwingPlayers = new Set<number>();
@@ -45,7 +70,7 @@ export function swing(c: Ctx): void {
     for (const e of events) {
       if (e.kind === "plant") {
         state.planted = true;
-        const p = pTWins(state);
+        const p = at(e.tick);
         if (p === null) { valued = false; break; }
         pT = p;
         path.push({ tick: e.tick, event: "plant", pT });
@@ -58,7 +83,7 @@ export function swing(c: Ctx): void {
       if (vs === "T") state.aliveT--; else state.aliveCT--;
       const gainer: Side = vs === "T" ? "CT" : "T";
       state.lastKillSide = gainer === "T" ? "t" : "ct";
-      const p = pTWins(state);
+      const p = at(k.tick);
       if (p === null) { valued = false; break; }
       const delta = pSide(p, gainer) - pSide(pT, gainer);
       pT = p;
@@ -66,7 +91,7 @@ export function swing(c: Ctx): void {
       const credits: [number, number][] = [[k.victim, -delta]];
       // positive credit: damage share of the gaining side's damage on the victim, else the killer
       const ledger = new Map<number, number>();
-      for (const i of c.byRound("damages")[ri]) {
+      for (const i of dmgRows) {
         if (c.t.damages.tick[i] > k.tick || c.t.damages.victim_steamid[i] !== c.players[k.victim].id || !enemyHit(c.t, i)) continue;
         const a = c.idOf(c.t.damages.attacker_steamid[i]);
         if (a === null || c.side[ri][a] !== gainer) continue;
