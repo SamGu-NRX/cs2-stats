@@ -1,5 +1,6 @@
-// The extractor's output layout: a map's live tables are in the versioned folder its CURRENT file names,
-// or in the map folder itself for output written before versioned folders.
+// The extractor's output layout (SCHEMA-v1.md "Finding a map's tables"): a map's live tables are in the
+// version folder its CURRENT file names, once that folder's COMPLETE file vouches for every table, or in
+// the map folder itself for output written before versioned folders.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,13 +16,17 @@ const map = (name: string, files: Record<string, string>) => {
   }
   return path.join(root, name);
 };
+const V1 = "v-1.6.0-0a1b2c3d", V2 = "v-1.6.0-99aa00ff";
 
-it("reads the folder CURRENT names, falls back to the flat folder, and refuses a pointer to nothing", () => {
-  // fails if a versioned map is skipped or read from a stale version, or a dangling pointer passes silently
-  const versioned = map("versioned", { "CURRENT": "v-1-bbb\n", "v-1-aaa/match.parquet": "", "v-1-bbb/match.parquet": "" });
-  expect(mapTablesDir(versioned)).toBe(path.join(versioned, "v-1-bbb"));
+it("reads the complete version CURRENT names, falls back to the flat folder, and skips what is not complete", () => {
+  // fails if a stale or half-written version is read, a retired map is read, or a bad pointer passes silently
+  const ok = map("versioned", { CURRENT: `${V2}\n`, [`${V1}/match.parquet`]: "old", [`${V2}/match.parquet`]: "new", [`${V2}/COMPLETE`]: JSON.stringify({ "match.parquet": 3 }) });
+  expect(mapTablesDir(ok)).toEqual({ dir: path.join(ok, V2) });
   const flat = map("flat", { "match.parquet": "" });
-  expect(mapTablesDir(flat)).toBe(flat);
+  expect(mapTablesDir(flat)).toEqual({ dir: flat });
   expect(mapTablesDir(map("empty", { "notes.txt": "" }))).toBeNull();
-  expect(() => mapTablesDir(map("dangling", { "CURRENT": "v-2-ccc" }))).toThrow(/v-2-ccc/);
+  expect(mapTablesDir(map("no-complete", { CURRENT: V1, [`${V1}/match.parquet`]: "x" }))).toHaveProperty("skipped");
+  expect(mapTablesDir(map("short", { CURRENT: V1, [`${V1}/match.parquet`]: "x", [`${V1}/COMPLETE`]: JSON.stringify({ "match.parquet": 9 }) }))).toHaveProperty("skipped");
+  expect(mapTablesDir(map("retired", { RETIRED: "", CURRENT: V2, [`${V2}/match.parquet`]: "new", [`${V2}/COMPLETE`]: JSON.stringify({ "match.parquet": 3 }) }))).toHaveProperty("skipped");
+  expect(() => mapTablesDir(map("bad", { CURRENT: "../elsewhere" }))).toThrow(/not a version folder/);
 });

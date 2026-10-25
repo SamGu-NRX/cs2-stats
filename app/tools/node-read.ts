@@ -1,5 +1,5 @@
 // Node helpers for the engine CLIs and tests: read one map's parquet folder, and find the pro maps.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadTables, type ReadFile } from "../src/stats/load";
 import { winProbSource } from "../src/stats/model-params";
@@ -27,53 +27,82 @@ export const WINPROB = winProbSource(PACK && existsSync(PACK) ? JSON.parse(readF
 
 export const loadDir = (dir: string, optional?: readonly TableName[]): Promise<MatchTables> => loadTables(dirReader(dir), optional);
 
+/** One map folder resolved: its tables folder, or why it has no complete map now. */
+export type MapTables = { dir: string } | { skipped: string };
+
+const VERSION_DIR = /^v-[0-9A-Za-z.+_]+-[0-9a-f]{8}$/;
+
 /**
- * The folder holding one map's tables. The extractor writes each map to a versioned folder
- * (<map>/v-<version>-<hash>/) and names the live one in <map>/CURRENT (SCHEMA-v1.md); older output is
- * the flat <map>/ folder. Null when the map has no tables yet. A CURRENT naming a folder without
- * tables throws, naming both.
+ * Where one map's tables are, by SCHEMA-v1.md "Finding a map's tables": a RETIRED map is skipped; a
+ * CURRENT pointer names a version folder (refused unless the name has the version-folder form), which
+ * counts only once its COMPLETE file lists every table at its size on disk; otherwise the flat folder
+ * written before versioned output (match.parquet, or meta.parquet before schema v1). Null when the
+ * folder holds no map at all.
  */
-export function mapTablesDir(mapDir: string): string | null {
+export function mapTablesDir(mapDir: string): MapTables | null {
+  if (existsSync(path.join(mapDir, "RETIRED"))) return { skipped: "retired, a re-extraction replaced it" };
   const pointer = path.join(mapDir, "CURRENT");
-  const has = (dir: string) => existsSync(path.join(dir, "match.parquet")) || existsSync(path.join(dir, "meta.parquet"));
   if (existsSync(pointer)) {
-    const live = path.join(mapDir, readFileSync(pointer, "utf-8").trim());
-    if (!has(live)) throw new Error(`${pointer} names ${live}, which holds no tables`);
-    return live;
+    const name = readFileSync(pointer, "utf-8").trim();
+    if (!VERSION_DIR.test(name)) throw new Error(`${pointer} names "${name}", which is not a version folder (v-<version>-<8 hex>)`);
+    const dir = path.join(mapDir, name);
+    const complete = path.join(dir, "COMPLETE");
+    if (!existsSync(complete)) return { skipped: `${name} has no COMPLETE file yet` };
+    const sizes = JSON.parse(readFileSync(complete, "utf-8")) as Record<string, number>;
+    for (const [file, bytes] of Object.entries(sizes)) {
+      const f = path.join(dir, file);
+      if (!existsSync(f) || statSync(f).size !== bytes) return { skipped: `${name}/${file} is not at its listed ${bytes} bytes` };
+    }
+    return { dir };
   }
-  return has(mapDir) ? mapDir : null;
+  return existsSync(path.join(mapDir, "match.parquet")) || existsSync(path.join(mapDir, "meta.parquet")) ? { dir: mapDir } : null;
 }
 
-/** Every extracted pro map's tables folder: demos/<archive>/<map>/, through mapTablesDir. */
-export function proMapDirs(root = path.join(DATA_DIR, "demos")): string[] {
+/** Every map folder under demos/<archive>/<map>/. */
+function mapFolders(root = path.join(DATA_DIR, "demos")): string[] {
   if (!existsSync(root)) return [];
   const out: string[] = [];
   for (const a of readdirSync(root, { withFileTypes: true })) {
     if (!a.isDirectory()) continue;
-    for (const m of readdirSync(path.join(root, a.name), { withFileTypes: true })) {
-      const dir = m.isDirectory() ? mapTablesDir(path.join(root, a.name, m.name)) : null;
-      if (dir) out.push(dir);
-    }
+    for (const m of readdirSync(path.join(root, a.name), { withFileTypes: true })) if (m.isDirectory()) out.push(path.join(root, a.name, m.name));
   }
   return out.sort();
 }
 
+const skip = (mapDir: string, why: string) => console.error(`SKIPPED ${mapLabel(mapDir)}: ${why}`);
+
+/** Every pro map's complete tables folder now; maps without one are skipped by name on stderr. */
+export function proMapDirs(): string[] {
+  const out: string[] = [];
+  for (const m of mapFolders()) {
+    const r = mapTablesDir(m);
+    if (r && "dir" in r) out.push(r.dir);
+    else if (r) skip(m, r.skipped);
+  }
+  return out;
+}
+
 /**
- * Every pro map's tables, one at a time. The extraction pipeline replaces folders while it runs (until
- * PR #16 makes the replacement atomic), so a map whose tables vanish between listing and reading is
- * skipped with a line on stderr naming it; any other load error throws.
+ * Every pro map's tables, one at a time. The extractor publishes a version by renaming CURRENT, so a
+ * file that vanishes while it is read means the map was just republished: it is resolved once more
+ * and read again, and skipped by name only when it then has no complete version. Any other load
+ * error throws.
  */
 export async function* proMaps(optional?: readonly TableName[]): AsyncGenerator<{ dir: string; t: MatchTables }> {
-  for (const dir of proMapDirs()) {
-    let t: MatchTables;
-    try {
-      t = await loadDir(dir, optional);
-    } catch (e) {
-      if (existsSync(path.join(dir, "match.parquet")) || existsSync(path.join(dir, "meta.parquet"))) throw e;
-      console.error(`SKIPPED ${mapLabel(dir)}: its tables were removed while reading (${(e as Error).message})`);
-      continue;
+  for (const m of mapFolders()) {
+    let r = mapTablesDir(m);
+    for (let attempt = 0; r; attempt++) {
+      if (!("dir" in r)) { skip(m, r.skipped); break; }
+      try {
+        yield { dir: r.dir, t: await loadDir(r.dir, optional) };
+        break;
+      } catch (e) {
+        const again = mapTablesDir(m);
+        const vanished = !existsSync(path.join(r.dir, "match.parquet")) && !existsSync(path.join(r.dir, "meta.parquet"));
+        if (attempt > 0 || !(vanished || (again && "dir" in again && again.dir !== r.dir))) throw e;
+        r = again;
+      }
     }
-    yield { dir, t };
   }
 }
 
