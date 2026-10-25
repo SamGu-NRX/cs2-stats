@@ -12,3 +12,5 @@ app/src-tauri/gen/
 __pycache__/
 # Training data downloaded from Zenodo (CC BY 4.0); see model/README.md
 model/data/
+# The importer writes the user's SteamID64 here (extractor/valve_import.py)
+valve-user.local.json
