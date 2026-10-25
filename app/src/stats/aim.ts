@@ -902,7 +902,7 @@ export const AIM_METRICS: Metric[] = [
     def: "Your median movement speed at your first shot after spotting an enemy.",
     value: (s) => median(s.aim.shotSpeed) },
   { id: "shotError", label: "First-shot error", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true, needs: ["sight"],
-    def: "Median angle from your crosshair to the enemy's eye at your first shot.",
+    def: "Median angle between your crosshair and the enemy's eye at first shot.",
     value: (s) => median(s.aim.shotErr) },
   { id: "stopBuffer", label: "Stop before shooting", kind: "identity", group: "aim", unit: "ms", status: "approx", needs: ["sight"],
     def: "Median time between stopping and your first shot at an enemy.",
