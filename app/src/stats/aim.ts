@@ -8,7 +8,7 @@
 //   view angles, recoil index or ammo; their sprays read the plugin's own per-shot aim data instead
 //   (PluginShots, from the shots columns plugin rows fill).
 // Radar `spotted` lags real visibility, so nothing here reads it (architecture.md).
-import { aimAngle, aimError, forward, lookAt, wrap180 } from "./aim-geometry";
+import { ACCURATE_FRAC, aimAngle, aimError, forward, lookAt, SIGHT_CONE_DEG, wrap180 } from "./aim-geometry";
 import { MAX_SPEED, RECOIL } from "./aim-ref";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
@@ -58,10 +58,9 @@ export const MICRO_WINDOW_S = 0.5;
  */
 export const TRACK_OFF_DEG = 10;
 export const TRACK_LOS_DPS = 10;
-/** A shot is fired at a visible enemy when one is mesh-visible within this half-angle of the view (the extractor's shot trigger, SCHEMA-v1.md). */
-export const SIGHT_CONE_DEG = 30;
-/** Moving accuracy is lost above 34% of the weapon's max speed (research-data-sources.md, NextFrag). */
-export const ACCURATE_FRAC = 0.34;
+// SIGHT_CONE_DEG and ACCURATE_FRAC live in aim-geometry.ts, which has no engine imports, so the aim
+// panels can state them without loading the engine on the UI thread.
+export { ACCURATE_FRAC, SIGHT_CONE_DEG };
 /** Counter-strafe errors look at the velocity this long before the shot. Ours, no fit. */
 export const CS_HISTORY_S = 0.25;
 /** A shot at no more than this fraction of the recent peak speed came during a stop ("too early"). Ours. */
@@ -127,6 +126,30 @@ export interface ShotFact {
   firstHits: number;
   /** rifle and sniper first bullets on the ground: [accurate, too early, late reversal, no stop, unknown] */
   cs: number[];
+  /**
+   * sight shots not fired on a tick where one of the shooter's kills went through a wall or object
+   * (kills.penetrated); a sight shot on a kill tick whose penetration is not recorded is set aside, in
+   * neither count. And their hits.
+   */
+  adj: number;
+  adjHits: number;
+  /** shots on a map with mesh visibility whose smoke state is known (throughSmoke), and those through a smoke */
+  smokeKnown: number;
+  smoke: number;
+}
+
+/** One player's enemy kills with one gun in one round, with the wallbang and smoke flags where the source records them. */
+export interface KillAimFact {
+  k: "kills";
+  ri: number;
+  pi: number;
+  weapon: string;
+  /** kills whose kills.penetrated is recorded, and those with it above 0 */
+  wbKnown: number;
+  wb: number;
+  /** kills whose kills.thrusmoke is recorded, and those through smoke */
+  smokeKnown: number;
+  smoke: number;
 }
 
 /**
@@ -159,9 +182,24 @@ export interface SprayFact {
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
   sw: number;
   swHits: number;
+  /** bullets 4 and later fired at a visible enemy (as ShotFact.sight counts them), and those that hit */
+  deep: number;
+  deepHits: number;
+  /**
+   * For the bullets of the path (index 0 is bullet 1, then the bullets dp covers): the direction to
+   * bullet 1's target's eye, relative to the view at bullet 1 (pitch, and yaw unwrapped as dy is), and
+   * the target's eye relative to the bullet's own direction (fire_bullets' angle). Null where the target
+   * was not on screen or the shot has no bullet angle; empty when no bullet has a value, and on relative
+   * sprays. Demos need the target in one of the shooter's engagements, mesh-visible and not behind a
+   * smoke; plugin 1.2.0 files take it from the shot's aim error.
+   */
+  hp: (number | null)[];
+  hy: (number | null)[];
+  tp: (number | null)[];
+  ty: (number | null)[];
 }
 
-export type AimFact = SightFact | ShotFact | SprayFact;
+export type AimFact = SightFact | ShotFact | SprayFact | KillAimFact;
 
 /**
  * The capture plugin's per-shot aim data, from the shots columns only plugin rows fill (tables.ts
@@ -215,13 +253,41 @@ export interface AimAgg {
   path: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for sprays whose path is relative to the target (plugin recordings): shown, not compared with pros */
   relPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** per weapon, indexed as path: sums of the squared view change, pitch and yaw, for the spread per bullet */
+  spread: Record<string, { pp: number[]; yy: number[] }>;
+  /** per weapon and bullet of path's sprays (index 0 is bullet 1): bullets with a value, and sums of SprayFact.hp and hy */
+  heads: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** the same for SprayFact.tp and ty: where the target's eye sat from each bullet's direction */
+  onTarget: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** ShotFact.adj, adjHits, smokeKnown and smoke summed */
+  adj: number;
+  adjHits: number;
+  smokeShotsKnown: number;
+  smokeShots: number;
+  /** KillAimFact sums: gun kills with penetration recorded and wallbangs, with thrusmoke recorded and through smoke */
+  killsWbKnown: number;
+  killsWb: number;
+  killsSmokeKnown: number;
+  killsSmoke: number;
+  /** SprayFact.deep and deepHits summed */
+  deep: number;
+  deepHits: number;
 }
 
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
-  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
+  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, spread: {}, heads: {}, onTarget: {},
+  adj: 0, adjHits: 0, smokeShotsKnown: 0, smokeShots: 0, killsWbKnown: 0, killsWb: 0, killsSmokeKnown: 0, killsSmoke: 0, deep: 0, deepHits: 0,
 });
+
+/** Adds per-bullet values (null skipped) into a { n, dp, dy } sum, index for index. */
+function addBullets(into: { n: number[]; dp: number[]; dy: number[] }, p: (number | null)[], y: (number | null)[]): void {
+  p.forEach((v, j) => {
+    if (v === null || y[j] === null) return;
+    into.n[j] = (into.n[j] ?? 0) + 1; into.dp[j] = (into.dp[j] ?? 0) + v; into.dy[j] = (into.dy[j] ?? 0) + y[j]!;
+  });
+}
 
 export function foldAim(a: AimAgg, f: AimFact): void {
   if (f.k === "sight") {
@@ -241,11 +307,16 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.shots += f.shots; a.hits += f.hits; a.sight += f.sight; a.sightHits += f.sightHits;
     a.first += f.first; a.firstHits += f.firstHits;
     for (let i = 0; i < 5; i++) a.cs[i] += f.cs[i];
+    a.adj += f.adj; a.adjHits += f.adjHits; a.smokeShotsKnown += f.smokeKnown; a.smokeShots += f.smoke;
+  } else if (f.k === "kills") {
+    a.killsWbKnown += f.wbKnown; a.killsWb += f.wb; a.killsSmokeKnown += f.smokeKnown; a.killsSmoke += f.smoke;
   } else {
     a.sprays++;
     if (f.sw > 0) a.swSprays++;
     a.switches += f.sw;
     a.switchHits += f.swHits;
+    a.deep += f.deep;
+    a.deepHits += f.deepHits;
     if (!f.dp.length) return;
     if (f.relative) {
       const r = (a.relPath[f.weapon] ??= { n: [], dp: [], dy: [] });
@@ -254,11 +325,15 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     }
     const ref = RECOIL[f.weapon].path;
     const w = (a.path[f.weapon] ??= { n: [], dp: [], dy: [] });
+    const sq = (a.spread[f.weapon] ??= { pp: [], yy: [] });
     f.dp.forEach((dp, j) => {
       const rp = dp - ref[j + 1][0], ry = f.dy[j] - ref[j + 1][1];
       a.cmp++; a.dev += Math.hypot(rp, ry); a.pull += rp;
       w.n[j] = (w.n[j] ?? 0) + 1; w.dp[j] = (w.dp[j] ?? 0) + dp; w.dy[j] = (w.dy[j] ?? 0) + f.dy[j];
+      sq.pp[j] = (sq.pp[j] ?? 0) + dp * dp; sq.yy[j] = (sq.yy[j] ?? 0) + f.dy[j] * f.dy[j];
     });
+    if (f.hp.length) addBullets((a.heads[f.weapon] ??= { n: [], dp: [], dy: [] }), f.hp, f.hy);
+    if (f.tp.length) addBullets((a.onTarget[f.weapon] ??= { n: [], dp: [], dy: [] }), f.tp, f.ty);
   }
 }
 
@@ -280,8 +355,30 @@ export function deriveAim(c: Ctx): AimFact[] {
     const f = sighting(c, view, e);
     if (f) out.push(f);
   }
-  if (c.t.shots) shotFacts(c, view, out);
+  if (c.t.shots) { shotFacts(c, view, out); killFacts(c, out); }
   return out;
+}
+
+/** Enemy gun kills (the kills guns.ts counts per weapon), per round, player and gun, with the source's wallbang and smoke flags. */
+function killFacts(c: Ctx, out: AimFact[]): void {
+  const K = c.t.kills;
+  const row = new Map<string, number>();
+  for (let i = 0; i < K.n; i++) row.set(`${K.tick[i]}:${c.idOf(K.attacker_steamid[i])}:${c.pi.get(K.victim_steamid[i])}`, i);
+  c.kills.forEach((ks, ri) => {
+    const per = new Map<string, KillAimFact>();
+    for (const k of ks) {
+      if (!k.enemy || k.killer === null || !isGun(k.weapon) || !c.pr[ri]?.[k.killer]) continue;
+      const i = row.get(`${k.tick}:${k.killer}:${k.victim}`);
+      if (i === undefined) continue;
+      const id = `${k.killer}:${k.weapon}`;
+      let f = per.get(id);
+      if (!f) per.set(id, (f = { k: "kills", ri, pi: k.killer, weapon: k.weapon, wbKnown: 0, wb: 0, smokeKnown: 0, smoke: 0 }));
+      const pen = K.penetrated[i], smoke = K.thrusmoke[i];
+      if (pen !== null) { f.wbKnown++; if (pen > 0) f.wb++; }
+      if (smoke !== null) { f.smokeKnown++; if (smoke) f.smoke++; }
+    }
+    for (const f of per.values()) out.push(f);
+  });
 }
 
 interface View {
@@ -300,8 +397,11 @@ interface View {
 }
 
 const key = (tick: number, pi: number) => tick * 256 + pi;
-/** Angles in facts keep 0.001 degrees: aim facts shrink from about 115 to 97 KB per map, and nothing reads finer. */
-const r3 = (x: number) => Math.round(x * 1000) / 1000;
+/**
+ * Angles in facts keep 0.001 degrees: aim facts shrink from about 115 to 97 KB per map, and nothing
+ * reads finer. Adding 0 turns -0 (a level lookAt pitch) into 0, as JSON would.
+ */
+const r3 = (x: number) => Math.round(x * 1000) / 1000 + 0;
 
 function viewIndex(c: Ctx): View | null {
   const E = c.t.engagements, T = c.t.engagement_ticks;
@@ -477,6 +577,27 @@ function aimedAt(c: Ctx, view: View | null, shot: number, pi: number, cone: numb
   return best;
 }
 
+/**
+ * Whether a shot went through a smoke: every enemy mesh-visible within SIGHT_CONE_DEG of its
+ * direction (as aimedAt reads it) is behind one, and there is at least one. False when one of them is
+ * clear (a shot at a visible enemy) or none is near; null on maps without mesh visibility, for a shot
+ * without angles, and when a candidate's smoke_blocked is not recorded.
+ */
+function throughSmoke(c: Ctx, view: View | null, shot: number, pi: number): boolean | null {
+  if (!view?.visible) return null;
+  const S = c.t.shots!, T = c.t.engagement_ticks!;
+  const pitch = S.bullet_pitch[shot] ?? S.pitch[shot], yaw = S.bullet_yaw[shot] ?? S.yaw[shot];
+  if (pitch === null || yaw === null) return null;
+  let smoke = false, unknown = false;
+  for (const i of view.atTick.get(key(S.tick[shot], pi)) ?? []) {
+    if (T.mesh_visible[i] !== true) continue;
+    if (aimAngle(pitch, yaw, [T.a_x[i]!, T.a_y[i]!, T.a_eye_z[i]!], [T.v_x[i]!, T.v_y[i]!, T.v_eye_z[i]!]) > SIGHT_CONE_DEG) continue;
+    if (T.smoke_blocked[i] === false) return false;
+    if (T.smoke_blocked[i] === true) smoke = true; else unknown = true;
+  }
+  return unknown ? null : smoke;
+}
+
 /** Counter-strafe class of a first bullet: 0 accurate, 1 too early, 2 late reversal, 3 no stop, 4 unknown. */
 function strafeClass(c: Ctx, view: View | null, i: number, pi: number): number {
   const S = c.t.shots!;
@@ -544,6 +665,17 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
     const s = hitOn.get(k);
     if (s) s.add(v); else hitOn.set(k, new Set([v]));
   }
+  // Kill ticks by (tick, killer): "wall" when a kill there went through a wall or object, "unknown"
+  // when one has no penetration recorded, else "clear". Adjusted accuracy leaves out the first two.
+  const killAt = new Map<number, "wall" | "unknown" | "clear">();
+  const K = c.t.kills;
+  for (let i = 0; i < K.n; i++) {
+    const p = c.idOf(K.attacker_steamid[i]);
+    if (p === null) continue;
+    const k = key(K.tick[i], p), pen = K.penetrated[i], was = killAt.get(k);
+    const now = pen === null ? "unknown" : pen > 0 ? "wall" : "clear";
+    if (was !== "wall" && (was !== "unknown" || now === "wall")) killAt.set(k, now);
+  }
 
   c.byRound("shots").forEach((rowsOfRound, ri) => {
     const byPlayer = new Map<number, number[]>();
@@ -565,7 +697,7 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
         const reset = S.recoil_index[i] !== null && S.recoil_index[i]! >= 0 && S.recoil_index[i]! <= RESET_RECOIL && spaced;
         if (isGun(w)) {
           let f = perGun.get(w);
-          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0] }));
+          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], adj: 0, adjHits: 0, smokeKnown: 0, smoke: 0 }));
           const h = hitOn.has(key(S.tick[i], pi));
           f.shots++;
           if (h) f.hits++;
@@ -573,7 +705,10 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
             f.sight++;
             if (h) f.sightHits++;
             if (reset) { f.first++; if (h) f.firstHits++; }
+            if ((killAt.get(key(S.tick[i], pi)) ?? "clear") === "clear") { f.adj++; if (h) f.adjHits++; }
           }
+          const smoked = throughSmoke(c, view, i, pi);
+          if (smoked !== null) { f.smokeKnown++; if (smoked) f.smoke++; }
           const cls = weaponClass(w);
           if (reset && (cls === "rifle" || cls === "sniper") && S.airborne[i] === false && S.speed_2d[i] !== null) f.cs[strafeClass(c, view, i, pi)]++;
         }
@@ -643,7 +778,49 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     cur = t;
     if (run.slice(j).some((i) => hitOn.get(key(S.tick[i], pi))?.has(t))) swHits++;
   }
-  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits };
+  // Spray accuracy: bullets 4 and later fired at a visible enemy, as first-bullet accuracy counts them.
+  let deep = 0, deepHits = 0;
+  for (let j = 3; j < run.length; j++) {
+    if (!aimedAt(c, view, run[j], pi, SIGHT_CONE_DEG)) continue;
+    deep++;
+    if (hitOn.has(key(S.tick[run[j]], pi))) deepHits++;
+  }
+  const { hp, hy, tp, ty } = relative || !dp.length ? { hp: [], hy: [], tp: [], ty: [] } : targetPath(c, view, ps, pi, run.slice(0, dp.length + 1), dy);
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits, deep, deepHits, hp, hy, tp, ty };
+}
+
+/**
+ * SprayFact.hp, hy, tp and ty for a spray's path bullets (`bullets`, bullet 1 first; `dy` the path's
+ * unwrapped yaw change for bullets 2..). The target is bullet 1's: on a demo the visible enemy nearest
+ * its direction (aimedAt), looked up in the shooter's engagement rows at each bullet; on a plugin file
+ * the shot's own target, whose eye sits at the view plus the aim error.
+ */
+function targetPath(c: Ctx, view: View | null, ps: PluginShots | null, pi: number, bullets: number[], dy: number[]) {
+  const S = c.t.shots!, T = c.t.engagement_ticks, E = c.t.engagements;
+  const target = ps ? null : aimedAt(c, view, bullets[0], pi, SIGHT_CONE_DEG)?.[0] ?? null;
+  /** the pitch and yaw from the shooter's eye to the target's eye at bullet j; null when not known */
+  const eyeAt = (j: number): { pitch: number; yaw: number } | null => {
+    const i = bullets[j];
+    if (ps) {
+      const e = ps.err[i];
+      return e && S.pitch[i] !== null && S.yaw[i] !== null ? { pitch: S.pitch[i]! + e[1], yaw: S.yaw[i]! + e[0] } : null;
+    }
+    if (target === null || !view || !T || !E) return null;
+    const row = (view.atTick.get(key(S.tick[i], pi)) ?? []).find((r) => c.idOf(E.victim_steamid[view.eng[r]]) === target && seen(c, r));
+    return row === undefined ? null : lookAt([T.a_x[row]!, T.a_y[row]!, T.a_eye_z[row]!], [T.v_x[row]!, T.v_y[row]!, T.v_eye_z[row]!]);
+  };
+  const hp: (number | null)[] = [], hy: (number | null)[] = [], tp: (number | null)[] = [], ty: (number | null)[] = [];
+  const p0 = S.pitch[bullets[0]]!;
+  bullets.forEach((i, j) => {
+    const want = eyeAt(j);
+    const bp = S.bullet_pitch[i], by = S.bullet_yaw[i];
+    hp.push(want ? r3(want.pitch - p0) : null);
+    hy.push(want ? r3((j ? dy[j - 1] : 0) + wrap180(want.yaw - S.yaw[i]!)) : null);
+    tp.push(want && bp !== null && by !== null ? r3(want.pitch - bp) : null);
+    ty.push(want && bp !== null && by !== null ? r3(wrap180(want.yaw - by)) : null);
+  });
+  const none = (xs: (number | null)[]) => xs.every((x) => x === null);
+  return { hp: none(hp) ? [] : hp, hy: none(hp) ? [] : hy, tp: none(tp) ? [] : tp, ty: none(tp) ? [] : ty };
 }
 
 // ---- metrics
@@ -699,6 +876,18 @@ export const AIM_METRICS: Metric[] = [
   { id: "sightAccuracy", label: "Accuracy at visible enemies", kind: "performance", group: "aim", unit: "pct", status: "approx",
     def: `Hits per gun shot fired while an enemy was mesh-visible within ${SIGHT_CONE_DEG} degrees of the view.`,
     value: (s) => pct(s.aim.sightHits, s.aim.sight) },
+  { id: "headAccuracy", label: "Head accuracy", kind: "performance", group: "aim", unit: "pct", status: "exact",
+    def: "Gun hits on the head, of all your gun hits on enemies (a hit the game files under no body part counts in the total only).",
+    value: (s) => { let head = 0, hits = 0; for (const [w, t] of Object.entries(s.weapons)) if (isGun(w)) { head += t.groups[0]; hits += t.hits; } return pct(head, hits); } },
+  { id: "adjustedAccuracy", label: "Adjusted accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
+    def: `Accuracy at visible enemies without the shots fired on a tick where your kill went through a wall or object (the game's penetration flag); a kill shot whose penetration is not recorded is set aside. Shots at an enemy behind a smoke are already out of the visible-enemy shots.`,
+    value: (s) => pct(s.aim.adjHits, s.aim.adj) },
+  { id: "shotsThroughSmoke", label: "Shots through smoke", kind: "identity", group: "aim", unit: "pct", status: "approx",
+    def: `Gun shots fired while every enemy mesh-visible within ${SIGHT_CONE_DEG} degrees of the shot stood behind a smoke (the extractor's smoke spheres, an approximation), of your gun shots on maps with mesh visibility.`,
+    value: (s) => pct(s.aim.smokeShots, s.aim.smokeShotsKnown) },
+  { id: "sprayAccuracy", label: "Spray accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
+    def: `Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within ${SIGHT_CONE_DEG} degrees. A spray is ${SPRAY_MIN} or more shots of one automatic gun in a continuous run from a reset (the recoil asset's rule).`,
+    value: (s) => pct(s.aim.deepHits, s.aim.deep) },
   { id: "firstBulletAccuracy", label: "First-bullet accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
     def: `Hits per first bullet (recoil index reset, ${RESET_GAP_S} s since your previous shot) fired at a visible enemy within ${SIGHT_CONE_DEG} degrees.`,
     value: (s) => pct(s.aim.firstHits, s.aim.first) },

@@ -1,1 +1,10 @@
 /* Styles for elements restored from main (REMOVALS.md, E20), aim slice. */
+
+/* The spray card's two toggles, Spread bands and Pro path, sit together at the end of the gun row. */
+.gunpick__bands { display: inline-flex; flex-wrap: wrap; gap: 6px 16px; }
+
+/* The spray card stacks two bullet-by-bullet charts: on target, then against pros. */
+.spray-body .bctl + .bctl { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+/* A disclosure that holds a paragraph above its rows. */
+.disclose__p + .drow { margin-top: 6px; }
