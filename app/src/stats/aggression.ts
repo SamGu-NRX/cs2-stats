@@ -23,15 +23,23 @@ export interface AggroFact {
   lowBuy: boolean;
   /** the player spent ECO_BELOW_PER_PLAYER or more by freeze end; null when the spend is unknown */
   bought: boolean | null;
+  /** the player's enemy kills this round (scoreboard.ts), for kills on low-buy rounds */
+  kills: number;
 }
 
 export interface AggroAgg {
   visRounds: number; contactRounds: number; contactSecs: number; rankSum: number; entries: number;
   pushRounds: number; pushSum: number; lowBuyRounds: number; lowBuyBuys: number;
+  /**
+   * Rounds where your team was on an eco or half buy: all of them and your kills in them; those with
+   * visibility measured, and of those the rounds where you made contact (took a fight).
+   */
+  lowPlayed: number; lowKills: number; lowVis: number; lowFights: number;
 }
 
 export const emptyAggro = (): AggroAgg => ({
   visRounds: 0, contactRounds: 0, contactSecs: 0, rankSum: 0, entries: 0, pushRounds: 0, pushSum: 0, lowBuyRounds: 0, lowBuyBuys: 0,
+  lowPlayed: 0, lowKills: 0, lowVis: 0, lowFights: 0,
 });
 
 export function foldAggro(a: AggroAgg, f: AggroFact): void {
@@ -40,6 +48,10 @@ export function foldAggro(a: AggroAgg, f: AggroFact): void {
   if (f.entry) a.entries++;
   if (f.push !== null) { a.pushRounds++; a.pushSum += f.push; }
   if (f.lowBuy && f.bought !== null) { a.lowBuyRounds++; if (f.bought) a.lowBuyBuys++; }
+  if (f.lowBuy) {
+    a.lowPlayed++; a.lowKills += f.kills;
+    if (f.vis) { a.lowVis++; if (f.contactS !== null) a.lowFights++; }
+  }
 }
 
 /**
@@ -129,7 +141,7 @@ export function deriveAggro(c: Ctx): AggroFact[] {
       }
 
       const lowBuy = p.ownBuy === "eco" || p.ownBuy === "half";
-      out.push({ ri, pi: p.pi, vis, contactS, contactRank, entry, push, lowBuy, bought: p.spent === null ? null : p.spent >= ECO_BELOW_PER_PLAYER });
+      out.push({ ri, pi: p.pi, vis, contactS, contactRank, entry, push, lowBuy, bought: p.spent === null ? null : p.spent >= ECO_BELOW_PER_PLAYER, kills: p.m.kills });
     }
   }
   return out;
