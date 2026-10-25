@@ -81,12 +81,17 @@ const LEGACY: Partial<Record<TableName, (read: ReadFile) => Promise<Table<TableN
   },
 };
 
-/** Loads every table. Required tables must exist; optional ones are null when absent. */
-export async function loadTables(read: ReadFile): Promise<MatchTables> {
+/**
+ * Loads every required table and the optional ones named in `optional` (all by default); optional
+ * tables that are absent or not asked for are null. A scoreboard needs none of them, and positions,
+ * shots and engagement ticks are most of a match's size.
+ */
+export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES): Promise<MatchTables> {
   const out: Record<string, unknown> = {};
   // A folder is v1 when it has match.parquet (SCHEMA-v1.md, "Versions").
   const v1 = (await read("match.parquet")) !== null;
   for (const name of [...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]) {
+    if (!(REQUIRED_TABLES as readonly string[]).includes(name) && !optional.includes(name)) { out[name] = null; continue; }
     let t: Table<TableName> | null;
     if (!v1 && LEGACY[name]) t = await LEGACY[name]!(read);
     else {
@@ -100,7 +105,7 @@ export async function loadTables(read: ReadFile): Promise<MatchTables> {
 }
 
 /** Decodes the SCHEMA columns of one table. */
-export async function readTable<N extends TableName>(bytes: ArrayBuffer, name: N): Promise<Table<N>> {
+async function readTable<N extends TableName>(bytes: ArrayBuffer, name: N): Promise<Table<N>> {
   const cols = Object.keys(SCHEMA[name]);
   const raw = await readRaw(bytes, name, cols);
   const t: Record<string, unknown> = { n: raw.__n };

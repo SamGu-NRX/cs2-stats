@@ -24,10 +24,13 @@ export interface Filter {
   to?: string;
   /** opponent team names */
   opponents?: string[];
-  /** weapon class names; applies to the per-weapon rows only */
+  /** weapon class names; applies to the per-weapon rows and to event facts with a weapon */
   weapons?: string[];
+  /** spawn points (PlayerRound.spawn) */
+  spawns?: string[];
 }
 
+/** A weapon's sums; rounds counts the rounds it was used in (a shot, hit or kill). */
 export type WeaponTotals = Omit<WeaponFact, "ri" | "pi" | "weapon"> & { rounds: number };
 
 export interface Summary {
@@ -44,7 +47,7 @@ export interface Summary {
 }
 
 /** The player-round rows a filter keeps in one match, for families that sum their own facts. */
-export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
+function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
   const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
   if (filter.maps && !filter.maps.includes(f.match.map)) return [];
   if (filter.from && (!f.match.date || f.match.date < filter.from)) return [];
@@ -55,11 +58,12 @@ export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
     if (filter.ownBuy && (!r.ownBuy || !filter.ownBuy.includes(r.ownBuy))) return false;
     if (filter.oppBuy && (!r.oppBuy || !filter.oppBuy.includes(r.oppBuy))) return false;
     if (filter.opponents && !filter.opponents.includes(f.match.teams[1 - r.team])) return false;
+    if (filter.spawns && (!r.spawn || !filter.spawns.includes(r.spawn))) return false;
     return true;
   });
 }
 
-export const emptySummary = (): Summary => ({
+const emptySummary = (): Summary => ({
   matches: 0, m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(),
 });
 
@@ -73,12 +77,13 @@ export function rollup(facts: MatchFacts[], filter: Filter): Summary {
     if (!rows.length) continue;
     s.matches++;
     const kept = new Set(rows.map((r) => r.ri * 1024 + r.pi));
-    for (const r of rows) for (const k of MEASURES) s.m[k] += r.m[k];
+    for (const r of rows) for (const k of MEASURES) s.m[k] += r.m[k] ?? 0;
     const roundsWith = new Map<string, Set<number>>();
     for (const w of f.weapons) {
       if (!kept.has(w.ri * 1024 + w.pi) || (filter.weapons && !filter.weapons.includes(w.weapon))) continue;
       const y = (s.weapons[w.weapon] ??= { rounds: 0, shots: 0, hits: 0, headHits: 0, dmg: 0, kills: 0, hsKills: 0, deaths: 0 });
       y.shots += w.shots; y.hits += w.hits; y.headHits += w.headHits; y.dmg += w.dmg; y.kills += w.kills; y.hsKills += w.hsKills; y.deaths += w.deaths;
+      if (!w.shots && !w.hits && !w.kills) continue;
       let r = roundsWith.get(w.weapon);
       if (!r) roundsWith.set(w.weapon, (r = new Set()));
       r.add(w.ri);

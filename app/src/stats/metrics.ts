@@ -15,7 +15,7 @@ import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
 export type Status = "exact" | "approx" | "unavailable";
-export type Unit = "rating" | "perRound" | "pct" | "secs" | "count" | "money" | "rank" | "dmg";
+export type Unit = "rating" | "perRound" | "pct" | "secs" | "ms" | "deg" | "count" | "money" | "rank" | "dmg" | "units" | "speed";
 
 export interface Metric {
   id: string;
@@ -41,7 +41,7 @@ const WINDOW = "5.4 s, the window that reproduces HLTV's traded deaths best";
 const M: Metric[] = [
   // ---- rating and scoreboard (performance)
   { id: "rating3", label: "Rating 3.0 (approx.)", hltv: "Rating 3.0", kind: "performance", group: "rating", unit: "rating", status: "approx",
-    def: "HLTV Rating 3.02 as reconstructed in model/rating3 (SPEC.md): a quadratic in eco-adjusted KPR, ADR, DPR and KAST, multi-kill % and swing. Swing and the eco adjustment are provisional.",
+    def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md). params.json currently carries the retired map-level polynomial as a diagnostic (Rating3.diagnostic is true); label it so until the per-round model lands.",
     value: (s) => rating3(s.m).value },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
     def: "Enemy kills (killer and victim on different sides at the kill) per round. Matches HLTV on 440 of 440 player-maps.", value: (s) => per(s.m.kills, s.m.rounds) },
@@ -160,17 +160,10 @@ const M: Metric[] = [
   { id: "oneVsOne", label: "1v1 win rate", kind: "performance", group: "closing", unit: "pct", status: "exact",
     def: "1v1 clutches won.", value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
 
-  // ---- utility quality (performance; Leetify's flash definitions)
-  { id: "utilDmgPR", label: "Utility damage per round", kind: "performance", group: "utility", unit: "dmg", status: "exact",
-    def: "Enemy damage from grenades and fire, per round.", value: (s) => per(s.m.utilDmg, s.m.rounds) },
-  { id: "enemiesPerFlash", label: "Enemies flashed per flash", kind: "performance", group: "utility", unit: "perRound", status: "exact",
-    def: "Enemies blinded for more than 1.1 s (Leetify's cut) per flashbang thrown.", value: (s) => per(s.m.enemiesFlashed, s.m.flashes) },
-  { id: "blindPerFlash", label: "Enemy blind time per flash", kind: "performance", group: "utility", unit: "secs", status: "exact",
-    def: "Seconds of enemy blindness (blinds over 1.1 s) per flashbang thrown.", value: (s) => per(s.m.enemyBlindSecs, s.m.flashes) },
+  // ---- utility quality (performance; Leetify's flash definitions). utilDmgPR, enemiesPerFlash,
+  // blindPerFlash and teamFlashPR were removed: duplicates or no link to round wins (METRICS.md, "Pruned").
   { id: "flashKillsPR", label: "Flashes that led to a kill per round", kind: "performance", group: "utility", unit: "perRound", status: "exact",
     def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per round.", value: (s) => per(s.m.flashKills, s.m.rounds) },
-  { id: "teamFlashPR", label: "Teammates flashed per round", kind: "performance", group: "utility", unit: "perRound", status: "exact", lowerIsBetter: true,
-    def: "Teammates you blinded for more than 1.1 s, per round.", value: (s) => per(s.m.teamFlashed, s.m.rounds) },
   { id: "utilUnused", label: "Unused utility on death", kind: "performance", group: "utility", unit: "money", status: "approx", lowerIsBetter: true,
     def: "Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen.", value: (s) => per(s.m.utilUnused, s.m.rounds) },
 

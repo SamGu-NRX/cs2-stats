@@ -25,16 +25,14 @@ export interface Baselines {
 
 /** Share of the pool below v, 0-100, from the stored quantiles. */
 export function percentileOf(q: number[], v: number): number {
-  if (v <= q[0]) return 0;
-  if (v >= q[q.length - 1]) return 100;
-  for (let i = 1; i < q.length; i++) {
-    if (v > q[i]) continue;
-    const span = q[i] - q[i - 1];
-    // a run of equal quantiles: the middle of the run
-    if (span === 0) { let j = i; while (j < q.length - 1 && q[j + 1] === q[i]) j++; return (QUANTILES[i - 1] + QUANTILES[j]) / 2; }
-    return QUANTILES[i - 1] + ((v - q[i - 1]) / span) * (QUANTILES[i] - QUANTILES[i - 1]);
-  }
-  return 100;
+  // A value equal to one or more quantiles (common when many pros share a value, such as 0) sits in
+  // the middle of that run.
+  const first = q.indexOf(v);
+  if (first >= 0) return (QUANTILES[first] + QUANTILES[q.lastIndexOf(v)]) / 2;
+  if (v < q[0]) return 0;
+  if (v > q[q.length - 1]) return 100;
+  const i = q.findIndex((x) => x > v);
+  return QUANTILES[i - 1] + ((v - q[i - 1]) / (q[i] - q[i - 1])) * (QUANTILES[i] - QUANTILES[i - 1]);
 }
 
 export const roleOf = (s: Summary): "awper" | "rifler" => (s.m.rounds > 0 && s.m.awpKills / s.m.rounds > AWPER_MIN_AWP_KPR ? "awper" : "rifler");

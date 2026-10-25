@@ -5,9 +5,10 @@
 // Inputs per player: eco-adjusted kills, damage and deaths per round, eco-adjusted KAST, multi-kill
 // rounds (raw, as HLTV's map cards expose no eco version) and round swing. Each is z-scored with the
 // fit's means and SDs, and the rating is a degree-two polynomial in those z-scores.
-import params from "../../../model/rating3/params.json";
+import { PARAMS as params } from "./rating3-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
-import type { Measures } from "./facts";
+import type { MatchFacts, Measures } from "./facts";
+import { rollup, type Filter } from "./rollup";
 import type { Side } from "./tables";
 import { classFromDisplay } from "./weapons";
 
@@ -15,7 +16,6 @@ export const RATING3_LABEL = "Rating 3.0 (approx.)";
 
 // ---- economy groups and the duel model ------------------------------------------------------------
 
-export const ECO_GROUPS = params.duel.groups as EcoGroup[];
 export type EcoGroup = "sniper" | "rifle1" | "rifle2" | "smg" | "pistolPlus" | "pistol";
 
 const GROUP_OF: Record<string, EcoGroup> = {};
@@ -29,7 +29,7 @@ put("pistolPlus", ["deagle", "revolver", "p250", "fiveseven", "tec9", "cz75a", "
 put("pistol", ["glock", "hkp2000", "usp_silencer"]);
 
 /** Economy group of a weapon class name; null for knives, grenades, the Zeus and unknown names. */
-export const weaponGroup = (cls: string): EcoGroup | null => GROUP_OF[cls] ?? null;
+const weaponGroup = (cls: string): EcoGroup | null => GROUP_OF[cls] ?? null;
 
 /**
  * Group from equipment value when the player holds no primary. params.json has no bands yet, so they
@@ -38,7 +38,7 @@ export const weaponGroup = (cls: string): EcoGroup | null => GROUP_OF[cls] ?? nu
  * and armor are possible, so only the last two bands apply in practice.
  */
 const EQUIP_BANDS: readonly [number, EcoGroup][] = [[2400, "rifle2"], [1600, "smg"], [800, "pistolPlus"], [0, "pistol"]];
-export function groupFromEquip(equip: number): EcoGroup {
+function groupFromEquip(equip: number): EcoGroup {
   for (const [min, g] of EQUIP_BANDS) if (equip >= min) return g;
   return "pistol";
 }
@@ -47,7 +47,7 @@ const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 const strength = params.duel.strength as Record<EcoGroup, number>;
 
 /** P(the killer's side of the duel wins) for a killer in group a against a victim in group b. */
-export function duelWinProb(a: EcoGroup, b: EcoGroup, killerSide: Side): number {
+function duelWinProb(a: EcoGroup, b: EcoGroup, killerSide: Side): number {
   const edge = killerSide === "CT" ? params.duel.ct_edge : -params.duel.ct_edge;
   return sigmoid(strength[a] - strength[b] + edge);
 }
@@ -142,6 +142,16 @@ export function r3Inputs(m: Measures): R3Inputs | null {
   };
 }
 
+/**
+ * The bases this file implements. SPEC.md retired the map-level polynomial as Rating 3.02 (it stays in
+ * params.json as a diagnostic) while a per-round model is fitted; a basis this file does not know is an
+ * error, so a new formula cannot be read with the old one's terms.
+ */
+const POLYNOMIAL = new Set(["degree_2_polynomial_with_interactions", "legacy_degree_2_polynomial_diagnostic"]);
+if (!POLYNOMIAL.has(params.rating.basis)) throw new Error(`rating3: params.json rating.basis "${params.rating.basis}" is not implemented in rating3.ts`);
+/** True while params.json marks the formula as a diagnostic rather than Rating 3.02 itself. */
+export const RATING3_DIAGNOSTIC = params.rating.basis.startsWith("legacy_");
+
 const terms = params.rating.terms as Record<string, number>;
 const means = params.rating.standardisation.means as Record<Feature, number>;
 const sds = params.rating.standardisation.sds as Record<Feature, number>;
@@ -161,14 +171,32 @@ export interface Rating3 {
   label: typeof RATING3_LABEL;
   value: number | null;
   inputs: R3Inputs | null;
-  /** the swing part follows SPEC.md's provisional round-end rule */
-  provisional: boolean;
+  /** the formula is params.json's diagnostic, not the accepted Rating 3.02; show `status` with it */
+  diagnostic: boolean;
+  /** params.json's own description of the fit's state */
+  status: string;
 }
 
 export function rating3(m: Measures): Rating3 {
   const inputs = r3Inputs(m);
-  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, provisional: true };
+  return {
+    label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs,
+    diagnostic: RATING3_DIAGNOSTIC, status: params.rating.fit_status ?? params.rating.basis,
+  };
 }
 
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */
 export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
+
+/**
+ * Rating 3.0 for both sides and for each side, from one aggregate definition: the inputs pooled over
+ * the rounds kept, so a side's rating is the rating of that side's rounds. HLTV's map scoreboards
+ * show total, CT and T Rating 3.0 the same way (VALIDATION.md compares them).
+ */
+export function rating3BySide(facts: MatchFacts[], filter: Filter): Record<"both" | "CT" | "T", Rating3> {
+  return {
+    both: rating3(rollup(facts, filter).m),
+    CT: rating3(rollup(facts, { ...filter, sides: ["CT"] }).m),
+    T: rating3(rollup(facts, { ...filter, sides: ["T"] }).m),
+  };
+}

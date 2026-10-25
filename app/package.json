@@ -11,7 +11,10 @@
     "tauri": "tauri",
     "hltv-check": "vite-node tools/hltv-check.ts",
     "baselines": "vite-node tools/baselines.ts",
-    "rating-check": "vite-node tools/rating-check.ts"
+    "rating-check": "vite-node tools/rating-check.ts",
+    "fit-roles": "vite-node tools/fit-roles.ts",
+    "aim-ref": "vite-node tools/aim-ref.ts",
+    "identity-check": "vite-node tools/identity-check.ts"
   },
   "dependencies": {
     "@fontsource-variable/schibsted-grotesk": "^5.3.0",
