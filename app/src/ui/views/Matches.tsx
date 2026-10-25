@@ -1,11 +1,11 @@
-// Matches: every finished match in one sortable, filterable table, edge to edge. Filters live in the hash.
-// Unfinished and 0–0 matches are not listed (engine.ts listedEntries).
+// Matches: every match in one sortable, filterable table, edge to edge. Filters live in the hash.
+// A recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled.
 import { useMemo } from "react";
 import { MapThumb, Num, ScoreCell, SourceBadge } from "../components/bits";
 import { Segmented } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
-import { entryLine, entryRating, isWingman, listedEntries, NO_RATING_TIP, RATING_LABEL, RATING_POOLED, WINGMAN_TIP } from "../data/engine";
+import { entryLine, entryRating, INCOMPLETE_TIP, isWingman, listedEntries, NO_RATING_TIP, RATING_LABEL, RATING_POOLED, WINGMAN_TIP } from "../data/engine";
 import { useRatings, useYourQuery } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
@@ -88,7 +88,7 @@ export function MatchesView() {
               { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (s) => line(s).kast, render: (s) => <Num v={fmtPct(line(s).kast)} /> },
               { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (s) => line(s).hs, render: (s) => <Num v={fmtPct(line(s).hs)} /> },
               { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win probability you caused per round", sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}><Num v={fmtSwing(x)} /></span>; } },
-              { key: "rating", label: RATING_LABEL, colored: true, tip: RATING_POOLED, sort: (s) => entryRating(s), render: (s) => (isWingman(s) ? <span className="chip chip--outline" data-tip={WINGMAN_TIP} tabIndex={0}>Wingman</span> : entryRating(s) === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b>) },
+              { key: "rating", label: RATING_LABEL, colored: true, tip: RATING_POOLED, sort: (s) => entryRating(s), render: (s) => (!s.match.complete ? <span className="chip chip--outline" data-tip={INCOMPLETE_TIP} tabIndex={0}>Unfinished</span> : isWingman(s) ? <span className="chip chip--outline" data-tip={WINGMAN_TIP} tabIndex={0}>Wingman</span> : entryRating(s) === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b>) },
               { key: "rounds", label: "Rounds", tip: "Rounds played; rounds with a kill-by-kill log in brackets when fewer. Only those count in any number.", sort: (s) => s.match.roundsPlayed, render: (s) => <span className="num">{s.match.roundsPlayed}{s.match.nRounds < s.match.roundsPlayed && <span className="faint"> ({s.match.nRounds})</span>}</span> },
             ]}
           />
