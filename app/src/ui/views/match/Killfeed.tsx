@@ -3,7 +3,7 @@
 // team's side (a kill by an enemy reads negative). Official icons come from the local pack, with the
 // app's glyphs as the fallback.
 import { GameIcon } from "../../components/GameIcon";
-import { HeadshotIcon, NoscopeIcon, SmokeKillIcon, WallbangIcon, WeaponIcon } from "../../icons/game";
+import { BlindIcon, HeadshotIcon, InAirIcon, NoscopeIcon, SmokeKillIcon, WallbangIcon, WeaponIcon } from "../../icons/game";
 import type { Side } from "../../../stats/tables";
 import { weaponLabel } from "../../../stats/weapons";
 
@@ -18,6 +18,10 @@ export interface FeedKill {
   wallbang: boolean;
   smoke: boolean;
   noscope: boolean;
+  /** the killer was flashed */
+  blind: boolean;
+  /** the killer was in the air */
+  inAir: boolean;
   opening: boolean;
   tradeKill: boolean;
   /** change in your team's chance to win the round, a fraction; null when the round is not valued */
@@ -46,6 +50,8 @@ export function KillRow({ k }: { k: FeedKill }) {
         {k.assister ? <small> + {k.assister.name}</small> : null}
       </span>
       <span className="kfeed__w">
+        {k.blind ? <span title="Killer was flashed"><GameIcon id="blind" width={14} label="Killer was flashed" fallback={<BlindIcon size={14} label="Killer was flashed" />} /></span> : null}
+        {k.inAir ? <span title="Killer was in the air"><GameIcon id="inair" width={14} label="Killer was in the air" fallback={<InAirIcon size={14} label="Killer was in the air" />} /></span> : null}
         <GameIcon id={k.weapon} width={40} height={14} label={weaponLabel(k.weapon)} fallback={<WeaponIcon name={k.weapon} size={14} />} />
         {MODS.filter((m) => k[m.key]).map((m) => (
           <span key={m.key} title={m.label}><GameIcon id={m.id} width={14} label={m.label} fallback={<m.Glyph size={14} label={m.label} />} /></span>
