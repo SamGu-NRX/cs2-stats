@@ -1,5 +1,7 @@
 # Round win-probability model
 
+> **Superseded.** This CS2RB logistic model is the interim swing model. It is being replaced by the HLTV Rating 3.02 recreation in `model/rating3/` (branch `feat/rating3-fit`), which fits HLTV's published per-event win probabilities and per-player swing credits directly. `design/architecture.md` sets its acceptance. The "HLTV's model is not public" gap below was true when this model was built and no longer holds: HLTV's match pages publish the probabilities and credits, so we calibrate against them.
+
 This folder fits the model behind the app's round swing. Round swing is the change in a team's chance of winning the round across one kill. The model gives P(CT wins the round) from the state the app has at each kill. It is an 83-term logistic regression stored in `export/model.json` (7.9 KB, 2.4 KB gzipped). `export/winprob.ts` evaluates it with no dependencies.
 
 ## Using it from the app
