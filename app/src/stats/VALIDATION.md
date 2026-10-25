@@ -185,6 +185,22 @@ utilUnused stays with the caveat that it mostly measures dying early. The smoke 
 duplicated smokeSights (blocked seconds, kills prevented) and the molotov candidates were removed with
 their code during development, so their figures are not reproducible here; no molotov metric is defined.
 
+Rerun on 489 maps (21,026 team-rounds) after smoke and molotov usefulness were restored, odds ratio per
+standard deviation of the team-round sum, with buy and side controls / plus grenades thrown / plus time
+alive:
+
+| Metric | buy+side | + thrown | + alive |
+|---|---|---|---|
+| smokeSights | 1.13 [1.10, 1.17] | 1.06 [1.03, 1.10] | 1.13 [1.08, 1.18] |
+| smokeBlockedSecs | 1.07 [1.04, 1.10] | 1.02 [0.98, 1.05] | 1.09 [1.04, 1.13] |
+| molotovEnemiesHit | 1.02 [0.99, 1.05] | 0.98 [0.95, 1.01] | 1.02 [0.98, 1.07] |
+| molotovDmg | 1.01 [0.98, 1.04] | 0.98 [0.96, 1.01] | 1.01 [0.96, 1.05] |
+
+smokeBlockedSecs tracks smokeSights closely (r 0.91 over team-rounds) and links to winning a little
+more weakly; the molotov metrics show no link to winning once grenades thrown are controlled for. They
+stay because the user asked for smoke and molotov usefulness by name; their link is weak, and this is
+where that is said.
+
 ## Baselines: `pnpm baselines`
 
 `public/baselines.json` is 361 KB: 21 quantiles of every metric for each pool and side, with no names or
