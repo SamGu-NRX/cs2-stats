@@ -105,14 +105,19 @@ function webHost(): Host {
       const local = [...picked].map(([file, f]) => ({ file, size: f.size, mtime: f.lastModified }));
       // The dev and preview servers expose the match folder; a static build has no such endpoint.
       let recorded: FileEntry[] = [];
+      let failed: string | null = null;
       try {
         const res = await fetch("/__matches/list");
         if (res.ok) {
           const l = (await res.json()) as { folder: string; files: FileEntry[] };
           folder = l.folder;
           recorded = l.files;
+        } else if (res.status === 500) {
+          // the dev server could not read the folder; its body names the path and the cause
+          failed = ((await res.json()) as { error: string }).error;
         }
       } catch { /* no dev server: bundled and picked files only */ }
+      if (failed) throw new Error(failed);
       return [...local, ...recorded, ...(samplesShown() ? await sampleEntries() : [])];
     },
     async read(file) {
