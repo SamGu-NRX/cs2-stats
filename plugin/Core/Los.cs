@@ -27,7 +27,7 @@ public struct LosRow
 ///
 /// Cost control: only the human; only every <see cref="CheckEveryTicks"/> ticks; enemies outside a
 /// horizontal cone around the view or beyond <see cref="MaxDistance"/> count as hidden without a
-/// trace; at most three points per enemy (eye, chest, waist), stopping at the first clear one; and a
+/// trace; at most seven points per enemy (see <see cref="Points"/>), stopping at the first clear one; and a
 /// per-check time budget, past which the remaining enemies keep their previous state.
 /// </summary>
 public sealed class LosTracker
@@ -40,8 +40,17 @@ public sealed class LosTracker
     public const double HalfConeDeg = 60;
     /// <summary>Longer than any sightline on the competitive maps (Dust II's longest is about 3,500 units).</summary>
     public const double MaxDistance = 5000;
-    /// <summary>Trace points as a fraction of the enemy's view offset above the feet: eye, chest, waist.</summary>
-    public static readonly double[] PointHeights = { 1.0, 0.65, 0.35 };
+    /// <summary>
+    /// Trace targets on an enemy, in order: eye, chest and waist on the body axis (height as a fraction
+    /// of the view offset), then eye and chest <see cref="SideOffset"/> units to either side, across the
+    /// line of sight. The side points exist because the first match recorded with line of sight
+    /// (2026-10-25 17:40, de_dust2) had every unexplained miss at a corner or through the mid-doors
+    /// gap, where the human hit an enemy whose body axis was covered.
+    /// </summary>
+    public static readonly (double Height, double Side)[] Points =
+        { (1.0, 0), (0.65, 0), (0.35, 0), (1.0, -SideOffset), (1.0, SideOffset), (0.65, -SideOffset), (0.65, SideOffset) };
+    /// <summary>Inside the 16-unit half-width of a player's hull: about the shoulders.</summary>
+    public const double SideOffset = 12;
     /// <summary>A check makes no further trace once it has run this long.</summary>
     public const double BudgetUs = 250;
     /// <summary>A trace this close to its end point counts as clear.</summary>
@@ -125,16 +134,20 @@ public sealed class LosTracker
                 Set(ri, tick, pi, false, sink);
                 continue;
             }
+            // Unit vector across the line of sight, for the side points.
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            double sx = len > 0 ? -dy / len : 0, sy = len > 0 ? dx / len : 0;
             // The deadline is checked before every trace; an enemy not finished keeps its previous state.
             bool vis = false, done = false;
-            foreach (double frac in PointHeights)
+            for (int p = 0; p < Points.Length; p++)
             {
                 if (Clock() >= deadline) break;
                 Traces++;
-                bool? clear = Probe!.Clear(ex, ey, ez, e.X, e.Y, e.Z + e.ViewZ * frac);
+                var (height, side) = Points[p];
+                bool? clear = Probe!.Clear(ex, ey, ez, e.X + sx * side, e.Y + sy * side, e.Z + e.ViewZ * height);
                 if (clear == null) { Fail("trace returned no result"); return; }
                 if (clear.Value) { vis = true; done = true; break; }
-                done = frac == PointHeights[^1];
+                done = p == Points.Length - 1;
             }
             if (done) Set(ri, tick, pi, vis, sink);
             else BudgetHits++;
@@ -145,10 +158,14 @@ public sealed class LosTracker
         if (dt > CheckTicksMax) CheckTicksMax = dt;
     }
 
-    /// <summary>Marks one enemy hidden (it died).</summary>
-    public void Hide(int ri, int tick, int pi, FixedBuffer<LosRow> sink)
+    /// <summary>
+    /// Marks one enemy hidden because it died at <paramref name="tick"/>. The row is stamped the next
+    /// tick: the kill happened while the victim was in sight, so a read at the kill tick sees it visible
+    /// whichever order the death event and the check run in within that tick.
+    /// </summary>
+    public void HideDead(int ri, int tick, int pi, FixedBuffer<LosRow> sink)
     {
-        if ((uint)pi < Limits.MaxPlayers) Set(ri, tick, pi, false, sink);
+        if ((uint)pi < Limits.MaxPlayers) Set(ri, tick + 1, pi, false, sink);
     }
 
     /// <summary>Marks every visible enemy hidden (round end, the human died, or line of sight turned off).</summary>

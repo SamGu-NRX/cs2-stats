@@ -379,8 +379,9 @@ public sealed class Recorder
         if (!RoundActive || (uint)k.Victim >= Limits.MaxPlayers) return;
         int v = k.Victim;
         // A dead enemy, or every enemy once the human dies, leaves the human's sight at the kill tick.
-        if (v == Meta.Human) Los.HideAll(Ri, k.Tick, _buf.Los);
-        else Los.Hide(Ri, k.Tick, v, _buf.Los);
+        // The human saw the enemies (and the victim was in sight) up to the kill tick; see LosTracker.HideDead.
+        if (v == Meta.Human) Los.HideAll(Ri, k.Tick + 1, _buf.Los);
+        else Los.HideDead(Ri, k.Tick, v, _buf.Los);
         int killer = k.Killer == v ? Nil.V : k.Killer;
         int flags = k.Flags;
         if (k.Killer == v) flags |= KillFlagSuicide;
