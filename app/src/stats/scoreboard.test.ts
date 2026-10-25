@@ -1,5 +1,7 @@
 // What earned each KAST round, and team damage, on hand-built rounds.
 import { expect, it } from "vitest";
+import { METRIC } from "./metrics";
+import { rollup } from "./rollup";
 import { FREEZE_END, oneRound } from "./testing/match";
 
 const t = (s: number) => FREEZE_END + s * 64;
@@ -47,4 +49,16 @@ it("gives damage whose attacker the demo lost to nobody, in ADR or in swing's da
   expect([dmg("k"), dmg("h"), dmg("w")]).toEqual([0, 40, 0]);
   const credited = f.kills[0].credits.filter(([, x]) => x > 0).map(([p]) => f.players[p].id);
   expect(credited).toEqual(["h"]);
+});
+
+it("rates traded death success over tradeable deaths only, so it cannot pass 100%", () => {
+  // fails if traded deaths outside the tradeable ones (no positions, or no teammate near) count in the
+  // numerator: the profile once showed 136%
+  const death = { tick: t(5), killer: "e", victim: "v", at: { v_x: 0, v_y: 0 } };
+  const trade = { tick: t(7), killer: "m", victim: "e" };
+  const players = { v: "CT", m: "CT", e: "T" } as const;
+  const near = oneRound({ players, kills: [death], positions: [{ tick: t(5), steamid: "m", x: 300, y: 0 }, { tick: t(5), steamid: "v", x: 0, y: 0 }] });
+  const unlogged = oneRound({ players, kills: [death, trade] });
+  const s = rollup([near, unlogged, unlogged], { player: "v" });
+  expect([s.m.tradedDeaths, s.m.tradeableDeaths, METRIC.tradedDeathSuccess.value(s)]).toEqual([2, 1, 0]);
 });
