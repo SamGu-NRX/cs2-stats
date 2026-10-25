@@ -318,7 +318,7 @@ def test_map_key_and_teams_from_filename():
     single = Path("alpha-team-vs-bravo-nuke.dem")
     assert ex.map_key_for(single, "de_nuke") == "nuke"
     assert ex.teams_from_filename(single) == ("alpha-team", "bravo")
-    assert dp.slug_for(["team-a-vs-team-b-m1-nuke.dem"], "f3a92631-1281") == "team-a-vs-team-b-f3a92631"
+    assert dp.slug_for(["team-a-vs-team-b-m1-nuke.dem"], "f3a92631-1281") == "team-a-vs-team-b-f3a92631-1281"
     assert dp.slug_for(["team-a-vs-team-b-m1-nuke.dem"], "team-a-vs-team-b-f3a92631") == "team-a-vs-team-b-f3a92631"
 
 
@@ -532,9 +532,11 @@ def test_a_re_extraction_replaces_only_its_own_old_folder(tmp_path, monkeypatch)
             dict(dem_file="a-vs-b-m2-dust2.dem", dem_bytes=200, out_dir=str(other.relative_to(tmp_path)))]
     dp.NEEDS_REEXTRACT.write_text("".join(json.dumps(r) + "\n" for r in rows))
     # m1 re-extracted as v1; a same-named demo of a different size (another match) must not count
+    new = dp.DEMOS_DIR / "new-slug" / "m1-nuke"
+    _write_map(new)
     dp.replace_old_extractions({"x": dict(ok=True, dem_file="a-vs-b-m1-nuke.dem", dem_bytes=100),
                                 "y": dict(ok=True, dem_file="a-vs-b-m2-dust2.dem", dem_bytes=999)},
-                               {(dp.DEMOS_DIR / "new-slug" / "m1-nuke").resolve()})
+                               {"x": new, "y": dp.DEMOS_DIR / "new-slug" / "m2-dust2"})
     assert not old.exists() and other.exists()
     assert [json.loads(x)["dem_file"] for x in dp.NEEDS_REEXTRACT.read_text().splitlines()] == ["a-vs-b-m2-dust2.dem"]
 
@@ -581,7 +583,7 @@ def test_a_re_extraction_into_the_same_folder_keeps_it(tmp_path, monkeypatch):
     (same / "match.parquet").write_bytes(b"x")
     dp.NEEDS_REEXTRACT.write_text(json.dumps(dict(dem_file="a.dem", dem_bytes=1, out_dir=str(same.relative_to(tmp_path))))
                                   + "\n")
-    dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1)}, {same.resolve()})
+    dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1)}, {"x": same})
     assert same.exists() and dp.NEEDS_REEXTRACT.read_text() == ""
 
 
@@ -941,6 +943,9 @@ def test_a_hit_table_over_the_game_counter_fails_the_map():
 
 
 # Versioned map folders: <map>/v-<version>-<hash>/ and a CURRENT pointer replaced with os.replace.
+_TABLE_FILES = ("match.parquet", "rounds.parquet")  # what _tables writes
+
+
 def _tables(d, content):
     d.mkdir(parents=True)
     for name in ("match", "rounds"):
@@ -952,11 +957,11 @@ def test_publishing_a_map_never_renames_a_folder_a_reader_has_open(tmp_path):
     # file in it open. Now the new tables go to a new folder and only the small CURRENT file is replaced.
     m = tmp_path / "m1"
     _tables(m / ".tmp-1", "old")
-    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0", _TABLE_FILES)
     assert ex.resolve_map_dir(m) == v1
     with open(v1 / "match.parquet", "rb"):  # a reader holds the old version open
         _tables(m / ".tmp-2", "new")
-        v2 = ex.publish_version(m / ".tmp-2", m, "1.5.0")
+        v2 = ex.publish_version(m / ".tmp-2", m, "1.5.0", _TABLE_FILES)
         assert ex.resolve_map_dir(m) == v2 and (v2 / "match.parquet").read_text() == "match new"
         left = ex.prune_map(m)
         if sys.platform == "win32":  # the open file cannot be deleted yet; that is left for later
@@ -967,7 +972,7 @@ def test_publishing_a_map_never_renames_a_folder_a_reader_has_open(tmp_path):
 def test_a_crash_before_the_pointer_moves_leaves_the_old_map_current(tmp_path):
     m = tmp_path / "m1"
     _tables(m / ".tmp-1", "old")
-    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0", _TABLE_FILES)
     _tables(m / "v-1.5.0-0000beef", "new")  # renamed into place, then the process died before CURRENT moved
     (m / ".tmp-7").mkdir()  # and another run died mid-write
     assert ex.resolve_map_dir(m) == v1
@@ -988,7 +993,7 @@ def test_a_map_from_before_versioned_folders_is_read_in_place_until_it_is_republ
     (m / "awpy").mkdir()  # not written by the extractor: never deleted by pruning
     assert ex.resolve_map_dir(m) == m and ex.prune_map(m) == [] and (m / "match.parquet").exists()
     _tables(m / ".tmp-1", "new")
-    v = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    v = ex.publish_version(m / ".tmp-1", m, "1.5.0", _TABLE_FILES)
     assert ex.resolve_map_dir(m) == v
     assert ex.prune_map(m) == [] and sorted(x.name for x in m.iterdir()) == ["CURRENT", "awpy", v.name]
 
@@ -1007,7 +1012,7 @@ def test_pruning_a_folder_with_no_map_removes_only_what_the_extractor_wrote(tmp_
 def test_a_retired_map_stops_resolving_at_once_and_goes_once_unlocked(tmp_path):
     m = tmp_path / "m1"
     _tables(m / ".tmp-1", "x")
-    v = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    v = ex.publish_version(m / ".tmp-1", m, "1.5.0", _TABLE_FILES)
     with open(v / "match.parquet", "rb"):
         ex.retire_map(m)
         assert ex.resolve_map_dir(m) is None
@@ -1018,9 +1023,9 @@ def test_startup_tidies_every_map_and_leaves_pre_v1_folders_alone(tmp_path, monk
     _isolate(tmp_path, monkeypatch)
     live = dp.DEMOS_DIR / "slug" / "m1-nuke"
     _tables(live / ".tmp-1", "old")
-    old = ex.publish_version(live / ".tmp-1", live, "1.5.0")
+    old = ex.publish_version(live / ".tmp-1", live, "1.5.0", _TABLE_FILES)
     _tables(live / ".tmp-2", "new")
-    new = ex.publish_version(live / ".tmp-2", live, "1.5.0")  # old was locked when this published
+    new = ex.publish_version(live / ".tmp-2", live, "1.5.0", _TABLE_FILES)  # old was locked when this published
     pre_v1 = dp.DEMOS_DIR / "slug" / "m2-dust2"
     pre_v1.mkdir()
     (pre_v1 / "meta.parquet").write_text("pre-v1")
@@ -1062,12 +1067,12 @@ def test_republishing_the_same_tables_never_reuses_a_partly_pruned_folder(tmp_pa
     # even if a prune had already deleted part of it, and CURRENT then pointed at an incomplete map.
     m = tmp_path / "m1"
     _tables(m / ".tmp-1", "same")
-    first = ex.publish_version(m / ".tmp-1", m, "1.6.0")
+    first = ex.publish_version(m / ".tmp-1", m, "1.6.0", _TABLE_FILES)
     _tables(m / ".tmp-2", "other")
-    ex.publish_version(m / ".tmp-2", m, "1.6.0")
+    ex.publish_version(m / ".tmp-2", m, "1.6.0", _TABLE_FILES)
     (first / "rounds.parquet").unlink()  # a prune deleted part of it; match.parquet was locked
     _tables(m / ".tmp-3", "same")
-    again = ex.publish_version(m / ".tmp-3", m, "1.6.0")
+    again = ex.publish_version(m / ".tmp-3", m, "1.6.0", _TABLE_FILES)
     assert again != first and ex.resolve_map_dir(m) == again
     assert sorted(x.name for x in again.iterdir()) == ["COMPLETE", "match.parquet", "rounds.parquet"]
 
@@ -1075,7 +1080,7 @@ def test_republishing_the_same_tables_never_reuses_a_partly_pruned_folder(tmp_pa
 def test_a_version_folder_resolves_only_with_every_file_its_completion_list_names(tmp_path):
     m = tmp_path / "m1"
     _tables(m / ".tmp-1", "x")
-    v = ex.publish_version(m / ".tmp-1", m, "1.6.0")
+    v = ex.publish_version(m / ".tmp-1", m, "1.6.0", _TABLE_FILES)
     assert ex.resolve_map_dir(m) == v
     (v / "rounds.parquet").write_text("truncated")  # same name, different size
     assert ex.resolve_map_dir(m) is None
@@ -1221,3 +1226,256 @@ def test_a_publish_into_a_withdrawn_folder_makes_it_live_only_once_published(tmp
     ex.write_output({"match": _one_row("match")}, m, result)
     assert not (m / "RETIRED").exists() and ex.resolve_map_dir(m) == m / result["version_dir"]
     assert sorted(x.name for x in m.iterdir()) == ["CURRENT", result["version_dir"]]  # old tables pruned
+
+
+# --- Publish protocol fixes from the formal audit (formal/AUDIT.md; schedules replayed by formal/reproduce.py)
+AUDIT_TABLES = ("match", "player_rounds", "damages")
+
+
+def _write_map(m, **match):
+    """Publish a small real map into m through the production writer."""
+    result = dict(rows={}, bytes={})
+    ex.write_output({t: _one_row(t, **(match if t == "match" else {})) for t in AUDIT_TABLES}, m, result)
+    return m / result["version_dir"]
+
+
+def test_an_in_place_re_extraction_never_retires_the_map_it_just_wrote(tmp_path, monkeypatch):
+    # The pipeline names a job's folder from the file stem (plus _dup), but rebuilt the archive's new folders
+    # from the worker's result["map"], which a name without "-vs-" takes from the demo header instead. The
+    # folder just written was then missing from new_dirs, and its needs_reextract row retired it.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    slug = "lan-final-0123abcd"
+    out = dp.DEMOS_DIR / slug / "lan-final-map1"
+    _write_map(out)
+    work = dp.WORK_DIR / slug
+    work.mkdir(parents=True)
+    dem = work / "lan-final-map1.dem"
+    dem.write_bytes(b"x")
+    (dp.DOWNLOADS / "h").mkdir()
+    rar = dp.DOWNLOADS / "h" / "0123abcd-0000"
+    rar.write_bytes(dp.RAR_MAGIC)
+    dp.NEEDS_REEXTRACT.write_text(json.dumps(dict(dem_file=dem.name, dem_bytes=1,
+                                                  out_dir=str(out.relative_to(tmp_path)))) + "\n")
+    a = dp.Archive(rar=rar, id="0123abcd-0000", state="parsing", slug=slug, work=work, dems=[dem])
+    a.results = {dem.name: dict(ok=True, dem_file=dem.name, dem_bytes=1, map="de_nuke")}
+    a.out_dirs = {dem.name: out}
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.finish_archives()
+    assert ex.resolve_map_dir(out) is not None and not (out / "RETIRED").exists()
+    assert dp.NEEDS_REEXTRACT.read_text() == ""  # the row is satisfied by the map written in place
+
+
+def test_a_prune_cannot_delete_a_version_published_while_it_runs(tmp_path, monkeypatch):
+    # Audit schedule 1: the pruner cached CURRENT (V0), a writer published V1 and its own prune removed V0,
+    # then the first pruner deleted V1 as "not current", leaving CURRENT dangling.
+    m = tmp_path / "m1"
+    _write_map(m)
+    real, cached, go, pruner = ex.resolve_map_dir, threading.Event(), threading.Event(), []
+
+    def slow(path):
+        found = real(path)
+        if pruner and threading.current_thread() is pruner[0] and not cached.is_set():
+            cached.set()
+            go.wait(5)
+        return found
+
+    monkeypatch.setattr(ex, "resolve_map_dir", slow)
+    pruner.append(threading.Thread(target=ex.prune_map, args=(m,)))
+    pruner[0].start()
+    assert cached.wait(5)
+    writer = threading.Thread(target=_write_map, args=(m,))
+    writer.start()
+    writer.join(0.5)
+    go.set()
+    pruner[0].join(10)
+    writer.join(20)
+    assert real(m) is not None
+
+
+def test_a_retirement_racing_a_writer_leaves_the_map_withdrawn(tmp_path, monkeypatch):
+    # Audit schedule 2: the writer replaced CURRENT, a retirement wrote "replaced" and paused, the writer
+    # removed RETIRED, and the withdrawn version resolved again after retire_map returned.
+    m = tmp_path / "m1"
+    _write_map(m)
+    marked, resume, errors = threading.Event(), threading.Event(), []
+    real_marker, real_publish = ex._write_marker, ex.publish_version
+
+    def marker(path, text):
+        real_marker(path, text)
+        marked.set()
+        resume.wait(10)
+
+    def retire():
+        try:
+            ex.retire_map(m)
+        except BaseException as e:  # noqa: BLE001 - reported below
+            errors.append(e)
+
+    retirer = threading.Thread(target=retire)
+
+    def publishing(*args, **kwargs):
+        out = real_publish(*args, **kwargs)
+        retirer.start()
+        marked.wait(0.5)  # the retirement gets in here unless the writer holds the map's lock
+        return out
+
+    monkeypatch.setattr(ex, "_write_marker", marker)
+    monkeypatch.setattr(ex, "publish_version", publishing)
+    _write_map(m)
+    resume.set()
+    retirer.join(10)
+    assert not errors and ex.resolve_map_dir(m) is None
+
+
+def test_a_prune_never_touches_the_staging_folder_of_a_running_writer(tmp_path, monkeypatch):
+    # Audit schedule 3: a startup prune deleted part of a writer's .tmp-<pid> folder, and the writer then
+    # published only the tables that survived.
+    m = tmp_path / "m1"
+    _write_map(m)
+    real_schema, pruners = ex.pl.read_parquet_schema, []
+
+    def schema(path):
+        if not pruners:
+            pruners.append(threading.Thread(target=ex.prune_map, args=(m,)))
+            pruners[0].start()
+            pruners[0].join(0.5)
+        return real_schema(path)
+
+    monkeypatch.setattr(ex.pl, "read_parquet_schema", schema)
+    new = _write_map(m)
+    pruners[0].join(10)
+    assert ex.resolve_map_dir(m) == new
+    assert sorted(json.loads((new / "COMPLETE").read_text())) == [f"{t}.parquet" for t in sorted(AUDIT_TABLES)]
+
+
+def test_complete_lists_every_table_written_and_a_missing_one_fails_the_publish(tmp_path, monkeypatch):
+    # COMPLETE listed whatever .parquet files were left in the staging folder, not the tables written.
+    m = tmp_path / "m1"
+    real_schema = ex.pl.read_parquet_schema
+
+    def lose_damages(path):
+        if path.name == "match.parquet":
+            (path.parent / "damages.parquet").unlink(missing_ok=True)
+        return real_schema(path)
+
+    monkeypatch.setattr(ex.pl, "read_parquet_schema", lose_damages)
+    with pytest.raises(Exception):
+        _write_map(m)
+    assert ex.resolve_map_dir(m) is None
+
+
+def test_a_map_is_retired_only_while_its_successor_resolves(tmp_path):
+    old, new = tmp_path / "a" / "m1", tmp_path / "b" / "m1"
+    _write_map(old)
+    with pytest.raises(ex.SuccessorMissing):
+        ex.retire_map(old, successor=new)
+    assert ex.resolve_map_dir(old) is not None and not (old / "RETIRED").exists()
+    _write_map(new)
+    assert ex.retire_map(old, successor=new) == [] and not old.exists() and ex.resolve_map_dir(new) is not None
+
+
+def test_a_re_extraction_whose_map_is_gone_keeps_the_old_map_and_its_row(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    old, new = dp.DEMOS_DIR / "old-slug" / "m1-nuke", dp.DEMOS_DIR / "new-slug" / "m1-nuke"
+    _write_map(old)
+    row = dict(dem_file="a-vs-b-m1-nuke.dem", dem_bytes=100, out_dir=str(old.relative_to(tmp_path)))
+    dp.NEEDS_REEXTRACT.write_text(json.dumps(row) + "\n")
+    dp.replace_old_extractions({"a-vs-b-m1-nuke.dem": dict(ok=True, dem_file=row["dem_file"], dem_bytes=100)},
+                               {"a-vs-b-m1-nuke.dem": new})  # reported ok, but nothing resolves there now
+    assert ex.resolve_map_dir(old) is not None
+    assert [json.loads(x) for x in dp.NEEDS_REEXTRACT.read_text().splitlines()] == [row]
+
+
+def test_two_archives_sharing_an_id_prefix_get_different_folders(tmp_path, monkeypatch):
+    names = ["team-a-vs-team-b-m1-nuke.dem"]
+    one, two = "f3a92631-1281-45b5-80bb-48725dbb136b", "f3a92631-9999-45b5-80bb-48725dbb136b"
+    assert dp.slug_for(names, one) != dp.slug_for(names, two)
+    # A folder already named by the old 8-character form keeps serving the archive that owns it.
+    _isolate(tmp_path, monkeypatch)
+    _write_map(dp.DEMOS_DIR / "team-a-vs-team-b-f3a92631" / "m1-nuke", archive=one)
+    p = dp.Pipeline()
+    a, b = dp.Archive(rar=tmp_path / "r1", id=one), dp.Archive(rar=tmp_path / "r2", id=two)
+    a.listing = b.listing = {names[0]: dict(size=1, modified=None)}
+    assert p.slug_of(a) == "team-a-vs-team-b-f3a92631" and p.slug_of(b) == dp.slug_for(names, two)
+
+
+def test_a_crash_while_rewriting_needs_reextract_keeps_every_row(tmp_path, monkeypatch):
+    # The rewrite truncated the file in place; a crash before the retained rows were written lost them.
+    import builtins
+    import io
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    done, other = dp.DEMOS_DIR / "s1" / "m1", dp.DEMOS_DIR / "s2" / "m2"
+    _write_map(done)
+    rows = [dict(dem_file="a.dem", dem_bytes=1, out_dir=str((dp.DEMOS_DIR / "old" / "m1").relative_to(tmp_path))),
+            dict(dem_file="b.dem", dem_bytes=2, out_dir=str(other.relative_to(tmp_path)))]
+    dp.NEEDS_REEXTRACT.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    real_open = io.open
+
+    class Crash:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.f.close()
+
+        def write(self, *_):
+            raise OSError("power cut")
+
+        def __getattr__(self, name):
+            return getattr(self.f, name)
+
+    def crashing(file, mode="r", *a, **k):
+        f = real_open(file, mode, *a, **k)
+        if "w" in mode and Path(file).parent == dp.DEMOS_DIR:
+            return Crash(f)
+        return f
+
+    with monkeypatch.context() as mp, pytest.raises(OSError):
+        mp.setattr(io, "open", crashing)
+        mp.setattr(builtins, "open", crashing)
+        dp.replace_old_extractions({"a.dem": dict(ok=True, dem_file="a.dem", dem_bytes=1)}, {"a.dem": done})
+    assert [json.loads(x) for x in dp.NEEDS_REEXTRACT.read_text().splitlines()] == rows
+
+
+def test_a_refeed_of_a_finished_archive_is_extracted_when_needs_reextract_asks(tmp_path, monkeypatch):
+    # A finished ledger id was skipped forever, so a refeed under the same id never re-extracted.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    aid = "4f4ef05b-d8e4-44a5-8d7a-2b16f4d105ad"
+    dp.LEDGER.write_text(json.dumps(dict(id=aid, status="done", slug="team-a-vs-team-b-4f4ef05b")) + "\n")
+    (dp.DOWNLOADS / "h").mkdir()
+    (dp.DOWNLOADS / "h" / aid).write_bytes(dp.RAR_MAGIC + bytes(10))
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(100.0)
+    assert aid not in p.archives  # nothing asks for it: still skipped
+    dp.NEEDS_REEXTRACT.write_text(json.dumps(dict(archive_slug="team-a-vs-team-b-4f4ef05b", dem_file="x.dem",
+                                                  dem_bytes=1, out_dir="demos/team-a-vs-team-b-4f4ef05b/m1")) + "\n")
+    p.scan(200.0)
+    p.scan(300.0)
+    assert aid in p.archives
+
+
+
+def test_the_startup_tidy_skips_a_map_another_process_holds(tmp_path, monkeypatch):
+    # An orphan worker or a standalone extractor can still be writing a map when the pipeline starts.
+    _isolate(tmp_path, monkeypatch)
+    m = dp.DEMOS_DIR / "slug" / "m1"
+    _write_map(m)
+    orphan = m / "v-1.10.0-0000beef"  # what a prune would delete
+    orphan.mkdir()
+    done = threading.Event()
+    with ex.map_lock(m):
+        t = threading.Thread(target=lambda: (dp.tidy_demos(), done.set()))
+        t.start()
+        assert done.wait(5)  # it did not wait for the holder
+        assert orphan.exists()
+    dp.tidy_demos()
+    assert not orphan.exists() and ex.resolve_map_dir(m) is not None

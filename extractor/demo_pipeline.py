@@ -156,6 +156,7 @@ class Archive:
     dems: list[Path] = field(default_factory=list)
     listing: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)
+    out_dirs: dict = field(default_factory=dict)  # demo name -> the folder its job writes, as allocated
     proc: subprocess.Popen | None = None
     extract_log: Path | None = None
     size_at_extract: int = 0
@@ -176,14 +177,29 @@ class Job:
     killed: str | None = None
 
 
-def slug_for(dem_names: list[str], archive_id: str) -> str:
+def slug_for(dem_names: list[str], archive_id: str, legacy: bool = False) -> str:
+    """The archive's folder name: its teams and its whole id. Extractors before 1.10.0 kept only the id's
+    first 8 characters (legacy=True), so two archives could share a folder and write the same map path."""
     for n in dem_names:
         t1, t2 = extract.teams_from_filename(Path(n))
         if t1:
             prefix = f"{t1}-vs-{t2}-"
             # A RAR retried from failed/ is already named by its slug.
-            return archive_id if archive_id.startswith(prefix) else f"{prefix}{archive_id[:8]}"
+            return archive_id if archive_id.startswith(prefix) else f"{prefix}{archive_id[:8] if legacy else archive_id}"
     return archive_id
+
+
+def _owned_by(folder: Path, archive_id: str) -> bool:
+    """Whether a map in folder was extracted from archive_id (match.archive)."""
+    import polars as pl
+    for m in folder.iterdir():
+        try:
+            d = extract.resolve_map_dir(m) if m.is_dir() else None
+            if d is not None and pl.read_parquet(d / "match.parquet", columns=["archive"])["archive"][0] == archive_id:
+                return True
+        except (OSError, ValueError, pl.exceptions.PolarsError) as e:  # an unreadable map proves nothing
+            log.warning("cannot read the archive of %s: %s", m, e)
+    return False
 
 
 def list_archive(rar: Path) -> dict[str, dict]:
@@ -357,30 +373,59 @@ def fail_reason(res: dict, log_path: Path) -> str | None:
     return f"worker reported failure without a reason; see {log_path}"
 
 
-def replace_old_extractions(results: dict, new_dirs: set[Path]) -> None:
-    """Delete the listed old folder of each map this archive re-extracted (same demo name and size)."""
+def write_jsonl_atomic(path: Path, rows: list[dict]) -> None:
+    """Rewrite a JSONL file whole: a staged copy, fsynced, then os.replace, so a crash leaves the old file
+    or the new one, never a truncated one."""
+    staged = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(staged, "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r, default=extract._json_default) + "\n" for r in rows))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(staged, path)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def replace_old_extractions(results: dict, out_dirs: dict[str, Path]) -> None:
+    """Retire the listed old folder of each map this archive re-extracted (same demo name and size).
+
+    out_dirs maps each of the archive's demos to the folder its job was given; the worker's own map name is
+    never used to find it, because it can differ (a name without "-vs-", a _dup key). A row whose old folder
+    is that same folder was re-extracted in place and is done. Otherwise the old map is retired only while
+    the new one resolves, both maps' locks held; if it does not resolve, the old map and its row stay.
+    """
     if not NEEDS_REEXTRACT.exists():
         return
     rows = read_jsonl(NEEDS_REEXTRACT)
-    sizes = {(r.get("dem_file"), r.get("dem_bytes")) for r in results.values() if r.get("ok")}
+    successor = {(r.get("dem_file"), r.get("dem_bytes")): Path(out_dirs[name]) for name, r in results.items()
+                 if r.get("ok") and name in out_dirs}
     keep = []
     for row in rows:
-        if (row["dem_file"], row["dem_bytes"]) in sizes:
-            rel = Path(row["out_dir"])
-            if rel.is_absolute() or ".." in rel.parts:
-                log.error("needs_reextract row with an unsafe out_dir %r; not deleting anything", row["out_dir"])
-                keep.append(row)
-                continue
-            old = DATA_ROOT / rel
-            if old.exists() and old.resolve() not in new_dirs:
-                # Retired at once (readers stop resolving it); files a reader still has open go at a later start.
-                left = extract.retire_map(_deletable(old))
-                log.info("replaced %s with its re-extraction%s", row["out_dir"],
-                         f"; {len(left)} entries still open, deleted at a later start" if left else "")
+        new = successor.get((row.get("dem_file"), row.get("dem_bytes")))
+        if new is None:
+            keep.append(row)
             continue
-        keep.append(row)
+        rel = Path(row["out_dir"])
+        if rel.is_absolute() or ".." in rel.parts:
+            log.error("needs_reextract row with an unsafe out_dir %r; not deleting anything", row["out_dir"])
+            keep.append(row)
+            continue
+        old = DATA_ROOT / rel
+        if old.resolve() == new.resolve() or not old.exists():
+            continue  # re-extracted in place, or nothing is left to retire
+        try:
+            # Readers stop resolving it at once; files a reader still has open go at a later start.
+            left = extract.retire_map(_deletable(old), successor=_deletable(new))
+        except (extract.SuccessorMissing, extract.MapLocked, OSError) as e:
+            log.error("not replacing %s: %s", row["out_dir"], e)
+            keep.append(row)
+            continue
+        log.info("replaced %s with %s%s", row["out_dir"], new.relative_to(DATA_ROOT),
+                 f"; {len(left)} entries still open, deleted at a later start" if left else "")
     if len(keep) != len(rows):
-        NEEDS_REEXTRACT.write_text("".join(json.dumps(r) + "\n" for r in keep), encoding="utf-8")
+        write_jsonl_atomic(NEEDS_REEXTRACT, keep)
 
 
 def tidy_demos() -> None:
@@ -388,14 +433,27 @@ def tidy_demos() -> None:
     folder (old versions, partial writes, retired maps). Whatever a reader still has open waits for the next
     start; one map that cannot be tidied is logged and skipped."""
     for d in DEMOS_DIR.glob("*/*.tmp"):  # pre-1.5.0 partial output beside its map
-        safe_rmtree(d, ignore_errors=True)
+        try:
+            with extract.map_lock(d.with_name(d.name.removesuffix(".tmp")), wait=False):
+                safe_rmtree(d, ignore_errors=True)
+        except extract.MapLocked:
+            log.warning("%s is in use; left for the next start", d)
     for d in DEMOS_DIR.glob("*/*.old"):  # a pre-1.5.0 folder swap a crash interrupted
-        extract.recover_output(_deletable(d.with_name(d.name.removesuffix(".old"))))
+        out = _deletable(d.with_name(d.name.removesuffix(".old")))
+        try:
+            with extract.map_lock(out, wait=False):
+                extract.recover_output(out)
+        except extract.MapLocked:
+            log.warning("%s is in use; left for the next start", d)
     for m in sorted(DEMOS_DIR.glob("*/*")):
         if not m.is_dir():
             continue
         try:
-            left = extract.prune_map(_deletable(m))
+            # Never wait: a map another process holds (a worker still writing it) is left for the next start.
+            left = extract.prune_map(_deletable(m), wait=False)
+        except extract.MapLocked:
+            log.warning("%s is being written by another process; left for the next start", m)
+            continue
         except (OSError, ValueError, RuntimeError) as e:
             log.error("could not tidy %s: %s", m, e)
             continue
@@ -439,6 +497,32 @@ class Pipeline:
         self.started = time.time()
         self.last_sweep = 0.0
         self._budget: tuple[float, float, bool] = (0.0, 0.0, True)  # (computed_at, ourGB, capacity)
+        self._reextract: tuple[float, set[str]] = (-1.0, set())  # (needs_reextract mtime, ledger ids)
+
+    def reextract_ids(self) -> set[str]:
+        """Finished archives that a needs_reextract row asks for again (by archive slug): a refeed of one of
+        these under its old id is extracted, not skipped as done."""
+        try:
+            mtime = NEEDS_REEXTRACT.stat().st_mtime
+        except OSError:
+            return set()
+        if mtime != self._reextract[0]:
+            wanted = {r.get("archive_slug") or r.get("archive") for r in read_jsonl(NEEDS_REEXTRACT)}
+            ids = {aid for aid, rec in self.ledger.items() if rec.get("status") == "done" and rec.get("slug") in wanted}
+            self._reextract = (mtime, ids)
+        return self._reextract[1]
+
+    def slug_of(self, a: Archive) -> str:
+        """The archive's folder name. An archive the ledger knows keeps the folder it used, and one whose maps
+        already sit in a folder named by the 8-character form of extractors before 1.10.0 keeps that one."""
+        recorded = (self.ledger.get(a.id) or {}).get("slug")
+        if recorded:
+            return recorded
+        names = sorted(a.listing)
+        slug, legacy = slug_for(names, a.id), slug_for(names, a.id, legacy=True)
+        if legacy != slug and (DEMOS_DIR / legacy).is_dir() and _owned_by(DEMOS_DIR / legacy, a.id):
+            return legacy
+        return slug
 
     # --- inputs
     def candidates(self):
@@ -462,7 +546,7 @@ class Pipeline:
                 continue
             in_failed = f.parent.parent == FAILED_DIR
             aid = f.parent.name if in_failed else f.name
-            done = self.ledger.get(aid, {}).get("status") == "done"
+            done = self.ledger.get(aid, {}).get("status") == "done" and aid not in self.reextract_ids()
             if done or (self.ledger.get(aid, {}).get("status") == "failed" and not in_failed):
                 continue
             if in_failed and f in self.retried:
@@ -517,7 +601,7 @@ class Pipeline:
                             "(max %.0f), free %.1f GB (min %.0f after extracting); %s waits", our, held, expand,
                             MAX_OUR_GB, free, MIN_FREE_GB, a.id)
                 return
-            a.slug = slug_for(sorted(a.listing), a.id)
+            a.slug = self.slug_of(a)
             a.work = WORK_DIR / a.slug
             if a.work.exists():
                 safe_rmtree(a.work)
@@ -564,7 +648,8 @@ class Pipeline:
                 keys.add(key)
                 jd = LOG_DIR / "jobs"
                 jd.mkdir(parents=True, exist_ok=True)
-                self.jobs.append(Job(archive=a, dem=dem, out_dir=DEMOS_DIR / a.slug / key, map_key=key,
+                a.out_dirs[dem.name] = DEMOS_DIR / a.slug / key
+                self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
                                      result_path=a.work / f"{dem.stem}.result.json",
                                      log_path=jd / f"{a.slug}-{key}.log"))
             log.info("extracted %s in %.1fs: %s", a.id, a.t_extract_s, [d.name for d in a.dems])
@@ -660,8 +745,7 @@ class Pipeline:
             if bad:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
                 continue
-            replace_old_extractions(a.results, {(DEMOS_DIR / a.slug / (r.get("map") or "")).resolve()
-                                                for r in a.results.values()})
+            replace_old_extractions(a.results, a.out_dirs)
             # Every map is written and validated: the inputs can go.
             safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
