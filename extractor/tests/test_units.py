@@ -543,10 +543,11 @@ def _pr(rows):
     return df.astype({"steamid": "UInt64"})
 
 
-def test_hits_the_demo_lost_are_rebuilt_from_health_with_an_exact_attacker():
+def test_hits_the_demo_lost_are_rebuilt_from_health_and_named_only_on_evidence():
     # A pro demo, round 2: ticks 9168-9184 carry no player_hurt or weapon_fire, yet a CT (V1) drops 48 -> 0
-    # at 9173 (killed by T1) and T1 drops 100 -> 45 at 9182. The game credits T1 279 (hits 231 + 48) and a
-    # CT (C1) 140 (hits 85 + 55). On another demo, a world suicide from 74 HP (S) is self damage.
+    # at 9173 (killed by T1) and T1 drops 100 -> 45 at 9182. The kill names the 9173 attacker; nothing on
+    # 9182 names anyone, so that hit keeps a null attacker and is flagged. On another demo, a world suicide
+    # from 74 HP (S) is self damage.
     T1, V1, C1, S1 = 76561190000000011, 76561190000000012, 76561190000000013, 76561190000000014
     side = {(2, T1): "T", (2, V1): "CT", (2, C1): "CT", (2, S1): "CT"}
     dmg = ex.pd.DataFrame(dict(tick=[8802, 9196], round=[2, 2], attacker_steamid=[T1, C1],
@@ -558,27 +559,13 @@ def test_hits_the_demo_lost_are_rebuilt_from_health_with_an_exact_attacker():
         {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
     drops = ex.pd.DataFrame(dict(tick=[9173, 9182, 9500], steamid=[V1, T1, S1], health_before=[48, 100, 74],
                                  health_after=[0, 45, 0], round=[2, 2, 2]))
-    out = ex.rebuild_lost_hits(drops, dmg, kills, _pr([(2, T1, 279), (2, C1, 140)]), side)
+    out = ex.rebuild_lost_hits(drops, dmg, kills, _fires(), side)
+    assert [None if pd.isna(a) else int(a) for a in out.attacker_steamid] == [T1, None, S1]
     out["weapon"] = out.weapon.astype(object).where(out.weapon.notna(), None)
-    assert out[["tick", "attacker_steamid", "dmg_health_capped", "weapon", "is_team_damage", "is_self", "source"]]         .values.tolist() == [[9173, T1, 48, "galilar", False, False, "health"],
-                             [9182, C1, 55, None, False, False, "health"],
-                             [9500, S1, 74, "world", True, True, "health"]]
-
-
-def test_a_lost_hit_goes_only_to_the_one_enemy_whose_residual_equals_it():
-    side = {(1, A): "CT", (1, B): "CT", (1, C): "T"}
-    drops = ex.pd.DataFrame(dict(tick=[100], steamid=[C], health_before=[100], health_after=[70], round=[1]))
-    no_dmg = ex.pd.DataFrame(dict(tick=[], round=[], attacker_steamid=[], victim_steamid=[], dmg_health_capped=[],
-                                  is_team_damage=[])).astype({"attacker_steamid": "UInt64", "victim_steamid": "UInt64",
-                                                               "is_team_damage": bool})
-    no_kills = ex.pd.DataFrame(dict(tick=[], attacker_steamid=[], victim_steamid=[], weapon=[], hitgroup=[])).astype(
-        {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
-    # Only an enemy whose unexplained game damage equals the drop exactly is credited...
-    out = ex.rebuild_lost_hits(drops, no_dmg, no_kills, _pr([(1, A, 30), (1, B, 31)]), side)
-    assert out.attacker_steamid.tolist() == [A]
-    # ...and with two such enemies nobody is.
-    out = ex.rebuild_lost_hits(drops, no_dmg, no_kills, _pr([(1, A, 30), (1, B, 30)]), side)
-    assert out.attacker_steamid.isna().tolist() == [True]
+    assert out[["tick", "dmg_health_capped", "weapon", "is_team_damage", "is_self", "source",
+                "reconstructed_ambiguous"]].values.tolist() == [[9173, 48, "galilar", False, False, "health", False],
+                                                                [9182, 55, None, False, False, "health", True],
+                                                                [9500, 74, "world", True, True, "health", False]]
 
 
 def test_game_damage_is_the_counter_rise_measured_on_the_next_round_start():
@@ -697,24 +684,25 @@ def test_match_starts_at_the_last_restart_that_rounds_follow():
 
 
 
-def test_several_lost_hits_go_to_the_one_enemy_whose_residual_is_their_sum():
-    # A pro demo, round 2: seven lost burn ticks (1, 3, 3, 4, 5, 6, 6 = 28 HP) on one CT; the
-    # only T with unexplained game damage has exactly 28 (36 counted, 8 recorded).
+def test_lost_burn_ticks_stay_unattributed_and_account_for_the_shortfall_of_the_side_that_burned():
+    # A pro demo, round 2: seven lost burn ticks (1, 3, 3, 4, 5, 6, 6 = 28 HP) on one CT; the only T short
+    # of his game damage is short by exactly 28 (36 counted, 8 recorded). No shot names anyone on those
+    # ticks, so none is credited; the 28 HP shortfall is explained, and one HP more would not be.
     side = {(2, A): "CT", (2, C): "T", (2, D): "T"}
     burns = [1, 3, 3, 4, 5, 6, 6]
     hp = list(np.cumsum([0] + burns))
     drops = ex.pd.DataFrame(dict(tick=[13753 + 13 * i for i in range(7)], steamid=A, health_before=[100 - h for h in hp[:-1]],
                                  health_after=[100 - h for h in hp[1:]], round=2))
     dmg = ex.pd.DataFrame(dict(tick=[13000], round=[2], attacker_steamid=[C], victim_steamid=[A], dmg_health_capped=[8],
-                               is_team_damage=[False])).astype({"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
+                               is_team_damage=[False], v_side=["CT"], reconstructed_ambiguous=[False])).astype(
+        {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
     no_kills = ex.pd.DataFrame(dict(tick=[], attacker_steamid=[], victim_steamid=[], weapon=[], hitgroup=[])).astype(
         {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
-    out = ex.rebuild_lost_hits(drops, dmg, no_kills, _pr([(2, C, 36), (2, D, 0)]), side)
-    assert out.attacker_steamid.tolist() == [C] * 7 and int(out.dmg_health_capped.sum()) == 28
-    # If the sum does not match exactly, nobody is credited.
-    out = ex.rebuild_lost_hits(drops, dmg, no_kills, _pr([(2, C, 37), (2, D, 0)]), side)
-    assert out.attacker_steamid.isna().all()
-
+    out = ex.rebuild_lost_hits(drops, dmg, no_kills, _fires(), side)
+    assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
+    hits = pd.concat([dmg, out], ignore_index=True).astype({"is_team_damage": bool, "reconstructed_ambiguous": bool})
+    assert ex.explain_damage_gaps(hits, _pr([(2, C, 36), (2, D, 0)]), side) == ([], [(2, C, 36, 8)])
+    assert ex.explain_damage_gaps(hits, _pr([(2, C, 37), (2, D, 0)]), side) == ([(2, C, 37, 8)], [])
 
 
 def test_a_winnerless_attempt_is_voided_only_if_the_game_rolled_its_stats_back():
@@ -910,3 +898,112 @@ def test_the_writer_rejects_a_duplicate_key():
 def test_a_round_recorded_live_is_timed_from_its_start():
     r = pd.DataFrame(dict(start_tick=[1, 5483], freeze_end_tick=[None, 6763], end_tick=[5163, 11169]))
     assert ex.round_duration_s(r, 64.0).tolist() == [(5163 - 1) / 64, (11169 - 6763) / 64]
+
+
+# Lost hits: an attacker only on evidence from the drop's own tick.
+LA, LB, LC, LV, LW = (76561190000000021, 76561190000000022, 76561190000000023, 76561190000000031,
+                      76561190000000032)
+LOST_SIDES = {(3, LA): "T", (3, LB): "T", (3, LC): "T", (3, LV): "CT", (3, LW): "CT"}
+
+
+def _lost(tick=9182, hp0=100, hp1=45, victim=LV):
+    return pd.DataFrame(dict(tick=[tick], steamid=[victim], health_before=[hp0], health_after=[hp1], round=[3]))
+
+
+def _no_events():
+    dmg = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.Series([], dtype="UInt64")))
+    kills = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.Series([], dtype="UInt64"),
+                              attacker_steamid=pd.Series([], dtype="UInt64"), weapon=[], hitgroup=[]))
+    return dmg, kills
+
+
+def _fires(*pairs):
+    return pd.DataFrame(dict(tick=[t for t, _ in pairs], steamid=pd.array([f for _, f in pairs], dtype="UInt64")))
+
+
+def _rebuilt(fires, line_of_fire=None, drops=None):
+    dmg, kills = _no_events()
+    out = ex.rebuild_lost_hits(drops if drops is not None else _lost(), dmg, kills, fires, LOST_SIDES, line_of_fire)
+    r = out.iloc[0]
+    return (None if pd.isna(r.attacker_steamid) else int(r.attacker_steamid)), bool(r.reconstructed_ambiguous)
+
+
+def test_a_lost_hit_goes_to_the_one_enemy_who_fired_on_its_tick():
+    assert _rebuilt(_fires((9182, LA), (9100, LB))) == (LA, False)
+
+
+def test_two_enemies_firing_on_the_tick_is_ambiguous_unless_one_alone_has_the_victim_in_line_of_fire():
+    two = _fires((9182, LA), (9182, LB))
+    assert _rebuilt(two) == (None, True)
+    assert _rebuilt(two, lambda t, v: {LB, LC}) == (LB, False)
+    assert _rebuilt(two, lambda t, v: {LC}) == (None, True)  # the only one in line of fire did not shoot
+
+
+def test_with_no_shot_on_the_tick_only_a_single_enemy_in_line_of_fire_names_the_attacker():
+    assert _rebuilt(_fires(), lambda t, v: {LC}) == (LC, False)
+    assert _rebuilt(_fires(), lambda t, v: {LB, LC}) == (None, True)
+
+
+def test_a_teammate_firing_on_the_tick_is_not_evidence():
+    assert _rebuilt(_fires((9182, LW))) == (None, True)
+
+
+class _Wall:
+    """A mesh stub: every ray is clear except those that start at a blocked eye."""
+
+    def __init__(self, blocked=()):
+        self.blocked = {tuple(b) for b in blocked}
+
+    def is_visible(self, a, b):
+        return tuple(a) not in self.blocked
+
+
+def test_line_of_fire_is_the_alive_enemies_facing_the_victim_with_a_clear_ray():
+    # The victim (CT) at the origin. T1 faces him from +x; T2 faces away; T3 faces him but is dead;
+    # a CT teammate faces him too. Only T1 counts, and not once a wall blocks T1's eye.
+    ids = [LV, LA, LB, LC, LW]
+    S = pd.DataFrame(dict(tick=9182, steamid=pd.array(ids, dtype="UInt64"), team_num=[3, 2, 2, 2, 3],
+                          is_alive=[True, True, True, False, True], X=[0.0, 500.0, 0.0, -500.0, 0.0],
+                          Y=[0.0, 0.0, 500.0, 0.0, -500.0], eye_z=64.0, pitch=0.0, yaw=[0.0, 180.0, 90.0, 0.0, 90.0]))
+    assert ex.enemies_in_line_of_fire(S, _Wall(), [9182])(9182, LV) == {LA}
+    assert ex.enemies_in_line_of_fire(S, _Wall([(500.0, 0.0, 64.0)]), [9182])(9182, LV) == set()
+    assert ex.enemies_in_line_of_fire(S, None, [9182]) is None
+
+
+def _gap_inputs(game, hits, ambiguous_hp):
+    """One round; T players' game_damage and recorded hits; unattributed rebuilt HP on the CT victim."""
+    pr = pd.DataFrame(dict(round=3, steamid=list(game), game_damage=list(game.values())))
+    rows = [dict(round=3, attacker_steamid=a, v_side="CT", dmg_health_capped=h, is_team_damage=False,
+                 reconstructed_ambiguous=False) for a, h in hits.items()]
+    rows += [dict(round=3, attacker_steamid=None, v_side="CT", dmg_health_capped=h, is_team_damage=False,
+                  reconstructed_ambiguous=True) for h in ambiguous_hp]
+    dmg = pd.DataFrame(rows)
+    # From the Python values: the frame column went through float64 (a None among them) and lost precision.
+    dmg["attacker_steamid"] = pd.array([r["attacker_steamid"] for r in rows], dtype="UInt64")
+    return dmg, pr
+
+
+def test_shortfalls_that_unattributed_hits_sum_to_exactly_are_explained_and_nothing_else_is():
+    dmg, pr = _gap_inputs({LA: 100, LB: 59}, {LA: 45, LB: 55}, [55, 4])
+    assert ex.explain_damage_gaps(dmg, pr, LOST_SIDES) == ([], [(3, LA, 100, 45), (3, LB, 59, 55)])
+    dmg, pr = _gap_inputs({LA: 100, LB: 59}, {LA: 45, LB: 55}, [55])  # 4 HP short with nothing to explain it
+    assert ex.explain_damage_gaps(dmg, pr, LOST_SIDES) == ([(3, LA, 100, 45), (3, LB, 59, 55)], [])
+    dmg, pr = _gap_inputs({LA: 100, LB: 40}, {LA: 45, LB: 55}, [40])  # LB over-credited: never explained
+    assert ex.explain_damage_gaps(dmg, pr, LOST_SIDES) == ([(3, LA, 100, 45), (3, LB, 40, 55)], [])
+
+
+def test_an_unattributed_damage_shortfall_is_reported_not_passed_and_not_fatal():
+    kills = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), attacker_steamid=pd.Series([], dtype="UInt64"),
+                              victim_steamid=pd.Series([], dtype="UInt64"), assister_steamid=pd.Series([], dtype="UInt64"),
+                              is_teamkill=pd.Series([], dtype=bool), is_suicide=pd.Series([], dtype=bool),
+                              headshot=pd.Series([], dtype=bool), assister_side=[], v_side=[]))
+    dmg = pd.DataFrame(dict(attacker_steamid=pd.array([LA], dtype="UInt64"), victim_steamid=pd.array([LV], dtype="UInt64"),
+                            dmg_health_capped=[45], is_team_damage=[False]))
+    sb = pd.DataFrame(dict(steamid=pd.array([LA], dtype="UInt64"), kills_total=[0], deaths_total=[0],
+                           assists_total=[0], damage_total=[100], headshot_kills_total=[0]))
+    dam = lambda u: [c for c in ex.validate_scoreboard(kills, dmg, sb, u) if c["check"] == "damage"][0]
+    c = dam({LA: 55})
+    assert (c["ok"], c["fatal"]) == (False, False) and "unattributed" in c["note"]
+    c = dam({LA: 40})  # the unattributed hits do not cover the whole gap
+    assert (c["ok"], c["fatal"]) == (False, True)
+

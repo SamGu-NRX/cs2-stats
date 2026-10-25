@@ -53,7 +53,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.3.1"
+EXTRACTOR_VERSION = "1.4.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -194,7 +194,8 @@ def check_purchase_cost(item: str, cost: int) -> str | None:
 # Validation (pure functions over DataFrames; unit-tested)
 # ---------------------------------------------------------------------------
 
-def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: pd.DataFrame) -> list[dict]:
+def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: pd.DataFrame,
+                        unattributed: dict[int, int] | None = None) -> list[dict]:
     """Compare event-derived K/D/A/damage with the final-tick scoreboard.
 
     Definitions, each reproduced exactly on the two test demos:
@@ -207,7 +208,8 @@ def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: 
       not the truncated dmg_health field, including hits rebuilt from health
       drops whose player_hurt the demo lost (rebuild_lost_hits).
     A player with events but no final-tick controller (a disconnect) is noted,
-    not failed.
+    not failed. unattributed maps a player to the hit-table shortfall that unattributed rebuilt hits
+    account for (explain_damage_gaps); a damage gap of exactly that size fails as unattributed, not fatally.
     kills/damages carry steamids as UInt64 and use the column names of the
     kills and damages tables.
     """
@@ -240,8 +242,12 @@ def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: 
         for name, exp, act in (("deaths", row.deaths_total, d), ("assists", row.assists_total, a)):
             checks.append(dict(check=name, steamid=int(sid), expected=int(exp), actual=act,
                                ok=int(exp) == act, fatal=True, note=""))
+        gap = int(row.damage_total) - dmg
+        lost = (unattributed or {}).get(int(sid), 0)
         checks.append(dict(check="damage", steamid=int(sid), expected=int(row.damage_total), actual=dmg,
-                           ok=int(row.damage_total) == dmg, fatal=True, note=""))
+                           ok=gap == 0, fatal=not (gap > 0 and gap == lost),
+                           note=f"unattributed: {gap} HP of rebuilt hits name no attacker" if gap and gap == lost
+                           else ""))
         hs = int(((enemy.attacker_steamid == sid) & enemy.headshot).sum())
         checks.append(dict(check="headshot_kills", steamid=int(sid), expected=int(row.headshot_kills_total),
                            actual=hs, ok=int(row.headshot_kills_total) == hs, fatal=False, note=""))
@@ -532,30 +538,34 @@ def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: l
     return rise
 
 
-def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFrame, player_rounds: pd.DataFrame,
-                      side_of: dict) -> pd.DataFrame:
+def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFrame, fires: pd.DataFrame,
+                      side_of: dict, line_of_fire=None) -> pd.DataFrame:
     """Damage rows for health drops that have no player_hurt event on that tick.
 
     GOTV demos can lose a stretch of events: on one pro demo, ticks 9168-9184 have no
     player_hurt or weapon_fire at all, yet health falls (48 -> 0 at 9173, 100 -> 45 at 9182) and
-    the game credits both hits. HP before and after come from the networked health. The attacker is the
-    player_death attacker on that tick for a lethal drop; otherwise the one enemy of the victim whose game
-    damage that round exceeds his recorded hits by exactly the drop (55). A lost stretch can also
-    hold several hits from one attacker (molotov burn ticks of 1, 3, 3, 4, 5, 6, 6 HP on one
-    demo; an HE on two players on another): the drops still unattributed in a round on one
-    side all go to the one enemy whose unexplained game damage is positive, when it equals their sum. With
-    no exact unique match the attacker stays null, and the damage check then fails loudly.
+    the game credits both hits. HP before and after come from the networked health. A rebuilt hit names an
+    attacker only on evidence from its own tick, never from the scoreboard it is validated against:
+    - a lethal drop: the player_death attacker on that tick (null for a world death);
+    - otherwise the one enemy of the victim who fired on that tick (weapon_fire or bullet_impact), who must
+      also be in line of fire when the map mesh is usable;
+    - with no enemy shot on that tick (the stretch lost those too), the one enemy in line of fire.
+    Any other drop keeps a null attacker with reconstructed_ambiguous = true, and validation reports the
+    damage it leaves out as unattributed (explain_damage_gaps).
     drops: (tick, steamid, health_before, health_after, round) from the every-tick pass.
+    fires: (tick, steamid) of every shot event.
+    line_of_fire: (tick, victim) -> the enemies who are alive with the victim mesh-visible inside their view
+    cone on that tick (enemies_in_line_of_fire), or None without a usable mesh.
     """
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
     lost = drops[(drops["round"] > 0).to_numpy() & unexplained]
     death = {(int(t), int(v)): r for t, v, r in zip(kills.tick, kills.victim_steamid.astype("Int64"),
                                                      kills.itertuples())}
-    enemy_hits = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(
-        ["round", "attacker_steamid"]).dmg_health_capped.sum()
-    residual = {(int(r), int(s)): int(g) - int(enemy_hits.get((r, s), 0)) for r, s, g in
-                zip(player_rounds["round"], player_rounds.steamid, player_rounds.game_damage) if not pd.isna(g)}
+    fired: dict[int, set[int]] = {}
+    for t, f in zip(fires.tick, fires.steamid.astype("Int64")):
+        if not pd.isna(f):
+            fired.setdefault(int(t), set()).add(int(f))
     rows = []
     for t, v, hp0, hp1, rnd in zip(lost.tick, lost.steamid, lost.health_before, lost.health_after, lost["round"]):
         t, v, rnd, d = int(t), int(v), int(rnd), int(hp0) - int(hp1)
@@ -563,40 +573,80 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
         k = death.get((t, v)) if hp1 == 0 else None
         if k is not None:
             attacker = None if pd.isna(k.attacker_steamid) else int(k.attacker_steamid)
-            weapon, hitgroup = k.weapon, k.hitgroup
+            weapon, hitgroup, ambiguous = k.weapon, k.hitgroup, False
         else:
-            match = [s for (r, s), left in residual.items() if r == rnd and left == d
-                     and side_of.get((rnd, s)) not in (None, v_side)]
-            attacker, weapon, hitgroup = (match[0] if len(match) == 1 else None), None, None
+            shooters = {f for f in fired.get(t, ()) if side_of.get((rnd, f)) not in (None, v_side)}
+            in_line = line_of_fire(t, v) if line_of_fire is not None else None
+            if shooters:
+                cand = shooters & in_line if in_line is not None else shooters
+            else:
+                cand = in_line or set()
+            attacker = next(iter(cand)) if len(cand) == 1 else None
+            weapon, hitgroup, ambiguous = None, None, attacker is None
         a_side = side_of.get((rnd, attacker)) if attacker is not None else None
-        if attacker is not None and a_side != v_side:
-            residual[(rnd, attacker)] = residual.get((rnd, attacker), 0) - d
         rows.append(dict(tick=t, round=rnd, attacker_steamid=attacker, victim_steamid=v, weapon=weapon,
                          hitgroup=hitgroup, health_before=int(hp0), health_after=int(hp1), dmg_health_capped=d,
                          # Same definitions as event rows: team damage is any same-side attacker, self included.
                          is_self=attacker == v, is_team_damage=attacker is not None and a_side == v_side,
-                         a_side=a_side, v_side=v_side, source="health"))
-    # Several lost hits from one attacker: the drops left in a (round, victim side) all go to the only enemy
-    # with unexplained game damage, if it equals their sum exactly.
-    groups: dict[tuple, list[dict]] = {}
-    for r in rows:
-        if r["attacker_steamid"] is None and r["health_after"] > 0:
-            groups.setdefault((r["round"], r["v_side"]), []).append(r)
-    for (rnd, v_side), grp in groups.items():
-        open_ = [(s, left) for (r, s), left in residual.items()
-                 if r == rnd and left > 0 and side_of.get((rnd, s)) not in (None, v_side)]
-        if len(open_) == 1 and open_[0][1] == sum(r["dmg_health_capped"] for r in grp):
-            attacker = open_[0][0]
-            residual[(rnd, attacker)] = 0
-            for r in grp:
-                r.update(attacker_steamid=attacker, a_side=side_of.get((rnd, attacker)), is_self=False,
-                         is_team_damage=False)
+                         a_side=a_side, v_side=v_side, source="health", reconstructed_ambiguous=ambiguous))
     out = pd.DataFrame(rows, columns=["tick", "round", "attacker_steamid", "victim_steamid", "weapon", "hitgroup",
                                       "health_before", "health_after", "dmg_health_capped", "is_self",
-                                      "is_team_damage", "a_side", "v_side", "source"])
+                                      "is_team_damage", "a_side", "v_side", "source", "reconstructed_ambiguous"])
     for c in ("attacker_steamid", "victim_steamid"):
         out[c] = to_u64(pd.Series([r[c] for r in rows], index=out.index, dtype=object))
     return out
+
+
+def enemies_in_line_of_fire(S: pd.DataFrame, checker, ticks):
+    """line_of_fire for rebuild_lost_hits: (tick, victim) -> the alive players of the other team who have the
+    victim inside their view cone and mesh-visible on that tick. None without a usable mesh.
+    S: player_state() rows; ticks: the only ticks that will be asked about."""
+    if checker is None:
+        return None
+    by_tick = {int(t): g for t, g in S[S.tick.isin(set(int(t) for t in ticks))].groupby("tick")}
+
+    def at(tick: int, victim: int) -> set[int]:
+        g = by_tick.get(int(tick))
+        me = g[g.steamid == victim] if g is not None else None
+        if me is None or me.empty:
+            return set()
+        foes = g[(g.team_num != me.team_num.iat[0]) & g.is_alive.astype(bool)]
+        a_eye = foes[["X", "Y", "eye_z"]].to_numpy(dtype=float)
+        v_eye = np.repeat(me[["X", "Y", "eye_z"]].to_numpy(dtype=float), len(foes), axis=0)
+        seen = np.zeros(len(foes), dtype=bool)
+        cone = in_view_cone(a_eye, foes.pitch.to_numpy(float), foes.yaw.to_numpy(float), v_eye)
+        seen[cone] = mesh_visible(checker, a_eye[cone], v_eye[cone])
+        return {int(x) for x in foes.steamid[seen]}
+    return at
+
+
+def explain_damage_gaps(dmg: pd.DataFrame, player_rounds: pd.DataFrame, side_of: dict):
+    """Gaps between game_damage and the hit table, per (round, player), split into those the unattributed
+    rebuilt hits account for and the rest.
+
+    The unattributed hits of a round on one side's players account for the gaps of the other side's players
+    in that round when every such gap is a shortfall and the shortfalls sum to exactly those hits. The test
+    compares totals only and never names an attacker. Returns (unexplained, explained), each a sorted list
+    of (round, steamid, game_damage, hit-table damage).
+    """
+    hit_r = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
+        .dmg_health_capped.sum()
+    amb = dmg[dmg.reconstructed_ambiguous.astype(bool)].groupby(["round", "v_side"]).dmg_health_capped.sum()
+    groups: dict[tuple, list] = {}
+    for r, s_, g in zip(player_rounds["round"], player_rounds.steamid, player_rounds.game_damage):
+        if pd.isna(g) or int(g) == int(hit_r.get((r, s_), 0)):
+            continue
+        gap = (int(r), int(s_), int(g), int(hit_r.get((r, s_), 0)))
+        groups.setdefault((int(r), side_of.get((int(r), int(s_)))), []).append(gap)
+    unexplained, explained = [], []
+    for (rnd, side), grp in groups.items():
+        other = {"CT": "T", "T": "CT"}.get(side)
+        pool = int(amb.get((rnd, other), 0)) if other else 0
+        if pool and all(g > h for _, _, g, h in grp) and sum(g - h for _, _, g, h in grp) == pool:
+            explained += grp
+        else:
+            unexplained += grp
+    return sorted(unexplained), sorted(explained)
 
 
 def round_duration_s(rounds: pd.DataFrame, rate: float) -> pd.Series:
@@ -1252,12 +1302,22 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                         dtype=bool) & ~bl.is_self
         T["blinds"] = bl[bl["round"] > 0]
 
+    # ----- every player's state at every tick, and the map mesh checked against the kills
+    S = player_state(pd.concat(state_parts, ignore_index=True))
+    del state_parts
+    checker, vis = checked_mesh(S, kills, ctx.mapdata, header.get("map_name"))
+
     # ----- hits the demo's event stream lost, rebuilt from networked health
-    dmg = pd.concat([dmg, rebuild_lost_hits(stamp(pd.concat(drop_parts, ignore_index=True)), dmg, kills,
-                                            player_rounds, side_of)], ignore_index=True)
+    drops = stamp(pd.concat(drop_parts, ignore_index=True))
+    fires = [ev("weapon_fire")] + ([ev("bullet_impact")] if "bullet_impact" in E else [])
+    fires = pd.concat([pd.DataFrame({"tick": f.tick, "steamid": pid(f, "user")}) for f in fires], ignore_index=True)
+    dmg["reconstructed_ambiguous"] = False
+    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, kills, fires, side_of,
+                                            enemies_in_line_of_fire(S, checker, drops.tick))], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
     # not negation; every filter below relies on real booleans.
-    dmg = dmg.astype({"is_self": bool, "is_team_damage": bool}).sort_values("tick", kind="stable")         .reset_index(drop=True)
+    dmg = dmg.astype({"is_self": bool, "is_team_damage": bool, "reconstructed_ambiguous": bool}) \
+        .sort_values("tick", kind="stable").reset_index(drop=True)
     T["damages"] = dmg
     ctx.info["rebuilt_hits"] = int((dmg.source == "health").sum())
 
@@ -1303,10 +1363,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
 
     # ----- engagement tables
     with Timer(ctx, "dp_engagements"):
-        T["engagements"], T["engagement_ticks"], vis = engagement_tables(
-            pd.concat(state_parts, ignore_index=True), rounds, shots, dmg, kills, T["smokes"], steam_bit,
-            ctx.velocity, header.get("map_name"), ctx.mapdata, rate)
-        del state_parts
+        T["engagements"], T["engagement_ticks"] = engagement_tables(
+            S, rounds, shots, dmg, kills, T["smokes"], steam_bit, ctx.velocity, checker, rate)
+        del S
         ctx.info["visibility"] = vis
 
     # ----- positions (4 Hz)
@@ -1363,16 +1422,19 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     T["events_misc"] = em
 
     # ----- validation
-    checks = validate_scoreboard(kills, dmg, sb_part) + validate_rounds(rounds, final_score)
     # Per round, the game's damage and the hit table must agree exactly; a round boundary read one tick
-    # early shifts every round's damage into the next and fails this.
-    hit_r = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
-        .dmg_health_capped.sum()
-    off = [(int(r), int(s_), int(g), int(hit_r.get((r, s_), 0))) for r, s_, g in
-           zip(player_rounds["round"], player_rounds.steamid, player_rounds.game_damage)
-           if not pd.isna(g) and int(g) != int(hit_r.get((r, s_), 0))]
+    # early shifts every round's damage into the next and fails this. Only the gaps that unattributed
+    # rebuilt hits account for are exempt, and they are reported, not passed.
+    off, unattributed = explain_damage_gaps(dmg, player_rounds, side_of)
+    short: dict[int, int] = {}
+    for _, s_, g, h in unattributed:
+        short[s_] = short.get(s_, 0) + g - h
+    checks = validate_scoreboard(kills, dmg, sb_part, short) + validate_rounds(rounds, final_score)
     checks.append(dict(check="game_damage_per_round", expected=0, actual=len(off), ok=not off, fatal=True,
                        note=str(off[:5]) if off else ""))
+    lost_hp = int(dmg.loc[dmg.reconstructed_ambiguous, "dmg_health_capped"].sum())
+    checks.append(dict(check="damage_unattributed", expected=0, actual=lost_hp, ok=lost_hp == 0, fatal=False,
+                       note=f"{len(unattributed)} player-rounds short: {unattributed[:5]}" if lost_hp else ""))
     gd = player_rounds.groupby("steamid").game_damage.sum()
     for r in sb_part.itertuples():
         got = int(gd.get(r.steamid, 0))
@@ -1522,6 +1584,36 @@ def load_mesh(mapdata: Path | None, map_name: str | None):
     return VisibilityChecker(mesh), dict(info, status="ok", mesh_sha256=file_sha256(mesh))
 
 
+def player_state(S: pd.DataFrame) -> pd.DataFrame:
+    """Every player's state at every tick (tick, steamid, team_num, is_alive, X, Y, Z, pitch, yaw, duck_amount,
+    spotted-by mask), with eye height and exact steamids."""
+    return S.assign(eye_z=eye_z(S.Z, S.duck_amount).astype("float32"), steamid=to_u64(S.steamid))
+
+
+def _eyes(df: pd.DataFrame) -> np.ndarray:
+    return df[["X", "Y", "eye_z"]].to_numpy(dtype=float)
+
+
+def checked_mesh(S: pd.DataFrame, kills: pd.DataFrame, mapdata: Path | None, map_name: str | None):
+    """(VisibilityChecker or None, visibility info). The mesh is dropped (status mesh_mismatch) when it shows
+    fewer than MESH_MIN_KILL_AGREEMENT of the clean kills as visible: it does not match the demo's map version.
+    S: player_state() rows."""
+    checker, vis = load_mesh(mapdata, map_name)
+    if checker is not None:
+        key = ["tick", "steamid"]
+        clean = kills[(kills.penetrated == 0) & kills.attacker_steamid.notna() & ~kills.is_teamkill
+                      & ~kills.is_suicide]
+        a, v = (clean[["tick", who]].rename(columns={who: "steamid"}).merge(S, on=key, how="left")
+                for who in ("attacker_steamid", "victim_steamid"))
+        ok = a.X.notna().to_numpy() & v.X.notna().to_numpy()
+        seen = mesh_visible(checker, _eyes(a)[ok], _eyes(v)[ok])
+        vis["kills_checked"] = int(ok.sum())
+        vis["kill_agreement"] = round(float(seen.mean()), 4) if ok.any() else None
+        if vis["kill_agreement"] is not None and vis["kill_agreement"] < MESH_MIN_KILL_AGREEMENT:
+            vis["status"], checker = "mesh_mismatch", None
+    return checker, vis
+
+
 ENGAGEMENT_PAIR = ["round", "attacker_steamid", "victim_steamid", "tick"]
 
 
@@ -1535,34 +1627,14 @@ def engagement_triggers(dmg: pd.DataFrame, kills: pd.DataFrame) -> pd.DataFrame:
                       for x in (d, k)], ignore_index=True)
 
 
-def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity, map_name, mapdata, rate):
+def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity, checker, rate):
     """Build engagements and engagement_ticks (definitions in engagements.py and SCHEMA-v1.md).
 
-    S: every player's state at every tick (tick, steamid, team_num, is_alive, X, Y, Z, pitch, yaw,
-    duck_amount, spotted-by mask); steam_bit maps a steamid to its bit in that mask.
+    S: player_state() rows; steam_bit maps a steamid to its bit in the spotted-by mask; checker: the
+    checked_mesh() checker, or None when visibility is unavailable.
     """
-    S = S.assign(eye_z=eye_z(S.Z, S.duck_amount).astype("float32"))
-    S["steamid"] = to_u64(S.steamid)
     key = ["tick", "steamid"]
-
-    def state_at(df, who):
-        return df[["tick", who]].rename(columns={who: "steamid"}).merge(S, on=key, how="left")
-
-    def eyes(df):
-        return df[["X", "Y", "eye_z"]].to_numpy(dtype=float)
-
-    checker, vis = load_mesh(mapdata, map_name)
-    if checker is not None:
-        # Guard against a mesh that does not match the demo's map version (see MESH_MIN_KILL_AGREEMENT).
-        clean = kills[(kills.penetrated == 0) & kills.attacker_steamid.notna() & ~kills.is_teamkill
-                      & ~kills.is_suicide]
-        a, v = state_at(clean, "attacker_steamid"), state_at(clean, "victim_steamid")
-        ok = a.X.notna().to_numpy() & v.X.notna().to_numpy()
-        seen = mesh_visible(checker, eyes(a)[ok], eyes(v)[ok])
-        vis["kills_checked"] = int(ok.sum())
-        vis["kill_agreement"] = round(float(seen.mean()), 4) if ok.any() else None
-        if vis["kill_agreement"] is not None and vis["kill_agreement"] < MESH_MIN_KILL_AGREEMENT:
-            vis["status"], checker = "mesh_mismatch", None
+    eyes = _eyes
 
     bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.start_tick),
                              int(r.end_tick)) for r in rounds.itertuples()}
@@ -1659,7 +1731,7 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
                                          ("x", "y", "z", "eye_z", "pitch", "yaw", "vel_x", "vel_y", "vel_z",
                                           "duck", "shot_fired")] + ["a_spotted_by_v", "v_spotted_by_a",
                                                                     "mesh_visible", "smoke_blocked"]
-    return eng, rows[order], vis
+    return eng, rows[order]
 
 
 # ---------------------------------------------------------------------------
