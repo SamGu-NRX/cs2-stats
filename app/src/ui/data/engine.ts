@@ -12,7 +12,7 @@ import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs } from "../lib/format";
 import type { MatchEntry } from "./match";
 import { sourceOf } from "./sources";
-import { metric, metrics, ratingInfo, winProbInfo } from "./meta";
+import { metric, ratingInfo, winProbInfo } from "./meta";
 import type { AttributeId } from "./proPack";
 
 // ---------------------------------------------------------------- rating
@@ -186,12 +186,6 @@ export const proPoolName = (role: "awper" | "rifler" | "all") => (role === "all"
 /** The same for the bot pools the user's style ranks against: "rifler bots", "all bots". */
 export const botPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "all bots" : role === "awper" ? "AWPer bots" : "rifler bots");
 
-/**
- * Whether the engine defines a metric. A view slot for a metric the engine has announced but not
- * shipped (Profile's buy deviation and save conversion) renders only once this is true and the value
- * is non-null, so nothing stands in for it meanwhile.
- */
-export const hasMetric = (id: string) => metrics().some((m) => m.id === id);
 
 /**
  * The bot population the user's style ranks against, as one count with one noun. Every place that
@@ -214,6 +208,9 @@ export function botPopulation(c: Careers, pool?: BotPool): BotPopulation {
   const noun = c.unit === "matches" ? (count === 1 ? "bot match" : "bot matches") : count === 1 ? "bot career" : "bot careers";
   return { count, noun, text: `${count} ${role}${noun}` };
 }
+
+/** A bot pool's name and size, for a card's aside: "Percentile against 62 rifler bot matches". */
+export const botPoolText = (c: Careers, pool?: BotPool) => `Percentile against ${botPopulation(c, pool).text}`;
 
 /** The sentence behind the "Provisional" chip the style scores carry until enough bot careers qualify. */
 export const provisionalText = (c: Careers, pool?: BotPool) => (c.unit === "matches"
