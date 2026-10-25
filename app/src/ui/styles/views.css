@@ -249,12 +249,13 @@ canvas.radar-img { image-rendering: auto; }
 .dhost__main { display: grid; gap: 10px; min-width: 0; }
 .inspector { position: relative; padding: 10px 0 12px; min-width: 0; }
 .inspector__scroll { overflow-x: auto; padding: 0 12px; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
-/* more rounds past an edge: a fade over the cells and a chevron that pages the grid */
-.inspector::before, .inspector::after { content: ""; position: absolute; top: 0; bottom: 0; width: 40px; z-index: 3; pointer-events: none; opacity: 0; transition: opacity var(--d-hover) ease; }
+/* more rounds past an edge: a fade over the cells and a chevron that pages the grid. No transition:
+   arrow keys scroll the grid too, and keyboard actions never animate (design/shell-and-motion.md). */
+.inspector::before, .inspector::after { content: ""; position: absolute; top: 0; bottom: 0; width: 40px; z-index: 3; pointer-events: none; opacity: 0; }
 .inspector::before { left: 180px; background: linear-gradient(to right, var(--bg1), transparent); }
 .inspector::after { right: 0; border-radius: 0 var(--r-card) var(--r-card) 0; background: linear-gradient(to left, var(--bg1) 20%, transparent); }
 .inspector[data-left]::before, .inspector[data-right]::after { opacity: 1; }
-.inspector__more { position: absolute; top: 50%; z-index: 4; width: 24px; height: 40px; margin-top: -20px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--cream); background: var(--bg2); box-shadow: inset 0 0 0 1px var(--line2); opacity: 0; pointer-events: none; transition: opacity var(--d-hover) ease; }
+.inspector__more { position: absolute; top: 50%; z-index: 4; width: 24px; height: 40px; margin-top: -20px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--cream); background: var(--bg2); box-shadow: inset 0 0 0 1px var(--line2); opacity: 0; pointer-events: none; }
 .inspector__more--l { left: 184px; }
 .inspector__more--r { right: 6px; }
 .inspector[data-left] .inspector__more--l, .inspector[data-right] .inspector__more--r { opacity: 1; pointer-events: auto; }
