@@ -57,7 +57,8 @@ it("shows no percentile, but a reason, when the matches lack an input a metric n
   const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } };
   const pros: Baselines = { version: 1, built: "x", source: "test", model: f.match.model, n: {}, pools: { ...pools, rifler: pools.all } };
   const same = compare(s, pros, {});
-  expect(same.utilUnused).toMatchObject({ pct: null, reason: expect.stringMatching(/inventories/) });
+  // no inventories: unused utility is unmeasured (no value) and says why
+  expect(same.utilUnused).toMatchObject({ value: null, pct: null, reason: expect.stringMatching(/inventories/) });
   expect(same.kpr.reason).toBeNull();
   expect(same.swing.pct).not.toBeNull();
   const other = compare(s, { ...pros, model: "hltv-0000-pffff" }, {});
