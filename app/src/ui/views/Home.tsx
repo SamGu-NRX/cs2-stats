@@ -16,18 +16,18 @@ import { metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
-import { entryTile, seriesOf, tileValue, TILES } from "../data/series";
+import { seriesOf, tileValue, TILES } from "../data/series";
 import { ATTR_ICON, AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, SkullIcon, WeaponIcon, WinIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
 import { ChevronRightIcon } from "../icons/ui";
-import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, openMatch, pageHref } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
-import { BreakRows, Empty, SectionAside, StatTile } from "./shared";
+import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
 import { RoundRail } from "./match/RoundRail";
 import type { AttributeId } from "../data/proPack";
 
@@ -98,13 +98,18 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
   const verdict = verdictOf(line.rating, BENCH.rating);
   const half = (side: "T" | "CT") => (v ? v.rounds.filter((r) => r.usSide === side && r.winner === "us").length : null);
   const other = s.usStartSide === "T" ? "CT" : "T";
-  const stat = (label: string, value: string, d: number | null, span: number, fmtD: (x: number) => string, color?: string) => (
+  // The hero is the one place a delta shows: this match against your average over the filtered
+  // matches, the average named beside it ("vs your 99.0").
+  const stat = (label: string, value: string, mine: number | null, avgV: number | null | undefined, fmtAvg: (x: number) => string, span: number, fmtD: (x: number) => string, color?: string, tip?: string) => (
     <div className="hero-stat">
       <span className="stat__l">{label}</span>
-      <b className="num" style={color ? { color } : undefined}><Num v={value} /></b>
-      <Delta d={d} span={span} fmt={fmtD} title="Against your average over the filtered matches" />
+      <b className="num" style={color ? { color } : undefined} data-tip={tip}><Num v={value} /></b>
+      {mine !== null && avgV !== null && avgV !== undefined && (
+        <span className="hero-stat__d"><Delta d={mine - avgV} span={span} fmt={fmtD} /><span className="hero-stat__vs">vs your {fmtAvg(avgV)}</span></span>
+      )}
     </div>
   );
+  const avgDiff = avg ? avg.diff / Math.max(1, list.length) : null;
   return (
     <section className="hero card" aria-label="Last match">
       <MapAtmosphere map={s.match.map} />
@@ -131,11 +136,11 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
             <b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b>
             <span className="verdict" data-v={verdict}>{verdict === "good" ? "Good" : verdict === "poor" ? "Poor" : "Average"}</span>
           </div>
-          {stat("Swing", fmtSwing(swing), swing !== null && avg?.swing != null ? (swing - avg.swing) * 100 : null, 3, (x) => `${x.toFixed(2)}%`, swing === null ? undefined : scoreText(swingScore(swing)))}
-          {stat("K–D", `${line.kills}–${line.deaths}`, avg ? line.diff - avg.diff / Math.max(1, list.length) : null, 8, (x) => x.toFixed(1))}
-          {stat("ADR", fmtAdr(line.adr), line.adr !== null && avg?.adr != null ? line.adr - avg.adr : null, 20, (x) => x.toFixed(1))}
-          {stat("KAST", fmtPct(line.kast), line.kast !== null && avg?.kast != null ? line.kast - avg.kast : null, 10, (x) => `${x.toFixed(1)}%`)}
-          {stat("HS%", fmtPct(line.hs), line.hs !== null && avg?.hs != null ? line.hs - avg.hs : null, 15, (x) => `${x.toFixed(1)}%`)}
+          {stat("Swing", fmtSwing(swing), swing === null ? null : 100 * swing, avg?.swing == null ? null : 100 * avg.swing, (x) => fmtSwing(x / 100), 3, (x) => `${x.toFixed(2)}%`, swing === null ? undefined : scoreText(swingScore(swing)), swingSumTip(line.m))}
+          {stat("K–D", `${line.kills}–${line.deaths}`, line.diff, avgDiff, (x) => `${signed(x, 1)} K–D`, 8, (x) => x.toFixed(1))}
+          {stat("ADR", fmtAdr(line.adr), line.adr, avg?.adr, fmtAdr, 20, (x) => x.toFixed(1))}
+          {stat("KAST", fmtPct(line.kast), line.kast, avg?.kast, (x) => fmtPct(x), 10, (x) => `${x.toFixed(1)}%`)}
+          {stat("HS%", fmtPct(line.hs), line.hs, avg?.hs, (x) => fmtPct(x), 15, (x) => `${x.toFixed(1)}%`)}
         </div>
         {v && <div className="hero__rail"><RoundRail v={v} compact selected={null} onPick={(ri) => openMatch(matchHref(s.file, "rounds", { round: v.rounds[ri].number }))} /></div>}
         <div className="hero__actions">
@@ -192,7 +197,6 @@ function FormCard({ list }: { list: MatchEntry[] }) {
 // ---------------------------------------------------------------- tiles
 
 function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
-  const last = list[0];
   const aimMatches = list.filter((e) => e.hasAim).length;
   const visibility = list.some((e) => e.match.visibility === "ok");
   return (
@@ -200,8 +204,6 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
       {TILES.filter((m) => !m.visibility || visibility).map((m) => {
         const value = tileValue(m, t?.both.v ?? null, t?.rating.value ?? null);
         const series = seriesOf(m, list.slice(0, 10));
-        const lastV = last ? entryTile(m, last) : null;
-        const d = lastV !== null && value !== null ? lastV - value : null;
         const noAim = !!m.aim && !aimMatches;
         const breakdown = m.id === "rating3" ? () => {
           const x = t?.rating.inputs;
@@ -210,7 +212,7 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
           if (!t) return null;
           const f = (s: Rolled) => fmtMetric(m.id, s.v[m.id]);
           return <BreakRows rows={[{ label: <span className="t-text">T side</span>, value: f(t.t) }, { label: <span className="ct-text">CT side</span>, value: f(t.ct) }, { label: "Rounds", value: `${t.t.m.rounds} T, ${t.ct.m.rounds} CT` }]} />;
-        } : m.aim ? () => <p className="meta">{aimMatches ? `From ${plural(aimMatches, "recorded match", "recorded matches")}.` : "Needs a recorded match."}</p> : undefined;
+        } : m.aim && aimMatches ? () => <p className="meta">From {plural(aimMatches, "recorded match", "recorded matches")}.</p> : undefined;
         return (
           <div role="listitem" key={m.id}>
             <StatTile
@@ -220,7 +222,7 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
               bench={m.bench}
               def={metric(m.id).def}
               spark={series.map((x) => x.v)}
-              delta={noAim ? <span className="faint">Recorded matches only</span> : <Delta d={d} span={m.deltaSpan} lowerIsBetter={metric(m.id).lowerIsBetter} fmt={m.fmtDelta} title="Last match against your average" />}
+              sub={noAim ? <NeedsDemo detail={`${m.label} needs shots, which converted logs do not record.`} /> : undefined}
               breakdown={breakdown}
             />
           </div>
@@ -228,10 +230,10 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
       })}
       {!visibility && (
         <div role="listitem">
-          <div className="tile tile--gated" data-tip="Plugin match files carry no view angles or mesh line of sight.">
+          <div className="tile tile--gated">
             <div className="tile__top"><span className="stat__l">Reaction, time to damage</span></div>
-            <div className="tile__v tile__v--muted">Gated</div>
-            <div className="tile__sub">These timings need view angles and line of sight to each enemy, which plugin match files do not carry.</div>
+            <div className="tile__v tile__v--muted">–</div>
+            <div className="tile__sub"><NeedsDemo detail="These timings need view angles and line of sight to each enemy, which plugin match files do not carry." /></div>
           </div>
         </div>
       )}
@@ -281,7 +283,7 @@ function RecentMatches({ list }: { list: MatchEntry[] }) {
           { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span> },
           { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num">{line(s).kills}–{line(s).deaths}</span> },
           { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },
-          { key: "swing", label: "Swing", colored: true, sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }}>{fmtSwing(x)}</span>; } },
+          { key: "swing", label: "Swing", colored: true, sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}>{fmtSwing(x)}</span>; } },
           { key: "rating", label: "Rating", colored: true, sort: (s) => entryRating(s), render: (s) => <b style={{ color: ratingText(entryRating(s)) }}>{fmtRating(entryRating(s))}</b> },
         ]}
         rowClass={() => undefined}
@@ -378,14 +380,15 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 
 /**
  * The two performance metrics where you sit lowest among pros, each with its percentile. Style
- * attributes are left out: they describe how you play, not how well (design/identity.md).
+ * attributes are left out: they describe how you play, not how well (design/identity.md). A metric
+ * the engine could not compare (Percentile.reason) is skipped, never ranked as the lowest.
  */
 function WorkOn({ t }: { t: Totals | null }) {
   const { baselines } = useData();
   const r = useCall("compare", t && baselines ? [t.q, {}] : null).data;
   const weak = useMemo(() => {
     if (!r) return [];
-    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id]?.pct != null)
+    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null)
       .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
   }, [r]);

@@ -15,7 +15,7 @@ import { fmtAdr, fmtMatchDay, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen,
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
 import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
-import { Empty } from "../shared";
+import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
 import Overview from "./Overview";
 
@@ -144,7 +144,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
       <div className="mhero__you">
         <span className="caps">You</span>
         <span className="mhero__stat"><span className="meta">{ratingHeadline()}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
-        <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }}><Num v={fmtSwing(line.swing)} /></b></span>
+        <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }} data-tip={swingSumTip(line.m)}><Num v={fmtSwing(line.swing)} /></b></span>
         <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{line.kills}<span className="faint">–</span>{line.deaths}</b></span>
         <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(line.adr)}</b></span>
         <span className="mhero__stat"><span className="meta">KAST</span><b className="num"><Num v={fmtPct(line.kast)} /></b></span>
@@ -181,7 +181,7 @@ function Sticky({ v, file, tab, round }: { v: MatchModel | null; file: string; t
               aria-controls="match-panel"
               href={matchHref(file, t, v && round !== null && t === "rounds" ? { round: v.rounds[round].number } : undefined)}
               className={`mtab ${disabled ? "is-dim" : ""}`}
-              data-tip={`Alt ${n + 1}${disabled ? (t === "aim" ? ": needs a recorded match" : ": no positions in this match") : ""}`}
+              data-tip={`Alt ${n + 1}${disabled ? (t === "aim" ? `: ${NEEDS_DEMO.toLowerCase()}` : ": no positions in this match") : ""}`}
             >
               {MATCH_TAB_LABEL[t]}
             </a>

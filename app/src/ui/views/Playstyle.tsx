@@ -20,7 +20,7 @@ import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
 import { RoleCard } from "./profile/parts";
-import { Empty, Provisional } from "./shared";
+import { Empty, NeedsDemo, NotCompared, Provisional } from "./shared";
 
 export default function Playstyle() {
   const { matches, you } = useData();
@@ -89,7 +89,7 @@ export function WhereYouPlay() {
               <ul className="places" aria-label="Where you spend your time alive">
                 {places.map(([p, secs]) => <li key={p}><span>{p}</span><span className="hbar"><i style={{ width: `${(100 * secs) / places[0][1]}%` }} /></span><b className="num">{fmtPct((100 * secs) / total, 0)}</b></li>)}
               </ul>
-            ) : <p className="meta">Movement comes from recorded matches; converted logs place kills and deaths only.</p>}
+            ) : <p className="meta"><NeedsDemo detail="Where you spend your time comes from movement samples; converted logs place kills and deaths only." /></p>}
             <p className="meta">Kills sit where you stood, deaths where you fell.</p>
           </div>
         </div>
@@ -139,7 +139,7 @@ function Ranks({ q }: { q: Query }) {
                       <span className="ranks__l">{m.label}<span className="ranks__pop" data-tip={style ? BOTS_TIP : undefined}>{style ? "vs bots" : "vs pros"}</span></span>
                       <b className="num ranks__v">{fmtMetric(id, x.value)}</b>
                       <span className={`ranks__track ${style ? "is-style" : ""}`}>{x.pct !== null && <i style={{ left: `${x.pct}%` }} />}<em style={{ left: "50%" }} /></span>
-                      <span className="ranks__p num">{style ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}% of bots`) : rankText(x.pct)}</span>
+                      <span className="ranks__p num">{x.reason ? <NotCompared reason={x.reason} /> : style ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}% of bots`) : rankText(x.pct)}</span>
                     </li>
                   );
                 })}

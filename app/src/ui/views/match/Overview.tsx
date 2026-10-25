@@ -15,7 +15,7 @@ import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
 import { matchHref } from "../../router";
-import { PlayerName, RoundCardBody } from "../shared";
+import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Overview({ v, file }: TabProps) {
@@ -40,7 +40,7 @@ export default function Overview({ v, file }: TabProps) {
       { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => lines[p.pi].m.openingKills - lines[p.pi].m.openingDeaths, render: (p: PlayerRow) => <span className="num">{lines[p.pi].m.openingKills}<span className="faint">–</span>{lines[p.pi].m.openingDeaths}</span> },
       { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (p: PlayerRow) => multiScore(p.pi), render: (p: PlayerRow) => <MultiChips c={multi[p.pi]} />, width: 170 },
     ] : []),
-    { key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win probability per round, from your kills (split by damage) and deaths", sort: (p: PlayerRow) => lines[p.pi].swing, render: (p: PlayerRow) => { const x = lines[p.pi].swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }}><Num v={fmtSwing(x)} /></span>; } },
+    { key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win probability per round, from your kills (split by damage) and deaths", sort: (p: PlayerRow) => lines[p.pi].swing, render: (p: PlayerRow) => { const x = lines[p.pi].swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }} data-tip={swingSumTip(lines[p.pi].m)}><Num v={fmtSwing(x)} /></span>; } },
     { key: "rating", label: RATING_LABEL, tip: RATING_POOLED, colored: true, sort: (p: PlayerRow) => lines[p.pi].rating, render: (p: PlayerRow) => { const x = lines[p.pi].rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
   ];
 
@@ -102,7 +102,7 @@ export default function Overview({ v, file }: TabProps) {
                   </li>
                 ))}
               </ul>
-            ) : <p className="meta">No round has swing data in this match.</p>}
+            ) : <p className="meta"><NeedsDemo detail="No round in this match has swing: a converted log values a round only where every player's equipment is known." /></p>}
           </Card>
         </div>
       </div>

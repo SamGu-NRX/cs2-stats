@@ -13,7 +13,7 @@ import { BUY_LABEL, BuyIcon, FirstKillIcon, KillFlags, NadeIcon, NADE_LABEL, Wea
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
 import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
 import { roundSwingScore, scoreText } from "../../lib/scale";
-import { PlaceList, PlayerName } from "../shared";
+import { NeedsDemo, PlaceList, PlayerName } from "../shared";
 
 const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
@@ -260,7 +260,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
         )}
 
         <Section title="Your aim this round">
-          {!v.entry.hasAim ? <p className="meta">Aim needs a recorded match; this one has no shot data.</p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
+          {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
             <>
               <div className="daim">
                 <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
@@ -271,7 +271,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
                 <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
               </div>
               {!v.visibility ? (
-                <p className="gate"><span className="chip chip--outline">Gated</span> Time to damage, reaction and crosshair placement need view angles and mesh line of sight, which this match file does not carry.</p>
+                <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="These need view angles and mesh line of sight, which this match file does not carry." /></p>
               ) : (
                 <div className="daim">
                   <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>

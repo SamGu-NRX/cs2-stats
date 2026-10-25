@@ -139,7 +139,11 @@ export const rankText = (pct: number | null) => (pct === null ? "–" : pct >= 5
 
 // ---------------------------------------------------------------- attributes
 
-export interface Sub { id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: Status }
+export interface Sub {
+  id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: Status;
+  /** why the value has no percentile (compare.ts Percentile.reason); null when it has one or has no value */
+  reason: string | null;
+}
 export interface Attr { id: AttributeId; label: string; kind: Kind; score: number | null; subs: Sub[] }
 
 /** The engine's attribute scores (percentiles in the pool the worker ranked them against) with each metric's label and format. */
@@ -147,7 +151,7 @@ export const attrsOf = (scores: AttributeScore[]): Attr[] => scores.map((a) => (
   id: a.id as AttributeId, label: a.label, kind: a.kind, score: a.score,
   subs: a.metrics.map((p) => {
     const m = metric(p.id);
-    return { id: p.id, label: m.label, def: m.def, value: p.value, text: fmtMetric(p.id, p.value), score: p.pct, status: m.status };
+    return { id: p.id, label: m.label, def: m.def, value: p.value, text: fmtMetric(p.id, p.value), score: p.pct, status: m.status, reason: p.reason };
   }),
 }));
 
@@ -166,17 +170,17 @@ export const poolText = (role: "awper" | "rifler" | "all", n: number) => `Percen
 export const botPoolText = (role: "awper" | "rifler" | "all", n: number) =>
   `Percentile against ${n} ${role === "all" ? "" : role === "awper" ? "AWPer " : "rifler "}bot ${n === 1 ? "career" : "careers"}`;
 
-/** The provisional label the style scores carry until enough bot careers qualify. */
+/** The sentence behind the "Provisional" chip the style scores carry until enough bot careers qualify. */
 export const provisionalText = (c: Careers) => (c.unit === "matches"
   ? `Provisional: against ${c.botMatches} bot ${c.botMatches === 1 ? "match" : "matches"}; career scores need ${c.minPool} bot careers with ${c.minRounds}+ rounds`
   : `Provisional: ${c.qualified} of ${c.needed} bot careers with ${c.minRounds}+ rounds`);
 
 export const BOTS_TIP = "Style is ranked against the bots in your own matches: each bot name is one career, summed over the same matches as you. Pros are ranked against pros.";
 
-/** Why a style pool shows no scores: fewer careers in it than the engine needs to write its quantiles. */
+/** Why a style pool shows no scores (the detail behind "Needs a recorded demo"): fewer samples in it than the engine needs to write its quantiles. */
 export const thinPoolText = (c: Careers, n: number) => (c.unit === "matches"
-  ? `No style scores yet: this pool has ${n} bot ${n === 1 ? "match" : "matches"}, and a score needs ${c.minPool}.`
-  : `No style scores yet: this pool has ${n} bot ${n === 1 ? "career" : "careers"} with ${c.minRounds}+ rounds, and a score needs ${c.minPool}.`);
+  ? `This pool has ${n} bot ${n === 1 ? "match" : "matches"}, and a style score needs ${c.minPool}.`
+  : `This pool has ${n} bot ${n === 1 ? "career" : "careers"} with ${c.minRounds}+ rounds, and a style score needs ${c.minPool}.`);
 
 // ---------------------------------------------------------------- lists
 

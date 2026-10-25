@@ -10,14 +10,21 @@ import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIco
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
+import { pageHref } from "../router";
 
 // ---------------------------------------------------------------- stat tile
 
-export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
+/**
+ * A tile draws its sparkline only from this many matches with a value: two points make a line that
+ * reads as a trend. The review asked for three (PR #20 round 1); no data run picked it.
+ */
+const SPARK_MIN_POINTS = 3;
+
+/** A pooled headline stat. It carries no delta: the last-match hero is the one place deltas show. */
+export function StatTile({ label, value, sub, spark, bench, raw, breakdown, def, color }: {
   label: string;
   value: string;
   sub?: ReactNode;
-  delta?: ReactNode;
   spark?: (number | null)[];
   bench?: BenchId;
   raw?: number | null;
@@ -26,6 +33,7 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
   color?: string;
 }) {
   const v = bench ? verdictOf(raw, BENCH[bench]) : "na";
+  const points = spark?.filter((x) => x !== null && Number.isFinite(x)).length ?? 0;
   const body = (
     <>
       <div className="tile__top">
@@ -33,10 +41,11 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
         {bench && <VerdictLabel v={v} />}
       </div>
       <div className="tile__v num" style={color ? { color } : undefined}><Num v={value} /></div>
-      <div className="tile__foot">
-        <span className="tile__delta">{delta}</span>
-        {spark && <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />}
-      </div>
+      {spark && points >= SPARK_MIN_POINTS && (
+        <div className="tile__foot">
+          <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />
+        </div>
+      )}
       {sub && <div className="tile__sub">{sub}</div>}
     </>
   );
@@ -199,9 +208,55 @@ export { Delta };
 
 /**
  * The label the user's style scores carry while fewer bot careers qualify than the engine's minimum
- * (compare.ts BOT_CAREERS_MIN): the scores still show, marked provisional with the count.
+ * (compare.ts BOT_CAREERS_MIN): the scores still show, under a "Provisional" chip whose tooltip holds
+ * the count. Focusable, so the tooltip opens from the keyboard too.
  */
 export function Provisional({ c }: { c: Careers }) {
   if (!c.provisional) return null;
-  return <span className="chip chip--prov" data-tip={`${BOTS_TIP} Until ${c.needed} bot careers have ${c.minRounds} or more rounds, the population is small and the scores can move as you play more.`}>{provisionalText(c)}</span>;
+  return (
+    <span className="chip chip--prov" tabIndex={0} data-tip={`${provisionalText(c)}. ${BOTS_TIP} Until ${c.needed} bot careers have ${c.minRounds} or more rounds, the population is small and the scores can move as you play more.`}>
+      Provisional
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------- missing data
+
+/** The one phrasing for a number the user's matches cannot give yet. */
+export const NEEDS_DEMO = "Needs a recorded demo";
+
+/**
+ * NEEDS_DEMO with a link to Data & settings, whose first card is the recording source. `detail` (the
+ * specific gap, such as how many bot careers a pool has) is the tooltip of the phrase and of the link,
+ * so focusing the link opens it and describes the link to a screen reader.
+ */
+export function NeedsDemo({ detail }: { detail?: string }) {
+  return (
+    <span className="needs">
+      <span className="needs__t" data-tip={detail}>{NEEDS_DEMO}</span>
+      <a className="needs__link" href={pageHref("settings")} data-tip={detail}>Data & settings</a>
+    </span>
+  );
+}
+
+/**
+ * A value with no percentile, and why (compare.ts Percentile.reason): a kept match lacks an input the
+ * metric needs, or the pro pool was built under another model. Stands where the rank would be.
+ */
+export function NotCompared({ reason }: { reason: string }) {
+  return <span className="nocmp" tabIndex={0} data-tip={reason}>Not compared</span>;
+}
+
+/** Marks a metric whose status is "approx" (metrics.ts): our reading of an unpublished definition. */
+export function ApproxMark() {
+  return (
+    <span className="approx" data-tip="Approximate: our reading of an unpublished definition">
+      <span aria-hidden>≈</span><span className="sr-only">, approximate</span>
+    </span>
+  );
+}
+
+/** A match's swing is shown per round; its sum over the valued rounds goes in the tooltip. */
+export function swingSumTip(m: { swing: number; swingRounds: number }): string | undefined {
+  return m.swingRounds ? `${fmtSwing(m.swing)} summed over ${m.swingRounds} ${m.swingRounds === 1 ? "round" : "rounds"} with swing` : undefined;
 }

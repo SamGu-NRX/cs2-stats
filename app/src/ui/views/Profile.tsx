@@ -34,7 +34,7 @@ import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, SideFilter, TimeFilter, useFilters } from "../shell/filters";
-import { BreakRows, Empty, Provisional, SectionAside } from "./shared";
+import { ApproxMark, BreakRows, Empty, NeedsDemo, NotCompared, Provisional, SectionAside } from "./shared";
 import { HowGood, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 import { Segmented } from "../components/controls";
@@ -299,7 +299,7 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
       {res?.careers.provisional && <div className="attrs__prov"><Provisional c={res.careers} /></div>}
       {!res ? (call.error ? <Empty text={call.error} /> : <div className="skel" style={{ height: 220 }} />) : (
         <>
-          {res.n < res.careers.minPool && <p className="meta attrs__thin">{thinPoolText(res.careers, res.n)}{pool === "role" ? " All bots may have more." : ""}</p>}
+          {res.n < res.careers.minPool && <p className="meta attrs__thin"><NeedsDemo detail={`${thinPoolText(res.careers, res.n)}${pool === "role" ? " All bots may have more." : ""}`} /></p>}
           <div className="attrs">
             {attrs.map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
           </div>
@@ -332,9 +332,9 @@ function AttrCard({ a, wide, open: openInit }: { a: Attr; wide: boolean; open: b
           <div className="subs">
             {a.subs.map((s) => (
               <div key={s.id} className="sub" data-tip={s.def}>
-                <span className="sub__label">{s.label}{s.status === "approx" && <span className="sub__status" aria-label="approximate">≈</span>}</span>
+                <span className="sub__label">{s.label}{s.status === "approx" && <ApproxMark />}</span>
                 <b className="sub__v num">{s.status === "unavailable" ? <span className="faint">n/a</span> : <Num v={s.text} />}</b>
-                <span className="sub__bar"><i style={{ width: `${s.score ?? 0}%` }} /></span>
+                {s.reason ? <NotCompared reason={s.reason} /> : <span className="sub__bar"><i style={{ width: `${s.score ?? 0}%` }} /></span>}
               </div>
             ))}
           </div>

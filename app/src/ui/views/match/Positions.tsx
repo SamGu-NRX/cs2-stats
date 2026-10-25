@@ -9,7 +9,7 @@ import { frameFor, RadarView } from "../../components/MapArt";
 import { sideOf } from "../../data/match";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { plural } from "../../lib/format";
-import { Empty, PlaceList, SectionAside } from "../shared";
+import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
 import type { TabProps } from "./MatchView";
 
 type Who = "you" | "team" | "all";
@@ -32,7 +32,7 @@ export default function Positions({ v }: TabProps) {
   const cells = useMemo(() => Object.entries(v.b.presence?.cells ?? {}).map(([c, secs]) => ({ c: +c, secs, at: cellCentre(+c) })), [v]);
   const frame = useMemo(() => frameFor(v.map, [...events.flatMap((e) => [[e.kx, e.ky], [e.vx, e.vy]] as [number, number][]), ...cells.map((c) => c.at)]), [v.map, events, cells]);
   if (!events.length || !frame) {
-    return <div className="tabpad"><div className="card"><Empty icon={<SkullIcon size={36} />} text="This match has no kill positions." /></div></div>;
+    return <div className="tabpad"><div className="card"><Empty icon={<SkullIcon size={36} />} text={<NeedsDemo detail="This match has no kill positions." />} /></div></div>;
   }
   const human = v.human;
   const team = (pi: number | null) => (pi === null ? null : v.players[pi].team);
@@ -126,7 +126,7 @@ function PlacesCard({ v }: { v: TabProps["v"] }) {
           <PlaceList places={places} />
           <p className="meta" style={{ marginTop: 10 }}>Where you spent each round is in the round panel on the Rounds tab.</p>
         </>
-      ) : <p className="meta">Movement is recorded by the capture plugin; this match has kill positions only.</p>}
+      ) : <p className="meta"><NeedsDemo detail="This match has kill positions but no movement samples." /></p>}
     </Card>
   );
 }
