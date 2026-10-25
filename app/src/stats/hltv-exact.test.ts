@@ -9,21 +9,35 @@ import { derive } from "./derive";
 import { rollup } from "./rollup";
 
 /**
- * 24 of the 83 maps (of 194 joined, 2026-10-25) where every player matches HLTV exactly on K, D and
- * KAST and within 0.5 on ADR. The others mostly miss KAST by one round for one or two players, or come
- * from demos recorded from round 1 live (VALIDATION.md).
+ * 24 maps, three or four per map pool map, where every player matched HLTV exactly on K, D and KAST
+ * and within 0.5 on ADR on the 395-map run of pnpm hltv-check (VALIDATION.md); re-pinned 2026-10-25
+ * after the extractor's re-extraction moved the earlier set.
  */
 const GATE_MAPS = [
-  "alliance-vs-nemiga-c7619130/m2-ancient", "astralis-vs-alliance-a7ac677d/m1-inferno",
-  "astralis-vs-faze-929f3358/m2-nuke", "b8-vs-fnatic-137fbe4b/m2-mirage", "b8-vs-luminosity-bb35a46a/m1-inferno",
-  "b8-vs-luminosity-bb35a46a/m2-mirage", "bbl-vs-ninjas-in-pyjamas-9bd02d7d/inferno",
-  "big-vs-fnatic-ab6073b8/m3-mirage", "faze-vs-nemiga-4aab916b/m2-ancient", "fokus-vs-bbl-40fb39ad/m1-nuke",
-  "g2-vs-natus-vincere-f3a92631/m2-dust2", "jijiehao-vs-fokus-2fa42bb2/inferno", "k27-vs-nemesis-a6834912/m5-cache",
-  "legacy-vs-parivision-fd84447a/m2-inferno", "luminosity-vs-big-bb2b84b1/m1-inferno",
-  "ninjas-in-pyjamas-vs-sangal-96396e0d/nuke", "100-thieves-vs-liquid-4f4ef05b/m2-inferno",
-  "astralis-vs-fnatic-6163de97/m1-dust2", "betboom-vs-m80-75d909c1/m1-cache", "faze-vs-sangal-96360514/m2-nuke",
-  "inner-circle-vs-sangal-e85b61b7/m1-anubis", "luminosity-vs-astralis-1e7f28ad/m3-nuke",
-  "nemiga-vs-astralis-f6b2682f/m4-cache", "spirit-vs-shinden-7c8274a7/m2-nuke",
+  "1win-vs-aurora-5f1d137b/m1-dust2",
+  "9z-vs-falcons-a51ade09/m1-nuke",
+  "alka-vs-los-ninos-ce861ea6/m2-dust2",
+  "alliance-vs-nemiga-61b3ab80/m2-ancient",
+  "astral-vs-iberian-soul-e6e8350e/m1-cache",
+  "astralis-vs-alliance-2029146f/m1-inferno",
+  "astralis-vs-big-88e4546b/m2-inferno",
+  "astralis-vs-big-88e4546b/m3-mirage",
+  "astralis-vs-faze-b6d2f9f9/m2-nuke",
+  "astralis-vs-fnatic-21d24cef/m1-dust2",
+  "astralis-vs-fnatic-21d24cef/m2-ancient",
+  "b8-vs-fnatic-df598fbd/m2-mirage",
+  "b8-vs-luminosity-eeae43e3/m1-inferno",
+  "b8-vs-luminosity-eeae43e3/m2-mirage",
+  "baks-vs-illyrians-e9d7f468/m3-ancient",
+  "baks-vs-lfo-10-1af60588/m1-mirage",
+  "bbl-vs-luminosity-07de06fe/m1-nuke",
+  "bbl-vs-ninjas-in-pyjamas-6d468c01/inferno",
+  "bc-game-vs-bbl-cca68dd6/m2-cache",
+  "borracherios-vs-quintessencia-3983feb3/m1-anubis",
+  "eternal-fire-vs-jijiehao-3b8492f2/m3-anubis",
+  "faze-vs-sangal-504c00b2/m2-nuke",
+  "faze-vs-sangal-504c00b2/m3-cache",
+  "jijiehao-vs-100-thieves-178ef7bd/m3-anubis",
 ];
 
 // The extraction pipeline rewrites the data folder while it runs, so the test reads only the pinned
