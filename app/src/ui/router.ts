@@ -1,47 +1,109 @@
-// Hash routes, so every view can be deep-linked (and screenshotted):
-//   #/matches   #/match/<file>/<tab>   #/profile/<tab>
-import { useEffect, useState } from "react";
+// Hash routes, so every view and tab can be deep-linked (and screenshotted). Filters live in the
+// hash's query string, e.g. #/profile?side=t&map=de_dust2 or #/match/<file>/rounds?round=7.
+import { useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 
-export type Route =
-  | { page: "matches" }
-  | { page: "match"; file: string; tab: MatchTab }
-  | { page: "profile"; tab: ProfileTab };
-
-export const PROFILE_TABS = ["overview", "splits", "aim", "positions"] as const;
-export type ProfileTab = (typeof PROFILE_TABS)[number];
-
-export const MATCH_TABS = ["overview", "detailed", "matrix", "economy", "rounds", "aim", "positions"] as const;
+export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced"] as const;
 export type MatchTab = (typeof MATCH_TABS)[number];
+export const MATCH_TAB_LABEL: Record<MatchTab, string> = {
+  overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced",
+};
+
+export type Page = "home" | "matches" | "match" | "profile" | "playstyle" | "aim" | "weapons" | "settings";
+
+export interface Route {
+  page: Page;
+  /** match page only */
+  file?: string;
+  tab?: MatchTab;
+  query: URLSearchParams;
+}
 
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  const raw = hash.replace(/^#\/?/, "");
+  const [pathPart, qs = ""] = raw.split("?");
+  const query = new URLSearchParams(qs);
+  const parts = pathPart.split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "match" && parts.length >= 2) {
     // the file path may contain slashes; the last part is the tab when it names one
     const last = parts[parts.length - 1] as MatchTab;
-    const hasTab = (MATCH_TABS as readonly string[]).includes(last) && parts.length >= 3;
-    const file = parts.slice(1, hasTab ? -1 : undefined).join("/");
-    return { page: "match", file, tab: hasTab ? last : "overview" };
+    const hasTab = parts.length >= 3 && (MATCH_TABS as readonly string[]).includes(last);
+    return { page: "match", file: parts.slice(1, hasTab ? -1 : undefined).join("/"), tab: hasTab ? last : "overview", query };
   }
-  if (parts[0] === "profile") {
-    const tab = (PROFILE_TABS as readonly string[]).includes(parts[1]) ? (parts[1] as ProfileTab) : "overview";
-    return { page: "profile", tab };
-  }
-  return { page: "matches" };
+  const p = parts[0];
+  if (p === "matches" || p === "profile" || p === "playstyle" || p === "aim" || p === "weapons" || p === "settings") return { page: p, query };
+  return { page: "home", query };
 }
 
-export const matchHref = (file: string, tab: MatchTab = "overview") =>
-  `#/match/${file.split("/").map(encodeURIComponent).join("/")}/${tab}`;
+const qs = (q?: Record<string, string | number | null | undefined>) => {
+  if (!q) return "";
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== null && v !== undefined && v !== "") u.set(k, String(v));
+  const s = u.toString();
+  return s ? `?${s}` : "";
+};
+
+export const matchHref = (file: string, tab: MatchTab = "overview", q?: Record<string, string | number | null | undefined>) =>
+  `#/match/${file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
+export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string | number | null | undefined>) => `#/${page === "home" ? "" : page}${qs(q)}`;
+
+// The current route is a small store, so navigation can render synchronously (flushSync) inside a
+// View Transition: the new view must be in the DOM when the transition snapshots it.
+let current: Route = typeof location === "undefined" ? parseHash("") : parseHash(location.hash);
+const subs = new Set<() => void>();
+const publish = () => {
+  current = parseHash(location.hash);
+  subs.forEach((s) => s());
+};
+/** The last navigation came from a keyboard shortcut: the new view appears without motion. */
+let instant = false;
+export const navWasInstant = () => instant;
+if (typeof window !== "undefined") addEventListener("hashchange", () => { instant = false; publish(); });
 
 export function useRoute(): Route {
-  const [route, setRoute] = useState(() => parseHash(location.hash));
-  useEffect(() => {
-    const on = () => setRoute(parseHash(location.hash));
-    addEventListener("hashchange", on);
-    return () => removeEventListener("hashchange", on);
-  }, []);
-  return route;
+  return useSyncExternalStore((s) => { subs.add(s); return () => subs.delete(s); }, () => current);
+}
+export const currentRoute = () => current;
+
+/** Navigates and renders the new route before returning. Keyboard callers pass instant. */
+export function go(href: string, opts?: { instant?: boolean }) {
+  const h = href.startsWith("#") ? href : `#${href}`;
+  if (location.hash === h) return;
+  instant = !!opts?.instant;
+  history.pushState(null, "", h);
+  flushSync(publish);
 }
 
-export const go = (href: string) => {
-  location.hash = href.replace(/^#/, "");
-};
+/**
+ * Opens a match. Where View Transitions exist and motion is allowed, the clicked row's score and map
+ * label morph into the hero (the row carries data-vt="score" and data-vt="map" children).
+ */
+export function openMatch(href: string, row?: Element | null) {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } };
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!doc.startViewTransition || reduce) return go(href);
+  const named: HTMLElement[] = [];
+  row?.querySelectorAll<HTMLElement>("[data-vt]").forEach((el) => {
+    el.style.viewTransitionName = `match-${el.dataset.vt}`;
+    named.push(el);
+  });
+  const t = doc.startViewTransition(() => {
+    named.forEach((el) => (el.style.viewTransitionName = ""));
+    go(href);
+  });
+  t.finished.finally(() => named.forEach((el) => (el.style.viewTransitionName = "")));
+}
+
+/** Updates query parameters in place (replaceState: filters do not fill the back history). */
+export function setQuery(key: string, value: string | null, more?: Record<string, string | null>) {
+  const r = parseHash(location.hash);
+  const all = { [key]: value, ...more };
+  for (const [k, v] of Object.entries(all)) {
+    if (v === null || v === "") r.query.delete(k);
+    else r.query.set(k, v);
+  }
+  const base = location.hash.split("?")[0] || "#/";
+  const s = r.query.toString();
+  history.replaceState(null, "", `${base}${s ? `?${s}` : ""}`);
+  flushSync(publish);
+}

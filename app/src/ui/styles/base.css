@@ -1,0 +1,60 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+html { background: var(--bg0); }
+body {
+  color: var(--ink);
+  font: 400 13px/1.3 var(--f);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+/* Text can be selected and copied; controls and app chrome cannot, so clicks do not select labels. */
+button, [role="tab"], [role="radio"], [role="option"], [role="menuitem"], .side, .bar, .mtabs, .seg, .rail, .tbl th, .ig__cell, .ig__headbtn, label { user-select: none; }
+h1, h2, h3, h4, p, dl, dd, figure, ul, ol { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; text-align: inherit; }
+button:disabled { cursor: default; }
+a { color: inherit; text-decoration: none; }
+img { display: block; max-width: 100%; }
+svg { display: block; flex: none; }
+.ico * { vector-effect: non-scaling-stroke; }
+[hidden] { display: none !important; }
+.selectable, .selectable * { user-select: text; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; border-radius: var(--r-chip); }
+
+/* Numbers: tabular figures wherever a number is shown, so columns align. */
+.num, td, th, svg text, .tile__v, .stat__v { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--f-mono); font-size: 12px; }
+
+/* type steps */
+.caps { font: 600 11px/1.3 var(--f); letter-spacing: 0.08em; text-transform: uppercase; color: var(--tan); }
+.meta { font-size: 12px; color: var(--ink2); }
+.name { font: 600 14px/1.3 var(--f); }
+.section-title { font: 600 16px/1.3 var(--f); letter-spacing: -0.01em; color: var(--ink); }
+.t-text { color: var(--t); }
+.ct-text { color: var(--ct); }
+.good-text { color: var(--good-text); }
+.poor-text { color: var(--poor-text); }
+.muted { color: var(--ink2); }
+.faint { color: var(--ink3); }
+.cream { color: var(--cream); }
+
+/* scrollbars: Fluent metrics */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line2); border: 3px solid transparent; background-clip: padding-box; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--track); background-clip: padding-box; border: 3px solid transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* press feedback for buttons (not wide rows) */
+.press { transition: transform var(--d-press) var(--ease-out); }
+.press:active { transform: scale(calc(1 - 0.03 * var(--mo))); }
+
+/* Shortcut chip: "Ctrl K" */
+.kbd { display: inline-flex; align-items: center; gap: 2px; }
+.kbd kbd { font: 500 11px/16px var(--f); padding: 0 5px; min-width: 18px; text-align: center; border-radius: var(--r-chip); background: var(--pill); color: var(--ink2); box-shadow: inset 0 -1px 0 var(--line2); }
