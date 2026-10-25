@@ -5,7 +5,12 @@
 // HLTV's style attributes and our own style families). design/identity.md is binding on the split.
 // status: "exact" (a direct count, or checked against HLTV), "approx" (our reading of an unpublished
 // definition), "unavailable" (the tables cannot support it yet; value is always null).
+import { AGGRESSION_METRICS } from "./aggression";
+import { AIM_METRICS } from "./aim";
+import { INFORMATION_METRICS } from "./information";
+import { MOVEMENT_METRICS } from "./movement";
 import { rating3 } from "./rating3";
+import { UTILQ_METRICS } from "./utilq";
 import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
@@ -178,7 +183,7 @@ const M: Metric[] = [
     def: "Opening duels won.", value: (s) => pct(s.m.openingKills, s.m.openingKills + s.m.openingDeaths) },
 ];
 
-export const METRICS: Metric[] = M;
+export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
 export const METRIC: Record<string, Metric> = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 
 /**

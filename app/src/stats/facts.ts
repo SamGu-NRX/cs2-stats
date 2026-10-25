@@ -1,6 +1,11 @@
 // What derive() returns: plain, JSON-safe facts about one match, one record per event or per player
 // per round. rollup() sums them under filters; nothing downstream reads the tables again.
+import type { AggroFact } from "./aggression";
+import type { AimFact } from "./aim";
 import type { BuyClass } from "./economy";
+import type { InfoFact } from "./information";
+import type { MoveFact } from "./movement";
+import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
@@ -159,6 +164,12 @@ export interface MatchFacts {
   pr: PlayerRound[];
   kills: KillFact[];
   weapons: WeaponFact[];
+  /** event facts of the families with their own modules; each carries ri and pi */
+  aim: AimFact[];
+  movement: MoveFact[];
+  aggression: AggroFact[];
+  information: InfoFact[];
+  utilq: UtilQFact[];
 }
 
 export const emptyMeasures = (): Measures => Object.fromEntries(MEASURES.map((k) => [k, 0])) as Measures;

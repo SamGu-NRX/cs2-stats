@@ -1,7 +1,12 @@
 // rollup(facts[], filter) -> Summary: sums one player's facts over the matches and rounds a filter
 // keeps. Every measure is additive, so any slice (side, buy class, map, period, opponent, weapon) is
 // the same sum over fewer rows, and every ratio is computed from the totals.
+import { emptyAggro, foldAggro, type AggroAgg } from "./aggression";
+import { emptyAim, foldAim, type AimAgg } from "./aim";
 import type { BuyClass } from "./economy";
+import { emptyInfo, foldInfo, type InfoAgg } from "./information";
+import { emptyMove, foldMove, type MoveAgg } from "./movement";
+import { emptyUtilQ, foldUtilQ, type UtilQAgg } from "./utilq";
 import { emptyMeasures, MEASURES, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
 import type { Side } from "./tables";
 
@@ -31,6 +36,11 @@ export interface Summary {
   m: Measures;
   /** by weapon class name */
   weapons: Record<string, WeaponTotals>;
+  aim: AimAgg;
+  movement: MoveAgg;
+  aggression: AggroAgg;
+  information: InfoAgg;
+  utilq: UtilQAgg;
 }
 
 /** The player-round rows a filter keeps in one match, for families that sum their own facts. */
@@ -49,18 +59,12 @@ export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
   });
 }
 
-export const emptySummary = (): Summary => ({ matches: 0, m: emptyMeasures(), weapons: {} });
+export const emptySummary = (): Summary => ({
+  matches: 0, m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(),
+});
 
-/** a += b, in place. */
-export function addSummary(a: Summary, b: Summary): Summary {
-  a.matches += b.matches;
-  for (const k of MEASURES) a.m[k] += b.m[k];
-  for (const [w, x] of Object.entries(b.weapons)) {
-    const y = (a.weapons[w] ??= { rounds: 0, shots: 0, hits: 0, headHits: 0, dmg: 0, kills: 0, hsKills: 0, deaths: 0 });
-    for (const k of Object.keys(x) as (keyof WeaponTotals)[]) y[k] += x[k];
-  }
-  return a;
-}
+/** Event facts whose weapon the filter rejects are dropped; facts without a weapon field always pass. */
+const weaponOk = (filter: Filter, f: object) => !filter.weapons || !("weapon" in f) || (f.weapon !== null && filter.weapons.includes(f.weapon as string));
 
 export function rollup(facts: MatchFacts[], filter: Filter): Summary {
   const s = emptySummary();
@@ -80,6 +84,14 @@ export function rollup(facts: MatchFacts[], filter: Filter): Summary {
       r.add(w.ri);
     }
     for (const [w, r] of roundsWith) s.weapons[w].rounds += r.size;
+    const keep = <F extends { ri: number; pi: number }>(xs: F[], fold: (x: F) => void) => {
+      for (const x of xs) if (kept.has(x.ri * 1024 + x.pi) && weaponOk(filter, x)) fold(x);
+    };
+    keep(f.aim, (x) => foldAim(s.aim, x));
+    keep(f.movement, (x) => foldMove(s.movement, x));
+    keep(f.aggression, (x) => foldAggro(s.aggression, x));
+    keep(f.information, (x) => foldInfo(s.information, x));
+    keep(f.utilq, (x) => foldUtilQ(s.utilq, x));
   }
   return s;
 }
