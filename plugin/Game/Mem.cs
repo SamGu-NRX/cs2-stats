@@ -25,7 +25,7 @@ internal static unsafe class Mem
     public static int CtrlPawn, Team, LifeState, Health, BodyComponent, SceneNode, AbsOrigin, ViewZ,
         EyeAngles, SpottedMask, Place, AbsVelocity, Scoped, MovementServices, Ducked, WeaponServices,
         MyWeapons, ActiveWeapon, Ammo, EquipCurrent, PawnController, OwnerEntity, EntityIdentity, DesignerName,
-        OriginalControllerOfPawn, Armor, ItemServices, HasHelmet, HasDefuser;
+        OriginalControllerOfPawn, Armor, ItemServices, HasHelmet, HasDefuser, SpottedFlag;
 
     public const int PlaceBytes = 18;
 
@@ -51,6 +51,7 @@ internal static unsafe class Mem
         ViewZ = O("CBaseModelEntity", "m_vecViewOffset") + O("CNetworkViewOffsetVector", "m_vecZ");
         EyeAngles = O("CCSPlayerPawn", "m_angEyeAngles");
         SpottedMask = O("CCSPlayerPawn", "m_entitySpottedState") + O("EntitySpottedState_t", "m_bSpottedByMask");
+        SpottedFlag = O("CCSPlayerPawn", "m_entitySpottedState") + O("EntitySpottedState_t", "m_bSpotted");
         Place = O("CCSPlayerPawn", "m_szLastPlaceName");
         AbsVelocity = O("CBaseEntity", "m_vecAbsVelocity");
         Scoped = O("CCSPlayerPawn", "m_bIsScoped");
@@ -137,6 +138,21 @@ internal static unsafe class Mem
     {
         float* v = (float*)(pawn + AbsVelocity);
         return (int)MathF.Round(MathF.Sqrt(v[0] * v[0] + v[1] * v[1]));
+    }
+
+    public static void SpottedState(nint pawn, out uint m0, out uint m1, out bool spotted)
+    {
+        uint* mask = (uint*)(pawn + SpottedMask);
+        m0 = mask[0];
+        m1 = mask[1];
+        spotted = *(byte*)(pawn + SpottedFlag) != 0;
+    }
+
+    /// <summary>Entity index of an entity, from its identity's handle.</summary>
+    public static int IndexOf(nint entity)
+    {
+        nint ident = Ptr(entity, EntityIdentity);
+        return ident == 0 ? -1 : (int)(*(uint*)(ident + 0x10) & IndexMask);
     }
 
     public static bool IsScoped(nint pawn) => *(byte*)(pawn + Scoped) != 0;

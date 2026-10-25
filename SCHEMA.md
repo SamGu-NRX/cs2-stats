@@ -135,13 +135,19 @@ Additions to v1; the version stays `1`. Two of them change how an existing field
 - `pen`: 1 if the shot killed an enemy with `player_death.penetrated` > 0, and 0 if it damaged no enemy or killed without penetrating. It is null when the shot hit an enemy non-fatally, because without a ray trace the plugin cannot tell whether the path was clear.
 - `cls`: weapon class, one of `rifle`, `sniper`, `smg`, `pistol`, `shotgun`, `heavy`, from the item name. Null for the taser.
 
+### Visibility validation (`aim.hitMask`, `env.human*`)
+Recorded on every match to check `IsVisibleToHuman`, which reads one bit of the spotted mask and is suspected to be wrong. A hit usually means the human could see the victim, so these rows show which bit, if any, tracks the human.
+- `aim.hitMask`: `ri, tick, victim, m0, m1, spotted`, one row per `player_hurt` where the human damaged an enemy. `m0` and `m1` are the victim pawn's raw `EntitySpottedState_t.m_bSpottedByMask` words (unsigned 32-bit), read in the hurt handler. `spotted` is its `m_bSpotted` flag.
+- `env.humanSlot`, `env.humanController`, `env.humanPawn`: the human's player slot, controller entity index and pawn entity index, recorded once per match at the first freeze end, for comparing against mask bits. The pawn index can change if the pawn is recreated.
+- Cost: raw memory reads only, nothing allocated in the hurt path. 89 rows and +0.8 KB on the 21-round fixture replay.
+
 ### Reconciliation (`recon`)
 Each round is compared with the game's `CSPerRoundStats_t` at the next `round_start` (or 1 s after `cs_win_panel_match`). Kills count enemy kills, deaths count every death, and assists count damage and flash assists; these must match exactly. Damage cannot match exactly: `player_hurt` reports each hit's damage truncated to an integer while the game's total keeps the fractions, so our sum is a lower bound and the check is `0 <= game - ours <= hits` (at most 1 HP lost per hit). On `fixtures/events_two_matches.jsonl` the gap was 0 to 6 HP and never above the hit count.
 - `rounds`: `ri, checkedPlayers, expectedPlayers, kOk, dOk, aOk, dmgOk`. `expectedPlayers` is everyone with a side that round; `checkedPlayers` is those whose game stats were read and compared. Partial rounds get a row with `checkedPlayers` 0, so coverage is explicit. Rounds before capture began have no row.
 - `mismatch`: `ri, pi, field (k|d|a|dmg), ours, game, hits`.
 - `partial`: rounds with incomplete capture (before `firstFullRound`, or interrupted by a reload). Rounds before capture began have only `winSide` and `how`.
 - `unknownResult`: rounds whose `MatchStats_RoundResults` code is unknown; their `winSide` and `how` are null.
-- `capUnknown`: damage rows whose pre-hit HP was unknown (capped at 100). `dropped`: rows lost to full buffers, by table (including `leaves`).
+- `capUnknown`: damage rows whose pre-hit HP was unknown (capped at 100). `dropped`: rows lost to full buffers, by table (including `leaves` and `hitMask`).
 
 ### `perf`
 Columns per round: `ri, ticks, tickAvgUs, tickMaxUs, events, evAvgUs, evMaxUs, evMaxName, tickAllocB, evAllocB, gen0`, plus `write: {lastMs, maxMs, lastBytes}` for the worker's previous write. Times cover only the plugin's own handlers; allocation is `GC.GetAllocatedBytesForCurrentThread` measured inside them. The tick columns cover the OnTick handler only. Housekeeping (a 0.25 s timer that drains worker messages, refreshes the player list and economy, and finalizes rounds) is counted as an event named `housekeeping`.

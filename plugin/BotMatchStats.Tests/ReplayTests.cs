@@ -261,9 +261,13 @@ public class ReplayTests
                     rec.FreezeEnd(tick);
                     break;
                 case "hurt":
-                    rec.Hurt(tick, Pi(e.B), Pi(e.A), e.I1, e.I2, e.I3, e.Weapon.Length == 0 ? Nil.V : rec.Weapons.Get(e.Weapon), e.I4,
+                {
+                    int a = Pi(e.B), v = Pi(e.A);
+                    rec.Hurt(tick, a, v, e.I1, e.I2, e.I3, e.Weapon.Length == 0 ? Nil.V : rec.Weapons.Get(e.Weapon), e.I4,
                         WeaponNames.IsBulletWeapon(e.Weapon), WeaponNames.NadeSourceOf(e.Weapon));
+                    if (v != Nil.V) rec.HitMask(tick, a, v, frames.ByPi[v].Spot0 | (uint)(tick & 0x3FF) << 10, 0u, true); // synthetic mask values
                     break;
+                }
                 case "death":
                     rec.Kill(new KillInput
                     {
@@ -341,6 +345,8 @@ public class ReplayTests
             Assert.Equal(21, store.RoundCount);
             Assert.Equal(21, store.ReconRounds.Count);
             Assert.Empty(mism);
+            Assert.True(store.HitMask.Count > 0);
+            _out.WriteLine($"hitMask rows {store.HitMask.Count}");
             Assert.True(store.Engagements.Count > 0);
             Assert.True(store.Shots.Count > 0);
             Assert.All(Enumerable.Range(0, 21), ri => Assert.Equal(RoundResult.FromMatchStatsCode(results[ri], out int ws, out _) ? ws : Nil.V, store.Round(ri).WinSide));

@@ -114,6 +114,11 @@ public sealed partial class BotMatchStatsPlugin
             if (_equipFromInventory && !wasInventory)
                 Logger.LogWarning("BotMatchStats: every bot reads 0 for m_unCurrentEquipmentValue at freeze end; equipment values come from inventory prices instead.");
             rec.SetEquipSource(_equipFromInventory ? Recorder.EquipFromInventory : Recorder.EquipFromPawn);
+            if (_humanSlot >= 0)
+            {
+                nint hp = PawnOfSlot(_humanSlot);
+                if (hp != 0) rec.SetHumanEntities(_humanSlot, _humanSlot + 1, Mem.IndexOf(hp));
+            }
             for (int slot = 0; slot < MaxSlots; slot++)
             {
                 ref var s = ref _slots[slot];
@@ -273,9 +278,20 @@ public sealed partial class BotMatchStatsPlugin
             string weapon = WeaponNames.Strip(e.Weapon);
             if (a != Nil.V && WeaponNames.NeedsVariantCheck(weapon))
                 weapon = WeaponNames.HurtVariant(weapon, ActiveItemDef(attacker)) ?? weapon;
-            rec.Hurt(Server.TickCount, a, v, e.DmgHealth, e.DmgArmor, e.Health,
+            int tick = Server.TickCount;
+            rec.Hurt(tick, a, v, e.DmgHealth, e.DmgArmor, e.Health,
                 weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), e.Hitgroup,
                 WeaponNames.IsBulletWeapon(weapon), WeaponNames.NadeSourceOf(weapon));
+            if (a != Nil.V && a == rec.HumanPi)
+            {
+                // Raw reads only: validation data for IsVisibleToHuman (aim.hitMask).
+                nint vp = PawnOfSlot(e.Userid!.Slot);
+                if (vp != 0)
+                {
+                    Mem.SpottedState(vp, out uint m0, out uint m1, out bool spotted);
+                    rec.HitMask(tick, a, v, m0, m1, spotted);
+                }
+            }
         }
         catch (Exception ex) { EvError("player_hurt", ex); }
         return EvEnd("player_hurt");

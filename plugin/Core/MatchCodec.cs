@@ -34,6 +34,9 @@ public static class MatchCodec
         IntProp(w, "maxrounds", m.Env.MaxRounds);
         IntProp(w, "botDifficulty", m.Env.BotDifficulty);
         StrOrNull(w, "equipSource", m.Env.EquipSource);
+        IntProp(w, "humanSlot", m.Env.HumanSlot);
+        IntProp(w, "humanController", m.Env.HumanController);
+        IntProp(w, "humanPawn", m.Env.HumanPawn);
         w.WriteEndObject();
 
         w.WriteNumber("firstFullRound", m.FirstFullRound);
@@ -143,6 +146,13 @@ public static class MatchCodec
         Col(w, "pen", sh, static r => r.Pen);
         Col(w, "visTarget", sh, static r => r.VisTarget);
         w.WriteStartArray("cls"); foreach (ref readonly var r in sh) { if (r.Class == Nil.V) w.WriteNullValue(); else w.WriteStringValue(WeaponNames.ClassNames[r.Class]); } w.WriteEndArray();
+        w.WriteEndObject();
+        var hm = s.HitMask.Span;
+        w.WriteStartObject("hitMask");
+        Col(w, "ri", hm, static r => r.Ri); Col(w, "tick", hm, static r => r.Tick); Col(w, "victim", hm, static r => r.Victim);
+        w.WriteStartArray("m0"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M0); w.WriteEndArray();
+        w.WriteStartArray("m1"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M1); w.WriteEndArray();
+        w.WriteStartArray("spotted"); foreach (ref readonly var r in hm) w.WriteBooleanValue(r.Spotted); w.WriteEndArray();
         w.WriteEndObject();
         w.WriteEndObject(); // aim
 
@@ -293,6 +303,7 @@ public static class MatchCodec
         w.WriteNumber("grenades", s.TotalDropped("grenades", s.Grenades.Dropped));
         w.WriteNumber("throws", s.TotalDropped("throws", s.Throws.Dropped));
         w.WriteNumber("leaves", s.TotalDropped("leaves", s.Leaves.Dropped));
+        w.WriteNumber("hitMask", s.TotalDropped("hitMask", s.HitMask.Dropped));
         w.WriteNumber("pos", s.TotalDropped("pos", s.Pos.Dropped));
         w.WriteNumber("engagements", s.TotalDropped("engagements", s.Engagements.Dropped));
         w.WriteNumber("shots", s.TotalDropped("shots", s.Shots.Dropped));
@@ -436,6 +447,9 @@ public static class MatchCodec
             MaxRounds = OptInt(env.GetProperty("maxrounds")),
             BotDifficulty = OptInt(env.GetProperty("botDifficulty")),
             EquipSource = OptString(env, "equipSource"),
+            HumanSlot = env.TryGetProperty("humanSlot", out var hs) ? OptInt(hs) : Nil.V,
+            HumanController = env.TryGetProperty("humanController", out var hc) ? OptInt(hc) : Nil.V,
+            HumanPawn = env.TryGetProperty("humanPawn", out var hp) ? OptInt(hp) : Nil.V,
         };
         var pl = root.GetProperty("players");
         var keys = Strings(pl.GetProperty("key"));
@@ -470,6 +484,7 @@ public static class MatchCodec
         var aim = root.GetProperty("aim");
         ReadEngagements(aim.GetProperty("engagements"), s);
         ReadShots(aim.GetProperty("shots"), s);
+        if (aim.TryGetProperty("hitMask", out var hmEl)) ReadHitMask(hmEl, s);
         ReadRecon(recon, s);
         ReadPerf(root.GetProperty("perf"), s);
         m.GrenadeCount = s.Grenades.Count;
@@ -623,6 +638,14 @@ public static class MatchCodec
             Triple(pos[i], out r.X, out r.Y, out r.Z);
             s.Grenades.Add(r);
         }
+    }
+
+    private static void ReadHitMask(JsonElement t, MatchStore s)
+    {
+        var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var v = Ints(t.GetProperty("victim"));
+        var m0 = t.GetProperty("m0"); var m1 = t.GetProperty("m1"); var sp = t.GetProperty("spotted");
+        for (int i = 0; i < ri.Length; i++)
+            s.HitMask.Add(new HitMaskRow { Ri = ri[i], Tick = tick[i], Victim = v[i], M0 = m0[i].GetUInt32(), M1 = m1[i].GetUInt32(), Spotted = sp[i].GetBoolean() });
     }
 
     private static void ReadLeaves(JsonElement t, MatchStore s)

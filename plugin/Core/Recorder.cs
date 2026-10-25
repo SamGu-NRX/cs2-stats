@@ -246,6 +246,23 @@ public sealed class Recorder
         else if (env.EquipSource != name) env.EquipSource = "mixed";
     }
 
+    /// <summary>The human damaged an enemy: keep the victim's raw spotted state for validating visibility.</summary>
+    public void HitMask(int tick, int attacker, int victim, uint m0, uint m1, bool spotted)
+    {
+        if (!RoundActive || attacker != Meta.Human || attacker == Nil.V || (uint)victim >= Limits.MaxPlayers || !IsEnemy(attacker, victim)) return;
+        _buf.HitMask.Add(new HitMaskRow { Ri = Ri, Tick = tick, Victim = victim, M0 = m0, M1 = m1, Spotted = spotted });
+    }
+
+    /// <summary>Records the human's slot, controller index and pawn index once per match.</summary>
+    public void SetHumanEntities(int slot, int controllerIndex, int pawnIndex)
+    {
+        var env = Meta.Env;
+        if (env.HumanSlot != Nil.V) return;
+        env.HumanSlot = slot;
+        env.HumanController = controllerIndex;
+        env.HumanPawn = pawnIndex;
+    }
+
     /// <summary>A player left the server during the round.</summary>
     public void Leave(int tick, int pi)
     {
