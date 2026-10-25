@@ -57,7 +57,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     kills: emptyTable("kills"), damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
     grenade_throws: emptyTable("grenade_throws"), grenade_events: emptyTable("grenade_events"), smokes: emptyTable("smokes"),
     infernos: emptyTable("infernos"), shots: emptyTable("shots"), positions: emptyTable("positions"),
-    spotted: null, engagements: null, engagement_ticks: null,
+    spotted: null, engagements: null, engagement_ticks: null, purchases: null,
   };
 
   add(t.match, "match", {

@@ -119,6 +119,7 @@ that more is better. They are identity metrics, so no view scores them or lists 
 | teamFlashPR | exact | Teammates blinded for more than 1.1 s, per round |
 | utilDmgPR | exact | Enemy damage from your grenades and fire, per round |
 | fireDmgPR | exact | Enemy damage from your molotovs and incendiaries, per round |
+| utilSpentPR | exact | Money spent on grenades per round, less refunds in the buy zone, over rounds with the purchases table |
 
 ## Aim (performance unless noted)
 

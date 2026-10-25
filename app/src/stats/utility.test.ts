@@ -24,3 +24,15 @@ it("records each thrown grenade with its time and landing point", () => {
   });
   expect(f.grenades).toEqual([{ ri: 0, pi: 0, weapon: "smokegrenade", t: 10, from: [10, 20], land: [900, -50] }]);
 });
+
+it("counts money spent on grenades, less refunds, over rounds with purchases only", () => {
+  // fails if a refunded grenade or a rifle counts as utility bought, or a source without purchases dilutes the rate
+  const buy = (item: string, cost: number, was_sold = false) => ({ tick: 100, steamid: "a", item, cost, was_sold });
+  const f = oneRound({
+    players: { a: "CT", c: "T" },
+    purchases: [buy("Smoke Grenade", 300), buy("Flashbang", 200), buy("Molotov", 400, true), buy("M4A4", 2900)],
+  });
+  const m = f.pr.find((r) => f.players[r.pi].id === "a")!.m;
+  expect([m.utilSpent, m.purchaseRounds]).toEqual([500, 1]);
+  expect(oneRound({ players: { a: "CT", c: "T" } }).pr[0].m.purchaseRounds).toBeUndefined();
+});

@@ -177,6 +177,9 @@ const M: Metric[] = [
     def: `Teammates you blinded for more than ${FLASHED_MIN_S} s, per round.`, value: (s) => per(s.m.teamFlashed, s.m.rounds) },
   { id: "utilDmgPR", label: "Utility damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
     def: "Enemy damage from your grenades and fire, per round.", value: (s) => per(s.m.utilDmg, s.m.rounds) },
+  { id: "utilSpentPR", label: "Utility bought per round", kind: "identity", group: "utility", unit: "money", status: "exact",
+    def: "Money spent on grenades per round, less grenades refunded in the buy zone. Needs the purchases table (demos through the extractor).",
+    value: (s) => per(s.m.utilSpent, s.m.purchaseRounds) },
   { id: "fireDmgPR", label: "Fire damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
     def: "Enemy damage from your molotovs and incendiaries, per round.", value: (s) => per(s.m.fireDmg, s.m.rounds) },
 

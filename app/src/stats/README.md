@@ -125,5 +125,5 @@ comes from:
   and Flash Swing is unavailable. It has no equipment bands either; `rating3.ts` keeps them with their
   derivation until it does.
 - The extractor ships no nav mesh, so path efficiency is unavailable.
-- No table records purchases, so utility spent is not computed. The demo's `item_purchase` events
-  would supply it; equipment deltas would not (pickups and drops).
+- Plugin recordings carry no purchases, so utility bought (`utilSpentPR`) is measured on extracted
+  demos only; its denominator counts only rounds with the purchases table.

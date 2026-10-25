@@ -68,6 +68,8 @@ export const SCHEMA = {
     is_self: "b", is_team_flash: "b", ambiguous: "b",
   },
   bomb: { tick: "i", round: "i", event: "s", steamid: "id?", site: "s?", place: "s?" },
+  /** every item bought; `item` is the display name, `was_sold` a refund in the buy zone */
+  purchases: { tick: "i", round: "i", steamid: "id", item: "s", cost: "i", was_sold: "b" },
   /** 4 Hz samples */
   positions: {
     tick: "i", round: "i", steamid: "id", side: "s?", x: "f", y: "f", z: "f", pitch: "f?", yaw: "f?",
@@ -117,6 +119,7 @@ export interface MatchTables {
   grenade_throws: Table<"grenade_throws"> | null;
   grenade_events: Table<"grenade_events"> | null;
   smokes: Table<"smokes"> | null;
+  purchases: Table<"purchases"> | null;
   infernos: Table<"infernos"> | null;
   shots: Table<"shots"> | null;
   positions: Table<"positions"> | null;
@@ -126,7 +129,7 @@ export interface MatchTables {
 }
 
 export const REQUIRED_TABLES = ["match", "players", "rounds", "player_rounds", "kills", "damages", "blinds", "bomb"] as const;
-export const OPTIONAL_TABLES = ["grenade_throws", "grenade_events", "smokes", "infernos", "shots", "positions", "spotted", "engagements", "engagement_ticks"] as const;
+export const OPTIONAL_TABLES = ["grenade_throws", "grenade_events", "smokes", "infernos", "shots", "positions", "spotted", "engagements", "engagement_ticks", "purchases"] as const;
 
 export function kindOf(table: TableName, column: string): Kind {
   return (SCHEMA[table] as Record<string, Kind>)[column];

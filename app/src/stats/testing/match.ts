@@ -31,6 +31,7 @@ export interface OneRound {
   player_rounds?: Record<string, Row>;
   damages?: Row[];
   blinds?: Row[];
+  purchases?: Row[];
   grenade_throws?: Row[];
   /** columns of the rounds row to override, such as plant_tick */
   roundRow?: Row;
@@ -60,6 +61,7 @@ export function oneRoundTables(m: OneRound): MatchTables {
     spotted: m.spotted ? table("spotted", m.spotted.map((s) => ({ round, ...s }))) : null,
     engagements: m.engagements ? table("engagements", m.engagements.map((e) => ({ round, hits: 0, damage: 0, outcome: "sight-only", truncated: false, ...e }))) : null,
     engagement_ticks: m.engagement_ticks ? table("engagement_ticks", m.engagement_ticks) : null,
+    purchases: m.purchases ? table("purchases", m.purchases.map((p) => ({ round, was_sold: false, ...p }))) : null,
   };
   return t;
 }
