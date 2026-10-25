@@ -1,14 +1,12 @@
-// Home's headline tiles: which metric each tile shows, its format and its benchmark. Values come
-// from METRIC over a match's or a filter's Summary.
-import { METRIC } from "../../stats/metrics";
-import { ratedMatch } from "./engine";
-import type { Summary } from "../../stats/rollup";
+// Home's headline tiles: which metric each tile shows, its format and its benchmark. Values are the
+// worker's metric values over a match or over the filter.
+import type { Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtMs, fmtPct, fmtRating, fmtSwing } from "../lib/format";
 import type { BenchId } from "../lib/verdict";
 import type { MatchEntry } from "./match";
 
 export interface TileDef {
-  /** METRIC id */
+  /** metric id */
   id: string;
   label: string;
   fmt: (v: number) => string;
@@ -28,7 +26,7 @@ export const TILES: TileDef[] = [
   { id: "kpr", label: "KPR", fmt: (v) => fmtDec(v), fmtDelta: (v) => v.toFixed(2), bench: "kpr", deltaSpan: 0.2 },
   { id: "adr", label: "ADR", fmt: fmtAdr, fmtDelta: (v) => v.toFixed(1), bench: "adr", deltaSpan: 20 },
   { id: "kast", label: "KAST", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "kast", deltaSpan: 10 },
-  // METRIC.swing is in percent; fmtSwing takes a fraction
+  // the swing metric is in percent; fmtSwing takes a fraction
   { id: "swing", label: "Swing", fmt: (v) => fmtSwing(v / 100), fmtDelta: (v) => `${v.toFixed(2)}%`, bench: "swing", deltaSpan: 3 },
   { id: "hs", label: "HS%", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "hs", deltaSpan: 15 },
   { id: "accuracy", label: "Accuracy", fmt: (v) => fmtPct(v), fmtDelta: (v) => `${v.toFixed(1)}%`, bench: "acc", deltaSpan: 8, aim: true },
@@ -36,10 +34,11 @@ export const TILES: TileDef[] = [
   { id: "timeToDamage", label: "Time to damage", fmt: fmtMs, fmtDelta: (v) => `${Math.round(v)} ms`, bench: "ttd", deltaSpan: 200, aim: true, visibility: true },
 ];
 
-export const tileValue = (t: TileDef, s: Summary | null) => (s ? METRIC[t.id].value(s) : null);
+/** A tile's value over a filter; its rating is the pooled one the caller passes (under the coverage rule). */
+export const tileValue = (t: TileDef, v: Values | null, rating: number | null) => (!v ? null : t.id === "rating3" ? rating : v[t.id]);
 
-/** One match's value; a match under the rating coverage rule (data/engine.ts) has no rating. */
-export const entryTile = (t: TileDef, e: MatchEntry) => (t.id === "rating3" && !ratedMatch(e.match) ? null : tileValue(t, e.summary));
+/** One match's value; a match under the rating coverage rule has no rating. */
+export const entryTile = (t: TileDef, e: MatchEntry) => tileValue(t, e.line.v, e.line.rating);
 
 /** Per-match values, oldest first. */
 export const seriesOf = (t: TileDef, list: MatchEntry[]) => [...list].reverse().map((e) => ({ e, v: entryTile(t, e) }));

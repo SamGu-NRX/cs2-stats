@@ -42,7 +42,7 @@ function AppBar({ onPalette }: { onPalette: () => void }) {
 
 function Body() {
   const route = useRoute();
-  const { status, error, matches, refresh } = useData();
+  const { status, error, matches, refresh, meta } = useData();
   const pane = useRef<HTMLElement>(null);
   const rail = useRail();
   const [palette, setPalette] = useState(false);
@@ -110,6 +110,9 @@ function Body() {
         <p className="selectable muted">{error}</p>
       </div></div>
     );
+  } else if (!meta) {
+    // the views read metric labels and units the worker sends once at start (data/meta.ts)
+    view = <div className="view"><div className="skel" style={{ height: 160 }} /></div>;
   } else if (route.page === "match" && route.file) view = <MatchView file={route.file} tab={route.tab ?? "overview"} />;
   else if (route.page === "matches") view = <MatchesView />;
   else if (route.page === "profile") view = <ProfileView />;

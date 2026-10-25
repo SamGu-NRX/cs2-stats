@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { halfOf, killSlots, roundColumns, startsHalf } from "./layout";
+import { halfOf, halfStarts, killSlots, roundColumns } from "./layout";
 
 describe("halves", () => {
   it("splits regulation at maxrounds / 2", () => {
@@ -19,14 +19,14 @@ describe("halves", () => {
     expect(halfOf(8, 16)).toBe(1);
   });
   it("marks the first round of each half", () => {
-    const starts = Array.from({ length: 30 }, (_, ri) => ri).filter((ri) => startsHalf(ri, 24));
-    expect(starts).toEqual([12, 24, 27]);
+    const numbers = Array.from({ length: 30 }, (_, i) => i + 1);
+    expect(numbers.filter((_, i) => halfStarts(numbers, 24)[i])).toEqual([13, 25, 28]);
   });
 });
 
 describe("roundColumns", () => {
   it("places columns with a gap at halftime", () => {
-    const { cols, width } = roundColumns(14, 24, 30, 2, 10);
+    const { cols, width } = roundColumns(Array.from({ length: 14 }, (_, i) => i + 1), 24, 30, 2, 10);
     expect(cols[0].x).toBe(0);
     expect(cols[1].x).toBe(32);
     expect(cols[11].x).toBe(11 * 32);
@@ -36,7 +36,13 @@ describe("roundColumns", () => {
     expect(width).toBe(13 * 32 + 10 + 30);
   });
   it("is empty without rounds", () => {
-    expect(roundColumns(0, 24, 30, 2, 10)).toEqual({ cols: [], width: 0 });
+    expect(roundColumns([], 24, 30, 2, 10)).toEqual({ cols: [], width: 0 });
+  });
+  it("puts the halftime gap by round number when the file starts late", () => {
+    // a converted log that holds rounds 1 to 6 as totals only starts at round 7
+    const numbers = Array.from({ length: 18 }, (_, i) => i + 7);
+    const { cols } = roundColumns(numbers, 24, 30, 2, 10);
+    expect(cols.filter((c) => c.gapBefore).map((c) => numbers[c.ri])).toEqual([13]);
   });
 });
 

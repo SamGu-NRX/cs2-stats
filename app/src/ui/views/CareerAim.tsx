@@ -1,11 +1,10 @@
 // Career aim: how your aim moves across recorded matches, then every recorded shot together.
 import { useMemo } from "react";
-import { METRIC } from "../../stats/metrics";
-import { trend } from "../../stats/trends";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
 import { filterEntries, fmtMetric } from "../data/engine";
-import { useRollups, useYourQuery } from "../data/hooks";
+import { useCall, useRollups, useYourQuery } from "../data/hooks";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import { AimIcon } from "../icons/ui";
 import { fmtDate, plural } from "../lib/format";
@@ -28,16 +27,18 @@ export default function CareerAim() {
   const { map, n } = useFilters();
   const list = useMemo(() => { const f = filterEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
-  const scope = useMemo(() => (query ? { query } : null), [query]);
   const career = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
   const visibility = list.some((s) => s.match.visibility === "ok");
-  const shots = list.reduce((t, s) => t + s.summary.aim.shots, 0);
-  const oldestFirst = [...list].reverse();
+  const shots = list.reduce((t, s) => t + s.shots, 0);
+  const oldestFirst = useMemo(() => [...list].reverse(), [list]);
+  // each metric's value per match comes with the match list; the slope over them is the engine's trend()
+  const series = useMemo(() => TRENDS.map((t) => oldestFirst.map((s) => s.line.v[t.id])), [oldestFirst]);
+  const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
       <BarContent crumbs={[{ label: "Career aim" }]} tools={<><MapFilter /><TimeFilter /></>} />
       <div className="view__in careeraim">
-        {!scope ? (
+        {!query ? (
           <Card><Empty icon={<AimIcon size={40} />} text="No recorded matches yet. Aim comes from matches recorded with the capture plugin; converted logs have no shots." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
@@ -51,27 +52,26 @@ export default function CareerAim() {
               </div>
             </div>
             <div className="trends">
-              {TRENDS.map((t) => {
-                const m = METRIC[t.id];
-                const pts = oldestFirst.map((s) => ({ key: s.file, value: m.value(s.summary), label: fmtDate(s.match.date) }));
-                // the engine's least-squares slope over match order, per match
-                const tr = trend(oldestFirst.map((s, i) => ({ match: s.file, date: s.match.date, value: pts[i].value, won: null })));
+              {TRENDS.map((t, k) => {
+                const m = metric(t.id);
+                const pts = oldestFirst.map((s, i) => ({ key: s.file, value: series[k][i], label: fmtDate(s.match.date) }));
+                const tr = trends?.[k] ?? null;
                 const fmt = (v: number) => fmtMetric(t.id, v);
                 const better = tr && (m.lowerIsBetter ? tr.slope < 0 : tr.slope > 0);
                 return (
                   <Card key={t.id} title={m.label} aside={
                     <span className="trend-aside">
                       {tr && <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={m.lowerIsBetter} fmt={fmt} title={`Change per match over ${tr.n} matches (least-squares slope)`} />}
-                      <b className="num cream" data-tip={m.def}>{fmtMetric(t.id, career ? m.value(career) : null)}</b>
+                      <b className="num cream" data-tip={m.def}>{fmtMetric(t.id, career ? career.v[t.id] : null)}</b>
                     </span>
                   }>
                     <TrendLine points={pts} fmt={fmt} height={120} bench={t.bench} benchLabel="ref" lowerIsBetter={m.lowerIsBetter} />
-                    <p className="meta trend-note">{tr === null ? "Three recorded matches with a value are needed to show a trend." : `${tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}: ${fmt(Math.abs(tr.slope))} per match over ${tr.n} matches.`}</p>
+                    <p className="meta trend-note">{!trends ? "" : tr === null ? "Three recorded matches with a value are needed to show a trend." : `${tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}: ${fmt(Math.abs(tr.slope))} per match over ${tr.n} matches.`}</p>
                   </Card>
                 );
               })}
             </div>
-            <AimPanels scope={scope} label={plural(list.length, "match", "matches")} visibility={visibility} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} />
           </>
         )}
       </div>

@@ -9,7 +9,7 @@ import { useRatings, useYourQuery } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { MatchesIcon, SearchIcon } from "../icons/ui";
-import { fmtAdr, fmtDate, fmtDiff, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtDate, fmtDiff, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
 import { diffScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
@@ -76,7 +76,7 @@ export function MatchesView() {
               { label: "Copy file name", run: () => copyText(s.file, "File name copied") },
             ])}
             columns={[
-              { key: "date", label: "Date", align: "l", sort: (s) => `${s.match.date ?? ""}|${s.file}`, firstDir: "desc", render: (s) => <span className="two" data-file={s.file}><b>{fmtDate(s.match.date)}</b></span>, width: 110 },
+              { key: "date", label: "Date", align: "l", sort: (s) => `${s.match.date ?? ""}|${s.file}`, firstDir: "desc", render: (s) => <span className="two" data-file={s.file}><b>{fmtDate(s.match.date)}</b>{s.match.startedAt && <small>{fmtTime(s.match.startedAt)}</small>}</span>, width: 110 },
               { key: "map", label: "Map", align: "l", sort: (s) => mapName(s.match.map), render: (s) => <span className="mapcell"><MapThumb map={s.match.map} size={26} /><b data-vt="map">{mapName(s.match.map)}</b></span>, width: 150 },
               { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span>, width: 110 },
               { key: "kd", label: "K–D", tip: "Kills and deaths", sort: (s) => line(s).kills, render: (s) => <span className="num">{line(s).kills}<span className="faint">–</span>{line(s).deaths}</span> },

@@ -1,10 +1,8 @@
 // Home: the last match as the hero, form, headline stats with trends, recent matches, highlights
 // from the data, and the two performance numbers to work on.
 import { useMemo, useState } from "react";
-import { compare } from "../../stats/compare";
-import { METRIC, METRICS } from "../../stats/metrics";
 import type { Rating3 } from "../../stats/rating3";
-import type { Summary } from "../../stats/rollup";
+import type { Query, Rolled } from "../../worker/protocol";
 import { ClutchBadge, Delta, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { FormBars } from "../components/charts";
@@ -12,8 +10,9 @@ import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
-import { clutchRows, entryLine, entryRating, filterEntries, fmtMetric, lineOf, multiKillRows, R3_INPUT_LABEL, RATING_HEADLINE } from "../data/engine";
-import { useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
+import { clutchRows, entryLine, entryRating, filterEntries, fmtMetric, lineOf, multiKillRows, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
+import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
+import { metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
@@ -22,7 +21,7 @@ import { ATTR_ICON, AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, SkullIcon, WeaponIcon, WinIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
 import { ChevronRightIcon } from "../icons/ui";
-import { fmtAdr, fmtDate, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtDate, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, openMatch, pageHref } from "../router";
@@ -32,15 +31,15 @@ import { BreakRows, Empty, SectionAside, StatTile } from "./shared";
 import { RoundRail } from "./match/RoundRail";
 import type { AttributeId } from "../data/proPack";
 
-/** Your totals over the filtered matches: both sides, T and CT, and the pooled rating. */
-interface Totals { both: Summary; t: Summary; ct: Summary; rating: Rating3 }
+/** Your totals over the filtered matches: both sides, T and CT, the pooled rating, and their query. */
+interface Totals { q: Query; both: Rolled; t: Rolled; ct: Rolled; rating: Rating3 }
 
 function useTotals(list: MatchEntry[]): Totals | null {
   const q = useYourQuery(list);
   const qs = useMemo(() => (q ? [q, { ...q, filter: { ...q.filter, sides: ["T" as const] } }, { ...q, filter: { ...q.filter, sides: ["CT" as const] } }] : null), [q]);
   const s = useRollups(qs).data;
   const r = useRatings(useMemo(() => (q ? [q] : null), [q])).data;
-  return s?.length === 3 && r ? { both: s[0], t: s[1], ct: s[2], rating: r[0].both } : null;
+  return q && s?.length === 3 && r ? { q, both: s[0], t: s[1], ct: s[2], rating: r[0].both } : null;
 }
 
 export function HomeView() {
@@ -114,7 +113,8 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
         <div className="hero__meta">
           <span className="caps">Last match</span>
           <span className="hero__map"><MapThumb map={s.match.map} size={22} /><b>{mapName(s.match.map)}</b></span>
-          <span className="meta">{fmtDate(s.match.date)}</span>
+          <span className="meta">{fmtWhen(s.match)}</span>
+          {s.match.durationS !== null && <span className="meta">{fmtDuration(s.match.durationS)}</span>}
           <SourceBadge s={src} />
         </div>
         <div className="hero__score" data-vt="score">
@@ -127,7 +127,7 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
         </div>
         <div className="hero__stats">
           <div className="hero-stat hero-stat--big">
-            <span className="stat__l">{RATING_HEADLINE}</span>
+            <span className="stat__l">{ratingHeadline()}</span>
             <b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b>
             <span className="verdict" data-v={verdict}>{verdict === "good" ? "Good" : verdict === "poor" ? "Poor" : "Average"}</span>
           </div>
@@ -196,7 +196,7 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
   return (
     <div className="tiles" role="list" aria-label="Headline stats">
       {TILES.filter((m) => !m.visibility || visibility).map((m) => {
-        const value = tileValue(m, t?.both ?? null);
+        const value = tileValue(m, t?.both.v ?? null, t?.rating.value ?? null);
         const series = seriesOf(m, list.slice(0, 10));
         const lastV = last ? entryTile(m, last) : null;
         const d = lastV !== null && value !== null ? lastV - value : null;
@@ -206,7 +206,7 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
           return x ? <BreakRows rows={Object.entries(x).map(([k, val]) => ({ label: R3_INPUT_LABEL[k]?.label ?? k, value: R3_INPUT_LABEL[k]?.fmt(val) ?? String(val) }))} /> : null;
         } : m.id === "kast" ? () => (t ? <KastSplit s={t.both} /> : null) : m.id === "adr" || m.id === "kpr" ? () => {
           if (!t) return null;
-          const f = (s: Summary) => fmtMetric(m.id, METRIC[m.id].value(s));
+          const f = (s: Rolled) => fmtMetric(m.id, s.v[m.id]);
           return <BreakRows rows={[{ label: <span className="t-text">T side</span>, value: f(t.t) }, { label: <span className="ct-text">CT side</span>, value: f(t.ct) }, { label: "Rounds", value: `${t.t.m.rounds} T, ${t.ct.m.rounds} CT` }]} />;
         } : m.aim ? () => <p className="meta">{aimMatches ? `From ${plural(aimMatches, "recorded match", "recorded matches")}.` : "Needs a recorded match."}</p> : undefined;
         return (
@@ -216,9 +216,9 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
               value={noAim || value === null ? "–" : m.fmt(value)}
               raw={value}
               bench={m.bench}
-              def={METRIC[m.id].def}
+              def={metric(m.id).def}
               spark={series.map((x) => x.v)}
-              delta={noAim ? <span className="faint">Recorded matches only</span> : <Delta d={d} span={m.deltaSpan} lowerIsBetter={METRIC[m.id].lowerIsBetter} fmt={m.fmtDelta} title="Last match against your average" />}
+              delta={noAim ? <span className="faint">Recorded matches only</span> : <Delta d={d} span={m.deltaSpan} lowerIsBetter={metric(m.id).lowerIsBetter} fmt={m.fmtDelta} title="Last match against your average" />}
               breakdown={breakdown}
             />
           </div>
@@ -237,16 +237,25 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
   );
 }
 
-/** What KAST is made of, each ingredient on its own: rounds with a kill and deaths traded. */
-function KastSplit({ s }: { s: Summary }) {
-  const killR = METRIC.killRounds.value(s);
-  const traded = METRIC.deathsTradedPct.value(s);
-  if (killR === null) return null;
+/**
+ * What KAST is made of: the engine credits each KAST round once, to a kill before an assist before
+ * survival before a traded death, so the four shares of rounds add up to KAST.
+ */
+function KastSplit({ s }: { s: Rolled }) {
+  const m = s.m;
+  if (!m.rounds) return null;
+  const part = (n: number) => ({ value: fmtPct((100 * n) / m.rounds), share: n / m.rounds });
   return (
-    <BreakRows rows={[
-      { label: METRIC.killRounds.label, value: fmtPct(killR), share: killR / 100, color: "var(--cream)" },
-      { label: METRIC.deathsTradedPct.label, value: fmtPct(traded), share: (traded ?? 0) / 100, color: "var(--ink2)" },
-    ]} />
+    <>
+      <BreakRows rows={[
+        { label: "Rounds with a kill", ...part(m.killRounds), color: "var(--cream)" },
+        { label: "With an assist, no kill", ...part(m.kastA), color: "var(--tan)" },
+        { label: "Survived, no kill or assist", ...part(m.kastS), color: "var(--ink2)" },
+        { label: "Death traded, nothing else", ...part(m.kastT), color: "var(--ink3)" },
+        { label: "Assists per round", value: fmtDec(m.assists / m.rounds) },
+      ]} />
+      <p className="meta">Each KAST round counts once, in that order, so the first four add up to KAST.</p>
+    </>
   );
 }
 
@@ -303,7 +312,7 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
   const m = t?.both.m;
   const clutches = m ? clutchRows(m).filter((r) => r.played > 0) : [];
   const mk = m ? multiKillRows(m) : [];
-  const open = t ? METRIC.openingSuccess.value(t.both) : null;
+  const open = t ? t.both.v.openingSuccess : null;
   return (
     <Card title="Highlights" aside={<span className="meta">{plural(list.length, "match", "matches")}</span>}>
       <div className="hl">
@@ -366,18 +375,18 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 // ---------------------------------------------------------------- work on
 
 /**
- * The two performance metrics where you sit lowest among pros. Style attributes are left out: they
- * describe how you play, not how well (design/identity.md).
+ * The two performance metrics where you sit lowest among pros, each with its percentile. Style
+ * attributes are left out: they describe how you play, not how well (design/identity.md).
  */
 function WorkOn({ t }: { t: Totals | null }) {
   const { baselines } = useData();
+  const r = useCall("compare", t && baselines ? [t.q, {}] : null).data;
   const weak = useMemo(() => {
-    if (!t || !baselines) return [];
-    const p = compare(t.both, baselines);
-    return METRICS.filter((m) => m.kind === "performance" && m.status !== "unavailable" && p[m.id].pct !== null)
-      .map((m) => ({ m, pct: p[m.id].pct!, value: p[m.id].value }))
+    if (!r) return [];
+    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id]?.pct != null)
+      .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
-  }, [t, baselines]);
+  }, [r]);
   const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
@@ -387,9 +396,9 @@ function WorkOn({ t }: { t: Totals | null }) {
             <a key={m.id} className="workon__item" href={pageHref("profile", m.group in ATTR_ICON ? { attr: m.group } : undefined)} data-tip={m.def}>
               <AttrIcon id={icon(m.group)} size={20} className="workon__ico" />
               <div className="workon__body">
-                <div className="workon__top"><b>{m.label}</b><span className="num"><b style={{ color: scoreText((pct - 50) / 50) }}>{Math.round(pct)}</b><span className="faint">/100</span></span></div>
+                <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }} data-tip="Percentile against pros: the share of pros below you">{rankText(pct)}</b></div>
                 <div className="hbar"><i style={{ width: `${pct}%`, background: "var(--poor)" }} /></div>
-                <div className="meta">You <b className="num" style={{ color: "var(--ink)" }}>{fmtMetric(m.id, value)}</b>, percentile against pros</div>
+                <div className="meta">You <b className="num" style={{ color: "var(--ink)" }}>{fmtMetric(m.id, value)}</b>, higher than {Math.round(pct)}% of {r?.role === "awper" ? "pro AWPers" : "pro riflers"}</div>
               </div>
             </a>
           ))}

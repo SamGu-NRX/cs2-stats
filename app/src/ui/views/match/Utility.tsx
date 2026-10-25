@@ -1,30 +1,34 @@
-// Utility: grenades thrown, flash assists and HE damage per player, split by side.
+// Utility: flashes, grenade damage and smokes per player, split by side, and where grenades landed.
 import { useMemo, useState } from "react";
 import type { Measures } from "../../../stats/facts";
-import { rollup } from "../../../stats/rollup";
+import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
-import { SIDE_OPTIONS, sidesOf, type SideKey } from "../../data/engine";
+import { frameFor, RadarView } from "../../components/MapArt";
+import { SIDE_OPTIONS, fmtMetric, type SideKey } from "../../data/engine";
 import type { MPlayer as PlayerRow } from "../../data/match";
-import { NadeIcon } from "../../icons/game";
-import { PlayerName, SectionAside } from "../shared";
+import { metric } from "../../data/meta";
+import { NadeIcon, NADE_LABEL, type Nade } from "../../icons/game";
+import { fmtSecs, plural } from "../../lib/format";
+import { PlayerName, SectionAside, Empty } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Utility({ v }: TabProps) {
   const [side, setSide] = useState<SideKey>("both");
-  const ms = useMemo(() => v.players.map((p) => rollup([v.facts], { player: p.key, ...sidesOf(side) }).m), [v, side]);
-  const sl = (p: PlayerRow): Measures => ms[p.pi];
+  const lines = v.b.lines[side];
+  const sl = (p: PlayerRow): Measures => lines[p.pi].m;
+  const val = (p: PlayerRow, id: string) => lines[p.pi].v[id];
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
-  const sum = (t: "us" | "them", f: (m: Measures) => number) => team(t).reduce((a, p) => a + f(sl(p)), 0);
-  const maxDmg = Math.max(1, ...v.players.map((p) => sl(p).heDmg));
+  const sum = (t: "us" | "them", f: (u: Measures) => number) => team(t).reduce((a, p) => a + f(sl(p)), 0);
+  const maxDmg = Math.max(1, ...v.players.map((p) => sl(p).utilDmg));
   return (
     <div className="tabpad utility">
       <div className="toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={SIDE_OPTIONS.map((o) => ({ ...o, label: o.value === "both" ? "Both sides" : o.label, side: o.value === "both" ? undefined : o.value }))} />
         <div className="toolbar__end">
-          <SectionAside label="HE damage" value={<><span className="cream">{sum("us", (u) => u.heDmg)}</span><span className="faint">–</span>{sum("them", (u) => u.heDmg)}</>} />
-          <SectionAside label="Flash assists" value={<><span className="cream">{sum("us", (u) => u.flashAssists)}</span><span className="faint">–</span>{sum("them", (u) => u.flashAssists)}</>} />
+          <SectionAside label="Utility damage" value={<><span className="cream">{sum("us", (u) => u.utilDmg)}</span><span className="faint">–</span>{sum("them", (u) => u.utilDmg)}</>} />
+          <SectionAside label="Enemies blinded" value={<><span className="cream">{sum("us", (u) => u.enemiesFlashed)}</span><span className="faint">–</span>{sum("them", (u) => u.enemiesFlashed)}</>} />
         </div>
       </div>
       <Card title="Flashes, grenades and smokes" flush>
@@ -37,17 +41,82 @@ export default function Utility({ v }: TabProps) {
           columns={[
             { key: "name", label: "Player", align: "l", sticky: true, sort: (p) => p.name, render: (p) => <span className="name-cell"><PlayerName v={v} pi={p.pi} /></span>, width: 170 },
             { key: "fl", label: <><NadeIcon type="flash" size={12} />Thrown</>, tip: "Flashbangs thrown", sort: (p) => sl(p).flashes, render: (p) => sl(p).flashes },
+            { key: "ef", label: "Blinded", tip: "Enemies your flashes blinded, once per enemy per flash", sort: (p) => sl(p).enemiesFlashed, render: (p) => sl(p).enemiesFlashed },
+            { key: "bt", label: "Blind time", tip: "Seconds of blindness your flashes caused on enemies", sort: (p) => sl(p).enemyBlindSecs, render: (p) => <span data-tip={`${fmtMetric("blindPerFlash", val(p, "blindPerFlash"))} per flash`}><Num v={fmtSecs(sl(p).enemyBlindSecs)} /></span> },
+            { key: "pf", label: "Per flash", tip: metric("enemiesPerFlash").def, sort: (p) => val(p, "enemiesPerFlash"), render: (p) => fmtMetric("enemiesPerFlash", val(p, "enemiesPerFlash")) },
             { key: "fa", label: "Assists", tip: "Flash assists: a teammate killed an enemy you had blinded", sort: (p) => sl(p).flashAssists, render: (p) => sl(p).flashAssists },
-            { key: "fk", label: "Led to a kill", tip: "Enemies you flashed who died to your team while still blind", sort: (p) => sl(p).flashKills, render: (p) => sl(p).flashKills },
-            { key: "hes", label: <><NadeIcon type="he" size={12} />Thrown</>, tip: "HE grenades thrown", sort: (p) => sl(p).hes, render: (p) => sl(p).hes },
-            { key: "mo", label: <><NadeIcon type="molotov" size={12} />Thrown</>, tip: "Molotovs and incendiaries thrown", sort: (p) => sl(p).molotovs, render: (p) => sl(p).molotovs },
+            { key: "tf", label: "Team flashed", tip: "Times your flashes blinded a teammate", sort: (p) => sl(p).teamFlashed, firstDir: "asc", render: (p) => <span className={sl(p).teamFlashed ? "poor-text" : undefined} data-tip={`${fmtSecs(sl(p).teamBlindSecs)} of teammate blindness, ${fmtMetric("teamFlashPR", val(p, "teamFlashPR"))} per round`}>{sl(p).teamFlashed}</span> },
+            { key: "he", label: <><NadeIcon type="he" size={12} />Dmg</>, tip: "Damage from your HE grenades to enemies", sort: (p) => sl(p).heDmg, render: (p) => sl(p).heDmg },
+            { key: "fire", label: <><NadeIcon type="molotov" size={12} />Dmg</>, tip: "Fire damage from your molotovs and incendiaries to enemies", sort: (p) => sl(p).fireDmg, render: (p) => <span data-tip={`${fmtMetric("fireDmgPR", val(p, "fireDmgPR"))} per round`}>{sl(p).fireDmg}</span> },
             { key: "sm", label: <><NadeIcon type="smoke" size={12} />Smokes</>, tip: "Smokes thrown", sort: (p) => sl(p).smokes, render: (p) => sl(p).smokes },
-            { key: "dmg", label: <><NadeIcon type="he" size={12} />Dmg</>, tip: "Damage from your HE grenades to enemies", sort: (p) => sl(p).heDmg, render: (p) => (
-              <span className="cellbar"><span className="hbar"><i style={{ width: `${(sl(p).heDmg / maxDmg) * 100}%`, background: p.team === "us" ? "var(--cream)" : "var(--ink2)" }} /></span><b className="num">{sl(p).heDmg}</b></span>
+            { key: "dmg", label: "Utility dmg", tip: "All grenade and fire damage to enemies", sort: (p) => sl(p).utilDmg, render: (p) => (
+              <span className="cellbar" data-tip={`${fmtMetric("utilDmgPR", val(p, "utilDmgPR"))} per round`}><span className="hbar"><i style={{ width: `${(sl(p).utilDmg / maxDmg) * 100}%`, background: p.team === "us" ? "var(--cream)" : "var(--ink2)" }} /></span><b className="num">{sl(p).utilDmg}</b></span>
             ), width: 150 },
           ]}
         />
       </Card>
+      <Landing v={v} />
     </div>
+  );
+}
+
+const TYPES: Nade[] = ["smoke", "flash", "he", "molotov"];
+const COLOR: Record<Nade, string> = { smoke: "var(--ink)", flash: "var(--cream)", he: "var(--poor-text)", molotov: "var(--t)", decoy: "var(--ink3)" };
+/** GrenadeFact.weapon (the grenade class) as the grenade glyphs name it. */
+const NADE_OF: Record<string, Nade> = { smokegrenade: "smoke", flashbang: "flash", hegrenade: "he", molotov: "molotov", incgrenade: "molotov", decoy: "decoy" };
+
+/** Where grenades landed, with the throw origin when it was recorded (grenadesOf in the worker). */
+function Landing({ v }: { v: TabProps["v"] }) {
+  const [who, setWho] = useState<"you" | "team" | "all">("you");
+  const [types, setTypes] = useState<Set<Nade>>(new Set(TYPES));
+  const nades = useMemo(() => v.b.grenades.flatMap((g) => {
+    const type = NADE_OF[g.weapon];
+    return g.land && type ? [{ x: g.land[0], y: g.land[1], type, from: g.from, pi: g.pi }] : [];
+  }), [v]);
+  const frame = useMemo(() => frameFor(v.map, nades.map((n) => [n.x, n.y])), [v.map, nades]);
+  const mine = (pi: number) => who === "all" || (who === "you" ? pi === v.human : v.players[pi]?.team === "us");
+  const shown = nades.filter((n) => types.has(n.type) && mine(n.pi));
+  const toggle = (t: Nade) => setTypes((s) => { const n = new Set(s); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  return (
+    <Card title="Where grenades landed" aside={<span className="meta">{plural(shown.length, "grenade")}</span>} collapsible id="match-landing">
+      {!nades.length || !frame ? (
+        <Empty icon={<NadeIcon type="smoke" size={36} />} text={v.b.grenades.some((g) => g.from)
+          ? "This match file records where grenades were thrown from, but not where they landed, so there is nothing to place on the map."
+          : "This match has no grenade positions. Recorded matches carry them."} />
+      ) : (
+        <div className="landing">
+          <div className="landing__side">
+            <Segmented label="Whose grenades" value={who} onChange={setWho} options={[{ value: "you", label: "You" }, { value: "team", label: "Your team" }, { value: "all", label: "Everyone" }]} />
+            <div className="landing__types" role="group" aria-label="Grenade types">
+              {TYPES.map((t) => {
+                const n = nades.filter((x) => x.type === t && mine(x.pi)).length;
+                return (
+                  <button key={t} className="landing__type" aria-pressed={types.has(t)} onClick={() => toggle(t)}>
+                    <i style={{ background: COLOR[t] }} /><NadeIcon type={t} size={14} /><span>{NADE_LABEL[t]}</span><b className="num">{n}</b>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="meta">Lines run from where the grenade was thrown, when the plugin recorded it.</p>
+          </div>
+          <div className="landing__map">
+            <RadarView map={v.map} frame={frame} label={`${shown.length} grenade landing points`}>
+              {shown.map((n, i) => {
+                const [x, y] = frame.to(n.x, n.y);
+                const from = n.from ? frame.to(...n.from) : null;
+                return (
+                  <g key={i}>
+                    {from && <line x1={from[0]} y1={from[1]} x2={x} y2={y} stroke={COLOR[n.type]} strokeOpacity="0.35" strokeWidth="2" />}
+                    {n.type === "smoke" ? <circle cx={x} cy={y} r="18" fill="rgba(230,226,220,.16)" stroke="rgba(230,226,220,.6)" strokeWidth="2" />
+                      : n.type === "molotov" ? <circle cx={x} cy={y} r="14" fill="rgba(219,136,28,.28)" stroke="var(--t)" strokeWidth="2" />
+                      : <circle cx={x} cy={y} r="7" fill={COLOR[n.type]} stroke="var(--bg0)" strokeWidth="2" />}
+                  </g>
+                );
+              })}
+            </RadarView>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

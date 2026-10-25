@@ -4,10 +4,9 @@
 // player's swing that round. Arrow keys move between cells (no animation), Enter opens the round.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { HoverCard } from "../../components/overlay";
-import { matchLines } from "../../data/engine";
 import { roundMatrix, sideOf, type MatchModel as MatchView, type RoundCell } from "../../data/match";
 import { DeathIcon, FirstKillIcon, SkullIcon, WinIcon, WIN_LABEL } from "../../icons/game";
-import { killSlots, moveIndex, startsHalf } from "../../lib/layout";
+import { killSlots, moveIndex } from "../../lib/layout";
 import { fmtSwing } from "../../lib/format";
 import { roundSwingScore, scoreText, scoreTint, swingScore } from "../../lib/scale";
 import { setQuery } from "../../router";
@@ -15,7 +14,7 @@ import { PlayerName, RoundCardBody } from "../shared";
 import type { TabProps } from "./MatchView";
 import { RoundDrawer } from "./RoundDrawer";
 
-export default function Rounds({ v, file, round }: TabProps) {
+export default function Rounds({ v, round }: TabProps) {
   const matrix = useMemo(() => roundMatrix(v), [v]);
   const open = (ri: number | null) => setQuery("round", ri === null ? null : String(v.rounds[ri].number));
   const sel = round !== null && round >= 0 && round < v.nRounds ? round : null;
@@ -37,7 +36,7 @@ export default function Rounds({ v, file, round }: TabProps) {
   return (
     <div className="rounds">
       <RoundDrawer v={v} ri={sel} onClose={() => open(null)} onStep={(d) => sel !== null && open(Math.max(0, Math.min(v.nRounds - 1, sel + d)))}>
-        <Inspector v={v} matrix={matrix} sel={sel} onOpen={open} file={file} />
+        <Inspector v={v} matrix={matrix} sel={sel} onOpen={open} />
         <Legend />
       </RoundDrawer>
     </div>
@@ -56,9 +55,8 @@ function Legend() {
   );
 }
 
-function Inspector({ v, matrix, sel, onOpen, file }: { v: MatchView; matrix: RoundCell[][]; sel: number | null; onOpen: (ri: number) => void; file: string }) {
-  const max = v.maxRounds;
-  const lines = useMemo(() => matchLines(v, "both"), [v]);
+function Inspector({ v, matrix, sel, onOpen }: { v: MatchView; matrix: RoundCell[][]; sel: number | null; onOpen: (ri: number) => void }) {
+  const lines = v.b.lines.both;
   const rating = (pi: number) => lines[pi].rating ?? 0;
   const us = v.players.filter((p) => p.team === "us").sort((a, b) => (a.isHuman ? -1 : b.isHuman ? 1 : rating(b.pi) - rating(a.pi)));
   const them = v.players.filter((p) => p.team === "them").sort((a, b) => rating(b.pi) - rating(a.pi));
@@ -92,7 +90,7 @@ function Inspector({ v, matrix, sel, onOpen, file }: { v: MatchView; matrix: Rou
         </div>
         {v.rounds.map((r) => {
           const s = t === "us" ? r.usSide : r.usSide === "T" ? "CT" : "T";
-          return <div key={r.ri} className={`ig__side ${startsHalf(r.number - 1, max) ? "is-half" : ""}`} data-side={s === "T" ? "t" : "ct"} role="gridcell" aria-hidden />;
+          return <div key={r.ri} className={`ig__side ${r.halfStart ? "is-half" : ""}`} data-side={s === "T" ? "t" : "ct"} role="gridcell" aria-hidden />;
         })}
         <div className="ig__total ig__total--head" role="columnheader">{t === "us" ? <span className={firstSide === "T" ? "t-text" : "ct-text"}>{firstSide} first</span> : null}</div>
       </div>
@@ -107,7 +105,7 @@ function Inspector({ v, matrix, sel, onOpen, file }: { v: MatchView; matrix: Rou
           {v.rounds.map((r) => {
             const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : "none";
             return (
-              <HoverCard key={r.ri} as="div" tabbable={false} prefer="bottom" className={`ig__head ${startsHalf(r.number - 1, max) ? "is-half" : ""} ${sel === r.ri ? "is-on" : ""}`} card={() => <RoundCardBody v={v} r={r} />}>
+              <HoverCard key={r.ri} as="div" tabbable={false} prefer="bottom" className={`ig__head ${r.halfStart ? "is-half" : ""} ${sel === r.ri ? "is-on" : ""}`} card={() => <RoundCardBody v={v} r={r} />}>
                 <button className="ig__headbtn" data-side={side} data-won={r.winner === "us"} onClick={() => onOpen(r.ri)} aria-label={`Open round ${r.number}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}, ${r.winner === "us" ? "won" : "lost"}`} tabIndex={-1}>
                   <WinIcon how={r.how} size={12} />
                   <span className="num">{r.number}</span>
@@ -118,17 +116,17 @@ function Inspector({ v, matrix, sel, onOpen, file }: { v: MatchView; matrix: Rou
           <div className="ig__total ig__total--head" role="columnheader"><span className="caps">Swing</span></div>
         </div>
         {teamRow("us")}
-        {us.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].summary.m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} max={max} file={file} />)}
+        {us.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
         {teamRow("them")}
-        {them.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].summary.m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} max={max} file={file} />)}
+        {them.map((p) => <PlayerRowView key={p.key} v={v} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} total={lines[p.pi].m} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} opening={opening} />)}
       </div>
     </div>
   );
 }
 
-function PlayerRowView({ v, pi, r, cells, total: m, sel, focus, setFocus, onOpen, opening, max }: {
+function PlayerRowView({ v, pi, r, cells, total: m, sel, focus, setFocus, onOpen, opening }: {
   v: MatchView; pi: number; r: number; cells: RoundCell[]; total: { swing: number; swingRounds: number }; sel: number | null; focus: { r: number; c: number };
-  setFocus: (f: { r: number; c: number }) => void; onOpen: (ri: number) => void; opening: (number | null)[]; max: number; file: string;
+  setFocus: (f: { r: number; c: number }) => void; onOpen: (ri: number) => void; opening: (number | null)[];
 }) {
   const p = v.players[pi];
   // the match's swing summed over the player's valued rounds, a fraction
@@ -153,7 +151,7 @@ function PlayerRowView({ v, pi, r, cells, total: m, sel, focus, setFocus, onOpen
             tabIndex={focus.r === r && focus.c === c.ri ? 0 : -1}
             aria-label={label}
             aria-selected={sel === c.ri}
-            className={`ig__cell ${startsHalf(v.rounds[c.ri].number - 1, max) ? "is-half" : ""} ${sel === c.ri ? "is-on" : ""} ${c.empty ? "is-empty" : ""} ${c.died ? "is-dead" : ""}`}
+            className={`ig__cell ${v.rounds[c.ri].halfStart ? "is-half" : ""} ${sel === c.ri ? "is-on" : ""} ${c.empty ? "is-empty" : ""} ${c.died ? "is-dead" : ""}`}
             style={tint ? { background: tint } : undefined}
             onClick={() => { setFocus({ r, c: c.ri }); onOpen(c.ri); }}
             onFocus={() => setFocus({ r, c: c.ri })}

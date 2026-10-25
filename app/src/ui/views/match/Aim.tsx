@@ -7,7 +7,7 @@ import { Empty } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Aim({ v }: TabProps) {
-  const scope = useMemo(() => ({ facts: v.facts, player: v.players[v.human].key }), [v]);
+  const query = useMemo(() => ({ files: [v.file], filter: { player: v.players[v.human].key } }), [v]);
   if (!v.entry.hasAim) {
     return (
       <div className="tabpad">
@@ -21,5 +21,5 @@ export default function Aim({ v }: TabProps) {
       </div>
     );
   }
-  return <div className="tabpad"><AimPanels scope={scope} label="this match" visibility={v.visibility} /></div>;
+  return <div className="tabpad"><AimPanels query={query} label="this match" visibility={v.visibility} /></div>;
 }

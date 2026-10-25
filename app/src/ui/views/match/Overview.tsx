@@ -2,15 +2,14 @@
 // player, the rounds that decided the match, and you against the other nine players. Team facts
 // live on the Advanced tab.
 import { useMemo, useState } from "react";
-import { rollup } from "../../../stats/rollup";
 import { MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { HoverCard } from "../../components/overlay";
-import { matchLines, multiKillRows, RATING_LABEL, RATING_POOLED, SIDE_OPTIONS, type SideKey, type StatLine } from "../../data/engine";
-import { roundSlice, type MPlayer as PlayerRow } from "../../data/match";
+import { multiKillRows, RATING_LABEL, RATING_POOLED, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
+import type { MPlayer as PlayerRow } from "../../data/match";
 import { WinIcon, WIN_LABEL } from "../../icons/game";
 import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
@@ -22,8 +21,8 @@ import type { TabProps } from "./MatchView";
 export default function Overview({ v, file }: TabProps) {
   const [side, setSide] = useState<SideKey>("both");
   const [sort, setSort] = useState<SortState | null>({ key: "rating", dir: "desc" });
-  const lines = useMemo(() => matchLines(v, side), [v, side]);
-  const multi = useMemo(() => matchLines(v, "both").map((l) => Object.fromEntries(multiKillRows(l.summary.m).map((r) => [r.k, r.rounds])) as Record<2 | 3 | 4 | 5, number>), [v]);
+  const lines = useMemo(() => v.b.lines[side].map(statLine), [v, side]);
+  const multi = useMemo(() => v.b.lines.both.map((l) => Object.fromEntries(multiKillRows(l.m).map((r) => [r.k, r.rounds])) as Record<2 | 3 | 4 | 5, number>), [v]);
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
   const usSideFirst = v.usStartSide;
   const multiScore = (pi: number) => multi[pi][2] + 2 * multi[pi][3] + 4 * multi[pi][4] + 8 * multi[pi][5];
@@ -38,7 +37,7 @@ export default function Overview({ v, file }: TabProps) {
     { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (p: PlayerRow) => lines[p.pi].kast, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].kast)} /> },
     { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (p: PlayerRow) => lines[p.pi].hs, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].hs)} /> },
     ...(side === "both" ? [
-      { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => lines[p.pi].summary.m.openingKills - lines[p.pi].summary.m.openingDeaths, render: (p: PlayerRow) => <span className="num">{lines[p.pi].summary.m.openingKills}<span className="faint">–</span>{lines[p.pi].summary.m.openingDeaths}</span> },
+      { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => lines[p.pi].m.openingKills - lines[p.pi].m.openingDeaths, render: (p: PlayerRow) => <span className="num">{lines[p.pi].m.openingKills}<span className="faint">–</span>{lines[p.pi].m.openingDeaths}</span> },
       { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (p: PlayerRow) => multiScore(p.pi), render: (p: PlayerRow) => <MultiChips c={multi[p.pi]} />, width: 170 },
     ] : []),
     { key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win probability per round, from your kills (split by damage) and deaths", sort: (p: PlayerRow) => lines[p.pi].swing, render: (p: PlayerRow) => { const x = lines[p.pi].swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }}><Num v={fmtSwing(x)} /></span>; } },
@@ -60,12 +59,9 @@ export default function Overview({ v, file }: TabProps) {
   };
 
   // decisive rounds: the largest swing summed over your team, each round rolled up on its own
-  const key = useMemo(() => {
-    const ids = v.players.filter((p) => p.team === "us").map((p) => p.key);
-    return v.rounds.map((r) => ({ r, s: rollup([roundSlice(v.facts, r.ri)], { player: ids }).m }))
-      .filter((x) => x.s.swingRounds > 0).map((x) => ({ r: x.r, us: x.s.swing }))
-      .sort((a, b) => Math.abs(b.us) - Math.abs(a.us)).slice(0, 4);
-  }, [v]);
+  const key = useMemo(() => v.rounds.map((r) => ({ r, us: v.b.teamSwing[r.ri] }))
+    .filter((x): x is { r: typeof x.r; us: number } => x.us !== null)
+    .sort((a, b) => Math.abs(b.us) - Math.abs(a.us)).slice(0, 4), [v]);
 
   return (
     <div className="tabpad overview">
