@@ -59,7 +59,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     // Shot path: the weapon is resolved once per weapon switch, keyed by the active weapon handle.
     private uint _shotWeaponHandle = Mem.InvalidHandle;
-    private int _shotWeapon = Nil.V, _shotMaxSpeed = Nil.V;
+    private int _shotWeapon = Nil.V, _shotMaxSpeed = Nil.V, _shotClass = Nil.V;
     private bool _shotIsBullet;
 
     public override void Load(bool hotReload)
@@ -89,6 +89,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         RegisterEventHandler<EventHegrenadeDetonate>(OnHe);
         RegisterEventHandler<EventFlashbangDetonate>(OnFlash);
         RegisterEventHandler<EventSmokegrenadeDetonate>(OnSmoke);
+        RegisterEventHandler<EventSmokegrenadeExpired>(OnSmokeExpired);
         RegisterEventHandler<EventInfernoStartburn>(OnInferno);
         RegisterEventHandler<EventDecoyStarted>(OnDecoy);
         RegisterEventHandler<EventBombPlanted>(OnBombPlanted);

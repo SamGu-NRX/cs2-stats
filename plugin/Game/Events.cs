@@ -202,7 +202,7 @@ public sealed partial class BotMatchStatsPlugin
             {
                 Tick = tick, Killer = a, Victim = v, Assister = assist, AssistedFlash = e.Assistedflash,
                 Weapon = weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), Flags = flags,
-                NadeType = WeaponNames.NadeSourceOf(weapon),
+                NadeType = WeaponNames.NadeSourceOf(weapon), Bullet = WeaponNames.IsBulletWeapon(weapon),
                 VictimUtil = vs.DeathUtilTick == tick && vs.DeathWeapons > 0 ? vs.DeathUtil : vs.Util,
             };
             nint vp = PawnOfSlot(vslot);
@@ -291,7 +291,7 @@ public sealed partial class BotMatchStatsPlugin
             ReadAimFrames();
             rec.Shot(new ShotInput
             {
-                Tick = Server.TickCount, Weapon = _shotWeapon, Speed = Mem.HorizontalSpeed(pawn), MaxSpeed = _shotMaxSpeed,
+                Tick = Server.TickCount, Weapon = _shotWeapon, Class = _shotClass, Speed = Mem.HorizontalSpeed(pawn), MaxSpeed = _shotMaxSpeed,
                 Scoped = Mem.IsScoped(pawn), Ducked = Mem.IsDucked(pawn),
             });
         }
@@ -305,6 +305,7 @@ public sealed partial class BotMatchStatsPlugin
         string name = WeaponNames.Strip(e.Weapon);
         _shotIsBullet = WeaponNames.IsBulletWeapon(name);
         _shotWeapon = _rec!.Weapons.Get(name);
+        _shotClass = WeaponNames.ClassOf(name);
         _shotMaxSpeed = Nil.V;
         nint wp = Mem.ByHandle(handle);
         if (wp == 0) return;
@@ -344,18 +345,27 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("grenade_thrown");
     }
 
-    private HookResult Detonation(CCSPlayerController? thrower, GrenadeType type, float x, float y, float z, string name)
+    private HookResult Detonation(CCSPlayerController? thrower, GrenadeType type, float x, float y, float z, string name, int entityId = Nil.V)
     {
         if (!Recording) return HookResult.Continue;
         EvBegin();
-        try { _rec!.Grenade(Server.TickCount, PiOf(thrower), type, x, y, z); }
+        try { _rec!.Grenade(Server.TickCount, PiOf(thrower), type, x, y, z, entityId); }
         catch (Exception ex) { EvError(name, ex); }
         return EvEnd(name);
     }
 
     private HookResult OnHe(EventHegrenadeDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.He, e.X, e.Y, e.Z, "hegrenade_detonate");
     private HookResult OnFlash(EventFlashbangDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Flash, e.X, e.Y, e.Z, "flashbang_detonate");
-    private HookResult OnSmoke(EventSmokegrenadeDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Smoke, e.X, e.Y, e.Z, "smokegrenade_detonate");
+    private HookResult OnSmoke(EventSmokegrenadeDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Smoke, e.X, e.Y, e.Z, "smokegrenade_detonate", e.Entityid);
+
+    private HookResult OnSmokeExpired(EventSmokegrenadeExpired e, GameEventInfo info)
+    {
+        if (!Recording) return HookResult.Continue;
+        EvBegin();
+        try { _rec!.SmokeExpired(Server.TickCount, e.Entityid); }
+        catch (Exception ex) { EvError("smokegrenade_expired", ex); }
+        return EvEnd("smokegrenade_expired");
+    }
     private HookResult OnDecoy(EventDecoyStarted e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Decoy, e.X, e.Y, e.Z, "decoy_started");
 
     /// <summary>inferno_startburn has no userid; the thrower is the inferno entity's owner.</summary>

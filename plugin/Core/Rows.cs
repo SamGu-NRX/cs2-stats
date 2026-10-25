@@ -94,6 +94,16 @@ public struct ShotRow
 {
     public int Ri, Tick, Weapon, Burst, Idx, Speed, MaxSpeed, Target, AimErrYaw, AimErrPitch, ImpYaw, ImpPitch, Hit;
     public bool Scoped, Ducked;
+    /// <summary>1 if the view ray (to the target, else 4096 units) crosses an active smoke, else 0.</summary>
+    public int Smoke;
+    /// <summary>bullet_impact events in this shot's tick.</summary>
+    public int Impacts;
+    /// <summary>1 = damaged an enemy after penetrating, 0 = did not, Nil = a non-fatal hit whose path is unknown.</summary>
+    public int Pen;
+    /// <summary>1/0 whether the target was visible to the human; Nil without a target.</summary>
+    public int VisTarget;
+    /// <summary>WeaponClass of the weapon, or Nil.</summary>
+    public int Class;
 }
 
 public enum ReconField : byte { Kills = 0, Deaths = 1, Assists = 2, Damage = 3 }
