@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchHref, pageHref, parseHash, redirectOf } from "./router";
+import { matchHref, pageHref, parseHash } from "./router";
 
 describe("parseHash", () => {
   it("defaults to home", () => {
@@ -27,23 +27,17 @@ describe("parseHash", () => {
   });
 });
 
-describe("retired views", () => {
-  // Playstyle and Weapons left the sidebar; old links (bookmarks, palette history) must still land on
-  // the section that holds their content, with the scope they carried.
-  it("opens Profile's Identity section for #/playstyle, keeping its scope", () => {
+describe("Playstyle and Weapons", () => {
+  // Both are views of their own again (the redirects to Profile and Career aim dropped the per-gun sprays).
+  it("opens #/playstyle and #/weapons as their own pages, keeping their scope", () => {
     const r = parseHash("#/playstyle?map=de_dust2&n=10");
-    expect(r.page).toBe("profile");
-    expect(r.query.get("sec")).toBe("identity");
+    expect(r.page).toBe("playstyle");
     expect(r.query.get("map")).toBe("de_dust2");
-    expect(redirectOf("#/playstyle?map=de_dust2")).toBe("#/profile?map=de_dust2&sec=identity");
+    expect(r.query.has("sec")).toBe(false);
+    expect(parseHash("#/weapons").page).toBe("weapons");
   });
-  it("opens Career aim's gun table for #/weapons", () => {
-    expect(parseHash("#/weapons").page).toBe("aim");
-    expect(redirectOf("#/weapons")).toBe("#/aim?sec=guns");
-  });
-  it("leaves current pages alone", () => {
-    expect(redirectOf("#/profile?sec=identity")).toBeNull();
-    expect(redirectOf("#/match/dev/weapons")).toBeNull();
+  it("still reads a section link", () => {
+    expect(parseHash("#/profile?sec=identity").query.get("sec")).toBe("identity");
   });
 });
 

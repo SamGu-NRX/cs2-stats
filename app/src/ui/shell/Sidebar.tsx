@@ -1,4 +1,4 @@
-// Sidebar: the user, the four views, then Data & settings and the scan state. 232 px, or a 56 px rail.
+// Sidebar: the user, the six views, then Data & settings and the scan state. 232 px, or a 56 px rail.
 // The toggle button animates the width; Ctrl+B and the automatic rail at a window 1100 px wide or
 // narrower do not.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -6,18 +6,25 @@ import { AgentImg } from "../components/Agent";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
 import { AimIcon, ChevronLeftIcon, HomeIcon, MatchesIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
+import { OpeningIcon } from "../icons/attributes";
+import { WeaponIcon } from "../icons/game";
 import { careerEntries, isOwn, ratingHeadline } from "../data/engine";
 import { scanErrorText } from "../data/sources";
 import { fmtRating, plural } from "../lib/format";
 import { navWasInstant, pageHref, useRoute, type Page } from "../router";
 
+/** Weapons' nav icon: the AK silhouette, centred in the 20 px icon box the other entries use. */
+const GunNavIcon = ({ size = 20 }: { size?: number }) => <span className="navgun" style={{ width: size, height: size }}><WeaponIcon name="ak47" size={Math.round(size * 0.55)} label={undefined} /></span>;
+
 type NavPage = Exclude<Page, "match" | "settings">;
-/** The four views, in order; Ctrl+key opens each. */
+/** The six views, in order; Ctrl+key opens each. */
 export const NAV: { page: NavPage; label: string; Icon: typeof HomeIcon; key: string }[] = [
   { page: "home", label: "Home", Icon: HomeIcon, key: "1" },
   { page: "matches", label: "Matches", Icon: MatchesIcon, key: "2" },
   { page: "profile", label: "Profile", Icon: ProfileIcon, key: "3" },
-  { page: "aim", label: "Career aim", Icon: AimIcon, key: "4" },
+  { page: "playstyle", label: "Playstyle", Icon: OpeningIcon, key: "4" },
+  { page: "aim", label: "Career aim", Icon: AimIcon, key: "5" },
+  { page: "weapons", label: "Weapons", Icon: GunNavIcon, key: "6" },
 ];
 
 const RAIL_KEY = "cs2stats.rail";

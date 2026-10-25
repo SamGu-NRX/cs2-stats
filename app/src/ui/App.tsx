@@ -19,10 +19,12 @@ import { MatchesView } from "./views/Matches";
 
 const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
+const PlaystyleView = lazy(() => import("./views/Playstyle"));
 const AimView = lazy(() => import("./views/CareerAim"));
+const WeaponsView = lazy(() => import("./views/Weapons"));
 const SettingsView = lazy(() => import("./views/Settings"));
 
-const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", aim: "Career aim", settings: "Data & settings" };
+const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", playstyle: "Playstyle", aim: "Career aim", weapons: "Weapons", settings: "Data & settings" };
 
 function AppBar({ onPalette }: { onPalette: () => void }) {
   const { set } = useBarSlots();
@@ -73,7 +75,7 @@ function Body() {
       if (ctrl && e.key.toLowerCase() === "b") { e.preventDefault(); rail.toggle(false); return; }
       if (ctrl && e.key === ",") { e.preventDefault(); go(pageHref("settings"), { instant: true }); return; }
       if (ctrl && e.key.toLowerCase() === "r") { e.preventDefault(); refresh(); toast("Scanning the match folder"); return; }
-      if (ctrl && /^[1-4]$/.test(e.key)) {
+      if (ctrl && /^[1-6]$/.test(e.key)) {
         e.preventDefault();
         const n = NAV.find((x) => x.key === e.key);
         if (n) go(pageHref(n.page), { instant: true });
@@ -119,7 +121,9 @@ function Body() {
   } else if (route.page === "match" && route.file) view = <MatchView file={route.file} tab={route.tab ?? "overview"} />;
   else if (route.page === "matches") view = <MatchesView />;
   else if (route.page === "profile") view = <ProfileView />;
+  else if (route.page === "playstyle") view = <PlaystyleView />;
   else if (route.page === "aim") view = <AimView />;
+  else if (route.page === "weapons") view = <WeaponsView />;
   else if (route.page === "settings") view = <SettingsView />;
   else view = <HomeView />;
 
