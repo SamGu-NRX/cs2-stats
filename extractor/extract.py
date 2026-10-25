@@ -24,6 +24,7 @@ import math
 import os
 import platform
 import re
+import secrets
 import shutil
 import sys
 import time
@@ -1537,12 +1538,15 @@ def recover_output(out: Path) -> None:
             aside.rename(out)  # the crash came between the two renames: put the old map back
 
 
-# A map folder holds one folder per extraction, v-<extractor version>-<hash of its tables>, and a file
-# CURRENT naming the one to read. Publishing writes the new version folder, then replaces CURRENT with
-# os.replace, which is atomic for a file on Windows too. Nothing renames a folder a reader may have open:
+# A map folder holds one folder per extraction, v-<extractor version>-<random nonce>, and a file CURRENT
+# naming the one to read. Publishing writes the tables, then COMPLETE (the list of files and their sizes)
+# last, renames that new folder into place, then replaces CURRENT with os.replace, which is atomic for a
+# file on Windows too. Every extraction gets a folder of its own: reusing one with the same tables could
+# pick up a folder a prune had half deleted. Nothing renames a folder a reader may have open:
 # Windows refuses that ([WinError 5] with any file inside it open). Old versions are deleted once nothing
 # holds them open; prune_map() leaves locked ones for the next try.
 CURRENT = "CURRENT"
+COMPLETE = "COMPLETE"  # JSON {file name: bytes} of a version folder, written after every table
 RETIRED = "RETIRED"  # a map replaced by its re-extraction in another folder; delete it all
 _VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
 
@@ -1550,8 +1554,9 @@ _VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
 def resolve_map_dir(map_dir: Path) -> Path | None:
     """The folder holding a map's tables, or None when map_dir holds no complete map.
 
-    That is the version folder CURRENT names; for a map written before 1.5.0 (no CURRENT), map_dir itself.
-    A reader resolves, then opens; if a file has gone by then, the map was republished: resolve again.
+    That is the version folder CURRENT names, if its COMPLETE list names files that are all there at their
+    listed sizes; for a map written before 1.5.0 (no CURRENT), map_dir itself. A reader resolves, then
+    opens; if a file has gone by then, the map was republished: resolve again.
     """
     map_dir = Path(map_dir)
     if (map_dir / RETIRED).exists():
@@ -1562,8 +1567,16 @@ def resolve_map_dir(map_dir: Path) -> Path | None:
         if not _VERSION_DIR.fullmatch(name):
             raise ValueError(f"{ptr} is not a version folder name: {name!r}")
         d = map_dir / name
-        return d if (d / "match.parquet").exists() else None
+        return d if _complete(d) else None
     return map_dir if (map_dir / "match.parquet").exists() else None
+
+
+def _complete(d: Path) -> bool:
+    try:
+        files = json.loads((d / COMPLETE).read_text(encoding="utf-8"))
+        return "match.parquet" in files and all((d / f).stat().st_size == n for f, n in files.items())
+    except (OSError, ValueError):
+        return False
 
 
 def _write_pointer(map_dir: Path, name: str) -> None:
@@ -1576,16 +1589,16 @@ def _write_pointer(map_dir: Path, name: str) -> None:
 
 
 def publish_version(tmp: Path, map_dir: Path, version: str) -> Path:
-    """Make the finished tables in tmp (a new folder inside map_dir) the map's current version."""
-    h = hashlib.sha256()
-    for f in sorted(tmp.glob("*.parquet")):
-        h.update(f.name.encode())
-        h.update(file_sha256(f).encode())
-    target = map_dir / f"v-{version}-{h.hexdigest()[:8]}"
-    if target.exists():  # these exact tables are already published
-        shutil.rmtree(tmp)
-    else:
-        tmp.rename(target)  # tmp is new: no reader has it open
+    """Make the finished tables in tmp (a new folder inside map_dir) the map's current version, in a
+    version folder of its own."""
+    listing = {f.name: f.stat().st_size for f in sorted(tmp.glob("*.parquet"))}
+    with open(tmp / COMPLETE, "w", encoding="utf-8") as f:
+        json.dump(listing, f)
+        f.flush()
+        os.fsync(f.fileno())
+    while (target := map_dir / f"v-{version}-{secrets.token_hex(4)}").exists():
+        pass
+    tmp.rename(target)  # tmp is new: no reader has it open
     _write_pointer(map_dir, target.name)
     return target
 
@@ -1630,7 +1643,7 @@ def prune_map(map_dir: Path) -> list[Path]:
     current = resolve_map_dir(map_dir) if (map_dir / CURRENT).exists() else None
     if current is None and (map_dir / CURRENT).exists():
         # Every version folder would look stale; publishing never leaves this, so stop and say so.
-        raise RuntimeError(f"{map_dir}: CURRENT names a version folder without match.parquet; not pruning")
+        raise RuntimeError(f"{map_dir}: CURRENT names an incomplete version folder; not pruning")
     for e in sorted(map_dir.iterdir(), key=lambda e: e.name != "match.parquet"):
         if e == current or e.name == CURRENT:
             continue

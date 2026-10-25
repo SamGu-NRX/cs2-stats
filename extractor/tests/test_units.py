@@ -1132,3 +1132,33 @@ def test_an_he_kill_is_credited_only_to_a_detonation_of_his_in_reach_on_that_tic
 def test_a_gun_kill_names_no_attacker_without_an_impact():
     # GOTV demos carry no bullet_impact (none in 13 checked), so nothing on the tick ties the gun to the hit.
     assert _rebuilt(_death(9182, LV, LA, "ak47"), _lost(hp0=27, hp1=0)) == (None, True)
+
+
+def test_republishing_the_same_tables_never_reuses_a_partly_pruned_folder(tmp_path):
+    # Folders were named by a hash of their tables, so republishing identical tables reused the old folder
+    # even if a prune had already deleted part of it, and CURRENT then pointed at an incomplete map.
+    m = tmp_path / "m1"
+    _tables(m / ".tmp-1", "same")
+    first = ex.publish_version(m / ".tmp-1", m, "1.6.0")
+    _tables(m / ".tmp-2", "other")
+    ex.publish_version(m / ".tmp-2", m, "1.6.0")
+    (first / "rounds.parquet").unlink()  # a prune deleted part of it; match.parquet was locked
+    _tables(m / ".tmp-3", "same")
+    again = ex.publish_version(m / ".tmp-3", m, "1.6.0")
+    assert again != first and ex.resolve_map_dir(m) == again
+    assert sorted(x.name for x in again.iterdir()) == ["COMPLETE", "match.parquet", "rounds.parquet"]
+
+
+def test_a_version_folder_resolves_only_with_every_file_its_completion_list_names(tmp_path):
+    m = tmp_path / "m1"
+    _tables(m / ".tmp-1", "x")
+    v = ex.publish_version(m / ".tmp-1", m, "1.6.0")
+    assert ex.resolve_map_dir(m) == v
+    (v / "rounds.parquet").write_text("truncated")  # same name, different size
+    assert ex.resolve_map_dir(m) is None
+    (v / "rounds.parquet").unlink()
+    assert ex.resolve_map_dir(m) is None
+    (v / "COMPLETE").unlink()
+    _tables(m / "v-1.6.0-0123abcd", "no list")  # a folder with tables but no completion list
+    (m / "CURRENT").write_text("v-1.6.0-0123abcd\n")
+    assert ex.resolve_map_dir(m) is None
