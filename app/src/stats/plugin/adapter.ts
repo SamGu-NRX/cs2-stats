@@ -83,6 +83,8 @@ export function pluginToTables(m: MatchFile): MatchTables {
     extra: JSON.stringify({
       date: m.startUtc.slice(0, 10), started_at: m.startUtc, duration_s: (Date.parse(m.endUtc) - Date.parse(m.startUtc)) / 1000,
       pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m),
+      // files before plugin 1.0.0 have no throw log; throws are rebuilt from detonations (facts.ts SourceInputs.throws)
+      ...(m.throws ? {} : { throws: "rebuilt" }),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
