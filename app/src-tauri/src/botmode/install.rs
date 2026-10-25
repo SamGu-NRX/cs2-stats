@@ -7,6 +7,9 @@
 //! - The root `gameinfo.gi` is not copied; its two search paths are merged into the game's
 //!   own file instead (see `gameinfo.rs`).
 //! - Protected user files are kept or merged (see `paths::Protection`).
+//! - The `my_bot_*_config.cfg` files are the release's copies with the user's own convar
+//!   values put back. The Panel's Rules page, and the user, add lines to them
+//!   (`mp_friendlyfire 0`, `bot_nades normal`), and a plain copy would drop those lines.
 //! - The active bot profile keeps the difficulty the user had chosen.
 
 use super::changes::{self, Meta};
@@ -25,6 +28,9 @@ use std::path::{Path, PathBuf};
 
 pub const OFFICIAL_REPO: &str = "ed0ard/CS2-Bot-Improver";
 pub const DEFAULT_ASSET: &str = "CS2BotImprover.zip";
+
+/// Mod cfgs that also hold the user's settings. See `cfg::keep_user_values`.
+pub const USER_EDITED_CFGS: [&str; 3] = ["cfg/my_bot_ffa_config.cfg", "cfg/my_bot_normal_config.cfg", "cfg/my_bot_rush_config.cfg"];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -207,6 +213,8 @@ pub struct InstallSummary {
     pub kept: Vec<String>,
     /// Protected cfgs the release ships, merged into the user's copy.
     pub merged: Vec<String>,
+    /// Mod cfgs installed with the user's own convar values kept.
+    pub user_values_kept: Vec<String>,
     pub bot_mode_enabled: bool,
     pub difficulty_kept: Option<Difficulty>,
     /// Overlays whose files the release replaced; `botmode overlay` puts them back.
@@ -229,7 +237,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
     let op = format!("install-{}", index.tag);
     let body = |cs: &mut changes::ChangeSet| -> Result<InstallSummary, String> {
         let (mut written, mut unchanged) = (0, 0);
-        let (mut kept, mut merged) = (Vec::new(), Vec::new());
+        let (mut kept, mut merged, mut user_values_kept) = (Vec::new(), Vec::new(), Vec::new());
         let mut installed = BTreeMap::new();
         for (rel, digest) in &index.files {
             match paths::protection(rel) {
@@ -253,6 +261,26 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                     continue;
                 }
                 Protection::None => {}
+            }
+            if USER_EDITED_CFGS.iter().any(|c| c.eq_ignore_ascii_case(rel)) {
+                let path = layout.target(rel);
+                let user = match std::fs::read_to_string(&path) {
+                    Ok(t) => Some(t),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(format!("{}: {e}", path.display())),
+                };
+                let release = read_text(&mut archive, &map, rel)?.unwrap_or_default();
+                if let Some(out) = user.map(|u| super::cfg::keep_user_values(&release, &u)).filter(|out| *out != release) {
+                    if cs.put_bytes(rel, out.as_bytes())? {
+                        written += 1;
+                    } else {
+                        unchanged += 1;
+                    }
+                    // The release's hash is recorded, so status shows the user's lines as a difference.
+                    installed.insert(rel.clone(), digest.clone());
+                    user_values_kept.push(rel.clone());
+                    continue;
+                }
             }
             // The release ships Medium as the active profile; keep the user's level instead.
             let (source_rel, digest) = match level {
@@ -311,6 +339,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
             skipped: index.skipped.clone(),
             kept,
             merged,
+            user_values_kept,
             bot_mode_enabled,
             difficulty_kept: level,
             overlays_replaced,

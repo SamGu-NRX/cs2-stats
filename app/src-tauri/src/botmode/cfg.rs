@@ -85,6 +85,34 @@ pub fn add_missing(user: &str, incoming: &str, known: &[&str]) -> String {
     merge(user, &missing)
 }
 
+/// Console commands that take one argument but are actions, not settings. A user's
+/// `exec other.cfg` is not a value to carry into a new release's cfg, and treating it as one
+/// would rewrite the release's own `exec` lines.
+const COMMANDS: [&str; 18] = [
+    "exec", "echo", "say", "say_team", "unbind", "bind", "alias", "toggle", "incrementvar", "map", "changelevel",
+    "connect", "play", "give", "bot_add", "bot_add_t", "bot_add_ct", "bot_kick",
+];
+
+/// A release's copy of a mod cfg with the user's settings kept: every convar the user's copy
+/// sets to a value the release's copy does not have is set to the user's value (in place,
+/// or appended). The release's other lines, including `bind` and `alias` lines, win.
+pub fn keep_user_values(release: &str, user: &str) -> String {
+    let mut carried: Vec<(&str, String)> = Vec::new();
+    for (name, _) in user.lines().filter_map(simple) {
+        if COMMANDS.iter().any(|c| c.eq_ignore_ascii_case(name)) || carried.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        let Some(mine) = read(user, name) else { continue };
+        if read(release, name).as_deref() != Some(mine.as_str()) {
+            carried.push((name, mine));
+        }
+    }
+    if carried.is_empty() {
+        return release.to_string();
+    }
+    merge(release, &carried)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

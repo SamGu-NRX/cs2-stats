@@ -16,12 +16,12 @@
     {
       "name": "BotRandomizer",
       "target": "addons/counterstrikesharp/plugins/BotRandomizer",
-      "files": ["BotRandomizer.dll", "BotRandomizer.deps.json", "BotRandomizer.pdb", "cosmetic_catalog.json", "charm_placements.json"],
+      "files": ["BotRandomizer.dll", "BotRandomizer.deps.json", "BotRandomizer.pdb", "cosmetic_catalog.json"],
       "source": {
         "kind": "local",
         "repo": "SamGu-NRX/CS2-Bot-Randomizer",
         "branch": "feat/combined-1.4.7",
-        "checkout": "%USERPROFILE%\\Programming Projects\\CS2-Bot-Randomizer-local",
+        "checkout": "%USERPROFILE%\\Programming Projects\\CS2-Bot-Randomizer-147",
         "build": "bin\\Release\\net10.0"
       }
     },
@@ -45,8 +45,9 @@
         "kind": "local",
         "repo": "SamGu-NRX/cs2-stats",
         "branch": "main",
-        "checkout": "%USERPROFILE%\\Programming Projects\\cs2-stats",
-        "build": "plugin\\bin\\Release\\net10.0"
+        "checkout": "%USERPROFILE%\\Programming Projects\\cs2-stats-main-build",
+        "build": "plugin\\bin\\Release\\net10.0",
+        "commit": "35d9c78c8b1e71d8bab256288f917e561ad3b38d"
       }
     }
   ]
