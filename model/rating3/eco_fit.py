@@ -176,6 +176,15 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None):
     return rows, duels, provenance
 
 
+def target_errors(target: dict, *, kills: float, deaths: float, adr: float) -> list[float]:
+    """Weight map-total K/D errors and an ADR error already in HP per round."""
+    return [
+        (kills - target["ek"]) * 0.2,
+        (deaths - target["ed"]) * 0.2,
+        (adr - target["eadr"]) * 0.05,
+    ]
+
+
 def fit_model(root: Path, joins: list[dict]) -> dict:
     provenance = empty_provenance()
     raw, duels, provenance = collect(root, joins, provenance)
@@ -203,11 +212,12 @@ def fit_model(root: Path, joins: list[dict]) -> dict:
         output = []
         for target in target_source:
             values = predicted[(target["map"], target["player"])]
-            output.extend([
-                (values["k"] - target["ek"]) * 0.2,
-                (values["d"] - target["ed"]) * 0.2,
-                (values["adr"] / target["rounds"] - target["eadr"]) * 0.05,
-            ])
+            output.extend(target_errors(
+                target,
+                kills=values["k"],
+                deaths=values["d"],
+                adr=values["adr"] / target["rounds"],
+            ))
         return output
 
     initial = np.array([1.5, 1.18, 0.83, 0.56, 0.29, 2.14])
@@ -218,6 +228,8 @@ def fit_model(root: Path, joins: list[dict]) -> dict:
     target_groups = np.asarray([row["match"] for row in targets])
     held_out_predictions = []
     held_out_folds = []
+    held_out_baseline_predictions = []
+    held_out_baseline_folds = []
     splitter = GroupKFold(n_splits=min(5, len(set(target_groups))))
     for fold, (train_index, test_index) in enumerate(splitter.split(targets, target_groups, target_groups), start=1):
         train_matches = set(target_groups[train_index])
@@ -242,7 +254,35 @@ def fit_model(root: Path, joins: list[dict]) -> dict:
             "p95": float(np.quantile(errors, 0.95)),
             "max": float(errors.max()),
         })
+        baseline_values = {
+            "k": float(np.mean([target["ek"] for target in train_targets])),
+            "d": float(np.mean([target["ed"] for target in train_targets])),
+            "adr": float(np.mean([target["eadr"] for target in train_targets])),
+        }
+        baseline_errors = np.abs(np.asarray(
+            [
+                error
+                for target in test_targets
+                for error in target_errors(
+                    target,
+                    kills=baseline_values["k"],
+                    deaths=baseline_values["d"],
+                    adr=baseline_values["adr"],
+                )
+            ],
+            dtype=float,
+        ))
+        held_out_baseline_predictions.extend(baseline_errors.tolist())
+        held_out_baseline_folds.append({
+            "fold": fold,
+            "targets": len(test_targets),
+            "matches": len(test_matches),
+            "mae": float(baseline_errors.mean()),
+            "p95": float(np.quantile(baseline_errors, 0.95)),
+            "max": float(baseline_errors.max()),
+        })
     held_out_errors = np.asarray(held_out_predictions, dtype=float)
+    held_out_baseline_errors = np.asarray(held_out_baseline_predictions, dtype=float)
     held_out = {
         "split": "5-fold GroupKFold by match",
         "targets": len(targets),
@@ -251,6 +291,16 @@ def fit_model(root: Path, joins: list[dict]) -> dict:
         "p95": float(np.quantile(held_out_errors, 0.95)),
         "max": float(held_out_errors.max()),
         "folds": held_out_folds,
+    }
+    held_out_baseline = {
+        "model": "training-fold target mean; no duel features",
+        "split": "5-fold GroupKFold by match",
+        "targets": len(targets),
+        "matches": int(len(set(target_groups))),
+        "mae": float(held_out_baseline_errors.mean()),
+        "p95": float(np.quantile(held_out_baseline_errors, 0.95)),
+        "max": float(held_out_baseline_errors.max()),
+        "folds": held_out_baseline_folds,
     }
     return {
         "source": {
@@ -271,7 +321,17 @@ def fit_model(root: Path, joins: list[dict]) -> dict:
         "duels": len(duels),
         "targets": len(targets),
         "objective_mae": float(np.mean(np.abs(residual(result.x)))),
+        "target_definition": {
+            "predicted": "HLTV eco-adjusted kills, deaths, and ADR cells per player-map",
+            "units": {
+                "kills": "kills per map",
+                "deaths": "deaths per map",
+                "adr": "HP per round",
+            },
+            "error_scale": "0.2 times kill/death error and 0.05 times ADR error; MAE is in weighted residual units",
+        },
         "held_out": held_out,
+        "held_out_baseline": held_out_baseline,
         "status": "joint fit to eK/eD/eADR; validate exact display rounding before shipping",
     }
 

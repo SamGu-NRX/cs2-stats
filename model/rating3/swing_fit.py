@@ -200,11 +200,9 @@ def fit_model(events: list[dict]) -> dict:
     }
 
 
-def held_out_flash_error(events: list[dict], key: str) -> dict:
-    import numpy as np
-    from sklearn.model_selection import GroupKFold
-
-    observations = [
+def single_flash_observations(events: list[dict]) -> list[tuple[str, float]]:
+    """Return match and killer credit ratio for the clean single-flash bucket."""
+    return [
         (row["match"], row["observed"][row["kill"]["attacker_steamid"]] / row["delta"])
         for row in events
         if row["kill"]
@@ -213,6 +211,13 @@ def held_out_flash_error(events: list[dict], key: str) -> dict:
         and len(row["flash"]) == 1
         and not row["traded"]
     ]
+
+
+def held_out_flash_error(events: list[dict], key: str) -> dict:
+    import numpy as np
+    from sklearn.model_selection import GroupKFold
+
+    observations = single_flash_observations(events)
     if len(observations) < 5:
         return {"split": "insufficient observations", "n": len(observations)}
     groups = np.asarray([item[0] for item in observations])
@@ -237,7 +242,7 @@ def held_out_flash_error(events: list[dict], key: str) -> dict:
         })
     error = np.abs(values - predicted)
     return {
-        "split": "5-fold GroupKFold by match",
+        "split": f"{splitter.n_splits}-fold GroupKFold by match",
         "n": int(len(values)),
         "matches": int(len(set(groups))),
         "mae": float(error.mean()),
@@ -253,13 +258,21 @@ def fit_block(data_root: Path, joins_path: Path) -> dict:
     provenance = empty_provenance()
     events = list(joined_events(data_root, joins["accepted"], provenance))
     metrics = fit_model(events)
-    # Keep the flash anchor on the validated three-join baseline; consume all joins for event metrics.
-    calibration_events = [row for row in events if row["layout"] == "legacy"]
-    calibration_metrics = fit_model(calibration_events)
     key = "damage=False flash=1 trade=False"
-    if key not in calibration_metrics["kill_credit_ratios"]:
+    if key not in metrics["kill_credit_ratios"]:
         raise ValueError(f"no clean single-flash observations found for {key}")
-    flash_ratio = calibration_metrics["kill_credit_ratios"][key]
+    comparison = {}
+    for label in ("schema_v1", "legacy"):
+        subset = [row for row in events if row["layout"] == label]
+        observations = single_flash_observations(subset)
+        ratio = fit_model(subset)["kill_credit_ratios"].get(key)
+        comparison[label] = {
+            "sample_size": len(observations),
+            "matches": len({match for match, _ in observations}),
+            "killer_credit_median": ratio["median"] if ratio else None,
+            "flash_credit_fraction": float(1.0 - ratio["median"]) if ratio else None,
+        }
+    flash_ratio = metrics["kill_credit_ratios"][key]
     return {
         "source": {
             "source": "fit",
@@ -272,8 +285,9 @@ def fit_block(data_root: Path, joins_path: Path) -> dict:
             "events": metrics["events"],
             "unattributed_damage_hp": provenance["unattributed_damage_hp"],
             "excluded_damage_rows": provenance["excluded_damage_rows"],
-            "flash_calibration_layout": "legacy",
-            "flash_calibration_events": len(calibration_events),
+            "flash_calibration_layout": "all_consumed_joins",
+            "flash_calibration_events": flash_ratio["n"],
+            "layout_comparison": comparison,
         },
         "event_credit_model": "damage_share_then_single_flash_residual",
         "assist_damage": 40,
