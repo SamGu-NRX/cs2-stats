@@ -1,11 +1,20 @@
 // derive(tables) -> facts: the one path from a match's tables to everything the engine knows about
-// it. Deterministic and per event; rollup.ts sums the facts under filters.
+// it. Deterministic and per event; rollup.ts sums the facts under filters. Each family module fills
+// its own measures (facts.ts MEASURES) from the shared indexes built here.
+import { closing } from "./closing";
+import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
 import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
-import { kastRound, markOpening, markTrades } from "./rules";
+import { guns } from "./guns";
+import { ecoAdjust } from "./rating3";
+import { markOpening, markTrades } from "./rules";
+import { scoreboard } from "./scoreboard";
+import { sniping } from "./sniping";
+import { swing } from "./swing";
 import type { MatchTables, Side } from "./tables";
+import { utility } from "./utility";
 
-const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
+export const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
 
 /**
  * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
@@ -19,19 +28,28 @@ export function matchMeta(t: MatchTables): { date: string | null; maxRounds: num
   return { date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24) };
 }
 
-/** Indexes shared by the families: player ids, sides per round, and rows grouped by round. */
+/** Indexes shared by the families. */
 export interface Ctx {
   t: MatchTables;
   tickRate: number;
   nRounds: number;
+  map: string;
   pi: Map<string, number>;
   players: PlayerInfo[];
-  /** side[ri][pi], null when the player had no side at freeze end */
+  /** side[ri][pi], null when the player did not play the round */
   side: (Side | null)[][];
   ctTeam: (0 | 1)[];
-  freezeEnd: (number | null)[];
+  rounds: RoundFact[];
+  /** kills[ri], tick order, post-round suicides removed */
+  kills: KillFact[][];
+  /** pr[ri][pi], null when the player did not play the round */
+  pr: (PlayerRound | null)[][];
   /** row indexes of a table by round (0-based) */
-  byRound: (table: "kills" | "damages" | "blinds" | "grenade_throws" | "shots" | "positions") => number[][];
+  byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb") => number[][];
+  /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
+  posAt: (ri: number, pi: number, tick: number) => [number, number, number] | null;
+  /** the player's id */
+  idOf: (id: string | null) => number | null;
 }
 
 export function buildCtx(t: MatchTables): Ctx {
@@ -40,14 +58,14 @@ export function buildCtx(t: MatchTables): Ctx {
   const teams = [t.match.team_ct_start[0], t.match.team_t_start[0]];
   const pi = new Map<string, number>();
   const players: PlayerInfo[] = [];
-  const add = (id: string, name: string, team: string | null) => {
+  const add = (id: string, name: string, team: string | null, bot: boolean) => {
     if (pi.has(id)) return;
     pi.set(id, players.length);
     const ti = team === null ? -1 : teams.indexOf(team);
-    players.push({ id, name, team: ti === 0 ? 0 : ti === 1 ? 1 : null });
+    players.push({ id, name, team: ti === 0 ? 0 : ti === 1 ? 1 : null, bot });
   };
-  for (let i = 0; i < t.players.n; i++) add(t.players.steamid[i], t.players.name[i], t.players.team[i]);
-  for (let i = 0; i < t.player_rounds.n; i++) add(t.player_rounds.steamid[i], t.player_rounds.steamid[i], null);
+  for (let i = 0; i < t.players.n; i++) add(t.players.steamid[i], t.players.name[i], t.players.team[i], t.players.is_bot[i]);
+  for (let i = 0; i < t.player_rounds.n; i++) add(t.player_rounds.steamid[i], t.player_rounds.steamid[i], null, false);
 
   const side: (Side | null)[][] = Array.from({ length: nRounds }, () => new Array<Side | null>(players.length).fill(null));
   for (let i = 0; i < t.player_rounds.n; i++) {
@@ -64,7 +82,6 @@ export function buildCtx(t: MatchTables): Ctx {
   });
   // A player without a team name takes the team they played CT or T for.
   for (let p = 0; p < players.length; p++) {
-    if (players[p].team !== null) continue;
     for (let ri = 0; ri < nRounds && players[p].team === null; ri++) {
       const s = side[ri][p];
       if (s) players[p].team = s === "CT" ? ctTeam[ri] : ((1 - ctTeam[ri]) as 0 | 1);
@@ -87,7 +104,34 @@ export function buildCtx(t: MatchTables): Ctx {
     cache.set(name, out);
     return out;
   };
-  return { t, tickRate, nRounds, pi, players, side, ctTeam, freezeEnd: t.rounds.freeze_end_tick, byRound };
+
+  // positions by (round, player), tick order
+  const pos = new Map<number, number[]>();
+  const P = t.positions;
+  if (P) for (let i = 0; i < P.n; i++) {
+    const p = pi.get(P.steamid[i]);
+    if (p === undefined) continue;
+    const key = (P.round[i] - 1) * 1024 + p;
+    let l = pos.get(key);
+    if (!l) pos.set(key, (l = []));
+    l.push(i);
+  }
+  const posAt: Ctx["posAt"] = (ri, p, tick) => {
+    const l = P ? pos.get(ri * 1024 + p) : undefined;
+    if (!l || !P) return null;
+    let lo = 0, hi = l.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (P.tick[l[mid]] < tick) lo = mid + 1; else hi = mid; }
+    let best = lo;
+    if (lo > 0 && Math.abs(P.tick[l[lo - 1]] - tick) < Math.abs(P.tick[l[lo]] - tick)) best = lo - 1;
+    const i = l[best];
+    if (Math.abs(P.tick[i] - tick) > tickRate / 2 || !P.is_alive[i]) return null;
+    return [P.x[i], P.y[i], P.z[i]];
+  };
+  const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
+
+  return {
+    t, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf,
+  };
 }
 
 /**
@@ -101,120 +145,117 @@ export function hitDamage(t: MatchTables, i: number): number {
   return Math.min(t.damages.dmg_health[i], t.damages.health_before[i] ?? 100);
 }
 
+/** True for a damage row that counts as enemy damage (not self, team or world damage). */
+export const enemyHit = (t: MatchTables, i: number) => t.damages.attacker_steamid[i] !== null && !t.damages.is_self[i] && !t.damages.is_team_damage[i];
+
 function killFacts(c: Ctx): KillFact[][] {
   const k = c.t.kills;
-  return c.byRound("kills").map((rows, ri) => {
+  const rows: number[][] = Array.from({ length: c.nRounds }, () => []);
+  for (let i = 0; i < k.n; i++) { const ri = k.round[i] - 1; if (ri >= 0 && ri < c.nRounds) rows[ri].push(i); }
+  return rows.map((list, ri) => {
     // A suicide after the round has ended is not a death (HLTV: 4 of 4 such deaths left out on the
     // pro maps, while bomb deaths after the end tick count).
-    const kept = rows.filter((i) => !(k.is_suicide[i] && k.tick[i] > c.t.rounds.end_tick[ri]));
-    const list = kept.map((i): KillFact => {
-      const killer = k.attacker_steamid[i] === null ? null : c.pi.get(k.attacker_steamid[i]!) ?? null;
+    const kept = list.filter((i) => !(k.is_suicide[i] && k.tick[i] > c.t.rounds.end_tick[ri]));
+    const out = kept.map((i): KillFact => {
+      const killer = c.idOf(k.attacker_steamid[i]);
       const victim = c.pi.get(k.victim_steamid[i])!;
       const killerSide = killer === null ? null : asSide(k.a_side[i]) ?? c.side[ri][killer];
       const victimSide = asSide(k.v_side[i]) ?? c.side[ri][victim];
-      const assister = k.assister_steamid[i] === null ? null : c.pi.get(k.assister_steamid[i]!) ?? null;
-      const fe = c.freezeEnd[ri];
+      const fe = c.t.rounds.freeze_end_tick[ri];
+      const xy = (x: number | null, y: number | null): [number, number] | null => (x === null || y === null ? null : [x, y]);
       return {
         ri, tick: k.tick[i], t: fe === null ? null : (k.tick[i] - fe) / c.tickRate,
-        killer, victim, assister, flashAssist: k.assistedflash[i] === true,
-        killerSide, victimSide, weapon: k.weapon[i], headshot: k.headshot[i], wallbang: (k.penetrated[i] ?? 0) > 0,
-        smoke: k.thrusmoke[i] === true, noscope: k.noscope[i] === true,
+        killer, victim, assister: c.idOf(k.assister_steamid[i]), flashAssist: k.assistedflash[i] === true,
+        killerSide, victimSide, weapon: k.weapon[i], victimWeapon: k.v_active_weapon[i],
+        headshot: k.headshot[i], wallbang: (k.penetrated[i] ?? 0) > 0, smoke: k.thrusmoke[i] === true, noscope: k.noscope[i] === true,
+        kpos: xy(k.a_x[i], k.a_y[i]), vpos: xy(k.v_x[i], k.v_y[i]),
         enemy: killer !== null && killer !== victim && killerSide !== null && victimSide !== null && killerSide !== victimSide,
-        opening: false, tradeKill: false, traded: false,
+        opening: false, tradeKill: false, traded: false, ecoPoints: null, credits: [],
       };
     });
-    list.sort((a, b) => a.tick - b.tick);
-    markOpening(list);
-    markTrades(list, c.tickRate);
-    return list;
+    out.sort((a, b) => a.tick - b.tick);
+    markOpening(out);
+    markTrades(out, c.tickRate);
+    return out;
   });
+}
+
+function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
+  const r = c.t.rounds;
+  const pr = c.t.player_rounds;
+  const equip = Array.from({ length: c.nRounds }, () => ({ CT: 0 as number | null, T: 0 as number | null, nCT: 0, nT: 0 }));
+  for (let i = 0; i < pr.n; i++) {
+    const ri = pr.round[i] - 1;
+    const s = asSide(pr.side[i]);
+    if (ri < 0 || ri >= c.nRounds || !s) continue;
+    const e = pr.equip_value_game[i];
+    const x = equip[ri];
+    x[s] = e === null || x[s] === null ? null : x[s]! + e;
+    if (s === "CT") x.nCT++; else x.nT++;
+  }
+  return Array.from({ length: c.nRounds }, (_, ri): RoundFact => {
+    const x = equip[ri];
+    const pistol = isPistolRound(ri, maxRounds);
+    const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
+    const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    const fe = r.freeze_end_tick[ri];
+    return {
+      ri, ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
+      durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
+      plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
+      equip: team, buy: { CT: buy("CT"), T: buy("T") }, winProb: null,
+    };
+  });
+}
+
+function playerRounds(c: Ctx): (PlayerRound | null)[][] {
+  const t = c.t.player_rounds;
+  const row = new Map<number, number>();
+  for (let i = 0; i < t.n; i++) row.set((t.round[i] - 1) * 1024 + c.pi.get(t.steamid[i])!, i);
+  return c.rounds.map((rf) => c.players.map((_, p) => {
+    const side = c.side[rf.ri][p];
+    if (!side) return null;
+    const i = row.get(rf.ri * 1024 + p);
+    const m = emptyMeasures();
+    m.rounds = 1;
+    const won = rf.winner === null ? null : rf.winner === side;
+    if (won) m.won = 1;
+    if (won === false) m.lostRounds = 1;
+    return {
+      ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
+      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"],
+      equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
+      spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], m,
+    };
+  }));
 }
 
 export function derive(t: MatchTables): MatchFacts {
   const c = buildCtx(t);
-  const kills = killFacts(c);
-  const r = t.rounds;
   const { date, maxRounds } = matchMeta(t);
+  c.rounds = roundFacts(c, maxRounds);
+  c.kills = killFacts(c);
+  c.pr = playerRounds(c);
 
-  const rounds: RoundFact[] = [];
+  scoreboard(c);
+  closing(c);
+  sniping(c);
+  duels(c);
+  utility(c);
+  ecoAdjust(c);
+  swing(c);
+  const weapons = guns(c);
+
   const score: [number, number] = [0, 0];
-  for (let ri = 0; ri < c.nRounds; ri++) {
-    const winner = asSide(r.winner_side[ri]);
-    if (winner) score[winner === "CT" ? c.ctTeam[ri] : 1 - c.ctTeam[ri]]++;
-    const equip: Record<Side, number | null> = { CT: 0, T: 0 };
-    const count: Record<Side, number> = { CT: 0, T: 0 };
-    for (let i = 0; i < t.player_rounds.n; i++) {
-      if (t.player_rounds.round[i] - 1 !== ri) continue;
-      const s = asSide(t.player_rounds.side[i]);
-      if (!s) continue;
-      count[s]++;
-      const e = t.player_rounds.equip_value_game[i];
-      equip[s] = e === null || equip[s] === null ? null : equip[s]! + e;
-    }
-    for (const s of ["CT", "T"] as const) if (count[s] === 0) equip[s] = null;
-    const pistol = isPistolRound(ri, maxRounds);
-    const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : equip[s] === null || count[s] === 0 ? null : classifyBuy(equip[s]!, count[s], false));
-    const fe = r.freeze_end_tick[ri];
-    rounds.push({
-      ri, ctTeam: c.ctTeam[ri], winner, reason: r.reason[ri],
-      durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate,
-      plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
-      equip, buy: { CT: buy("CT"), T: buy("T") },
-    });
-  }
-
-  const dmgBy = c.byRound("damages").map((rows) => {
-    const d = new Map<number, number>();
-    for (const i of rows) {
-      const a = t.damages.attacker_steamid[i];
-      if (a === null || t.damages.is_self[i] || t.damages.is_team_damage[i]) continue;
-      const p = c.pi.get(a)!;
-      d.set(p, (d.get(p) ?? 0) + hitDamage(t, i));
-    }
-    return d;
-  });
-
-  const pr: PlayerRound[] = [];
-  for (let ri = 0; ri < c.nRounds; ri++) {
-    const list = kills[ri];
-    const rf = rounds[ri];
-    for (let p = 0; p < c.players.length; p++) {
-      const side = c.side[ri][p];
-      if (!side) continue;
-      const m = emptyMeasures();
-      m.rounds = 1;
-      m.won = rf.winner === side ? 1 : 0;
-      for (const k of list) {
-        if (k.enemy && k.killer === p) {
-          m.kills++;
-          if (k.headshot) m.hsKills++;
-          if (k.tradeKill) m.tradeKills++;
-          if (k.opening) { m.openingKills++; m.openingWins += m.won; }
-        }
-        if (k.enemy && k.assister === p) { m.assists++; if (k.flashAssist) m.flashAssists++; }
-        if (k.victim === p) {
-          m.deaths++;
-          if (k.traded) m.tradedDeaths++;
-          if (k.opening) { m.openingDeaths++; if (k.traded) m.openingTraded++; }
-        }
-      }
-      m.dmg = dmgBy[ri].get(p) ?? 0;
-      m.kast = kastRound(list, p) ? 1 : 0;
-      m.survived = list.some((k) => k.victim === p) ? 0 : 1;
-      m.killRounds = m.kills > 0 ? 1 : 0;
-      m.multiKillRounds = m.kills > 1 ? 1 : 0;
-      const team = side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1);
-      pr.push({ ...m, ri, pi: p, side, team, ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"] });
-    }
-  }
-
-  const teams: [string, string] = [t.match.team_ct_start[0], t.match.team_t_start[0]];
+  for (const rf of c.rounds) if (rf.winner) score[rf.winner === "CT" ? rf.ctTeam : 1 - rf.ctTeam]++;
   return {
     v: DERIVE_VERSION,
     match: {
-      id: t.match.match_id[0], source: t.match.source[0], map: t.match.map[0], date, tickRate: c.tickRate,
-      maxRounds, teams, score, nRounds: c.nRounds,
+      id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
+      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0],
     },
-    players: c.players, rounds, pr, kills: kills.flat(),
+    players: c.players, rounds: c.rounds,
+    pr: c.pr.flat().filter((x): x is PlayerRound => x !== null),
+    kills: c.kills.flat(), weapons,
   };
 }

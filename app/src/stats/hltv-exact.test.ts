@@ -36,7 +36,7 @@ describe.skipIf(!have)("scoreboard against HLTV", () => {
       const j = joinHltv(f);
       if (!j) continue;
       for (const [pi, hp] of j.player) {
-        const k = rollup([f], { player: f.players[pi].id }).kills;
+        const k = rollup([f], { player: f.players[pi].id }).m.kills;
         if (k !== hp.total.k) wrong.push(`${rel(dir)} ${hp.nick}: ${k} vs ${hp.total.k}`);
       }
     }
@@ -53,7 +53,7 @@ describe.skipIf(!have)("scoreboard against HLTV", () => {
       if (!j) { wrong.push(`${m}: no HLTV map joins`); continue; }
       if (j.player.size !== 10) wrong.push(`${m}: ${j.player.size} players joined`);
       for (const [pi, hp] of j.player) {
-        const s = rollup([f], { player: f.players[pi].id });
+        const s = rollup([f], { player: f.players[pi].id }).m;
         const kast = Math.round((1000 * s.kast) / s.rounds) / 10;
         const adr = s.dmg / s.rounds;
         if (s.kills !== hp.total.k) wrong.push(`${m} ${hp.nick} K ${s.kills} vs ${hp.total.k}`);
