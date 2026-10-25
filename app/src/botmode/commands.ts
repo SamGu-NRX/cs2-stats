@@ -30,6 +30,8 @@ export interface Change {
   error: string | null;
   /** folders Windows would not flush to disk */
   warnings: string[];
+  /** session: a session turning Bot Mode on or off; rollback() never takes a finished one off */
+  kind: "normal" | "session";
 }
 
 export interface Cosmetics {
@@ -83,6 +85,10 @@ export interface Status {
   cs2Running: boolean | null;
   /** whether gameinfo.gi has the Bot Mode search paths */
   botMode: boolean | null;
+  /** whether a live Bot Mode session is watching CS2 */
+  supervised: boolean;
+  /** UNPROTECTED_NOTICE */
+  notice: string;
   release: {
     installed: InstalledRelease | null;
     /** the release the files were compared with */
@@ -140,7 +146,6 @@ export interface InstallReport {
   merged: string[];
   /** my_bot_*_config.cfg files installed with the user's own convar values kept */
   userValuesKept: string[];
-  botModeEnabled: boolean;
   difficultyKept: Difficulty | null;
   /** overlays the release replaced; overlay() puts them back */
   overlaysReplaced: string[];
@@ -158,31 +163,49 @@ export interface LaunchPlan {
   steamExe: string;
   /** always starts with -applaunch 730 -insecure */
   args: string[];
-  botModeChange: Change | null;
 }
 
-/** One CS2 process the post-launch check looked at. */
+/** One CS2 process the session watch looked at. */
 export type Checked =
   | { verdict: "safe"; pid: number; commandLine: string }
-  | { verdict: "ended"; pid: number; why: string; ended: { Ok: null } | { Err: string } }
-  | { verdict: "otherInstall"; pid: number; image: string };
+  | { verdict: "ended"; pid: number; why: string }
+  /** unsafe, and ending it failed; tried again on every poll while it runs */
+  | { verdict: "endFailed"; pid: number; why: string; error: string }
+  /** its identity could not be checked, so it was not ended: show "close CS2 now" */
+  | { verdict: "unverified"; pid: number; why: string };
 
 export type Outcome =
-  | { outcome: "safe"; checked: Checked[] }
-  | { outcome: "unsafe"; checked: Checked[] }
-  | { outcome: "timedOut"; lastError: string | null }
-  | { outcome: "stopped" };
+  /** CS2 ran and has exited */
+  | { outcome: "exited"; checked: Checked[] }
+  | { outcome: "noStart"; lastError: string | null }
+  | { outcome: "stopped"; cs2Running: boolean; checked: Checked[] };
 
-/** The post-launch check, from botmode.launchCheck() or the LAUNCH_CHECK_EVENT event. */
-export interface LaunchCheck {
-  phase: "waiting" | "done";
-  /** e.g. "waiting for CS2 to start (Steam may be updating)" */
-  message: string;
-  outcome: Outcome | null;
+/** How a session ended. */
+export interface SessionEnd {
+  outcome: Outcome;
+  /** the change that turned Bot Mode off */
+  botModeOff: Change | null;
+  /** why Bot Mode is still on, when it could not be turned off */
+  leftOn: string | null;
+  /** watcher failures that were caught and recovered from */
+  errors: string[];
 }
 
-/** Event emitted by the app as the post-launch check progresses; the payload is a LaunchCheck. */
-export const LAUNCH_CHECK_EVENT = "botmode-launch-check";
+/** The Bot Mode session, from botmode.session() or the SESSION_EVENT event. */
+export interface SessionState {
+  /** waiting: no CS2 yet; running: CS2 is being watched; done: the session ended */
+  phase: "waiting" | "running" | "done";
+  /** e.g. "waiting for CS2 to start (Steam may be updating)" */
+  message: string;
+  end: SessionEnd | null;
+}
+
+/** Event emitted by the app as a session progresses; the payload is a SessionState. */
+export const SESSION_EVENT = "botmode-session";
+
+/** Show this with Bot Mode: the one case a session cannot protect. */
+export const UNPROTECTED_NOTICE =
+  "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.";
 
 export interface AppSettings { launchOptions: string }
 
@@ -201,13 +224,13 @@ export const botmode = {
   rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
   backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
   /**
-   * Asks Steam to start CS2 and resolves at once. The app then checks every new CS2 of this
-   * install, with no time limit, and ends any without -insecure; follow it with launchCheck()
-   * or the LAUNCH_CHECK_EVENT event.
+   * Turns Bot Mode on for a session, asks Steam to start CS2, and resolves at once. The app
+   * then watches CS2 until it exits, ends any CS2 of this install without -insecure, and turns
+   * Bot Mode off; follow it with session() or the SESSION_EVENT event.
    */
   launch: (t: Target = {}) => invoke<LaunchPlan>("botmode_launch", { ...t }),
-  /** The latest post-launch check, or null before the first launch. */
-  launchCheck: () => invoke<LaunchCheck | null>("botmode_launch_check"),
+  /** The latest session state, or null before the first session. */
+  session: () => invoke<SessionState | null>("botmode_session"),
   setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
   /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
   setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),

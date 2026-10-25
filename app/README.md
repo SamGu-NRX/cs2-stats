@@ -12,6 +12,14 @@ A desktop app (Tauri 2, React, TypeScript) that reads match files written by the
 | `pnpm test` | Stats tests (vitest, one process). |
 | `pnpm convert` | Rebuilds `public/samples/` from `../fixtures/`. |
 
+## Bot Mode
+
+The app installs ed0ard's CS2-Bot-Improver release, overlays your own plugin builds, and starts CS2 with the mod. The code is in `src-tauri/src/botmode/`; the same operations run from a terminal as `cs2-stats botmode <command>` (`cs2-stats botmode --help` lists them).
+
+Bot Mode is on only while a session runs. Launching from the app or with `cs2-stats botmode launch` turns it on, starts CS2 through Steam with `-insecure`, watches CS2 until it exits, and then turns Bot Mode off again. While it watches, any CS2 of this install that runs without `-insecure`, or with an option that turns VAC back on, is ended. If Bot Mode is found on with nothing watching (the app or the terminal closed mid-session), the next app start or Bot Mode command turns it off once CS2 has exited.
+
+**Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.** The case Bot Mode cannot cover: the app crashes during a session, and CS2 is then started from Steam before the app or a Bot Mode command runs again.
+
 ## Win-probability model interface
 
 Round swing needs P(CT wins) for a round state. The model agent owns the interface, in `../model/export/winprob.ts`:

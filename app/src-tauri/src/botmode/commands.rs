@@ -6,6 +6,7 @@ use super::changes::{self, Meta, RollbackReport};
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::launch::{self, LaunchPlan};
 use super::monitor;
+use super::session;
 use super::overlay::{self, OverlayReport};
 use super::process::SystemProbe;
 use super::settings::{self, AppSettings, Cosmetics, Difficulty};
@@ -24,7 +25,7 @@ async fn blocking<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) 
 
 #[tauri::command]
 pub async fn botmode_status(game: Option<String>) -> Result<Status, String> {
-    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options())).await
+    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, &monitor::Windows, ctx.install.as_ref(), ctx.steam_launch_options())).await
 }
 
 #[tauri::command]
@@ -74,50 +75,102 @@ pub async fn botmode_backups(game: Option<String>) -> Result<Vec<Meta>, String> 
     blocking(game, |ctx| changes::list(&ctx.layout)).await
 }
 
-/// The post-launch check as the app sees it, also sent as the `botmode-launch-check` event.
+/// The Bot Mode session as the app sees it, also sent as the `botmode-session` event.
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct LaunchCheck {
-    /// "waiting" until a verdict, then "done".
+pub struct SessionState {
+    /// "waiting" (no CS2 yet), "running" (CS2 is being watched) or "done".
     pub phase: &'static str,
     /// What to show the user, e.g. [`monitor::WAITING`].
     pub message: String,
-    pub outcome: Option<monitor::Outcome>,
+    /// How the session ended, once it has.
+    pub end: Option<session::SessionEnd>,
 }
 
-static LAUNCH_CHECK: std::sync::Mutex<Option<LaunchCheck>> = std::sync::Mutex::new(None);
+static SESSION: std::sync::Mutex<Option<SessionState>> = std::sync::Mutex::new(None);
 
-fn set_check(app: &tauri::AppHandle, check: LaunchCheck) {
+fn set_session(app: &tauri::AppHandle, state: SessionState) {
     use tauri::Emitter;
-    if let Ok(mut c) = LAUNCH_CHECK.lock() {
-        *c = Some(check.clone());
+    if let Ok(mut c) = SESSION.lock() {
+        *c = Some(state.clone());
     }
-    let _ = app.emit("botmode-launch-check", check);
+    let _ = app.emit("botmode-session", state);
 }
 
-/// Asks Steam to start CS2, then returns. A background thread checks every new CS2 process
-/// with no time limit, until one gets a verdict or Bot Mode is turned off or rolled back; its
-/// progress and result arrive as `botmode-launch-check` events and from `botmode_launch_check`.
+fn progress_to(app: &tauri::AppHandle) -> impl Fn(&monitor::Event) + '_ {
+    move |e| {
+        let (phase, message) = match e {
+            monitor::Event::Waiting { message } => ("waiting", message.clone()),
+            monitor::Event::Checked { message, .. } => ("running", message.clone()),
+        };
+        set_session(app, SessionState { phase, message, end: None });
+    }
+}
+
+fn finished(app: &tauri::AppHandle, end: session::SessionEnd) {
+    let mut message = monitor::describe(&end.outcome);
+    if let Some(why) = &end.left_on {
+        message.push_str(&format!(" Bot Mode is still on ({why}); it is turned off once CS2 has exited."));
+    }
+    set_session(app, SessionState { phase: "done", message, end: Some(end) });
+}
+
+/// Turns Bot Mode on for a session and asks Steam to start CS2, then returns. A background
+/// thread watches CS2 until it exits, with no time limit, and turns Bot Mode off; progress
+/// arrives as `botmode-session` events and from `botmode_session`. If that thread cannot be
+/// started, the launch is undone: the CS2 it started is ended and Bot Mode turned off.
 #[tauri::command]
 pub async fn botmode_launch(app: tauri::AppHandle, game: Option<String>) -> Result<LaunchPlan, String> {
-    let (plan, base, layout) = blocking(game, |ctx| {
-        let (plan, base) = launch::launch(&ctx.layout, &SystemProbe, &ctx.steam_config()?, &monitor::Windows)?;
-        Ok((plan, base, ctx.layout.clone()))
+    let (started, layout) = blocking(game, |ctx| {
+        let started = session::begin(&ctx.layout, &SystemProbe, &ctx.steam_config()?, &monitor::Windows, &launch::spawn_steam)?;
+        Ok((started, ctx.layout.clone()))
     })
     .await?;
-    set_check(&app, LaunchCheck { phase: "waiting", message: "checking the CS2 that Steam starts".into(), outcome: None });
-    std::thread::spawn(move || {
-        let progress = |m: &str| set_check(&app, LaunchCheck { phase: "waiting", message: m.into(), outcome: None });
-        let outcome = monitor::watch(&monitor::Windows, &base, None, &|| !launch::still_bot_mode(&layout), &progress);
-        set_check(&app, LaunchCheck { phase: "done", message: monitor::describe(&outcome), outcome: Some(outcome) });
+    set_session(&app, SessionState { phase: "waiting", message: monitor::WAITING.into(), end: None });
+    let (thread_app, thread_started, thread_layout) = (app.clone(), started.clone(), layout.clone());
+    let spawned = std::thread::Builder::new().name("botmode-session".into()).spawn(move || {
+        let control = session::control_until_off(&thread_layout, &|| false, &|_| {});
+        let end = session::run(&thread_layout, &SystemProbe, &monitor::Windows, &thread_started, None, &control, &progress_to(&thread_app));
+        finished(&thread_app, end);
     });
-    Ok(plan)
+    if let Err(e) = spawned {
+        let why = format!("the CS2 watcher could not be started ({e})");
+        let message = tauri::async_runtime::spawn_blocking(move || session::abort(&layout, &SystemProbe, &monitor::Windows, &started, &why))
+            .await
+            .map_err(|e| e.to_string())?;
+        set_session(&app, SessionState { phase: "done", message: message.clone(), end: None });
+        return Err(message);
+    }
+    Ok(started.plan)
 }
 
-/// The latest post-launch check, or `None` when no launch has run since the app started.
+/// The latest session state, or `None` when no session has run since the app started.
 #[tauri::command]
-pub fn botmode_launch_check() -> Option<LaunchCheck> {
-    LAUNCH_CHECK.lock().ok().and_then(|c| c.clone())
+pub fn botmode_session() -> Option<SessionState> {
+    SESSION.lock().ok().and_then(|c| c.clone())
+}
+
+/// At app start: Bot Mode left on with no session watching it is turned off once CS2 is not
+/// running; an unsafe CS2 is ended; a safe one is adopted and watched until it exits.
+pub fn on_app_start(app: tauri::AppHandle) {
+    let _ = std::thread::Builder::new().name("botmode-cleanup".into()).spawn(move || {
+        let Ok(ctx) = Ctx::new(Game::Steam, None) else { return };
+        let layout = ctx.layout;
+        match session::cleanup(&layout, &SystemProbe, &monitor::Windows) {
+            session::Cleanup::Adopt { .. } => {
+                set_session(&app, SessionState { phase: "running", message: "watching a CS2 started with Bot Mode on".into(), end: None });
+                let control = session::control_until_off(&layout, &|| false, &|_| {});
+                match session::adopt(&layout, &SystemProbe, &monitor::Windows, &control, &progress_to(&app)) {
+                    Ok(end) => finished(&app, end),
+                    Err(e) => set_session(&app, SessionState { phase: "done", message: e, end: None }),
+                }
+            }
+            session::Cleanup::LeftOn { why, .. } => {
+                set_session(&app, SessionState { phase: "done", message: format!("Bot Mode is on and could not be turned off: {why}"), end: None })
+            }
+            _ => {}
+        }
+    });
 }
 
 #[tauri::command]

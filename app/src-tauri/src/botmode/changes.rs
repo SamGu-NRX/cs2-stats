@@ -64,6 +64,21 @@ pub struct Meta {
     /// Folders Windows would not flush to disk (see `paths::flush_dir`).
     #[serde(default)]
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub kind: Kind,
+}
+
+/// What a change is for.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    /// An install, overlay or setting: rolled back with `rollback`.
+    #[default]
+    Normal,
+    /// A session turning Bot Mode on or off in `gameinfo.gi`. Journaled for crash safety, but
+    /// once complete never taken off by `rollback`: undoing the "off" of a finished session
+    /// would turn Bot Mode on with nothing watching CS2. Sessions turn it off themselves.
+    Session,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -138,7 +153,11 @@ pub struct ChangeSet<'p> {
 impl<'p> ChangeSet<'p> {
     /// Starts a change, right before its writes. Needs the operation lock, refuses while CS2
     /// runs, and refuses while an earlier change is unfinished.
-    pub fn begin(layout: &Layout, probe: &'p dyn ProcessProbe, _lock: &OpLock, operation: &str) -> Result<ChangeSet<'p>, String> {
+    pub fn begin(layout: &Layout, probe: &'p dyn ProcessProbe, lock: &OpLock, operation: &str) -> Result<ChangeSet<'p>, String> {
+        Self::begin_kind(layout, probe, lock, operation, Kind::Normal)
+    }
+
+    fn begin_kind(layout: &Layout, probe: &'p dyn ProcessProbe, _lock: &OpLock, operation: &str, kind: Kind) -> Result<ChangeSet<'p>, String> {
         ensure_cs2_closed(probe, Phase::ChangeBegin)?;
         let existing = list(layout)?;
         if let Some(m) = existing.iter().find(|m| m.status.unfinished()) {
@@ -162,6 +181,7 @@ impl<'p> ChangeSet<'p> {
             files: 0,
             error: None,
             warnings: Vec::new(),
+            kind,
         };
         // The journal and the saved app state exist, on disk, before meta.json records the
         // change as in progress. A failure before that point removes the partial record, so
@@ -380,7 +400,19 @@ pub fn run<T>(
     operation: &str,
     body: impl FnOnce(&mut ChangeSet) -> Result<T, String>,
 ) -> Result<(T, Meta), String> {
-    let mut cs = ChangeSet::begin(layout, probe, lock, operation)?;
+    run_kind(layout, probe, lock, operation, Kind::Normal, body)
+}
+
+/// [`run`] for a change of the given kind.
+pub fn run_kind<T>(
+    layout: &Layout,
+    probe: &dyn ProcessProbe,
+    lock: &OpLock,
+    operation: &str,
+    kind: Kind,
+    body: impl FnOnce(&mut ChangeSet) -> Result<T, String>,
+) -> Result<(T, Meta), String> {
+    let mut cs = ChangeSet::begin_kind(layout, probe, lock, operation, kind)?;
     match body(&mut cs) {
         Ok(v) => match cs.commit() {
             Ok(meta) => Ok((v, meta)),
@@ -496,7 +528,9 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     ensure_cs2_closed(probe, Phase::Operation)?;
     let _lock = OpLock::acquire(layout)?;
     let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
-    let active: Vec<Meta> = list(layout)?.into_iter().filter(|m| m.status.in_effect()).collect();
+    // A finished session toggle is never taken off; an interrupted one is, like any change.
+    let active: Vec<Meta> =
+        list(layout)?.into_iter().filter(|m| m.status.in_effect() && (m.kind == Kind::Normal || m.status.unfinished())).collect();
     let newest = active.first().ok_or("no change to roll back")?;
     if let Some(id) = id {
         if id != newest.id {

@@ -7,15 +7,17 @@
 //!   turns VAC back on (`process::is_secure_token`).
 //! - Steam's stored CS2 options get the same check, before and right after preparing.
 //! - Steam itself uses the options it holds in memory, which no file read can see, so the
-//!   checks above cannot be the last word. After Steam is asked to start the game, Bot Mode
-//!   checks every new `cs2.exe` of this install (`monitor.rs`) and ends the unsafe ones. That
-//!   check is on the running game itself, so it closes the gap left by every earlier check,
-//!   whatever Steam added.
+//!   checks above cannot be the last word. Bot Mode is on only for a supervised session
+//!   (`session.rs`): it is turned on right before Steam is asked to start the game, every new
+//!   `cs2.exe` of this install is checked for the whole session (`monitor.rs`) and the unsafe
+//!   ones ended, and it is turned off when CS2 exits. That check is on the running game
+//!   itself, so it closes the gap left by every earlier check, whatever Steam added. The one
+//!   case it cannot cover is in `session.rs`: the app crashes mid-session and CS2 is then
+//!   started from Steam before Bot Mode runs again.
 
-use super::changes::{self, Meta};
+use super::changes;
 use super::gameinfo;
 use super::paths::Layout;
-use super::monitor::{self, Baseline, System};
 use super::process::{is_secure_token, OpLock, Phase, ProcessProbe};
 use super::settings;
 use super::steam::SteamConfig;
@@ -69,13 +71,11 @@ pub fn steam_args(options: &str) -> Result<Vec<String>, String> {
     Ok(args)
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchPlan {
     pub steam_exe: String,
     pub args: Vec<String>,
-    /// The change that turned Bot Mode on in `gameinfo.gi`, when it was off.
-    pub bot_mode_change: Option<Meta>,
 }
 
 /// What the check on the started game found.
@@ -114,10 +114,10 @@ fn check_closed(probe: &dyn ProcessProbe, phase: Phase, running: &str) -> Result
 }
 
 /// Everything before starting the game: CS2 must be closed, no change may be unfinished,
-/// Steam's own options must not turn VAC on, the mod must be installed, and Bot Mode on in
-/// `gameinfo.gi` (turned on here, with a backup, when it is off). The caller holds `lock`
-/// until the game has been handed to Steam.
-pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, lock: &OpLock) -> Result<LaunchPlan, String> {
+/// Steam's own options must not turn VAC on, the mod must be installed, and `gameinfo.gi`
+/// must be readable. Turning Bot Mode on is the session's job (`session::begin`), right before
+/// the spawn. The caller holds `lock` until the game has been handed to Steam.
+pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _lock: &OpLock) -> Result<LaunchPlan, String> {
     check_closed(probe, Phase::LaunchPrepare, "CS2 is already running. Close it, then launch Bot Mode, so the game starts with -insecure.")?;
     check_no_unfinished(layout)?;
     check_steam_options(steam)?;
@@ -133,17 +133,12 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, l
     let args = steam_args(&settings::load_app(layout)?.launch_options)?;
     let gi_path = layout.confined("gameinfo.gi")?;
     let text = std::fs::read_to_string(&gi_path).map_err(|e| format!("{}: {e}", gi_path.display()))?;
-    let bot_mode_change = if gameinfo::is_bot_mode(&text)? {
-        None
-    } else {
-        let on = gameinfo::enable(&text)?;
-        Some(changes::run(layout, probe, lock, "bot-mode-on", |cs| cs.put_bytes("gameinfo.gi", on.as_bytes()))?.1)
-    };
+    gameinfo::enable(&text)?;
     let steam_exe = steam.steam.join("steam.exe");
     if !steam_exe.is_file() {
         return Err(format!("{} not found", steam_exe.display()));
     }
-    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args, bot_mode_change })
+    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args })
 }
 
 /// The last checks before Steam is asked to start the game: CS2 has not started meanwhile, no
@@ -159,37 +154,16 @@ pub fn check_start(plan: &LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe,
     Ok(())
 }
 
-/// Hands the plan to Steam, after the last checks. Returns the baseline the post-launch
-/// watcher (`monitor::watch`) compares new CS2 processes with, taken right before the spawn.
-pub fn start(plan: &LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, sys: &dyn System) -> Result<Baseline, String> {
-    check_start(plan, layout, probe, steam)?;
-    let base = monitor::baseline(sys, &layout.csgo)?;
+/// Asks Steam to start the game with the plan's arguments.
+pub fn spawn_steam(plan: &LaunchPlan) -> Result<(), String> {
+    if plan.args.get(2).map(String::as_str) != Some("-insecure") {
+        return Err("internal error: a launch without -insecure was refused".into());
+    }
     std::process::Command::new(&plan.steam_exe)
         .args(&plan.args)
         .spawn()
-        .map_err(|e| format!("{}: {e}", plan.steam_exe))?;
-    Ok(base)
-}
-
-/// Prepares and starts the launch under one operation lock, which is released before the
-/// watch so other operations (a rollback, say) are not held up while Steam updates.
-pub fn launch(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, sys: &dyn System) -> Result<(LaunchPlan, Baseline), String> {
-    let lock = OpLock::acquire(layout)?;
-    let plan = prepare(layout, probe, steam, &lock)?;
-    let base = start(&plan, layout, probe, steam, sys)?;
-    Ok((plan, base))
-}
-
-/// Whether Bot Mode is still on for this game folder: the mod's files are there and
-/// `gameinfo.gi` has the Bot Mode search paths. The app's watcher stops when this turns false.
-pub fn still_bot_mode(layout: &Layout) -> bool {
-    let files = REQUIRED.iter().all(|r| layout.confined(r).is_ok_and(|p| p.is_file()));
-    let gi = layout
-        .confined("gameinfo.gi")
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|t| gameinfo::is_bot_mode(&t).unwrap_or(false));
-    files && gi
+        .map(|_| ())
+        .map_err(|e| format!("{}: {e}", plan.steam_exe))
 }
 
 #[cfg(test)]

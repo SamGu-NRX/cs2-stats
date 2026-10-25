@@ -132,6 +132,164 @@ pub fn fake_steam_config(s: &Scratch, options: Option<&str>) -> super::steam::St
     super::steam::SteamConfig { steam, localconfig: localconfig_path }
 }
 
+/// The game executable the fake system's processes run from by default.
+pub const IMAGE: &str = r"C:\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe";
+/// A command line Bot Mode accepts.
+pub const SAFE_LINE: &str = r#""C:\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe" -insecure -novid"#;
+const UNREADABLE_IMAGE: &str = "<unreadable for comparison>";
+
+struct FakeProc {
+    created: u64,
+    image: String,
+    line: Option<String>,
+    broken: Option<&'static str>,
+    failing_ends: u32,
+    end_attempts: u32,
+    ended: bool,
+}
+
+#[derive(Clone)]
+struct ProcHandle(std::rc::Rc<std::cell::RefCell<FakeProc>>);
+
+impl super::monitor::Cs2Process for ProcHandle {
+    fn created(&self) -> Result<u64, String> {
+        let p = self.0.borrow();
+        if p.broken == Some("created") {
+            return Err("access denied".into());
+        }
+        Ok(p.created)
+    }
+    fn image(&self) -> Result<PathBuf, String> {
+        let p = self.0.borrow();
+        match p.broken {
+            Some("image") => Err("access denied".into()),
+            Some("same_file") => Ok(PathBuf::from(UNREADABLE_IMAGE)),
+            _ => Ok(PathBuf::from(&p.image)),
+        }
+    }
+    fn command_line(&self) -> Result<String, String> {
+        self.0.borrow().line.clone().ok_or_else(|| "access denied".into())
+    }
+    fn terminate(&self) -> Result<(), String> {
+        let mut p = self.0.borrow_mut();
+        p.end_attempts += 1;
+        if p.failing_ends > 0 {
+            p.failing_ends -= 1;
+            return Err("access denied".into());
+        }
+        p.ended = true;
+        Ok(())
+    }
+}
+
+/// A process list scripted per poll (the last entry repeats), processes by id, and a clock
+/// that moves only when the code under test sleeps.
+pub struct FakeSystem {
+    lists: std::cell::RefCell<std::collections::VecDeque<Result<Vec<(u32, u64)>, String>>>,
+    procs: std::cell::RefCell<std::collections::HashMap<u32, ProcHandle>>,
+    clock: std::cell::Cell<std::time::Duration>,
+    sleeps: std::cell::RefCell<Vec<std::time::Duration>>,
+    polls: std::cell::Cell<usize>,
+    /// Polls on which listing panics, for the panic boundary.
+    pub panic_on_polls: std::cell::RefCell<Vec<usize>>,
+    pub alive: std::cell::RefCell<std::collections::HashSet<(u32, u64)>>,
+    /// Called whenever the code under test reads the time, to observe what was true then.
+    pub on_file_time: std::cell::RefCell<Option<Box<dyn Fn()>>>,
+}
+
+impl FakeSystem {
+    pub fn new() -> FakeSystem {
+        FakeSystem {
+            lists: Default::default(),
+            procs: Default::default(),
+            clock: Default::default(),
+            sleeps: Default::default(),
+            polls: Default::default(),
+            panic_on_polls: Default::default(),
+            alive: Default::default(),
+            on_file_time: Default::default(),
+        }
+    }
+    pub fn script(&self, lists: Vec<Vec<(u32, u64)>>) {
+        self.script_results(lists.into_iter().map(Ok).collect());
+    }
+    pub fn script_results(&self, lists: Vec<Result<Vec<(u32, u64)>, String>>) {
+        *self.lists.borrow_mut() = lists.into();
+    }
+    pub fn proc(&self, pid: u32, created: u64, line: Option<&str>) {
+        self.proc_at(pid, created, IMAGE, line)
+    }
+    pub fn proc_at(&self, pid: u32, created: u64, image: &str, line: Option<&str>) {
+        let p = FakeProc { created, image: image.into(), line: line.map(String::from), broken: None, failing_ends: 0, end_attempts: 0, ended: false };
+        self.procs.borrow_mut().insert(pid, ProcHandle(std::rc::Rc::new(std::cell::RefCell::new(p))));
+    }
+    /// Makes one identity read fail: "created", "image" or "same_file".
+    pub fn break_identity(&self, pid: u32, which: &'static str) {
+        self.procs.borrow()[&pid].0.borrow_mut().broken = Some(which);
+    }
+    pub fn fail_ends(&self, pid: u32, times: u32) {
+        self.procs.borrow()[&pid].0.borrow_mut().failing_ends = times;
+    }
+    pub fn ended(&self, pid: u32) -> bool {
+        self.procs.borrow()[&pid].0.borrow().ended
+    }
+    pub fn end_attempts(&self, pid: u32) -> u32 {
+        self.procs.borrow()[&pid].0.borrow().end_attempts
+    }
+    pub fn polls(&self) -> usize {
+        self.polls.get()
+    }
+    pub fn sleeps(&self) -> Vec<std::time::Duration> {
+        self.sleeps.borrow().clone()
+    }
+    pub fn clock(&self) -> std::time::Duration {
+        self.clock.get()
+    }
+}
+
+impl super::monitor::System for FakeSystem {
+    fn cs2_list(&self) -> Result<Vec<super::monitor::Listed>, String> {
+        self.polls.set(self.polls.get() + 1);
+        if self.panic_on_polls.borrow().contains(&self.polls.get()) {
+            panic!("staged watcher failure");
+        }
+        let mut l = self.lists.borrow_mut();
+        let next = if l.len() > 1 { l.pop_front().unwrap() } else { l.front().cloned().unwrap_or(Ok(Vec::new())) };
+        // A process that was ended is gone from the list, as on Windows.
+        let procs = self.procs.borrow();
+        let gone = |pid: &u32| procs.get(pid).is_some_and(|p| p.0.borrow().ended);
+        next.map(|v| v.into_iter().filter(|(pid, _)| !gone(pid)).map(|(pid, created)| super::monitor::Listed { pid, created }).collect())
+    }
+    fn open(&self, pid: u32) -> Result<Option<Box<dyn super::monitor::Cs2Process>>, String> {
+        Ok(self.procs.borrow().get(&pid).cloned().map(|p| Box::new(p) as Box<dyn super::monitor::Cs2Process>))
+    }
+    fn same_file(&self, a: &Path, b: &Path) -> Result<bool, String> {
+        if a.as_os_str() == UNREADABLE_IMAGE || b.as_os_str() == UNREADABLE_IMAGE {
+            return Err("file identity unreadable".into());
+        }
+        Ok(a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()))
+    }
+    fn file_time(&self) -> u64 {
+        if let Some(f) = self.on_file_time.borrow().as_ref() {
+            f();
+        }
+        1000
+    }
+    fn elapsed(&self) -> std::time::Duration {
+        self.clock.get()
+    }
+    fn sleep(&self, d: std::time::Duration) {
+        self.sleeps.borrow_mut().push(d);
+        self.clock.set(self.clock.get() + d);
+    }
+    fn alive(&self, pid: u32, created: u64) -> bool {
+        self.alive.borrow().contains(&(pid, created))
+    }
+    fn this_process(&self) -> super::monitor::Listed {
+        super::monitor::Listed { pid: 1, created: 1 }
+    }
+}
+
 /// A directory junction at `link` pointing to `target`, as `mklink /J` makes.
 #[cfg(windows)]
 pub fn junction(link: &Path, target: &Path) {
