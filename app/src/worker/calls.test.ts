@@ -8,7 +8,8 @@ import { vsOpponentsOf } from "../stats/opponents";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { decodeMatch } from "../stats/plugin/decode";
 import { emptySummary } from "../stats/rollup";
-import { winCorrelationOf } from "../stats/trends";
+import { matchWon, winCorrelationOf } from "../stats/trends";
+import { oneRound } from "../stats/testing/match";
 import { entryOf } from "./views";
 
 it("ranks the player among the opponents with lower-is-better metrics turned around", () => {
@@ -34,4 +35,12 @@ it("gives each scoreboard line its eco-adjusted values from the rating's own inp
   expect(l.eco).not.toBeNull();
   expect(l.eco!.ek).toBe(l.m.vEcoKills);
   expect(l.eco!.eadr).toBeCloseTo(l.m.vEcoDmg / l.m.swingRounds, 9);
+});
+
+it("counts only finished, decided matches as wins or losses for the win correlation", () => {
+  // fails if a tie counts as a loss or an unfinished match counts at all
+  const base = oneRound({ players: { a: "CT", b: "T" } });
+  const as = (score: [number, number], complete: boolean) => ({ ...base, match: { ...base.match, score, complete } });
+  const me = new Set(["a"]);
+  expect([matchWon(as([13, 9], true), me), matchWon(as([9, 13], true), me), matchWon(as([12, 12], true), me), matchWon(as([5, 2], false), me)]).toEqual([true, false, null, null]);
 });

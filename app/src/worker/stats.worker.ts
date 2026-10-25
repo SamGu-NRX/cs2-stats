@@ -11,7 +11,7 @@ import { BUY_CLASSES } from "../stats/economy";
 import { METRIC } from "../stats/metrics";
 import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
-import { trend, winCorrelationOf } from "../stats/trends";
+import { matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
@@ -350,8 +350,7 @@ const api: Impl = {
     await stream(q.files, (f) => {
       const s = rollup([f], q.filter);
       if (!s.m.rounds) return;
-      const p = f.players.find((x) => me.has(x.id));
-      const won = !p || p.team === null ? null : f.match.score[p.team] > f.match.score[1 - p.team];
+      const won = matchWon(f, me);
       for (const id of metricIds) points[id].push({ value: METRIC[id].value(s), won });
     });
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
