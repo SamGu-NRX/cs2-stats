@@ -6,7 +6,7 @@
 // rounds (raw, as HLTV's map cards expose no eco version) and round swing. The rating is params.json's
 // linear model in those six inputs.
 import { PARAMS as params } from "./model-params";
-import { enemyHit, hitDamage, type Ctx } from "./derive";
+import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
 import { coveredEnough } from "./coverage";
 import { rollup, type Filter, type Summary } from "./rollup";
@@ -83,9 +83,16 @@ export function ecoAdjust(c: Ctx): void {
   const row = new Map<string, number>();
   for (let i = 0; i < k.n; i++) row.set(`${k.tick[i]}:${k.victim_steamid[i]}`, i);
 
+  const known = loadouts(c);
   for (let ri = 0; ri < c.nRounds; ri++) {
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
+      // coverage: both players' loadouts recorded for this round (INPUT_COVERAGE.eco)
+      const both = !!known.get(ri * 1024 + kf.killer!) && !!known.get(ri * 1024 + kf.victim);
+      for (const pl of [kf.killer!, kf.victim]) {
+        const r = c.pr[ri][pl];
+        if (r) { r.m.ecoEvents++; if (both) r.m.ecoEventsKnown++; }
+      }
       const i = row.get(`${kf.tick}:${c.players[kf.victim].id}`)!;
       const ga = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
       const gb = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);

@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 11;
+export const DERIVE_VERSION = 12;
 
 export interface MatchInfo {
   id: string;
@@ -47,21 +47,24 @@ export interface MatchInfo {
   winProb: "hltv" | "cs2rb";
   /** model-params.ts modelFingerprint: the rating parameters and win-probability source these facts were derived with */
   model: string;
-  /** what the source records beyond the scoreboard; a metric that needs a missing input gets no percentile (compare.ts) */
-  inputs: SourceInputs;
+  /** the source's throws: logged, or rebuilt from detonations (the plugin's older files), whose throw point and time are approximate */
+  inputs: { throws: "logged" | "rebuilt" | null };
 }
 
-/** Source fields some metrics need. */
-export const INPUTS = ["loadout", "activeWeapon"] as const;
-export type Input = (typeof INPUTS)[number];
-export interface SourceInputs extends Record<Input, boolean> {
-  /**
-   * loadout: freeze-end inventories and best primaries (unused utility, rounds with a sniper, the eco
-   * groups); activeWeapon: the weapon in each victim's hand (AWP duels). throws: the source's throw log,
-   * or throws rebuilt from detonations (the plugin's older files), whose throw point and time are approximate.
-   */
-  throws: "logged" | "rebuilt" | null;
-}
+/**
+ * Inputs some metrics need, each counted per row by a pair of measures: [rows where the input is
+ * known, rows the metric uses]. A metric whose input is known on only some rows is computed over the
+ * known rows and gets no pro percentile; compare.ts says how many were known.
+ */
+export const INPUT_COVERAGE = {
+  /** freeze-end inventory and best primary recorded for the player-round */
+  loadout: ["loadoutRounds", "rounds", "freeze-end loadout", "rounds"],
+  /** the weapon in the victim's hand recorded for an enemy kill */
+  activeWeapon: ["deathsHandKnown", "deathsHandTotal", "weapon in hand", "deaths"],
+  /** both players' loadouts recorded for a kill or death the eco adjustment values */
+  eco: ["ecoEventsKnown", "ecoEvents", "both players' loadout", "kills and deaths"],
+} as const;
+export type Input = keyof typeof INPUT_COVERAGE;
 
 export interface PlayerInfo {
   id: string;
@@ -163,6 +166,8 @@ export const MEASURES = [
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
+  // row coverage of the inputs some metrics need (INPUT_COVERAGE)
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
