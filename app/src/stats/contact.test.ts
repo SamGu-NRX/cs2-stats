@@ -3,6 +3,7 @@
 // tick 1020; b (T) stands at x = 1,000. Both become visible to each other at tick 1010, when a is at
 // x = 40. a fires at 1030, b at 1040, and a kills b at 1050.
 import { describe, expect, it } from "vitest";
+import { aggressionScore, AGGRO_PARTS, type AggroScale } from "./aggro-scale";
 import type { SightFact } from "./aim";
 import { compare, type Baselines } from "./compare";
 import { METRIC, METRICS } from "./metrics";
@@ -94,5 +95,23 @@ describe("shooting while moving", () => {
     const s = rollup([f], { player: "a" });
     expect([s.aim.bursts, s.aim.movingShare]).toEqual([2, 2 / 3 + 1 / 2]);
     expect(METRIC.movingSpray.value(s)).toBeCloseTo((100 * (2 / 3 + 1 / 2)) / 2, 9);
+  });
+});
+
+describe("aggressive-to-passive score", () => {
+  const scale: AggroScale = { parts: [...AGGRO_PARTS], mean: [20, 50, 0.5, 800], sd: [10, 25, 0.25, 80], players: 1, source: "test" };
+
+  it("averages the parts' signed z-scores, higher for more aggressive", () => {
+    // fails if a sign flips or a part drops out. a travelled 40 (+2), fired first in 100% (+2), waited
+    // 0.625 s for the duel (-0.5: longer is more passive) and met b at 960 units (-2: farther is more
+    // passive): (2 + 2 - 0.5 - 2) / 4
+    expect(aggressionScore(rollup([match], { player: "a" }), scale)).toBeCloseTo(0.375, 12);
+  });
+
+  it("gives no score unless every part has a value, and refuses a scale for other parts", () => {
+    // fails if a score is made from three parts, or a scale fitted on another list is read in the wrong order
+    const noShots = oneRound({ players: { a: "CT", b: "T" } });
+    expect(aggressionScore(rollup([noShots], { player: "a" }), scale)).toBeNull();
+    expect(() => aggressionScore(rollup([match], { player: "a" }), { ...scale, parts: ["peekTravel", "engageDistance", "firedFirst", "duelExposure"] })).toThrow(/aggression scale is for/);
   });
 });

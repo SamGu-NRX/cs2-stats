@@ -1,0 +1,22 @@
+{
+  "parts": [
+    "peekTravel",
+    "firedFirst",
+    "duelExposure",
+    "engageDistance"
+  ],
+  "mean": [
+    18.55181488203267,
+    49.45488233457795,
+    0.5428198729582577,
+    771.2097096188743
+  ],
+  "sd": [
+    4.030789663173215,
+    9.341230013141153,
+    0.0806227519124513,
+    88.93784265324884
+  ],
+  "players": 551,
+  "source": "489 pro maps, players with 40+ rounds and all four parts"
+}
