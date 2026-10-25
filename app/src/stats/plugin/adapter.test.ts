@@ -176,7 +176,7 @@ it("scores a match across the half-time side swap from the human's side each rou
   // PM recording's shape)
   const base = pluginMatch([]);
   const won = [...[3, 3, 3], ...Array(9).fill(2), 2, 2, 2, 3, 2, 2, 2, 2, 3, 2, 2, 2] as (2 | 3)[];
-  const side = won.map((_, ri) => (ri < 12 ? [2, 3] : [3, 2]));
+  const side = won.map((_, ri): (2 | 3)[] => (ri < 12 ? [2, 3] : [3, 2]));
   const r = base.rounds;
   const m: MatchFile = {
     ...base,
