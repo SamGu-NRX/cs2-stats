@@ -21,8 +21,10 @@ export class ValvePathError extends Error {}
 export interface ValveEntry { file: string; size: number; mtime: number }
 export interface ValveListing {
   folder: string;
-  /** the user's SteamID64 as a string, or null before the first import */
+  /** the user's SteamID64 as a string, or null before the first import or when the file is unreadable */
   user: string | null;
+  /** why valve-user.local.json could not be read; the matches are still listed, without a user */
+  userError: string | null;
   files: ValveEntry[];
   /** map folders with no complete version now, and why */
   skipped: { file: string; why: string }[];
@@ -61,10 +63,28 @@ function contained(root: string, p: string, rel: string): void {
   if (!isInside(root, p)) throw new ValvePathError(`${rel}: resolves outside the Valve folder`);
 }
 
+/**
+ * The user's id, read a second time 50 ms after a failure: something else may be writing the file. Still
+ * unreadable, it is reported in `error` rather than thrown, so one bad file does not hide every match
+ * (review of #29).
+ */
+function readUser(root: string): { user: string | null; error: string | null } {
+  try {
+    return { user: valveUser(root), error: null };
+  } catch {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    try {
+      return { user: valveUser(root), error: null };
+    } catch (e) {
+      return { user: null, error: (e as Error).message };
+    }
+  }
+}
+
 export function listValve(root: string): ValveListing {
-  const out: ValveListing = { folder: root, user: null, files: [], skipped: [] };
+  const out: ValveListing = { folder: root, user: null, userError: null, files: [], skipped: [] };
   if (!existsSync(root)) return out;
-  out.user = valveUser(root);
+  ({ user: out.user, error: out.userError } = readUser(root));
   for (const d of readdirSync(root, { withFileTypes: true })) {
     if (!d.isDirectory() || !isName(d.name)) continue;
     let r;

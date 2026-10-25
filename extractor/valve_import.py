@@ -144,7 +144,16 @@ def resolve_user(out: Path, steam: Path | None, explicit: int | None) -> dict:
     if user["steamid"] < STEAMID64_MIN:
         raise ValueError(f"{user['steamid']} is not a SteamID64")
     out.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(user, indent=1) + "\n", encoding="utf-8")
+    text = json.dumps(user, indent=1) + "\n"
+    # The app reads this file while it lists matches, so it is replaced whole, never rewritten in place,
+    # and left alone when nothing changed (review of #29).
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        staged = path.with_name(f".{USER_FILE}.{os.getpid()}.tmp")
+        try:
+            staged.write_text(text, encoding="utf-8")
+            os.replace(staged, path)
+        finally:
+            staged.unlink(missing_ok=True)
     return user
 
 

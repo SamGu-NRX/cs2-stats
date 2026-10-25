@@ -36,10 +36,14 @@ it("lists complete Valve matches by their version folder, with the user's exact 
   expect(listValve(path.join(root, "absent"))).toMatchObject({ files: [], user: null });
 });
 
-it("refuses a user file that names no SteamID64", () => {
+it("still lists the matches when the user file is unreadable, and says why", () => {
+  // fails if a half-written or broken user file hides every match (review of #29)
   const root = fresh();
-  writeFileSync(path.join(root, VALVE_USER_FILE), '{"steamid": 12345}');
-  expect(() => listValve(root)).toThrow(/names no SteamID64/);
+  map(root, "match730_a", { "match.parquet": "abc" });
+  for (const body of ['{"steamid": 12345}', '{"steam']) {
+    writeFileSync(path.join(root, VALVE_USER_FILE), body);
+    expect(listValve(root)).toMatchObject({ user: null, userError: expect.stringMatching(/names no SteamID64/), files: [{ file: `valve/match730_a/${V1}` }] });
+  }
 });
 
 it("reads only the tables a version's COMPLETE list names, at their size", () => {

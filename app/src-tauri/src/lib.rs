@@ -251,6 +251,9 @@ struct Skipped {
 struct ValveListing {
     folder: String,
     user: Option<String>,
+    /// Why valve-user.local.json could not be read; the matches are still listed, without a user.
+    #[serde(rename = "userError")]
+    user_error: Option<String>,
     files: Vec<FileEntry>,
     skipped: Vec<Skipped>,
 }
@@ -258,13 +261,21 @@ struct ValveListing {
 /// Every Valve match whose CURRENT version is complete, newest folder name first; folders without one are
 /// listed in `skipped` with the reason. A missing folder lists nothing.
 fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
-    let mut out = ValveListing { folder: root.display().to_string(), user: None, files: Vec::new(), skipped: Vec::new() };
+    let mut out = ValveListing { folder: root.display().to_string(), user: None, user_error: None, files: Vec::new(), skipped: Vec::new() };
     let top = match fs::read_dir(root) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(format!("{}: {e}", root.display())),
     };
-    out.user = valve_user(root)?;
+    // Read a second time 50 ms after a failure, as something else may be writing the file. Still unreadable,
+    // it is reported rather than returned as an error, so one bad file does not hide every match.
+    match valve_user(root).or_else(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        valve_user(root)
+    }) {
+        Ok(u) => out.user = u,
+        Err(e) => out.user_error = Some(e),
+    }
     for item in top {
         let item = item.map_err(|e| format!("{}: {e}", root.display()))?;
         let Some(name) = item.file_name().to_str().map(str::to_owned) else { continue };
@@ -520,10 +531,16 @@ mod tests {
     }
 
     #[test]
-    fn a_valve_user_file_without_a_steamid64_is_an_error() {
+    fn an_unreadable_valve_user_file_is_reported_and_the_matches_still_listed() {
+        // fails if a half-written or broken user file hides every match (review of #29)
         let s = Scratch::new("valve-user");
-        fs::write(s.0.join(VALVE_USER_FILE), "{\"steamid\": 12345}").unwrap();
-        assert!(list_valve_in(&s.0).is_err());
+        valve_map(&s.0, "match730_a", V1, &[("match.parquet", b"abc")], None);
+        for body in ["{\"steamid\": 12345}", "{\"steam"] {
+            fs::write(s.0.join(VALVE_USER_FILE), body).unwrap();
+            let l = list_valve_in(&s.0).unwrap();
+            assert_eq!((l.user, l.files.len()), (None, 1));
+            assert!(l.user_error.is_some());
+        }
     }
 
     #[test]
