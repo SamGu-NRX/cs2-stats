@@ -10,9 +10,13 @@ import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
 import { Select } from "../components/controls";
 import { frameFor, RadarView } from "../components/MapArt";
-import { BOTS_TIP, careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
+import { careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
 import { useCall } from "../data/hooks";
 import { metric } from "../data/meta";
+import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
+import { calloutName } from "../lib/callouts";
+import { GameIcon } from "../components/GameIcon";
+import { useGameIcon } from "../data/icons";
 import { useData } from "../data/provider";
 import { DeathIcon } from "../icons/game";
 import { fmtPct, mapName, plural } from "../lib/format";
@@ -20,7 +24,7 @@ import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
 import { RoleCard } from "./profile/parts";
-import { Empty, NeedsDemo, NotCompared, Provisional } from "./shared";
+import { Empty, NeedsDemo, NotCompared } from "./shared";
 
 export default function Playstyle() {
   const { matches, you } = useData();
@@ -62,8 +66,10 @@ export function WhereYouPlay() {
   const maxCell = Math.max(1, ...cells.map((c) => c.secs));
   const places = Object.entries(pos?.presence?.places ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const total = Object.values(pos?.presence?.places ?? {}).reduce((a, s) => a + s, 0) || 1;
+  // deaths are marked with the game's skull from the icon pack, tinted; without the pack, a cross
+  const skull = useGameIcon("elimination");
   return (
-    <Card title="Where you play" aside={<Select label="Map" prefix="Map" value={map} onChange={setMap} options={maps.map((m) => ({ value: m, label: mapName(m) }))} />}>
+    <Card title="Where you play" tip={PANEL_TIP.whereYouPlay} aside={<Select label="Map" prefix="Map" value={map} onChange={setMap} options={maps.map((m) => ({ value: m, label: mapName(m) }))} />}>
       {!pos ? <div className="skel" style={{ height: 360 }} /> : !frame ? <Empty text={`No kill, death or movement positions on ${mapName(map)} yet.`} /> : (
         <div className="wyp">
           <div className="wyp__map">
@@ -74,11 +80,24 @@ export function WhereYouPlay() {
                 return <rect key={c} x={x - s / 2} y={y - s / 2} width={s} height={s} fill="var(--cream)" opacity={0.04 + 0.3 * Math.sqrt(secs / maxCell)} />;
               })}
               {pos.kills.map(([x0, y0], i) => { const [x, y] = frame.to(x0, y0); return <circle key={`k${i}`} cx={x} cy={y} r="7" fill="var(--good-text)" stroke="var(--bg0)" strokeWidth="2.5" opacity="0.9" />; })}
-              {pos.deaths.map(([x0, y0], i) => { const [x, y] = frame.to(x0, y0); return <path key={`d${i}`} transform={`translate(${x} ${y})`} d="M-7 -7L7 7M7 -7L-7 7" stroke="var(--poor-text)" strokeWidth="3" strokeLinecap="round" />; })}
+              {skull && (
+                <defs>
+                  <filter id="wyp-skull" colorInterpolationFilters="sRGB">
+                    <feFlood style={{ floodColor: "var(--poor-text)" }} />
+                    <feComposite in2="SourceAlpha" operator="in" />
+                  </filter>
+                </defs>
+              )}
+              {pos.deaths.map(([x0, y0], i) => {
+                const [x, y] = frame.to(x0, y0);
+                return skull
+                  ? <image key={`d${i}`} href={skull} x={x - 9} y={y - 9} width="18" height="18" filter="url(#wyp-skull)" />
+                  : <path key={`d${i}`} transform={`translate(${x} ${y})`} d="M-7 -7L7 7M7 -7L-7 7" stroke="var(--poor-text)" strokeWidth="3" strokeLinecap="round" />;
+              })}
             </RadarView>
             <div className="legend">
               <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="4" fill="var(--good-text)" /></svg>Your kills</span>
-              <span><DeathIcon size={11} className="poor-text" />Your deaths</span>
+              <span><span className="poor-text"><GameIcon id="elimination" width={11} fallback={<DeathIcon size={11} />} /></span>Your deaths</span>
               <span><i className="swatch" style={{ background: "rgba(255,215,173,.4)" }} />Where you moved</span>
             </div>
           </div>
@@ -87,9 +106,9 @@ export function WhereYouPlay() {
             <div className="wyp__count"><b className="num good-text">{pos.kills.length}</b><span className="meta">kills placed</span><b className="num poor-text">{pos.deaths.length}</b><span className="meta">deaths placed</span></div>
             {places.length ? (
               <ul className="places" aria-label="Where you spend your time alive">
-                {places.map(([p, secs]) => <li key={p}><span>{p}</span><span className="hbar"><i style={{ width: `${(100 * secs) / places[0][1]}%` }} /></span><b className="num">{fmtPct((100 * secs) / total, 0)}</b></li>)}
+                {places.map(([p, secs]) => <li key={p}><span>{calloutName(p)}</span><span className="hbar"><i style={{ width: `${(100 * secs) / places[0][1]}%` }} /></span><b className="num">{fmtPct((100 * secs) / total, 0)}</b></li>)}
               </ul>
-            ) : <p className="meta"><NeedsDemo detail="Where you spend your time comes from movement samples; converted logs place kills and deaths only." /></p>}
+            ) : <p className="meta"><NeedsDemo detail="Time spent per place needs movement, which converted logs lack." /></p>}
             <p className="meta">Kills sit where you stood, deaths where you fell.</p>
           </div>
         </div>
@@ -117,9 +136,8 @@ function Ranks({ q }: { q: Query }) {
   const error = pros.error ?? bots.error ?? (baselines ? null : baselinesError);
   const n = { pros: baselines?.n.all?.both ?? 0, bots: bots.data?.n ?? 0 };
   return (
-    <Card title="Where you rank" aside={
+    <Card title="Where you rank" tip={PANEL_TIP.whereYouRank} aside={
       <span className="card__aside-row">
-        {careers && <Provisional c={careers} />}
         <span className="meta">{proP && botP ? `How well against ${n.pros} pros; style against ${n.bots} bot ${n.bots === 1 ? "career" : "careers"}` : ""}</span>
       </span>
     }>
@@ -135,10 +153,10 @@ function Ranks({ q }: { q: Query }) {
                   const x = (style ? botP : proP)[id];
                   const tone = x.pct === null || style ? "" : x.pct >= 67 ? "is-high" : x.pct < 33 ? "is-low" : "";
                   return (
-                    <li key={id} className={tone} data-tip={m.def}>
-                      <span className="ranks__l">{m.label}<span className="ranks__pop" data-tip={style ? BOTS_TIP : undefined}>{style ? "vs bots" : "vs pros"}</span></span>
+                    <li key={id} className={tone} data-tip={tipOf(id)}>
+                      <span className="ranks__l">{m.label}<span className="ranks__pop" data-tip={style ? "Ranked against bots in your matches." : "Ranked against pros."}>{style ? "vs bots" : "vs pros"}</span></span>
                       <b className="num ranks__v">{fmtMetric(id, x.value)}</b>
-                      <span className={`ranks__track ${style ? "is-style" : ""}`}>{x.pct !== null && <i style={{ left: `${x.pct}%` }} />}<em style={{ left: "50%" }} /></span>
+                      <span className={`ranks__track ${style ? "is-style" : ""} ${style && careers?.provisional ? "is-prov" : ""}`} {...(style && careers?.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0, "aria-label": "Provisional" } : {})}>{x.pct !== null && <i style={{ left: `${x.pct}%` }} />}<em style={{ left: "50%" }} /></span>
                       <span className="ranks__p num">{x.reason ? <NotCompared reason={x.reason} /> : style ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}% of bots`) : rankText(x.pct)}</span>
                     </li>
                   );

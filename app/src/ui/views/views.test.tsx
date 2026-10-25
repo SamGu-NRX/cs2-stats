@@ -175,38 +175,46 @@ describe("comparison reasons", () => {
   });
 });
 
-describe("Profile attributes block", () => {
+describe("Profile attributes", () => {
   const renderProfile = async () => {
     use(samples);
     const q = queryOf(samples);
     const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
+    const firepower = await calls.attributes(q, { side: "both" });
     answers.attributeBlock = block;
+    answers.attributes = firepower;
     render(<ProfileView />);
-    return block;
+    return { block, firepower };
   };
   const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
 
-  it("lists Firepower first, then the six style attributes in HLTV's order, one per row", async () => {
-    // fails if the block drops an attribute, reorders them, or brings back the paired grid
+  it("puts Firepower in its own card and the six style attributes in pairs, in HLTV's order", async () => {
+    // fails if Firepower moves back into the style block, the block drops or reorders an attribute, or
+    // the block grows its own Side control (the title bar's is the page's one)
     await renderProfile();
-    const ids = Array.from(host.querySelectorAll(".apanel__list > .apa")).map((el) => el.getAttribute("data-attr"));
-    expect(ids).toEqual(["firepower", "entrying", "trading", "opening", "closing", "sniping", "utility"]);
-    expect(host.querySelector(".apanel__grid")).toBeNull();
-    // one home per number: no separate Firepower card besides the block
-    expect(Array.from(host.querySelectorAll(".card__title")).map(text)).not.toContain("Firepower");
+    const block = host.querySelector(".apanel")!;
+    const ids = Array.from(block.querySelectorAll(".apanel__grid > .apa")).map((el) => el.getAttribute("data-attr"));
+    expect(ids).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
+    expect(block.querySelector('[role="radiogroup"], .seg')).toBeNull();
+    const fpCard = attr("firepower").closest(".card")!;
+    expect(fpCard).not.toBe(block);
+    expect(text(fpCard.querySelector(".card__title"))).toBe("Firepower");
   });
 
   it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
-    // fails if the block labels Firepower's pro percentiles as bot ranks (or the reverse), drops Sniping's
-    // own population, or shows a rank where the engine gave a reason
-    const block = await renderProfile();
+    // fails if Firepower's pro percentiles read as bot ranks (or the reverse), Sniping loses its own
+    // population, or a rank shows where the engine gave a reason
+    const { block, firepower } = await renderProfile();
     const phrases = (id: string) => Array.from(attr(id).querySelectorAll(".pctl")).map((el) => text(el.querySelector(".pctl__phrase")));
-    expect(text(attr("firepower").querySelector(".apa__note"))).toBe(`Compared to ${block.proPool} pro ${block.style.role === "awper" ? "AWPers" : "riflers"}`);
     expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
     const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
-    const checks: [string, RegExp][] = [["firepower", / of pro (riflers|AWPers)$/], ["sniping", / against all bots$/], ["entrying", new RegExp(` against ${own}$`)]];
-    for (const [id, pop] of checks) {
-      const score = id === "firepower" ? block.firepower! : block.style.scores.find((a) => a.id === id)!;
+    const fp = firepower.scores.find((a) => a.id === "firepower")!;
+    const checks: [string, RegExp, typeof fp][] = [
+      ["firepower", / of pro (riflers|AWPers)$/, fp],
+      ["sniping", / against all bots$/, block.style.scores.find((a) => a.id === "sniping")!],
+      ["entrying", new RegExp(` against ${own}$`), block.style.scores.find((a) => a.id === "entrying")!],
+    ];
+    for (const [id, pop, score] of checks) {
       const rows = phrases(id);
       expect(rows.length, id).toBe(score.metrics.length);
       score.metrics.forEach((p, i) => {
@@ -214,6 +222,17 @@ describe("Profile attributes block", () => {
         else if (p.pct !== null) expect(rows[i], `${id} ${p.id}`).toMatch(pop);
       });
     }
+  });
+
+  it("shows a provisional score by its hatched bar and tooltip, never by a chip or label", async () => {
+    // fails if "Provisional" comes back as words on the page, or a provisional score loses its mark
+    const { block } = await renderProfile();
+    expect(block.style.careers.provisional).toBe(true);
+    expect(host.textContent).not.toMatch(/provisional/i);
+    const score = attr("entrying").querySelector(".apa__score")!;
+    expect(attr("entrying").hasAttribute("data-prov")).toBe(true);
+    expect(score.getAttribute("data-tip")).toBe("Few bot careers yet, so this may shift.");
+    expect(score.getAttribute("tabindex")).toBe("0");
   });
 
   it("opens an attribute from its chevron, instantly from the keyboard", async () => {

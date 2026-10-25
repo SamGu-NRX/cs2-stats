@@ -11,7 +11,7 @@ export type PercentileKind = "performance" | "style";
  *  Every surface that shows such a metric shows the mark. */
 export function ApproxMark() {
   return (
-    <span className="approx" data-tip="Approximate: our reading of an unpublished definition" tabIndex={0}>
+    <span className="approx" data-tip="Approximate: HLTV hasn't published this formula." tabIndex={0}>
       <span aria-hidden>≈</span><span className="sr-only">, approximate</span>
     </span>
   );
