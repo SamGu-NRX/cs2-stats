@@ -243,6 +243,33 @@ def test_disconnected_player_is_noted_not_failed():
     assert any(c["check"] == "present_on_scoreboard" and c["steamid"] == D for c in checks)
 
 
+def test_a_player_who_left_is_checked_against_his_counters_at_the_disconnect():
+    # A Valve abandoner has no final-scoreboard row; his counters where he disconnected are the reference,
+    # so a wrong count for him fails the map instead of passing as a note.
+    kills, dmg, sb = _base()
+    board = sb[sb.steamid != D]
+    left = sb[sb.steamid == D].assign(tick=4000)
+    checks = ex.validate_scoreboard(kills, dmg, board, left)
+    assert _fatal_failures(checks) == []
+    assert {c["check"] for c in checks if c.get("steamid") == D} == {"kills", "deaths", "assists", "damage",
+                                                                     "headshot_kills"}
+    wrong = left.assign(deaths_total=2)
+    assert [(c["check"], c["steamid"]) for c in _fatal_failures(ex.validate_scoreboard(kills, dmg, board, wrong))] \
+        == [("deaths", D)]
+
+
+def test_every_player_in_any_table_is_checked_not_only_killers_and_victims():
+    # Review of PR 19: an abandoner who only assisted, or only appears in other tables, got no check at all.
+    kills, dmg, sb = _base()
+    board = sb[sb.steamid != B]
+    left = sb[sb.steamid == B].assign(tick=4000, assists_total=0)  # B assisted once
+    bad = _fatal_failures(ex.validate_scoreboard(kills, dmg, board, left))
+    assert [(c["check"], c["steamid"]) for c in bad] == [("assists", B)]
+    E = 55  # in player_rounds or positions only, never on the scoreboard, no disconnect read
+    checks = ex.validate_scoreboard(kills, dmg, sb, None, {E})
+    assert [c["check"] for c in checks if c.get("steamid") == E] == ["present_on_scoreboard"]
+
+
 def _rounds(n, winners):
     return pd.DataFrame(dict(round=range(1, n + 1), start_tick=[i * 100 for i in range(n)],
                              freeze_end_tick=[i * 100 + 10 for i in range(n)],
