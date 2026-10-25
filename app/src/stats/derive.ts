@@ -6,7 +6,7 @@ import { deriveAim } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
-import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
+import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
@@ -41,6 +41,30 @@ function totalsOnlyOf(v: unknown): number[] {
 }
 
 /**
+ * match.extra "totals_rounds": [{ round, winner, players: [[steamid, kills, deaths, assists, damage,
+ * headshot kills], ...] }]; absent means none. A row naming an unknown player or holding a
+ * non-number is an error.
+ */
+function totalsRoundsOf(v: unknown, pi: Map<string, number>): TotalsRound[] {
+  if (v === undefined) return [];
+  const bad = () => new Error(`derive: match.extra totals_rounds ${JSON.stringify(v).slice(0, 200)} is not a list of round totals`);
+  if (!Array.isArray(v)) throw bad();
+  return v.map((r: { round?: unknown; winner?: unknown; players?: unknown }) => {
+    if (!Number.isInteger(r.round) || !(r.winner === "CT" || r.winner === "T" || r.winner === null) || !Array.isArray(r.players)) throw bad();
+    return {
+      number: r.round as number, winner: r.winner,
+      players: (r.players as unknown[][]).map((row) => {
+        const p = pi.get(row[0] as string);
+        const n = row.slice(1);
+        if (p === undefined || n.length !== 5 || !n.every((x) => typeof x === "number")) throw bad();
+        const [kills, deaths, assists, dmg, hsKills] = n as number[];
+        return { pi: p, kills, deaths, assists, dmg, hsKills };
+      }),
+    };
+  });
+}
+
+/**
  * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
  * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
@@ -59,6 +83,8 @@ function matchMeta(t: MatchTables) {
     throws: extra.throws === "rebuilt" ? ("rebuilt" as const) : null,
     onScreen: onScreenOf(extra.on_screen),
     totalsOnly: totalsOnlyOf(extra.totals_only_rounds),
+    /** parsed in derive, which knows the players' indices (totalsRoundsOf) */
+    totalsRaw: extra.totals_rounds,
     status: typeof extra.status === "string" ? extra.status : null,
   };
 }
@@ -319,7 +345,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -349,7 +375,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
-    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c),
+    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c), totalsRounds: totalsRoundsOf(totalsRaw, c.pi),
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
 }
