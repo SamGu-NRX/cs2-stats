@@ -13,7 +13,7 @@ import { MAX_SPEED, RECOIL } from "./aim-ref";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
-import { PEEK_MIN_SPEED } from "./movement";
+import { PEEK_MIN_SPEED, tracks } from "./movement";
 import { weaponClass } from "./weapons";
 
 // ---- thresholds. "Ours" means no source and no fit. Distributions on the pro maps: pnpm family-check.
@@ -140,7 +140,17 @@ export interface SightFact {
   /** seconds from the onset to a kill between the two of you within DUEL_WINDOW_S, and whether you made it; null without one */
   duelS: number | null;
   duelWon: boolean | null;
+  /** the duel's context at the onset, in XDUEL_FEATURES order; null without a duel or with a feature unknown */
+  xf: number[] | null;
 }
+
+/**
+ * The expected-duel model's inputs (the research's nine, xduel.ts), at the onset: placement (deg),
+ * horizontal distance, your speed and his, your health and his (each from the latest 4 Hz position
+ * sample no older than HEALTH_MAX_AGE_S), your side's living players minus his, seconds since freeze
+ * end, and the pitch part of the aim error (deg, absolute).
+ */
+export const XDUEL_FEATURES = ["placement", "distance", "speed", "enemySpeed", "health", "enemyHealth", "aliveDiff", "roundTime", "verticalAbs"] as const;
 
 /** One player's shots with one gun in one round. */
 export interface ShotFact {
@@ -389,6 +399,8 @@ interface View {
   shotAt: Map<number, number>;
   /** engagement row of each engagement tick row */
   eng: Int32Array;
+  /** positions rows per round and player (movement.ts tracks) */
+  track: Map<number, number[]>;
 }
 
 const key = (tick: number, pi: number) => tick * 256 + pi;
@@ -433,7 +445,7 @@ function viewIndex(c: Ctx): View | null {
   const shotAt = new Map<number, number>();
   const S = c.t.shots;
   if (S) for (let i = 0; i < S.n; i++) { const p = c.idOf(S.steamid[i]); if (p !== null) shotAt.set(key(S.tick[i], p), i); }
-  return { visible: c.t.match.visibility_status[0] === "ok", rows, atTick, vel, shotAt, eng };
+  return { visible: c.t.match.visibility_status[0] === "ok", rows, atTick, vel, shotAt, eng, track: tracks(c) };
 }
 
 /** The victim is on screen and not behind a smoke (smoke_blocked is an approximation, SCHEMA-v1.md). */
@@ -570,13 +582,35 @@ function sighting(c: Ctx, view: View, e: number): Sighting | null {
   }
   const duel = c.kills[ri].find((k) => k.enemy && k.tick >= t0 && k.tick <= t0 + DUEL_WINDOW_S * rate
     && ((k.killer === pi && k.victim === victim) || (k.killer === victim && k.victim === pi)));
+  let xf: number[] | null = null;
+  const fe = c.rounds[ri].freezeEndTick;
+  if (duel && fe !== null) {
+    const health = (p: number) => {
+      const P = c.t.positions!;
+      let h: number | null = null;
+      for (const i of view.track.get(ri * 1024 + p) ?? []) {
+        if (P.tick[i] > t0) break;
+        h = t0 - P.tick[i] <= HEALTH_MAX_AGE_S * rate ? P.health[i] : null;
+      }
+      return h;
+    };
+    const vx = T.v_vel_x[r[o]], vy = T.v_vel_y[r[o]];
+    const mySide = c.pr[ri][pi]!.side;
+    let alive = 0;
+    for (const p of c.pr[ri]) {
+      if (!p || c.kills[ri].some((k) => k.victim === p.pi && k.tick < t0)) continue;
+      alive += p.side === mySide ? 1 : -1;
+    }
+    const xs = [place, dist, speed(o), vx === null || vy === null ? null : Math.hypot(vx, vy), health(pi), health(victim!), alive, (t0 - fe) / rate, Math.abs(e0[1])];
+    if (xs.every((x) => x !== null)) xf = (xs as number[]).map(r3);
+  }
 
   return {
     f: {
       k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
       over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
       dist: r1(dist), travel: travel === null ? null : r1(travel), shotSpeed: shotSpeed === null ? null : r1(shotSpeed), shotErr, stopBuf, first: null,
-      duelS: duel ? (duel.tick - t0) / rate : null, duelWon: duel ? duel.killer === pi : null,
+      duelS: duel ? (duel.tick - t0) / rate : null, duelWon: duel ? duel.killer === pi : null, xf,
     },
     victim: victim!, onset: t0, shot: fk >= 0 ? tick(fk) : null,
   };
