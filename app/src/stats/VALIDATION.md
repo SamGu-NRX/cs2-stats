@@ -55,7 +55,9 @@ $1,000 and $3,250 per player, are those bands for five players.
 ## Rating 3.0 and swing: `pnpm rating-check`
 
 Rating 3.0 is `params.json`'s six-term linear model as merged in #17 (swing and duel refitted on 304
-joins, flash share 0.154). Against HLTV on 371 joined maps (3,710 player-maps) on 2026-10-25, with each
+joins, flash share 0.154), with all six inputs averaged over the rounds swing valued (a player-map with
+swing on under half its rounds has no rating, which leaves 10 out). Against HLTV on 371 joined maps
+(3,700 player-maps) on 2026-10-25, with each
 win-probability source: `pnpm rating-check` uses the HLTV pack when installed,
 `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB. Raw rows compare the engine's counts with
 HLTV's traditional columns, so an eco input's error can be told from a counting error.
@@ -63,17 +65,21 @@ HLTV's traditional columns, so an eco input's error can be told from a counting 
 | Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV |
 |---|---|---|---|
 | KPR, raw | 0.0000 / 1.000 | same | 0.655 / 0.655 |
-| eKPR | 0.028 / 0.986 | same | 0.643 / 0.654 |
+| eKPR | 0.028 / 0.986 | 0.028 / 0.986 | 0.643 / 0.654 |
 | DPR, raw | 0.0003 / 1.000 | same | 0.660 / 0.659 |
-| eDPR | 0.037 / 0.974 | same | 0.643 / 0.676 |
+| eDPR | 0.036 / 0.973 | 0.037 / 0.974 | 0.643 / 0.676 |
 | ADR, raw | 0.078 / 1.000 | same | 71.81 / 71.82 |
-| eADR | 1.89 / 0.991 | same | 70.91 / 71.43 |
+| eADR | 1.88 / 0.991 | 1.89 / 0.991 | 70.92 / 71.42 |
 | KAST, raw (percentage points) | 0.33 / 0.994 | same | 71.11 / 71.13 |
-| eKAST | 4.48 / 0.885 | same | 70.34 / 68.88 |
-| Swing (points per round) | 1.01 / 0.953 | 1.51 / 0.904 | 0.00 / -0.02 |
-| Rating 3.0 | 0.069 / 0.972 | 0.084 / 0.960 | 1.089 / 1.078 |
-| Rating 3.0, CT rounds | 0.121 / 0.966 | 0.135 / 0.952 | 1.172 / 1.101 |
-| Rating 3.0, T rounds | 0.107 / 0.970 | 0.126 / 0.957 | 1.008 / 1.067 |
+| eKAST | 4.48 / 0.885 | 4.48 / 0.885 | 70.34 / 68.88 |
+| Swing (points per round) | 1.00 / 0.955 | 1.51 / 0.904 | 0.00 / -0.02 |
+| Rating 3.0 | 0.069 / 0.973 | 0.084 / 0.960 | 1.089 / 1.078 |
+| Rating 3.0, CT rounds | 0.120 / 0.966 | 0.135 / 0.952 | 1.172 / 1.101 |
+| Rating 3.0, T rounds | 0.107 / 0.970 | 0.126 / 0.957 | 1.007 / 1.067 |
+
+The HLTV-lookup column is the valued-round run; the CS2RB column is from the run before it, on all
+rounds. With the HLTV lookup the valued-round change moved swing MAE from 1.006 to 0.998 and the
+rating MAE from 0.0694 to 0.0691.
 
 The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting.
 eKAST has the largest error and the weakest correlation (its transform `params.json` marks
