@@ -156,7 +156,7 @@ map; model B adds the team's grenades thrown, model C also both teams' seconds a
 
 | Metric | Buy and side | + thrown | + alive |
 |---|---|---|---|
-| flashKillsPR | 1.57 [1.47, 1.68] | 1.56 [1.46, 1.66] | 1.19 [1.10, 1.29] |
+| flashKillsPerFlash | 1.57 [1.47, 1.68] | 1.56 [1.46, 1.66] | 1.19 [1.10, 1.29] |
 | assistsPerFlash | 1.57 [1.50, 1.65] | 1.55 [1.48, 1.63] | 1.21 [1.13, 1.30] |
 | dmgPerHe | 1.13 [1.08, 1.18] | 1.09 [1.04, 1.14] | 1.09 [1.01, 1.17] |
 | smokeSights | 1.15 [1.10, 1.20] | 1.06 [1.00, 1.11] | 1.12 [1.05, 1.20] |
@@ -172,7 +172,7 @@ map; model B adds the team's grenades thrown, model C also both teams' seconds a
 | teamFlashPR (pruned) | 1.11 [1.07, 1.16] | 1.04 [1.00, 1.10] | 1.02 [0.95, 1.09] |
 
 Team-round correlations at |r| 0.6 or more: enemiesPerFlash and blindPerFlash 0.97, dmgPerHe and
-utilDmgPR 0.88, flashKillsPR and assistsPerFlash 0.66, smokesPR and molotovsPR 0.61. Pruned:
+utilDmgPR 0.88, flashKillsPerFlash and assistsPerFlash 0.66, smokesPR and molotovsPR 0.61. Pruned:
 utilDmgPR (duplicates dmgPerHe), blindPerFlash (duplicates enemiesPerFlash), enemiesPerFlash and
 teamFlashPR (no lasting link to winning). The four thrown counts stay as HLTV's identity metrics;
 utilUnused stays with the caveat that it mostly measures dying early. The smoke candidates that

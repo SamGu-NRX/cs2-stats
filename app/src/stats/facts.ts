@@ -154,11 +154,11 @@ export const MEASURES = [
   "awpDuels", "awpDuelWins",
   // opening and trading context (duels.ts): positions needed for the *Pos measures
   "duelRounds", "duelRankSum", "duelTimeSum", "gunShots",
-  "posRounds", "deathsPos", "tradeableDeaths", "tradeableTraded", "tradeOpps", "tradeOppsTaken",
+  "posRounds", "deathsPos", "tradeableDeaths", "tradedAttempts", "tradeableTraded", "tradeOpps", "tradeAttempts", "tradeOppsTaken",
   // team spacing, Packer's features (positioning.ts)
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
   // utility (utility.ts)
-  "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused",
+  "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",

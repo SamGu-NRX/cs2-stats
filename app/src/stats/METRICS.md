@@ -97,15 +97,15 @@ blind, and a flash-to-kill is a flashed enemy dying to the team while still blin
 
 | id | Status | Definition |
 |---|---|---|
-| flashKillsPR | exact | Flash-to-kills per round |
-| utilUnused | approx | Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen. |
+| flashKillsPerFlash | exact | Flash-to-kills per flashbang thrown (Leetify's rate) |
+| utilUnused | approx | Value of grenades you held at freeze end and had not thrown when you died, per death (Leetify's rate). Grenades picked up later are not seen. Unmeasured, not $0, for sources without inventories. |
 | smokeSights | approx | Enemy sightlines blocked per smoke thrown (`utilq.ts`). A sightline is the onset of a directed engagement (`first_visible_tick`); one that opened through a smoke (`smoke_blocked`) counts for the smoke(s) whose sphere crosses it, split equally, and only for a smoke thrown by the victim's team. Smoke model: the extractor's, a sphere of radius 144 centred 60 units above the detonation (awpy 3.1.1 defaults). Needs v1 maps with visibility. |
 
 **Pruned from performance**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`;
 numbers in VALIDATION.md): blindPerFlash and utilDmgPR duplicated enemiesPerFlash and dmgPerHe;
 enemiesPerFlash and teamFlashPR showed no lasting link to winning; two smoke variants duplicated
 smokeSights; no molotov candidate earned a place. Kept with caveats: grenadeDmgTaken (HLTV parity),
-utilUnused (mostly measures dying early).
+utilUnused (now per death; per round it mostly measured dying early).
 
 ### Descriptive utility (identity)
 

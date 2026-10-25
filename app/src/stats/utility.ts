@@ -88,6 +88,7 @@ export function utility(c: Ctx): void {
         if (j >= 0) left.splice(j, 1);
       }
       p.m.utilUnused += left.reduce((s, x) => s + PRICE[x], 0);
+      p.m.utilDeaths++;
     }
   }
 }

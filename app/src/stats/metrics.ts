@@ -148,6 +148,14 @@ const M: Metric[] = [
   // ---- HLTV's "how good" metrics (performance)
   { id: "tradeKillSuccess", label: "Trade kill success", hltv: "Trade Kill Success %", kind: "performance", group: "trading", unit: "pct", status: "approx",
     def: `Trade opportunities where you killed the killer within ${WINDOW}.`, value: (s) => pct(s.m.tradeOppsTaken, s.m.tradeOpps) },
+  { id: "tradeAttemptPct", label: "Trade attempts", kind: "performance", group: "trading", unit: "pct", status: "approx",
+    def: `Trade opportunities (a teammate died within 1,000 units of you) where you hit the killer within ${WINDOW}. With Trade kill success and opportunities, Leetify's opportunity, attempt, success triple.`,
+    value: (s) => pct(s.m.tradeAttempts, s.m.tradeOpps) },
+  { id: "tradeAttemptSuccess", label: "Trade attempt success", kind: "performance", group: "trading", unit: "pct", status: "approx",
+    def: `Trade attempts (you hit the killer within ${WINDOW}) that ended with you killing him.`, value: (s) => pct(s.m.tradeOppsTaken, s.m.tradeAttempts) },
+  { id: "tradedAttemptPct", label: "Trade attempts for your deaths", kind: "performance", group: "entrying", unit: "pct", status: "approx",
+    def: `Tradeable deaths (a teammate within 1,000 units) where a teammate hit your killer within ${WINDOW}; Traded death success is how many of them were traded.`,
+    value: (s) => pct(s.m.tradedAttempts, s.m.tradeableDeaths) },
   { id: "tradedDeathSuccess", label: "Traded death success", hltv: "Traded Death Success %", kind: "performance", group: "entrying", unit: "pct", status: "approx",
     def: "Tradeable deaths (a living teammate within 1,000 units) that a teammate traded.", value: (s) => pct(s.m.tradeableTraded, s.m.tradeableDeaths) },
   { id: "openingSwing", label: "Opening swing", hltv: "Opening Swing", kind: "performance", group: "opening", unit: "pct", status: "approx",
@@ -171,10 +179,10 @@ const M: Metric[] = [
     def: "1v1 clutches won.", value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
 
   // ---- utility quality (performance; Leetify's flash definitions)
-  { id: "flashKillsPR", label: "Flashes that led to a kill per round", kind: "performance", group: "utility", unit: "perRound", status: "exact",
-    def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per round.", value: (s) => per(s.m.flashKills, s.m.rounds) },
+  { id: "flashKillsPerFlash", label: "Flash-to-kills per flash", kind: "performance", group: "utility", unit: "perRound", status: "exact",
+    def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per flashbang thrown, as Leetify counts it so players who flash more or less compare.", value: (s) => per(s.m.flashKills, s.m.flashes) },
   { id: "utilUnused", label: "Unused utility on death", kind: "performance", group: "utility", unit: "money", status: "approx", lowerIsBetter: true,
-    def: "Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen.", needs: ["loadout"], value: (s) => per(s.m.utilUnused, s.m.rounds) },
+    def: "Value of grenades you held at freeze end and had not thrown when you died, per death (Leetify's rate; per round it mostly measured dying early). Grenades picked up later are not seen.", needs: ["loadout"], value: (s) => per(s.m.utilUnused, s.m.utilDeaths) },
 
   // ---- utility description (identity). Not scored as performance: on pro team-rounds these duplicate
   // other metrics or show no lasting link to winning rounds (METRICS.md, "Descriptive utility").

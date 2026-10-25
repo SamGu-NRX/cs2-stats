@@ -46,17 +46,23 @@ export function duels(c: Ctx): void {
       const victim = rows[k.victim];
       if (!victim) continue;
       victim.m.deathsPos++;
-      let tradeable = false;
+      let tradeable = false, attempted = false;
       for (const mate of rows) {
         if (!mate || mate.pi === k.victim || mate.side !== victim.side) continue;
         const at = c.posAt(ri, mate.pi, k.tick);
         if (!at || Math.hypot(at[0] - k.vpos[0], at[1] - k.vpos[1]) > TRADE_DISTANCE) continue;
         tradeable = true;
         mate.m.tradeOpps++;
+        // an attempt: the teammate hit the killer within the trade window (Leetify's opportunity, attempt, success)
+        const killer = k.killer === null ? null : c.players[k.killer].id;
+        const hit = killer !== null && c.byRound("damages")[ri].some((i) => enemyHit(c.t, i) && d.attacker_steamid[i] === c.players[mate.pi].id
+          && d.victim_steamid[i] === killer && d.tick[i] >= k.tick && d.tick[i] - k.tick <= window);
+        if (hit) { mate.m.tradeAttempts++; attempted = true; }
         if (c.kills[ri].some((x) => x.enemy && x.killer === mate.pi && x.victim === k.killer && x.tick >= k.tick && x.tick - k.tick <= window)) mate.m.tradeOppsTaken++;
       }
       if (!tradeable) continue;
       victim.m.tradeableDeaths++;
+      if (attempted) victim.m.tradedAttempts++;
       if (k.traded) victim.m.tradeableTraded++;
     }
   }

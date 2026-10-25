@@ -52,7 +52,7 @@ for (const r of all) r.oppAlive = (byKey.get(`${r.map}:${r.ri}:${1 - (r.team as 
 
 const COUNTS = ["smokes", "flashes", "hes", "molotovs"];
 const METRICS: [string, string][] = [
-  ["flashKillsPR", "flashKills"], ["assistsPerFlash", "flashAssists"], ["dmgPerHe", "heDmg"], ["grenadeDmgTaken", "utilDmgTaken"],
+  ["flashKillsPerFlash", "flashKills"], ["assistsPerFlash", "flashAssists"], ["dmgPerHe", "heDmg"], ["grenadeDmgTaken", "utilDmgTaken"],
   ["utilUnused", "utilUnused"], ["smokesPR", "smokes"], ["flashesPR", "flashes"], ["hesPR", "hes"], ["molotovsPR", "molotovs"],
   ["smokeSights", "sights"], ["utilDmgPR (pruned)", "utilDmg"], ["enemiesPerFlash (pruned)", "enemiesFlashed"],
   ["blindPerFlash (pruned)", "enemyBlindSecs"], ["teamFlashPR (pruned)", "teamFlashed"],
