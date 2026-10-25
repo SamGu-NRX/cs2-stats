@@ -6,9 +6,9 @@ import type { FileEntry } from "../host/host";
 import type { AimAgg } from "../stats/aim";
 import type { AttributeScore, CompareOptions, Percentile, SideKey } from "../stats/compare";
 import type { EconomyView } from "../stats/economy";
-import type { GrenadeFact, MatchFacts, Measures } from "../stats/facts";
+import type { GrenadeFact, MatchFacts, Measure, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
-import type { RoleBlend } from "../stats/identity";
+import type { RoleBlend, RoleSignal, StylePoint } from "../stats/identity";
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
@@ -54,6 +54,8 @@ export interface MetricMeta {
   status: Status;
   def: string;
   lowerIsBetter?: boolean;
+  /** a share's numerator and denominator measures (metrics.ts Metric.of) */
+  of?: [Measure, Measure];
 }
 
 /** Engine descriptions the UI shows, sent once at start. */
@@ -66,6 +68,10 @@ export interface Meta {
   winProb: { kind: "hltv" | "cs2rb"; label: string };
   /** the six style attributes "plays like" compares (identity.ts STYLE) */
   style: string[];
+  /** the role card's signals and the style compass's threshold lines (identity.ts ROLE_SIGNALS) */
+  signals: readonly RoleSignal[];
+  /** AWP kills per round above which a player is an AWPer (compare.ts AWPER_MIN_AWP_KPR) */
+  awperKpr: number;
   deriveVersion: number;
 }
 
@@ -151,6 +157,13 @@ export interface PlaysLikeResult {
 /** A pro in the pack, as the pack file holds it (scores in ATTRIBUTE_ORDER). */
 export interface PackPro { slug: string; both: (number | null)[]; ct: (number | null)[]; t: (number | null)[] }
 
+/**
+ * The style compass: you and the bots the style ranks against in the "all" pool on both sides (bot
+ * careers with CAREER_MIN_ROUNDS or more rounds, else single bot matches; `careers.unit` says which),
+ * each at opening attempts and trade/assist share.
+ */
+export interface CompassResult { you: StylePoint | null; bots: StylePoint[]; careers: Careers }
+
 export interface PositionsResult {
   /** world [x, y] of the players' enemy kills (where the killer stood) and of their deaths */
   kills: [number, number][];
@@ -185,6 +198,8 @@ export interface Api {
   roles(q: Query): Record<"T" | "CT", RoleBlend>;
   /** pros ranked by style similarity over T and CT (identity.ts mostSimilar), the user's side scored against the bot careers */
   playsLike(q: Query, pros: PackPro[]): PlaysLikeResult;
+  /** you and the bots of your style population on the style compass, over both sides of the query's matches */
+  compass(q: Query): CompassResult;
   /** least-squares trend of each series over match order (trends.ts trend) */
   trends(series: (number | null)[][]): ({ slope: number; r: number; n: number } | null)[];
   /** the query split by the player's own and the opponents' buy class (pistol, eco, half, full): aggression by economy and round type, pistol and eco splits */

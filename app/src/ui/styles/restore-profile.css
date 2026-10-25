@@ -1,1 +1,16 @@
 /* Styles for elements restored from main (REMOVALS.md, E20), profile slice. */
+
+/* Role card: main's signals under the engine's blend */
+.rolecard__signals { display: grid; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.rolecard__signals .signals2 { margin-bottom: 0; }
+
+/* How good: the counts behind a share ("12 of 30") */
+.howgood__of { color: var(--ink3); }
+
+/* Style compass: each bot dot is a focus stop; the ring replaces the box outline SVG groups get */
+.compass__dot { cursor: default; outline: none; }
+.compass__dot:focus-visible .compass__mark { opacity: 1; stroke: var(--cream); stroke-width: 2; }
+
+/* Settings: the source note sits under the source's name; the rating's status chip beside the name */
+.settings__note { flex-basis: 100%; }
+.settings__chip { height: 18px; font-size: 10px; }

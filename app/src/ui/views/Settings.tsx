@@ -7,13 +7,16 @@ import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
-import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
+import { rating3Note, ratingHeadline, winProbName, winProbNote } from "../data/engine";
+import { ratingInfo } from "../data/meta";
 import { useData } from "../data/provider";
 import { sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
 import { fmtMatchDay, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { SHORTCUTS } from "../shell/Palette";
+
+const capitalised = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
 
 export default function Settings() {
   const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync } = useData();
@@ -86,9 +89,13 @@ export default function Settings() {
           <Card title="Models and versions">
             <dl className="facts facts--wide">
               <dt>Round win probability</dt>
-              <dd className="meta">{winProbText()}</dd>
+              {/* Main's "Placeholder" chip marked a stub source; the engine has none (Meta.winProb is HLTV's lookup or CS2RB), so no chip. */}
+              <dd><span>{winProbName()}</span><span className="meta settings__note">{winProbNote()}</span></dd>
               <dt>Rating</dt>
-              <dd><span data-tip={rating3Note()}>{ratingHeadline()}</span></dd>
+              {/* main's "Calibrating" chip, now params.json's own word for the model's state */}
+              <dd><span>{ratingHeadline()}</span><span className="chip chip--outline settings__chip" tabIndex={0} data-tip={rating3Note()}>{capitalised(ratingInfo().status)}</span></dd>
+              <dt>Rating 3.0 weights</dt>
+              <dd className="meta">{capitalised(ratingInfo().weights)}</dd>
               <dt>Pro baselines</dt>
               <dd className="meta">{baselines ? `${baselines.source}. Built ${baselines.built}.` : baselinesError ?? "Loading"}</dd>
               <dt>Visibility timings</dt>

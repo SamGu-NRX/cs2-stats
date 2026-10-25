@@ -188,6 +188,8 @@ export const MEASURES = [
   "posRounds", "deathsPos", "tradeableDeaths", "tradedAttempts", "tradeableTraded", "tradeOpps", "tradeAttempts", "tradeOppsTaken",
   // team spacing, Packer's features (positioning.ts)
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
+  // the summed distance to the nearest teammate over the same samples (positioning.ts), the Lurker signal's input
+  "nearestDistSum",
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
