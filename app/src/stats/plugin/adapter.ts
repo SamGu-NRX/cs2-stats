@@ -5,11 +5,13 @@
 // recording is proven (architecture.md, migration step 1: tv_autorecord on the local server, run
 // through the extractor) and the user's matches arrive as demos. Nothing else reads plugin files.
 //
-// What the plugin files cannot provide stays null: view angles, inventories, health before a hit,
-// smoke and fire lifetimes, engagements and radar spotting. Rounds the file holds only as totals
-// (converted logs before firstFullRound, and rounds the plugin marked partial) are left out, so
-// every derived rate covers the rounds with a kill-by-kill log. The plugin's per-shot aim error,
-// target and on-screen state go to the shots columns only plugin rows fill (tables.ts SOURCE_COLUMNS).
+// What the plugin files cannot provide stays null: inventories, health before a hit, smoke and fire
+// lifetimes, engagements and radar spotting, and view angles in files before plugin 1.2.0 (1.2.0
+// records each shot's pitch and yaw, which go to shots.pitch and shots.yaw). Rounds the file holds
+// only as totals (converted logs before firstFullRound, and rounds the plugin marked partial) are left
+// out, so every derived rate covers the rounds with a kill-by-kill log. The plugin's per-shot aim
+// error, target and on-screen state go to the shots columns only plugin rows fill (tables.ts
+// SOURCE_COLUMNS).
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
 import type { GrenadeType, MatchFile } from "./schema";
 
