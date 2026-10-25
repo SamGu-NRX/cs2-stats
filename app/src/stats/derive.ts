@@ -6,7 +6,9 @@ import { countMatch, type Counters, type RoundFacts } from "./counters";
 import { BUY_TYPES, economyView, teamEquip, type BuyType, type EconomyView } from "./economy";
 import { positionsAggregate, type PosAgg } from "./positions";
 import { hsPercent, rating2 } from "./rating";
+import { hltvCounts } from "./hltv";
 import { r3Inputs, rating3, type Rating3 } from "./rating3";
+import { deriveRole, roleCounts, type Role } from "./role";
 import { computeTrades, isEnemyKill, isSave } from "./rules";
 import type { MatchFile, RoundHow, Side, Vec3 } from "./schema";
 import { roundDetailsFromCtx, type RoundDetail, type TeamId } from "./rounds";
@@ -31,6 +33,8 @@ export interface PlayerRow {
   rating: number;
   /** Rating 3.0 (approx.), over rounds with the kill log; see rating3.ts */
   rating3: Rating3;
+  /** AWPer or Rifler with a flavour, from this match alone (role.ts) */
+  role: Role;
   adr: number;
   kast: number;
   hs: number;
@@ -173,7 +177,7 @@ function rowFor(ctx: MatchCtx, pi: number, c: Counters): PlayerRow {
   const m = ctx.m;
   return {
     pi, key: m.players.key[pi], name: m.players.name[pi], isBot: m.players.isBot[pi], isHuman: pi === m.human,
-    team: ctx.onHumanTeam[pi] ? "us" : "them", c, rating: rating2(c), rating3: rating3(c.r3), adr: c.rounds ? c.dmg / c.rounds : 0,
+    team: ctx.onHumanTeam[pi] ? "us" : "them", c, rating: rating2(c), rating3: rating3(c.r3), role: deriveRole(c), adr: c.rounds ? c.dmg / c.rounds : 0,
     kast: c.rounds ? (100 * c.kastRounds) / c.rounds : 0, hs: hsPercent(c.hsKills, c.kills),
     swingPerRound: c.swingRounds ? c.swing / c.swingRounds : null,
   };
@@ -186,6 +190,9 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
   const swing = swingResult.swings;
   const { counters, rounds: facts } = countMatch(ctx, trades, swingResult);
   r3Inputs(ctx, trades, swingResult).forEach((x, pi) => (counters[pi].r3 = x));
+  roleCounts(ctx).forEach((x, pi) => (counters[pi].role = x));
+  const roundDetails = roundDetailsFromCtx(ctx, trades, swingResult, model);
+  hltvCounts(ctx, roundDetails).forEach((x, pi) => (counters[pi].hl = x));
   const players = counters.map((c, pi) => rowFor(ctx, pi, c));
   const nRounds = m.rounds.winSide.length;
   const swingByKill = new Map(swing.map((s) => [s.k, s]));
@@ -267,7 +274,6 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
   }
 
   const aim = aimAggregate(m);
-  const roundDetails = roundDetailsFromCtx(ctx, trades, swingResult, model);
   return {
     id: m.id, file, map: m.map, startUtc: m.startUtc, endUtc: m.endUtc, status: m.status, env: m.env,
     firstFullRound: m.firstFullRound, nRounds, captured: ctx.rounds.length, statRounds: players[m.human].c.rounds, score: { us, them },
