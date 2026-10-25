@@ -224,7 +224,19 @@ function careersOf(q: Query): Promise<BotPopulation> {
   return p;
 }
 
-const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf });
+/** The query's players' rounds per map, over its matches and map filter. */
+async function mapRounds(q: Query): Promise<Record<string, number>> {
+  const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+  const out: Record<string, number> = {};
+  await stream(q.files, (f) => {
+    if (q.filter.maps && !q.filter.maps.includes(f.match.map)) return;
+    const n = f.pr.filter((r) => me.has(f.players[r.pi].id)).length;
+    if (n) out[f.match.map] = (out[f.match.map] ?? 0) + n;
+  });
+  return out;
+}
+
+const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds });
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -324,10 +336,8 @@ const api: Impl = {
   attributes: ranking.attributes,
   style: ranking.style,
   attributeBlock: ranking.attributeBlock,
-  async roles(q) {
-    const [t, ct] = await Promise.all([summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT"))]);
-    return { T: roleBlend(t, "T"), CT: roleBlend(ct, "CT") };
-  },
+  roles: ranking.roles,
+  rolesByMap: ranking.rolesByMap,
   playsLike: ranking.playsLike,
   async buySplits(q) {
     const split = (key: "ownBuy" | "oppBuy") => Promise.all(BUY_CLASSES.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, [key]: [b] } }))] as const))

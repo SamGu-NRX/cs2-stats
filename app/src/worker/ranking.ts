@@ -13,12 +13,12 @@ import {
   type Baselines, type CompareOptions, type Percentile, type PoolUnit, type SideKey,
 } from "../stats/compare";
 import type { MatchFacts } from "../stats/facts";
-import { mostSimilar, STYLE, styleScores, type PackPlayer } from "../stats/identity";
+import { mostSimilar, overallRole, roleBlend, STYLE, styleScores, type PackPlayer } from "../stats/identity";
 import { METRIC, type Kind } from "../stats/metrics";
 import { addMatch, emptySummary, type Filter, type Summary } from "../stats/rollup";
 import type { Side } from "../stats/tables";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, StyleResult } from "./protocol";
+import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, Roles, StyleResult } from "./protocol";
 
 /**
  * The population the user's style ranks against. Each pool (role) and side is ranked against bot
@@ -109,6 +109,8 @@ export interface Sources {
   summary(q: Query): Promise<Summary>;
   pros(): Promise<Baselines>;
   careers(q: Query): Promise<BotPopulation>;
+  /** the query's players' rounds per map, over the query's matches and map filter */
+  mapRounds(q: Query): Promise<Record<string, number>>;
 }
 
 /** The pool compare() reads for a summary (its role unless "all" is asked for), and that pool's size on the side. */
@@ -152,6 +154,17 @@ export function rankingCalls(src: Sources) {
       const pool = (x: Summary) => roleOf(x);
       const sides = [careersFor(c, pool(t), "T"), careersFor(c, pool(ct), "CT")];
       return { ranked, careers: sides.find((x) => x.unit === "matches") ?? sides[0] };
+    },
+    /** The role blend on each side and over all rounds (the query's side filter is replaced). */
+    async roles(q: Query): Promise<Roles> {
+      const [t, ct] = await Promise.all([src.summary(sideQuery(q, "T")), src.summary(sideQuery(q, "CT"))]);
+      const T = roleBlend(t, "T"), CT = roleBlend(ct, "CT");
+      return { T, CT, all: overallRole(T, CT) };
+    },
+    /** roles() on each map the players played in the query's matches, most rounds first. */
+    async rolesByMap(q: Query): Promise<({ map: string } & Roles)[]> {
+      const maps = Object.entries(await src.mapRounds(q)).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+      return Promise.all(maps.map(async ([map]) => ({ map, ...(await calls.roles({ files: q.files, filter: { ...q.filter, maps: [map] } })) })));
     },
   };
   return calls;

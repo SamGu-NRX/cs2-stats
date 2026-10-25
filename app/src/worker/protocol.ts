@@ -8,7 +8,7 @@ import type { AttributeScore, CompareOptions, Percentile, SideKey } from "../sta
 import type { EconomyView } from "../stats/economy";
 import type { GrenadeFact, MatchFacts, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
-import type { RoleBlend } from "../stats/identity";
+import type { OverallRole, RoleBlend } from "../stats/identity";
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
@@ -104,6 +104,9 @@ export interface RoundLine { m: Measures; v: Values; aim: Pick<AimAgg, "shots" |
 
 export interface RoundBundle { number: number; players: (RoundLine | null)[] }
 
+/** A player's role: the blend on each side, and over all rounds. */
+export interface Roles { T: RoleBlend; CT: RoleBlend; all: OverallRole }
+
 /** Performance percentiles against the pros (public/baselines.json); identity metrics are left out. */
 export interface CompareResult {
   p: Record<string, Percentile>;
@@ -194,8 +197,10 @@ export interface Api {
   style(q: Query, opt: CompareOptions): StyleResult;
   /** HLTV's attribute block in one call: Firepower against the pros and the six style attributes against the bots, each with its four metrics' values, percentiles and reasons, for one side and pool */
   attributeBlock(q: Query, opt: CompareOptions): AttributeBlock;
-  /** the role blend on T and on CT (the query's side filter is replaced) */
-  roles(q: Query): Record<"T" | "CT", RoleBlend>;
+  /** the role blend on T and on CT (the query's side filter is replaced), and over all rounds (identity.ts overallRole) */
+  roles(q: Query): Roles;
+  /** roles() per map in the query's matches, most rounds first */
+  rolesByMap(q: Query): ({ map: string } & Roles)[];
   /** pros ranked by style similarity over T and CT (identity.ts mostSimilar), the user's side scored against the bot careers */
   playsLike(q: Query, pros: PackPro[]): PlaysLikeResult;
   /** least-squares trend of each series over match order (trends.ts trend) */
