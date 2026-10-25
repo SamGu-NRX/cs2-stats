@@ -546,9 +546,9 @@ def _pr(rows):
 
 def test_hits_the_demo_lost_are_rebuilt_from_health_and_named_only_on_evidence():
     # A pro demo, round 2: ticks 9168-9184 carry no player_hurt or weapon_fire, yet a CT (V1) drops 48 -> 0
-    # at 9173 (player_death: T1, galilar) and T1 drops 100 -> 45 at 9182. A gun kill's cause would need a
-    # bullet_impact, which GOTV demos never carry, so the 9173 hit is flagged like the 9182 one. On another
-    # demo, a world suicide from 74 HP (S) is self damage: no player can be credited with it.
+    # at 9173 (player_death: T1, galilar) and T1 drops 100 -> 45 at 9182. The game names the 9173 killer and
+    # his gun, and no grenade reaches the victim, so T1 gets that hit; nothing names the 9182 one, which is
+    # flagged. On another demo, a world suicide from 74 HP (S) is self damage.
     T1, V1, C1, S1 = 76561190000000011, 76561190000000012, 76561190000000013, 76561190000000014
     side = {(2, T1): "T", (2, V1): "CT", (2, C1): "CT", (2, S1): "CT"}
     dmg = ex.pd.DataFrame(dict(tick=[8802, 9196], round=[2, 2], attacker_steamid=[T1, C1],
@@ -561,10 +561,10 @@ def test_hits_the_demo_lost_are_rebuilt_from_health_and_named_only_on_evidence()
     drops = ex.pd.DataFrame(dict(tick=[9173, 9182, 9500], steamid=[V1, T1, S1], health_before=[48, 100, 74],
                                  health_after=[0, 45, 0], round=[2, 2, 2]))
     out = ex.rebuild_lost_hits(_at_origin(drops), dmg, kills, side, _NO_INFERNOS, _NO_HE)
-    assert [None if pd.isna(a) else int(a) for a in out.attacker_steamid] == [None, None, S1]
+    assert [None if pd.isna(a) else int(a) for a in out.attacker_steamid] == [T1, None, S1]
     out["weapon"] = out.weapon.astype(object).where(out.weapon.notna(), None)
     assert out[["tick", "dmg_health_capped", "weapon", "is_team_damage", "is_self", "source",
-                "reconstructed_ambiguous"]].values.tolist() == [[9173, 48, None, False, False, "health", True],
+                "reconstructed_ambiguous"]].values.tolist() == [[9173, 48, "galilar", False, False, "health", False],
                                                                 [9182, 55, None, False, False, "health", True],
                                                                 [9500, 74, "world", True, True, "health", False]]
 
@@ -1129,9 +1129,21 @@ def test_an_he_kill_is_credited_only_to_a_detonation_of_his_in_reach_on_that_tic
     assert _rebuilt(kill, lethal, he=_he((LA, 9182, (ex.HE_REACH + 1, 0.0, 0.0)))) == (None, True)
 
 
-def test_a_gun_kill_names_no_attacker_without_an_impact():
-    # GOTV demos carry no bullet_impact (none in 13 checked), so nothing on the tick ties the gun to the hit.
-    assert _rebuilt(_death(9182, LV, LA, "ak47"), _lost(hp0=27, hp1=0)) == (None, True)
+def test_a_gun_or_knife_kill_names_its_killer_when_no_grenade_reaches_the_victim():
+    # player_death names the killer and his weapon for the drop to 0 on that tick: the game's own credit.
+    assert _rebuilt(_death(9182, LV, LA, "ak47"), _lost(hp0=27, hp1=0)) == (LA, False)
+    assert _rebuilt(_death(9182, LV, LA, "knife"), _lost(hp0=40, hp1=0)) == (LA, False)
+
+
+def test_a_gun_kill_inside_a_burning_inferno_or_in_he_reach_stays_ambiguous():
+    # The last HP may have gone to the fire or the blast rather than the bullet the death event names.
+    kill, lethal = _death(9182, LV, LA, "ak47"), _lost(hp0=5, hp1=0)
+    assert _rebuilt(kill, lethal, _infernos((LB, 9000, None, (100.0, 0.0, 0.0)))) == (None, True)
+    assert _rebuilt(kill, lethal, _infernos((LA, 9000, None, (100.0, 0.0, 0.0)))) == (None, True)
+    assert _rebuilt(kill, lethal, he=_he((LB, 9182, (200.0, 0.0, 0.0)))) == (None, True)
+    # A fire that has burnt out, or a blast on another tick, does not reach him.
+    assert _rebuilt(kill, lethal, _infernos((LB, 9000, 9100, (100.0, 0.0, 0.0)))) == (LA, False)
+    assert _rebuilt(kill, lethal, he=_he((LB, 9181, (200.0, 0.0, 0.0)))) == (LA, False)
 
 
 def test_republishing_the_same_tables_never_reuses_a_partly_pruned_folder(tmp_path):
