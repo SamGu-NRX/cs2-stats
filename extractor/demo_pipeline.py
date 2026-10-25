@@ -510,7 +510,7 @@ class Pipeline:
                 self.fail_archive(a, f"its demos ({expand:.1f} GB) are larger than the {MAX_OUR_GB:.0f} GB budget")
                 continue
             # Archives still extracting hold the rest of their listed size: their demos are not on disk yet.
-            our, held = self.our_bytes() / 1e9, self.reserved_bytes() / 1e9
+            our, held = (b / 1e9 for b in self.disk_usage())
             free = free_gb()
             if our + held + expand > MAX_OUR_GB or free - held - expand < MIN_FREE_GB:
                 log.warning("disk budget: ours %.2f + %.2f GB held by running extractions + %.2f GB of demos "
@@ -744,7 +744,12 @@ class Pipeline:
                         sizes[d] / 1e6)
 
     # --- disk budget
-    def our_bytes(self) -> int:
+    def disk_usage(self) -> tuple[int, int]:
+        """(bytes we use, bytes held for running extractions), from one size reading of each work folder.
+
+        Held is each extracting archive's listed .dem bytes minus what its work folder holds. Reading the
+        work folders once for both keeps a 7-Zip write between two readings from counting in neither.
+        """
         waiting = sum(a.rar.stat().st_size for a in self.archives.values()
                       if a.rar.exists() and a.rar.parent.parent != FAILED_DIR)
         downloading = 0
@@ -753,22 +758,28 @@ class Pipeline:
                 downloading += f.stat().st_size
             except OSError:
                 continue
-        return tree_bytes(DEMOS_DIR) + tree_bytes(WORK_DIR) + waiting + downloading
-
-    def reserved_bytes(self) -> int:
-        """Listed .dem bytes of each archive still extracting, minus what its work folder already holds."""
+        work: dict[Path, int] = {}
+        try:
+            with os.scandir(WORK_DIR) as it:
+                for e in it:
+                    try:
+                        work[Path(e.path)] = tree_bytes(Path(e.path)) if e.is_dir(follow_symlinks=False) \
+                            else e.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except FileNotFoundError:
+            pass
         held = 0
         for a in self.archives.values():
             if a.state == "extracting" and a.listing:
                 listed = sum(int(e.get("size") or 0) for e in a.listing.values())
-                held += max(0, listed - (tree_bytes(a.work) if a.work else 0))
-        return held
+                held += max(0, listed - (work.get(Path(a.work), 0) if a.work else 0))
+        return tree_bytes(DEMOS_DIR) + sum(work.values()) + waiting + downloading, held
 
     def budget(self, fresh: bool = False) -> tuple[float, bool]:
         t, our, ok = self._budget
         if fresh or time.time() - t > BUDGET_CACHE_S:
-            our = self.our_bytes() / 1e9
-            held = self.reserved_bytes() / 1e9
+            our, held = (b / 1e9 for b in self.disk_usage())
             ok = our + held <= MAX_OUR_GB and free_gb() - held >= MIN_FREE_GB
             self._budget = (time.time(), our, ok)
         return our, ok
