@@ -62,9 +62,39 @@ export function roundStateBefore(ctx: MatchCtx, ri: number, tick: number, s: Kil
   };
 }
 
-/** Right after the kill: the victim leaves the alive count. HP is unchanged (the lethal hit came first), and equipment is fixed for the round. */
-export function stateAfterKill(state: RoundState, victimSide: Side): RoundState {
-  return victimSide === 3 ? { ...state, ctAlive: Math.max(0, state.ctAlive - 1) } : { ...state, tAlive: Math.max(0, state.tAlive - 1) };
+/**
+ * Right after the kill: the victim leaves the alive count and its side's HP drops by `victimHp`, the
+ * victim's HP in the state before. Equipment is fixed for the round. The side's HP is then capped at
+ * 100 per living player, so a victim HP that could not be read (deaths without a player_hurt row,
+ * such as the bomb or a fall) still gives a state the model accepts.
+ */
+export function stateAfterKill(state: RoundState, victimSide: Side, victimHp = 0): RoundState {
+  if (victimSide === 3) {
+    const ctAlive = Math.max(0, state.ctAlive - 1);
+    return { ...state, ctAlive, ctHp: Math.max(0, Math.min(state.ctHp - victimHp, 100 * ctAlive)) };
+  }
+  const tAlive = Math.max(0, state.tAlive - 1);
+  return { ...state, tAlive, tHp: Math.max(0, Math.min(state.tHp - victimHp, 100 * tAlive)) };
+}
+
+/**
+ * Writers whose kills.state counts the victim at 0 HP (the fatal hit already applied). Capture plugin
+ * 1.0.0 instead counts the victim with its HP before the fatal hit (Recorder.FillState), so for its
+ * files the victim's HP has to come off the side's total after the kill. Before this split, every
+ * plugin round had an after-kill HP above 100 per living player, the model rejected it, and swing was
+ * unknown for all 48 rounds of the three 2026-10-25 recordings.
+ */
+export const VICTIM_AT_ZERO_HP_WRITERS: ReadonlySet<string> = new Set(["legacy-convert", "synthetic-demo"]);
+
+/**
+ * HP each victim had before a hit, keyed `ri:victim:tick`: the last player_hurt row on the victim in
+ * that tick, whose dmg is capped at the HP before it. Looked up at the kill's tick, that is the fatal hit.
+ */
+function lastHitByTick(ctx: MatchCtx): Map<string, number> {
+  const d = ctx.m.damage;
+  const out = new Map<string, number>();
+  for (let j = 0; j < d.ri.length; j++) out.set(`${d.ri[j]}:${d.victim[j]}:${d.tick[j]}`, d.dmg[j]);
+  return out;
 }
 
 /** Alive counts and HP only, for the placeholder model, which needs nothing else. */
@@ -86,6 +116,8 @@ export function computeSwing(ctx: MatchCtx, model: WinModel): SwingResult {
   const all: KillSwing[] = [];
   const unknownRounds = new Set<number>();
   let available = false;
+  const victimInHp = !VICTIM_AT_ZERO_HP_WRITERS.has(m.env.plugin ?? "");
+  const lastHit = victimInHp ? lastHitByTick(ctx) : null;
   ctx.kills.forEach((k, pos) => {
     const ks = m.kills.state[k.i];
     const vs = ctx.side(k.ri, k.victim);
@@ -93,8 +125,9 @@ export function computeSwing(ctx: MatchCtx, model: WinModel): SwingResult {
     available = true;
     // The trained model needs the full state; the placeholder needs alive counts only.
     const before = model.kind === "model" ? roundStateBefore(ctx, k.ri, k.tick, ks) : aliveOnly(ks);
+    const victimHp = lastHit?.get(`${k.ri}:${k.victim}:${k.tick}`) ?? 0;
     const pBefore = before ? model.winProbability(before, m.map) : null;
-    const pAfter = before ? model.winProbability(stateAfterKill(before, vs), m.map) : null;
+    const pAfter = before ? model.winProbability(stateAfterKill(before, vs, victimHp), m.map) : null;
     if (pBefore === null || pAfter === null) { unknownRounds.add(k.ri); return; }
     // change for the victim's side (≤ 0 for any sensible model)
     const dVictim = vs === 3 ? pAfter - pBefore : pBefore - pAfter;
