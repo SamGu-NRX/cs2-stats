@@ -180,8 +180,8 @@ their code during development, so their figures are not reproducible here; no mo
 
 ## Baselines: `pnpm baselines`
 
-`public/baselines.json` is 358 KB: 21 quantiles of every metric for each pool and side, with no names or
-ids. Built from 516 pro maps on 2026-10-25 with swing from the HLTV win-probability lookup: 552 players
+`public/baselines.json` is 361 KB: 21 quantiles of every metric for each pool and side, with no names or
+ids. Built from 516 pro maps on 2026-10-25 with swing from the HLTV win-probability lookup and the flash share, on the duel strengths of #17's `2197873`: 552 players
 with 40 or more rounds (455 riflers, 97 AWPers), and per-map pools of player-maps with 16 or more
 rounds. A metric's quantiles are written when at least 8 units have a value. The named pack (per-side
 style and performance scores) is written to the
