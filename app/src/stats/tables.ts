@@ -54,6 +54,8 @@ export const SCHEMA = {
     eye_x: "f?", eye_y: "f?", eye_z: "f?", bullet_pitch: "f?", bullet_yaw: "f?",
     vel_x: "f?", vel_y: "f?", vel_z: "f?", speed_2d: "f?", place: "s?",
     ammo_clip: "i?", flash_duration: "f?", silenced: "b?",
+    // the capture plugin's per-shot aim data (SOURCE_COLUMNS: extractor files have none, rows read null)
+    aim_err_yaw: "f?", aim_err_pitch: "f?", target_steamid: "id?", target_on_screen: "b?",
   },
   /** one row per grenade_thrown, linked to its projectile's landing point */
   grenade_throws: {
@@ -96,6 +98,17 @@ export const SCHEMA = {
 } as const satisfies Record<string, Record<string, Kind>>;
 
 export type TableName = keyof typeof SCHEMA;
+
+/**
+ * Columns only some sources write. The plugin adapter fills these shots columns: the view's aim error
+ * to the target's eye in degrees, [yaw, pitch] (the turn the view still needed), the target (the alive
+ * enemy nearest the view within 10 degrees) and whether it was on screen at the shot (line of sight or
+ * the spotted mask). The extractor's v1 files have no such columns; the loader reads them as null rather
+ * than failing on them. Every other column must be in the file.
+ */
+export const SOURCE_COLUMNS: Partial<Record<TableName, readonly string[]>> = {
+  shots: ["aim_err_yaw", "aim_err_pitch", "target_steamid", "target_on_screen"],
+};
 
 type Value<K> =
   K extends "i" | "f" ? number : K extends "i?" | "f?" ? number | null :
