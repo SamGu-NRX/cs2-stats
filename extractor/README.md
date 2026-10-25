@@ -34,4 +34,4 @@ The snapshot tests in `tests/test_snapshot.py` need the private fixture demos an
 .venv/Scripts/python extract.py match.dem out/ --source hltv --mapdata <cs2-stats-data>/mapdata/2000935
 ```
 
-Without `--mapdata` the map still extracts, but `match.visibility_status` is `no_mapdata`, mesh visibility is null, and only damage and kills open engagements.
+The tables land in `out/v-<version>-<hash>/`, and `out/CURRENT` names that folder (see "Finding a map's tables" in `SCHEMA-v1.md`). Without `--mapdata` the map still extracts, but `match.visibility_status` is `no_mapdata`, mesh visibility is null, and only damage and kills open engagements.

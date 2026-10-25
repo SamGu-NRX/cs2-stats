@@ -54,7 +54,7 @@ def test_schema_v1_snapshot(case, tmp_path):
     assert ex.file_sha256(dem) == expected["demo_sha256"], "fixture demo differs from the one snapshotted"
     res = ex.extract_demo(dem, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
     assert res["ok"], res["errors"]
-    got = snapshot_of(tmp_path / "out")
+    got = snapshot_of(ex.resolve_map_dir(tmp_path / "out"))
     if os.environ.get("UPDATE_SNAPSHOTS") == "1":
         expected["tables"] = got
         (SNAPSHOTS / f"{case}.json").write_text(json.dumps(expected, indent=1, sort_keys=True) + "\n",
@@ -73,6 +73,6 @@ def test_a_truncated_demo_is_extracted_through_its_last_complete_round(tmp_path)
         g.write(f.read(185_000_000))
     res = ex.extract_demo(cut, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
     assert res["ok"], res["errors"]
-    match = pl.read_parquet(tmp_path / "out" / "match.parquet").row(0, named=True)
+    match = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet").row(0, named=True)
     assert (match["truncated"], match["velocity_source"], match["n_rounds"], match["tick_rate"]) == (
         True, "position_diff", 12, 64.0)

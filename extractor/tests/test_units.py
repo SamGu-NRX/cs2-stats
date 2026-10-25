@@ -864,36 +864,8 @@ def _map(d, content):
     (d / "match.parquet").write_text(content)
 
 
-def test_replacing_a_map_swaps_it_in_and_leaves_nothing_behind(tmp_path):
-    out, new = tmp_path / "m1", tmp_path / "m1.tmp"
-    _map(out, "old")
-    _map(new, "new")
-    ex.replace_dir(new, out)
-    assert (out / "match.parquet").read_text() == "new" and sorted(p.name for p in tmp_path.iterdir()) == ["m1"]
-
-
-def test_a_crash_between_the_renames_leaves_the_old_map_recoverable(tmp_path, monkeypatch):
-    # The old code deleted the map before renaming the new one in; a crash there left no map at all.
-    out, new = tmp_path / "m1", tmp_path / "m1.tmp"
-    _map(out, "old")
-    _map(new, "new")
-    real_rename, calls = Path.rename, []
-
-    def crash_on_second(self, target):
-        calls.append(self)
-        if len(calls) == 2:
-            raise OSError("power cut")
-        return real_rename(self, target)
-
-    monkeypatch.setattr(Path, "rename", crash_on_second)
-    with pytest.raises(OSError):
-        ex.replace_dir(new, out)
-    monkeypatch.setattr(Path, "rename", real_rename)
-    ex.recover_output(out)
-    assert (out / "match.parquet").read_text() == "old"
-
-
-def test_a_crash_after_the_swap_keeps_the_new_map(tmp_path):
+def test_a_crash_after_a_pre_1_5_swap_keeps_the_new_map(tmp_path):
+    # Extractors before 1.5.0 swapped whole folders and could leave <map>.old beside the map.
     out = tmp_path / "m1"
     _map(out, "new")
     _map(tmp_path / "m1.old", "old")  # the swap finished; only deleting the old copy was interrupted
@@ -996,4 +968,94 @@ def test_a_hit_table_over_the_game_counter_fails_the_map():
     checks, _ = ex.hit_table_checks(_hit_table([(3, LA, 45, False, False)]), _pr([(3, LA, 40)]))
     assert [(c["check"], c["actual"]) for c in checks if c["fatal"] and not c["ok"]] == \
         [("hit_table_over_game_damage", 1)]
+
+
+# Versioned map folders: <map>/v-<version>-<hash>/ and a CURRENT pointer replaced with os.replace.
+def _tables(d, content):
+    d.mkdir(parents=True)
+    for name in ("match", "rounds"):
+        (d / f"{name}.parquet").write_text(f"{name} {content}")
+
+
+def test_publishing_a_map_never_renames_a_folder_a_reader_has_open(tmp_path):
+    # Before 1.5.0 the map folder itself was renamed aside, which Windows refuses while a reader has a
+    # file in it open. Now the new tables go to a new folder and only the small CURRENT file is replaced.
+    m = tmp_path / "m1"
+    _tables(m / ".tmp-1", "old")
+    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    assert ex.resolve_map_dir(m) == v1
+    with open(v1 / "match.parquet", "rb"):  # a reader holds the old version open
+        _tables(m / ".tmp-2", "new")
+        v2 = ex.publish_version(m / ".tmp-2", m, "1.5.0")
+        assert ex.resolve_map_dir(m) == v2 and (v2 / "match.parquet").read_text() == "match new"
+        left = ex.prune_map(m)
+        if sys.platform == "win32":  # the open file cannot be deleted yet; that is left for later
+            assert left == [v1] and (v1 / "match.parquet").exists()
+    assert ex.prune_map(m) == [] and sorted(x.name for x in m.iterdir()) == ["CURRENT", v2.name]
+
+
+def test_a_crash_before_the_pointer_moves_leaves_the_old_map_current(tmp_path):
+    m = tmp_path / "m1"
+    _tables(m / ".tmp-1", "old")
+    v1 = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    _tables(m / "v-1.5.0-0000beef", "new")  # renamed into place, then the process died before CURRENT moved
+    (m / ".tmp-7").mkdir()  # and another run died mid-write
+    assert ex.resolve_map_dir(m) == v1
+    assert ex.prune_map(m) == [] and sorted(x.name for x in m.iterdir()) == ["CURRENT", v1.name]
+
+
+def test_a_pointer_that_names_anything_but_a_version_folder_is_refused(tmp_path):
+    m = tmp_path / "m1"
+    m.mkdir()
+    (m / "CURRENT").write_text("..\\..\\elsewhere\n")
+    with pytest.raises(ValueError, match="not a version folder"):
+        ex.resolve_map_dir(m)
+
+
+def test_a_map_from_before_versioned_folders_is_read_in_place_until_it_is_republished(tmp_path):
+    m = tmp_path / "m1"
+    _tables(m, "legacy")
+    (m / "awpy").mkdir()  # not written by the extractor: never deleted by pruning
+    assert ex.resolve_map_dir(m) == m and ex.prune_map(m) == [] and (m / "match.parquet").exists()
+    _tables(m / ".tmp-1", "new")
+    v = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    assert ex.resolve_map_dir(m) == v
+    assert ex.prune_map(m) == [] and sorted(x.name for x in m.iterdir()) == ["CURRENT", "awpy", v.name]
+
+
+def test_pruning_a_folder_with_no_map_removes_only_what_the_extractor_wrote(tmp_path):
+    # A pre-v1 folder (meta.parquet) has no CURRENT and no match.parquet; it is not debris.
+    m = tmp_path / "m1"
+    m.mkdir()
+    (m / "meta.parquet").write_text("pre-v1")
+    _tables(m / "v-1.5.0-0000beef", "orphan")
+    (m / ".tmp-3").mkdir()
+    assert ex.resolve_map_dir(m) is None and ex.prune_map(m) == []
+    assert sorted(x.name for x in m.iterdir()) == ["meta.parquet"]
+
+
+def test_a_retired_map_stops_resolving_at_once_and_goes_once_unlocked(tmp_path):
+    m = tmp_path / "m1"
+    _tables(m / ".tmp-1", "x")
+    v = ex.publish_version(m / ".tmp-1", m, "1.5.0")
+    with open(v / "match.parquet", "rb"):
+        ex.retire_map(m)
+        assert ex.resolve_map_dir(m) is None
+    assert ex.prune_map(m) == [] and not m.exists()
+
+
+def test_startup_tidies_every_map_and_leaves_pre_v1_folders_alone(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    live = dp.DEMOS_DIR / "slug" / "m1-nuke"
+    _tables(live / ".tmp-1", "old")
+    old = ex.publish_version(live / ".tmp-1", live, "1.5.0")
+    _tables(live / ".tmp-2", "new")
+    new = ex.publish_version(live / ".tmp-2", live, "1.5.0")  # old was locked when this published
+    pre_v1 = dp.DEMOS_DIR / "slug" / "m2-dust2"
+    pre_v1.mkdir()
+    (pre_v1 / "meta.parquet").write_text("pre-v1")
+    assert old.exists()
+    dp.tidy_demos()
+    assert sorted(x.name for x in live.iterdir()) == ["CURRENT", new.name]
+    assert (pre_v1 / "meta.parquet").exists()
 

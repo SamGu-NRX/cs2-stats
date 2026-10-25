@@ -4,6 +4,15 @@ The contract between the extractor (`extractor/extract.py`, Python) and the TS l
 
 `extractor/schema_v1.py` declares every column's type, and the writer casts to it and fails on any mismatch, so a type never changes from one map to the next. `tests/test_schema_doc.py` fails if this document and that declaration disagree.
 
+## Finding a map's tables
+Each map has a folder `cs2-stats-data/demos/<archive slug>/<map>/`. From extractor 1.5.0 its tables are in a version folder inside it, `v-<extractor version>-<8 hex>/`, and the file `CURRENT` holds that folder's name on one line. To read a map:
+1. If `<map>/RETIRED` exists, skip the folder: it was replaced by a re-extraction elsewhere and is being deleted.
+2. If `<map>/CURRENT` exists, read its one line. It must match `v-[0-9A-Za-z.+_]+-[0-9a-f]{8}`; refuse anything else. Read the tables from `<map>/<that name>/`.
+3. Otherwise a `<map>/match.parquet` is a map written before 1.5.0, with its tables in `<map>/` itself.
+4. Otherwise the folder holds no complete map (a pre-v1 map has `meta.parquet` instead; see Versions).
+
+The extractor publishes a new version by writing its folder first and then replacing `CURRENT` with an atomic file rename, so a reader that resolves the pointer always gets a complete set of tables. It never renames a map folder, and it deletes an old version only once no reader holds its files open. A file that disappears between resolving and opening means the map was just republished: resolve again. A glob of `demos/*/*/match.parquet` finds only maps written before 1.5.0. `extract.resolve_map_dir()` implements these steps in Python.
+
 ## Conventions
 - **Versions.** `match.schema_version` is 1 and `match.extractor_version` is the extractor's semver. A folder without `match.parquet` was written before v1 and lacks the engagement tables; those maps are listed in `cs2-stats-data/demos/needs_reextract.jsonl`.
 - **Player ids.** Every `steamid` and `*_steamid` column is a UInt64 player id. For a human it is the SteamID64. A bot has no SteamID, so its id is `2^32 * (user_id + 1) + crc32(name)`: the server user id (slot) and the bot's name, always below 2^40, so it can never collide with a SteamID64. `players.is_bot` marks bots. Radar spotters are named by SteamID in the demo, so `spotted` and the spotted flags cannot identify a bot spotter; those rows are dropped.
