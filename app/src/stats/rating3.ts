@@ -206,56 +206,57 @@ export function rating3FromInputs(q: R3Inputs): number {
 export interface Rating3 {
   label: typeof RATING3_LABEL;
   value: number | null;
+  /** the six inputs value is computed from: value = rating3FromInputs(inputs) */
   inputs: R3Inputs | null;
+  /** the rated rounds the inputs average over (the rated sides' ratedRounds) */
+  rounds: number;
   /** params.json's own word for the model's state ("approximation") */
   status: string;
-  /** why value is null (r3Gap, or the coverage gate); null when there is a rating */
+  /** why value is null (r3Gap, a thin side, or the coverage gate); null when there is a rating */
   reason: string | null;
 }
 
-export function rating3(m: Measures): Rating3 {
-  const inputs = r3Inputs(m);
-  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status, reason: r3Gap(m) };
-}
+export const RATING3_STATUS: string = params.rating.status;
 
 /** The coverage gate's reason (coverage.ts), or null when the summary passes it. */
 const coverageGap = (s: Summary) =>
   coveredEnough(s.covered) ? null : `the kill-by-kill log covers ${s.covered.nRounds} of ${s.covered.roundsPlayed} rounds; the rating needs half`;
 
+const SIDES = ["CT", "T"] as const;
+
 /**
- * Rating 3.0 of a summary under the one coverage gate (coverage.ts): null when the kept matches' facts
- * cover under half their rounds. Every rating the app shows, the rating metric and so its percentile
- * and "Work on" come through here.
+ * Rating 3.0 of a summary, the one definition every rating the app shows uses: the rating metric, so
+ * its percentile and "Work on", the breakdown's inputs, scoreboard lines and the side table.
+ *
+ * Each side is rated over its own rounds (r3Inputs of Summary.sides), and the total's inputs are the
+ * side inputs weighted by each side's rated rounds; value is the rating of those inputs. The rating is
+ * linear, so with both sides rated this equals the rating of the pooled rounds; a side under half its
+ * rounds rated adds nothing, so a total always lies between the side ratings shown beside it. Null,
+ * with a reason, when the kept matches' facts cover under half their rounds (coverage.ts) or the rated
+ * sides' rounds are under MIN_VALUED_SHARE of all rounds.
  */
 export function rating3Of(s: Summary): Rating3 {
-  const r = rating3(s.m);
+  const none = (reason: string): Rating3 => ({ label: RATING3_LABEL, value: null, inputs: null, rounds: 0, status: RATING3_STATUS, reason });
   const gap = coverageGap(s);
-  return gap ? { ...r, value: null, inputs: null, reason: gap } : r;
+  if (gap) return none(gap);
+  const parts = SIDES.flatMap((side) => {
+    const q = r3Inputs(s.sides[side]);
+    return q ? [{ q, n: s.sides[side].ratedRounds }] : [];
+  });
+  const n = parts.reduce((a, p) => a + p.n, 0);
+  if (!parts.length || n < MIN_VALUED_SHARE * s.m.rounds) {
+    return none(r3Gap(s.m) ?? `the sides with half their own rounds rated cover ${n} of ${s.m.rounds} rounds; the rating needs half`);
+  }
+  const inputs = Object.fromEntries(FEATURES.map((f) => [f, parts.reduce((a, p) => a + p.n * p.q[f], 0) / n])) as R3Inputs;
+  return { label: RATING3_LABEL, value: rating3FromInputs(inputs), inputs, rounds: n, status: RATING3_STATUS, reason: null };
 }
 
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */
 export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
 
-/**
- * Rating 3.0 for both sides and for each side, from one aggregate definition: the inputs pooled over
- * the rounds kept, so a side's rating is the rating of that side's rounds. HLTV's map scoreboards
- * show total, CT and T Rating 3.0 the same way (VALIDATION.md compares them).
- */
+/** Rating 3.0 for both sides and for each side (rating3Of of each slice). */
 export function rating3BySide(facts: MatchFacts[], filter: Filter): Record<"both" | "CT" | "T", Rating3> {
-  const both = rollup(facts, filter), CT = rollup(facts, { ...filter, sides: ["CT"] }), T = rollup(facts, { ...filter, sides: ["T"] });
-  return { both: ratingFromSides(both, { CT, T }), CT: rating3Of(CT), T: rating3Of(T) };
-}
-
-/**
- * The total rating from the side ratings, weighted by each side's valued rounds:
- * (valued CT rounds x CT + valued T rounds x T) / valued rounds of the rated sides. A side without a
- * rating (under half its rounds valued) adds nothing, so the total is always the round-weighted mean of
- * the side ratings it shows beside. `both` gives the coverage gate and the pooled inputs.
- */
-export function ratingFromSides(both: Summary, sides: Record<"CT" | "T", Summary>): Rating3 {
-  const base = rating3Of(both);
-  const parts = (["CT", "T"] as const).map((s) => ({ r: rating3Of(sides[s]).value, n: sides[s].m.swingRounds })).filter((p) => p.r !== null && p.n > 0);
-  const n = parts.reduce((a, p) => a + p.n, 0);
-  if (!coveredEnough(both.covered) || !n) return { ...base, value: null, inputs: null, reason: base.reason ?? "neither side has a rating" };
-  return { ...base, value: parts.reduce((a, p) => a + p.n * p.r!, 0) / n };
+  return {
+    both: rating3Of(rollup(facts, filter)), CT: rating3Of(rollup(facts, { ...filter, sides: ["CT"] })), T: rating3Of(rollup(facts, { ...filter, sides: ["T"] })),
+  };
 }

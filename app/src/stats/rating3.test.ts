@@ -3,23 +3,13 @@ import { expect, it } from "vitest";
 import { compare, type Baselines } from "./compare";
 import { METRIC, METRICS } from "./metrics";
 import { PARAMS } from "./model-params";
-import { rating3Of, ratingFromSides, type R3Inputs } from "./rating3";
-import { emptySummary, rollup } from "./rollup";
+import { rating3FromInputs, rating3Of } from "./rating3";
+import { rollup } from "./rollup";
 import { derive } from "./derive";
 import type { WinProbSource } from "./model-params";
+import { at, combine } from "./testing/summary";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 
-/** A summary of `rounds` rounds whose six inputs (over valued rounds) are `q`. */
-function at(q: R3Inputs, rounds = 100) {
-  const s = emptySummary();
-  Object.assign(s.m, {
-    rounds, swingRounds: rounds, ecoRounds: rounds, ratedRounds: rounds, vEcoKills: q.kpr_eco * rounds, vEcoDmg: q.adr_eco * rounds, vEcoDeaths: q.dpr_eco * rounds,
-    vEcoKast: (q.kast_eco * rounds) / 100, vMultiKillRounds: (q.mk * rounds) / 100, swing: (q.swing * rounds) / 100, vSwing: (q.swing * rounds) / 100,
-  });
-  s.matches = 1;
-  s.covered = { nRounds: rounds, roundsPlayed: rounds };
-  return s;
-}
 const MEAN = { kpr_eco: 0.66, adr_eco: 72, dpr_eco: 0.66, kast_eco: 69, mk: 16, swing: -0.02 };
 
 it("rates only over the rounds swing valued, and not at all when under half are", () => {
@@ -70,30 +60,23 @@ it("gates the rating, its percentile and so Work on through one coverage rule", 
   expect(compare(s, flat).rating3.pct).toBeNull();
 });
 
-it("takes the total rating from the sides, weighted by their valued rounds", () => {
-  // fails if the total and side ratings disagree: Astra's case, 100 CT rounds with 50 valued at 1.00
-  // and 100 T rounds with 100 valued at 3.00, must total (50 x 1 + 100 x 3) / 150
+it("takes the total rating from the sides, weighted by their rated rounds", () => {
+  // fails if the total and side ratings disagree: Astra's case, 100 CT rounds with 50 rated at 1.00
+  // and 100 T rounds with 100 rated at 3.00, must total (50 x 1 + 100 x 3) / 150
   const k = PARAMS.rating.coefficients.eKPR, b = PARAMS.rating.intercept;
-  const side = (rounds: number, valued: number, rating: number) => {
-    const s = at({ kpr_eco: (rating - b) / k, adr_eco: 0, dpr_eco: 0, kast_eco: 0, mk: 0, swing: 0 }, valued);
-    s.m.rounds = rounds;
-    s.covered = { nRounds: rounds, roundsPlayed: rounds };
-    return s;
-  };
-  const CT = side(100, 50, 1), T = side(100, 100, 3);
+  const side = (side: "CT" | "T", rounds: number, rated: number, rating: number) =>
+    at({ kpr_eco: (rating - b) / k, adr_eco: 0, dpr_eco: 0, kast_eco: 0, mk: 0, swing: 0 }, rated, side, rounds);
+  const CT = side("CT", 100, 50, 1), T = side("T", 100, 100, 3);
   expect([rating3Of(CT).value, rating3Of(T).value]).toEqual([expect.closeTo(1, 9), expect.closeTo(3, 9)]);
-  const both = emptySummary();
-  for (const [key, v] of Object.entries(CT.m)) both.m[key as keyof typeof both.m] = v + T.m[key as keyof typeof T.m];
-  both.matches = 1;
-  both.covered = { nRounds: 200, roundsPlayed: 200 };
-  expect(ratingFromSides(both, { CT, T }).value).toBeCloseTo(350 / 150, 9);
-  // a side with no rating (CT valued on 40 of 100 rounds) adds nothing: the total is T's 3.00, not a
+  const both = rating3Of(combine(CT, T));
+  expect(both.value).toBeCloseTo(350 / 150, 9);
+  expect(rating3FromInputs(both.inputs!)).toBeCloseTo(both.value!, 9);
+  // a side with no rating (CT rated on 40 of 100 rounds) adds nothing: the total is T's 3.00, not a
   // pooled mix with rounds the CT rating rejected
-  const thin = side(100, 40, 1);
-  const both2 = emptySummary();
-  for (const [key, v] of Object.entries(thin.m)) both2.m[key as keyof typeof both2.m] = v + T.m[key as keyof typeof T.m];
-  both2.matches = 1;
-  both2.covered = { nRounds: 200, roundsPlayed: 200 };
+  const thin = side("CT", 100, 40, 1);
   expect(rating3Of(thin).value).toBeNull();
-  expect(ratingFromSides(both2, { CT: thin, T }).value).toBeCloseTo(3, 9);
+  expect(rating3Of(combine(thin, T)).value).toBeCloseTo(3, 9);
+  // one rated side covering under half of all rounds is no total
+  const r = rating3Of(combine(thin, side("T", 300, 160, 3)));
+  expect([r.value, r.reason]).toEqual([null, "the sides with half their own rounds rated cover 160 of 400 rounds; the rating needs half"]);
 });
