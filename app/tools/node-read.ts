@@ -27,16 +27,36 @@ export const WINPROB = winProbSource(PACK && existsSync(PACK) ? JSON.parse(readF
 
 export const loadDir = (dir: string, optional?: readonly TableName[]): Promise<MatchTables> => loadTables(dirReader(dir), optional);
 
-/** Every extracted pro map: demos/<archive>/<map>/ folders holding meta.parquet or match.parquet. */
+/**
+ * The folder holding one map's tables. The extractor writes each map to a versioned folder
+ * (<map>/v-<version>-<hash>/) and names the live one in <map>/CURRENT (SCHEMA-v1.md); older output is
+ * the flat <map>/ folder. Null when the map has no tables yet. A CURRENT naming a folder without
+ * tables throws, naming both.
+ */
+export function mapTablesDir(mapDir: string): string | null {
+  const pointer = path.join(mapDir, "CURRENT");
+  const has = (dir: string) => existsSync(path.join(dir, "match.parquet")) || existsSync(path.join(dir, "meta.parquet"));
+  if (existsSync(pointer)) {
+    const live = path.join(mapDir, readFileSync(pointer, "utf-8").trim());
+    if (!has(live)) throw new Error(`${pointer} names ${live}, which holds no tables`);
+    return live;
+  }
+  return has(mapDir) ? mapDir : null;
+}
+
+/** Every extracted pro map's tables folder: demos/<archive>/<map>/, through mapTablesDir. */
 export function proMapDirs(root = path.join(DATA_DIR, "demos")): string[] {
   if (!existsSync(root)) return [];
   const out: string[] = [];
   for (const a of readdirSync(root, { withFileTypes: true })) {
     if (!a.isDirectory()) continue;
     for (const m of readdirSync(path.join(root, a.name), { withFileTypes: true })) {
-      const dir = path.join(root, a.name, m.name);
-      if (m.isDirectory() && (existsSync(path.join(dir, "match.parquet")) || existsSync(path.join(dir, "meta.parquet")))) out.push(dir);
+      const dir = m.isDirectory() ? mapTablesDir(path.join(root, a.name, m.name)) : null;
+      if (dir) out.push(dir);
     }
   }
   return out.sort();
 }
+
+/** "<archive>/<map>" for a tables folder from proMapDirs, for messages. */
+export const mapLabel = (dir: string) => path.relative(path.join(DATA_DIR, "demos"), dir).split(path.sep).filter((s) => !s.startsWith("v-")).join("/");

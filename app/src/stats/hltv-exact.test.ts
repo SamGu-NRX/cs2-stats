@@ -1,11 +1,10 @@
 // The scoreboard gate (design/architecture.md): the engine's K, D, KAST and ADR against HLTV's per-map
 // scoreboards on pinned pro demos. Needs the private data folder (cs2-stats-data: demos/ and hltv/);
 // without it the suite is skipped with a message saying so. Kills on every joined map: pnpm hltv-check.
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hltvMaps, joinHltv } from "../../tools/hltv";
-import { DATA_DIR, loadDir, WINPROB } from "../../tools/node-read";
+import { DATA_DIR, loadDir, mapTablesDir, WINPROB } from "../../tools/node-read";
 import { derive } from "./derive";
 import { rollup } from "./rollup";
 
@@ -28,9 +27,9 @@ const GATE_MAPS = [
 ];
 
 // The extraction pipeline rewrites the data folder while it runs, so the test reads only the pinned
-// gate maps; one that is absent or not yet fully written (no match.parquet) is skipped by name.
-const gateDir = (m: string) => path.join(DATA_DIR, "demos", m);
-const present = GATE_MAPS.filter((m) => existsSync(path.join(gateDir(m), "match.parquet")));
+// gate maps; one that is absent or has no tables yet is skipped by name.
+const gateDir = (m: string) => mapTablesDir(path.join(DATA_DIR, "demos", m));
+const present = GATE_MAPS.filter((m) => gateDir(m) !== null);
 const absent = GATE_MAPS.filter((m) => !present.includes(m));
 const have = present.length > 0 && hltvMaps().length > 0;
 if (!have) console.warn(`SKIPPED hltv-exact: no gate maps or HLTV maps under ${DATA_DIR} (set CS2_STATS_DATA)`);
@@ -40,7 +39,7 @@ describe.skipIf(!have)("scoreboard against HLTV", () => {
   it("K, D, KAST and ADR match HLTV on the gate maps", async () => {
     const wrong: string[] = [];
     for (const m of present) {
-      const f = derive(await loadDir(gateDir(m), []), WINPROB);
+      const f = derive(await loadDir(gateDir(m)!, []), WINPROB);
       const j = joinHltv(f);
       if (!j) { wrong.push(`${m}: no HLTV map joins`); continue; }
       if (j.player.size !== 10) wrong.push(`${m}: ${j.player.size} players joined`);
