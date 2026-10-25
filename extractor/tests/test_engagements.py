@@ -79,3 +79,31 @@ def test_smoke_blocks_only_segments_through_a_live_sphere():
     ticks = np.array([150, 150, 250, 150])
     # through the centre / stops 200 short of the sphere / smoke expired / passes 300 > 144 away
     assert eg.smoke_blocked(ticks, a, b, smokes).tolist() == [True, False, False, False]
+
+
+def test_a_kill_with_no_damage_row_opens_an_engagement():
+    # A demo that lost the player_hurt of a killing hit still has the player_death; without a map mesh
+    # (visibility_status no_mapdata) damage and kills are the only triggers, so this kill must open a window.
+    # The victim's earlier hit on the attacker is a separate ordered pair and opens its own window.
+    a, v = 76561190000000001, 76561190000000002
+    ticks = np.arange(1000, 2001)
+    S = pd.DataFrame(dict(tick=np.repeat(ticks, 2), steamid=np.tile([a, v], len(ticks)),
+                          team_num=np.tile([3, 2], len(ticks)), is_alive=True, X=np.tile([0.0, 500.0], len(ticks)),
+                          Y=0.0, Z=0.0, pitch=0.0, yaw=0.0, duck_amount=0.0, mask=0))
+    rounds = pd.DataFrame(dict(round=[1], start_tick=[900], freeze_end_tick=[1000], end_tick=[2000]))
+    shots = pd.DataFrame(dict(round=pd.Series([], dtype="int64"), tick=pd.Series([], dtype="int64"),
+                              steamid=pd.Series([], dtype="UInt64")))
+    dmg = pd.DataFrame(dict(round=[1], tick=[1200], attacker_steamid=pd.array([v], dtype="UInt64"),
+                            victim_steamid=pd.array([a], dtype="UInt64"), is_team_damage=[False], is_self=[False],
+                            dmg_health_capped=[27], weapon=["ak47"]))
+    kills = pd.DataFrame(dict(round=[1], tick=[1500], attacker_steamid=pd.array([a], dtype="UInt64"),
+                              victim_steamid=pd.array([v], dtype="UInt64"), is_teamkill=[False],
+                              is_suicide=[False], penetrated=[0]))
+    smokes = pd.DataFrame(dict(start_tick=[], end_tick=[], x=[], y=[], z=[]))
+    velocity = pd.DataFrame(dict(tick=pd.Series([], dtype="int32"), steamid=pd.Series([], dtype="UInt64"),
+                                 vel_x=[], vel_y=[], vel_z=[]))
+    eng, rows, vis = ex.engagement_tables(S, rounds, shots, dmg, kills, smokes, {a: 0, v: 1}, velocity,
+                                          "de_test", None, RATE)
+    assert vis["status"] == "no_mapdata"
+    got = eng[["attacker_steamid", "victim_steamid", "start_tick", "end_tick", "outcome"]].values.tolist()
+    assert sorted(got) == sorted([[v, a, 1200 - 64, 1200 + 64, "damage-only"], [a, v, 1500 - 64, 1500 + 64, "kill"]])

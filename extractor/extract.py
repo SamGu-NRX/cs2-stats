@@ -1522,6 +1522,19 @@ def load_mesh(mapdata: Path | None, map_name: str | None):
     return VisibilityChecker(mesh), dict(info, status="ok", mesh_sha256=file_sha256(mesh))
 
 
+ENGAGEMENT_PAIR = ["round", "attacker_steamid", "victim_steamid", "tick"]
+
+
+def engagement_triggers(dmg: pd.DataFrame, kills: pd.DataFrame) -> pd.DataFrame:
+    """Trigger (c): every damage and every kill by a player on an enemy. A kill triggers on its own, since a
+    demo can lose the player_hurt of a killing hit but still has the player_death."""
+    d = dmg[dmg.attacker_steamid.notna() & dmg.victim_steamid.notna() & ~dmg.is_team_damage & ~dmg.is_self]
+    k = kills[kills.attacker_steamid.notna() & kills.victim_steamid.notna()
+              & ~kills.is_teamkill.astype(bool) & ~kills.is_suicide.astype(bool)]
+    return pd.concat([x[ENGAGEMENT_PAIR].astype({"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
+                      for x in (d, k)], ignore_index=True)
+
+
 def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity, map_name, mapdata, rate):
     """Build engagements and engagement_ticks (definitions in engagements.py and SCHEMA-v1.md).
 
@@ -1553,9 +1566,9 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
 
     bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.start_tick),
                              int(r.end_tick)) for r in rounds.itertuples()}
-    pair = ["round", "attacker_steamid", "victim_steamid", "tick"]
+    pair = ENGAGEMENT_PAIR
     d = dmg[dmg.attacker_steamid.notna() & dmg.victim_steamid.notna() & ~dmg.is_team_damage & ~dmg.is_self]
-    triggers = [d[pair]]  # (c) damage and kills
+    triggers = [engagement_triggers(dmg, kills)]
     if checker is not None:
         onset_rows = []  # (a) mesh-visibility onsets, both directions
         for rnd, (lo, hi) in bounds.items():
