@@ -108,6 +108,25 @@ public class LosTests
         Assert.False(LosTracker.IsClear(0.5f, startInSolid: false));
     }
 
+    /// <summary>
+    /// Fails if an enemy whose body axis is covered but whose shoulder shows reads hidden. Positions are
+    /// the human and victim at round 0, tick 3529 of the 2026-10-25 17:40 match: a head-shot kill without
+    /// penetration through mid doors that line of sight called hidden for the preceding 115 ticks.
+    /// </summary>
+    [Fact]
+    public void AnEnemyShowingOnlyAShoulderIsVisible()
+    {
+        var f = new FrameSet { ActiveCount = 2 };
+        f.Active[0] = H; f.Active[1] = E1;
+        f.ByPi[H] = new PlayerFrame { Present = true, Alive = true, Team = 2, X = -279, Y = 1122, Z = -76, ViewZ = 64, Yaw = 108 };
+        f.ByPi[E1] = new PlayerFrame { Present = true, Alive = true, Team = 3, X = -467, Y = 1684, Z = -125, ViewZ = 64 };
+        // Cover hides every point on the victim's axis; a point to one side is clear.
+        _probe.Answer = (x, y, _) => Math.Abs(x - -467) > 1 || Math.Abs(y - 1684) > 1;
+        _los.Check(0, 3528, H, f, _rows);
+        Assert.True(_los.IsVisible(E1));
+        Assert.Equal(LosTracker.Points.Count(p => p.Side == 0) + 1, _probe.Calls); // three axis points, then the first side point
+    }
+
     [Fact]
     public void ChecksRunSixteenTimesASecond() => Assert.Equal(4, LosTracker.CheckEveryTicks(64));
 }
@@ -158,16 +177,22 @@ public class RecorderLosTests
         Assert.Equal(1, s.Shots[0].VisTarget); // the spotted mask (Spot0 = 0) would have said 0
         Assert.Equal("los", s.Meta.Env.VisSource);
         var perf = s.Perf[0];
-        Assert.Equal((50, 3 + 3 * 47), (perf.LosChecks, perf.LosTraces)); // 2000..2196 every 4 ticks; blocked checks trace all three points
+        Assert.Equal((50, 3 + LosTracker.Points.Length * 47), (perf.LosChecks, perf.LosTraces)); // 2000..2196 every 4 ticks; blocked checks trace every point
     }
 
+    /// <summary>
+    /// Fails if a read at the kill tick sees the victim hidden. The 2026-10-25 17:40 match had 0 of 20
+    /// kills visible at the kill tick and 17 of 20 one tick earlier: the death row shared the kill tick.
+    /// </summary>
     [Fact]
-    public void ADeadEnemyIsHiddenAtTheKillTick()
+    public void AKilledEnemyIsVisibleAtTheKillTickAndHiddenAfter()
     {
         Ticks(2000, 2003);
         _r.Kill(new KillInput { Tick = 2003, Killer = H, Victim = B, Assister = Nil.V, Weapon = 0, NadeType = Nil.V });
+        _frames.ByPi[B].Alive = false;
+        Ticks(2003, 2010); // a check in the kill tick, after the death, must not stamp it earlier
         _r.Flush();
-        Assert.Equal(new[] { (2000, 1), (2003, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
+        Assert.Equal(new[] { (2000, 1), (2004, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
     }
 
     [Fact]
