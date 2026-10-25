@@ -1,5 +1,6 @@
 // Compares the engine's Rating 3.0 inputs and rating with HLTV's on every joined pro map: eKPR, eDPR,
-// eADR, eKAST, swing and the rating. Prints MAE and Pearson r per column, and the win-probability source
+// eADR, eKAST, swing and the rating, and beside the eco inputs their raw versions (KPR, DPR, ADR, KAST
+// against HLTV's traditional columns), so an eco error can be told from a counting error. Prints MAE and Pearson r per column, and the win-probability source
 // swing used (node-read.ts WINPROB; CS2_WINPROB_PACK=none forces CS2RB). Usage: pnpm rating-check
 import { derive } from "../src/stats/derive";
 import { r3Inputs, rating3, rating3BySide } from "../src/stats/rating3";
@@ -22,6 +23,10 @@ for (const dir of proMapDirs()) {
     const r = rating3(m).value;
     if (!q || r === null) continue;
     const put = (c: string, ours: number, theirs: number) => { cols[c][0].push(ours); cols[c][1].push(theirs); };
+    put("KPR", m.kills / m.rounds, h.total.k / m.rounds);
+    put("DPR", m.deaths / m.rounds, h.total.d / m.rounds);
+    put("ADR", m.dmg / m.rounds, h.total.adr);
+    put("KAST", (100 * m.kast) / m.rounds, h.total.kast);
     put("eKPR", q.kpr_eco, h.total.eK / m.rounds);
     put("eDPR", q.dpr_eco, h.total.eD / m.rounds);
     put("eADR", q.adr_eco, h.total.eAdr);
