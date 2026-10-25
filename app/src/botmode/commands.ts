@@ -133,6 +133,8 @@ export interface InstallReport {
   skipped: Skipped[];
   kept: string[];
   merged: string[];
+  /** my_bot_*_config.cfg files installed with the user's own convar values kept */
+  userValuesKept: string[];
   botModeEnabled: boolean;
   difficultyKept: Difficulty | null;
   /** overlays the release replaced; overlay() puts them back */

@@ -140,6 +140,9 @@ fn run(a: Args) -> Result<(), String> {
                 for k in &s.kept {
                     o.push_str(&format!("Kept your {k} (protected)\n"));
                 }
+                for k in &s.user_values_kept {
+                    o.push_str(&format!("Kept your own convar values in {k}\n"));
+                }
                 for k in &s.merged {
                     o.push_str(&format!("Merged missing convars into your {k}\n"));
                 }

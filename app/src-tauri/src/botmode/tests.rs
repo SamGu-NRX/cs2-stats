@@ -51,7 +51,7 @@ fn install_copies_the_release_and_leaves_user_files_alone() {
     let r = install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.7")).unwrap();
 
     assert_eq!(read(&layout, "addons/counterstrikesharp/plugins/BotState/BotState.dll"), "official botstate v1.4.7");
-    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), "bot_difficulty 5 // v1.4.7\r\n");
+    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), format!("{RELEASE_BOT_CFG}// v1.4.7\r\n"));
     assert!(!layout.target("Panel v1.4.7.exe").exists(), "the Panel is never installed");
     assert_eq!(read(&layout, "cfg/autoexec.cfg"), USER_AUTOEXEC);
     assert_eq!(read(&layout, USER_SKELETON), "user skeleton");
@@ -71,6 +71,28 @@ fn install_copies_the_release_and_leaves_user_files_alone() {
     let official = st.official.unwrap();
     assert_eq!(official.tag, "v1.4.7");
     assert_eq!(official.source.url, format!("https://github.com/ed0ard/CS2-Bot-Improver/tree/{}", "a".repeat(40)));
+}
+
+#[test]
+fn install_keeps_the_users_own_lines_in_the_bot_cfgs() {
+    let s = Scratch::new("botcfg");
+    let layout = fake_game(&s);
+    // An older release's file, with lines the Panel's Rules page put at the top.
+    let mine = "mp_friendlyfire 0\r\nmp_c4timer 50\r\nbot_nades normal\r\nbot_difficulty 5\r\nexec old_buy.cfg\r\nbind \\ \"subclass_create 500\"\r\n";
+    write(&layout.target("cfg/my_bot_normal_config.cfg"), mine.as_bytes());
+
+    let r = install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.7")).unwrap();
+    // The release's lines win except where the user set a convar; the user's other settings
+    // are appended. Commands (exec) and binds come from the release.
+    let want = "mp_c4timer 50\r\nbot_difficulty 5\r\nexec bot_buy.cfg\r\nbind \\ \"subclass_create 500;subclass_create 503\"\r\n// v1.4.7\r\nmp_friendlyfire 0\r\nbot_nades normal\r\n";
+    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), want);
+    assert_eq!(r.summary.user_values_kept, ["cfg/my_bot_normal_config.cfg"]);
+
+    // Installing again, or the next release, keeps them too.
+    install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.7")).unwrap();
+    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), want);
+    install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.8")).unwrap();
+    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), want.replace("v1.4.7", "v1.4.8"));
 }
 
 #[test]
@@ -248,6 +270,10 @@ fn fork_checkout(s: &Scratch) -> PathBuf {
 }
 
 fn manifest_for(s: &Scratch, checkout: &Path, branch: &str) -> PathBuf {
+    manifest_pinned(s, checkout, branch, None)
+}
+
+fn manifest_pinned(s: &Scratch, checkout: &Path, branch: &str, commit: Option<&str>) -> PathBuf {
     let m = serde_json::json!({
         "version": 1,
         "entries": [{
@@ -259,7 +285,8 @@ fn manifest_for(s: &Scratch, checkout: &Path, branch: &str) -> PathBuf {
                 "repo": "SamGu-NRX/CS2-Smarter-Bot",
                 "branch": branch,
                 "checkout": checkout.display().to_string(),
-                "build": "bin\\Release\\net10.0"
+                "build": "bin\\Release\\net10.0",
+                "commit": commit
             }
         }]
     });
@@ -315,6 +342,25 @@ fn overlay_refuses_a_build_whose_source_link_would_be_wrong() {
     assert!(err.contains("BotState.pdb not found"), "{err}");
 
     assert_eq!(snapshot(&layout.csgo), before);
+}
+
+#[test]
+fn a_pinned_commit_allows_a_detached_build_worktree_and_nothing_else() {
+    let s = Scratch::new("overlay-pin");
+    let layout = installed(&s);
+    let checkout = fork_checkout(&s);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(&checkout, &["checkout", "-q", "--detach"]);
+
+    let err = overlay::apply(&layout, &CLOSED, &manifest_for(&s, &checkout, "fix/hold")).unwrap_err();
+    assert!(err.contains("is on branch HEAD"), "detached without a pin: {err}");
+    let err = overlay::apply(&layout, &CLOSED, &manifest_pinned(&s, &checkout, "fix/hold", Some(&"0".repeat(40)))).unwrap_err();
+    assert!(err.contains("but the manifest pins"), "{err}");
+    let err = overlay::apply(&layout, &CLOSED, &manifest_pinned(&s, &checkout, "main", Some(&head))).unwrap_err();
+    assert!(err.contains("is not on main at any remote"), "{err}");
+
+    let r = overlay::apply(&layout, &CLOSED, &manifest_pinned(&s, &checkout, "fix/hold", Some(&head))).unwrap();
+    assert_eq!(r.entries[0].source.commit.as_deref(), Some(head.as_str()));
 }
 
 #[test]

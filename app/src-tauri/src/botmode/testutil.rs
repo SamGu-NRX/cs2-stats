@@ -50,6 +50,9 @@ pub fn fake_game(s: &Scratch) -> Layout {
     layout
 }
 
+/// The release's `my_bot_normal_config.cfg`, before its version comment.
+pub const RELEASE_BOT_CFG: &str = "mp_c4timer 40\r\nbot_difficulty 5\r\nexec bot_buy.cfg\r\nbind \\ \"subclass_create 500;subclass_create 503\"\r\n";
+
 /// The files of a fake release, shaped like the v1.4.7 Windows zip: the Panel at the root,
 /// Metamod and CounterStrikeSharp, a plugin, mod cfgs, bot profiles, both gameinfo copies,
 /// and a few files that would hit the user's protected files if copied blindly.
@@ -67,7 +70,7 @@ pub fn release_files(version: &str) -> BTreeMap<String, Vec<u8>> {
     put("addons/metamod/bin/server.dll", format!("metamod {version}").as_bytes());
     put("addons/counterstrikesharp/bin/win64/counterstrikesharp.dll", format!("css {version}").as_bytes());
     put("addons/counterstrikesharp/plugins/BotState/BotState.dll", format!("official botstate {version}").as_bytes());
-    put("cfg/my_bot_normal_config.cfg", format!("bot_difficulty 5 // {version}\r\n").as_bytes());
+    put("cfg/my_bot_normal_config.cfg", format!("{RELEASE_BOT_CFG}// {version}\r\n").as_bytes());
     put("cfg/autoexec.cfg", b"// the release's autoexec\r\n");
     put("cfg/gamemode_competitive_server.cfg", b"br_player_music_kit 0\r\nbr_dropped_knife_premium 0\r\n");
     put(USER_SKELETON, b"release skeleton");

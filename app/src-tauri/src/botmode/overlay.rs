@@ -6,7 +6,9 @@
 //! come from:
 //! - `local`: a build folder inside a git checkout. The checkout must be on the named
 //!   branch, have no uncommitted changes to tracked files, and have its commit on a remote
-//!   branch, so the recorded source link points at the code that was built.
+//!   branch, so the recorded source link points at the code that was built. An entry that
+//!   pins `commit` instead requires the checkout to be at exactly that commit (a detached
+//!   build worktree is fine) and the commit to be on `branch` at a remote.
 //! - `github-release`: a zip attached to a GitHub release, verified like the official one.
 //!
 //! Every entry is resolved and verified before the first file is written.
@@ -55,6 +57,9 @@ pub enum Source {
         checkout: String,
         /// The build output folder, relative to `checkout` or absolute.
         build: String,
+        /// The full commit id the build must come from, when pinned.
+        #[serde(default)]
+        commit: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     GithubRelease {
@@ -100,10 +105,13 @@ impl Manifest {
                 }
             }
             match &e.source {
-                Source::Local { repo, branch, .. } => {
+                Source::Local { repo, branch, commit, .. } => {
                     github::check_repo(repo)?;
                     if branch.trim().is_empty() {
                         return fail("names no branch".into());
+                    }
+                    if commit.as_ref().is_some_and(|c| c.len() != 40 || !c.bytes().all(|b| b.is_ascii_hexdigit())) {
+                        return fail("commit must be a full 40-character commit id".into());
                     }
                 }
                 Source::GithubRelease { repo, tag, asset, subdir, .. } => {
@@ -160,17 +168,31 @@ fn git(checkout: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn resolve_local(e: &Entry, repo: &str, branch: &str, checkout: &str, build: &str) -> Result<Resolved, String> {
+fn resolve_local(e: &Entry, repo: &str, branch: &str, checkout: &str, build: &str, pinned: Option<&str>) -> Result<Resolved, String> {
     let checkout = paths::expand_env(checkout)?;
     let build_dir = {
         let b = paths::expand_env(build)?;
         if b.is_absolute() { b } else { checkout.join(b) }
     };
-    let on = git(&checkout, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if on != *branch {
-        return Err(format!("{}: {} is on branch {on}, but the manifest names {branch}", e.name, checkout.display()));
-    }
     let commit = git(&checkout, &["rev-parse", "HEAD"])?;
+    match pinned {
+        Some(want) if !commit.eq_ignore_ascii_case(want) => {
+            return Err(format!("{}: {} is at commit {commit}, but the manifest pins {want}", e.name, checkout.display()));
+        }
+        Some(_) => {
+            let remote = git(&checkout, &["branch", "-r", "--contains", "HEAD"])?;
+            let suffix = format!("/{branch}");
+            if !remote.lines().any(|l| l.trim().ends_with(&suffix) && !l.contains("->")) {
+                return Err(format!("{}: commit {} is not on {branch} at any remote", e.name, &commit[..12.min(commit.len())]));
+            }
+        }
+        None => {
+            let on = git(&checkout, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            if on != *branch {
+                return Err(format!("{}: {} is on branch {on}, but the manifest names {branch}", e.name, checkout.display()));
+            }
+        }
+    }
     if !git(&checkout, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
         return Err(format!(
             "{}: {} has uncommitted changes, so commit {} would not be the source of this build",
@@ -246,7 +268,7 @@ fn resolve_release(layout: &Layout, e: &Entry, repo: &str, tag: &str, asset: &st
 
 fn resolve(layout: &Layout, e: &Entry) -> Result<Resolved, String> {
     match &e.source {
-        Source::Local { repo, branch, checkout, build } => resolve_local(e, repo, branch, checkout, build),
+        Source::Local { repo, branch, checkout, build, commit } => resolve_local(e, repo, branch, checkout, build, commit.as_deref()),
         Source::GithubRelease { repo, tag, asset, subdir, sha256 } => {
             resolve_release(layout, e, repo, tag, asset, subdir.as_deref(), sha256.as_deref())
         }
