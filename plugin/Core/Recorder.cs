@@ -638,7 +638,7 @@ public sealed class Recorder
             Ri = Ri, Tick = s.Tick, Weapon = s.Weapon, Burst = _burst.Burst, Idx = _burst.Index,
             Speed = s.Speed, MaxSpeed = s.MaxSpeed, Scoped = s.Scoped, Ducked = s.Ducked,
             Target = Nil.V, AimErrYaw = Nil.V, AimErrPitch = Nil.V, ImpYaw = Nil.V, ImpPitch = Nil.V, Hit = Nil.V,
-            Smoke = 0, Impacts = 0, Pen = 0, VisTarget = Nil.V, Class = s.Class,
+            Smoke = 0, Impacts = 0, Pen = 0, VisTarget = Nil.V, Class = s.Class, Pitch = float.NaN, Yaw = float.NaN,
         };
         double targetDist = SmokeRay.MaxRange;
         ref var h = ref Frames.ByPi[human];
@@ -676,6 +676,8 @@ public sealed class Recorder
                 row.Smoke = RayCrossesSmoke(s.Tick, ex, ey, ez, fx, fy, fz, targetDist) ? 1 : 0;
             }
             _shotEyeX = ex; _shotEyeY = ey; _shotEyeZ = ez; _shotPitch = h.Pitch; _shotYaw = h.Yaw;
+            row.Pitch = h.Pitch;
+            row.Yaw = h.Yaw;
         }
         _pendingShot = _buf.Shots.Add(row);
         _pendingShotTick = s.Tick;
