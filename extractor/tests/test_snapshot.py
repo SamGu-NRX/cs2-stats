@@ -55,6 +55,10 @@ def test_schema_v1_snapshot(case, tmp_path):
     res = ex.extract_demo(dem, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
     assert res["ok"], res["errors"]
     got = snapshot_of(ex.resolve_map_dir(tmp_path / "out"))
+    # The validation result carries the hit-table gap as a warning with exactly the HP the match row stores.
+    hp = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet")["unattributed_damage_hp"][0]
+    warn = [c for c in res["validation"]["nonfatal_failed"] if c["check"] == "damage_events_incomplete"]
+    assert [c["actual"] for c in warn] == ([hp] if hp else [])
     if os.environ.get("UPDATE_SNAPSHOTS") == "1":
         expected["tables"] = got
         (SNAPSHOTS / f"{case}.json").write_text(json.dumps(expected, indent=1, sort_keys=True) + "\n",

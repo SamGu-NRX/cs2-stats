@@ -54,7 +54,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.7.1"
+EXTRACTOR_VERSION = "1.8.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -532,101 +532,27 @@ def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: l
     return rise
 
 
-# How far a grenade's damage reaches, for crediting a lost lethal hit to its owner. Measured on the
-# player_hurt events of both fixtures: 162 inferno hits had the victim's feet at most 245.4 units from the
-# attacker's inferno origin (fixture A 245.4, B 231.1), every one while that inferno still burned; 82 HE hits
-# had the victim at most 371.3 units from the detonation (A 371.3, B 359.8), every one on the detonation
-# tick. The reaches round those maxima up; no other map was measured, so a farther hit stays unattributed.
-INFERNO_REACH = 300.0
-HE_REACH = 400.0
-INFERNO_WEAPONS = frozenset({"inferno", "molotov", "incgrenade"})
-# Causes that name no player (falling, the map); the game credits the victim himself or nobody.
-WORLD_WEAPONS = frozenset({"world", "trigger_hurt", "worldent"})
-# weapon_fire of a thrown grenade: the throw itself hurts no one on that tick.
-THROWN = frozenset({"hegrenade", "flashbang", "smokegrenade", "molotov", "incgrenade", "decoy"})
-
-
-def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFrame, side_of: dict,
-                      infernos: pd.DataFrame, detonations: pd.DataFrame, fires: pd.DataFrame) -> pd.DataFrame:
-    """Damage rows for health drops that have no player_hurt event on that tick.
+def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> pd.DataFrame:
+    """Damage rows for health drops that have no player_hurt event on that tick. They never name an attacker.
 
     GOTV demos can lose a stretch of events: on one pro demo, ticks 9168-9184 have no
     player_hurt or weapon_fire at all, yet health falls (48 -> 0 at 9173, 100 -> 45 at 9182) and
-    the game credits both hits. HP before and after come from the networked health. A rebuilt hit names an
-    attacker only when its cause can be checked on its own tick, never from the scoreboard it is validated
-    against. That needs a lethal drop with a player_death on the tick whose weapon matches a cause:
-    - an inferno weapon: the killer's inferno, burning on the tick, within INFERNO_REACH of the victim;
-    - hegrenade: the killer's HE detonating on the tick within HE_REACH of the victim;
-    - a world cause with no other player (a fall, the map): the victim himself, or nobody;
-    - any other weapon (a gun, a knife): the killer the game names, unless any burning inferno or any HE
-      detonating on the tick reaches the victim, when the fire or the blast may have taken the last HP, or
-      another enemy of the victim fired a gun or swung a knife on the tick, who may have done part of the
-      drop. A weapon_fire cannot show who hit, but its absence rules a player out.
-    A non-lethal drop never names anyone: a shot on the tick is no evidence (another player's molotov or HE
-    can cause the same drop while someone fires), and GOTV demos carry no bullet_impact (none in 13
-    checked) to place a shot at the victim. Every other drop keeps a null attacker with
-    reconstructed_ambiguous = true.
-    drops: (tick, steamid, health_before, health_after, round, x, y, z) from the every-tick pass, the
-    position being the victim's feet on that tick. infernos: (steamid, start_tick, end_tick, x, y, z), end
-    null if it never went out in the demo. detonations: HE detonations (tick, steamid, x, y, z).
-    fires: weapon_fire (tick, steamid, weapon).
+    the game credits both hits. HP before and after come from the networked health. Who did it cannot be
+    told: one drop can mix hits from several players, team damage and world damage, and the events that
+    would rule a player in or out (weapon_fire, grenade detonations) can be lost in the same gap. Every row
+    has a null attacker and reconstructed_ambiguous = true; its HP shows up in the hit-table shortfall
+    (hit_table_checks). Kills still come from player_death.
+    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass.
     """
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
     lost = drops[(drops["round"] > 0).to_numpy() & unexplained]
-    death = {(int(t), int(v)): r for t, v, r in zip(kills.tick, kills.victim_steamid.astype("Int64"),
-                                                     kills.itertuples())}
-    shooting: dict[int, set[int]] = {}
-    for t, f, w in zip(fires.tick, fires.steamid.astype("Int64"), fires.weapon):
-        if not pd.isna(f) and str(w) not in THROWN:
-            shooting.setdefault(int(t), set()).add(int(f))
-
-    def near(df, owner, feet, reach):
-        """Whether any row of df (of that owner, unless owner is None) lies within reach of feet."""
-        if df.empty:
-            return False
-        own = df if owner is None else df[df.steamid.astype("Int64") == owner]
-        d = np.sqrt((own.x.astype(float) - feet[0]) ** 2 + (own.y.astype(float) - feet[1]) ** 2
-                    + (own.z.astype(float) - feet[2]) ** 2)
-        return bool((d <= reach).any())
-
-    def cause_matches(k, t, v, rnd, feet) -> bool:
-        a = None if pd.isna(k.attacker_steamid) else int(k.attacker_steamid)
-        w = str(k.weapon)
-        if w in WORLD_WEAPONS:
-            return a in (None, v)
-        if a is None:
-            return False
-        burning = infernos[(infernos.start_tick <= t)
-                           & (infernos.end_tick.isna() | (infernos.end_tick.astype("Float64") >= t))]
-        blasts = detonations[detonations.tick == t]
-        if w in INFERNO_WEAPONS:
-            return near(burning, a, feet, INFERNO_REACH)
-        if w == "hegrenade":
-            return near(blasts, a, feet, HE_REACH)
-        # A gun or a knife: the game names this killer and weapon, unless a grenade or another enemy's shot
-        # on the tick could have done part of it.
-        v_side = side_of.get((rnd, v))
-        rivals = {f for f in shooting.get(t, ()) if f != a and side_of.get((rnd, f)) not in (None, v_side)}
-        return not (rivals or near(burning, None, feet, INFERNO_REACH) or near(blasts, None, feet, HE_REACH))
-
-    rows = []
-    for t, v, hp0, hp1, rnd, x, y, z in zip(lost.tick, lost.steamid, lost.health_before, lost.health_after,
-                                            lost["round"], lost.x, lost.y, lost.z):
-        t, v, rnd, d = int(t), int(v), int(rnd), int(hp0) - int(hp1)
-        v_side = side_of.get((rnd, v))
-        k = death.get((t, v)) if hp1 == 0 else None
-        if k is not None and cause_matches(k, t, v, rnd, (float(x), float(y), float(z))):
-            attacker = None if pd.isna(k.attacker_steamid) else int(k.attacker_steamid)
-            weapon, hitgroup, ambiguous = k.weapon, k.hitgroup, False
-        else:
-            attacker, weapon, hitgroup, ambiguous = None, None, None, True
-        a_side = side_of.get((rnd, attacker)) if attacker is not None else None
-        rows.append(dict(tick=t, round=rnd, attacker_steamid=attacker, victim_steamid=v, weapon=weapon,
-                         hitgroup=hitgroup, health_before=int(hp0), health_after=int(hp1), dmg_health_capped=d,
-                         # Same definitions as event rows: team damage is any same-side attacker, self included.
-                         is_self=attacker == v, is_team_damage=attacker is not None and a_side == v_side,
-                         a_side=a_side, v_side=v_side, source="health", reconstructed_ambiguous=ambiguous))
+    rows = [dict(tick=int(t), round=int(rnd), attacker_steamid=None, victim_steamid=int(v), weapon=None,
+                 hitgroup=None, health_before=int(hp0), health_after=int(hp1), dmg_health_capped=int(hp0) - int(hp1),
+                 is_self=False, is_team_damage=False, a_side=None, v_side=side_of.get((int(rnd), int(v))),
+                 source="health", reconstructed_ambiguous=True)
+            for t, v, hp0, hp1, rnd in zip(lost.tick, lost.steamid, lost.health_before, lost.health_after,
+                                           lost["round"])]
     out = pd.DataFrame(rows, columns=["tick", "round", "attacker_steamid", "victim_steamid", "weapon", "hitgroup",
                                       "health_before", "health_after", "dmg_health_capped", "is_self",
                                       "is_team_damage", "a_side", "v_side", "source", "reconstructed_ambiguous"])
@@ -639,7 +565,7 @@ def hit_table_checks(dmg: pd.DataFrame, player_rounds: pd.DataFrame) -> tuple[li
     """The hit table against the game's per-round damage counter. (checks, unattributed HP)
 
     Each player-round's enemy hits in the damages table may fall short of its game_damage: the demo lost the
-    events, or a rebuilt hit names no attacker. That gap is recorded as a warning and as
+    events, and the rows rebuilt for them name no attacker. That gap is recorded as a warning and as
     match.unattributed_damage_hp, never matched against anything to pass. Hits over game_damage fail the
     map, because lost events cannot cause them: a round boundary read early, or a hit credited to the
     wrong player, does.
@@ -1259,8 +1185,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
             blind_parts.append(cur.loc[is_blind, ["tick", "steamid", "flash_duration", "X", "Y", "Z"]])
             hurt = fresh & prev_h.notna() & (cur.health < prev_h)
             drop_parts.append(pd.DataFrame({"tick": cur.tick[hurt], "steamid": cur.steamid[hurt],
-                                            "health_before": prev_h[hurt], "health_after": cur.health[hurt],
-                                            "x": cur.X[hurt], "y": cur.Y[hurt], "z": cur.Z[hurt]}))
+                                            "health_before": prev_h[hurt], "health_after": cur.health[hurt]}))
             spot_parts.append(cur.loc[is_spot, ["tick", "steamid", "mask"]])
             carry = cur.groupby("steamid", sort=False).tail(1).reset_index(drop=True)
             del at, ex, cur, grp
@@ -1325,12 +1250,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # ----- hits the demo's event stream lost, rebuilt from networked health
     drops = stamp(pd.concat(drop_parts, ignore_index=True))
     dmg["reconstructed_ambiguous"] = False
-    wf = ev("weapon_fire")
-    fires = pd.DataFrame({"tick": wf.tick, "steamid": pid(wf, "user"),
-                          "weapon": col(wf, "weapon").astype(str).str.removeprefix("weapon_")})
-    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, kills, side_of, T["infernos"],
-                                            T["grenade_events"][T["grenade_events"].event == "he_detonate"], fires)],
-                    ignore_index=True)
+    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of)], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
     # not negation; every filter below relies on real booleans.
     dmg = dmg.astype({"is_self": bool, "is_team_damage": bool, "reconstructed_ambiguous": bool}) \
