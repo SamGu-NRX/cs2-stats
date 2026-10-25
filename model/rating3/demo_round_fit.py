@@ -20,10 +20,18 @@ FEATURES = (
     "damage_game",
     "damage_raw100",
     "damage_capped100",
+    "kills_count",
+    "deaths_count",
+    "assists_count",
+    "flash_assists_count",
+    "trade_kills_count",
+    "traded_deaths_count",
     "kill",
     "assist",
     "flash_assist",
     "survival",
+    "team_win",
+    "team_loss",
     "trade_kill",
     "traded_death",
     "mk2",
@@ -34,6 +42,14 @@ FEATURES = (
     "equip_diff",
     "kill_x_equip",
     "survival_x_win",
+    "damage_x_equip",
+    "eco_kills_x_equip",
+    "eco_deaths_x_equip",
+    "kill_x_win",
+    "death_x_loss",
+    "damage_x_survival",
+    "swing_x_kill",
+    "swing_x_survival",
 )
 
 STAGES = {
@@ -51,7 +67,13 @@ STAGES = {
         "kill", "assist", "survival", "traded_death", "flash_assist", "trade_kill",
         "mk2", "mk3", "mk4", "mk5", "swing",
     ),
-    "equipment_interactions": FEATURES,
+    "action_counts_and_outcomes": (
+        "eco_kills", "eco_deaths", "damage_game", "damage_capped100",
+        "kills_count", "deaths_count", "assists_count", "flash_assists_count",
+        "trade_kills_count", "traded_deaths_count", "survival", "team_win", "team_loss",
+        "mk2", "mk3", "mk4", "mk5", "swing",
+    ),
+    "expanded_interactions": FEATURES,
 }
 
 
@@ -138,11 +160,18 @@ def parse_targets(data: dict) -> dict[str, dict]:
                 name = normalize(row["player"])
                 if name not in targets:
                     continue
+                eco_kills, _ = kd(cell(row, "st-kills", True))
+                eco_deaths, _ = kd(cell(row, "st-deaths", True))
                 targets[name][side] = number(cell(row, "st-rating"))
+                targets[name][f"{side}_eco_kills_display"] = eco_kills
+                targets[name][f"{side}_eco_deaths_display"] = eco_deaths
     return {name: row for name, row in targets.items() if {"total", "ct", "t"} <= row.keys()}
 
 
-def fit_duels(events: list[dict], targets: list[dict]) -> dict:
+def fit_duels(events: list[dict], targets: list[dict], include_side_targets: bool = False) -> dict:
+    if not include_side_targets:
+        targets = [target for target in targets if target["side"] is None]
+
     def unpack(params: np.ndarray) -> tuple[np.ndarray, float, float]:
         strengths = np.r_[params[:5], 0.0]
         return strengths, float(params[5]), float(params[6])
@@ -158,16 +187,21 @@ def fit_duels(events: list[dict], targets: list[dict]) -> dict:
         return scale * (1.0 - probability)
 
     def residual(params: np.ndarray) -> list[float]:
-        predicted: dict[tuple[str, str], dict[str, float]] = defaultdict(
+        predicted: dict[tuple[str, str, str], dict[str, float]] = defaultdict(
             lambda: {"kills": 0.0, "deaths": 0.0}
         )
         for event in events:
             points = predict_event(params, event)
-            predicted[(event["map"], event["attacker"])]["kills"] += points
-            predicted[(event["map"], event["victim"])]["deaths"] += points
+            predicted[(event["map"], event["attacker"], "total")]["kills"] += points
+            predicted[(event["map"], event["victim"], "total")]["deaths"] += points
+            attacker_side = event["side"].lower()
+            victim_side = "t" if attacker_side == "ct" else "ct"
+            predicted[(event["map"], event["attacker"], attacker_side)]["kills"] += points
+            predicted[(event["map"], event["victim"], victim_side)]["deaths"] += points
         output = []
         for target in targets:
-            value = predicted[(target["map"], target["player"])]
+            side = target["side"] or "total"
+            value = predicted[(target["map"], target["player"], side)]
             output.extend([
                 (value["kills"] - target["eco_kills_display"]) * 0.2,
                 (value["deaths"] - target["eco_deaths_display"]) * 0.2,
@@ -236,12 +270,15 @@ def build_duel_events(root: Path, joins: list[dict]) -> tuple[list[dict], list[d
         names = {str(row["steamid"]): normalize(row["name"]) for row in economy}
         round_players = {(int(row["round"]), str(row["steamid"])): row for row in player_rounds}
         for name, target in target_by_name.items():
-            targets.append({
-                "map": join["hltv"],
-                "player": name,
-                "eco_kills_display": target["eco_kills_display"],
-                "eco_deaths_display": target["eco_deaths_display"],
-            })
+            for side in (None, "ct", "t"):
+                prefix = "" if side is None else f"{side}_"
+                targets.append({
+                    "map": join["hltv"],
+                    "player": name,
+                    "side": side,
+                    "eco_kills_display": target[f"{prefix}eco_kills_display"],
+                    "eco_deaths_display": target[f"{prefix}eco_deaths_display"],
+                })
         for kill in kills:
             if kill["is_suicide"] or kill["is_teamkill"]:
                 continue
@@ -380,26 +417,54 @@ def build_round_rows(root: Path, joins: list[dict], duel_model: dict) -> list[di
             opponent_side = "T" if side == "CT" else "CT"
             equip_diff = (equip_by_round_side[(round_number, side)] - equip_by_round_side[(round_number, opponent_side)]) / 1000.0
             survived = bool(row["survived"]) if "survived" in row else (round_number, steamid) not in death_keys
+            deaths_this_round = death_count[(round_number, steamid)]
+            assists_this_round = assist_count[(round_number, steamid)]
+            flash_assists_this_round = flash_assist_count[(round_number, steamid)]
+            trade_kills_this_round = trade_kill_count[(round_number, steamid)]
+            traded_deaths_this_round = traded_death_count[(round_number, steamid)]
+            team_won = float(side == winner_side)
+            damage_game = game_damage_by_player[(round_number, steamid)]
+            damage_raw = raw_damage[(round_number, steamid)].get("__sum__", 0.0)
+            damage_capped = capped_damage[(round_number, steamid)].get("__sum__", 0.0)
+            eco_kills = fractional_kills[(round_number, steamid)]
+            eco_deaths = fractional_deaths[(round_number, steamid)]
+            swing_value = swing.get((names[steamid], round_number), 0.0)
             values = {
-                "eco_kills": fractional_kills[(round_number, steamid)],
-                "eco_deaths": fractional_deaths[(round_number, steamid)],
-                "damage_game": game_damage_by_player[(round_number, steamid)],
-                "damage_raw100": raw_damage[(round_number, steamid)].get("__sum__", 0.0),
-                "damage_capped100": capped_damage[(round_number, steamid)].get("__sum__", 0.0),
+                "eco_kills": eco_kills,
+                "eco_deaths": eco_deaths,
+                "damage_game": damage_game,
+                "damage_raw100": damage_raw,
+                "damage_capped100": damage_capped,
+                "kills_count": float(kills_this_round),
+                "deaths_count": float(deaths_this_round),
+                "assists_count": float(assists_this_round),
+                "flash_assists_count": float(flash_assists_this_round),
+                "trade_kills_count": float(trade_kills_this_round),
+                "traded_deaths_count": float(traded_deaths_this_round),
                 "kill": float(kills_this_round > 0),
-                "assist": float(assist_count[(round_number, steamid)] > 0),
-                "flash_assist": float(flash_assist_count[(round_number, steamid)] > 0),
+                "assist": float(assists_this_round > 0),
+                "flash_assist": float(flash_assists_this_round > 0),
                 "survival": float(survived),
-                "trade_kill": float(trade_kill_count[(round_number, steamid)] > 0),
-                "traded_death": float(traded_death_count[(round_number, steamid)] > 0),
+                "team_win": team_won,
+                "team_loss": 1.0 - team_won,
+                "trade_kill": float(trade_kills_this_round > 0),
+                "traded_death": float(traded_deaths_this_round > 0),
                 "mk2": float(kills_this_round >= 2),
                 "mk3": float(kills_this_round >= 3),
                 "mk4": float(kills_this_round >= 4),
                 "mk5": float(kills_this_round >= 5),
-                "swing": swing.get((names[steamid], round_number), 0.0),
+                "swing": swing_value,
                 "equip_diff": equip_diff,
                 "kill_x_equip": float(kills_this_round) * equip_diff,
-                "survival_x_win": float(survived) * float(side == winner_side),
+                "survival_x_win": float(survived) * team_won,
+                "damage_x_equip": damage_game * equip_diff,
+                "eco_kills_x_equip": eco_kills * equip_diff,
+                "eco_deaths_x_equip": eco_deaths * equip_diff,
+                "kill_x_win": float(kills_this_round) * team_won,
+                "death_x_loss": float(deaths_this_round) * (1.0 - team_won),
+                "damage_x_survival": damage_game * float(survived),
+                "swing_x_kill": swing_value * float(kills_this_round),
+                "swing_x_survival": swing_value * float(survived),
             }
             values["map"] = join["hltv"]
             values["player"] = names[steamid]
@@ -524,7 +589,8 @@ def main() -> None:
     joins_result = json.loads(args.joins.read_text(encoding="utf-8"))
     joins = joins_result["accepted"]
     duel_events, duel_targets = build_duel_events(args.data, joins)
-    duel_model = fit_duels(duel_events, duel_targets)
+    duel_model = fit_duels(duel_events, duel_targets, include_side_targets=False)
+    duel_model_with_sides = fit_duels(duel_events, duel_targets, include_side_targets=True)
     rows = attach_targets(build_round_rows(args.data, joins, duel_model), args.data)
     X, y, metadata, _ = aggregate(rows)
     results = {}
@@ -537,9 +603,18 @@ def main() -> None:
             "groups": result["groups"],
             "rounding_floor": floor,
         }
+    exact_game_damage_maps = sum(
+        int((args.data / join["demo"] / "player_rounds.parquet").exists()) for join in joins
+    )
     payload = {
         "joins": joins_result["counts"],
+        "table_availability": {
+            "accepted_join_folders": len(joins),
+            "exact_game_damage_maps": exact_game_damage_maps,
+            "capped_damage_fallback_maps": len(joins) - exact_game_damage_maps,
+        },
         "duel_model": duel_model,
+        "duel_model_with_side_targets": duel_model_with_sides,
         "round_rows": len(rows),
         "equations": len(y),
         "stages": results,
