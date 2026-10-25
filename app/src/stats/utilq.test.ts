@@ -18,10 +18,10 @@ function table<N extends TableName>(name: N, rows: Record<string, unknown>[]): T
 const eyes = { a: [400, 0, -236], b: [0, 0, 64] } as const;
 const smoke = (steamid: string, x: number, z: number) => ({ steamid, round: 1, start_tick: 100, end_tick: 2000, x, y: 0, z: z - 60 });
 
-function sights(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba", "ab"]): number[] {
+function facts(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba", "ab"], ticks = 1) {
   const eng = (id: number, att: "a" | "b", vic: "a" | "b") => ({ engagement_id: id, round: 1, attacker_steamid: att, victim_steamid: vic, start_tick: 436, end_tick: 564, first_visible_tick: 500 });
-  const tick = (id: number, att: "a" | "b", vic: "a" | "b") => ({
-    engagement_id: id, tick: 500, mesh_visible: true, smoke_blocked: true,
+  const tick = (id: number, att: "a" | "b", vic: "a" | "b", k: number) => ({
+    engagement_id: id, tick: 500 + k, mesh_visible: true, smoke_blocked: true,
     a_x: eyes[att][0], a_y: eyes[att][1], a_eye_z: eyes[att][2], v_x: eyes[vic][0], v_y: eyes[vic][1], v_eye_z: eyes[vic][2],
   });
   const t: MatchTables = {
@@ -33,10 +33,11 @@ function sights(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba"
     grenade_throws: null, grenade_events: null, shots: null, positions: null, spotted: null, infernos: null,
     smokes: table("smokes", smokes),
     engagements: table("engagements", dirs.map((d, id) => eng(id, d[0] as "a" | "b", d[1] as "a" | "b"))),
-    engagement_ticks: table("engagement_ticks", dirs.map((d, id) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b"))), purchases: null,
+    engagement_ticks: table("engagement_ticks", dirs.flatMap((d, id) => Array.from({ length: ticks }, (_, k) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b", k)))), purchases: null,
   };
-  return deriveUtilQ(buildCtx(t, CS2RB)).map((f) => f.sights);
+  return deriveUtilQ(buildCtx(t, CS2RB));
 }
+const sights = (smokes: Record<string, unknown>[], dirs?: ("ab" | "ba")[]) => facts(smokes, dirs).map((f) => f.sights);
 
 it("credits a sightline through a smoke once, to the team the smoke hid", () => {
   // fails if both directions of the pair credit the thrower, or the credit goes to the attacker's team
@@ -55,4 +56,12 @@ it("does not credit a smoke past the end of the sightline", () => {
   // fails if the sphere test treats the sight segment as an infinite line: the second smoke sits on the line
   // 500 units beyond a's eye and would take half the credit
   expect(sights([smoke("a", 200, -86), smoke("a", 800, -536)])).toEqual([1, 0]);
+});
+
+it("counts every second an enemy line of sight ran through the smoke, not only the onset", () => {
+  // fails if blocked time stops at the onset tick or credits the attacker's own team
+  const [mine, theirs] = facts([smoke("a", 200, -86), smoke("b", 600, 0)], ["ba"], 64);
+  expect(mine.blockedSecs).toBeCloseTo(1, 9);
+  expect(theirs.blockedSecs).toBe(0);
+  expect(mine.sights).toBe(1);
 });

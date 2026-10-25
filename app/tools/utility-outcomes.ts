@@ -11,7 +11,7 @@ import { isUtility } from "../src/stats/weapons";
 import { WINPROB, proMaps } from "./node-read";
 
 type Row = Record<string, number | string | boolean | null>;
-const SUM = ["flashKills", "flashAssists", "heDmg", "utilDmgTaken", "utilUnused", "smokes", "flashes", "hes", "molotovs", "aliveSecs"] as const;
+const SUM = ["flashKills", "flashAssists", "heDmg", "utilDmgTaken", "utilUnused", "smokes", "flashes", "hes", "molotovs", "aliveSecs", "molotovHits", "fireDmg"] as const;
 const rows: Row[] = [];
 let mi = 0;
 for await (const { t } of proMaps(["grenade_throws", "smokes", "engagements", "engagement_ticks"])) {
@@ -21,11 +21,14 @@ for await (const { t } of proMaps(["grenade_throws", "smokes", "engagements", "e
   const key = (ri: number, tm: number) => `${ri}:${tm}`;
   for (const r of f.pr) {
     let x = team.get(key(r.ri, r.team));
-    if (!x) team.set(key(r.ri, r.team), (x = { map: mi, ri: r.ri, team: r.team, side: r.side, own: r.ownBuy, opp: r.oppBuy, won: r.won, sights: vis ? 0 : null, utilDmg: 0, enemiesFlashed: 0, enemyBlindSecs: 0, teamFlashed: 0, ...Object.fromEntries(SUM.map((k) => [k, 0])) }));
+    if (!x) team.set(key(r.ri, r.team), (x = { map: mi, ri: r.ri, team: r.team, side: r.side, own: r.ownBuy, opp: r.oppBuy, won: r.won, sights: vis ? 0 : null, blocked: vis ? 0 : null, utilDmg: 0, enemiesFlashed: 0, enemyBlindSecs: 0, teamFlashed: 0, ...Object.fromEntries(SUM.map((k) => [k, 0])) }));
     for (const k of SUM) (x[k] as number) += r.m[k] ?? 0;
   }
   const teamOf = new Map(f.pr.map((r) => [`${r.ri}:${r.pi}`, r.team]));
-  for (const q of f.utilq) { const x = team.get(key(q.ri, teamOf.get(`${q.ri}:${q.pi}`)!)); if (x && x.sights !== null) (x.sights as number) += q.sights; }
+  for (const q of f.utilq) {
+    const x = team.get(key(q.ri, teamOf.get(`${q.ri}:${q.pi}`)!));
+    if (x && x.sights !== null) { (x.sights as number) += q.sights; (x.blocked as number) += q.blockedSecs; }
+  }
   // the pruned metrics, with the definitions they had in the engine
   const pi = new Map(f.players.map((p, i) => [p.id, i]));
   const ri = new Map(f.rounds.map((r) => [r.number, r.ri]));
@@ -54,7 +57,7 @@ const COUNTS = ["smokes", "flashes", "hes", "molotovs"];
 const METRICS: [string, string][] = [
   ["flashKillsPerFlash", "flashKills"], ["assistsPerFlash", "flashAssists"], ["dmgPerHe", "heDmg"], ["grenadeDmgTaken", "utilDmgTaken"],
   ["utilUnused", "utilUnused"], ["smokesPR", "smokes"], ["flashesPR", "flashes"], ["hesPR", "hes"], ["molotovsPR", "molotovs"],
-  ["smokeSights", "sights"], ["utilDmgPR (pruned)", "utilDmg"], ["enemiesPerFlash (pruned)", "enemiesFlashed"],
+  ["smokeSights", "sights"], ["smokeBlockedSecs", "blocked"], ["molotovEnemiesHit", "molotovHits"], ["molotovDmg", "fireDmg"], ["utilDmgPR (pruned)", "utilDmg"], ["enemiesPerFlash (pruned)", "enemiesFlashed"],
   ["blindPerFlash (pruned)", "enemyBlindSecs"], ["teamFlashPR (pruned)", "teamFlashed"],
 ];
 

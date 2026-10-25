@@ -100,8 +100,12 @@ blind, and a flash-to-kill is a flashed enemy dying to the team while still blin
 | flashKillsPerFlash | exact | Flash-to-kills per flashbang thrown (Leetify's rate) |
 | utilUnused | approx | Value of grenades you held at freeze end and had not thrown when you died, per death (Leetify's rate). Grenades picked up later are not seen. Unmeasured, not $0, for sources without inventories. |
 | smokeSights | approx | Enemy sightlines blocked per smoke thrown (`utilq.ts`). A sightline is the onset of a directed engagement (`first_visible_tick`); one that opened through a smoke (`smoke_blocked`) counts for the smoke(s) whose sphere crosses it, split equally, and only for a smoke thrown by the victim's team. Smoke model: the extractor's, a sphere of radius 144 centred 60 units above the detonation (awpy 3.1.1 defaults). Needs v1 maps with visibility. |
+| smokeBlockedSecs | approx | Seconds an enemy's mesh line of sight to your team ran through your smoke (same sphere, engagement ticks with mesh visibility and the smoke flag), per smoke; shared among smokes crossing the line, credited only to the hidden team's smokes. |
+| molotovEnemiesHit | approx | Distinct enemies your molotov or incendiary damaged, per one thrown. Ours. |
+| molotovDmg | approx | Enemy fire damage per molotov thrown. Ours. |
 
-**Pruned from performance**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`;
+The user asked for smoke and molotov usefulness by name, so those metrics stay whatever their link to
+round wins; VALIDATION.md states the link. **Pruned from performance**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`;
 numbers in VALIDATION.md): blindPerFlash and utilDmgPR duplicated enemiesPerFlash and dmgPerHe;
 enemiesPerFlash and teamFlashPR showed no lasting link to winning; two smoke variants duplicated
 smokeSights; no molotov candidate earned a place. Kept with caveats: grenadeDmgTaken (HLTV parity),
