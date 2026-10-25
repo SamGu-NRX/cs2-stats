@@ -258,6 +258,18 @@ def test_a_player_who_left_is_checked_against_his_counters_at_the_disconnect():
         == [("deaths", D)]
 
 
+def test_every_player_in_any_table_is_checked_not_only_killers_and_victims():
+    # Review of PR 19: an abandoner who only assisted, or only appears in other tables, got no check at all.
+    kills, dmg, sb = _base()
+    board = sb[sb.steamid != B]
+    left = sb[sb.steamid == B].assign(tick=4000, assists_total=0)  # B assisted once
+    bad = _fatal_failures(ex.validate_scoreboard(kills, dmg, board, left))
+    assert [(c["check"], c["steamid"]) for c in bad] == [("assists", B)]
+    E = 55  # in player_rounds or positions only, never on the scoreboard, no disconnect read
+    checks = ex.validate_scoreboard(kills, dmg, sb, None, {E})
+    assert [c["check"] for c in checks if c.get("steamid") == E] == ["present_on_scoreboard"]
+
+
 def _rounds(n, winners):
     return pd.DataFrame(dict(round=range(1, n + 1), start_tick=[i * 100 for i in range(n)],
                              freeze_end_tick=[i * 100 + 10 for i in range(n)],
