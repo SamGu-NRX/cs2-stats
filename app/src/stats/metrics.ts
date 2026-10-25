@@ -42,7 +42,15 @@ export interface Metric {
   value: (s: Summary) => number | null;
   /** why value is null for s, for a metric with a rule of its own (Rating 3.0's rated-round gate); compare() reports it */
   why?: (s: Summary) => string | null;
+  /**
+   * The events the value rests on (AWP duels, saved rounds), so the UI can show their count beside it.
+   * With `min`, compare() gives no percentile below that count: the metric's reliability needs it
+   * (METRICS.md gives the evidence per metric).
+   */
+  sample?: Sample;
 }
+
+export interface Sample { n: (s: Summary) => number; unit: string; min?: number }
 
 const per = (a: number, b: number) => (b > 0 ? a / b : null);
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
@@ -167,7 +175,8 @@ const M: Metric[] = [
   { id: "awpSwing", label: "AWP swing", hltv: "AWP Swing", kind: "performance", group: "sniping", unit: "pct", status: "approx",
     def: "Swing from your AWP kills and your deaths holding the AWP, per round.", needs: ["model", "activeWeapon"], value: (s) => (s.m.swingRounds ? (100 * s.m.awpSwing) / s.m.swingRounds : null) },
   { id: "awpDuelWin", label: "AWP duel win", hltv: "AWP Duel Win %", kind: "performance", group: "sniping", unit: "pct", status: "approx",
-    def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", needs: ["activeWeapon"], value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels) },
+    def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", needs: ["activeWeapon"], value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels),
+    sample: { n: (s) => s.m.awpDuels, unit: "AWP duels" } },
   { id: "flashSwing", label: "Flash swing", hltv: "Flash Swing", kind: "performance", group: "utility", unit: "pct", status: "approx",
     def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), split equally when several flashes were, per round.",
     needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.flashSwing) / s.m.swingRounds : null) },
