@@ -17,19 +17,19 @@ import { useData } from "../data/provider";
 import { DeathIcon } from "../icons/game";
 import { fmtPct, mapName, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
-import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import { useScope } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
 import { RoleCard } from "./profile/parts";
 import { Empty, NeedsDemo, NotCompared, Provisional } from "./shared";
 
 export default function Playstyle() {
   const { matches, you } = useData();
-  const { map, n } = useFilters();
+  const { map, n } = useScope();
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const q = useMemo(() => (list.length && you.length ? { files: list.map((e) => e.file), filter: { player: you } } : null), [list, you]);
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Playstyle" }]} tools={<><MapFilter /><TimeFilter /></>} />
+      <BarContent crumbs={[{ label: "Playstyle" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in playstyle">
         {!q ? <Card><Empty text="No matches in this filter." /></Card> : (
           <>
@@ -51,7 +51,7 @@ export default function Playstyle() {
 export function WhereYouPlay() {
   const { matches, you } = useData();
   const maps = mapsIn(matches);
-  const { map: filtered } = useFilters();
+  const { map: filtered } = useScope();
   const [map, setMap] = useState<string>(filtered ?? maps[0] ?? "de_dust2");
   const onMap = useMemo(() => matches.filter((s) => s.match.map === map), [matches, map]);
   const q = useMemo(() => (onMap.length && you.length ? { files: onMap.map((e) => e.file), filter: { player: you, maps: [map] } } : null), [onMap, you, map]);

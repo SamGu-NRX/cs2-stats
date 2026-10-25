@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchHref, pageHref, parseHash } from "./router";
+import { matchHref, pageHref, parseHash, redirectOf } from "./router";
 
 describe("parseHash", () => {
   it("defaults to home", () => {
@@ -24,6 +24,26 @@ describe("parseHash", () => {
     const r = parseHash("#/match/samples/a.json.gz");
     expect(r.file).toBe("samples/a.json.gz");
     expect(r.tab).toBe("overview");
+  });
+});
+
+describe("retired views", () => {
+  // Playstyle and Weapons left the sidebar; old links (bookmarks, palette history) must still land on
+  // the section that holds their content, with the scope they carried.
+  it("opens Profile's Identity section for #/playstyle, keeping its scope", () => {
+    const r = parseHash("#/playstyle?map=de_dust2&n=10");
+    expect(r.page).toBe("profile");
+    expect(r.query.get("sec")).toBe("identity");
+    expect(r.query.get("map")).toBe("de_dust2");
+    expect(redirectOf("#/playstyle?map=de_dust2")).toBe("#/profile?map=de_dust2&sec=identity");
+  });
+  it("opens Career aim's gun table for #/weapons", () => {
+    expect(parseHash("#/weapons").page).toBe("aim");
+    expect(redirectOf("#/weapons")).toBe("#/aim?sec=guns");
+  });
+  it("leaves current pages alone", () => {
+    expect(redirectOf("#/profile?sec=identity")).toBeNull();
+    expect(redirectOf("#/match/dev/weapons")).toBeNull();
   });
 });
 

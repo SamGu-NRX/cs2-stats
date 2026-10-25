@@ -33,7 +33,7 @@ import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
-import { MapFilter, SideFilter, TimeFilter, useFilters } from "../shell/filters";
+import { SideFilter, useScope } from "../shell/filters";
 import { ApproxMark, BreakRows, Empty, NeedsDemo, NotCompared, Provisional, SectionAside } from "./shared";
 import { HowGood, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
@@ -58,7 +58,7 @@ interface ProfileData {
 
 export default function ProfileView() {
   const { matches, you: ids, baselines, baselinesError } = useData();
-  const { map, n, side } = useFilters();
+  const { map, n, side } = useScope();
   const r = useRoute();
   const [cmp, setCmp] = useState<Compare>(() => (r.query.get("cmp") as Compare) || "bench");
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
@@ -85,7 +85,7 @@ export default function ProfileView() {
   if (!p) {
     return (
       <div className="view view--capped">
-        <BarContent crumbs={[{ label: "Profile" }]} tools={<><MapFilter /><TimeFilter /><SideFilter /></>} />
+        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
         <div className="view__in profile">
           {(sums.loading || !matches.length) && !sums.error ? <div className="skel" style={{ height: 340 }} /> : <Card><Empty text={sums.error ?? "No matches in this filter."} /></Card>}
         </div>
@@ -94,7 +94,7 @@ export default function ProfileView() {
   }
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }]} tools={<><MapFilter /><TimeFilter /><SideFilter /></>} />
+      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
       <div className="view__in profile" data-side={side}>
         <div className="profile__top">
           <PlayerCard p={p} side={side} cmp={cmp} />
@@ -289,7 +289,7 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
   return (
     <Card title="Style attributes" aside={
       <span className="card__aside-row">
-        <span className="meta" data-tip={BOTS_TIP}>{res ? botPoolText(pool === "all" ? "all" : res.role, res.n) : ""}</span>
+        <span className="meta" data-tip={BOTS_TIP}>{res ? botPoolText(res.careers, { n: res.n, role: pool === "all" ? "all" : res.role }) : ""}</span>
         <Segmented label="Compared to" value={cmp} onChange={setCmp} options={[
           { value: "role", label: `${peer} bots`, tip: `You are compared with ${peer.toLowerCase()} bot careers: more than 0.20 AWP kills per round makes an AWPer.` },
           { value: "everyone", label: "All bots" },
