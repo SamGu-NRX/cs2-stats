@@ -102,10 +102,12 @@ describe("5. kill attribution (CS Demo Manager)", () => {
     b.m.kills.flags = [0, 64];
     expect(counters(b)[1].tradedDeaths).toBe(1);
   });
-  test("deaths while controlling a bot are not the player's", () => {
+  test("deaths while controlling a bot are not the player's, opening death included", () => {
     const b = new MatchBuilder().kill(0, 5, 6, 0);
     b.m.kills.vBody = [2];
-    expect(counters(b)[0].deaths).toBe(0);
+    const c = counters(b)[0];
+    expect(c.deaths).toBe(0);
+    expect(c.openingDeaths).toBe(0); // else opening attempts and success count a death the player never had
   });
 });
 

@@ -249,7 +249,8 @@ export function countMatch(ctx: MatchCtx, trades: Trades, swingResult: SwingResu
           if (won) c.openingWins++;
           if (isSniper(open.weapon)) c.sniperOpeningKills++;
         }
-        if (open.victim === pi) {
+        // a death while controlling a bot is not the player's (as for deaths above)
+        if (open.victim === pi && !open.victimBot) {
           c.openingDeaths++;
           if (traded(open)) c.openingDeathsTraded++;
         }
