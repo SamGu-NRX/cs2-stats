@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import logging
 import math
 import os
 import platform
@@ -1491,6 +1492,7 @@ COMPLETE = "COMPLETE"  # JSON {file name: bytes} of a version folder, written af
 # replaced it; delete it all) or "stale: <reason>" (keep it until a re-extraction replaces it). An empty
 # file, as extractor 1.5.0 to 1.8.0 wrote, means replaced.
 RETIRED = "RETIRED"
+log = logging.getLogger("extract")
 _VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
 
 
@@ -1573,7 +1575,7 @@ def prune_map(map_dir: Path) -> list[Path]:
         return []
     locked: list[Path] = []
     if (map_dir / RETIRED).exists():
-        if _stale(map_dir):
+        if not _replaced(map_dir):
             return locked  # skipped by readers, kept until its re-extraction retires it
         for e in sorted(map_dir.iterdir(), key=lambda e: (e.name == RETIRED, e.name != "match.parquet")):
             if e.name != RETIRED:
@@ -1603,11 +1605,25 @@ def _write_marker(map_dir: Path, text: str) -> None:
     os.replace(staged, Path(map_dir) / RETIRED)
 
 
-def _stale(map_dir: Path) -> bool:
+def _replaced(map_dir: Path) -> bool:
+    """Whether the RETIRED marker allows deleting the map: it reads "replaced", or is empty (1.5.0 to 1.8.0).
+    Anything else keeps the map: a stale reason, unknown text, or a marker that cannot be read."""
+    marker = Path(map_dir) / RETIRED
     try:
-        return (Path(map_dir) / RETIRED).read_text(encoding="utf-8").startswith("stale")
-    except OSError:
+        text = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as e:
+        log.warning("cannot read %s (%s); keeping the map as stale", marker, e)
         return False
+    if text in ("", "replaced"):
+        return True
+    if not text.startswith("stale"):
+        log.warning("%s reads %r, neither replaced nor stale; keeping the map", marker, text[:80])
+    return False
+
+
+def _stale(map_dir: Path) -> bool:
+    """Whether readers skip the map but its files must be kept."""
+    return (Path(map_dir) / RETIRED).exists() and not _replaced(map_dir)
 
 
 def retire_map(map_dir: Path) -> list[Path]:
@@ -1853,7 +1869,6 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                   dem_bytes=dem.stat().st_size, map=None, team1_file=team1,
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
-    tmp = out_dir / f".tmp-{os.getpid()}"
     try:
         for name, fn in STAGES:
             with Timer(ctx, f"stage_{name}"):
@@ -1915,24 +1930,8 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
             raise ValidationFailed(f"{len(failed)} fatal validation checks failed: {failed[:5]}")
 
         with Timer(ctx, "write"):
-            if tmp.exists():
-                shutil.rmtree(tmp)
-            # A folder retired earlier and now extracted into again holds a live map once more.
-            (out_dir / RETIRED).unlink(missing_ok=True)
-            tmp.mkdir(parents=True)
             # Only the schema v1 tables are written; awpy's own tables were inputs and cross-checks.
-            for tname, df in ctx.tables["demoparser2"].items():
-                p = tmp / f"{tname}.parquet"
-                pdf = _to_polars(df, tname)
-                pdf.write_parquet(p, compression="zstd", compression_level=ZSTD_LEVEL)
-                result["rows"][tname] = pdf.height
-                result["bytes"][tname] = p.stat().st_size
-            # Read back every file so a truncated write cannot pass.
-            for p in tmp.rglob("*.parquet"):
-                pl.read_parquet_schema(p)
-            result["version_dir"] = publish_version(tmp, out_dir, EXTRACTOR_VERSION).name
-            # An old version a reader still has open stays until a later prune; it never fails the map.
-            result["old_versions_locked"] = [str(x) for x in prune_map(out_dir)]
+            write_output(ctx.tables["demoparser2"], out_dir, result)
         result["output_bytes"] = sum(result["bytes"].values())
         result["ok"] = True
     except Exception as e:  # noqa: BLE001 - every failure is reported, the RAR is kept
@@ -1940,8 +1939,6 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
         result["errors"].append(msg if not ctx.truncated or msg.startswith(f"RuntimeError: {TRUNCATED}")
                                 else f"{TRUNCATED}: {msg}")
         result["traceback"] = traceback.format_exc(limit=8)
-        if tmp.exists():
-            shutil.rmtree(tmp, ignore_errors=True)
     result["seconds"] = round(time.perf_counter() - t0, 2)
     try:
         import psutil
@@ -1950,6 +1947,36 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
     except Exception:  # noqa: BLE001 - memory telemetry is best-effort
         pass
     return result
+
+
+def write_output(tables: dict[str, pd.DataFrame], out_dir: Path, result: dict) -> None:
+    """Write the tables as a new version of the map in out_dir and publish it; fill result's rows, bytes,
+    version_dir and old_versions_locked. A RETIRED marker on out_dir (a withdrawn map extracted into again)
+    is removed only once the new version is published, so a failed write leaves the old tables withdrawn."""
+    tmp = Path(out_dir) / f".tmp-{os.getpid()}"
+    try:
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        for tname, df in tables.items():
+            p = tmp / f"{tname}.parquet"
+            pdf = _to_polars(df, tname)
+            pdf.write_parquet(p, compression="zstd", compression_level=ZSTD_LEVEL)
+            result["rows"][tname] = pdf.height
+            result["bytes"][tname] = p.stat().st_size
+        # Read back every file so a truncated write cannot pass.
+        for p in tmp.rglob("*.parquet"):
+            pl.read_parquet_schema(p)
+        result["version_dir"] = publish_version(tmp, out_dir, EXTRACTOR_VERSION).name
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    # COMPLETE is written and CURRENT replaced: the folder holds a live map again. A crash before this
+    # unlink never makes the old tables live: readers skip the new version too, and under a "replaced"
+    # marker the next prune deletes it, while the job, never finished, fails its archive for a retry.
+    (Path(out_dir) / RETIRED).unlink(missing_ok=True)
+    # An old version a reader still has open stays until a later prune; it never fails the map.
+    result["old_versions_locked"] = [str(x) for x in prune_map(out_dir)]
 
 
 class ValidationFailed(RuntimeError):
