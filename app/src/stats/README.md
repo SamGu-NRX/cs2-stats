@@ -10,12 +10,12 @@ that build the pro baselines. Metric definitions are in `METRICS.md`; the eviden
 | Phase | State |
 |---|---|
 | Loader (`load.ts`, hyparquet) | done; reads v1 folders and pre-v1 folders |
-| Scoreboard on tables, the HLTV gate | done; 16 maps exact for every player on K, D, KAST and ADR (`hltv-exact.test.ts`), kills exact on every joined map |
-| Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done |
+| Scoreboard on tables, the HLTV gate | done; 83 of 194 joined maps exact for every player on K, D, KAST and ADR; `hltv-exact.test.ts` pins 24 and checks kills on all |
+| Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done; Rating 3.0 runs the diagnostic polynomial until the per-round model lands in `params.json` |
 | Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
-| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json` |
-| New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation status per metric in `METRICS.md` |
-| UI on the new API | in progress on this branch: `ui/data` adapters and the worker move to the calls below |
+| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json`, 340 KB, 214 pro players |
+| New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation per metric in `VALIDATION.md` |
+| UI and worker on the new API | in progress on this branch (rebased onto `feat/app-redesign`) |
 
 ## Pipeline
 
@@ -65,6 +65,7 @@ equipment, plant, and `winProb`, the win-probability path), `pr` (one row per pl
 | `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
 | `gunProficiency(facts, filter)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. |
 | `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
+| `presence(tables, playerId, side?)`, `addPresence` (`positions.ts`) | `Presence` | Alive samples per 64-unit grid cell and seconds per place, from a match's tables (facts do not keep positions). `playerId = null` gives every player, the map's walkable backdrop. |
 
 ### Baselines
 `pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
@@ -90,7 +91,7 @@ comes from:
 | `SUBSTATS`, `METRICS` from `metrics.ts` and `hltv.ts` | `METRICS` (one list; `hltv` holds HLTV's name) |
 | `deriveRole(counters)` | `roleBlend(summary, side)` |
 | `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"` |
-| `PosAgg` heatmaps | from `facts.kills` positions and the movement facts (positions are not cached in facts) |
+| `PosAgg` heatmaps | `presence(tables, id)` per match, summed with `addPresence`; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
 | `MatchView.human` | `facts.match.pov` (the recording player's steamid) |
 
 ## Gaps in the inputs
