@@ -137,18 +137,86 @@
       "source": "fit",
       "script": "swing_fit.py",
       "accepted_joins": 318,
-      "events": 602
+      "consumed_joins": 318,
+      "skipped_joins": 0,
+      "layouts": {
+        "schema_v1": 315,
+        "legacy": 3
+      },
+      "skipped": [],
+      "events": 58391,
+      "unattributed_damage_hp": 0,
+      "excluded_damage_rows": 293,
+      "flash_calibration_layout": "legacy",
+      "flash_calibration_events": 602
     },
-    "event_credit_model": "damage_share_then_flash_residual",
+    "event_credit_model": "damage_share_then_single_flash_residual",
     "assist_damage": 40,
     "trade_window_seconds": 5.0,
-    "flash_credit_fraction": 0.15400502293429819,
-    "flash_credit_sample_size": 23,
+    "flash_credit_fraction": 0.15399681597047077,
+    "flash_credit_sample_size": 20,
+    "held_out": {
+      "split": "5-fold GroupKFold by match",
+      "n": 1447,
+      "matches": 155,
+      "mae": 0.028531040762445,
+      "p95": 0.15407653440795147,
+      "max": 0.2962218825166375,
+      "folds": [
+        {
+          "fold": 1,
+          "n": 290,
+          "matches": 31,
+          "median": 0.8460685677421699,
+          "mae": 0.02761600530004882,
+          "p95": 0.1539877179564524,
+          "max": 0.23503349607506285
+        },
+        {
+          "fold": 2,
+          "n": 290,
+          "matches": 31,
+          "median": 0.8460723785324742,
+          "mae": 0.028644439327988273,
+          "p95": 0.15406603654257509,
+          "max": 0.2962218825166375
+        },
+        {
+          "fold": 3,
+          "n": 289,
+          "matches": 31,
+          "median": 0.8460723785324742,
+          "mae": 0.029639245908668302,
+          "p95": 0.15407818865462639,
+          "max": 0.15491834965875362
+        },
+        {
+          "fold": 4,
+          "n": 289,
+          "matches": 31,
+          "median": 0.8460904687546404,
+          "mae": 0.029060621554652326,
+          "p95": 0.15411949788250134,
+          "max": 0.29603419453407387
+        },
+        {
+          "fold": 5,
+          "n": 289,
+          "matches": 31,
+          "median": 0.8460723785324742,
+          "mae": 0.027697665550960184,
+          "p95": 0.1540926012035293,
+          "max": 0.2961147997050181
+        }
+      ],
+      "target": "damage=False flash=1 trade=False"
+    },
     "zero_rules": [
       "unpreventable post-bomb kills have zero swing",
       "kill credit is never negative",
       "failed trade victim still receives the full victim debit",
-      "round with an unvalued probability event is unknown"
+      "round with an unvalued probability event is unknown",
+      "unattributed, health-reconstructed, or ambiguous damage rows do not receive damage-share credit"
     ],
     "round_end_remainder": {
       "clutcher_weight": 1,
@@ -163,8 +231,15 @@
       "source": "fit",
       "script": "eco_fit.py",
       "accepted_joins": 318,
-      "duels": 462,
-      "targets": 30
+      "consumed_joins": 318,
+      "skipped_joins": 0,
+      "layouts": {
+        "schema_v1": 315,
+        "legacy": 3
+      },
+      "skipped": [],
+      "duels": 45319,
+      "targets": 3180
     },
     "groups": [
       "sniper",
@@ -175,18 +250,68 @@
       "pistol"
     ],
     "strength": {
-      "sniper": 0.8000365369485354,
-      "rifle1": 0.5883787885710595,
-      "rifle2": 0.3002174511530293,
-      "smg": 0.1458257703123428,
-      "pistolPlus": 0.29331672693076777,
+      "sniper": 0.6211831642060697,
+      "rifle1": 0.5237915968519881,
+      "rifle2": 0.5302156525681799,
+      "smg": 0.40147567806345835,
+      "pistolPlus": 0.15259719869919514,
       "pistol": 0.0
     },
     "ct_edge": 0.0800427076735365,
-    "kill_points_scale": 2.0863386903749372,
-    "duels": 462,
-    "targets": 30,
-    "objective_mae": 0.10760526038940484,
+    "kill_points_scale": 1.6618416540532308,
+    "duels": 45319,
+    "targets": 3180,
+    "objective_mae": 0.8004568082803943,
+    "held_out": {
+      "split": "5-fold GroupKFold by match",
+      "targets": 3180,
+      "matches": 161,
+      "mae": 0.803752909530498,
+      "p95": 2.0884243605910955,
+      "max": 4.113072563022001,
+      "folds": [
+        {
+          "fold": 1,
+          "targets": 640,
+          "matches": 32,
+          "mae": 0.7992700927629668,
+          "p95": 1.9870733770733275,
+          "max": 3.2732878210556566
+        },
+        {
+          "fold": 2,
+          "targets": 640,
+          "matches": 32,
+          "mae": 0.7700252078446141,
+          "p95": 2.1485138275127986,
+          "max": 3.665299802832907
+        },
+        {
+          "fold": 3,
+          "targets": 640,
+          "matches": 33,
+          "mae": 0.798413757887194,
+          "p95": 1.9249908843380332,
+          "max": 3.3850005111321226
+        },
+        {
+          "fold": 4,
+          "targets": 630,
+          "matches": 32,
+          "mae": 0.789858007447279,
+          "p95": 2.0839526073412458,
+          "max": 4.113072563022001
+        },
+        {
+          "fold": 5,
+          "targets": 630,
+          "matches": 32,
+          "mae": 0.8618887463151464,
+          "p95": 2.2806688437608615,
+          "max": 4.034600015943221
+        }
+      ]
+    },
     "status": "joint fit to eK/eD/eADR; validate exact display rounding before shipping",
     "published_anchors": {
       "t_rifle_vs_ct_rifle": {

@@ -12,6 +12,8 @@ C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python
 
 The command fits the six-term rating block, Swing event-credit block, duel/economy block, dataset metadata, input definitions, and win-probability source declaration. It prints a readable formula from the emitted coefficients; the formula is not duplicated as a string in `params.json`.
 
+Demo scripts share the extractor resolver in `demo_paths.py`. A `CURRENT` pointer is accepted only when its version folder has a valid `COMPLETE` manifest with matching file sizes; incomplete current versions are skipped during discovery, while flat legacy folders remain supported.
+
 The public rating inputs are HLTV displayed eKPR, eADR, eDPR, and eKAST, raw multi-kill percentage, and displayed Round Swing. The rating remains labeled an approximation.
 
 ## Refresh private research outputs

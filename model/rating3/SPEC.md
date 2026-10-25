@@ -58,7 +58,7 @@ HLTV map files with `v: 3` provide the rating and graph targets. The graph targe
 
 A strict demo join requires the map, archive date, both five-player rosters, every round winner, and every enemy-kill sequence to agree. Kills after the demo round end are excluded because the HLTV event graph stops at round end. The current join command produces **318 accepted joins, 198 rejected folders, 6,928 joined rounds, and 45,055 joined enemy kills** in `demo_joins.json`.
 
-The joiner accepts legacy `meta.parquet` and schema-v1 `match.parquet` metadata. It stores join references and checks, not player identities or derived tables in the public repository.
+The shared resolver accepts flat legacy `meta.parquet`/`economy.parquet` folders and versioned schema-v1 folders selected by `CURRENT`. A current version is usable only when its `COMPLETE` filename-to-size manifest matches every listed file; incomplete versions are skipped by discovery, and an unsupported resolved folder fails loudly. The joiner stores join references and checks, not player identities or derived tables in the public repository.
 
 ## Win probability
 
@@ -68,7 +68,7 @@ The current lookup fit contains **135,628 events across 503 matches**. On its ch
 
 Those values come from the win-probability command above and `C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\winprob_metrics.json`.
 
-The separate post-plant join analysis produces **156 aligned event rows over 39 rounds**; **108 events change after the plant**. This is evidence that post-plant graph values continue to move, not a validated defuse-time threshold. Those values come from the post-plant command above and `postplant_metrics.json`.
+The separate post-plant join analysis produces **14,243 aligned event rows over 3,474 rounds**; **8,914 events change after the plant**. This is evidence that post-plant graph values continue to move, not a validated defuse-time threshold. Those values come from the post-plant command above and `postplant_metrics.json`.
 
 ## Swing credits
 
@@ -77,19 +77,19 @@ For a valued event, `delta` is the change in the probability of the side helped 
 The current event model follows this order:
 
 - an unpreventable post-bomb kill has zero swing;
-- damage credit uses enemy HP-capped damage at or before the kill and excludes team and self damage;
+- damage credit uses enemy HP-capped damage at or before the kill and excludes team and self damage; unattributed, health-reconstructed, and reconstructed-ambiguous rows do not receive share credit;
 - an eligible enemy flash can receive residual credit, excluding the killer, team flashes, and ambiguous flashes;
 - without a flash candidate, positive credit follows the damage ledger, or the killer receives all credit when the ledger is empty;
 - a trade death keeps the full victim debit;
 - the round-end remainder uses the weights stored in `params.json`.
 
-The Swing fit command produces **602 valued events** and **23 clean no-damage, one-flash, no-trade observations**. Their median killer credit ratio is **0.8459949770657018**, which yields the emitted provisional flash residual fraction **0.15400502293429819**. The round-end remainder and mixed cases are still provisional; the fit status in `params.json` says so.
+The Swing fit consumes **318 joins** (**315 schema-v1**, **3 legacy**) with no skipped joins and produces **58,391 valued events**. It excludes **293 health-reconstructed, ambiguous, or unattributed damage rows** from damage-share credit; reported unattributed game damage is **0 HP**. The emitted flash anchor uses the validated three-join legacy calibration baseline: exactly **20 no-damage, exactly-one-flash, no-trade observations**. Their median killer credit ratio is **0.8460031840295292**, which yields the emitted provisional flash residual fraction **0.15399681597047077**. All v1 events remain in the event buckets and held-out diagnostic. The five-fold match-disjoint diagnostic covers **1,447 observations across 155 matches** with **MAE 0.028531040762445**, **p95 0.15407653440795147**, and **maximum 0.2962218825166375**. The round-end remainder and mixed cases are still provisional; the fit status in `params.json` says so.
 
 ## Economy adjustment
 
 The duel fit groups weapons as `sniper`, `rifle1`, `rifle2`, `smg`, `pistolPlus`, and `pistol`, strongest first. It fits fractional kill and death points to HLTV eco-adjusted K/D/ADR cells using a Bradley-Terry-style probability and a side edge. Published anchors remain marked as published in `params.json`; fit-derived strengths and scale remain marked as fit-derived.
 
-The current duel fit uses **462 recognized duel events** and **30 HLTV target rows**. Its objective MAE is **0.10760526038940484** in the fitter's target units. These values come from `eco_fit.py` and `eco_metrics.json`.
+The current duel fit consumes **318 joins** (**315 schema-v1**, **3 legacy**) with no skipped joins, producing **45,319 recognized duel events** and **3,180 HLTV target rows**. Its fitted strengths are `sniper=0.6211831642060697`, `rifle1=0.5237915968519881`, `rifle2=0.5302156525681799`, `smg=0.40147567806345835`, `pistolPlus=0.15259719869919514`, and `pistol=0`; the kill-points scale is **1.6618416540532308**. Full-fit objective MAE is **0.8004568082803943**. Match-disjoint held-out error is **MAE 0.803752909530498**, **p95 2.0884243605910955**, and **maximum 4.113072563022001** over **3,180 targets and 161 matches**. These values come from `eco_fit.py` and `eco_metrics.json`.
 
 ## Shipped approximation
 

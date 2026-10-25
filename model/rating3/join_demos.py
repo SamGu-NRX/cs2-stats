@@ -13,6 +13,10 @@ import json
 from pathlib import Path
 import re
 import runpy
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from demo_paths import iter_demo_roots
 
 
 def nickname(name: str) -> str:
@@ -61,27 +65,16 @@ def join(root: Path, metrics: Path) -> dict:
     import pyarrow.parquet as pq
     fit = json.loads(metrics.read_text(encoding="utf-8"))
     by_map = hltv_index(root / "hltv", fit["source_audit"]["sources"])
-    # The manifest records historical output paths. Enumerate schema-v1 folders
-    # in place so a refeed that replaces an archive slug is not silently lost.
-    metadata_paths = sorted((root / "demos").glob("*/*/meta.parquet"))
-    metadata_paths.extend((root / "demos").glob("*/*/match.parquet"))
+    # Enumerate map folders rather than table files so CURRENT selects one
+    # complete extractor version and old versions are not joined twice.
     entries = [
-        {"out_dir": str(path.parent.relative_to(root)).replace("/", "\\\\")}
-        for path in sorted(metadata_paths)
+        {"out_dir": str(relative).replace("/", "\\\\"), "layout": layout}
+        for relative, layout in iter_demo_roots(root)
     ]
     accepted, rejected = [], []
-    seen = set()
     for entry in entries:
-        if entry["out_dir"] in seen:
-            continue
-        seen.add(entry["out_dir"])
-        directory = root / entry["out_dir"]
-        metadata_path = directory / "match.parquet"
-        if not metadata_path.exists():
-            metadata_path = directory / "meta.parquet"
-        if not metadata_path.exists():
-            rejected.append({"demo": entry["out_dir"], "reason": "output metadata no longer exists"})
-            continue
+        directory = entry["layout"].directory
+        metadata_path = entry["layout"].table("match")
         meta = pq.read_table(metadata_path).to_pylist()[0]
         archive_date = json.loads(meta["extra"]).get("dem_modified_in_archive")
         if not archive_date:
@@ -89,11 +82,10 @@ def join(root: Path, metrics: Path) -> dict:
             continue
         demo_date = datetime.strptime(archive_date[:19], "%Y-%m-%d %H:%M:%S")
         rounds = pq.read_table(directory / "rounds.parquet").to_pylist()
-        roster_path = directory / "economy.parquet"
-        if roster_path.exists():
-            roster_rows = pq.read_table(roster_path, columns=["round", "steamid", "name", "side"]).to_pylist()
-        else:
-            roster_rows = pq.read_table(directory / "player_rounds.parquet", columns=["round", "steamid", "name", "side"]).to_pylist()
+        roster_rows = pq.read_table(
+            entry["layout"].table("player_rounds"),
+            columns=["round", "steamid", "name", "side"],
+        ).to_pylist()
         names = {r["steamid"]: nickname(r["name"]) for r in roster_rows}
         roster_t = {names[r["steamid"]] for r in roster_rows if r["round"] == 1 and r["side"] == "T"}
         roster_ct = {names[r["steamid"]] for r in roster_rows if r["round"] == 1 and r["side"] == "CT"}
