@@ -161,8 +161,8 @@ their code during development, so their figures are not reproducible here; no mo
 
 ## Baselines: `pnpm baselines`
 
-`public/baselines.json` is 340 KB: 21 quantiles of every metric for each pool and side, with no names or
-ids. Built from every pro map on 2026-10-25: 214 players with 40 or more rounds (174 riflers, 40
+`public/baselines.json` is 356 KB: 21 quantiles of every metric for each pool and side, with no names or
+ids. Built from 343 pro maps on 2026-10-25: 367 players with 40 or more rounds (298 riflers, 69
 AWPers), and per-map pools of player-maps with 16 or more rounds. A metric's quantiles are written when
 at least 8 units have a value. The named pack (per-side style and performance scores) is written to the
 private data folder only.
