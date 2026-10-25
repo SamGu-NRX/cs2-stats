@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import type { Connect, Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
 
 
 // Tauri expects a fixed dev port and must not watch the Rust sources.
@@ -75,6 +77,78 @@ function matchFolder(): Plugin {
 }
 
 /**
+ * The user's imported Valve matches (tools/valve-folder.ts), for `vite dev` and `vite preview`; the
+ * desktop app has the same commands in Rust. GET /__valve/list lists complete matches and the user's
+ * SteamID64; GET /__valve/file?f=<demo>/<version>[/<table>.parquet] returns table names or one table;
+ * POST /__valve/import runs extractor/valve_import.py and streams one JSON line per event: each
+ * {"type":"progress",...} the importer reports, then {"type":"done","code","summary","error"}.
+ */
+function valveFolder(): Plugin {
+  let running = false;
+  const handler: Connect.NextHandleFunction = async (req, res, next) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (!url.pathname.startsWith("/__valve/")) return next();
+    const send = (code: number, body: string | Buffer, type = "application/json") => {
+      res.statusCode = code;
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "no-store");
+      res.end(body);
+    };
+    const root = valveRoot();
+    if (!root) return send(404, JSON.stringify({ error: "APPDATA is not set and CS2_VALVE_MATCHES is not given" }));
+    try {
+      if (url.pathname === "/__valve/list") return send(200, JSON.stringify(listValve(root)));
+      if (url.pathname === "/__valve/file") {
+        const rel = url.searchParams.get("f") ?? "";
+        const body = readValve(root, rel);
+        return send(200, body, rel.endsWith(".parquet") ? "application/octet-stream" : "application/json");
+      }
+      if (url.pathname === "/__valve/import" && req.method === "POST") {
+        const run = importerCommand(root);
+        if ("missing" in run) return send(503, JSON.stringify({ error: run.missing }));
+        if (running) return send(409, JSON.stringify({ error: "an import is already running" }));
+        running = true;
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/x-ndjson");
+        res.setHeader("Cache-Control", "no-store");
+        const line = (o: unknown) => res.write(`${JSON.stringify(o)}\n`);
+        const child = spawn(run.cmd, run.args, { cwd: run.cwd, windowsHide: true });
+        let stdout = "", errTail = "", partial = "";
+        child.stdout.on("data", (b: Buffer) => { stdout += b.toString(); });
+        child.stderr.on("data", (b: Buffer) => {
+          partial += b.toString();
+          const lines = partial.split(/\r?\n/);
+          partial = lines.pop() ?? "";
+          for (const l of lines) {
+            let ev: unknown = null;
+            try { ev = JSON.parse(l); } catch { /* not a progress line */ }
+            if (ev && typeof ev === "object" && "event" in ev) line({ type: "progress", ...ev });
+            else if (l.trim()) errTail = `${errTail}\n${l}`.slice(-2000);
+          }
+        });
+        child.on("error", (e) => { running = false; line({ type: "done", code: null, summary: null, error: e.message }); res.end(); });
+        child.on("close", (code) => {
+          running = false;
+          let summary: unknown = null;
+          try { summary = JSON.parse(stdout); } catch { /* a usage error prints no summary */ }
+          line({ type: "done", code, summary, error: code === 0 ? null : errTail.trim() || null });
+          res.end();
+        });
+        return;
+      }
+      return send(404, JSON.stringify({ error: "unknown endpoint" }));
+    } catch (e) {
+      return send(e instanceof ValvePathError ? 400 : 500, JSON.stringify({ error: (e as Error).message }));
+    }
+  };
+  return {
+    name: "cs2-valve-folder",
+    configureServer: (s) => { s.middlewares.use(handler); },
+    configurePreviewServer: (s) => { s.middlewares.use(handler); },
+  };
+}
+
+/**
  * Development only: extracted match folders (schema v1 parquet, one folder per map) from the folder
  * named by CS2_DEV_MATCHES, such as cs2-stats-data/dev-matches, so views can be checked on demo data
  * before local recordings come through the extractor. Never the user's match folder: matches there
@@ -123,7 +197,7 @@ function devMatches(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), matchFolder(), devMatches()],
+  plugins: [react(), matchFolder(), valveFolder(), devMatches()],
   clearScreen: false,
   server: {
     port: 1420,

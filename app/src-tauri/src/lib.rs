@@ -1,6 +1,8 @@
 //! Commands scoped to `%APPDATA%\BotMatchStats`: `list_matches` lists finished match files,
 //! `read_match` returns one file's gzip bytes, `import_match` copies a picked file into
 //! `matches\imported\`, and `read_pack` reads the optional packs folder (pro scores, agent art).
+//! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
+//! `import_valve` runs the importer that writes them.
 //! Decompression and every statistic run in the web view.
 
 use serde::Serialize;
@@ -168,10 +170,232 @@ async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
     fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| format!("{name}: {e}"))
 }
 
+// ---------------------------------------------------------------- the user's Valve matches
+//
+// %APPDATA%\BotMatchStats\valve (CS2_VALVE_MATCHES overrides it) holds extractor/valve_import.py's output:
+// one map folder per demo in the extractor's versioned layout, and valve-user.local.json with the user's
+// SteamID64. app/tools/valve-folder.ts implements the same rules for the dev server. A match is listed
+// as "valve/<demo>/<version folder>", so one match's tables never mix two extractions.
+
+const VALVE_USER_FILE: &str = "valve-user.local.json";
+/// SteamID64 of account 0 in the public universe; every real SteamID64 is above it.
+const STEAMID64_MIN: u64 = 76561197960265728;
+
+fn valve_dir() -> Result<PathBuf, String> {
+    if let Some(d) = std::env::var_os("CS2_VALVE_MATCHES") {
+        return Ok(PathBuf::from(d));
+    }
+    let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
+    Ok(PathBuf::from(appdata).join("BotMatchStats").join("valve"))
+}
+
+/// A demo or version folder name: letters, digits, '_', '.', '-' only.
+fn plain_name(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+}
+
+/// v-<version>-<8 hex>, the extractor's version folder name.
+fn version_dir(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("v-") else { return false };
+    let Some((ver, hex)) = rest.rsplit_once('-') else { return false };
+    !ver.is_empty()
+        && ver.chars().all(|c| c.is_ascii_alphanumeric() || "._+".contains(c))
+        && hex.len() == 8
+        && hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// The user's SteamID64 from valve-user.local.json; None when the file is absent.
+fn valve_user(root: &Path) -> Result<Option<String>, String> {
+    let f = root.join(VALVE_USER_FILE);
+    let text = match fs::read_to_string(&f) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", f.display())),
+    };
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+    match v.get("steamid").and_then(|s| s.as_u64()) {
+        Some(id) if id > STEAMID64_MIN => Ok(Some(id.to_string())),
+        _ => Err(format!("{} names no SteamID64 (\"steamid\": <integer>)", f.display())),
+    }
+}
+
+/// The version folder's COMPLETE list (file name to bytes), when every file is there at its size.
+fn complete_tables(dir: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
+    let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| "no COMPLETE file yet".to_string())?;
+    let sizes: std::collections::BTreeMap<String, u64> =
+        serde_json::from_str(&text).map_err(|e| format!("COMPLETE: {e}"))?;
+    for (f, n) in &sizes {
+        if fs::metadata(dir.join(f)).map(|m| m.len()).ok() != Some(*n) {
+            return Err(format!("{f} is not at its listed {n} bytes"));
+        }
+    }
+    Ok(sizes)
+}
+
+#[derive(Serialize)]
+struct Skipped {
+    file: String,
+    why: String,
+}
+
+#[derive(Serialize)]
+struct ValveListing {
+    folder: String,
+    user: Option<String>,
+    files: Vec<FileEntry>,
+    skipped: Vec<Skipped>,
+}
+
+/// Every Valve match whose CURRENT version is complete, newest folder name first; folders without one are
+/// listed in `skipped` with the reason. A missing folder lists nothing.
+fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
+    let mut out = ValveListing { folder: root.display().to_string(), user: None, files: Vec::new(), skipped: Vec::new() };
+    let top = match fs::read_dir(root) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(format!("{}: {e}", root.display())),
+    };
+    out.user = valve_user(root)?;
+    for item in top {
+        let item = item.map_err(|e| format!("{}: {e}", root.display()))?;
+        let Some(name) = item.file_name().to_str().map(str::to_owned) else { continue };
+        let map = item.path();
+        if !map.is_dir() || !plain_name(&name) || !map.join("CURRENT").exists() {
+            continue;
+        }
+        let skip = |why: String| Skipped { file: format!("valve/{name}"), why };
+        if map.join("RETIRED").exists() {
+            out.skipped.push(skip("retired".into()));
+            continue;
+        }
+        let current = fs::read_to_string(map.join("CURRENT")).unwrap_or_default().trim().to_string();
+        if !version_dir(&current) {
+            out.skipped.push(skip(format!("CURRENT names \"{current}\", which is not a version folder")));
+            continue;
+        }
+        let dir = map.join(&current);
+        match complete_tables(&dir) {
+            Ok(sizes) => {
+                let mtime = fs::metadata(dir.join("COMPLETE"))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_millis() as u64);
+                out.files.push(FileEntry { file: format!("valve/{name}/{current}"), size: sizes.values().sum(), mtime });
+            }
+            Err(why) => out.skipped.push(skip(format!("{current}: {why}"))),
+        }
+    }
+    out.files.sort_by(|a, b| b.file.cmp(&a.file));
+    Ok(out)
+}
+
+#[tauri::command]
+async fn list_valve() -> Result<ValveListing, String> {
+    list_valve_in(&valve_dir()?)
+}
+
+/// "<demo>/<version>" returns the version's table file names as JSON; "<demo>/<version>/<table>.parquet"
+/// returns that table, only if the version's COMPLETE list names it at its size.
+fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let table_ok = |t: &str| t.ends_with(".parquet") && t.len() > 8 && t[..t.len() - 8].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    let ok = matches!(parts.len(), 2 | 3) && plain_name(parts[0]) && version_dir(parts[1]) && parts.get(2).is_none_or(|t| table_ok(t));
+    if !ok {
+        return Err(format!("{path}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])"));
+    }
+    let dir = root.join(parts[0]).join(parts[1]);
+    let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| format!("{path}: this version is gone; rescan"))?;
+    let sizes: std::collections::BTreeMap<String, u64> = serde_json::from_str(&text).map_err(|e| format!("{path}: COMPLETE: {e}"))?;
+    let Some(table) = parts.get(2) else {
+        let names: Vec<&String> = sizes.keys().filter(|f| f.ends_with(".parquet")).collect();
+        return serde_json::to_vec(&names).map_err(|e| e.to_string());
+    };
+    let want = *sizes.get(*table).ok_or_else(|| format!("{path}: not one of this version's tables"))?;
+    let bytes = fs::read(dir.join(table)).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 != want {
+        return Err(format!("{path}: {} bytes, not the {want} COMPLETE lists; rescan", bytes.len()));
+    }
+    Ok(bytes)
+}
+
+#[tauri::command]
+async fn read_valve(path: String) -> Result<tauri::ipc::Response, String> {
+    read_valve_in(&valve_dir()?, &path).map(tauri::ipc::Response::new)
+}
+
+#[derive(Serialize)]
+struct ValveImport {
+    code: Option<i32>,
+    summary: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+/// Runs extractor/valve_import.py over the CS2 replays folder into the Valve folder. Until the extractor is
+/// packaged as a sidecar binary, it runs from CS2_EXTRACTOR_DIR (the extractor folder) with that folder's
+/// .venv Python (CS2_EXTRACTOR_PYTHON overrides); CS2_MAPDATA, when set, adds mesh visibility. Each JSON line
+/// the importer writes to stderr is sent as a "valve-import-progress" event.
+#[tauri::command]
+async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
+    use std::io::BufRead;
+    use tauri::Emitter;
+    let dir = std::env::var_os("CS2_EXTRACTOR_DIR")
+        .map(PathBuf::from)
+        .ok_or("The importer is not installed: set CS2_EXTRACTOR_DIR to the extractor folder (extractor/README.md)")?;
+    let script = dir.join("valve_import.py");
+    if !script.is_file() {
+        return Err(format!("no importer at {}", script.display()));
+    }
+    let python = std::env::var_os("CS2_EXTRACTOR_PYTHON")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dir.join(".venv").join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" }));
+    if !python.is_file() {
+        return Err(format!("no Python at {}; create the extractor's .venv or set CS2_EXTRACTOR_PYTHON", python.display()));
+    }
+    let out = valve_dir()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(&python);
+        cmd.arg("-I").arg(&script).arg("--progress").arg("--out").arg(&out).current_dir(&dir);
+        if let Some(m) = std::env::var_os("CS2_MAPDATA") {
+            cmd.arg("--mapdata").arg(m);
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("{}: {e}", python.display()))?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let reader = std::thread::spawn(move || std::io::read_to_string(stdout).unwrap_or_default());
+        let mut tail = String::new();
+        for line in std::io::BufReader::new(child.stderr.take().expect("piped stderr")).lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            match serde_json::from_str::<serde_json::Value>(&line) {
+                Ok(ev) if ev.get("event").is_some() => {
+                    let _ = app.emit("valve-import-progress", ev);
+                }
+                _ if !line.trim().is_empty() => {
+                    tail.push_str(&line);
+                    tail.push('\n');
+                }
+                _ => {}
+            }
+        }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        let summary = serde_json::from_str(&reader.join().unwrap_or_default()).ok();
+        let code = status.code();
+        // the last 2000 characters of what the importer wrote besides progress, for a failed run
+        let tail: Vec<char> = tail.trim().chars().collect();
+        let error = (code != Some(0) && !tail.is_empty()).then(|| tail[tail.len().saturating_sub(2000)..].iter().collect());
+        Ok(ValveImport { code, summary, error })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_matches, read_match, import_match, read_pack])
+        .invoke_handler(tauri::generate_handler![list_matches, read_match, import_match, read_pack, list_valve, read_valve, import_valve])
         .run(tauri::generate_context!())
         .expect("error while running CS2 Stats");
 }
@@ -204,6 +428,63 @@ mod tests {
         fs::write(&root, b"not a folder").unwrap();
         let err = list_files(&root).err().expect("an error, not an empty list");
         assert!(err.starts_with(&root.display().to_string()), "{err}");
+    }
+
+    /// A Valve map folder: CURRENT naming `version`, and the version's tables with a COMPLETE list.
+    /// `listed` overrides the byte counts COMPLETE gives.
+    fn valve_map(root: &Path, demo: &str, version: &str, tables: &[(&str, &[u8])], listed: Option<u64>) {
+        let dir = root.join(demo).join(version);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(root.join(demo).join("CURRENT"), format!("{version}\n")).unwrap();
+        let mut sizes = serde_json::Map::new();
+        for (name, body) in tables {
+            fs::write(dir.join(name), body).unwrap();
+            sizes.insert(name.to_string(), listed.unwrap_or(body.len() as u64).into());
+        }
+        fs::write(dir.join("COMPLETE"), serde_json::Value::Object(sizes).to_string()).unwrap();
+    }
+
+    const V1: &str = "v-1.13.0-0a1b2c3d";
+
+    #[test]
+    fn lists_complete_valve_matches_by_version_and_skips_the_rest() {
+        // fails if a half-written or retired version is listed, or a listed path does not name its version
+        let s = Scratch::new("valve-list");
+        valve_map(&s.0, "match730_a", V1, &[("match.parquet", b"abc")], None);
+        valve_map(&s.0, "match730_b", V1, &[("match.parquet", b"abc")], Some(9));
+        valve_map(&s.0, "match730_c", V1, &[("match.parquet", b"abc")], None);
+        fs::write(s.0.join("match730_c").join("RETIRED"), "replaced\n").unwrap();
+        fs::write(s.0.join(VALVE_USER_FILE), "{\"steamid\": 76561197960265729, \"source\": \"--user\"}").unwrap();
+        let l = list_valve_in(&s.0).unwrap();
+        let files: Vec<(String, u64)> = l.files.into_iter().map(|f| (f.file, f.size)).collect();
+        assert_eq!(files, [(format!("valve/match730_a/{V1}"), 3)]);
+        let skipped: Vec<&str> = l.skipped.iter().map(|x| x.file.as_str()).collect();
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+        // a SteamID64 above 2^53 must come back exact
+        assert_eq!(l.user.as_deref(), Some("76561197960265729"));
+    }
+
+    #[test]
+    fn a_valve_user_file_without_a_steamid64_is_an_error() {
+        let s = Scratch::new("valve-user");
+        fs::write(s.0.join(VALVE_USER_FILE), "{\"steamid\": 12345}").unwrap();
+        assert!(list_valve_in(&s.0).is_err());
+    }
+
+    #[test]
+    fn reads_only_the_tables_a_valve_version_lists_at_their_size() {
+        // fails if a path escapes the folder, or a table rewritten since COMPLETE was written is returned
+        let s = Scratch::new("valve-read");
+        valve_map(&s.0, "match730_a", V1, &[("match.parquet", b"abc"), ("kills.parquet", b"k")], None);
+        let names: Vec<String> = serde_json::from_slice(&read_valve_in(&s.0, &format!("match730_a/{V1}")).unwrap()).unwrap();
+        assert_eq!(names, ["kills.parquet", "match.parquet"]);
+        assert_eq!(read_valve_in(&s.0, &format!("match730_a/{V1}/match.parquet")).unwrap(), b"abc");
+        for bad in [format!("../x/{V1}"), format!("match730_a/{V1}/../../x.parquet"), "match730_a/CURRENT".into(), format!("match730_a/{V1}/COMPLETE")] {
+            assert!(read_valve_in(&s.0, &bad).is_err(), "{bad}");
+        }
+        assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/rounds.parquet")).is_err());
+        fs::write(s.0.join("match730_a").join(V1).join("match.parquet"), b"abcd").unwrap();
+        assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/match.parquet")).is_err());
     }
 
     #[test]
