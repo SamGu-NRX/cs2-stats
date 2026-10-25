@@ -7,10 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DataTable } from "./components/DataTable";
 import { MenuLayer, openMenu } from "./components/overlay";
 import { navWasInstant, openMatch } from "./router";
+import type { Data } from "./data/provider";
 import { Palette } from "./shell/Palette";
 
-// The palette's data: no matches and no pro pack.
-vi.mock("./data/provider", () => ({ useData: () => ({ summaries: [] }) }));
+// The palette's data: no matches and no pro pack. The mock is typed against the provider's Data, so
+// renaming a field the palette reads fails to compile here instead of failing at render (it once
+// returned "summaries" after the provider had renamed it to "matches").
+vi.mock("./data/provider", () => ({ useData: (): Pick<Data, "matches"> => ({ matches: [] }) }));
 vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
