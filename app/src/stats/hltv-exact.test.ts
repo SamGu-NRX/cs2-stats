@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hltvMaps, joinHltv } from "../../tools/hltv";
-import { DATA_DIR, loadDir } from "../../tools/node-read";
+import { DATA_DIR, loadDir, WINPROB } from "../../tools/node-read";
 import { derive } from "./derive";
 import { rollup } from "./rollup";
 
@@ -40,7 +40,7 @@ describe.skipIf(!have)("scoreboard against HLTV", () => {
   it("K, D, KAST and ADR match HLTV on the gate maps", async () => {
     const wrong: string[] = [];
     for (const m of present) {
-      const f = derive(await loadDir(gateDir(m), []));
+      const f = derive(await loadDir(gateDir(m), []), WINPROB);
       const j = joinHltv(f);
       if (!j) { wrong.push(`${m}: no HLTV map joins`); continue; }
       if (j.player.size !== 10) wrong.push(`${m}: ${j.player.size} players joined`);

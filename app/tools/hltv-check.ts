@@ -4,7 +4,7 @@ import path from "node:path";
 import { derive } from "../src/stats/derive";
 import { rollup } from "../src/stats/rollup";
 import { hltvMaps, joinHltv, type HltvLine } from "./hltv";
-import { loadDir, proMapDirs } from "./node-read";
+import { loadDir, proMapDirs, WINPROB } from "./node-read";
 
 const sides = process.argv.includes("--sides");
 const cols = ["k", "d", "a", "fa", "td", "hs", "kast", "adr", "opK", "opD", "mks", "clutches"] as const;
@@ -15,7 +15,7 @@ const GATE = new Set(["k", "d", "kast", "adr"]);
 const perMap = new Map<string, number>();
 
 for (const dir of proMapDirs()) {
-  const facts = derive(await loadDir(dir, []));
+  const facts = derive(await loadDir(dir, []), WINPROB);
   const j = joinHltv(facts, hltvMaps());
   const name = path.relative(path.join(dir, "../.."), dir);
   if (!j) { misses.push(`${name}: no HLTV map joins`); continue; }

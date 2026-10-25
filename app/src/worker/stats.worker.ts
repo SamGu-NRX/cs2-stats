@@ -15,6 +15,7 @@ import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
 import { loadTables } from "../stats/load";
+import { winProbSource, type WinProbSource } from "../stats/model-params";
 import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
@@ -69,7 +70,13 @@ function baselines(): Promise<Baselines> {
 /** What IndexedDB keeps per file: the facts and the plugin's own label for the file. */
 interface Cached { facts: MatchFacts; origin: string }
 
-const factsKey = (e: FileEntry) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}`;
+/** The round win-probability source, set by meta() before any match is derived; facts depend on it. */
+let wp: WinProbSource | null = null;
+const source = () => {
+  if (!wp) throw new Error("the stats worker derived a match before meta() chose the win-probability source");
+  return wp;
+};
+const factsKey = (e: FileEntry) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${source().kind}`;
 const entryKey = (factsKey: string) => `${factsKey}|e${ENTRY_VERSION}`;
 
 let index = new Map<string, { key: string; entry: MatchEntry }>();
@@ -88,10 +95,10 @@ async function folderTables(file: string): Promise<MatchTables> {
 async function deriveFile(file: string): Promise<Cached> {
   if (isFolder(file)) {
     const t = await folderTables(file);
-    return { facts: derive(t), origin: `extracted, ${t.match.extractor_version[0]}` };
+    return { facts: derive(t, source()), origin: `extracted, ${t.match.extractor_version[0]}` };
   }
   const m = await decodeMatch(await bytes(file), file);
-  return { facts: derive(pluginToTables(m)), origin: m.env.plugin ?? "" };
+  return { facts: derive(pluginToTables(m), source()), origin: m.env.plugin ?? "" };
 }
 
 /**
@@ -228,8 +235,9 @@ function entryOfFile(file: string): MatchEntry {
 type Impl = { [K in Method]: (...a: Parameters<Api[K]>) => Promise<ReturnType<Api[K]>> };
 
 const api: Impl = {
-  async meta() {
-    return metaOf();
+  async meta(winprobPack) {
+    wp = winProbSource(winprobPack === null ? null : JSON.parse(new TextDecoder().decode(winprobPack)));
+    return metaOf(wp);
   },
   async baselines() {
     const b = await baselines();

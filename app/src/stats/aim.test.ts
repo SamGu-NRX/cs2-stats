@@ -1,4 +1,5 @@
 // Aim measures on a hand-built match at 64 ticks/s, where every expected value is worked out by hand.
+import { CS2RB } from "./model-params";
 import { describe, expect, it } from "vitest";
 import { aimAngle, aimError } from "./aim-geometry";
 import type { ShotFact, SightFact, SprayFact } from "./aim";
@@ -91,7 +92,7 @@ describe("aim geometry", () => {
 });
 
 describe("deriveAim on a hand-built match", () => {
-  const facts = derive(match()).aim;
+  const facts = derive(match(), CS2RB).aim;
 
   it("times and measures a sighting", () => {
     // fails if the onset, the reaction tick, the flick's overshoot or the correction count moves

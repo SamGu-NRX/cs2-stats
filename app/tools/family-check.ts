@@ -8,7 +8,7 @@ import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { METRICS, type Metric } from "../src/stats/metrics";
 import { rollup, type Summary } from "../src/stats/rollup";
-import { loadDir, proMapDirs } from "./node-read";
+import { loadDir, proMapDirs, WINPROB } from "./node-read";
 
 const i = process.argv.indexOf("--min-rounds");
 const MIN_ROUNDS = i > 0 ? Number(process.argv[i + 1]) : 60;
@@ -18,7 +18,7 @@ const facts: MatchFacts[] = [];
 let spottedSecs = 0, sightSecs = 0;
 for (const dir of proMapDirs()) {
   const t = await loadDir(dir);
-  const f = derive(t);
+  const f = derive(t, WINPROB);
   facts.push(f);
   const T = t.engagement_ticks;
   if (T && f.match.visibility === "ok" && t.spotted) {

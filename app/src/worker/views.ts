@@ -7,7 +7,8 @@ import { DERIVE_VERSION, emptyMeasures, type MatchFacts } from "../stats/facts";
 import { isGun } from "../stats/guns";
 import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
-import { RATING3_DIAGNOSTIC, RATING3_LABEL, rating3, type Rating3 } from "../stats/rating3";
+import type { WinProbSource } from "../stats/model-params";
+import { RATING3_LABEL, rating3, type Rating3 } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
 import { ratedMatch } from "../ui/data/engine";
 import type { MatchEntry } from "../ui/data/match";
@@ -15,11 +16,12 @@ import type {
   Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
 } from "./protocol";
 
-export function metaOf(): Meta {
+export function metaOf(wp: WinProbSource): Meta {
   return {
     metrics: METRICS.map(({ value: _value, ...m }) => m),
     attributes: ATTRIBUTES,
-    rating: { label: RATING3_LABEL, diagnostic: RATING3_DIAGNOSTIC, status: rating3(emptyMeasures()).status },
+    rating: { label: RATING3_LABEL, status: rating3(emptyMeasures()).status },
+    winProb: { kind: wp.kind, label: wp.label },
     style: [...STYLE],
     deriveVersion: DERIVE_VERSION,
   };

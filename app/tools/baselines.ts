@@ -10,7 +10,7 @@ import { performanceScores, styleScores, type PackPlayer } from "../src/stats/id
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
-import { DATA_DIR, loadDir, proMapDirs } from "./node-read";
+import { DATA_DIR, loadDir, proMapDirs, WINPROB } from "./node-read";
 
 /** Rounds a player needs, over all maps, to count in the player pools; per side, half of it. */
 export const MIN_ROUNDS = 40;
@@ -25,7 +25,7 @@ const SIDES: SideKey[] = ["both", "CT", "T"];
 const dirs = proMapDirs();
 if (!dirs.length) throw new Error(`no pro tables under ${DATA_DIR}/demos (set CS2_STATS_DATA)`);
 const facts: MatchFacts[] = [];
-for (const d of dirs) facts.push(derive(await loadDir(d)));
+for (const d of dirs) facts.push(derive(await loadDir(d), WINPROB));
 
 const players = new Map<string, string>();
 for (const f of facts) for (const p of f.players) if (!p.bot) players.set(p.id, p.name);
@@ -62,7 +62,7 @@ for (const map of maps) {
 
 const b: Baselines = {
   version: 1, built: new Date().toISOString().slice(0, 10),
-  source: `${facts.length} pro maps from HLTV demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds`,
+  source: `${facts.length} pro maps from HLTV demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds; swing from the ${WINPROB.label}`,
   ...buildPools(units),
 };
 // The named pack: each pro's style and performance scores per side, against the pools just built.

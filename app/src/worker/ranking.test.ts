@@ -2,6 +2,7 @@
 // against pros; performance is ranked against pros.
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { CS2RB } from "../stats/model-params";
 import { expect, it } from "vitest";
 import type { Baselines } from "../stats/compare";
 import { derive } from "../stats/derive";
@@ -25,7 +26,7 @@ it("ranks the user's style against the bot careers and performance against the p
   // fails if the user's style scores, identity rows or "plays like" read the pro baselines, or a
   // pro percentile is offered for an identity metric
   const m = await decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz");
-  const facts = derive(pluginToTables(m));
+  const facts = derive(pluginToTables(m), CS2RB);
   const calls = rankingCalls({
     summary: async (q) => rollup([facts], q.filter),
     pros: async () => flat(1e9),

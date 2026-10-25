@@ -12,6 +12,7 @@ import type { Data } from "./data/provider";
 import { Palette } from "./shell/Palette";
 import { RECOIL } from "../stats/aim-ref";
 import { emptySummary } from "../stats/rollup";
+import { CS2RB } from "../stats/model-params";
 import { metaOf, rolled } from "../worker/views";
 import type { Rolled } from "../worker/protocol";
 import { setMeta } from "./data/meta";
@@ -164,7 +165,7 @@ describe("opening a match", () => {
 
 describe("spray gun picker", () => {
   it("is one tab stop; arrows, Home and End pick a gun and move focus with it", () => {
-    setMeta(metaOf());
+    setMeta(metaOf(CS2RB));
     const s = rolled(emptySummary());
     // sprays on six guns: five get buttons, the sixth goes to the More menu
     const guns = Object.keys(RECOIL).slice(0, 6);

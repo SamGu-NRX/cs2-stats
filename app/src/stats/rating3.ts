@@ -3,9 +3,9 @@
 // formulas only. Show it as RATING3_LABEL.
 //
 // Inputs per player: eco-adjusted kills, damage and deaths per round, eco-adjusted KAST, multi-kill
-// rounds (raw, as HLTV's map cards expose no eco version) and round swing. Each is z-scored with the
-// fit's means and SDs, and the rating is a degree-two polynomial in those z-scores.
-import { PARAMS as params } from "./rating3-params";
+// rounds (raw, as HLTV's map cards expose no eco version) and round swing. The rating is params.json's
+// linear model in those six inputs.
+import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
 import { rollup, type Filter } from "./rollup";
@@ -142,47 +142,32 @@ export function r3Inputs(m: Measures): R3Inputs | null {
   };
 }
 
-/**
- * The bases this file implements. SPEC.md retired the map-level polynomial as Rating 3.02 (it stays in
- * params.json as a diagnostic) while a per-round model is fitted; a basis this file does not know is an
- * error, so a new formula cannot be read with the old one's terms.
- */
-const POLYNOMIAL = new Set(["degree_2_polynomial_with_interactions", "legacy_degree_2_polynomial_diagnostic"]);
-if (!POLYNOMIAL.has(params.rating.basis)) throw new Error(`rating3: params.json rating.basis "${params.rating.basis}" is not implemented in rating3.ts`);
-/** True while params.json marks the formula as a diagnostic rather than Rating 3.02 itself. */
-export const RATING3_DIAGNOSTIC = params.rating.basis.startsWith("legacy_");
+/** The basis this file implements; a params.json with another basis is an error, so a new formula cannot be read with this one's code. */
+const LINEAR = "plain_linear_displayed_eco_inputs";
+if (params.rating.basis !== LINEAR) throw new Error(`rating3: params.json rating.basis "${params.rating.basis}" is not implemented in rating3.ts`);
 
-const terms = params.rating.terms as Record<string, number>;
-const means = params.rating.standardisation.means as Record<Feature, number>;
-const sds = params.rating.standardisation.sds as Record<Feature, number>;
+/** params.json's feature names, as the six inputs here are called. */
+const INPUT_OF: Record<string, Feature> = { eKPR: "kpr_eco", eADR: "adr_eco", eDPR: "dpr_eco", eKAST: "kast_eco", MK: "mk", Swing: "swing" };
+for (const f of params.rating.features) {
+  if (!INPUT_OF[f] || typeof params.rating.coefficients[f] !== "number") throw new Error(`rating3: params.json feature "${f}" has no input or coefficient here`);
+}
 
-/** Rating 3.02 from its six inputs (SPEC.md "Sub-ratings and final fit"). */
+/** Rating 3.02 from its six inputs: params.json's intercept plus each coefficient times its input. */
 export function rating3FromInputs(q: R3Inputs): number {
-  const z = Object.fromEntries(FEATURES.map((f) => [f, (q[f] - means[f]) / sds[f]])) as Record<Feature, number>;
-  let r = terms["1"];
-  FEATURES.forEach((f, i) => {
-    r += terms[f] * z[f] + terms[`${f}^2`] * z[f] * z[f];
-    for (const g of FEATURES.slice(i + 1)) r += terms[`${f} ${g}`] * z[f] * z[g];
-  });
-  return Math.max(0, r);
+  return params.rating.features.reduce((r, f) => r + params.rating.coefficients[f] * q[INPUT_OF[f]], params.rating.intercept);
 }
 
 export interface Rating3 {
   label: typeof RATING3_LABEL;
   value: number | null;
   inputs: R3Inputs | null;
-  /** the formula is params.json's diagnostic, not the accepted Rating 3.02; show `status` with it */
-  diagnostic: boolean;
-  /** params.json's own description of the fit's state */
+  /** params.json's own word for the model's state ("approximation") */
   status: string;
 }
 
 export function rating3(m: Measures): Rating3 {
   const inputs = r3Inputs(m);
-  return {
-    label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs,
-    diagnostic: RATING3_DIAGNOSTIC, status: params.rating.fit_status ?? params.rating.basis,
-  };
+  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status };
 }
 
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */

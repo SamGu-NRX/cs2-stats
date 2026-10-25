@@ -18,7 +18,7 @@ import { AgentImg } from "../components/Agent";
 import {
   attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
   thinPoolText,
-  ratingDiagnostic, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
+  ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
@@ -209,7 +209,7 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
               <p className="bd__def faint">{rating3Note()}</p>
             </div>
           )}>
-            <Gauge value={gaugeV} verdict={gaugeVerdict} label={<>{ratingHeadline()}{ratingDiagnostic() && <span className="calib">diagnostic</span>}</>} />
+            <Gauge value={gaugeV} verdict={gaugeVerdict} label={ratingHeadline()} />
           </HoverCard>
           <button className={`band band--ct ${side === "ct" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "ct" ? null : "ct")} aria-pressed={side === "ct"}>
             <b className="num">{fmtRating(ctR)}</b><span>CT rating</span>
