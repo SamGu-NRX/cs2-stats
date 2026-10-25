@@ -12,6 +12,7 @@ import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
 import { rating3Of } from "./rating3";
 import { UTILQ_METRICS } from "./utilq";
+import { DUEL_METRICS } from "./xduel";
 import { FLASHED_MIN_S } from "./utility";
 import type { Input } from "./facts";
 import type { Summary } from "./rollup";
@@ -227,7 +228,7 @@ const M: Metric[] = [
     def: "Opening duels won.", value: (s) => pct(s.m.openingKills, s.m.openingKills + s.m.openingDeaths) },
 ];
 
-export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
+export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
 export const METRIC: Record<string, Metric> = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 
 /**

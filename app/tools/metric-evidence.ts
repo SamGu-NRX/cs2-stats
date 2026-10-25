@@ -17,12 +17,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { aggroParts, AGGRO_PARTS, scoreOf, type AggroScale } from "../src/stats/aggro-scale";
-import { XDUEL_FEATURES, type SightFact } from "../src/stats/aim";
+import type { SightFact } from "../src/stats/aim";
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { METRIC } from "../src/stats/metrics";
 import { addMatch, emptySummary, rollup, type Summary } from "../src/stats/rollup";
-import { auc, fitXDuel, xduelP, type XDuelParams } from "../src/stats/xduel";
+import { auc, fitXDuel, XDUEL_FEATURES, xduelP, type XDuelParams } from "../src/stats/xduel";
 import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, mapLabel, proMaps, WINPROB } from "./node-read";
 
 const arg = (name: string, dflt: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
