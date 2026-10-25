@@ -3,12 +3,9 @@
 // attributes, the pro whose style matches yours). The side switch in the app bar drives the whole
 // page: every summary is rolled up over that side's rounds and compared with that side's pros.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { attributes, roleOf, type Baselines } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
-import { roleBlend, styleScores } from "../../stats/identity";
-import { METRIC } from "../../stats/metrics";
+import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import type { Summary } from "../../stats/rollup";
 import { weaponClass } from "../../stats/weapons";
 import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../components/bits";
 import { Card } from "../components/Card";
@@ -18,13 +15,14 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  attrsOf, botIds, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, R3_INPUT_LABEL, RATING3_DIAGNOSTIC, RATING3_NOTE,
-  RATING_HEADLINE, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
+  attrsOf, botIds, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
+  ratingDiagnostic, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
 } from "../data/engine";
-import { useRatings, useRollups } from "../data/hooks";
+import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
-import type { Query, SideRatings } from "../../worker/protocol";
+import type { Query, Rolled, SideRatings } from "../../worker/protocol";
 import { AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, WeaponClassIcon } from "../icons/game";
 import { ChevronIcon } from "../icons/ui";
@@ -45,11 +43,13 @@ type Compare = "bench" | "bots";
 interface ProfileData {
   list: MatchEntry[];
   name: string;
+  /** you over every kept round, for the identity questions (role, plays like), which pick their sides */
+  base: Query;
   /** you on the page's side, bots on it, you on T and on CT */
-  you: Summary;
-  bots: Summary | null;
-  t: Summary;
-  ct: Summary;
+  you: Rolled;
+  bots: Rolled | null;
+  t: Rolled;
+  ct: Rolled;
   ratings: SideRatings;
   botRatings: SideRatings | null;
 }
@@ -71,12 +71,14 @@ export default function ProfileView() {
   const sums = useRollups(qs);
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
+  const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
   const p: ProfileData | null = sums.data && rats && sums.data.length === (qs?.length ?? 0) ? {
-    list, name: list[0].players[list[0].you].name, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
+    list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null,
   } : null;
-  const attrs = useMemo(() => (p && baselines ? attrsOf(attributes(p.you, baselines, { side: ratingKey(side) })) : []), [p?.you, baselines, side]); // eslint-disable-line react-hooks/exhaustive-deps
-  const style = useMemo(() => (p && baselines ? { T: styleScores(attributes(p.t, baselines, { side: "T" })), CT: styleScores(attributes(p.ct, baselines, { side: "CT" })) } : null), [p?.t, p?.ct, baselines]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the page's side, compared with pros on that side (the worker rolls the query up over that side's rounds)
+  const scored = useCall("attributes", list.length && ids.length && baselines ? [base, { side: ratingKey(side) }] : null).data;
+  const attrs = useMemo(() => (scored ? attrsOf(scored.scores) : []), [scored]);
 
   if (!p) {
     return (
@@ -107,8 +109,8 @@ export default function ProfileView() {
         <SwingCard you={p.you} list={list} bots={p.bots} />
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         <div className="profile__cols">
-          {baselines && <Firepower attrs={attrs} pool={poolLabel(p.you, baselines, side)} />}
-          {baselines && <HowGood s={p.you} baselines={baselines} side={ratingKey(side)} />}
+          {baselines && <Firepower attrs={attrs} pool={scored ? poolText(scored.role, scored.n) : ""} />}
+          {baselines && <HowGood q={base} side={ratingKey(side)} />}
         </div>
         <div className="profile__cols">
           <FormTrend p={p} />
@@ -121,22 +123,15 @@ export default function ProfileView() {
           <Openings s={p.you} />
         </div>
         <SectionHead title="Identity" sub="How and where you play, apart from how well: style attributes, role and positions. A strong and a weak player can share a style." id="identity" />
-        {baselines && <StyleAttributes s={p.you} baselines={baselines} side={side} />}
+        {baselines && <StyleAttributes q={base} side={side} />}
         <div className="identity">
-          <RoleCard t={p.t} ct={p.ct} />
+          <RoleCard q={base} />
           <WhereYouPlay />
         </div>
-        {style && <PlaysLike attrs={attrs} profile={style} side={ratingKey(side)} initial={r.query.get("pro")} />}
+        {baselines && <PlaysLike q={base} attrs={attrs} side={ratingKey(side)} initial={r.query.get("pro")} />}
       </div>
     </div>
   );
-}
-
-/** The comparison pool's name and size for a card's aside. */
-function poolLabel(s: Summary, b: Baselines, side: SideKey, pool: "role" | "all" = "role") {
-  const name = pool === "all" ? "all" : roleOf(s);
-  const n = b.n[name]?.[ratingKey(side)] ?? 0;
-  return `Percentile against ${n} ${name === "all" ? "pros" : name === "awper" ? "AWPers" : "riflers"}`;
 }
 
 // ---------------------------------------------------------------- the card
@@ -144,9 +139,8 @@ function poolLabel(s: Summary, b: Baselines, side: SideKey, pool: "role" | "all"
 interface CellDef { id: string; label: string; bench: Bench; value: number | null; text: string; unit?: string }
 
 /** The two most likely roles on one side, in words: "Entry 46%, Lurker 31%". */
-function topRoles(s: Summary, side: "T" | "CT") {
-  const b = roleBlend(s, side);
-  if (!b.blend) return null;
+function topRoles(b: RoleBlend | undefined) {
+  if (!b?.blend) return null;
   return Object.entries(b.blend).sort((x, y) => y[1] - x[1]).slice(0, 2).map(([r, v]) => `${r} ${fmtPct(100 * v, 0)}`).join(", ");
 }
 
@@ -175,8 +169,9 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const parts = r3.inputs ? Object.entries(r3.inputs).map(([k, v]) => ({ label: R3_INPUT_LABEL[k]?.label ?? k, value: R3_INPUT_LABEL[k]?.fmt(v) ?? String(v) })) : null;
   const woke = useRef(!sessionStorage.getItem("cs2stats.cardWoke"));
   useEffect(() => { sessionStorage.setItem("cs2stats.cardWoke", "1"); }, []);
-  const roleT = topRoles(p.t, "T");
-  const roleCT = topRoles(p.ct, "CT");
+  const roles = useCall("roles", [p.base]).data;
+  const roleT = topRoles(roles?.T);
+  const roleCT = topRoles(roles?.CT);
   const role = side === "t" ? roleT : side === "ct" ? roleCT : roleT && roleCT ? `${roleT.split(" ")[0]} on T, ${roleCT.split(" ")[0]} on CT` : null;
   const wins = p.list.filter((e) => e.result === "W").length;
   const losses = p.list.filter((e) => e.result === "L").length;
@@ -206,13 +201,13 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
           </button>
           <HoverCard as="div" className="gauge-wrap" card={() => (
             <div className="bd">
-              <div className="bd__head"><span className="caps">{RATING_HEADLINE}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
+              <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
               <p className="bd__def">{RATING_POOLED} T and CT are the same formula over each side's rounds.</p>
               {parts && <BreakRows rows={parts.map((t) => ({ label: t.label, value: t.value }))} />}
-              <p className="bd__def faint">{RATING3_NOTE}</p>
+              <p className="bd__def faint">{rating3Note()}</p>
             </div>
           )}>
-            <Gauge value={gaugeV} verdict={gaugeVerdict} label={<>{RATING_HEADLINE}{RATING3_DIAGNOSTIC && <span className="calib">diagnostic</span>}</>} />
+            <Gauge value={gaugeV} verdict={gaugeVerdict} label={<>{ratingHeadline()}{ratingDiagnostic() && <span className="calib">diagnostic</span>}</>} />
           </HoverCard>
           <button className={`band band--ct ${side === "ct" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "ct" ? null : "ct")} aria-pressed={side === "ct"}>
             <b className="num">{fmtRating(ctR)}</b><span>CT rating</span>
@@ -277,26 +272,29 @@ function Firepower({ attrs, pool }: { attrs: Attr[]; pool: string }) {
 type StyleCompare = "role" | "everyone";
 
 /** The six style attributes: how you play, not how well (HLTV: "rating covers performance, attributes cover style"). */
-function StyleAttributes({ s, baselines, side }: { s: Summary; baselines: Baselines; side: SideKey }) {
+function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [cmp, setCmp] = useState<StyleCompare>("role");
   const pool = cmp === "role" ? "role" : "all";
-  const attrs = useMemo(() => attrsOf(attributes(s, baselines, { pool, side: ratingKey(side) })), [s, baselines, pool, side]);
-  const peers = roleOf(s) === "awper" ? "AWPers" : "Riflers";
+  const res = useCall("attributes", [q, { pool, side: ratingKey(side) }]).data;
+  const attrs = useMemo(() => (res ? attrsOf(res.scores) : []), [res]);
+  const peers = res?.role === "awper" ? "AWPers" : "Riflers";
   return (
     <Card title="Style attributes" aside={
       <span className="card__aside-row">
-        <span className="meta" data-tip={SCORED_TIP}>{poolLabel(s, baselines, side, pool)}</span>
+        <span className="meta" data-tip={SCORED_TIP}>{res ? poolText(pool === "all" ? "all" : res.role, res.n) : ""}</span>
         <Segmented label="Compared to" value={cmp} onChange={setCmp} options={[
           { value: "role", label: peers, tip: `You are compared with ${peers.toLowerCase()}: more than 0.20 AWP kills per round makes an AWPer.` },
           { value: "everyone", label: "Everyone" },
         ]} />
       </span>
     }>
-      <div className="attrs">
-        {attrs.filter((a) => a.id !== "firepower").map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
-      </div>
+      {!res ? <div className="skel" style={{ height: 220 }} /> : (
+        <div className="attrs">
+          {attrs.filter((a) => a.id !== "firepower").map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
+        </div>
+      )}
       <p className="meta attrs__note">Each attribute weighs intent as well as outcome: opening attempts as well as opening kills, tradeable deaths as well as traded ones. As on HLTV, riflers are compared with riflers and AWPers with AWPers; Sniping always compares with everyone.</p>
     </Card>
   );
@@ -348,7 +346,7 @@ function FormTrend({ p }: { p: ProfileData }) {
   );
 }
 
-interface MapRow { map: string; matches: number; wins: number; s: Summary; r: SideRatings }
+interface MapRow { map: string; matches: number; wins: number; s: Rolled; r: SideRatings }
 
 function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
   const { you: ids } = useData();
@@ -372,8 +370,8 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
           { key: "map", label: "Map", align: "l", sort: (m) => mapName(m.map), render: (m) => <span className="mapcell"><MapThumb map={m.map} size={22} /><b>{mapName(m.map)}</b></span> },
           { key: "matches", label: "Maps", sort: (m) => m.matches, render: (m) => m.matches },
           { key: "wl", label: "W–L", sort: (m) => m.wins / m.matches, render: (m) => <span className="num">{m.wins}<span className="faint">–</span>{m.matches - m.wins}</span> },
-          { key: "adr", label: "ADR", sort: (m) => METRIC.adr.value(m.s), render: (m) => fmtAdr(METRIC.adr.value(m.s)) },
-          { key: "kast", label: "KAST", sort: (m) => METRIC.kast.value(m.s), render: (m) => <Num v={fmtPct(METRIC.kast.value(m.s))} /> },
+          { key: "adr", label: "ADR", sort: (m) => m.s.v.adr, render: (m) => fmtAdr(m.s.v.adr) },
+          { key: "kast", label: "KAST", sort: (m) => m.s.v.kast, render: (m) => <Num v={fmtPct(m.s.v.kast)} /> },
           { key: "t", label: "T", tip: "Rating 3.0 on T, pooled over rounds", colored: true, sort: (m) => m.r.T.value, render: (m) => <span className="t-text">{fmtRating(m.r.T.value)}</span> },
           { key: "ct", label: "CT", tip: "Rating 3.0 on CT, pooled over rounds", colored: true, sort: (m) => m.r.CT.value, render: (m) => <span className="ct-text">{fmtRating(m.r.CT.value)}</span> },
           { key: "rating", label: RATING_LABEL, tip: RATING_POOLED, colored: true, sort: (m) => m.r[key].value, render: (m) => { const x = m.r[key].value; return <b style={{ color: ratingText(x) }}>{fmtRating(x)}</b>; } },
@@ -395,7 +393,7 @@ function Weapons({ p, files, side }: { p: ProfileData; files: string[]; side: Si
   const total = rows.reduce((a, r) => a + r.kills, 0);
   const key = rows.map((r) => r.cls).join(",");
   const accs = useRollups(useMemo(() => rows.map((r) => ({ files, filter: { player: ids, weapons: r.ws, ...sidesOf(side) } })), [key, files, ids, side])).data; // eslint-disable-line react-hooks/exhaustive-deps
-  const acc = (i: number) => (accs?.length === rows.length && accs[i].aim.shots ? { acc: METRIC.accuracy.value(accs[i]), shots: accs[i].aim.shots } : null);
+  const acc = (i: number) => (accs?.length === rows.length && accs[i].aim.shots ? { acc: accs[i].v.accuracy, shots: accs[i].aim.shots } : null);
   const anyAim = rows.some((_, i) => acc(i));
   return (
     <Card title="Weapons" collapsible id="profile-weapons" aside={<span className="meta">{plural(total, "kill")}</span>}>
@@ -453,10 +451,10 @@ function Multis({ m }: { m: Measures }) {
   );
 }
 
-function Openings({ s }: { s: Summary }) {
+function Openings({ s }: { s: Rolled }) {
   const c = s.m;
   const att = c.openingKills + c.openingDeaths;
-  const succ = METRIC.openingSuccess.value(s);
+  const succ = s.v.openingSuccess;
   return (
     <Card title="Opening duels" collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} />}>
       <div className="odial">
@@ -467,8 +465,8 @@ function Openings({ s }: { s: Summary }) {
         <div className="odial__legend"><span><b className="num good-text">{c.openingKills}</b> won</span><span><b className="num poor-text">{c.openingDeaths}</b> lost</span></div>
       </div>
       <dl className="facts">
-        <dt data-tip={METRIC.openingAttempts.def}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", METRIC.openingAttempts.value(s))}</b><span className="meta">of rounds</span></dd>
-        <dt data-tip={METRIC.openingTradedPct.def}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", METRIC.openingTradedPct.value(s))}</b></dd>
+        <dt data-tip={metric("openingAttempts").def}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
+        <dt data-tip={metric("openingTradedPct").def}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
       </dl>
     </Card>
   );

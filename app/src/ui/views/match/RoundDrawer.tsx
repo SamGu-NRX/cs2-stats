@@ -2,18 +2,18 @@
 // It always docks beside the grid and never covers it (the user found the overlay hid the rounds);
 // the grid scrolls sideways instead. It opens with the drawer spring (320 ms) and only then narrows
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Measure } from "../../../stats/facts";
-import { METRIC } from "../../../stats/metrics";
-import { rollup } from "../../../stats/rollup";
 import { Num } from "../../components/bits";
 import { fmtMetric } from "../../data/engine";
-import { killSwing, roundSlice, sideOf, type MatchModel as MatchView } from "../../data/match";
+import { useCall } from "../../data/hooks";
+import { killSwing, roundSecs, sideOf, type MatchModel as MatchView } from "../../data/match";
+import { metric } from "../../data/meta";
 import { BUY_LABEL, BuyIcon, FirstKillIcon, KillFlags, NadeIcon, NADE_LABEL, WeaponIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
-import { fmtClock, fmtMoney, fmtSwing } from "../../lib/format";
+import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
 import { roundSwingScore, scoreText } from "../../lib/scale";
-import { PlayerName } from "../shared";
+import { PlaceList, PlayerName } from "../shared";
 
 const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
@@ -116,17 +116,24 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
   const r = v.rounds[ri];
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
+  // every round's numbers per player, rolled up once in the worker when the drawer first opens, so
+  // stepping rounds swaps the content without waiting
+  const all = useCall("rounds", [v.file]).data;
+  const rd = all?.[ri] ?? null;
   const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
   const opening = r.kills.find((k) => k.opening);
-  const pr = (pi: number) => r.pr[pi];
-  const dmgMax = Math.max(1, ...v.players.map((p) => pr(p.pi)?.m.dmg ?? 0));
+  const m = (pi: number) => rd?.players[pi]?.m ?? null;
+  const dmgMax = Math.max(1, ...v.players.map((p) => m(p.pi)?.dmg ?? 0));
   const sideCls = (pi: number) => (sideOf(v, r, pi) === "T" ? "t" : "ct");
-  const thrown = (pi: number) => NADES.filter(([, m]) => (pr(pi)?.m[m] ?? 0) > 0);
+  const thrown = (pi: number) => NADES.filter(([, k]) => (m(pi)?.[k] ?? 0) > 0);
   const anyNades = v.players.some((p) => thrown(p.pi).length > 0);
-  // your numbers this round: the match's facts cut to the round, rolled up
-  const aim = useMemo(() => rollup([roundSlice(v.facts, ri)], { player: v.players[v.human].key }), [v, ri]);
-  const metric = (id: string) => fmtMetric(id, METRIC[id].value(aim));
+  const econ = v.b.economy.rounds[ri];
+  const you = rd?.players[v.human] ?? null;
+  // one round's places come from the match's tables, which the worker reads again for the open match
+  const spent = useCall("places", v.entry.hasPos ? [v.file] : null).data?.[r.number] ?? {};
+  const f = r.fact;
+  const name = (pi: number | null) => (pi === null ? "someone" : v.players[pi].name);
   return (
     <div className="drawer__in">
       <header className="drawer__head">
@@ -164,33 +171,43 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
               })}
             </ol>
           ) : <p className="meta">No kills.</p>}
+          {f.plantTick !== null && (
+            <p className="meta" data-tip="Round clock: time since freeze time ended">
+              Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
+              {f.defused ? `; defused by ${name(f.defuser)} at ${fmtClock(roundSecs(v, r, f.endTick))}` : f.exploded ? `; exploded at ${fmtClock(roundSecs(v, r, f.endTick))}` : ""}.
+            </p>
+          )}
         </Section>
 
         <Section title="Economy">
           <div className="deco">
             {(["us", "them"] as const).map((t) => {
-              const buy = r.buy[t];
-              const saves = team(t).filter((p) => (pr(p.pi)?.m.saves ?? 0) > 0).length;
+              const tr = econ[t];
               return (
                 <div key={t} className="deco__team">
                   <div className="deco__head">
-                    <BuyIcon buy={buy} size={16} className={t === "us" ? "cream" : "muted"} />
-                    <b>{buy ? BUY_LABEL[buy] : "Unknown buy"}</b>
-                    <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(r.equip[t])}</span>
+                    <BuyIcon buy={tr.buy} size={16} className={t === "us" ? "cream" : "muted"} />
+                    <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
+                    <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
                   </div>
                   <ul className="deco__players">
                     {team(t).map((p) => {
-                      const x = pr(p.pi);
+                      const x = r.pr[p.pi];
                       return (
                         <li key={p.key}>
                           <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
                           <span className="deco__buy">{x?.ownBuy && <BuyIcon buy={x.ownBuy} size={11} />}</span>
                           <span className="num" data-tip="Equipment value at freeze end">{fmtMoney(x?.equip)}</span>
+                          <span className="num faint" data-tip="Money left after buying">{fmtMoney(x?.money)}</span>
                         </li>
                       );
                     })}
                   </ul>
-                  {saves > 0 && <div className="deco__foot meta"><span>{saves} saved</span></div>}
+                  <div className="deco__foot meta">
+                    <span>Bank {fmtMoney(tr.money)}</span>
+                    {tr.spent !== null && <span data-tip="Money the team spent in the buy time">Spent {fmtMoney(tr.spent)}</span>}
+                    {tr.saves > 0 && <span>{tr.saves} saved</span>}
+                  </div>
                 </div>
               );
             })}
@@ -198,59 +215,79 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
         </Section>
 
         <Section title="Utility thrown">
-          <ul className="dutil">
-            {v.players.filter((p) => thrown(p.pi).length > 0 || (pr(p.pi)?.m.heDmg ?? 0) > 0).map((p) => {
-              const x = pr(p.pi)!;
-              return (
-                <li key={p.key}>
-                  <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                  <span className="dutil__icons">{thrown(p.pi).map(([n, m]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{(x.m[m] ?? 0) > 1 && <small>{x.m[m]}</small>}</span>)}</span>
-                  <span className="meta">{x.m.flashAssists ? `${x.m.flashAssists} flash ${x.m.flashAssists === 1 ? "assist" : "assists"}` : ""}</span>
-                  <span className="num" data-tip="HE grenade damage to enemies">{x.m.heDmg ? `${x.m.heDmg} dmg` : ""}</span>
-                </li>
-              );
-            })}
-            {!anyNades && <li className="meta">No grenades thrown this round.</li>}
-          </ul>
+          {!rd ? <SkeletonLines n={3} /> : (
+            <ul className="dutil">
+              {v.players.filter((p) => thrown(p.pi).length > 0 || (m(p.pi)?.utilDmg ?? 0) > 0).map((p) => {
+                const x = m(p.pi)!;
+                return (
+                  <li key={p.key}>
+                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                    <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
+                    <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
+                  </li>
+                );
+              })}
+              {!anyNades && <li className="meta">No grenades thrown this round.</li>}
+            </ul>
+          )}
         </Section>
 
         <Section title="Damage" aside="To enemies">
-          <ul className="ddmg">
-            {[...v.players].sort((a, b) => (pr(b.pi)?.m.dmg ?? 0) - (pr(a.pi)?.m.dmg ?? 0)).map((p) => {
-              const d = pr(p.pi)?.m.dmg ?? 0;
-              return (
-                <li key={p.key} className={p.isHuman ? "is-you" : undefined}>
-                  <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                  <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
-                  <b className="num">{d}</b>
-                </li>
-              );
-            })}
-          </ul>
+          {!rd ? <SkeletonLines n={5} /> : (
+            <ul className="ddmg">
+              {[...v.players].sort((a, b) => (m(b.pi)?.dmg ?? 0) - (m(a.pi)?.dmg ?? 0)).map((p) => {
+                const d = m(p.pi)?.dmg ?? 0;
+                const own = m(p.pi)?.teamDmg ?? 0;
+                const rm = m(p.pi);
+                const sw = rm && rm.swingRounds ? rm.swing : null;
+                return (
+                  <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`}>
+                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                    <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
+                    <b className="num">{d}{own > 0 && <small className="poor-text"> +{own} team</small>}</b>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Section>
 
+        {Object.keys(spent).length > 0 && (
+          <Section title="Where you spent the round" aside="Seconds alive">
+            <PlaceList places={spent} n={5} />
+          </Section>
+        )}
+
         <Section title="Your aim this round">
-          {v.entry.hasAim ? (
+          {!v.entry.hasAim ? <p className="meta">Aim needs a recorded match; this one has no shot data.</p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
             <>
               <div className="daim">
-                <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{aim.aim.shots}</span></div>
-                <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{aim.aim.hits}</span></div>
-                <div className="stat" data-tip={METRIC.accuracy.def}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={metric("accuracy")} /></span></div>
-                <div className="stat" data-tip={METRIC.firstBulletAccuracy.def}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={metric("firstBulletAccuracy")} /></span><span className="stat__s">{aim.aim.firstHits}/{aim.aim.first}</span></div>
+                <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
+                <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{you.aim.hits}</span><span className="stat__s">{you.headHits} head</span></div>
+                <div className="stat" data-tip={metric("accuracy").def}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
+                <div className="stat" data-tip="Share of your gun hits that landed on the head"><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
+                <div className="stat" data-tip={metric("firstBulletAccuracy").def}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
+                <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
               </div>
               {!v.visibility ? (
                 <p className="gate"><span className="chip chip--outline">Gated</span> Time to damage, reaction and crosshair placement need view angles and mesh line of sight, which this match file does not carry.</p>
               ) : (
                 <div className="daim">
-                  <div className="stat" data-tip={METRIC.timeToDamage.def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={metric("timeToDamage")} /></span></div>
-                  <div className="stat" data-tip={METRIC.reactionTime.def}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={metric("reactionTime")} /></span></div>
-                  <div className="stat" data-tip={METRIC.crosshairPlacement.def}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={metric("crosshairPlacement")} /></span></div>
+                  <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
+                  <div className="stat" data-tip={metric("reactionTime").def}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
+                  <div className="stat" data-tip={metric("crosshairPlacement").def}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
                 </div>
               )}
             </>
-          ) : <p className="meta">Aim needs a recorded match; this one has no shot data.</p>}
+          )}
         </Section>
       </div>
     </div>
   );
+}
+
+/** Placeholder rows while the worker rolls the rounds up, shaped like the list they stand in for. */
+function SkeletonLines({ n }: { n: number }) {
+  return <div className="skel-rows" aria-hidden>{Array.from({ length: n }, (_, i) => <div key={i} className="skel" style={{ height: 14, opacity: 1 - i * 0.12 }} />)}</div>;
 }

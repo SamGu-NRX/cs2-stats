@@ -4,11 +4,9 @@
 import type { MatchModel } from "../../data/match";
 import { HoverCard } from "../../components/overlay";
 import { WinIcon, WIN_LABEL } from "../../icons/game";
-import { startsHalf } from "../../lib/layout";
 import { RoundCardBody } from "../shared";
 
 export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; selected: number | null; onPick: (ri: number) => void; compact?: boolean }) {
-  const max = v.maxRounds;
   if (compact) {
     return (
       <div className="rail rail--compact" role="list" aria-label="Rounds">
@@ -18,7 +16,7 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
             <button
               key={r.ri}
               role="listitem"
-              className={`rail__mini ${startsHalf(r.number - 1, max) ? "is-half" : ""}`}
+              className={`rail__mini ${r.halfStart ? "is-half" : ""}`}
               data-side={side}
               data-won={r.winner === "us"}
               aria-label={`Round ${r.number}: ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "unknown"}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}`}
@@ -49,7 +47,7 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
               as="div"
               tabbable={false}
               prefer="bottom"
-              className={`rail__col ${startsHalf(r.number - 1, max) ? "is-half" : ""} ${on ? "is-on" : ""}`}
+              className={`rail__col ${r.halfStart ? "is-half" : ""} ${on ? "is-on" : ""}`}
               card={() => <RoundCardBody v={v} r={r} />}
             >
               <button className="rail__btn" onClick={() => onPick(r.ri)} aria-label={`Round ${r.number}, ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "result unknown"}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}`} aria-pressed={on}>

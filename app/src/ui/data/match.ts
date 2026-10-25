@@ -1,11 +1,11 @@
-// One match's facts shaped for the match views, seen from the recording player's team ("us"): rounds
-// with their kills and player rows, and the per-player cells of the round inspector. Pure grouping of
-// MatchFacts; every number with a definition still comes from rollup and METRIC (data/engine.ts).
-import { BUY_CLASSES, type BuyClass } from "../../stats/economy";
-import type { KillFact, MatchFacts, MatchInfo, PlayerInfo, PlayerRound, RoundFact } from "../../stats/facts";
-import { rating3, type Rating3 } from "../../stats/rating3";
-import { rollup, type Summary } from "../../stats/rollup";
+// One match shaped for the match views, seen from the recording player's team ("us"): rounds with
+// their kills and player rows, and the per-player cells of the round inspector. Pure grouping of the
+// worker's MatchBundle; every number with a definition comes from the worker (worker/views.ts).
+import type { BuyClass } from "../../stats/economy";
+import type { KillFact, MatchInfo, PlayerInfo, PlayerRound, RoundFact } from "../../stats/facts";
 import type { Side } from "../../stats/tables";
+import type { Line, MatchBundle, MatchCore } from "../../worker/protocol";
+import { halfStarts } from "../lib/layout";
 
 export type Team = "us" | "them";
 export type RoundHow = "elim" | "bomb" | "defuse" | "time";
@@ -26,33 +26,10 @@ export interface MatchEntry {
   /** the file has shots (aim) and position samples (movement) */
   hasAim: boolean;
   hasPos: boolean;
-  /** the recording player over the whole match */
-  summary: Summary;
-  rating: Rating3;
-}
-
-const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them ? "W" : us < them ? "L" : "T");
-
-/** The recording player and their team. A match without one cannot be shown from "your" side. */
-function pov(file: string, f: MatchFacts): { you: number; usTeam: 0 | 1 } {
-  const you = f.players.findIndex((p) => p.id === f.match.pov);
-  if (you < 0) throw new Error(`${file}: the recording player (match pov ${f.match.pov ?? "missing"}) is not among the players`);
-  const usTeam = f.players[you].team;
-  if (usTeam === null) throw new Error(`${file}: the recording player never had a side`);
-  return { you, usTeam };
-}
-
-export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
-  const { you, usTeam } = pov(file, f);
-  const summary = rollup([f], { player: f.players[you].id });
-  const us = f.match.score[usTeam];
-  const them = f.match.score[1 - usTeam];
-  return {
-    file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
-    score: { us, them }, result: resultOf(us, them),
-    hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    summary, rating: rating3(summary.m),
-  };
+  /** gun shots by the recording player */
+  shots: number;
+  /** the recording player over the whole match, both sides; its rating is under the coverage rule */
+  line: Line;
 }
 
 /** Newest first: by date, then by file name (plugin files are named by their start time). */
@@ -71,6 +48,8 @@ export interface MRound {
   winner: Team | null;
   how: RoundHow | null;
   durSecs: number | null;
+  /** a side swap falls just before this round (by round number, lib/layout.ts halfStarts) */
+  halfStart: boolean;
   /** score after the round; null when the file is missing earlier rounds, so the running score is unknown */
   scoreAfter: { us: number; them: number } | null;
   buy: Record<Team, BuyClass | null>;
@@ -83,12 +62,15 @@ export interface MRound {
   kills: KillFact[];
   /** player rows by pi; null when the player has no row this round */
   pr: (PlayerRound | null)[];
+  fact: RoundFact;
 }
 
 export interface MatchModel {
   entry: MatchEntry;
   file: string;
-  facts: MatchFacts;
+  /** the worker's numbers for this match */
+  b: MatchBundle;
+  facts: MatchCore;
   map: string;
   maxRounds: number;
   nRounds: number;
@@ -111,7 +93,8 @@ function howOf(reason: string | null): RoundHow | null {
   return null;
 }
 
-export function matchModel(entry: MatchEntry, facts: MatchFacts): MatchModel {
+export function matchModel(entry: MatchEntry, b: MatchBundle): MatchModel {
+  const facts = b.core;
   const usTeam = entry.usTeam;
   const teamOf = (t: 0 | 1 | null): Team => (t === usTeam ? "us" : "them");
   const players: MPlayer[] = facts.players.map((p, pi) => ({ pi, key: p.id, name: p.name, bot: p.bot, team: teamOf(p.team), isHuman: pi === entry.you }));
@@ -119,6 +102,7 @@ export function matchModel(entry: MatchEntry, facts: MatchFacts): MatchModel {
   for (const k of facts.kills) kills[k.ri].push(k);
   const pr = facts.rounds.map(() => players.map((): PlayerRound | null => null));
   for (const r of facts.pr) pr[r.ri][r.pi] = r;
+  const starts = halfStarts(facts.rounds.map((r) => r.number), facts.match.maxRounds);
   let us = 0;
   let them = 0;
   const rounds = facts.rounds.map((r: RoundFact, ri): MRound => {
@@ -128,16 +112,16 @@ export function matchModel(entry: MatchEntry, facts: MatchFacts): MatchModel {
     if (winner === "us") us++;
     else if (winner === "them") them++;
     return {
-      ri, number: r.number, usSide, winSide: r.winner, winner, how: howOf(r.reason), durSecs: r.durationS,
+      ri, number: r.number, usSide, winSide: r.winner, winner, how: howOf(r.reason), durSecs: r.durationS, halfStart: starts[ri],
       // round numbers skip when the file holds early rounds as totals only (plugin/adapter.ts)
       scoreAfter: r.number === ri + 1 ? { us, them } : null,
       buy: { us: r.buy[usSide], them: r.buy[themSide] }, equip: { us: r.equip[usSide], them: r.equip[themSide] },
       plantSite: r.plantSite, planted: r.plantTick !== null, defused: r.defused, exploded: r.exploded,
-      kills: kills[ri], pr: pr[ri],
+      kills: kills[ri], pr: pr[ri], fact: r,
     };
   });
   return {
-    entry, file: entry.file, facts, map: facts.match.map, maxRounds: facts.match.maxRounds, nRounds: facts.rounds.length,
+    entry, file: entry.file, b, facts, map: facts.match.map, maxRounds: facts.match.maxRounds, nRounds: facts.rounds.length,
     human: entry.you, usStartSide: entry.usStartSide, players, rounds, visibility: facts.match.visibility === "ok",
   };
 }
@@ -148,9 +132,6 @@ export function sideOf(v: MatchModel, r: MRound, pi: number): Side {
   if (row) return row.side;
   return v.players[pi].team === "us" ? r.usSide : r.usSide === "CT" ? "T" : "CT";
 }
-
-/** The match's facts cut to one round, so rollup and METRIC give that round's numbers. */
-export const roundSlice = (f: MatchFacts, ri: number): MatchFacts => ({ ...f, pr: f.pr.filter((r) => r.ri === ri) });
 
 /** A player's enemy kills and death in one round. */
 export const killsBy = (r: MRound, pi: number) => r.kills.filter((k) => k.killer === pi && k.enemy);
@@ -164,6 +145,10 @@ export function killSwing(k: KillFact, pi: number | null): number | null {
 
 /** A player's swing in one round (a fraction), from their row; null when the round is not valued. */
 export const roundSwing = (row: PlayerRound | null) => (row && row.m.swingRounds ? row.m.swing ?? 0 : null);
+
+/** Seconds since the round's freeze end at a tick; null without a freeze-end tick. */
+export const roundSecs = (v: MatchModel, r: MRound, tick: number | null) =>
+  tick === null || r.fact.freezeEndTick === null ? null : (tick - r.fact.freezeEndTick) / v.facts.match.tickRate;
 
 /** One player's round in the inspector grid. */
 export interface RoundCell {
@@ -186,23 +171,6 @@ export function roundMatrix(v: MatchModel): RoundCell[][] {
     const death = deathOf(r, p.pi);
     return { ri: r.ri, side: sideOf(v, r, p.pi), kills: killsBy(r, p.pi), death, died: death !== null, dmg: row?.m.dmg ?? 0, swing: roundSwing(row), empty: !row, pr: row };
   }));
-}
-
-export interface WinTally { wins: number; rounds: number }
-const byBuy = <T,>(f: () => T) => Object.fromEntries(BUY_CLASSES.map((b) => [b, f()])) as Record<BuyClass, T>;
-
-/** Rounds played and won on each buy class, per team, and your team's wins by both teams' buys. */
-export function buyTally(v: MatchModel) {
-  const us = byBuy((): WinTally => ({ wins: 0, rounds: 0 }));
-  const them = byBuy((): WinTally => ({ wins: 0, rounds: 0 }));
-  const matchup = byBuy(() => byBuy((): WinTally => ({ wins: 0, rounds: 0 })));
-  for (const r of v.rounds) {
-    if (r.winner === null) continue;
-    if (r.buy.us) { us[r.buy.us].rounds++; if (r.winner === "us") us[r.buy.us].wins++; }
-    if (r.buy.them) { them[r.buy.them].rounds++; if (r.winner === "them") them[r.buy.them].wins++; }
-    if (r.buy.us && r.buy.them) { const x = matchup[r.buy.us][r.buy.them]; x.rounds++; if (r.winner === "us") x.wins++; }
-  }
-  return { us, them, matchup };
 }
 
 /** Enemy kills by killer and victim, [killer][victim]. */

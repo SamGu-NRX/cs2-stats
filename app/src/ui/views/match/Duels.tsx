@@ -1,14 +1,13 @@
 // Duels: who killed whom (head to head), opening duels and trades per player.
 import { useMemo } from "react";
-import { METRIC } from "../../../stats/metrics";
-import { rollup } from "../../../stats/rollup";
 import { TRADE_WINDOW_S } from "../../../stats/rules";
 import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable } from "../../components/DataTable";
 import { FirstKillIcon, TradingGlyph } from "./glyphs";
-import { fmtMetric, matchLines } from "../../data/engine";
-import { deathOf, killMatrix, killsBy, roundSlice, type MPlayer as PlayerRow } from "../../data/match";
+import { fmtMetric } from "../../data/engine";
+import { deathOf, killMatrix, killsBy, type MPlayer as PlayerRow } from "../../data/match";
+import { metric as meta } from "../../data/meta";
 import { fmtDiff } from "../../lib/format";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
@@ -19,9 +18,9 @@ export default function Duels({ v }: TabProps) {
   const us = v.players.filter((p) => p.team === "us");
   const them = v.players.filter((p) => p.team === "them");
   const km = useMemo(() => killMatrix(v), [v]);
-  const lines = useMemo(() => matchLines(v, "both"), [v]);
-  const m = (p: PlayerRow) => lines[p.pi].summary.m;
-  const metric = (p: PlayerRow, id: string) => METRIC[id].value(lines[p.pi].summary);
+  const lines = v.b.lines.both;
+  const m = (p: PlayerRow) => lines[p.pi].m;
+  const metric = (p: PlayerRow, id: string) => lines[p.pi].v[id];
   const totalUs = us.reduce((a, p) => a + them.reduce((b, q) => b + km[p.pi][q.pi], 0), 0);
   const totalThem = them.reduce((a, q) => a + us.reduce((b, p) => b + km[q.pi][p.pi], 0), 0);
   const fk = (t: "us" | "them") => v.players.filter((p) => p.team === t).reduce((a, p) => a + m(p).openingKills, 0);
@@ -76,8 +75,8 @@ export default function Duels({ v }: TabProps) {
               { key: "name", label: "Player", align: "l", sort: (p) => p.name, render: (p) => <span className={`name-cell ${p.team}-text`}><PlayerName v={v} pi={p.pi} /></span> },
               { key: "fk", label: "FK", tip: "Opening kills: the first kill of a round", sort: (p) => m(p).openingKills, render: (p) => m(p).openingKills },
               { key: "fd", label: "FD", tip: "Opening deaths", sort: (p) => m(p).openingDeaths, firstDir: "asc", render: (p) => m(p).openingDeaths },
-              { key: "att", label: "Attempts", tip: METRIC.openingAttempts.def, sort: (p) => metric(p, "openingAttempts"), render: (p) => <Num v={fmtMetric("openingAttempts", metric(p, "openingAttempts"))} /> },
-              { key: "succ", label: "Success", colored: true, tip: METRIC.openingSuccess.def, sort: (p) => metric(p, "openingSuccess"), render: (p) => { const x = metric(p, "openingSuccess"); return <span style={{ color: x === null ? undefined : scoreText(toScore(x, 50, 40)) }}><Num v={fmtMetric("openingSuccess", x)} /></span>; } },
+              { key: "att", label: "Attempts", tip: meta("openingAttempts").def, sort: (p) => metric(p, "openingAttempts"), render: (p) => <Num v={fmtMetric("openingAttempts", metric(p, "openingAttempts"))} /> },
+              { key: "succ", label: "Success", colored: true, tip: meta("openingSuccess").def, sort: (p) => metric(p, "openingSuccess"), render: (p) => { const x = metric(p, "openingSuccess"); return <span style={{ color: x === null ? undefined : scoreText(toScore(x, 50, 40)) }}><Num v={fmtMetric("openingSuccess", x)} /></span>; } },
             ]}
           />
         </Card>
@@ -91,7 +90,7 @@ export default function Duels({ v }: TabProps) {
             columns={[
               { key: "name", label: "Player", align: "l", sort: (p) => p.name, render: (p) => <span className={`name-cell ${p.team}-text`}><PlayerName v={v} pi={p.pi} /></span> },
               { key: "tk", label: "Trade kills", tip: `Kills on an enemy who had killed a teammate in the last ${TRADE_WINDOW_S} s`, sort: (p) => m(p).tradeKills, render: (p) => m(p).tradeKills },
-              { key: "td", label: "Traded", tip: METRIC.deathsTradedPct.def, sort: (p) => metric(p, "deathsTradedPct"), render: (p) => <span className="num">{m(p).tradedDeaths}<span className="faint">/{m(p).deaths}</span></span> },
+              { key: "td", label: "Traded", tip: meta("deathsTradedPct").def, sort: (p) => metric(p, "deathsTradedPct"), render: (p) => <span className="num">{m(p).tradedDeaths}<span className="faint">/{m(p).deaths}</span></span> },
               { key: "saved", label: "Saved", tip: "Times you killed an enemy who had just hit a teammate, while the teammate lived", sort: (p) => m(p).savedTeammate, render: (p) => m(p).savedTeammate },
               { key: "savedby", label: "Saved by", tip: "Times a teammate did that for you", sort: (p) => m(p).savedByTeammate, render: (p) => m(p).savedByTeammate },
             ]}
@@ -109,9 +108,9 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
   const gate = "Needs view angles and mesh line of sight, which this match file does not carry.";
   const human = v.human;
   const rows = useMemo(() => v.rounds.filter((r) => killsBy(r, human).length || deathOf(r, human)).map((r) => ({
-    r, kills: killsBy(r, human), death: deathOf(r, human), s: rollup([roundSlice(v.facts, r.ri)], { player: v.players[human].key }),
+    r, kills: killsBy(r, human), death: deathOf(r, human), s: v.b.yourRounds[r.ri],
   })), [v, human]);
-  const metric = (s: (typeof rows)[number]["s"], id: string) => fmtMetric(id, METRIC[id].value(s));
+  const metric = (s: (typeof rows)[number]["s"], id: string) => fmtMetric(id, s[id]);
   return (
     <Card title="Your duels, round by round" aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
       <div className="tbl-wrap">
@@ -120,9 +119,9 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
             <th className="l"><span className="th">Round</span></th>
             <th className="l"><span className="th">Killed</span></th>
             <th className="l"><span className="th">Died to</span></th>
-            <th><span className="th" data-tip={METRIC.accuracy.def}>Accuracy</span></th>
-            <th><span className="th" data-tip={METRIC.timeToDamage.def}>TTD</span></th>
-            <th><span className="th" data-tip={METRIC.reactionTime.def}>Reaction</span></th>
+            <th><span className="th" data-tip={meta("accuracy").def}>Accuracy</span></th>
+            <th><span className="th" data-tip={meta("timeToDamage").def}>TTD</span></th>
+            <th><span className="th" data-tip={meta("reactionTime").def}>Reaction</span></th>
           </tr></thead>
           <tbody>
             {rows.map(({ r, kills, death, s }) => {

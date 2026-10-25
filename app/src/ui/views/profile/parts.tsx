@@ -1,16 +1,16 @@
 // Profile sections: the round-swing card, the role blend in plain words, the "plays like" view
 // against the pro pack, and the how-good table.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { compare, type Baselines, type SideKey as PoolSide } from "../../../stats/compare";
-import { mostSimilar, roleBlend, STYLE, type PackPlayer, type SideProfile } from "../../../stats/identity";
-import { METRIC } from "../../../stats/metrics";
-import type { Summary } from "../../../stats/rollup";
+import type { SideKey as PoolSide } from "../../../stats/compare";
+import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
-import { fmtMetric, type Attr } from "../../data/engine";
+import { fmtMetric, rankText, type Attr } from "../../data/engine";
+import { useCall } from "../../data/hooks";
+import { metric, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
-import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type Pro } from "../../data/packs";
+import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtDate, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
@@ -29,13 +29,13 @@ export function SectionHead({ title, sub, id }: { title: string; sub: string; id
 
 // ---------------------------------------------------------------- swing
 
-/** METRIC.swing is in percent; fmtSwing and swingScore take a fraction. */
-const swingOf = (s: Summary) => { const v = METRIC.swing.value(s); return v === null ? null : v / 100; };
+/** The swing metric is in percent; fmtSwing and swingScore take a fraction. */
+const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
 
-export function SwingCard({ you, list, bots }: { you: Summary; list: MatchEntry[]; bots: Summary | null }) {
-  const swing = swingOf(you);
-  const botSwing = bots ? swingOf(bots) : null;
-  const per = [...list].reverse().map((s) => ({ s, v: swingOf(s.summary) }));
+export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null }) {
+  const swing = swingOf(you.v);
+  const botSwing = bots ? swingOf(bots.v) : null;
+  const per = [...list].reverse().map((s) => ({ s, v: swingOf(s.line.v) }));
   const known = per.filter((x) => x.v !== null) as { s: MatchEntry; v: number }[];
   const best = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v > b.v ? x : b), null);
   const worst = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v < b.v ? x : b), null);
@@ -85,8 +85,12 @@ const ROLE_WHAT: Record<string, string> = {
  * The engine's role blend per side (identity.ts): shares of each role from a model fitted on
  * labelled pros, with the evidence behind them in words.
  */
-export function RoleCard({ t, ct }: { t: Summary; ct: Summary }) {
-  const sides = [roleBlend(t, "T"), roleBlend(ct, "CT")];
+export function RoleCard({ q }: { q: Query }) {
+  const r = useCall("roles", [q]);
+  if (!r.data) {
+    return <Card title="Role" className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
+  }
+  const sides = [r.data.T, r.data.CT];
   return (
     <Card title="Role" aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
       {sides.map((b) => {
@@ -134,21 +138,17 @@ function ProMarks({ pro }: { pro: Pro }) {
 
 /** A pro's scores on one side, in ATTRIBUTE_ORDER. */
 const proScores = (pro: Pro, side: PoolSide) => (side === "both" ? pro.both : side === "CT" ? pro.ct : pro.t);
-const styleOf = (v: (number | null)[]) => STYLE.map((id) => v[ATTRIBUTE_ORDER.indexOf(id)]);
-/** The pro pack in the engine's shape for mostSimilar: style scores per side. */
-const toPack = (pros: Pro[]): PackPlayer[] => pros.map((p) => ({
-  name: p.slug,
-  sides: Object.fromEntries((["both", "CT", "T"] as const).map((s) => [s, { style: Object.fromEntries(STYLE.map((id, i) => [id, styleOf(proScores(p, s))[i]])) }])),
-}));
+/** A pro's six style scores, in the order the engine lists them (identity.ts STYLE). */
+const styleOf = (v: (number | null)[]) => styleIds().map((id) => v[ATTRIBUTE_ORDER.indexOf(id as AttributeId)]);
 
 /**
  * "Plays like": the shape of your six style attributes on T and on CT against each pro's (identity.ts
- * mostSimilar, cosine similarity over the twelve scores, design/identity.md). The radar and table
- * show the selected side.
+ * mostSimilar in the worker, cosine similarity over the twelve scores, design/identity.md). The radar
+ * and table show the selected side.
  */
-export function PlaysLike({ attrs, profile, side, initial }: { attrs: Attr[]; profile: SideProfile; side: PoolSide; initial: string | null }) {
+export function PlaysLike({ q, attrs, side, initial }: { q: Query; attrs: Attr[]; side: PoolSide; initial: string | null }) {
   const pack = usePros();
-  if (pack.state === "ready") return <PlaysLikeBody attrs={attrs} profile={profile} side={side} initial={initial} pros={pack.pros} />;
+  if (pack.state === "ready") return <PlaysLikeBody q={q} attrs={attrs} side={side} initial={initial} pros={pack.pros} />;
   return (
     <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
       {pack.state === "loading" ? <div className="skel" style={{ height: 220 }} /> : (
@@ -167,17 +167,23 @@ export function PlaysLike({ attrs, profile, side, initial }: { attrs: Attr[]; pr
   );
 }
 
-function PlaysLikeBody({ attrs, profile, side, initial, pros }: { attrs: Attr[]; profile: SideProfile; side: PoolSide; initial: string | null; pros: Pro[] }) {
+function PlaysLikeBody({ q, attrs, side, initial, pros }: { q: Query; attrs: Attr[]; side: PoolSide; initial: string | null; pros: Pro[] }) {
   const bySlug = useMemo(() => new Map(pros.map((p) => [p.slug, p])), [pros]);
-  const ranked = useMemo(() => mostSimilar(profile, toPack(pros), "style", pros.length).map((x) => ({ item: bySlug.get(x.name)!, pct: Math.round(x.similarity) })), [profile, pros, bySlug]);
+  const pack = useMemo(() => pros.map((p) => ({ slug: p.slug, both: p.both, ct: p.ct, t: p.t })), [pros]);
+  const res = useCall("playsLike", [q, pack]);
+  const ranked = useMemo(() => (res.data ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
   const [sel, setSel] = useState<string | null>(initial);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
+  if (!res.data) {
+    return <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>{res.error ? <p className="meta">{res.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
+  }
   const top = ranked.slice(0, 6);
   const pick = (sel && ranked.find((x) => x.item.slug === sel)) || top[0];
   if (!pick) return null;
-  const you = STYLE.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
-  const labels = STYLE.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
+  const style = styleIds();
+  const you = style.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
+  const labels = style.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
   const sideLabel = side === "both" ? "both sides" : side;
   return (
     <div ref={ref} id="similar">
@@ -221,14 +227,14 @@ function VsTable({ attrs, pro, side }: { attrs: Attr[]; pro: Pro; side: PoolSide
   return (
     <div className="vs vs--wide">
       <div className="vs__head"><span className="caps">You</span><span /><span className="vs__pro">{pro.name}</span><span className="caps">Diff</span></div>
-      {STYLE.map((id, i) => {
+      {styleIds().map((id, i) => {
         const a = attrs.find((x) => x.id === id);
         const pv = theirs[i];
         const d = !a || a.score === null || pv === null ? null : a.score - pv;
         return (
           <div key={id} className="vs__row">
             <span className="num cream">{!a || a.score === null ? "–" : Math.round(a.score)}</span>
-            <span className="vs__lbl"><AttrIcon id={id} size={13} />{a?.label ?? id}</span>
+            <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{a?.label ?? id}</span>
             <span className="num">{pv ?? "–"}</span>
             <Delta d={d} span={30} fmt={(x) => Math.round(x).toString()} />
           </div>
@@ -256,28 +262,28 @@ export function RatingLegend({ children }: { children?: ReactNode }) {
 /** HLTV's "how good" metrics, in the order HLTV lists them beside Rating 3.0. */
 const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
 
-/** Where a percentile sits, for performance metrics (higher is always better after compare()). */
-export const rankText = (pct: number | null) => (pct === null ? "–" : pct >= 50 ? `Top ${Math.max(1, Math.round(100 - pct))}%` : `Bottom ${Math.max(1, Math.round(pct))}%`);
-
-/** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros. */
-export function HowGood({ s, baselines, side }: { s: Summary; baselines: Baselines; side: PoolSide }) {
-  const p = compare(s, baselines, { side });
+/** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros on the page's side. */
+export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
+  const r = useCall("compare", [q, { side }]);
+  const p = r.data?.p ?? null;
   return (
     <Card title="How good" aside={<span className="meta">HLTV's performance tables, against pros</span>}>
-      <ul className="howgood">
-        {HOW_GOOD.map((id) => {
-          const m = METRIC[id];
-          return (
-            <li key={id} data-tip={m.def}>
-              <span>{m.label}</span>
-              <span className="howgood__v">
-                <span className="meta num">{m.status === "unavailable" ? "Not measured yet" : rankText(p[id].pct)}</span>
-                <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, p[id].value)}</b>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
+        <ul className="howgood">
+          {HOW_GOOD.map((id) => {
+            const m = metric(id);
+            return (
+              <li key={id} data-tip={m.def}>
+                <span>{m.label}</span>
+                <span className="howgood__v">
+                  <span className="meta num">{m.status === "unavailable" ? "Not measured yet" : rankText(p[id].pct)}</span>
+                  <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, p[id].value)}</b>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Card>
   );
 }

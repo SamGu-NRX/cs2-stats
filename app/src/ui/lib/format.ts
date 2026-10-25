@@ -55,6 +55,13 @@ function day(d: string): Date {
 }
 export const fmtDate = (d: string | null) => (d ? dateFmt.format(day(d)) : DASH);
 export const fmtDateYear = (d: string | null) => (d ? yearFmt.format(day(d)) : DASH);
+const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+/** Clock time of an ISO timestamp, in local time: "9:38 PM". */
+export const fmtTime = (iso: string) => timeFmt.format(new Date(iso));
+/** A match's length in whole minutes: "38 min". */
+export const fmtDuration = (secs: number | null | undefined) => (ok(secs) && secs > 0 ? `${Math.max(1, Math.round(secs / 60))} min` : DASH);
+/** A match's date, with its start time when the source has one. */
+export const fmtWhen = (m: { date: string | null; startedAt: string | null }) => (m.startedAt ? `${fmtDate(m.date)}, ${fmtTime(m.startedAt)}` : fmtDate(m.date));
 
 /** "3 matches", "1 match" */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

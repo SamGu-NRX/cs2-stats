@@ -1,12 +1,12 @@
 // Pieces several views share: stat tiles, hover cards for players and rounds, empty states and
 // skeletons shaped like the content they stand in for.
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
-import { playerLine, RATING_HEADLINE } from "../data/engine";
+import { ratingHeadline, statLine } from "../data/engine";
 import { roundSwing, sideOf, type MatchModel, type MRound } from "../data/match";
 import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
-import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSwing } from "../lib/format";
+import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
 
@@ -72,7 +72,7 @@ export function BreakRows({ rows }: { rows: { label: ReactNode; value: ReactNode
 
 export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
   const p = v.players[pi];
-  const [both, t, ct] = useMemo(() => (["both", "t", "ct"] as const).map((k) => playerLine(v, pi, k)), [v, pi]);
+  const [both, t, ct] = (["both", "t", "ct"] as const).map((k) => statLine(v.b.lines[k][pi]));
   return (
     <div className="pcard">
       <div className="pcard__head">
@@ -93,7 +93,7 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
         <div><span className="t-text caps">T</span><b className="num">{fmtRating(t.rating)}</b><small className="meta">{t.kills}–{t.deaths}</small></div>
         <div><span className="ct-text caps">CT</span><b className="num">{fmtRating(ct.rating)}</b><small className="meta">{ct.kills}–{ct.deaths}</small></div>
       </div>
-      <div className="meta">{RATING_HEADLINE}</div>
+      <div className="meta">{ratingHeadline()}</div>
     </div>
   );
 }
@@ -153,6 +153,19 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
 /** Kill icons for one player's round, headshots marked. */
 export function Skulls({ kills, size = 10 }: { kills: { hs: boolean }[]; size?: number }) {
   return <span className="skulls">{kills.map((k, i) => <SkullIcon key={i} hs={k.hs} size={size} className={k.hs ? "skull skull--hs" : "skull"} />)}</span>;
+}
+
+// ---------------------------------------------------------------- places
+
+/** Seconds alive by place name, sorted, the top `n`. */
+export function PlaceList({ places, n = 10 }: { places: Record<string, number>; n?: number }) {
+  const rows = Object.entries(places).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const max = rows[0]?.[1] ?? 1;
+  return (
+    <ul className="places">
+      {rows.map(([p, secs]) => <li key={p}><span>{p}</span><span className="hbar"><i style={{ width: `${(secs / max) * 100}%` }} /></span><b className="num">{fmtSecs(secs, 0)}</b></li>)}
+    </ul>
+  );
 }
 
 // ---------------------------------------------------------------- states

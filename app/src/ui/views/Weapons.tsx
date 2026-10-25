@@ -3,15 +3,15 @@
 // Proficiency (familiarity and consistency rather than raw results) is the engine's gunProficiency.
 import { useMemo } from "react";
 import type { GunProficiency } from "../../stats/guns";
-import { METRIC } from "../../stats/metrics";
-import type { Summary } from "../../stats/rollup";
 import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { Num } from "../components/bits";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { filterEntries, fmtMetric, WEAPON_CLASS_LABEL } from "../data/engine";
-import { useGuns, useRollups, useYourQuery } from "../data/hooks";
+import { useCall, useRollups, useYourQuery } from "../data/hooks";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
+import type { Rolled } from "../../worker/protocol";
 import { WeaponIcon } from "../icons/game";
 import { fmtInt, fmtPct, plural } from "../lib/format";
 import { scoreText, toScore } from "../lib/scale";
@@ -40,8 +40,8 @@ interface Judged {
   prof: GunProficiency | null;
 }
 
-const acc = (s: Summary | undefined) => (s ? METRIC.accuracy.value(s) : null);
-const first = (s: Summary | undefined) => (s ? METRIC.firstBulletAccuracy.value(s) : null);
+const acc = (s: Rolled | undefined) => (s ? s.v.accuracy : null);
+const first = (s: Rolled | undefined) => (s ? s.v.firstBulletAccuracy : null);
 
 /** Advice from the gun's own numbers against your numbers for its class. */
 function advice(g: Judged, all: Judged[]): string {
@@ -68,7 +68,7 @@ export default function Weapons() {
     ...classes.map((c) => ({ files: query.files, filter: { ...query.filter, weapons: names.filter((w) => weaponClass(w) === c) } })),
   ] : null), [query, names, classes]);
   const per = useRollups(qs).data;
-  const prof = useGuns(query).data;
+  const prof = useCall("guns", query ? [query] : null).data;
   const guns = useMemo((): Judged[] | null => {
     // a previous filter's rollups stay in place while new ones load; wait for a matching set
     if (!base || (names.length && per?.length !== names.length + classes.length)) return null;
@@ -107,8 +107,8 @@ export default function Weapons() {
                   { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><WeaponIcon name={g.weapon} size={13} label={undefined} />{weaponLabel(g.weapon)}<small className="faint">{WEAPON_CLASS_LABEL[g.cls]}</small></span>, width: 220 },
                   { key: "kills", label: "Kills", sort: (g) => g.kills, render: (g) => g.kills },
                   { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
-                  { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => <span style={{ color: g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8)) }}><Num v={fmtMetric("accuracy", g.acc)} /></span>, tip: `${METRIC.accuracy.def} Coloured against your accuracy with the whole class.` },
-                  { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: METRIC.firstBulletAccuracy.def },
+                  { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => <span style={{ color: g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8)) }}><Num v={fmtMetric("accuracy", g.acc)} /></span>, tip: `${metric("accuracy").def} Coloured against your accuracy with the whole class.` },
+                  { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: metric("firstBulletAccuracy").def },
                   { key: "rounds", label: "Rounds used", sort: (g) => g.rounds, render: (g) => g.rounds },
                   { key: "prof", label: "Proficiency", tip: "Familiarity (rounds used) times consistency (how steady your accuracy is from match to match), 0 to 100. Not a measure of how good your numbers are.", sort: (g) => g.prof?.proficiency ?? null, render: (g) => <span data-tip={g.prof?.evidence}><Num v={fmtInt(g.prof?.proficiency)} /></span> },
                   { key: "advice", label: "Advice", align: "l", render: (g) => <span className="advice">{advice(g, guns)}</span>, width: 360 },

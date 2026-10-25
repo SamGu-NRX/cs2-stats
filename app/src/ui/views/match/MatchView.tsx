@@ -4,14 +4,14 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { MapThumb, Num, SourceBadge } from "../../components/bits";
 import { MapAtmosphere } from "../../components/MapArt";
-import { entryLine, RATING_HEADLINE } from "../../data/engine";
+import { entryLine, ratingHeadline } from "../../data/engine";
 import { useMatch } from "../../data/hooks";
 import { mapAccent } from "../../data/maps";
 import type { MatchEntry, MatchModel } from "../../data/match";
 import { useData } from "../../data/provider";
 import { sourceOf } from "../../data/sources";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
-import { fmtAdr, fmtDate, fmtPct, fmtRating, fmtSwing, mapName } from "../../lib/format";
+import { fmtAdr, fmtDate, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
 import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
@@ -130,7 +130,8 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
           </div>
           <div className="mhero__meta">
             <span className="mhero__map"><MapThumb map={map} size={18} /><b>{mapName(map)}</b></span>
-            <span>{fmtDate(e.match.date)}</span>
+            <span>{fmtWhen(e.match)}</span>
+            {e.match.durationS !== null && <span data-tip="From the first round's start to the last round's end">{fmtDuration(e.match.durationS)}</span>}
             <SourceBadge s={src} />
           </div>
         </div>
@@ -142,7 +143,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
       </div>
       <div className="mhero__you">
         <span className="caps">You</span>
-        <span className="mhero__stat"><span className="meta">{RATING_HEADLINE}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
+        <span className="mhero__stat"><span className="meta">{ratingHeadline()}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
         <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }}><Num v={fmtSwing(line.swing)} /></b></span>
         <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{line.kills}<span className="faint">–</span>{line.deaths}</b></span>
         <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(line.adr)}</b></span>
