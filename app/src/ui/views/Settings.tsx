@@ -1,8 +1,9 @@
 // Data & settings: where matches come from, what each source supports, import, and which model and
 // rating versions the numbers use.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DERIVE_VERSION } from "../../stats/facts";
-import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport, type ValveProgress } from "../../host/host";
+import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport } from "../../host/host";
+import type { ImportStatus } from "../../host/import-store";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
@@ -122,11 +123,8 @@ export default function Settings() {
   );
 }
 
-type ImportState =
-  | { phase: "idle" }
-  | { phase: "running"; at: ValveProgress | null }
-  | { phase: "done"; r: ValveImport }
-  | { phase: "failed"; message: string };
+const IDLE_IMPORT: ImportStatus = { running: false, at: null, last: null, error: null };
+const noImports = () => () => {};
 
 /** What an import's end says, by the importer's exit code (extractor/valve_import.py). */
 function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } {
@@ -142,21 +140,18 @@ function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } 
 /** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
 function ValveSource({ n }: { n: number }) {
   const { host, refresh } = useData();
-  const [state, setState] = useState<ImportState>({ phase: "idle" });
+  // The import's state lives in the host, so an import keeps showing after navigating away and back.
+  const status = useSyncExternalStore(host?.imports.subscribe ?? noImports, host ? host.imports.get : () => IDLE_IMPORT);
+  useEffect(() => { void host?.imports.sync(); }, [host]);
+  // rescan once an import ends, whichever page started it
+  const ended = useRef(status.last);
+  useEffect(() => {
+    if (status.last && status.last !== ended.current) refresh();
+    ended.current = status.last;
+  }, [status.last, refresh]);
   const folder = host?.valve?.folder ?? VALVE_FOLDER;
-  const run = async () => {
-    if (!host || state.phase === "running") return;
-    setState({ phase: "running", at: null });
-    try {
-      const r = await host.importValve((at) => setState({ phase: "running", at }));
-      setState({ phase: "done", r });
-    } catch (e) {
-      // the desktop app's commands reject with a string, the web host with an Error
-      setState({ phase: "failed", message: e instanceof Error ? e.message : String(e) });
-    }
-    refresh();
-  };
-  const outcome = state.phase === "done" ? importOutcome(state.r) : null;
+  const run = () => { if (host && !status.running) void host.imports.start(); };
+  const outcome = status.last && !status.running ? importOutcome(status.last) : null;
   return (
     <div className="source">
       <div className="source__head"><SourceBadge s={{ id: "valve", label: "Valve matchmaking", missing: [] }} compact /><b className="num source__n">{n}</b></div>
@@ -173,13 +168,13 @@ function ValveSource({ n }: { n: number }) {
           : "The first import takes your SteamID64 from Steam's most recent login."}
         {host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}
       </p>
-      <button className="btn press" onClick={() => void run()} disabled={!host || state.phase === "running"} aria-busy={state.phase === "running"}>
-        <RefreshIcon size={14} />{state.phase === "running" ? "Importing" : "Import Valve matches"}
+      <button className="btn press" onClick={run} disabled={!host || status.running} aria-busy={status.running}>
+        <RefreshIcon size={14} />{status.running ? "Importing" : "Import Valve matches"}
       </button>
       <p className="meta" role="status" aria-live="polite">
-        {state.phase === "running" && (state.at ? `Demo ${state.at.i} of ${state.at.n}${state.at.event === "done" ? (state.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
-        {outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{outcome.text}</span>}
-        {state.phase === "failed" && <span className="poor-text">{state.message}</span>}
+        {status.running && (status.at ? `Demo ${status.at.i} of ${status.at.n}${status.at.event === "done" ? (status.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
+        {status.error && !status.running ? <span className="poor-text">{status.error}</span>
+          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{outcome.text}</span>}
       </p>
     </div>
   );

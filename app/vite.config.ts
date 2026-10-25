@@ -84,7 +84,9 @@ function matchFolder(): Plugin {
  * {"type":"progress",...} the importer reports, then {"type":"done","code","summary","error"}.
  */
 function valveFolder(): Plugin {
+  // one import at a time; GET /__valve/import/state reports it to a page that did not start it
   let running = false;
+  let at: unknown = null, last: unknown = null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!url.pathname.startsWith("/__valve/")) return next();
@@ -103,15 +105,17 @@ function valveFolder(): Plugin {
         const body = readValve(root, rel);
         return send(200, body, rel.endsWith(".parquet") ? "application/octet-stream" : "application/json");
       }
+      if (url.pathname === "/__valve/import/state") return send(200, JSON.stringify({ running, at, last }));
       if (url.pathname === "/__valve/import" && req.method === "POST") {
         const run = importerCommand(root);
         if ("missing" in run) return send(503, JSON.stringify({ error: run.missing }));
         if (running) return send(409, JSON.stringify({ error: "an import is already running" }));
         running = true;
+        at = null;
         res.statusCode = 200;
         res.setHeader("Content-Type", "application/x-ndjson");
         res.setHeader("Cache-Control", "no-store");
-        const line = (o: unknown) => res.write(`${JSON.stringify(o)}\n`);
+        const line = (o: unknown) => { if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(o)}\n`); };
         const child = spawn(run.cmd, run.args, { cwd: run.cwd, windowsHide: true });
         let stdout = "", errTail = "", partial = "";
         child.stdout.on("data", (b: Buffer) => { stdout += b.toString(); });
@@ -122,17 +126,23 @@ function valveFolder(): Plugin {
           for (const l of lines) {
             let ev: unknown = null;
             try { ev = JSON.parse(l); } catch { /* not a progress line */ }
-            if (ev && typeof ev === "object" && "event" in ev) line({ type: "progress", ...ev });
+            if (ev && typeof ev === "object" && "event" in ev) { at = ev; line({ type: "progress", ...ev }); }
             else if (l.trim()) errTail = `${errTail}\n${l}`.slice(-2000);
           }
         });
-        child.on("error", (e) => { running = false; line({ type: "done", code: null, summary: null, error: e.message }); res.end(); });
-        child.on("close", (code) => {
+        // the page may have gone; the import runs on, and its end is kept for the state endpoint
+        const finish = (r: { code: number | null; summary: unknown; error: string | null }) => {
           running = false;
+          last = r;
+          line({ type: "done", ...r });
+          if (!res.writableEnded) res.end();
+        };
+        child.on("error", (e) => finish({ code: null, summary: null, error: e.message }));
+        child.on("close", (code) => {
+          if (!running) return; // "error" already finished it
           let summary: unknown = null;
           try { summary = JSON.parse(stdout); } catch { /* a usage error prints no summary */ }
-          line({ type: "done", code, summary, error: code === 0 ? null : errTail.trim() || null });
-          res.end();
+          finish({ code, summary, error: code === 0 ? null : errTail.trim() || null });
         });
         return;
       }

@@ -10,6 +10,8 @@
 // The user's imported Valve matches come from %APPDATA%\BotMatchStats\valve (tools/valve-folder.ts;
 // lib.rs on the desktop) as "valve/<demo>/<version folder>", each carrying the user's SteamID64 as pov.
 
+import { importStore, type ImportQuery, type ImportStore } from "./import-store";
+
 export interface FileEntry {
   /** path relative to the match folder, e.g. "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz" */
   file: string;
@@ -59,8 +61,8 @@ export interface Host {
   readPack(name: string): Promise<ArrayBuffer | null>;
   /** The Valve folder from the last list(), or null when this host has none. */
   readonly valve: ValveFolder | null;
-  /** Runs the Valve importer over the CS2 replays folder; rejects when the importer cannot start. */
-  importValve(onProgress: (p: ValveProgress) => void): Promise<ValveImport>;
+  /** The Valve importer over the CS2 replays folder: one import at a time, its state outliving any page. */
+  readonly imports: ImportStore;
 }
 
 interface ValveListing extends ValveFolder { files: FileEntry[] }
@@ -114,10 +116,19 @@ async function tauriHost(): Promise<Host> {
   const { listen } = await import("@tauri-apps/api/event");
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
+  const imports = importStore(async (onProgress) => {
+    const stop = await listen<ValveProgress>("valve-import-progress", (e) => onProgress(e.payload));
+    try {
+      return await invoke<ValveImport>("import_valve");
+    } finally {
+      stop();
+    }
+  }, () => invoke("valve_import_state"));
   return {
     kind: "tauri",
     get folder() { return folder; },
     get valve() { return valve; },
+    imports,
     async list() {
       const l = await invoke<{ folder: string; files: FileEntry[] }>("list_matches");
       folder = l.folder;
@@ -129,14 +140,6 @@ async function tauriHost(): Promise<Host> {
     read: (file) => (isSample(file) ? readSample(file)
       : isValve(file) ? invoke<ArrayBuffer>("read_valve", { path: file.slice("valve/".length) })
       : invoke<ArrayBuffer>("read_match", { file })),
-    async importValve(onProgress) {
-      const stop = await listen<ValveProgress>("valve-import-progress", (e) => onProgress(e.payload));
-      try {
-        return await invoke<ValveImport>("import_valve");
-      } finally {
-        stop();
-      }
-    },
     async readPack(name) {
       const r = await invoke<ArrayBuffer | null>("read_pack", { name });
       return r && r.byteLength ? r : null;
@@ -200,14 +203,22 @@ async function webImportValve(onProgress: (p: ValveProgress) => void): Promise<V
   throw new Error("The importer stopped without reporting a result");
 }
 
+/** The dev server's import state (vite.config.ts valveFolder), for an import this page did not start. */
+async function webImportState(): ReturnType<ImportQuery> {
+  const res = await fetch("/__valve/import/state");
+  if (!res.ok) throw new Error(`The import state failed to load (HTTP ${res.status})`);
+  return res.json();
+}
+
 function webHost(): Host {
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
+  const imports = importStore(webImportValve, webImportState);
   return {
     kind: "web",
     get folder() { return folder; },
     get valve() { return valve; },
-    importValve: webImportValve,
+    imports,
     async list() {
       const local = [...picked].map(([file, f]) => ({ file, size: f.size, mtime: f.lastModified }));
       // The dev and preview servers expose the match folder; a static build has no such endpoint.
