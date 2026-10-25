@@ -915,3 +915,16 @@ canvas.radar-img { image-rendering: auto; }
 .convcell { display: inline-flex; align-items: baseline; gap: 6px; }
 .convcell[data-tip] { text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
 .convtag { font: 600 10px/1 var(--f); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink2); cursor: help; }
+
+/* ---------------------------------------------------------------- killfeed (views/match/Killfeed.tsx) */
+.kfeeds { display: grid; gap: 2px; }
+.kfeed { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto minmax(0, 1fr) 52px; align-items: center; column-gap: 8px; height: 30px; padding: 0 6px; margin: 0 -6px; border-radius: 4px; }
+.kfeed[data-mine] { background: rgba(255, 215, 173, 0.06); box-shadow: inset 2px 0 0 var(--cream); }
+.kfeed__t { font-size: 12px; color: var(--ink3); }
+.kfeed__n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.kfeed__n--k { text-align: right; }
+.kfeed__n small { font-weight: 400; color: var(--ink3); }
+.kfeed__w { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); }
+.kfeed__w > span { display: inline-flex; color: var(--ink2); }
+.kfeed__tag { font: 600 10px/12px var(--f); letter-spacing: 0.04em; color: var(--ink2); border: 1px solid var(--line2); border-radius: 3px; padding: 0 3px; }
+.kfeed__sw { text-align: right; font: 600 12px var(--f); }
