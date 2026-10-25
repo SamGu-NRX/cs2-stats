@@ -29,6 +29,12 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 | kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. Each KAST round is also credited to the first of those that earned it, so the parts sum to KAST: `killRounds + kastA + kastS + kastT`. |
 | swing | Round swing | approx | `swing.ts`: each kill's and plant's change in win probability (HLTV's lookup from the private pack when installed, else the CS2RB round model, which also reads the living players' health, team equipment and time; `model-params.ts`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). An eligible flash (the gaining side's, still blinding the victim at the kill, not the killer's, a team flash or an ambiguous one) takes `params.json`'s flash share first. |
 
+Swing by source (`swing.ts` `swingSources`, the worker's `Rolled.swingSources`): every swing credit is also
+filed under one source, so the six sum to swing. Kills is the killer's own share of a kill that was not a
+trade, trades the same for a trade kill, damage a share of a teammate's kill earned by damage on the
+victim, flashes the flash share (flashSwing), deaths the charge to the victim, and round end the
+remainder shared at the round's end. Each is in percent per valued round, like swing.
+
 Eco adjustment (`rating3.ts`): a player's duel group comes from the best primary held at the kill,
 else their equipment value; a kill is worth `k (1 - P(killer wins))` from the Bradley-Terry table in
 `params.json`, and the death is charged the same. Without a primary, equipment bands decide: $2,400
@@ -187,7 +193,104 @@ gaps under 0.05 s merge. A **peek** is an exposure with an observed onset where 
 | lowBuyBuys | exact | Rounds where your team's buy is eco or half and you spent $1,000 or more, over such rounds with a known spend |
 
 Breakdowns by round type and economy ("aggressive on ecos") are the same metrics over `rollup` with
-`ownBuy` or `oppBuy`.
+`ownBuy` or `oppBuy`. The aggression family also counts, over your team's eco and half-buy rounds, your
+kills and the rounds where you made contact (`AggroAgg.lowKills`, `lowFights`). Two metrics built on them,
+fights taken and kills per round on those rounds, failed the reliability bar and do not ship (evidence below).
+
+## Contact and duels
+
+Each sighting (Aim, above) also records what the individual-play research measured at a contact
+(`research/individual/extract_individual.py`). Windows are the research's: the first shot within 1 s of
+the onset while the enemy stays visible, peek travel over 0.25 s, a duel settled by a kill between the
+two players within 3 s, and a stop looked for in the 0.5 s before the shot. "Moving" is above 75 u/s.
+All need line of sight (the `sight` input): a match without the extractor's engagements, such as a
+plugin recording, gives no value and the reason "line of sight known for 0 of N rounds".
+
+The engine's sighting differs from the research's contact in three ways, so the research's reliability
+is not claimed for any of them; the evidence table gives the engine's own. The onset is the first
+mesh-visible tick after one without sight, kept only when it falls inside the 90-degree view (the
+research's onset is the first tick both visible and inside the view). The windows run while the enemy
+stays visible (the research's take any visible tick inside them). And no sighting is dropped for a
+flashed attacker (the research dropped those above 0.1 s of blindness).
+
+| id | Kind | Status | Definition and thresholds |
+|---|---|---|---|
+| shotSpeed | identity | approx | Median 2D speed at your first shot within 1 s of a sighting |
+| shotError | performance, lower is better | approx | Median angle between your view and the enemy's eye at that shot (a true 3-D angle; the research used the hypotenuse of the yaw and pitch errors) |
+| stopBuffer | identity | approx | Median time from your last tick above 75 u/s to that shot, minus one tick, over shots fired at or under 75 u/s with a moving tick in the 0.5 s before |
+| movingSpray | identity | approx | Mean, over rifle bursts, of the share of bullets fired above 75 u/s. A burst is two or more shots of one rifle, each within 0.3 s of the last; a burst with any bullet of unknown speed is left out. Reads only shots, so plugin recordings have it. |
+| peekTravel | identity | approx | Median distance you moved from the onset to the last visible tick within 0.25 s; sightings that stay visible for one tick only are left out |
+| duelExposure | identity | approx | Median seconds from the onset to a kill between the two of you within 3 s |
+| firedFirst | identity | approx | Share of mutual sightings where you fired first: per pair and round, each player's earliest sighting of the other with a first shot, compared by tick; equal ticks count for neither |
+| engageDistance | identity | approx | Median horizontal distance to the enemy at the onset |
+| aggressionScore | identity | approx | The mean of four signed z-scores: peek travel and fired first count toward aggressive, exposure before the duel and engagement distance toward passive. Each z-score is against the pros' mean and standard deviation over 551 players with 40+ rounds (`aggression-scale.json`). Null unless all four parts have a value. The signs are ours: on the pro player-maps every part correlates under 0.1 with entry attempts, either way, so no data run set them. |
+| expectedDuel | identity | approx | Mean chance of winning your settled duels, from a logistic model of the research's nine features at the onset: placement, distance, both speeds, both health values (the latest 4 Hz sample no older than 0.3 s), living players a side, round time and the pitch error. Fitted on 88,069 pro duels from 489 maps with the research's ridge of 1e-3 (`xduel-params.json`); five-fold cross-validation grouped by match gives AUC 0.682 and Brier 0.223 (the research's: 0.692, 0.221). Shows a value from 80 settled duels. |
+| duelsOverExpected | performance | approx | Your settled duels won minus the expected wins, per duel, in percentage points. Shows a value from 442 settled duels. |
+
+The two duel gates come from `pnpm metric-evidence`: a player's first n settled duels split into
+alternate halves, Spearman's r between the halves' means across players, then Spearman-Brown. The gate is
+the smallest n from which every larger measured n reaches 0.4. Expected duel reaches 0.445 at 10 duels,
+dips to 0.393 at 40, and holds 0.469, 0.508 and 0.743 at 80, 160 and 320, so its gate is 80. Duels over
+expected never reaches 0.4 (0.20 to 0.33 from 10 to 320 duels), so its gate is a projection, not a
+measurement: Spearman-Brown carries its 0.326 at 320 duels to 0.4 at 442. Under its gate a metric has no
+value, and compare() says how many duels there are and how many it needs.
+
+## Buying (identity)
+
+From the team research (`research/team/explore.py`).
+
+| id | Status | Definition and thresholds |
+|---|---|---|
+| buyDeviation | approx | Your freeze-end equipment value minus your side's mean, over rounds where every player on the side has one. The research divides the team's total by five and keeps only 5v5 rounds; the engine divides by the players on the side. |
+| saveConversion | approx | The next round's starting equipment (`round_start_equip_value`) after a round you lost and survived, when that round is on the same side and the lost round did not end a half (regulation halves of `mp_maxrounds` / 2, overtime halves of `mp_overtime_maxrounds` / 2, default 6). The research's `save_conversion_proxy` is the same quantity in thousands of dollars. Needs the `carry` input: plugin files record no starting equipment. Its percentile needs 10 saved rounds (`SAVE_MIN`): a player's first 10 saves have a split-half reliability of 0.54 on the pros, 0.67 at 20. The value shows below that, with the count. |
+
+## Evidence for the metrics-v2 metrics
+
+The coordinator's bar: reliability (split-half, Spearman-Brown) of 0.4 or more, and no correlation of 0.5
+or more in absolute value with an existing stat. Research numbers are as the two research files give them:
+`research/individual/analysis.json` `candidates[].reliability.map_split.sb` and `max_existing_abs_corr`
+(per player-map, players with 4+ maps, against KPR, ADR, HS%, accuracy, swing, HLTV rating and AWP share
+of kills), and `research/team/candidate_summary.json` `candidates[].reliability_split_half` and
+`max_abs_existing_corr` (per player-map-side, against the team research's set, which has no AWP share).
+Engine numbers are `pnpm metric-evidence` on the engine's definitions, over the same 489 pro maps:
+player-maps with 16+ rounds, players with 4+ of them, first half of their maps against the last half,
+and the same seven comparisons with Rating 3.0 in place of HLTV's rating. The full report is
+`cs2-stats-data/derived/metric-evidence-v2.json` (no names or ids).
+
+| id | Research key | Research reliability, max \|r\| | Engine reliability (players), max \|r\| (with) | Ships |
+|---|---|---|---|---|
+| shotSpeed | shot_speed | 0.79, 0.43 | 0.76 (354), 0.45 (AWP share) | yes |
+| shotError | shot_error | 0.46, 0.17 | 0.55 (354), 0.19 (AWP share) | yes |
+| stopBuffer | stop_buffer | 0.45, 0.25 | 0.47 (354), 0.27 (AWP share) | yes |
+| movingSpray | moving_spray | 0.67, 0.14 | 0.67 (377), 0.15 (accuracy) | yes |
+| peekTravel | peek_travel | 0.63, 0.36 | 0.60 (354), 0.38 (AWP share) | yes |
+| duelExposure | exposure | 0.41, 0.30 | 0.48 (354), 0.34 (AWP share) | yes |
+| firedFirst | fired_first | 0.50, 0.10 | 0.49 (354), 0.17 (AWP share) | yes |
+| engageDistance | distance | 0.53, 0.28 | 0.55 (354), 0.30 (AWP share) | yes |
+| aggressionScore | none | | 0.50 (354), 0.27 (AWP share) | yes |
+| expectedDuel | expected_duel | 0.34, 0.29 | 0.25 (354), 0.25 (KPR); per duel 0.47 at 80 | yes, from 80 duels |
+| duelsOverExpected | execution_over_expected | 0.21, 0.69 (rating) | 0.32 (354), 0.70 (Rating 3.0); per duel 0.33 at 320 | yes, from 442 duels |
+| buyDeviation | buy_deviation | 0.70, 0.20 | 0.87 (377), 0.61 (AWP share) | yes; see below |
+| saveConversion | save_conversion_proxy | 0.27, 0.16 | 0.45 (259), 0.28 (AWP share); per save 0.54 at 10 | yes, percentile from 10 saves |
+| ecoFights | none | | 0.28 (349), 0.05 | no: under 0.4 |
+| ecoKills | none | | 0.12 (367), 0.32 (KPR) | no: under 0.4 |
+| crosshairPlacement (existing) | preaim, the median placement | 0.51, 0.25 | 0.57 (354), 0.26 (AWP share) | already shipped |
+| timeToShot (existing) | time_to_shot | 0.57, 0.11 | 0.72 (354), 0.10 (Rating 3.0) | already shipped |
+
+The research's "pre-aim" is the median placement at the onset, which is the engine's existing
+crosshairPlacement; its "time to shot" is the existing timeToShot (which keeps shots past 1 s and leaves out
+sightings with a shot in the previous 0.3 s). Neither got a new metric.
+
+Two of the shipped metrics clear the bar in the research file but not on the engine's own numbers, and
+are flagged for the coordinator rather than dropped. buyDeviation correlates 0.61 with AWP share of kills,
+a stat the team research did not compare against: an AWP costs $4,750, so AWPers buy above their team.
+duelsOverExpected correlates 0.70 with Rating 3.0, as the research's 0.69 with HLTV's rating already
+showed; it ships under the duel-difficulty exception with its 442-duel gate.
+
+Fights taken (`ecoFights`: rounds with contact over eco and half-buy rounds with visibility) and kills per
+round on those rounds (`ecoKills`) are the eco-aggression candidates. Neither is in the research files;
+on the engine's numbers both fall under 0.4, so neither ships. The per-buy-class breakdown of the existing
+metrics (`buySplits`) still answers "aggressive on ecos".
 
 ## Information (identity)
 
@@ -206,7 +309,9 @@ real sight and is used for nothing else.
 |---|---|
 | Role blend (`roleBlend`) | Per side, a Gaussian naive Bayes over Jamie Packer's six features (time alive per death, opening attempts, traded deaths %, trade kills %, and team-relative ranks of distance to the nearest teammate and to the team's centre), fitted on his labelled pros (CS2 Playstyle & Roles Dataset 2024, CC BY 4.0; labels from Harry Richards' Positions Database). The blend is the posterior over Entry, Lurker, Half-lurker (T) or Anchor, Rotator, Mixed (CT). AWPer share is the rounds you carried an AWP. Spacing samples: every 3 s from 10 s after freeze end, before the plant, with all five alive; ranks per sample, ties sharing the mean rank. |
 | Support tendency | Mean percentile of flashes and smokes thrown, trade kills % and assisted kills %. Reported beside the blend because no labelled source for support exists. |
-| Populations | Style attributes and "plays like" rank the user against the bot careers in their own matches (`careerBaselines`; careers with 150 or more rounds, provisional until 15 qualify) and each pro against pros. Performance metrics and "Work on" rank against the pros. `design/identity.md`. |
+| Overall and per-map role (`overallRole`, the worker's `roles(q).all` and `rolesByMap`) | Each side's blend weighted by its rounds; a side without a blend adds no weight. The model is fitted per side and the sides' roles differ, so a role's overall share is its share of its side times that side's share of the rounds. Per map it is the same over that map's rounds. |
+| Spawn names (`rolesBySpawn`) | Each spawn with its map, the map's place name at the spawn sample (`PlayerRound.spawnPlace`), and its position in the side's spawn area: facing the mean of the enemy's spawns from the mean of the side's, "front" or "back" when 64 units or more along that line, "left" or "right" when 64 or more across it, else "centre". 64 units (two player widths) is ours, no fit. Every spawn on a side shares one place name on the pro maps checked (TSpawn, CTSpawn), which is why the position is there. |
+| Populations | Style attributes and "plays like" rank the user against the bot careers in their own matches (`careerBaselines`; careers with 150 or more rounds, provisional until 15 qualify) and each pro against pros. Performance metrics and "Work on" rank against the pros. `design/identity.md`. Firepower is also scored against the same bots (`StyleResult.firepower`). An AWPer pool with fewer than 8 samples on a side takes the all-bots pool there and says so (`Careers.pool`): in the user's seven recorded matches of 2026-10-25 two bot matches passed 0.20 AWP kills per round and no bot id played twice. |
 | Plays like | Cosine similarity, as a percentage, of twelve scores: the six style attributes on T and on CT, each taken as its distance from the pool middle (score minus 50). The user and the pros are scored against different populations, so only the profile's shape compares (`design/identity.md`): 100 is the same shape, 0 unrelated, -100 the opposite. Keys either player lacks are left out. |
 | Performs like | The same over the percentiles of KPR, ADR, DPR, KAST, multi-kill % and swing, on T and on CT |
 | Gun proficiency | Familiarity (rounds used over 100, capped at 1; ours) times consistency (1 minus the coefficient of variation of per-match accuracy over matches with 20 or more shots, at least 3 matches; ours). Not performance. |
