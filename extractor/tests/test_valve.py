@@ -259,13 +259,14 @@ def _fake_extractor(calls: list, failing: set):
     def fake(dem, out_dir, source, mapdata=None, archive="", meta_extra=None):
         calls.append(Path(dem).name)
         ok = Path(dem).name not in failing
-        if ok:
-            tmp = Path(out_dir) / ".tmp-test"
-            tmp.mkdir(parents=True)
-            pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION]}) \
-                .write_parquet(tmp / "match.parquet")
-            pl.DataFrame({"steamid": pl.Series([U1], dtype=pl.UInt64)}).write_parquet(tmp / "players.parquet")
-            ex.publish_version(tmp, Path(out_dir), ex.EXTRACTOR_VERSION)
+        if ok:  # published the way write_output does: under the map's lock, listing the files written
+            with ex.map_lock(Path(out_dir)):
+                tmp = Path(out_dir) / ".tmp-test"
+                tmp.mkdir(parents=True)
+                pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION]}) \
+                    .write_parquet(tmp / "match.parquet")
+                pl.DataFrame({"steamid": pl.Series([U1], dtype=pl.UInt64)}).write_parquet(tmp / "players.parquet")
+                ex.publish_version(tmp, Path(out_dir), ex.EXTRACTOR_VERSION, ["match.parquet", "players.parquet"])
         return dict(ok=ok, errors=[] if ok else ["ValidationFailed: deaths"], validation={})
     return fake
 

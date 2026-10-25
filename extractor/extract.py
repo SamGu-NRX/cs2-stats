@@ -55,7 +55,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.10.0"
+EXTRACTOR_VERSION = "1.11.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
