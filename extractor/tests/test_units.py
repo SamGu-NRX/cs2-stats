@@ -803,6 +803,37 @@ def test_an_archive_whose_demos_would_break_the_budget_is_not_extracted(tmp_path
     assert len(started) == 1 and a.state == "extracting"
 
 
+
+def test_an_archive_still_extracting_holds_its_listed_size_against_the_next_one(tmp_path, monkeypatch):
+    # The check counted only bytes already on disk, so a second archive could start while the first one's
+    # 7-Zip run had written nothing yet, and together they broke the budget. Sizes in bytes: the budget is
+    # 1000, each archive lists 600 bytes of demos.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0)
+    archives = []
+    for name in ("a", "b"):
+        rar = dp.DOWNLOADS / name
+        rar.write_bytes(dp.RAR_MAGIC + bytes(10))
+        archives.append(dp.Archive(rar=rar, id=name))
+    listing = {"m1.dem": dict(size=600, modified=None)}
+    started = []
+    monkeypatch.setattr(dp, "list_archive", lambda rar: listing)
+    monkeypatch.setattr(dp.subprocess, "Popen", lambda *x, **k: started.append(x))
+    p = dp.Pipeline()
+    for a in archives:
+        p.archives[a.id] = a
+    first, second = sorted(archives, key=lambda a: a.rar.stat().st_mtime)
+    p.start_extractions()
+    assert len(started) == 1 and first.state == "extracting" and second.state == "pending"
+    (first.work / "m1.dem").write_bytes(b"x" * 600)  # 7-Zip wrote the demo: it now counts as disk use
+    p.start_extractions()
+    assert len(started) == 1 and second.state == "pending"
+    (first.work / "m1.dem").unlink()  # the first archive finished and its demos are gone
+    del p.archives[first.id]
+    p.start_extractions()
+    assert len(started) == 2 and second.state == "extracting"
+
 def test_an_archive_that_breaks_the_free_space_floor_waits(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 46.0)  # 46 GB free, 2 GB of demos -> 44 < 45

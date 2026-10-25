@@ -487,11 +487,13 @@ class Pipeline:
             if expand > MAX_OUR_GB:
                 self.fail_archive(a, f"its demos ({expand:.1f} GB) are larger than the {MAX_OUR_GB:.0f} GB budget")
                 continue
-            our = self.our_bytes() / 1e9
+            # Archives still extracting hold the rest of their listed size: their demos are not on disk yet.
+            our, held = self.our_bytes() / 1e9, self.reserved_bytes() / 1e9
             free = free_gb()
-            if our + expand > MAX_OUR_GB or free - expand < MIN_FREE_GB:
-                log.warning("disk budget: ours %.2f + %.2f GB of demos (max %.0f), free %.1f GB (min %.0f after "
-                            "extracting); %s waits", our, expand, MAX_OUR_GB, free, MIN_FREE_GB, a.id)
+            if our + held + expand > MAX_OUR_GB or free - held - expand < MIN_FREE_GB:
+                log.warning("disk budget: ours %.2f + %.2f GB held by running extractions + %.2f GB of demos "
+                            "(max %.0f), free %.1f GB (min %.0f after extracting); %s waits", our, held, expand,
+                            MAX_OUR_GB, free, MIN_FREE_GB, a.id)
                 return
             a.slug = slug_for(sorted(a.listing), a.id)
             a.work = WORK_DIR / a.slug
@@ -730,11 +732,21 @@ class Pipeline:
                 continue
         return tree_bytes(DEMOS_DIR) + tree_bytes(WORK_DIR) + waiting + downloading
 
+    def reserved_bytes(self) -> int:
+        """Listed .dem bytes of each archive still extracting, minus what its work folder already holds."""
+        held = 0
+        for a in self.archives.values():
+            if a.state == "extracting" and a.listing:
+                listed = sum(int(e.get("size") or 0) for e in a.listing.values())
+                held += max(0, listed - (tree_bytes(a.work) if a.work else 0))
+        return held
+
     def budget(self, fresh: bool = False) -> tuple[float, bool]:
         t, our, ok = self._budget
         if fresh or time.time() - t > BUDGET_CACHE_S:
             our = self.our_bytes() / 1e9
-            ok = our <= MAX_OUR_GB and free_gb() >= MIN_FREE_GB
+            held = self.reserved_bytes() / 1e9
+            ok = our + held <= MAX_OUR_GB and free_gb() - held >= MIN_FREE_GB
             self._budget = (time.time(), our, ok)
         return our, ok
 
