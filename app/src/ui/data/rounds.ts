@@ -43,7 +43,7 @@ export function feedFor(f: MatchFacts, ri: number, viewer: number): FeedKill[] {
     killer: k.killer === null || !k.killerSide ? null : { name: f.players[k.killer].name, side: k.killerSide },
     victim: { name: f.players[k.victim].name, side: k.victimSide ?? (k.killerSide === "T" ? "CT" : "T") },
     assister: k.assister === null ? null : { name: f.players[k.assister].name, flash: k.flashAssist },
-    weapon: k.weapon, headshot: k.headshot, wallbang: k.wallbang, smoke: k.smoke, noscope: k.noscope,
+    weapon: k.weapon, headshot: k.headshot, wallbang: k.wallbang, smoke: k.smoke, noscope: k.noscope, blind: k.killerBlind === true, inAir: k.killerInAir === true,
     opening: k.opening, tradeKill: k.tradeKill,
     swing: teamSwing(f, k, team),
     mine: k.killer === viewer || k.victim === viewer,
