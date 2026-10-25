@@ -17,7 +17,8 @@ import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
 import { swing } from "./swing";
 import type { MatchTables, Side } from "./tables";
-import { utility } from "./utility";
+import { grenadeFacts, utility } from "./utility";
+import { derivePresence } from "./positions";
 import { deriveUtilQ } from "./utilq";
 
 const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
@@ -27,7 +28,7 @@ const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT"
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
  * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
  */
-function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null; roundsPlayed: number | null } {
+function matchMeta(t: MatchTables) {
   const extra = JSON.parse(t.match.extra[0]) as Record<string, unknown>;
   const convars = JSON.parse(t.match.convars[0]) as Record<string, unknown>;
   const raw = extra.date ?? extra.dem_modified_in_archive;
@@ -35,6 +36,8 @@ function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; po
     date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
     pov: typeof extra.pov === "string" ? extra.pov : null,
     roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
+    startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
+    durationS: typeof extra.duration_s === "number" ? extra.duration_s : null,
   };
 }
 
@@ -226,7 +229,7 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
     return {
       ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
       durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
-      plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
+      plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], planter: c.idOf(r.planter_steamid[ri]), defuser: c.idOf(r.defuser_steamid[ri]), defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
       equip: team, buy: { CT: buy("CT"), T: buy("T") }, winProb: null,
     };
   });
@@ -255,16 +258,23 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
       ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
       ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
-      spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], spawn: spawnOf(c, rf.ri, p), m,
+      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], spawn: spawnOf(c, rf.ri, p), m,
     };
   }));
+}
+
+/** Seconds from the first round's start (or freeze end) to the last round's end. */
+function ticksSpan(c: Ctx): number | null {
+  const r = c.t.rounds;
+  const first = r.start_tick[0] ?? r.freeze_end_tick[0];
+  return c.nRounds && first !== null ? (r.end_tick[c.nRounds - 1] - first) / c.tickRate : null;
 }
 
 const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));
 
 export function derive(t: MatchTables): MatchFacts {
   const c = buildCtx(t);
-  const { date, maxRounds, pov, roundsPlayed } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -286,11 +296,11 @@ export function derive(t: MatchTables): MatchFacts {
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
-      roundsPlayed: roundsPlayed ?? c.nRounds,
+      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c),
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
-    kills: c.kills.flat(), weapons,
+    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), presence: derivePresence(c),
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
 }

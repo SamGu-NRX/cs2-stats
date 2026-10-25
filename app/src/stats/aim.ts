@@ -204,6 +204,13 @@ export function foldAim(a: AimAgg, f: AimFact): void {
   }
 }
 
+/**
+ * Share of the player's gun hits fired while an enemy was mesh-visible near the view: how much of their
+ * shooting the visibility data explains, which is the visibility coverage meter. Null without hits, and
+ * on maps without mesh visibility (no shot there counts as fired at a visible enemy).
+ */
+export const visibilityCoverage = (a: AimAgg): number | null => (a.hits && a.sightHits ? a.sightHits / a.hits : null);
+
 // ---- derive
 
 type Vec3 = [number, number, number];

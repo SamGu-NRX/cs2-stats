@@ -1,8 +1,8 @@
-// Per player, round and weapon: shots, damaging hits on enemies, damage, kills, and deaths with the
+// Per player, round and weapon: shots, damaging hits on enemies by body part, damage, kills, and deaths with the
 // weapon in hand. Accuracy by gun and gun proficiency are sums of these rows.
 import { enemyHit, hitDamage, type Ctx } from "./derive";
-import type { MatchFacts, WeaponFact } from "./facts";
-import { rollup, type Filter } from "./rollup";
+import { HIT_GROUPS, type WeaponFact } from "./facts";
+import type { Summary } from "./rollup";
 import { classFromDisplay, isUtility, weaponClass } from "./weapons";
 
 /** Guns only: knives, grenades, the Zeus and the bomb are left out. */
@@ -13,7 +13,7 @@ export function guns(c: Ctx): WeaponFact[] {
   const fact = (ri: number, pi: number, weapon: string): WeaponFact => {
     const key = `${ri}:${pi}:${weapon}`;
     let f = out.get(key);
-    if (!f) out.set(key, (f = { ri, pi, weapon, shots: 0, hits: 0, headHits: 0, dmg: 0, kills: 0, hsKills: 0, deaths: 0 }));
+    if (!f) out.set(key, (f = { ri, pi, weapon, shots: 0, hits: 0, groups: HIT_GROUPS.map(() => 0), dmg: 0, kills: 0, hsKills: 0, deaths: 0 }));
     return f;
   };
   const s = c.t.shots;
@@ -37,7 +37,8 @@ export function guns(c: Ctx): WeaponFact[] {
       if (!rows[p]) continue;
       const f = fact(ri, p, w);
       f.hits++;
-      if (d.hitgroup[i] === "head") f.headHits++;
+      const g = HIT_GROUPS.indexOf(d.hitgroup[i] as (typeof HIT_GROUPS)[number]);
+      if (g >= 0) f.groups[g]++;
       f.dmg += hitDamage(c.t, i);
     }
     for (const k of c.kills[ri]) {
@@ -75,10 +76,11 @@ export interface GunProficiency {
   evidence: string;
 }
 
-/** Proficiency per gun over the matches a filter keeps, most used first. */
-export function gunProficiency(facts: MatchFacts[], filter: Filter): GunProficiency[] {
-  const all = rollup(facts, filter);
-  const perMatch = facts.map((f) => rollup([f], filter).weapons);
+/**
+ * Proficiency per gun, most used first, from the rollup over the kept matches and each match's own
+ * rollup (consistency compares matches). A caller streaming matches builds both in one pass.
+ */
+export function gunProficiency(all: Summary, perMatch: Summary["weapons"][]): GunProficiency[] {
   return Object.entries(all.weapons)
     .filter(([w, t]) => isGun(w) && t.shots > 0)
     .map(([weapon, t]) => {

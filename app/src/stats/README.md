@@ -15,7 +15,7 @@ that build the pro baselines. Metric definitions are in `METRICS.md`; the eviden
 | Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
 | Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json`, 340 KB, 214 pro players |
 | New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation per metric in `VALIDATION.md` |
-| UI and worker on the new API | in progress on this branch (rebased onto `feat/app-redesign`) |
+| UI and worker on the new API | in progress on this branch |
 
 ## Pipeline
 
@@ -39,18 +39,32 @@ Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginTo
 |---|---|---|
 | `derive(tables)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`); it changes whenever a definition does. |
 
-`MatchFacts` holds `match` (id, source, map, date, teams, score, `pov` = the recording player, and
-`roundsPlayed` next to `nRounds`, the rounds the facts cover; a converted log may cover few), `players`
-(index `pi` -> steamid, name, team 0/1, bot), `rounds` (per round: winner, reason, buy classes, team
-equipment, plant, and `winProb`, the win-probability path), `pr` (one row per player per round, with
-`m`, the additive measures), `kills` (per kill: trade, opening, eco points, swing credits), `weapons`
-(per player, round and gun), and the event facts of `aim`, `movement`, `aggression`, `information` and
-`utilq`. Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round number.
+`MatchFacts` holds:
+
+- `match`: id, source, map, date, `startedAt` (clock time, when the source has one), `durationS`,
+  teams, score, `pov` (the recording player), and `roundsPlayed` next to `nRounds`, the rounds the
+  facts cover (a converted log may cover few).
+- `players`: index `pi` -> steamid, name, team 0/1, bot.
+- `rounds`: per round, winner, reason, buy classes, team equipment, plant, `planter` and `defuser`
+  (`pi`), and `winProb`, the win-probability path.
+- `pr`: one row per player per round, with equipment, money before (`moneyStart`) and after (`money`)
+  buying, spend, and `m`, the additive measures.
+- `kills`: per kill, trade, opening, eco points, swing credits, positions.
+- `weapons`: per player, round and gun, with hits by body part in `groups` (`HIT_GROUPS` order).
+- `grenades`: every throw, with where it was thrown from and landed.
+- `presence`: per player-round, seconds alive per 128-unit grid cell and per place name.
+- The event facts of `aim`, `movement`, `aggression`, `information` and `utilq`.
+
+Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round number.
 
 ### Summaries and metrics
 | Call | Returns | Notes |
 |---|---|---|
-| `rollup(facts[], filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`. |
+| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places. |
+| `emptySummary()`, `addMatch(summary, facts, filter)` | | The same sum one match at a time, so a caller can stream facts from storage instead of holding them all. |
+| `grenadesOf(facts, filter)` | grenades with their map | The landing map's points. |
+| `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. |
+| `visibilityCoverage(summary.aim)` (`aim.ts`) | 0-1 or null | Share of gun hits fired with an enemy mesh-visible near the view: the visibility coverage meter. |
 | `METRICS`, `METRIC[id]` (`metrics.ts`) | `Metric` | Every metric once: `label`, `hltv` name, `kind` (performance or identity), `group`, `unit`, `status` (exact, approx, unavailable), `def`, `value(summary)`. |
 | `ATTRIBUTES` (`metrics.ts`) | groups | HLTV's Firepower (performance) and six style attributes (identity), with their metric ids. |
 | `rating3(m)`, `rating3BySide(facts, filter)` (`rating3.ts`) | `Rating3` | Rating 3.0 (approx.). Per side it is the rating of that side's rounds, pooled. Label it `RATING3_LABEL`; while `diagnostic` is true, say so and show `status` (params.json has retired the map polynomial pending the per-round model). |
@@ -64,9 +78,9 @@ equipment, plant, and `winProb`, the win-probability path), `pr` (one row per pl
 | `supportTendency(summary, baselines, opt)` | score and evidence | Support has no labelled source, so it stays out of the blend. |
 | `mostSimilar(mine, pack, "style" or "performance")` | ranked names | Cosine similarity of profile shape over both sides: "plays like" over the six style attributes on T and on CT, "performs like" over the rating inputs on T and on CT. `mine` is `{ T, CT }`, each built with `styleScores(attributes(sideSummary, b, { side }))` or `performanceScores(...)`. The pack is optional and private (see Baselines). |
 | `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
-| `gunProficiency(facts, filter)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. |
+| `gunProficiency(all, perMatch)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. `all` is the rollup over the kept matches, `perMatch` each match's `Summary.weapons`. |
 | `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
-| `presence(tables, playerId, side?)`, `addPresence` (`positions.ts`) | `Presence` | Alive samples per 64-unit grid cell and seconds per place, from a match's tables (facts do not keep positions). `playerId = null` gives every player, the map's walkable backdrop. |
+| `cellOf`, `cellCentre`, `GRID`, `CELL` (`positions.ts`) | | The presence grid: 128-unit cells over ±4096 world units. Roll up every player's ids for a map's walkable backdrop. |
 
 ### Baselines
 `pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
@@ -91,8 +105,12 @@ comes from:
 | `scoreAttributes(counters, careers)` | `attributes(summary, baselines)` |
 | `SUBSTATS`, `METRICS` from `metrics.ts` and `hltv.ts` | `METRICS` (one list; `hltv` holds HLTV's name) |
 | `deriveRole(counters)` | `roleBlend(summary, side)` |
-| `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"` |
-| `PosAgg` heatmaps | `presence(tables, id)` per match, summed with `addPresence`; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
+| `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"`; the coverage meter is `visibilityCoverage(summary.aim)` |
+| `PosAgg` heatmaps | `rollup(...).presence[map]`; one round's `facts.presence` row is "where you spent the round"; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
+| The interim hit map | `Summary.weapons[gun].groups` by `HIT_GROUPS` |
+| `MatchView.econ` saves, win rates, matchups | `economyOf(facts, team)` |
+| `roundSlice` in the round drawer | `rollup([facts], { player, rounds: [n] })` |
+| KAST split (kill, survived, traded) | `killRounds`, `kastA`, `kastS`, `kastT` partition `kast` |
 | `MatchView.human` | `facts.match.pov` (the recording player's steamid) |
 
 ## Gaps in the inputs
