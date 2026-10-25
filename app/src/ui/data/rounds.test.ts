@@ -7,7 +7,7 @@ import { clutchesOf, feedFor, roundCells } from "./rounds";
 const kill = (tick: number, killer: number, victim: number, credits: [number, number][], opening = false): KillFact => ({
   ri: 0, tick, t: tick / 64, killer, victim, assister: null, flashAssist: false,
   killerSide: killer < 2 ? "T" : "CT", victimSide: victim < 2 ? "T" : "CT", weapon: "ak47", victimWeapon: null,
-  headshot: false, wallbang: false, smoke: false, noscope: false, kpos: null, vpos: null, enemy: true, opening,
+  headshot: false, wallbang: false, smoke: false, noscope: false, killerBlind: false, killerInAir: false, kpos: null, vpos: null, enemy: true, opening,
   tradeKill: false, traded: false, ecoPoints: null, credits,
 });
 const facts = {
