@@ -24,10 +24,11 @@ export interface AggroScale {
 export const aggroParts = (s: Summary): (number | null)[] =>
   AGGRO_PARTS.map((id) => CONTACT_METRICS.find((m) => m.id === id)!.value(s));
 
-/** The mean of the four signed z-scores; null unless every part has a value. */
-export function aggressionScore(s: Summary, scale: AggroScale): number | null {
+/** The mean of the four signed z-scores of part values (AGGRO_PARTS order); null unless every part has a value. */
+export function scoreOf(v: (number | null)[], scale: AggroScale): number | null {
   if (scale.parts.join() !== AGGRO_PARTS.join()) throw new Error(`aggression scale is for [${scale.parts}], the engine combines [${AGGRO_PARTS}]`);
-  const v = aggroParts(s);
   if (v.some((x) => x === null)) return null;
   return v.reduce<number>((a, x, j) => a + (AGGRO_SIGNS[j] * (x! - scale.mean[j])) / scale.sd[j], 0) / v.length;
 }
+
+export const aggressionScore = (s: Summary, scale: AggroScale) => scoreOf(aggroParts(s), scale);
