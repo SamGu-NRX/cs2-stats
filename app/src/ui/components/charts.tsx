@@ -1,7 +1,7 @@
 // Hand-drawn SVG charts. Every chart labels its extremes, marks your average and, where one exists,
 // a reference line (rating 1.00, a benchmark). Charts never replay an entrance on tab switch,
 // filter or refresh.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ratingScore, scoreFill, scoreText } from "../lib/scale";
 
 // ---------------------------------------------------------------- shared
@@ -165,44 +165,46 @@ export function DivergingBars({ rows, cap }: { rows: DivRow[]; cap: number }) {
  * Seven-axis radar: you (cream, filled) and a comparison (dashed). When the comparison changes, its
  * polygon lerps from where it is now (320 ms, ease-in-out); with reduced motion it jumps.
  */
-export function AttrRadar({ labels, you, other, otherLabel, size = 260 }: { labels: string[]; you: (number | null)[]; other: (number | null)[] | null; otherLabel?: string; size?: number }) {
+/**
+ * Your six style scores against another player's, on one radar. Picking another player morphs their
+ * shape: a CSS transition on the path's `d` (--d-expand, --ease-out in tokens.css), which retargets from
+ * the shape on screen when a new pick interrupts it. A keyboard pick (`instant`) and reduced motion swap
+ * the shape at once. A provisional score of yours draws its shape with a hatched fill.
+ */
+export function AttrRadar({ labels, you, other, otherLabel, size = 260, instant = false, provisional = false, provisionalTip }: {
+  labels: string[]; you: (number | null)[]; other: (number | null)[] | null; otherLabel?: string; size?: number;
+  /** swap the other shape without the morph (keyboard selection) */
+  instant?: boolean;
+  /** your scores rank against a still-small bot pool */
+  provisional?: boolean;
+  /** the tooltip a provisional shape opens on hover and focus */
+  provisionalTip?: string;
+}) {
   const n = labels.length;
   const c = size / 2;
   const R = c - 62;
+  const hatch = `hatch${useId().replace(/:/g, "")}`;
   const pt = (i: number, v: number) => {
     const a = (Math.PI * 2 * i) / n - Math.PI / 2;
     return [c + Math.cos(a) * R * (v / 100), c + Math.sin(a) * R * (v / 100)] as const;
   };
-  const target = (other ?? []).map((v) => v ?? 0);
-  const [shown, setShown] = useState<number[]>(target);
-  const cur = useRef<number[]>(target);
-  useEffect(() => {
-    if (!other) return;
-    const from = cur.current.length === target.length ? [...cur.current] : target.map(() => 0);
-    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) { cur.current = target; setShown(target); return; }
-    const t0 = performance.now();
-    const D = 320;
-    const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-    let raf = 0;
-    const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / D);
-      const e = ease(t);
-      const next = target.map((v, i) => from[i] + (v - from[i]) * e);
-      cur.current = next;
-      setShown(next);
-      if (t < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [other?.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const poly = (vals: number[]) => vals.map((v, i) => pt(i, v).join(",")).join(" ");
+  // one M and n-1 L commands, so every shape has the same structure and `d` interpolates between them
+  const path = (vals: number[]) => `M${vals.map((v, i) => pt(i, v).map((x) => x.toFixed(2)).join(" ")).join("L")}Z`;
+  const otherD = other ? path(other.map((v) => v ?? 0)) : null;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Attribute shape: ${labels.map((l, i) => `${l} you ${you[i] === null ? "none" : Math.round(you[i]!)}${other ? `, ${otherLabel} ${other[i] ?? "none"}` : ""}`).join("; ")}`} className="radar">
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Attribute shape: ${labels.map((l, i) => `${l} you ${you[i] === null ? "none" : Math.round(you[i]!)}${other ? `, ${otherLabel} ${other[i] ?? "none"}` : ""}`).join("; ")}`} className="radar" {...(provisional && provisionalTip ? { "data-tip": provisionalTip, tabIndex: 0 } : {})}>
+      {provisional && (
+        <defs>
+          <pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="rgba(255,215,173,.06)" /><line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,215,173,.35)" strokeWidth="2" />
+          </pattern>
+        </defs>
+      )}
       {[25, 50, 75, 100].map((r) => <polygon key={r} points={poly(labels.map(() => r))} fill="none" stroke="var(--line)" />)}
       {labels.map((_, i) => { const [x, y] = pt(i, 100); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="var(--line)" />; })}
-      {other && <polygon points={poly(shown)} fill="rgba(163,167,164,.08)" stroke="var(--ink2)" strokeDasharray="4 3" strokeWidth="1.5" />}
-      <polygon points={poly(you.map((v) => v ?? 0))} fill="rgba(255,215,173,.14)" stroke="var(--cream)" strokeWidth="1.75" strokeLinejoin="round" />
+      {otherD && <path className={`radar__other ${instant ? "is-instant" : ""}`} d={otherD} style={{ d: `path("${otherD}")` } as CSSProperties} fill="rgba(163,167,164,.08)" stroke="var(--ink2)" strokeDasharray="4 3" strokeWidth="1.5" />}
+      <polygon points={poly(you.map((v) => v ?? 0))} fill={provisional ? `url(#${hatch})` : "rgba(255,215,173,.14)"} stroke="var(--cream)" strokeWidth="1.75" strokeLinejoin="round" />
       {you.map((v, i) => { const [x, y] = pt(i, v ?? 0); return <circle key={i} cx={x} cy={y} r="2.5" fill="var(--cream)" />; })}
       {labels.map((l, i) => {
         const [x, y] = pt(i, 116);

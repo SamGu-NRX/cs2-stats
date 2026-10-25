@@ -419,7 +419,7 @@ canvas.radar-img { image-rendering: auto; }
 /* ================================================================ profile */
 .profile__top { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; align-items: stretch; }
 .pcard-hltv { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: 340px; border-radius: var(--r-card); overflow: hidden; background: var(--bg2); }
-.pcard-hltv__photo { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 16px 0 18px 18px; }
+.pcard-hltv__photo { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: var(--pad-panel) 0 var(--pad-panel) var(--pad-panel); }
 .pcard-hltv__agent { position: absolute; left: 50%; top: 18px; height: 292px; width: auto; transform: translateX(-50%); pointer-events: none; user-select: none; animation: fade-in var(--d-color) ease both;
   -webkit-mask-image: linear-gradient(to right, #000 52%, transparent 94%), linear-gradient(to bottom, #000 62%, transparent 96%); -webkit-mask-composite: source-in;
   mask-image: linear-gradient(to right, #000 52%, transparent 94%), linear-gradient(to bottom, #000 62%, transparent 96%); mask-composite: intersect; }
@@ -429,14 +429,14 @@ canvas.radar-img { image-rendering: auto; }
 .pcard-hltv__id { position: relative; z-index: 1; display: grid; gap: 2px; }
 .pcard-hltv__name { font: 800 28px/1.15 var(--f); color: var(--cream); letter-spacing: -0.02em; white-space: nowrap; }
 .pcard-hltv__sub { font-size: 13px; color: var(--tan); }
-.pcard-hltv__stage { position: relative; padding: 14px 22px 16px; background: linear-gradient(90deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.16)); overflow: hidden; }
+.pcard-hltv__stage { position: relative; padding: 14px var(--pad-panel) var(--pad-panel); background: linear-gradient(90deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.16)); overflow: hidden; }
 .ghost { position: absolute; top: -6px; height: 240px; width: auto; filter: grayscale(1) brightness(0.55) contrast(0.9); opacity: 0.18; pointer-events: none; user-select: none; transition: opacity var(--d-color) ease;
   -webkit-mask-image: radial-gradient(closest-side, #000 40%, transparent 100%); mask-image: radial-gradient(closest-side, #000 40%, transparent 100%); }
 .ghost--t { left: 0; }
 .ghost--ct { right: -10px; transform: scaleX(-1); }
 .ghost.is-lit { opacity: 0.3; }
 .pcard-hltv__stage > *:not(.ghost) { position: relative; }
-.pcard-hltv__scope { display: flex; justify-content: flex-end; }
+.pcard-hltv__scope { position: relative; z-index: 1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: var(--r-chip); background: var(--pill); font-size: 12px; color: var(--ink); }
 .ratings { display: grid; grid-template-columns: 1fr 190px 1fr; align-items: end; margin-top: 2px; }
 .band { position: relative; display: flex; flex-direction: column; justify-content: center; height: 64px; margin-bottom: 18px; padding: 0 18px; transition: opacity var(--d-color) ease, box-shadow var(--d-color) ease; }
@@ -471,10 +471,8 @@ canvas.radar-img { image-rendering: auto; }
 @keyframes bar-grow { from { transform: scaleX(0); } }
 @media (prefers-reduced-motion: reduce) { .gauge__arc--wake, .is-waking .wake-bar, .is-waking .cell__foot { animation: none; } }
 .form-rail { display: flex; flex-direction: column; }
-.form-rail .chart { padding: 4px 16px 0; }
+.form-rail .chart { padding: 4px var(--pad-panel) 0; }
 .tbl--compact td { height: 32px; }
-.sidebar-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 10px 16px; }
-.sidebar-bar__end { margin-left: auto; }
 .identity { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.8fr); gap: 12px; align-items: stretch; }
 .identity > .card { display: flex; flex-direction: column; }
 .role { display: grid; gap: 10px; }
@@ -564,21 +562,19 @@ canvas.radar-img { image-rendering: auto; }
 .wlist b, .wlist .meta { text-align: right; }
 .wlist__note { margin-top: 8px; }
 /* a clutch row is a button when it has rounds behind it: it opens the list of them, each a link to its round */
-.clist__row { display: grid; grid-template-columns: 36px minmax(0, 1fr) 44px 16px; gap: 10px; align-items: center; width: 100%; height: 28px; margin: -2px 0; padding: 0 4px; border-radius: var(--r-ctl); text-align: left; color: inherit; }
+/* the row lines up with the panel's padding; its hover background bleeds to the panel's edge */
+.clist__row { display: grid; grid-template-columns: 36px minmax(0, 1fr) 44px 16px; gap: 10px; align-items: center; width: calc(100% + 2 * var(--pad-panel)); height: 28px; margin: 0 calc(-1 * var(--pad-panel)); padding: 0 var(--pad-panel); text-align: left; color: inherit; }
 .clist__row b { text-align: right; }
 button.clist__row { transition: background-color var(--d-hover) ease; }
 @media (hover: hover) and (pointer: fine) { button.clist__row:hover { background: var(--hover); } }
 .clist__chev { justify-self: center; }
 button.clist__row .clist__chev::before { content: ""; display: block; width: 6px; height: 6px; border-right: 1.5px solid var(--ink3); border-bottom: 1.5px solid var(--ink3); transform: translateY(-2px) rotate(45deg); }
 button.clist__row[aria-expanded="true"] .clist__chev::before { transform: translateY(1px) rotate(225deg); }
-.clutchlist { display: grid; margin: 4px 0 8px; }
-.clutchlist__a { display: grid; grid-template-columns: 40px 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; height: 32px; padding: 0 8px; border-radius: var(--r-ctl); border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink); transition: background-color var(--d-hover) ease; }
+.clutchlist { display: grid; margin: 4px calc(-1 * var(--pad-panel)) 8px; }
+.clutchlist__a { display: grid; grid-template-columns: 40px 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; height: 32px; padding: 0 var(--pad-panel); border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink); transition: background-color var(--d-hover) ease; }
 @media (hover: hover) and (pointer: fine) { .clutchlist__a:hover { background: var(--hover); } }
 .clutchlist__res { font-weight: 600; color: var(--ink3); }
 .clutchlist__res.is-won { color: var(--good-text); }
-/* How good on its own row: its rows in two columns, so a label stays near its value */
-.profile__solo .howgood { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
-@media (max-width: 1240px) { .profile__solo .howgood { grid-template-columns: minmax(0, 1fr); } }
 .mlist li { display: grid; grid-template-columns: 40px 30px minmax(0, 1fr); gap: 10px; align-items: center; height: 24px; }
 .mlist b { font: 800 15px/1 var(--f); text-align: right; }
 .odial { display: grid; gap: 6px; margin-bottom: 12px; }
@@ -982,17 +978,23 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 
 /* ---------------------------------------------------------------- attributes panel (views/profile/AttributesPanel.tsx) */
 .apanel { padding: 0; overflow: hidden; container-type: inline-size; }
-.apanel__head { display: flex; align-items: center; gap: 8px 12px; min-height: 48px; padding: 8px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.apanel__head { display: flex; align-items: center; gap: 8px 12px; min-height: 48px; padding: 8px var(--pad-panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .apanel__title { margin: 0 8px 0 0; }
 .apanel__lbl { font-size: 12px; color: var(--ink2); }
 .apanel__cmp { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.apanel__msg { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-/* one attribute per row, Firepower first (the user's ask: no pairs) */
-.apanel__list { display: grid; grid-template-columns: minmax(0, 1fr); }
-.apanel__list > .apa + .apa { border-top: 1px solid var(--line); }
-.apanel__foot { padding: 12px 16px 14px; border-top: 1px solid var(--line); }
-.apanel__foot p { margin: 0; max-width: 110ch; }
-.apa { padding: 12px 16px; min-width: 0; }
+.apanel__msg { margin: 0; padding: 10px var(--pad-panel); border-bottom: 1px solid var(--line); }
+/* the six style attributes in pairs, in HLTV's order */
+.apanel__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.apanel__grid > .apa:nth-child(n + 3) { border-top: 1px solid var(--line); }
+.apanel__grid > .apa:nth-child(odd) { border-right: 1px solid var(--line); }
+@container (max-width: 640px) {
+  .apanel__grid { grid-template-columns: minmax(0, 1fr); }
+  .apanel__grid > .apa:nth-child(odd) { border-right: 0; }
+  .apanel__grid > .apa + .apa { border-top: 1px solid var(--line); }
+}
+/* Firepower alone in its card: the card's body is its padding */
+.card__body > .apa--wide { padding: 0; }
+.apa { padding: 12px var(--pad-panel); min-width: 0; }
 .apa__row { display: flex; align-items: center; gap: 10px; min-height: 28px; cursor: pointer; }
 .apa__icon { color: var(--tan); flex: none; }
 .apa__name { margin: 0; font: 600 15px/1.3 var(--f); white-space: nowrap; }
@@ -1011,11 +1013,11 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .apa__bar { position: relative; height: 6px; margin-top: 10px; border-radius: 3px; background: var(--track); }
 .apa__bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--cream); }
 .apa__bar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink2); }
-.apa__more { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line2); }
-@container (max-width: 640px) {
-  .apa__more { grid-template-columns: minmax(0, 1fr); }
-  .apa__peek { display: none; }
-}
+.apa__more { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line2); }
+.apa--wide .apa__more { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; }
+/* a provisional score: its bar is hatched instead of solid, and the score's tooltip says why */
+.apa[data-prov] .apa__bar i { background: repeating-linear-gradient(-45deg, var(--cream) 0 3px, rgba(255, 215, 173, 0.32) 3px 6px); }
+.apa__score[tabindex] { cursor: help; }
 .help { width: 16px; height: 16px; flex: none; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--line2); color: var(--ink3); font: 600 10px/1 var(--f); cursor: help; }
 .chip--warn { background: rgba(255, 215, 173, 0.08); color: var(--cream); border: 1px solid rgba(255, 215, 173, 0.25); }
 
@@ -1050,3 +1052,41 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .strip__ph { font-size: 12px; line-height: 1.35; color: var(--ink2); text-wrap: pretty; }
 .strip__ph b { color: var(--ink); font-weight: 600; }
 .spray__note { margin-top: 8px; max-width: 60ch; font-size: 12px; color: var(--ink2); }
+
+/* Plays like radar: the pro's shape morphs to the next pick (components/charts.tsx AttrRadar). A pick is
+   an occasional action, so it moves; a keyboard pick and reduced motion swap the shape at once. */
+.radar__other { transition: d var(--d-expand) var(--ease-out); }
+.radar__other.is-instant { transition: none; }
+@media (prefers-reduced-motion: reduce) { .radar__other { transition: none; } }
+
+/* ---------------------------------------------------------------- design pass B3 */
+/* titles that carry a tooltip (Card tip, SectionHead): no mark at rest, a dotted underline on hover */
+.card__tipped { cursor: help; text-decoration: underline dotted transparent; text-underline-offset: 4px; }
+@media (prefers-reduced-motion: no-preference) { .card__tipped { transition: text-decoration-color var(--d-hover) ease; } }
+@media (hover: hover) and (pointer: fine) { .card__tipped:hover, .card__toggle[data-tip]:hover .card__title { text-decoration: underline dotted var(--ink3); text-underline-offset: 4px; } }
+.shead { padding-bottom: 0; }
+
+/* Rating by match takes the row beside a maps table sized to its columns; both are the row's height */
+.profile__trend { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 12px; align-items: stretch; }
+.profile__trend > .card { display: flex; flex-direction: column; }
+.mapscard .tbl { width: auto; }
+@media (max-width: 1240px) { .profile__trend { grid-template-columns: minmax(0, 1fr); } .mapscard .tbl { width: 100%; } }
+
+/* round swing: the bots' number beside yours, no sentence */
+.swingcard__bots { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 13px; }
+
+/* Form: "Rating 3.0" and its approx glyph */
+.form-rail__label { display: inline-flex; align-items: baseline; gap: 2px; }
+
+/* role evidence: three tiles per side */
+.rolecard__side + .rolecard__side { margin-top: 18px; }
+.rolecard__side .role__label { display: block; margin-bottom: 10px; }
+.rtiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.rtiles li { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 10px; align-items: center; padding: 10px 12px; border-radius: var(--r-card); background: var(--bg2); cursor: default; }
+.rtiles__ico { grid-row: 1 / 3; display: grid; place-items: center; width: 34px; color: var(--tan); }
+.rtiles b { font: 800 18px/1.1 var(--f); color: var(--cream); letter-spacing: -0.01em; }
+.rtiles li > span:last-child { font-size: 12px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* provisional, shown rather than written: hatched where a solid fill would be */
+.ranks__track.is-prov { background: repeating-linear-gradient(-45deg, var(--track) 0 3px, rgba(255, 215, 173, 0.22) 3px 6px); cursor: help; }
+.probanner__pct.is-prov { padding-bottom: 5px; background: repeating-linear-gradient(-45deg, var(--cream) 0 2px, transparent 2px 4px) bottom / 100% 3px no-repeat; cursor: help; }

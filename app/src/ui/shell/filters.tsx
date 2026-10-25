@@ -162,10 +162,3 @@ export function ScopeControls({ controls, off = {}, maps = "career" }: ScopeDecl
     </>
   );
 }
-
-/**
- * Profile's in-page Side strip, kept only until the Profile attributes panel (views/profile/
- * AttributesPanel.tsx) takes its own Side control. Nothing else should use it: scope belongs in the
- * title bar.
- */
-export const SideFilter = () => <SideControl />;
