@@ -29,7 +29,7 @@ import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addPositions, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle } from "./views";
+import { addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, spawnRows } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -358,12 +358,11 @@ const api: Impl = {
   },
   async rolesBySpawn(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
-    const spawns: Record<"T" | "CT", Map<string, number>> = { T: new Map(), CT: new Map() };
-    await stream(q.files, (f) => {
-      for (const r of f.pr) if (r.spawn && me.has(f.players[r.pi].id)) spawns[r.side].set(r.spawn, (spawns[r.side].get(r.spawn) ?? 0) + 1);
-    });
-    const side = (s: "T" | "CT") => Promise.all([...spawns[s]].sort((a, b) => b[1] - a[1]).map(async ([spawn, rounds]) =>
-      ({ spawn, rounds, blend: roleBlend(await summaryOf({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [spawn] } }), s) })));
+    const acc = emptySpawns();
+    await stream(q.files, (f) => addSpawns(acc, f, me));
+    const rows = spawnRows(acc);
+    const side = (s: "T" | "CT") => Promise.all(rows[s].map(async (row) =>
+      ({ ...row, blend: roleBlend(await summaryOf({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [row.spawn] } }), s) })));
     const [T, CT] = await Promise.all([side("T"), side("CT")]);
     return { T, CT };
   },

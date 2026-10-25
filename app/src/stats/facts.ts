@@ -227,6 +227,8 @@ export interface PlayerRound {
   primary: string | null;
   /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */
   spawn: string | null;
+  /** the map's place name at the spawn point ("TSpawn"; positions.place), null when the sample has none */
+  spawnPlace: string | null;
   /** the additive measures; a measure that is 0 is left out, which keeps cached facts small */
   m: Partial<Measures>;
 }

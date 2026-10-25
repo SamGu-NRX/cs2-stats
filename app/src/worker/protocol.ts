@@ -157,6 +157,13 @@ export interface PlaysLikeResult {
 /** A pro in the pack, as the pack file holds it (scores in ATTRIBUTE_ORDER). */
 export interface PackPro { slug: string; both: (number | null)[]; ct: (number | null)[]; t: (number | null)[] }
 
+/**
+ * One spawn a player started rounds from: its key ("x,y", PlayerRound.spawn), map, the map's place name
+ * there (raw, "TSpawn"; null when the sample has none), and where it sits in the side's spawn area
+ * facing the enemy spawn ("front left", "centre"; positions.ts spawnPosition; null without a facing).
+ */
+export interface SpawnRow { spawn: string; map: string; side: "T" | "CT"; place: string | null; position: string | null; rounds: number }
+
 export interface PositionsResult {
   /** world [x, y] of the players' enemy kills (where the killer stood) and of their deaths */
   kills: [number, number][];
@@ -199,8 +206,8 @@ export interface Api {
   opponents(q: Query): VsOpponents[];
   /** Pearson r of each metric per match with winning it (stats/trends.ts winCorrelationOf) */
   winCorrelation(q: Query, metricIds: string[]): Record<string, { r: number; n: number } | null>;
-  /** the role blend per side and per spawn the player used (the spawns filter) */
-  rolesBySpawn(q: Query): Record<"T" | "CT", { spawn: string; rounds: number; blend: RoleBlend }[]>;
+  /** the role blend per side and per spawn the player used (the spawns filter), each spawn with its map, place name and position (SpawnRow) */
+  rolesBySpawn(q: Query): Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>;
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
 }
