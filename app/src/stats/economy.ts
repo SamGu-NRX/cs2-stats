@@ -3,8 +3,11 @@ import type { MatchFacts, PlayerRound } from "./facts";
 import type { Side } from "./tables";
 //
 // HLTV labels each team's round with its equipment value and class: ECO below $5,000, HALF from
-// $5,000, FULL from $16,250, and PISTOL on the first round of each half (bands read from HLTV's labels,
-// VALIDATION.md, pnpm scoreboard-variants). For five players that is $1,000 and $3,250 per player.
+// $5,000, FULL from $16,250, and PISTOL on the first round of each half (bands read from HLTV's labels
+// over every HLTV map, VALIDATION.md, pnpm scoreboard-variants). For five players that is $1,000 and
+// $3,250 per player, which is how the engine classifies, so a short-handed team classifies the same.
+// The extractor's rounds.*_buy_type columns use other team totals ($5k, $10k, $20k, CS Demo
+// Manager's); the engine does not read them.
 export const BUY_CLASSES = ["pistol", "eco", "half", "full"] as const;
 export type BuyClass = (typeof BUY_CLASSES)[number];
 
