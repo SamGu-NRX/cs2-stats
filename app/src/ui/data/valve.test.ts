@@ -51,9 +51,14 @@ it("labels wingman and leaves it out of career views, whose models and baselines
   expect(careerEntries([five, two], null)).toEqual([five]);
 });
 
-it("lists only finished matches with a round won in Matches", () => {
-  // fails if an abandoned recording or a 0–0 stub shows in the match list
+it("hides a recording with no round won and no kill, and nothing hidden counts in career views", () => {
+  // fails if a 0–0 stub is listed or counted (review of #29: a hidden finished 0–0 still counted), or if a
+  // winnerless recording with real kills is hidden instead of listed as unfinished
   const t = valveTables({ 1: "CT", 3: "T" }, 24);
-  const done = entry(t), open = entry(t, { complete: false }), empty = entry(t, {}, { us: 0, them: 0 });
-  expect(listedEntries([done, open, empty], null)).toEqual([done]);
+  const done = entry(t);
+  const winnerless = entry(t, { complete: false }, { us: 0, them: 0 });
+  const stub = { ...entry(t, {}, { us: 0, them: 0 }), kills: 0 };
+  expect(winnerless.kills).toBeGreaterThan(0);
+  expect(listedEntries([done, winnerless, stub], null)).toEqual([done, winnerless]);
+  expect(careerEntries([done, winnerless, stub], null)).toEqual([done]);
 });
