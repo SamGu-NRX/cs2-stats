@@ -263,7 +263,8 @@ public sealed class Recorder
         if (Capturing)
         {
             Meta.Env.LosError ??= Los.Failure;
-            if (RoundActive && Live) { Los.HideAll(Ri, tick, _buf.Los); NoteVisSource("mask"); }
+            NoteVisSource("mask");
+            if (RoundActive && Live) Los.HideAll(Ri, tick, _buf.Los);
         }
         _warn($"Line of sight turned off: {Los.Failure}. Visibility falls back to the spotted mask.");
     }

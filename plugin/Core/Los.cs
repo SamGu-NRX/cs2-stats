@@ -48,8 +48,9 @@ public sealed class LosTracker
     public const float ClearFraction = 0.999f;
 
     private readonly bool[] _vis = new bool[Limits.MaxPlayers];
-    /// <summary>The time budget in use; <see cref="BudgetUs"/> unless a test changes it.</summary>
-    public double BudgetMicros { get; set; } = BudgetUs;
+    private static readonly long BudgetTicks = (long)(BudgetUs * Stopwatch.Frequency / 1_000_000);
+    /// <summary>Timestamp source in <see cref="Stopwatch"/> ticks for the budget; tests replace it to make time deterministic.</summary>
+    public Func<long> Clock { get; set; } = Stopwatch.GetTimestamp;
 
     public ILosProbe? Probe { get; private set; }
     /// <summary>Set by the first failed trace; line of sight stays off until <see cref="Attach"/>.</summary>
@@ -106,10 +107,10 @@ public sealed class LosTracker
     public void Check(int ri, int tick, int human, FrameSet frames, FixedBuffer<LosRow> sink)
     {
         if (!Enabled || (uint)human >= Limits.MaxPlayers) return;
-        long t0 = Stopwatch.GetTimestamp();
+        long t0 = Clock();
         ref var h = ref frames.ByPi[human];
         double ex = h.X, ey = h.Y, ez = h.Z + h.ViewZ;
-        long deadline = t0 + (long)(BudgetMicros * Stopwatch.Frequency / 1_000_000);
+        long deadline = t0 + BudgetTicks;
         for (int i = 0; i < frames.ActiveCount; i++)
         {
             int pi = frames.Active[i];
@@ -128,7 +129,7 @@ public sealed class LosTracker
             bool vis = false, done = false;
             foreach (double frac in PointHeights)
             {
-                if (Stopwatch.GetTimestamp() >= deadline) break;
+                if (Clock() >= deadline) break;
                 Traces++;
                 bool? clear = Probe!.Clear(ex, ey, ez, e.X, e.Y, e.Z + e.ViewZ * frac);
                 if (clear == null) { Fail("trace returned no result"); return; }
@@ -138,7 +139,7 @@ public sealed class LosTracker
             if (done) Set(ri, tick, pi, vis, sink);
             else BudgetHits++;
         }
-        long dt = Stopwatch.GetTimestamp() - t0;
+        long dt = Clock() - t0;
         Checks++;
         CheckTicksSum += dt;
         if (dt > CheckTicksMax) CheckTicksMax = dt;

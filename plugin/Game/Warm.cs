@@ -82,7 +82,7 @@ public sealed partial class BotMatchStatsPlugin
         {
             _losProbe = null;
             rec.AttachLos(null);
-            Log(LogLevel.Warning, $"line of sight unavailable ({ex.GetType().Name}: {ex.Message}); visibility uses the spotted mask");
+            rec.DisableLos($"probe could not be created ({ex.GetType().Name}: {ex.Message})", Server.TickCount);
             return;
         }
         long t0 = Stopwatch.GetTimestamp();
