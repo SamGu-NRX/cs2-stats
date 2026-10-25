@@ -112,7 +112,7 @@
     ],
     "a_side": [
      "String",
-     "cca7f7dc2ce3a373"
+     "29dfe6f25ac871de"
     ],
     "a_x": [
      "Float32",
@@ -136,7 +136,7 @@
     ],
     "attacker_steamid": [
      "UInt64",
-     "8b138b662a952c8f"
+     "2d3c08bf748abdcb"
     ],
     "distance": [
      "Float32",
@@ -176,19 +176,19 @@
     ],
     "hitgroup": [
      "String",
-     "35ba1dbd76b814c6"
+     "536262ac03e833ba"
     ],
     "is_self": [
      "Boolean",
-     "01226ffc8e8562b3"
+     "0e603b06e7877a27"
     ],
     "is_team_damage": [
      "Boolean",
-     "2d7034de776f3306"
+     "212fe4e39eb01755"
     ],
     "reconstructed_ambiguous": [
      "Boolean",
-     "8cc987040281d3ed"
+     "0a82f91a83d23e36"
     ],
     "round": [
      "Int16",
@@ -228,7 +228,7 @@
     ],
     "weapon": [
      "String",
-     "805373744fe2090e"
+     "9c619709cd85f697"
     ]
    },
    "rows": 608
@@ -969,7 +969,7 @@
     ],
     "extractor_version": [
      "String",
-     "f37bdb3b33511cfd"
+     "720151d50ea032db"
     ],
     "final_tick": [
      "Int32",

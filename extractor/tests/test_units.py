@@ -544,29 +544,23 @@ def _pr(rows):
     return df.astype({"steamid": "UInt64"})
 
 
-def test_hits_the_demo_lost_are_rebuilt_from_health_and_named_only_on_evidence():
+def test_every_rebuilt_hit_is_unattributed():
     # A pro demo, round 2: ticks 9168-9184 carry no player_hurt or weapon_fire, yet a CT (V1) drops 48 -> 0
-    # at 9173 (player_death: T1, galilar) and T1 drops 100 -> 45 at 9182. The game names the 9173 killer and
-    # his gun, and no grenade reaches the victim, so T1 gets that hit; nothing names the 9182 one, which is
-    # flagged. On another demo, a world suicide from 74 HP (S) is self damage.
+    # at 9173 (player_death names T1 with a galil) and T1 drops 100 -> 45 at 9182; on another demo a player
+    # dies to the world from 74 HP. None of the three is credited, the kill and the suicide included: the
+    # evidence that would rule other players out can be lost in the same gap.
     T1, V1, C1, S1 = 76561190000000011, 76561190000000012, 76561190000000013, 76561190000000014
     side = {(2, T1): "T", (2, V1): "CT", (2, C1): "CT", (2, S1): "CT"}
     dmg = ex.pd.DataFrame(dict(tick=[8802, 9196], round=[2, 2], attacker_steamid=[T1, C1],
                                victim_steamid=[C1, T1], dmg_health_capped=[231, 85],
                                is_team_damage=[False, False])).astype({"attacker_steamid": "UInt64",
                                                                        "victim_steamid": "UInt64"})
-    kills = ex.pd.DataFrame(dict(tick=[9173, 9500], attacker_steamid=[T1, S1], victim_steamid=[V1, S1],
-                                 weapon=["galilar", "world"], hitgroup=["head", "generic"])).astype(
-        {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
-    drops = ex.pd.DataFrame(dict(tick=[9173, 9182, 9500], steamid=[V1, T1, S1], health_before=[48, 100, 74],
-                                 health_after=[0, 45, 0], round=[2, 2, 2]))
-    out = ex.rebuild_lost_hits(_at_origin(drops), dmg, kills, side, _NO_INFERNOS, _NO_HE, _NO_FIRES)
-    assert [None if pd.isna(a) else int(a) for a in out.attacker_steamid] == [T1, None, S1]
-    out["weapon"] = out.weapon.astype(object).where(out.weapon.notna(), None)
-    assert out[["tick", "dmg_health_capped", "weapon", "is_team_damage", "is_self", "source",
-                "reconstructed_ambiguous"]].values.tolist() == [[9173, 48, "galilar", False, False, "health", False],
-                                                                [9182, 55, None, False, False, "health", True],
-                                                                [9500, 74, "world", True, True, "health", False]]
+    drops = ex.pd.DataFrame(dict(tick=[8802, 9173, 9182, 9500], steamid=[C1, V1, T1, S1],
+                                 health_before=[100, 48, 100, 74], health_after=[0, 0, 45, 0], round=[2, 2, 2, 2]))
+    out = ex.rebuild_lost_hits(drops, dmg, side)  # 8802 has its player_hurt: not rebuilt
+    assert out.tick.tolist() == [9173, 9182, 9500] and out.attacker_steamid.isna().all()
+    assert out.reconstructed_ambiguous.all() and out.weapon.isna().all() and not out.is_self.any()
+    assert not out.is_team_damage.any() and out.dmg_health_capped.tolist() == [48, 55, 74]
 
 
 def test_game_damage_is_the_counter_rise_measured_on_the_next_round_start():
@@ -688,7 +682,7 @@ def test_match_starts_at_the_last_restart_that_rounds_follow():
 def test_lost_burn_ticks_stay_unattributed():
     # A pro demo, round 2: seven lost burn ticks (1, 3, 3, 4, 5, 6, 6 = 28 HP) on one CT; the only T short
     # of his game damage is short by exactly 28 (36 counted, 8 recorded). That total is no evidence of who
-    # burned him, and no shot names anyone on those ticks, so none is credited.
+    # burned him, so none is credited.
     side = {(2, A): "CT", (2, C): "T", (2, D): "T"}
     burns = [1, 3, 3, 4, 5, 6, 6]
     hp = list(np.cumsum([0] + burns))
@@ -697,9 +691,7 @@ def test_lost_burn_ticks_stay_unattributed():
     dmg = ex.pd.DataFrame(dict(tick=[13000], round=[2], attacker_steamid=[C], victim_steamid=[A], dmg_health_capped=[8],
                                is_team_damage=[False], v_side=["CT"], reconstructed_ambiguous=[False])).astype(
         {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
-    no_kills = ex.pd.DataFrame(dict(tick=[], attacker_steamid=[], victim_steamid=[], weapon=[], hitgroup=[])).astype(
-        {"attacker_steamid": "UInt64", "victim_steamid": "UInt64"})
-    out = ex.rebuild_lost_hits(_at_origin(drops), dmg, no_kills, side, _NO_INFERNOS, _NO_HE, _NO_FIRES)
+    out = ex.rebuild_lost_hits(drops, dmg, side)
     assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
 
 
@@ -901,15 +893,16 @@ def test_a_round_recorded_live_is_timed_from_its_start():
     assert ex.round_duration_s(r, 64.0).tolist() == [(5163 - 1) / 64, (11169 - 6763) / 64]
 
 
-# Lost hits: an attacker only on evidence from the drop's own tick.
+# Lost hits: rebuilt, never credited.
 LA, LB, LC, LV, LW = (76561190000000021, 76561190000000022, 76561190000000023, 76561190000000031,
                       76561190000000032)
 LOST_SIDES = {(3, LA): "T", (3, LB): "T", (3, LC): "T", (3, LV): "CT", (3, LW): "CT"}
 
 
-def _lost(tick=9182, hp0=100, hp1=45, victim=LV, at=(0.0, 0.0, 0.0)):
-    return pd.DataFrame(dict(tick=[tick], steamid=[victim], health_before=[hp0], health_after=[hp1], round=[3],
-                             x=[at[0]], y=[at[1]], z=[at[2]]))
+def _lost(*rows):
+    """rows: (tick, victim, health_before, health_after), all in round 3."""
+    return pd.DataFrame(dict(tick=[r[0] for r in rows], steamid=[r[1] for r in rows],
+                             health_before=[r[2] for r in rows], health_after=[r[3] for r in rows], round=3))
 
 
 def _no_events():
@@ -917,51 +910,6 @@ def _no_events():
     kills = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.Series([], dtype="UInt64"),
                               attacker_steamid=pd.Series([], dtype="UInt64"), weapon=[], hitgroup=[]))
     return dmg, kills
-
-
-_NO_INFERNOS = pd.DataFrame(dict(steamid=pd.Series([], dtype="UInt64"), start_tick=[], end_tick=[], x=[], y=[], z=[]))
-_NO_HE = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), steamid=pd.Series([], dtype="UInt64"), x=[], y=[], z=[]))
-
-
-_NO_FIRES = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), steamid=pd.Series([], dtype="UInt64"), weapon=[]))
-
-
-def _fires(*rows):
-    """rows: (shooter, tick, weapon)."""
-    return pd.DataFrame(dict(tick=[r[1] for r in rows], steamid=pd.array([r[0] for r in rows], dtype="UInt64"),
-                             weapon=[r[2] for r in rows]))
-
-
-def _at_origin(drops):
-    return drops.assign(x=0.0, y=0.0, z=0.0)
-
-
-def _infernos(*rows):
-    """rows: (owner, start_tick, end_tick or None, (x, y, z))."""
-    return pd.DataFrame(dict(steamid=pd.array([r[0] for r in rows], dtype="UInt64"), start_tick=[r[1] for r in rows],
-                             end_tick=pd.array([r[2] for r in rows], dtype="Int64"), x=[r[3][0] for r in rows],
-                             y=[r[3][1] for r in rows], z=[r[3][2] for r in rows]))
-
-
-def _he(*rows):
-    """rows: (owner, tick, (x, y, z))."""
-    return pd.DataFrame(dict(tick=[r[1] for r in rows], steamid=pd.array([r[0] for r in rows], dtype="UInt64"),
-                             x=[r[2][0] for r in rows], y=[r[2][1] for r in rows], z=[r[2][2] for r in rows]))
-
-
-def _death(tick, victim, attacker, weapon):
-    return pd.DataFrame(dict(tick=[tick], victim_steamid=pd.array([victim], dtype="UInt64"),
-                             attacker_steamid=pd.array([attacker], dtype="UInt64"), weapon=[weapon],
-                             hitgroup=["generic"]))
-
-
-def _rebuilt(kills=None, drops=None, infernos=None, he=None, fires=None):
-    dmg, no_kills = _no_events()
-    out = ex.rebuild_lost_hits(drops if drops is not None else _lost(), dmg, no_kills if kills is None else kills,
-                               LOST_SIDES, _NO_INFERNOS if infernos is None else infernos, _NO_HE if he is None else he,
-                               _NO_FIRES if fires is None else fires)
-    r = out.iloc[0]
-    return (None if pd.isna(r.attacker_steamid) else int(r.attacker_steamid)), bool(r.reconstructed_ambiguous)
 
 
 def _hit_table(rows):
@@ -1109,53 +1057,6 @@ def test_the_writer_accepts_the_nulls_real_maps_carry(table, cols):
     ex._to_polars(_one_row(table, **{c: None for c in cols}), table)
 
 
-def test_swapped_molotov_burns_are_not_credited_to_whoever_fired_on_the_tick():
-    # The reviewer's probe: two CTs each lose 20 HP to a lost burn tick, LV inside LB's molotov and LW
-    # inside LA's. LA fires on LV's tick and LB on LW's, so the old same-tick rule credited each burn to the
-    # other thrower and validation still passed. A shot on the tick never names anyone.
-    drops = pd.DataFrame(dict(tick=[5000, 5010], steamid=[LV, LW], health_before=[100, 100], health_after=[80, 80],
-                              round=[3, 3], x=[0.0, 1000.0], y=[0.0, 0.0], z=[0.0, 0.0]))
-    burning = _infernos((LB, 4900, None, (50.0, 0.0, 0.0)), (LA, 4900, None, (1050.0, 0.0, 0.0)))
-    dmg, kills = _no_events()
-    out = ex.rebuild_lost_hits(drops, dmg, kills, LOST_SIDES, burning, _NO_HE, _NO_FIRES)
-    assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
-
-
-def test_a_molotov_kill_is_credited_only_inside_that_killers_burning_inferno():
-    kill = _death(9182, LV, LA, "inferno")
-    lethal = _lost(hp0=20, hp1=0)
-    assert _rebuilt(kill, lethal, _infernos((LA, 9000, None, (100.0, 0.0, 0.0)))) == (LA, False)
-    assert _rebuilt(kill, lethal, _infernos((LB, 9000, None, (100.0, 0.0, 0.0)))) == (None, True)  # not his fire
-    assert _rebuilt(kill, lethal, _infernos((LA, 9000, 9100, (100.0, 0.0, 0.0)))) == (None, True)  # burnt out
-    assert _rebuilt(kill, lethal, _infernos((LA, 9000, None, (ex.INFERNO_REACH + 1, 0.0, 0.0)))) == (None, True)
-
-
-def test_an_he_kill_is_credited_only_to_a_detonation_of_his_in_reach_on_that_tick():
-    kill = _death(9182, LV, LA, "hegrenade")
-    lethal = _lost(hp0=30, hp1=0)
-    assert _rebuilt(kill, lethal, he=_he((LA, 9182, (200.0, 0.0, 0.0)))) == (LA, False)
-    assert _rebuilt(kill, lethal, he=_he((LB, 9182, (200.0, 0.0, 0.0)))) == (None, True)
-    assert _rebuilt(kill, lethal, he=_he((LA, 9181, (200.0, 0.0, 0.0)))) == (None, True)
-    assert _rebuilt(kill, lethal, he=_he((LA, 9182, (ex.HE_REACH + 1, 0.0, 0.0)))) == (None, True)
-
-
-def test_a_gun_or_knife_kill_names_its_killer_when_no_grenade_reaches_the_victim():
-    # player_death names the killer and his weapon for the drop to 0 on that tick: the game's own credit.
-    assert _rebuilt(_death(9182, LV, LA, "ak47"), _lost(hp0=27, hp1=0)) == (LA, False)
-    assert _rebuilt(_death(9182, LV, LA, "knife"), _lost(hp0=40, hp1=0)) == (LA, False)
-
-
-def test_a_gun_kill_inside_a_burning_inferno_or_in_he_reach_stays_ambiguous():
-    # The last HP may have gone to the fire or the blast rather than the bullet the death event names.
-    kill, lethal = _death(9182, LV, LA, "ak47"), _lost(hp0=5, hp1=0)
-    assert _rebuilt(kill, lethal, _infernos((LB, 9000, None, (100.0, 0.0, 0.0)))) == (None, True)
-    assert _rebuilt(kill, lethal, _infernos((LA, 9000, None, (100.0, 0.0, 0.0)))) == (None, True)
-    assert _rebuilt(kill, lethal, he=_he((LB, 9182, (200.0, 0.0, 0.0)))) == (None, True)
-    # A fire that has burnt out, or a blast on another tick, does not reach him.
-    assert _rebuilt(kill, lethal, _infernos((LB, 9000, 9100, (100.0, 0.0, 0.0)))) == (LA, False)
-    assert _rebuilt(kill, lethal, he=_he((LB, 9181, (200.0, 0.0, 0.0)))) == (LA, False)
-
-
 def test_republishing_the_same_tables_never_reuses_a_partly_pruned_folder(tmp_path):
     # Folders were named by a hash of their tables, so republishing identical tables reused the old folder
     # even if a prune had already deleted part of it, and CURRENT then pointed at an incomplete map.
@@ -1221,29 +1122,29 @@ def test_a_write_between_the_size_reads_cannot_hide_a_running_extraction(tmp_pat
     assert wrote and len(started) == 1 and second.state == "pending"
 
 
-def test_two_killers_trading_lost_kills_are_not_swapped():
-    # The reviewer's case, both ticks lost: at 100 LA does 80 and LB kills LV for the last 20; at 200 LB
-    # does 80 and LA kills LW for the last 20. Crediting each whole drop to the named killer swapped 160 HP
-    # and still passed with nothing unattributed. Another enemy firing on the tick rules the killer's sole
-    # credit out.
-    drops = pd.DataFrame(dict(tick=[100, 200], steamid=[LV, LW], health_before=[100, 100], health_after=[0, 0],
-                              round=[3, 3], x=[0.0, 0.0], y=[0.0, 0.0], z=[0.0, 0.0]))
-    kills = pd.DataFrame(dict(tick=[100, 200], victim_steamid=pd.array([LV, LW], dtype="UInt64"),
-                              attacker_steamid=pd.array([LB, LA], dtype="UInt64"), weapon=["ak47", "ak47"],
-                              hitgroup=["head", "head"]))
-    fires = _fires((LA, 100, "ak47"), (LB, 100, "ak47"), (LA, 200, "ak47"), (LB, 200, "ak47"))
+def _rebuild_and_validate(drops, game_damage):
+    """Rebuild the lost drops (nothing else in the event stream) and check them against the game's counter."""
     dmg, _ = _no_events()
-    out = ex.rebuild_lost_hits(drops, dmg, kills, LOST_SIDES, _NO_INFERNOS, _NO_HE, fires)
+    out = ex.rebuild_lost_hits(drops, dmg, LOST_SIDES)
+    checks, hp = ex.hit_table_checks(out, _pr([(3, s_, g) for s_, g in game_damage.items()]))
+    warn = [c for c in checks if c["check"] == "damage_events_incomplete"]
+    return out, [c for c in checks if c["fatal"] and not c["ok"]], hp, warn
+
+
+@pytest.mark.parametrize("drops, game_damage, lost_hp", [
+    # The reviewer's swap with the fires lost too: LA does 80 and LB kills LV for 20 at tick 100, LB does 80
+    # and LA kills LW for 20 at 200, and the gap holds no weapon_fire to rule either out.
+    ([(100, LV, 100, 0), (200, LW, 100, 0)], {LA: 100, LB: 100}, 200),
+    # Team damage folded into an enemy's lethal drop: LW (LV's teammate) burns LV for 30, LA kills him with
+    # 70, one drop of 100. The game counts LA's 70; the 30 is nobody's enemy damage.
+    ([(300, LV, 100, 0)], {LA: 70}, 70),
+    # World damage mixed in: LV falls for 40 and LA shoots him for the last 60 on one tick.
+    ([(400, LV, 100, 0)], {LA: 60}, 60),
+])
+def test_a_lost_drop_names_no_one_and_the_map_passes_with_the_exact_gap_as_a_warning(drops, game_damage, lost_hp):
+    out, fatal, hp, warn = _rebuild_and_validate(_lost(*drops), game_damage)
     assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
-
-
-def test_a_killer_who_was_the_only_enemy_shooting_on_the_tick_gets_the_lost_kill():
-    kill, lethal = _death(9182, LV, LA, "ak47"), _lost(hp0=100, hp1=0)
-    # His own shots, a teammate of the victim shooting, a shot on another tick and a thrown grenade rule
-    # nobody else in.
-    alone = _fires((LA, 9182, "ak47"), (LA, 9182, "ak47"), (LW, 9182, "m4a1"), (LB, 9181, "ak47"),
-                   (LB, 9182, "flashbang"))
-    assert _rebuilt(kill, lethal, fires=alone) == (LA, False)
-    assert _rebuilt(kill, lethal, fires=_fires((LA, 9182, "ak47"), (LB, 9182, "deagle"))) == (None, True)
-    assert _rebuilt(kill, lethal, fires=_fires((LB, 9182, "knife"))) == (None, True)  # a slash could hit too
+    assert fatal == [] and hp == lost_hp
+    assert [(w["ok"], w["fatal"], w["actual"]) for w in warn] == [(False, False, lost_hp)]
+    assert warn[0]["note"].startswith(f"damage_events_incomplete: {lost_hp} HP")
 
