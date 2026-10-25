@@ -31,6 +31,8 @@ export const useData = () => {
 };
 
 const MIN_GAP_MS = 2000;
+/** Tauri commands reject with the Rust error string, not an Error. */
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<Omit<Data, "refresh">>({
@@ -51,7 +53,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const { summaries, errors } = await r.client.sync(entries);
       setState((s) => ({ ...s, status: "ready", summaries, fileErrors: errors, progress: null, version: s.version + 1, lastSync: Date.now() }));
     } catch (e) {
-      setState((s) => ({ ...s, status: "error", error: (e as Error).message }));
+      setState((s) => ({ ...s, status: "error", error: errorText(e) }));
     } finally {
       busy.current = false;
     }
@@ -70,7 +72,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setState((s) => ({ ...s, host, client, model }));
         await sync();
       } catch (e) {
-        setState((s) => ({ ...s, status: "error", error: (e as Error).message }));
+        setState((s) => ({ ...s, status: "error", error: errorText(e) }));
       }
     })();
     const onFocus = () => void sync();
