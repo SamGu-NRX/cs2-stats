@@ -1,10 +1,10 @@
 // The dev and preview servers' Valve folder (tools/valve-folder.ts): what is listed and what can be read.
 // src-tauri/src/lib.rs has the same rules for the desktop app, with its own tests.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { importerCommand, listValve, readValve, VALVE_USER_FILE } from "../../tools/valve-folder";
+import { importerCommand, listValve, readValve, VALVE_USER_FILE, ValvePathError } from "../../tools/valve-folder";
 
 const base = mkdtempSync(path.join(tmpdir(), "cs2-valve-"));
 afterAll(() => rmSync(base, { recursive: true, force: true }));
@@ -53,6 +53,23 @@ it("reads only the tables a version's COMPLETE list names, at their size", () =>
   }
   writeFileSync(path.join(root, "match730_a", V1, "match.parquet"), "abcd");
   expect(() => readValve(root, `match730_a/${V1}/match.parquet`)).toThrow(/rescan/);
+});
+
+it("never lists or reads a version that resolves outside the folder", () => {
+  // fails if "../v-…/match.parquet" or a version folder that is a junction reads files beside the folder
+  // (review of #29: both read outside it)
+  const root = fresh();
+  const outside = path.join(path.dirname(root), V1);
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(path.join(outside, "match.parquet"), "secret");
+  writeFileSync(path.join(outside, "COMPLETE"), JSON.stringify({ "match.parquet": 6 }));
+  expect(() => readValve(root, `../${V1}/match.parquet`)).toThrow(ValvePathError);
+  mkdirSync(path.join(root, "match730_j"));
+  writeFileSync(path.join(root, "match730_j", "CURRENT"), `${V1}\n`);
+  symlinkSync(outside, path.join(root, "match730_j", V1), "junction");
+  expect(listValve(root)).toMatchObject({ files: [], skipped: [{ file: "valve/match730_j" }] });
+  expect(() => readValve(root, `match730_j/${V1}`)).toThrow(/outside the Valve folder/);
+  expect(() => readValve(root, `match730_j/${V1}/match.parquet`)).toThrow(/outside the Valve folder/);
 });
 
 it("runs the importer with progress into the Valve folder, and says what is missing when it cannot", () => {
