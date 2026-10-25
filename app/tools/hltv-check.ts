@@ -26,7 +26,7 @@ for (const dir of proMapDirs()) {
     for (const side of sides ? (["CT", "T"] as const) : [null]) {
       const want: HltvLine | null = side === null ? hp.total : side === "CT" ? hp.ct : hp.t;
       if (!want) continue;
-      const s = rollup([facts], { player: facts.players[pi].id, sides: side ? [side] : undefined });
+      const s = rollup([facts], { player: facts.players[pi].id, sides: side ? [side] : undefined }).m;
       const got: Record<(typeof cols)[number], number> = {
         k: s.kills, d: s.deaths, a: s.assists, fa: s.flashAssists, td: s.tradedDeaths, hs: s.hsKills,
         kast: Math.round((1000 * s.kast) / s.rounds) / 10, adr: Math.round((10 * s.dmg) / s.rounds) / 10,

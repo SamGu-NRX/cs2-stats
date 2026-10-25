@@ -64,7 +64,7 @@ export const SCHEMA = {
   infernos: { entity_id: "i?", steamid: "id?", round: "i", start_tick: "i", end_tick: "i?", x: "f", y: "f", z: "f" },
   blinds: {
     tick: "i", round: "i", attacker_steamid: "id?", victim_steamid: "id", duration: "f", flash_entity_id: "i?",
-    is_self: "b", is_team_flash: "b",
+    is_self: "b", is_team_flash: "b", ambiguous: "b",
   },
   bomb: { tick: "i", round: "i", event: "s", steamid: "id?", site: "s?", place: "s?" },
   /** 4 Hz samples */
