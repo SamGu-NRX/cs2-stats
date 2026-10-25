@@ -22,6 +22,8 @@ def joined_events(root: Path, joins: list[dict]):
     import pyarrow.parquet as pq
     for join in joins:
         directory = root / join["demo"]
+        if not (directory / "economy.parquet").exists():
+            continue
         data = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
         economy = pq.read_table(directory / "economy.parquet").to_pylist()
         names = {r["steamid"]: nickname(r["name"]) for r in economy}
@@ -92,14 +94,8 @@ def main() -> None:
     events = list(joined_events(args.data, json.loads(args.joins.read_text())["accepted"]))
     buckets = defaultdict(list)
     debit = defaultdict(list)
-    sums = defaultdict(float)
-    truths = {}
     samples = []
     for row in events:
-        for sid, amount in row["observed"].items():
-            key = (row["map"], row["round"], sid)
-            sums[key] += amount
-            truths[key] = row["per_round"][sid]
         k = row["kill"]
         delta = row["delta"]
         if not k or delta < .001:
@@ -119,7 +115,7 @@ def main() -> None:
     summarise = lambda values: {"n": len(values), "median": float(np.median(values)), "p05": float(np.quantile(values,.05)), "p95": float(np.quantile(values,.95))}
     result = {"events": len(events), "kill_credit_ratios": {k: summarise(v) for k, v in buckets.items()},
               "victim_debit_ratios": {k: summarise(v) for k, v in debit.items()},
-              "tooltip_round_sum": helpers["error_metrics"]([truths[k] for k in sums], list(sums.values())),
+              "note": "perRound is not additive over event tooltip credits; fit the observed player credits directly",
               "samples": samples}
     args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in result.items() if k != "samples"}, indent=2))

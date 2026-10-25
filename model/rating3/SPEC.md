@@ -27,7 +27,7 @@ Each cell stores the median observed P(T wins) and its count. `last_kill_side` i
 
 Equipment is represented by HLTV's round-start buy labels: `PISTOL`, `ECO`, `HALF`, and `FULL`. A terminal event returns the terminal winner exactly. An unknown state is an error in strict validation and `null` in a general engine adapter. Do not infer a terminal winner from alive counts alone after a bomb plant.
 
-On a chronological 70/15/15 match split, the selected lookup has 0.153 pp test MAE over 20,235 events and 0.160 pp over non-terminal events. Pre-plant MAE is 0.0019 pp. Post-plant MAE is 0.710 pp. The remaining post-plant errors occur where HLTV holds a probability constant after the bomb becomes unpreventable but the event stream does not expose the timing rule.
+On a chronological 70/15/15 match split, the selected lookup has 0.153 pp test MAE over 20,235 events and 0.160 pp over non-terminal events. Pre-plant MAE is 0.0019 pp. Post-plant timing is still open. The current valid joins provide 1,311 aligned post-plant events across 350 rounds. They are consistent with the nominal 10-second no-kit and 5-second kit defuse limits, but kills can still change elimination probability after defusing becomes impossible, so a threshold cannot be claimed from zero deltas alone.
 
 ## Swing credits
 
@@ -44,7 +44,7 @@ The recovered event rule is:
 7. A trade denial is a player's kill less than five seconds after that player's previous kill in the round. A failed trade is a player dying less than five seconds after a teammate to the same killer. These labels do not remove the victim debit.
 8. At round end, distribute the remaining round swing using weights 1 for the clutcher, 2 for each player with kill swing, 1 for the defuser, and 1 for each survivor, then normalise over eligible recipients. The current joined data has not yet isolated this remainder from event credits with enough confidence, so keep the constants in `params.json` and mark the implementation provisional.
 
-The event ledger conserves positive and negative swing to rounding error on ordinary kills. The strict join data is not sufficient to claim the final per-player-map correlation until post-plant zero rules and round-end remainder are fitted.
+The tooltip credits are the ground truth for each player and event. A round-level sum is not a valid check: `performance.players[].perRound` is not additive over the event tooltip values. The strict join data is not sufficient to claim the final per-player-map correlation until post-plant zero rules, mixed damage/trade allocation, and the round-end remainder are fitted.
 
 ## Economy adjustment
 
@@ -63,18 +63,20 @@ For each player-map, eKPR is the sum of kill points divided by rounds. eDPR char
 
 The map scoreboard exposes eKPR, eDPR, eADR, and eKAST. It does not expose eMK. The reference fit therefore uses raw multi-kill percent for the MK term. Career cards expose an eco multi-kill value, but that value is on a different scale. Do not silently mix the two. `eKAST`'s 3.0.1 reduced-power transformation remains unresolved.
 
-## Sub-ratings and final fit
+## Rating target and per-round fit
 
-The reference fit uses four eco-adjusted map inputs, raw multi-kill percent, and swing:
+The map target is a round-weighted mean of the side targets. For a player with `R_ct` CT rounds and `R_t` T rounds:
 
 ```
-q = (eKPR, eADR, eDPR, eKAST, MK, Swing)
-z_i = (q_i - mean_i) / sd_i
-Rating = max(0, sum(c_t * phi_t(z)))
+Rating_map = (R_ct * Rating_ct + R_t * Rating_t) / (R_ct + R_t)
 ```
 
-`phi` is the degree-two polynomial basis with an intercept, six first-order terms, six square terms, and fifteen pairwise products. Coefficients are stored under `rating.terms` in `params.json`, using scikit-learn's order: `1`, six feature names, then `x_i^2` and `x_i x_j` in feature order. This is the smallest tested extension that meets the map acceptance error. A six-term linear fit has 0.0474 MAE; the degree-two fit has 0.0360 MAE and R² 0.9844 on 7,330 player-map rows.
+Using the displayed total, CT, and T ratings gives MAE 0.00284, p95 0.00652, and maximum error 0.00924 across 7,330 player-map rows. The coordinator's regulation-only probe reports the same result over 6,320 rows: MAE 0.0028, p95 0.0065, and maximum 0.009. This is display rounding, not evidence for a map-level formula.
 
-The career check applies the map-fitted means, standard deviations, and terms to 275 valid career cards. It is a scale check, not a second fit. Its current error is recorded in `rating.career_fit` and must be rerun after eMK and eKAST are resolved.
+The target-only rating display floor is ±0.005 rating units, with expected absolute error 0.0025. Map eKPR and eDPR have count quantisation of ±0.5/R because eK and eD are displayed as integer counts. MK has the same count quantisation when converted to a per-round percentage. eADR and eKAST contribute ±0.05 in their displayed units, and Swing contributes ±0.005 percentage points. The propagated floor for the final per-round model is not known yet.
+
+The current reference fit uses round events rather than map aggregates. Each round supplies kills, death or survival, a KAST proxy, a multi-kill indicator, swing, buy label, and side. A 25-term least-squares basis over 21,990 total/CT/T equations reaches MAE 0.0893 and correlation 0.9701. It is a research baseline, not an accepted formula. Damage, assists, exact KAST, exact economy adjustment, and the six HLTV sub-rating transforms remain open.
+
+The degree-two map polynomial is retired. Its 0.0360 MAE on map aggregates is a diagnostic result only and must not be shipped as Rating 3.02.
 
 All numeric constants belong in `params.json`. The engine must not duplicate them in TypeScript.
