@@ -26,6 +26,22 @@ export interface Env {
   visSource?: "los" | "mask" | "mixed" | null;
   /** plugin 1.1.0: why line of sight turned off */
   losError?: string;
+  /** the human's player slot, controller entity index and pawn entity index (plugin 1.0.0), for aim.hitMask */
+  humanSlot?: number | null;
+  humanController?: number | null;
+  humanPawn?: number | null;
+}
+
+/** Optional (plugin 1.0.0): the victim's raw spotted mask at each hit by the human. */
+export interface HitMask {
+  ri: number[];
+  tick: number[];
+  victim: number[];
+  /** m_bSpottedByMask words, unsigned 32-bit */
+  m0: number[];
+  m1: number[];
+  /** m_bSpotted */
+  spotted: boolean[];
 }
 
 export interface Players {
@@ -230,7 +246,7 @@ export interface MatchFile {
   grenades: Grenades;
   pos: Pos;
   /** los (plugin 1.1.0): an enemy entering (vis 1) or leaving (vis 0) the human's line of sight */
-  aim: { engagements: Engagements; shots: Shots; los?: { ri: number[]; tick: number[]; enemy: number[]; vis: (0 | 1)[] } };
+  aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask; los?: { ri: number[]; tick: number[]; enemy: number[]; vis: (0 | 1)[] } };
   throws?: Throws;
   recon?: Recon;
   /** players who disconnected during a recorded round */
@@ -264,6 +280,7 @@ const TABLE_COLUMNS = {
     "impact", "hit",
   ],
   throws: ["ri", "tick", "thrower", "type", "pos"],
+  hitMask: ["ri", "tick", "victim", "m0", "m1", "spotted"],
 } as const;
 
 function checkTable(where: string, table: unknown, name: keyof typeof TABLE_COLUMNS): number {
@@ -302,6 +319,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
   if (typeof aim !== "object" || aim === null) throw new SchemaError(where, `field "aim" must be an object`);
   checkTable(where, aim.engagements, "engagements");
   checkTable(where, aim.shots, "shots");
+  if (aim.hitMask !== undefined) checkTable(where, aim.hitMask, "hitMask");
 
   const human = m.human as number;
   if (human < 0 || human >= nPlayers) throw new SchemaError(where, `human index ${human} is outside players (0..${nPlayers - 1})`);

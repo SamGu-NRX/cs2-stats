@@ -3,6 +3,7 @@
 // Everything is counted per side (T/CT) and per weapon class, so any split is a sum of buckets.
 import { fullRoundTest } from "./context";
 import type { MatchFile, Side, Vec3 } from "./schema";
+import { emptyEvidence, mergeEvidence, visibilityEvidence, visibilityVerdict, type VisibilityEvidence, type VisibilityVerdict } from "./visibility";
 import { weaponClass, type WeaponClass } from "./weapons";
 
 /** A new burst starts after 0.3 s without firing (SCHEMA.md), or on a weapon or round change. */
@@ -159,8 +160,13 @@ const step = (): SprayStep => ({ n: 0, sy: 0, sp: 0, syy: 0, spp: 0, en: 0, ey: 
 
 type SideKey = "t" | "ct";
 export interface AimAgg {
-  /** plugin flag: engagement visibility has been validated (visibility metrics are "validating" until then) */
+  /**
+   * The visibility signal passed the hit test in visibility.ts (or, for files without hit masks, the
+   * plugin's env.visibilityValidated flag). Visibility metrics are "validating" until then.
+   */
   validated: boolean;
+  /** the hit test's counts, summed over matches; null when no file had hit masks */
+  visibility: VisibilityEvidence | null;
   /** spotted came from visTarget in every file (false: an older file's target column stood in) */
   visFromVisTarget: boolean;
   eng: Record<SideKey, EngStats>;
@@ -171,7 +177,7 @@ export interface AimAgg {
 
 export function emptyAim(validated = true): AimAgg {
   const classes = () => Object.fromEntries(GUN_CLASSES.map((c) => [c, emptyShots()])) as Record<GunClass, ShotStats>;
-  return { validated, visFromVisTarget: true, eng: { t: emptyEng(), ct: emptyEng() }, shots: { t: classes(), ct: classes() }, spray: {} };
+  return { validated, visibility: null, visFromVisTarget: true, eng: { t: emptyEng(), ct: emptyEng() }, shots: { t: classes(), ct: classes() }, spray: {} };
 }
 
 function addShots(a: ShotStats, b: ShotStats) {
@@ -185,6 +191,7 @@ function addShots(a: ShotStats, b: ShotStats) {
 /** a += b (b is only read). The merged aim is validated only if every part is. */
 export function mergeAim(a: AimAgg, b: AimAgg): AimAgg {
   a.validated = a.validated && b.validated;
+  if (b.visibility) a.visibility = mergeEvidence(a.visibility ?? emptyEvidence(), b.visibility);
   a.visFromVisTarget = a.visFromVisTarget && b.visFromVisTarget;
   for (const s of ["t", "ct"] as const) {
     a.eng[s].n += b.eng[s].n;
@@ -196,6 +203,11 @@ export function mergeAim(a: AimAgg, b: AimAgg): AimAgg {
     steps.forEach((s, i) => { for (const f of Object.keys(s) as (keyof SprayStep)[]) into[i][f] += s[f]; });
   }
   return a;
+}
+
+/** Why the visibility metrics are or are not validated, for the "Validating" tooltip. */
+export function aimVisibility(a: AimAgg): VisibilityVerdict {
+  return { ...visibilityVerdict(a.visibility, a.validated), validated: a.validated };
 }
 
 export type SideFilter = "all" | "t" | "ct";
@@ -237,7 +249,9 @@ export function aimAggregate(m: MatchFile): AimAgg | null {
   const s = m.aim.shots;
   if (!e.ri.length && !s.ri.length) return null;
   const tr = m.env.tickrate || 64;
-  const a = emptyAim(m.env.visibilityValidated === true);
+  const evidence = visibilityEvidence(m);
+  const a = emptyAim(visibilityVerdict(evidence, m.env.visibilityValidated === true).validated);
+  a.visibility = evidence;
   a.visFromVisTarget = !!s.visTarget;
   const isFull = fullRoundTest(m);
   const sideOf = (ri: number): SideKey | null => {
