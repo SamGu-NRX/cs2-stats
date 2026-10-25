@@ -26,9 +26,9 @@ ureq = "3.5.0"
 codegen-units = 1
 lto = true
 opt-level = "s"
-# Unwinding, not abort: the Bot Mode session watcher catches a panic and fails closed
-# (session::supervise_guarded), which an aborting panic would skip.
-panic = "unwind"
+# A panic ends the process. The Bot Mode supervisor relies on this: a dead supervisor frees
+# its session lease, and the next cleanup turns Bot Mode off (session.rs).
+panic = "abort"
 strip = true
 
 [target."cfg(windows)".dependencies]

@@ -175,8 +175,8 @@ async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
 pub fn run() {
     tauri::Builder::default()
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
-        .setup(|app| {
-            botmode::commands::on_app_start(app.handle().clone());
+        .setup(|_app| {
+            botmode::commands::on_app_start();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

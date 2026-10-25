@@ -54,14 +54,10 @@ pub trait System {
     /// Time elapsed on a steady clock.
     fn elapsed(&self) -> Duration;
     fn sleep(&self, d: Duration);
-    /// Whether the process with this id and creation time is still running.
-    fn alive(&self, pid: u32, created: u64) -> bool;
-    /// This process's id and creation time.
-    fn this_process(&self) -> Listed;
 }
 
 /// A verdict on one process, as reported to the user.
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "verdict")]
 pub enum Checked {
     /// `-insecure` confirmed, nothing turning VAC on; left running.
@@ -81,9 +77,18 @@ pub enum Event {
     /// No CS2 has started yet.
     Waiting { message: String },
     Checked { checked: Checked, message: String },
+    /// The process list has failed to read for [`OUTAGE`] or longer; the watch keeps retrying.
+    Outage { message: String, error: String },
+    /// The process list reads again after an outage.
+    Recovered { message: String },
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+/// How long the process list may fail before the user is told CS2 cannot be seen.
+pub const OUTAGE: Duration = Duration::from_secs(30);
+/// Shown during such an outage.
+pub const CANNOT_SEE: &str = "cannot see CS2 processes: close CS2 now";
+
+#[derive(Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "outcome")]
 pub enum Outcome {
     /// CS2 ran and every process of this install has exited.
@@ -207,7 +212,22 @@ pub fn supervise(
     control: &dyn Fn() -> Control,
     progress: &dyn Fn(&Event),
 ) -> Outcome {
+    supervise_with_tick(sys, image, mode, start_limit, control, progress, &|| {})
+}
+
+/// [`supervise`], calling `tick` once per poll (the supervisor's heartbeat).
+pub fn supervise_with_tick(
+    sys: &dyn System,
+    image: &Path,
+    mode: Mode,
+    start_limit: Option<Duration>,
+    control: &dyn Fn() -> Control,
+    progress: &dyn Fn(&Event),
+    tick: &dyn Fn(),
+) -> Outcome {
     let start = sys.elapsed();
+    let mut failing_since: Option<Duration> = None;
+    let mut outage_told = false;
     let mut tracked: HashMap<Listed, Track> = HashMap::new();
     let mut checked: Vec<Checked> = Vec::new();
     let mut backoff = POLL;
@@ -218,15 +238,26 @@ pub fn supervise(
         checked.push(c);
     };
     loop {
+        tick();
         let mut wait = POLL;
         match sys.cs2_list() {
             Err(e) => {
+                let since = *failing_since.get_or_insert(sys.elapsed());
+                if !outage_told && sys.elapsed().saturating_sub(since) >= OUTAGE {
+                    progress(&Event::Outage { message: CANNOT_SEE.into(), error: e.clone() });
+                    outage_told = true;
+                }
                 last_error = Some(e);
                 wait = backoff;
                 backoff = (backoff * 2).min(BACKOFF_MAX);
             }
             Ok(list) => {
                 backoff = POLL;
+                failing_since = None;
+                if outage_told {
+                    progress(&Event::Recovered { message: "CS2 processes can be seen again".into() });
+                    outage_told = false;
+                }
                 let mine: Vec<Listed> = list
                     .into_iter()
                     .filter(|p| match mode {
@@ -367,12 +398,6 @@ impl System for Windows {
     fn sleep(&self, d: Duration) {
         std::thread::sleep(d)
     }
-    fn alive(&self, pid: u32, created: u64) -> bool {
-        super::process::alive(pid, created)
-    }
-    fn this_process(&self) -> Listed {
-        super::process::this_process()
-    }
 }
 
 #[cfg(test)]
@@ -483,6 +508,28 @@ mod tests {
         let (out, _) = run(&sys, LAUNCH, None);
         assert!(matches!(out, Outcome::Exited { .. }), "{out:?}");
         assert_eq!(&sys.sleeps()[..2], [Duration::from_millis(250), Duration::from_millis(500)]);
+    }
+
+    #[test]
+    fn a_long_process_list_outage_is_shown_and_cleared() {
+        let sys = FakeSystem::new();
+        let mut lists: Vec<Result<Vec<(u32, u64)>, String>> = vec![Err("snapshot failed".into()); 12];
+        lists.push(Ok(vec![(10, 2000)]));
+        lists.push(Ok(vec![]));
+        sys.script_results(lists);
+        sys.proc(10, 2000, Some(SAFE_LINE));
+        let (out, said) = run(&sys, LAUNCH, None);
+        assert!(matches!(out, Outcome::Exited { .. }), "{out:?}");
+        let outage: Vec<_> = said.iter().filter(|e| matches!(e, Event::Outage { .. })).collect();
+        assert_eq!(outage.len(), 1, "told once: {said:?}");
+        assert!(matches!(outage[0], Event::Outage { message, .. } if message == CANNOT_SEE));
+        assert!(said.iter().any(|e| matches!(e, Event::Recovered { .. })));
+        // A short failure is not an outage.
+        let sys = FakeSystem::new();
+        sys.script_results(vec![Err("x".into()), Ok(vec![(10, 2000)]), Ok(vec![])]);
+        sys.proc(10, 2000, Some(SAFE_LINE));
+        let (_, said) = run(&sys, LAUNCH, None);
+        assert!(!said.iter().any(|e| matches!(e, Event::Outage { .. })));
     }
 
     #[test]

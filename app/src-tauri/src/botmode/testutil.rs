@@ -182,6 +182,9 @@ impl super::monitor::Cs2Process for ProcHandle {
     }
 }
 
+/// Far past any limit the code under test uses (the longest is the 15-minute start limit).
+pub const FAKE_CLOCK_CAP: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
 /// A process list scripted per poll (the last entry repeats), processes by id, and a clock
 /// that moves only when the code under test sleeps.
 pub struct FakeSystem {
@@ -190,9 +193,6 @@ pub struct FakeSystem {
     clock: std::cell::Cell<std::time::Duration>,
     sleeps: std::cell::RefCell<Vec<std::time::Duration>>,
     polls: std::cell::Cell<usize>,
-    /// Polls on which listing panics, for the panic boundary.
-    pub panic_on_polls: std::cell::RefCell<Vec<usize>>,
-    pub alive: std::cell::RefCell<std::collections::HashSet<(u32, u64)>>,
     /// Called whenever the code under test reads the time, to observe what was true then.
     pub on_file_time: std::cell::RefCell<Option<Box<dyn Fn()>>>,
 }
@@ -205,8 +205,6 @@ impl FakeSystem {
             clock: Default::default(),
             sleeps: Default::default(),
             polls: Default::default(),
-            panic_on_polls: Default::default(),
-            alive: Default::default(),
             on_file_time: Default::default(),
         }
     }
@@ -250,9 +248,6 @@ impl FakeSystem {
 impl super::monitor::System for FakeSystem {
     fn cs2_list(&self) -> Result<Vec<super::monitor::Listed>, String> {
         self.polls.set(self.polls.get() + 1);
-        if self.panic_on_polls.borrow().contains(&self.polls.get()) {
-            panic!("staged watcher failure");
-        }
         let mut l = self.lists.borrow_mut();
         let next = if l.len() > 1 { l.pop_front().unwrap() } else { l.front().cloned().unwrap_or(Ok(Vec::new())) };
         // A process that was ended is gone from the list, as on Windows.
@@ -281,12 +276,9 @@ impl super::monitor::System for FakeSystem {
     fn sleep(&self, d: std::time::Duration) {
         self.sleeps.borrow_mut().push(d);
         self.clock.set(self.clock.get() + d);
-    }
-    fn alive(&self, pid: u32, created: u64) -> bool {
-        self.alive.borrow().contains(&(pid, created))
-    }
-    fn this_process(&self) -> super::monitor::Listed {
-        super::monitor::Listed { pid: 1, created: 1 }
+        // Every watch, supervisor and follow loop sleeps through here, so this cap turns a loop
+        // that never ends (a broken exit condition) into a failing test instead of a hang.
+        assert!(self.clock.get() < FAKE_CLOCK_CAP, "fake clock passed {FAKE_CLOCK_CAP:?}: a loop under test did not end");
     }
 }
 
