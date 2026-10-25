@@ -124,8 +124,8 @@ export interface Sources {
   summary(q: Query): Promise<Summary>;
   pros(): Promise<Baselines>;
   careers(q: Query): Promise<BotPopulation>;
-  /** the query's players' rounds per map, over the query's matches and map filter */
-  mapRounds(q: Query): Promise<Record<string, number>>;
+  /** the query's players' rounds per map, over the query's matches and map filter; rolesByMap needs it */
+  mapRounds?(q: Query): Promise<Record<string, number>>;
 }
 
 /** The pool compare() reads for a summary (its role unless "all" is asked for), and that pool's size on the side. */
@@ -179,6 +179,7 @@ export function rankingCalls(src: Sources) {
     },
     /** roles() on each map the players played in the query's matches, most rounds first. */
     async rolesByMap(q: Query): Promise<({ map: string } & Roles)[]> {
+      if (!src.mapRounds) throw new Error("rolesByMap: the ranking sources have no mapRounds");
       const maps = Object.entries(await src.mapRounds(q)).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
       return Promise.all(maps.map(async ([map]) => ({ map, ...(await calls.roles({ files: q.files, filter: { ...q.filter, maps: [map] } })) })));
     },
