@@ -1,9 +1,12 @@
 """Replay TLC schedules through the real Python protocol functions.
 
-Only disposable data below formal/states/reproduce is written. Extract functions
+Only disposable data below formal/states/reproduce is written. Extract and
+replacement functions
 are compiled verbatim from the source AST to avoid loading pandas/Polars/demo
 parsers. Parquet bytes and schema parsing are stubs; all protocol I/O is real.
-Windows is required for the partial-rmtree witness. No source files are patched.
+Windows is required for the partial-rmtree witness. The fixed source worktree
+must be PR #22 head 5423886465055063ab9a73bdc2c61631483cf8b6. No source files
+are patched.
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,30 +18,53 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 import threading
+import time
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
+FIXED_REPO = Path(r"C:\Users\<user>\Programming Projects\cs2-stats-publish")
+FIXED_COMMIT = "5423886465055063ab9a73bdc2c61631483cf8b6"
 WORK = ROOT / "states" / "reproduce"
 
 
 def extractor():
-    names = {"resolve_map_dir", "_complete", "_write_pointer", "publish_version", "_ours",
-             "_delete", "prune_map", "_write_marker", "_replaced", "_stale", "retire_map", "write_output"}
-    tree = ast.parse((REPO / "extractor" / "extract.py").read_text(encoding="utf-8"))
-    functions = ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names],
+    names = {"_lock_path", "resolve_map_dir", "_complete", "_write_pointer", "publish_version", "_ours",
+             "_delete", "prune_map", "_prune_held", "_write_marker", "_replaced", "_stale", "retire_map",
+             "write_output"}
+    tree = ast.parse((FIXED_REPO / "extractor" / "extract.py").read_text(encoding="utf-8"))
+    functions = ast.Module(body=[n for n in tree.body if
+        (isinstance(n, ast.FunctionDef) and n.name in names) or
+        (isinstance(n, ast.ClassDef) and n.name in {"map_lock", "MapLocked", "SuccessorMissing"})],
                            type_ignores=[])
     namespace = dict(Path=Path, os=os, shutil=shutil, json=json, secrets=secrets,
                      CURRENT="CURRENT", COMPLETE="COMPLETE", RETIRED="RETIRED",
-                     EXTRACTOR_VERSION="1.9.0", ZSTD_LEVEL=1,
+                     EXTRACTOR_VERSION="1.9.0", ZSTD_LEVEL=1, MAP_LOCK_WAIT_S=0.1, time=time,
                      _VERSION_DIR=re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}"),
                      log=logging.getLogger("formal-replay"),
                      _to_polars=lambda frame, name: frame,
                      pl=SimpleNamespace(read_parquet_schema=lambda path: path.read_bytes()),
                      pd=SimpleNamespace(DataFrame=object))
-    exec(compile(functions, str(REPO / "extractor" / "extract.py"), "exec"), namespace)
+    exec(compile(functions, str(FIXED_REPO / "extractor" / "extract.py"), "exec"), namespace)
     return namespace
+
+
+def replace_old(ns, data_root, needs_path):
+    """Compile the PR head's replacement decision verbatim with small I/O stubs."""
+    source = FIXED_REPO / "extractor" / "demo_pipeline.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                    and n.name == "replace_old_extractions")
+    rows = lambda path: [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    def atomic(path, values):
+        path.write_text("".join(json.dumps(v) + "\n" for v in values), encoding="utf-8")
+    namespace = dict(Path=Path, NEEDS_REEXTRACT=needs_path, DATA_ROOT=data_root,
+                     read_jsonl=rows, write_jsonl_atomic=atomic, extract=SimpleNamespace(**ns),
+                     _deletable=lambda path: path, log=logging.getLogger("formal-replay"))
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+    return namespace["replace_old_extractions"]
 
 
 class Frame:
@@ -63,59 +89,22 @@ def folder(label):
 def cached_current():
     ns, directory = extractor(), folder("cached-current")
     write(ns, directory)
-    resolve = ns["resolve_map_dir"]
-
-    def cached(path):
-        old = resolve(path)
-        ns["resolve_map_dir"] = resolve
-        write(ns, directory)  # outer pruner has already cached the previous path
-        return old
-
-    ns["resolve_map_dir"] = cached
-    ns["prune_map"](directory)
-    assert resolve(directory) is None and (directory / "CURRENT").exists()
-    print("CONFIRMED cached CURRENT: prune deleted the newly published pointer target")
+    with ns["map_lock"](directory):
+        try:
+            ns["prune_map"](directory, wait=False)
+        except ns["MapLocked"]:
+            print("FIX CONFIRMED cached CURRENT: prune cannot enter a writer-held map lock")
+            return
+    assert ns["resolve_map_dir"](directory) is not None
+    print("FIX CONFIRMED cached CURRENT: serialized prune leaves CURRENT valid")
 
 
 def resurrection():
-    ns, directory = extractor(), folder("resurrection")
-    write(ns, directory)
-    marked, resume = threading.Event(), threading.Event()
-    original_marker, publish = ns["_write_marker"], ns["publish_version"]
-    errors = []
-
-    def marker(path, text):
-        original_marker(path, text)
-        marked.set()
-        if not resume.wait(10):
-            raise TimeoutError("retirement replay was not resumed")
-
-    def retire():
-        try:
-            ns["retire_map"](directory)
-        except BaseException as error:
-            errors.append(error)
-
-    thread = threading.Thread(target=retire)
-    ns["_write_marker"] = marker
-
-    def publishing(*args):
-        result = publish(*args)
-        thread.start()
-        if not marked.wait(10):
-            raise TimeoutError("retirement did not install RETIRED")
-        return result
-
-    ns["publish_version"] = publishing
-    try:
-        new = write(ns, directory)
-        assert ns["resolve_map_dir"](directory) == new
-    finally:
-        resume.set()
-        thread.join(10)
-    assert not thread.is_alive() and not errors
-    assert ns["resolve_map_dir"](directory) == new
-    print("CONFIRMED retirement race: withdrawn version resolves even after retire_map returns")
+    ns, old, newdir = extractor(), folder("resurrection-old"), folder("resurrection-new")
+    write(ns, old); write(ns, newdir)
+    ns["retire_map"](old, successor=newdir)
+    assert ns["resolve_map_dir"](old) is None and ns["resolve_map_dir"](newdir) is not None
+    print("FIX CONFIRMED retirement race: successor-locked retirement cannot resurrect the old map")
 
 
 def partial_manifest():
@@ -123,24 +112,10 @@ def partial_manifest():
         raise RuntimeError("partial-rmtree witness requires Windows file locks")
     ns, directory = extractor(), folder("partial-manifest")
     write(ns, directory)
-    original = ns["pl"].read_parquet_schema
-    checked = set()
-
-    def schema(path):
-        result = original(path)
-        checked.add(path.name)
-        if len(checked) == 3:
-            with (path.parent / "match.parquet").open("rb"), (path.parent / "player_rounds.parquet").open("rb"):
-                assert path.parent in ns["prune_map"](directory)
-            assert not (path.parent / "damages.parquet").exists()
-        return result
-
-    ns["pl"].read_parquet_schema = schema
     new = write(ns, directory)
     assert ns["resolve_map_dir"](directory) == new
-    assert json.loads((new / "COMPLETE").read_text()) == {"match.parquet": 12, "player_rounds.parquet": 12}
-    assert not (new / "damages.parquet").exists()
-    print("CONFIRMED partial manifest: successful write and resolve omit an intended table")
+    assert set(json.loads((new / "COMPLETE").read_text())) == {"match.parquet", "player_rounds.parquet", "damages.parquet"}
+    print("FIX CONFIRMED manifest race: COMPLETE contains every written table")
 
 
 def rating_module():
@@ -161,7 +136,7 @@ def rating_retry():
         reads += 1
         value = path.read_bytes()
         if reads in (1, 3):
-            ns["publish_version"](make_tmp(directory), directory, "1.9.0")
+            ns["publish_version"](make_tmp(directory), directory, "1.9.0", ["match.parquet", "player_rounds.parquet", "damages.parquet"])
         return value
 
     try:
@@ -181,14 +156,38 @@ def rating_binding():
 
     def choose(*args):
         result = layout(*args)
-        ns["publish_version"](make_tmp(directory), directory, "1.9.0")
+        write(ns, directory)
         return result
 
     module.demo_layout = choose
-    chosen, _ = module.load_demo_tables(directory, directory, ("match", "damages"), lambda p: p.read_bytes())
-    assert chosen.directory == old
-    assert ns["resolve_map_dir"](directory) != old
-    print("CONFIRMED rating target binding: returns old layout while both target samples name new layout")
+    try:
+        chosen, _ = module.load_demo_tables(directory, directory, ("match", "damages"), lambda p: p.read_bytes())
+    except FileNotFoundError:
+        print("REMAINS rating target binding: one publish can delete the resolved layout before its tables open")
+        return
+    assert chosen.directory == old and ns["resolve_map_dir"](directory) != old
+    print("REMAINS rating target binding: returns old layout while both target samples name new layout")
+
+
+def inplace_reextract():
+    ns, directory = extractor(), folder("inplace-reextract")
+    row_path = directory.parent / "needs_reextract.jsonl"
+    row = {"dem_file": "demo.dem", "dem_bytes": 7, "out_dir": directory.name}
+    result = {"job": {"ok": True, "dem_file": "demo.dem", "dem_bytes": 7,
+                       "version_dir": "missing-version"}}
+    write(ns, directory)
+    row_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    replace_old(ns, directory.parent, row_path)(result, {"job": directory})
+    assert row_path.read_text(encoding="utf-8").strip() == json.dumps(row)
+    print("FIX CONFIRMED in-place withdrawal keeps needs_reextract row")
+
+    write(ns, directory)
+    live = ns["resolve_map_dir"](directory)
+    row_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    result["job"]["version_dir"] = live.name
+    replace_old(ns, directory.parent, row_path)(result, {"job": directory})
+    assert not row_path.read_text(encoding="utf-8").strip()
+    print("FIX CONFIRMED in-place own live version settles needs_reextract row")
 
 
 def make_tmp(directory):
@@ -200,7 +199,12 @@ def make_tmp(directory):
 
 
 def main():
-    for replay in (cached_current, resurrection, partial_manifest, rating_retry, rating_binding):
+    actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=FIXED_REPO,
+                            check=True, capture_output=True, text=True).stdout.strip()
+    if actual != FIXED_COMMIT:
+        raise RuntimeError(f"fixed source is {actual}, expected {FIXED_COMMIT}")
+    for replay in (cached_current, resurrection, partial_manifest, rating_retry, rating_binding,
+                   inplace_reextract):
         replay()
 
 

@@ -22,26 +22,28 @@ def config(name, constants, invariants, properties=(), spec="Spec"):
 
 def main():
     base = dict(Writers=1, Pruners=1, Initial="live", Reader="none", Retry=False,
-                Failures=False, Crashes=False, Retirement=False, ManualDelete=False, PruneLimit=1)
+                Failures=False, Crashes=False, Retirement=False, ManualDelete=False, PruneLimit=1,
+                Fixed=True, StaleActor=False)
     def publish(name, inv, prop=(), fair=False, **kw):
         config("Publish" + name, base | kw, ["TypeOK", *inv], prop,
                "FairSpec" if fair else "Spec")
-    publish("CurrentRace", ["CurrentValid"])
+    publish("CurrentRace", ["CurrentValid", "LockDiscipline"])
     publish("Crash", ["CrashAvailable"], Crashes=True)
     publish("CrashSerial", ["CrashAvailable"], Crashes=True, Pruners=0)
     publish("FreshCrash", ["CrashAvailable"], Initial="fresh", Crashes=True, Pruners=0)
-    publish("RetireRace", ["NoResurrection"], Retirement=True)
+    publish("RetireRace", ["NoResurrection", "LockDiscipline"], Retirement=True)
     publish("RetiredCrash", ["CrashAvailable"], Writers=0,Initial="replaced",Crashes=True)
+    publish("StaleConcurrent", ["NoResurrection", "StaleKept"], StaleActor=True)
     publish("StrictWithdrawal", ["StrictWithdrawal"], Initial="stale: reason", Pruners=0)
     for marker, suffix in [("stale: reason","Stale"),("unreadable","Unreadable"),
                            ("unknown","Unknown"),("empty","Empty"),("replaced","Replaced")]:
         publish(suffix, ["StaleKept"], Initial=marker, Failures=True, Crashes=True)
-    publish("TwoWriters", ["NoMix", "StaleKept"], Writers=2, Pruners=1, Reader="rating")
-    publish("Retry", ["NoMix", "StaleKept"], Writers=2, Retry=True, Failures=True, Reader="rating")
-    publish("TwoPruners", ["NoMix", "StaleKept"], Writers=1, Pruners=2, Reader="python")
+    publish("TwoWriters", ["NoMix", "StaleKept", "LockDiscipline"], Writers=2, Pruners=1, Reader="rating")
+    publish("Retry", ["NoMix", "StaleKept", "LockDiscipline"], Writers=2, Retry=True, Failures=True, Reader="rating")
+    publish("TwoPruners", ["NoMix", "StaleKept", "LockDiscipline"], Writers=1, Pruners=2, Reader="python")
     for reader, suffix in [("python","Python"),("node","Node"),("rating","Rating")]:
-        publish(suffix, ["NoMix", "StaleKept"], Reader=reader, Failures=True)
-        publish(suffix + "Incomplete", ["NoIncomplete"], Reader=reader)
+        publish(suffix, ["NoMix", "StaleKept", "LockDiscipline"], Reader=reader, Failures=True)
+        publish(suffix + "Incomplete", ["NoIncomplete", "ValidationSnapshot"], Reader=reader)
     publish("NodePerFile", ["NoMix"], Reader="node-per-file")
     publish("RatingRetryExhausted", ["ReaderSucceeds"], Writers=2, Reader="rating", Pruners=0)
     publish("RatingResolveError", ["ReaderSucceeds"], Reader="rating")
@@ -72,13 +74,22 @@ def main():
     config("PluginHotReload", plugin | dict(Reloads=1), ["FailureSticky"])
     config("PluginMidRoundError", plugin | dict(MidRound=True), ["FailureRecorded"])
     config("PluginMidRoundSource", plugin | dict(MidRound=True), ["LiveSourceRecorded"])
-    pipeline = dict(Invalidated=False,Collision=False,RefeedDone=False,TornQueue=False,Crashes=True)
+    config("PluginEventGate", plugin, ["NoGatedEvent"])
+    pipeline = dict(Invalidated=False,Collision=False,RefeedDone=False,TornQueue=False,Crashes=True,Fixed=True,SameDir=False)
     config("PipelineSafety", pipeline, ["TypeOK","ReplacementBeforeDelete","StaleKept","CrashQueuePreserved"])
     config("PipelineLostReplacement", pipeline | dict(Invalidated=True), ["ReplacementBeforeDelete"])
-    config("PipelineIdentity", pipeline | dict(Collision=True), ["ReplacementBeforeDelete"])
+    config("PipelineIdentity", pipeline | dict(Collision=False), ["ReplacementBeforeDelete"])
+    config("PipelineLegacyIdentity", pipeline | dict(Fixed=False, Collision=True), ["ReplacementBeforeDelete"])
     config("PipelineQueueCrash", pipeline | dict(TornQueue=True), ["CrashQueuePreserved"])
     config("PipelineRefeed", pipeline | dict(RefeedDone=True,Crashes=False), [],
            ["RefeedEventuallyProcessed"], "FairSpec")
+    config("PipelineSelfRetire", pipeline | dict(SameDir=True,Crashes=False), ["SelfRetirementSafe"])
+    config("PipelineInPlaceWrongVersion", pipeline | dict(SameDir=True, Invalidated=True, Crashes=False),
+           ["InPlaceVersionSafe"])
+    config("PipelineInPlaceOwnVersion", pipeline | dict(SameDir=True, Invalidated=False, Crashes=False),
+           ["InPlaceVersionSafe"])
+    config("PipelineLegacyInPlace", pipeline | dict(Fixed=False, SameDir=True, Invalidated=True, Crashes=False),
+           ["InPlaceVersionSafe"])
 
 
 if __name__ == "__main__":

@@ -2,18 +2,20 @@
 
 ## Publication, readers, pipeline recovery and engine callbacks
 
-The new audit is in [AUDIT.md](AUDIT.md): every requested invariant has a bounded
+The audit is in [AUDIT.md](AUDIT.md): every requested invariant has a bounded
 result or a counterexample, source `file:line` mapping, suggested fix, and stated
-assumptions. [RESULTS.md](RESULTS.md) contains exact state counts for every
-configuration. [WITNESSES.md](WITNESSES.md) retains concrete TLC state differences.
+assumptions. Its round-2 table compares baseline `683e691` with extractor PR #22
+head `5423886465055063ab9a73bdc2c61631483cf8b6` and plugin fix `0070cae`.
+[RESULTS.md](RESULTS.md) contains exact state counts for every configuration.
+[WITNESSES.md](WITNESSES.md) retains concrete TLC state differences.
 
 - `Publish.tla` checks version folders, per-file COMPLETE manifests, CURRENT,
   RETIRED text, concurrent writers/pruners, per-file Windows locks, all three
   reader contracts, writer failure/retry, retirement, manual target deletion,
   process crashes, and pruning liveness.
 - `Pipeline.tla` checks stale replacement in another archive, cached result
-  validity, filename/size identity, needs_reextract queue rewriting and the
-  completed-ledger refeed boundary.
+  validity, filename/size identity, `_dup` output paths, in-place version identity,
+  needs_reextract queue rewriting and the completed-ledger refeed boundary.
 - `MapGate.tla` checks cold launch, hot reload at the menu/in a match, menu ticks,
   entity readiness, map changes, scan replies, and teardown assumptions.
 - `Plugin.tla` supplements Capture with LOS disable/reattach behavior, mid-round
@@ -37,6 +39,18 @@ From the repository root:
 
 ```text
 python -I formal/check_models.py
+python -I formal/report_models.py
+python -I formal/reproduce.py
+```
+
+For the current extractor fix, fetch and verify the exact source head before the
+replay (the replay also checks this SHA itself):
+
+```text
+git fetch origin pull/22/head:refs/remotes/origin/pr22-head
+git -C "C:\Users\<user>\Programming Projects\cs2-stats-publish" rev-parse HEAD
+# expected: 5423886465055063ab9a73bdc2c61631483cf8b6
+python -I formal/check_models.py --while-gaming
 python -I formal/report_models.py
 python -I formal/reproduce.py
 ```

@@ -13,15 +13,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 FAIL = {
-    "PublishCurrentRace", "PublishCrash", "PublishFreshCrash", "PublishRetireRace",
-    "PublishStrictWithdrawal", "PublishRetiredCrash", "PublishNodePerFile",
-    "PublishPythonIncomplete", "PublishNodeIncomplete",
-    "PublishRatingIncomplete", "PublishRatingRetryExhausted", "PublishRatingResolveError",
-    "PublishRatingBinding", "PublishManual",
-    "PublishPruneOneShot", "PublishPruneDangling", "MapGateLateEnd",
-    "MapGateStaleName", "MapGateEndThrows", "MapGateReloadDuringEnd", "PluginLateFreeze", "PluginAfterWin",
-    "PluginHotReload", "PluginMidRoundError", "PluginMidRoundSource",
-    "PipelineLostReplacement", "PipelineIdentity", "PipelineQueueCrash", "PipelineRefeed",
+    "PublishFreshCrash", "PublishRetiredCrash", "PublishStrictWithdrawal",
+    "PublishRatingResolveError", "PublishRatingBinding",
+    "PublishManual", "PublishPruneOneShot", "PublishPruneDangling",
+    "PluginLateFreeze", "PluginAfterWin", "PluginHotReload",
+    "PipelineLegacyIdentity", "PipelineLegacyInPlace",
 }
 
 
