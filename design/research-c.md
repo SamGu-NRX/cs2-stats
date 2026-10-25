@@ -91,7 +91,7 @@ hltv.org and web.archive.org refused direct fetches from this machine. Two separ
 - **Unknown:** its colours. No source documented them.
 
 ### Live page (verified in a browser by the lead, 2026-10-25)
-Screenshots: `design/hltv-ref/` (day theme, attributes expanded, night-mode card). Pro scores: `design/data/pros.json`.
+The HLTV screenshots and scraped pro scores this note used are private reference data kept outside the repository.
 - **Card:** one panel. The photo column holds flag, team logo, name, real name and age, and a "Player profile" button. The right side holds "1729 maps" and a "Show player average" checkbox. A semicircle gauge sits around the rating, with "GOOD" above it, T rating on an orange band to the left and CT rating on a blue band to the right. Below: six cells in two rows (Round swing, DPR, KAST / Multi-kill, ADR, KPR). Each cell has a value, a caps label, a bar with a coloured segment and an "Avg." tick, and GOOD, POOR or N/A.
 - **Under the card:** Side (Both | Counter-Terrorist | Terrorist) and "Compared to".
 - **Attributes:** Firepower full width, then pairs. Clutching is now **Closing**. Each box has an icon, a name, "?", "92/100", a caret and a blue bar. Expanded, Firepower has 8 sub-stats and the others 4. The names are listed in `extract.mjs` (`SUBS`).
