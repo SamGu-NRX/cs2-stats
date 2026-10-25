@@ -55,7 +55,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.8.0"
+EXTRACTOR_VERSION = "1.10.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -1486,6 +1486,12 @@ def recover_output(out: Path) -> None:
 # pick up a folder a prune had half deleted. Nothing renames a folder a reader may have open:
 # Windows refuses that ([WinError 5] with any file inside it open). Old versions are deleted once nothing
 # holds them open; prune_map() leaves locked ones for the next try.
+#
+# Every change to a map folder happens under that map's lock (map_lock): writing a version from its staging
+# folder through publication and the removal of RETIRED, a prune's whole decision and deletion, and a
+# retirement. Without it a prune could delete a version published after it read CURRENT, a retirement could
+# be undone by a writer finishing, and a startup prune could delete part of a running writer's staging
+# folder (formal/AUDIT.md, schedules 1 to 3). Readers take no lock.
 CURRENT = "CURRENT"
 COMPLETE = "COMPLETE"  # JSON {file name: bytes} of a version folder, written after every table
 # Readers skip a map with a RETIRED file. Its first line says why: "replaced" (a re-extraction elsewhere
@@ -1494,6 +1500,80 @@ COMPLETE = "COMPLETE"  # JSON {file name: bytes} of a version folder, written af
 RETIRED = "RETIRED"
 log = logging.getLogger("extract")
 _VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
+# How long a mutator waits for another process's hold on a map. A writer holds it while it writes one map's
+# tables, seconds on the fixtures; ten minutes means a stuck holder, and the waiter fails loudly instead.
+MAP_LOCK_WAIT_S = 600.0
+
+
+class MapLocked(TimeoutError):
+    """Another process or thread holds the map's lock."""
+
+
+class SuccessorMissing(ValueError):
+    """A map was to be retired in favour of a successor that does not resolve."""
+
+
+def _lock_path(map_dir: Path) -> Path:
+    """The map's lock file: beside the map folder, so nothing that prunes or retires the map deletes it."""
+    map_dir = Path(map_dir).resolve()
+    return map_dir.parent / f".{map_dir.name}.lock"
+
+
+class map_lock:
+    """Hold the cross-process lock of one or more maps, taken in path order so two holders of the same pair
+    cannot deadlock. wait=False raises MapLocked at once instead of waiting."""
+
+    def __init__(self, *map_dirs: Path, wait: bool = True):
+        self.paths = sorted({_lock_path(m) for m in map_dirs if m is not None}, key=str)
+        self.wait, self.held = wait, []
+
+    def __enter__(self):
+        try:
+            for path in self.paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                f = open(path, "a+b")
+                try:
+                    self._acquire(f, path)
+                except BaseException:
+                    f.close()
+                    raise
+                self.held.append(f)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def _acquire(self, f, path: Path) -> None:
+        deadline = time.monotonic() + (MAP_LOCK_WAIT_S if self.wait else 0.0)
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise MapLocked(f"{path} is held by another process or thread") from None
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        while self.held:
+            f = self.held.pop()
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            finally:
+                f.close()
+        return False
 
 
 def resolve_map_dir(map_dir: Path) -> Path | None:
@@ -1533,10 +1613,15 @@ def _write_pointer(map_dir: Path, name: str) -> None:
     os.replace(staged, map_dir / CURRENT)
 
 
-def publish_version(tmp: Path, map_dir: Path, version: str) -> Path:
+def publish_version(tmp: Path, map_dir: Path, version: str, files) -> Path:
     """Make the finished tables in tmp (a new folder inside map_dir) the map's current version, in a
-    version folder of its own."""
-    listing = {f.name: f.stat().st_size for f in sorted(tmp.glob("*.parquet"))}
+    version folder of its own. files names every table file written; COMPLETE lists exactly those, and a
+    missing one fails the publish rather than being left out. The caller holds the map's lock."""
+    files = sorted(files)
+    missing = [f for f in files if not (tmp / f).is_file()]
+    if missing or "match.parquet" not in files:
+        raise FileNotFoundError(f"{tmp}: tables written but not there to publish: {missing or ['match.parquet']}")
+    listing = {f: (tmp / f).stat().st_size for f in files}
     with open(tmp / COMPLETE, "w", encoding="utf-8") as f:
         json.dump(listing, f)
         f.flush()
@@ -1561,8 +1646,17 @@ def _delete(entry: Path, locked: list[Path]) -> None:
         locked.append(entry)
 
 
-def prune_map(map_dir: Path) -> list[Path]:
-    """Delete what map_dir no longer needs; return what could not be deleted yet (open in a reader).
+def prune_map(map_dir: Path, wait: bool = True) -> list[Path]:
+    """Delete what map_dir no longer needs, under its lock; return what could not be deleted yet (open in a
+    reader). wait=False raises MapLocked if another process holds the map, as a running writer does."""
+    if not Path(map_dir).is_dir():
+        return []
+    with map_lock(map_dir, wait=wait):
+        return _prune_held(map_dir)
+
+
+def _prune_held(map_dir: Path) -> list[Path]:
+    """prune_map's body; the caller holds the map's lock, so no writer's staging folder is in use.
 
     - a retired map: everything, then the folder;
     - beside a CURRENT: other version folders, partial writes, and the tables of a map written before 1.5.0
@@ -1610,11 +1704,12 @@ def _replaced(map_dir: Path) -> bool:
     Anything else keeps the map: a stale reason, unknown text, or a marker that cannot be read."""
     marker = Path(map_dir) / RETIRED
     try:
-        text = marker.read_text(encoding="utf-8").strip()
+        text = marker.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         log.warning("cannot read %s (%s); keeping the map as stale", marker, e)
         return False
-    if text in ("", "replaced"):
+    first = text.splitlines()[0].strip() if text.strip() else ""
+    if first in ("", "replaced"):  # a "replaced" marker may name its successor on the next line
         return True
     if not text.startswith("stale"):
         log.warning("%s reads %r, neither replaced nor stale; keeping the map", marker, text[:80])
@@ -1626,15 +1721,22 @@ def _stale(map_dir: Path) -> bool:
     return (Path(map_dir) / RETIRED).exists() and not _replaced(map_dir)
 
 
-def retire_map(map_dir: Path) -> list[Path]:
-    """Withdraw a map at once (resolve_map_dir returns None) and delete it as far as nothing holds it open."""
-    _write_marker(map_dir, "replaced")
-    return prune_map(map_dir)
+def retire_map(map_dir: Path, successor: Path | None = None) -> list[Path]:
+    """Withdraw a map at once (resolve_map_dir returns None) and delete it as far as nothing holds it open.
+
+    With a successor, both maps' locks are held, and the map is retired only if the successor resolves then;
+    otherwise SuccessorMissing is raised and nothing changes. The marker names the successor."""
+    with map_lock(map_dir, successor):
+        if successor is not None and resolve_map_dir(successor) is None:
+            raise SuccessorMissing(f"not retiring {map_dir}: its successor {successor} holds no complete map")
+        _write_marker(map_dir, "replaced" + (f"\nby: {Path(successor).resolve()}" if successor is not None else ""))
+        return _prune_held(map_dir)
 
 
 def mark_stale(map_dir: Path, reason: str) -> None:
     """Withdraw a map from readers but keep its files until a re-extraction replaces it (retire_map)."""
-    _write_marker(map_dir, f"stale: {reason}")
+    with map_lock(map_dir):
+        _write_marker(map_dir, f"stale: {reason}")
 
 
 def file_sha256(path: Path) -> str:
@@ -1952,31 +2054,39 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
 def write_output(tables: dict[str, pd.DataFrame], out_dir: Path, result: dict) -> None:
     """Write the tables as a new version of the map in out_dir and publish it; fill result's rows, bytes,
     version_dir and old_versions_locked. A RETIRED marker on out_dir (a withdrawn map extracted into again)
-    is removed only once the new version is published, so a failed write leaves the old tables withdrawn."""
-    tmp = Path(out_dir) / f".tmp-{os.getpid()}"
-    try:
-        if tmp.exists():
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
-        for tname, df in tables.items():
-            p = tmp / f"{tname}.parquet"
-            pdf = _to_polars(df, tname)
-            pdf.write_parquet(p, compression="zstd", compression_level=ZSTD_LEVEL)
-            result["rows"][tname] = pdf.height
-            result["bytes"][tname] = p.stat().st_size
-        # Read back every file so a truncated write cannot pass.
-        for p in tmp.rglob("*.parquet"):
-            pl.read_parquet_schema(p)
-        result["version_dir"] = publish_version(tmp, out_dir, EXTRACTOR_VERSION).name
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
-    # COMPLETE is written and CURRENT replaced: the folder holds a live map again. A crash before this
-    # unlink never makes the old tables live: readers skip the new version too, and under a "replaced"
-    # marker the next prune deletes it, while the job, never finished, fails its archive for a retry.
-    (Path(out_dir) / RETIRED).unlink(missing_ok=True)
-    # An old version a reader still has open stays until a later prune; it never fails the map.
-    result["old_versions_locked"] = [str(x) for x in prune_map(out_dir)]
+    is removed only once the new version is published, so a failed write leaves the old tables withdrawn.
+    The map's lock is held from creating the staging folder to the prune after publishing."""
+    out_dir = Path(out_dir)
+    tmp = out_dir / f".tmp-{os.getpid()}"
+    with map_lock(out_dir):
+        # Created under the lock: a retirement could otherwise delete the folder between its creation and
+        # the lock. The lock file sits beside it, so the lock itself needs no map folder.
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if tmp.exists():
+                shutil.rmtree(tmp)
+            tmp.mkdir()
+            files = []
+            for tname, df in tables.items():
+                p = tmp / f"{tname}.parquet"
+                pdf = _to_polars(df, tname)
+                pdf.write_parquet(p, compression="zstd", compression_level=ZSTD_LEVEL)
+                result["rows"][tname] = pdf.height
+                result["bytes"][tname] = p.stat().st_size
+                files.append(p.name)
+            # Read back every table written, so a truncated or vanished file cannot pass.
+            for name in files:
+                pl.read_parquet_schema(tmp / name)
+            result["version_dir"] = publish_version(tmp, out_dir, EXTRACTOR_VERSION, files).name
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        # COMPLETE is written and CURRENT replaced: the folder holds a live map again. A crash before this
+        # unlink never makes the old tables live: readers skip the new version too, and under a "replaced"
+        # marker the next prune deletes it, while the job, never finished, fails its archive for a retry.
+        (out_dir / RETIRED).unlink(missing_ok=True)
+        # An old version a reader still has open stays until a later prune; it never fails the map.
+        result["old_versions_locked"] = [str(x) for x in _prune_held(out_dir)]
 
 
 class ValidationFailed(RuntimeError):

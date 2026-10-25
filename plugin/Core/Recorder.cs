@@ -142,6 +142,8 @@ public sealed class Recorder
         _pendingThrows.Clear();
         ResetLive();
         Capturing = true;
+        // A failure before this capture (at map load, or the spawn self-check) belongs in its file too.
+        if (Los.Failure != null) Meta.Env.LosError ??= Los.Failure;
         RoundActive = false;
         Ri = Nil.V;
         LastRound = Nil.V;
@@ -214,8 +216,7 @@ public sealed class Recorder
         if (freezeTickIfLive != Nil.V)
         {
             _round.FreezeTick = freezeTickIfLive;
-            Live = true;
-            _freezeOver = true;
+            GoLive();
         }
     }
 
@@ -237,6 +238,15 @@ public sealed class Recorder
     {
         if (!RoundActive) return;
         _round.FreezeTick = tick;
+        GoLive();
+    }
+
+    /// <summary>
+    /// A round becomes live: at freeze end, or at once when capture starts mid-round. Either way the
+    /// file records the visibility source in use and, if line of sight failed earlier, why.
+    /// </summary>
+    private void GoLive()
+    {
         Live = true;
         _freezeOver = true;
         NoteVisSource(Los.Enabled ? "los" : "mask");
@@ -369,8 +379,9 @@ public sealed class Recorder
         if (!RoundActive || (uint)k.Victim >= Limits.MaxPlayers) return;
         int v = k.Victim;
         // A dead enemy, or every enemy once the human dies, leaves the human's sight at the kill tick.
-        if (v == Meta.Human) Los.HideAll(Ri, k.Tick, _buf.Los);
-        else Los.Hide(Ri, k.Tick, v, _buf.Los);
+        // The human saw the enemies (and the victim was in sight) up to the kill tick; see LosTracker.HideDead.
+        if (v == Meta.Human) Los.HideAllHumanDied(Ri, k.Tick, _buf.Los);
+        else Los.HideDead(Ri, k.Tick, v, _buf.Los);
         int killer = k.Killer == v ? Nil.V : k.Killer;
         int flags = k.Flags;
         if (k.Killer == v) flags |= KillFlagSuicide;
@@ -716,7 +727,7 @@ public sealed class Recorder
         bool humanAlive = humanOk && Frames.ByPi[human].Present && Frames.ByPi[human].Alive && _alive[human];
 
         if (humanAlive && LosDue(tick)) CheckLos(tick, human);
-        else if (!humanAlive) Los.HideAll(Ri, tick, _buf.Los);
+        else if (!humanAlive) Los.HumanSeenDead(Ri, tick, _buf.Los);
         if (humanAlive) AimTick(tick, human);
 
         if (humanAlive && HumanPosDue(tick)) AddPos(tick, human);
