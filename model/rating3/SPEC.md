@@ -87,13 +87,13 @@ The cumulative research stages are:
 
 | Stage | Total MAE | CT MAE | T MAE | Total correlation |
 | --- | ---: | ---: | ---: | ---: |
-| Fractional eco K/D | 0.1088 | 0.1668 | 0.1562 | 0.9168 |
-| Add game damage | 0.1076 | 0.1649 | 0.1537 | 0.9186 |
-| Raw and per-victim capped damage | 0.1018 | 0.1587 | 0.1457 | 0.9272 |
-| KAST components | 0.0982 | 0.1532 | 0.1374 | 0.9329 |
-| Trade, flash, multikill, swing | 0.0540 | 0.0884 | 0.0753 | 0.9778 |
-| Action counts and outcomes | 0.0538 | 0.0884 | 0.0754 | 0.9778 |
-| Equipment and interaction terms | 0.0485 | 0.0745 | 0.0690 | 0.9827 |
+| Fractional eco K/D | 0.1088 | 0.1668 | 0.1562 | 0.9258 |
+| Add game damage | 0.1076 | 0.1649 | 0.1537 | 0.9267 |
+| Raw and per-victim capped damage | 0.1018 | 0.1587 | 0.1457 | 0.9365 |
+| KAST components | 0.0982 | 0.1532 | 0.1374 | 0.9399 |
+| Trade, flash, multikill, swing | 0.0540 | 0.0884 | 0.0753 | 0.9829 |
+| Action counts and outcomes | 0.0538 | 0.0884 | 0.0754 | 0.9830 |
+| Equipment and interaction terms | 0.0485 | 0.0745 | 0.0690 | 0.9862 |
 | Side-identity weighted interactions | 0.0475 | 0.0737 | 0.0673 | 0.9867 |
 
 The target display floor remains MAE 0.0025 and maximum 0.005. For each stage, local input-rounding probes include eK/eD count rounding of ±0.5 per side or total round count and Swing display rounding of ±0.005. The final side-identity stage gives input-quantisation MAE 0.00096, p95 half-width 0.0695, and maximum half-width 0.4291; the fit is therefore not at its floor.
