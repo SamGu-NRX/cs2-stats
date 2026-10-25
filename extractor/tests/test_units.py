@@ -1148,3 +1148,17 @@ def test_a_lost_drop_names_no_one_and_the_map_passes_with_the_exact_gap_as_a_war
     assert [(w["ok"], w["fatal"], w["actual"]) for w in warn] == [(False, False, lost_hp)]
     assert warn[0]["note"].startswith(f"damage_events_incomplete: {lost_hp} HP")
 
+
+
+def test_a_stale_map_is_skipped_by_readers_but_kept_until_a_re_extraction_replaces_it(tmp_path):
+    # Maps from extractors before 1.2.0 have untrustworthy per-round damage. RETIRED makes readers skip a
+    # map, but pruning deleted every RETIRED folder, so marking them would have destroyed them before any
+    # re-extraction existed. A stale marker keeps the folder; retiring it once replaced still deletes it.
+    m = tmp_path / "m1"
+    _tables(m, "legacy")
+    ex.mark_stale(m, "extractor 1.1.0: per-round damage predates the round-boundary fix")
+    assert ex.resolve_map_dir(m) is None
+    assert (m / "RETIRED").read_text(encoding="utf-8").startswith("stale: extractor 1.1.0")
+    assert ex.prune_map(m) == [] and (m / "match.parquet").exists()
+    ex.retire_map(m)  # its re-extraction landed in another folder
+    assert not m.exists()
