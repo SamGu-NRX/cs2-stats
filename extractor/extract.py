@@ -53,7 +53,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.4.0"
+EXTRACTOR_VERSION = "1.5.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -194,9 +194,8 @@ def check_purchase_cost(item: str, cost: int) -> str | None:
 # Validation (pure functions over DataFrames; unit-tested)
 # ---------------------------------------------------------------------------
 
-def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: pd.DataFrame,
-                        unattributed: dict[int, int] | None = None) -> list[dict]:
-    """Compare event-derived K/D/A/damage with the final-tick scoreboard.
+def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreboard: pd.DataFrame) -> list[dict]:
+    """Compare event-derived K/D/A, and the per-round damage counter, with the final-tick scoreboard.
 
     Definitions, each reproduced exactly on the two test demos:
     - kills: kills on enemies. A player with team kills or suicides may instead
@@ -204,21 +203,19 @@ def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: 
     - deaths: every death, any cause.
     - assists: every assist, flash assists included, except when the
       assister is on the victim's team.
-    - damage: HP actually removed from enemies (health before minus after),
-      not the truncated dmg_health field, including hits rebuilt from health
-      drops whose player_hurt the demo lost (rebuild_lost_hits).
+    - damage: game_damage, a player's player_rounds.game_damage summed over
+      rounds (the game's own damage_total, read per round). The hit table is
+      checked against it separately (hit_table_checks), so a hit the demo lost
+      cannot decide this check.
     A player with events but no final-tick controller (a disconnect) is noted,
-    not failed. unattributed maps a player to the hit-table shortfall that unattributed rebuilt hits
-    account for (explain_damage_gaps); a damage gap of exactly that size fails as unattributed, not fatally.
-    kills/damages carry steamids as UInt64 and use the column names of the
-    kills and damages tables.
+    not failed. kills carries steamids as UInt64 and uses the kills table's
+    column names.
     """
     checks: list[dict] = []
     sb = scoreboard.set_index("steamid")
     enemy = kills[~kills.is_teamkill & ~kills.is_suicide & kills.attacker_steamid.notna()]
     tk = kills[kills.is_teamkill & ~kills.is_suicide]
     sui = kills[kills.is_suicide]
-    dmg_enemy = damages[~damages.is_team_damage & damages.attacker_steamid.notna()]
     involved = set(kills.attacker_steamid.dropna()) | set(kills.victim_steamid.dropna())
     # player_death names an assister even when he damaged his own teammate (the victim);
     # the scoreboard does not count that (seen on a pro demo).
@@ -234,7 +231,7 @@ def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: 
         n_sui = int((sui.victim_steamid == sid).sum())
         d = int((kills.victim_steamid == sid).sum())
         a = int(((kills.assister_steamid == sid) & credited).sum())
-        dmg = int(dmg_enemy.loc[dmg_enemy.attacker_steamid == sid, "dmg_health_capped"].sum())
+        dmg = int(game_damage.get(int(sid), 0))
         sb_k = int(row.kills_total)
         k_ok = sb_k == k or (n_tk + n_sui > 0 and sb_k == k - n_tk - n_sui)
         note = f"teamkills={n_tk} suicides={n_sui}" if n_tk + n_sui else ""
@@ -242,12 +239,8 @@ def validate_scoreboard(kills: pd.DataFrame, damages: pd.DataFrame, scoreboard: 
         for name, exp, act in (("deaths", row.deaths_total, d), ("assists", row.assists_total, a)):
             checks.append(dict(check=name, steamid=int(sid), expected=int(exp), actual=act,
                                ok=int(exp) == act, fatal=True, note=""))
-        gap = int(row.damage_total) - dmg
-        lost = (unattributed or {}).get(int(sid), 0)
         checks.append(dict(check="damage", steamid=int(sid), expected=int(row.damage_total), actual=dmg,
-                           ok=gap == 0, fatal=not (gap > 0 and gap == lost),
-                           note=f"unattributed: {gap} HP of rebuilt hits name no attacker" if gap and gap == lost
-                           else ""))
+                           ok=int(row.damage_total) == dmg, fatal=True, note=""))
         hs = int(((enemy.attacker_steamid == sid) & enemy.headshot).sum())
         checks.append(dict(check="headshot_kills", steamid=int(sid), expected=int(row.headshot_kills_total),
                            actual=hs, ok=int(row.headshot_kills_total) == hs, fatal=False, note=""))
@@ -539,7 +532,7 @@ def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: l
 
 
 def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFrame, fires: pd.DataFrame,
-                      side_of: dict, line_of_fire=None) -> pd.DataFrame:
+                      side_of: dict) -> pd.DataFrame:
     """Damage rows for health drops that have no player_hurt event on that tick.
 
     GOTV demos can lose a stretch of events: on one pro demo, ticks 9168-9184 have no
@@ -547,15 +540,11 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
     the game credits both hits. HP before and after come from the networked health. A rebuilt hit names an
     attacker only on evidence from its own tick, never from the scoreboard it is validated against:
     - a lethal drop: the player_death attacker on that tick (null for a world death);
-    - otherwise the one enemy of the victim who fired on that tick (weapon_fire or bullet_impact), who must
-      also be in line of fire when the map mesh is usable;
-    - with no enemy shot on that tick (the stretch lost those too), the one enemy in line of fire.
-    Any other drop keeps a null attacker with reconstructed_ambiguous = true, and validation reports the
-    damage it leaves out as unattributed (explain_damage_gaps).
+    - otherwise the one enemy of the victim who fired on that tick (weapon_fire or bullet_impact).
+    Any other drop keeps a null attacker with reconstructed_ambiguous = true. Being the only enemy with the
+    victim in view is not evidence: an HE, a molotov or a player nobody saw can cause the same drop.
     drops: (tick, steamid, health_before, health_after, round) from the every-tick pass.
     fires: (tick, steamid) of every shot event.
-    line_of_fire: (tick, victim) -> the enemies who are alive with the victim mesh-visible inside their view
-    cone on that tick (enemies_in_line_of_fire), or None without a usable mesh.
     """
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
@@ -576,12 +565,7 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
             weapon, hitgroup, ambiguous = k.weapon, k.hitgroup, False
         else:
             shooters = {f for f in fired.get(t, ()) if side_of.get((rnd, f)) not in (None, v_side)}
-            in_line = line_of_fire(t, v) if line_of_fire is not None else None
-            if shooters:
-                cand = shooters & in_line if in_line is not None else shooters
-            else:
-                cand = in_line or set()
-            attacker = next(iter(cand)) if len(cand) == 1 else None
+            attacker = next(iter(shooters)) if len(shooters) == 1 else None
             weapon, hitgroup, ambiguous = None, None, attacker is None
         a_side = side_of.get((rnd, attacker)) if attacker is not None else None
         rows.append(dict(tick=t, round=rnd, attacker_steamid=attacker, victim_steamid=v, weapon=weapon,
@@ -597,56 +581,32 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, kills: pd.DataFram
     return out
 
 
-def enemies_in_line_of_fire(S: pd.DataFrame, checker, ticks):
-    """line_of_fire for rebuild_lost_hits: (tick, victim) -> the alive players of the other team who have the
-    victim inside their view cone and mesh-visible on that tick. None without a usable mesh.
-    S: player_state() rows; ticks: the only ticks that will be asked about."""
-    if checker is None:
-        return None
-    by_tick = {int(t): g for t, g in S[S.tick.isin(set(int(t) for t in ticks))].groupby("tick")}
+def hit_table_checks(dmg: pd.DataFrame, player_rounds: pd.DataFrame) -> tuple[list[dict], int]:
+    """The hit table against the game's per-round damage counter. (checks, unattributed HP)
 
-    def at(tick: int, victim: int) -> set[int]:
-        g = by_tick.get(int(tick))
-        me = g[g.steamid == victim] if g is not None else None
-        if me is None or me.empty:
-            return set()
-        foes = g[(g.team_num != me.team_num.iat[0]) & g.is_alive.astype(bool)]
-        a_eye = foes[["X", "Y", "eye_z"]].to_numpy(dtype=float)
-        v_eye = np.repeat(me[["X", "Y", "eye_z"]].to_numpy(dtype=float), len(foes), axis=0)
-        seen = np.zeros(len(foes), dtype=bool)
-        cone = in_view_cone(a_eye, foes.pitch.to_numpy(float), foes.yaw.to_numpy(float), v_eye)
-        seen[cone] = mesh_visible(checker, a_eye[cone], v_eye[cone])
-        return {int(x) for x in foes.steamid[seen]}
-    return at
-
-
-def explain_damage_gaps(dmg: pd.DataFrame, player_rounds: pd.DataFrame, side_of: dict):
-    """Gaps between game_damage and the hit table, per (round, player), split into those the unattributed
-    rebuilt hits account for and the rest.
-
-    The unattributed hits of a round on one side's players account for the gaps of the other side's players
-    in that round when every such gap is a shortfall and the shortfalls sum to exactly those hits. The test
-    compares totals only and never names an attacker. Returns (unexplained, explained), each a sorted list
-    of (round, steamid, game_damage, hit-table damage).
+    Each player-round's enemy hits in the damages table may fall short of its game_damage: the demo lost the
+    events, or a rebuilt hit names no attacker. That gap is recorded as a warning and as
+    match.unattributed_damage_hp, never matched against anything to pass. Hits over game_damage fail the
+    map, because lost events cannot cause them: a round boundary read early, or a hit credited to the
+    wrong player, does.
     """
-    hit_r = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
+    hits = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
         .dmg_health_capped.sum()
-    amb = dmg[dmg.reconstructed_ambiguous.astype(bool)].groupby(["round", "v_side"]).dmg_health_capped.sum()
-    groups: dict[tuple, list] = {}
+    over, short = [], 0
     for r, s_, g in zip(player_rounds["round"], player_rounds.steamid, player_rounds.game_damage):
-        if pd.isna(g) or int(g) == int(hit_r.get((r, s_), 0)):
+        if pd.isna(g):
             continue
-        gap = (int(r), int(s_), int(g), int(hit_r.get((r, s_), 0)))
-        groups.setdefault((int(r), side_of.get((int(r), int(s_)))), []).append(gap)
-    unexplained, explained = [], []
-    for (rnd, side), grp in groups.items():
-        other = {"CT": "T", "T": "CT"}.get(side)
-        pool = int(amb.get((rnd, other), 0)) if other else 0
-        if pool and all(g > h for _, _, g, h in grp) and sum(g - h for _, _, g, h in grp) == pool:
-            explained += grp
+        h = int(hits.get((r, s_), 0))
+        if h > int(g):
+            over.append((int(r), int(s_), int(g), h))
         else:
-            unexplained += grp
-    return sorted(unexplained), sorted(explained)
+            short += int(g) - h
+    rebuilt = int(dmg.loc[dmg.reconstructed_ambiguous.astype(bool), "dmg_health_capped"].sum())
+    return [dict(check="hit_table_over_game_damage", expected=0, actual=len(over), ok=not over, fatal=True,
+                 note=str(over[:5]) if over else ""),
+            dict(check="damage_events_incomplete", expected=0, actual=short, ok=short == 0, fatal=False,
+                 note=f"damage_events_incomplete: {short} HP ({rebuilt} HP in rebuilt hits that name no attacker)"
+                 if short else "")], short
 
 
 def round_duration_s(rounds: pd.DataFrame, rate: float) -> pd.Series:
@@ -1312,8 +1272,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     fires = [ev("weapon_fire")] + ([ev("bullet_impact")] if "bullet_impact" in E else [])
     fires = pd.concat([pd.DataFrame({"tick": f.tick, "steamid": pid(f, "user")}) for f in fires], ignore_index=True)
     dmg["reconstructed_ambiguous"] = False
-    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, kills, fires, side_of,
-                                            enemies_in_line_of_fire(S, checker, drops.tick))], ignore_index=True)
+    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, kills, fires, side_of)], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
     # not negation; every filter below relies on real booleans.
     dmg = dmg.astype({"is_self": bool, "is_team_damage": bool, "reconstructed_ambiguous": bool}) \
@@ -1422,24 +1381,13 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     T["events_misc"] = em
 
     # ----- validation
-    # Per round, the game's damage and the hit table must agree exactly; a round boundary read one tick
-    # early shifts every round's damage into the next and fails this. Only the gaps that unattributed
-    # rebuilt hits account for are exempt, and they are reported, not passed.
-    off, unattributed = explain_damage_gaps(dmg, player_rounds, side_of)
-    short: dict[int, int] = {}
-    for _, s_, g, h in unattributed:
-        short[s_] = short.get(s_, 0) + g - h
-    checks = validate_scoreboard(kills, dmg, sb_part, short) + validate_rounds(rounds, final_score)
-    checks.append(dict(check="game_damage_per_round", expected=0, actual=len(off), ok=not off, fatal=True,
-                       note=str(off[:5]) if off else ""))
-    lost_hp = int(dmg.loc[dmg.reconstructed_ambiguous, "dmg_health_capped"].sum())
-    checks.append(dict(check="damage_unattributed", expected=0, actual=lost_hp, ok=lost_hp == 0, fatal=False,
-                       note=f"{len(unattributed)} player-rounds short: {unattributed[:5]}" if lost_hp else ""))
+    # Damage passes on the game's own counter; the hit table is checked against it per round, where a
+    # round boundary read one tick early credits some round more than the game counted and fails the map.
     gd = player_rounds.groupby("steamid").game_damage.sum()
-    for r in sb_part.itertuples():
-        got = int(gd.get(r.steamid, 0))
-        checks.append(dict(check="game_damage_sum", steamid=int(r.steamid), expected=int(r.damage_total), actual=got,
-                           ok=got == int(r.damage_total), fatal=True, note=""))
+    checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, sb_part) \
+        + validate_rounds(rounds, final_score)
+    hit_checks, unattributed_hp = hit_table_checks(dmg, player_rounds)
+    checks += hit_checks
     gl = ctx.info["grenade_link"]
     checks.append(dict(check="grenade_throws_linked", expected=gl["throws"], actual=gl["linked"],
                        ok=gl["throws"] == gl["linked"], fatal=False, note=f"projectiles={gl['projectiles']}"))
@@ -1447,7 +1395,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # from PRICE_FILE. Both columns are stored.
     ctx.info.update(dict(header=header, convars=cvars, final_score=final_score, teams=teams,
                          rounds=len(rounds), match_start_tick=match_start, final_tick=final_tick,
-                         voided_windows=voided, checks=checks,
+                         voided_windows=voided, checks=checks, unattributed_damage_hp=unattributed_hp,
                          equip_value_mismatch_rows=int((econ.equip_value_game != econ.inventory_value
                                                         + np.where(econ.armor > 0, VEST_PRICE, 0)
                                                         + np.where(econ.helmet, HELMET_UPGRADE_COST, 0)
@@ -1830,6 +1778,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     team1_file=team1, team2_file=team2, team_ct_start=start_ct, team_t_start=start_t,
                     score_ct_start=info["final_score"].get(start_ct), score_t_start=info["final_score"].get(start_t),
                     n_rounds=info["rounds"], match_start_tick=info["match_start_tick"],
+                    unattributed_damage_hp=info["unattributed_damage_hp"],
                     final_tick=info["final_tick"], playback_ticks=info["awpy_header"].get("playback_ticks"),
                     patch_version=header.get("patch_version"), build_num=info["awpy_header"].get("build_num"),
                     server_name=header.get("server_name"), demo_version_guid=header.get("demo_version_guid"),

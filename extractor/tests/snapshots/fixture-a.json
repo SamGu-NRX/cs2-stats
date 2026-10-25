@@ -969,7 +969,7 @@
     ],
     "extractor_version": [
      "String",
-     "538bca3bbf987939"
+     "e89b077bb06dabd4"
     ],
     "final_tick": [
      "Int32",
@@ -1102,6 +1102,10 @@
     "truncated": [
      "Boolean",
      "a1c52f47ee39e4c9"
+    ],
+    "unattributed_damage_hp": [
+     "Int32",
+     "2b8d9cc6944cb101"
     ],
     "unavailable_fields": [
      "String",
