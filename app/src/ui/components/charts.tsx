@@ -88,7 +88,8 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
   const lo = lo0 - pad;
   const hi = hi0 + pad;
   const left = 8;
-  const right = 8;
+  // a gutter on the right holds the reference labels, so they never sit on the data
+  const right = 84;
   const top = 18;
   const bottom = 20;
   const X = (i: number) => left + (points.length === 1 ? (w - left - right) / 2 : (i / (points.length - 1)) * (w - left - right));
@@ -104,12 +105,12 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
       <svg width={w} height={height} role="img" aria-label={`Trend: ${points.map((p) => `${p.label} ${p.value === null ? "none" : fmt(p.value)}`).join(", ")}`}>
         {bench !== undefined && (
           <g>
-            <line x1="0" x2={w} y1={Y(bench)} y2={Y(bench)} stroke="var(--ink3)" strokeDasharray="3 3" />
-            <text x={w - 2} y={Y(bench) + 12} textAnchor="end" className="ax">{benchLabel} {fmt(bench)}</text>
+            <line x1="0" x2={w - right} y1={Y(bench)} y2={Y(bench)} stroke="var(--ink3)" strokeDasharray="3 3" />
+            <text x={w - right + 6} y={Y(bench) + 4 + (Math.abs(Y(bench) - Y(avgValue ?? vals.reduce((a, v) => a + v, 0) / vals.length)) < 12 ? 12 : 0)} className="ax">{benchLabel} {fmt(bench)}</text>
           </g>
         )}
-        <line x1="0" x2={w} y1={Y(avg)} y2={Y(avg)} stroke="var(--cream)" strokeDasharray="2 4" opacity="0.45" />
-        <text x="2" y={Y(avg) - 4} className="ax ax--cream">{avgLabel} {fmt(avg)}</text>
+        <line x1="0" x2={w - right} y1={Y(avg)} y2={Y(avg)} stroke="var(--cream)" strokeDasharray="2 4" opacity="0.45" />
+        <text x={w - right + 6} y={Y(avg) + 4} className="ax ax--cream">{avgLabel} {fmt(avg)}</text>
         <polyline points={path} fill="none" stroke={color} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" />
         {points.map((p, i) => {
           if (p.value === null) return null;
