@@ -28,12 +28,15 @@ function ticks(id: number, aIsAttacker: boolean, shotAt: number) {
 }
 
 const window = { start_tick: 1000, end_tick: 1100, first_visible_tick: 1010 };
-const match = oneRound({
+/** b's last 4 Hz sample before the onset is at `bSample`, with 73 health; a's is at 1000 with 100. */
+const contactRound = (bSample = 1000) => oneRound({
   players: { a: "CT", b: "T" },
   engagements: [{ engagement_id: 0, attacker_steamid: "a", victim_steamid: "b", ...window }, { engagement_id: 1, attacker_steamid: "b", victim_steamid: "a", ...window }],
   engagement_ticks: [...ticks(0, true, 1030), ...ticks(1, false, 1040)],
   kills: [{ tick: 1050, killer: "a", victim: "b" }],
+  positions: [{ steamid: "a", tick: 1000, x: 0, y: 0, health: 100 }, { steamid: "b", tick: 900, x: 1000, y: 0, health: 100 }, { steamid: "b", tick: bSample, x: 1000, y: 0, health: 73 }],
 });
+const match = contactRound();
 
 describe("contact measures", () => {
   const sight = (pi: number) => match.aim.find((f): f is SightFact => f.k === "sight" && f.pi === pi)!;
@@ -46,6 +49,14 @@ describe("contact measures", () => {
     expect(sight(0).shotErr).toBeCloseTo(3, 3);
     // b never moved, so he has no stop buffer, and he fired 10 ticks after a
     expect(sight(1)).toMatchObject({ dist: 960, travel: 0, stopBuf: null, duelWon: false, first: false });
+  });
+
+  it("records the duel's context at the onset for the expected-duel model", () => {
+    // fails if a feature moves or reads the wrong player: placement 3, distance 960, a at 256 u/s and
+    // b still, health 100 and 73, one alive a side, 370 ticks (5.781 s, facts keep 0.001) after freeze end, no pitch error
+    expect(sight(0).xf).toEqual([3, 960, 256, 0, 100, 73, 0, 5.781, 0]);
+    // fails if a 4 Hz sample older than 0.3 s (30 ticks > 19.2) gives b's health
+    expect(contactRound(980).aim.find((f): f is SightFact => f.k === "sight" && f.pi === 0)!.xf).toBeNull();
   });
 
   it("turns the sightings into the contact metrics", () => {
