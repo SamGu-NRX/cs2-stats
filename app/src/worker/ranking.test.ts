@@ -32,7 +32,7 @@ it("ranks the user's style against the bot careers and performance against the p
     pros: async () => flat(1e9),
     careers: async () => ({
       baselines: flat(-1e9), unit: { all: { both: "careers", T: "careers", CT: "careers" }, rifler: { both: "careers", T: "careers", CT: "careers" }, awper: { both: "careers", T: "careers", CT: "careers" } },
-      counts: { botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8 },
+      from: {}, counts: { botMatches: 40, qualified: 6, needed: 15, minRounds: 150, minPool: 8 },
     }),
     mapRounds: async () => ({}),
   });
@@ -84,7 +84,7 @@ it("returns Firepower against the pros and the six style attributes against the 
   const { attributeBlock } = rankingCalls({
     summary: async (q) => rollup([facts], q.filter),
     pros: async () => flat(1e9),
-    careers: async () => ({ baselines: flat(-1e9), unit: all, counts: { botMatches: 40, qualified: 9, needed: 15, minRounds: 150, minPool: 8 } }),
+    careers: async () => ({ baselines: flat(-1e9), unit: all, from: {}, counts: { botMatches: 40, qualified: 9, needed: 15, minRounds: 150, minPool: 8 } }),
     mapRounds: async () => ({}),
   });
   const b = await attributeBlock({ files: ["x"], filter: { player: facts.match.pov! } }, { side: "T" });
@@ -96,6 +96,22 @@ it("returns Firepower against the pros and the six style attributes against the 
   expect(b.style.firepower?.metrics.length).toBe(8);
   expect(b.style.firepower?.metrics.some((x) => x.pct === 100)).toBe(true);
   expect(b.style.firepower?.metrics.every((x) => x.pct === null || x.pct === 100)).toBe(true);
+});
+
+it("ranks AWPers against all bots when fewer than 8 AWPer bots are in the matches, and says so", () => {
+  // fails if an AWPer gets no style scores because two bots in the matches AWPed, or the fallback is
+  // not named. 9 rifler bot matches and 2 AWPer ones: the AWPer pool holds all 11
+  const bot = (kills: number, awpKills = 0) => {
+    const s = emptySummary();
+    s.m.rounds = 24; s.m.kills = kills; s.m.awpKills = awpKills;
+    return { both: s, CT: s, T: s };
+  };
+  const matches = [...Array.from({ length: 9 }, (_, i) => bot(10 + i)), bot(12, 8), bot(13, 8)];
+  const p = botPopulation([], matches, "x");
+  expect(careersFor(p, "awper", "both")).toMatchObject({ unit: "matches", pool: "all" });
+  expect(careersFor(p, "rifler", "both").pool).toBe("rifler");
+  expect(p.baselines.n.awper.both).toBe(11);
+  expect(p.baselines.pools.awper.both!.kpr).toEqual(p.baselines.pools.all.both!.kpr);
 });
 
 it("gives the role over all rounds and per map, maps with the most rounds first", async () => {
