@@ -358,6 +358,8 @@ def test_a_demos_date_is_its_dem_info_match_time_else_its_file_time(tmp_path, mo
     (tmp_path / "b.dem.info").write_bytes(bytes([0x10, 0xFF]))  # cut off inside its varint
     os.utime(b, (1790000000, 1790000000))
     _run([a, b], tmp_path / "out")
+    # started_at is what the app turns into the local day: from date alone, Chicago saw July 19 for July 18
+    assert [e["started_at"] for e in extras] == [e["date"] for e in extras]
     assert [(e["date"], e["date_source"]) for e in extras] == [("2026-07-19T03:19:10+00:00", "dem.info"),
                                                              ("2026-09-21T14:13:20+00:00", "file time")]
 

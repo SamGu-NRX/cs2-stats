@@ -148,9 +148,9 @@ def resolve_user(out: Path, steam: Path | None, explicit: int | None) -> dict:
     return user
 
 
-# What import_demos writes into match.extra (the app reads "date"). Bump it when that changes, so maps
-# imported before are imported again rather than skipped.
-IMPORTER_VERSION = 2
+# What import_demos writes into match.extra (the app reads "date" and "started_at"). Bump it when that
+# changes, so maps imported before are imported again rather than skipped. 3 added started_at.
+IMPORTER_VERSION = 3
 
 
 def _varint(b: bytes, i: int) -> tuple[int, int]:
@@ -191,15 +191,16 @@ def info_matchtime(info: bytes) -> int | None:
 
 
 def match_date(dem: Path) -> dict:
-    """{date (UTC ISO-8601), date_source} for a demo. Demos carry no date; Steam writes the match time into
-    the .dem.info beside a matchmaking demo, and the demo's own file time is the fallback."""
+    """{date, started_at, date_source} for a demo, both times UTC ISO-8601. Demos carry no date; Steam writes
+    the match time into the .dem.info beside a matchmaking demo, and the demo's own file time is the fallback.
+    started_at is what the app shows in local time: from the UTC date alone, a match played on the evening
+    of July 18 in Chicago (03:19 UTC on the 19th) showed as July 19 (review of #29)."""
     info = dem.with_name(dem.name + ".info")
     t = info_matchtime(info.read_bytes()) if info.is_file() else None
     # matchtime is seconds since 1970; anything before CS2's release (2023-09-27) is not one
-    if t is not None and t >= 1695772800:
-        return dict(date=datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds"), date_source="dem.info")
-    return dict(date=datetime.fromtimestamp(dem.stat().st_mtime, timezone.utc).isoformat(timespec="seconds"),
-                date_source="file time")
+    source = "dem.info" if t is not None and t >= 1695772800 else "file time"
+    at = datetime.fromtimestamp(t if source == "dem.info" else dem.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+    return dict(date=at, started_at=at, date_source=source)
 
 
 def already_done(map_dir: Path, dem: Path) -> bool:
