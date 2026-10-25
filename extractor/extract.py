@@ -1489,7 +1489,9 @@ STAGES = [("awpy", stage_awpy), ("demoparser2", stage_demoparser2)]
 
 
 def recover_output(out: Path) -> None:
-    """Finish or undo a replace_dir() that a crash interrupted, so out is a whole map again."""
+    """Finish or undo a folder swap that a crash interrupted, so out is a whole map again. Only extractors
+    before 1.5.0 swapped folders (out renamed to out.old, the new folder renamed in); this cleans up after
+    them."""
     aside = out.with_name(out.name + ".old")
     if aside.exists():
         if out.exists():
@@ -1498,16 +1500,113 @@ def recover_output(out: Path) -> None:
             aside.rename(out)  # the crash came between the two renames: put the old map back
 
 
-def replace_dir(new: Path, out: Path) -> None:
-    """Swap a finished output folder in: the old map is renamed aside, the new one renamed in, and only
-    then is the old copy deleted. A crash at any step leaves a valid map, or one recover_output() restores."""
-    recover_output(out)
-    aside = out.with_name(out.name + ".old")
-    if out.exists():
-        out.rename(aside)
-    new.rename(out)
-    if aside.exists():
-        shutil.rmtree(aside)
+# A map folder holds one folder per extraction, v-<extractor version>-<hash of its tables>, and a file
+# CURRENT naming the one to read. Publishing writes the new version folder, then replaces CURRENT with
+# os.replace, which is atomic for a file on Windows too. Nothing renames a folder a reader may have open:
+# Windows refuses that ([WinError 5] with any file inside it open). Old versions are deleted once nothing
+# holds them open; prune_map() leaves locked ones for the next try.
+CURRENT = "CURRENT"
+RETIRED = "RETIRED"  # a map replaced by its re-extraction in another folder; delete it all
+_VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
+
+
+def resolve_map_dir(map_dir: Path) -> Path | None:
+    """The folder holding a map's tables, or None when map_dir holds no complete map.
+
+    That is the version folder CURRENT names; for a map written before 1.5.0 (no CURRENT), map_dir itself.
+    A reader resolves, then opens; if a file has gone by then, the map was republished: resolve again.
+    """
+    map_dir = Path(map_dir)
+    if (map_dir / RETIRED).exists():
+        return None
+    ptr = map_dir / CURRENT
+    if ptr.exists():
+        name = ptr.read_text(encoding="utf-8").strip()
+        if not _VERSION_DIR.fullmatch(name):
+            raise ValueError(f"{ptr} is not a version folder name: {name!r}")
+        d = map_dir / name
+        return d if (d / "match.parquet").exists() else None
+    return map_dir if (map_dir / "match.parquet").exists() else None
+
+
+def _write_pointer(map_dir: Path, name: str) -> None:
+    staged = map_dir / f"{CURRENT}.{os.getpid()}.tmp"
+    with open(staged, "w", encoding="utf-8") as f:
+        f.write(name + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(staged, map_dir / CURRENT)
+
+
+def publish_version(tmp: Path, map_dir: Path, version: str) -> Path:
+    """Make the finished tables in tmp (a new folder inside map_dir) the map's current version."""
+    h = hashlib.sha256()
+    for f in sorted(tmp.glob("*.parquet")):
+        h.update(f.name.encode())
+        h.update(file_sha256(f).encode())
+    target = map_dir / f"v-{version}-{h.hexdigest()[:8]}"
+    if target.exists():  # these exact tables are already published
+        shutil.rmtree(tmp)
+    else:
+        tmp.rename(target)  # tmp is new: no reader has it open
+    _write_pointer(map_dir, target.name)
+    return target
+
+
+def _ours(entry: Path) -> bool:
+    """Written by this extractor's publishing: a version folder, a partial write or a staged pointer."""
+    n = entry.name
+    return bool(_VERSION_DIR.fullmatch(n)) or n.startswith(".tmp-") or (n.startswith(f"{CURRENT}.") and n.endswith(".tmp"))
+
+
+def _delete(entry: Path, locked: list[Path]) -> None:
+    try:
+        shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+    except OSError:  # open in a reader (Windows), or partly deleted; the next prune tries again
+        locked.append(entry)
+
+
+def prune_map(map_dir: Path) -> list[Path]:
+    """Delete what map_dir no longer needs; return what could not be deleted yet (open in a reader).
+
+    - a retired map: everything, then the folder;
+    - beside a CURRENT: other version folders, partial writes, and the tables of a map written before 1.5.0
+      (match.parquet first, so a reader looking for it stops treating the folder as a map);
+    - with no map: only version folders, partial writes and staged pointers, never files this extractor
+      did not write (a pre-v1 folder holds meta.parquet).
+    """
+    map_dir = Path(map_dir)
+    if not map_dir.is_dir():
+        return []
+    locked: list[Path] = []
+    if (map_dir / RETIRED).exists():
+        for e in sorted(map_dir.iterdir(), key=lambda e: (e.name == RETIRED, e.name != "match.parquet")):
+            if e.name != RETIRED:
+                _delete(e, locked)
+        if not locked:
+            _delete(map_dir / RETIRED, locked)
+            try:
+                map_dir.rmdir()
+            except OSError:
+                locked.append(map_dir)
+        return locked
+    current = resolve_map_dir(map_dir) if (map_dir / CURRENT).exists() else None
+    if current is None and (map_dir / CURRENT).exists():
+        # Every version folder would look stale; publishing never leaves this, so stop and say so.
+        raise RuntimeError(f"{map_dir}: CURRENT names a version folder without match.parquet; not pruning")
+    for e in sorted(map_dir.iterdir(), key=lambda e: e.name != "match.parquet"):
+        if e == current or e.name == CURRENT:
+            continue
+        if _ours(e) or (current is not None and e.is_file() and e.suffix == ".parquet"):
+            _delete(e, locked)
+    return locked
+
+
+def retire_map(map_dir: Path) -> list[Path]:
+    """Withdraw a map at once (resolve_map_dir returns None) and delete it as far as nothing holds it open."""
+    marker = Path(map_dir) / RETIRED
+    marker.touch()
+    return prune_map(map_dir)
 
 
 def file_sha256(path: Path) -> str:
@@ -1742,8 +1841,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                   dem_bytes=dem.stat().st_size, map=None, team1_file=team1,
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
-    tmp = out_dir.with_name(out_dir.name + ".tmp")
-    recover_output(out_dir)
+    tmp = out_dir / f".tmp-{os.getpid()}"
     try:
         for name, fn in STAGES:
             with Timer(ctx, f"stage_{name}"):
@@ -1807,6 +1905,8 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
         with Timer(ctx, "write"):
             if tmp.exists():
                 shutil.rmtree(tmp)
+            # A folder retired earlier and now extracted into again holds a live map once more.
+            (out_dir / RETIRED).unlink(missing_ok=True)
             tmp.mkdir(parents=True)
             # Only the schema v1 tables are written; awpy's own tables were inputs and cross-checks.
             for tname, df in ctx.tables["demoparser2"].items():
@@ -1818,7 +1918,9 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
             # Read back every file so a truncated write cannot pass.
             for p in tmp.rglob("*.parquet"):
                 pl.read_parquet_schema(p)
-            replace_dir(tmp, out_dir)
+            result["version_dir"] = publish_version(tmp, out_dir, EXTRACTOR_VERSION).name
+            # An old version a reader still has open stays until a later prune; it never fails the map.
+            result["old_versions_locked"] = [str(x) for x in prune_map(out_dir)]
         result["output_bytes"] = sum(result["bytes"].values())
         result["ok"] = True
     except Exception as e:  # noqa: BLE001 - every failure is reported, the RAR is kept

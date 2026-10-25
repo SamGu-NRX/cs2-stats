@@ -373,12 +373,34 @@ def replace_old_extractions(results: dict, new_dirs: set[Path]) -> None:
                 continue
             old = DATA_ROOT / rel
             if old.exists() and old.resolve() not in new_dirs:
-                safe_rmtree(old)
-                log.info("replaced %s with its re-extraction", row["out_dir"])
+                # Retired at once (readers stop resolving it); files a reader still has open go at a later start.
+                left = extract.retire_map(_deletable(old))
+                log.info("replaced %s with its re-extraction%s", row["out_dir"],
+                         f"; {len(left)} entries still open, deleted at a later start" if left else "")
             continue
         keep.append(row)
     if len(keep) != len(rows):
         NEEDS_REEXTRACT.write_text("".join(json.dumps(r) + "\n" for r in keep), encoding="utf-8")
+
+
+def tidy_demos() -> None:
+    """At startup: finish folder swaps that extractors before 1.5.0 left half done, then prune every map
+    folder (old versions, partial writes, retired maps). Whatever a reader still has open waits for the next
+    start; one map that cannot be tidied is logged and skipped."""
+    for d in DEMOS_DIR.glob("*/*.tmp"):  # pre-1.5.0 partial output beside its map
+        safe_rmtree(d, ignore_errors=True)
+    for d in DEMOS_DIR.glob("*/*.old"):  # a pre-1.5.0 folder swap a crash interrupted
+        extract.recover_output(_deletable(d.with_name(d.name.removesuffix(".old"))))
+    for m in sorted(DEMOS_DIR.glob("*/*")):
+        if not m.is_dir():
+            continue
+        try:
+            left = extract.prune_map(_deletable(m))
+        except (OSError, ValueError, RuntimeError) as e:
+            log.error("could not tidy %s: %s", m, e)
+            continue
+        if left:
+            log.warning("%s: %d old entries are still open; retrying at the next start", m, len(left))
 
 
 # Workers run a copy of the extractor taken at startup. Running the repo files directly let edits made
@@ -607,13 +629,14 @@ class Pipeline:
             tail = j.log_path.read_text(encoding="utf-8", errors="replace")[-1500:] if j.log_path.exists() else ""
             res = dict(ok=False, errors=[j.killed or f"worker exit {rc} without a result"], log_tail=tail,
                        dem_file=j.dem.name)
-        # A result only counts as success if its output folder is really there.
-        if res.get("ok") and not (j.out_dir / "match.parquet").exists():
+        # A result only counts as success if its map really resolves to written tables.
+        if res.get("ok") and extract.resolve_map_dir(j.out_dir) is None:
             res["ok"] = False
             res.setdefault("errors", []).append(f"output missing: {j.out_dir}")
         j.archive.results[j.dem.name] = res
         line = dict(archive=j.archive.id, archive_slug=j.archive.slug, map=j.map_key, dem_file=j.dem.name,
-                    out_dir=str(j.out_dir.relative_to(DATA_ROOT)), ok=bool(res.get("ok")),
+                    out_dir=str(j.out_dir.relative_to(DATA_ROOT)), version_dir=res.get("version_dir"),
+                    ok=bool(res.get("ok")),
                     extractor_version=res.get("extractor_version"), visibility=res.get("visibility"),
                     team1_file=res.get("team1_file"), team2_file=res.get("team2_file"),
                     map_name=res.get("map_name"), tick_rate=res.get("tick_rate"), rounds=res.get("rounds"),
@@ -908,10 +931,7 @@ def main(argv=None) -> int:
     # picked up again re-extracts into a clean folder) and partial outputs. Their RARs are still in
     # place and get processed again.
     pipeline.sweep_work(force=True)
-    for d in DEMOS_DIR.glob("*/*.tmp"):
-        safe_rmtree(d, ignore_errors=True)
-    for d in DEMOS_DIR.glob("*/*.old"):  # a map replacement a crash interrupted
-        extract.recover_output(d.with_name(d.name.removesuffix(".old")))
+    tidy_demos()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")
