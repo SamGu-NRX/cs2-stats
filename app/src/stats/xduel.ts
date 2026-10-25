@@ -1,7 +1,16 @@
 // Expected duel: the chance the player wins a duel given its context at first sight, from a logistic
-// model over the research's nine features (aim.ts XDUEL_FEATURES), fitted on the pro maps by
-// `pnpm metric-evidence --fit`. The research fitted the same model (analysis.json xduel: AUC 0.69).
-import { XDUEL_FEATURES } from "./aim";
+// model over the research's nine features, fitted on the pro maps by `pnpm metric-evidence --fit`.
+// The research fitted the same model (analysis.json xduel: AUC 0.69); ours scores 0.68 (xduel-params.json).
+import type { Metric } from "./metrics";
+import params from "./xduel-params.json";
+
+/**
+ * The model's inputs, measured at a sighting's onset (aim.ts SightFact.xf): placement (deg), horizontal
+ * distance, your speed and his, your health and his (each from the latest 4 Hz position sample no older
+ * than aim.ts HEALTH_MAX_AGE_S), your side's living players minus his, seconds since freeze end, and the
+ * pitch part of the aim error (deg, absolute).
+ */
+export const XDUEL_FEATURES = ["placement", "distance", "speed", "enemySpeed", "health", "enemyHealth", "aliveDiff", "roundTime", "verticalAbs"] as const;
 
 export interface XDuelParams {
   features: string[];
@@ -34,6 +43,9 @@ export function checkXDuel(p: XDuelParams): XDuelParams {
   if (p.features.join() !== XDUEL_FEATURES.join()) throw new Error(`xduel parameters are for [${p.features}], the engine measures [${XDUEL_FEATURES}]`);
   return p;
 }
+
+/** The shipped fit. */
+export const XDUEL = checkXDuel(params);
 
 /**
  * Fits the model: features scaled to mean 0 and standard deviation 1 (a constant feature keeps sd 1),
@@ -96,3 +108,28 @@ export function auc(scores: number[], ys: (0 | 1)[]): number {
   const neg = ys.length - pos;
   return (rankSum - (pos * (pos + 1)) / 2) / (pos * neg);
 }
+
+// ---- metrics
+
+/**
+ * Settled duels the two metrics need before they show a value; the coordinator's bar is a reliability of
+ * 0.4. On the pro maps (pnpm metric-evidence) the expected chance's alternate-duel split-half reliability
+ * is 0.47 at 80 duels and stays above 0.4 at every larger size measured (0.51 at 160, 0.74 at 320); it
+ * dips to 0.39 at 40. Duels over expected never reaches 0.4 in the data (0.33 at 320 duels, 81 players),
+ * so its gate is the Spearman-Brown projection of that figure to 0.4: 442 duels.
+ */
+export const EXPECTED_DUEL_MIN = 80;
+export const OVER_EXPECTED_MIN = 442;
+
+const tooFew = (min: number) => (s: { aim: { xN: number } }) => (s.aim.xN < min ? `${s.aim.xN} of the ${min} settled duels it needs` : null);
+
+export const DUEL_METRICS: Metric[] = [
+  { id: "expectedDuel", label: "Expected duel win", kind: "identity", group: "duels", unit: "pct", status: "approx", needs: ["sight"],
+    def: "Your average chance of winning your duels, given their context.",
+    value: (s) => (s.aim.xN >= EXPECTED_DUEL_MIN ? (100 * s.aim.xExp) / s.aim.xN : null), why: tooFew(EXPECTED_DUEL_MIN),
+    sample: { n: (s) => s.aim.xN, unit: "settled duels", min: EXPECTED_DUEL_MIN } },
+  { id: "duelsOverExpected", label: "Duels won over expected", kind: "performance", group: "duels", unit: "pct", status: "approx", needs: ["sight"],
+    def: "Duels you won beyond what their context predicted, in percentage points.",
+    value: (s) => (s.aim.xN >= OVER_EXPECTED_MIN ? (100 * (s.aim.xWins - s.aim.xExp)) / s.aim.xN : null), why: tooFew(OVER_EXPECTED_MIN),
+    sample: { n: (s) => s.aim.xN, unit: "settled duels", min: OVER_EXPECTED_MIN } },
+];

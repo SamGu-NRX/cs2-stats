@@ -14,6 +14,7 @@ import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
 import { PEEK_MIN_SPEED, tracks } from "./movement";
+import { XDUEL, xduelP } from "./xduel";
 import { weaponClass } from "./weapons";
 
 // ---- thresholds. "Ours" means no source and no fit. Distributions on the pro maps: pnpm family-check.
@@ -140,17 +141,9 @@ export interface SightFact {
   /** seconds from the onset to a kill between the two of you within DUEL_WINDOW_S, and whether you made it; null without one */
   duelS: number | null;
   duelWon: boolean | null;
-  /** the duel's context at the onset, in XDUEL_FEATURES order; null without a duel or with a feature unknown */
+  /** the duel's context at the onset, in xduel.ts XDUEL_FEATURES order; null without a duel or with a feature unknown */
   xf: number[] | null;
 }
-
-/**
- * The expected-duel model's inputs (the research's nine, xduel.ts), at the onset: placement (deg),
- * horizontal distance, your speed and his, your health and his (each from the latest 4 Hz position
- * sample no older than HEALTH_MAX_AGE_S), your side's living players minus his, seconds since freeze
- * end, and the pitch part of the aim error (deg, absolute).
- */
-export const XDUEL_FEATURES = ["placement", "distance", "speed", "enemySpeed", "health", "enemyHealth", "aliveDiff", "roundTime", "verticalAbs"] as const;
 
 /** One player's shots with one gun in one round. */
 export interface ShotFact {
@@ -269,6 +262,10 @@ export interface AimAgg {
   /** mutual sightings with both first shots timed, and those where you fired first */
   ffN: number;
   ff: number;
+  /** settled duels with their context known, your wins among them, and the expected-duel model's expected wins (xduel.ts) */
+  xN: number;
+  xWins: number;
+  xExp: number;
   /** bullets compared with the pro path, and sums of the residual's length and pitch part */
   cmp: number;
   dev: number;
@@ -283,7 +280,7 @@ export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
   sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
-  dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0,
+  dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0, xN: 0, xWins: 0, xExp: 0,
 });
 
 export function foldAim(a: AimAgg, f: AimFact): void {
@@ -307,6 +304,7 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     if (f.stopBuf !== null) a.stopBuf.push(f.stopBuf);
     if (f.duelS !== null) a.duelS.push(f.duelS);
     if (f.first !== null) { a.ffN++; if (f.first) a.ff++; }
+    if (f.xf !== null && f.duelWon !== null) { a.xN++; if (f.duelWon) a.xWins++; a.xExp += xduelP(f.xf, XDUEL); }
   } else if (f.k === "shots") {
     a.shots += f.shots; a.hits += f.hits; a.sight += f.sight; a.sightHits += f.sightHits;
     a.first += f.first; a.firstHits += f.firstHits;
