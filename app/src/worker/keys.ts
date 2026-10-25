@@ -8,7 +8,8 @@ import { DERIVE_VERSION } from "../stats/facts";
 /** Bump when MatchEntry's shape or what entryOf computes into it changes, so cached entries are rebuilt. */
 export const ENTRY_VERSION = 1;
 
-export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}`;
+// A Valve match's facts are derived from the user's point of view (FileEntry.pov), so a different user is a different key.
+export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}${e.pov ? `|pov${e.pov}` : ""}`;
 export const entryKey = (factsKey: string, baselinesHash: string) => `${factsKey}|e${ENTRY_VERSION}|b${baselinesHash}`;
 
 /** Whether a match entry held in memory is still the one these keys name: same facts and same baselines. */
