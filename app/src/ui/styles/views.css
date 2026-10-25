@@ -1129,3 +1129,7 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 
 /* a ?sec= link scrolls its section to the top of the pane with a little room above */
 .shead, .psec { scroll-margin-top: 12px; }
+
+/* Where you play: the radar keeps main's size (560 px) with the places list beside it, instead of filling a full-width card */
+.wyp { grid-template-columns: minmax(0, 560px) minmax(240px, 1fr); }
+@media (max-width: 1240px) { .wyp { grid-template-columns: minmax(0, 1fr); } }
