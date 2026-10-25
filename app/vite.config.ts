@@ -79,8 +79,8 @@ function matchFolder(): Plugin {
  * named by CS2_DEV_MATCHES, such as cs2-stats-data/dev-matches, so views can be checked on demo data
  * before local recordings come through the extractor. Never the user's match folder: matches there
  * count in the user's career. `vite dev` only; preview, the static build and the desktop app never
- * serve it. GET /__dev-matches/list lists folders holding match.parquet as "dev/<folder>/";
- * GET /__dev-matches/file?f=<folder>/ returns the folder's parquet file names, and
+ * serve it. GET /__dev-matches/list lists folders holding match.parquet as "dev/<folder>";
+ * GET /__dev-matches/file?f=<folder> returns the folder's parquet file names, and
  * ?f=<folder>/<table>.parquet one file's bytes.
  */
 function devMatches(): Plugin {
@@ -101,7 +101,7 @@ function devMatches(): Plugin {
           const m = path.join(root, d.name, "match.parquet");
           if (!d.isDirectory() || !existsSync(m)) continue;
           const st = await fs.stat(m);
-          files.push({ file: `dev/${d.name}/`, size: st.size, mtime: Math.round(st.mtimeMs) });
+          files.push({ file: `dev/${d.name}`, size: st.size, mtime: Math.round(st.mtimeMs) });
         }
         return send(200, JSON.stringify({ folder: root, files }));
       }
@@ -109,9 +109,8 @@ function devMatches(): Plugin {
         const rel = url.searchParams.get("f") ?? "";
         const abs = path.resolve(root, rel);
         if (!abs.startsWith(root + path.sep)) return send(400, JSON.stringify({ error: "not inside the dev match folder" }));
-        if (rel.endsWith("/")) return send(200, JSON.stringify((await fs.readdir(abs)).filter((f) => f.endsWith(".parquet"))));
-        if (!rel.endsWith(".parquet")) return send(400, JSON.stringify({ error: "not a parquet file" }));
-        return send(200, await fs.readFile(abs), "application/octet-stream");
+        if (rel.endsWith(".parquet")) return send(200, await fs.readFile(abs), "application/octet-stream");
+        return send(200, JSON.stringify((await fs.readdir(abs)).filter((f) => f.endsWith(".parquet"))));
       }
       return send(404, JSON.stringify({ error: "unknown endpoint" }));
     } catch (e) {

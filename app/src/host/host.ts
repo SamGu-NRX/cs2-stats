@@ -5,8 +5,8 @@
 // Both also list the converted logs bundled in public/samples unless the user hides them in
 // Settings. File paths: "2026/<name>.json.gz" (recorded), "samples/<name>" (bundled),
 // "picked/<name>" (picked in the browser this session), and in `vite dev` with CS2_DEV_MATCHES set,
-// "dev/<folder>/" (an extracted match folder; reading the folder path returns its parquet file names,
-// vite.config.ts devMatches).
+// "dev/<folder>" (an extracted match folder; reading the folder path returns its parquet file names,
+// vite.config.ts devMatches). A path not ending in .json.gz is an extracted folder.
 
 export interface FileEntry {
   /** path relative to the match folder, e.g. "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz" */
