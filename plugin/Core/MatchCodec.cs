@@ -148,6 +148,9 @@ public static class MatchCodec
         Col(w, "pen", sh, static r => r.Pen);
         Col(w, "visTarget", sh, static r => r.VisTarget);
         w.WriteStartArray("cls"); foreach (ref readonly var r in sh) { if (r.Class == Nil.V) w.WriteNullValue(); else w.WriteStringValue(WeaponNames.ClassNames[r.Class]); } w.WriteEndArray();
+        // Degrees, not the ×100 integers of the other angle columns: these match the extractor's shots.pitch/yaw.
+        Deg(w, "pitch", sh, static r => r.Pitch);
+        Deg(w, "yaw", sh, static r => r.Yaw);
         w.WriteEndObject();
         var hm = s.HitMask.Span;
         w.WriteStartObject("hitMask");
@@ -347,6 +350,18 @@ public static class MatchCodec
     }
 
     private static string OutcomeName(Outcome o) => o switch { Outcome.Kill => "kill", Outcome.Died => "died", _ => "none" };
+
+    /// <summary>A column of angles in degrees, rounded to 0.001°; NaN is written as null.</summary>
+    private static void Deg<T>(Utf8JsonWriter w, string name, ReadOnlySpan<T> rows, Func<T, float> get)
+    {
+        w.WriteStartArray(name);
+        foreach (ref readonly var r in rows)
+        {
+            float v = get(r);
+            if (float.IsNaN(v)) w.WriteNullValue(); else w.WriteNumberValue(Math.Round((double)v, 3));
+        }
+        w.WriteEndArray();
+    }
 
     private static void Int(Utf8JsonWriter w, int v)
     {
@@ -751,6 +766,8 @@ public static class MatchCodec
         var hit = Ints(t.GetProperty("hit"));
         var smoke = Ints(t.GetProperty("smoke")); var impacts = Ints(t.GetProperty("impacts"));
         var pen = Ints(t.GetProperty("pen")); var vis = Ints(t.GetProperty("visTarget")); var cls = t.GetProperty("cls");
+        // pitch/yaw are absent from files written before plugin 1.2.0.
+        bool angles = t.TryGetProperty("pitch", out var pitch) & t.TryGetProperty("yaw", out var yaw);
         for (int i = 0; i < ri.Length; i++)
         {
             int c = cls[i].ValueKind == JsonValueKind.Null ? Nil.V : Array.IndexOf(WeaponNames.ClassNames, cls[i].GetString());
@@ -760,6 +777,8 @@ public static class MatchCodec
                 Ri = ri[i], Tick = tick[i], Weapon = wpn[i], Burst = burst[i], Idx = idx[i], Speed = speed[i], MaxSpeed = max[i],
                 Scoped = scoped[i].GetBoolean(), Ducked = ducked[i].GetBoolean(), Target = target[i], Hit = hit[i],
                 Smoke = smoke[i], Impacts = impacts[i], Pen = pen[i], VisTarget = vis[i], Class = c,
+                Pitch = angles && pitch[i].ValueKind != JsonValueKind.Null ? pitch[i].GetSingle() : float.NaN,
+                Yaw = angles && yaw[i].ValueKind != JsonValueKind.Null ? yaw[i].GetSingle() : float.NaN,
             };
             Pair(err[i], out r.AimErrYaw, out r.AimErrPitch);
             Pair(imp[i], out r.ImpYaw, out r.ImpPitch);
