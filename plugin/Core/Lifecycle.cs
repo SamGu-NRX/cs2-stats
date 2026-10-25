@@ -40,22 +40,26 @@ public static class Lifecycle
 /// <summary>
 /// Whether a map is known to be running, so engine entities (and traces) may be touched. A game launch
 /// loads plugins at the main menu, where entity reads fail and CounterStrikeSharp caches the failure
-/// for every plugin until restart. So nothing native runs until OnMapStart, or, after a hot reload
-/// into a running map (no OnMapStart follows), until the first server tick: OnTick fires only in game.
+/// for every plugin until restart. So nothing touches entities until OnMapStart, or, after a hot
+/// reload (no OnMapStart follows), until the server reports a map name. OnTick cannot stand in for
+/// that: it also fires at the main menu (CS2-Smarter-Bot's BotState.Tick.cs saw the menu's
+/// one-player limit from it).
 /// </summary>
 public sealed class MapGate
 {
-    private bool _awaitTick;
     public bool MapRunning { get; private set; }
+    /// <summary>Hot-reloaded and not yet sure a map is running; the plugin polls the map name meanwhile.</summary>
+    public bool AwaitingHotReload { get; private set; }
 
-    public void PluginLoaded(bool hotReload) { MapRunning = false; _awaitTick = hotReload; }
-    public void MapStarted() { MapRunning = true; _awaitTick = false; }
-    public void MapEnded() { MapRunning = false; _awaitTick = false; }
+    public void PluginLoaded(bool hotReload) { MapRunning = false; AwaitingHotReload = hotReload; }
+    public void MapStarted() { MapRunning = true; AwaitingHotReload = false; }
+    public void MapEnded() { MapRunning = false; AwaitingHotReload = false; }
 
-    public void ServerTick()
+    /// <summary>The server reported a non-empty map name while a hot reload was waiting.</summary>
+    public void MapNamed()
     {
-        if (!_awaitTick) return;
-        _awaitTick = false;
+        if (!AwaitingHotReload) return;
+        AwaitingHotReload = false;
         MapRunning = true;
     }
 }
