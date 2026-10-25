@@ -1,0 +1,187 @@
+// Pieces several views share: stat tiles, hover cards for players and rounds, empty states and
+// skeletons shaped like the content they stand in for.
+import type { ReactNode } from "react";
+import type { MatchView, RoundView } from "../../stats/derive";
+import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
+import { HoverCard } from "../components/overlay";
+import { killSwing, playerSide, ratingLabel, statLine } from "../data/engine";
+import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
+import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSwing } from "../lib/format";
+import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
+import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
+
+// ---------------------------------------------------------------- stat tile
+
+export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
+  label: string;
+  value: string;
+  sub?: ReactNode;
+  delta?: ReactNode;
+  spark?: (number | null)[];
+  bench?: BenchId;
+  raw?: number | null;
+  breakdown?: () => ReactNode;
+  def?: string;
+  color?: string;
+}) {
+  const v = bench ? verdictOf(raw, BENCH[bench]) : "na";
+  const body = (
+    <>
+      <div className="tile__top">
+        <span className="stat__l">{label}</span>
+        {bench && <VerdictLabel v={v} />}
+      </div>
+      <div className="tile__v num" style={color ? { color } : undefined}><Num v={value} /></div>
+      <div className="tile__foot">
+        <span className="tile__delta">{delta}</span>
+        {spark && <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />}
+      </div>
+      {sub && <div className="tile__sub">{sub}</div>}
+    </>
+  );
+  if (!breakdown) return <div className="tile" data-tip={def}>{body}</div>;
+  return (
+    <HoverCard as="div" className="tile" prefer="bottom" card={() => (
+      <div className="bd">
+        <div className="bd__head"><span className="caps">{label}</span><b className="num cream">{value}</b></div>
+        {def && <p className="bd__def">{def}</p>}
+        {breakdown()}
+      </div>
+    )}>
+      {body}
+    </HoverCard>
+  );
+}
+
+/** Rows of a breakdown card: label, value, optional share bar. */
+export function BreakRows({ rows }: { rows: { label: ReactNode; value: ReactNode; share?: number; color?: string }[] }) {
+  return (
+    <div className="bd__rows">
+      {rows.map((r, i) => (
+        <div key={i} className="bd__row">
+          <span>{r.label}</span>
+          {r.share !== undefined && <span className="hbar"><i style={{ width: `${Math.max(0, Math.min(1, r.share)) * 100}%`, background: r.color }} /></span>}
+          <b className="num">{r.value}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- player hover card
+
+export function PlayerCardBody({ v, pi }: { v: MatchView; pi: number }) {
+  const p = v.players[pi];
+  const both = statLine(v, pi, "both");
+  const t = statLine(v, pi, "t");
+  const ct = statLine(v, pi, "ct");
+  return (
+    <div className="pcard">
+      <div className="pcard__head">
+        <span className={`pcard__dot ${p.team === "us" ? "us" : "them"}`} />
+        <div>
+          <b>{p.name}</b>
+          <div className="meta">{p.isHuman ? "You" : p.team === "us" ? "Teammate, bot" : "Opponent, bot"}</div>
+        </div>
+        <span className="pcard__rating num" style={{ color: ratingText(both.rating ?? 1) }}>{fmtRating(both.rating)}</span>
+      </div>
+      <div className="pcard__grid">
+        <span className="caps">K–D</span><b className="num">{both.kills}–{both.deaths}</b>
+        <span className="caps">ADR</span><b className="num">{fmtAdr(both.adr)}</b>
+        <span className="caps">KAST</span><b className="num">{fmtPct(both.kast)}</b>
+        <span className="caps">Swing</span><b className="num" style={{ color: both.swing === null ? undefined : scoreText(swingScore(both.swing)) }}>{fmtSwing(both.swing)}</b>
+      </div>
+      <div className="pcard__sides">
+        <div><span className="t-text caps">T</span><b className="num">{fmtRating(t.rating)}</b><small className="meta">{t.kills}–{t.deaths}</small></div>
+        <div><span className="ct-text caps">CT</span><b className="num">{fmtRating(ct.rating)}</b><small className="meta">{ct.kills}–{ct.deaths}</small></div>
+      </div>
+      <div className="meta">{ratingLabel(v)}</div>
+    </div>
+  );
+}
+
+export function PlayerName({ v, pi, children }: { v: MatchView; pi: number; children?: ReactNode }) {
+  return (
+    <HoverCard prefer="right" card={() => <PlayerCardBody v={v} pi={pi} />} className="pname">
+      {children ?? v.players[pi].name}
+    </HoverCard>
+  );
+}
+
+// ---------------------------------------------------------------- round hover card
+
+export function RoundCardBody({ v, r }: { v: MatchView; r: RoundView }) {
+  const side = r.winSide === 2 ? "t" : r.winSide === 3 ? "ct" : null;
+  const human = v.human;
+  const hSide = playerSide(v, r, human);
+  const top = r.swing ? r.swing.map((s, pi) => ({ s, pi })).sort((a, b) => b.s - a.s)[0] : null;
+  return (
+    <div className="rcard">
+      <div className="rcard__head">
+        <WinIcon how={r.how} size={16} className={side ? `${side}-text` : "faint"} />
+        <b>Round {r.ri + 1}</b>
+        <span className="meta">{r.how ? WIN_LABEL[r.how] : "Result unknown"}</span>
+        <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>
+      </div>
+      <div className="rcard__eco">
+        <span><BuyIcon buy={r.buy.us} size={14} /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
+        <span className="faint">vs</span>
+        <span><BuyIcon buy={r.buy.them} size={14} /> {r.buy.them ? BUY_LABEL[r.buy.them] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.them)}</span></span>
+      </div>
+      {r.kills.length > 0 ? (
+        <ol className="kf kf--compact">
+          {r.kills.slice(0, 10).map((k, i) => (
+            <li key={i}>
+              <span className="mono faint">{fmtClock(k.secs)}</span>
+              <span className={k.killer !== null && v.players[k.killer].team === "us" ? "us-text" : "them-text"}>{k.killer === null ? "World" : v.players[k.killer].name}</span>
+              <WeaponIcon name={k.weapon} size={11} />
+              <KillFlags flags={k.flags} size={11} />
+              <span className={v.players[k.victim].team === "us" ? "us-text" : "them-text"}>{v.players[k.victim].name}</span>
+            </li>
+          ))}
+          {r.kills.length > 10 && <li className="faint">{r.kills.length - 10} more</li>}
+        </ol>
+      ) : <p className="meta">{r.lite ? "Totals only for this round." : "No kills recorded."}</p>}
+      <div className="rcard__foot">
+        {r.swing && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(r.swing[human])) }}>{fmtSwing(r.swing[human])}</b></span>}
+        {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
+        <span className={hSide === 2 ? "t-text" : "ct-text"}>You on {hSide === 2 ? "T" : "CT"}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Kill icons for one player's round, headshots marked. */
+export function Skulls({ kills, size = 10 }: { kills: { hs: boolean }[]; size?: number }) {
+  return <span className="skulls">{kills.map((k, i) => <SkullIcon key={i} hs={k.hs} size={size} className={k.hs ? "skull skull--hs" : "skull"} />)}</span>;
+}
+
+export { killSwing };
+
+// ---------------------------------------------------------------- states
+
+/** Empty state: a small line graphic, one sentence, one action. */
+export function Empty({ icon, text, action }: { icon?: ReactNode; text: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="empty">
+      {icon && <div className="empty__art" aria-hidden>{icon}</div>}
+      <p>{text}</p>
+      {action}
+    </div>
+  );
+}
+
+export function SkeletonRows({ rows = 6, height = 36 }: { rows?: number; height?: number }) {
+  return (
+    <div className="skel-rows" aria-hidden>
+      {Array.from({ length: rows }, (_, i) => <div key={i} className="skel" style={{ height: height - 8, opacity: 1 - i * 0.1 }} />)}
+    </div>
+  );
+}
+
+export function SectionAside({ label, value, color }: { label: string; value: ReactNode; color?: string }) {
+  return <span className="aside-metric"><span className="caps">{label}</span><b className="num" style={color ? { color } : undefined}>{value}</b></span>;
+}
+
+export const deltaOf = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
+export { Delta };
