@@ -786,7 +786,8 @@ canvas.radar-img { image-rendering: auto; }
 /* identity split and playstyle, round 2 */
 .identity { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) !important; }
 .identity > .card:last-child { grid-column: auto !important; }
-.card__aside-row { display: inline-flex; align-items: center; gap: 12px; }
+.card__aside-row { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 12px; min-width: 0; }
+.card__aside-row > .meta { white-space: normal; text-align: right; }
 .attrs--one { grid-template-columns: minmax(0, 1fr); }
 .attrs__note { margin-top: 12px; }
 .howgood { display: grid; gap: 2px; }
@@ -860,3 +861,35 @@ canvas.radar-img { image-rendering: auto; }
 .spray-body { display: grid; gap: 18px; }
 .spray-main { display: grid; grid-template-columns: auto minmax(180px, 1fr); gap: 20px; align-items: start; }
 .spray__n { fill: var(--ink); }
+
+/* populations: style ranks against bot careers, performance against pros (worker/ranking.ts) */
+.chip--prov { height: auto; min-height: 22px; padding: 4px 8px; white-space: normal; line-height: 1.3; background: transparent; color: var(--tan); box-shadow: inset 0 0 0 1px var(--tan); }
+.attrs__prov { margin-bottom: 12px; }
+.attrs__thin { margin-bottom: 12px; }
+.probanner__score { display: grid; justify-items: end; gap: 6px; align-self: center; }
+.vs--pair .vs__head, .vs--pair .vs__row { grid-template-columns: 44px minmax(0, 1fr) 96px; }
+.vs--pair .vs__head .vs__pro { overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.vs__note { margin-top: 8px; }
+.ranks__group { container-type: inline-size; }
+.ranks__group li { grid-template-columns: minmax(0, 1fr) 64px 120px 116px; height: auto; min-height: 32px; padding-block: 4px; }
+.ranks__pop { display: inline-block; margin-left: 8px; font: 600 10px/1 var(--f); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink2); white-space: nowrap; }
+/* Too narrow for four columns (the 1100 px window at 200% zoom): the label and value on one line, the
+   track and the rank under them. */
+@container (max-width: 480px) {
+  .ranks__group li { grid-template-columns: minmax(0, 1fr) 116px; grid-template-areas: "l v" "t p"; gap: 6px 12px; padding-block: 6px; }
+  .ranks__l { grid-area: l; }
+  .ranks__v { grid-area: v; }
+  .ranks__track { grid-area: t; }
+  .ranks__p { grid-area: p; }
+}
+.ranks__track.is-style { background: var(--track); }
+
+/* spray: scales down with its card, square; the legend drops below when there is no room beside it */
+.spray { display: block; max-width: 100%; height: auto; }
+.spray-main.is-stacked { grid-template-columns: minmax(0, 1fr); }
+
+/* economy: each round column is a keyboard stop (one at a time, arrows move) with a focus ring */
+.echart__col { outline: none; }
+.echart__ring { fill: none; stroke: none; }
+.echart__col:focus-visible .echart__ring { stroke: var(--cream); stroke-width: 2; }
+.echart__readout { min-height: 18px; margin-top: 6px; }

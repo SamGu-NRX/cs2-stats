@@ -1,8 +1,10 @@
 // Economy: team equipment per round (with the bank left after buying), HLTV's buy classes (pistol,
 // eco, half, full), saves, and how each buy converted. Reads the worker's economy view (economyOf).
+import { useRef, useState, type KeyboardEvent } from "react";
 import { ECO_BELOW_PER_PLAYER, FULL_FROM_PER_PLAYER, type BuyClass, type EconRound } from "../../../stats/economy";
 import { Card } from "../../components/Card";
 import { useWidth } from "../../components/charts";
+import { rovingIndex } from "../../components/controls";
 import { HoverCard } from "../../components/overlay";
 import { BUY_CLASSES, BUY_CLASS_LABEL } from "../../data/engine";
 import type { MatchModel as MatchView } from "../../data/match";
@@ -24,6 +26,10 @@ const BUY_DEF: Record<BuyClass, string> = {
 /** One team's round in words, for the chart column's tooltip. */
 const teamRound = (who: string, t: EconRound["us"]) =>
   `${who}: ${t.buy ? BUY_CLASS_LABEL[t.buy].toLowerCase() : "buy unknown"}, ${fmtMoney(t.equip)} equipment, ${fmtMoney(t.spent)} spent, ${fmtMoney(t.money)} left${t.saves ? `, ${plural(t.saves, "save")}` : ""}`;
+
+/** A round column in words: its tooltip, its accessible name and the line under the chart while it has focus. */
+const roundWords = (r: EconRound) =>
+  `Round ${r.number}, ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "winner not recorded"}. ${teamRound("You", r.us)}. ${teamRound("Them", r.them)}.`;
 
 export default function Economy({ v, file }: TabProps) {
   const e = v.b.economy;
@@ -62,7 +68,8 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
   const n = e.rounds.length;
   const gap = 4;
   const halfGap = 14;
-  const cell = Math.max(14, Math.min(40, (w - left - 8 - (n - 1) * gap - halfGap * 2) / Math.max(1, n)));
+  // A round's target is its cell plus the gap, at least 24 px wide (WCAG 2.5.8); past that the chart scrolls.
+  const cell = Math.max(24 - gap, Math.min(40, (w - left - 8 - (n - 1) * gap - halfGap * 2) / Math.max(1, n)));
   // half-time and overtime gaps fall by round number, not by position in the file
   const { cols, width } = roundColumns(e.rounds.map((r) => r.number), max, cell, gap, halfGap);
   const vmax = Math.max(10000, ...e.rounds.flatMap((r) => [r.us.equip ?? 0, r.them.equip ?? 0, r.us.money ?? 0, r.them.money ?? 0]));
@@ -73,9 +80,22 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
   const bw = (cell - 2) / 2;
   const bank = (t: "us" | "them") => cols.map((c) => { const m = e.rounds[c.ri][t].money; return m === null ? null : `${left + c.x + (t === "us" ? bw / 2 : bw + 2 + bw / 2)},${Y(m)}`; }).filter(Boolean).join(" ");
   const peak = e.rounds.reduce((b, r) => ((r.us.equip ?? 0) > (b?.us.equip ?? -1) ? r : b), e.rounds[0]);
+  // The columns are one tab stop: arrows move between rounds, Enter opens the focused one in Rounds.
+  const svg = useRef<SVGSVGElement>(null);
+  const [stop, setStop] = useState(0);
+  const [focused, setFocused] = useState<number | null>(null);
+  const open = (n: number) => go(matchHref(file, "rounds", { round: n }));
+  const onKey = (ev: KeyboardEvent, j: number) => {
+    if (ev.key === "Enter") { ev.preventDefault(); open(e.rounds[cols[j].ri].number); return; }
+    const to = rovingIndex(ev.key, j, cols.length, false);
+    if (to === null) return;
+    ev.preventDefault();
+    setStop(to);
+    svg.current?.querySelector<SVGGElement>(`[data-j="${to}"]`)?.focus();
+  };
   return (
     <div ref={ref} className="chart echart">
-      <svg width={Math.max(w, left + width + 8)} height={H} role="img" aria-label={`Equipment per round. ${e.rounds.map((r) => `Round ${r.number}: you ${fmtMoney(r.us.equip)}, them ${fmtMoney(r.them.equip)}`).join("; ")}`}>
+      <svg ref={svg} width={Math.max(w, left + width + 8)} height={H} role="group" aria-label="Equipment per round. Each round opens in the Rounds tab; arrow keys move between rounds.">
         {ticks.map((t) => (
           <g key={t}>
             <line x1={left} x2={left + width} y1={Y(t)} y2={Y(t)} stroke="var(--line)" />
@@ -88,16 +108,18 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
             <text x={left + c.x - halfGap / 2 - gap / 2} y={top - 10} textAnchor="middle" className="ax">{c.half === 1 ? "Half" : "OT"}</text>
           </g>
         ))}
-        {cols.map((c) => {
+        {cols.map((c, j) => {
           const r = e.rounds[c.ri];
           const usFill = r.us.side === "T" ? "var(--t)" : "var(--ct)";
           const themFill = r.us.side === "T" ? "var(--ct)" : "var(--t)";
           const x = left + c.x;
           const won = r.winner === "us";
           return (
-            <g key={c.ri} className="echart__col" onClick={() => go(matchHref(file, "rounds", { round: r.number }))}>
-              <title>{`Round ${r.number}. ${teamRound("You", r.us)}. ${teamRound("Them", r.them)}.`}</title>
+            <g key={c.ri} data-j={j} className="echart__col" role="link" tabIndex={j === Math.min(stop, cols.length - 1) ? 0 : -1} aria-label={roundWords(r)}
+              onClick={() => open(r.number)} onKeyDown={(ev) => onKey(ev, j)} onFocus={() => { setStop(j); setFocused(c.ri); }} onBlur={() => setFocused(null)}>
+              <title>{roundWords(r)}</title>
               <rect x={x - gap / 2} y={top} width={cell + gap} height={ih + bottom} fill="transparent" />
+              <rect className="echart__ring" x={x - gap / 2 + 1} y={top - 9} width={cell + gap - 2} height={ih + bottom + 8} rx="4" />
               {r.us.equip !== null && <rect x={x} y={Y(r.us.equip)} width={bw} height={Math.max(1, top + ih - Y(r.us.equip))} rx="1.5" fill={usFill} opacity={won ? 1 : 0.5} />}
               {r.them.equip !== null && <rect x={x + bw + 2} y={Y(r.them.equip)} width={bw} height={Math.max(1, top + ih - Y(r.them.equip))} rx="1.5" fill={themFill} opacity={won ? 0.4 : 0.85} />}
               {won && <circle cx={x + cell / 2} cy={top - 3} r="2.5" fill="var(--cream)" />}
@@ -113,14 +135,15 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
         {cols.map((c) => {
           const r = e.rounds[c.ri];
           return (
-            <HoverCard key={c.ri} as="div" tabbable={false} card={() => <RoundCardBody v={v} r={v.rounds[c.ri]} />} className="echart__buy" style={{ left: c.x, width: cell }}>
+            <HoverCard key={c.ri} as="div" tabbable={false} card={() => <RoundCardBody v={v} r={v.rounds[c.ri]} />} className="echart__buy" style={{ left: c.x - gap / 2, width: cell + gap }}>
               <BuyIcon buy={r.us.buy} size={12} className="cream" />
               <BuyIcon buy={r.them.buy} size={12} className="muted" />
             </HoverCard>
           );
         })}
       </div>
-      <div className="legend" style={{ marginTop: 12 }}>
+      <p className="meta echart__readout" aria-hidden>{focused === null ? "" : `${roundWords(e.rounds[focused])} Enter opens it.`}</p>
+      <div className="legend" style={{ marginTop: 6 }}>
         <span><i className="swatch" style={{ background: "var(--t)" }} />T</span>
         <span><i className="swatch" style={{ background: "var(--ct)" }} />CT</span>
         <span>Left bar yours, right theirs, bright when it won</span>
