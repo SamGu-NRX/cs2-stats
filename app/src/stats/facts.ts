@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 5;
+export const DERIVE_VERSION = 6;
 
 export interface MatchInfo {
   id: string;
@@ -142,7 +142,7 @@ export const MEASURES = [
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
-  "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
+  "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;

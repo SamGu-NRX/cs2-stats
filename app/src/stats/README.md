@@ -122,9 +122,8 @@ comes from:
 
 - Demos recorded from round 1 already live have no round 1 rows in `player_rounds`. Derive then takes
   round 1 sides from team names. HLTV's ADR differs on those ten demos, so they stay out of the gate.
-- `params.json` has no flash share for swing (SPEC.md rule 5), so flash assists get no swing credit
-  and Flash Swing is unavailable. It has no equipment bands either; `rating3.ts` keeps them with their
-  derivation until it does.
+- `params.json` has no equipment bands for the duel groups of players without a primary; `rating3.ts`
+  keeps them with their derivation until it does.
 - The extractor ships no nav mesh, so path efficiency is unavailable.
 - Plugin recordings carry no purchases, so utility bought (`utilSpentPR`) is measured on extracted
   demos only; its denominator counts only rounds with the purchases table.
