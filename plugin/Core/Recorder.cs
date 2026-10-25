@@ -53,7 +53,7 @@ public sealed class Recorder
     public readonly PlaceTable Places = new(128);
     /// <summary>Line of sight for the human; enabled when the game layer attaches a probe.</summary>
     public readonly LosTracker Los = new();
-    private string? _losFailureReported;
+    private bool _losOffReported;
 
     private readonly List<PlayerInfo> _players = new();
     private readonly Dictionary<string, int> _playerByKey = new(StringComparer.Ordinal);
@@ -133,7 +133,7 @@ public sealed class Recorder
         _burst = new BurstTracker(1);
         _eng.Reset();
         Los.Reset();
-        _losFailureReported = null;
+        _losOffReported = false;
         _buf.Clear();
         _grenadeBase = meta.GrenadeCount;
         _throwBase = meta.ThrowCount;
@@ -243,6 +243,31 @@ public sealed class Recorder
         if (Los.Failure != null) Meta.Env.LosError ??= Los.Failure;
     }
 
+    /// <summary>
+    /// Every line-of-sight failure ends here: tracing stops at once, visible enemies are closed at
+    /// <paramref name="tick"/>, the file records why (env.losError, env.visSource), and visibility
+    /// falls back to the spotted mask for the rest of the map.
+    /// </summary>
+    /// <summary>Attaches a probe for a new map; a failure on the previous map no longer applies.</summary>
+    public void AttachLos(ILosProbe? probe)
+    {
+        Los.Attach(probe);
+        _losOffReported = false;
+    }
+
+    public void DisableLos(string why, int tick)
+    {
+        Los.Fail(why);
+        if (_losOffReported) return;
+        _losOffReported = true;
+        if (Capturing)
+        {
+            Meta.Env.LosError ??= Los.Failure;
+            if (RoundActive && Live) { Los.HideAll(Ri, tick, _buf.Los); NoteVisSource("mask"); }
+        }
+        _warn($"Line of sight turned off: {Los.Failure}. Visibility falls back to the spotted mask.");
+    }
+
     /// <summary>env.visSource: "los" or "mask" for the whole match, "mixed" when it changed (line of sight failed or was unavailable for some rounds).</summary>
     private void NoteVisSource(string name)
     {
@@ -262,14 +287,11 @@ public sealed class Recorder
         else if (env.EquipSource != name) env.EquipSource = "mixed";
     }
 
-    /// <summary>
-    /// The human damaged an enemy: keep the victim's raw spotted state and, when line of sight is on,
-    /// a trace made at the hit (<paramref name="los"/> 1/0, Nil when not traced), for validating visibility.
-    /// </summary>
-    public void HitMask(int tick, int attacker, int victim, uint m0, uint m1, bool spotted, int los = Nil.V)
+    /// <summary>The human damaged an enemy: keep the victim's raw spotted state for validating visibility.</summary>
+    public void HitMask(int tick, int attacker, int victim, uint m0, uint m1, bool spotted)
     {
         if (!RoundActive || attacker != Meta.Human || attacker == Nil.V || (uint)victim >= Limits.MaxPlayers || !IsEnemy(attacker, victim)) return;
-        _buf.HitMask.Add(new HitMaskRow { Ri = Ri, Tick = tick, Victim = victim, M0 = m0, M1 = m1, Spotted = spotted, Los = los });
+        _buf.HitMask.Add(new HitMaskRow { Ri = Ri, Tick = tick, Victim = victim, M0 = m0, M1 = m1, Spotted = spotted });
     }
 
     /// <summary>Records the human's slot, controller index and pawn index once per match.</summary>
@@ -675,15 +697,7 @@ public sealed class Recorder
     private void CheckLos(int tick, int human)
     {
         Los.Check(Ri, tick, human, Frames, _buf.Los);
-        if (Los.Failure != null && _losFailureReported == null)
-        {
-            // Turned off mid-round: close open intervals and fall back to the spotted mask.
-            _losFailureReported = Los.Failure;
-            Los.HideAll(Ri, tick, _buf.Los);
-            Meta.Env.LosError = Los.Failure;
-            NoteVisSource("mask");
-            _warn($"Line of sight turned off in round {Ri}: {Los.Failure}. Visibility falls back to the spotted mask.");
-        }
+        if (Los.Failure != null) DisableLos(Los.Failure, tick);
     }
 
     private bool Due(int tick, int every)

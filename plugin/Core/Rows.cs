@@ -61,8 +61,6 @@ public struct HitMaskRow
     public int Ri, Tick, Victim;
     public uint M0, M1;
     public bool Spotted;
-    /// <summary>Line of sight traced at the hit: 1 clear, 0 blocked, Nil when not traced.</summary>
-    public int Los;
 }
 
 /// <summary>A player leaving the server during a recorded round.</summary>

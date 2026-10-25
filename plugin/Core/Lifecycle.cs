@@ -36,3 +36,26 @@ public static class Lifecycle
     /// </summary>
     public static bool MatchOverAtResume(bool winPanelSeen, int gamePhase) => winPanelSeen || gamePhase == GamePhaseMatchEnded;
 }
+
+/// <summary>
+/// Whether a map is known to be running, so engine entities (and traces) may be touched. A game launch
+/// loads plugins at the main menu, where entity reads fail and CounterStrikeSharp caches the failure
+/// for every plugin until restart. So nothing native runs until OnMapStart, or, after a hot reload
+/// into a running map (no OnMapStart follows), until the first server tick: OnTick fires only in game.
+/// </summary>
+public sealed class MapGate
+{
+    private bool _awaitTick;
+    public bool MapRunning { get; private set; }
+
+    public void PluginLoaded(bool hotReload) { MapRunning = false; _awaitTick = hotReload; }
+    public void MapStarted() { MapRunning = true; _awaitTick = false; }
+    public void MapEnded() { MapRunning = false; _awaitTick = false; }
+
+    public void ServerTick()
+    {
+        if (!_awaitTick) return;
+        _awaitTick = false;
+        MapRunning = true;
+    }
+}

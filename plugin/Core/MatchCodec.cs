@@ -155,7 +155,6 @@ public static class MatchCodec
         w.WriteStartArray("m0"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M0); w.WriteEndArray();
         w.WriteStartArray("m1"); foreach (ref readonly var r in hm) w.WriteNumberValue(r.M1); w.WriteEndArray();
         w.WriteStartArray("spotted"); foreach (ref readonly var r in hm) w.WriteBooleanValue(r.Spotted); w.WriteEndArray();
-        Col(w, "los", hm, static r => r.Los);
         w.WriteEndObject();
         var lo = s.Los.Span;
         w.WriteStartObject("los");
@@ -660,9 +659,8 @@ public static class MatchCodec
     {
         var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick")); var v = Ints(t.GetProperty("victim"));
         var m0 = t.GetProperty("m0"); var m1 = t.GetProperty("m1"); var sp = t.GetProperty("spotted");
-        var los = t.TryGetProperty("los", out var losEl) ? Ints(losEl) : null;
         for (int i = 0; i < ri.Length; i++)
-            s.HitMask.Add(new HitMaskRow { Ri = ri[i], Tick = tick[i], Victim = v[i], M0 = m0[i].GetUInt32(), M1 = m1[i].GetUInt32(), Spotted = sp[i].GetBoolean(), Los = los?[i] ?? Nil.V });
+            s.HitMask.Add(new HitMaskRow { Ri = ri[i], Tick = tick[i], Victim = v[i], M0 = m0[i].GetUInt32(), M1 = m1[i].GetUInt32(), Spotted = sp[i].GetBoolean() });
     }
 
     private static void ReadLos(JsonElement t, MatchStore s)

@@ -122,7 +122,7 @@ public static class Warmup
                 r.Shot(new ShotInput { Tick = t, Weapon = weapon, Class = 0, Speed = 50, MaxSpeed = 215 });
                 r.Impact(t, 500, 300, 60);
                 r.Hurt(t, 0, 5 + (t / 16) % 5, 27, 3, 50, weapon, 2, true, Nil.V);
-                r.HitMask(t, 0, 5, 1u, 0u, true, 1);
+                r.HitMask(t, 0, 5, 1u, 0u, true);
             }
         }
         r.SetEquipNow(1, 3000);

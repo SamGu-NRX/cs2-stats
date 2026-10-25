@@ -25,8 +25,8 @@ public sealed partial class BotMatchStatsPlugin
     private volatile string? _coreWarmResult;
     private (RuntimeMethodHandle Method, RuntimeTypeHandle[]? Inst)[]? _gameMethods;
     private int _gameMethodNext;
-    private bool _engineWarmDone;
-    private int _engineWarmTries;
+    private Action[]? _engineSteps;
+    private int _engineStepNext, _engineWarmTries;
     private TraceLosProbe? _losProbe;
     /// <summary>func_bomb_target entity index → 0 for A, 1 for B, read once per map.</summary>
     private readonly Dictionary<int, int> _bombSites = new();
@@ -60,23 +60,36 @@ public sealed partial class BotMatchStatsPlugin
         BuildBombSites();
         AttachLos();
         _gameMethods ??= MethodsToPrepare();
-        _engineWarmDone = false;
+        _engineSteps ??= EngineSteps();
+        _engineStepNext = 0;
         _engineWarmTries = 0;
     }
 
+    /// <summary>
+    /// Creates the probe and makes the first trace now, while the map loads: in game, that first call
+    /// took 7.7 ms (native and managed first-use costs), and later calls 9-41 µs per check. The two
+    /// points are arbitrary; only a failure (exception, non-number) matters here.
+    /// </summary>
     private void AttachLos()
     {
+        var rec = _rec!;
         try
         {
             _losProbe = new TraceLosProbe();
-            _rec!.Los.Attach(_losProbe);
+            rec.AttachLos(_losProbe);
         }
         catch (Exception ex)
         {
             _losProbe = null;
-            _rec!.Los.Attach(null);
+            rec.AttachLos(null);
             Log(LogLevel.Warning, $"line of sight unavailable ({ex.GetType().Name}: {ex.Message}); visibility uses the spotted mask");
+            return;
         }
+        long t0 = Stopwatch.GetTimestamp();
+        bool? first = _losProbe.Clear(0, 0, 0, 0, 0, 8);
+        double us = PerfCounter.Us(Stopwatch.GetTimestamp() - t0);
+        if (first == null) rec.DisableLos(_losProbe.Error ?? "first trace returned no result", Server.TickCount);
+        else Log(LogLevel.Information, $"line of sight on (first trace at map load: {us:F0} µs)");
     }
 
     private void BuildBombSites()
@@ -88,24 +101,28 @@ public sealed partial class BotMatchStatsPlugin
 
     /// <summary>
     /// One housekeeping slice of warm-up, outside live rounds only: compile the plugin's engine-bound
-    /// methods, then run the CounterStrikeSharp paths that handlers use once.
+    /// methods, then run the CounterStrikeSharp paths that handlers use, one path per slice. The
+    /// deadline is checked before each unit of work, so a slice overruns by at most one method or path.
     /// </summary>
     private void WarmStep()
     {
         if (_rec == null || _rec.Live) return;
         if (_coreWarmResult is { } msg) { _coreWarmResult = null; Log(LogLevel.Information, msg); }
-        long t0 = Stopwatch.GetTimestamp();
-        long budget = (long)(WarmStepBudgetMs * Stopwatch.Frequency / 1000);
+        long deadline = Stopwatch.GetTimestamp() + (long)(WarmStepBudgetMs * Stopwatch.Frequency / 1000);
         var methods = _gameMethods;
-        while (methods != null && _gameMethodNext < methods.Length && Stopwatch.GetTimestamp() - t0 < budget)
+        while (methods != null && _gameMethodNext < methods.Length)
         {
-            var (m, inst) = methods[_gameMethodNext];
+            if (Stopwatch.GetTimestamp() >= deadline) return;
+            var (m, inst) = methods[_gameMethodNext++];
             try { if (inst == null) RuntimeHelpers.PrepareMethod(m); else RuntimeHelpers.PrepareMethod(m, inst); } catch (Exception) { /* compiled on first call instead */ }
-            _gameMethodNext++;
         }
-        if (_engineWarmDone || Stopwatch.GetTimestamp() - t0 >= budget) return;
-        if (++_engineWarmTries > 240) { _engineWarmDone = true; return; } // a minute without a usable player
-        WarmEnginePaths();
+        var steps = _engineSteps;
+        if (steps == null || _engineStepNext >= steps.Length || Stopwatch.GetTimestamp() >= deadline) return;
+        if (++_engineWarmTries > 240) { _engineStepNext = steps.Length; return; } // a minute without a living human
+        if (_humanSlot < 0 || PawnOfSlot(_humanSlot) is var p && (p == 0 || !Mem.Alive(p))) return;
+        try { steps[_engineStepNext](); }
+        catch (Exception ex) { Log(LogLevel.Warning, $"engine warm-up step {_engineStepNext} failed: {ex.Message}"); }
+        _engineStepNext++;
     }
 
     /// <summary>
@@ -141,27 +158,23 @@ public sealed partial class BotMatchStatsPlugin
         return list.ToArray();
     }
 
-    /// <summary>Runs each wrapper-based read once on a real player, discarding the results; and checks the trace.</summary>
-    private void WarmEnginePaths()
+    /// <summary>
+    /// The CounterStrikeSharp paths handlers use, each run once on the living human (results discarded),
+    /// one per warm-up slice; the last checks the trace against a known-clear segment.
+    /// </summary>
+    private Action[] EngineSteps()
     {
-        if (_humanSlot < 0) return;
-        nint pawn = PawnOfSlot(_humanSlot);
-        if (pawn == 0 || !Mem.Alive(pawn)) return;
-        _engineWarmDone = true;
-        try
+        nint Pawn() => PawnOfSlot(_humanSlot);
+        return new Action[]
         {
-            CurrentEnv();
-            _ = new CCSPlayerController(_slots[_humanSlot].Ctrl).InGameMoneyServices?.Account;
-            ReadPerRoundStats(_humanSlot, 0, out _);
-            _ = HasPrimary(_humanSlot);
-            _ = Mem.ActiveItemDef(pawn);
-            _ = EquipOf(pawn);
-            _ = Mem.Utility(pawn, _ammoSlot, out _);
-            _ = _rules?.MatchStats_RoundResults.Length;
-            _ = (_teamT?.Score, _teamCt?.Score, _rules?.TotalRoundsPlayed, _rules?.WarmupPeriod, _rules?.RoundWinStatus);
-        }
-        catch (Exception ex) { Log(LogLevel.Warning, $"engine warm-up step failed: {ex.Message}"); }
-        CheckLosProbe(pawn);
+            () => CurrentEnv(),
+            () => _ = new CCSPlayerController(_slots[_humanSlot].Ctrl).InGameMoneyServices?.Account,
+            () => ReadPerRoundStats(_humanSlot, 0, out _),
+            () => _ = HasPrimary(_humanSlot),
+            () => { var p = Pawn(); _ = Mem.ActiveItemDef(p); _ = EquipOf(p); _ = Mem.Utility(p, _ammoSlot, out _); },
+            () => _ = (_rules?.MatchStats_RoundResults.Length, _teamT?.Score, _teamCt?.Score, _rules?.TotalRoundsPlayed, _rules?.WarmupPeriod, _rules?.RoundWinStatus),
+            () => CheckLosProbe(Pawn()),
+        };
     }
 
     /// <summary>A trace from the human's eye to a point just above it must be clear; anything else turns line of sight off for this map.</summary>
@@ -173,12 +186,8 @@ public sealed partial class BotMatchStatsPlugin
         if (float.IsNaN(x)) return;
         double ez = z + Mem.Read<float>(pawn, Mem.ViewZ);
         probe.SetIgnore(pawn);
-        long t0 = Stopwatch.GetTimestamp();
         bool? clear = probe.Clear(x, y, ez, x, y, ez + 4);
-        double us = PerfCounter.Us(Stopwatch.GetTimestamp() - t0);
-        if (clear == true) { Log(LogLevel.Information, $"line of sight on (CounterStrikeSharp trace, first call {us:F0} µs)"); return; }
-        string why = clear == null ? probe.Error ?? "no result" : "a trace to a point 4 units above the eye was blocked";
-        _rec.Los.Fail(why);
-        Log(LogLevel.Warning, $"line of sight OFF for this map: {why}. Visibility uses the spotted mask.");
+        if (clear == true) return;
+        _rec.DisableLos(clear == null ? probe.Error ?? "no result" : "a trace to a point 4 units above the eye was blocked", Server.TickCount);
     }
 }

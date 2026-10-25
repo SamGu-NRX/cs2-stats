@@ -292,38 +292,12 @@ public sealed partial class BotMatchStatsPlugin
                 if (vp != 0)
                 {
                     Mem.SpottedState(vp, out uint m0, out uint m1, out bool spotted);
-                    rec.HitMask(tick, a, v, m0, m1, spotted, LosAtHit(vp));
+                    rec.HitMask(tick, a, v, m0, m1, spotted);
                 }
             }
         }
         catch (Exception ex) { EvError("player_hurt", ex); }
         return EvEnd("player_hurt");
-    }
-
-    /// <summary>
-    /// Line of sight from the human's eye to the victim at the moment of a hit (aim.hitMask.los): 1 when
-    /// any of the tracker's points is clear, 0 when all are blocked, Nil when line of sight is off.
-    /// Validation data for the 16 Hz signal, at the cost of up to three traces per human hit.
-    /// </summary>
-    private int LosAtHit(nint victimPawn)
-    {
-        var probe = _losProbe;
-        if (probe == null || !_rec!.Los.Enabled || _humanSlot < 0) return Nil.V;
-        nint hp = PawnOfSlot(_humanSlot);
-        if (hp == 0) return Nil.V;
-        Mem.Origin(hp, out float hx, out float hy, out float hz);
-        Mem.Origin(victimPawn, out float vx, out float vy, out float vz);
-        if (float.IsNaN(hx) || float.IsNaN(vx)) return Nil.V;
-        double ez = hz + Mem.Read<float>(hp, Mem.ViewZ);
-        float vview = Mem.Read<float>(victimPawn, Mem.ViewZ);
-        probe.SetIgnore(hp);
-        foreach (double frac in LosTracker.PointHeights)
-        {
-            bool? clear = probe.Clear(hx, hy, ez, vx, vy, vz + vview * frac);
-            if (clear == null) return Nil.V;
-            if (clear.Value) return 1;
-        }
-        return 0;
     }
 
     private HookResult OnBlind(EventPlayerBlind e, GameEventInfo info)
