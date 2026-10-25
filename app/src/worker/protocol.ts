@@ -60,7 +60,8 @@ export interface MetricMeta {
 export interface Meta {
   metrics: MetricMeta[];
   attributes: { id: string; label: string; kind: Kind; metrics: string[] }[];
-  rating: { label: string; status: string };
+  /** Rating 3.0's label, params.json status, and its linear terms (rating3.ts RATING3_TERMS) for breakdowns */
+  rating: { label: string; status: string; intercept: number; terms: { name: string; input: string; coefficient: number }[]; weights: string };
   /** the round win-probability source facts are derived with (model-params.ts), for Settings */
   winProb: { kind: "hltv" | "cs2rb"; label: string };
   /** the six style attributes "plays like" compares (identity.ts STYLE) */
