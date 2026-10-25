@@ -50,7 +50,7 @@ The contract between the capture plugin (`plugin/`) and the app (`app/`). The pl
 - `killer`, `assister` and `flashAssister` are null for world deaths and suicides.
 - `flags` bits: 1 headshot, 2 wallbang, 4 through smoke, 8 killer blind, 16 noscope, 32 in air.
 - `kpos`, `vpos`: `[x, y, z]`.
-- `state`: the round state just *before* the kill, used for the round-swing model: `[ctAlive, tAlive, ctHp, tHp, ctEquip, tEquip, planted(0/1), ticksSincePlant|null]`.
+- `state`: the round state just *before* the kill, used for the round-swing model: `[ctAlive, tAlive, ctHp, tHp, ctEquip, tEquip, planted(0/1), ticksSincePlant|null]`. Plugin 1.0.0 counts the victim as alive with its HP before the fatal hit; files from the legacy converter count it at 0 HP.
 
 ## `damage` (every `player_hurt` between different players)
 `ri, tick, attacker, victim, dmg, dmgArmor, weapon, hitgroup`
@@ -129,14 +129,14 @@ Additions to v1; the version stays `1`. Two of them change how an existing field
 
 ### Shots (`aim.shots`)
 - `target`: the alive enemy closest to the shot's aim within 10°, whether visible or not. This differs from the v1 text above because the spotted mask under-reports visibility; visibility is now in `visTarget`.
-- `visTarget`: 1/0 whether `target` was visible to the human at that tick, from the engine's spotted mask. The mask's bit is under review. Null without a target.
+- `visTarget`: 1/0 whether `target` was visible to the human at that tick, from the engine's spotted mask. The bit (the human's slot) is right, but the mask is the radar's spotted state, not line of sight; see `app/src/stats/README.md`, "Visibility". Null without a target.
 - `smoke`: 1 if the ray from the eye along the view direction crosses an active smoke before reaching the target, or 4096 units without one; else 0. A smoke is a 144-unit sphere around its detonation point, active from `smokegrenade_detonate` until `smokegrenade_expired` (matched by entity) or 22 s, whichever is first. These constants approximate CS2's volumetric smoke and have not been validated in-game.
 - `impacts`: number of `bullet_impact` events in the shot's tick. More than 1 means penetration or several surfaces (and pellets for shotguns).
 - `pen`: 1 if the shot killed an enemy with `player_death.penetrated` > 0, and 0 if it damaged no enemy or killed without penetrating. It is null when the shot hit an enemy non-fatally, because without a ray trace the plugin cannot tell whether the path was clear.
 - `cls`: weapon class, one of `rifle`, `sniper`, `smg`, `pistol`, `shotgun`, `heavy`, from the item name. Null for the taser.
 
 ### Visibility validation (`aim.hitMask`, `env.human*`)
-Recorded on every match to check `IsVisibleToHuman`, which reads one bit of the spotted mask and is suspected to be wrong. A hit usually means the human could see the victim, so these rows show which bit, if any, tracks the human.
+Recorded on every match to check `IsVisibleToHuman`, which reads one bit of the spotted mask. A hit usually means the human could see the victim, so these rows show which bit, if any, tracks the human. On the three 2026-10-25 recordings the human's slot bit in `m0` is the only candidate that matches (53 of 93 bullet hits) and every set bit belongs to the human's team, but the mask misses 40 hits, so it cannot stand in for line of sight.
 - `aim.hitMask`: `ri, tick, victim, m0, m1, spotted`, one row per `player_hurt` where the human damaged an enemy. `m0` and `m1` are the victim pawn's raw `EntitySpottedState_t.m_bSpottedByMask` words (unsigned 32-bit), read in the hurt handler. `spotted` is its `m_bSpotted` flag.
 - `env.humanSlot`, `env.humanController`, `env.humanPawn`: the human's player slot, controller entity index and pawn entity index, recorded once per match at the first freeze end, for comparing against mask bits. The pawn index can change if the pawn is recreated.
 - Cost: raw memory reads only, nothing allocated in the hurt path. 89 rows and +0.8 KB on the 21-round fixture replay.

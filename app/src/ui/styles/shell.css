@@ -1,0 +1,104 @@
+/* The desktop shell: sidebar, app bar and content pane. The window keeps the native Windows title
+   bar (the user's brief); the 44 px app bar sits directly under it and carries the breadcrumb,
+   the view's filters and the command palette button. */
+
+.shell { display: grid; grid-template-columns: auto minmax(0, 1fr); height: 100%; }
+
+/* ---------------------------------------------------------------- sidebar */
+.side {
+  --bg-side: #161413;
+  width: var(--side-w);
+  background: var(--bg-side);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  transition: width var(--d-side) var(--ease-in-out);
+}
+.side.is-instant { transition: none; }
+.side[data-rail="true"] { width: var(--side-rail); }
+
+.side__me { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
+.avatar { width: 28px; height: 28px; border-radius: var(--r-ctl); overflow: hidden; flex: none; background: var(--bg2); display: grid; place-items: center; font: 700 11px/1 var(--f); color: var(--cream); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 12%; transform: scale(1.5); transform-origin: 50% 10%; }
+.side__who { min-width: 0; display: grid; gap: 1px; }
+.side__name { font: 600 13px/1.25 var(--f); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side__rating { font: 600 12px/1.25 var(--f); color: var(--cream); white-space: nowrap; }
+.side__rating span { color: var(--ink3); font-weight: 400; margin-right: 4px; }
+
+.side__nav { display: grid; gap: 2px; padding: 10px 8px; position: relative; }
+.side__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--r-ctl);
+  color: var(--ink2);
+  font: 500 13px/1 var(--f);
+  white-space: nowrap;
+  transition: background-color var(--d-hover) ease, color var(--d-hover) ease;
+}
+.side__item .ico { width: 20px; height: 20px; }
+.side__item[aria-current="page"] { background: var(--bg2); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .side__item:not([aria-current="page"]):hover { background: var(--hover); color: var(--ink); } }
+.side__item:active { background: var(--raise); }
+.side__label { transition: opacity calc(var(--d-side) * 0.55) ease; }
+.side[data-rail="true"] .side__label { opacity: 0; }
+/* The active bar moves between items (on-screen move: ease-in-out). */
+.side__bar { position: absolute; left: 8px; top: 0; width: 2px; height: 20px; border-radius: 1px; background: var(--cream); transition: transform var(--d-view) var(--ease-in-out); }
+.side__bar.is-instant { transition: none; }
+
+.side__spacer { flex: 1; }
+.side__foot { display: grid; gap: 2px; padding: 8px; border-top: 1px solid var(--line); }
+.side__sync { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 10px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.side__sync .dot { width: 20px; display: grid; place-items: center; flex: none; }
+.side__sync .dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+.side__sync[data-state="syncing"] .dot i { background: var(--cream); animation: pulse 1.2s ease-in-out infinite; }
+.side__sync[data-state="error"] .dot i { background: var(--poor); }
+.side__toggle { color: var(--ink3); }
+.side__toggle .ico { transition: transform var(--d-side) var(--ease-in-out); }
+.side[data-rail="true"] .side__toggle .ico { transform: rotate(180deg); }
+.side.is-instant .side__toggle .ico, .side.is-instant .side__label { transition: none; }
+
+/* ---------------------------------------------------------------- main column */
+.main { display: grid; grid-template-rows: var(--bar-h) minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--bg0); }
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-side, #161413);
+  min-width: 0;
+}
+.crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--ink2); white-space: nowrap; overflow: hidden; }
+.crumbs a, .crumbs span { overflow: hidden; text-overflow: ellipsis; }
+.crumbs a { border-radius: var(--r-chip); padding: 2px 4px; margin: 0 -4px; transition: color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .crumbs a:hover { color: var(--ink); } }
+.crumbs .sep { color: var(--ink3); flex: none; }
+.crumbs [aria-current="page"] { color: var(--ink); font-weight: 600; }
+.bar__tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+.search-btn { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 10px; border-radius: var(--r-ctl); background: var(--bg1); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink2); font-size: 12px; transition: color var(--d-hover) ease, background-color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .search-btn:hover { color: var(--ink); background: var(--bg2); } }
+
+/* ---------------------------------------------------------------- content pane */
+.pane { position: relative; overflow: auto; min-height: 0; scrollbar-gutter: stable; }
+.pane:focus-visible { outline: none; }
+.view { padding: 20px var(--gutter) 48px; min-height: 100%; }
+.view--capped > .view__in { max-width: var(--cap); }
+.view--flush { padding: 0; }
+
+/* view change: out 80 ms opacity; in 180 ms opacity + 6 px rise */
+.view-in { animation: view-in var(--d-view) var(--ease-out) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(calc(6px * var(--mo))); } }
+.launch-in { animation: view-in var(--d-launch) var(--ease-out) both; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .side__sync[data-state="syncing"] .dot i { animation: none; } }
+
+/* Below 1100 px window width the sidebar is a rail (set in JS); the app bar hides long crumbs. */
+@media (max-width: 1180px) { .bar .search-btn .kbd { display: none; } }
