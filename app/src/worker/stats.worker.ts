@@ -14,6 +14,7 @@ import { derive } from "../stats/derive";
 import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
+import { loadTables } from "../stats/load";
 import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
@@ -76,7 +77,19 @@ let index = new Map<string, { key: string; entry: MatchEntry }>();
 let gen = 0;
 const lru = new Map<string, { key: string; facts: MatchFacts }>();
 
+/** An extracted match folder (host.ts "dev/<folder>/"), read table by table; else a plugin file. */
+const isFolder = (file: string) => file.endsWith("/");
+
+async function folderTables(file: string): Promise<MatchTables> {
+  const names = new Set(JSON.parse(new TextDecoder().decode(await bytes(file))) as string[]);
+  return loadTables((name) => (names.has(name) ? bytes(file + name) : Promise.resolve(null)));
+}
+
 async function deriveFile(file: string): Promise<Cached> {
+  if (isFolder(file)) {
+    const t = await folderTables(file);
+    return { facts: derive(t), origin: `extracted, ${t.match.extractor_version[0]}` };
+  }
   const m = await decodeMatch(await bytes(file), file);
   return { facts: derive(pluginToTables(m)), origin: m.env.plugin ?? "" };
 }
@@ -91,7 +104,7 @@ async function tablesOf(file: string): Promise<MatchTables> {
   if (!ix) throw new Error(`${file} is not in the match folder; rescan it`);
   if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
   openTables = null;
-  const tables = pluginToTables(await decodeMatch(await bytes(file), file));
+  const tables = isFolder(file) ? await folderTables(file) : pluginToTables(await decodeMatch(await bytes(file), file));
   openTables = { file, key: ix.key, tables };
   return tables;
 }

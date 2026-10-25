@@ -4,7 +4,9 @@
 //   (vite.config.ts), plus files picked in this session.
 // Both also list the converted logs bundled in public/samples unless the user hides them in
 // Settings. File paths: "2026/<name>.json.gz" (recorded), "samples/<name>" (bundled),
-// "picked/<name>" (picked in the browser this session).
+// "picked/<name>" (picked in the browser this session), and in `vite dev` with CS2_DEV_MATCHES set,
+// "dev/<folder>/" (an extracted match folder; reading the folder path returns its parquet file names,
+// vite.config.ts devMatches).
 
 export interface FileEntry {
   /** path relative to the match folder, e.g. "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz" */
@@ -96,6 +98,15 @@ async function tauriHost(): Promise<Host> {
 
 const picked = new Map<string, File>();
 
+/** Extracted match folders from the dev server, when it was started with CS2_DEV_MATCHES; none otherwise. */
+async function devEntries(): Promise<FileEntry[]> {
+  if (!import.meta.env.DEV) return [];
+  const res = await fetch("/__dev-matches/list");
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(((await res.json()) as { error: string }).error);
+  return ((await res.json()) as { files: FileEntry[] }).files;
+}
+
 function webHost(): Host {
   let folder: string | null = null;
   return {
@@ -118,12 +129,13 @@ function webHost(): Host {
         }
       } catch { /* no dev server: bundled and picked files only */ }
       if (failed) throw new Error(failed);
-      return [...local, ...recorded, ...(samplesShown() ? await sampleEntries() : [])];
+      return [...local, ...recorded, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
     },
     async read(file) {
       const p = picked.get(file);
       if (p) return p.arrayBuffer();
       if (isSample(file)) return readSample(file);
+      if (file.startsWith("dev/")) return fetchBytes(`/__dev-matches/file?f=${encodeURIComponent(file.slice(4))}`, file);
       return fetchBytes(`/__matches/file?f=${encodeURIComponent(file)}`, file);
     },
     async readPack(name) {
