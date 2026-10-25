@@ -13,5 +13,5 @@
     "jsx": "react-jsx",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
   },
-  "include": ["vite.config.ts", "tools", "src/**/*.test.ts", "src/**/*.test.tsx", "src/stats/testing", "src/model-module.d.ts"]
+  "include": ["vite.config.ts", "tools", "src/**/*.test.ts", "src/**/*.test.tsx", "src/stats/testing"]
 }

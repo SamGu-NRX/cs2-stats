@@ -4,11 +4,6 @@ import type { Connect, Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
-// The trained win-probability model is bundled only when it is complete: winprob.ts and the
-// model.json it imports. A half-written export must not break the app's build.
-const modelDir = path.resolve(__dirname, "../model/export");
-const modelReady = existsSync(path.join(modelDir, "winprob.ts")) && existsSync(path.join(modelDir, "model.json"));
-const modelModule = modelReady ? path.join(modelDir, "winprob.ts") : path.resolve(__dirname, "src/stats/no-model.ts");
 
 // Tauri expects a fixed dev port and must not watch the Rust sources.
 const host = process.env.TAURI_DEV_HOST;
@@ -81,7 +76,6 @@ function matchFolder(): Plugin {
 
 export default defineConfig({
   plugins: [react(), matchFolder()],
-  resolve: { alias: { "@model/winprob": modelModule } },
   clearScreen: false,
   server: {
     port: 1420,
@@ -89,7 +83,7 @@ export default defineConfig({
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
-    // the worker bundles ../model/export/winprob.ts and its model.json when both exist
+    // the engine imports ../model/rating3/params.json (Rating 3.0 and win probability)
     fs: { allow: [".", "../model"] },
   },
   preview: { port: 4173, strictPort: true },
