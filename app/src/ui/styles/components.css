@@ -230,3 +230,24 @@ button[data-tip], a[data-tip], [role="button"][data-tip], th [data-tip] { cursor
 .name-cell { font: 600 14px/1.3 var(--f); color: var(--ink); }
 .name-cell small { margin-left: 6px; font: 400 11px/1 var(--f); color: var(--ink3); }
 .palette__input:focus-within { box-shadow: inset 0 -2px 0 var(--cream); }
+
+/* ---------------------------------------------------------------- official CS2 icon (data/icons.ts) */
+.gicon { display: inline-block; flex: none; vertical-align: middle; background: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+
+/* ---------------------------------------------------------------- the percentile component */
+.pctl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; }
+.pctl__label { font-size: 13px; color: var(--ink); min-width: 0; }
+.pctl__val { font: 700 14px var(--f); text-align: right; white-space: nowrap; }
+.pctl__val small { font-size: 11px; font-weight: 600; color: var(--ink3); margin-left: 1px; }
+.pctl__bar { grid-column: 1 / -1; position: relative; height: 4px; margin: 3px 0 1px; border-radius: 2px; background: var(--track); }
+.pctl__bar::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink3); }
+.pctl__bar i { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--cream); box-shadow: 0 0 0 2px var(--bg1); }
+.pctl[data-tone="good"] .pctl__bar i { background: var(--good-text); }
+.pctl[data-tone="poor"] .pctl__bar i { background: var(--poor-text); }
+.pctl__phrase { grid-column: 1 / -1; font-size: 12px; color: var(--ink2); }
+.pctl__phrase b { color: var(--ink); font-weight: 600; }
+.pctl[data-na] .pctl__val { color: var(--ink3); }
+.pctl[data-na] .pctl__bar::before { display: none; }
+/* one row in a table: label, value, bar, phrase */
+.pctl--row { grid-template-columns: minmax(0, 1fr) 64px minmax(80px, 140px) minmax(0, 170px); align-items: center; min-height: 36px; border-top: 1px solid var(--line); }
+.pctl--row .pctl__bar, .pctl--row .pctl__phrase { grid-column: auto; margin: 0; }
