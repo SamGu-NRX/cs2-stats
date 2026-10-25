@@ -44,6 +44,8 @@ export interface Summary {
   /** the distinct model fingerprints the kept matches were derived with */
   models: string[];
   m: Measures;
+  /** m split by the side each kept round was played on: Rating 3.0 rates each side over its own rounds (rating3.ts rating3Of) */
+  sides: Record<Side, Measures>;
   /** by weapon class name */
   weapons: Record<string, WeaponTotals>;
   aim: AimAgg;
@@ -78,7 +80,7 @@ function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
 }
 
 export const emptySummary = (): Summary => ({
-  matches: 0, covered: { nRounds: 0, roundsPlayed: 0 }, models: [], m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
+  matches: 0, covered: { nRounds: 0, roundsPlayed: 0 }, models: [], m: emptyMeasures(), sides: { CT: emptyMeasures(), T: emptyMeasures() }, weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
 });
 
 /** Event facts whose weapon the filter rejects are dropped; facts without a weapon field always pass. */
@@ -99,7 +101,10 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   s.covered.roundsPlayed += f.match.roundsPlayed;
   if (!s.models.includes(f.match.model)) s.models.push(f.match.model);
   const kept = new Set(rows.map((r) => r.ri * 1024 + r.pi));
-  for (const r of rows) for (const k of MEASURES) s.m[k] += r.m[k] ?? 0;
+  for (const r of rows) {
+    const side = s.sides[r.side];
+    for (const k of MEASURES) { const v = r.m[k] ?? 0; s.m[k] += v; side[k] += v; }
+  }
   const roundsWith = new Map<string, Set<number>>();
   for (const w of f.weapons) {
     if (!kept.has(w.ri * 1024 + w.pi) || (filter.weapons && !filter.weapons.includes(w.weapon))) continue;

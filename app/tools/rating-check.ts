@@ -3,7 +3,7 @@
 // against HLTV's traditional columns), so an eco error can be told from a counting error. Prints MAE and Pearson r per column, and the win-probability source
 // swing used (node-read.ts WINPROB; CS2_WINPROB_PACK=none forces CS2RB). Usage: pnpm rating-check
 import { derive } from "../src/stats/derive";
-import { r3Inputs, rating3, rating3BySide } from "../src/stats/rating3";
+import { rating3BySide } from "../src/stats/rating3";
 import { pearson } from "../src/stats/trends";
 import { rollup } from "../src/stats/rollup";
 import { hltvMaps, joinHltv } from "./hltv";
@@ -18,9 +18,10 @@ for await (const { t } of proMaps()) {
   if (!j) continue;
   maps++;
   for (const [pi, h] of j.player) {
+    const bySide = rating3BySide([f], { player: f.players[pi].id });
     const m = rollup([f], { player: f.players[pi].id }).m;
-    const q = r3Inputs(m);
-    const r = rating3(m).value;
+    const q = bySide.both.inputs;
+    const r = bySide.both.value;
     if (!q || r === null) continue;
     const put = (c: string, ours: number, theirs: number) => { cols[c][0].push(ours); cols[c][1].push(theirs); };
     put("KPR", m.kills / m.rounds, h.total.k / m.rounds);
@@ -33,7 +34,6 @@ for await (const { t } of proMaps()) {
     put("eKAST", q.kast_eco, h.total.eKast);
     put("swing", q.swing, h.total.swing);
     put("rating", r, h.total.rating);
-    const bySide = rating3BySide([f], { player: f.players[pi].id });
     if (h.ct && bySide.CT.value !== null) put("rating CT", bySide.CT.value, h.ct.rating);
     if (h.t && bySide.T.value !== null) put("rating T", bySide.T.value, h.t.rating);
   }

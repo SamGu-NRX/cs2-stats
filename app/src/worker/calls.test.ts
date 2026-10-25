@@ -10,7 +10,11 @@ import { decodeMatch } from "../stats/plugin/decode";
 import { emptySummary } from "../stats/rollup";
 import { matchWon, winCorrelationOf } from "../stats/trends";
 import { oneRound } from "../stats/testing/match";
-import { entryOf } from "./views";
+import { compare, percentileOf, type Baselines } from "../stats/compare";
+import { METRICS } from "../stats/metrics";
+import { rating3FromInputs } from "../stats/rating3";
+import { at, combine } from "../stats/testing/summary";
+import { entryOf, ratingsOf, valuesOf } from "./views";
 
 it("ranks the player among the opponents with lower-is-better metrics turned around", () => {
   // fails if fewer deaths ranks worse, or an identity metric gets a rank
@@ -33,8 +37,8 @@ it("gives each scoreboard line its eco-adjusted values from the rating's own inp
   const e = entryOf(file, "", derive(pluginToTables(m), CS2RB));
   const l = e.line;
   expect(l.eco).not.toBeNull();
-  expect(l.eco!.ek).toBe(l.m.vEcoKills);
-  expect(l.eco!.eadr).toBeCloseTo(l.m.vEcoDmg / l.m.swingRounds, 9);
+  expect(l.eco!.ek).toBeCloseTo(l.m.vEcoKills, 9);
+  expect(l.eco!.eadr).toBeCloseTo(l.m.vEcoDmg / l.m.ratedRounds, 9);
 });
 
 it("counts only finished, decided matches as wins or losses for the win correlation", () => {
@@ -43,4 +47,20 @@ it("counts only finished, decided matches as wins or losses for the win correlat
   const as = (score: [number, number], complete: boolean) => ({ ...base, match: { ...base.match, score, complete } });
   const me = new Set(["a"]);
   expect([matchWon(as([13, 9], true), me), matchWon(as([9, 13], true), me), matchWon(as([12, 12], true), me), matchWon(as([5, 2], false), me)]).toEqual([true, false, null, null]);
+});
+
+it("shows the rating it ranks when one side is too thin to rate", () => {
+  // fails if the rating3 metric, and so its percentile, pools both sides' rounds while the views weight
+  // the rated sides: CT is rated on 40 of 100 rounds (no CT rating), T on all 100 at a higher level
+  const q = { kpr_eco: 0.5, adr_eco: 60, dpr_eco: 0.7, kast_eco: 65, mk: 10, swing: -1 };
+  const CT = at(q, 40, "CT", 100), T = at({ ...q, kpr_eco: 1.1, adr_eco: 95, swing: 3 }, 100, "T");
+  const both = combine(CT, T);
+  const shown = ratingsOf({ both, CT, T }).both;
+  expect(shown.value).not.toBeNull();
+  expect(shown.value).toBeCloseTo(ratingsOf({ both: T, CT, T }).T.value!, 9);
+  const quantiles = Array.from({ length: 21 }, (_, i) => i / 5);
+  const pool: Baselines = { version: 1, built: "x", source: "test", model: "m", n: {}, pools: { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, quantiles])) } } };
+  const ranked = compare(both, pool, { pool: "all" }).rating3;
+  expect([valuesOf(both).rating3, ranked.value, ranked.pct]).toEqual([shown.value, shown.value, percentileOf(quantiles, shown.value!)]);
+  expect(rating3FromInputs(shown.inputs!)).toBeCloseTo(shown.value!, 9);
 });
