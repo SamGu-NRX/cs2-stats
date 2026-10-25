@@ -40,3 +40,12 @@ it("gives a converted log its whole match's score, not the score of the rounds i
     expect(f.match.complete, file).toBe(m.status === "complete");
   }
 });
+
+it("marks throws rebuilt from detonations as such, and logged throws as logged", async () => {
+  // fails if a file without a throw log presents detonation points as exact throws
+  for (const file of readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"))) {
+    const m = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
+    const f = derive(pluginToTables(m), CS2RB);
+    expect(f.match.inputs.throws, file).toBe(m.throws ? "logged" : "rebuilt");
+  }
+});
