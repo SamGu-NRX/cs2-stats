@@ -493,10 +493,16 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
     # Each restore also voids its attempt directly: from the last round_start before the
     # winnerless round_end up to that tick. This covers a restore inside round 1, which the
     # several-starts rule above cannot see (one pro demo: attempt 98, restore 4020).
-    for r_tick in round_ends.tick[(round_ends.tick > match_start) & ~real]:
+    first_start = rows[0]["start_tick"] if rows else None
+    for r_tick in round_ends.tick[~real]:
         before = rs[rs < r_tick]
-        if len(before):
+        if r_tick > match_start and len(before):
             voided.append((int(before.max()), int(r_tick)))
+        elif first_start is not None and first_start <= r_tick <= match_start:
+            # A restore on round 1's start tick, before begin_new_match, has no attempt before it, but its tick
+            # is still voided: a split recording's later part opened by restoring the backup at tick 4, all 10
+            # players died to "world" there, and the game counted none of it (deaths_total summed 68 -> 67).
+            voided.append((int(r_tick), int(r_tick)))
     return pd.DataFrame(rows), sorted(set(voided))
 
 
@@ -682,35 +688,44 @@ def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, r
     return pd.concat(parts, ignore_index=True) if parts else df.iloc[:0]
 
 
-def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame,
-                        rate: float, ids=lambda rows: rows.steamid) -> pd.DataFrame:
+# The counters a death can move; damage commits between rounds and team scores at round ends.
+DEATH_COUNTERS = ["kills_total", "deaths_total", "assists_total", "headshot_kills_total"]
+
+
+def scoreboard_baseline(parser, rounds: pd.DataFrame, death_ticks, guard: pd.DataFrame, rate: float,
+                        ids=lambda rows: rows.steamid) -> pd.DataFrame:
     """BASELINE_PROPS per player before the first counted round: zero for a whole match, the earlier parts'
     totals for a later part of a split recording (one demo's second part starts at 8-8 with kills and damage
     carried over). Empty for a round 1 recorded already live.
 
     Read at round 1's freeze end, when the game's counters have settled after any restore and every player
-    of the round has a controller, less what the tables themselves count in round 1 up to then: a Valve
-    player who disconnected in freeze time died to "world", and the game counted that death. deaths: round 1's
-    deaths up to its freeze end, with the kills table's columns (attacker_steamid, victim_steamid,
-    assister_steamid, a_side, v_side, assister_side, headshot). Damage commits between rounds, so none is in
-    round 1 by its freeze end. ids: the player ids of parsed rows (resolve_ids for bots).
+    of the round has a controller, less what the game itself counted in round 1 up to then: a Valve player
+    who disconnected in freeze time died to "world", and deaths_total rose on that tick. death_ticks: the
+    ticks of round 1's deaths in the tables up to its freeze end. Only the rise the game recorded across each
+    such tick is taken off, never the events themselves: a death in the tables that the game did not count
+    stays in the baseline, so validation still fails on it. ids: the player ids of parsed rows (resolve_ids
+    for bots).
     """
     fe1 = rounds.freeze_end_tick.iloc[0]
     if pd.isna(fe1):
         return pd.DataFrame(columns=["tick", "steamid", "name"] + BASELINE_PROPS)
     base = read_at(parser, BASELINE_PROPS, [int(fe1)], after=False, guard=guard, rate=rate)
     base["steamid"] = ids(base)
-    d = deaths[deaths.tick <= int(fe1)]
-    enemy = d[d.attacker_steamid.notna() & (d.attacker_steamid != d.victim_steamid).fillna(True)
-              & (d.a_side != d.v_side).fillna(True)]
-    credited = d[d.assister_steamid.notna() & (d.assister_side != d.v_side).fillna(True)]
-    counted = {"kills_total": enemy.attacker_steamid, "deaths_total": d.victim_steamid,
-               "assists_total": credited.assister_steamid,
-               "headshot_kills_total": enemy.attacker_steamid[enemy.headshot.astype(bool)]}
-    for c, who in counted.items():
-        n = who.dropna().astype("int64").value_counts()
-        base[c] = [int(v) - int(n.get(int(s_), 0)) if not (pd.isna(s_) or pd.isna(v)) else v
-                   for s_, v in zip(base.steamid, base[c])]
+    ticks = sorted({int(t) for t in death_ticks if int(t) <= int(fe1)})
+    if ticks:
+        before = read_at(parser, DEATH_COUNTERS, [t - 1 for t in ticks], after=False, guard=guard, rate=rate)
+        at = read_at(parser, DEATH_COUNTERS, ticks, after=True, guard=guard, rate=rate)
+        before["steamid"], at["steamid"] = ids(before), ids(at)
+        # Per player and death tick: the counters on the tick less those on the tick before it. A player with
+        # no controller on either side of a tick (connecting, leaving) has no rise there.
+        def keyed(df, shift):
+            df = df.dropna(subset=["steamid"]).assign(tick=df.tick.astype("int64") + shift,
+                                                      steamid=df.steamid.astype("int64"))
+            return df.drop_duplicates(["tick", "steamid"]).set_index(["tick", "steamid"])[DEATH_COUNTERS]
+        rise = (keyed(at, 0) - keyed(before, 1)).dropna().groupby(level="steamid").sum()
+        for c in DEATH_COUNTERS:
+            base[c] = [int(v) - int(rise[c].get(int(s_), 0)) if not (pd.isna(s_) or pd.isna(v)) else v
+                       for s_, v in zip(base.steamid, base[c])]
     return base
 
 
@@ -996,12 +1011,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     for df in (pos, econ_raw, sb, dmg_counter, score_at):
         df["steamid"] = resolve_ids(df.steamid, df.name, bots)
     k0 = stamp(ev("player_death"))
-    k0 = k0[k0["round"] == 1]
-    base = scoreboard_baseline(parser, rounds, pd.DataFrame({
-        "tick": k0.tick, "attacker_steamid": pid(k0, "attacker"), "victim_steamid": pid(k0, "user"),
-        "assister_steamid": pid(k0, "assister"), "a_side": col(k0, "attacker_team_num").map(SIDE),
-        "v_side": col(k0, "user_team_num").map(SIDE), "assister_side": col(k0, "assister_team_num").map(SIDE),
-        "headshot": col(k0, "headshot", False)}), guard, rate, ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots))
+    base = scoreboard_baseline(parser, rounds, k0.tick[k0["round"] == 1], guard, rate,
+                               ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots))
     baseline = baseline_of(base)
     # Teams are named by clan name. When the server set no distinct clan names (one pro
     # demo: both empty, so the two teams merged into one with 13 wins), each player is named instead by the
