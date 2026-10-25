@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { attributes, roleOf, type Baselines } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
-import { roleBlend } from "../../stats/identity";
+import { roleBlend, styleScores } from "../../stats/identity";
 import { METRIC } from "../../stats/metrics";
 import type { Rating3 } from "../../stats/rating3";
 import type { Summary } from "../../stats/rollup";
@@ -76,6 +76,7 @@ export default function ProfileView() {
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null,
   } : null;
   const attrs = useMemo(() => (p && baselines ? attrsOf(attributes(p.you, baselines, { side: ratingKey(side) })) : []), [p?.you, baselines, side]); // eslint-disable-line react-hooks/exhaustive-deps
+  const style = useMemo(() => (p && baselines ? { T: styleScores(attributes(p.t, baselines, { side: "T" })), CT: styleScores(attributes(p.ct, baselines, { side: "CT" })) } : null), [p?.t, p?.ct, baselines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!p) {
     return (
@@ -125,7 +126,7 @@ export default function ProfileView() {
           <RoleCard t={p.t} ct={p.ct} />
           <WhereYouPlay />
         </div>
-        {baselines && <PlaysLike attrs={attrs} side={ratingKey(side)} initial={r.query.get("pro")} />}
+        {style && <PlaysLike attrs={attrs} profile={style} side={ratingKey(side)} initial={r.query.get("pro")} />}
       </div>
     </div>
   );

@@ -2,7 +2,7 @@
 // against the pro pack, and the how-good table.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { compare, type Baselines, type SideKey as PoolSide } from "../../../stats/compare";
-import { mostSimilar, roleBlend, STYLE, type PackPlayer } from "../../../stats/identity";
+import { mostSimilar, roleBlend, STYLE, type PackPlayer, type SideProfile } from "../../../stats/identity";
 import { METRIC } from "../../../stats/metrics";
 import type { Summary } from "../../../stats/rollup";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
@@ -142,13 +142,13 @@ const toPack = (pros: Pro[]): PackPlayer[] => pros.map((p) => ({
 }));
 
 /**
- * "Plays like": your six style attributes against each pro's on the same side (identity.ts
- * mostSimilar: 100 minus the mean gap between the scores). Both sets are percentiles against pros,
- * so the level is comparable as well as the shape.
+ * "Plays like": the shape of your six style attributes on T and on CT against each pro's (identity.ts
+ * mostSimilar, cosine similarity over the twelve scores, design/identity.md). The radar and table
+ * show the selected side.
  */
-export function PlaysLike({ attrs, side, initial }: { attrs: Attr[]; side: PoolSide; initial: string | null }) {
+export function PlaysLike({ attrs, profile, side, initial }: { attrs: Attr[]; profile: SideProfile; side: PoolSide; initial: string | null }) {
   const pack = usePros();
-  if (pack.state === "ready") return <PlaysLikeBody attrs={attrs} side={side} initial={initial} pros={pack.pros} />;
+  if (pack.state === "ready") return <PlaysLikeBody attrs={attrs} profile={profile} side={side} initial={initial} pros={pack.pros} />;
   return (
     <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
       {pack.state === "loading" ? <div className="skel" style={{ height: 220 }} /> : (
@@ -167,10 +167,9 @@ export function PlaysLike({ attrs, side, initial }: { attrs: Attr[]; side: PoolS
   );
 }
 
-function PlaysLikeBody({ attrs, side, initial, pros }: { attrs: Attr[]; side: PoolSide; initial: string | null; pros: Pro[] }) {
-  const mine = useMemo(() => Object.fromEntries(attrs.filter((a) => a.kind === "identity").map((a) => [a.id, a.score])), [attrs]);
+function PlaysLikeBody({ attrs, profile, side, initial, pros }: { attrs: Attr[]; profile: SideProfile; side: PoolSide; initial: string | null; pros: Pro[] }) {
   const bySlug = useMemo(() => new Map(pros.map((p) => [p.slug, p])), [pros]);
-  const ranked = useMemo(() => mostSimilar(mine, toPack(pros), side, "style", pros.length).map((x) => ({ item: bySlug.get(x.name)!, pct: Math.round(x.similarity) })), [mine, pros, side, bySlug]);
+  const ranked = useMemo(() => mostSimilar(profile, toPack(pros), "style", pros.length).map((x) => ({ item: bySlug.get(x.name)!, pct: Math.round(x.similarity) })), [profile, pros, bySlug]);
   const [sel, setSel] = useState<string | null>(initial);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
@@ -182,7 +181,7 @@ function PlaysLikeBody({ attrs, side, initial, pros }: { attrs: Attr[]; side: Po
   const sideLabel = side === "both" ? "both sides" : side;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" aside={<span className="meta">Six style attributes, {sideLabel}</span>} foot={<><span>Your scores and a pro's are both percentiles against pros, so the match compares how high each attribute sits as well as the shape.</span><span>Pro scores and photos: HLTV</span></>}>
+      <Card title="Plays like" aside={<span className="meta">Six style attributes on T and CT; radar: {sideLabel}</span>} foot={<><span>The match compares the shape of your twelve style scores (six attributes, T and CT) with a pro's, not how high they sit.</span><span>Pro scores and photos: HLTV</span></>}>
         <div className="likes">
           <div className="likes__left">
             <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens the player's HLTV page">

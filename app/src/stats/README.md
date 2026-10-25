@@ -62,7 +62,7 @@ equipment, plant, and `winProb`, the win-probability path), `pr` (one row per pl
 | `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
 | `roleBlend(summary, side)` (`identity.ts`) | `RoleBlend` | Shares of Entry, Lurker, Half-lurker (T) or Anchor, Rotator, Mixed (CT), plus AWPer, with plain-language evidence. Pass a summary rolled up with `sides: [side]`; add `maps`, `spawns` or `ownBuy` for the breakdowns. |
 | `supportTendency(summary, baselines, opt)` | score and evidence | Support has no labelled source, so it stays out of the blend. |
-| `mostSimilar(mine, pack, side, "style" or "performance")` | ranked names | "Plays like" over the six style attributes; "performs like" over the rating inputs. `styleScores(attributes(...))` and `performanceScores(...)` build `mine`. The pack is optional and private (see Baselines). |
+| `mostSimilar(mine, pack, "style" or "performance")` | ranked names | Cosine similarity of profile shape over both sides: "plays like" over the six style attributes on T and on CT, "performs like" over the rating inputs on T and on CT. `mine` is `{ T, CT }`, each built with `styleScores(attributes(sideSummary, b, { side }))` or `performanceScores(...)`. The pack is optional and private (see Baselines). |
 | `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
 | `gunProficiency(facts, filter)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. |
 | `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
