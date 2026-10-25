@@ -383,10 +383,10 @@ One row per tick of every engagement window. a_* attacker, v_* victim. Key: (eng
 | `a_y` | Float32 | yes |  |
 | `a_yaw` | Float32 | yes | degrees |
 | `a_z` | Float32 | yes | feet |
-| `engagement_id` | Int32 | yes | engagements.engagement_id |
+| `engagement_id` | Int32 | no | engagements.engagement_id |
 | `mesh_visible` | Boolean | yes | attacker eye to victim eye, or chest, clear of the map mesh; null when visibility_status is not ok |
 | `smoke_blocked` | Boolean | yes | approximation: the eye-to-eye segment crosses a live smoke sphere |
-| `tick` | Int32 | yes | tick |
+| `tick` | Int32 | no | tick |
 | `v_duck` | Float32 | yes |  |
 | `v_eye_z` | Float32 | yes |  |
 | `v_pitch` | Float32 | yes |  |

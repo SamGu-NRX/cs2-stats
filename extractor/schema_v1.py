@@ -506,7 +506,7 @@ NULLABLE: dict[str, list[str]] = {
     "blinds": ["attacker_steamid"],
     "bomb": ["site", "site_entity", "zone"],
     "damages": ["a_place", "a_side", "a_x", "a_y", "a_z", "armor_after", "armor_before", "attacker_steamid", "distance", "dmg_armor", "dmg_armor_capped", "dmg_health", "grenade_entity_id", "grenade_link", "hitgroup", "v_place", "v_x", "v_y", "v_z", "weapon"],
-    "engagement_ticks": ["a_duck", "a_eye_z", "a_pitch", "a_shot_fired", "a_spotted_by_v", "a_vel_x", "a_vel_y", "a_vel_z", "a_x", "a_y", "a_yaw", "a_z", "engagement_id", "mesh_visible", "smoke_blocked", "tick", "v_duck", "v_eye_z", "v_pitch", "v_shot_fired", "v_spotted_by_a", "v_vel_x", "v_vel_y", "v_vel_z", "v_x", "v_y", "v_yaw", "v_z"],
+    "engagement_ticks": ["a_duck", "a_eye_z", "a_pitch", "a_shot_fired", "a_spotted_by_v", "a_vel_x", "a_vel_y", "a_vel_z", "a_x", "a_y", "a_yaw", "a_z", "mesh_visible", "smoke_blocked", "v_duck", "v_eye_z", "v_pitch", "v_shot_fired", "v_spotted_by_a", "v_vel_x", "v_vel_y", "v_vel_z", "v_x", "v_y", "v_yaw", "v_z"],
     "engagements": ["first_damage_tick", "first_shot_tick", "first_visible_tick", "weapon"],
     "events_misc": ["steamid"],
     "grenade_events": [],

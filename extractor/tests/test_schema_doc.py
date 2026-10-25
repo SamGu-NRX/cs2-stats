@@ -27,3 +27,10 @@ def test_schema_doc_matches_the_enforced_types_nullability_and_keys():
     assert types == TYPES
     assert {t: sorted(c) for t, c in nullable.items()} == {t: sorted(c) for t, c in NULLABLE.items()}
     assert keys == KEYS
+
+
+def test_no_key_column_may_hold_nulls():
+    # engagement_ticks declared its key (engagement_id, tick) nullable, so the writer would have let a row
+    # with no engagement or no tick through even though the duplicate-key check relies on both.
+    nullable_keys = {t: sorted(set(k) & set(NULLABLE.get(t, []))) for t, k in KEYS.items()}
+    assert {t: c for t, c in nullable_keys.items() if c} == {}
