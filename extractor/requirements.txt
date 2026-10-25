@@ -1,0 +1,22 @@
+# Python 3.12.3. pip freeze of .venv without the test tools (requirements-dev.txt); demoparser2, awpy, polars, pandas, pyarrow and psutil are the direct dependencies.
+annotated-doc==0.0.5
+awpy==3.1.1
+colorama==0.4.6
+demoparser2==0.42.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+numpy==2.5.4
+pandas==3.1.0
+polars==2.0.0
+polars-runtime-32==2.0.0
+psutil==7.2.2
+pyarrow==26.0.0
+Pygments==2.21.0
+python-dateutil==3.0.0
+rich==15.0.0
+shellingham==1.5.4
+six==1.17.0
+tqdm==4.70.1
+typer==0.27.3
+tzdata==2026.5
+zstandard==0.25.0
