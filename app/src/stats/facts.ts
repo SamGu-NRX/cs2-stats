@@ -292,6 +292,19 @@ export interface MatchFacts {
   aggression: AggroFact[];
   information: InfoFact[];
   utilq: UtilQFact[];
+  /** the rounds in match.totalsOnly that the source gave totals for, in round order */
+  totalsRounds: TotalsRound[];
+}
+
+/**
+ * A round the source holds only as the game's own per-player totals (a plugin file's rounds.basic):
+ * shown in the round grid and drawer, never folded into any rate.
+ */
+export interface TotalsRound {
+  number: number;
+  winner: "CT" | "T" | null;
+  /** players with a totals row, by players index */
+  players: { pi: number; kills: number; deaths: number; assists: number; dmg: number; hsKills: number }[];
 }
 
 export const emptyMeasures = (): Measures => Object.fromEntries(MEASURES.map((k) => [k, 0])) as Measures;

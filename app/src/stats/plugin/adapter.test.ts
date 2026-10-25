@@ -203,8 +203,12 @@ it("names the rounds a converted log holds only as totals", () => {
       ...r, winSide: won, how: won.map(() => "elim"), freezeTick: won.map((_, i) => 1000 + i * 5000), durTicks: won.map(() => 4000),
       bombSite: won.map(() => null), plantTick: won.map(() => null), planter: won.map(() => null), defuser: won.map(() => null),
       ctSetup: won.map(() => null), score: won.map(() => [0, 0] as [number, number]), side: won.map((): (2 | 3)[] => [3, 2]), equip: won.map(() => [4000, 4000]), money: won.map(() => [800, 800]),
+      // the game's totals: round 2 only, the bot without a row
+      basic: won.map((_, ri) => (ri === 1 ? [[2, 0, 1, 180, 1], null] : [null, null])),
     },
   };
   const f = derive(pluginToTables(m), CS2RB);
   expect([f.match.totalsOnly, f.rounds.map((x) => x.number)]).toEqual([[1, 2, 3, 10], [4, 5, 6, 7, 8, 9, 11, 12]]);
+  // fails if a totals-only round's per-player totals are lost, so its grid cells and drawer stay empty
+  expect(f.totalsRounds.filter((r) => r.players.length)).toEqual([{ number: 2, winner: "CT", players: [{ pi: 0, kills: 2, deaths: 0, assists: 1, dmg: 180, hsKills: 1 }] }]);
 });

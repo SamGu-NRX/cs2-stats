@@ -146,6 +146,13 @@ export function pluginToTables(m: MatchFile): MatchTables {
       on_screen: onScreenSource(m),
       // rounds the file holds only as totals, left out of the tables (MatchInfo.totalsOnly)
       totals_only_rounds: m.rounds.winSide.flatMap((_, ri) => (covered(ri) ? [] : [ri + 1])),
+      // their per-player totals from the game's round stats (MatchFacts.totalsRounds)
+      totals_rounds: m.rounds.winSide.flatMap((w, ri) => {
+        const basic = m.rounds.basic?.[ri];
+        if (covered(ri) || !basic) return [];
+        const players = key.flatMap((id, pi) => (basic[pi] ? [[id, ...basic[pi]!]] : []));
+        return [{ round: ri + 1, winner: SIDE[w ?? -1] ?? null, players }];
+      }),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
