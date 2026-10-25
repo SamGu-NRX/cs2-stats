@@ -13,7 +13,7 @@ export default function Aim({ v }: TabProps) {
         <div className="card">
           <Empty
             icon={<AimIcon size={40} />}
-            text={<NeedsDemo detail="This match has no shots: converted logs never do, and older plugin versions did not record them." />}
+            text={<NeedsDemo detail="Converted logs and older plugin versions record no shots." />}
           />
         </div>
       </div>

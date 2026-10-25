@@ -16,10 +16,14 @@ import { BarContent } from "../shell/Bar";
 import { MapFilter, useFilters } from "../shell/filters";
 import { Empty, SectionAside, swingSumTip } from "./shared";
 
+/** An unfinished match that never got past 0–0: nothing to show, so the list leaves it out. */
+const unplayed = (s: MatchEntry) => !s.match.complete && s.score.us + s.score.them === 0;
+
 const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(file)}"]`)?.closest("tr") ?? null;
 
 export function MatchesView() {
-  const { matches: summaries } = useData();
+  const { matches: all } = useData();
+  const summaries = useMemo(() => all.filter((s) => !unplayed(s)), [all]);
   const r = useRoute();
   const { map } = useFilters();
   const q = r.query.get("q") ?? "";
