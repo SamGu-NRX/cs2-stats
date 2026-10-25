@@ -23,9 +23,6 @@ internal sealed class TraceLosProbe : ILosProbe
     /// BotState uses for its flash line of sight on this build.
     /// </summary>
     public static readonly Contents Mask = Masks.SolidBrushOnly;
-    /// <summary>A trace this close to its end point counts as clear.</summary>
-    public const float ClearFraction = 0.999f;
-
     private readonly Vector _a = new(0, 0, 0), _b = new(0, 0, 0);
     private readonly TraceOptions _opts = new() { InteractsWith = Mask };
     private CBaseEntity? _ignore;
@@ -48,10 +45,10 @@ internal sealed class TraceLosProbe : ILosProbe
         {
             _a.X = (float)ax; _a.Y = (float)ay; _a.Z = (float)az;
             _b.X = (float)bx; _b.Y = (float)by; _b.Z = (float)bz;
-            var r = Trace.TraceEndShape(_a, _b, _ignore!, _opts);
+            var r = Trace.TraceEndShape(_a, _b, _ignore!, _opts); // a null ignore entity is passed as IntPtr.Zero
             float f = r.Fraction;
             if (!float.IsFinite(f)) { Error = $"trace fraction {f}"; return null; }
-            return f >= ClearFraction;
+            return LosTracker.IsClear(f, r.IsAllSolid);
         }
         catch (Exception ex)
         {

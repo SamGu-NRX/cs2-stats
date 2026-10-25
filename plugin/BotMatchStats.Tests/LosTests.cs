@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using BotMatchStats.Core;
 
@@ -9,11 +8,9 @@ internal sealed class FakeProbe : ILosProbe
 {
     public Func<double, double, double, bool?> Answer = (_, _, _) => true;
     public int Calls;
-    public int SleepUs;
     public bool? Clear(double ax, double ay, double az, double bx, double by, double bz)
     {
         Calls++;
-        if (SleepUs > 0) { var sw = Stopwatch.StartNew(); while (sw.Elapsed.TotalMicroseconds < SleepUs) { } }
         return Answer(bx, by, bz);
     }
 }
@@ -89,14 +86,24 @@ public class LosTests
     }
 
     [Fact]
-    public void ASlowCheckStopsAtTheTimeBudgetAndKeepsPreviousStates()
+    public void AnExhaustedBudgetMakesNoTraceAndKeepsPreviousStates()
     {
-        _los.BudgetMicros = LosTracker.BudgetUs;
-        _probe.SleepUs = (int)LosTracker.BudgetUs + 50;
         _los.Check(0, 100, H, _f, _rows);
-        Assert.Equal(1, _los.BudgetHits);          // E2 skipped
-        Assert.Equal(1, _probe.Calls);              // E1's eye point only
-        Assert.False(_los.IsVisible(E2));
+        int calls = _probe.Calls;
+        _probe.Answer = (_, _, _) => false;
+        _los.BudgetMicros = 0; // the deadline has passed before the first trace
+        _los.Check(0, 104, H, _f, _rows);
+        Assert.Equal(calls, _probe.Calls);
+        Assert.Equal(2, _los.BudgetHits);
+        Assert.True(_los.IsVisible(E1) && _los.IsVisible(E2));
+    }
+
+    [Fact]
+    public void ATraceThatStartsInSolidIsBlocked()
+    {
+        Assert.True(LosTracker.IsClear(1f, startInSolid: false));
+        Assert.False(LosTracker.IsClear(1f, startInSolid: true));
+        Assert.False(LosTracker.IsClear(0.5f, startInSolid: false));
     }
 
     [Fact]
@@ -115,7 +122,7 @@ public class RecorderLosTests
     public RecorderLosTests()
     {
         _r = new Recorder(_sink, _frames, new PerfCounter(), _warnings.Add);
-        _r.Los.Attach(_probe);
+        _r.AttachLos(_probe);
         _r.Los.BudgetMicros = 1e9;
         _r.StartCapture(new MatchMeta { Id = "0123456789abcdef0123456789abcdef", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z", Env = new EnvInfo { Plugin = "t", MaxRounds = 24 } });
         _r.PlayerIndex("76561190000000001", "me", false);
@@ -162,27 +169,55 @@ public class RecorderLosTests
     }
 
     [Fact]
-    public void FailureFallsBackToTheMaskAndIsRecorded()
+    public void AFailedTraceMidRoundClosesVisibleEnemiesAndFallsBackToTheMask()
     {
-        _frames.ByPi[B].Spot0 = 1u; // human slot 0 spotted
+        _frames.ByPi[B].Spot0 = 1u; // the human's slot (0) is set in the mask
         _frames.HumanSlot = 0;
+        Ticks(2000, 2004);
         _probe.Answer = (_, _, _) => null;
-        Ticks(2000, 2010);
+        Ticks(2004, 2010);
+        int calls = _probe.Calls;
         _r.Shot(new ShotInput { Tick = 2010, Weapon = 0, Class = 0, Speed = 0, MaxSpeed = 215 });
+        Ticks(2010, 2100);
         _r.RoundEnd(2100, 3, 8);
         _r.Finalize(1, 2164);
         var s = _sink.Store;
+        Assert.Equal(new[] { (2000, 1), (2004, 0) }, s.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
+        Assert.Equal(calls, _probe.Calls); // no trace after the failure
         Assert.Equal("trace returned no result", s.Meta.Env.LosError);
         Assert.Equal("mixed", s.Meta.Env.VisSource);
         Assert.Equal(1, s.Shots[0].VisTarget);
-        Assert.Contains(_warnings, w => w.Contains("Line of sight turned off"));
+        Assert.Single(_warnings, w => w.Contains("Line of sight turned off"));
     }
 
     [Fact]
-    public void FileRoundTripKeepsLosRowsHitLosAndEnv()
+    public void AFailureBeforeTheMatchIsRecordedAndANewMapRetries()
+    {
+        var sink = new ListSink();
+        var probe = new FakeProbe();
+        var r = new Recorder(sink, _frames, new PerfCounter(), _ => { });
+        r.AttachLos(probe);
+        r.DisableLos("a trace to a point 4 units above the eye was blocked", 0); // the startup self-check
+        r.StartCapture(new MatchMeta { Id = "fedcba9876543210fedcba9876543210", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z", Env = new EnvInfo { Plugin = "t", MaxRounds = 24 } });
+        r.PlayerIndex("76561190000000001", "me", false);
+        r.PlayerIndex("B:Rock", "Rock", true);
+        r.SetHuman(H);
+        r.BeginRound(0, 1000, 0, 0, partial: false, Nil.V);
+        r.SetFreezePlayer(H, 3, 800, 1000, 100, true);
+        r.SetFreezePlayer(B, 2, 1000, 900, 100, true);
+        r.FreezeEnd(2000);
+        for (int t = 2000; t < 2100; t++) r.Tick(t);
+        r.Flush();
+        Assert.Equal(0, probe.Calls);
+        Assert.Equal(("mask", "a trace to a point 4 units above the eye was blocked"), (sink.Store.Meta.Env.VisSource, sink.Store.Meta.Env.LosError));
+        r.AttachLos(probe);
+        Assert.True(r.Los.Enabled);
+    }
+
+    [Fact]
+    public void FileRoundTripKeepsLosRowsAndEnv()
     {
         Ticks(2000, 2001);
-        _r.HitMask(2001, H, B, 1u, 0u, true, 1);
         _r.RoundEnd(2100, 3, 8);
         _r.Finalize(1, 2164);
         using var ms = new MemoryStream();
@@ -191,14 +226,12 @@ public class RecorderLosTests
         var aim = doc.RootElement.GetProperty("aim");
         Assert.Equal("[2000,2100]", aim.GetProperty("los").GetProperty("tick").GetRawText());
         Assert.Equal("[1,0]", aim.GetProperty("los").GetProperty("vis").GetRawText());
-        Assert.Equal("[1]", aim.GetProperty("hitMask").GetProperty("los").GetRawText());
         Assert.Equal("los", doc.RootElement.GetProperty("env").GetProperty("visSource").GetString());
         Assert.True(doc.RootElement.GetProperty("perf").GetProperty("losChecks")[0].GetInt32() > 0);
         ms.Position = 0;
         var back = new MatchStore();
         MatchCodec.Read(ms, back);
         Assert.Equal(2, back.Los.Count);
-        Assert.Equal(1, back.HitMask[0].Los);
         Assert.Equal("los", back.Meta.Env.VisSource);
         Assert.Equal(_sink.Store.Perf[0].LosTraces, back.Perf[0].LosTraces);
     }
@@ -216,7 +249,7 @@ public class RecorderLosTests
         Assert.Equal("mask", _sink.Store.Meta.Env.VisSource);
         using var ms = new MemoryStream();
         MatchCodec.Write(_sink.Store, ms, inProgress: true);
-        // An older file has neither aim.los nor hitMask.los, env.visSource or the perf los columns.
+        // An older file has neither aim.los, env.visSource nor the perf los columns.
         using var doc = JsonDocument.Parse(ms.ToArray());
         var back = new MatchStore();
         MatchCodec.Read(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(StripLos(doc.RootElement))), back);

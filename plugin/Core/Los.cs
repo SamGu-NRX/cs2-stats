@@ -42,8 +42,10 @@ public sealed class LosTracker
     public const double MaxDistance = 5000;
     /// <summary>Trace points as a fraction of the enemy's view offset above the feet: eye, chest, waist.</summary>
     public static readonly double[] PointHeights = { 1.0, 0.65, 0.35 };
-    /// <summary>A check stops tracing new enemies once it has run this long.</summary>
+    /// <summary>A check makes no further trace once it has run this long.</summary>
     public const double BudgetUs = 250;
+    /// <summary>A trace this close to its end point counts as clear.</summary>
+    public const float ClearFraction = 0.999f;
 
     private readonly bool[] _vis = new bool[Limits.MaxPlayers];
     /// <summary>The time budget in use; <see cref="BudgetUs"/> unless a test changes it.</summary>
@@ -85,6 +87,12 @@ public sealed class LosTracker
         CheckTicksSum = CheckTicksMax = 0;
     }
 
+    /// <summary>
+    /// A trace result as line of sight: clear when it reaches the end point. A trace that starts inside
+    /// solid geometry reports fraction 1 without having travelled, so it counts as blocked.
+    /// </summary>
+    public static bool IsClear(float fraction, bool startInSolid) => !startInSolid && fraction >= ClearFraction;
+
     /// <summary>Whether an enemy direction lies inside the horizontal view cone.</summary>
     public static bool InCone(double viewYawDeg, double dx, double dy)
     {
@@ -101,8 +109,7 @@ public sealed class LosTracker
         long t0 = Stopwatch.GetTimestamp();
         ref var h = ref frames.ByPi[human];
         double ex = h.X, ey = h.Y, ez = h.Z + h.ViewZ;
-        long budgetTicks = (long)(BudgetMicros * Stopwatch.Frequency / 1_000_000);
-        bool overBudget = false;
+        long deadline = t0 + (long)(BudgetMicros * Stopwatch.Frequency / 1_000_000);
         for (int i = 0; i < frames.ActiveCount; i++)
         {
             int pi = frames.Active[i];
@@ -117,16 +124,19 @@ public sealed class LosTracker
                 Set(ri, tick, pi, false, sink);
                 continue;
             }
-            if (overBudget || Stopwatch.GetTimestamp() - t0 > budgetTicks) { overBudget = true; BudgetHits++; continue; }
-            bool vis = false;
+            // The deadline is checked before every trace; an enemy not finished keeps its previous state.
+            bool vis = false, done = false;
             foreach (double frac in PointHeights)
             {
+                if (Stopwatch.GetTimestamp() >= deadline) break;
                 Traces++;
                 bool? clear = Probe!.Clear(ex, ey, ez, e.X, e.Y, e.Z + e.ViewZ * frac);
                 if (clear == null) { Fail("trace returned no result"); return; }
-                if (clear.Value) { vis = true; break; }
+                if (clear.Value) { vis = true; done = true; break; }
+                done = frac == PointHeights[^1];
             }
-            Set(ri, tick, pi, vis, sink);
+            if (done) Set(ri, tick, pi, vis, sink);
+            else BudgetHits++;
         }
         long dt = Stopwatch.GetTimestamp() - t0;
         Checks++;
