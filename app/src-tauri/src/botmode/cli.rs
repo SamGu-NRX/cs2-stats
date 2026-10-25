@@ -114,7 +114,7 @@ fn run(a: Args) -> Result<(), String> {
     let layout = &ctx.layout;
     match words.as_slice() {
         ["status"] => {
-            let s = status::status(layout, &probe, ctx.install.as_ref(), ctx.steam_launch_options())?;
+            let s = status::status(layout, &probe, ctx.install.as_ref(), ctx.steam_launch_options().ok().flatten())?;
             print(a.json, &s, status::render);
         }
         ["download", tag] => {
@@ -189,8 +189,7 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let plan = launch::prepare(layout, &probe, &ctx.steam()?)?;
-            launch::start(&plan)?;
+            let plan = launch::launch(layout, &probe, &ctx.steam()?, ctx.steam_launch_options()?.as_deref())?;
             print(a.json, &plan, |p| {
                 let mut o = String::new();
                 if let Some(m) = &p.bot_mode_change {

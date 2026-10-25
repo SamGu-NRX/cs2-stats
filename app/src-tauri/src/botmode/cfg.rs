@@ -1,42 +1,100 @@
 //! Reading and merging convar lines in a cfg the user also edits by hand.
 //!
-//! A "simple" line is one command, `name value`, optionally followed by a `//` comment.
+//! Lines are read the way the console reads them: `;` separates commands and `//` starts a
+//! comment, both only outside double quotes, so `say hi; br_player_music_kit 5` sets the convar
+//! and `alias x "a; br_player_music_kit 5"` does not. A command with a name and exactly one
+//! argument sets a value. A "simple" line is one such command, optionally followed by a comment.
+//!
 //! Merging rewrites the value of every simple line that sets a known convar, keeps the line's
 //! indentation and comment, and leaves every other line alone. A convar with no simple line
-//! is appended. So is one that a later compound line (`a 1; name 2`) also sets, because the
-//! game applies the last value it reads.
+//! is appended. So is one that a later compound line also sets, because the game applies the
+//! last value it reads.
+
+/// A line's commands, and its comment (empty when there is none).
+fn commands(line: &str) -> (Vec<&str>, &str) {
+    let b = line.as_bytes();
+    let (mut out, mut start, mut quoted) = (Vec::new(), 0, false);
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => quoted = !quoted,
+            b';' if !quoted => {
+                out.push(&line[start..i]);
+                start = i + 1;
+            }
+            b'/' if !quoted && b.get(i + 1) == Some(&b'/') => {
+                out.push(&line[start..i]);
+                return (out, &line[i..]);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&line[start..]);
+    (out, "")
+}
+
+/// A command's words. A quoted word keeps its spaces and loses its quotes.
+fn words(cmd: &str) -> Vec<&str> {
+    let b = cmd.as_bytes();
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < b.len() {
+        if b[i].is_ascii_whitespace() {
+            i += 1;
+        } else if b[i] == b'"' {
+            let s = i + 1;
+            let mut j = s;
+            while j < b.len() && b[j] != b'"' {
+                j += 1;
+            }
+            out.push(&cmd[s..j]);
+            i = j + 1;
+        } else {
+            let s = i;
+            while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'"' {
+                i += 1;
+            }
+            out.push(&cmd[s..i]);
+        }
+    }
+    out
+}
+
+/// `(name, value)` when `cmd` is a name and exactly one argument.
+fn setting(cmd: &str) -> Option<(&str, &str)> {
+    match words(cmd).as_slice() {
+        [name, value] => Some((name, value)),
+        _ => None,
+    }
+}
 
 fn split_comment(line: &str) -> (&str, &str) {
-    match line.find("//") {
-        Some(i) => (&line[..i], &line[i..]),
-        None => (line, ""),
-    }
+    let (_, comment) = commands(line);
+    (&line[..line.len() - comment.len()], comment)
 }
 
-/// `(name, value)` when `line` is a single uncommented command with one argument.
+/// `(name, value)` when `line` holds exactly one command and it sets a value.
 fn simple(line: &str) -> Option<(&str, &str)> {
-    let (code, _) = split_comment(line);
-    if code.contains(';') {
-        return None;
+    let (cmds, _) = commands(line);
+    match cmds.iter().filter(|c| !c.trim().is_empty()).collect::<Vec<_>>().as_slice() {
+        [only] => setting(only),
+        _ => None,
     }
-    let mut t = code.split_whitespace();
-    let (name, value) = (t.next()?, t.next()?);
-    t.next().is_none().then_some((name, value.trim_matches('"')))
 }
 
-/// Whether a compound or multi-argument line also sets `name`.
+/// Whether any command on the line is `name`.
 fn mentions(line: &str, name: &str) -> bool {
-    let (code, _) = split_comment(line);
-    code.split(';').any(|cmd| cmd.split_whitespace().next().is_some_and(|t| t.eq_ignore_ascii_case(name)))
+    commands(line).0.iter().any(|c| words(c).first().is_some_and(|w| w.eq_ignore_ascii_case(name)))
 }
 
-/// The value the game ends up with: the last uncommented simple line that sets `name`.
+/// Every value-setting command in `text`, in the order the game runs them.
+fn settings(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines().flat_map(|l| commands(l).0).filter_map(setting)
+}
+
+/// The value the game ends up with: the last command anywhere that sets `name`.
 pub fn read(text: &str, name: &str) -> Option<String> {
-    text.lines()
-        .filter_map(simple)
-        .filter(|(n, _)| n.eq_ignore_ascii_case(name))
-        .last()
-        .map(|(_, v)| v.to_string())
+    settings(text).filter(|(n, _)| n.eq_ignore_ascii_case(name)).last().map(|(_, v)| v.to_string())
 }
 
 /// Sets each `(name, value)` in `text`. See the module notes for the rules.
@@ -98,7 +156,7 @@ const COMMANDS: [&str; 18] = [
 /// or appended). The release's other lines, including `bind` and `alias` lines, win.
 pub fn keep_user_values(release: &str, user: &str) -> String {
     let mut carried: Vec<(&str, String)> = Vec::new();
-    for (name, _) in user.lines().filter_map(simple) {
+    for (name, _) in settings(user) {
         if COMMANDS.iter().any(|c| c.eq_ignore_ascii_case(name)) || carried.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
             continue;
         }
@@ -137,6 +195,18 @@ mod tests {
         let text = "mp_maxrounds 24\nbr_player_music_kit 5\nsay hi; br_player_music_kit 9\n";
         let out = merge(text, &[("br_player_music_kit", "33".into()), ("br_dropped_knife_skins", "0".into())]);
         assert_eq!(out, "mp_maxrounds 24\nbr_player_music_kit 33\nsay hi; br_player_music_kit 9\nbr_player_music_kit 33\nbr_dropped_knife_skins 0\n");
+        assert_eq!(read(&out, "br_player_music_kit").as_deref(), Some("33"));
+    }
+
+    #[test]
+    fn a_compound_line_sets_the_convar_but_a_quoted_alias_body_does_not() {
+        let text = "br_player_music_kit 3\nsay hi; br_player_music_kit 5\n";
+        assert_eq!(read(text, "br_player_music_kit").as_deref(), Some("5"));
+        let quoted = "br_player_music_kit 3\nalias x \"say a; br_player_music_kit 9\"\nsay \"http://example.com\"; br_dropped_knife_skins 1\n";
+        assert_eq!(read(quoted, "br_player_music_kit").as_deref(), Some("3"));
+        assert_eq!(read(quoted, "br_dropped_knife_skins").as_deref(), Some("1"), "// inside quotes is not a comment");
+        // Setting a value the compound line overrides appends a line that wins.
+        let out = merge(text, &[("br_player_music_kit", "33".into())]);
         assert_eq!(read(&out, "br_player_music_kit").as_deref(), Some("33"));
     }
 

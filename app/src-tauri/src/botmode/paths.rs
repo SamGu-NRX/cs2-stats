@@ -106,6 +106,56 @@ pub fn is_runtime_output(rel: &str) -> bool {
 /// Suffix of the temporary file written next to a target before it is renamed into place.
 pub const TMP_SUFFIX: &str = ".botmode-tmp";
 
+/// Whether a file or folder is a junction or symbolic link (or another reparse point).
+pub fn is_reparse(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        std::os::windows::fs::MetadataExt::file_attributes(meta) & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
+}
+
+/// The path to write `rel` at, checked to stay physically inside the game folder:
+/// - No existing part of `rel` under `root`, nor its `.botmode-tmp` sibling, is a junction or
+///   symbolic link. `rel()` stops `..` in the text; this stops a link that leads elsewhere.
+/// - With `create`, the parent folders are created, then the canonical parent must lie inside
+///   `root_canon` (the canonical game folder).
+pub fn confined(root: &Path, root_canon: &Path, rel: &str, create: bool) -> Result<PathBuf, String> {
+    let rel = self::rel(rel)?;
+    let link = |p: &Path| format!("{rel}: {} is a junction or symbolic link; Bot Mode only writes real folders inside the game folder", p.display());
+    let mut p = root.to_path_buf();
+    for part in rel.split('/') {
+        p.push(part);
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) if is_reparse(&m) => return Err(link(&p)),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(format!("{}: {e}", p.display())),
+        }
+    }
+    let target = join_rel(root, &rel);
+    let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(TMP_SUFFIX);
+    let tmp = target.with_file_name(tmp_name);
+    if std::fs::symlink_metadata(&tmp).is_ok_and(|m| is_reparse(&m)) {
+        return Err(link(&tmp));
+    }
+    let parent = target.parent().ok_or_else(|| format!("{rel}: no parent folder"))?;
+    if create {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    match parent.canonicalize() {
+        Ok(canon) if canon.starts_with(root_canon) => Ok(target),
+        Ok(canon) => Err(format!("{rel}: resolves to {}, outside the game folder {}", canon.display(), root_canon.display())),
+        Err(e) if !create && e.kind() == std::io::ErrorKind::NotFound => Ok(target),
+        Err(e) => Err(format!("{}: {e}", parent.display())),
+    }
+}
+
 /// Expands `%NAME%` environment references, as Windows does in paths.
 pub fn expand_env(raw: &str) -> Result<PathBuf, String> {
     let mut out = String::new();

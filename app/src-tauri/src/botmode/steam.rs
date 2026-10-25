@@ -2,9 +2,11 @@
 
 use super::vdf::{self, Node};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const CS2_APP_ID: &str = "730";
+/// CS2's folder under `steamapps\common`, from its app manifest.
+const CS2_INSTALL_DIR: &str = "Counter-Strike Global Offensive";
 /// Offset between a SteamID64 and the 32-bit account id used for `userdata\<id>` folders.
 const STEAMID64_BASE: u64 = 76_561_197_960_265_728;
 
@@ -41,15 +43,15 @@ pub fn find_cs2(steam: &Path) -> Result<Cs2Install, String> {
     let lf = steam.join("steamapps").join("libraryfolders.vdf");
     let root = read_vdf(&lf)?;
     let folders = root.get("libraryfolders").ok_or_else(|| format!("{}: no libraryfolders key", lf.display()))?;
-    let mut libraries: Vec<(bool, PathBuf)> = folders
-        .entries()
-        .iter()
-        .filter_map(|(_, lib)| {
-            let path = lib.get("path")?.str()?;
-            let lists = lib.path(&["apps", CS2_APP_ID]).is_some();
-            Some((lists, PathBuf::from(path)))
-        })
-        .collect();
+    let mut libraries: Vec<(bool, PathBuf)> = Vec::new();
+    for (_, lib) in folders.entries() {
+        let Some(path) = lib.get("path").and_then(Node::str) else { continue };
+        let path = PathBuf::from(path);
+        if !path.is_absolute() || path.components().any(|c| !matches!(c, Component::Prefix(_) | Component::RootDir | Component::Normal(_))) {
+            return Err(format!("{}: library path {} is not a plain absolute path", lf.display(), path.display()));
+        }
+        libraries.push((lib.path(&["apps", CS2_APP_ID]).is_some(), path));
+    }
     if libraries.is_empty() {
         libraries.push((false, steam.to_path_buf()));
     }
@@ -62,9 +64,18 @@ pub fn find_cs2(steam: &Path) -> Result<Cs2Install, String> {
         let acf = read_vdf(&manifest)?;
         let state = acf.get("AppState").ok_or_else(|| format!("{}: no AppState", manifest.display()))?;
         let dir = state.get("installdir").and_then(Node::str).ok_or_else(|| format!("{}: no installdir", manifest.display()))?;
+        if dir != CS2_INSTALL_DIR {
+            return Err(format!("{}: installdir is {dir:?}, not {CS2_INSTALL_DIR:?}", manifest.display()));
+        }
         let csgo = library.join("steamapps").join("common").join(dir).join("game").join("csgo");
         if !csgo.join("gameinfo.gi").is_file() {
             return Err(format!("{}: CS2 is listed here but {} has no gameinfo.gi", manifest.display(), csgo.display()));
+        }
+        // A junction anywhere on the way could make that path lead somewhere else.
+        let canon = csgo.canonicalize().map_err(|e| format!("{}: {e}", csgo.display()))?;
+        let tail: Vec<String> = canon.components().rev().take(5).map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
+        if tail != ["csgo", "game", &CS2_INSTALL_DIR.to_ascii_lowercase(), "common", "steamapps"] {
+            return Err(format!("{} resolves to {}, which is not a ...\\steamapps\\common\\{CS2_INSTALL_DIR}\\game\\csgo folder", csgo.display(), canon.display()));
         }
         return Ok(Cs2Install {
             steam: steam.to_path_buf(),
@@ -188,6 +199,40 @@ mod tests {
         fs::remove_file(csgo.join("gameinfo.gi")).unwrap();
         let err = find_cs2(&steam).unwrap_err();
         assert!(err.contains("no gameinfo.gi"), "{err}");
+    }
+
+    #[test]
+    fn library_paths_and_install_folders_that_could_lead_elsewhere_are_refused() {
+        let s = Scratch::new("steam-vdf");
+        let (steam, csgo) = fake_steam(&s);
+        let lf = steam.join("steamapps/libraryfolders.vdf");
+        let original = fs::read_to_string(&lf).unwrap();
+        let esc = |p: &Path| p.display().to_string().replace('\\', "\\\\");
+        let lib2 = s.0.join("Games Lib");
+        for bad in [s.0.join("x").join("..").join("Games Lib"), PathBuf::from("Games Lib")] {
+            fs::write(&lf, original.replace(&esc(&lib2), &esc(&bad))).unwrap();
+            let err = find_cs2(&steam).unwrap_err();
+            assert!(err.contains("not a plain absolute path"), "{bad:?}: {err}");
+        }
+        fs::write(&lf, &original).unwrap();
+
+        let acf = lib2.join("steamapps/appmanifest_730.acf");
+        let manifest = fs::read_to_string(&acf).unwrap();
+        fs::write(&acf, manifest.replace("Counter-Strike Global Offensive", "..\\..\\Windows")).unwrap();
+        assert!(find_cs2(&steam).unwrap_err().contains("installdir is"));
+        fs::write(&acf, &manifest).unwrap();
+
+        // The install folder is a junction to a folder that is not CS2's.
+        #[cfg(windows)]
+        {
+            let elsewhere = s.0.join("elsewhere");
+            write(&elsewhere.join("game/csgo/gameinfo.gi"), "\"GameInfo\" {}");
+            let cs2 = csgo.parent().unwrap().parent().unwrap().to_path_buf();
+            fs::remove_dir_all(&cs2).unwrap();
+            crate::botmode::testutil::junction(&cs2, &elsewhere);
+            let err = find_cs2(&steam).unwrap_err();
+            assert!(err.contains("which is not a"), "{err}");
+        }
     }
 
     #[test]
