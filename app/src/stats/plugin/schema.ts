@@ -219,9 +219,6 @@ export interface Shots {
   visTarget?: (number | null)[];
   /** bullet_impact events in the shot's tick */
   impacts?: (number | null)[];
-  /** plugin 1.2.0: absolute view angles at the shot (m_angEyeAngles, degrees, pitch positive down, aim punch excluded); missing or NaN in older files */
-  pitch?: (number | null)[];
-  yaw?: (number | null)[];
   /** weapon class from the item name; null for the taser */
   cls?: ("rifle" | "sniper" | "smg" | "pistol" | "shotgun" | "heavy" | null)[];
   /** plugin 1.2.0: the human's absolute view at the shot, degrees (pitch down positive), without aim punch */
