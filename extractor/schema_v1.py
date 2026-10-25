@@ -268,6 +268,7 @@ TYPES: dict[str, dict[str, str]] = {
         "mesh_release": "String",
         "mesh_sha256": "String",
         "n_rounds": "Int16",
+        "unattributed_damage_hp": "Int32",
         "pandas_version": "String",
         "parsed_at_utc": "String",
         "patch_version": "String",
