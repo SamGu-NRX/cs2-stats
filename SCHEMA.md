@@ -101,3 +101,36 @@ One row per bullet you fired.
 - **No allocations per tick:** cache player lists and refresh them on spawn/death/team events or once a second.
 - **Disk:** the game thread never touches the disk. Encoding and writes run on a worker thread once per round.
 - **Instrumentation:** the plugin records its own per-round timing (average and max µs per tick and per event, GC count) into the file under `perf`, so the budget can be checked on real matches.
+
+## Optional fields (plugin 1.0.0)
+Additions to v1 that do not change any field above; the version stays `1`. Readers must treat each as possibly absent. Index columns (`throw`, `flash`, `nade`) are row indices into another table of the same file, or null.
+
+### Economy
+- `rounds.equipEnd[pi]`: equipment value at `round_end`; 0 when the player was dead, null if absent.
+- `rounds.survPrimary[pi]`: 1 if alive at `round_end` holding a primary (any weapon in the rifle gear slot), else 0; null if absent.
+- `rounds.utilBought[pi]`: grenades bought this round as counts `[he, flash, smoke, molotov, incgrenade, decoy]`; null if absent.
+- `rounds.utilSpent[pi]`: money spent on those grenades, from each item's VData price; null if absent or if any price was unreadable.
+
+### Utility
+- `throws`: one row per `grenade_thrown`: `ri, tick, thrower, type (he|flash|smoke|molotov|incgrenade|decoy), pos` (thrower's position).
+- `grenades` rows are detonations: `hegrenade_detonate`, `flashbang_detonate`, `smokegrenade_detonate`, `inferno_startburn` (type `molotov`, covers the incendiary; thrower is the inferno entity's owner) and `decoy_started`. `grenades.throw`: the thrower's oldest unlinked throw of the same kind in the round.
+- `blinds.flash`: the attacker's latest flash detonation at most 1 s earlier. Blinds include teammates and the thrower; events with 0 ms duration are not stored.
+- `damage.nade`, `kills.nade`: for `hegrenade` damage, the attacker's latest HE detonation at most 1 s earlier; for `inferno` damage, the latest molotov detonation at most 8 s earlier.
+- `kills.vUtil`: grenades the victim held at death as `[he, flash, smoke, molotov, incgrenade, decoy]`, read in the `player_death` pre-hook, falling back to the once-a-second inventory snapshot; null if unknown.
+
+### Reconciliation (`recon`)
+Each round is compared with the game's `CSPerRoundStats_t` at the next `round_start` (or 1 s after `cs_win_panel_match`). Kills count enemy kills, deaths count every death, and assists count damage and flash assists; these must match exactly. Damage must satisfy `0 <= game - ours <= hits`, because `player_hurt` truncates fractional damage (measured on `fixtures/events_two_matches.jsonl`).
+- `rounds`: `ri, checked, kOk, dOk, aOk, dmgOk, missing` (players whose stats could not be read).
+- `mismatch`: `ri, pi, field (k|d|a|dmg), ours, game, hits`.
+- `partial`: rounds with incomplete capture (before `firstFullRound`, or interrupted by a reload). Rounds before capture began have only `winSide` and `how`.
+- `unknownResult`: rounds whose `MatchStats_RoundResults` code is unknown; their `winSide` and `how` are null.
+- `capUnknown`: damage rows whose pre-hit HP was unknown (capped at 100). `dropped`: rows lost to full buffers, by table.
+
+### `perf`
+Columns per round: `ri, ticks, tickAvgUs, tickMaxUs, events, evAvgUs, evMaxUs, evMaxName, tickAllocB, evAllocB, gen0`, plus `write: {lastMs, maxMs, lastBytes}` for the worker's previous write. Times cover only the plugin's own handlers; allocation is `GC.GetAllocatedBytesForCurrentThread` measured inside them.
+
+### In-progress files
+Files under `inprogress\` have `status: "inprogress"` and a `resume: {gameStart, nextBurst}` object; final files have neither. A hot-reloaded plugin resumes the file whose `map` and `gameStart` (`m_flGameStartTime`) match the running game. Any other in-progress file is written to `matches\` as `abandoned`.
+
+### `pos`
+Only alive players are sampled, so `alive` is always 1 in plugin 1.0.0.

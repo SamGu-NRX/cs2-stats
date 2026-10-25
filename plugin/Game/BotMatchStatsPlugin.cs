@@ -1,0 +1,526 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using BotMatchStats.Core;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Modules.Events;
+using CounterStrikeSharp.API.Modules.Memory;
+using Microsoft.Extensions.Logging;
+
+namespace BotMatchStats.Game;
+
+/// <summary>
+/// Records bot matches to %APPDATA%\BotMatchStats per SCHEMA.md. This class translates engine state
+/// into calls on <see cref="Recorder"/>; the recording logic itself lives in Core and has no engine
+/// dependency. Disk work happens on <see cref="MatchWriter"/>'s thread.
+/// </summary>
+public sealed partial class BotMatchStatsPlugin : BasePlugin
+{
+    public override string ModuleName => "BotMatchStats";
+    public override string ModuleVersion => "1.0.0";
+    public override string ModuleDescription => "Records bot matches into compact columnar files";
+
+    private const int MaxSlots = 64;
+
+    private struct Slot
+    {
+        public nint Ctrl;
+        public uint Handle;
+        public bool Valid, Pending, IsBot;
+        public int Pi, Team;
+        public ulong SteamId;
+        public string? Key, Name;
+        /// <summary>Grenades held at the last once-a-second snapshot.</summary>
+        public UtilCounts Util;
+        public UtilCounts DeathUtil;
+        public int DeathUtilTick, DeathWeapons;
+    }
+
+    private readonly Slot[] _slots = new Slot[MaxSlots];
+    private readonly int[] _piSlot = new int[Limits.MaxPlayers];
+    private readonly FrameSet _frames = new();
+    private readonly PerfCounter _perf = new();
+    private readonly GameRoundStats[] _gameStats = new GameRoundStats[Limits.MaxPlayers];
+    private readonly bool[] _haveStats = new bool[Limits.MaxPlayers];
+    /// <summary>Ammo slot per UtilType, learned from a grenade's VData the first time one is bought or thrown.</summary>
+    private readonly int[] _ammoSlot = { -1, -1, -1, -1, -1, -1 };
+
+    private MatchWriter? _writer;
+    private Recorder? _rec;
+    private CCSGameRules? _rules;
+    private CCSTeam? _teamT, _teamCt;
+    private bool _needInit = true, _scanPending, _disabled, _memReady;
+    private int _tick, _nextRefresh, _finalizeAt = Nil.V, _matchEndAt = Nil.V, _humanSlot = -1;
+    private int _perRoundStride;
+    private string _map = "";
+    private int _tickErrors;
+
+    // Shot path: the weapon is resolved once per weapon switch, keyed by the active weapon handle.
+    private uint _shotWeaponHandle = Mem.InvalidHandle;
+    private int _shotWeapon = Nil.V, _shotMaxSpeed = Nil.V;
+    private bool _shotIsBullet;
+
+    public override void Load(bool hotReload)
+    {
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BotMatchStats");
+        string? gameDir = null;
+        try { gameDir = Server.GameDirectory; } catch (Exception ex) { Logger.LogWarning("Game directory unavailable, env.game will be null: {Message}", ex.Message); }
+        _writer = new MatchWriter(root, gameDir);
+        _rec = new Recorder(_writer, _frames, _perf, Warn);
+        Array.Fill(_piSlot, -1);
+
+        RegisterListener<Listeners.OnTick>(OnTick);
+        RegisterListener<Listeners.OnMapStart>(OnMapStart);
+        RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
+
+        RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        RegisterEventHandler<EventRoundFreezeEnd>(OnFreezeEnd);
+        RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
+        RegisterEventHandler<EventCsWinPanelMatch>(OnWinPanel);
+        RegisterEventHandler<EventPlayerDeath>(OnDeathPre, HookMode.Pre);
+        RegisterEventHandler<EventPlayerDeath>(OnDeath);
+        RegisterEventHandler<EventPlayerHurt>(OnHurt);
+        RegisterEventHandler<EventPlayerBlind>(OnBlind);
+        RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
+        RegisterEventHandler<EventBulletImpact>(OnBulletImpact);
+        RegisterEventHandler<EventGrenadeThrown>(OnGrenadeThrown);
+        RegisterEventHandler<EventHegrenadeDetonate>(OnHe);
+        RegisterEventHandler<EventFlashbangDetonate>(OnFlash);
+        RegisterEventHandler<EventSmokegrenadeDetonate>(OnSmoke);
+        RegisterEventHandler<EventInfernoStartburn>(OnInferno);
+        RegisterEventHandler<EventDecoyStarted>(OnDecoy);
+        RegisterEventHandler<EventBombPlanted>(OnBombPlanted);
+        RegisterEventHandler<EventBombDefused>(OnBombDefused);
+        RegisterEventHandler<EventItemPurchase>(OnItemPurchase);
+        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
+        RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
+        RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+        Logger.LogInformation("BotMatchStats loaded (hotReload={HotReload}); files go to {Root}", hotReload, root);
+    }
+
+    public override void Unload(bool hotReload)
+    {
+        // CSSharp removes listeners and event handlers itself. Seal what this round has so far so a
+        // hot-reloaded instance can resume, then stop the worker.
+        try
+        {
+            if (_rec is { Capturing: true }) _rec.Flush();
+            if (_writer != null && !_writer.Drain(TimeSpan.FromSeconds(2)))
+                Logger.LogWarning("BotMatchStats: writer did not finish within 2 s during unload; the last write may be missing.");
+        }
+        finally
+        {
+            _writer?.Dispose();
+            _writer = null;
+        }
+    }
+
+    private void Warn(string message) => Logger.LogWarning("BotMatchStats: {Message}", message);
+
+    // ---- per tick -------------------------------------------------------------------------------
+
+    private void OnTick()
+    {
+        long t0 = Stopwatch.GetTimestamp();
+        long a0 = GC.GetAllocatedBytesForCurrentThread();
+        try
+        {
+            TickBody();
+        }
+        catch (Exception ex)
+        {
+            if (_tickErrors++ < 5) Logger.LogError(ex, "BotMatchStats tick failed");
+        }
+        _perf.Tick(Stopwatch.GetTimestamp() - t0, GC.GetAllocatedBytesForCurrentThread() - a0);
+    }
+
+    private void TickBody()
+    {
+        DrainMessages();
+        if (_disabled || _rec == null) return;
+        if (_needInit) { TryInit(); return; }
+        _tick = Server.TickCount;
+        if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
+        if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }
+        if (_tick >= _nextRefresh)
+        {
+            _nextRefresh = _tick + 64;
+            RefreshSlots(false);
+            if (_rec.Capturing) RefreshEconomy();
+        }
+        if (!_rec.Capturing || !_rec.Live) return;
+
+        bool aim = _rec.NeedsAim, humanPos = _rec.HumanPosDue(_tick), botPos = _rec.BotPosDue(_tick), ct = _rec.CtSetupDue(_tick);
+        if (!aim && !humanPos && !botPos && !ct) return;
+        int human = _rec.HumanPi;
+        int humanTeam = _humanSlot >= 0 ? _slots[_humanSlot].Team : 0;
+        for (int i = 0; i < _frames.ActiveCount; i++)
+        {
+            int pi = _frames.Active[i];
+            int slot = _piSlot[pi];
+            if (slot < 0) continue;
+            int team = _slots[slot].Team;
+            bool isHuman = pi == human;
+            bool enemy = aim && IsOpposing(team, humanTeam);
+            if (!(botPos || ct || enemy || (isHuman && (aim || humanPos)))) continue;
+            bool place = botPos || (isHuman && humanPos) || (ct && team == 3);
+            ReadFrame(slot, ref _frames.ByPi[pi], place);
+        }
+        _rec.Tick(_tick);
+    }
+
+    private static bool IsOpposing(int a, int b) => (a == 2 && b == 3) || (a == 3 && b == 2);
+
+    private void ReadFrame(int slot, ref PlayerFrame f, bool place)
+    {
+        ref var s = ref _slots[slot];
+        nint ctrl = Mem.ByIndex(slot + 1, out uint h);
+        if (ctrl == 0 || ctrl != s.Ctrl || h != s.Handle) { f.Present = false; _nextRefresh = 0; return; }
+        nint pawn = Mem.PawnOf(ctrl);
+        if (pawn == 0) { f.Present = false; return; }
+        Mem.Frame(pawn, s.Team, ref f, place ? _rec!.Places : null);
+    }
+
+    /// <summary>Fresh frames for the human and enemies, for the shot path.</summary>
+    private void ReadAimFrames()
+    {
+        int human = _rec!.HumanPi;
+        int humanTeam = _humanSlot >= 0 ? _slots[_humanSlot].Team : 0;
+        for (int i = 0; i < _frames.ActiveCount; i++)
+        {
+            int pi = _frames.Active[i];
+            int slot = _piSlot[pi];
+            if (slot < 0) continue;
+            if (pi == human || IsOpposing(_slots[slot].Team, humanTeam)) ReadFrame(slot, ref _frames.ByPi[pi], false);
+        }
+    }
+
+    private void DrainMessages()
+    {
+        var w = _writer;
+        if (w == null) return;
+        while (w.Messages.TryDequeue(out var m))
+        {
+            switch (m.Level)
+            {
+                case MessageLevel.Error: Logger.LogError("BotMatchStats writer: {Text}", m.Text); break;
+                case MessageLevel.Warn: Logger.LogWarning("BotMatchStats writer: {Text}", m.Text); break;
+                default: Logger.LogInformation("BotMatchStats writer: {Text}", m.Text); break;
+            }
+            if (m.Resume != null && _scanPending) ResumeCapture(m.Resume, m.ResumeRounds);
+            if (m.ScanDone && _scanPending)
+            {
+                _scanPending = false;
+                if (!_rec!.Capturing) StartMidMatchIfLive();
+            }
+        }
+    }
+
+    // ---- init and slots -------------------------------------------------------------------------
+
+    private void TryInit()
+    {
+        CCSGameRulesProxy? proxy = null;
+        foreach (var p in Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules")) { proxy = p; break; }
+        if (proxy?.GameRules == null) return;
+        if (!_memReady)
+        {
+            string? err = Mem.Init();
+            if (err != null)
+            {
+                _disabled = true;
+                Logger.LogError("BotMatchStats DISABLED: raw entity access is not usable ({Error}). Nothing will be recorded.", err);
+                return;
+            }
+            _perRoundStride = Schema.GetSchemaOffset("CSMatchStats_t", "m_iEnemy5Ks");
+            if (_perRoundStride <= 0) Logger.LogError("BotMatchStats: CSPerRoundStats_t size unknown; reconciliation disabled.");
+            _memReady = true;
+        }
+        _rules = proxy.GameRules;
+        _teamT = _teamCt = null;
+        foreach (var t in Utilities.FindAllEntitiesByDesignerName<CCSTeam>("cs_team_manager"))
+        {
+            if (t.TeamNum == 2) _teamT = t;
+            else if (t.TeamNum == 3) _teamCt = t;
+        }
+        _map = Server.MapName;
+        _needInit = false;
+        _tick = Server.TickCount;
+        RefreshSlots(true);
+        _scanPending = true;
+        _writer!.RequestScan(_map, _rules.GameStartTime);
+    }
+
+    private void ResetSlotPis()
+    {
+        for (int i = 0; i < MaxSlots; i++) _slots[i].Pi = Nil.V;
+        Array.Fill(_piSlot, -1);
+        _frames.ActiveCount = 0;
+        _shotWeaponHandle = Mem.InvalidHandle;
+    }
+
+    /// <summary>
+    /// Re-reads the 64 controller slots. Wrappers are created only for slots whose entity changed,
+    /// so a steady server allocates nothing here.
+    /// </summary>
+    private void RefreshSlots(bool forceTeams)
+    {
+        var rec = _rec!;
+        int humanSlot = -1;
+        int active = 0;
+        for (int slot = 0; slot < MaxSlots; slot++)
+        {
+            ref var s = ref _slots[slot];
+            nint ctrl = Mem.ByIndex(slot + 1, out uint h);
+            if (ctrl != s.Ctrl || h != s.Handle)
+            {
+                if (s.Pi != Nil.V && (uint)s.Pi < Limits.MaxPlayers) _piSlot[s.Pi] = -1;
+                s = default;
+                s.Pi = Nil.V;
+                s.Ctrl = ctrl;
+                s.Handle = h;
+                s.Pending = ctrl != 0;
+            }
+            if (s.Pending) Identify(ref s);
+            if (!s.Valid) continue;
+            int team = Mem.Read<byte>(s.Ctrl, Mem.Team);
+            if (rec.Capturing && s.Pi == Nil.V)
+            {
+                s.Pi = rec.PlayerIndex(s.Key!, s.Name!, s.IsBot);
+                if (s.Pi != Nil.V) { _piSlot[s.Pi] = slot; forceTeams = true; }
+            }
+            if (team != s.Team || forceTeams)
+            {
+                s.Team = team;
+                if (s.Pi != Nil.V) rec.SetTeam(s.Pi, team);
+            }
+            if (!s.IsBot && s.SteamId != 0 && humanSlot < 0) humanSlot = slot;
+            if (s.Pi != Nil.V) _frames.Active[active++] = s.Pi;
+        }
+        _frames.ActiveCount = active;
+        _humanSlot = humanSlot;
+        _frames.HumanSlot = humanSlot;
+        if (rec.Capturing && humanSlot >= 0)
+        {
+            int hp = _slots[humanSlot].Pi;
+            if (rec.HumanPi == Nil.V && hp != Nil.V) rec.SetHuman(hp);
+        }
+    }
+
+    private static void Identify(ref Slot s)
+    {
+        var c = new CCSPlayerController(s.Ctrl);
+        if (!c.IsValid || c.DesignerName != "cs_player_controller" || c.IsHLTV) { s.Pending = false; return; }
+        if (c.Connected != PlayerConnectedState.Connected) return; // stays pending until fully connected
+        s.Pending = false;
+        s.Valid = true;
+        s.IsBot = c.IsBot;
+        s.Name = c.PlayerName;
+        s.SteamId = s.IsBot ? 0 : c.SteamID;
+        s.Key = s.IsBot ? "B:" + s.Name : s.SteamId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        s.Team = -1;
+    }
+
+    private int PiOf(CCSPlayerController? c)
+    {
+        if (c == null || !c.IsValid) return Nil.V;
+        int slot = c.Slot;
+        if ((uint)slot >= MaxSlots) return Nil.V;
+        if (_slots[slot].Pi == Nil.V && _rec!.Capturing) RefreshSlots(false);
+        return _slots[slot].Pi;
+    }
+
+    private int SlotOfEventPlayer(GameEvent e, string field)
+    {
+        nint ptr = NativeAPI.GetEventPlayerController(e.Handle, field);
+        if (ptr == 0) return -1;
+        for (int i = 0; i < MaxSlots; i++) if (_slots[i].Ctrl == ptr) return i;
+        return -1;
+    }
+
+    private nint PawnOfSlot(int slot)
+    {
+        if ((uint)slot >= MaxSlots) return 0;
+        ref var s = ref _slots[slot];
+        nint ctrl = Mem.ByIndex(slot + 1, out uint h);
+        if (ctrl == 0 || ctrl != s.Ctrl || h != s.Handle) return 0;
+        return Mem.PawnOf(ctrl);
+    }
+
+    /// <summary>Once a second: current equipment value and grenades held, for kill states and utility at death.</summary>
+    private void RefreshEconomy()
+    {
+        for (int slot = 0; slot < MaxSlots; slot++)
+        {
+            ref var s = ref _slots[slot];
+            if (!s.Valid || s.Pi == Nil.V) continue;
+            nint pawn = PawnOfSlot(slot);
+            if (pawn == 0 || !Mem.Alive(pawn)) continue;
+            _rec!.SetEquipNow(s.Pi, Mem.EquipValue(pawn));
+            var u = Mem.Utility(pawn, _ammoSlot, out int n);
+            if (n > 0) s.Util = u;
+        }
+    }
+
+    // ---- lifecycle ------------------------------------------------------------------------------
+
+    private EnvInfo CurrentEnv() => new()
+    {
+        Plugin = ModuleVersion,
+        Cssharp = Api.GetVersionString(),
+        TickRate = (int)Math.Round(1.0 / Server.TickInterval),
+        MaxRounds = ConVarInt("mp_maxrounds"),
+        BotDifficulty = ConVarInt("bot_difficulty"),
+        Halftime = ConVarInt("mp_halftime") != 0,
+    };
+
+    private int ConVarInt(string name)
+    {
+        try
+        {
+            var cv = ConVar.Find(name);
+            if (cv == null) return Nil.V;
+            return cv.Type == ConVarType.Bool ? (cv.GetPrimitiveValue<bool>() ? 1 : 0) : cv.GetPrimitiveValue<int>();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("BotMatchStats: could not read {Name}: {Message}", name, ex.Message);
+            return Nil.V;
+        }
+    }
+
+    private void StartCapture(int firstFullRound)
+    {
+        var rules = _rules!;
+        double sinceStart = Math.Max(0, Server.CurrentTime - rules.GameStartTime);
+        var meta = new MatchMeta
+        {
+            Id = RandomNumberGenerator.GetHexString(32, lowercase: true),
+            Map = _map,
+            StartUtc = MatchCodec.IsoUtc(DateTime.UtcNow.AddSeconds(-sinceStart)),
+            Env = CurrentEnv(),
+            FirstFullRound = firstFullRound,
+            GameStart = rules.GameStartTime,
+            Status = "inprogress",
+        };
+        _rec!.StartCapture(meta);
+        ResetSlotPis();
+        RefreshSlots(true);
+        Logger.LogInformation("BotMatchStats: capture {Id} started on {Map}, firstFullRound={First}", meta.Id, _map, firstFullRound);
+    }
+
+    private void ResumeCapture(MatchMeta meta, int roundsInFile)
+    {
+        var rules = _rules!;
+        var env = CurrentEnv();
+        meta.Env.Halftime = env.Halftime;
+        meta.Status = "inprogress";
+        _rec!.Resume(meta);
+        ResetSlotPis();
+        RefreshSlots(true);
+        bool postRound = rules.RoundWinStatus != 0;
+        int r = rules.TotalRoundsPlayed;
+        AddPriorRounds(roundsInFile, r);
+        if (!postRound && roundsInFile <= r) BeginRoundMidway(r);
+    }
+
+    /// <summary>Loaded while a match is live and nothing to resume: rounds so far come from the game's round results.</summary>
+    private void StartMidMatchIfLive()
+    {
+        var rules = _rules;
+        if (rules == null || rules.WarmupPeriod || !rules.HasMatchStarted || _humanSlot < 0) return;
+        int r = rules.TotalRoundsPlayed;
+        bool postRound = rules.RoundWinStatus != 0;
+        StartCapture(postRound ? r : r + 1);
+        AddPriorRounds(0, r);
+        if (!postRound) BeginRoundMidway(r);
+    }
+
+    private void AddPriorRounds(int from, int to)
+    {
+        var results = _rules!.MatchStats_RoundResults;
+        for (int ri = from; ri < to; ri++) _rec!.AddPriorRound(ri, ri < results.Length ? results[ri] : 0);
+    }
+
+    private void BeginRoundMidway(int r)
+    {
+        var rules = _rules!;
+        int freeze = Nil.V;
+        if (!rules.FreezePeriod)
+            freeze = _tick - (int)Math.Round((Server.CurrentTime - rules.RoundStartTime) * _rec!.TickRate);
+        _rec!.BeginRound(r, _tick, _teamT?.Score ?? Nil.V, _teamCt?.Score ?? Nil.V, partial: true, freeze);
+    }
+
+    private void FinalizeRound()
+    {
+        var rec = _rec!;
+        if (!rec.RoundActive || rec.RoundFinalized) return;
+        var results = _rules!.MatchStats_RoundResults;
+        int code = rec.Ri >= 0 && rec.Ri < results.Length ? results[rec.Ri] : 0;
+        rec.Finalize(code, _tick);
+    }
+
+    private void Reconcile()
+    {
+        var rec = _rec!;
+        if (!rec.RoundActive || _perRoundStride <= 0) return;
+        int ri = rec.Ri;
+        Array.Clear(_haveStats);
+        for (int slot = 0; slot < MaxSlots; slot++)
+        {
+            ref var s = ref _slots[slot];
+            if (!s.Valid || (uint)s.Pi >= Limits.MaxPlayers) continue;
+            var ats = new CCSPlayerController(s.Ctrl).ActionTrackingServices;
+            if (ats == null) continue;
+            nint vec = ats.PerRoundStats.Handle;
+            int count = Marshal.ReadInt32(vec);
+            nint elems = Marshal.ReadIntPtr(vec + 8);
+            if (ri < 0 || ri >= count || count > 512 || elems == 0) continue;
+            var st = new CSPerRoundStats_t(elems + ri * _perRoundStride);
+            _gameStats[s.Pi] = new GameRoundStats { Kills = st.Kills, Deaths = st.Deaths, Assists = st.Assists, Damage = st.Damage };
+            _haveStats[s.Pi] = true;
+        }
+        rec.Reconcile(ri, _gameStats, _haveStats);
+    }
+
+    private void EndMatch()
+    {
+        var rec = _rec!;
+        if (!rec.Capturing) return;
+        FinalizeRound();
+        Reconcile();
+        rec.EndCapture("complete", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
+    }
+
+    private void Abandon(string why)
+    {
+        var rec = _rec!;
+        if (!rec.Capturing) return;
+        _finalizeAt = Nil.V;
+        Logger.LogInformation("BotMatchStats: capture abandoned ({Why})", why);
+        rec.EndCapture("abandoned", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
+    }
+
+    private void OnMapStart(string map)
+    {
+        // Normally OnMapEnd already closed the capture; this covers a map change without it.
+        Abandon("map change");
+        _finalizeAt = _matchEndAt = Nil.V;
+        _needInit = true;
+        _rules = null;
+    }
+
+    private void OnMapEnd()
+    {
+        if (_rec == null) return;
+        if (_matchEndAt != Nil.V) { _matchEndAt = Nil.V; EndMatch(); }
+        else Abandon("map end");
+        _needInit = true;
+        _rules = null;
+        _teamT = _teamCt = null;
+        _scanPending = false;
+        _finalizeAt = Nil.V;
+    }
+}
