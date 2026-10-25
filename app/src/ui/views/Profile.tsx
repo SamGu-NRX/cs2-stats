@@ -160,8 +160,8 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
     { id: "adr", label: "ADR", bench: bench(BENCH.adr, botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
     { id: "kpr", label: "KPR", bench: bench(BENCH.kpr, botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
   ];
-  // One rating, Rating 3.0 pooled over rounds; a side's rating is the rating of that side's rounds
-  // (rating3BySide), so the overall need not lie between T and CT.
+  // One rating definition (rating3.ts rating3Of): each side rated over its rated rounds, a side under
+  // half rated left out, the total weighted by rated rounds, so it lies between the rated sides.
   const tR = p.ratings.T.value;
   const ctR = p.ratings.CT.value;
   const r3: Rating3 = p.ratings[key];
@@ -382,8 +382,8 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
           { key: "wl", label: "W–L", sort: (m) => m.wins / m.matches, render: (m) => <span className="num">{m.wins}<span className="faint">–</span>{m.matches - m.wins}</span> },
           { key: "adr", label: "ADR", sort: (m) => m.s.v.adr, render: (m) => fmtAdr(m.s.v.adr) },
           { key: "kast", label: "KAST", sort: (m) => m.s.v.kast, render: (m) => <Num v={fmtPct(m.s.v.kast)} /> },
-          { key: "t", label: "T", tip: "Rating 3.0 on T, pooled over rounds", colored: true, sort: (m) => m.r.T.value, render: (m) => <span className="t-text">{fmtRating(m.r.T.value)}</span> },
-          { key: "ct", label: "CT", tip: "Rating 3.0 on CT, pooled over rounds", colored: true, sort: (m) => m.r.CT.value, render: (m) => <span className="ct-text">{fmtRating(m.r.CT.value)}</span> },
+          { key: "t", label: "T", tip: "Rating 3.0 over the T rounds it can value", colored: true, sort: (m) => m.r.T.value, render: (m) => <span className="t-text">{fmtRating(m.r.T.value)}</span> },
+          { key: "ct", label: "CT", tip: "Rating 3.0 over the CT rounds it can value", colored: true, sort: (m) => m.r.CT.value, render: (m) => <span className="ct-text">{fmtRating(m.r.CT.value)}</span> },
           { key: "rating", label: RATING_LABEL, tip: RATING_POOLED, colored: true, sort: (m) => m.r[key].value, render: (m) => { const x = m.r[key].value; return <b style={{ color: ratingText(x) }}>{fmtRating(x)}</b>; } },
         ]}
       />
