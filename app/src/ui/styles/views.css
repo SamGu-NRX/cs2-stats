@@ -101,7 +101,11 @@
 .hero__agent { position: absolute; right: -10px; bottom: -6px; height: 112%; width: auto; pointer-events: none; user-select: none;
   -webkit-mask-image: linear-gradient(to left, #000 35%, transparent 92%), linear-gradient(to top, transparent 0, #000 22%);
   -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 35%, transparent 92%), linear-gradient(to top, transparent 0, #000 22%); mask-composite: intersect; }
-.hero__in { position: relative; display: grid; gap: 14px; padding: 18px 20px; max-width: 760px; }
+/* The text sits on the panel colour, never on the art: a scrim covers the agent wherever the text
+   column reaches and fades out only past it, so the art shows at the right edge. */
+.hero::after { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(90deg, var(--bg1) 0, var(--bg1) 66%, color-mix(in srgb, var(--bg1) 72%, transparent) 80%, transparent 94%); }
+.hero__in { position: relative; z-index: 1; display: grid; gap: 14px; padding: 18px 20px; max-width: 760px; }
 .hero__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; }
 .hero__map { display: inline-flex; align-items: center; gap: 8px; }
 .hero__map b { font: 700 16px/1 var(--f); letter-spacing: -0.01em; }
