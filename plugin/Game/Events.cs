@@ -2,6 +2,7 @@ using System.Diagnostics;
 using BotMatchStats.Core;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Events;
 using Microsoft.Extensions.Logging;
 
 namespace BotMatchStats.Game;
@@ -25,14 +26,20 @@ public sealed partial class BotMatchStatsPlugin
         return HookResult.Continue;
     }
 
-    private bool Recording => _rec is { RoundActive: true } && !_needInit;
+    /// <summary>
+    /// Registers a handler that runs only when <paramref name="need"/> is met, checked before the
+    /// handler reads any event field: reading a player or entity from an event at the main menu or after
+    /// teardown is what the map gate exists to prevent, so no handler body has to remember it.
+    /// </summary>
+    private void On<T>(Func<T, HookResult> handler, EventNeed need, HookMode mode = HookMode.Post) where T : GameEvent =>
+        RegisterEventHandler<T>((e, _) => _rec != null && !_disabled && _mapGate.EventAllowed(need, _rec.Capturing, _rec.RoundActive) ? handler(e) : HookResult.Continue, mode);
 
     private void EvError(string name, Exception ex) => Log(LogLevel.Error, $"{name} handler failed: {ex}");
 
-    private HookResult OnRoundStart(EventRoundStart e, GameEventInfo info)
+    private HookResult OnRoundStart(EventRoundStart e)
     {
-        if (_rec == null || _needInit || _disabled || _rules == null) return HookResult.Continue;
-        if (_scanPending)
+        if (_rules == null) return HookResult.Continue;
+        if (_mapGate.ScanPending)
         {
             // Not capturing yet, but a restart here changes which match the pending scan must find.
             var rl = _rules;
@@ -44,7 +51,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
-            var rec = _rec;
+            var rec = _rec!;
             _tick = Server.TickCount;
             var rules = _rules;
             bool warm = rules.WarmupPeriod;
@@ -88,9 +95,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("round_start");
     }
 
-    private HookResult OnFreezeEnd(EventRoundFreezeEnd e, GameEventInfo info)
+    private HookResult OnFreezeEnd(EventRoundFreezeEnd e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -136,9 +142,9 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("round_freeze_end");
     }
 
-    private HookResult OnRoundEnd(EventRoundEnd e, GameEventInfo info)
+    private HookResult OnRoundEnd(EventRoundEnd e)
     {
-        if (!Recording || _rec!.RoundFinalized) return HookResult.Continue;
+        if (_rec!.RoundFinalized) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -173,7 +179,7 @@ public sealed partial class BotMatchStatsPlugin
         return false;
     }
 
-    private HookResult OnWinPanel(EventCsWinPanelMatch e, GameEventInfo info)
+    private HookResult OnWinPanel(EventCsWinPanelMatch e)
     {
         // Remembered even when not capturing, so a capture resumed afterwards knows the match is over.
         _winPanelSeen = true;
@@ -184,9 +190,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("cs_win_panel_match");
     }
 
-    private HookResult OnDeathPre(EventPlayerDeath e, GameEventInfo info)
+    private HookResult OnDeathPre(EventPlayerDeath e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -206,9 +211,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("player_death_pre");
     }
 
-    private HookResult OnDeath(EventPlayerDeath e, GameEventInfo info)
+    private HookResult OnDeath(EventPlayerDeath e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -264,9 +268,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("player_death");
     }
 
-    private HookResult OnHurt(EventPlayerHurt e, GameEventInfo info)
+    private HookResult OnHurt(EventPlayerHurt e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -300,9 +303,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("player_hurt");
     }
 
-    private HookResult OnBlind(EventPlayerBlind e, GameEventInfo info)
+    private HookResult OnBlind(EventPlayerBlind e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -319,9 +321,9 @@ public sealed partial class BotMatchStatsPlugin
     /// creating a wrapper; the human's shots read pawn memory directly, and the weapon is resolved
     /// through CSSharp only when the active weapon handle changes.
     /// </summary>
-    private HookResult OnWeaponFire(EventWeaponFire e, GameEventInfo info)
+    private HookResult OnWeaponFire(EventWeaponFire e)
     {
-        if (!Recording || _humanSlot < 0) return HookResult.Continue;
+        if (_humanSlot < 0) return HookResult.Continue;
         nint ctrl = NativeAPI.GetEventPlayerController(e.Handle, "userid");
         if (ctrl == 0 || ctrl != _slots[_humanSlot].Ctrl) return HookResult.Continue;
         EvBegin();
@@ -358,9 +360,9 @@ public sealed partial class BotMatchStatsPlugin
         if (vdata != null) _shotMaxSpeed = (int)Math.Round(vdata.MaxSpeed.Values[0]);
     }
 
-    private HookResult OnBulletImpact(EventBulletImpact e, GameEventInfo info)
+    private HookResult OnBulletImpact(EventBulletImpact e)
     {
-        if (!Recording || _humanSlot < 0) return HookResult.Continue;
+        if (_humanSlot < 0) return HookResult.Continue;
         nint ctrl = NativeAPI.GetEventPlayerController(e.Handle, "userid");
         if (ctrl == 0 || ctrl != _slots[_humanSlot].Ctrl) return HookResult.Continue;
         EvBegin();
@@ -369,9 +371,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("bullet_impact");
     }
 
-    private HookResult OnGrenadeThrown(EventGrenadeThrown e, GameEventInfo info)
+    private HookResult OnGrenadeThrown(EventGrenadeThrown e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -392,31 +393,24 @@ public sealed partial class BotMatchStatsPlugin
 
     private HookResult Detonation(CCSPlayerController? thrower, GrenadeType type, float x, float y, float z, string name, int entityId = Nil.V)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try { _rec!.Grenade(Server.TickCount, PiOf(thrower), type, x, y, z, entityId); }
         catch (Exception ex) { EvError(name, ex); }
         return EvEnd(name);
     }
 
-    private HookResult OnHe(EventHegrenadeDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.He, e.X, e.Y, e.Z, "hegrenade_detonate");
-    private HookResult OnFlash(EventFlashbangDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Flash, e.X, e.Y, e.Z, "flashbang_detonate");
-    private HookResult OnSmoke(EventSmokegrenadeDetonate e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Smoke, e.X, e.Y, e.Z, "smokegrenade_detonate", e.Entityid);
 
-    private HookResult OnSmokeExpired(EventSmokegrenadeExpired e, GameEventInfo info)
+    private HookResult OnSmokeExpired(EventSmokegrenadeExpired e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try { _rec!.SmokeExpired(Server.TickCount, e.Entityid); }
         catch (Exception ex) { EvError("smokegrenade_expired", ex); }
         return EvEnd("smokegrenade_expired");
     }
-    private HookResult OnDecoy(EventDecoyStarted e, GameEventInfo info) => Detonation(e.Userid, GrenadeType.Decoy, e.X, e.Y, e.Z, "decoy_started");
 
     /// <summary>inferno_startburn has no userid; the thrower is the inferno entity's owner.</summary>
-    private HookResult OnInferno(EventInfernoStartburn e, GameEventInfo info)
+    private HookResult OnInferno(EventInfernoStartburn e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -429,9 +423,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("inferno_startburn");
     }
 
-    private HookResult OnBombPlanted(EventBombPlanted e, GameEventInfo info)
+    private HookResult OnBombPlanted(EventBombPlanted e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -448,9 +441,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("bomb_planted");
     }
 
-    private HookResult OnBombDefused(EventBombDefused e, GameEventInfo info)
+    private HookResult OnBombDefused(EventBombDefused e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try { _rec!.BombDefused(Server.TickCount, PiOf(e.Userid)); }
         catch (Exception ex) { EvError("bomb_defused", ex); }
@@ -458,9 +450,8 @@ public sealed partial class BotMatchStatsPlugin
     }
 
     /// <summary>Grenade purchases; the price comes from the bought item's VData.</summary>
-    private HookResult OnItemPurchase(EventItemPurchase e, GameEventInfo info)
+    private HookResult OnItemPurchase(EventItemPurchase e)
     {
-        if (!Recording) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -491,9 +482,8 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("item_purchase");
     }
 
-    private HookResult OnPlayerSpawn(EventPlayerSpawn e, GameEventInfo info)
+    private HookResult OnPlayerSpawn(EventPlayerSpawn e)
     {
-        if (_rec is not { Capturing: true }) return HookResult.Continue;
         EvBegin();
         try
         {
@@ -502,7 +492,7 @@ public sealed partial class BotMatchStatsPlugin
             if (pi != Nil.V && c != null)
             {
                 nint pawn = PawnOfSlot(c.Slot);
-                if (pawn != 0) _rec.SetAlive(pi, Mem.Alive(pawn), Mem.Read<int>(pawn, Mem.Health));
+                if (pawn != 0) _rec!.SetAlive(pi, Mem.Alive(pawn), Mem.Read<int>(pawn, Mem.Health));
             }
             _nextRefresh = 0;
         }
@@ -510,13 +500,13 @@ public sealed partial class BotMatchStatsPlugin
         return EvEnd("player_spawn");
     }
 
-    private HookResult OnPlayerTeam(EventPlayerTeam e, GameEventInfo info)
+    private HookResult OnPlayerTeam(EventPlayerTeam e)
     {
         _nextRefresh = 0;
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerDisconnect(EventPlayerDisconnect e, GameEventInfo info)
+    private HookResult OnPlayerDisconnect(EventPlayerDisconnect e)
     {
         _nextRefresh = 0;
         if (_rec is not { Capturing: true }) return HookResult.Continue;
