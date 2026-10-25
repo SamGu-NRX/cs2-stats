@@ -232,8 +232,8 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `assister_side` | String | yes | CT | T |
 | `assister_steamid` | UInt64 | yes | player id (see Conventions) |
 | `attacker_steamid` | UInt64 | yes | player id (see Conventions) |
-| `attackerblind` | Boolean | no |  |
-| `attackerinair` | Boolean | no |  |
+| `attackerblind` | Boolean | yes | the killer was flashed when he killed: the killfeed's blind mark; null when the demo's player_death has no such field |
+| `attackerinair` | Boolean | yes | the killer was in the air when he killed: the killfeed's in-air mark; null when the demo's player_death has no such field |
 | `distance` | Float32 | no | attacker to victim, Hammer units |
 | `dmg_armor` | Int32 | no | event field |
 | `dmg_health` | Int32 | no | event field |
