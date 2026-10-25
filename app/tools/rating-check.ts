@@ -7,13 +7,13 @@ import { r3Inputs, rating3, rating3BySide } from "../src/stats/rating3";
 import { pearson } from "../src/stats/trends";
 import { rollup } from "../src/stats/rollup";
 import { hltvMaps, joinHltv } from "./hltv";
-import { loadDir, proMapDirs, WINPROB } from "./node-read";
+import { WINPROB, proMaps } from "./node-read";
 
-const cols = { eKPR: [[], []], eDPR: [[], []], eADR: [[], []], eKAST: [[], []], swing: [[], []], rating: [[], []], "rating CT": [[], []], "rating T": [[], []] } as Record<string, [number[], number[]]>;
+const cols = { KPR: [[], []], eKPR: [[], []], DPR: [[], []], eDPR: [[], []], ADR: [[], []], eADR: [[], []], KAST: [[], []], eKAST: [[], []], swing: [[], []], rating: [[], []], "rating CT": [[], []], "rating T": [[], []] } as Record<string, [number[], number[]]>;
 let maps = 0;
 console.log(`win probability: ${WINPROB.label}`);
-for (const dir of proMapDirs()) {
-  const f = derive(await loadDir(dir), WINPROB);
+for await (const { t } of proMaps()) {
+  const f = derive(t, WINPROB);
   const j = joinHltv(f, hltvMaps());
   if (!j) continue;
   maps++;

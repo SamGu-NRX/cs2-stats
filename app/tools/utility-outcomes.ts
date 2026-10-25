@@ -8,14 +8,13 @@
 // with their old definitions, so the reason for pruning them stays reproducible.
 import { derive, hitDamage } from "../src/stats/derive";
 import { isUtility } from "../src/stats/weapons";
-import { loadDir, proMapDirs, WINPROB } from "./node-read";
+import { WINPROB, proMaps } from "./node-read";
 
 type Row = Record<string, number | string | boolean | null>;
 const SUM = ["flashKills", "flashAssists", "heDmg", "utilDmgTaken", "utilUnused", "smokes", "flashes", "hes", "molotovs", "aliveSecs"] as const;
 const rows: Row[] = [];
 let mi = 0;
-for (const dir of proMapDirs()) {
-  const t = await loadDir(dir, ["grenade_throws", "smokes", "engagements", "engagement_ticks"]);
+for await (const { t } of proMaps(["grenade_throws", "smokes", "engagements", "engagement_ticks"])) {
   const f = derive(t, WINPROB);
   const vis = f.match.visibility === "ok";
   const team = new Map<string, Row>();
