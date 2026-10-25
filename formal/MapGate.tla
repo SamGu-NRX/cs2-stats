@@ -27,19 +27,19 @@ MapEnd ==
                    !.scan = IF EndThrows /\ s.capturing THEN @ ELSE FALSE]
 EngineEnd ==
  /\ s.live /\ (s.ending \/ ~OrderedEnd)
- /\ s' = [s EXCEPT !.live = FALSE, !.ready = FALSE,
+ /\ s' = [s EXCEPT !.live = FALSE, !.ready = FALSE, !.gate = FALSE, !.needInit = TRUE,
                    !.named = IF AccurateName THEN FALSE ELSE @,
                    !.ending = FALSE, !.pendingStart = FALSE]
 Reload ==
  /\ s.reloads < Reloads /\ (~s.ending \/ ReloadDuringEnd)
- /\ s' = [s EXCEPT !.reloads = @+1, !.gate = FALSE, !.awaiting = TRUE,
+ /\ s' = [s EXCEPT !.reloads = @+1, !.live = FALSE, !.gate = FALSE, !.awaiting = TRUE,
                    !.needInit = TRUE, !.capturing = FALSE, !.roundLive = FALSE, !.scan = FALSE]
 Housekeeping ==
  /\ LET g == s.gate \/ (s.needInit /\ s.awaiting /\ s.named)
-        init == s.needInit /\ g /\ s.ready
-        probe == s.needInit /\ g
+        init == s.needInit /\ g /\ s.ready /\ s.live
+        probe == s.needInit /\ g /\ s.live
         steady == ~s.needInit
-    IN s' = [s EXCEPT !.gate = g,
+    IN s' = [s EXCEPT !.gate = g /\ s.live,
        !.awaiting = IF s.needInit /\ s.awaiting /\ s.named THEN FALSE ELSE @,
        !.needInit = IF init THEN FALSE ELSE @,
        !.scan = IF init THEN TRUE ELSE @,
@@ -60,7 +60,7 @@ Tick ==
 SwitchMap ==
  /\ s.live /\ ~s.ending /\ ~s.pendingStart /\ s.map < Maps
  /\ s' = [s EXCEPT !.map = @+1, !.named = TRUE, !.ready = FALSE,
-       !.gate = TRUE, !.awaiting = FALSE, !.needInit = TRUE,
+       !.live = TRUE, !.gate = TRUE, !.awaiting = FALSE, !.needInit = TRUE,
        !.capturing = FALSE, !.roundLive = FALSE]
 Next == EngineStart \/ EntityReady \/ MapStart \/ MapEnd \/ EngineEnd \/ Reload
         \/ Housekeeping \/ ScanReply \/ Tick \/ SwitchMap

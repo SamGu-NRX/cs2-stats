@@ -1,9 +1,42 @@
 # Publication and engine-callback audit
 
-Audit target: production code at `683e691426319ef211f58d588a4f3974cc6523fc`.
+Baseline target: production code at `683e691426319ef211f58d588a4f3974cc6523fc`.
+Round-2 extractor target: PR #22 head `5423886465055063ab9a73bdc2c61631483cf8b6`.
+Plugin target: merged main commit `0070cae`.
 Only `formal/` is changed. [RESULTS.md](RESULTS.md) records exact TLC counts;
 [WITNESSES.md](WITNESSES.md) retains concrete state-by-state counterexamples.
 Each `.cfg` is the executable statement of its bounds and checked properties.
+
+## Round-2 PR #22 result
+
+The PR head was fetched as `refs/remotes/origin/pr22-head` and verified with
+`git rev-parse`. The full suite was rerun after adding the map lock, atomic
+manifest validation, successor checks, concurrent `mark_stale`, the `_dup`
+real-output-directory path, queue refeed handling, and the in-place
+`needs_reextract` version check. The focused replay in `reproduce.py` compiles
+the exact PR-head functions and refuses to run unless the source worktree is
+the recorded SHA.
+
+| Invariant | Before (baseline) | After PR #22 / PR #21 | Code location and remaining design issue |
+| --- | --- | --- | --- |
+| `CurrentValid`, including cached CURRENT versus publish/prune | Counterexample `PublishCurrentRace` | **Holds within bounds**: one/two writers, one/two pruners, crash positions; `PublishCurrentRace`, `PublishTwoWriters`, `PublishTwoPruners` pass | [extract.py:1522](../extractor/extract.py#L1522), [1654](../extractor/extract.py#L1654), [2061](../extractor/extract.py#L2061). The per-map lock covers the decision and action. |
+| No incomplete published manifest | Counterexamples in `PublishPythonIncomplete`, `NodeIncomplete`, `RatingIncomplete` | **Holds within bounds**, including per-file readers and two writers | [extract.py:1616](../extractor/extract.py#L1616), [2077](../extractor/extract.py#L2077). The written file list is checked and COMPLETE is built from that list; the model assumes the writer lock protects files during validation. |
+| No resurrection after retirement or concurrent `mark_stale` | `PublishRetireRace` counterexample | **Holds within bounds**: `PublishRetireRace`, `PublishStaleConcurrent` pass | [extract.py:1724](../extractor/extract.py#L1724), [1736](../extractor/extract.py#L1736), [2061](../extractor/extract.py#L2061). Successor availability and withdrawal are checked under ordered locks. |
+| Replacement exists before old data is deleted | `PipelineLostReplacement` and identity/self-retirement counterexamples | **Holds within bounds** for `PipelineSafety`, `PipelineLostReplacement`, `PipelineIdentity`, `PipelineSelfRetire`; legacy identity and legacy in-place configs remain counterexamples | [demo_pipeline.py:404](../extractor/demo_pipeline.py#L404), [435](../extractor/demo_pipeline.py#L435). The fixed path carries real `out_dirs`, verifies the successor under both locks, and does not settle an in-place row unless its own version is live. |
+| In-place re-extraction queue row | Old same-directory test dropped a row after the map was withdrawn again | **Holds within bounds** for `PipelineInPlaceWrongVersion` and `PipelineInPlaceOwnVersion`; exact replay covers both | [demo_pipeline.py:418](../extractor/demo_pipeline.py#L418), [425](../extractor/demo_pipeline.py#L425). The old behavior remains in `PipelineLegacyInPlace` as a concrete counterexample. |
+| Queue rewrite and completed-ledger refeed | `PipelineQueueCrash` and `PipelineRefeed` counterexamples | **Holds within bounds** after atomic JSONL replacement and finished-ledger override | [demo_pipeline.py:383](../extractor/demo_pipeline.py#L383), [518](../extractor/demo_pipeline.py#L518). |
+| Reader never mixes versions | Python/rating whole-attempt paths already passed; documented Node per-file retry had a design counterexample | Whole-attempt Python, Node, rating, retry and per-file model **hold within bounds** under writer-lock assumptions | [extract.py:1579](../extractor/extract.py#L1579), [demo_paths.py:129](../model/rating3/demo_paths.py#L129). The SCHEMA-v1 per-file contract still needs a reader lease or whole-attempt discard in a real Node implementation; the lock is writer-side only. |
+| Rating resolve/target binding and one retry | `PublishRatingResolveError`, `PublishRatingBinding`, and retry exhaustion | Resolve error and target binding **remain counterexamples**; model retry property passes under held-reader handles, while replay still confirms two publishes exhaust the single retry | [demo_paths.py:127](../model/rating3/demo_paths.py#L127), [133](../model/rating3/demo_paths.py#L133). Bind the resolved directory and use a reader lease or quiescence for a stronger availability guarantee. |
+| Crash availability, manual target deletion, strict withdrawal, pruning liveness | Fresh/retired/manual crash, strict withdrawal, one-shot/dangling prune counterexamples remain | **Still failing by design**: `PublishFreshCrash`, `PublishRetiredCrash`, `PublishManual`, `PublishStrictWithdrawal`, `PublishPruneOneShot`, `PublishPruneDangling` | [extract.py:1579](../extractor/extract.py#L1579), [1649](../extractor/extract.py#L1649). The design has no durable tombstone/repair record outside the deletable map and no scheduler guarantee for a later prune; path reuse intentionally clears RETIRED after a successful replacement. |
+| MapGate safety/liveness | Old teardown and stale-name assumptions produced `MapGateEndThrows`, `MapGateLateEnd`, and reload cases | **Holds within bounds** for all MapGate configs, including exception-safe end, reload during end, menu hot reload and stale names | [Lifecycle.cs:48](../plugin/Core/Lifecycle.cs#L48), [BotMatchStatsPlugin.cs:216](../plugin/Game/BotMatchStatsPlugin.cs#L216). This still assumes `Server.MapName` is empty exactly when no server exists and that entity readiness is authoritative. |
+| Plugin event, LOS and recorder lifecycle | Event entry, mid-round metadata, late freeze and post-win paths were exposed | **Event gate and mid-round metadata hold**; `PluginHotReload`, `PluginLateFreeze`, and `PluginAfterWin` remain counterexamples | [Events.cs:36](../plugin/Game/Events.cs#L36), [Recorder.cs:127](../plugin/Core/Recorder.cs#L127), [Recorder.cs:891](../plugin/Core/Recorder.cs#L891). Persist LOS failure across same-map reload if required, reject late freeze for a finalized generation, and guard a finished game before starting another capture. |
+
+The fixed extractor therefore satisfies the lock, manifest, successor, queue,
+and in-place version properties in the stated bounds. The remaining failures
+are design-level availability or reader-binding weaknesses rather than races
+addressed by PR #22. They should be treated as explicit protocol choices or
+fixed with a durable withdrawal record, a reader lease/transaction, and
+generation-aware plugin state.
 
 ## What was checked
 
@@ -70,6 +103,10 @@ makes Windows rename fail is a failed attempt, not reuse of an existing folder.
 exhaustively searched; the exact counts are in RESULTS.md. A counterexample
 only needs its much smaller prefix, retained in WITNESSES.md.
 
+The table in the next section records the original baseline findings at
+`683e691`; the round-2 comparison above is the authoritative after-fix result
+for PR #22 head `5423886`.
+
 | Requirement / model predicate | Result and bounds | Code and suggested fix |
 | --- | --- | --- |
 | Whole-attempt readers never combine versions (`NoMix`) | **Holds within the bounds above**, including two simultaneous writers, retry after failure, and two pruners in their respective configurations: `PublishPython`, `Node`, `Rating`, `TwoWriters`, `Retry`, `TwoPruners`. | [extract.py:1514](../extractor/extract.py#L1514), [demo_paths.py:129](../model/rating3/demo_paths.py#L129). Immutable unique directories plus discarding an entire failed attempt are essential. |
@@ -131,12 +168,12 @@ short schedules are:
    LOS remains off, LosDue never invokes CheckLos, and the file can omit both
    the failure reason and mask source until some later freeze-end.
 
-`python -I formal/reproduce.py` replays schedules 1–3 and both rating-helper
-findings through the **verbatim source functions**, with real Windows file
-operations and thread barriers. It also imports the real rating helper.
-Only dataframe/parquet encoding and schema parsing are stubbed; fake table
-contents are sufficient because the failures concern directory/marker/pointer
-ordering. All five replays passed. The script writes only beneath ignored
+`python -I formal/reproduce.py` replays the publish/prune, retirement,
+manifest, rating-helper and in-place queue schedules through the **verbatim
+source functions**, with real Windows file operations. It also imports the
+real rating helper. Only dataframe/parquet encoding and schema parsing are
+stubbed; fake table contents are sufficient because the findings concern
+directory, marker, pointer and queue ordering. All six replays passed. The script writes only beneath ignored
 `formal/states/reproduce/` and never patches production source.
 
 ## Pipeline reachability and reader inventory

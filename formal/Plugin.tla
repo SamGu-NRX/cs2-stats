@@ -9,12 +9,22 @@ Init == s = [map |-> 0, liveMap |-> FALSE, attached |-> FALSE,
   phase |-> "none", active |-> FALSE, live |-> FALSE, finalized |-> FALSE,
   visible |-> FALSE, reported |-> FALSE, errorRecorded |-> FALSE,
   badTrace |-> FALSE, badEnable |-> FALSE, badDoubleSeal |-> FALSE,
-  seals |-> 0, sources |-> {}, win |-> FALSE, startedAfterWin |-> FALSE]
+  seals |-> 0, sources |-> {}, win |-> FALSE, startedAfterWin |-> FALSE,
+  needInit |-> TRUE, eventBad |-> FALSE]
 NewMap ==
  /\ ~s.liveMap /\ s.map < Maps
  /\ s' = [s EXCEPT !.map = @+1, !.liveMap = TRUE, !.attached = FALSE,
                    !.capturing = FALSE, !.active = FALSE, !.live = FALSE,
                    !.phase = "none", !.win = FALSE]
+Initialize == /\ s.liveMap /\ s.needInit
+ /\ s' = [s EXCEPT !.needInit = FALSE]
+Event(need) ==
+ /\ need \in {"nothing","map","round"}
+ /\ LET allowed == IF need="nothing" THEN TRUE ELSE
+                    IF need="map" THEN s.liveMap /\ ~s.needInit
+                    ELSE s.liveMap /\ ~s.needInit /\ s.capturing /\ s.active
+    \* The fixed On<T> wrapper returns Continue before reading a disallowed event.
+    IN s' = [s EXCEPT !.eventBad = @]
 Attach(ok) ==
  /\ s.liveMap /\ ~s.attached
  /\ s' = [s EXCEPT !.attached = TRUE, !.probe = ok, !.failed = ~ok,
@@ -24,8 +34,8 @@ StartCapture ==
  /\ s.liveMap /\ s.attached /\ ~s.capturing /\ s.capture < Captures
  /\ s' = [s EXCEPT !.capture = @+1, !.capturing = TRUE, !.round = 0,
        !.active = FALSE, !.live = FALSE, !.finalized = FALSE, !.phase = "none",
-       !.visible = FALSE, !.reported = FALSE, !.errorRecorded = FALSE,
-       !.sources = {}, !.seals = 0, !.startedAfterWin = @ \/ s.win]
+       !.visible = FALSE, !.reported = FALSE, !.errorRecorded = s.failed,
+       !.sources = IF s.failed THEN {"mask"} ELSE {}, !.seals = 0, !.startedAfterWin = @ \/ s.win]
 Begin ==
  /\ s.capturing /\ s.round < Rounds /\ s.phase \in {"none","sealed"}
  /\ s' = [s EXCEPT !.round = @+1, !.phase = "freeze", !.active = TRUE,
@@ -33,7 +43,9 @@ Begin ==
 BeginMidRound ==
  /\ MidRound /\ s.capturing /\ s.round < Rounds /\ s.phase = "none"
  /\ s' = [s EXCEPT !.round = @+1, !.phase = "live", !.active = TRUE,
-                   !.live = TRUE, !.finalized = FALSE, !.visible = FALSE, !.seals = 0]
+                   !.live = TRUE, !.finalized = FALSE, !.visible = FALSE, !.seals = 0,
+                   !.sources = @ \cup {IF s.failed THEN "mask" ELSE "los"},
+                   !.errorRecorded = @ \/ s.failed]
 HotReload ==
  /\ s.liveMap /\ s.reloads < Reloads
  /\ s' = [s EXCEPT !.reloads = @+1, !.attached = FALSE, !.capturing = FALSE,
@@ -74,9 +86,10 @@ EndCapture ==
        !.badDoubleSeal = @ \/ (s.active /\ ~s.finalized /\ s.seals > 0)]
 MapEnd ==
  /\ s.liveMap
- /\ s' = [s EXCEPT !.liveMap = FALSE, !.capturing = FALSE,
+ /\ s' = [s EXCEPT !.liveMap = FALSE, !.needInit = TRUE, !.capturing = FALSE,
                    !.active = FALSE, !.live = FALSE, !.visible = FALSE, !.phase = "none"]
-Next == NewMap \/ Attach(TRUE) \/ Attach(FALSE) \/ StartCapture \/ Begin \/ BeginMidRound \/ HotReload
+Next == NewMap \/ Initialize \/ Event("nothing") \/ Event("map") \/ Event("round")
+ \/ Attach(TRUE) \/ Attach(FALSE) \/ StartCapture \/ Begin \/ BeginMidRound \/ HotReload
  \/ FreezeEnd \/ Trace("clear") \/ Trace("blocked") \/ Trace("failure")
  \/ Disable \/ RoundEnd \/ Finalize \/ Win \/ EndCapture \/ MapEnd
 Spec == Init /\ [][Next]_vars
@@ -90,4 +103,5 @@ CaptureSound == s.live => s.capturing /\ s.active
 NoPostFinalizeLive == s.live => ~s.finalized
 NoDoubleSeal == ~s.badDoubleSeal
 NoCaptureAfterWin == ~s.startedAfterWin
+NoGatedEvent == ~s.eventBad
 =============================================================================
