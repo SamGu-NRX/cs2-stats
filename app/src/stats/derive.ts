@@ -6,7 +6,7 @@ import { deriveAim } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
-import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
+import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
@@ -23,6 +23,15 @@ import { derivePresence } from "./positions";
 import { deriveUtilQ } from "./utilq";
 
 const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
+
+const ON_SCREEN: readonly OnScreenSource[] = ["los", "spotted", "spotted-los-lost"];
+
+/** match.extra "on_screen": absent for demos; any other value is a source this code does not know. */
+function onScreenOf(v: unknown): OnScreenSource | null {
+  if (v === undefined) return null;
+  if (!ON_SCREEN.includes(v as OnScreenSource)) throw new Error(`derive: match.extra on_screen ${JSON.stringify(v)} is not one of ${ON_SCREEN.join(", ")}`);
+  return v as OnScreenSource;
+}
 
 /**
  * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
@@ -41,8 +50,24 @@ function matchMeta(t: MatchTables) {
     durationS: typeof extra.duration_s === "number" ? extra.duration_s : null,
     finalScore: Array.isArray(extra.final_score) ? (extra.final_score as [number, number]) : null,
     throws: extra.throws === "rebuilt" ? ("rebuilt" as const) : null,
+    onScreen: onScreenOf(extra.on_screen),
     status: typeof extra.status === "string" ? extra.status : null,
   };
+}
+
+/**
+ * Each player-round's freeze-end loadout (its inventory), or null when the row records none: a row with
+ * an empty inventory and no best primary is unknown, not an empty loadout (the plugin records neither).
+ */
+export function loadouts(c: Ctx): Map<number, string[] | null> {
+  const inv = c.t.player_rounds;
+  const out = new Map<number, string[] | null>();
+  for (let i = 0; i < inv.n; i++) {
+    const ri = c.riOf(inv.round[i]);
+    if (ri === undefined) continue;
+    out.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].length || inv.best_primary[i] !== null ? inv.inventory[i] : null);
+  }
+  return out;
 }
 
 /** A player-round while the families fill it: every measure present. */
@@ -286,7 +311,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -312,11 +337,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
       roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
-      inputs: {
-        loadout: t.player_rounds.best_primary.some((x) => x !== null) || t.player_rounds.inventory.some((x) => x.length > 0),
-        activeWeapon: t.kills.v_active_weapon.some((x) => x !== null),
-        throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null),
-      },
+      inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen },
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

@@ -221,6 +221,9 @@ export interface Shots {
   impacts?: (number | null)[];
   /** weapon class from the item name; null for the taser */
   cls?: ("rifle" | "sniper" | "smg" | "pistol" | "shotgun" | "heavy" | null)[];
+  /** plugin 1.2.0: the human's absolute view at the shot, degrees (pitch down positive), without aim punch */
+  pitch?: (number | null)[];
+  yaw?: (number | null)[];
 }
 
 export interface MatchFile {

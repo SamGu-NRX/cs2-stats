@@ -6,6 +6,17 @@ import { rollup, type Filter } from "./rollup";
 
 export interface TrendPoint { match: string; date: string | null; value: number | null; won: boolean | null }
 
+/**
+ * Whether the player's team won the match: null for a tie, an unfinished match (MatchInfo.complete
+ * false) or a player without a team, which a correlation with winning leaves out.
+ */
+export function matchWon(f: MatchFacts, ids: Set<string>): boolean | null {
+  const me = f.players.find((p) => ids.has(p.id));
+  if (!f.match.complete || !me || me.team === null) return null;
+  const [us, them] = [f.match.score[me.team], f.match.score[1 - me.team]];
+  return us === them ? null : us > them;
+}
+
 /** The metric per match, in date order (matches without a date keep their input order at the end). */
 export function series(facts: MatchFacts[], filter: Filter, metricId: string): TrendPoint[] {
   const m = METRIC[metricId];
@@ -15,9 +26,7 @@ export function series(facts: MatchFacts[], filter: Filter, metricId: string): T
   return sorted.flatMap((f) => {
     const s = rollup([f], filter);
     if (!s.m.rounds) return [];
-    const me = f.players.find((p) => ids.has(p.id));
-    const won = me?.team === null || me === undefined ? null : f.match.score[me.team] > f.match.score[1 - me.team];
-    return [{ match: f.match.id, date: f.match.date, value: m.value(s), won }];
+    return [{ match: f.match.id, date: f.match.date, value: m.value(s), won: matchWon(f, ids) }];
   });
 }
 

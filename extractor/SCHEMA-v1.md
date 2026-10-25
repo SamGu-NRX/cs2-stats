@@ -1,6 +1,6 @@
 # Match tables, schema v1
 
-The contract between the extractor (`extractor/extract.py`, Python) and the TS loader and engine. One CS2 demo becomes one folder of zstd parquet files, one file per table below. The extractor computes no metric the UI shows: every number here is read from the demo, or is a documented geometric test (visibility) or bookkeeping (round assignment, HP capping).
+The contract between the extractor (`extractor/extract.py`, Python) and the TS loader and engine. One CS2 demo becomes one folder of zstd parquet files, one file per table below. The extractor computes no metric the UI shows: every number here is read from the demo, or is a documented geometric test (visibility) or bookkeeping (round assignment, HP capping). The few derived columns another component needs are named `extractor_*`, say who reads them, and are not the engine's definitions; the engine computes trades and buy types itself.
 
 `extractor/schema_v1.py` declares every column's type, and the writer casts to it and fails on any mismatch, so a type never changes from one map to the next. `tests/test_schema_doc.py` fails if this document and that declaration disagree.
 
@@ -23,7 +23,7 @@ Changing a map folder by hand is not supported: do not delete or edit a version 
 - **Time.** `tick` and every `*_tick` column are demo ticks (Int32). Convert to seconds with `match.tick_rate`; never assume 64, because tick rates differ by source. Columns ending in `_s` are already seconds.
 - **Space.** Positions are Hammer units in the map's world frame, `z` at the feet. Eye height is `z + 64 - 18 * duck_amount` (on the Ancient fixture, `fire_bullets` eye origins sit at median 63.2 / p95 64.0 standing and 45.2 / 46.0 ducked). Angles are degrees; pitch is positive looking down.
 - **Money** is in dollars. **HP and armor** are points.
-- **Rounds.** `round` is 1-based. Rows outside a counted round are dropped: warmup, backup-restored attempts (from the attempt's start to the restore tick, inclusive), and anything after game over. An attempt ended with no winner counts as voided only if the game rolled its stats back (kills plus deaths unchanged across it); otherwise it is kept as a round with `aborted = true` and no winner. `events_misc` keeps warmup rows as round 0.
+- **Rounds.** `round` is 1-based. Rows outside a counted round are dropped: warmup, backup-restored attempts (from the attempt's start to the restore tick, inclusive; a restore on round 1's start tick before `begin_new_match`, as a split recording's later part can open with, voids only its tick), and anything after game over. An attempt ended with no winner counts as voided only if the game rolled its stats back (kills plus deaths unchanged across it); otherwise it is kept as a round with `aborted = true` and no winner. `events_misc` keeps warmup rows as round 0.
 - **Nulls.** A missing value is null, never 0 or an empty string. "null: yes" below means the column can be null; a "no" column never is.
 - **Pre-event state.** Player state attached to an event (kills `a_*`/`v_*`, shots, damages) is read at the event tick, before the event applies; a victim's health in `kills` is his health before the fatal hit.
 
@@ -53,7 +53,10 @@ The extractor fails a map unless the tables reproduce the demo's own final score
 - **damage, the rating input:** `player_rounds.game_damage` summed over rounds equals the scoreboard's `damage_total` exactly. The game commits `damage_total` once per round, between round end and the next round start, so a round's damage is the counter's rise across its boundary;
 - **damage, the hit table:** per player and round, the enemy hits in `damages` (`dmg_health_capped`, the HP actually removed: `player_hurt` reports a truncated amount, 25 reported for 26 removed) never exceed `game_damage`. More than the game counted fails the map, because lost events cannot cause it. Less is allowed: a demo can lose a stretch of events, and a health drop with no `player_hurt` on that tick is rebuilt as a `damages` row with `source = health` (see `damages`), which never names an attacker. The total shortfall is `match.unattributed_damage_hp` and the warning `damage_events_incomplete: N HP`. The map's damage passes on `game_damage` alone, so use `game_damage` for a player's damage and treat the shortfall as damage no event credits;
 - **rounds:** every round has ordered start, freeze-end and end ticks (except a round recorded already live), and the wins per team add up to the final score.
-- **Split recordings.** One map can arrive as two demos (`-p1`, `-p2`). Every count is checked as the final counter minus the same counter at round 1's freeze end (`scoreboard.*_at_start`): zero for a whole match, the earlier parts' totals for a later part. The match starts at the last `begin_new_match` before the first real round end, because a first part can end with one after its last round. A demo without a win panel reads its final scoreboard at the next round start after its last round, the tick on which the game commits that round's damage. Merge parts by `match.archive` and `match.map_key` without the `-pN` suffix.
+- **Split recordings.** One map can arrive as two demos (`-p1`, `-p2`). Every count is checked as the final counter minus the same counter at the start of round 1 (`scoreboard.*_at_start`): zero for a whole match, the earlier parts' totals for a later part. That baseline is read at round 1's freeze end, when the counters have settled after any restore and every player has a controller, less the rise of the game's own counters across each of round 1's deaths up to then, from the tick before the death to the last tick before the next event (the game can commit a counter a tick late): a player who disconnects in freeze time dies, and the game counts that death. A death in the tables that the game did not count is not taken off, so it still fails the map. Two rises fail the map outright: a `deaths_total` rise on a death tick larger than that tick's deaths of the player (a counter load, as a restore does), and a rise between the player's first recorded tick from round 1's start (or the tick after `begin_new_match`) and freeze end that his death, kill and assist rows there cannot explain (a death the demo lost). What a player already holds when he first appears, after a reconnect or from a split recording's earlier parts, is not from this demo. The match starts at the last `begin_new_match` before the first real round end, because a first part can end with one after its last round. A demo without a win panel reads its final scoreboard at the next round start after its last round, the tick on which the game commits that round's damage. Merge parts by `match.archive` and `match.map_key` without the `-pN` suffix.
+- **Players who left.** A player with no final-scoreboard row (an abandon) is checked against his counters just after his last disconnect, less his own baseline. Every player in any table is checked; one with neither row is noted.
+- **Skipped ticks.** Valve matchmaking demos have no snapshot for 1-3 ticks after most round starts, and sometimes for the tick after a round end. A value read at one tick (scores, the damage boundary, freeze-end economy, the baseline, a departed player's counters) then comes from the nearest recorded tick within 0.125 s, on the side the read allows: later for a state after the tick (a round start's committed counters, the tick after a round end, a disconnect), earlier for a state as of it (freeze-end economy, the win panel). It keeps the requested tick in its `tick` column. The map fails, naming both ticks and the event, if a death, purchase or sale, round start or end (restores included), `begin_new_match`, team switch or disconnect lies between the two, and it fails if nothing is recorded within 0.125 s.
+- **Teams without clan names.** Valve matchmaking demos have no clan names, so teams are `ct_start` and `t_start`, named by the side they had in round 1. A player who joins later (for example, filling an empty wingman slot) takes his teammates' name.
 
 Cross-checks against awpy (round, kill and blind counts; awpy's K/D) are recorded in the manifest and never fail a map.
 
@@ -117,7 +120,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `team_ct_start` | String | no | clan name of the team on CT in round 1 |
 | `team_t_start` | String | no | clan name of the team on T in round 1 |
 | `tick_rate` | Float32 | no | ticks per second (playback ticks / playback time). Divide tick differences by this; never assume 64 |
-| `trade_window_s` | Float32 | no | window for trade flags, s |
+| `extractor_trade_window_s` | Float32 | no | window of kills.extractor_trade_kill_5s and extractor_traded_death_5s, s |
 | `unavailable_fields` | String | no | JSON: data the demo does not carry, and what replaces it |
 | `visibility_status` | String | no | ok | no_mapdata | no_mesh | mesh_mismatch. Anything but ok means mesh_visible is null and only damage and kills trigger engagements |
 | `voided_windows` | String | no | JSON [[from, to], ...] tick ranges dropped as backup restores |
@@ -143,7 +146,6 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 
 | field | type | null | meaning, units |
 |---|---|---|---|
-| `ct_buy_type` | String | no | pistol | eco | semi_eco | semi_buy | full (thresholds $5k/$10k/$20k; a convention, not fitted) |
 | `ct_equip_value` | Int32 | no | sum of CT players' game equipment value at freeze end, $ |
 | `ct_money_start` | Int32 | no | sum of CT money before buying, $ |
 | `ct_team` | String | no | clan name on CT |
@@ -162,7 +164,6 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `round` | Int16 | no | 1-based round number |
 | `start_tick` | Int32 | no | tick |
 | `started_live` | Boolean | no | true when the recording began mid-round 1 (no freeze end) |
-| `t_buy_type` | String | no | as ct_buy_type |
 | `t_equip_value` | Int32 | no | as ct_equip_value |
 | `t_money_start` | Int32 | no | as ct_money_start |
 | `t_team` | String | no | clan name on T |
@@ -231,8 +232,8 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `assister_side` | String | yes | CT | T |
 | `assister_steamid` | UInt64 | yes | player id (see Conventions) |
 | `attacker_steamid` | UInt64 | yes | player id (see Conventions) |
-| `attackerblind` | Boolean | no |  |
-| `attackerinair` | Boolean | no |  |
+| `attackerblind` | Boolean | yes | the killer was flashed when he killed: the killfeed's blind mark; null when the demo's player_death has no such field |
+| `attackerinair` | Boolean | yes | the killer was in the air when he killed: the killfeed's in-air mark; null when the demo's player_death has no such field |
 | `distance` | Float32 | no | attacker to victim, Hammer units |
 | `dmg_armor` | Int32 | no | event field |
 | `dmg_health` | Int32 | no | event field |
@@ -247,8 +248,8 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `s_since_plant` | Float32 | yes | s; null before the plant or without one |
 | `thrusmoke` | Boolean | no |  |
 | `tick` | Int32 | no | tick |
-| `trade_kill_5s` | Boolean | no | the victim had killed the attacker's teammate within 5 s |
-| `traded_death_5s` | Boolean | no | this death was traded within 5 s |
+| `extractor_trade_kill_5s` | Boolean | no | the victim had killed the attacker's teammate within 5 s; extractor-internal, for model/rating3's round fit only; not the engine's trade (5.4 s), and the UI must not show it |
+| `extractor_traded_death_5s` | Boolean | no | this death was traded within 5 s; extractor-internal, for model/rating3's round fit only; not the engine's trade (5.4 s), and the UI must not show it |
 | `v_active_weapon` | String | no |  |
 | `v_airborne` | Boolean | no |  |
 | `v_armor` | Int32 | no |  |
@@ -627,12 +628,12 @@ The game's own end-of-match scoreboard, one row per player. The validation refer
 | `team_rounds_total` | Int32 | no | counter from the game's scoreboard |
 | `tick` | Int32 | no | tick it was read |
 | `utility_damage_total` | Int32 | no | counter from the game's scoreboard |
-| `kills_total_at_start` | Int32 | no | kills_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
-| `deaths_total_at_start` | Int32 | no | deaths_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
-| `assists_total_at_start` | Int32 | no | assists_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
-| `damage_total_at_start` | Int32 | no | damage_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
-| `headshot_kills_total_at_start` | Int32 | no | headshot_kills_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
-| `team_rounds_total_at_start` | Int32 | no | team_rounds_total at round 1's freeze end: 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `kills_total_at_start` | Int32 | no | kills_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `deaths_total_at_start` | Int32 | no | deaths_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `assists_total_at_start` | Int32 | no | assists_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `damage_total_at_start` | Int32 | no | damage_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `headshot_kills_total_at_start` | Int32 | no | headshot_kills_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
+| `team_rounds_total_at_start` | Int32 | no | team_rounds_total before round 1 (see Validation, Split recordings): 0 for a whole match, the earlier parts' totals for a later part of a split recording |
 
 ### `events_misc`
 Every other game event, as JSON. Key: (tick, event, row order).

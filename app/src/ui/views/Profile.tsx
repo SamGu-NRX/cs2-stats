@@ -160,8 +160,8 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
     { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
     { id: "kpr", metric: "kpr", label: "KPR", bench: bench(BENCH.kpr, botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
   ];
-  // One rating, Rating 3.0 pooled over rounds; a side's rating is the rating of that side's rounds
-  // (rating3BySide), so the overall need not lie between T and CT.
+  // One rating definition (rating3.ts rating3Of): each side rated over its rated rounds, a side under
+  // half rated left out, the total weighted by rated rounds, so it lies between the rated sides.
   const tR = p.ratings.T.value;
   const ctR = p.ratings.CT.value;
   const r3: Rating3 = p.ratings[key];

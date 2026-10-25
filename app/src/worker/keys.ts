@@ -10,3 +10,6 @@ export const ENTRY_VERSION = 1;
 
 export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}`;
 export const entryKey = (factsKey: string, baselinesHash: string) => `${factsKey}|e${ENTRY_VERSION}|b${baselinesHash}`;
+
+/** Whether a match entry held in memory is still the one these keys name: same facts and same baselines. */
+export const sameEntry = (held: { key: string; ekey: string } | undefined, key: string, ekey: string) => held?.key === key && held.ekey === ekey;

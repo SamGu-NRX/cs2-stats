@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 11;
+export const DERIVE_VERSION = 14;
 
 export interface MatchInfo {
   id: string;
@@ -47,21 +47,43 @@ export interface MatchInfo {
   winProb: "hltv" | "cs2rb";
   /** model-params.ts modelFingerprint: the rating parameters and win-probability source these facts were derived with */
   model: string;
-  /** what the source records beyond the scoreboard; a metric that needs a missing input gets no percentile (compare.ts) */
-  inputs: SourceInputs;
+  inputs: {
+    /** the source's throws: logged, or rebuilt from detonations (the plugin's older files), whose throw point and time are approximate */
+    throws: "logged" | "rebuilt" | null;
+    /**
+     * what a plugin file's "target on screen" comes from: line of sight, the game's spotted flags, or
+     * the spotted flags because line of sight failed partway (ON_SCREEN_NOTE). Null for demos, whose
+     * visibility comes from the extractor's engagements.
+     */
+    onScreen: OnScreenSource | null;
+  };
 }
 
-/** Source fields some metrics need. */
-export const INPUTS = ["loadout", "activeWeapon"] as const;
-export type Input = (typeof INPUTS)[number];
-export interface SourceInputs extends Record<Input, boolean> {
+export type OnScreenSource = "los" | "spotted" | "spotted-los-lost";
+
+/** The note a match whose on-screen source is a fallback carries wherever its aim numbers are shown. */
+export const ON_SCREEN_NOTE: Partial<Record<OnScreenSource, string>> = {
+  "spotted-los-lost": "line of sight lost partway; using the game's spotted flags",
+};
+
+/**
+ * Inputs some metrics need, each counted per row by a pair of measures: [rows where the input is
+ * known, rows the metric uses]. A metric whose input is known on only some rows is computed over the
+ * known rows and gets no pro percentile; compare.ts says how many were known.
+ */
+export const INPUT_COVERAGE = {
+  /** freeze-end inventory and best primary recorded for the player-round */
+  loadout: ["loadoutRounds", "rounds", "freeze-end loadout", "rounds"],
+  /** the weapon in the victim's hand recorded for an enemy kill */
+  activeWeapon: ["deathsHandKnown", "deathsHandTotal", "weapon in hand", "deaths"],
   /**
-   * loadout: freeze-end inventories and best primaries (unused utility, rounds with a sniper, the eco
-   * groups); activeWeapon: the weapon in each victim's hand (AWP duels). throws: the source's throw log,
-   * or throws rebuilt from detonations (the plugin's older files), whose throw point and time are approximate.
+   * both players' loadouts recorded for a kill or death the eco adjustment values. This gates only the
+   * percentile: the rating's eco values need just the economy groups, which the weapon or equipment
+   * value give (rating3.ts ecoAdjust).
    */
-  throws: "logged" | "rebuilt" | null;
-}
+  eco: ["ecoEventsKnown", "ecoEvents", "both players' loadout", "kills and deaths"],
+} as const;
+export type Input = keyof typeof INPUT_COVERAGE;
 
 export interface PlayerInfo {
   id: string;
@@ -163,12 +185,16 @@ export const MEASURES = [
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
+  // row coverage of the inputs some metrics need (INPUT_COVERAGE)
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing",
-  // Rating 3.0's other inputs over the rounds swing could value (swingRounds), so all six share one set of rounds
-  "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
+  // eco-adjusted measures over the player-rounds whose every eco value is known (ecoRounds, rating3.ts ecoAdjust)
+  "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
+  // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds
+  "ratedRounds", "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "vSwing",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;

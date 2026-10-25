@@ -6,7 +6,7 @@
 // rounds (raw, as HLTV's map cards expose no eco version) and round swing. The rating is params.json's
 // linear model in those six inputs.
 import { PARAMS as params } from "./model-params";
-import { enemyHit, hitDamage, type Ctx } from "./derive";
+import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
 import { coveredEnough } from "./coverage";
 import { rollup, type Filter, type Summary } from "./rollup";
@@ -58,9 +58,11 @@ export const killPoints = (a: EcoGroup, b: EcoGroup, killerSide: Side) => params
 
 /**
  * Kill points on every kill, and the eco-adjusted measures (ecoKills, ecoDeaths, ecoDmg, ecoKast) on
- * every player-round. A player's group at a kill comes from the best primary they held then
- * (kills.a_/v_best_primary), else their freeze-end equipment value. Damage uses the freeze-end
- * primary. A kill whose groups are unknown counts its raw value and adds to ecoUnknown.
+ * the player-rounds where every eco value they need is known (ecoRounds 1). A player's group at a kill
+ * comes from the best primary they held then (kills.a_/v_best_primary), else their equipment value;
+ * damage uses the freeze-end groups. A kill, assist, death or hit whose groups are unknown leaves the
+ * player-round out of every eco measure instead of counting it at its raw value, so each eco input is
+ * a sum over ecoRounds divided by ecoRounds (rating3.ts valuedRounds).
  */
 export function ecoAdjust(c: Ctx): void {
   const k = c.t.kills;
@@ -83,46 +85,65 @@ export function ecoAdjust(c: Ctx): void {
   const row = new Map<string, number>();
   for (let i = 0; i < k.n; i++) row.set(`${k.tick[i]}:${k.victim_steamid[i]}`, i);
 
+  const known = loadouts(c);
   for (let ri = 0; ri < c.nRounds; ri++) {
+    // Players with an eco event this round whose value cannot be computed. An eco value counts as known
+    // when both economy groups can be worked out, from the weapon or else the equipment value; it does
+    // not need both loadouts recorded. That stricter rule would null every plugin match's rating
+    // (plugin files record no loadouts) and remove a metric the user relies on. The stricter rule
+    // gates only the comparison with pros (INPUT_COVERAGE.eco, the `both` count below), so plugin
+    // ratings keep a value and get no percentile.
+    const unknown = new Set<number>();
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
+      // percentile coverage only: both players' loadouts recorded (INPUT_COVERAGE.eco)
+      const both = !!known.get(ri * 1024 + kf.killer!) && !!known.get(ri * 1024 + kf.victim);
+      for (const pl of [kf.killer!, kf.victim]) {
+        const r = c.pr[ri][pl];
+        if (r) { r.m.ecoEvents++; if (both) r.m.ecoEventsKnown++; }
+      }
       const i = row.get(`${kf.tick}:${c.players[kf.victim].id}`)!;
       const ga = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
       const gb = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);
       kf.ecoPoints = ga && gb ? killPoints(ga, gb, kf.killerSide!) : null;
-    }
-    for (const p of c.pr[ri]) {
-      if (!p) continue;
-      const m = p.m;
-      let kast = 0;
-      let died = false;
-      for (const kf of c.kills[ri]) {
-        const v = kf.ecoPoints ?? 1;
-        if (kf.enemy && kf.killer === p.pi) {
-          m.ecoKills += v;
-          if (kf.ecoPoints === null) m.ecoUnknown++;
-          kast = Math.max(kast, Math.min(1, v));
-        }
-        if (kf.enemy && kf.assister === p.pi && !kf.flashAssist) kast = Math.max(kast, Math.min(1, v));
-        if (kf.victim === p.pi) {
-          died = true;
-          if (kf.enemy) m.ecoDeaths += v;
-          if (kf.traded) kast = 1;
-        }
+      if (kf.ecoPoints === null) {
+        unknown.add(kf.killer!).add(kf.victim);
+        if (kf.assister !== null && !kf.flashAssist) unknown.add(kf.assister);
       }
-      if (!died) kast = 1;
-      m.ecoKast += kast;
     }
+    const dmg = new Map<number, number>();
     for (const i of c.byRound("damages")[ri]) {
       if (!enemyHit(c.t, i)) continue;
       const a = c.idOf(c.t.damages.attacker_steamid[i]);
       const v = c.pi.get(c.t.damages.victim_steamid[i])!;
       const side = c.side[ri][a ?? -1];
-      const row = a === null ? null : c.pr[ri][a];
-      if (!row || !side) continue;
-      const ga = freeze.get(ri * 1024 + a!);
+      if (a === null || !c.pr[ri][a] || !side) continue;
+      const ga = freeze.get(ri * 1024 + a);
       const gb = freeze.get(ri * 1024 + v);
-      row.m.ecoDmg += hitDamage(c.t, i) * (ga && gb ? killPoints(ga, gb, side) : 1);
+      if (ga && gb) dmg.set(a, (dmg.get(a) ?? 0) + hitDamage(c.t, i) * killPoints(ga, gb, side));
+      else unknown.add(a);
+    }
+    for (const p of c.pr[ri]) {
+      if (!p || unknown.has(p.pi)) continue;
+      const m = p.m;
+      m.ecoRounds = 1;
+      m.ecoDmg = dmg.get(p.pi) ?? 0;
+      let kast = 0;
+      let died = false;
+      for (const kf of c.kills[ri]) {
+        if (kf.enemy && kf.killer === p.pi) {
+          m.ecoKills += kf.ecoPoints!;
+          kast = Math.max(kast, Math.min(1, kf.ecoPoints!));
+        }
+        if (kf.enemy && kf.assister === p.pi && !kf.flashAssist) kast = Math.max(kast, Math.min(1, kf.ecoPoints!));
+        if (kf.victim === p.pi) {
+          died = true;
+          if (kf.enemy) m.ecoDeaths += kf.ecoPoints!;
+          if (kf.traded) kast = 1;
+        }
+      }
+      if (!died) kast = 1;
+      m.ecoKast += kast;
     }
   }
 }
@@ -134,30 +155,41 @@ export type Feature = (typeof FEATURES)[number];
 export type R3Inputs = Record<Feature, number>;
 
 /**
- * Copies the eco inputs of every player-round swing could value (swingRounds 1) into the v* measures,
- * so Rating 3.0's six inputs average over one set of rounds. Runs after swing.
+ * Copies the inputs of every player-round both swing and the eco adjustment could value (swingRounds 1
+ * and ecoRounds 1) into the v* measures and counts it in ratedRounds, so Rating 3.0's six inputs
+ * average over one set of rounds. Runs after swing.
  */
 export function valuedRounds(c: Ctx): void {
   for (const rows of c.pr) for (const p of rows) {
-    if (!p || !p.m.swingRounds) continue;
+    if (!p || !p.m.swingRounds || !p.m.ecoRounds) continue;
     const m = p.m;
-    m.vEcoKills = m.ecoKills; m.vEcoDeaths = m.ecoDeaths; m.vEcoDmg = m.ecoDmg; m.vEcoKast = m.ecoKast; m.vMultiKillRounds = m.multiKillRounds;
+    m.ratedRounds = 1;
+    m.vEcoKills = m.ecoKills; m.vEcoDeaths = m.ecoDeaths; m.vEcoDmg = m.ecoDmg; m.vEcoKast = m.ecoKast;
+    m.vMultiKillRounds = m.multiKillRounds; m.vSwing = m.swing;
   }
 }
 
-/** Share of a summary's rounds swing must value for a rating: below it the swing input is too thin. Ours, no fit. */
+/** Share of a summary's rounds that must be rated (ratedRounds) for a rating: below it the inputs are too thin. Ours, no fit. */
 export const MIN_VALUED_SHARE = 0.5;
 
+/** Why a set of rounds has no rating, or null when it has one. */
+export function r3Gap(m: Measures): string | null {
+  if (m.rounds <= 0) return "no rounds";
+  if (m.ratedRounds >= MIN_VALUED_SHARE * m.rounds) return null;
+  if (m.swingRounds < MIN_VALUED_SHARE * m.rounds) return `round win probability known for ${m.swingRounds} of ${m.rounds} rounds; the rating needs half`;
+  return `both the round's win probability and every eco value known for ${m.ratedRounds} of ${m.rounds} rounds; the rating needs half`;
+}
+
 /**
- * The six inputs over the rounds swing valued: KAST and MK in percent, swing in percentage points per
- * round. Null with no rounds, or when swing valued under MIN_VALUED_SHARE of them.
+ * The six inputs over the rated rounds (ratedRounds): KAST and MK in percent, swing in percentage
+ * points per round. Null when r3Gap gives a reason.
  */
 export function r3Inputs(m: Measures): R3Inputs | null {
-  const n = m.swingRounds;
-  if (m.rounds <= 0 || n < MIN_VALUED_SHARE * m.rounds) return null;
+  const n = m.ratedRounds;
+  if (r3Gap(m) !== null) return null;
   return {
     kpr_eco: m.vEcoKills / n, adr_eco: m.vEcoDmg / n, dpr_eco: m.vEcoDeaths / n, kast_eco: (100 * m.vEcoKast) / n,
-    mk: (100 * m.vMultiKillRounds) / n, swing: (100 * m.swing) / n,
+    mk: (100 * m.vMultiKillRounds) / n, swing: (100 * m.vSwing) / n,
   };
 }
 
@@ -179,38 +211,57 @@ export function rating3FromInputs(q: R3Inputs): number {
 export interface Rating3 {
   label: typeof RATING3_LABEL;
   value: number | null;
+  /** the six inputs value is computed from: value = rating3FromInputs(inputs) */
   inputs: R3Inputs | null;
+  /** the rated rounds the inputs average over (the rated sides' ratedRounds) */
+  rounds: number;
   /** params.json's own word for the model's state ("approximation") */
   status: string;
+  /** why value is null (r3Gap, a thin side, or the coverage gate); null when there is a rating */
+  reason: string | null;
 }
 
-export function rating3(m: Measures): Rating3 {
-  const inputs = r3Inputs(m);
-  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status };
-}
+export const RATING3_STATUS: string = params.rating.status;
+
+/** The coverage gate's reason (coverage.ts), or null when the summary passes it. */
+const coverageGap = (s: Summary) =>
+  coveredEnough(s.covered) ? null : `the kill-by-kill log covers ${s.covered.nRounds} of ${s.covered.roundsPlayed} rounds; the rating needs half`;
+
+const SIDES = ["CT", "T"] as const;
 
 /**
- * Rating 3.0 of a summary under the one coverage gate (coverage.ts): null when the kept matches' facts
- * cover under half their rounds. Every rating the app shows, the rating metric and so its percentile
- * and "Work on" come through here.
+ * Rating 3.0 of a summary, the one definition every rating the app shows uses: the rating metric, so
+ * its percentile and "Work on", the breakdown's inputs, scoreboard lines and the side table.
+ *
+ * Each side is rated over its own rounds (r3Inputs of Summary.sides), and the total's inputs are the
+ * side inputs weighted by each side's rated rounds; value is the rating of those inputs. The rating is
+ * linear, so with both sides rated this equals the rating of the pooled rounds; a side under half its
+ * rounds rated adds nothing, so a total always lies between the side ratings shown beside it. Null,
+ * with a reason, when the kept matches' facts cover under half their rounds (coverage.ts) or the rated
+ * sides' rounds are under MIN_VALUED_SHARE of all rounds.
  */
 export function rating3Of(s: Summary): Rating3 {
-  const r = rating3(s.m);
-  return coveredEnough(s.covered) ? r : { ...r, value: null, inputs: null };
+  const none = (reason: string): Rating3 => ({ label: RATING3_LABEL, value: null, inputs: null, rounds: 0, status: RATING3_STATUS, reason });
+  const gap = coverageGap(s);
+  if (gap) return none(gap);
+  const parts = SIDES.flatMap((side) => {
+    const q = r3Inputs(s.sides[side]);
+    return q ? [{ q, n: s.sides[side].ratedRounds }] : [];
+  });
+  const n = parts.reduce((a, p) => a + p.n, 0);
+  if (!parts.length || n < MIN_VALUED_SHARE * s.m.rounds) {
+    return none(r3Gap(s.m) ?? `the sides with half their own rounds rated cover ${n} of ${s.m.rounds} rounds; the rating needs half`);
+  }
+  const inputs = Object.fromEntries(FEATURES.map((f) => [f, parts.reduce((a, p) => a + p.n * p.q[f], 0) / n])) as R3Inputs;
+  return { label: RATING3_LABEL, value: rating3FromInputs(inputs), inputs, rounds: n, status: RATING3_STATUS, reason: null };
 }
 
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */
 export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
 
-/**
- * Rating 3.0 for both sides and for each side, from one aggregate definition: the inputs pooled over
- * the rounds kept, so a side's rating is the rating of that side's rounds. HLTV's map scoreboards
- * show total, CT and T Rating 3.0 the same way (VALIDATION.md compares them).
- */
+/** Rating 3.0 for both sides and for each side (rating3Of of each slice). */
 export function rating3BySide(facts: MatchFacts[], filter: Filter): Record<"both" | "CT" | "T", Rating3> {
   return {
-    both: rating3Of(rollup(facts, filter)),
-    CT: rating3Of(rollup(facts, { ...filter, sides: ["CT"] })),
-    T: rating3Of(rollup(facts, { ...filter, sides: ["T"] })),
+    both: rating3Of(rollup(facts, filter)), CT: rating3Of(rollup(facts, { ...filter, sides: ["CT"] })), T: rating3Of(rollup(facts, { ...filter, sides: ["T"] })),
   };
 }

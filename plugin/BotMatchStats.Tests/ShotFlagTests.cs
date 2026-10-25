@@ -114,6 +114,51 @@ public class ShotFlagRecorderTests
         return _sink.Store.Shots.Span.ToArray();
     }
 
+    /// <summary>
+    /// Fails if a shot's pitch/yaw are not the human's own view at the fire tick: a moving target
+    /// changes aimErr but must not change them (the leak that kept sprays from comparing with pros).
+    /// </summary>
+    [Fact]
+    public void ShotsRecordTheHumansViewNotTheTargetOffset()
+    {
+        _frames.ByPi[H].Pitch = 3.5f;
+        _frames.ByPi[H].Yaw = 91.25f;
+        Shoot(2100);
+        _frames.ByPi[B1].X = 40; // the target moves; the view does not
+        Shoot(2106);
+        _frames.ByPi[H].Pitch = 2.75f; // recoil control pulls the view down
+        Shoot(2112);
+        _frames.ByPi[H].Present = false;
+        Shoot(2118);
+        var s = Shots();
+        Assert.NotEqual(s[0].AimErrYaw, s[1].AimErrYaw);
+        Assert.Equal(new[] { (3.5f, 91.25f), (3.5f, 91.25f), (2.75f, 91.25f) }, s.Take(3).Select(x => (x.Pitch, x.Yaw)));
+        Assert.True(float.IsNaN(s[3].Pitch) && float.IsNaN(s[3].Yaw));
+    }
+
+    /// <summary>Fails if the file rescales the angles (they are degrees, unlike the ×100 columns), drops them on resume, or writes a missing view as a number.</summary>
+    [Fact]
+    public void ShotAnglesAreWrittenInDegreesAndReadBack()
+    {
+        _frames.ByPi[H].Pitch = -12.3456f;
+        _frames.ByPi[H].Yaw = -179.5f;
+        Shoot(2100);
+        _frames.ByPi[H].Present = false;
+        Shoot(2106);
+        Shots();
+        using var ms = new MemoryStream();
+        MatchCodec.Write(_sink.Store, ms, inProgress: true);
+        using var doc = System.Text.Json.JsonDocument.Parse(ms.ToArray());
+        var shots = doc.RootElement.GetProperty("aim").GetProperty("shots");
+        Assert.Equal("[-12.346,null]", shots.GetProperty("pitch").GetRawText());
+        Assert.Equal("[-179.5,null]", shots.GetProperty("yaw").GetRawText());
+        ms.Position = 0;
+        var back = new MatchStore();
+        MatchCodec.Read(ms, back);
+        Assert.Equal((-12.346f, -179.5f), (back.Shots[0].Pitch, back.Shots[0].Yaw));
+        Assert.True(float.IsNaN(back.Shots[1].Pitch));
+    }
+
     [Fact]
     public void TargetIsKeptWhenNotVisibleAndVisTargetSaysSo()
     {

@@ -56,7 +56,8 @@ $1,000 and $3,250 per player, are those bands for five players.
 
 Rating 3.0 is `params.json`'s six-term linear model as merged in #17 (swing and duel refitted on 304
 joins, flash share 0.154), with all six inputs averaged over the rounds swing valued (a player-map with
-swing on under half its rounds has no rating, which leaves 10 out). Against HLTV on 371 joined maps
+swing on under half its rounds has no rating, which leaves 10 out; since round 3 of #20 a round must
+also have every eco value known). Against HLTV on 371 joined maps
 (3,700 player-maps) on 2026-10-25, with each
 win-probability source: `pnpm rating-check` uses the HLTV pack when installed,
 `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB. Raw rows compare the engine's counts with
@@ -79,7 +80,9 @@ HLTV's traditional columns, so an eco input's error can be told from a counting 
 
 The HLTV-lookup column is the valued-round run; the CS2RB column is from the run before it, on all
 rounds. With the HLTV lookup the valued-round change moved swing MAE from 1.006 to 0.998 and the
-rating MAE from 0.0694 to 0.0691.
+rating MAE from 0.0694 to 0.0691. Re-run with the HLTV lookup after round 3 of #20 (rated rounds need
+every eco value known; the total weights the side ratings by rated rounds): every figure in that
+column is unchanged at the precision shown, on the same 3,700 player-maps.
 
 The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting.
 eKAST has the largest error and the weakest correlation (its transform `params.json` marks
