@@ -61,11 +61,16 @@ def join(root: Path, metrics: Path) -> dict:
     import pyarrow.parquet as pq
     fit = json.loads(metrics.read_text(encoding="utf-8"))
     by_map = hltv_index(root / "hltv", fit["source_audit"]["sources"])
-    entries = [json.loads(line) for line in (root / "demos/manifest.jsonl").read_text(encoding="utf-8").splitlines()]
+    # The manifest records historical output paths. Enumerate schema-v1 folders
+    # in place so a refeed that replaces an archive slug is not silently lost.
+    entries = [
+        {"out_dir": str(path.parent.relative_to(root)).replace("/", "\\\\")}
+        for path in sorted((root / "demos").glob("*/*/meta.parquet"))
+    ]
     accepted, rejected = [], []
     seen = set()
     for entry in entries:
-        if not entry.get("ok") or entry["out_dir"] in seen:
+        if entry["out_dir"] in seen:
             continue
         seen.add(entry["out_dir"])
         directory = root / entry["out_dir"]
