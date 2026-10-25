@@ -40,4 +40,12 @@ export function toRadar(info: MapInfo, x: number, y: number): [number, number] {
   return [(x - info.posX) / info.scale, (info.posY - y) / info.scale];
 }
 
+/** The only origins remote images load from. The Tauri CSP's img-src lists the same origins
+ *  (src-tauri/tauri.conf.json; packs.test.ts fails if the two drift apart). */
 export const REMOTE_IMAGE_ORIGINS = ["https://raw.githubusercontent.com", "https://img-cdn.hltv.org", "https://flagcdn.com"];
+
+/** The URL when it is an image on an allowed origin, else null (an invalid URL included). */
+export function allowedImage(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+  try { return REMOTE_IMAGE_ORIGINS.includes(new URL(url).origin) ? url : null; } catch { return null; }
+}
