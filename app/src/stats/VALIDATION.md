@@ -80,7 +80,9 @@ HLTV's traditional columns, so an eco input's error can be told from a counting 
 
 The HLTV-lookup column is the valued-round run; the CS2RB column is from the run before it, on all
 rounds. With the HLTV lookup the valued-round change moved swing MAE from 1.006 to 0.998 and the
-rating MAE from 0.0694 to 0.0691.
+rating MAE from 0.0694 to 0.0691. Re-run with the HLTV lookup after round 3 of #20 (rated rounds need
+every eco value known; the total weights the side ratings by rated rounds): every figure in that
+column is unchanged at the precision shown, on the same 3,700 player-maps.
 
 The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting.
 eKAST has the largest error and the weakest correlation (its transform `params.json` marks
