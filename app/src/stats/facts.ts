@@ -76,7 +76,11 @@ export const INPUT_COVERAGE = {
   loadout: ["loadoutRounds", "rounds", "freeze-end loadout", "rounds"],
   /** the weapon in the victim's hand recorded for an enemy kill */
   activeWeapon: ["deathsHandKnown", "deathsHandTotal", "weapon in hand", "deaths"],
-  /** both players' loadouts recorded for a kill or death the eco adjustment values */
+  /**
+   * both players' loadouts recorded for a kill or death the eco adjustment values. This gates only the
+   * percentile: the rating's eco values need just the economy groups, which the weapon or equipment
+   * value give (rating3.ts ecoAdjust).
+   */
   eco: ["ecoEventsKnown", "ecoEvents", "both players' loadout", "kills and deaths"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;

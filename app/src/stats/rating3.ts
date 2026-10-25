@@ -96,7 +96,7 @@ export function ecoAdjust(c: Ctx): void {
     const unknown = new Set<number>();
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
-      // coverage: both players' loadouts recorded for this round (INPUT_COVERAGE.eco)
+      // percentile coverage only: both players' loadouts recorded (INPUT_COVERAGE.eco)
       const both = !!known.get(ri * 1024 + kf.killer!) && !!known.get(ri * 1024 + kf.victim);
       for (const pl of [kf.killer!, kf.victim]) {
         const r = c.pr[ri][pl];
