@@ -17,7 +17,7 @@ use super::gameinfo;
 use super::github;
 use super::hash;
 use super::paths::{self, Layout, Protection};
-use super::process::{ensure_cs2_closed, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use super::settings::{self, Difficulty, ACTIVE_PROFILE, COSMETIC_CONVARS};
 use super::state::{self, Official, SourceLink};
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,7 @@ fn index_path(zip: &Path) -> PathBuf {
 pub fn download(layout: &Layout, tag: &str, asset_name: &str, sha_override: Option<&str>) -> Result<Cached, String> {
     github::check_name("tag", tag)?;
     github::check_name("asset name", asset_name)?;
+    let _lock = OpLock::acquire(layout)?;
     let release = github::release(OFFICIAL_REPO, tag)?;
     let asset = release.assets.iter().find(|a| a.name == asset_name).ok_or_else(|| {
         let names: Vec<_> = release.assets.iter().map(|a| a.name.as_str()).collect();
@@ -114,6 +115,58 @@ pub fn cached(layout: &Layout, tag: &str, asset: &str) -> Option<Cached> {
     cached_all(layout).into_iter().find(|c| c.index.tag == tag && c.index.asset == asset)
 }
 
+/// How much a zip may unpack to: ten times its own size, and never more than 2 GiB. The v1.4.7
+/// Windows zip is 73.7 MB and unpacks to 184 MB (2.5 times), so ten times leaves four times
+/// that headroom, while a zip bomb, which unpacks to hundreds of times its size, is stopped
+/// before it fills the disk. Each entry is also held to the size the zip declares for it.
+pub struct UnpackBudget {
+    left: u64,
+    limit: u64,
+}
+
+impl UnpackBudget {
+    pub fn for_zip(zip: &Path) -> Result<UnpackBudget, String> {
+        let size = std::fs::metadata(zip).map_err(|e| format!("{}: {e}", zip.display()))?.len();
+        let limit = size.saturating_mul(10).min(2 << 30);
+        Ok(UnpackBudget { left: limit, limit })
+    }
+
+    /// Wraps one entry's reader. Reading fails once the entry passes its declared size or the
+    /// whole zip passes the budget.
+    pub fn read<'a, R: Read>(&'a mut self, name: &str, declared: u64, inner: R) -> Capped<'a, R> {
+        Capped { inner, name: name.to_string(), declared, seen: 0, budget: self }
+    }
+}
+
+pub struct Capped<'a, R> {
+    inner: R,
+    name: String,
+    declared: u64,
+    seen: u64,
+    budget: &'a mut UnpackBudget,
+}
+
+impl<R: Read> Read for Capped<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.seen += n as u64;
+        if self.seen > self.declared {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{} unpacks to more than its declared size of {} bytes", self.name, self.declared),
+            ));
+        }
+        if n as u64 > self.budget.left {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("the zip unpacks to more than {} bytes (ten times its own size, at most 2 GiB)", self.budget.limit),
+            ));
+        }
+        self.budget.left -= n as u64;
+        Ok(n)
+    }
+}
+
 fn open(zip: &Path) -> Result<zip::ZipArchive<File>, String> {
     let f = File::open(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
     zip::ZipArchive::new(f).map_err(|e| format!("{}: {e}", zip.display()))
@@ -139,14 +192,17 @@ fn entries(archive: &mut zip::ZipArchive<File>) -> Result<HashMap<String, (Strin
     Ok(out)
 }
 
-fn read_text(archive: &mut zip::ZipArchive<File>, map: &HashMap<String, (String, usize)>, rel: &str) -> Result<Option<String>, String> {
+fn read_text(
+    archive: &mut zip::ZipArchive<File>,
+    map: &HashMap<String, (String, usize)>,
+    budget: &mut UnpackBudget,
+    rel: &str,
+) -> Result<Option<String>, String> {
     let Some((_, i)) = map.get(&rel.to_ascii_lowercase()) else { return Ok(None) };
+    let e = archive.by_index(*i).map_err(|e| e.to_string())?;
+    let declared = e.size();
     let mut s = String::new();
-    archive
-        .by_index(*i)
-        .map_err(|e| e.to_string())?
-        .read_to_string(&mut s)
-        .map_err(|e| format!("{rel}: {e}"))?;
+    budget.read(rel, declared, e).read_to_string(&mut s).map_err(|e| format!("{rel}: {e}"))?;
     Ok(Some(s))
 }
 
@@ -154,8 +210,9 @@ fn read_text(archive: &mut zip::ZipArchive<File>, map: &HashMap<String, (String,
 pub fn index_zip(zip: &Path, tag: &str, asset: &str, sha256: &str, source: SourceLink) -> Result<ReleaseIndex, String> {
     let mut archive = open(zip)?;
     let map = entries(&mut archive)?;
-    let online = read_text(&mut archive, &map, "backup/Online/gameinfo.gi")?;
-    let with_bots = read_text(&mut archive, &map, "backup/WithBots/gameinfo.gi")?;
+    let mut budget = UnpackBudget::for_zip(zip)?;
+    let online = read_text(&mut archive, &map, &mut budget, "backup/Online/gameinfo.gi")?;
+    let with_bots = read_text(&mut archive, &map, &mut budget, "backup/WithBots/gameinfo.gi")?;
     let (Some(online), Some(with_bots)) = (online, with_bots) else {
         return Err(format!("{asset}: no backup/Online and backup/WithBots gameinfo.gi, so how this release turns Bot Mode on is unknown"));
     };
@@ -184,7 +241,8 @@ pub fn index_zip(zip: &Path, tag: &str, asset: &str, sha256: &str, source: Sourc
             continue;
         }
         let e = archive.by_index(i).map_err(|e| e.to_string())?;
-        let digest = hash::reader(e).map_err(|e| format!("{rel}: {e}"))?;
+        let declared = e.size();
+        let digest = hash::reader(budget.read(&rel, declared, e)).map_err(|e| format!("{rel}: {e}"))?;
         files.insert(rel, digest);
     }
     Ok(ReleaseIndex { tag: tag.into(), asset: asset.into(), sha256: sha256.into(), source, files, skipped, bot_search_paths })
@@ -225,6 +283,7 @@ pub struct InstallSummary {
 /// install back.
 pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Result<InstallReport, String> {
     ensure_cs2_closed(probe)?;
+    let lock = OpLock::acquire(layout)?;
     let index = &cached.index;
     let zip_sha = hash::file(&cached.zip)?;
     if zip_sha != index.sha256 {
@@ -232,6 +291,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
     }
     let mut archive = open(&cached.zip)?;
     let map = entries(&mut archive)?;
+    let mut budget = UnpackBudget::for_zip(&cached.zip)?;
     let level = settings::current_difficulty(&layout.csgo)?;
 
     let op = format!("install-{}", index.tag);
@@ -246,7 +306,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                     continue;
                 }
                 Protection::MergeConvars => {
-                    let incoming = read_text(&mut archive, &map, rel)?.unwrap_or_default();
+                    let incoming = read_text(&mut archive, &map, &mut budget, rel)?.unwrap_or_default();
                     let path = layout.target(rel);
                     let user = match std::fs::read_to_string(&path) {
                         Ok(t) => t,
@@ -269,7 +329,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                     Err(e) => return Err(format!("{}: {e}", path.display())),
                 };
-                let release = read_text(&mut archive, &map, rel)?.unwrap_or_default();
+                let release = read_text(&mut archive, &map, &mut budget, rel)?.unwrap_or_default();
                 if let Some(out) = user.map(|u| super::cfg::keep_user_values(&release, &u)).filter(|out| *out != release) {
                     if cs.put_bytes(rel, out.as_bytes())? {
                         written += 1;
@@ -295,7 +355,8 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                 .ok_or_else(|| format!("{source_rel}: in the index but not in the zip"))?;
             let changed = cs.put(rel, digest, |f| {
                 let e = archive.by_index(i).map_err(|e| e.to_string())?;
-                hash::copy(e, f).map(|_| ()).map_err(|e| format!("{source_rel}: {e}"))
+                let declared = e.size();
+                hash::copy(budget.read(&source_rel, declared, e), f).map(|_| ()).map_err(|e| format!("{source_rel}: {e}"))
             })?;
             if changed {
                 written += 1;
@@ -345,6 +406,6 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
             overlays_replaced,
         })
     };
-    let (summary, change) = changes::run(layout, probe, &op, body)?;
+    let (summary, change) = changes::run(layout, probe, &lock, &op, body)?;
     Ok(InstallReport { change, summary })
 }

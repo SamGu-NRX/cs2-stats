@@ -72,8 +72,12 @@ impl Ctx {
         }
     }
 
-    pub fn steam_launch_options(&self) -> Option<String> {
-        let i = self.install.as_ref()?;
-        steam::launch_options(&i.steam, i.owner).ok().flatten()
+    /// CS2's launch options as stored in Steam. An unreadable `localconfig.vdf` is an error,
+    /// so launch can refuse rather than miss a `-secure` there.
+    pub fn steam_launch_options(&self) -> Result<Option<String>, String> {
+        match &self.install {
+            Some(i) => steam::launch_options(&i.steam, i.owner),
+            None => Ok(None),
+        }
     }
 }

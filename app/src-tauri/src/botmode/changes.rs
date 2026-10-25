@@ -13,7 +13,7 @@
 
 use super::hash;
 use super::paths::{self, Layout, Protection, TMP_SUFFIX};
-use super::process::{ensure_cs2_closed, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -59,6 +59,8 @@ const STATE_BEFORE: &str = "state-before.json";
 
 pub struct ChangeSet {
     layout: Layout,
+    /// The game folder with links resolved; every write must land inside it.
+    root_canon: PathBuf,
     dir: PathBuf,
     meta: Meta,
     entries: Vec<Entry>,
@@ -66,9 +68,11 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    /// Starts a change. Refuses while CS2 runs, so no change exists without that check.
-    pub fn begin(layout: &Layout, probe: &dyn ProcessProbe, operation: &str) -> Result<ChangeSet, String> {
+    /// Starts a change, right before its writes. Needs the operation lock, and refuses while
+    /// CS2 runs, so no change exists without both.
+    pub fn begin(layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, operation: &str) -> Result<ChangeSet, String> {
         ensure_cs2_closed(probe)?;
+        let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
         let (compact, iso) = now_utc();
         let seq = list(layout)?.iter().map(|m| m.seq).max().unwrap_or(0) + 1;
         let id = format!("{seq:04}-{compact}-{operation}");
@@ -77,7 +81,7 @@ impl ChangeSet {
         // The app state (installed release, applied overlays) is restored along with the files.
         let state = layout.state_file();
         if state.is_file() {
-            fs::copy(&state, dir.join(STATE_BEFORE)).map_err(|e| format!("{}: {e}", state.display()))?;
+            copy_synced(&state, &dir.join(STATE_BEFORE)).map_err(|e| format!("{}: {e}", state.display()))?;
         }
         let meta = Meta { seq, id, operation: operation.into(), created: iso, status: Status::InProgress, files: 0, error: None };
         write_meta(&dir, &meta)?;
@@ -86,7 +90,7 @@ impl ChangeSet {
             .append(true)
             .open(dir.join(ENTRIES))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(ChangeSet { layout: layout.clone(), dir, meta, entries: Vec::new(), log })
+        Ok(ChangeSet { layout: layout.clone(), root_canon, dir, meta, entries: Vec::new(), log })
     }
 
     pub fn id(&self) -> &str {
@@ -141,7 +145,7 @@ impl ChangeSet {
         if self.entries.iter().any(|e| e.path.eq_ignore_ascii_case(&rel)) {
             return Err(format!("{rel}: written twice in one change"));
         }
-        let target = self.layout.target(&rel);
+        let target = paths::confined(&self.layout.csgo, &self.root_canon, &rel, true)?;
         let before = hash::file_if_exists(&target)?;
         if before.as_deref() == Some(expected) {
             return Ok(false);
@@ -151,7 +155,7 @@ impl ChangeSet {
             if let Some(parent) = saved.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-            fs::copy(&target, &saved).map_err(|e| format!("backing up {rel}: {e}"))?;
+            copy_synced(&target, &saved).map_err(|e| format!("backing up {rel}: {e}"))?;
             if hash::file(&saved)? != *old {
                 return Err(format!("{rel}: the backup copy does not match the original"));
             }
@@ -163,9 +167,6 @@ impl ChangeSet {
             .map_err(|e| format!("writing the change journal: {e}"))?;
         self.entries.push(entry);
 
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
         let tmp = tmp_path(&target);
         let written = File::create(&tmp)
             .map_err(|e| format!("{}: {e}", tmp.display()))
@@ -213,7 +214,8 @@ impl ChangeSet {
     /// Undoes what this change wrote after `error`, and returns a message naming both.
     pub fn abort(mut self, error: String) -> String {
         self.meta.files = self.entries.len();
-        let undo = restore(&self.layout, &self.dir, &self.entries).and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
+        let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, None)
+            .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
         self.meta.status = Status::Failed;
         self.meta.error = Some(error.clone());
         let _ = write_meta(&self.dir, &self.meta);
@@ -228,10 +230,11 @@ impl ChangeSet {
 pub fn run<T>(
     layout: &Layout,
     probe: &dyn ProcessProbe,
+    lock: &OpLock,
     operation: &str,
     body: impl FnOnce(&mut ChangeSet) -> Result<T, String>,
 ) -> Result<(T, Meta), String> {
-    let mut cs = ChangeSet::begin(layout, probe, operation)?;
+    let mut cs = ChangeSet::begin(layout, probe, lock, operation)?;
     match body(&mut cs) {
         Ok(v) => Ok((v, cs.commit()?)),
         Err(e) => Err(cs.abort(e)),
@@ -259,8 +262,17 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let tmp = tmp_path(path);
-    fs::write(&tmp, data).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    File::create(&tmp)
+        .and_then(|mut f| f.write_all(data).and_then(|_| f.sync_all()))
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Copies a file and flushes the copy to disk before returning, so a backup or restored file
+/// survives a crash right after it is made.
+fn copy_synced(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::copy(src, dst)?;
+    OpenOptions::new().write(true).open(dst)?.sync_all()
 }
 
 fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
@@ -315,6 +327,8 @@ pub struct RollbackReport {
 /// must be that newest one: changes come off in the reverse order they went on.
 pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> Result<RollbackReport, String> {
     ensure_cs2_closed(probe)?;
+    let _lock = OpLock::acquire(layout)?;
+    let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
     let active: Vec<Meta> = list(layout)?
         .into_iter()
         .filter(|m| matches!(m.status, Status::Complete | Status::InProgress))
@@ -331,7 +345,7 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     let mut meta = newest.clone();
     let dir = layout.backups().join(&meta.id);
     let entries = read_entries(&dir)?;
-    let mut report = restore(layout, &dir, &entries)?;
+    let mut report = restore(layout, &root_canon, &dir, &entries, Some(probe))?;
     restore_state(layout, &dir)?;
     meta.status = Status::RolledBack;
     write_meta(&dir, &meta)?;
@@ -345,7 +359,7 @@ fn restore_state(layout: &Layout, dir: &Path) -> Result<(), String> {
     let saved = dir.join(STATE_BEFORE);
     let state = layout.state_file();
     if saved.is_file() {
-        fs::copy(&saved, &state).map(|_| ()).map_err(|e| format!("restoring the app state: {e}"))
+        copy_synced(&saved, &state).map_err(|e| format!("restoring the app state: {e}"))
     } else if state.is_file() {
         fs::remove_file(&state).map_err(|e| format!("restoring the app state: {e}"))
     } else {
@@ -355,13 +369,15 @@ fn restore_state(layout: &Layout, dir: &Path) -> Result<(), String> {
 
 /// Puts `entries` back to their `before` content. Checks every file first and changes
 /// nothing if any file holds neither the old nor the new content, because something else
-/// wrote it after Bot Mode did.
-fn restore(layout: &Layout, dir: &Path, entries: &[Entry]) -> Result<RollbackReport, String> {
+/// wrote it after Bot Mode did. Then, with `probe`, checks CS2 again, and re-hashes each file
+/// immediately before restoring it: a file another program changed after the first pass is
+/// left alone and stops the rollback, which can be run again once the cause is dealt with.
+fn restore(layout: &Layout, root_canon: &Path, dir: &Path, entries: &[Entry], probe: Option<&dyn ProcessProbe>) -> Result<RollbackReport, String> {
     let mut todo = Vec::new();
     let mut conflicts = Vec::new();
     let mut report = RollbackReport::default();
     for e in entries.iter().rev() {
-        let target = layout.target(&paths::rel(&e.path)?);
+        let target = paths::confined(&layout.csgo, root_canon, &e.path, false)?;
         let now = hash::file_if_exists(&target)?;
         if now == e.before {
             report.unchanged += 1;
@@ -380,7 +396,22 @@ fn restore(layout: &Layout, dir: &Path, entries: &[Entry]) -> Result<RollbackRep
             if conflicts.len() > 10 { ", ..." } else { "" }
         ));
     }
+    if let Some(probe) = probe {
+        ensure_cs2_closed(probe)?;
+    }
     for (e, target) in todo {
+        let now = hash::file_if_exists(&target)?;
+        if now == e.before {
+            report.unchanged += 1;
+            continue;
+        }
+        if now.as_deref() != Some(e.after.as_str()) {
+            return Err(format!(
+                "{} changed while the rollback ran, so it was left as it is; {} file(s) were already put back. Run rollback again to finish.",
+                e.path,
+                report.restored + report.removed
+            ));
+        }
         match &e.before {
             Some(old) => {
                 let saved = backup_path(dir, &e.path);
@@ -388,7 +419,7 @@ fn restore(layout: &Layout, dir: &Path, entries: &[Entry]) -> Result<RollbackRep
                     return Err(format!("{}: the backup copy is damaged; it was not restored", e.path));
                 }
                 let tmp = tmp_path(&target);
-                fs::copy(&saved, &tmp).map_err(|err| format!("{}: {err}", e.path))?;
+                copy_synced(&saved, &tmp).map_err(|err| format!("{}: {err}", e.path))?;
                 fs::rename(&tmp, &target).map_err(|err| format!("{}: {err}", e.path))?;
                 if hash::file(&target)? != *old {
                     return Err(format!("{}: restored content does not match the backup", e.path));

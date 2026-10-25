@@ -10,7 +10,7 @@ use super::cfg;
 use super::changes::{self, write_atomic, Meta};
 use super::hash;
 use super::paths::{join_rel, Layout, SERVER_CFG};
-use super::process::{ensure_cs2_closed, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -66,10 +66,11 @@ pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
 
 pub fn set_difficulty(layout: &Layout, probe: &dyn ProcessProbe, level: Difficulty) -> Result<Meta, String> {
     ensure_cs2_closed(probe)?;
+    let lock = OpLock::acquire(layout)?;
     let src = layout.target(level.variant());
     let sha = hash::file_if_exists(&src)?
         .ok_or_else(|| format!("{} is missing; install the mod first", level.variant()))?;
-    let (_, meta) = changes::run(layout, probe, &format!("difficulty-{}", level.name()), |cs| {
+    let (_, meta) = changes::run(layout, probe, &lock, &format!("difficulty-{}", level.name()), |cs| {
         cs.put_file(ACTIVE_PROFILE, &src, &sha)
     })?;
     Ok(meta)
@@ -151,6 +152,7 @@ fn check_music_kit(csgo: &Path, id: i32) -> Result<(), String> {
 /// value across map changes, so a deleted line would leave the old value active.
 pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) -> Result<Meta, String> {
     ensure_cs2_closed(probe)?;
+    let lock = OpLock::acquire(layout)?;
     check_music_kit(&layout.csgo, c.music_kit)?;
     let path = layout.target(SERVER_CFG);
     let text = match std::fs::read_to_string(&path) {
@@ -167,7 +169,7 @@ pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) ->
             (COSMETIC_CONVARS[2], c.music_kit.to_string()),
         ],
     );
-    let (_, meta) = changes::run(layout, probe, "cosmetics", |cs| cs.put_merged_cfg(SERVER_CFG, merged.as_bytes()))?;
+    let (_, meta) = changes::run(layout, probe, &lock, "cosmetics", |cs| cs.put_merged_cfg(SERVER_CFG, merged.as_bytes()))?;
     Ok(meta)
 }
 
@@ -192,6 +194,7 @@ pub fn load_app(layout: &Layout) -> Result<AppSettings, String> {
 
 pub fn save_app(layout: &Layout, s: &AppSettings) -> Result<(), String> {
     super::launch::steam_args(&s.launch_options)?;
+    let _lock = OpLock::acquire(layout)?;
     let text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     write_atomic(&layout.settings_file(), text.as_bytes())
 }

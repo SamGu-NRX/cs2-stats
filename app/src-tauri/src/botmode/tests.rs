@@ -9,8 +9,8 @@ use super::install::{self, Cached};
 use super::launch;
 use super::overlay::{self, Manifest};
 use super::paths::Layout;
-use super::process::fake::{Broken, Running};
-use super::process::ProcessProbe;
+use super::process::fake::{Broken, Running, Scripted};
+use super::process::{OpLock, ProcessProbe};
 use super::settings::{self, Cosmetics, Difficulty};
 use super::state::{self, SourceLink};
 use super::status::{self, ComponentState};
@@ -144,7 +144,7 @@ fn nothing_changes_while_cs2_runs_or_cannot_be_checked() {
             ("rollback", changes::rollback(&layout, probe, None).map(|_| ())),
             ("difficulty", settings::set_difficulty(&layout, probe, Difficulty::Low).map(|_| ())),
             ("cosmetics", settings::set_cosmetics(&layout, probe, Cosmetics::default()).map(|_| ())),
-            ("launch", launch::prepare(&layout, probe, &steam).map(|_| ())),
+            ("launch", launch::launch(&layout, probe, &steam, None).map(|_| ())),
         ];
         for (op, r) in results {
             let err = r.expect_err(op);
@@ -173,7 +173,8 @@ fn a_failed_install_puts_back_what_it_had_written() {
 fn content_that_does_not_match_its_hash_never_replaces_a_file() {
     let s = Scratch::new("hash");
     let layout = fake_game(&s);
-    let mut cs = ChangeSet::begin(&layout, &CLOSED, "test").unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let mut cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
     let err = cs
         .put("cfg/server.cfg", &hash::bytes(b"good"), |f| std::io::Write::write_all(f, b"bad").map_err(|e| e.to_string()))
         .unwrap_err();
@@ -186,7 +187,8 @@ fn content_that_does_not_match_its_hash_never_replaces_a_file() {
 fn protected_files_cannot_be_replaced_through_a_change() {
     let s = Scratch::new("protected");
     let layout = fake_game(&s);
-    let mut cs = ChangeSet::begin(&layout, &CLOSED, "test").unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let mut cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
     for rel in ["cfg/autoexec.cfg", "cfg/gamemode_competitive_server.cfg", USER_SKELETON] {
         assert!(cs.put_bytes(rel, b"x").is_err(), "{rel}");
     }
@@ -221,10 +223,12 @@ fn changes_roll_back_newest_first() {
 fn a_change_interrupted_by_a_crash_can_be_rolled_back() {
     let s = Scratch::new("crash");
     let layout = fake_game(&s);
-    let mut cs = ChangeSet::begin(&layout, &CLOSED, "test").unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let mut cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
     cs.put_bytes("cfg/server.cfg", b"new").unwrap();
     let id = cs.id().to_string();
-    drop(cs); // no commit: the process died here
+    drop(cs); // no commit: the process died here, and the OS released its lock
+    drop(lock);
     let journal = layout.backups().join(&id).join("entries.jsonl");
     let mut text = fs::read_to_string(&journal).unwrap();
     text.push_str("{\"path\":\"cfg/torn"); // a line cut off mid-write
@@ -479,15 +483,164 @@ fn launch_turns_bot_mode_back_on_and_refuses_without_the_mod() {
     let steam = s.0.join("Steam");
     write(&steam.join("steam.exe"), b"");
     let bare = fake_game(&s);
-    let err = launch::prepare(&bare, &CLOSED, &steam).unwrap_err();
+    let lock = OpLock::acquire(&bare).unwrap();
+    let err = launch::prepare(&bare, &CLOSED, &steam, None, &lock).unwrap_err();
     assert!(err.contains("not installed"), "{err}");
 
     let s2 = Scratch::new("launch2");
     let layout = installed(&s2);
     // A CS2 update rewrote gameinfo.gi without the bot search paths.
     write(&layout.target("gameinfo.gi"), gameinfo::ONLINE_SAMPLE.as_bytes());
-    let plan = launch::prepare(&layout, &CLOSED, &steam).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let plan = launch::prepare(&layout, &CLOSED, &steam, Some("-novid -insecure"), &lock).unwrap();
     assert_eq!(&plan.args[..3], ["-applaunch", "730", "-insecure"]);
     assert!(plan.bot_mode_change.is_some());
     assert!(gameinfo::is_bot_mode(&read(&layout, "gameinfo.gi")).unwrap());
+}
+
+// --- round 1 review: process checks, lock, confinement, Steam options, zip limits, races ----
+
+#[test]
+fn launch_refuses_secure_in_steams_own_options_and_rechecks_before_starting() {
+    let s = Scratch::new("launch-secure");
+    let steam = s.0.join("Steam");
+    write(&steam.join("steam.exe"), b"");
+    let layout = installed(&s);
+    let before = snapshot(&layout.csgo);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let err = launch::prepare(&layout, &CLOSED, &steam, Some("-novid -SECURE +exec autoexec"), &lock).unwrap_err();
+    assert!(err.contains("contain -secure") && err.contains("VAC"), "{err}");
+    assert_eq!(snapshot(&layout.csgo), before);
+
+    // CS2 starting between the preparation and the hand-off to Steam stops the launch.
+    let plan = launch::prepare(&layout, &CLOSED, &steam, None, &lock).unwrap();
+    let err = launch::start(&plan, &Running(true)).unwrap_err();
+    assert!(err.contains("CS2 started"), "{err}");
+}
+
+#[test]
+fn a_second_operation_cannot_run_while_one_holds_the_lock() {
+    let s = Scratch::new("lock");
+    let layout = installed(&s);
+    let before = snapshot(&layout.csgo);
+    let held = OpLock::acquire(&layout).unwrap();
+    let results = [
+        ("install", install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.8")).map(|_| ())),
+        ("rollback", changes::rollback(&layout, &CLOSED, None).map(|_| ())),
+        ("difficulty", settings::set_difficulty(&layout, &CLOSED, Difficulty::High).map(|_| ())),
+    ];
+    for (op, r) in results {
+        let err = r.expect_err(op);
+        assert!(err.contains("another Bot Mode operation"), "{op}: {err}");
+    }
+    assert_eq!(snapshot(&layout.csgo), before);
+    drop(held);
+    settings::set_difficulty(&layout, &CLOSED, Difficulty::High).unwrap();
+}
+
+#[test]
+fn rollback_rechecks_cs2_after_its_first_pass() {
+    let s = Scratch::new("rollback-recheck");
+    let layout = installed(&s);
+    let before = snapshot(&layout.csgo);
+    // Closed when rollback starts, running by the time it would write.
+    let err = changes::rollback(&layout, &Scripted::new(|n| n >= 2), None).unwrap_err();
+    assert!(err.contains("CS2 is running"), "{err}");
+    assert_eq!(snapshot(&layout.csgo), before);
+}
+
+#[test]
+fn rollback_leaves_a_file_another_program_changed_during_it() {
+    let s = Scratch::new("rollback-race");
+    let layout = installed(&s);
+    let edited = layout.target("cfg/my_bot_normal_config.cfg");
+    // Between rollback's first pass and its writes, something else saves this file.
+    let probe = Scripted::new(move |n| {
+        if n == 2 {
+            fs::write(&edited, b"saved by another program").unwrap();
+        }
+        false
+    });
+    let err = changes::rollback(&layout, &probe, None).unwrap_err();
+    assert!(err.contains("cfg/my_bot_normal_config.cfg changed while the rollback ran"), "{err}");
+    assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), "saved by another program");
+}
+
+#[cfg(windows)]
+#[test]
+fn writes_never_follow_a_junction_out_of_the_game_folder() {
+    let s = Scratch::new("junction");
+    let layout = fake_game(&s);
+    let outside = s.0.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    junction(&layout.target("addons/counterstrikesharp"), &outside);
+
+    let err = install::install(&layout, &CLOSED, &cached_release(&layout, "v1.4.7")).unwrap_err();
+    assert!(err.contains("junction or symbolic link"), "{err}");
+    assert!(snapshot(&outside).is_empty(), "nothing was written through the junction");
+
+    // The temporary file next to a target is checked too.
+    fs::remove_dir(layout.target("addons/counterstrikesharp")).unwrap();
+    junction(&layout.target("cfg/server.cfg.botmode-tmp"), &outside);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let mut cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
+    let err = cs.put_bytes("cfg/server.cfg", b"x").unwrap_err();
+    assert!(err.contains("botmode-tmp is a junction"), "{err}");
+    assert_eq!(read(&layout, "cfg/server.cfg"), "// valve\r\n");
+}
+
+/// A release zip plus `extra` entries, written with `method`.
+fn zip_with(path: &Path, extra: &[(&str, Vec<u8>)], method: zip::CompressionMethod) {
+    let mut files = release_files("v1.4.7");
+    for (name, data) in extra {
+        files.insert(name.to_string(), data.clone());
+    }
+    let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    let opts = zip::write::SimpleFileOptions::default().compression_method(method);
+    for (name, data) in &files {
+        z.start_file(name.as_str(), opts).unwrap();
+        std::io::Write::write_all(&mut z, data).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+fn index(path: &Path) -> Result<install::ReleaseIndex, String> {
+    install::index_zip(path, "v1.4.7", install::DEFAULT_ASSET, "0", SourceLink::new("https://github.com/x/y", "v1.4.7", None))
+}
+
+#[test]
+fn a_zip_that_unpacks_far_past_its_size_is_refused() {
+    let s = Scratch::new("bomb");
+    let path = s.0.join("bomb.zip");
+    // 64 MB of zeros deflates to about 64 KB: a thousand times its packed size.
+    zip_with(&path, &[("addons/bomb.bin", vec![0u8; 64 << 20])], zip::CompressionMethod::Deflated);
+    assert!(fs::metadata(&path).unwrap().len() < 1 << 20);
+    let err = index(&path).unwrap_err();
+    assert!(err.contains("unpacks to more than") && err.contains("ten times its own size"), "{err}");
+}
+
+#[test]
+fn an_entry_larger_than_its_declared_size_is_refused() {
+    let s = Scratch::new("declared");
+    let path = s.0.join("liar.zip");
+    let name = "addons/liar.bin";
+    zip_with(&path, &[(name, vec![b'A'; 1000])], zip::CompressionMethod::Stored);
+    // Rewrite the entry's uncompressed size to 10 bytes in its local and central headers.
+    let mut bytes = fs::read(&path).unwrap();
+    let mut patched = 0;
+    let mut at = 0;
+    while let Some(pos) = bytes[at..].windows(name.len()).position(|w| w == name.as_bytes()).map(|p| p + at) {
+        if pos >= 46 && bytes[pos - 46..pos - 42] == [0x50, 0x4b, 0x01, 0x02] {
+            bytes[pos - 46 + 24..pos - 46 + 28].copy_from_slice(&10u32.to_le_bytes());
+            patched += 1;
+        } else if pos >= 30 && bytes[pos - 30..pos - 26] == [0x50, 0x4b, 0x03, 0x04] {
+            bytes[pos - 30 + 22..pos - 30 + 26].copy_from_slice(&10u32.to_le_bytes());
+            patched += 1;
+        }
+        at = pos + 1;
+    }
+    assert_eq!(patched, 2);
+    fs::write(&path, bytes).unwrap();
+    let err = index(&path).unwrap_err();
+    assert!(err.contains("more than its declared size of 10 bytes"), "{err}");
 }

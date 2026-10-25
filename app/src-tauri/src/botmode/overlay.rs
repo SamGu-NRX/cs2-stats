@@ -16,12 +16,12 @@
 use super::changes::{self, Meta};
 use super::github;
 use super::hash;
+use super::install::UnpackBudget;
 use super::paths::{self, Layout, Protection};
-use super::process::{ensure_cs2_closed, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use super::state::{self, OverlayRecord, SourceLink};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -136,15 +136,11 @@ impl Manifest {
     }
 }
 
-enum Content {
-    File(PathBuf),
-    Bytes(Vec<u8>),
-}
-
 struct ResolvedFile {
     rel: String,
     sha: String,
-    content: Content,
+    /// The built or unpacked file to copy.
+    src: PathBuf,
 }
 
 struct Resolved {
@@ -222,7 +218,7 @@ fn resolve_local(e: &Entry, repo: &str, branch: &str, checkout: &str, build: &st
         if f.to_ascii_lowercase().ends_with(".dll") && built < committed {
             warnings.push(format!("{f} was built before commit {} was made; rebuild if that commit changed code", &commit[..12]));
         }
-        files.push(ResolvedFile { rel: format!("{}/{f}", e.target), sha, content: Content::File(path) });
+        files.push(ResolvedFile { rel: format!("{}/{f}", e.target), sha, src: path });
     }
     Ok(Resolved {
         name: e.name.clone(),
@@ -246,16 +242,22 @@ fn resolve_release(layout: &Layout, e: &Entry, repo: &str, tag: &str, asset: &st
     let commit = github::tag_commit(repo, tag)?;
     let f = std::fs::File::open(&zip_path).map_err(|err| format!("{}: {err}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(f).map_err(|err| format!("{}: {err}", zip_path.display()))?;
+    let mut budget = UnpackBudget::for_zip(&zip_path)?;
+    // Files are unpacked to a staging folder next to the zip, never held whole in memory.
+    let staging = zip_path.with_extension("files");
+    std::fs::create_dir_all(&staging).map_err(|err| format!("{}: {err}", staging.display()))?;
     let mut files = Vec::new();
     for name in &e.files {
         let inner = match subdir {
             Some(d) => format!("{}/{name}", paths::rel(d)?),
             None => name.clone(),
         };
-        let mut entry = archive.by_name(&inner).map_err(|err| format!("{}: {inner} in {asset}: {err}", e.name))?;
-        let mut data = Vec::new();
-        entry.read_to_end(&mut data).map_err(|err| format!("{}: {inner}: {err}", e.name))?;
-        files.push(ResolvedFile { rel: format!("{}/{name}", e.target), sha: hash::bytes(&data), content: Content::Bytes(data) });
+        let entry = archive.by_name(&inner).map_err(|err| format!("{}: {inner} in {asset}: {err}", e.name))?;
+        let declared = entry.size();
+        let out_path = staging.join(name);
+        let out = std::fs::File::create(&out_path).map_err(|err| format!("{}: {err}", out_path.display()))?;
+        let (sha, _) = hash::copy(budget.read(&inner, declared, entry), out).map_err(|err| format!("{}: {inner}: {err}", e.name))?;
+        files.push(ResolvedFile { rel: format!("{}/{name}", e.target), sha, src: out_path });
     }
     Ok(Resolved {
         name: e.name.clone(),
@@ -297,19 +299,17 @@ pub struct OverlayReport {
 /// Applies every entry of the manifest at `manifest_path`, as one change.
 pub fn apply(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path) -> Result<OverlayReport, String> {
     ensure_cs2_closed(probe)?;
+    let lock = OpLock::acquire(layout)?;
     let manifest = Manifest::load(manifest_path)?;
     let resolved = manifest.entries.iter().map(|e| resolve(layout, e)).collect::<Result<Vec<_>, _>>()?;
-    let (entries, change) = changes::run(layout, probe, "overlay", |cs| {
+    let (entries, change) = changes::run(layout, probe, &lock, "overlay", |cs| {
         let mut st = state::load(layout)?;
         let mut applied = Vec::new();
         for r in &resolved {
             let mut written = 0;
             let mut record = BTreeMap::new();
             for f in &r.files {
-                let changed = match &f.content {
-                    Content::File(p) => cs.put_file(&f.rel, p, &f.sha)?,
-                    Content::Bytes(b) => cs.put_bytes(&f.rel, b)?,
-                };
+                let changed = cs.put_file(&f.rel, &f.src, &f.sha)?;
                 written += usize::from(changed);
                 record.insert(f.rel.clone(), f.sha.clone());
             }

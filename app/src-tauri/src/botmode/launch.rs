@@ -8,7 +8,7 @@
 use super::changes::{self, Meta};
 use super::gameinfo;
 use super::paths::Layout;
-use super::process::ProcessProbe;
+use super::process::{OpLock, ProcessProbe};
 use super::settings;
 use serde::Serialize;
 use std::path::Path;
@@ -70,14 +70,28 @@ pub struct LaunchPlan {
     pub bot_mode_change: Option<Meta>,
 }
 
-/// Everything before starting the game: CS2 must be closed, the mod installed, and Bot Mode
-/// on in `gameinfo.gi` (turned on here, with a backup, when it is off).
-pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &Path) -> Result<LaunchPlan, String> {
+/// Refuses Steam's own CS2 launch options when they contain `-secure`: Steam adds them to every
+/// start, and `-secure` would turn VAC back on with the mod loaded.
+pub fn check_steam_options(steam_options: Option<&str>) -> Result<(), String> {
+    let opts = steam_options.unwrap_or("");
+    if split(opts)?.iter().any(|a| a.eq_ignore_ascii_case("-secure")) {
+        return Err(format!(
+            "CS2's launch options in Steam contain -secure (\"{opts}\"). Steam adds them to every start, which would turn VAC on with the mod loaded. Remove -secure in Steam > Counter-Strike 2 > Properties > Launch options."
+        ));
+    }
+    Ok(())
+}
+
+/// Everything before starting the game: CS2 must be closed, Steam's own options must not say
+/// `-secure`, the mod must be installed, and Bot Mode on in `gameinfo.gi` (turned on here, with
+/// a backup, when it is off). The caller holds `lock` until the game has been handed to Steam.
+pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &Path, steam_options: Option<&str>, lock: &OpLock) -> Result<LaunchPlan, String> {
     match probe.cs2_running() {
         Ok(false) => {}
         Ok(true) => return Err("CS2 is already running. Close it, then launch Bot Mode, so the game starts with -insecure.".into()),
         Err(e) => return Err(format!("could not check whether CS2 is running: {e}")),
     }
+    check_steam_options(steam_options)?;
     let missing: Vec<&str> = REQUIRED.into_iter().filter(|r| !layout.target(r).is_file()).collect();
     if !missing.is_empty() {
         return Err(format!("the mod is not installed ({} missing); run `botmode install <tag>` first", missing.join(", ")));
@@ -89,7 +103,7 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &Path) -> Resul
         None
     } else {
         let on = gameinfo::enable(&text)?;
-        Some(changes::run(layout, probe, "bot-mode-on", |cs| cs.put_bytes("gameinfo.gi", on.as_bytes()))?.1)
+        Some(changes::run(layout, probe, lock, "bot-mode-on", |cs| cs.put_bytes("gameinfo.gi", on.as_bytes()))?.1)
     };
     let steam_exe = steam.join("steam.exe");
     if !steam_exe.is_file() {
@@ -98,15 +112,30 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &Path) -> Resul
     Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args, bot_mode_change })
 }
 
-/// Hands the plan to Steam. Steam starts the game and adds the launch options set in its
-/// own CS2 properties.
-pub fn start(plan: &LaunchPlan) -> Result<(), String> {
-    debug_assert_eq!(plan.args.get(2).map(String::as_str), Some("-insecure"));
+/// Hands the plan to Steam, after checking once more that CS2 has not started meanwhile.
+/// Steam starts the game and adds the launch options set in its own CS2 properties.
+pub fn start(plan: &LaunchPlan, probe: &dyn ProcessProbe) -> Result<(), String> {
+    match probe.cs2_running() {
+        Ok(false) => {}
+        Ok(true) => return Err("CS2 started while Bot Mode was getting ready; it was not launched again.".into()),
+        Err(e) => return Err(format!("could not check whether CS2 is running: {e}")),
+    }
+    if plan.args.get(2).map(String::as_str) != Some("-insecure") {
+        return Err("internal error: a launch without -insecure was refused".into());
+    }
     std::process::Command::new(&plan.steam_exe)
         .args(&plan.args)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("{}: {e}", plan.steam_exe))
+}
+
+/// The whole launch under one operation lock.
+pub fn launch(layout: &Layout, probe: &dyn ProcessProbe, steam: &Path, steam_options: Option<&str>) -> Result<LaunchPlan, String> {
+    let lock = OpLock::acquire(layout)?;
+    let plan = prepare(layout, probe, steam, steam_options, &lock)?;
+    start(&plan, probe)?;
+    Ok(plan)
 }
 
 #[cfg(test)]

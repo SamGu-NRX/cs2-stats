@@ -113,6 +113,13 @@ pub fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
+/// A directory junction at `link` pointing to `target`, as `mklink /J` makes.
+#[cfg(windows)]
+pub fn junction(link: &Path, target: &Path) {
+    let out = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+    assert!(out.status.success(), "mklink: {}", String::from_utf8_lossy(&out.stderr));
+}
+
 pub fn read(layout: &Layout, rel: &str) -> String {
     fs::read_to_string(join_rel(&layout.csgo, rel)).unwrap()
 }

@@ -23,7 +23,7 @@ async fn blocking<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) 
 
 #[tauri::command]
 pub async fn botmode_status(game: Option<String>) -> Result<Status, String> {
-    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options())).await
+    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options().ok().flatten())).await
 }
 
 #[tauri::command]
@@ -76,9 +76,7 @@ pub async fn botmode_backups(game: Option<String>) -> Result<Vec<Meta>, String> 
 #[tauri::command]
 pub async fn botmode_launch(game: Option<String>) -> Result<LaunchPlan, String> {
     blocking(game, |ctx| {
-        let plan = launch::prepare(&ctx.layout, &SystemProbe, &ctx.steam()?)?;
-        launch::start(&plan)?;
-        Ok(plan)
+        launch::launch(&ctx.layout, &SystemProbe, &ctx.steam()?, ctx.steam_launch_options()?.as_deref())
     })
     .await
 }
