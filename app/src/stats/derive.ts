@@ -27,13 +27,14 @@ const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT"
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
  * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
  */
-function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null } {
+function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null; roundsPlayed: number | null } {
   const extra = JSON.parse(t.match.extra[0]) as Record<string, unknown>;
   const convars = JSON.parse(t.match.convars[0]) as Record<string, unknown>;
   const raw = extra.date ?? extra.dem_modified_in_archive;
   return {
     date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
     pov: typeof extra.pov === "string" ? extra.pov : null,
+    roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
   };
 }
 
@@ -263,7 +264,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
 
 export function derive(t: MatchTables): MatchFacts {
   const c = buildCtx(t);
-  const { date, maxRounds, pov } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -285,6 +286,7 @@ export function derive(t: MatchTables): MatchFacts {
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
+      roundsPlayed: roundsPlayed ?? c.nRounds,
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

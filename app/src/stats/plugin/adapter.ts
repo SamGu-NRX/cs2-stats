@@ -62,7 +62,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     team_ct_start: humanStart === "CT" ? humanTeam : "Opponents", team_t_start: humanStart === "T" ? humanTeam : "Opponents",
     schema_version: 1, extractor_version: `plugin ${m.env.plugin} via plugin/adapter.ts`,
     convars: JSON.stringify({ mp_maxrounds: m.env.maxrounds ?? 24 }),
-    extra: JSON.stringify({ date: m.startUtc.slice(0, 10), pov: human }), visibility_status: "no_mapdata",
+    extra: JSON.stringify({ date: m.startUtc.slice(0, 10), pov: human, rounds_played: m.rounds.winSide.length }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
 
@@ -95,8 +95,9 @@ export function pluginToTables(m: MatchFile): MatchTables {
   for (let i = 0; i < k.ri.length; i++) {
     const ri = k.ri[i];
     if (!covered(ri) || k.flags[i] & FLAG.freeze) continue;
-    const killer = k.killer[i];
-    const victim = k.victim[i];
+    // A kill or death in a bot's body (takeover) belongs to the bot, as in CS Demo Manager.
+    const killer = k.kBody?.[i] ?? k.killer[i];
+    const victim = k.vBody?.[i] ?? k.victim[i];
     // CS2 names one assister: the damage assister when there is one, else the flash assister.
     const assister = k.assister[i] ?? k.flashAssister[i];
     const kp = k.kpos[i];

@@ -28,6 +28,12 @@ export interface MatchInfo {
   visibility: string;
   /** steamid of the player whose machine recorded the match (match.extra "pov"); null for pro demos */
   pov: string | null;
+  /**
+   * Rounds the match had. nRounds counts the rounds these facts cover, which is fewer when the source
+   * held some rounds as totals only (the plugin adapter leaves those out); a rating over a small
+   * covered share of a match is not that match's rating.
+   */
+  roundsPlayed: number;
 }
 
 export interface PlayerInfo {

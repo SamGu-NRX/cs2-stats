@@ -39,7 +39,8 @@ Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginTo
 |---|---|---|
 | `derive(tables)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`); it changes whenever a definition does. |
 
-`MatchFacts` holds `match` (id, source, map, date, teams, score, `pov` = the recording player), `players`
+`MatchFacts` holds `match` (id, source, map, date, teams, score, `pov` = the recording player, and
+`roundsPlayed` next to `nRounds`, the rounds the facts cover; a converted log may cover few), `players`
 (index `pi` -> steamid, name, team 0/1, bot), `rounds` (per round: winner, reason, buy classes, team
 equipment, plant, and `winProb`, the win-probability path), `pr` (one row per player per round, with
 `m`, the additive measures), `kills` (per kill: trade, opening, eco points, swing credits), `weapons`
@@ -82,7 +83,7 @@ comes from:
 |---|---|
 | `decodeMatch` then `deriveMatch(m, file, model)` | `pluginToTables(await decodeMatch(bytes, name))` or `await loadTables(read)`, then `derive(tables)`. There is no model argument: win probability reads `params.json`. |
 | `MatchView.players[pi]` and `.c` (`Counters`) | `rollup([facts], { player: id }).m` (`Measures`); metric values through `METRIC[id].value(summary)` |
-| `PlayerRow.rating3`, the UI's `sideRating.ts` | `rating3BySide(facts, { player: id })` |
+| `PlayerRow.rating3`, the UI's `sideRating.ts` | `rating3BySide(facts, { player: id })`; keep main's coverage rule with `facts.match.nRounds` against `roundsPlayed` |
 | `MatchView.roundDetails`, `RoundDetail.players[pi]` | `facts.rounds[ri]` and `facts.pr` rows for `ri`; kills from `facts.kills` filtered by `ri` |
 | `MatchView.econ`, buy classes | `facts.rounds[ri].buy` and `.equip` (HLTV's four classes, renamed: force is now half) |
 | `KillView` swing and win probability | `facts.kills[i].credits`, `facts.rounds[ri].winProb` |
