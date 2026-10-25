@@ -5,7 +5,8 @@ import { visibilityCoverage } from "../stats/aim";
 import { economyOf } from "../stats/economy";
 import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { isGun } from "../stats/guns";
-import { STYLE } from "../stats/identity";
+import { ROLE_SIGNALS, STYLE } from "../stats/identity";
+import { AWPER_MIN_AWP_KPR } from "../stats/compare";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
 import { RATING3_INTERCEPT, RATING3_LABEL, RATING3_STATUS, RATING3_TERMS, RATING3_WEIGHTS, rating3Of } from "../stats/rating3";
@@ -22,6 +23,8 @@ export function metaOf(wp: WinProbSource): Meta {
     rating: { label: RATING3_LABEL, status: RATING3_STATUS, intercept: RATING3_INTERCEPT, terms: RATING3_TERMS, weights: RATING3_WEIGHTS },
     winProb: { kind: wp.kind, label: wp.label },
     style: [...STYLE],
+    signals: ROLE_SIGNALS,
+    awperKpr: AWPER_MIN_AWP_KPR,
     deriveVersion: DERIVE_VERSION,
   };
 }

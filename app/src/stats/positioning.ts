@@ -1,7 +1,8 @@
 // Team spacing, as in Jamie Packer's CS2 playstyle dataset (2024, CC BY 4.0; research-playstyle-viz.md):
 // every 3 s from 10 s after freeze end, before the plant, while all five players of the side are alive,
 // rank each player within their team by distance to the nearest teammate (ADNT) and by distance to
-// the team's centre (ADAT). Ranks run 0.2 (closest) to 1.0 (farthest).
+// the team's centre (ADAT). Ranks run 0.2 (closest) to 1.0 (farthest). The nearest-teammate distance
+// itself is summed too (nearestDistSum), for the role card's Lurker signal (identity.ts ROLE_SIGNALS).
 //
 // Packer ranks the map-level means; we rank each sample and sum the ranks, so the result stays
 // additive and rollup's filters work on it. identity.ts compares the two on players in both datasets.
@@ -37,6 +38,7 @@ export function positioning(c: Ctx): void {
           m.spacingSamples++;
           m.adntRank += rn[i];
           m.adatRank += rc[i];
+          m.nearestDistSum += nearest[i];
         });
       }
     }

@@ -2,20 +2,21 @@
 // against the pro pack, and the how-good table.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SideKey as PoolSide } from "../../../stats/compare";
+import type { RoleSignal } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
-import { attrsOf, BOTS_TIP, fmtMetric, rankText } from "../../data/engine";
-import { useCall } from "../../data/hooks";
-import { metric, styleIds } from "../../data/meta";
+import { attrsOf, BOTS_TIP, fmtMetric, rankText, ratingTerms, signalBar } from "../../data/engine";
+import { useCall, useRollups } from "../../data/hooks";
+import { awperKpr, metric, roleSignals, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
-import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
+import { fmtDec, fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { scoreText, swingScore } from "../../lib/scale";
-import { ApproxMark, NeedsDemo, NotCompared, Provisional } from "../shared";
+import { ApproxMark, BreakRows, NeedsDemo, NotCompared, Provisional } from "../shared";
 import { BENCH, verdictOf } from "../../lib/verdict";
 import { matchHref, openMatch, setQuery } from "../../router";
 
@@ -25,6 +26,27 @@ export function SectionHead({ title, sub, id }: { title: string; sub: string; id
       <h2 className="shead__t">{title}</h2>
       <p className="shead__s">{sub}</p>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- rating breakdown
+
+const signedNum = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(3)}`;
+
+/**
+ * Rating 3.0's breakdown, as main showed it: each input with its weight, the input's value and its
+ * contribution, then the constant. The rows add up to the rating (engine.ts ratingTerms).
+ */
+export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
+  const { terms, intercept } = ratingTerms(inputs);
+  return (
+    <BreakRows rows={[
+      ...terms.map((t) => ({
+        label: <>{t.label} <span className="faint">× {t.coefficient.toFixed(4)}</span></>,
+        value: <><span className="faint">{t.input} → </span>{signedNum(t.contribution)}</>,
+      })),
+      { label: "Constant", value: signedNum(intercept) },
+    ]} />
   );
 }
 
@@ -117,7 +139,74 @@ export function RoleCard({ q }: { q: Query }) {
         );
       })}
       <p className="meta">Shares come from a model of labelled pro roles (Jamie Packer's CS2 roles dataset) over opening duels, death timing, trades and spacing; the AWPer share is how often you carried an AWP.</p>
+      <RoleSignals q={q} />
     </Card>
+  );
+}
+
+const UNIT_M = 0.0254; // one Source unit is one inch
+
+/** Main's measurement sentences for each signal (stats/role.ts on main). */
+const SIGNAL_TEXT: Record<RoleSignal["id"], { what: string; you: (v: number) => string; bar: (t: number) => string; missing: ReactNode }> = {
+  Entry: {
+    what: "Takes the first duel of the round.",
+    you: (v) => `You are in the first duel of ${fmtPct(v, 0)} of rounds.`,
+    bar: (t) => `Entry players: ${t}% or more (the average is 20%).`,
+    missing: "Needs rounds with a kill log.",
+  },
+  Support: {
+    what: "Plays off teammates: trades and assists rather than first kills.",
+    you: (v) => `${fmtPct(v, 0)} of your kills and assists are trades or assists.`,
+    bar: (t) => `Support players: ${t}% or more.`,
+    missing: "Needs kills or assists.",
+  },
+  Lurker: {
+    what: "Plays away from the team on T, before the bomb is planted.",
+    you: (v) => `You stand ${Math.round(v).toLocaleString("en")} units (about ${Math.round(v * UNIT_M)} m) from your nearest teammate.`,
+    bar: (t) => `Lurkers: ${t.toLocaleString("en")} units (about ${Math.round(t * UNIT_M)} m) or more.`,
+    missing: <NeedsDemo detail="The distance comes from position samples taken while all five T players are alive; converted logs have no positions." />,
+  },
+};
+
+/**
+ * Main's role signals under the engine's blend: the AWP sentence, then each signal measured against
+ * its hand-set threshold (identity.ts ROLE_SIGNALS), the bar filled to twice the threshold with the
+ * threshold ticked, and "You fit" at or above it. Entry and Support read both sides, Lurker T.
+ */
+function RoleSignals({ q }: { q: Query }) {
+  const qs = useMemo(() => {
+    const { sides: _sides, ...rest } = q.filter;
+    return [{ files: q.files, filter: rest }, { files: q.files, filter: { ...rest, sides: ["T" as const] } }];
+  }, [q]);
+  const r = useRollups(qs).data;
+  if (!r || r.length !== 2) return null;
+  const [both, t] = r;
+  const awp = both.v.awpKpr;
+  const cut = awperKpr();
+  return (
+    <div className="rolecard__signals">
+      <h3 className="caps">Signals</h3>
+      {awp !== null && (
+        <p className="meta">{awp > cut
+          ? `You make ${fmtDec(awp)} AWP kills per round (AWPers: more than ${fmtDec(cut)}), so you compare with AWPers.`
+          : `You make ${fmtDec(awp)} AWP kills per round, under the ${fmtDec(cut)} that makes an AWPer, so you play as a rifler.`}</p>
+      )}
+      <ul className="signals2">
+        {roleSignals().map((sg) => {
+          const v = (sg.side === "T" ? t : both).v[sg.metric];
+          const text = SIGNAL_TEXT[sg.id];
+          const bar = v === null ? null : signalBar(v, sg.threshold);
+          return (
+            <li key={sg.id} className={bar?.fits ? "is-on" : bar ? "" : "is-na"}>
+              <div className="signals2__top"><b>{sg.id}</b><span className="meta">{text.what}</span>{bar?.fits && <span className="chip chip--outline">You fit</span>}</div>
+              <div className="signals2__track" aria-hidden><i style={{ width: `${100 * (bar?.fill ?? 0)}%` }} /><em style={{ left: "50%" }} /></div>
+              <p className="signals2__you">{v === null ? text.missing : text.you(v)} <span className="faint">{text.bar(sg.threshold)}</span></p>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="meta">The tick on each bar is the threshold; the bar fills to twice it. The thresholds are set by hand, not fitted.</p>
+    </div>
   );
 }
 
@@ -282,6 +371,12 @@ const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clu
 export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
   const r = useCall("compare", [q, { side }]);
   const p = r.data?.p ?? null;
+  // the same rounds compare() ranked, for the counts behind each share ("12 of 30")
+  const scope = useMemo(() => {
+    const { sides: _sides, ...rest } = q.filter;
+    return [{ files: q.files, filter: side === "both" ? rest : { ...rest, sides: [side] } }];
+  }, [q, side]);
+  const counts = useRollups(scope).data?.[0]?.m ?? null;
   return (
     <Card title="How good" aside={<span className="meta">HLTV's performance tables, against pros</span>}>
       {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
@@ -289,10 +384,12 @@ export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
           {HOW_GOOD.map((id) => {
             const m = metric(id);
             const x = p[id];
+            const of = m.of && counts && x.value !== null ? `${counts[m.of[0]]} of ${counts[m.of[1]]}` : null;
             return (
               <li key={id} data-tip={m.def}>
                 <span>{m.label}{m.status === "approx" && <ApproxMark />}</span>
                 <span className="howgood__v">
+                  {of && <span className="meta num howgood__of">{of}</span>}
                   {m.status === "unavailable" ? <span className="meta">Not measured yet</span>
                     : x.reason ? <NotCompared reason={x.reason} />
                     : <span className="meta num">{rankText(x.pct)}</span>}

@@ -16,15 +16,15 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, careerEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
+  attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, rating3Note,
   thinPoolText,
-  NO_RATING_TIP, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
+  NO_RATING_TIP, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey, type Sub,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
-import type { Query, Rolled, SideRatings } from "../../worker/protocol";
+import type { Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, WeaponClassIcon } from "../icons/game";
 import { ChevronIcon } from "../icons/ui";
@@ -34,8 +34,8 @@ import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, SideFilter, TimeFilter, useFilters } from "../shell/filters";
-import { ApproxMark, BreakRows, Empty, NeedsDemo, NotCompared, Provisional, SectionAside } from "./shared";
-import { HowGood, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
+import { ApproxMark, Empty, NeedsDemo, NotCompared, Provisional, SectionAside } from "./shared";
+import { HowGood, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 import { Segmented } from "../components/controls";
 
@@ -111,7 +111,7 @@ export default function ProfileView() {
         <SwingCard you={p.you} list={list} bots={p.bots} />
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         <div className="profile__cols">
-          {baselines && <Firepower attrs={attrs} pool={scored ? poolText(scored.role, scored.n) : ""} />}
+          {baselines && <Firepower attrs={attrs} pool={scored ? poolText(scored.role, scored.n) : ""} values={p.you.v} />}
           {baselines && <HowGood q={base} side={ratingKey(side)} />}
         </div>
         <div className="profile__cols">
@@ -125,7 +125,7 @@ export default function ProfileView() {
           <Openings s={p.you} />
         </div>
         <SectionHead title="Identity" sub="How and where you play, apart from how well: style attributes, role and positions. A strong and a weak player can share a style. Your style is ranked against the bots in your matches; pros are ranked against pros." id="identity" />
-        <StyleAttributes q={base} side={side} />
+        <StyleAttributes q={base} side={side} values={p.you.v} />
         <div className="identity">
           <RoleCard q={base} />
           <WhereYouPlay />
@@ -168,7 +168,6 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const gaugeV = r3.value;
   const botRating = p.botRatings?.[key].value ?? null;
   const gaugeVerdict = verdictOf(gaugeV, cmp === "bots" && botRating !== null ? benchAround(BENCH.rating, botRating) : BENCH.rating);
-  const parts = r3.inputs ? Object.entries(r3.inputs).map(([k, v]) => ({ label: R3_INPUT_LABEL[k]?.label ?? k, value: R3_INPUT_LABEL[k]?.fmt(v) ?? String(v) })) : null;
   const woke = useRef(!sessionStorage.getItem("cs2stats.cardWoke"));
   useEffect(() => { sessionStorage.setItem("cs2stats.cardWoke", "1"); }, []);
   const roles = useCall("roles", [p.base]).data;
@@ -205,7 +204,7 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
             <div className="bd">
               <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
               <p className="bd__def">{RATING_POOLED} T and CT are the same formula over each side's rounds.</p>
-              {parts && <BreakRows rows={parts.map((t) => ({ label: t.label, value: t.value }))} />}
+              {r3.inputs && <RatingTerms inputs={r3.inputs} />}
               <p className="bd__def faint">{rating3Note()}</p>
             </div>
           )}>
@@ -260,13 +259,16 @@ function FormRail({ p }: { p: ProfileData }) {
 
 const PRO_TIP = "The score is the mean of its metrics' percentiles against anonymous pro players (public/baselines.json), on the same side.";
 
-/** Firepower, the one attribute on the performance side (design/identity.md), ranked against pros. */
-function Firepower({ attrs, pool }: { attrs: Attr[]; pool: string }) {
+/**
+ * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros.
+ * `values` are your metric values on the page's side, for the unscored rows (engine.ts EXTRA_SUBS).
+ */
+function Firepower({ attrs, pool, values }: { attrs: Attr[]; pool: string; values: Values }) {
   const a = attrs.find((x) => x.id === "firepower");
   if (!a) return null;
   return (
     <Card title="Firepower" aside={<span className="meta" data-tip={PRO_TIP}>{pool}</span>}>
-      <div className="attrs attrs--one"><AttrCard a={a} wide open /></div>
+      <div className="attrs attrs--one"><AttrCard a={a} extra={extraSubs(a.id, values)} wide open /></div>
     </Card>
   );
 }
@@ -277,7 +279,7 @@ type StyleCompare = "role" | "everyone";
  * The six style attributes: how you play, not how well (HLTV: "rating covers performance, attributes
  * cover style"), ranked against the bot careers in the same matches (design/identity.md).
  */
-function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
+function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [cmp, setCmp] = useState<StyleCompare>("role");
@@ -301,7 +303,7 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
         <>
           {res.n < res.careers.minPool && <p className="meta attrs__thin"><NeedsDemo detail={`${thinPoolText(res.careers, res.n)}${pool === "role" ? " All bots may have more." : ""}`} /></p>}
           <div className="attrs">
-            {attrs.map((a) => <AttrCard key={a.id} a={a} wide={false} open={focus === a.id} />)}
+            {attrs.map((a) => <AttrCard key={a.id} a={a} extra={extraSubs(a.id, values)} wide={false} open={focus === a.id} />)}
           </div>
         </>
       )}
@@ -310,7 +312,8 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
   );
 }
 
-function AttrCard({ a, wide, open: openInit }: { a: Attr; wide: boolean; open: boolean }) {
+/** One attribute: its score, its scored metrics with their percentile bars, then `extra` rows with a value only. */
+function AttrCard({ a, extra, wide, open: openInit }: { a: Attr; extra: Sub[]; wide: boolean; open: boolean }) {
   const [open, setOpen] = useState(openInit);
   const [instant, setInstant] = useState(true);
   const score = a.score;
@@ -335,6 +338,12 @@ function AttrCard({ a, wide, open: openInit }: { a: Attr; wide: boolean; open: b
                 <span className="sub__label">{s.label}{s.status === "approx" && <ApproxMark />}</span>
                 <b className="sub__v num">{s.status === "unavailable" ? <span className="faint">n/a</span> : <Num v={s.text} />}</b>
                 {s.reason ? <NotCompared reason={s.reason} /> : <span className="sub__bar"><i style={{ width: `${s.score ?? 0}%` }} /></span>}
+              </div>
+            ))}
+            {extra.map((s) => (
+              <div key={s.id} className="sub sub--extra" data-tip={s.def}>
+                <span className="sub__label">{s.label}{s.status === "approx" && <ApproxMark />}</span>
+                <b className="sub__v num"><Num v={s.text} /></b>
               </div>
             ))}
           </div>
@@ -454,6 +463,7 @@ function Multis({ m }: { m: Measures }) {
           <li key={r.k}>
             <MultiBadge k={r.k} />
             <b className="num">{r.rounds}</b>
+            <span className="meta">{r.pct === null ? "" : `${r.pct.toFixed(1)}% of rounds`}</span>
           </li>
         ))}
       </ul>
@@ -476,6 +486,7 @@ function Openings({ s }: { s: Rolled }) {
       </div>
       <dl className="facts">
         <dt data-tip={metric("openingAttempts").def}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
+        <dt data-tip={metric("openingWinPct").def}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
         <dt data-tip={metric("openingTradedPct").def}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
       </dl>
     </Card>

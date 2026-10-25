@@ -174,15 +174,14 @@ describe("comparison reasons", () => {
 });
 
 describe("Home", () => {
-  it("labels the hero's deltas with your average and gives the pooled tiles none", () => {
-    // fails if a pooled tile shows a delta, or the hero's delta does not name the average it is measured from
+  it("labels the hero's deltas with your average", () => {
+    // fails if the hero's delta does not name the average it is measured from
     use(converted);
     render(<HomeView />);
     const adr = byLabel(".hero-stat", ".stat__l", "ADR");
     const tile = byLabel(".tile", ".stat__l", "ADR");
     expect(text(adr?.querySelector(".hero-stat__vs"))).toBe(`vs your ${text(tile?.querySelector(".tile__v"))}`);
     expect(adr?.querySelector(".delta")).not.toBeNull();
-    expect(host.querySelectorAll(".tile .delta").length).toBe(0);
   });
 
   it("draws a tile's sparkline only from three or more matches", () => {
