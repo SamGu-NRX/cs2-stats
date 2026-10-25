@@ -1,0 +1,147 @@
+// @vitest-environment jsdom
+// Keyboard contracts a mouse user never exercises: table rows, the row menu, the palette and opening
+// a match without motion. jsdom has no layout, so these check focus, events and state, not pixels.
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DataTable } from "./components/DataTable";
+import { MenuLayer, openMenu } from "./components/overlay";
+import { navWasInstant, openMatch } from "./router";
+import { Palette } from "./shell/Palette";
+
+// The palette's data: no matches and no pro pack.
+vi.mock("./data/provider", () => ({ useData: () => ({ summaries: [] }) }));
+vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }) }));
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+Element.prototype.scrollIntoView = () => {}; // not in jsdom
+
+let host: HTMLDivElement;
+let root: Root;
+beforeEach(() => {
+  host = document.body.appendChild(document.createElement("div"));
+  root = createRoot(host);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  document.body.innerHTML = "";
+});
+const render = (ui: JSX.Element) => act(() => root.render(ui));
+const key = (el: Element, k: string, init: KeyboardEventInit = {}) => {
+  const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init });
+  act(() => { el.dispatchEvent(e); });
+  return e;
+};
+const frame = () => act(() => new Promise((r) => setTimeout(r, 20)));
+
+interface Row { id: string }
+const rows = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({ id: `r${i}` }));
+const table = (data: Row[], onOpen: (r: Row) => void, onRowContext?: (r: Row, at: { x: number; y: number }) => void) => (
+  <DataTable<Row> label="Rows" rows={data} rowKey={(r) => r.id} onOpen={onOpen} onRowContext={onRowContext} maxHeight={400}
+    columns={[{ key: "id", label: "Id", render: (r) => r.id }]} />
+);
+
+describe("table rows from the keyboard", () => {
+  it("J and K move the active row and Enter opens it", () => {
+    const onOpen = vi.fn();
+    render(table(rows(5), onOpen));
+    const body = host.querySelector("tbody")!;
+    act(() => body.focus());
+    key(body, "j"); key(body, "j"); key(body, "j"); key(body, "k");
+    expect(host.querySelector('tr[data-active="true"]')?.getAttribute("data-i")).toBe("2");
+    key(body, "Enter");
+    expect(onOpen).toHaveBeenCalledWith({ id: "r2" });
+  });
+  it("Shift+F10 and the menu key open the active row's menu", () => {
+    const onRowContext = vi.fn();
+    render(table(rows(5), vi.fn(), onRowContext));
+    const body = host.querySelector("tbody")!;
+    act(() => body.focus());
+    key(body, "j");
+    expect(key(body, "F10", { shiftKey: true }).defaultPrevented).toBe(true);
+    key(body, "j");
+    key(body, "ContextMenu");
+    expect(onRowContext.mock.calls.map((c) => c[0])).toEqual([{ id: "r1" }, { id: "r2" }]);
+  });
+  it("a right-click opens the menu of the row under the pointer", () => {
+    const onRowContext = vi.fn();
+    render(table(rows(5), vi.fn(), onRowContext));
+    const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+    act(() => { host.querySelector('tr[data-i="3"] td')!.dispatchEvent(e); });
+    expect(e.defaultPrevented).toBe(true);
+    expect(onRowContext).toHaveBeenCalledWith({ id: "r3" }, { x: 40, y: 50 });
+  });
+});
+
+describe("row menu", () => {
+  it("focuses its first item, skips disabled items, runs on Enter and gives focus back", () => {
+    const run = vi.fn();
+    render(<><button>opener</button><MenuLayer /></>);
+    const opener = host.querySelector("button")!;
+    act(() => opener.focus());
+    act(() => openMenu({ x: 10, y: 10 }, [
+      { label: "Open", run: vi.fn() }, { label: "Locked", run: vi.fn(), disabled: true }, { label: "Copy", run },
+    ]));
+    expect(document.activeElement?.textContent).toBe("Open");
+    key(document.activeElement!, "ArrowDown");
+    expect(document.activeElement?.textContent).toBe("Copy");
+    key(document.activeElement!, "Enter");
+    expect(run).toHaveBeenCalledOnce();
+    expect(document.querySelector("[role=menu]")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+  it("Esc closes it and gives focus back", () => {
+    render(<><button>opener</button><MenuLayer /></>);
+    const opener = host.querySelector("button")!;
+    act(() => opener.focus());
+    act(() => openMenu({ x: 10, y: 10 }, [{ label: "Open", run: vi.fn() }]));
+    key(document.activeElement!, "Escape");
+    expect(document.querySelector("[role=menu]")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe("command palette", () => {
+  it("is modal: focus starts in the search, Tab stays there, the app is inert, and focus returns on close", async () => {
+    const onClose = vi.fn();
+    const ui = (open: boolean) => <div className="shell"><button>opener</button><Palette open={open} onClose={onClose} actions={[]} /></div>;
+    render(ui(false));
+    const opener = host.querySelector("button")!;
+    act(() => opener.focus());
+    render(ui(true));
+    await frame();
+    const input = document.querySelector<HTMLInputElement>(".palette input")!;
+    expect(document.activeElement).toBe(input);
+    expect(host.querySelector(".shell")!.hasAttribute("inert")).toBe(true);
+    expect(key(input, "Tab").defaultPrevented).toBe(true);
+    expect(key(input, "Tab", { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(input);
+    key(input, "Escape");
+    expect(onClose).toHaveBeenCalled();
+    render(ui(false));
+    expect(host.querySelector(".shell")!.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+});
+
+describe("opening a match", () => {
+  const transition = vi.fn((cb: () => void) => { cb(); return { finished: Promise.resolve() }; });
+  beforeEach(() => {
+    transition.mockClear();
+    Object.assign(document, { startViewTransition: transition });
+    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+  });
+  it("from the keyboard is instant: no view transition, no view fade", () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    openMatch("#/match/a.json.gz/overview");
+    expect(location.hash).toBe("#/match/a.json.gz/overview");
+    expect(transition).not.toHaveBeenCalled();
+    expect(navWasInstant()).toBe(true);
+  });
+  it("from a click morphs through a view transition", () => {
+    window.dispatchEvent(new Event("pointerdown"));
+    openMatch("#/match/b.json.gz/overview");
+    expect(location.hash).toBe("#/match/b.json.gz/overview");
+    expect(transition).toHaveBeenCalledOnce();
+  });
+});

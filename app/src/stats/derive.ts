@@ -3,18 +3,23 @@
 import { aimAggregate, type AimAgg } from "./aim";
 import { buildCtx, type MatchCtx } from "./context";
 import { countMatch, type Counters, type RoundFacts } from "./counters";
-import { BUY_TYPES, teamEquip, type BuyType } from "./economy";
+import { BUY_TYPES, economyView, teamEquip, type BuyType, type EconomyView } from "./economy";
 import { positionsAggregate, type PosAgg } from "./positions";
 import { hsPercent, rating2 } from "./rating";
+import { hltvCounts } from "./hltv";
+import { r3Inputs, rating3, type Rating3 } from "./rating3";
+import { deriveRole, roleCounts, type Role } from "./role";
 import { computeTrades, isEnemyKill, isSave } from "./rules";
 import type { MatchFile, RoundHow, Side, Vec3 } from "./schema";
+import { roundDetailsFromCtx, type RoundDetail, type TeamId } from "./rounds";
 import { computeSwing } from "./swing";
 import { stubModel, type WinModel } from "./winprob";
 
 /** Bump when a definition changes, so cached summaries are rebuilt. */
-export const DERIVE_VERSION = 6;
+// 7: swing for plugin 1.0.0 files removes the victim's HP after a kill (was unknown for every round).
+export const DERIVE_VERSION = 7;
 
-export type TeamId = "us" | "them";
+export type { TeamId };
 
 export interface PlayerRow {
   pi: number;
@@ -24,7 +29,12 @@ export interface PlayerRow {
   isHuman: boolean;
   team: TeamId;
   c: Counters;
+  /** Rating 2.0 (public approximation) */
   rating: number;
+  /** Rating 3.0 (approx.), over rounds with the kill log; see rating3.ts */
+  rating3: Rating3;
+  /** AWPer or Rifler with a flavour, from this match alone (role.ts) */
+  role: Role;
   adr: number;
   kast: number;
   hs: number;
@@ -122,6 +132,10 @@ export interface MatchView {
   hasPos: boolean;
   /** the plugin's own check of each round against the game's per-round stats, when recorded */
   recon: ReconSummary | null;
+  /** per round, per player: the round inspector's data (rounds.ts) */
+  roundDetails: RoundDetail[];
+  /** four-way buy classes, win rates, matchups, money and equipment curves, saves (economy.ts) */
+  econ: EconomyView;
 }
 
 export interface ReconSummary {
@@ -163,7 +177,7 @@ function rowFor(ctx: MatchCtx, pi: number, c: Counters): PlayerRow {
   const m = ctx.m;
   return {
     pi, key: m.players.key[pi], name: m.players.name[pi], isBot: m.players.isBot[pi], isHuman: pi === m.human,
-    team: ctx.onHumanTeam[pi] ? "us" : "them", c, rating: rating2(c), adr: c.rounds ? c.dmg / c.rounds : 0,
+    team: ctx.onHumanTeam[pi] ? "us" : "them", c, rating: rating2(c), rating3: rating3(c.r3), role: deriveRole(c), adr: c.rounds ? c.dmg / c.rounds : 0,
     kast: c.rounds ? (100 * c.kastRounds) / c.rounds : 0, hs: hsPercent(c.hsKills, c.kills),
     swingPerRound: c.swingRounds ? c.swing / c.swingRounds : null,
   };
@@ -175,6 +189,10 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
   const swingResult = computeSwing(ctx, model);
   const swing = swingResult.swings;
   const { counters, rounds: facts } = countMatch(ctx, trades, swingResult);
+  r3Inputs(ctx, trades, swingResult).forEach((x, pi) => (counters[pi].r3 = x));
+  roleCounts(ctx).forEach((x, pi) => (counters[pi].role = x));
+  const roundDetails = roundDetailsFromCtx(ctx, trades, swingResult, model);
+  hltvCounts(ctx, roundDetails).forEach((x, pi) => (counters[pi].hl = x));
   const players = counters.map((c, pi) => rowFor(ctx, pi, c));
   const nRounds = m.rounds.winSide.length;
   const swingByKill = new Map(swing.map((s) => [s.k, s]));
@@ -262,7 +280,7 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
     result: us > them ? "W" : us < them ? "L" : "T", human: m.human, usStartSide: usSide(0), players, rounds,
     killMatrix, economy, model: { kind: model.kind, label: model.label }, aim,
     pos: positionsAggregate(m), hasAim: m.aim.shots.ri.length > 0 || m.aim.engagements.ri.length > 0,
-    hasPos: m.pos.ri.length > 0, recon: reconSummary(m),
+    hasPos: m.pos.ri.length > 0, recon: reconSummary(m), roundDetails, econ: economyView(roundDetails),
   };
 }
 
@@ -282,7 +300,7 @@ export interface MatchSummary {
   score: { us: number; them: number };
   result: MatchView["result"];
   usStartSide: Side;
-  human: { key: string; name: string; c: Counters; rating: number };
+  human: { key: string; name: string; c: Counters; rating: number; rating3: number | null };
   /** bot careers: one entry per bot in the match, either team */
   bots: { key: string; name: string; c: Counters }[];
   aim: AimAgg | null;
@@ -296,7 +314,7 @@ export function summarize(v: MatchView): MatchSummary {
   return {
     v: DERIVE_VERSION, file: v.file, id: v.id, map: v.map, startUtc: v.startUtc, status: v.status, nRounds: v.nRounds,
     captured: v.captured, statRounds: v.statRounds, score: v.score, result: v.result, usStartSide: v.usStartSide,
-    human: { key: h.key, name: h.name, c: h.c, rating: h.rating },
+    human: { key: h.key, name: h.name, c: h.c, rating: h.rating, rating3: h.rating3.value },
     bots: v.players.filter((p) => p.isBot).map((p) => ({ key: p.key, name: p.name, c: p.c })),
     aim: v.aim, hasPos: Object.keys(v.pos.human).length > 0, pos: v.pos,
   };
