@@ -21,6 +21,7 @@ export function utility(c: Ctx): void {
   const b = c.t.blinds;
   const d = c.t.damages;
   const inv = c.t.player_rounds;
+  const loadout = inv.best_primary.some((x) => x !== null) || inv.inventory.some((x) => x.length > 0);
   const held = new Map<number, string[]>();
   for (let i = 0; i < inv.n; i++) {
     const ri = c.riOf(inv.round[i]);
@@ -73,7 +74,9 @@ export function utility(c: Ctx): void {
       }
     }
 
-    // grenades held: the freeze-end inventory, less those thrown before death
+    // grenades held: the freeze-end inventory, less those thrown before death; a source without
+    // inventories leaves this unmeasured (its metric gets no percentile), not $0
+    if (!loadout) continue;
     for (const p of rows) {
       if (!p) continue;
       const death = c.kills[ri].find((k) => k.victim === p.pi);

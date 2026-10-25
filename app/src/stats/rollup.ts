@@ -7,7 +7,7 @@ import type { BuyClass } from "./economy";
 import { emptyInfo, foldInfo, type InfoAgg } from "./information";
 import { emptyMove, foldMove, type MoveAgg } from "./movement";
 import { emptyUtilQ, foldUtilQ, type UtilQAgg } from "./utilq";
-import { emptyMeasures, HIT_GROUPS, MEASURES, type GrenadeFact, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
+import { emptyMeasures, HIT_GROUPS, INPUTS, MEASURES, type Input, type GrenadeFact, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
 import { foldPresence, type Presence } from "./positions";
 import type { Side } from "./tables";
 
@@ -39,6 +39,11 @@ export type WeaponTotals = Omit<WeaponFact, "ri" | "pi" | "weapon"> & { rounds: 
 export interface Summary {
   /** matches with at least one kept round */
   matches: number;
+  /** over the kept matches: the rounds the facts cover and the rounds played (Rating 3.0's coverage gate) */
+  covered: { nRounds: number; roundsPlayed: number };
+  /** kept matches whose source lacks each input, and the distinct model fingerprints they were derived with */
+  missing: Record<Input, number>;
+  models: string[];
   m: Measures;
   /** by weapon class name */
   weapons: Record<string, WeaponTotals>;
@@ -74,7 +79,7 @@ function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
 }
 
 export const emptySummary = (): Summary => ({
-  matches: 0, m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
+  matches: 0, covered: { nRounds: 0, roundsPlayed: 0 }, missing: Object.fromEntries(INPUTS.map((i) => [i, 0])) as Record<Input, number>, models: [], m: emptyMeasures(), weapons: {}, aim: emptyAim(), movement: emptyMove(), aggression: emptyAggro(), information: emptyInfo(), utilq: emptyUtilQ(), presence: {},
 });
 
 /** Event facts whose weapon the filter rejects are dropped; facts without a weapon field always pass. */
@@ -91,6 +96,10 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   const rows = keptRounds(f, filter);
   if (!rows.length) return;
   s.matches++;
+  s.covered.nRounds += f.match.nRounds;
+  s.covered.roundsPlayed += f.match.roundsPlayed;
+  for (const i of INPUTS) if (!f.match.inputs[i]) s.missing[i]++;
+  if (!s.models.includes(f.match.model)) s.models.push(f.match.model);
   const kept = new Set(rows.map((r) => r.ri * 1024 + r.pi));
   for (const r of rows) for (const k of MEASURES) s.m[k] += r.m[k] ?? 0;
   const roundsWith = new Map<string, Set<number>>();

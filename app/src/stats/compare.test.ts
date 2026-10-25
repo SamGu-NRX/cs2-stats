@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
-import { careerBaselines, percentileOf } from "./compare";
-import { emptySummary } from "./rollup";
+import { careerBaselines, compare, percentileOf, type Baselines } from "./compare";
+import { METRICS } from "./metrics";
+import { FREEZE_END, oneRound } from "./testing/match";
+import { emptySummary, rollup } from "./rollup";
 import { mostSimilar, similarity, STYLE, type PackPlayer } from "./identity";
 
 // Quantiles at 0, 5, ..., 100 percent. Values 0..200 in steps of 10: each step is 5 percentile points.
@@ -42,4 +44,23 @@ it("ranks the user against bot careers of 150+ rounds, provisionally until 15 qu
   const r = careerBaselines([...fourteen, career(150, 120)], "x");
   expect(r).toMatchObject({ provisional: false, careers: 15 });
   expect(r.baselines.pools.all.both!.kpr![0]).toBeCloseTo(100 / 150);
+});
+
+it("shows no percentile, but a reason, when the matches lack an input a metric needs or the pros used another model", () => {
+  // fails if a source without inventories is ranked on unused utility (counted as $0), or swing is
+  // ranked against pros whose baselines were built with another win-probability source
+  const f = oneRound({
+    players: { a: "CT", b: "T" }, kills: [{ tick: FREEZE_END + 300, killer: "a", victim: "b" }],
+    player_rounds: { a: { equip_value_game: 4000 }, b: { equip_value_game: 4000 } },
+  });
+  const s = rollup([f], { player: "a" });
+  const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } };
+  const pros: Baselines = { version: 1, built: "x", source: "test", model: f.match.model, n: {}, pools: { ...pools, rifler: pools.all } };
+  const same = compare(s, pros, {});
+  expect(same.utilUnused).toMatchObject({ pct: null, reason: expect.stringMatching(/inventories/) });
+  expect(same.kpr.reason).toBeNull();
+  expect(same.swing.pct).not.toBeNull();
+  const other = compare(s, { ...pros, model: "hltv-0000-pffff" }, {});
+  expect(other.swing).toMatchObject({ pct: null, reason: expect.stringMatching(/model/) });
+  expect(other.kpr.pct).not.toBeNull();
 });

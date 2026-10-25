@@ -11,7 +11,7 @@ import type { FileEntry } from "../host/host";
 import { trend } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
-import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
+import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
 import { loadTables } from "../stats/load";
@@ -25,7 +25,7 @@ import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addPositions, entryOf, matchBundle, metaOf, ratedMatches, ratingsOf, rolled, roundBundle } from "./views";
+import { addPositions, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -219,13 +219,6 @@ function careersOf(q: Query): Promise<BotPopulation> {
 
 const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf });
 
-/** The matches a query keeps by its map and date filters, for the coverage rule. */
-function keptMatches(q: Query) {
-  const { maps, from, to } = q.filter;
-  return q.files.map((f) => index.get(f)?.entry.match).filter((m): m is MatchEntry["match"] => !!m
-    && (!maps || maps.includes(m.map)) && (!from || (!!m.date && m.date >= from)) && (!to || (!!m.date && m.date <= to)));
-}
-
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
   if (!e) throw new Error(`${file} is not in the match folder; rescan it`);
@@ -297,7 +290,7 @@ const api: Impl = {
   async ratings(qs) {
     return Promise.all(qs.map(async (q) => {
       const [both, T, CT] = await Promise.all([summaryOf(sideQuery(q, "both")), summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT"))]);
-      return ratingsOf({ both, T, CT }, ratedMatches(keptMatches(q)));
+      return ratingsOf({ both, T, CT });
     }));
   },
   async guns(q) {

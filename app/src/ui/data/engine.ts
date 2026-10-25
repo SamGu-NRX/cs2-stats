@@ -2,6 +2,7 @@
 // lines, the attribute adapter, number formats by metric unit, and the rating coverage rule. Nothing
 // here defines a metric, and nothing here loads the engine: the numbers arrive from the worker and
 // the descriptions from data/meta.ts.
+import { coveredEnough } from "../../stats/coverage";
 import { BUY_CLASSES, type BuyClass } from "../../stats/economy";
 import type { AttributeScore } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
@@ -36,9 +37,8 @@ export const RATING_POOLED = "Pooled over rounds: the six inputs are summed over
  * rounds as totals only) gets no rating of its own, on either side: the rating of its few covered
  * rounds is not the match's rating. Such a match is also left out of career views (careerEntries).
  */
-export const R3_MIN_COVERAGE = 0.5;
 export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log, so it is left out of career views.";
-export const ratedMatch = (m: { nRounds: number; roundsPlayed: number }) => m.nRounds >= R3_MIN_COVERAGE * m.roundsPlayed;
+export const ratedMatch = coveredEnough;
 /** A match entry's own rating, null under the coverage rule. */
 export const entryRating = (e: MatchEntry) => e.line.rating;
 
