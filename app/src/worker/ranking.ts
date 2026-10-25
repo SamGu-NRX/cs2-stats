@@ -134,8 +134,9 @@ export function rankingCalls(src: Sources) {
     async style(q: Query, opt: CompareOptions): Promise<StyleResult> {
       const [s, c] = await Promise.all([src.summary(sideQuery(q, opt.side ?? "both")), src.careers(q)]);
       const b = c.baselines;
+      const attrs = attributes(s, b, opt);
       return {
-        scores: attributes(s, b, opt).filter((a) => a.kind === "identity"), p: ofKind(compare(s, b, opt), "identity"),
+        scores: attrs.filter((a) => a.kind === "identity"), firepower: attrs.find((a) => a.id === "firepower") ?? null, p: ofKind(compare(s, b, opt), "identity"),
         role: roleOf(s), n: poolSize(s, b, opt), careers: careersFor(c, opt.pool === "all" ? "all" : roleOf(s), opt.side ?? "both"),
       };
     },

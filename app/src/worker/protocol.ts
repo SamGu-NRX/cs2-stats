@@ -144,6 +144,8 @@ export interface AttributeBlock { firepower: AttributeScore | null; style: Style
 
 export interface StyleResult {
   scores: AttributeScore[];
+  /** Firepower against the same bot pool as the style scores (the attribute block's `firepower` is against the pros) */
+  firepower: AttributeScore | null;
   p: Record<string, Percentile>;
   role: "awper" | "rifler";
   /** samples (careers or bot matches, per `careers.unit`) in the pool the scores read, on the asked side */
