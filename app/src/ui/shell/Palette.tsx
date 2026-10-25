@@ -16,7 +16,7 @@ import { NAV } from "./Sidebar";
 interface Item { id: string; group: string; label: string; hint?: string; keys?: string; run: () => void; text: string }
 
 export const SHORTCUTS: [string, string][] = [
-  ["Ctrl K", "Command palette"], ["Ctrl 1–4", "Views"], ["Ctrl ,", "Data & settings"], ["Ctrl B", "Collapse the sidebar"],
+  ["Ctrl K", "Command palette"], ["Ctrl 1–6", "Views"], ["Ctrl ,", "Data & settings"], ["Ctrl B", "Collapse the sidebar"],
   ["Ctrl R", "Rescan the match folder"], ["J / K", "Move between table rows"], ["Enter", "Open the row"], ["/", "Search the table"],
   ["[ / ]", "Previous or next match"], ["Alt 1–8", "Match tabs"], ["← / →", "Previous or next round"], ["Esc", "Close the drawer or palette"],
 ];

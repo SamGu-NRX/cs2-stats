@@ -3,9 +3,8 @@
 // #/match/<file>/rounds?round=7. A view's section is the `sec` parameter: #/profile?sec=identity
 // scrolls Profile to its Identity section once (useSection below).
 //
-// The app has four views (Home, Matches, Profile, Career aim) plus Data & settings and the match
-// view. Two retired views keep their links working as redirects to where their content now lives:
-// #/playstyle is Profile's Identity section, #/weapons is Career aim's gun table.
+// The app has six views (Home, Matches, Profile, Playstyle, Career aim, Weapons) plus Data & settings
+// and the match view.
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
@@ -15,13 +14,7 @@ export const MATCH_TAB_LABEL: Record<MatchTab, string> = {
   overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced",
 };
 
-export type Page = "home" | "matches" | "match" | "profile" | "aim" | "settings";
-
-/** Retired views and where their content lives now: the page and the section (`sec`) to open. */
-export const REDIRECTS: Record<string, { page: Exclude<Page, "match">; sec: string }> = {
-  playstyle: { page: "profile", sec: "identity" },
-  weapons: { page: "aim", sec: "guns" },
-};
+export type Page = "home" | "matches" | "match" | "profile" | "playstyle" | "aim" | "weapons" | "settings";
 
 export interface Route {
   page: Page;
@@ -43,21 +36,8 @@ export function parseHash(hash: string): Route {
     return { page: "match", file: parts.slice(1, hasTab ? -1 : undefined).join("/"), tab: hasTab ? last : "overview", query };
   }
   const p = parts[0];
-  const moved = REDIRECTS[p];
-  if (moved) {
-    query.set("sec", moved.sec);
-    return { page: moved.page, query };
-  }
-  if (p === "matches" || p === "profile" || p === "aim" || p === "settings") return { page: p, query };
+  if (p === "matches" || p === "profile" || p === "playstyle" || p === "aim" || p === "weapons" || p === "settings") return { page: p, query };
   return { page: "home", query };
-}
-
-/** The hash a retired view's link should be replaced with, or null when the hash is current. */
-export function redirectOf(hash: string): string | null {
-  const p = hash.replace(/^#\/?/, "").split(/[/?]/)[0];
-  if (!REDIRECTS[p]) return null;
-  const r = parseHash(hash);
-  return pageHref(r.page as Exclude<Page, "match">, Object.fromEntries(r.query));
 }
 
 const qs = (q?: Record<string, string | number | null | undefined>) => {
@@ -74,16 +54,9 @@ export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string
 
 // The current route is a small store, so navigation can render synchronously (flushSync) inside a
 // View Transition: the new view must be in the DOM when the transition snapshots it.
-/** Swaps a retired view's hash for its new home in place, so the address bar and back history hold the current link. */
-const canonical = () => {
-  const to = redirectOf(location.hash);
-  if (to) history.replaceState(null, "", to);
-};
-if (typeof location !== "undefined") canonical();
 let current: Route = typeof location === "undefined" ? parseHash("") : parseHash(location.hash);
 const subs = new Set<() => void>();
 const publish = () => {
-  canonical();
   current = parseHash(location.hash);
   subs.forEach((s) => s());
 };

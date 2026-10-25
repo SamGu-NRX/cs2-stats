@@ -239,6 +239,14 @@ export function NeedsDemo({ detail }: { detail?: string }) {
   );
 }
 
+/**
+ * A value with no percentile, and why (compare.ts Percentile.reason): a kept match lacks an input the
+ * metric needs, or the pro pool was built under another model. Stands where the rank would be.
+ */
+export function NotCompared({ reason }: { reason: string }) {
+  return <span className="nocmp" tabIndex={0} data-tip={reason}>Not compared</span>;
+}
+
 // The approx marker lives with the percentile display, which every metric surface uses.
 export { ApproxMark } from "../components/Percentile";
 
