@@ -22,11 +22,12 @@ public class LosTests
     private readonly FixedBuffer<LosRow> _rows = new(64);
     private readonly LosTracker _los = new();
     private readonly FakeProbe _probe = new();
+    private long _now; // the tracker's clock, in Stopwatch ticks; it only moves when a test moves it
 
     public LosTests()
     {
         _los.Attach(_probe);
-        _los.BudgetMicros = 1e9; // timing-independent, except in the budget test
+        _los.Clock = () => _now;
         _f.ActiveCount = 4;
         for (int i = 0; i < 4; i++) _f.Active[i] = i;
         _f.ByPi[H] = new PlayerFrame { Present = true, Alive = true, Team = 3, ViewZ = 64, Yaw = 0 };
@@ -85,17 +86,18 @@ public class LosTests
         Assert.Equal(1, _probe.Calls);
     }
 
+    /// <summary>Fails if a check keeps tracing after a slow trace has passed its deadline (the budget checked only between enemies).</summary>
     [Fact]
-    public void AnExhaustedBudgetMakesNoTraceAndKeepsPreviousStates()
+    public void ASlowTraceStopsTheCheckAndUndecidedEnemiesKeepTheirState()
     {
-        _los.Check(0, 100, H, _f, _rows);
+        _los.Check(0, 100, H, _f, _rows); // both enemies visible
         int calls = _probe.Calls;
-        _probe.Answer = (_, _, _) => false;
-        _los.BudgetMicros = 0; // the deadline has passed before the first trace
+        _probe.Answer = (_, _, _) => { _now += System.Diagnostics.Stopwatch.Frequency; return false; }; // each trace takes 1 s and is blocked
         _los.Check(0, 104, H, _f, _rows);
-        Assert.Equal(calls, _probe.Calls);
+        Assert.Equal(calls + 1, _probe.Calls);        // E1's eye point only: no chest or waist, nothing for E2
         Assert.Equal(2, _los.BudgetHits);
         Assert.True(_los.IsVisible(E1) && _los.IsVisible(E2));
+        Assert.Equal(2, _rows.Count);                  // no hidden transition from an unfinished check
     }
 
     [Fact]
@@ -123,7 +125,7 @@ public class RecorderLosTests
     {
         _r = new Recorder(_sink, _frames, new PerfCounter(), _warnings.Add);
         _r.AttachLos(_probe);
-        _r.Los.BudgetMicros = 1e9;
+        _r.Los.Clock = () => 0;
         _r.StartCapture(new MatchMeta { Id = "0123456789abcdef0123456789abcdef", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z", Env = new EnvInfo { Plugin = "t", MaxRounds = 24 } });
         _r.PlayerIndex("76561190000000001", "me", false);
         _r.PlayerIndex("B:Rock", "Rock", true);
@@ -188,6 +190,17 @@ public class RecorderLosTests
         Assert.Equal("mixed", s.Meta.Env.VisSource);
         Assert.Equal(1, s.Shots[0].VisTarget);
         Assert.Single(_warnings, w => w.Contains("Line of sight turned off"));
+    }
+
+    /// <summary>Fails if a failure between rounds records env.losError but leaves env.visSource at "los".</summary>
+    [Fact]
+    public void AFailureBetweenRoundsMarksTheSourceMixed()
+    {
+        Ticks(2000, 2010);
+        _r.RoundEnd(2100, 3, 8);
+        _r.DisableLos("probe could not be created (NullReferenceException: x)", 2200); // e.g. at the next map-ready step
+        _r.Flush();
+        Assert.Equal(("mixed", "probe could not be created (NullReferenceException: x)"), (_sink.Store.Meta.Env.VisSource, _sink.Store.Meta.Env.LosError));
     }
 
     [Fact]
