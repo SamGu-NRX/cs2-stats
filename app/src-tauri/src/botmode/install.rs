@@ -307,7 +307,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                 }
                 Protection::MergeConvars => {
                     let incoming = read_text(&mut archive, &map, &mut budget, rel)?.unwrap_or_default();
-                    let path = layout.target(rel);
+                    let path = layout.confined(rel)?;
                     let user = match std::fs::read_to_string(&path) {
                         Ok(t) => t,
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -323,7 +323,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                 Protection::None => {}
             }
             if USER_EDITED_CFGS.iter().any(|c| c.eq_ignore_ascii_case(rel)) {
-                let path = layout.target(rel);
+                let path = layout.confined(rel)?;
                 let user = match std::fs::read_to_string(&path) {
                     Ok(t) => Some(t),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -366,7 +366,7 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
             installed.insert(rel.clone(), digest.clone());
         }
 
-        let gi = layout.target("gameinfo.gi");
+        let gi = layout.confined("gameinfo.gi")?;
         let text = std::fs::read_to_string(&gi).map_err(|e| format!("{}: {e}", gi.display()))?;
         let on = gameinfo::enable(&text)?;
         let bot_mode_enabled = on != text;

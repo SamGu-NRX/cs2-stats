@@ -5,16 +5,19 @@
 //! `backups\<id>\files\` and checked against its hash. Then a line naming the path, the old
 //! hash and the new hash is appended to `backups\<id>\entries.jsonl` and flushed. Only then
 //! is the new content written, to a temporary file next to the target that is renamed into
-//! place and hashed again.
+//! place and hashed again. Folders are flushed after each file is created, renamed or removed
+//! in them, so the order survives a power cut.
 //!
 //! Because the journal line lands before the write, a crash leaves a change that
 //! [`rollback`] can still undo: each entry is restored only if the file still holds the
-//! content Bot Mode wrote, and is left alone if it already holds the old content.
+//! content Bot Mode wrote, and is left alone if it already holds the old content. Until an
+//! interrupted or partly undone change is rolled back, no new change can begin.
 
 use super::hash;
 use super::paths::{self, Layout, Protection, TMP_SUFFIX};
 use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -22,12 +25,27 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
-    /// Still running, or interrupted by a crash. Rollback treats it like a finished change.
+    /// Still running, or interrupted by a crash. Must be rolled back before anything else.
     InProgress,
     Complete,
     RolledBack,
-    /// Failed part-way and was rolled back automatically.
+    /// Failed part-way and was rolled back automatically, completely.
     Failed,
+    /// Failed part-way, and the automatic rollback could not finish (CS2 was running, or a
+    /// file had changed). Must be rolled back before anything else.
+    RollbackPending,
+}
+
+impl Status {
+    /// Changes `rollback` can still take off.
+    fn in_effect(&self) -> bool {
+        matches!(self, Status::Complete | Status::InProgress | Status::RollbackPending)
+    }
+
+    /// Changes that leave the game folder half-written.
+    fn unfinished(&self) -> bool {
+        matches!(self, Status::InProgress | Status::RollbackPending)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -43,6 +61,9 @@ pub struct Meta {
     /// Files written by the change.
     pub files: usize,
     pub error: Option<String>,
+    /// Folders Windows would not flush to disk (see `paths::flush_dir`).
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -57,44 +78,100 @@ const META: &str = "meta.json";
 const ENTRIES: &str = "entries.jsonl";
 const STATE_BEFORE: &str = "state-before.json";
 
-pub struct ChangeSet {
+/// Flushes folders and remembers those Windows refused, to report once per change.
+#[derive(Default)]
+struct Flusher {
+    refused: BTreeSet<PathBuf>,
+}
+
+impl Flusher {
+    fn flush(&mut self, dir: &Path) -> Result<(), String> {
+        if !paths::flush_dir(dir)? {
+            self.refused.insert(dir.to_path_buf());
+        }
+        Ok(())
+    }
+
+    fn parent_of(&mut self, path: &Path) -> Result<(), String> {
+        match path.parent() {
+            Some(p) => self.flush(p),
+            None => Ok(()),
+        }
+    }
+
+    fn warnings(&self) -> Vec<String> {
+        self.refused
+            .iter()
+            .map(|d| format!("Windows would not flush folder {} to disk without administrator rights; the change is complete, but a power cut in the next few seconds could lose its last steps", d.display()))
+            .collect()
+    }
+}
+
+pub struct ChangeSet<'p> {
     layout: Layout,
+    probe: &'p dyn ProcessProbe,
     /// The game folder with links resolved; every write must land inside it.
     root_canon: PathBuf,
     dir: PathBuf,
     meta: Meta,
     entries: Vec<Entry>,
     log: File,
+    flusher: Flusher,
 }
 
-impl ChangeSet {
-    /// Starts a change, right before its writes. Needs the operation lock, and refuses while
-    /// CS2 runs, so no change exists without both.
-    pub fn begin(layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, operation: &str) -> Result<ChangeSet, String> {
+impl<'p> ChangeSet<'p> {
+    /// Starts a change, right before its writes. Needs the operation lock, refuses while CS2
+    /// runs, and refuses while an earlier change is unfinished.
+    pub fn begin(layout: &Layout, probe: &'p dyn ProcessProbe, _lock: &OpLock, operation: &str) -> Result<ChangeSet<'p>, String> {
         ensure_cs2_closed(probe)?;
+        let existing = list(layout)?;
+        if let Some(m) = existing.iter().find(|m| m.status.unfinished()) {
+            return Err(format!(
+                "change {} ({}) is unfinished, so the game folder may be half-written; run `botmode rollback` first",
+                m.id, m.operation
+            ));
+        }
         let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
         let (compact, iso) = now_utc();
-        let seq = list(layout)?.iter().map(|m| m.seq).max().unwrap_or(0) + 1;
+        let seq = existing.iter().map(|m| m.seq).max().unwrap_or(0) + 1;
         let id = format!("{seq:04}-{compact}-{operation}");
         let dir = layout.backups().join(&id);
         fs::create_dir_all(dir.join("files")).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut flusher = Flusher::default();
+        flusher.flush(&layout.backups())?;
         // The app state (installed release, applied overlays) is restored along with the files.
         let state = layout.state_file();
         if state.is_file() {
             copy_synced(&state, &dir.join(STATE_BEFORE)).map_err(|e| format!("{}: {e}", state.display()))?;
         }
-        let meta = Meta { seq, id, operation: operation.into(), created: iso, status: Status::InProgress, files: 0, error: None };
+        let meta = Meta {
+            seq,
+            id,
+            operation: operation.into(),
+            created: iso,
+            status: Status::InProgress,
+            files: 0,
+            error: None,
+            warnings: Vec::new(),
+        };
         write_meta(&dir, &meta)?;
         let log = OpenOptions::new()
             .create(true)
             .append(true)
             .open(dir.join(ENTRIES))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
-        Ok(ChangeSet { layout: layout.clone(), root_canon, dir, meta, entries: Vec::new(), log })
+        log.sync_all().map_err(|e| format!("{}: {e}", dir.display()))?;
+        flusher.flush(&dir)?;
+        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher })
     }
 
     pub fn id(&self) -> &str {
         &self.meta.id
+    }
+
+    /// This change's backup folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Writes a mod file whose final content must hash to `expected`. `fill` writes that
@@ -136,6 +213,10 @@ impl ChangeSet {
         self.put_inner(rel, &expected, |f| f.write_all(merged).map_err(|e| e.to_string()))
     }
 
+    fn confine(&self, rel: &str) -> Result<PathBuf, String> {
+        paths::confined(&self.layout.csgo, &self.root_canon, rel, true)
+    }
+
     fn put_inner(
         &mut self,
         rel: String,
@@ -145,7 +226,7 @@ impl ChangeSet {
         if self.entries.iter().any(|e| e.path.eq_ignore_ascii_case(&rel)) {
             return Err(format!("{rel}: written twice in one change"));
         }
-        let target = paths::confined(&self.layout.csgo, &self.root_canon, &rel, true)?;
+        let target = self.confine(&rel)?;
         let before = hash::file_if_exists(&target)?;
         if before.as_deref() == Some(expected) {
             return Ok(false);
@@ -155,7 +236,9 @@ impl ChangeSet {
             if let Some(parent) = saved.parent() {
                 fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
+            self.confine(&rel)?;
             copy_synced(&target, &saved).map_err(|e| format!("backing up {rel}: {e}"))?;
+            self.flusher.parent_of(&saved)?;
             if hash::file(&saved)? != *old {
                 return Err(format!("{rel}: the backup copy does not match the original"));
             }
@@ -168,6 +251,7 @@ impl ChangeSet {
         self.entries.push(entry);
 
         let tmp = tmp_path(&target);
+        self.confine(&rel)?;
         let written = File::create(&tmp)
             .map_err(|e| format!("{}: {e}", tmp.display()))
             .and_then(|mut f| {
@@ -186,10 +270,15 @@ impl ChangeSet {
                 return Err(format!("{rel}: {e}"));
             }
         }
+        if let Err(e) = self.confine(&rel) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
         fs::rename(&tmp, &target).map_err(|e| {
             let _ = fs::remove_file(&tmp);
             format!("{rel}: {e}")
         })?;
+        self.flusher.parent_of(&target)?;
         let after = hash::file(&target)?;
         if after != expected {
             return Err(format!("{rel}: hashes to {after} after the copy, expected {expected}"));
@@ -198,35 +287,51 @@ impl ChangeSet {
     }
 
     /// Finishes the change. A change that wrote nothing leaves no backup behind.
-    pub fn commit(mut self) -> Result<Meta, String> {
+    fn commit(&mut self) -> Result<Meta, String> {
         self.meta.files = self.entries.len();
+        self.meta.warnings = self.flusher.warnings();
         if self.entries.is_empty() {
-            drop(self.log);
             fs::remove_dir_all(&self.dir).map_err(|e| format!("{}: {e}", self.dir.display()))?;
+        } else {
             self.meta.status = Status::Complete;
-            return Ok(self.meta);
+            write_meta(&self.dir, &self.meta)?;
         }
         self.meta.status = Status::Complete;
-        write_meta(&self.dir, &self.meta)?;
-        Ok(self.meta)
+        Ok(self.meta.clone())
     }
 
-    /// Undoes what this change wrote after `error`, and returns a message naming both.
-    pub fn abort(mut self, error: String) -> String {
+    /// Undoes what this change wrote after `error`, and returns a message naming both. CS2 is
+    /// checked again first; if it is running, or the undo cannot finish, the change is left
+    /// as `RollbackPending` and the message says how to finish it.
+    fn abort(mut self, error: String) -> String {
         self.meta.files = self.entries.len();
-        let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, None)
-            .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
-        self.meta.status = Status::Failed;
         self.meta.error = Some(error.clone());
-        let _ = write_meta(&self.dir, &self.meta);
-        match undo {
-            Ok(r) => format!("{error}. Nothing was left changed: {} file(s) restored from backup {}.", r.restored + r.removed, self.meta.id),
-            Err(e) => format!("{error}. Restoring the backup also failed ({e}); run `botmode rollback {}` once the cause is fixed.", self.meta.id),
+        let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, Some(self.probe), &mut self.flusher)
+            .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
+        self.meta.warnings = self.flusher.warnings();
+        let msg = match &undo {
+            Ok(r) => {
+                self.meta.status = Status::Failed;
+                format!("{error}. Nothing was left changed: {} file(s) restored from backup {}.", r.restored + r.removed, self.meta.id)
+            }
+            Err(e) => {
+                self.meta.status = Status::RollbackPending;
+                format!(
+                    "{error}. The automatic rollback did not finish ({e}), so the game folder is partly changed; run `botmode rollback {}` once the cause is dealt with.",
+                    self.meta.id
+                )
+            }
+        };
+        match write_meta(&self.dir, &self.meta) {
+            Ok(()) => msg,
+            // The meta file still says InProgress, which rollback also picks up.
+            Err(e) => format!("{msg} (Recording the change's state also failed: {e}.)"),
         }
     }
 }
 
-/// Runs `body` inside a change: commits on success, rolls back and reports on failure.
+/// Runs `body` inside a change: commits on success. A failure in `body`, or in finishing the
+/// change, rolls the change back and reports.
 pub fn run<T>(
     layout: &Layout,
     probe: &dyn ProcessProbe,
@@ -236,7 +341,10 @@ pub fn run<T>(
 ) -> Result<(T, Meta), String> {
     let mut cs = ChangeSet::begin(layout, probe, lock, operation)?;
     match body(&mut cs) {
-        Ok(v) => Ok((v, cs.commit()?)),
+        Ok(v) => match cs.commit() {
+            Ok(meta) => Ok((v, meta)),
+            Err(e) => Err(cs.abort(format!("finishing the change failed: {e}"))),
+        },
         Err(e) => Err(cs.abort(e)),
     }
 }
@@ -256,7 +364,8 @@ fn write_meta(dir: &Path, meta: &Meta) -> Result<(), String> {
     write_atomic(&dir.join(META), text.as_bytes())
 }
 
-/// Writes app data (not game files) through a temporary file and a rename.
+/// Writes app data (not game files) through a synced temporary file and a rename, then flushes
+/// the folder. The app folder is the user's own, so a refused folder flush is not reported.
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -265,7 +374,11 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     File::create(&tmp)
         .and_then(|mut f| f.write_all(data).and_then(|_| f.sync_all()))
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(parent) = path.parent() {
+        paths::flush_dir(parent)?;
+    }
+    Ok(())
 }
 
 /// Copies a file and flushes the copy to disk before returning, so a backup or restored file
@@ -310,6 +423,12 @@ pub fn list(layout: &Layout) -> Result<Vec<Meta>, String> {
     Ok(out)
 }
 
+/// The newest change left interrupted or partly undone, which must be rolled back before any
+/// other change. Shown by status and by every CLI command.
+pub fn unfinished(layout: &Layout) -> Result<Option<Meta>, String> {
+    Ok(list(layout)?.into_iter().find(|m| m.status.unfinished()))
+}
+
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RollbackReport {
@@ -321,6 +440,7 @@ pub struct RollbackReport {
     pub removed: usize,
     /// Files that already held their old content.
     pub unchanged: usize,
+    pub warnings: Vec<String>,
 }
 
 /// Rolls back the newest change that is still in effect, or the one named by `id`, which
@@ -329,10 +449,7 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     ensure_cs2_closed(probe)?;
     let _lock = OpLock::acquire(layout)?;
     let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
-    let active: Vec<Meta> = list(layout)?
-        .into_iter()
-        .filter(|m| matches!(m.status, Status::Complete | Status::InProgress))
-        .collect();
+    let active: Vec<Meta> = list(layout)?.into_iter().filter(|m| m.status.in_effect()).collect();
     let newest = active.first().ok_or("no change to roll back")?;
     if let Some(id) = id {
         if id != newest.id {
@@ -345,12 +462,14 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     let mut meta = newest.clone();
     let dir = layout.backups().join(&meta.id);
     let entries = read_entries(&dir)?;
-    let mut report = restore(layout, &root_canon, &dir, &entries, Some(probe))?;
+    let mut flusher = Flusher::default();
+    let mut report = restore(layout, &root_canon, &dir, &entries, Some(probe), &mut flusher)?;
     restore_state(layout, &dir)?;
     meta.status = Status::RolledBack;
     write_meta(&dir, &meta)?;
     report.id = meta.id;
     report.operation = meta.operation;
+    report.warnings = flusher.warnings();
     Ok(report)
 }
 
@@ -359,12 +478,11 @@ fn restore_state(layout: &Layout, dir: &Path) -> Result<(), String> {
     let saved = dir.join(STATE_BEFORE);
     let state = layout.state_file();
     if saved.is_file() {
-        copy_synced(&saved, &state).map_err(|e| format!("restoring the app state: {e}"))
+        copy_synced(&saved, &state).map_err(|e| format!("restoring the app state: {e}"))?;
     } else if state.is_file() {
-        fs::remove_file(&state).map_err(|e| format!("restoring the app state: {e}"))
-    } else {
-        Ok(())
+        fs::remove_file(&state).map_err(|e| format!("restoring the app state: {e}"))?;
     }
+    paths::flush_dir(&layout.data).map(|_| ())
 }
 
 /// Puts `entries` back to their `before` content. Checks every file first and changes
@@ -372,12 +490,20 @@ fn restore_state(layout: &Layout, dir: &Path) -> Result<(), String> {
 /// wrote it after Bot Mode did. Then, with `probe`, checks CS2 again, and re-hashes each file
 /// immediately before restoring it: a file another program changed after the first pass is
 /// left alone and stops the rollback, which can be run again once the cause is dealt with.
-fn restore(layout: &Layout, root_canon: &Path, dir: &Path, entries: &[Entry], probe: Option<&dyn ProcessProbe>) -> Result<RollbackReport, String> {
+fn restore(
+    layout: &Layout,
+    root_canon: &Path,
+    dir: &Path,
+    entries: &[Entry],
+    probe: Option<&dyn ProcessProbe>,
+    flusher: &mut Flusher,
+) -> Result<RollbackReport, String> {
+    let confine = |rel: &str| paths::confined(&layout.csgo, root_canon, rel, false);
     let mut todo = Vec::new();
     let mut conflicts = Vec::new();
     let mut report = RollbackReport::default();
     for e in entries.iter().rev() {
-        let target = paths::confined(&layout.csgo, root_canon, &e.path, false)?;
+        let target = confine(&e.path)?;
         let now = hash::file_if_exists(&target)?;
         if now == e.before {
             report.unchanged += 1;
@@ -400,6 +526,7 @@ fn restore(layout: &Layout, root_canon: &Path, dir: &Path, entries: &[Entry], pr
         ensure_cs2_closed(probe)?;
     }
     for (e, target) in todo {
+        confine(&e.path)?;
         let now = hash::file_if_exists(&target)?;
         if now == e.before {
             report.unchanged += 1;
@@ -419,15 +546,20 @@ fn restore(layout: &Layout, root_canon: &Path, dir: &Path, entries: &[Entry], pr
                     return Err(format!("{}: the backup copy is damaged; it was not restored", e.path));
                 }
                 let tmp = tmp_path(&target);
+                confine(&e.path)?;
                 copy_synced(&saved, &tmp).map_err(|err| format!("{}: {err}", e.path))?;
+                confine(&e.path)?;
                 fs::rename(&tmp, &target).map_err(|err| format!("{}: {err}", e.path))?;
+                flusher.parent_of(&target)?;
                 if hash::file(&target)? != *old {
                     return Err(format!("{}: restored content does not match the backup", e.path));
                 }
                 report.restored += 1;
             }
             None => {
+                confine(&e.path)?;
                 fs::remove_file(&target).map_err(|err| format!("{}: {err}", e.path))?;
+                flusher.parent_of(&target)?;
                 report.removed += 1;
             }
         }

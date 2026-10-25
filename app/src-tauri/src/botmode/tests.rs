@@ -127,8 +127,7 @@ fn install_keeps_the_chosen_difficulty() {
 fn nothing_changes_while_cs2_runs_or_cannot_be_checked() {
     let s = Scratch::new("running");
     let layout = installed(&s);
-    let steam = s.0.join("Steam");
-    write(&steam.join("steam.exe"), b"");
+    let steam = fake_steam_config(&s, Some("-novid"));
     // Something to roll back and something to overlay.
     write(&layout.target("gameinfo.gi"), gameinfo::ONLINE_SAMPLE.as_bytes());
     let manifest = s.0.join("overlay.json");
@@ -144,7 +143,7 @@ fn nothing_changes_while_cs2_runs_or_cannot_be_checked() {
             ("rollback", changes::rollback(&layout, probe, None).map(|_| ())),
             ("difficulty", settings::set_difficulty(&layout, probe, Difficulty::Low).map(|_| ())),
             ("cosmetics", settings::set_cosmetics(&layout, probe, Cosmetics::default()).map(|_| ())),
-            ("launch", launch::launch(&layout, probe, &steam, None).map(|_| ())),
+            ("launch", launch::launch(&layout, probe, &steam).map(|_| ())),
         ];
         for (op, r) in results {
             let err = r.expect_err(op);
@@ -234,8 +233,16 @@ fn a_change_interrupted_by_a_crash_can_be_rolled_back() {
     text.push_str("{\"path\":\"cfg/torn"); // a line cut off mid-write
     fs::write(&journal, text).unwrap();
 
+    // The next start finds it: status names it, and no new change may begin on top of it.
+    let st = status::status(&layout, &CLOSED, None, None).unwrap();
+    assert_eq!(st.unfinished.as_ref().map(|m| m.id.as_str()), Some(id.as_str()));
+    assert!(st.warnings.iter().any(|w| w.contains("botmode rollback")), "{:?}", st.warnings);
+    let err = settings::set_cosmetics(&layout, &CLOSED, Cosmetics::default()).unwrap_err();
+    assert!(err.contains("is unfinished"), "{err}");
+
     changes::rollback(&layout, &CLOSED, None).unwrap();
     assert_eq!(read(&layout, "cfg/server.cfg"), "// valve\r\n");
+    assert!(changes::unfinished(&layout).unwrap().is_none());
 }
 
 // --- overlay -------------------------------------------------------------------------
@@ -480,11 +487,10 @@ fn status_finds_the_version_of_a_hand_installed_mod_and_writes_nothing() {
 #[test]
 fn launch_turns_bot_mode_back_on_and_refuses_without_the_mod() {
     let s = Scratch::new("launch");
-    let steam = s.0.join("Steam");
-    write(&steam.join("steam.exe"), b"");
+    let steam = fake_steam_config(&s, Some("-novid -insecure"));
     let bare = fake_game(&s);
     let lock = OpLock::acquire(&bare).unwrap();
-    let err = launch::prepare(&bare, &CLOSED, &steam, None, &lock).unwrap_err();
+    let err = launch::prepare(&bare, &CLOSED, &steam, &lock).unwrap_err();
     assert!(err.contains("not installed"), "{err}");
 
     let s2 = Scratch::new("launch2");
@@ -492,7 +498,7 @@ fn launch_turns_bot_mode_back_on_and_refuses_without_the_mod() {
     // A CS2 update rewrote gameinfo.gi without the bot search paths.
     write(&layout.target("gameinfo.gi"), gameinfo::ONLINE_SAMPLE.as_bytes());
     let lock = OpLock::acquire(&layout).unwrap();
-    let plan = launch::prepare(&layout, &CLOSED, &steam, Some("-novid -insecure"), &lock).unwrap();
+    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
     assert_eq!(&plan.args[..3], ["-applaunch", "730", "-insecure"]);
     assert!(plan.bot_mode_change.is_some());
     assert!(gameinfo::is_bot_mode(&read(&layout, "gameinfo.gi")).unwrap());
@@ -503,19 +509,43 @@ fn launch_turns_bot_mode_back_on_and_refuses_without_the_mod() {
 #[test]
 fn launch_refuses_secure_in_steams_own_options_and_rechecks_before_starting() {
     let s = Scratch::new("launch-secure");
-    let steam = s.0.join("Steam");
-    write(&steam.join("steam.exe"), b"");
+    let steam = fake_steam_config(&s, Some("-novid -SECURE +exec autoexec"));
     let layout = installed(&s);
     let before = snapshot(&layout.csgo);
     let lock = OpLock::acquire(&layout).unwrap();
-    let err = launch::prepare(&layout, &CLOSED, &steam, Some("-novid -SECURE +exec autoexec"), &lock).unwrap_err();
+    let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
     assert!(err.contains("contain -secure") && err.contains("VAC"), "{err}");
     assert_eq!(snapshot(&layout.csgo), before);
 
     // CS2 starting between the preparation and the hand-off to Steam stops the launch.
-    let plan = launch::prepare(&layout, &CLOSED, &steam, None, &lock).unwrap();
-    let err = launch::start(&plan, &Running(true)).unwrap_err();
+    write(&steam.localconfig, localconfig("-novid").as_bytes());
+    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    let err = launch::start(&plan, &Running(true), &steam).unwrap_err();
     assert!(err.contains("CS2 started"), "{err}");
+
+    // So does -secure added in Steam meanwhile: start reads the options again.
+    write(&steam.localconfig, localconfig("-novid -secure").as_bytes());
+    let err = launch::start(&plan, &CLOSED, &steam).unwrap_err();
+    assert!(err.contains("contain -secure"), "{err}");
+}
+
+#[test]
+fn launch_refuses_when_steams_launch_options_cannot_be_read() {
+    let s = Scratch::new("launch-unread");
+    let layout = installed(&s);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let missing = fake_steam_config(&s, None);
+    let err = launch::prepare(&layout, &CLOSED, &missing, &lock).unwrap_err();
+    assert!(err.contains("could not read CS2's launch options"), "missing localconfig.vdf: {err}");
+    write(&missing.localconfig, b"\"UserLocalConfigStore\"\n{\n");
+    let err = launch::prepare(&layout, &CLOSED, &missing, &lock).unwrap_err();
+    assert!(err.contains("could not read CS2's launch options"), "unreadable localconfig.vdf: {err}");
+
+    // Prepared fine, then the file went away before the hand-off.
+    write(&missing.localconfig, localconfig("").as_bytes());
+    let plan = launch::prepare(&layout, &CLOSED, &missing, &lock).unwrap();
+    fs::remove_file(&missing.localconfig).unwrap();
+    assert!(launch::start(&plan, &CLOSED, &missing).is_err());
 }
 
 #[test]
@@ -643,4 +673,146 @@ fn an_entry_larger_than_its_declared_size_is_refused() {
     fs::write(&path, bytes).unwrap();
     let err = index(&path).unwrap_err();
     assert!(err.contains("more than its declared size of 10 bytes"), "{err}");
+}
+
+// --- round 2 review: unfinished rollbacks, game-keyed lock, commit failure, identity, reads ----
+
+/// A fake game where install fails part-way: a folder sits where a release cfg goes, so the
+/// addons/ files are written before the failure.
+fn failing_install(s: &Scratch) -> Layout {
+    let layout = fake_game(s);
+    fs::create_dir_all(layout.target("cfg/my_bot_normal_config.cfg")).unwrap();
+    layout
+}
+
+#[test]
+fn an_automatic_rollback_waits_while_cs2_runs_and_can_be_finished_later() {
+    let s = Scratch::new("abort-cs2");
+    let layout = failing_install(&s);
+    let before = snapshot(&layout.csgo);
+    // Closed for install's own checks (calls 1 and 2), running by the automatic rollback.
+    let err = install::install(&layout, &Scripted::new(|n| n >= 3), &cached_release(&layout, "v1.4.7")).unwrap_err();
+    let pending = changes::unfinished(&layout).unwrap().expect("left pending");
+    assert_eq!(pending.status, Status::RollbackPending);
+    assert!(err.contains("CS2 is running") && err.contains(&format!("botmode rollback {}", pending.id)), "{err}");
+    // Nothing was put back while CS2 ran.
+    assert_eq!(read(&layout, "addons/metamod.vdf"), String::from_utf8(release_files("v1.4.7")["addons/metamod.vdf"].clone()).unwrap());
+
+    changes::rollback(&layout, &CLOSED, Some(&pending.id)).unwrap();
+    assert_eq!(snapshot(&layout.csgo), before);
+}
+
+#[test]
+fn a_partly_undone_change_stays_reachable_until_it_is_fully_rolled_back() {
+    let s = Scratch::new("abort-partial");
+    let layout = failing_install(&s);
+    let before = snapshot(&layout.csgo);
+    let victim = layout.target("addons/metamod.vdf");
+    let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = saved.clone();
+    // During the automatic rollback, another program rewrites a file the install wrote.
+    let probe = Scripted::new(move |n| {
+        if n == 3 {
+            *keep.lock().unwrap() = fs::read(&victim).unwrap();
+            fs::write(&victim, b"another program").unwrap();
+        }
+        false
+    });
+    let err = install::install(&layout, &probe, &cached_release(&layout, "v1.4.7")).unwrap_err();
+    let pending = changes::unfinished(&layout).unwrap().expect("left pending");
+    assert_eq!(pending.status, Status::RollbackPending);
+    assert!(err.contains("changed while the rollback ran") && err.contains(&pending.id), "{err}");
+
+    // Once the file is back as Bot Mode wrote it, the named rollback finishes the job.
+    fs::write(layout.target("addons/metamod.vdf"), saved.lock().unwrap().as_slice()).unwrap();
+    changes::rollback(&layout, &CLOSED, Some(&pending.id)).unwrap();
+    assert_eq!(snapshot(&layout.csgo), before);
+    assert!(changes::unfinished(&layout).unwrap().is_none());
+}
+
+#[test]
+fn a_failure_to_finish_the_change_rolls_it_back() {
+    let s = Scratch::new("commit-fail");
+    let layout = fake_game(&s);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| {
+        cs.put_bytes("cfg/server.cfg", b"changed")?;
+        // Recording the finished change will need this name for its temporary file.
+        fs::create_dir_all(cs.dir().join("meta.json.botmode-tmp")).unwrap();
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(err.contains("finishing the change failed"), "{err}");
+    assert_eq!(read(&layout, "cfg/server.cfg"), "// valve\r\n");
+}
+
+#[test]
+fn two_app_folders_cannot_work_on_one_game_folder_at_once() {
+    let s = Scratch::new("lock-data");
+    let a = installed(&s);
+    let b = Layout { csgo: a.csgo.clone(), data: s.0.join("other-data") };
+    let held = OpLock::acquire(&a).unwrap();
+    let err = OpLock::acquire(&b).err().expect("second app folder refused");
+    assert!(err.contains("is working on"), "{err}");
+    let err = settings::set_difficulty(&b, &CLOSED, Difficulty::High).unwrap_err();
+    assert!(err.contains("is working on"), "{err}");
+    drop(held);
+    OpLock::acquire(&b).unwrap();
+}
+
+#[test]
+fn a_named_game_folder_must_be_cs2s() {
+    let s = Scratch::new("game-identity");
+    let fake = fake_game(&s); // ...\game\csgo, but not under steamapps\common\Counter-Strike Global Offensive
+    let err = super::Ctx::new(super::Game::Folder(fake.csgo.clone()), Some(s.0.join("data"))).err().expect("refused");
+    assert!(err.contains("which is not a"), "{err}");
+    let real_shape = s.0.join("steamapps").join("common").join("Counter-Strike Global Offensive").join("game").join("csgo");
+    write(&real_shape.join("gameinfo.gi"), b"\"GameInfo\" {}");
+    assert!(super::steam::check_game_folder(&real_shape).is_ok());
+}
+
+#[test]
+fn the_manifest_is_only_created_new_inside_the_app_folder() {
+    let s = Scratch::new("init-manifest");
+    let layout = fake_game(&s);
+    let outside = s.0.join("elsewhere");
+    fs::create_dir_all(&outside).unwrap();
+    let err = overlay::init_manifest(&layout, &outside.join("overlay.json")).unwrap_err();
+    assert!(err.contains("inside the app folder"), "{err}");
+    assert!(!outside.join("overlay.json").exists());
+
+    overlay::init_manifest(&layout, &layout.default_manifest()).unwrap();
+    assert_eq!(fs::read_to_string(layout.default_manifest()).unwrap(), overlay::EXAMPLE);
+    write(&layout.default_manifest(), b"{\"mine\": true}");
+    assert!(overlay::init_manifest(&layout, &layout.default_manifest()).unwrap_err().contains("already exists"));
+    assert_eq!(fs::read_to_string(layout.default_manifest()).unwrap(), "{\"mine\": true}");
+}
+
+#[cfg(windows)]
+#[test]
+fn reads_never_follow_a_junction_out_of_the_game_folder() {
+    let s = Scratch::new("read-junction");
+    let layout = fake_game(&s);
+    // The catalog the music kit is checked against sits behind a junction.
+    let outside = s.0.join("outside");
+    write(&outside.join("cosmetic_catalog.json"), br#"{"musicKits": [5]}"#);
+    fs::create_dir_all(layout.target("addons/counterstrikesharp/plugins")).unwrap();
+    junction(&layout.target("addons/counterstrikesharp/plugins/BotRandomizer"), &outside);
+    let err = settings::set_cosmetics(&layout, &CLOSED, Cosmetics { music_kit: 5, ..Cosmetics::default() }).unwrap_err();
+    assert!(err.contains("junction or symbolic link"), "{err}");
+    assert_eq!(read(&layout, "cfg/gamemode_competitive_server.cfg"), USER_SERVER_CFG);
+}
+
+#[test]
+fn folders_can_be_flushed_without_administrator_rights() {
+    let s = Scratch::new("flush");
+    assert_eq!(super::paths::flush_dir(&s.0), Ok(true));
+}
+
+#[test]
+fn launch_needs_cs2_found_through_steam() {
+    let s = Scratch::new("no-steam");
+    let ctx = super::Ctx { layout: fake_game(&s), install: None };
+    let err = ctx.steam_config().unwrap_err();
+    assert!(err.contains("will not launch"), "{err}");
 }

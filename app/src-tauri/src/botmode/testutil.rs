@@ -113,6 +113,25 @@ pub fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
+/// The text of a Steam `localconfig.vdf` whose CS2 entry has `options` as its launch options.
+pub fn localconfig(options: &str) -> String {
+    format!(
+        "\"UserLocalConfigStore\"\n{{\n\t\"Software\"\n\t{{\n\t\t\"Valve\"\n\t\t{{\n\t\t\t\"Steam\"\n\t\t\t{{\n\t\t\t\t\"apps\"\n\t\t\t\t{{\n\t\t\t\t\t\"730\"\n\t\t\t\t\t{{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"{options}\"\n\t\t\t\t\t}}\n\t\t\t\t}}\n\t\t\t}}\n\t\t}}\n\t}}\n}}\n"
+    )
+}
+
+/// A Steam folder with `steam.exe` and the owner's `localconfig.vdf`, which holds `options`
+/// for CS2 unless `options` is `None`, in which case the file is not created.
+pub fn fake_steam_config(s: &Scratch, options: Option<&str>) -> super::steam::SteamConfig {
+    let steam = s.0.join("Steam");
+    write(&steam.join("steam.exe"), b"");
+    let localconfig_path = steam.join("userdata").join("1000001").join("config").join("localconfig.vdf");
+    if let Some(o) = options {
+        write(&localconfig_path, localconfig(o).as_bytes());
+    }
+    super::steam::SteamConfig { steam, localconfig: localconfig_path }
+}
+
 /// A directory junction at `link` pointing to `target`, as `mklink /J` makes.
 #[cfg(windows)]
 pub fn junction(link: &Path, target: &Path) {

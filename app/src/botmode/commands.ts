@@ -23,10 +23,13 @@ export interface Change {
   operation: string;
   /** UTC, ISO 8601 */
   created: string;
-  status: "inProgress" | "complete" | "rolledBack" | "failed";
+  /** inProgress and rollbackPending must be rolled back before any other change */
+  status: "inProgress" | "complete" | "rolledBack" | "failed" | "rollbackPending";
   /** files written */
   files: number;
   error: string | null;
+  /** folders Windows would not flush to disk */
+  warnings: string[];
 }
 
 export interface Cosmetics {
@@ -98,6 +101,8 @@ export interface Status {
   overlays: OverlayRecord[];
   /** newest first */
   backups: Change[];
+  /** an interrupted or partly undone change; offer rollback() before anything else */
+  unfinished: Change | null;
   warnings: string[];
 }
 
@@ -147,7 +152,7 @@ export interface OverlayReport {
   entries: { name: string; target: string; files: number; written: number; source: SourceLink; warnings: string[] }[];
 }
 
-export interface RollbackReport { id: string; operation: string; restored: number; removed: number; unchanged: number }
+export interface RollbackReport { id: string; operation: string; restored: number; removed: number; unchanged: number; warnings: string[] }
 
 export interface LaunchPlan {
   steamExe: string;

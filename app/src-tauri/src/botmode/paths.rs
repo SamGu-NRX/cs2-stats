@@ -18,6 +18,11 @@ impl Layout {
     pub fn target(&self, rel: &str) -> PathBuf {
         join_rel(&self.csgo, rel)
     }
+
+    /// A game path to read, resolved through [`confined`] like every write.
+    pub fn confined(&self, rel: &str) -> Result<PathBuf, String> {
+        confined_read(&self.csgo, rel)
+    }
     pub fn backups(&self) -> PathBuf {
         self.data.join("backups")
     }
@@ -119,11 +124,21 @@ pub fn is_reparse(meta: &std::fs::Metadata) -> bool {
     }
 }
 
-/// The path to write `rel` at, checked to stay physically inside the game folder:
+/// The path to use for `rel`, checked to stay physically inside the game folder:
 /// - No existing part of `rel` under `root`, nor its `.botmode-tmp` sibling, is a junction or
 ///   symbolic link. `rel()` stops `..` in the text; this stops a link that leads elsewhere.
 /// - With `create`, the parent folders are created, then the canonical parent must lie inside
 ///   `root_canon` (the canonical game folder).
+///
+/// Callers run this again immediately before each open, rename and remove, which keeps the
+/// time between check and use short but not zero. Closing that gap would take handle-relative
+/// Windows I/O (opening each folder and working from its handle), and it is not built, on
+/// purpose. Bot Mode is a single-user desktop tool. The only thing that could swap a folder for
+/// a junction inside that gap is another process running as the same user, and such a process
+/// can already write anything it likes into the game folder directly. Full handle confinement
+/// would therefore protect nothing that matters. These checks exist to stop accidents (a
+/// junction the user made, a hostile path in a zip or manifest), not an attacker who already
+/// runs as the user.
 pub fn confined(root: &Path, root_canon: &Path, rel: &str, create: bool) -> Result<PathBuf, String> {
     let rel = self::rel(rel)?;
     let link = |p: &Path| format!("{rel}: {} is a junction or symbolic link; Bot Mode only writes real folders inside the game folder", p.display());
@@ -153,6 +168,36 @@ pub fn confined(root: &Path, root_canon: &Path, rel: &str, create: bool) -> Resu
         Ok(canon) => Err(format!("{rel}: resolves to {}, outside the game folder {}", canon.display(), root_canon.display())),
         Err(e) if !create && e.kind() == std::io::ErrorKind::NotFound => Ok(target),
         Err(e) => Err(format!("{}: {e}", parent.display())),
+    }
+}
+
+/// [`confined`] for a read: computes the canonical game folder and creates nothing.
+pub fn confined_read(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let root_canon = root.canonicalize().map_err(|e| format!("{}: {e}", root.display()))?;
+    confined(root, &root_canon, rel, false)
+}
+
+/// Flushes a folder's entries to disk, so a file created, renamed or removed in it survives a
+/// power cut. On Windows this opens the folder with `FILE_FLAG_BACKUP_SEMANTICS` and calls
+/// `FlushFileBuffers` (what `sync_all` does). Returns `Ok(false)` when Windows refuses the
+/// flush with access denied, which it can for folders the user may write files in but not
+/// open for writing as a whole; the caller reports that rather than failing the change.
+pub fn flush_dir(dir: &Path) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let opened = std::fs::OpenOptions::new().write(true).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(dir);
+        let result = opened.and_then(|f| f.sync_all());
+        match result {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(false),
+            Err(e) => Err(format!("flushing {}: {e}", dir.display())),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(dir).and_then(|f| f.sync_all()).map(|_| true).map_err(|e| format!("flushing {}: {e}", dir.display()))
     }
 }
 

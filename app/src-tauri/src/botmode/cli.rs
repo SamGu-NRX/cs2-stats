@@ -2,7 +2,7 @@
 
 use super::process::SystemProbe;
 use super::settings::{self, Difficulty};
-use super::{changes, install, launch, overlay, status, Ctx};
+use super::{changes, install, launch, overlay, status, Ctx, Game};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -38,6 +38,8 @@ Install, overlay, rollback, set and launch refuse while cs2.exe is running.";
 struct Args {
     words: Vec<String>,
     game: Option<PathBuf>,
+    /// Debug builds only: a scratch game folder that skips the CS2 folder identity check.
+    unchecked_game: Option<PathBuf>,
     data: Option<PathBuf>,
     manifest: Option<PathBuf>,
     asset: Option<String>,
@@ -46,12 +48,14 @@ struct Args {
 }
 
 fn parse(argv: &[String]) -> Result<Args, String> {
-    let mut a = Args { words: Vec::new(), game: None, data: None, manifest: None, asset: None, sha256: None, json: false };
+    let mut a = Args { words: Vec::new(), game: None, unchecked_game: None, data: None, manifest: None, asset: None, sha256: None, json: false };
     let mut it = argv.iter();
     while let Some(arg) = it.next() {
         let mut value = |flag: &str| it.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
         match arg.as_str() {
             "--game" => a.game = Some(value(arg)?.into()),
+            #[cfg(debug_assertions)]
+            "--unchecked-game-folder-for-testing" => a.unchecked_game = Some(value(arg)?.into()),
             "--data" => a.data = Some(value(arg)?.into()),
             "--manifest" => a.manifest = Some(value(arg)?.into()),
             "--asset" => a.asset = Some(value(arg)?),
@@ -84,37 +88,41 @@ fn run(a: Args) -> Result<(), String> {
     let words: Vec<&str> = a.words.iter().map(String::as_str).collect();
     let probe = SystemProbe;
     let asset = a.asset.as_deref().unwrap_or(install::DEFAULT_ASSET);
-    match words.as_slice() {
-        ["releases"] => {
-            let rels = super::github::releases(install::OFFICIAL_REPO)?;
-            print(a.json, &rels, |rels| {
-                rels.iter()
-                    .filter(|r| !r.draft)
-                    .map(|r| {
-                        let assets: Vec<_> = r.assets.iter().map(|x| x.name.as_str()).collect();
-                        format!("{:<10}{}  {}\n", r.tag_name, r.published_at.as_deref().unwrap_or(""), assets.join(", "))
-                    })
-                    .collect()
-            });
-            return Ok(());
-        }
-        ["init-manifest"] => {
-            let data = match a.data.clone() {
-                Some(d) => d,
-                None => super::paths::default_data_dir()?,
-            };
-            let path = a.manifest.clone().unwrap_or_else(|| data.join("overlay.json"));
-            overlay::init_manifest(&path)?;
-            println!("Wrote {}. Check each entry's checkout, branch and build folder.", path.display());
-            return Ok(());
-        }
-        _ => {}
+    // Listing releases needs no game folder.
+    if words.as_slice() == ["releases"] {
+        let rels = super::github::releases(install::OFFICIAL_REPO)?;
+        print(a.json, &rels, |rels| {
+            let mut o = String::new();
+            for r in rels.iter().filter(|r| !r.draft) {
+                let assets: Vec<_> = r.assets.iter().map(|x| x.name.as_str()).collect();
+                o.push_str(&format!("{:<10}{}  {}\n", r.tag_name, r.published_at.as_deref().unwrap_or(""), assets.join(", ")));
+            }
+            o
+        });
+        return Ok(());
     }
-    let ctx = Ctx::new(a.game.clone(), a.data.clone())?;
+    let game = match (a.game.clone(), a.unchecked_game.clone()) {
+        (Some(_), Some(_)) => return Err("give --game or the testing override, not both".into()),
+        (Some(g), None) => Game::Folder(g),
+        #[cfg(debug_assertions)]
+        (None, Some(g)) => Game::UncheckedForTesting(g),
+        _ => Game::Steam,
+    };
+    let ctx = Ctx::new(game, a.data.clone())?;
     let layout = &ctx.layout;
+    if !matches!(words.as_slice(), ["status"] | ["rollback"] | ["rollback", _] | ["backups"]) {
+        if let Some(m) = changes::unfinished(layout)? {
+            eprintln!("warning: change {} ({}) is unfinished; run `botmode rollback` before anything else.", m.id, m.operation);
+        }
+    }
     match words.as_slice() {
+        ["init-manifest"] => {
+            let path = a.manifest.clone().unwrap_or_else(|| layout.default_manifest());
+            overlay::init_manifest(layout, &path)?;
+            println!("Wrote {}. Check each entry's checkout, branch and build folder.", path.display());
+        }
         ["status"] => {
-            let s = status::status(layout, &probe, ctx.install.as_ref(), ctx.steam_launch_options().ok().flatten())?;
+            let s = status::status(layout, &probe, ctx.install.as_ref(), ctx.steam_launch_options())?;
             print(a.json, &s, status::render);
         }
         ["download", tag] => {
@@ -189,7 +197,7 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let plan = launch::launch(layout, &probe, &ctx.steam()?, ctx.steam_launch_options()?.as_deref())?;
+            let plan = launch::launch(layout, &probe, &ctx.steam_config()?)?;
             print(a.json, &plan, |p| {
                 let mut o = String::new();
                 if let Some(m) = &p.bot_mode_change {

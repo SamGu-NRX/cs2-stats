@@ -9,12 +9,12 @@ use super::overlay::{self, OverlayReport};
 use super::process::SystemProbe;
 use super::settings::{self, AppSettings, Cosmetics, Difficulty};
 use super::status::{self, Status};
-use super::Ctx;
+use super::{Ctx, Game};
 use std::path::PathBuf;
 
 async fn blocking<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ctx = Ctx::new(game.map(PathBuf::from), None)?;
+        let ctx = Ctx::new(game.map(|g| Game::Folder(PathBuf::from(g))).unwrap_or(Game::Steam), None)?;
         f(&ctx)
     })
     .await
@@ -23,7 +23,7 @@ async fn blocking<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) 
 
 #[tauri::command]
 pub async fn botmode_status(game: Option<String>) -> Result<Status, String> {
-    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options().ok().flatten())).await
+    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options())).await
 }
 
 #[tauri::command]
@@ -76,7 +76,7 @@ pub async fn botmode_backups(game: Option<String>) -> Result<Vec<Meta>, String> 
 #[tauri::command]
 pub async fn botmode_launch(game: Option<String>) -> Result<LaunchPlan, String> {
     blocking(game, |ctx| {
-        launch::launch(&ctx.layout, &SystemProbe, &ctx.steam()?, ctx.steam_launch_options()?.as_deref())
+        launch::launch(&ctx.layout, &SystemProbe, &ctx.steam_config()?)
     })
     .await
 }
