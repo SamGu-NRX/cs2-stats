@@ -201,6 +201,7 @@ function killFacts(c: Ctx): KillFact[][] {
         killer, victim, assister: c.idOf(k.assister_steamid[i]), flashAssist: k.assistedflash[i] === true,
         killerSide, victimSide, weapon: k.weapon[i], victimWeapon: k.v_active_weapon[i],
         headshot: k.headshot[i], wallbang: (k.penetrated[i] ?? 0) > 0, smoke: k.thrusmoke[i] === true, noscope: k.noscope[i] === true,
+        killerBlind: k.attackerblind[i], killerInAir: k.attackerinair[i],
         kpos: xy(k.a_x[i], k.a_y[i]), vpos: xy(k.v_x[i], k.v_y[i]),
         enemy: killer !== null && killer !== victim && killerSide !== null && victimSide !== null && killerSide !== victimSide,
         opening: false, tradeKill: false, traded: false, ecoPoints: null, credits: [],

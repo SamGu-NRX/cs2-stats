@@ -92,3 +92,12 @@ it("lists each clutch with its round, opponents and result", () => {
   // a goes 1v2 after b dies; once c dies, d is left 1v1 against a
   expect(f.clutches.map((c) => [f.players[c.pi].id, c.opponents, c.won])).toEqual([["a", 2, true], ["d", 1, false]]);
 });
+
+it("carries the killer's blind and in-air flags to the kill, null where the source has none", () => {
+  // fails if the killfeed loses a flashed or airborne kill, or reads an unrecorded flag as false
+  const f = oneRound({
+    players: { a: "CT", b: "T", c: "T" },
+    kills: [{ tick: t(3), killer: "a", victim: "b", at: { attackerblind: true, attackerinair: false } }, { tick: t(4), killer: "a", victim: "c" }],
+  });
+  expect(f.kills.map((k) => [k.killerBlind, k.killerInAir])).toEqual([[true, false], [null, null]]);
+});

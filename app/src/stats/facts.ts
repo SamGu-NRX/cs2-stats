@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 10;
+export const DERIVE_VERSION = 11;
 
 export interface MatchInfo {
   id: string;
@@ -116,6 +116,9 @@ export interface KillFact {
   wallbang: boolean;
   smoke: boolean;
   noscope: boolean;
+  /** the killer was flashed, or in the air, at the kill (kills.attackerblind, attackerinair); null when the source does not record it */
+  killerBlind: boolean | null;
+  killerInAir: boolean | null;
   /** world position of killer and victim, [x, y] */
   kpos: [number, number] | null;
   vpos: [number, number] | null;
