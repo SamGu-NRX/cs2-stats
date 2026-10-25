@@ -3,7 +3,7 @@
 // without it the suite is skipped with a message saying so. Kills on every joined map: pnpm hltv-check.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { hltvMaps, joinHltv } from "../../tools/hltv";
+import { hltvMaps, hltvRound1, joinHltv } from "../../tools/hltv";
 import { DATA_DIR, loadDir, mapTablesDir, WINPROB } from "../../tools/node-read";
 import { derive } from "./derive";
 import { rollup } from "./rollup";
@@ -45,9 +45,9 @@ describe.skipIf(!have)("scoreboard against HLTV", () => {
       if (j.player.size !== 10) wrong.push(`${m}: ${j.player.size} players joined`);
       for (const [pi, hp] of j.player) {
         const s = rollup([f], { player: f.players[pi].id }).m;
-        const kast = Math.round((1000 * s.kast) / s.rounds) / 10;
+        const kast = hltvRound1((100 * s.kast) / s.rounds);
         // compared as HLTV displays it, to one decimal
-        const adr = Math.round((10 * s.dmg) / s.rounds) / 10;
+        const adr = hltvRound1(s.dmg / s.rounds);
         if (s.kills !== hp.total.k) wrong.push(`${m} ${hp.nick} K ${s.kills} vs ${hp.total.k}`);
         if (s.deaths !== hp.total.d) wrong.push(`${m} ${hp.nick} D ${s.deaths} vs ${hp.total.d}`);
         if (kast !== hp.total.kast) wrong.push(`${m} ${hp.nick} KAST ${kast} vs ${hp.total.kast}`);

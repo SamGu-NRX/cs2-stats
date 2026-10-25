@@ -151,3 +151,14 @@ export function joinHltv(f: MatchFacts, maps = hltvMaps()): HltvJoin | null {
   }
   return { hltv: h, player, team, unmatched: [...left].map((x) => x.nick) };
 }
+
+/**
+ * A value to one decimal as HLTV displays it: halves go to the even digit (13 of 16 rounds, 81.25%, shows
+ * as 81.2). Comparisons with HLTV's columns round ours this way.
+ */
+export function hltvRound1(x: number): number {
+  const v = x * 10;
+  const f = Math.floor(v);
+  if (Math.abs(v - f - 0.5) < 1e-9) return (f % 2 === 0 ? f : f + 1) / 10;
+  return Math.round(v) / 10;
+}

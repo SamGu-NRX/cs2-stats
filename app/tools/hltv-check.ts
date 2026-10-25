@@ -2,7 +2,7 @@
 // a per-column tally. Usage: pnpm hltv-check [--sides]
 import { derive } from "../src/stats/derive";
 import { rollup } from "../src/stats/rollup";
-import { hltvMaps, joinHltv, type HltvLine } from "./hltv";
+import { hltvMaps, hltvRound1, joinHltv, type HltvLine } from "./hltv";
 import { WINPROB, mapLabel, proMaps } from "./node-read";
 
 const sides = process.argv.includes("--sides");
@@ -28,7 +28,7 @@ for await (const { dir, t } of proMaps([])) {
       const s = rollup([facts], { player: facts.players[pi].id, sides: side ? [side] : undefined }).m;
       const got: Record<(typeof cols)[number], number> = {
         k: s.kills, d: s.deaths, a: s.assists, fa: s.flashAssists, td: s.tradedDeaths, hs: s.hsKills,
-        kast: Math.round((1000 * s.kast) / s.rounds) / 10, adr: Math.round((10 * s.dmg) / s.rounds) / 10,
+        kast: hltvRound1((100 * s.kast) / s.rounds), adr: hltvRound1(s.dmg / s.rounds),
         opK: s.openingKills, opD: s.openingDeaths, mks: s.multiKillRounds, clutches: NaN,
       };
       for (const c of cols) {
