@@ -163,3 +163,24 @@ describe("plugin sprays", () => {
     expect(at(2020).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
   });
 });
+
+it("scores a match across the half-time side swap from the human's side each round", () => {
+  // fails if the score is read as [T, CT] or from the starting sides after the swap: the human starts
+  // T and wins 9 of the first 12, then as CT wins 2 of the last 12, so loses 11-13 (the Oct 25 12:40
+  // PM recording's shape)
+  const base = pluginMatch([]);
+  const won = [...[3, 3, 3], ...Array(9).fill(2), 2, 2, 2, 3, 2, 2, 2, 2, 3, 2, 2, 2] as (2 | 3)[];
+  const side = won.map((_, ri) => (ri < 12 ? [2, 3] : [3, 2]));
+  const r = base.rounds;
+  const m: MatchFile = {
+    ...base,
+    rounds: {
+      ...r, winSide: won, how: won.map(() => "elim"), freezeTick: won.map((_, i) => 1000 + i * 5000), durTicks: won.map(() => 4000),
+      bombSite: won.map(() => null), plantTick: won.map(() => null), planter: won.map(() => null), defuser: won.map(() => null),
+      ctSetup: won.map(() => null), score: won.map(() => [0, 0] as [number, number]), side, equip: won.map(() => [4000, 4000]), money: won.map(() => [800, 800]),
+    },
+  };
+  const f = derive(pluginToTables(m), CS2RB);
+  const usTeam = f.players[f.players.findIndex((p) => p.id === HUMAN)].team!;
+  expect([f.match.score[usTeam], f.match.score[1 - usTeam], f.match.complete]).toEqual([11, 13, true]);
+});
