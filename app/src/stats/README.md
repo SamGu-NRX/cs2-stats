@@ -65,7 +65,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 | `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places; it honours player, side and match filters and is empty under a round-level filter. |
 | `emptySummary()`, `addMatch(summary, facts, filter)` | | The same sum one match at a time, so a caller can stream facts from storage instead of holding them all. |
 | `grenadesOf(facts, filter)` | grenades with their map | The landing map's points. |
-| `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. |
+| `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. A save's value is the saver's equipment at freeze end, so grenades thrown since still count. |
 | `visibilityCoverage(summary.aim)` (`aim.ts`) | 0-1 or null | Share of gun hits fired with an enemy mesh-visible near the view: the visibility coverage meter. |
 | `METRICS`, `METRIC[id]` (`metrics.ts`) | `Metric` | Every metric once: `label`, `hltv` name, `kind` (performance or identity), `group`, `unit`, `status` (exact, approx, unavailable), `def`, `value(summary)`. |
 | `ATTRIBUTES` (`metrics.ts`) | groups | HLTV's Firepower (performance) and six style attributes (identity), with their metric ids. |
@@ -125,3 +125,5 @@ comes from:
   and Flash Swing is unavailable. It has no equipment bands either; `rating3.ts` keeps them with their
   derivation until it does.
 - The extractor ships no nav mesh, so path efficiency is unavailable.
+- No table records purchases, so utility spent is not computed. The demo's `item_purchase` events
+  would supply it; equipment deltas would not (pickups and drops).
