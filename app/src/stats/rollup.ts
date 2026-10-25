@@ -47,7 +47,11 @@ export interface Summary {
   aggression: AggroAgg;
   information: InfoAgg;
   utilq: UtilQAgg;
-  /** by map name: where the player spent their time alive */
+  /**
+   * by map name: where the player spent their time alive. Presence is kept per player and side, so it
+   * honours the player, side and match filters only; under a round-level filter (ownBuy, oppBuy,
+   * spawns, weapons, rounds) it stays empty rather than show the whole match.
+   */
   presence: Record<string, Presence>;
 }
 
@@ -109,7 +113,12 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   keep(f.aggression, (x) => foldAggro(s.aggression, x));
   keep(f.information, (x) => foldInfo(s.information, x));
   keep(f.utilq, (x) => foldUtilQ(s.utilq, x));
-  keep(f.presence, (x) => foldPresence((s.presence[f.match.map] ??= { cells: {}, places: {} }), x));
+  if (!(filter.ownBuy || filter.oppBuy || filter.spawns || filter.weapons || filter.rounds)) {
+    const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
+    for (const x of f.presence) {
+      if (ids.has(f.players[x.pi].id) && (!filter.sides || filter.sides.includes(x.side))) foldPresence((s.presence[f.match.map] ??= { cells: {}, places: {} }), x);
+    }
+  }
 }
 
 /** The grenades a filter keeps, with their match's map: the landing map's points. */

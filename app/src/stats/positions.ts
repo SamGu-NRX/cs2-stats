@@ -1,9 +1,10 @@
-// Where a player spends their time: alive position samples per player-round, as seconds on a fixed
+// Where a player spends their time: alive position samples per player and side, as seconds on a fixed
 // world grid and seconds per place name. rollup adds them per map (Summary.presence) for the movement
-// heatmap and the top places; one round's fact is "where you spent the round". Kill and death spots
-// come from facts.kills.
+// heatmap and the top places. One round's places ("where you spent the round") are read from the
+// tables by roundPlaces. Kill and death spots come from facts.kills.
 import type { Ctx } from "./derive";
 import type { PresenceFact } from "./facts";
+import type { MatchTables, Side } from "./tables";
 
 /**
  * World units per grid cell: four player widths (a player model is 32 units wide). Ours, no fit; the
@@ -25,22 +26,27 @@ export const cellCentre = (cell: number): [number, number] => [
   (cell % GRID) * CELL - HALF_EXTENT + CELL / 2, Math.floor(cell / GRID) * CELL - HALF_EXTENT + CELL / 2,
 ];
 
-/** Seconds alive per cell and per place name, by player-round. Empty without positions. */
-export function derivePresence(c: Ctx): PresenceFact[] {
-  const p = c.t.positions;
-  if (!p || !p.n) return [];
-  // seconds per sample: the extractor's stride, read from the sample ticks themselves
+/** Seconds per position sample: the extractor's stride, read from the sample ticks themselves; null without samples. */
+function sampleSecs(t: MatchTables): number | null {
+  const p = t.positions;
+  if (!p) return null;
   let stride = Infinity;
   for (let i = 1; i < Math.min(p.n, 200); i++) if (p.tick[i] > p.tick[i - 1]) stride = Math.min(stride, p.tick[i] - p.tick[i - 1]);
-  if (!Number.isFinite(stride)) return [];
-  const secs = stride / c.tickRate;
+  return Number.isFinite(stride) ? stride / t.match.tick_rate[0] : null;
+}
+
+/** Seconds alive per cell and per place name, by player and side. Empty without positions. */
+export function derivePresence(c: Ctx): PresenceFact[] {
+  const p = c.t.positions;
+  const secs = sampleSecs(c.t);
+  if (!p || secs === null) return [];
   const acc = new Map<number, { cells: Map<number, number>; places: Record<string, number> }>();
   for (let i = 0; i < p.n; i++) {
     if (!p.is_alive[i]) continue;
     const ri = c.riOf(p.round[i]);
     const pi = c.pi.get(p.steamid[i]);
     if (ri === undefined || pi === undefined || !c.pr[ri][pi]) continue;
-    const key = ri * 1024 + pi;
+    const key = pi * 2 + (c.side[ri][pi] === "CT" ? 1 : 0);
     let a = acc.get(key);
     if (!a) acc.set(key, (a = { cells: new Map(), places: {} }));
     const cell = cellOf(p.x[i], p.y[i]);
@@ -49,8 +55,22 @@ export function derivePresence(c: Ctx): PresenceFact[] {
     a.places[place] = (a.places[place] ?? 0) + secs;
   }
   return [...acc].sort(([x], [y]) => x - y).map(([key, a]) => ({
-    ri: Math.floor(key / 1024), pi: key % 1024, cells: [...a.cells].flat(), places: a.places,
+    pi: Math.floor(key / 2), side: (key % 2 ? "CT" : "T") as Side, cells: [...a.cells].flat(), places: a.places,
   }));
+}
+
+/** Seconds a player spent alive per place name in one round (by round number): "where you spent the round". */
+export function roundPlaces(t: MatchTables, round: number, steamid: string): Record<string, number> {
+  const p = t.positions;
+  const secs = sampleSecs(t);
+  const out: Record<string, number> = {};
+  if (!p || secs === null) return out;
+  for (let i = 0; i < p.n; i++) {
+    if (p.round[i] !== round || p.steamid[i] !== steamid || !p.is_alive[i]) continue;
+    const place = p.place[i] || "Unknown";
+    out[place] = (out[place] ?? 0) + secs;
+  }
+  return out;
 }
 
 /** Presence summed over player-rounds on one map: seconds per cell and per place. */
