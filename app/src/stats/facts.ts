@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 12;
+export const DERIVE_VERSION = 13;
 
 export interface MatchInfo {
   id: string;
