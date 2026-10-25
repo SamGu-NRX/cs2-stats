@@ -82,11 +82,15 @@ describe("match model", async () => {
   });
 });
 
-it("keeps unfinished matches out of career views but in the match list", async () => {
-  // fails if an abandoned match shows in Form or moves a career average
-  const m = await decodeMatch(readFileSync(path.join(SAMPLES, FILES[0])), FILES[0]);
+it("keeps unfinished matches and partial logs out of career views but in the match list", async () => {
+  // fails if an abandoned match or a log covering a few rounds shows in Form, Recent matches or a
+  // career average (the sidebar, the Rating 3.0 tile and Form's pooled line must read one match set)
+  // a bundled log that covers most of its rounds
+  const logs = await Promise.all(FILES.map((f) => decodeMatch(readFileSync(path.join(SAMPLES, f)), f)));
+  const m = logs.find((x) => { const f = derive(pluginToTables(x), CS2RB).match; return f.nRounds >= f.roundsPlayed / 2; })!;
   const done = entryOf("done", "", derive(pluginToTables(m), CS2RB));
   const left = entryOf("left", "", derive(pluginToTables({ ...m, status: "abandoned" }), CS2RB));
-  expect(careerEntries([done, left], null).map((e) => e.file)).toEqual(["done"]);
-  expect(filterEntries([done, left], null)).toHaveLength(2);
+  const partial = { ...done, file: "partial", match: { ...done.match, nRounds: 1, roundsPlayed: done.match.roundsPlayed } };
+  expect(careerEntries([done, left, partial], null).map((e) => e.file)).toEqual(["done"]);
+  expect(filterEntries([done, left, partial], null)).toHaveLength(3);
 });

@@ -8,6 +8,7 @@ import { AimIcon, ChevronLeftIcon, HomeIcon, MatchesIcon, ProfileIcon, SettingsI
 import { OpeningIcon } from "../icons/attributes";
 import { WeaponIcon } from "../icons/game";
 const GunNavIcon = ({ size = 20 }: { size?: number }) => <span className="navgun" style={{ width: size, height: size }}><WeaponIcon name="ak47" size={Math.round(size * 0.55)} label={undefined} /></span>;
+import { careerEntries } from "../data/engine";
 import { fmtRating } from "../lib/format";
 import { navWasInstant, pageHref, useRoute, type Page } from "../router";
 
@@ -55,7 +56,8 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
   const { matches, status, lastSync, refresh } = useData();
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
-  const q = useYourQuery(matches);
+  const career$ = useMemo(() => careerEntries(matches, null), [matches]);
+  const q = useYourQuery(career$);
   const career = useRatings(useMemo(() => (q ? [q] : null), [q])).data;
   const me = matches.length ? { name: matches[0].players[matches[0].you].name, rating: career?.[0].both.value ?? null } : null;
 
@@ -72,7 +74,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
 
   return (
     <aside className={`side ${instant ? "is-instant" : ""}`} data-rail={rail} aria-label="Sidebar">
-      <div className="side__me" data-tip={rail && me ? `${me.name}: rating ${fmtRating(me.rating)} over ${matches.length} matches` : undefined}>
+      <div className="side__me" data-tip={rail && me ? `${me.name}: rating ${fmtRating(me.rating)} over ${career$.length} matches` : undefined}>
         <span className="avatar"><AgentImg side="t" kind="portrait" /></span>
         {me && (
           <div className="side__who side__label">

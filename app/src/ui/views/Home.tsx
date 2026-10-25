@@ -159,12 +159,14 @@ function FormCard({ list }: { list: MatchEntry[] }) {
   const keep = insideFences(pool.map((s) => entryRating(s)!));
   const shown = noOutliers ? pool.filter((_, i) => keep.has(i)) : pool;
   const hidden = list.slice(0, 10).length - shown.length;
+  // the same pooled rating as the Rating 3.0 tile when Form shows the same matches; otherwise say which
+  const same = shown.length === list.length;
   // the reference line is the pooled rating of the matches shown, the same definition as the profile
   const q = useYourQuery(shown);
   const avg = useRatings(useMemo(() => (q ? [q] : null), [q])).data?.[0].both.value ?? null;
   const w = shown.filter((s) => s.result === "W").length;
   return (
-    <Card title="Form" aside={<SectionAside label="Pooled" value={fmtRating(avg)} color={avg === null ? undefined : ratingText(avg)} />} className="form-card">
+    <Card title="Form" aside={<SectionAside label={same ? "Pooled" : `Pooled, ${plural(shown.length, "match", "matches")} shown`} value={fmtRating(avg)} color={avg === null ? undefined : ratingText(avg)} />} className="form-card">
       <FormBars
         avgValue={avg}
         avgLabel="pooled"
