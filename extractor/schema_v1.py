@@ -1,7 +1,8 @@
-"""Schema v1 column types: the one declaration the writer enforces (see SCHEMA-v1.md for meanings).
+"""Schema v1 column types, nullable columns and keys: the declaration the writer enforces.
 
-extract.py casts every table to these types and raises on a missing, extra or
-uncastable column, so a type never depends on whether a map happened to contain nulls.
+extract.py casts every table to TYPES and raises on a missing, extra or uncastable column, a null in a
+column not in NULLABLE, or two rows sharing a KEYS key. SCHEMA-v1.md documents the same declaration, and
+tests/test_schema_doc.py fails if the two disagree.
 """
 
 TYPES: dict[str, dict[str, str]] = {
@@ -497,4 +498,50 @@ TYPES: dict[str, dict[str, str]] = {
         "target_steamid": "UInt64",
         "tick": "Int32",
     },
+}
+
+# Columns that may hold nulls; every other column must not.
+NULLABLE: dict[str, list[str]] = {
+    "blinds": ["attacker_steamid"],
+    "bomb": ["site", "site_entity", "zone"],
+    "damages": ["a_place", "a_side", "a_x", "a_y", "a_z", "armor_after", "armor_before", "attacker_steamid", "distance", "dmg_armor", "dmg_armor_capped", "dmg_health", "grenade_entity_id", "grenade_link", "hitgroup", "v_place", "v_x", "v_y", "v_z", "weapon"],
+    "engagement_ticks": ["a_duck", "a_eye_z", "a_pitch", "a_shot_fired", "a_spotted_by_v", "a_vel_x", "a_vel_y", "a_vel_z", "a_x", "a_y", "a_yaw", "a_z", "engagement_id", "mesh_visible", "smoke_blocked", "tick", "v_duck", "v_eye_z", "v_pitch", "v_shot_fired", "v_spotted_by_a", "v_vel_x", "v_vel_y", "v_vel_z", "v_x", "v_y", "v_yaw", "v_z"],
+    "engagements": ["first_damage_tick", "first_shot_tick", "first_visible_tick", "weapon"],
+    "events_misc": ["steamid"],
+    "grenade_events": [],
+    "grenade_paths": ["steamid"],
+    "grenade_throws": [],
+    "infernos": ["duration_s", "end_tick"],
+    "kills": ["a_active_weapon", "a_airborne", "a_armor", "a_best_primary", "a_best_primary_price", "a_best_secondary", "a_best_secondary_price", "a_ducking", "a_equip_value_game", "a_flash_duration", "a_health", "a_helmet", "a_inventory_value", "a_money", "a_pitch", "a_place", "a_scoped", "a_side", "a_walking", "a_x", "a_y", "a_yaw", "a_z", "assister_side", "assister_steamid", "attacker_steamid", "s_since_plant", "v_best_primary", "v_best_primary_price"],
+    "match": ["build_num", "playback_ticks", "team1_file", "team2_file"],
+    "player_rounds": ["best_primary", "best_primary_price", "game_damage"],
+    "players": ["side_h1", "side_h2", "team"],
+    "positions": ["active_weapon", "vel_x", "vel_y", "vel_z"],
+    "purchases": [],
+    "rounds": ["defuse_tick", "defuser_steamid", "explode_tick", "freeze_end_tick", "official_end_tick", "plant_site", "plant_tick", "planter_steamid"],
+    "scoreboard": [],
+    "shots": ["bullet_inair", "bullet_pitch", "bullet_yaw", "eye_x", "eye_y", "eye_z", "inaccuracy", "item_def_index", "num_bullets_remaining", "recoil_index", "seed", "speed_2d", "spread", "vel_x", "vel_y", "vel_z", "zoom_lvl"],
+    "smokes": ["duration_s", "end_tick"],
+    "spotted": [],
+}
+
+# Columns whose values identify one row; tables keyed only by row order have none.
+KEYS: dict[str, list[str]] = {
+    "blinds": ["tick", "victim_steamid"],
+    "bomb": ["tick", "event"],
+    "engagement_ticks": ["engagement_id", "tick"],
+    "engagements": ["engagement_id"],
+    "grenade_events": ["tick", "event", "entity_id"],
+    "grenade_paths": ["projectile", "tick"],
+    "grenade_throws": ["tick", "steamid"],
+    "infernos": ["entity_id", "start_tick"],
+    "kills": ["tick", "victim_steamid"],
+    "match": ["match_id"],
+    "player_rounds": ["round", "steamid"],
+    "players": ["steamid"],
+    "positions": ["tick", "steamid"],
+    "rounds": ["round"],
+    "scoreboard": ["steamid"],
+    "smokes": ["entity_id", "start_tick"],
+    "spotted": ["tick", "target_steamid", "spotter_steamid"],
 }

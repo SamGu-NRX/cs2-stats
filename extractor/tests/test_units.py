@@ -882,3 +882,31 @@ def test_a_crash_after_the_swap_keeps_the_new_map(tmp_path):
     _map(tmp_path / "m1.old", "old")  # the swap finished; only deleting the old copy was interrupted
     ex.recover_output(out)
     assert (out / "match.parquet").read_text() == "new" and not (tmp_path / "m1.old").exists()
+
+
+
+def _rounds_frame(**override):
+    import schema_v1
+    row = {c: None for c in schema_v1.TYPES["rounds"]}
+    row.update(round=1, start_tick=1, freeze_end_tick=100, end_tick=900, started_live=False, aborted=False,
+               winner_side="CT", reason="t_killed", voided_attempts=0, ct_team="A", t_team="B", winner_team="A",
+               ct_team_score_after=1, t_team_score_after=0, duration_s=12.5, ct_equip_value=4000, t_equip_value=4000,
+               ct_buy_type="pistol", t_buy_type="pistol", ct_money_start=4000, t_money_start=4000)
+    row.update(override)
+    return pd.DataFrame([row])
+
+
+def test_the_writer_rejects_a_null_in_a_non_nullable_column():
+    # A live-start round wrote duration_s = NaN into a column the schema declares non-null.
+    with pytest.raises(ValueError, match="duration_s"):
+        ex._to_polars(_rounds_frame(duration_s=float("nan")), "rounds")
+
+
+def test_the_writer_rejects_a_duplicate_key():
+    with pytest.raises(ValueError, match="key"):
+        ex._to_polars(pd.concat([_rounds_frame(), _rounds_frame()]), "rounds")
+
+
+def test_a_round_recorded_live_is_timed_from_its_start():
+    r = pd.DataFrame(dict(start_tick=[1, 5483], freeze_end_tick=[None, 6763], end_tick=[5163, 11169]))
+    assert ex.round_duration_s(r, 64.0).tolist() == [(5163 - 1) / 64, (11169 - 6763) / 64]
