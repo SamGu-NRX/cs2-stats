@@ -110,11 +110,27 @@ export const STYLE = ["entrying", "trading", "opening", "closing", "sniping", "u
 /** Rating 3.0's inputs, the basis of "performs like". */
 export const PERFORMANCE = ["kpr", "adr", "dpr", "kast", "mk", "swing"] as const;
 
-/** 100 minus the mean absolute difference over the scores both have; null with none in common. */
+/**
+ * Profile shape similarity, as a percentage: the cosine of the two profiles' deviations from the pool
+ * middle (score minus 50) over the keys both have (design/identity.md). The user's scores rank against
+ * one population and a pro's against another, so only shape compares: 100 is the same shape, 0 unrelated,
+ * -100 the opposite. Null with no key in common, or when either profile sits exactly at the middle.
+ */
 export function similarity(a: Record<string, number | null>, b: Record<string, number | null>, keys: readonly string[]): number | null {
-  const d = keys.filter((k) => a[k] != null && b[k] != null).map((k) => Math.abs(a[k]! - b[k]!));
-  return d.length ? 100 - d.reduce((s, x) => s + x, 0) / d.length : null;
+  let dot = 0, na = 0, nb = 0;
+  for (const k of keys) {
+    if (a[k] == null || b[k] == null) continue;
+    const x = a[k]! - 50, y = b[k]! - 50;
+    dot += x * y; na += x * x; nb += y * y;
+  }
+  return na && nb ? (100 * dot) / Math.sqrt(na * nb) : null;
 }
+
+/** One player's 0-100 scores on T and on CT. */
+export type SideProfile = Partial<Record<"T" | "CT", Record<string, number | null>>>;
+
+const SIDES = ["T", "CT"] as const;
+const flat = (p: SideProfile) => Object.fromEntries(SIDES.flatMap((side) => Object.entries(p[side] ?? {}).map(([k, v]) => [`${side}:${k}`, v])));
 
 export const styleScores = (attrs: AttributeScore[]) => Object.fromEntries(attrs.filter((a) => a.kind === "identity").map((a) => [a.id, a.score]));
 export const performanceScores = (s: Summary, b: Baselines, opt: CompareOptions = {}) => {
@@ -122,11 +138,15 @@ export const performanceScores = (s: Summary, b: Baselines, opt: CompareOptions 
   return Object.fromEntries(PERFORMANCE.map((id) => [id, p[id].pct]));
 };
 
-/** Pack players ranked by similarity on one side; "style" is plays like, "performance" performs like. */
-export function mostSimilar(mine: Record<string, number | null>, pack: PackPlayer[], side: SideKey, by: "style" | "performance", top = 5) {
-  const keys = by === "style" ? STYLE : PERFORMANCE;
+/**
+ * Pack players ranked by similarity over both sides' scores: twelve numbers for "style" (plays like:
+ * six style attributes on T and on CT), and the rating inputs on T and on CT for "performance" (performs like).
+ */
+export function mostSimilar(mine: SideProfile, pack: PackPlayer[], by: "style" | "performance", top = 5) {
+  const keys = SIDES.flatMap((side) => (by === "style" ? STYLE : PERFORMANCE).map((k) => `${side}:${k}`));
+  const me = flat(mine);
   return pack
-    .map((p) => ({ name: p.name, similarity: p.sides[side]?.[by] ? similarity(mine, p.sides[side]![by]!, keys) : null }))
+    .map((p) => ({ name: p.name, similarity: similarity(me, flat({ T: p.sides.T?.[by], CT: p.sides.CT?.[by] }), keys) }))
     .filter((x): x is { name: string; similarity: number } => x.similarity !== null)
     .sort((x, y) => y.similarity - x.similarity)
     .slice(0, top);

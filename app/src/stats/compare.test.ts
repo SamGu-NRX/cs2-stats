@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { percentileOf } from "./compare";
-import { similarity } from "./identity";
+import { mostSimilar, similarity, STYLE, type PackPlayer } from "./identity";
 
 // Quantiles at 0, 5, ..., 100 percent. Values 0..200 in steps of 10: each step is 5 percentile points.
 const linear = Array.from({ length: 21 }, (_, i) => i * 10);
@@ -14,7 +14,17 @@ it("reads percentiles between, below, above and across a flat run of quantiles",
   expect(percentileOf(flat, 3)).toBe(30);
 });
 
-it("scores similarity as 100 minus the mean absolute difference over the scores both players have", () => {
-  expect(similarity({ entrying: 50, trading: 80 }, { entrying: 60, trading: 80, opening: 5 }, ["entrying", "trading", "opening"])).toBe(95);
+it("scores similarity by profile shape over both sides, not by level", () => {
+  // fails if a profile at a different level but the same shape stops being a 100% match (the
+  // populations differ, design/identity.md), or if "plays like" reads only one side
+  expect(similarity({ entrying: 60, trading: 40 }, { entrying: 90, trading: 10, opening: 5 }, ["entrying", "trading", "opening"])).toBeCloseTo(100);
+  expect(similarity({ entrying: 60, trading: 40 }, { entrying: 30, trading: 70 }, ["entrying", "trading"])).toBeCloseTo(-100);
   expect(similarity({ entrying: null }, { entrying: 40 }, ["entrying"])).toBeNull();
+  const style = (hi: "entrying" | "sniping") => Object.fromEntries(STYLE.map((k) => [k, k === hi ? 90 : 40]));
+  const mine = { T: style("entrying"), CT: style("sniping") };
+  const pack: PackPlayer[] = [
+    { name: "same on T only", sides: { T: { style: style("entrying") }, CT: { style: style("entrying") } } },
+    { name: "same on both", sides: { T: { style: style("entrying") }, CT: { style: style("sniping") } } },
+  ];
+  expect(mostSimilar(mine, pack, "style").map((x) => x.name)).toEqual(["same on both", "same on T only"]);
 });
