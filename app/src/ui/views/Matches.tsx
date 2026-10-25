@@ -42,6 +42,10 @@ export function MatchesView() {
   const rows = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     return filterEntries(all, map).filter((s) => {
+      // A match that ended before any round was won (0:0) has nothing to show, so it is not listed
+      // (the user: "The 0-0 unfinished one you probably shouldn't include"). Other unfinished
+      // matches stay, labelled.
+      if (s.score.us + s.score.them === 0) return false;
       // an unfinished match is neither a win nor a loss
       if (result !== "all" && (!isFinished(s) || s.result !== result)) return false;
       if (!terms.length) return true;

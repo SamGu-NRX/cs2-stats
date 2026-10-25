@@ -28,7 +28,8 @@ import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { fmtPct, fmtSwing, signed } from "../lib/format";
-import { matchHref } from "../router";
+import { go, matchHref } from "../router";
+import { MatchesView } from "./Matches";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
 import Playstyle from "./Playstyle";
@@ -282,6 +283,64 @@ describe("Profile weapons and multi-kills", () => {
     expect(multis).toHaveLength(4);
     const two = s.m.multiKillRounds - s.m.k3Rounds;
     expect(text(multis[0].querySelector(".mlist__pct"))).toBe(fmtPct((100 * two) / s.m.rounds, 1));
+  });
+});
+
+describe("section links", () => {
+  it("scrolls a ?sec= link to its Profile section once it renders", () => {
+    // fails if useSection is not wired to the section the link names (the user would stay at the top)
+    use(samples);
+    const scrolled: Element[] = [];
+    const raf = globalThis.requestAnimationFrame;
+    const into = Element.prototype.scrollIntoView;
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => { cb(0); return 0; }) as typeof requestAnimationFrame;
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      act(() => go("#/profile?sec=howgood"));
+      render(<ProfileView />);
+      expect(scrolled.map((el) => el.id)).toEqual(["howgood"]);
+    } finally {
+      globalThis.requestAnimationFrame = raf;
+      Element.prototype.scrollIntoView = into;
+      act(() => go("#/"));
+    }
+  });
+});
+
+describe("Matches", () => {
+  it("leaves out a match that ended before any round was won, and keeps the other unfinished ones", () => {
+    // fails if a 0:0 match is listed, or an unfinished match with rounds played disappears
+    use(samples);
+    // one match that ended 0:0, made from a sample so the case is always present
+    const base = samples[0].entry;
+    data = { ...data, matches: [...data.matches, { ...base, file: "samples/zero.json.gz", score: { us: 0, them: 0 }, match: { ...base.match, complete: false } }] };
+    const zero = data.matches.filter((e) => e.score.us + e.score.them === 0);
+    expect(zero.length).toBeGreaterThan(0);
+    const unfinished = data.matches.filter((e) => !e.match.complete && e.score.us + e.score.them > 0);
+    render(<MatchesView />);
+    const listed = text(host.querySelector("tbody"));
+    const shown = host.querySelectorAll("tbody tr").length;
+    expect(shown).toBe(data.matches.length - zero.length);
+    for (const e of unfinished) expect(listed).toContain(`${e.score.us}:${e.score.them}`);
+  });
+});
+
+describe("Style compass", () => {
+  it("places you and every bot career with 20 or more rounds", () => {
+    // fails if the compass drops you, places a thin career, or loses a qualifying one
+    use(samples);
+    render(<Playstyle />);
+    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Style compass")!;
+    expect(card).toBeTruthy();
+    const career = new Set(careerEntries(data.matches, null).map((e) => e.file));
+    const files = samples.filter((x) => career.has(x.file));
+    const bots = [...new Set(files.flatMap((x) => x.entry.players.filter((p) => p.bot).map((p) => p.id)))];
+    const placed = bots.filter((id) => {
+      const m = summary({ files: files.map((x) => x.file), filter: { player: [id] } }).m;
+      return m.rounds >= 20 && m.kills + m.assists > 0;
+    });
+    expect(card.querySelectorAll("svg circle[r='4.5']")).toHaveLength(placed.length);
+    expect(text(card.querySelector(".compass__you"))).toMatch(/^You, (Support|Entry and support|Entry|Rifler)$/);
   });
 });
 

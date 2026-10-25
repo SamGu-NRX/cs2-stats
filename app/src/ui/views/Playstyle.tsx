@@ -1,17 +1,22 @@
 // Playstyle: identity rather than performance (design/research-playstyle-viz.md).
-// - Role: the engine's role blend per side, with its evidence in words.
+// - Style compass: you and every bot career in your matches on two signals, how often you take the
+//   opening duel and how much of your work is trades and assists, with the zones named in words.
+// - Role: the engine's role blend per side.
 // - Where you play: a radar of your movement, kills and deaths, for any map you have played, with the
 //   places you spend your time.
 // - Where you rank: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
 //   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
 // - Rotations and first contact wait for analysis that has not been built; the page says so.
 import { useMemo, useState } from "react";
+import type { Measures } from "../../stats/facts";
+import type { MatchEntry } from "../data/match";
 import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
 import { Select } from "../components/controls";
+import { useWidth } from "../components/charts";
 import { frameFor, RadarView } from "../components/MapArt";
-import { careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
-import { useCall } from "../data/hooks";
+import { botIds, careerEntries, fmtMetric, mapsIn, rankText } from "../data/engine";
+import { useCall, useRollups } from "../data/hooks";
 import { metric } from "../data/meta";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
 import { calloutName } from "../lib/callouts";
@@ -37,15 +42,121 @@ export default function Playstyle() {
       <div className="view__in playstyle">
         {!q ? <Card><Empty text="No matches in this filter." /></Card> : (
           <>
-            <div className="identity">
-              <RoleCard q={q} />
-              <WhereYouPlay />
+            <div className="ps-top">
+              <StyleCompass list={list} q={q} />
+              <RoleCard q={q} maps={mapsIn(list)} />
             </div>
+            <WhereYouPlay />
             <Ranks q={q} />
             <p className="meta ps-next">Rotations between callouts and where you first meet the enemy arrive with the movement analysis and line-of-sight tracing.</p>
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- style compass
+
+/** A bot career needs this many rounds before it is placed (main's compass used the same cut). */
+const COMPASS_MIN_ROUNDS = 20;
+/** The zone lines: the share of rounds in the opening duel, and the share of kills and assists that are trades or assists. */
+const ENTRY_X = 0.25;
+const SUPPORT_Y = 0.45;
+
+interface Dot { key: string; name: string; you: boolean; x: number; y: number; rounds: number }
+
+/** The two signals from a rollup's measures, or null without the rounds or kills to read them. */
+function signals(m: Measures): { x: number; y: number } | null {
+  if (!m.rounds || m.kills + m.assists === 0) return null;
+  return { x: (m.openingKills + m.openingDeaths) / m.rounds, y: (m.tradeKills + m.assists) / (m.kills + m.assists) };
+}
+
+const ZONES = [
+  { id: "support", label: "Support", sub: "plays off teammates" },
+  { id: "both", label: "Entry and support", sub: "opens and trades" },
+  { id: "entry", label: "Entry", sub: "takes first duels" },
+  { id: "rifler", label: "Rifler", sub: "neither signal" },
+] as const;
+const zoneOf = (d: { x: number; y: number }) => ZONES[d.y >= SUPPORT_Y ? (d.x >= ENTRY_X ? 1 : 0) : d.x >= ENTRY_X ? 2 : 3];
+
+/**
+ * You and every bot career from the same matches on two signals, each career summed over those
+ * matches (one bot name is one career, as worker/ranking.ts counts them). Restored from main's
+ * Playstyle, now read from the engine's rollups.
+ */
+function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
+  const bots = useMemo(() => botIds(list), [list]);
+  const names = useMemo(() => new Map(list.flatMap((e) => e.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const))), [list]);
+  const qs = useMemo(() => [q, ...bots.map((id) => ({ files: q.files, filter: { player: [id] } }))], [q, bots]);
+  const sums = useRollups(qs).data;
+  const dots = useMemo((): Dot[] => {
+    if (!sums) return [];
+    return sums.flatMap((r, i) => {
+      const sig = signals(r.m);
+      if (!sig || (i > 0 && r.m.rounds < COMPASS_MIN_ROUNDS)) return [];
+      return [{ key: i === 0 ? "you" : bots[i - 1], name: i === 0 ? "You" : names.get(bots[i - 1]) ?? "Bot", you: i === 0, rounds: r.m.rounds, ...sig }];
+    });
+  }, [sums, bots, names]);
+  return (
+    <Card title="Style compass" tip="You and the bots in your matches, by opening duels and trades." aside={<span className="meta">{sums ? `You and ${plural(dots.filter((d) => !d.you).length, "bot career")}` : ""}</span>}>
+      {!sums ? <div className="skel" style={{ height: 340 }} /> : <Compass dots={dots} />}
+    </Card>
+  );
+}
+
+function Compass({ dots }: { dots: Dot[] }) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<Dot | null>(null);
+  const h = 340;
+  const pad = { l: 16, r: 16, t: 16, b: 40 };
+  const xmax = Math.max(0.5, ...dots.map((d) => d.x)) * 1.08;
+  const ymax = Math.max(0.9, ...dots.map((d) => d.y)) * 1.04;
+  const X = (x: number) => pad.l + (x / xmax) * (w - pad.l - pad.r);
+  const Y = (y: number) => h - pad.b - (y / ymax) * (h - pad.t - pad.b);
+  const ex = X(ENTRY_X);
+  const sy = Y(SUPPORT_Y);
+  const me = dots.find((d) => d.you);
+  const rects = [
+    { x: pad.l, y: pad.t, w: ex - pad.l, h: sy - pad.t, fill: "rgba(43,163,224,.07)" },
+    { x: ex, y: pad.t, w: w - pad.r - ex, h: sy - pad.t, fill: "rgba(172,149,122,.08)" },
+    { x: ex, y: sy, w: w - pad.r - ex, h: h - pad.b - sy, fill: "rgba(219,136,28,.07)" },
+    { x: pad.l, y: sy, w: ex - pad.l, h: h - pad.b - sy, fill: "transparent" },
+  ];
+  return (
+    <div ref={ref} className="chart compass">
+      <svg width={w} height={h} role="img" aria-label={`Style compass: you ${me ? `at ${Math.round(100 * me.x)}% opening duels and ${Math.round(100 * me.y)}% trades and assists, ${zoneOf(me).label}` : "not placed"}`}>
+        {ZONES.map((z, i) => (
+          <g key={z.id}>
+            <rect x={rects[i].x} y={rects[i].y} width={Math.max(0, rects[i].w)} height={Math.max(0, rects[i].h)} fill={rects[i].fill} />
+            <text x={rects[i].x + 10} y={rects[i].y + 20} className="compass__zone">{z.label}</text>
+            <text x={rects[i].x + 10} y={rects[i].y + 34} className="ax">{z.sub}</text>
+          </g>
+        ))}
+        <line x1={ex} x2={ex} y1={pad.t} y2={h - pad.b} stroke="var(--line2)" strokeDasharray="3 3" />
+        <line x1={pad.l} x2={w - pad.r} y1={sy} y2={sy} stroke="var(--line2)" strokeDasharray="3 3" />
+        <text x={ex + 4} y={h - pad.b - 6} className="ax">{Math.round(ENTRY_X * 100)}%</text>
+        <text x={w - pad.r - 4} y={sy - 6} textAnchor="end" className="ax">{Math.round(SUPPORT_Y * 100)}%</text>
+        <text x={pad.l} y={h - 14} className="ax ax--label">Takes the first duel of the round more often →</text>
+        <text x={w - pad.r} y={h - 14} textAnchor="end" className="ax">↑ more trades and assists</text>
+        {dots.filter((d) => !d.you).map((d) => (
+          <circle key={d.key} cx={X(d.x)} cy={Y(d.y)} r="4.5" fill="var(--ink3)" opacity={hover?.key === d.key ? 1 : 0.55} onPointerEnter={() => setHover(d)} onPointerLeave={() => setHover(null)} />
+        ))}
+        {me && (
+          <g transform={`translate(${X(me.x)} ${Y(me.y)})`}>
+            <circle r="16" fill="rgba(255,215,173,.14)" />
+            <circle r="7" fill="var(--cream)" />
+            <text x="14" y="-12" className="compass__you">You, {zoneOf(me).label}</text>
+          </g>
+        )}
+        {hover && (
+          <g transform={`translate(${Math.min(w - 180, X(hover.x) + 12)} ${Math.max(pad.t, Y(hover.y) - 46)})`} pointerEvents="none">
+            <rect width="170" height="40" rx="6" fill="var(--bg0)" stroke="var(--line2)" />
+            <text x="10" y="16" className="ax ax--strong" style={{ fill: "var(--ink)" }}>{hover.name}</text>
+            <text x="10" y="31" className="ax">{zoneOf(hover).label}, {hover.rounds} rounds</text>
+          </g>
+        )}
+      </svg>
     </div>
   );
 }
