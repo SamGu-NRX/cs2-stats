@@ -58,10 +58,21 @@ it("shows no percentile, but a reason, when the matches lack an input a metric n
   const pros: Baselines = { version: 1, built: "x", source: "test", model: f.match.model, n: {}, pools: { ...pools, rifler: pools.all } };
   const same = compare(s, pros, {});
   // no inventories: unused utility is unmeasured (no value) and says why
-  expect(same.utilUnused).toMatchObject({ value: null, pct: null, reason: expect.stringMatching(/inventories/) });
+  expect(same.utilUnused).toMatchObject({ value: null, pct: null, reason: "Not compared: freeze-end loadout known for 0 of 1 rounds" });
   expect(same.kpr.reason).toBeNull();
   expect(same.swing.pct).not.toBeNull();
   const other = compare(s, { ...pros, model: "hltv-0000-pffff" }, {});
   expect(other.swing).toMatchObject({ pct: null, reason: expect.stringMatching(/model/) });
   expect(other.kpr.pct).not.toBeNull();
+});
+
+it("computes a metric over the rows its input is known on, and gives no percentile while some are unknown", () => {
+  // fails if a source with inventories on some rounds counts the others as empty loadouts, or is ranked
+  const players = { a: "CT", b: "T" } as const;
+  const known = oneRound({ players, player_rounds: { a: { inventory: ["AWP", "Glock-18"], best_primary: "AWP" } } });
+  const unknown = oneRound({ players });
+  const s = rollup([known, unknown], { player: "a" });
+  const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } };
+  const p = compare(s, { version: 1, built: "x", source: "t", model: known.match.model, n: {}, pools: { ...pools, rifler: pools.all } }, {});
+  expect(p.roundsWithAwp).toMatchObject({ value: 100, pct: null, reason: "Not compared: freeze-end loadout known for 1 of 2 rounds" });
 });

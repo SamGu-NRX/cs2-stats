@@ -51,7 +51,7 @@ const M: Metric[] = [
   // ---- rating and scoreboard (performance)
   { id: "rating3", label: "Rating 3.0 (approx.)", hltv: "Rating 3.0", kind: "performance", group: "rating", unit: "rating", status: "approx",
     def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md): a linear model in eco-adjusted KPR, ADR, DPR and KAST, multi-kill rounds and swing, with params.json's coefficients.",
-    needs: ["model", "loadout"], value: (s) => rating3Of(s).value },
+    needs: ["model", "eco"], value: (s) => rating3Of(s).value },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
     def: "Enemy kills (killer and victim on different sides at the kill) per round.", value: (s) => per(s.m.kills, s.m.rounds) },
   { id: "dpr", label: "Deaths per round", hltv: "Deaths per round", kind: "performance", group: "rating", unit: "perRound", status: "exact", lowerIsBetter: true,
@@ -127,11 +127,11 @@ const M: Metric[] = [
 
   // ---- Sniping (identity)
   { id: "roundsWithSniper", label: "Rounds with a sniper", hltv: "Rounds with a Sniper", kind: "identity", group: "sniping", unit: "pct", status: "approx",
-    def: "Rounds you carried a sniper rifle at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithSniper, s.m.rounds) },
+    def: "Rounds you carried a sniper rifle at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithSniper, s.m.loadoutRounds) },
   { id: "sniperKillsPct", label: "Sniper kills", hltv: "Sniper Kills %", kind: "identity", group: "sniping", unit: "pct", status: "exact",
     def: "Share of your kills made with the AWP, SSG 08, SCAR-20 or G3SG1.", value: (s) => pct(s.m.sniperKills, s.m.kills) },
   { id: "roundsWithAwp", label: "Rounds with an AWP", hltv: "Rounds with an AWP", kind: "identity", group: "sniping", unit: "pct", status: "approx",
-    def: "Rounds you carried an AWP at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithAwp, s.m.rounds) },
+    def: "Rounds you carried an AWP at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithAwp, s.m.loadoutRounds) },
   { id: "awpKillsPct", label: "AWP kills", hltv: "AWP Kills %", kind: "identity", group: "sniping", unit: "pct", status: "exact",
     def: "Share of your kills made with the AWP.", value: (s) => pct(s.m.awpKills, s.m.kills) },
 

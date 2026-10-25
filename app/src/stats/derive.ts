@@ -45,6 +45,21 @@ function matchMeta(t: MatchTables) {
   };
 }
 
+/**
+ * Each player-round's freeze-end loadout (its inventory), or null when the row records none: a row with
+ * an empty inventory and no best primary is unknown, not an empty loadout (the plugin records neither).
+ */
+export function loadouts(c: Ctx): Map<number, string[] | null> {
+  const inv = c.t.player_rounds;
+  const out = new Map<number, string[] | null>();
+  for (let i = 0; i < inv.n; i++) {
+    const ri = c.riOf(inv.round[i]);
+    if (ri === undefined) continue;
+    out.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].length || inv.best_primary[i] !== null ? inv.inventory[i] : null);
+  }
+  return out;
+}
+
 /** A player-round while the families fill it: every measure present. */
 export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
 
@@ -312,11 +327,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
       roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
-      inputs: {
-        loadout: t.player_rounds.best_primary.some((x) => x !== null) || t.player_rounds.inventory.some((x) => x.length > 0),
-        activeWeapon: t.kills.v_active_weapon.some((x) => x !== null),
-        throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null),
-      },
+      inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null) },
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

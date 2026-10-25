@@ -2,7 +2,7 @@
 // flash-to-kills, grenade damage dealt and taken, and grenades a player died holding. Flash definitions are Leetify's (research-data-sources.md): an enemy counts as flashed
 // at more than 1.1 s of blind, and a flash-to-kill is a flashed enemy dying to the team while still
 // blind. Utility quality beyond usage (smokes) is utilq.ts.
-import { enemyHit, hitDamage, type Ctx } from "./derive";
+import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import type { GrenadeFact } from "./facts";
 import { classFromDisplay, isUtility, PRICE } from "./weapons";
 
@@ -20,13 +20,8 @@ export function utility(c: Ctx): void {
   const g = c.t.grenade_throws;
   const b = c.t.blinds;
   const d = c.t.damages;
-  const inv = c.t.player_rounds;
-  const loadout = inv.best_primary.some((x) => x !== null) || inv.inventory.some((x) => x.length > 0);
-  const held = new Map<number, string[]>();
-  for (let i = 0; i < inv.n; i++) {
-    const ri = c.riOf(inv.round[i]);
-    if (ri !== undefined) held.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].map(classFromDisplay).filter((x) => x in THROWN));
-  }
+  // grenades held at freeze end, null where the row records no loadout
+  const held = new Map([...loadouts(c)].map(([k, items]) => [k, items && items.map(classFromDisplay).filter((x) => x in THROWN)]));
 
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rows = c.pr[ri];
@@ -80,14 +75,14 @@ export function utility(c: Ctx): void {
       }
     }
 
-    // grenades held: the freeze-end inventory, less those thrown before death; a source without
-    // inventories leaves this unmeasured (its metric gets no percentile), not $0
-    if (!loadout) continue;
+    // grenades held: the freeze-end inventory, less those thrown before death; a row without a recorded
+    // loadout leaves this unmeasured, not $0
     for (const p of rows) {
       if (!p) continue;
       const death = c.kills[ri].find((k) => k.victim === p.pi);
-      if (!death) continue;
-      const left = [...(held.get(ri * 1024 + p.pi) ?? [])];
+      const had = held.get(ri * 1024 + p.pi);
+      if (!death || !had) continue;
+      const left = [...had];
       for (const [pl, tick, cls] of throws) {
         if (pl !== p.pi || tick > death.tick) continue;
         const j = left.indexOf(cls);
