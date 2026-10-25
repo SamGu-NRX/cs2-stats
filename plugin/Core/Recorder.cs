@@ -380,7 +380,7 @@ public sealed class Recorder
         int v = k.Victim;
         // A dead enemy, or every enemy once the human dies, leaves the human's sight at the kill tick.
         // The human saw the enemies (and the victim was in sight) up to the kill tick; see LosTracker.HideDead.
-        if (v == Meta.Human) Los.HideAll(Ri, k.Tick + 1, _buf.Los);
+        if (v == Meta.Human) Los.HideAllHumanDied(Ri, k.Tick, _buf.Los);
         else Los.HideDead(Ri, k.Tick, v, _buf.Los);
         int killer = k.Killer == v ? Nil.V : k.Killer;
         int flags = k.Flags;
@@ -727,7 +727,7 @@ public sealed class Recorder
         bool humanAlive = humanOk && Frames.ByPi[human].Present && Frames.ByPi[human].Alive && _alive[human];
 
         if (humanAlive && LosDue(tick)) CheckLos(tick, human);
-        else if (!humanAlive) Los.HideAll(Ri, tick, _buf.Los);
+        else if (!humanAlive) Los.HumanSeenDead(Ri, tick, _buf.Los);
         if (humanAlive) AimTick(tick, human);
 
         if (humanAlive && HumanPosDue(tick)) AddPos(tick, human);
