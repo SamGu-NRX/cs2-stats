@@ -13,7 +13,7 @@ that build the pro baselines. Metric definitions are in `METRICS.md`; the eviden
 | Scoreboard on tables, the HLTV gate | done; 83 of 194 joined maps exact for every player on K, D, KAST and ADR; `hltv-exact.test.ts` pins 24 and checks kills on all |
 | Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done; Rating 3.0 is `params.json`'s six-term linear model (PR #17) |
 | Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
-| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json`, 356 KB, 367 pro players |
+| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json`, 358 KB, 552 pro players |
 | New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation per metric in `VALIDATION.md` |
 | UI and worker on the new API | in progress on this branch |
 
@@ -89,7 +89,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 
 ### Baselines
 `pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
-(356 KB, no names or ids) and the named pack to `<data>/derived/baselines-named.json`, which
+(358 KB, no names or ids; swing from the win-probability source the tools found) and the named pack to `<data>/derived/baselines-named.json`, which
 stays outside the repo. Rebuild after any change to `METRICS` or a definition.
 
 ## API changes for the UI

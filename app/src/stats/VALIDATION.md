@@ -43,27 +43,28 @@ HLTV's round buy labels over every HLTV map: PISTOL $3,000 to $4,700 (2,932 team
 $4,950 (1,794), HALF $5,000 to $16,200 (3,773), FULL $16,250 to $38,100 (23,469). The engine's cuts,
 $1,000 and $3,250 per player, are those bands for five players.
 
-## Rating 3.0 and swing: `pnpm rating-check`, `rating3.test.ts`
+## Rating 3.0 and swing: `pnpm rating-check`
 
-`rating3.test.ts`: the engine reproduces all 30 golden player-maps of `model/rating3/golden.json` to
-1e-9. Against HLTV, every joined player-map (about 200 maps at the run):
+Rating 3.0 is `params.json`'s six-term linear model (PR #17). Against HLTV on every joined player-map,
+395 maps and 3,950 player-maps, with each win-probability source (`pnpm rating-check` uses the pack
+when installed; `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB):
 
-| Input | MAE | Pearson r | Mean ours / HLTV |
+| Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV (HLTV lookup) |
 |---|---|---|---|
-| eKPR | 0.020 | 0.993 | 0.659 / 0.652 |
-| eDPR | 0.023 | 0.980 | 0.659 / 0.674 |
-| eADR | 3.08 | 0.984 | 73.1 / 71.2 |
-| eKAST | 4.56 | 0.881 | 70.2 / 68.9 |
-| Swing (points per round) | 1.01 | 0.953 | 0.00 / -0.02 |
-| Rating 3.0 | 0.065 | 0.977 | 1.098 / 1.076 |
-| Rating 3.0, CT rounds | 0.125 | 0.976 | 1.207 / 1.098 |
-| Rating 3.0, T rounds | 0.086 | 0.976 | 1.058 / 1.066 |
+| eKPR | 0.020 / 0.993 | same | 0.661 / 0.653 |
+| eDPR | 0.023 / 0.981 | same | 0.661 / 0.676 |
+| eADR | 3.12 / 0.983 | same | 73.3 / 71.3 |
+| eKAST | 4.52 / 0.884 | same | 70.1 / 68.8 |
+| Swing (points per round) | 1.02 / 0.952 | 1.51 / 0.906 | 0.00 / -0.02 |
+| Rating 3.0 | 0.071 / 0.973 | 0.085 / 0.961 | 1.100 / 1.078 |
+| Rating 3.0, CT rounds | 0.124 / 0.966 | 0.137 / 0.953 | 1.175 / 1.097 |
+| Rating 3.0, T rounds | 0.102 / 0.970 | 0.123 / 0.957 | 1.027 / 1.071 |
 
-Targets: swing r above 0.95 (met); rating MAE under 0.04 (not met) and r above 0.97 (met). These use
-the map-level polynomial that `params.json` now marks as a retired diagnostic (`rating3()` reports
-`diagnostic: true`) while the rating agent fits a per-round model. The largest errors are in eKAST,
-whose transform `params.json` marks unresolved, and in per-side ratings, which HLTV does not compute by
-applying the map model to one side's rounds.
+Targets: swing r above 0.95 (met with the HLTV lookup, not with CS2RB); rating MAE under 0.04 (not
+met) and r above 0.97 (met with the HLTV lookup). `params.json` reports a held-out MAE of 0.046 when the
+model reads HLTV's own displayed inputs; the gap to 0.071 is the error in the engine's inputs, mostly
+eKAST (whose transform `params.json` marks unresolved) and eADR. Per-side ratings apply the map model
+to one side's rounds, which HLTV does not.
 
 ## Plugin adapter: `plugin/adapter.test.ts`
 
@@ -163,8 +164,9 @@ their code during development, so their figures are not reproducible here; no mo
 
 ## Baselines: `pnpm baselines`
 
-`public/baselines.json` is 356 KB: 21 quantiles of every metric for each pool and side, with no names or
-ids. Built from 343 pro maps on 2026-10-25: 367 players with 40 or more rounds (298 riflers, 69
-AWPers), and per-map pools of player-maps with 16 or more rounds. A metric's quantiles are written when
-at least 8 units have a value. The named pack (per-side style and performance scores) is written to the
+`public/baselines.json` is 358 KB: 21 quantiles of every metric for each pool and side, with no names or
+ids. Built from 516 pro maps on 2026-10-25 with swing from the HLTV win-probability lookup: 552 players
+with 40 or more rounds (455 riflers, 97 AWPers), and per-map pools of player-maps with 16 or more
+rounds. A metric's quantiles are written when at least 8 units have a value. The named pack (per-side
+style and performance scores) is written to the
 private data folder only.
