@@ -733,3 +733,19 @@ def test_trade_flags_skip_a_world_death_before_the_trade():
                                                                         "victim_steamid": "UInt64"})
     trade, traded = ex._trade_flags(k, 64.0, 5.0)
     assert trade.tolist() == [False, False, True] and traded.tolist() == [False, True, False]
+
+
+def test_a_torn_last_ledger_line_does_not_brick_startup(tmp_path, monkeypatch):
+    # A crash mid-append leaves half a JSON line; startup used to raise on it.
+    _isolate(tmp_path, monkeypatch)
+    dp.LEDGER.write_text('{"id": "a", "status": "done"}\n{"id": "b", "sta', encoding="utf-8")
+    assert list(dp.read_ledger()) == ["a"]
+    dp.append_jsonl(dp.LEDGER, {"id": "c", "status": "failed"})
+    assert sorted(dp.read_ledger()) == ["a", "c"]  # the next append starts on its own line
+
+
+def test_a_malformed_line_before_the_end_still_fails_loudly(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    dp.LEDGER.write_text('{"id": "a"}\nnot json\n{"id": "b"}\n', encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        dp.read_ledger()
