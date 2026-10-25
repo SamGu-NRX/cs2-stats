@@ -92,3 +92,67 @@ export function attributes(s: Summary, b: Baselines, opt: CompareOptions = {}): 
     return { id: a.id, label: a.label, kind: a.kind, score: have.length ? have.reduce((t, x) => t + x.pct!, 0) / have.length : null, metrics };
   });
 }
+
+// ---- building pools ------------------------------------------------------------------------------
+
+/** Units with a value a metric needs in a pool before its quantiles are written. Ours, no fit. */
+export const MIN_UNITS = 8;
+
+/** One player (or player-map) on one side, and the pools it belongs to. */
+export interface PoolUnit { pools: string[]; side: SideKey; s: Summary }
+
+const round4 = (x: number) => Number(x.toPrecision(4));
+
+function quantiles(xs: number[]): number[] {
+  const v = [...xs].sort((a, b) => a - b);
+  return QUANTILES.map((q) => {
+    const pos = (q / 100) * (v.length - 1);
+    const lo = Math.floor(pos);
+    return round4(v[lo] + (v[Math.min(lo + 1, v.length - 1)] - v[lo]) * (pos - lo));
+  });
+}
+
+/** Quantiles of every metric per pool and side; a metric with fewer than MIN_UNITS values in a pool is null there. */
+export function buildPools(units: PoolUnit[]): Pick<Baselines, "n" | "pools"> {
+  const vals = units.map((u) => ({ ...u, v: Object.fromEntries(METRICS.map((m) => [m.id, m.value(u.s)])) }));
+  const out: Pick<Baselines, "n" | "pools"> = { n: {}, pools: {} };
+  for (const pool of new Set(units.flatMap((u) => u.pools))) {
+    out.pools[pool] = {};
+    out.n[pool] = {};
+    for (const side of ["both", "CT", "T"] as const) {
+      const us = vals.filter((u) => u.side === side && u.pools.includes(pool));
+      if (!us.length) continue;
+      out.n[pool][side] = us.length;
+      out.pools[pool][side] = Object.fromEntries(METRICS.map((m) => {
+        const xs = us.map((u) => u.v[m.id]).filter((x): x is number => x !== null && Number.isFinite(x));
+        return [m.id, xs.length >= MIN_UNITS ? quantiles(xs) : null];
+      }));
+    }
+  }
+  return out;
+}
+
+/**
+ * The user's own population (design/identity.md): style is ranked against bot careers, not pros.
+ * Careers with fewer than CAREER_MIN_ROUNDS rounds are left out of the pools, per side half of it;
+ * until BOT_CAREERS_MIN careers qualify, the scores are provisional. Both thresholds are the project
+ * plan's; no data run picked them.
+ */
+export const BOT_CAREERS_MIN = 15;
+export const CAREER_MIN_ROUNDS = 150;
+
+/** Baselines from bot careers, each rolled up over the user's matches on both sides and per side. */
+export function careerBaselines(careers: Record<SideKey, Summary>[], built: string): { baselines: Baselines; provisional: boolean; careers: number } {
+  const units: PoolUnit[] = [];
+  let qualified = 0;
+  for (const c of careers) {
+    if (c.both.m.rounds < CAREER_MIN_ROUNDS) continue;
+    qualified++;
+    const pools = ["all", roleOf(c.both)];
+    for (const side of ["both", "CT", "T"] as const) {
+      if (c[side].m.rounds >= (side === "both" ? CAREER_MIN_ROUNDS : CAREER_MIN_ROUNDS / 2)) units.push({ pools, side, s: c[side] });
+    }
+  }
+  const baselines: Baselines = { version: 1, built, source: `${qualified} bot careers with ${CAREER_MIN_ROUNDS}+ rounds`, ...buildPools(units) };
+  return { baselines, provisional: qualified < BOT_CAREERS_MIN, careers: qualified };
+}
