@@ -1,9 +1,8 @@
 // Sidebar: player identity, the views, then Data & settings and the sync state. 232 px, or a 56 px
 // rail (toggle button animates the width; Ctrl+B and the automatic rail below 1100 px do not).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { addCounters, emptyCounters } from "../../stats/counters";
 import { AgentImg } from "../components/Agent";
-import { countersRating } from "../data/engine";
+import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
 import { AimIcon, ChevronLeftIcon, HomeIcon, MatchesIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
 import { OpeningIcon } from "../icons/attributes";
@@ -53,15 +52,12 @@ export function useRail() {
 
 export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: boolean; onToggle: () => void }) {
   const route = useRoute();
-  const { summaries, status, lastSync, refresh } = useData();
+  const { matches, status, lastSync, refresh } = useData();
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
-  const me = useMemo(() => {
-    if (!summaries.length) return null;
-    const c = emptyCounters();
-    for (const s of summaries) addCounters(c, s.human.c);
-    return { name: summaries[0].human.name, rating: countersRating(c) };
-  }, [summaries]);
+  const q = useYourQuery(matches);
+  const career = useRatings(useMemo(() => (q ? [q] : null), [q])).data;
+  const me = matches.length ? { name: matches[0].players[matches[0].you].name, rating: career?.[0].both.value ?? null } : null;
 
   const active = route.page === "match" ? "matches" : route.page;
   const nav = useRef<HTMLElement>(null);
@@ -76,7 +72,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
 
   return (
     <aside className={`side ${instant ? "is-instant" : ""}`} data-rail={rail} aria-label="Sidebar">
-      <div className="side__me" data-tip={rail && me ? `${me.name}: rating ${fmtRating(me.rating)} over ${summaries.length} matches` : undefined}>
+      <div className="side__me" data-tip={rail && me ? `${me.name}: rating ${fmtRating(me.rating)} over ${matches.length} matches` : undefined}>
         <span className="avatar"><AgentImg side="t" kind="portrait" /></span>
         {me && (
           <div className="side__who side__label">

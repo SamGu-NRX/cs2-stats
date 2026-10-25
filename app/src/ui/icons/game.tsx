@@ -1,6 +1,7 @@
 // Game glyphs: kill and death marks, round win types, team buy types, grenades and weapons.
-import type { BuyClass, BuyType } from "../../stats/economy";
-import type { RoundHow } from "../../stats/schema";
+import type { BuyClass } from "../../stats/economy";
+import type { KillFact } from "../../stats/facts";
+import type { RoundHow } from "../data/match";
 import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { Svg, type IconProps } from "./Icon";
 
@@ -65,19 +66,15 @@ export function WinIcon({ how, ...p }: IconProps & { how: RoundHow | null }) {
 }
 
 // ---------------------------------------------------------------- buy types (16 grid, filled)
-// Ascending bars: eco one, force (or half) buy two, full buy three. CS Demo Manager's five-way
-// "force-buy" (spending the last money after a loss) draws all three bars hollow. Pistol rounds show
-// a pistol.
+// Ascending bars, HLTV's classes: eco one, half buy two, full buy three. Pistol rounds show a pistol.
 
-export type AnyBuy = BuyType | BuyClass;
-export const BUY_LABEL: Record<AnyBuy, string> = { pistol: "Pistol", eco: "Eco", semi: "Half buy", "force-buy": "Force buy", force: "Force buy", full: "Full buy" };
+export const BUY_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", half: "Half buy", full: "Full buy" };
 
 const BARS = ["M2.5 10h3v4h-3z", "M6.5 6.5h3V14h-3z", "M10.5 2.5h3V14h-3z"];
 
-export function BuyIcon({ buy, ...p }: IconProps & { buy: AnyBuy | null }) {
+export function BuyIcon({ buy, ...p }: IconProps & { buy: BuyClass | null }) {
   if (buy === "pistol") return <Svg {...p} grid={16} solid><path d="M1.75 4.75h11.5v2.6h-1.1l-.9.9H8.7l-1.35 4.5H4.55l1.15-4.5H4.4l-.35-.9H1.75z" /></Svg>;
-  if (buy === "force-buy") return <Svg {...p} grid={16}>{BARS.map((d) => <path key={d} d={d} strokeWidth="1.25" />)}</Svg>;
-  const n = buy === "eco" ? 1 : buy === "semi" || buy === "force" ? 2 : buy === "full" ? 3 : 0;
+  const n = buy === "eco" ? 1 : buy === "half" ? 2 : buy === "full" ? 3 : 0;
   if (!n) return <UnknownIcon {...p} />;
   return (
     <Svg {...p} grid={16} solid>
@@ -154,8 +151,7 @@ export function WeaponClassIcon({ cls, ...p }: IconProps & { cls: string }) {
 }
 
 // ---------------------------------------------------------------- killfeed flags (16 grid)
-// The game's kill flags (SCHEMA.md kills.flags): 1 headshot, 2 wallbang, 4 through smoke, 8 blind
-// killer, 16 no-scope, 32 airborne killer.
+// The kill's flags as the engine's KillFact carries them.
 
 export const HeadshotIcon = (p: IconProps) => (
   <Svg {...p} grid={16}><circle cx="8" cy="6.5" r="4" /><path d="M3.5 15c.6-2.6 2.3-3.9 4.5-3.9s3.9 1.3 4.5 3.9" /><circle cx="8" cy="6.5" r="1.1" fill="currentColor" stroke="none" /></Svg>
@@ -169,27 +165,20 @@ export const SmokeKillIcon = (p: IconProps) => (
 export const NoscopeIcon = (p: IconProps) => (
   <Svg {...p} grid={16}><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v3M8 10.5v3M2.5 8h3M10.5 8h3" /><path d="M2.5 13.5l11-11" /></Svg>
 );
-export const BlindIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.8" /><path d="M2.5 14L13.5 2" /></Svg>
-);
-export const AirIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M8 13V3M4.5 6.5L8 3l3.5 3.5" /><path d="M4 14.5h8" /></Svg>
-);
 
-export const KILL_FLAGS: { bit: number; label: string; Icon: (p: IconProps) => JSX.Element }[] = [
-  { bit: 1, label: "Headshot", Icon: HeadshotIcon },
-  { bit: 2, label: "Wallbang", Icon: WallbangIcon },
-  { bit: 4, label: "Through smoke", Icon: SmokeKillIcon },
-  { bit: 16, label: "No-scope", Icon: NoscopeIcon },
-  { bit: 8, label: "Killer was blind", Icon: BlindIcon },
-  { bit: 32, label: "Airborne", Icon: AirIcon },
+type Flag = "headshot" | "wallbang" | "smoke" | "noscope";
+export const KILL_FLAGS: { flag: Flag; label: string; Icon: (p: IconProps) => JSX.Element }[] = [
+  { flag: "headshot", label: "Headshot", Icon: HeadshotIcon },
+  { flag: "wallbang", label: "Wallbang", Icon: WallbangIcon },
+  { flag: "smoke", label: "Through smoke", Icon: SmokeKillIcon },
+  { flag: "noscope", label: "No-scope", Icon: NoscopeIcon },
 ];
 
 /** The flags set on a kill, as icons. */
-export function KillFlags({ flags, size = 13 }: { flags: number; size?: number }) {
-  const on = KILL_FLAGS.filter((f) => flags & f.bit);
+export function KillFlags({ kill, size = 13 }: { kill: Pick<KillFact, Flag>; size?: number }) {
+  const on = KILL_FLAGS.filter((f) => kill[f.flag]);
   if (!on.length) return null;
-  return <span className="kflags">{on.map(({ bit, label, Icon }) => <Icon key={bit} size={size} label={label} />)}</span>;
+  return <span className="kflags">{on.map(({ flag, label, Icon }) => <Icon key={flag} size={size} label={label} />)}</span>;
 }
 
 /** First kill of the round (a drop) or first death (a hollow drop). */

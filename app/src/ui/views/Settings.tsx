@@ -1,29 +1,28 @@
 // Data & settings: where matches come from, what each source supports, import, and which model and
 // rating versions the numbers use.
 import { useRef, useState } from "react";
-import { DERIVE_VERSION } from "../../stats/derive";
-import { R3_PARAMS } from "../../stats/rating3";
+import { DERIVE_VERSION } from "../../stats/facts";
 import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown } from "../../host/host";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
-import { RATING3_NOTE } from "../data/engine";
+import { RATING3_DIAGNOSTIC, RATING3_NOTE, RATING_HEADLINE } from "../data/engine";
 import { useData } from "../data/provider";
-import { sourceOfSummary, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
+import { sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
 import { fmtDate, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { SHORTCUTS } from "../shell/Palette";
 
 export default function Settings() {
-  const { host, summaries, fileErrors, model, refresh, lastSync } = useData();
+  const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync } = useData();
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
   const counts: Record<SourceId, number> = { recorded: 0, converted: 0, synthetic: 0 };
-  for (const s of summaries) counts[sourceOfSummary(s).id]++;
-  const bundled = summaries.filter((s) => isBundled(s.file)).length;
-  const newest = (id: SourceId) => summaries.find((s) => sourceOfSummary(s).id === id);
+  for (const s of matches) counts[sourceOf(s).id]++;
+  const bundled = matches.filter((s) => isBundled(s.file)).length;
+  const newest = (id: SourceId) => matches.find((s) => sourceOf(s).id === id);
 
   const onImport = async (files: FileList | null) => {
     if (!files || !host) return;
@@ -48,11 +47,11 @@ export default function Settings() {
                 <span className="mono selectable">{host?.folder ?? "%APPDATA%\\BotMatchStats\\matches"}</span>
                 {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied")} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
               </div>
-              <p className="meta">{newest("recorded") ? `Newest ${fmtDate(newest("recorded")!.startUtc)}.` : "None yet."} {lastSync ? `Scanned ${new Date(lastSync).toLocaleTimeString()}.` : ""}</p>
+              <p className="meta">{newest("recorded") ? `Newest ${fmtDate(newest("recorded")!.match.date)}.` : "None yet."} {lastSync ? `Scanned ${new Date(lastSync).toLocaleTimeString()}.` : ""}</p>
             </div>
             <div className="source">
               <div className="source__head"><SourceBadge s={{ id: "converted", label: SOURCE_LABEL.converted, missing: [] }} compact /><b className="num source__n">{counts.converted}</b></div>
-              <p className="meta">Older matches converted from the game's console log. No aim or movement; early rounds may hold totals only.</p>
+              <p className="meta">Older matches converted from the game's console log. No aim or movement; rounds held as totals only are left out.</p>
               <label className="check">
                 <input type="checkbox" checked={showSamples} onChange={(e) => { setSamplesShown(e.target.checked); setShow(e.target.checked); refresh(); }} />
                 <span>Show the {plural(bundled || 5, "bundled converted match", "bundled converted matches")}</span>
@@ -87,15 +86,13 @@ export default function Settings() {
           <Card title="Models and versions">
             <dl className="facts facts--wide">
               <dt>Round win probability</dt>
-              <dd><span>{model?.label ?? "Loading"}</span>{model?.kind === "stub" && <span className="chip chip--outline" data-tip={model.error ?? "The trained model is not bundled; swing uses an alive-count placeholder."}>Placeholder</span>}</dd>
+              <dd className="meta">The lookup in model/rating3/params.json, which also drives round swing.</dd>
               <dt>Rating</dt>
-              <dd><span>Rating 3.0 (approx.)</span>{!R3_PARAMS.calibrated && <span className="chip chip--outline" data-tip={RATING3_NOTE}>Calibrating</span>}</dd>
-              <dt>Rating 3.0 weights</dt>
-              <dd className="meta">{R3_PARAMS.source}</dd>
-              <dt>Rating 2.0</dt>
-              <dd className="meta">Public approximation, as CS Demo Manager computes it. Shown for single sides.</dd>
+              <dd><span>{RATING_HEADLINE}</span>{RATING3_DIAGNOSTIC && <span className="chip chip--outline" data-tip={RATING3_NOTE}>Diagnostic</span>}</dd>
+              <dt>Pro baselines</dt>
+              <dd className="meta">{baselines ? `${baselines.source}. Built ${baselines.built}.` : baselinesError ?? "Loading"}</dd>
               <dt>Visibility timings</dt>
-              <dd className="meta">Time to damage, reaction and crosshair placement are gated until the plugin traces line of sight.</dd>
+              <dd className="meta">Time to damage, reaction and crosshair placement need view angles and mesh line of sight; plugin match files carry neither.</dd>
               <dt>Stats engine</dt>
               <dd className="meta num">Derive version {DERIVE_VERSION}</dd>
               <dt>Map images</dt>

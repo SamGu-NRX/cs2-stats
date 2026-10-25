@@ -51,7 +51,7 @@ export function createClient(host: Host): Client {
     });
 
   return {
-    sync: call("sync"), match: call("match"), profile: call("profile"), profilePositions: call("profilePositions"),
-    modelInfo: call("modelInfo"), onProgress: (fn) => (progress = fn),
+    sync: call("sync"), facts: call("facts"), rollup: call("rollup"), ratings: call("ratings"), guns: call("guns"),
+    positions: call("positions"), onProgress: (fn) => (progress = fn),
   } as Client;
 }

@@ -2,10 +2,10 @@
 // since it is used many times a day.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { summaryRating } from "../data/engine";
+import { entryRating } from "../data/engine";
 import { usePros } from "../data/packs";
 import { useData } from "../data/provider";
-import { sourceOfSummary } from "../data/sources";
+import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
 import { fmtDate, fmtRating, mapName } from "../lib/format";
 import { go, matchHref, openMatch, pageHref } from "../router";
@@ -20,7 +20,7 @@ export const SHORTCUTS: [string, string][] = [
 ];
 
 export function Palette({ open, onClose, actions }: { open: boolean; onClose: () => void; actions: { label: string; hint?: string; run: () => void }[] }) {
-  const { summaries } = useData();
+  const { matches } = useData();
   const pack = usePros();
   const pros = pack.state === "ready" ? pack.pros : [];
   const [q, setQ] = useState("");
@@ -47,19 +47,19 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
     const out: Item[] = [];
     for (const n of NAV) out.push({ id: `v:${n.page}`, group: "Views", label: n.label, hint: `Ctrl ${n.key}`, run: () => go(pageHref(n.page as never)), text: n.label });
     out.push({ id: "v:settings", group: "Views", label: "Data & settings", hint: "Ctrl ,", run: () => go(pageHref("settings")), text: "data settings import folder" });
-    for (const s of summaries) {
-      const label = `${mapName(s.map)} ${s.score.us}:${s.score.them}`;
-      const src = sourceOfSummary(s);
+    for (const s of matches) {
+      const label = `${mapName(s.match.map)} ${s.score.us}:${s.score.them}`;
+      const src = sourceOf(s);
       out.push({
-        id: `m:${s.file}`, group: "Matches", label, hint: `${fmtDate(s.startUtc)}  ${fmtRating(summaryRating(s))}`,
+        id: `m:${s.file}`, group: "Matches", label, hint: `${fmtDate(s.match.date)}  ${fmtRating(entryRating(s))}`,
         run: () => openMatch(matchHref(s.file)),
-        text: `${s.map} ${mapName(s.map)} ${fmtDate(s.startUtc)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
+        text: `${s.match.map} ${mapName(s.match.map)} ${fmtDate(s.match.date)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
       });
     }
     for (const p of pros) out.push({ id: `p:${p.slug}`, group: "Pros", label: p.name, hint: p.team, run: () => go(pageHref("profile", { pro: p.slug })), text: `${p.name} ${p.team} ${p.country}` });
     for (const a of actions) out.push({ id: `a:${a.label}`, group: "Actions", label: a.label, hint: a.hint, run: a.run, text: a.label });
     return out;
-  }, [summaries, actions, pros]);
+  }, [matches, actions, pros]);
 
   const filtered = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);

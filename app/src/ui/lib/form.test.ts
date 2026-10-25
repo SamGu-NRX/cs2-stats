@@ -13,13 +13,12 @@ describe("insideFences", () => {
 });
 
 describe("firstOfDay", () => {
-  it("keeps the earliest match of each local day, in any input order", () => {
-    // noon local time avoids a date boundary in any time zone the test machine runs in
-    const at = (d: number, h: number) => new Date(2026, 9, d, h).toISOString();
+  it("keeps the oldest match of each day from a newest-first list", () => {
     const out = firstOfDay([
-      { file: "b", startUtc: at(24, 14) },
-      { file: "a", startUtc: at(24, 12) },
-      { file: "c", startUtc: at(25, 12) },
+      { file: "c", date: "2026-10-25" },
+      { file: "b", date: "2026-10-24" },
+      { file: "a", date: "2026-10-24" },
+      { file: "x", date: null },
     ]);
     expect([...out].sort()).toEqual(["a", "c"]);
   });

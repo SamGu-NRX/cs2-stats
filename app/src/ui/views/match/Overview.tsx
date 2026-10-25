@@ -2,31 +2,28 @@
 // player, the rounds that decided the match, and you against the other nine players. Team facts
 // live on the Advanced tab.
 import { useMemo, useState } from "react";
-import type { PlayerRow } from "../../../stats/derive";
+import { rollup } from "../../../stats/rollup";
 import { MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { HoverCard } from "../../components/overlay";
-import { multiKillCounts, RATING_POOLED, ratingLabel, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
+import { matchLines, multiKillRows, RATING_LABEL, RATING_POOLED, SIDE_OPTIONS, type SideKey, type StatLine } from "../../data/engine";
+import { roundSlice, type MPlayer as PlayerRow } from "../../data/match";
 import { WinIcon, WIN_LABEL } from "../../icons/game";
 import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
 import { matchHref } from "../../router";
 import { PlayerName, RoundCardBody } from "../shared";
-import { useRawMatch } from "../../data/hooks";
-import { sideInputs } from "../../data/sideRating";
 import type { TabProps } from "./MatchView";
 
 export default function Overview({ v, file }: TabProps) {
   const [side, setSide] = useState<SideKey>("both");
   const [sort, setSort] = useState<SortState | null>({ key: "rating", dir: "desc" });
-  const raw = useRawMatch(side === "both" ? null : file).data;
-  const sides = useMemo(() => (raw ? sideInputs(raw) : null), [raw]);
-  const lines = useMemo(() => v.players.map((p) => statLine(v, p.pi, side, sides)), [v, side, sides]);
-  const multi = useMemo(() => v.players.map((p) => multiKillCounts(v, p.pi)), [v]);
+  const lines = useMemo(() => matchLines(v, side), [v, side]);
+  const multi = useMemo(() => matchLines(v, "both").map((l) => Object.fromEntries(multiKillRows(l.summary.m).map((r) => [r.k, r.rounds])) as Record<2 | 3 | 4 | 5, number>), [v]);
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
   const usSideFirst = v.usStartSide;
   const multiScore = (pi: number) => multi[pi][2] + 2 * multi[pi][3] + 4 * multi[pi][4] + 8 * multi[pi][5];
@@ -41,19 +38,19 @@ export default function Overview({ v, file }: TabProps) {
     { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (p: PlayerRow) => lines[p.pi].kast, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].kast)} /> },
     { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (p: PlayerRow) => lines[p.pi].hs, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].hs)} /> },
     ...(side === "both" ? [
-      { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => p.c.openingKills - p.c.openingDeaths, render: (p: PlayerRow) => <span className="num">{p.c.openingKills}<span className="faint">–</span>{p.c.openingDeaths}</span> },
+      { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => lines[p.pi].summary.m.openingKills - lines[p.pi].summary.m.openingDeaths, render: (p: PlayerRow) => <span className="num">{lines[p.pi].summary.m.openingKills}<span className="faint">–</span>{lines[p.pi].summary.m.openingDeaths}</span> },
       { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (p: PlayerRow) => multiScore(p.pi), render: (p: PlayerRow) => <MultiChips c={multi[p.pi]} />, width: 170 },
     ] : []),
     { key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win probability per round, from your kills (split by damage) and deaths", sort: (p: PlayerRow) => lines[p.pi].swing, render: (p: PlayerRow) => { const x = lines[p.pi].swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }}><Num v={fmtSwing(x)} /></span>; } },
-    { key: "rating", label: ratingLabel(v), tip: RATING_POOLED, colored: true, sort: (p: PlayerRow) => lines[p.pi].rating, render: (p: PlayerRow) => { const x = lines[p.pi].rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
+    { key: "rating", label: RATING_LABEL, tip: RATING_POOLED, colored: true, sort: (p: PlayerRow) => lines[p.pi].rating, render: (p: PlayerRow) => { const x = lines[p.pi].rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
   ];
 
   const board = (t: "us" | "them") => {
-    const first = t === "us" ? usSideFirst : ((5 - usSideFirst) as 2 | 3);
+    const first = t === "us" ? usSideFirst : usSideFirst === "T" ? "CT" : "T";
     return (
       <Card
-        title={<>{t === "us" ? "Your team" : "Opponents"} <span className={`chip ${first === 2 ? "chip--t" : "chip--ct"}`}>{first === 2 ? "T" : "CT"} first</span></>}
-        aside={<span className="board-score num" data-team={t}>{t === "us" ? v.score.us : v.score.them}</span>}
+        title={<>{t === "us" ? "Your team" : "Opponents"} <span className={`chip ${first === "T" ? "chip--t" : "chip--ct"}`}>{first} first</span></>}
+        aside={<span className="board-score num" data-team={t}>{t === "us" ? v.entry.score.us : v.entry.score.them}</span>}
         flush
         className="board"
       >
@@ -62,17 +59,19 @@ export default function Overview({ v, file }: TabProps) {
     );
   };
 
-  // decisive rounds: the largest swing summed over your team
-  const key = v.rounds.filter((r) => r.swing).map((r) => {
-    const us = v.players.filter((p) => p.team === "us").reduce((a, p) => a + r.swing![p.pi], 0);
-    return { r, us };
-  }).sort((a, b) => Math.abs(b.us) - Math.abs(a.us)).slice(0, 4);
+  // decisive rounds: the largest swing summed over your team, each round rolled up on its own
+  const key = useMemo(() => {
+    const ids = v.players.filter((p) => p.team === "us").map((p) => p.key);
+    return v.rounds.map((r) => ({ r, s: rollup([roundSlice(v.facts, r.ri)], { player: ids }).m }))
+      .filter((x) => x.s.swingRounds > 0).map((x) => ({ r: x.r, us: x.s.swing }))
+      .sort((a, b) => Math.abs(b.us) - Math.abs(a.us)).slice(0, 4);
+  }, [v]);
 
   return (
     <div className="tabpad overview">
       <div className="overview__bar toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={SIDE_OPTIONS.map((o) => ({ ...o, label: o.value === "both" ? "Both sides" : o.label, side: o.value === "both" ? undefined : o.value }))} />
-        <span className="meta">{side === "both" ? `${v.statRounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
+        <span className="meta">{side === "both" ? `${lines[v.human].rounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
       </div>
       <div className="boards">
         {board("us")}
@@ -96,11 +95,11 @@ export default function Overview({ v, file }: TabProps) {
                 {key.map(({ r, us }) => (
                   <li key={r.ri}>
                     <HoverCard prefer="right" card={() => <RoundCardBody v={v} r={r} />} as="div" tabbable={false}>
-                      <a href={matchHref(file, "rounds", { round: r.ri + 1 })} className="keyround">
-                        <WinIcon how={r.how} size={14} className={r.winSide === 2 ? "t-text" : "ct-text"} />
-                        <b>Round {r.ri + 1}</b>
+                      <a href={matchHref(file, "rounds", { round: r.number })} className="keyround">
+                        <WinIcon how={r.how} size={14} className={r.winSide === "T" ? "t-text" : "ct-text"} />
+                        <b>Round {r.number}</b>
                         <span className="meta">{r.how ? WIN_LABEL[r.how] : ""}</span>
-                        <span className="num faint">{r.scoreAfter.us}:{r.scoreAfter.them}</span>
+                        <span className="num faint">{r.scoreAfter ? `${r.scoreAfter.us}:${r.scoreAfter.them}` : ""}</span>
                         <b className="num" style={{ color: scoreText(roundSwingScore(us / 2)) }}>{fmtSwing(us)}</b>
                       </a>
                     </HoverCard>

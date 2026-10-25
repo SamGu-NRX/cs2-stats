@@ -1,31 +1,22 @@
 /// <reference lib="webworker" />
-// All decoding and stats run here, off the UI thread. Memory stays bounded: summaries without
-// positions live in memory; full match views are kept for the last three matches opened; positions
-// stay in IndexedDB until the profile heatmap asks for them.
+// All decoding and deriving runs here, off the UI thread: a plugin file is decoded, turned into
+// tables (plugin/adapter.ts) and derived into MatchFacts, which IndexedDB caches by DERIVE_VERSION.
+// Facts for every listed match stay in memory, because every profile question is a rollup over them.
 import type { FileEntry } from "../host/host";
-import { decodeMatch } from "../stats/decode";
-import { DERIVE_VERSION, deriveMatch, summarize, type MatchSummary, type MatchView } from "../stats/derive";
-import { emptyPos, mergePos, type PosAgg } from "../stats/positions";
-import { buildProfile, type ProfileFilter } from "../stats/profile";
-import { winProbabilityCT } from "@model/winprob";
-import { modelFromModule, stubModel, type WinModel } from "../stats/winprob";
+import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
+import { derive } from "../stats/derive";
+import { gunProficiency } from "../stats/guns";
+import { decodeMatch } from "../stats/plugin/decode";
+import { pluginToTables } from "../stats/plugin/adapter";
+import { rating3BySide } from "../stats/rating3";
+import { rollup } from "../stats/rollup";
+import { byNewest, entryOf, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import { planSync } from "./plan";
-import type { Api, FromWorker, LightSummary, Method, ToWorker } from "./protocol";
+import type { Api, FromWorker, Method, Query, ToWorker } from "./protocol";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
-
-// ---- win-probability model: the model agent's model/export/winprob.ts when it is complete at
-// build time (see vite.config.ts and app/README.md); otherwise the placeholder stays.
-let model: WinModel = stubModel;
-let modelError: string | null = null;
-try {
-  if (winProbabilityCT !== undefined) model = modelFromModule(winProbabilityCT);
-} catch (e) {
-  modelError = (e as Error).message;
-}
-const modelReady = Promise.resolve();
 
 // ---- bytes come from the UI thread, which owns the Tauri bridge
 let rid = 0;
@@ -38,90 +29,79 @@ function bytes(file: string): Promise<ArrayBuffer> {
   });
 }
 
-const cacheKey = (e: FileEntry) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model.kind}`;
-let summaries: LightSummary[] = [];
+/** What IndexedDB keeps per file: the facts and the plugin's own label for the file. */
+interface Cached { facts: MatchFacts; origin: string }
+
+const cacheKey = (e: FileEntry) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}`;
+let loaded = new Map<string, Cached & { entry: MatchEntry }>();
 let keysByFile = new Map<string, string>();
-const views = new Map<string, MatchView>(); // insertion order = LRU
-const VIEW_CACHE = 3;
 
-function remember(v: MatchView) {
-  views.delete(v.file);
-  views.set(v.file, v);
-  while (views.size > VIEW_CACHE) views.delete(views.keys().next().value!);
-}
-
-async function deriveFile(file: string): Promise<MatchView> {
+async function deriveFile(file: string): Promise<Cached> {
   const m = await decodeMatch(await bytes(file), file);
-  const v = deriveMatch(m, file, model);
-  remember(v);
-  return v;
+  return { facts: derive(pluginToTables(m)), origin: m.env.plugin ?? "" };
 }
+
+const factsOf = (files: string[]) => files.map((f) => {
+  const x = loaded.get(f);
+  if (!x) throw new Error(`${f} is not loaded; rescan the match folder`);
+  return x.facts;
+});
 
 const api: { [K in Method]: (...a: Parameters<Api[K]>) => Promise<ReturnType<Api[K]>> } = {
   async sync(entries) {
-    await modelReady;
-    const next: LightSummary[] = [];
     const errors: { file: string; message: string }[] = [];
-    // Compare against the previous sync's keys before replacing them: a changed file must not
-    // keep its old summary or match view.
+    // Compare against the previous sync's keys before replacing them: a changed file must not keep
+    // its old facts.
     const plan = planSync(entries.map((e) => ({ file: e.file, key: cacheKey(e) })), keysByFile);
     keysByFile = plan.keys;
-    for (const f of plan.changed) views.delete(f);
-    const inMemory = new Map(summaries.map((s) => [s.file, s]));
+    const next = new Map<string, Cached & { entry: MatchEntry }>();
     let done = 0;
     for (const e of entries) {
       const key = cacheKey(e);
-      let s: LightSummary | undefined = plan.reuse.has(e.file) ? inMemory.get(e.file) : undefined;
-      if (!s) s = await idbGet<LightSummary>("summary", key);
-      if (!s) {
-        try {
-          const full: MatchSummary = summarize(await deriveFile(e.file));
-          const { pos, ...light } = full;
-          await idbPut("summary", key, light);
-          await idbPut("pos", key, pos);
-          s = light;
-        } catch (err) {
-          errors.push({ file: e.file, message: (err as Error).message });
+      let c: (Cached & { entry?: MatchEntry }) | undefined = plan.reuse.has(e.file) ? loaded.get(e.file) : undefined;
+      try {
+        if (!c) c = await idbGet<Cached>("facts", key);
+        if (!c) {
+          c = await deriveFile(e.file);
+          await idbPut("facts", key, c);
         }
+        next.set(e.file, { ...c, entry: c.entry ?? entryOf(e.file, c.origin, c.facts) });
+      } catch (err) {
+        errors.push({ file: e.file, message: (err as Error).message });
       }
-      if (s) next.push(s);
       done++;
       if (done % 5 === 0 || done === entries.length) post({ progress: { done, total: entries.length } });
     }
-    summaries = next.sort((a, b) => b.startUtc.localeCompare(a.startUtc));
-    // drop cache entries for files that are gone or changed
+    loaded = next;
+    // drop cache entries for files that are gone or changed, and those of older derive versions
     const live = new Set(keysByFile.values());
-    for (const store of ["summary", "pos"] as const) {
-      const stale = (await idbKeys(store)).filter((k) => !live.has(k));
-      await idbDelete(store, stale);
+    await idbDelete("facts", (await idbKeys("facts")).filter((k) => !live.has(k)));
+    return { matches: [...loaded.values()].map((x) => x.entry).sort(byNewest), errors };
+  },
+  async facts(file) {
+    return factsOf([file])[0];
+  },
+  async rollup(qs) {
+    return qs.map((q) => rollup(factsOf(q.files), q.filter));
+  },
+  async ratings(qs) {
+    return qs.map((q) => rating3BySide(factsOf(q.files), q.filter));
+  },
+  async guns(q) {
+    return gunProficiency(factsOf(q.files), q.filter);
+  },
+  async positions(q: Query) {
+    const ids = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    const kills: [number, number][] = [];
+    const deaths: [number, number][] = [];
+    for (const f of factsOf(q.files)) {
+      if (q.filter.maps && !q.filter.maps.includes(f.match.map)) continue;
+      for (const k of f.kills) {
+        if (k.enemy && k.killer !== null && k.kpos && ids.has(f.players[k.killer].id)) kills.push(k.kpos);
+        if (k.vpos && ids.has(f.players[k.victim].id)) deaths.push(k.vpos);
+      }
     }
-    return { summaries, errors };
-  },
-  async match(file) {
-    await modelReady;
-    const v = views.get(file);
-    if (v) {
-      remember(v);
-      return v;
-    }
-    return deriveFile(file);
-  },
-  async profile(filter: ProfileFilter) {
-    return buildProfile(summaries, filter);
-  },
-  async profilePositions(map) {
-    const out: PosAgg = emptyPos(map);
-    for (const s of summaries) {
-      if (s.map !== map) continue;
-      const key = keysByFile.get(s.file);
-      const p = key ? await idbGet<PosAgg>("pos", key) : undefined;
-      if (p) mergePos(out, p);
-    }
-    return out;
-  },
-  async modelInfo() {
-    await modelReady;
-    return { kind: model.kind, label: model.label, error: modelError };
+    return { kills, deaths };
   },
 };
 

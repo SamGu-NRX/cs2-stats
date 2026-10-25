@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { correlation, rankSimilar, similarityPct } from "./similarity";
 import { BENCH, benchAround, meterGeometry, verdictOf } from "./verdict";
 
 describe("verdictOf", () => {
@@ -60,31 +59,3 @@ describe("meterGeometry", () => {
     expect(meterGeometry(null, BENCH.dpr).value).toBeNull();
   });
 });
-
-describe("similarity", () => {
-  it("is 1 for the same shape at a different level", () => {
-    expect(correlation([10, 20, 30, 40], [60, 70, 80, 90])).toBeCloseTo(1);
-    expect(similarityPct(1)).toBe(100);
-  });
-  it("is −1 for the opposite shape", () => {
-    expect(correlation([1, 2, 3], [3, 2, 1])).toBeCloseTo(-1);
-    expect(similarityPct(-1)).toBe(0);
-  });
-  it("skips null scores and needs three pairs", () => {
-    expect(correlation([1, null, 3, 5], [2, 9, 4, 6])).toBeCloseTo(1);
-    expect(correlation([1, 2], [1, 2])).toBeNull();
-    expect(correlation([5, 5, 5], [1, 2, 3])).toBeNull();
-  });
-  it("ranks best first and drops unrankable items", () => {
-    const you = [90, 40, 30, 50, 60, 10, 20];
-    const pros = [
-      { n: "flat", s: [50, 50, 50, 50, 50, 50, 50] },
-      { n: "same", s: [95, 45, 35, 55, 65, 15, 25] },
-      { n: "opposite", s: [10, 60, 70, 50, 40, 90, 80] },
-    ];
-    const ranked = rankSimilar(you, pros, (p) => p.s);
-    expect(ranked.map((r) => r.item.n)).toEqual(["same", "opposite"]);
-    expect(ranked[0].pct).toBe(100);
-  });
-});
-

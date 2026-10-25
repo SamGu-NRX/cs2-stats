@@ -1,18 +1,17 @@
 // The match: a hero band (score, teams, map, your line), the round rail and the tabs, sticky
-// together, then the tab panel. The hero renders from the cached summary at once, so it is never
-// empty while the full match is derived in the worker.
+// together, then the tab panel. The hero renders from the match list's entry at once, so it is never
+// empty while the facts come from the worker.
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
-import type { MatchView as MV } from "../../../stats/derive";
-import type { LightSummary } from "../../../worker/protocol";
 import { MapThumb, Num, SourceBadge } from "../../components/bits";
 import { MapAtmosphere } from "../../components/MapArt";
-import { counterLine, ratingLabel, statLine } from "../../data/engine";
-import { useMatchView } from "../../data/hooks";
+import { entryLine, RATING_HEADLINE } from "../../data/engine";
+import { useMatch } from "../../data/hooks";
 import { mapAccent } from "../../data/maps";
+import type { MatchEntry, MatchModel } from "../../data/match";
 import { useData } from "../../data/provider";
-import { sourceOfSummary, sourceOfView } from "../../data/sources";
+import { sourceOf } from "../../data/sources";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
-import { fmtAdr, fmtDate, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtTime, mapName } from "../../lib/format";
+import { fmtAdr, fmtDate, fmtPct, fmtRating, fmtSwing, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
 import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
@@ -28,23 +27,26 @@ const Aim = lazy(() => import("./Aim"));
 const Positions = lazy(() => import("./Positions"));
 const Advanced = lazy(() => import("./Advanced"));
 
-export interface TabProps { v: MV; file: string; round: number | null }
+/** round: the selected round's row (ri), found from the round number in the URL */
+export interface TabProps { v: MatchModel; file: string; round: number | null }
 
 export default function MatchView({ file, tab }: { file: string; tab: MatchTab }) {
-  const { summaries } = useData();
+  const { matches } = useData();
   const r = useRoute();
-  const s = summaries.find((x) => x.file === file) ?? null;
-  const { data: v, error } = useMatchView(file);
-  const round = r.query.get("round") ? Number(r.query.get("round")) - 1 : null;
-  const i = summaries.findIndex((x) => x.file === file);
-  const older = summaries[i + 1];
-  const newer = summaries[i - 1];
-  const map = v?.map ?? s?.map ?? "";
+  const s = matches.find((x) => x.file === file) ?? null;
+  const { data: v, error } = useMatch(file);
+  const n = r.query.get("round") ? Number(r.query.get("round")) : null;
+  const ri = v && n !== null ? v.rounds.findIndex((x) => x.number === n) : -1;
+  const round = ri >= 0 ? ri : null;
+  const i = matches.findIndex((x) => x.file === file);
+  const older = matches[i + 1];
+  const newer = matches[i - 1];
+  const map = v?.map ?? s?.match.map ?? "";
 
   return (
     <div className="view view--flush match" style={{ ["--map-accent" as string]: mapAccent(map) }}>
       <BarContent
-        crumbs={[{ label: s?.human.name ?? "You", href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }, { label: s ? `${mapName(s.map)}, ${fmtDate(s.startUtc)}` : "Match" }]}
+        crumbs={[{ label: s ? s.players[s.you].name : "You", href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }, { label: s ? `${mapName(s.match.map)}, ${fmtDate(s.match.date)}` : "Match" }]}
         tools={
           <span className="pager">
             <button className="btn btn--ghost btn--icon btn--sm press" disabled={!older} onClick={() => older && go(matchHref(older.file, tab))} data-tip="Older match  [" aria-label="Older match"><ChevronLeftIcon size={16} /></button>
@@ -88,26 +90,26 @@ function TabSkeleton({ tab }: { tab: MatchTab }) {
   );
 }
 
-function Hero({ s, v }: { s: LightSummary | null; v: MV | null }) {
-  if (!s && !v) return <div className="mhero"><div className="skel" style={{ height: 96, margin: "16px var(--gutter)" }} /></div>;
-  const score = v?.score ?? s!.score;
-  const result = v?.result ?? s!.result;
-  const map = v?.map ?? s!.map;
-  const src = v ? sourceOfView(v) : sourceOfSummary(s!);
-  const line = v ? statLine(v, v.human, "both") : counterLine(s!.human.c, "both");
-  const usStart = v?.usStartSide ?? s!.usStartSide;
+function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
+  const e = v?.entry ?? s;
+  if (!e) return <div className="mhero"><div className="skel" style={{ height: 96, margin: "16px var(--gutter)" }} /></div>;
+  const { score, result } = e;
+  const map = e.match.map;
+  const src = sourceOf(e);
+  const line = entryLine(e);
+  const usStart = e.usStartSide;
   const halves = (team: "us" | "them") => {
     if (!v) return null;
-    const firstSide = team === "us" ? usStart : ((5 - usStart) as 2 | 3);
-    const max = v.env.maxrounds ?? 24;
-    const h1 = v.rounds.filter((r) => r.ri < max / 2 && r.winner === team).length;
-    const h2 = v.rounds.filter((r) => r.ri >= max / 2 && r.ri < max && r.winner === team).length;
-    const ot = v.rounds.filter((r) => r.ri >= max && r.winner === team).length;
+    const firstSide = team === "us" ? usStart : usStart === "T" ? "CT" : "T";
+    const max = v.maxRounds;
+    const h1 = v.rounds.filter((r) => r.number <= max / 2 && r.winner === team).length;
+    const h2 = v.rounds.filter((r) => r.number > max / 2 && r.number <= max && r.winner === team).length;
+    const ot = v.rounds.filter((r) => r.number > max && r.winner === team).length;
     return (
       <span className="mhero__halves num">
-        <span className={firstSide === 2 ? "t-text" : "ct-text"}>{firstSide === 2 ? "T" : "CT"} <b>{h1}</b></span>
-        <span className={firstSide === 2 ? "ct-text" : "t-text"}>{firstSide === 2 ? "CT" : "T"} <b>{h2}</b></span>
-        {v.nRounds > max && <span className="muted">OT <b>{ot}</b></span>}
+        <span className={firstSide === "T" ? "t-text" : "ct-text"}>{firstSide} <b>{h1}</b></span>
+        <span className={firstSide === "T" ? "ct-text" : "t-text"}>{firstSide === "T" ? "CT" : "T"} <b>{h2}</b></span>
+        {v.rounds.some((r) => r.number > max) && <span className="muted">OT <b>{ot}</b></span>}
       </span>
     );
   };
@@ -117,7 +119,7 @@ function Hero({ s, v }: { s: LightSummary | null; v: MV | null }) {
       <div className="mhero__in">
         <div className="mhero__team">
           <span className="caps">Your team</span>
-          <b className="mhero__name">{s?.human.name ?? "You"} <span className="faint">+ 4</span></b>
+          <b className="mhero__name">{e.players[e.you].name} <span className="faint">+ 4</span></b>
           {halves("us")}
         </div>
         <div className="mhero__center">
@@ -128,8 +130,7 @@ function Hero({ s, v }: { s: LightSummary | null; v: MV | null }) {
           </div>
           <div className="mhero__meta">
             <span className="mhero__map"><MapThumb map={map} size={18} /><b>{mapName(map)}</b></span>
-            <span>{fmtDate(v?.startUtc ?? s!.startUtc)}, {fmtTime(v?.startUtc ?? s!.startUtc)}</span>
-            {v && <span>{fmtDuration(v.startUtc, v.endUtc)}</span>}
+            <span>{fmtDate(e.match.date)}</span>
             <SourceBadge s={src} />
           </div>
         </div>
@@ -141,7 +142,7 @@ function Hero({ s, v }: { s: LightSummary | null; v: MV | null }) {
       </div>
       <div className="mhero__you">
         <span className="caps">You</span>
-        <span className="mhero__stat"><span className="meta">{ratingLabel(v)}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
+        <span className="mhero__stat"><span className="meta">{RATING_HEADLINE}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
         <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }}><Num v={fmtSwing(line.swing)} /></b></span>
         <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{line.kills}<span className="faint">–</span>{line.deaths}</b></span>
         <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(line.adr)}</b></span>
@@ -152,7 +153,7 @@ function Hero({ s, v }: { s: LightSummary | null; v: MV | null }) {
   );
 }
 
-function Sticky({ v, file, tab, round }: { v: MV | null; file: string; tab: MatchTab; round: number | null }) {
+function Sticky({ v, file, tab, round }: { v: MatchModel | null; file: string; tab: MatchTab; round: number | null }) {
   const tabs = useRef<HTMLDivElement>(null);
   const [ul, setUl] = useState<{ x: number; w: number; instant: boolean } | null>(null);
   const first = useRef(true);
@@ -162,14 +163,14 @@ function Sticky({ v, file, tab, round }: { v: MV | null; file: string; tab: Matc
     setUl({ x: el.offsetLeft, w: el.offsetWidth, instant: first.current || navWasInstant() });
     first.current = false;
   }, [tab]);
-  const pick = (ri: number) => go(matchHref(file, "rounds", { round: ri + 1 }));
+  const pick = (ri: number) => v && go(matchHref(file, "rounds", { round: v.rounds[ri].number }));
   return (
     <div className="msticky">
       {v ? <div className="msticky__rail"><RoundRail v={v} selected={round} onPick={pick} /></div> : <div className="skel" style={{ height: 70, margin: "8px var(--gutter)" }} />}
       <div className="mtabs" role="tablist" aria-label="Match sections" ref={tabs}>
         {ul && <i className={`mtabs__ul ${ul.instant ? "is-instant" : ""}`} style={{ width: ul.w, transform: `translateX(${ul.x}px)` }} aria-hidden />}
         {MATCH_TABS.map((t, n) => {
-          const disabled = !!v && ((t === "aim" && !v.hasAim) || (t === "positions" && !v.hasPos && !v.rounds.some((r) => r.kills.some((k) => k.kpos))));
+          const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)));
           return (
             <a
               key={t}
@@ -177,7 +178,7 @@ function Sticky({ v, file, tab, round }: { v: MV | null; file: string; tab: Matc
               role="tab"
               aria-selected={t === tab}
               aria-controls="match-panel"
-              href={matchHref(file, t, round !== null && t === "rounds" ? { round: round + 1 } : undefined)}
+              href={matchHref(file, t, v && round !== null && t === "rounds" ? { round: v.rounds[round].number } : undefined)}
               className={`mtab ${disabled ? "is-dim" : ""}`}
               data-tip={`Alt ${n + 1}${disabled ? (t === "aim" ? ": needs a recorded match" : ": no positions in this match") : ""}`}
             >

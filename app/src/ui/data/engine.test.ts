@@ -1,87 +1,69 @@
-// The adapter must agree with the engine it wraps: per-round cells sum to the match counters, the
-// per-side lines add up to both sides, and the Rating 3.0 fallback triggers on thin kill-log cover.
+// The UI's shaping of MatchFacts must agree with the engine it reads: the round grid holds every
+// kill and death the scoreboard counts, a side's line covers that side's rounds, the running score
+// ends at the match score, a thinly covered match shows no rating, and each bundled file is
+// labelled with its source.
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { deriveMatch, summarize } from "../../stats/derive";
-import { loadPluginMatch, loadSample, PLUGIN_MATCHES, SAMPLE_1714 } from "../../stats/testing/load";
-import { rating3 } from "../../stats/rating3";
-import { counterLine, countersRating, r3Usable, roundMatrix, statLine, summaryRating } from "./engine";
-import { sideInputs } from "./sideRating";
-import { sourceOfSummary, sourceOfView } from "./sources";
+import { derive } from "../../stats/derive";
+import { pluginToTables } from "../../stats/plugin/adapter";
+import { decodeMatch } from "../../stats/plugin/decode";
+import { entryLine, playerLine } from "./engine";
+import { entryOf, matchModel, roundMatrix, sideOf, type MatchModel } from "./match";
+import { sourceOf } from "./sources";
 
-describe("roundMatrix", async () => {
-  const v = deriveMatch(await loadPluginMatch(PLUGIN_MATCHES[1]), PLUGIN_MATCHES[1]);
-  const m = roundMatrix(v);
-  it("has one cell per player and round", () => {
-    expect(m.length).toBe(v.players.length);
-    for (const row of m) expect(row.length).toBe(v.nRounds);
-  });
-  it("sums kills, headshots and deaths to the counters", () => {
-    v.players.forEach((p, pi) => {
-      expect(m[pi].reduce((a, c) => a + c.kills.length, 0)).toBe(p.c.kills);
-      expect(m[pi].reduce((a, c) => a + c.kills.filter((k) => k.hs).length, 0)).toBe(p.c.hsKills);
-      expect(m[pi].filter((c) => c.died).length).toBe(p.c.deaths);
-    });
-  });
-  it("marks exactly one opening kill per captured round with a kill", () => {
-    for (let ri = 0; ri < v.nRounds; ri++) {
-      const openings = m.flatMap((row) => row[ri].kills.filter((k) => k.opening)).length;
-      expect(openings).toBeLessThanOrEqual(1);
+const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
+const FILES = readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"));
+
+async function load(file: string): Promise<MatchModel> {
+  const m = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
+  const facts = derive(pluginToTables(m));
+  return matchModel(entryOf(`samples/${file}`, m.env.plugin ?? "", facts), facts);
+}
+
+describe("match model", async () => {
+  const models = await Promise.all(FILES.map(load));
+
+  it("puts every kill and death the scoreboard counts into the round grid", () => {
+    for (const v of models) {
+      const grid = roundMatrix(v);
+      v.players.forEach((p) => {
+        const m = playerLine(v, p.pi, "both").summary.m;
+        expect(grid[p.pi].reduce((a, c) => a + c.kills.length, 0), `${v.file} ${p.name} kills`).toBe(m.kills);
+        expect(grid[p.pi].filter((c) => c.died).length, `${v.file} ${p.name} deaths`).toBe(m.deaths);
+      });
     }
   });
-});
 
-describe("statLine", async () => {
-  const v = deriveMatch(await loadPluginMatch(PLUGIN_MATCHES[2]), PLUGIN_MATCHES[2]);
-  it("splits kills, deaths and rounds exactly across sides", () => {
-    for (const p of v.players) {
-      const b = statLine(v, p.pi, "both");
-      const t = statLine(v, p.pi, "t");
-      const ct = statLine(v, p.pi, "ct");
-      expect(t.kills + ct.kills).toBe(b.kills);
-      expect(t.deaths + ct.deaths).toBe(b.deaths);
-      expect(t.rounds + ct.rounds).toBe(b.rounds);
+  it("rolls a side's line up over the rounds the player spent on that side", () => {
+    for (const v of models) {
+      const onT = v.rounds.filter((r) => r.pr[v.human] && sideOf(v, r, v.human) === "T").length;
+      expect(playerLine(v, v.human, "t").rounds, v.file).toBe(onT);
+      expect(playerLine(v, v.human, "ct").rounds, v.file).toBe(v.rounds.filter((r) => r.pr[v.human]).length - onT);
     }
   });
-  it("rates one side only from that side's Rating 3.0 inputs, never from Rating 2.0", async () => {
-    expect(statLine(v, v.human, "t").rating).toBeNull();
-    const sides = sideInputs(await loadPluginMatch(PLUGIN_MATCHES[2]));
-    expect(statLine(v, v.human, "t", sides).rating).toBe(rating3(sides[v.human].t).value);
-  });
-});
 
-describe("Rating 3.0 coverage", async () => {
-  // Rounds 1-15 of this converted log hold the game's totals only; one round has the kill log.
-  const v = deriveMatch(await loadSample(SAMPLE_1714), `samples/${SAMPLE_1714}`);
-  const s = summarize(v);
-  it("has no rating when the kill log covers under half the rounds", () => {
-    expect(r3Usable(s.human.c)).toBe(false);
-    expect(summaryRating(s)).toBeNull();
-    expect(countersRating(s.human.c)).toBeNull();
-  });
-  it("has no T or CT rating either, though one side holds the kill-log round", async () => {
-    const sides = sideInputs(await loadSample(SAMPLE_1714));
-    for (const side of ["t", "ct"] as const) {
-      expect(statLine(v, v.human, side, sides).rating).toBeNull();
-      expect(counterLine(s.human.c, side, sides[v.human][side]).rating).toBeNull();
+  it("ends the running score at the match score, or has none when early rounds are missing", () => {
+    for (const v of models) {
+      const last = v.rounds[v.rounds.length - 1];
+      if (v.rounds.every((r, ri) => r.number === ri + 1)) expect(last.scoreAfter, v.file).toEqual(v.entry.score);
+      else expect(last.scoreAfter, v.file).toBeNull();
     }
   });
-  it("uses Rating 3.0 on a fully recorded match", async () => {
-    const r = summarize(deriveMatch(await loadPluginMatch(PLUGIN_MATCHES[1]), PLUGIN_MATCHES[1]));
-    expect(r3Usable(r.human.c)).toBe(true);
-    expect(summaryRating(r)).toBe(r.human.rating3);
+
+  it("shows no rating for a match whose kill log covers under half its rounds", () => {
+    const thin = models.filter((v) => v.facts.match.nRounds < v.facts.match.roundsPlayed / 2);
+    const full = models.filter((v) => v.facts.match.nRounds === v.facts.match.roundsPlayed);
+    expect(thin.length).toBeGreaterThan(0);
+    expect(full.length).toBeGreaterThan(0);
+    for (const v of thin) {
+      expect(entryLine(v.entry).rating, v.file).toBeNull();
+      expect(playerLine(v, v.human, "both").rating, v.file).toBeNull();
+    }
+    for (const v of full) expect(entryLine(v.entry).rating, v.file).not.toBeNull();
+  });
+
+  it("labels the bundled files by the source that wrote them", () => {
+    for (const v of models) expect(sourceOf(v.entry).id, v.file).toBe(v.file.includes("synthetic-demo") ? "synthetic" : "converted");
   });
 });
-
-describe("sources", async () => {
-  const rec = deriveMatch(await loadPluginMatch(PLUGIN_MATCHES[1]), `2026/${PLUGIN_MATCHES[1]}`);
-  const conv = deriveMatch(await loadSample(SAMPLE_1714), `samples/${SAMPLE_1714}`);
-  it("reads env.plugin on the full view", () => {
-    expect(sourceOfView(rec).id).toBe("recorded");
-    expect(sourceOfView(conv)).toEqual({ id: "converted", label: "Converted log", missing: ["aim", "movement"] });
-  });
-  it("infers the same source from summaries", () => {
-    expect(sourceOfSummary(summarize(rec)).id).toBe("recorded");
-    expect(sourceOfSummary(summarize(conv)).id).toBe("converted");
-  });
-});
-

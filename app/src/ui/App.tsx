@@ -42,7 +42,7 @@ function AppBar({ onPalette }: { onPalette: () => void }) {
 
 function Body() {
   const route = useRoute();
-  const { status, error, summaries, refresh } = useData();
+  const { status, error, matches, refresh } = useData();
   const pane = useRef<HTMLElement>(null);
   const rail = useRail();
   const [palette, setPalette] = useState(false);
@@ -82,9 +82,9 @@ function Body() {
       }
       if (typing || ctrl || e.altKey) return;
       if ((e.key === "[" || e.key === "]") && r.page === "match" && r.file) {
-        const i = summaries.findIndex((s) => s.file === r.file);
-        // summaries are newest first: "[" goes to the older match, "]" to the newer one
-        const next = summaries[e.key === "[" ? i + 1 : i - 1];
+        const i = matches.findIndex((s) => s.file === r.file);
+        // matches are newest first: "[" goes to the older match, "]" to the newer one
+        const next = matches[e.key === "[" ? i + 1 : i - 1];
         if (next) go(matchHref(next.file, r.tab), { instant: true });
         return;
       }
@@ -100,7 +100,7 @@ function Body() {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [palette, rail, refresh, summaries]);
+  }, [palette, rail, refresh, matches]);
 
   let view: JSX.Element;
   if (status === "error") {

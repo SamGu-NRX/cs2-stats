@@ -1,25 +1,30 @@
 // Duels: who killed whom (head to head), opening duels and trades per player.
-import type { PlayerRow } from "../../../stats/derive";
+import { useMemo } from "react";
+import { METRIC } from "../../../stats/metrics";
+import { rollup } from "../../../stats/rollup";
+import { TRADE_WINDOW_S } from "../../../stats/rules";
 import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable } from "../../components/DataTable";
 import { FirstKillIcon, TradingGlyph } from "./glyphs";
-import { fmtDiff, fmtMs, fmtPct, fmtRatio } from "../../lib/format";
-import { aimVisibility } from "../../../stats/aim";
+import { fmtMetric, matchLines } from "../../data/engine";
+import { deathOf, killMatrix, killsBy, roundSlice, type MPlayer as PlayerRow } from "../../data/match";
+import { fmtDiff } from "../../lib/format";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
 import { PlayerName, SectionAside } from "../shared";
 import type { TabProps } from "./MatchView";
 
-const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
-
 export default function Duels({ v }: TabProps) {
   const us = v.players.filter((p) => p.team === "us");
   const them = v.players.filter((p) => p.team === "them");
-  const km = v.killMatrix;
+  const km = useMemo(() => killMatrix(v), [v]);
+  const lines = useMemo(() => matchLines(v, "both"), [v]);
+  const m = (p: PlayerRow) => lines[p.pi].summary.m;
+  const metric = (p: PlayerRow, id: string) => METRIC[id].value(lines[p.pi].summary);
   const totalUs = us.reduce((a, p) => a + them.reduce((b, q) => b + km[p.pi][q.pi], 0), 0);
   const totalThem = them.reduce((a, q) => a + us.reduce((b, p) => b + km[q.pi][p.pi], 0), 0);
-  const fk = (t: "us" | "them") => v.players.filter((p) => p.team === t).reduce((a, p) => a + p.c.openingKills, 0);
+  const fk = (t: "us" | "them") => v.players.filter((p) => p.team === t).reduce((a, p) => a + m(p).openingKills, 0);
   return (
     <div className="tabpad duels">
       <Card title="Head to head" aside={<SectionAside label="Kills" value={<><span className="cream">{totalUs}</span><span className="faint">–</span>{totalThem}</>} />}>
@@ -69,11 +74,10 @@ export default function Duels({ v }: TabProps) {
             rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
             columns={[
               { key: "name", label: "Player", align: "l", sort: (p) => p.name, render: (p) => <span className={`name-cell ${p.team}-text`}><PlayerName v={v} pi={p.pi} /></span> },
-              { key: "fk", label: "FK", tip: "Opening kills: the first kill of a round", sort: (p) => p.c.openingKills, render: (p) => p.c.openingKills },
-              { key: "fd", label: "FD", tip: "Opening deaths", sort: (p) => p.c.openingDeaths, firstDir: "asc", render: (p) => p.c.openingDeaths },
-              { key: "att", label: "Attempts", tip: "Share of rounds where you took part in the first kill", sort: (p) => pct(p.c.openingKills + p.c.openingDeaths, p.c.fullRounds), render: (p) => <Num v={fmtRatio(p.c.openingKills + p.c.openingDeaths, p.c.fullRounds)} /> },
-              { key: "succ", label: "Success", colored: true, tip: "Opening duels won", sort: (p) => pct(p.c.openingKills, p.c.openingKills + p.c.openingDeaths), render: (p) => { const x = pct(p.c.openingKills, p.c.openingKills + p.c.openingDeaths); return <span style={{ color: x === null ? undefined : scoreText(toScore(x, 50, 40)) }}><Num v={fmtPct(x)} /></span>; } },
-              { key: "win", label: "Won after", tip: "Rounds won after your opening kill", sort: (p) => pct(p.c.openingWins, p.c.openingKills), render: (p) => <Num v={fmtRatio(p.c.openingWins, p.c.openingKills)} /> },
+              { key: "fk", label: "FK", tip: "Opening kills: the first kill of a round", sort: (p) => m(p).openingKills, render: (p) => m(p).openingKills },
+              { key: "fd", label: "FD", tip: "Opening deaths", sort: (p) => m(p).openingDeaths, firstDir: "asc", render: (p) => m(p).openingDeaths },
+              { key: "att", label: "Attempts", tip: METRIC.openingAttempts.def, sort: (p) => metric(p, "openingAttempts"), render: (p) => <Num v={fmtMetric("openingAttempts", metric(p, "openingAttempts"))} /> },
+              { key: "succ", label: "Success", colored: true, tip: METRIC.openingSuccess.def, sort: (p) => metric(p, "openingSuccess"), render: (p) => { const x = metric(p, "openingSuccess"); return <span style={{ color: x === null ? undefined : scoreText(toScore(x, 50, 40)) }}><Num v={fmtMetric("openingSuccess", x)} /></span>; } },
             ]}
           />
         </Card>
@@ -86,10 +90,10 @@ export default function Duels({ v }: TabProps) {
             rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
             columns={[
               { key: "name", label: "Player", align: "l", sort: (p) => p.name, render: (p) => <span className={`name-cell ${p.team}-text`}><PlayerName v={v} pi={p.pi} /></span> },
-              { key: "tk", label: "Trade kills", tip: "Kills on an enemy who had made a kill less than 5 s earlier", sort: (p) => p.c.tradeKills, render: (p) => p.c.tradeKills },
-              { key: "td", label: "Traded", tip: "Share of your deaths avenged within 5 s", sort: (p) => pct(p.c.tradedDeaths, p.c.fullDeaths), render: (p) => <span className="num">{p.c.tradedDeaths}<span className="faint">/{p.c.fullDeaths}</span></span> },
-              { key: "saved", label: "Saved", tip: "Times you killed an enemy who had hit a teammate in the last 2 s, while the teammate lived", sort: (p) => p.c.savedTeammate, render: (p) => p.c.savedTeammate },
-              { key: "savedby", label: "Saved by", tip: "Times a teammate did that for you", sort: (p) => p.c.savedByTeammate, render: (p) => p.c.savedByTeammate },
+              { key: "tk", label: "Trade kills", tip: `Kills on an enemy who had killed a teammate in the last ${TRADE_WINDOW_S} s`, sort: (p) => m(p).tradeKills, render: (p) => m(p).tradeKills },
+              { key: "td", label: "Traded", tip: METRIC.deathsTradedPct.def, sort: (p) => metric(p, "deathsTradedPct"), render: (p) => <span className="num">{m(p).tradedDeaths}<span className="faint">/{m(p).deaths}</span></span> },
+              { key: "saved", label: "Saved", tip: "Times you killed an enemy who had just hit a teammate, while the teammate lived", sort: (p) => m(p).savedTeammate, render: (p) => m(p).savedTeammate },
+              { key: "savedby", label: "Saved by", tip: "Times a teammate did that for you", sort: (p) => m(p).savedByTeammate, render: (p) => m(p).savedByTeammate },
             ]}
           />
         </Card>
@@ -99,11 +103,15 @@ export default function Duels({ v }: TabProps) {
 }
 
 /** Your fights round by round: who you killed, who killed you, and how you shot. Time to damage and
- *  reaction per round need the visibility gate to open; the metrics update adds reaction per opponent. */
+ *  reaction need mesh visibility, which plugin recordings do not carry. */
 function YourRounds({ v }: { v: TabProps["v"] }) {
-  const gate = v.aim ? aimVisibility(v.aim) : null;
-  const rows = v.roundDetails.filter((r) => r.captured && r.players[v.human] && (r.players[v.human]!.kills.length || r.players[v.human]!.death));
-  const med = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[xs.length >> 1] : null);
+  const gated = !v.visibility;
+  const gate = "Needs view angles and mesh line of sight, which this match file does not carry.";
+  const human = v.human;
+  const rows = useMemo(() => v.rounds.filter((r) => killsBy(r, human).length || deathOf(r, human)).map((r) => ({
+    r, kills: killsBy(r, human), death: deathOf(r, human), s: rollup([roundSlice(v.facts, r.ri)], { player: v.players[human].key }),
+  })), [v, human]);
+  const metric = (s: (typeof rows)[number]["s"], id: string) => fmtMetric(id, METRIC[id].value(s));
   return (
     <Card title="Your duels, round by round" aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
       <div className="tbl-wrap">
@@ -112,30 +120,27 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
             <th className="l"><span className="th">Round</span></th>
             <th className="l"><span className="th">Killed</span></th>
             <th className="l"><span className="th">Died to</span></th>
-            <th><span className="th" data-tip="Hits divided by shots that round">Accuracy</span></th>
-            <th><span className="th" data-tip="Median time from an enemy appearing to your first damage">TTD</span></th>
-            <th><span className="th" data-tip="Median time until your aim moved toward the enemy">Reaction</span></th>
+            <th><span className="th" data-tip={METRIC.accuracy.def}>Accuracy</span></th>
+            <th><span className="th" data-tip={METRIC.timeToDamage.def}>TTD</span></th>
+            <th><span className="th" data-tip={METRIC.reactionTime.def}>Reaction</span></th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => {
-              const pr = r.players[v.human]!;
-              const h = r.human;
+            {rows.map(({ r, kills, death, s }) => {
               const won = r.winner === "us";
               return (
                 <tr key={r.ri}>
-                  <td className="l"><span className={`wl wl--${won ? "W" : "L"}`}>{r.ri + 1}</span></td>
-                  <td className="l"><span className="yrounds__names">{pr.kills.map((k, i) => <span key={i} className="yrounds__kill"><SkullIcon hs={k.headshot} size={10} className={k.headshot ? "skull skull--hs" : "skull"} />{v.players[k.victim].name}</span>)}{!pr.kills.length && <span className="faint">–</span>}</span></td>
-                  <td className="l">{pr.death ? <span className="yrounds__kill"><DeathIcon size={10} className="poor-text" />{pr.death.killer === null ? "World" : v.players[pr.death.killer].name}{pr.death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
-                  <td><Num v={h ? fmtRatio(h.hits, h.shots) : "–"} /></td>
-                  <td>{gate && !gate.validated ? <span className="chip chip--outline" data-tip={gate.reason}>Gated</span> : <Num v={fmtMs(h ? med(h.ttdMs) : null)} />}</td>
-                  <td>{gate && !gate.validated ? <span className="chip chip--outline" data-tip={gate.reason}>Gated</span> : <Num v={fmtMs(h ? med(h.reactMs) : null)} />}</td>
+                  <td className="l"><span className={`wl wl--${won ? "W" : "L"}`}>{r.number}</span></td>
+                  <td className="l"><span className="yrounds__names">{kills.map((k, i) => <span key={i} className="yrounds__kill"><SkullIcon hs={k.headshot} size={10} className={k.headshot ? "skull skull--hs" : "skull"} />{v.players[k.victim].name}</span>)}{!kills.length && <span className="faint">–</span>}</span></td>
+                  <td className="l">{death ? <span className="yrounds__kill"><DeathIcon size={10} className="poor-text" />{death.killer === null ? "World" : v.players[death.killer].name}{death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
+                  <td><Num v={v.entry.hasAim ? metric(s, "accuracy") : "–"} /></td>
+                  <td>{gated ? <span className="chip chip--outline" data-tip={gate}>Gated</span> : <Num v={metric(s, "timeToDamage")} />}</td>
+                  <td>{gated ? <span className="chip chip--outline" data-tip={gate}>Gated</span> : <Num v={metric(s, "reactionTime")} />}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <p className="meta yrounds__note">Reaction against each opponent, and how it compares with theirs, arrives with the metrics update.</p>
     </Card>
   );
 }
