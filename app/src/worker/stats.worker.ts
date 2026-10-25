@@ -77,12 +77,12 @@ let index = new Map<string, { key: string; entry: MatchEntry }>();
 let gen = 0;
 const lru = new Map<string, { key: string; facts: MatchFacts }>();
 
-/** An extracted match folder (host.ts "dev/<folder>/"), read table by table; else a plugin file. */
-const isFolder = (file: string) => file.endsWith("/");
+/** An extracted match folder (host.ts: any path not ending in .json.gz), read table by table; else a plugin file. */
+const isFolder = (file: string) => !file.endsWith(".json.gz");
 
 async function folderTables(file: string): Promise<MatchTables> {
   const names = new Set(JSON.parse(new TextDecoder().decode(await bytes(file))) as string[]);
-  return loadTables((name) => (names.has(name) ? bytes(file + name) : Promise.resolve(null)));
+  return loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)));
 }
 
 async function deriveFile(file: string): Promise<Cached> {
