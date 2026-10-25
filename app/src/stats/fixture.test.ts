@@ -2,7 +2,10 @@
 // against the game. Run it with: python -I reference_matchpage.py <snapshot> out.html events_two_matches.jsonl
 import { beforeAll, describe, expect, test } from "vitest";
 import { deriveMatch, type MatchView } from "./derive";
-import { loadSample, SAMPLE_1714, SAMPLE_1809 } from "./testing/load";
+import path from "node:path";
+import { convertMatch } from "../../tools/legacy";
+import { eventsFor, FIXTURES, MATCHES } from "../../tools/matches";
+import { loadSample, SAMPLE_1714, SAMPLE_1809, SAMPLE_1939 } from "./testing/load";
 
 describe("18:09 match", () => {
   let v: MatchView;
@@ -104,5 +107,26 @@ describe("17:14 match (kill log starts in round 16)", () => {
     expect(v.rounds.filter((r) => r.lite).length).toBe(15);
     // players left in lite rounds come from the game's AliveCT/AliveT
     expect(v.rounds[0].left).toBe(4);
+  });
+});
+
+describe("19:39 match (log joined across a plugin reload)", () => {
+  test("the converter reports the round the reload gap left incomplete", () => {
+    const m = MATCHES.find((x) => x.snapshot === "de_dust2_20261024_193943_match_end.json")!;
+    const { warnings, file } = convertMatch(path.join(FIXTURES, m.snapshot), eventsFor(m));
+    expect(warnings[0]).toBe("kill log covers 20 of 21 rounds; lite rounds: 11");
+    expect(warnings[1]).toBe("round 11: lite, the log has no freeze end");
+    expect(file.firstFullRound).toBe(0);
+    expect(file.recon?.partial).toEqual([10]);
+  });
+  test("game score 13–8 and your 18–14 from the snapshot", async () => {
+    const v = deriveMatch(await loadSample(SAMPLE_1939), SAMPLE_1939);
+    expect(v.score).toEqual({ us: 13, them: 8 });
+    expect(v.result).toBe("W");
+    const h = v.players[v.human];
+    expect([h.c.kills, h.c.deaths]).toEqual([18, 14]); // snapshot: Kills 18, Deaths 14
+    expect(h.c.rounds).toBe(21);
+    expect(h.c.fullRounds).toBe(20);
+    expect(h.c.dmg).toBe(1994); // snapshot Damage, with round 11 from the game's round totals
   });
 });

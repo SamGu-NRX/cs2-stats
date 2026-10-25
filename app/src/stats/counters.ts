@@ -5,7 +5,7 @@ import { BUY_TYPES, teamBuyType, type BuyType } from "./economy";
 import type { RatingInputs } from "./rating";
 import { aliveAtEnd, detectClutches, isEnemyKill, isSave, kastRound, openingKill, roundKills, type Clutch, type Trades } from "./rules";
 import { CT, T, type Side } from "./schema";
-import type { KillSwing } from "./swing";
+import type { KillSwing, SwingResult } from "./swing";
 import { countUtility, emptyUtil, type UtilSlice } from "./utility";
 import { isSniper, isUtility, weaponClass, type WeaponClass } from "./weapons";
 
@@ -144,7 +144,8 @@ function addBasic(c: Counters, r: BasicRound) {
 }
 
 /** Counters for every player in the match, plus per-round facts the match page reuses. */
-export function countMatch(ctx: MatchCtx, trades: Trades, swing: KillSwing[]): { counters: Counters[]; rounds: RoundFacts[] } {
+export function countMatch(ctx: MatchCtx, trades: Trades, swingResult: SwingResult = { swings: [], unknownRounds: new Set(), available: false }): { counters: Counters[]; rounds: RoundFacts[] } {
+  const swing: KillSwing[] = swingResult.swings;
   const m = ctx.m;
   const C = Array.from({ length: ctx.nPlayers }, emptyCounters);
   C.forEach((c) => (c.matches = 1));
@@ -226,6 +227,7 @@ export function countMatch(ctx: MatchCtx, trades: Trades, swing: KillSwing[]): {
 
       addBasic(c, { s, win, own: buy[s], opp: buy[(5 - s) as Side], isPistol, kills, deaths, assists, dmg: dmg[pi], kast, hs });
       c.fullRounds++;
+      if (swingResult.available && !swingResult.unknownRounds.has(ri)) c.swingRounds++;
       c.fullKills += kills;
       c.fullDeaths += deaths;
       if (!won && win !== null) c.fullLost++;
@@ -318,8 +320,6 @@ export function countMatch(ctx: MatchCtx, trades: Trades, swing: KillSwing[]): {
     }
   }
 
-  // Swing exists when the kills carry a round state; a full round without kills then counts as 0.
-  if (swing.length > 0) for (const c of C) c.swingRounds = c.fullRounds;
   return { counters: C, rounds: facts };
 }
 

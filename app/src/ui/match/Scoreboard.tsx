@@ -11,7 +11,9 @@ export function Scoreboard({ v, team }: { v: MatchView; team: TeamId }) {
   const won = team === "us" ? v.score.us : v.score.them;
   const sideNow = v.rounds[v.rounds.length - 1]?.usSide;
   const side = team === "us" ? sideNow : sideNow === 3 ? 2 : 3;
-  const swingTip = `${tipOf("swing")} ${v.model.kind === "stub" ? "Placeholder model: alive counts only. The trained model accounts for both teams' equipment and HP." : "The model accounts for both teams' alive players, HP and equipment."}`;
+  const swingTip = `${tipOf("swing")} ${v.model.kind === "stub"
+    ? "Placeholder model: alive counts only. The trained model accounts for both teams' equipment, HP, the bomb and the clock."
+    : "Win probability comes from a model fitted to CS2RB data (Bishop 2026, CS2RB v1.0, CC BY 4.0), using both teams' alive players, HP, freeze-end equipment, the bomb and the clock."} Rounds with unknown equipment have no swing.`;
   return (
     <section className="glass card" aria-label={team === "us" ? "Your team" : "Opponents"}>
       <div className="card__head">

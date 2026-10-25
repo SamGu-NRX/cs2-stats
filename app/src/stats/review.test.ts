@@ -12,7 +12,7 @@ import { planSync } from "../worker/plan";
 // Players 0..4 are CT, 5..9 are T; player 0 is the human.
 const counters = (b: MatchBuilder) => {
   const ctx = buildCtx(b.build());
-  return countMatch(ctx, computeTrades(ctx), []).counters;
+  return countMatch(ctx, computeTrades(ctx)).counters;
 };
 
 describe("1. flash assists count as assists and for KAST", () => {

@@ -12,7 +12,7 @@ import { computeSwing } from "./swing";
 import { stubModel, type WinModel } from "./winprob";
 
 /** Bump when a definition changes, so cached summaries are rebuilt. */
-export const DERIVE_VERSION = 5;
+export const DERIVE_VERSION = 6;
 
 export type TeamId = "us" | "them";
 
@@ -78,8 +78,8 @@ export interface RoundView {
   kills: KillView[];
   /** enemy damage per player this round */
   dmg: number[];
-  /** swing per player this round */
-  swing: number[];
+  /** swing per player this round; null when unknown (no round states, unknown equipment, or a state the model rejects) */
+  swing: number[] | null;
   clutches: RoundFacts["clutches"];
   saves: number[];
 }
@@ -172,8 +172,9 @@ function rowFor(ctx: MatchCtx, pi: number, c: Counters): PlayerRow {
 export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubModel): MatchView {
   const ctx = buildCtx(m);
   const trades = computeTrades(ctx);
-  const swing = computeSwing(ctx, model);
-  const { counters, rounds: facts } = countMatch(ctx, trades, swing);
+  const swingResult = computeSwing(ctx, model);
+  const swing = swingResult.swings;
+  const { counters, rounds: facts } = countMatch(ctx, trades, swingResult);
   const players = counters.map((c, pi) => rowFor(ctx, pi, c));
   const nRounds = m.rounds.winSide.length;
   const swingByKill = new Map(swing.map((s) => [s.k, s]));
@@ -229,7 +230,7 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
       defuser: m.rounds.defuser[ri],
       buy: { us: f ? f.buy[s] : null, them: f ? f.buy[(5 - s) as Side] : null },
       equip: { us: eqUs.equip, them: eqThem.equip }, money: { us: eqUs.money, them: eqThem.money },
-      kills, dmg, swing: sw, clutches: f?.clutches ?? [],
+      kills, dmg, swing: f && swingResult.available && !swingResult.unknownRounds.has(ri) ? sw : null, clutches: f?.clutches ?? [],
       saves: f && winSide !== null ? [...f.alive].filter((p) => isSave(ctx, ri, p, f.alive)) : [],
     });
   }

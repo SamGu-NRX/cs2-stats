@@ -17,9 +17,9 @@ describe("model adapter (model/export/winprob.ts → winProbabilityCT(state, map
     expect(() => modelFromModule(() => 1.5)).toThrow(/expected a probability between 0 and 1/);
     expect(() => modelFromModule(() => "0.5")).toThrow(/expected a probability/);
   });
-  test("a state the model rejects gets the placeholder's answer", () => {
+  test("a state the model rejects has no answer (its round's swing becomes unknown)", () => {
     const m = modelFromModule((s: RoundState) => { if (s.ctAlive === 0) throw new RangeError("ctAlive"); return 0.5; });
-    expect(m.winProbability(state(0, 3), "de_dust2")).toBe(0);
+    expect(m.winProbability(state(0, 3), "de_dust2")).toBeNull();
   });
   test("the placeholder is labelled as such", () => {
     expect(stubModel.kind).toBe("stub");

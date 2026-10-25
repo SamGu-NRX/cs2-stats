@@ -23,7 +23,8 @@ export type WinProbability = (state: RoundState, map: string) => number;
 export interface WinModel {
   kind: "stub" | "model";
   label: string;
-  winProbability: WinProbability;
+  /** null when the model cannot value the state (it rejects invalid input) */
+  winProbability: (state: RoundState, map: string) => number | null;
 }
 
 /**
@@ -50,7 +51,7 @@ const PROBE: RoundState = { ctAlive: 5, tAlive: 5, ctHp: 500, tHp: 500, ctEquip:
 /**
  * Wraps the model agent's winProbabilityCT. Checks that it is a function and answers the probe
  * state with a probability; throws with the reason otherwise, so the app can show it and keep the
- * placeholder. A state the model rejects (it throws on invalid input) gets the placeholder's answer.
+ * placeholder. A state the model rejects (RangeError on invalid input) has no answer (null).
  */
 export function modelFromModule(fn: unknown): WinModel {
   if (typeof fn !== "function") throw new Error("model/export/winprob.ts does not export a function named winProbabilityCT");
@@ -61,13 +62,13 @@ export function modelFromModule(fn: unknown): WinModel {
   }
   return {
     kind: "model",
-    label: "Trained model",
+    label: "Trained model (CS2RB)",
     winProbability: (s, map) => {
       try {
         const v = f(s, map);
-        return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : stubP(s);
+        return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
       } catch {
-        return stubP(s);
+        return null;
       }
     },
   };

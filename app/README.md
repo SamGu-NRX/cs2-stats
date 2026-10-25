@@ -32,9 +32,12 @@ interface RoundState {
 How the app calls it:
 
 - **When it is bundled:** at build time, only when both `winprob.ts` and its `model.json` exist (`vite.config.ts`). Otherwise `src/stats/no-model.ts` stands in, and the app shows "Placeholder model". Rebuild the app after the model changes.
-- **What it is fed, per kill:** alive counts and HP come from the kill's `state` column. Equipment is the sum of `rounds.equip` over every player on each side. Times are ticks divided by the tick rate. The state after a kill takes one player off the victim's side, with HP and equipment unchanged.
+- **What it is fed, per kill:** alive counts and HP come from the kill's `state` column, before and after the kill.
+  - Equipment is the sum of `rounds.equip` over every player on each side. That matches CS2RB's `ct_equip`/`t_equip`: post-buy value at freeze end, constant for the round. The per-kill `state` equipment, which counts only living players, is not used.
+  - `secondsSinceFreezeEnd` is `(tick − freezeTick) / 64`, and `secondsSincePlant` comes from `rounds.plantTick`.
+- **Unknown swing:** if any player's equipment is null in a round, or the model rejects a state in it (RangeError), that round's swing is unknown and shows "–". It is never a partial sum, and the rest of the match is unaffected.
+- **Attribution:** the swing tooltip cites WPA (Xenopoulos et al. 2020) and CS2RB (Bishop 2026, CC BY 4.0), as in `../model/README.md`.
 - **Check at startup:** the worker calls the function once on a 5v5 start. A missing export, or an answer that is not a probability, keeps the placeholder, and the badge's tooltip shows the error.
-- **Fallback for single kills:** a kill whose state has an unknown field (a bot's equipment in a legacy file), or which the model rejects by throwing, gets the placeholder's answer.
 - **The placeholder** is `ct² / (ct² + t²)` on alive counts, with no evidence behind it.
 
 ## Fields the app reads beyond SCHEMA.md

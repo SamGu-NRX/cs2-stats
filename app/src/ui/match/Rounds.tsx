@@ -38,7 +38,7 @@ function Round({ v, r, focused }: { v: MatchView; r: RoundView; focused: boolean
   const start = r.kills[0]?.alive;
   const states = [start ? (r.usSide === 3 ? start : [start[1], start[0]]) : null, ...r.kills.map((k) => aliveAfter(v, r, k))].filter(Boolean) as [number, number][];
   const dmg = r.dmg.map((d, pi) => ({ d, pi })).filter((x) => x.d > 0).sort((a, b) => b.d - a.d);
-  const mySwing = r.swing[v.human];
+  const mySwing = r.swing ? r.swing[v.human] : null;
   return (
     <section ref={ref} id={`round-${r.ri + 1}`} className={`glass card round ${focused ? "is-focus" : ""}`} aria-label={`Round ${r.ri + 1}`}>
       <div className="round__head">
@@ -48,7 +48,7 @@ function Round({ v, r, focused }: { v: MatchView; r: RoundView; focused: boolean
           : <span className={`pill ${won ? "pill--win" : "pill--loss"}`}><HowIcon how={r.how} size={11} /> {won ? "Won" : "Lost"} · {HOW_TEXT[r.how]}</span>}
         <span className="note">You on <b className={`side side--${r.usSide === 3 ? "ct" : "t"}`}>{r.usSide === 3 ? "CT" : "T"}</b></span>
         {r.captured && <span className="note">{clock(r.durSecs)} · {r.buy.us ? BUY_LABEL[r.buy.us] : "?"} vs {r.buy.them ? BUY_LABEL[r.buy.them] : "?"}</span>}
-        {r.captured && <span tabIndex={0} className={`round__swing num ${mySwing > 0 ? "pos" : mySwing < 0 ? "neg" : "muted"}`} data-tip="Your round swing this round: your share of your team's win-probability gains from kills, minus the loss when you died.">Your swing {swingPct(mySwing)}</span>}
+        {r.captured && <span tabIndex={0} className={`round__swing num ${mySwing === null ? "muted" : mySwing > 0 ? "pos" : mySwing < 0 ? "neg" : "muted"}`} data-tip="Your round swing this round: your share of your team's win-probability gains from kills, minus the loss when you died.">Your swing {swingPct(mySwing)}</span>}
         <span className="note num" style={{ marginLeft: "auto" }}>{r.scoreAfter.us}–{r.scoreAfter.them}</span>
       </div>
       {!r.captured ? (
