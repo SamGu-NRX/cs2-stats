@@ -187,8 +187,10 @@ export const MEASURES = [
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing",
-  // Rating 3.0's other inputs over the rounds swing could value (swingRounds), so all six share one set of rounds
-  "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
+  // eco-adjusted measures over the player-rounds whose every eco value is known (ecoRounds, rating3.ts ecoAdjust)
+  "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
+  // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds
+  "ratedRounds", "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "vSwing",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;

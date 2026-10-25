@@ -40,6 +40,8 @@ export interface Metric {
    */
   needs?: Need[];
   value: (s: Summary) => number | null;
+  /** why value is null for s, for a metric with a rule of its own (Rating 3.0's rated-round gate); compare() reports it */
+  why?: (s: Summary) => string | null;
 }
 
 const per = (a: number, b: number) => (b > 0 ? a / b : null);
@@ -51,7 +53,7 @@ const M: Metric[] = [
   // ---- rating and scoreboard (performance)
   { id: "rating3", label: "Rating 3.0 (approx.)", hltv: "Rating 3.0", kind: "performance", group: "rating", unit: "rating", status: "approx",
     def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md): a linear model in eco-adjusted KPR, ADR, DPR and KAST, multi-kill rounds and swing, with params.json's coefficients.",
-    needs: ["model", "eco"], value: (s) => rating3Of(s).value },
+    needs: ["model", "eco"], value: (s) => rating3Of(s).value, why: (s) => rating3Of(s).reason },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
     def: "Enemy kills (killer and victim on different sides at the kill) per round.", value: (s) => per(s.m.kills, s.m.rounds) },
   { id: "dpr", label: "Deaths per round", hltv: "Deaths per round", kind: "performance", group: "rating", unit: "perRound", status: "exact", lowerIsBetter: true,

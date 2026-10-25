@@ -64,9 +64,12 @@ export interface Percentile {
 /**
  * Why summary s cannot be compared with baselines b on metric m; null when it can. An input counts
  * only when it is known on every row the metric uses; otherwise the reason says how many were known,
- * which is also the coverage note for the value computed over the known rows.
+ * which is also the coverage note for the value computed over the known rows. A metric with its own
+ * rule for having no value (Metric.why) gives that rule's reason first.
  */
 export function notComparable(m: Metric, s: Summary, b: Baselines): string | null {
+  const gap = m.why?.(s) ?? null;
+  if (gap) return `No value: ${gap}`;
   for (const need of m.needs ?? []) {
     if (need === "model") {
       if (b.model === undefined || s.models.some((x) => x !== b.model)) return "Not compared: the pro pool was built with another rating or win-probability model";

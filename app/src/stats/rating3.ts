@@ -58,9 +58,11 @@ export const killPoints = (a: EcoGroup, b: EcoGroup, killerSide: Side) => params
 
 /**
  * Kill points on every kill, and the eco-adjusted measures (ecoKills, ecoDeaths, ecoDmg, ecoKast) on
- * every player-round. A player's group at a kill comes from the best primary they held then
- * (kills.a_/v_best_primary), else their freeze-end equipment value. Damage uses the freeze-end
- * primary. A kill whose groups are unknown counts its raw value and adds to ecoUnknown.
+ * the player-rounds where every eco value they need is known (ecoRounds 1). A player's group at a kill
+ * comes from the best primary they held then (kills.a_/v_best_primary), else their equipment value;
+ * damage uses the freeze-end groups. A kill, assist, death or hit whose groups are unknown leaves the
+ * player-round out of every eco measure instead of counting it at its raw value, so each eco input is
+ * a sum over ecoRounds divided by ecoRounds (rating3.ts valuedRounds).
  */
 export function ecoAdjust(c: Ctx): void {
   const k = c.t.kills;
@@ -85,6 +87,8 @@ export function ecoAdjust(c: Ctx): void {
 
   const known = loadouts(c);
   for (let ri = 0; ri < c.nRounds; ri++) {
+    // players with an eco event this round whose value cannot be computed
+    const unknown = new Set<number>();
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
       // coverage: both players' loadouts recorded for this round (INPUT_COVERAGE.eco)
@@ -97,39 +101,44 @@ export function ecoAdjust(c: Ctx): void {
       const ga = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
       const gb = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);
       kf.ecoPoints = ga && gb ? killPoints(ga, gb, kf.killerSide!) : null;
-    }
-    for (const p of c.pr[ri]) {
-      if (!p) continue;
-      const m = p.m;
-      let kast = 0;
-      let died = false;
-      for (const kf of c.kills[ri]) {
-        const v = kf.ecoPoints ?? 1;
-        if (kf.enemy && kf.killer === p.pi) {
-          m.ecoKills += v;
-          if (kf.ecoPoints === null) m.ecoUnknown++;
-          kast = Math.max(kast, Math.min(1, v));
-        }
-        if (kf.enemy && kf.assister === p.pi && !kf.flashAssist) kast = Math.max(kast, Math.min(1, v));
-        if (kf.victim === p.pi) {
-          died = true;
-          if (kf.enemy) m.ecoDeaths += v;
-          if (kf.traded) kast = 1;
-        }
+      if (kf.ecoPoints === null) {
+        unknown.add(kf.killer!).add(kf.victim);
+        if (kf.assister !== null && !kf.flashAssist) unknown.add(kf.assister);
       }
-      if (!died) kast = 1;
-      m.ecoKast += kast;
     }
+    const dmg = new Map<number, number>();
     for (const i of c.byRound("damages")[ri]) {
       if (!enemyHit(c.t, i)) continue;
       const a = c.idOf(c.t.damages.attacker_steamid[i]);
       const v = c.pi.get(c.t.damages.victim_steamid[i])!;
       const side = c.side[ri][a ?? -1];
-      const row = a === null ? null : c.pr[ri][a];
-      if (!row || !side) continue;
-      const ga = freeze.get(ri * 1024 + a!);
+      if (a === null || !c.pr[ri][a] || !side) continue;
+      const ga = freeze.get(ri * 1024 + a);
       const gb = freeze.get(ri * 1024 + v);
-      row.m.ecoDmg += hitDamage(c.t, i) * (ga && gb ? killPoints(ga, gb, side) : 1);
+      if (ga && gb) dmg.set(a, (dmg.get(a) ?? 0) + hitDamage(c.t, i) * killPoints(ga, gb, side));
+      else unknown.add(a);
+    }
+    for (const p of c.pr[ri]) {
+      if (!p || unknown.has(p.pi)) continue;
+      const m = p.m;
+      m.ecoRounds = 1;
+      m.ecoDmg = dmg.get(p.pi) ?? 0;
+      let kast = 0;
+      let died = false;
+      for (const kf of c.kills[ri]) {
+        if (kf.enemy && kf.killer === p.pi) {
+          m.ecoKills += kf.ecoPoints!;
+          kast = Math.max(kast, Math.min(1, kf.ecoPoints!));
+        }
+        if (kf.enemy && kf.assister === p.pi && !kf.flashAssist) kast = Math.max(kast, Math.min(1, kf.ecoPoints!));
+        if (kf.victim === p.pi) {
+          died = true;
+          if (kf.enemy) m.ecoDeaths += kf.ecoPoints!;
+          if (kf.traded) kast = 1;
+        }
+      }
+      if (!died) kast = 1;
+      m.ecoKast += kast;
     }
   }
 }
@@ -141,30 +150,41 @@ export type Feature = (typeof FEATURES)[number];
 export type R3Inputs = Record<Feature, number>;
 
 /**
- * Copies the eco inputs of every player-round swing could value (swingRounds 1) into the v* measures,
- * so Rating 3.0's six inputs average over one set of rounds. Runs after swing.
+ * Copies the inputs of every player-round both swing and the eco adjustment could value (swingRounds 1
+ * and ecoRounds 1) into the v* measures and counts it in ratedRounds, so Rating 3.0's six inputs
+ * average over one set of rounds. Runs after swing.
  */
 export function valuedRounds(c: Ctx): void {
   for (const rows of c.pr) for (const p of rows) {
-    if (!p || !p.m.swingRounds) continue;
+    if (!p || !p.m.swingRounds || !p.m.ecoRounds) continue;
     const m = p.m;
-    m.vEcoKills = m.ecoKills; m.vEcoDeaths = m.ecoDeaths; m.vEcoDmg = m.ecoDmg; m.vEcoKast = m.ecoKast; m.vMultiKillRounds = m.multiKillRounds;
+    m.ratedRounds = 1;
+    m.vEcoKills = m.ecoKills; m.vEcoDeaths = m.ecoDeaths; m.vEcoDmg = m.ecoDmg; m.vEcoKast = m.ecoKast;
+    m.vMultiKillRounds = m.multiKillRounds; m.vSwing = m.swing;
   }
 }
 
-/** Share of a summary's rounds swing must value for a rating: below it the swing input is too thin. Ours, no fit. */
+/** Share of a summary's rounds that must be rated (ratedRounds) for a rating: below it the inputs are too thin. Ours, no fit. */
 export const MIN_VALUED_SHARE = 0.5;
 
+/** Why a set of rounds has no rating, or null when it has one. */
+export function r3Gap(m: Measures): string | null {
+  if (m.rounds <= 0) return "no rounds";
+  if (m.ratedRounds >= MIN_VALUED_SHARE * m.rounds) return null;
+  if (m.swingRounds < MIN_VALUED_SHARE * m.rounds) return `round win probability known for ${m.swingRounds} of ${m.rounds} rounds; the rating needs half`;
+  return `both the round's win probability and every eco value known for ${m.ratedRounds} of ${m.rounds} rounds; the rating needs half`;
+}
+
 /**
- * The six inputs over the rounds swing valued: KAST and MK in percent, swing in percentage points per
- * round. Null with no rounds, or when swing valued under MIN_VALUED_SHARE of them.
+ * The six inputs over the rated rounds (ratedRounds): KAST and MK in percent, swing in percentage
+ * points per round. Null when r3Gap gives a reason.
  */
 export function r3Inputs(m: Measures): R3Inputs | null {
-  const n = m.swingRounds;
-  if (m.rounds <= 0 || n < MIN_VALUED_SHARE * m.rounds) return null;
+  const n = m.ratedRounds;
+  if (r3Gap(m) !== null) return null;
   return {
     kpr_eco: m.vEcoKills / n, adr_eco: m.vEcoDmg / n, dpr_eco: m.vEcoDeaths / n, kast_eco: (100 * m.vEcoKast) / n,
-    mk: (100 * m.vMultiKillRounds) / n, swing: (100 * m.swing) / n,
+    mk: (100 * m.vMultiKillRounds) / n, swing: (100 * m.vSwing) / n,
   };
 }
 
@@ -189,12 +209,18 @@ export interface Rating3 {
   inputs: R3Inputs | null;
   /** params.json's own word for the model's state ("approximation") */
   status: string;
+  /** why value is null (r3Gap, or the coverage gate); null when there is a rating */
+  reason: string | null;
 }
 
 export function rating3(m: Measures): Rating3 {
   const inputs = r3Inputs(m);
-  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status };
+  return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status, reason: r3Gap(m) };
 }
+
+/** The coverage gate's reason (coverage.ts), or null when the summary passes it. */
+const coverageGap = (s: Summary) =>
+  coveredEnough(s.covered) ? null : `the kill-by-kill log covers ${s.covered.nRounds} of ${s.covered.roundsPlayed} rounds; the rating needs half`;
 
 /**
  * Rating 3.0 of a summary under the one coverage gate (coverage.ts): null when the kept matches' facts
@@ -203,7 +229,8 @@ export function rating3(m: Measures): Rating3 {
  */
 export function rating3Of(s: Summary): Rating3 {
   const r = rating3(s.m);
-  return coveredEnough(s.covered) ? r : { ...r, value: null, inputs: null };
+  const gap = coverageGap(s);
+  return gap ? { ...r, value: null, inputs: null, reason: gap } : r;
 }
 
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */
@@ -229,6 +256,6 @@ export function ratingFromSides(both: Summary, sides: Record<"CT" | "T", Summary
   const base = rating3Of(both);
   const parts = (["CT", "T"] as const).map((s) => ({ r: rating3Of(sides[s]).value, n: sides[s].m.swingRounds })).filter((p) => p.r !== null && p.n > 0);
   const n = parts.reduce((a, p) => a + p.n, 0);
-  if (!coveredEnough(both.covered) || !n) return { ...base, value: null, inputs: null };
+  if (!coveredEnough(both.covered) || !n) return { ...base, value: null, inputs: null, reason: base.reason ?? "neither side has a rating" };
   return { ...base, value: parts.reduce((a, p) => a + p.n * p.r!, 0) / n };
 }
