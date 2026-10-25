@@ -15,7 +15,8 @@ import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
 import { loadTables } from "../stats/load";
-import { winProbSource, type WinProbSource } from "../stats/model-params";
+import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
+import { entryKey as entryKeyOf, factsKey as factsKeyOf } from "./keys";
 import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
@@ -36,8 +37,6 @@ const LRU_FACTS = 4;
 const SUMMARY_CACHE = 48;
 /** Bot career baselines kept, one per set of matches the pages ask about (Profile's and Playstyle's filters). */
 const CAREER_CACHE = 6;
-/** Bump when MatchEntry's shape or what entryOf computes into it changes, so cached entries are rebuilt. */
-const ENTRY_VERSION = 1;
 
 // ---- bytes come from the UI thread, which owns the Tauri bridge
 let rid = 0;
@@ -54,9 +53,12 @@ function bytes(file: string): Promise<ArrayBuffer> {
 let baselinesP: Promise<Baselines> | null = null;
 function baselines(): Promise<Baselines> {
   baselinesP ??= (async () => {
-    const res = await fetch(new URL(`${import.meta.env.BASE_URL}baselines.json`, self.location.href));
+    // revalidated on every load, so a rebuilt file is never read from the HTTP cache
+    const res = await fetch(new URL(`${import.meta.env.BASE_URL}baselines.json`, self.location.href), { cache: "no-cache" });
     if (!res.ok) throw new Error(`baselines.json failed to load (HTTP ${res.status})`);
-    const b = (await res.json()) as Baselines;
+    const text = await res.text();
+    const b = JSON.parse(text) as Baselines;
+    baselinesHash = contentHash(text);
     if (b.version !== 1) throw new Error(`baselines.json: version is ${JSON.stringify(b.version)}, this app reads version 1`);
     return b;
   })();
@@ -76,8 +78,10 @@ const source = () => {
   if (!wp) throw new Error("the stats worker derived a match before meta() chose the win-probability source");
   return wp;
 };
-const factsKey = (e: FileEntry) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${source().kind}`;
-const entryKey = (factsKey: string) => `${factsKey}|e${ENTRY_VERSION}`;
+const factsKey = (e: FileEntry) => factsKeyOf(e, modelFingerprint(source()));
+/** The content hash of the baselines the entries were shown with; set by sync once they load ("none" when they fail). */
+let baselinesHash = "none";
+const entryKey = (k: string) => entryKeyOf(k, baselinesHash);
 
 let index = new Map<string, { key: string; entry: MatchEntry }>();
 /** Increments when the index changes, so cached summaries of the old file set are not reused. */
@@ -237,6 +241,8 @@ const api: Impl = {
     return { source: b.source, built: b.built, n: b.n };
   },
   async sync(entries) {
+    // entries are keyed by the baselines they were shown against
+    await baselines().catch(() => undefined);
     const errors: { file: string; message: string }[] = [];
     const next = new Map<string, { key: string; entry: MatchEntry }>();
     let done = 0;
@@ -313,6 +319,7 @@ const api: Impl = {
   compare: ranking.compare,
   attributes: ranking.attributes,
   style: ranking.style,
+  attributeBlock: ranking.attributeBlock,
   async roles(q) {
     const [t, ct] = await Promise.all([summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT"))]);
     return { T: roleBlend(t, "T"), CT: roleBlend(ct, "CT") };
