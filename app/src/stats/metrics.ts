@@ -44,7 +44,7 @@ const M: Metric[] = [
     def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md). params.json currently carries the retired map-level polynomial as a diagnostic (Rating3.diagnostic is true); label it so until the per-round model lands.",
     value: (s) => rating3(s.m).value },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
-    def: "Enemy kills (killer and victim on different sides at the kill) per round. Matches HLTV on 440 of 440 player-maps.", value: (s) => per(s.m.kills, s.m.rounds) },
+    def: "Enemy kills (killer and victim on different sides at the kill) per round.", value: (s) => per(s.m.kills, s.m.rounds) },
   { id: "dpr", label: "Deaths per round", hltv: "Deaths per round", kind: "performance", group: "rating", unit: "perRound", status: "exact", lowerIsBetter: true,
     def: "Deaths of any cause except a suicide after the round ended, per round.", value: (s) => per(s.m.deaths, s.m.rounds) },
   { id: "adr", label: "ADR", hltv: "Damage per round", kind: "performance", group: "rating", unit: "dmg", status: "exact",
@@ -54,7 +54,7 @@ const M: Metric[] = [
   { id: "mk", label: "Multi-kill rounds", hltv: "Multi-kill", kind: "performance", group: "rating", unit: "pct", status: "exact",
     def: "Rounds with two or more kills.", value: (s) => pct(s.m.multiKillRounds, s.m.rounds) },
   { id: "swing", label: "Round swing", hltv: "Round swing", kind: "performance", group: "rating", unit: "pct", status: "approx",
-    def: "Average change per round in your team's win probability credited to you (swing.ts). r = 0.958 against HLTV over 730 player-maps.",
+    def: "Average change per round in your team's win probability credited to you (swing.ts).",
     value: (s) => (s.m.swingRounds ? (100 * s.m.swing) / s.m.swingRounds : null) },
   { id: "hs", label: "Headshot kills", kind: "performance", group: "rating", unit: "pct", status: "exact", def: "Headshot kills as a share of kills.", value: (s) => pct(s.m.hsKills, s.m.kills) },
 

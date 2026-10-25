@@ -157,10 +157,9 @@ export function buildCtx(t: MatchTables): Ctx {
 
 /**
  * Damage one hit counts for ADR: the hurt event's damage, capped at the victim's health before it.
- * This is HLTV's figure. The in-game scoreboard counts health lost instead (dmg_health_capped),
- * which is one HP more on hits where the event dropped fractional damage: 6,184 of 27,680
- * non-lethal hits on the 44 pro maps. With health lost, 157 of 440 HLTV ADRs were within 0.5; with
- * this, 398 are. 41 of the 42 misses are on the ten demos recorded from round 1 live.
+ * This is HLTV's figure. The in-game scoreboard counts health lost instead (dmg_health_capped), which
+ * is one HP more on hits where the event dropped fractional damage (VALIDATION.md, pnpm
+ * scoreboard-variants).
  */
 export function hitDamage(t: MatchTables, i: number): number {
   // A hit the extractor rebuilt from a health drop (damages.source = health) has no event damage; the
@@ -177,8 +176,8 @@ function killFacts(c: Ctx): KillFact[][] {
   const rows: number[][] = Array.from({ length: c.nRounds }, () => []);
   for (let i = 0; i < k.n; i++) { const ri = c.riOf(k.round[i]); if (ri !== undefined) rows[ri].push(i); }
   return rows.map((list, ri) => {
-    // A suicide after the round has ended is not a death (HLTV: 4 of 4 such deaths left out on the
-    // pro maps, while bomb deaths after the end tick count).
+    // A suicide after the round has ended is not a death; a bomb death after the end tick is
+    // (HLTV's counts, VALIDATION.md).
     const kept = list.filter((i) => !(k.is_suicide[i] && k.tick[i] > c.t.rounds.end_tick[ri]));
     const out = kept.map((i): KillFact => {
       const killer = c.idOf(k.attacker_steamid[i]);

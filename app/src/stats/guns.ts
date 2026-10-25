@@ -29,8 +29,9 @@ export function guns(c: Ctx): WeaponFact[] {
     const shotGun = new Map<string, string>();
     if (s) for (const i of c.byRound("shots")[ri]) shotGun.set(`${s.steamid[i]}:${s.tick[i]}`, s.weapon[i]);
     for (const i of c.byRound("damages")[ri]) {
+      // A rebuilt hit (damages.source = health) names no weapon; the same-tick shot names the gun.
       const named = d.weapon[i];
-      const w = named && isGun(named) ? shotGun.get(`${d.attacker_steamid[i]}:${d.tick[i]}`) ?? named : named;
+      const w = named === null || isGun(named) ? shotGun.get(`${d.attacker_steamid[i]}:${d.tick[i]}`) ?? named : named;
       if (!w || !enemyHit(c.t, i) || !isGun(w) || isUtility(w)) continue;
       const p = c.idOf(d.attacker_steamid[i])!;
       if (!rows[p]) continue;

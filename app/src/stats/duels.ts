@@ -2,12 +2,11 @@
 // make, and whether a teammate was close enough to trade their death (positions needed).
 import { enemyHit, type Ctx } from "./derive";
 import { TRADE_WINDOW_S } from "./rules";
-import { weaponClass } from "./weapons";
+import { isGun } from "./guns";
 
 /** A teammate within this 2D distance (world units) of a death could have traded it. See TRADE_DISTANCE's evidence in METRICS.md. */
 export const TRADE_DISTANCE = 1000;
 
-const GUN = new Set(["pistol", "smg", "heavy", "rifle", "sniper"]);
 
 export function duels(c: Ctx): void {
   const d = c.t.damages;
@@ -36,7 +35,7 @@ export function duels(c: Ctx): void {
     if (s) for (const i of c.byRound("shots")[ri]) {
       const p = c.idOf(s.steamid[i]);
       const row = p === null ? null : rows[p];
-      if (row && GUN.has(weaponClass(s.weapon[i]))) row.m.gunShots++;
+      if (row && isGun(s.weapon[i])) row.m.gunShots++;
     }
 
     if (!c.t.positions) continue;

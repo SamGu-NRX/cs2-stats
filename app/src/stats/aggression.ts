@@ -15,14 +15,14 @@ export interface AggroFact {
   contactS: number | null;
   /** 1 + teammates whose first contact came strictly earlier */
   contactRank: number | null;
-  /** the team's first contact (rank 1), made while the player moved at PEEK_MIN_SPEED or more */
+  /** the team's first contact (rank 1), as the attacker, made while moving at PEEK_MIN_SPEED or more */
   entry: boolean;
   /** furthest progress toward the enemy spawn in the opening phase: 0 at own spawn, 1 at the enemy's */
   push: number | null;
   /** the team's buy class is eco or half */
   lowBuy: boolean;
-  /** the player spent ECO_BELOW_PER_PLAYER or more by freeze end */
-  bought: boolean;
+  /** the player spent ECO_BELOW_PER_PLAYER or more by freeze end; null when the spend is unknown */
+  bought: boolean | null;
 }
 
 export interface AggroAgg {
@@ -39,24 +39,26 @@ export function foldAggro(a: AggroAgg, f: AggroFact): void {
   if (f.contactS !== null) { a.contactRounds++; a.contactSecs += f.contactS; a.rankSum += f.contactRank!; }
   if (f.entry) a.entries++;
   if (f.push !== null) { a.pushRounds++; a.pushSum += f.push; }
-  if (f.lowBuy) { a.lowBuyRounds++; if (f.bought) a.lowBuyBuys++; }
+  if (f.lowBuy && f.bought !== null) { a.lowBuyRounds++; if (f.bought) a.lowBuyBuys++; }
 }
 
 /**
  * Each player's first contact per round: the earliest engagement tick, as attacker or victim, with
  * mesh line of sight not blocked by smoke, or with the attacker's first hit. Key ri * 1024 + pi;
- * the value is the tick and the player's 2D speed then.
+ * the value is the tick, the player's 2D speed then (null when unknown), and whether they were the
+ * engagement's attacker.
  */
-function firstContacts(c: Ctx): Map<number, { tick: number; speed: number }> {
-  const out = new Map<number, { tick: number; speed: number }>();
+type Contact = { tick: number; speed: number | null; attacker: boolean };
+function firstContacts(c: Ctx): Map<number, Contact> {
+  const out = new Map<number, Contact>();
   const G = c.t.engagements, E = c.t.engagement_ticks;
   if (!G || !E) return out;
   const spans = engagementRows(c);
-  const note = (ri: number, pi: number | undefined, tick: number, vx: number | null, vy: number | null) => {
+  const note = (ri: number, pi: number | undefined, tick: number, vx: number | null, vy: number | null, attacker: boolean) => {
     if (pi === undefined) return;
     const key = ri * 1024 + pi;
     const cur = out.get(key);
-    if (!cur || tick < cur.tick) out.set(key, { tick, speed: vx === null || vy === null ? 0 : Math.hypot(vx, vy) });
+    if (!cur || tick < cur.tick) out.set(key, { tick, speed: vx === null || vy === null ? null : Math.hypot(vx, vy), attacker });
   };
   for (let g = 0; g < G.n; g++) {
     const span = spans.get(G.engagement_id[g]);
@@ -69,16 +71,17 @@ function firstContacts(c: Ctx): Map<number, { tick: number; speed: number }> {
       while (row + 1 < span[1] && E.tick[row] < hit) row++;
     }
     if (row === Infinity) continue;
-    const ri = G.round[g] - 1;
-    note(ri, c.pi.get(G.attacker_steamid[g]), E.tick[row], E.a_vel_x[row], E.a_vel_y[row]);
-    note(ri, c.pi.get(G.victim_steamid[g]), E.tick[row], E.v_vel_x[row], E.v_vel_y[row]);
+    const ri = c.riOf(G.round[g]);
+    if (ri === undefined) continue;
+    note(ri, c.pi.get(G.attacker_steamid[g]), E.tick[row], E.a_vel_x[row], E.a_vel_y[row], true);
+    note(ri, c.pi.get(G.victim_steamid[g]), E.tick[row], E.v_vel_x[row], E.v_vel_y[row], false);
   }
   return out;
 }
 
 export function deriveAggro(c: Ctx): AggroFact[] {
   const visOk = c.t.engagements !== null && c.t.engagement_ticks !== null && c.t.match.visibility_status[0] === "ok";
-  const contact = visOk ? firstContacts(c) : new Map<number, { tick: number; speed: number }>();
+  const contact = visOk ? firstContacts(c) : new Map<number, Contact>();
   const P = c.t.positions;
   const tr = tracks(c);
 
@@ -108,14 +111,15 @@ export function deriveAggro(c: Ctx): AggroFact[] {
       if (vis && own) {
         contactS = (own.tick - fe!) / c.tickRate;
         contactRank = 1 + rows.filter((q) => q && q.side === p.side && q.pi !== p.pi && (contact.get(ri * 1024 + q.pi)?.tick ?? Infinity) < own.tick).length;
-        entry = contactRank === 1 && own.speed >= PEEK_MIN_SPEED;
+        entry = contactRank === 1 && own.attacker && own.speed !== null && own.speed >= PEEK_MIN_SPEED;
       }
 
       let push: number | null = null;
       const from = spawn[p.side], to = spawn[p.side === "CT" ? "T" : "CT"];
       const track = tr.get(ri * 1024 + p.pi);
-      if (P && fe !== null && from && to && track) {
-        const dx = to[0] - from[0], dy = to[1] - from[1], d2 = dx * dx + dy * dy;
+      const dx = to && from ? to[0] - from[0] : 0, dy = to && from ? to[1] - from[1] : 0, d2 = dx * dx + dy * dy;
+      // with both spawn means on one point there is no direction to push along
+      if (P && fe !== null && from && to && track && d2 > 0) {
         const end = openingEnd(c, ri, p.pi);
         for (const i of track) {
           if (!P.is_alive[i] || P.tick[i] < fe || P.tick[i] > end) continue;
@@ -125,7 +129,7 @@ export function deriveAggro(c: Ctx): AggroFact[] {
       }
 
       const lowBuy = p.ownBuy === "eco" || p.ownBuy === "half";
-      out.push({ ri, pi: p.pi, vis, contactS, contactRank, entry, push, lowBuy, bought: (p.spent ?? 0) >= ECO_BELOW_PER_PLAYER });
+      out.push({ ri, pi: p.pi, vis, contactS, contactRank, entry, push, lowBuy, bought: p.spent === null ? null : p.spent >= ECO_BELOW_PER_PLAYER });
     }
   }
   return out;
@@ -143,12 +147,12 @@ export const AGGRESSION_METRICS: Metric[] = [
     def: `Your place (1 = first) among teammates in making first contact, averaged over rounds where you made contact. Teammates who never made contact are not ranked. ${CONTACT}`,
     value: (s) => per(s.aggression.rankSum, s.aggression.contactRounds) },
   { id: "entryAttempts", label: "Entry attempts", kind: "identity", group: "aggression", unit: "pct", status: "approx",
-    def: `Rounds where you made your team's first contact while moving at ${PEEK_MIN_SPEED} u/s or more, whether or not it produced the opening kill. ${CONTACT}`,
+    def: `Rounds where you made your team's first contact as the attacker, moving at ${PEEK_MIN_SPEED} u/s or more, whether or not it produced the opening kill. ${CONTACT}`,
     value: (s) => pct(s.aggression.entries, s.aggression.visRounds) },
   { id: "pushDepth", label: "Push depth", kind: "identity", group: "aggression", unit: "pct", status: "approx",
     def: "Your furthest point toward the enemy spawn before the round's first kill or your death, as a share of the straight line between the two spawns (0% your spawn, 100% theirs). Each spawn is the mean position of that side's players at freeze end; 4 Hz positions.",
     value: (s) => pct(s.aggression.pushSum, s.aggression.pushRounds) },
   { id: "lowBuyBuys", label: "Buys on team saves", kind: "identity", group: "aggression", unit: "pct", status: "exact",
-    def: `Rounds where your team was on an eco or half buy (economy.ts) and you had spent $${ECO_BELOW_PER_PLAYER.toLocaleString("en-US")} or more by freeze end, as a share of your team's eco and half-buy rounds.`,
+    def: `Rounds where your team was on an eco or half buy (economy.ts) and you had spent $${ECO_BELOW_PER_PLAYER.toLocaleString("en-US")} or more by freeze end, as a share of your team's eco and half-buy rounds where your spend is known.`,
     value: (s) => pct(s.aggression.lowBuyBuys, s.aggression.lowBuyRounds) },
 ];

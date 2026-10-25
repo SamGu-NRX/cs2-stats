@@ -15,7 +15,7 @@ const GATE = new Set(["k", "d", "kast", "adr"]);
 const perMap = new Map<string, number>();
 
 for (const dir of proMapDirs()) {
-  const facts = derive(await loadDir(dir));
+  const facts = derive(await loadDir(dir, []));
   const j = joinHltv(facts, hltvMaps());
   const name = path.relative(path.join(dir, "../.."), dir);
   if (!j) { misses.push(`${name}: no HLTV map joins`); continue; }

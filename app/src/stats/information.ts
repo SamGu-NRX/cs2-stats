@@ -2,20 +2,12 @@
 // spotted-state changes per spotter and target). It lags real visibility, which is acceptable for
 // information but not for aim (SCHEMA-v1.md, Visibility). Bots are never spotters in the table.
 //
-// The radar state in GOTV demos is sparse. On 97 v1 pro maps, in-round spotted time (clipped as
-// below) was 9,461 spotter-target seconds against 33,331 seconds of mesh line of sight not blocked
-// by smoke. On the alliance vs nemiga Cache map the median spotted stretch lasts 0.52 s. These
+// The radar state in GOTV demos is sparse next to mesh line of sight (VALIDATION.md), so these
 // metrics measure radar spotting, not sight.
 import type { Ctx } from "./derive";
 import type { Metric } from "./metrics";
 
-/**
- * A teammate's kill counts as set up by your spot when you had the victim spotted at some moment in
- * the SPOT_ASSIST_S seconds before it. Ours, no fit. On 97 v1 pro maps, the gap from a non-killing
- * teammate's last spot of the victim to the kill falls from about 800 cases per second within 1 s,
- * to 420 per second at 2 to 3 s, 280 at 3 to 4 s, and 70 at 10 to 20 s. There is no knee; 3 s keeps
- * the part well above that background.
- */
+/** A teammate's kill counts as set up by your spot when you had the victim spotted at some moment in the SPOT_ASSIST_S seconds before it. Ours, no fit. */
 export const SPOT_ASSIST_S = 3;
 
 export interface InfoFact {
@@ -45,9 +37,7 @@ export function foldInfo(a: InfoAgg, f: InfoFact): void {
 
 /**
  * One round's spotted intervals [from, to) per spotter, clipped to freeze end, round end and both
- * players' deaths. A dead player's radar state stays set until the next round resets it. On the
- * alliance vs nemiga Cache map, 1,358 s of raw spotted time become 171 s inside rounds and 104 s
- * while both players live.
+ * players' deaths. A dead player's radar state stays set until the next round resets it.
  */
 function spotIntervals(c: Ctx, ri: number, rows: number[]): Map<number, { target: number; from: number; to: number }[]> {
   const S = c.t.spotted!;
@@ -80,7 +70,7 @@ function spotIntervals(c: Ctx, ri: number, rows: number[]): Map<number, { target
 export function deriveInfo(c: Ctx): InfoFact[] {
   const S = c.t.spotted;
   const byRound: number[][] = Array.from({ length: c.nRounds }, () => []);
-  if (S) for (let i = 0; i < S.n; i++) { const ri = S.round[i] - 1; if (ri >= 0 && ri < c.nRounds) byRound[ri].push(i); }
+  if (S) for (let i = 0; i < S.n; i++) { const ri = c.riOf(S.round[i]); if (ri !== undefined) byRound[ri].push(i); }
   if (S) for (const l of byRound) l.sort((a, b) => S.tick[a] - S.tick[b]);
   const out: InfoFact[] = [];
   for (let ri = 0; ri < c.nRounds; ri++) {

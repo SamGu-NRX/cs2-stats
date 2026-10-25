@@ -61,3 +61,12 @@ it("measures exposure from the onset to the first gun shot, and skips exposures 
   expect(facts([window(0, 1000, 1300, () => 0, between(1100, 1200))], [1115]).exposures).toEqual([15 / TICK_RATE]);
   expect(facts([window(0, 1000, 1300, () => 0, between(1000, 1200))], [1115]).exposures).toEqual([]);
 });
+
+it("needs the reversal after sight breaks, and treats an unknown smoke state as not visible", () => {
+  // fails if a direction change while still exposed makes a shoulder peek, or a null smoke flag opens an exposure
+  const turnsWhileSeen = (t: number) => (t >= 1103 && t < 1106 ? -200 : 200);
+  expect(facts([window(0, 1000, 1300, turnsWhileSeen, between(1100, 1109))]).peek).toEqual({ peeks: 1, shoulder: 0, jiggle: 0, wide: 1 });
+  const unknownSmoke = window(0, 1000, 1300, outAndBack, between(1100, 1109));
+  for (const r of unknownSmoke.rows) r.smoke_blocked = null;
+  expect(facts([unknownSmoke]).peek.peeks).toBe(0);
+});
