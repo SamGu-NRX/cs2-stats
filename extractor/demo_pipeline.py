@@ -291,9 +291,41 @@ def bind_children_to_this_process() -> None:
 
 
 def append_jsonl(path: Path, obj: dict) -> None:
+    """Append one JSON line in a single write, flushed and fsynced. A torn tail left by a crash is cut first,
+    so the new line never lands in the middle of a broken one."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, default=extract._json_default) + "\n")
+    line = (json.dumps(obj, default=extract._json_default) + "\n").encode("utf-8")
+    with open(path, "ab+") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell():
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                f.seek(0)
+                data = f.read()
+                keep = data.rfind(b"\n") + 1
+                log.warning("%s: dropping a torn last line (%d bytes)", path.name, len(data) - keep)
+                f.truncate(keep)
+        f.seek(0, os.SEEK_END)
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """Rows of a JSONL file. A malformed final line (a crash mid-append) is skipped and logged; a malformed
+    line anywhere else is corruption and raises."""
+    if not path.exists():
+        return []
+    lines = [x for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = []
+    for i, x in enumerate(lines):
+        try:
+            rows.append(json.loads(x))
+        except json.JSONDecodeError:
+            if i != len(lines) - 1:
+                raise
+            log.warning("%s: skipping a torn last line", path.name)
+    return rows
 
 
 def fail_reason(res: dict, log_path: Path) -> str | None:
@@ -312,7 +344,7 @@ def replace_old_extractions(results: dict, new_dirs: set[Path]) -> None:
     """Delete the listed old folder of each map this archive re-extracted (same demo name and size)."""
     if not NEEDS_REEXTRACT.exists():
         return
-    rows = [json.loads(x) for x in NEEDS_REEXTRACT.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = read_jsonl(NEEDS_REEXTRACT)
     sizes = {(r.get("dem_file"), r.get("dem_bytes")) for r in results.values() if r.get("ok")}
     keep = []
     for row in rows:
@@ -341,13 +373,7 @@ def freeze_code() -> None:
 
 
 def read_ledger() -> dict[str, dict]:
-    out = {}
-    if LEDGER.exists():
-        for line in LEDGER.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                rec = json.loads(line)
-                out[rec["id"]] = rec
-    return out
+    return {rec["id"]: rec for rec in read_jsonl(LEDGER)}
 
 
 # ---------------------------------------------------------------------------
