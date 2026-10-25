@@ -34,11 +34,10 @@ export const RATING_POOLED = "Pooled over rounds: the six inputs are summed over
 /**
  * A match whose kill-by-kill log covers under half its rounds (a converted log that holds the first
  * rounds as totals only) gets no rating of its own, on either side: the rating of its few covered
- * rounds is not the match's rating. The worker applies it to match lines and, summed over the
- * matches, to pooled ratings; the rounds still count in a pooled rating that passes it.
+ * rounds is not the match's rating. Such a match is also left out of career views (careerEntries).
  */
 export const R3_MIN_COVERAGE = 0.5;
-export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log.";
+export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log, so it is left out of career views.";
 export const ratedMatch = (m: { nRounds: number; roundsPlayed: number }) => m.nRounds >= R3_MIN_COVERAGE * m.roundsPlayed;
 /** A match entry's own rating, null under the coverage rule. */
 export const entryRating = (e: MatchEntry) => e.line.rating;
@@ -187,13 +186,15 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
 }
 
 /**
- * The matches career views read (Home, Profile, Playstyle, Career aim): finished ones only, so an
- * abandoned match neither appears in Form nor moves an average. The Matches list shows every match
- * and labels the unfinished ones.
+ * The one match set every career number reads (the sidebar, Home, Profile, Playstyle, Career aim and
+ * Weapons): finished matches whose kill-by-kill log covers at least half their rounds. An unfinished
+ * match or a partial converted log neither appears in a career list nor moves an average, so the
+ * sidebar, the Rating 3.0 tile and Form's pooled line agree. The Matches list shows every match and
+ * labels the others.
  */
-export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete);
+export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete && ratedMatch(s.match));
 
-export const INCOMPLETE_TIP = "Not finished: left out of Home, Profile, Playstyle and Career aim.";
+export const INCOMPLETE_TIP = "Not finished: left out of career views (Home, Profile, Playstyle, Career aim, Weapons).";
 
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {
