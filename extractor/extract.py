@@ -196,7 +196,8 @@ def check_purchase_cost(item: str, cost: int) -> str | None:
 # Validation (pure functions over DataFrames; unit-tested)
 # ---------------------------------------------------------------------------
 
-def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreboard: pd.DataFrame) -> list[dict]:
+def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreboard: pd.DataFrame,
+                        departed: pd.DataFrame | None = None) -> list[dict]:
     """Compare event-derived K/D/A, and the per-round damage counter, with the final-tick scoreboard.
 
     Definitions, each reproduced exactly on the two test demos:
@@ -209,12 +210,14 @@ def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreb
       rounds (the game's own damage_total, read per round). The hit table is
       checked against it separately (hit_table_checks), so a hit the demo lost
       cannot decide this check.
-    A player with events but no final-tick controller (a disconnect) is noted,
-    not failed. kills carries steamids as UInt64 and uses the kills table's
-    column names.
+    A player with events but no final-tick controller left before the end. departed holds such players'
+    counters as they stood at their disconnect (its tick column says where), and they are checked the same
+    way; one with no departed row is noted, not failed. kills carries steamids as UInt64 and uses the kills
+    table's column names.
     """
     checks: list[dict] = []
     sb = scoreboard.set_index("steamid")
+    dep = departed.set_index("steamid") if departed is not None else pd.DataFrame()
     enemy = kills[~kills.is_teamkill & ~kills.is_suicide & kills.attacker_steamid.notna()]
     tk = kills[kills.is_teamkill & ~kills.is_suicide]
     sui = kills[kills.is_suicide]
@@ -223,11 +226,15 @@ def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreb
     # the scoreboard does not count that (seen on a pro demo).
     credited = (kills.assister_side != kills.v_side).fillna(True).astype(bool)
     for sid in sorted(involved | set(sb.index)):
-        if sid not in sb.index:
+        if sid in sb.index:
+            row, where = sb.loc[sid], ""
+        elif sid in dep.index:
+            row = dep.loc[sid]
+            where = f"left before the end; counters read at his disconnect, tick {int(row.tick)}"
+        else:
             checks.append(dict(check="present_on_scoreboard", steamid=int(sid), expected=None, actual=None,
                                ok=True, fatal=False, note="absent from final scoreboard (disconnect)"))
             continue
-        row = sb.loc[sid]
         k = int((enemy.attacker_steamid == sid).sum())
         n_tk = int((tk.attacker_steamid == sid).sum())
         n_sui = int((sui.victim_steamid == sid).sum())
@@ -236,16 +243,16 @@ def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreb
         dmg = int(game_damage.get(int(sid), 0))
         sb_k = int(row.kills_total)
         k_ok = sb_k == k or (n_tk + n_sui > 0 and sb_k == k - n_tk - n_sui)
-        note = f"teamkills={n_tk} suicides={n_sui}" if n_tk + n_sui else ""
+        note = "; ".join(n for n in (where, f"teamkills={n_tk} suicides={n_sui}" if n_tk + n_sui else "") if n)
         checks.append(dict(check="kills", steamid=int(sid), expected=sb_k, actual=k, ok=k_ok, fatal=True, note=note))
         for name, exp, act in (("deaths", row.deaths_total, d), ("assists", row.assists_total, a)):
             checks.append(dict(check=name, steamid=int(sid), expected=int(exp), actual=act,
-                               ok=int(exp) == act, fatal=True, note=""))
+                               ok=int(exp) == act, fatal=True, note=where))
         checks.append(dict(check="damage", steamid=int(sid), expected=int(row.damage_total), actual=dmg,
-                           ok=int(row.damage_total) == dmg, fatal=True, note=""))
+                           ok=int(row.damage_total) == dmg, fatal=True, note=where))
         hs = int(((enemy.attacker_steamid == sid) & enemy.headshot).sum())
         checks.append(dict(check="headshot_kills", steamid=int(sid), expected=int(row.headshot_kills_total),
-                           actual=hs, ok=int(row.headshot_kills_total) == hs, fatal=False, note=""))
+                           actual=hs, ok=int(row.headshot_kills_total) == hs, fatal=False, note=where))
     return checks
 
 
@@ -615,6 +622,99 @@ def buy_type(round_no: int, team_equip: float, max_rounds: int) -> str:
 # demoparser2 stage
 # ---------------------------------------------------------------------------
 
+# Valve matchmaking demos skip ticks at round transitions: on the six checked, 1-3 consecutive ticks right
+# after most round starts, and on one the tick after the last round end, while game_time runs on across the
+# gap. A read at a skipped tick returns no rows, so a value the extractor reads at one tick comes from the
+# first tick the demo has at or after it, at most MAX_TICK_GAP ticks later. 3 is the longest gap seen; 8 is
+# margin, not a measured bound.
+MAX_TICK_GAP = 8
+
+
+def parse_at(parser, props: list[str], ticks, required: bool = True) -> pd.DataFrame:
+    """parser.parse_ticks(props) at each of ticks, a skipped tick read from the next one the demo has.
+
+    Rows keep the requested tick in their tick column, so callers look them up by the tick they asked for.
+    required: raise when a tick has no recorded tick within MAX_TICK_GAP after it; otherwise leave it out.
+    """
+    want = sorted({int(t) for t in ticks})
+    if not want:
+        return pd.DataFrame(columns=["tick", "steamid", "name"] + list(props))
+    df = parser.parse_ticks(props, ticks=sorted({t + k for t in want for k in range(MAX_TICK_GAP + 1)}))
+    have = np.sort(df.tick.unique()) if len(df) else np.array([], dtype=np.int64)
+    parts, lost = [], []
+    for t in want:
+        i = np.searchsorted(have, t)
+        if i < len(have) and have[i] <= t + MAX_TICK_GAP:
+            parts.append(df[df.tick == have[i]].assign(tick=t))
+        else:
+            lost.append(t)
+    if lost and required:
+        raise RuntimeError(f"the demo has no tick within {MAX_TICK_GAP} ticks at or after {lost[:5]}")
+    return pd.concat(parts, ignore_index=True) if parts else df.iloc[:0]
+
+
+def scoreboard_baseline(parser, rounds: pd.DataFrame, match_start: int) -> pd.DataFrame:
+    """BASELINE_PROPS per player before the first counted round: zero for a whole match, the earlier parts'
+    totals for a later part of a split recording (one demo's second part starts at 8-8 with kills and damage
+    carried over). Empty for a round 1 recorded already live.
+
+    Read where the tables start counting: round 1's start, or the tick after begin_new_match when that comes
+    later (1-3 ticks later on both HLTV fixtures and all six Valve demos), since the game resets its counters
+    there. Not at freeze end, as before: a Valve player who disconnected in round 1's freeze time died to
+    "world", the game counted that death, and so does the kills table, so a baseline read after it took the
+    death off the scoreboard again.
+    """
+    fe1 = rounds.freeze_end_tick.iloc[0]
+    if pd.isna(fe1):
+        return pd.DataFrame(columns=["tick", "steamid", "name"] + BASELINE_PROPS)
+    tick = min(max(int(rounds.start_tick.iloc[0]), match_start + 1), int(fe1))
+    return parse_at(parser, BASELINE_PROPS, [tick])
+
+
+def start_side_teams(snap: pd.DataFrame) -> dict[int, str]:
+    """Team names for a match whose server set no distinct clan names: "ct_start" or "t_start", the side the
+    player's team was on in round 1.
+
+    snap: (tick, steamid, team_num) side snapshots, round 1's tick first. A player first seen on a later tick
+    takes the name of the teammates already named on his side there; if nobody on his side is named yet, the
+    name the other side does not hold. A Valve wingman demo had a slot empty in round 1 that a player filled
+    from round 7, and naming players by round 1 alone left him with no team on the scoreboard.
+    """
+    names: dict[int, str] = {}
+    snap = snap[snap.team_num.isin([2, 3]) & snap.steamid.notna()]
+    for i, (t, g) in enumerate(snap.sort_values("tick", kind="stable").groupby("tick", sort=True)):
+        if i == 0:
+            side_name = {3: "ct_start", 2: "t_start"}
+        else:
+            side_name = {}
+            for side, sg in g.groupby("team_num"):
+                known = [names[int(s)] for s in sg.steamid if int(s) in names]
+                if known:
+                    side_name[int(side)] = max(sorted(set(known)), key=known.count)
+            if len(set(side_name.values())) < len(side_name):
+                raise ValueError(f"tick {t}: both sides hold players of team {next(iter(side_name.values()))}")
+            if not side_name:
+                raise ValueError(f"tick {t}: no player on either side was seen before; teams cannot be named")
+            if len(side_name) == 1:
+                (side, n), = side_name.items()
+                side_name[5 - side] = "t_start" if n == "ct_start" else "ct_start"
+        for s, side in zip(g.steamid, g.team_num):
+            names.setdefault(int(s), side_name[int(side)])
+    return names
+
+
+def blinds_vs_event(blinds: pd.DataFrame, tick, victim, attacker, duration) -> dict:
+    """The rebuilt blinds against the demo's own player_blind events (tick, victim, attacker, duration), for a
+    demo that has them. A non-fatal check: on six Valve demos the two agreed on all 148 blinds, which is
+    the evidence that the rebuild GOTV demos rely on is right."""
+    key = lambda t, v, a, d: (int(t), int(v), None if pd.isna(a) else int(a), round(float(d), 3))
+    ours = {key(*r) for r in zip(blinds.tick, blinds.victim_steamid, blinds.attacker_steamid, blinds.duration)}
+    game = {key(*r) for r in zip(tick, victim, attacker, duration) if not pd.isna(r[1])}
+    return dict(check="blinds_match_player_blind", expected=len(game), actual=len(ours & game), ok=ours == game,
+                fatal=False, note=f"rebuilt={len(ours)} only_rebuilt={sorted(ours - game)[:3]} "
+                                  f"only_event={sorted(game - ours)[:3]}" if ours != game else "")
+
+
 def _events(parser, names, props):
     if not names:
         return {}
@@ -742,8 +842,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         # winner (one pro demo: a world suicide at 78957 inside the 78153-97787 attempt raised
         # deaths_total 7 -> 8 and stayed counted, while the 45420-57646 attempt rolled back).
         settle = restore_settle_ticks(rate)
-        counters = parser.parse_ticks(["kills_total", "deaths_total"],
-                                      ticks=sorted({t for a_, b_ in voided for t in (a_, b_ + settle)}))
+        counters = parse_at(parser, ["kills_total", "deaths_total"],
+                            {t for a_, b_ in voided for t in (a_, b_ + settle)})
         total_at = (counters.kills_total + counters.deaths_total).groupby(counters.tick).sum()
         rolled_back, aborted = split_restores(voided, total_at.to_dict(), rate)
         if aborted:
@@ -803,25 +903,20 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         rounds["team_tick"] = [int(f) if not pd.isna(f) else int(e) - 1
                                for f, e in zip(rounds.freeze_end_tick, rounds.end_tick)]
         pos = parser.parse_ticks(POSITION_PROPS, ticks=sample)
-        econ_raw = parser.parse_ticks(ECON_PROPS, ticks=sorted(set(fe_ticks) | set(rounds.team_tick)))
-        sb = parser.parse_ticks(SCOREBOARD_PROPS, ticks=[final_tick])
-        if sb.empty:
+        econ_raw = parse_at(parser, ECON_PROPS, set(fe_ticks) | set(rounds.team_tick))
+        sb = parse_at(parser, SCOREBOARD_PROPS, [final_tick], required=False)
+        if sb.empty:  # a demo that ends on the tick after its last round end
             sb = parser.parse_ticks(SCOREBOARD_PROPS, ticks=[final_tick - 1])
         # Team scores are read one tick after the last round's end, where they already include it. The
         # final tick can be the next round's start, which at halftime swaps team names and scores
         # (seen on a demo cut at round 13).
-        score_at = parser.parse_ticks(["team_rounds_total", "team_clan_name", "team_num"], ticks=[last_end + 1])
+        score_at = parse_at(parser, ["team_rounds_total", "team_clan_name", "team_num"], [last_end + 1])
         # The game's damage counter at each round boundary (see game_damage below).
         starts = [int(t) for t in rounds.start_tick]
         # A round's damage is committed on the next round's start tick (the last round's by the final tick).
         boundary = starts[1:] + [final_tick]
-        dmg_counter = parser.parse_ticks(["damage_total"], ticks=sorted(set(boundary)))
-        # Counters before the first counted round: zero for a whole match; the earlier parts' totals for a later
-        # part of a split recording (one demo's second part starts at 8-8 with kills and damage carried over).
-        # Read at round 1's freeze end: no kill happens in freeze time and damage commits between rounds.
-        fe1 = rounds.freeze_end_tick.iloc[0]
-        base = parser.parse_ticks(BASELINE_PROPS, ticks=[int(fe1)]) if not pd.isna(fe1) else pd.DataFrame(
-            columns=["steamid", "name"] + BASELINE_PROPS)
+        dmg_counter = parse_at(parser, ["damage_total"], boundary)
+        base = scoreboard_baseline(parser, rounds, match_start)
     # Bots have no SteamID (demoparser2 reports 0); they are keyed by bot_id(user_id, name).
     raw_bots = pos[(pos.steamid == 0) & pos.name.notna() & pos.team_num.isin([2, 3])]
     bots = {str(n): bot_id(u, str(n)) for n, u in raw_bots.groupby("name").user_id.first().items()}
@@ -835,12 +930,14 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         df["steamid"] = resolve_ids(df.steamid, df.name, bots)
     # Teams are named by clan name. When the server set no distinct clan names (one pro
     # demo: both empty, so the two teams merged into one with 13 wins), each player is named instead by the
-    # side his team started on, read from round 1's side snapshot.
-    r1 = econ_raw[(econ_raw.tick == int(rounds.team_tick.iloc[0])) & econ_raw.team_num.isin([2, 3])]
+    # side his team started on (start_side_teams), from the side snapshots in time order, round 1's first.
+    # Valve matchmaking demos never carry clan names.
+    r1_tick = int(rounds.team_tick.iloc[0])
+    r1 = econ_raw[(econ_raw.tick == r1_tick) & econ_raw.team_num.isin([2, 3])]
     clan = r1.groupby("team_num").team_clan_name.agg(lambda n: n.mode().iat[0] if len(n.mode()) else "")
     if not (len(clan) == 2 and all(str(n).strip() for n in clan) and clan.iloc[0] != clan.iloc[1]):
-        start_side = {int(s_): ("ct_start" if t_ == 3 else "t_start") for s_, t_ in zip(r1.steamid, r1.team_num)
-                      if not pd.isna(s_)}
+        snaps = pd.concat([df[["tick", "steamid", "team_num"]] for df in (econ_raw, score_at, sb)], ignore_index=True)
+        start_side = start_side_teams(snaps[snaps.tick >= r1_tick])
         for df in (econ_raw, sb, score_at):
             df["team_clan_name"] = [start_side.get(int(s_)) if not pd.isna(s_) else None for s_ in df.steamid]
     if ctx.velocity is None:  # truncated demo: demoparser2's position-differenced velocity instead
@@ -1242,6 +1339,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         bl["is_team_flash"] = pd.Series([a is not None and a == v for a, v in zip(a_s, v_s)], index=bl.index,
                                         dtype=bool) & ~bl.is_self
         T["blinds"] = bl[bl["round"] > 0]
+        if "player_blind" in present:  # Valve matchmaking demos have it; GOTV demos do not
+            pb = stamp(parser.parse_event("player_blind"))
+            ctx.info["player_blind_check"] = blinds_vs_event(
+                T["blinds"], pb.tick[pb["round"] > 0], pid(pb, "user")[pb["round"] > 0],
+                pid(pb, "attacker")[pb["round"] > 0], col(pb, "blind_duration")[pb["round"] > 0])
 
     # ----- every player's state at every tick, and the map mesh checked against the kills
     S = player_state(pd.concat(state_parts, ignore_index=True))
@@ -1363,13 +1465,31 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # Damage passes on the game's own counter; the hit table is checked against it per round, where a
     # round boundary read one tick early credits some round more than the game counted and fails the map.
     gd = player_rounds.groupby("steamid").game_damage.sum()
-    checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, sb_part) \
+    # A player who left before the end (an abandon) has no final-scoreboard row. His counters are read at
+    # his last disconnect instead (a Valve demo: the abandoner's kills, deaths, assists and damage there
+    # equal the tables'), less the same baseline as everyone's.
+    dc = ev("player_disconnect")
+    on_board = {int(s_) for s_ in sb.steamid}
+    gone_at: dict[int, int] = {}
+    for s_, t_ in zip(pid(dc, "user"), dc.tick) if len(dc) else ():
+        if not pd.isna(s_) and int(s_) not in on_board and match_start <= int(t_) <= final_tick:
+            gone_at[int(s_)] = max(gone_at.get(int(s_), 0), int(t_))
+    departed = parse_at(parser, BASELINE_PROPS, set(gone_at.values()), required=False)
+    departed["steamid"] = resolve_ids(departed.steamid, departed.name, bots)
+    departed = departed.loc[np.array([not pd.isna(s_) and gone_at.get(int(s_)) == int(t_)
+                                      for s_, t_ in zip(departed.steamid, departed.tick)], dtype=bool)].copy()
+    for c in BASELINE_PROPS:
+        departed[c] = [int(v) - (int(at_start[c].get(s_, 0)) if s_ in at_start.index and not pd.isna(at_start[c].get(s_))
+                                 else 0) for s_, v in zip(departed.steamid, departed[c])]
+    checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, sb_part, departed) \
         + validate_rounds(rounds, final_score)
     hit_checks, unattributed_hp = hit_table_checks(dmg, player_rounds)
     checks += hit_checks
     gl = ctx.info["grenade_link"]
     checks.append(dict(check="grenade_throws_linked", expected=gl["throws"], actual=gl["linked"],
                        ok=gl["throws"] == gl["linked"], fatal=False, note=f"projectiles={gl['projectiles']}"))
+    if "player_blind_check" in ctx.info:
+        checks.append(ctx.info["player_blind_check"])
     # Rows where the game's m_unCurrentEquipmentValue differs from inventory + armor + kit priced
     # from PRICE_FILE. Both columns are stored.
     ctx.info.update(dict(header=header, convars=cvars, final_score=final_score, teams=teams,
@@ -2016,7 +2136,10 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
                     voided_windows=json.dumps(info["voided_windows"]),
                     convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
-                    unavailable_fields=json.dumps(UNAVAILABLE),
+                    unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
+                        **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "
+                                                        "this demo's own player_blind events are the check "
+                                                        "blinds_match_player_blind"}),
                     extra=json.dumps(ctx.meta_extra, default=str))
         ctx.tables["demoparser2"]["match"] = pd.DataFrame([match])
 
