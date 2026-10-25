@@ -142,6 +142,8 @@ public sealed class Recorder
         _pendingThrows.Clear();
         ResetLive();
         Capturing = true;
+        // A failure before this capture (at map load, or the spawn self-check) belongs in its file too.
+        if (Los.Failure != null) Meta.Env.LosError ??= Los.Failure;
         RoundActive = false;
         Ri = Nil.V;
         LastRound = Nil.V;
@@ -214,8 +216,7 @@ public sealed class Recorder
         if (freezeTickIfLive != Nil.V)
         {
             _round.FreezeTick = freezeTickIfLive;
-            Live = true;
-            _freezeOver = true;
+            GoLive();
         }
     }
 
@@ -237,6 +238,15 @@ public sealed class Recorder
     {
         if (!RoundActive) return;
         _round.FreezeTick = tick;
+        GoLive();
+    }
+
+    /// <summary>
+    /// A round becomes live: at freeze end, or at once when capture starts mid-round. Either way the
+    /// file records the visibility source in use and, if line of sight failed earlier, why.
+    /// </summary>
+    private void GoLive()
+    {
         Live = true;
         _freezeOver = true;
         NoteVisSource(Los.Enabled ? "los" : "mask");

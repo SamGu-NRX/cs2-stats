@@ -227,6 +227,25 @@ public class RecorderLosTests
         Assert.True(r.Los.Enabled);
     }
 
+    /// <summary>
+    /// Fails if a capture started mid-round (plugin loaded or resumed during a live round, so no freeze
+    /// end follows) omits the visibility source and an earlier failure (audit PluginMidRoundError/Source).
+    /// </summary>
+    [Fact]
+    public void AMidRoundStartRecordsAnEarlierFailureAndTheMaskSource()
+    {
+        var sink = new ListSink();
+        var r = new Recorder(sink, _frames, new PerfCounter(), _ => { });
+        r.AttachLos(new FakeProbe());
+        r.DisableLos("first trace returned no result", 0); // at map load, before any capture
+        r.StartCapture(new MatchMeta { Id = "00112233445566778899aabbccddeeff", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z", Env = new EnvInfo { Plugin = "t", MaxRounds = 24 } });
+        r.PlayerIndex("76561190000000001", "me", false);
+        r.SetHuman(H);
+        r.BeginRound(3, 5000, 2, 1, partial: true, freezeTickIfLive: 4000);
+        r.Flush();
+        Assert.Equal(("mask", "first trace returned no result"), (sink.Store.Meta.Env.VisSource, sink.Store.Meta.Env.LosError));
+    }
+
     [Fact]
     public void FileRoundTripKeepsLosRowsAndEnv()
     {
