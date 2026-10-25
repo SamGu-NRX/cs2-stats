@@ -27,7 +27,7 @@ it("reads the complete version CURRENT names, falls back to the flat folder, and
   expect(mapTablesDir(map("empty", { "notes.txt": "" }))).toBeNull();
   expect(mapTablesDir(map("no-complete", { CURRENT: V1, [`${V1}/match.parquet`]: "x" }))).toHaveProperty("skipped");
   expect(mapTablesDir(map("short", { CURRENT: V1, [`${V1}/match.parquet`]: "x", [`${V1}/COMPLETE`]: JSON.stringify({ "match.parquet": 9 }) }))).toHaveProperty("skipped");
-  expect(mapTablesDir(map("retired", { RETIRED: "", CURRENT: V2, [`${V2}/match.parquet`]: "new", [`${V2}/COMPLETE`]: JSON.stringify({ "match.parquet": 3 }) }))).toHaveProperty("skipped");
+  expect(mapTablesDir(map("retired", { RETIRED: "stale: bad demo\nby: x", CURRENT: V2, [`${V2}/match.parquet`]: "new", [`${V2}/COMPLETE`]: JSON.stringify({ "match.parquet": 3 }) }))).toEqual({ skipped: "retired (stale: bad demo)" });
   expect(() => mapTablesDir(map("bad", { CURRENT: "../elsewhere" }))).toThrow(/not a version folder/);
 });
 
