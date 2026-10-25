@@ -22,7 +22,7 @@ An engagement is one attacker facing one victim on the opposite team. It is trig
 
 Triggers of one ordered pair less than 1.5 s apart extend the same engagement. The window runs from 1.0 s before the first trigger to 1.0 s after the last, inside the round (freeze end, or round start for a round recorded already live, to round end). It is capped at 8 s from its start: a capped window has `truncated = true`, and the next trigger opens a new engagement that starts after it. Windows of one pair never overlap. `engagement_ticks` has every tick of every window. Every shot, misses included, stays in `shots`; `engagement_ticks.a_shot_fired` points to it by tick.
 
-Hit-only windows would drop encounters where nobody lands a shot, which biases reaction, pre-aim and spray metrics. When `match.visibility_status` is not `ok`, triggers 1 and 2 cannot fire, so only damage creates engagements; the engine must treat such a map as visibility-unavailable, not as a map without sightings.
+Hit-only windows would drop encounters where nobody lands a shot, which biases reaction, pre-aim and spray metrics. When `match.visibility_status` is not `ok`, triggers 1 and 2 cannot fire, so only damage and kills create engagements; the engine must treat such a map as visibility-unavailable, not as a map without sightings.
 
 ## Visibility
 - **`mesh_visible`** (per engagement tick, directed): an awpy `VisibilityChecker` raycast against the map's collision mesh from the attacker's eye to the victim's eye, or to the victim's chest (eye − 16 units, an approximation) when the eye ray is blocked. Doors, props and breakables in their live state are not in the mesh.
@@ -105,7 +105,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `tick_rate` | Float32 | no | ticks per second (playback ticks / playback time). Divide tick differences by this; never assume 64 |
 | `trade_window_s` | Float32 | no | window for trade flags, s |
 | `unavailable_fields` | String | no | JSON: data the demo does not carry, and what replaces it |
-| `visibility_status` | String | no | ok | no_mapdata | no_mesh | mesh_mismatch. Anything but ok means mesh_visible is null and only damage triggers engagements |
+| `visibility_status` | String | no | ok | no_mapdata | no_mesh | mesh_mismatch. Anything but ok means mesh_visible is null and only damage and kills trigger engagements |
 | `voided_windows` | String | no | JSON [[from, to], ...] tick ranges dropped as backup restores |
 | `truncated` | Boolean | no | the demo is cut off mid-file (awpy refuses it); tables cover the rounds up to the last complete one |
 | `velocity_source` | String | no | networked (m_vecVelocity via awpy) or position_diff (demoparser2, used for a truncated demo) |
