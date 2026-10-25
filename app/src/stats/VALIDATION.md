@@ -119,10 +119,11 @@ out at a scripted tick against a known crosshair offset, logged mouse deltas, sc
 counter-strafe sequences, full sprays at a stationary target, a bot strafing at known speed, and two
 bots at a known angular separation.
 
-Cached facts (the same command, rerun on 361 maps with presence kept per player and side): a map's
-`MatchFacts` JSON is 526 KB at the median and 1,187 KB at most; presence is 44 KB of that at the median
-and 62 KB at most. Presence per player-round, at the same 128-unit cells, was 119 KB at the median (600
-KB facts) on 332 maps.
+Cached facts (the same command, on 403 maps, presence kept per player and side): a map's
+`MatchFacts` JSON is 527 KB at the median and 1,187 KB at most. Median KB per part: per-player-round
+rows (`pr`) 146, aim 96, kills 66, movement 47, presence 44, grenades 37, weapons 27, aggression 27,
+information 17, rounds 15, utilq 3, players 1. Presence per player-round, at the same 128-unit cells,
+was 119 KB at the median (600 KB facts) on 332 maps.
 
 Radar spotting: 19,327 spotter-target seconds against 70,644 seconds of mesh line of sight on the
 maps with both, so the information metrics measure radar state, not sight. Jiggle peeks are rare

@@ -28,12 +28,15 @@ for (const dir of proMapDirs()) {
     spottedSecs += f.information.reduce((s, x) => s + x.spotSecs, 0);
   }
 }
-// cached facts per map (IndexedDB holds them as JSON): whole facts and the presence part, median and max KB
+// cached facts per map (IndexedDB holds them as JSON): whole facts, the presence part, and the median of
+// each part, in KB
 {
   const kb = (x: unknown) => JSON.stringify(x).length / 1024;
   const med = (xs: number[]) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)];
   const all = facts.map(kb), pres = facts.map((f) => kb(f.presence));
   console.log(`facts per map: median ${med(all).toFixed(0)} KB, max ${Math.max(...all).toFixed(0)} KB; presence median ${med(pres).toFixed(0)} KB, max ${Math.max(...pres).toFixed(0)} KB`);
+  const parts = Object.keys(facts[0]) as (keyof MatchFacts)[];
+  console.log(`  median KB per part: ${parts.map((k) => `${k} ${med(facts.map((f) => kb(f[k]))).toFixed(0)}`).join(", ")}`);
 }
 const names = new Map<string, string>();
 for (const f of facts) for (const p of f.players) if (!p.bot) names.set(p.id, p.name);
