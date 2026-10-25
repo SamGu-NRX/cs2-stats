@@ -159,6 +159,13 @@ export interface ShotFact {
   firstHits: number;
   /** rifle and sniper first bullets on the ground: [accurate, too early, late reversal, no stop, unknown] */
   cs: number[];
+  /**
+   * Rifle bursts (two or more shots of one rifle, each within RESET_GAP_S of the last, the research's
+   * cut) whose every bullet has a known speed, and the sum over them of the share of bullets fired
+   * faster than PEEK_MIN_SPEED. A burst counts for its gun.
+   */
+  bursts: number;
+  movingShare: number;
 }
 
 /**
@@ -234,6 +241,9 @@ export interface AimAgg {
   first: number;
   firstHits: number;
   cs: number[];
+  /** rifle bursts and their summed moving-bullet shares (ShotFact) */
+  bursts: number;
+  movingShare: number;
   sprays: number;
   /** sprays with at least one target switch, switches, and switches that hit the new target */
   swSprays: number;
@@ -261,7 +271,7 @@ export interface AimAgg {
 
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
-  shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
+  shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
   sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
   dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0,
 });
@@ -291,6 +301,7 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.shots += f.shots; a.hits += f.hits; a.sight += f.sight; a.sightHits += f.sightHits;
     a.first += f.first; a.firstHits += f.firstHits;
     for (let i = 0; i < 5; i++) a.cs[i] += f.cs[i];
+    a.bursts += f.bursts; a.movingShare += f.movingShare;
   } else {
     a.sprays++;
     if (f.sw > 0) a.swSprays++;
@@ -671,6 +682,16 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
       const perGun = new Map<string, ShotFact>();
       let run: number[] = [];
       const finish = () => { if (run.length >= SPRAY_MIN) out.push(spray(c, view, ps, ri, pi, run, hitOn)); run = []; };
+      // rifle bursts for the moving-bullet share (ShotFact.bursts); gun shots only
+      let burst: number[] = [];
+      const endBurst = () => {
+        if (burst.length >= 2 && weaponClass(S.weapon[burst[0]]) === "rifle" && burst.every((i) => S.speed_2d[i] !== null)) {
+          const f = perGun.get(S.weapon[burst[0]])!;
+          f.bursts++;
+          f.movingShare += burst.filter((i) => S.speed_2d[i]! > PEEK_MIN_SPEED).length / burst.length;
+        }
+        burst = [];
+      };
       let prev = -1;
       for (const i of list) {
         const w = S.weapon[i];
@@ -678,7 +699,10 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
         const reset = S.recoil_index[i] !== null && S.recoil_index[i]! >= 0 && S.recoil_index[i]! <= RESET_RECOIL && spaced;
         if (isGun(w)) {
           let f = perGun.get(w);
-          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0] }));
+          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0 }));
+          const last = burst[burst.length - 1];
+          if (last !== undefined && (S.weapon[last] !== w || S.tick[i] - S.tick[last] > RESET_GAP_S * rate)) endBurst();
+          burst.push(i);
           const h = hitOn.has(key(S.tick[i], pi));
           f.shots++;
           if (h) f.hits++;
@@ -704,6 +728,7 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
         prev = i;
       }
       finish();
+      endBurst();
       for (const f of perGun.values()) out.push(f);
     }
   });
@@ -850,6 +875,9 @@ export const AIM_METRICS: Metric[] = [
   { id: "stopBuffer", label: "Stop before shooting", kind: "identity", group: "aim", unit: "ms", status: "approx", needs: ["sight"],
     def: "Median time between stopping and your first shot at an enemy.",
     value: (s) => ms(median(s.aim.stopBuf)) },
+  { id: "movingSpray", label: "Shooting while moving", kind: "identity", group: "aim", unit: "pct", status: "approx",
+    def: "Share of your rifle burst bullets fired while moving.",
+    value: (s) => pct(s.aim.movingShare, s.aim.bursts) },
 ];
 
 /** Contact measures that describe how you take a fight; aggression.ts combines them into one scale. */
