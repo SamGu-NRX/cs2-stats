@@ -243,6 +243,33 @@ def test_disconnected_player_is_noted_not_failed():
     assert any(c["check"] == "present_on_scoreboard" and c["steamid"] == D for c in checks)
 
 
+def test_a_player_who_left_is_checked_against_his_counters_at_the_disconnect():
+    # A Valve abandoner has no final-scoreboard row; his counters where he disconnected are the reference,
+    # so a wrong count for him fails the map instead of passing as a note.
+    kills, dmg, sb = _base()
+    board = sb[sb.steamid != D]
+    left = sb[sb.steamid == D].assign(tick=4000)
+    checks = ex.validate_scoreboard(kills, dmg, board, left)
+    assert _fatal_failures(checks) == []
+    assert {c["check"] for c in checks if c.get("steamid") == D} == {"kills", "deaths", "assists", "damage",
+                                                                     "headshot_kills"}
+    wrong = left.assign(deaths_total=2)
+    assert [(c["check"], c["steamid"]) for c in _fatal_failures(ex.validate_scoreboard(kills, dmg, board, wrong))] \
+        == [("deaths", D)]
+
+
+def test_every_player_in_any_table_is_checked_not_only_killers_and_victims():
+    # Review of PR 19: an abandoner who only assisted, or only appears in other tables, got no check at all.
+    kills, dmg, sb = _base()
+    board = sb[sb.steamid != B]
+    left = sb[sb.steamid == B].assign(tick=4000, assists_total=0)  # B assisted once
+    bad = _fatal_failures(ex.validate_scoreboard(kills, dmg, board, left))
+    assert [(c["check"], c["steamid"]) for c in bad] == [("assists", B)]
+    E = 55  # in player_rounds or positions only, never on the scoreboard, no disconnect read
+    checks = ex.validate_scoreboard(kills, dmg, sb, None, {E})
+    assert [c["check"] for c in checks if c.get("steamid") == E] == ["present_on_scoreboard"]
+
+
 def _rounds(n, winners):
     return pd.DataFrame(dict(round=range(1, n + 1), start_tick=[i * 100 for i in range(n)],
                              freeze_end_tick=[i * 100 + 10 for i in range(n)],
@@ -874,7 +901,7 @@ def _rounds_frame(**override):
     row.update(round=1, start_tick=1, freeze_end_tick=100, end_tick=900, started_live=False, aborted=False,
                winner_side="CT", reason="t_killed", voided_attempts=0, ct_team="A", t_team="B", winner_team="A",
                ct_team_score_after=1, t_team_score_after=0, duration_s=12.5, ct_equip_value=4000, t_equip_value=4000,
-               ct_buy_type="pistol", t_buy_type="pistol", ct_money_start=4000, t_money_start=4000)
+               ct_money_start=4000, t_money_start=4000)
     row.update(override)
     return pd.DataFrame([row])
 
@@ -1571,3 +1598,17 @@ def test_a_writer_survives_a_retirement_that_deletes_its_map_folder_first(tmp_pa
     assert not retirer.is_alive() and not writer.is_alive() and not errors, errors
     assert ex.resolve_map_dir(m) is not None
 
+
+
+def test_a_kill_whose_event_lacks_the_killfeed_modifiers_writes_null_not_a_failed_map():
+    # attackerblind / attackerinair were copied with col(), which fills NaN for a field the event lacks,
+    # into columns declared non-null: the writer then rejected the whole map. They are now null there.
+    without = pd.DataFrame(dict(tick=[100, 200]))
+    flags = ex.kill_modifiers(without)
+    assert {c: s.isna().tolist() for c, s in flags.items()} == {"attackerblind": [True, True],
+                                                               "attackerinair": [True, True]}
+    ex._to_polars(_one_row("kills", attackerblind=None, attackerinair=None), "kills")
+    # When the event has them, they come through as recorded.
+    with_flags = pd.DataFrame(dict(tick=[100, 200], attackerblind=[True, False], attackerinair=[False, True]))
+    flags = ex.kill_modifiers(with_flags)
+    assert flags["attackerblind"].tolist() == [True, False] and flags["attackerinair"].tolist() == [False, True]
