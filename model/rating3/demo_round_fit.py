@@ -259,15 +259,15 @@ def build_duel_events(root: Path, joins: list[dict]) -> tuple[list[dict], list[d
     targets = []
     for join in joins:
         directory = root / join["demo"]
-        required = ("economy.parquet", "kills.parquet")
-        if not all((directory / name).exists() for name in required):
+        if not (directory / "kills.parquet").exists():
             continue
         hltv = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
         target_by_name = parse_targets(hltv)
-        economy = pq.read_table(directory / "economy.parquet").to_pylist()
         player_rounds, _ = load_player_rounds(directory)
+        if not player_rounds:
+            continue
         kills = pq.read_table(directory / "kills.parquet").to_pylist()
-        names = {str(row["steamid"]): normalize(row["name"]) for row in economy}
+        names = {str(row["steamid"]): normalize(row["name"]) for row in player_rounds}
         round_players = {(int(row["round"]), str(row["steamid"])): row for row in player_rounds}
         for name, target in target_by_name.items():
             for side in (None, "ct", "t"):
@@ -494,6 +494,31 @@ def aggregate(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, list[dict], lis
     return np.asarray(designs, dtype=float), np.asarray(targets, dtype=float), metadata, list(FEATURES)
 
 
+def aggregate_identity(rows: list[dict]) -> list[dict]:
+    by_player = defaultdict(list)
+    for row in rows:
+        by_player[(row["map"], row["player"])].append(row)
+    records = []
+    for (map_name, player), player_rows in by_player.items():
+        target = player_rows[0]["target"]
+        by_side = {
+            side: [row for row in player_rows if row["side"] == side]
+            for side in ("ct", "t")
+        }
+        if not by_side["ct"] or not by_side["t"]:
+            continue
+        records.append({
+            "map": map_name,
+            "player": player,
+            "ct": np.asarray([np.mean([row[feature] for row in by_side["ct"]]) for feature in FEATURES]),
+            "t": np.asarray([np.mean([row[feature] for row in by_side["t"]]) for feature in FEATURES]),
+            "ct_rounds": len(by_side["ct"]),
+            "t_rounds": len(by_side["t"]),
+            "target": target,
+        })
+    return records
+
+
 def attach_targets(rows: list[dict], root: Path) -> list[dict]:
     cache = {}
     output = []
@@ -544,6 +569,99 @@ def fit_stage(X: np.ndarray, y: np.ndarray, metadata: list[dict], features: tupl
         "groups": groups,
         "predicted": predicted,
         "design": design,
+    }
+
+
+def fit_identity_stage(records: list[dict], features: tuple[str, ...]) -> dict:
+    indexes = [FEATURES.index(feature) for feature in features]
+    raw = np.vstack([np.vstack([record["ct"][indexes], record["t"][indexes]]) for record in records])
+    means = raw.mean(axis=0)
+    scales = raw.std(axis=0)
+    scales[scales == 0] = 1.0
+    coefficients_size = len(features) + 1
+    design = []
+    targets = []
+    labels = []
+    for record in records:
+        ct = np.r_[1.0, (record["ct"][indexes] - means) / scales]
+        tt = np.r_[1.0, (record["t"][indexes] - means) / scales]
+        total_weight = record["ct_rounds"] + record["t_rounds"]
+        ct_weight = record["ct_rounds"] / total_weight
+        t_weight = record["t_rounds"] / total_weight
+        design.extend([
+            np.r_[ct, np.zeros(coefficients_size)],
+            np.r_[np.zeros(coefficients_size), tt],
+            np.r_[ct_weight * ct, t_weight * tt],
+        ])
+        targets.extend([record["target"]["ct"], record["target"]["t"], record["target"]["total"]])
+        labels.extend(["ct", "t", "total"])
+    design_array = np.asarray(design)
+    target_array = np.asarray(targets)
+    coefficients = np.linalg.lstsq(design_array, target_array, rcond=None)[0]
+    predicted = design_array @ coefficients
+    groups = {}
+    for label in ("total", "ct", "t"):
+        mask = np.asarray(labels) == label
+        groups[label] = score(target_array[mask], predicted[mask])
+    return {
+        "features": list(features),
+        "means": means.tolist(),
+        "scales": scales.tolist(),
+        "coefficients": coefficients.tolist(),
+        "fit": score(target_array, predicted),
+        "groups": groups,
+    }
+
+
+def identity_quantization_floor(result: dict, records: list[dict], features: tuple[str, ...]) -> dict:
+    indexes = [FEATURES.index(feature) for feature in features]
+    means = np.asarray(result["means"])
+    scales = np.asarray(result["scales"])
+    coefficients = np.asarray(result["coefficients"])
+    width = len(features) + 1
+    rng = np.random.default_rng(0)
+    base_predictions = []
+    perturbations = []
+    for record in records:
+        ct = np.r_[1.0, (record["ct"][indexes] - means) / scales]
+        tt = np.r_[1.0, (record["t"][indexes] - means) / scales]
+        ct_weight = record["ct_rounds"] / (record["ct_rounds"] + record["t_rounds"])
+        t_weight = 1.0 - ct_weight
+        base_predictions.extend([
+            np.r_[ct, np.zeros(width)] @ coefficients,
+            np.r_[np.zeros(width), tt] @ coefficients,
+            np.r_[ct_weight * ct, t_weight * tt] @ coefficients,
+        ])
+    for _ in range(200):
+        predictions = []
+        for record in records:
+            noisy_ct = record["ct"][indexes].copy()
+            noisy_t = record["t"][indexes].copy()
+            for j, feature in enumerate(features):
+                if feature not in {"eco_kills", "eco_deaths", "swing"}:
+                    continue
+                noisy_ct[j] += rng.uniform(-0.5, 0.5) * (1.0 / record["ct_rounds"] if feature != "swing" else 0.01)
+                noisy_t[j] += rng.uniform(-0.5, 0.5) * (1.0 / record["t_rounds"] if feature != "swing" else 0.01)
+            ct = np.r_[1.0, (noisy_ct - means) / scales]
+            tt = np.r_[1.0, (noisy_t - means) / scales]
+            ct_weight = record["ct_rounds"] / (record["ct_rounds"] + record["t_rounds"])
+            t_weight = 1.0 - ct_weight
+            predictions.extend([
+                np.r_[ct, np.zeros(width)] @ coefficients,
+                np.r_[np.zeros(width), tt] @ coefficients,
+                np.r_[ct_weight * ct, t_weight * tt] @ coefficients,
+            ])
+        perturbations.append(predictions)
+    perturbed = np.asarray(perturbations)
+    base = np.asarray(base_predictions)
+    half_width = (perturbed.max(axis=0) - perturbed.min(axis=0)) / 2.0
+    return {
+        "rating_display": {"mae": 0.0025, "max": 0.005},
+        "input_quantization": {
+            "mae": float(np.mean(np.abs(perturbed.mean(axis=0) - base))),
+            "max_half_width": float(half_width.max()),
+            "p95_half_width": float(np.quantile(half_width, 0.95)),
+        },
     }
 
 
@@ -603,6 +721,15 @@ def main() -> None:
             "groups": result["groups"],
             "rounding_floor": floor,
         }
+    identity_records = aggregate_identity(rows)
+    identity_features = tuple(STAGES["expanded_interactions"])
+    identity_result = fit_identity_stage(identity_records, identity_features)
+    results["side_identity_expanded_interactions"] = {
+        "features": identity_result["features"],
+        "fit": identity_result["fit"],
+        "groups": identity_result["groups"],
+        "rounding_floor": identity_quantization_floor(identity_result, identity_records, identity_features),
+    }
     exact_game_damage_maps = sum(
         int((args.data / join["demo"] / "player_rounds.parquet").exists()) for join in joins
     )

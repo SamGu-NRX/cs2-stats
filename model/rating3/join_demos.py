@@ -63,9 +63,11 @@ def join(root: Path, metrics: Path) -> dict:
     by_map = hltv_index(root / "hltv", fit["source_audit"]["sources"])
     # The manifest records historical output paths. Enumerate schema-v1 folders
     # in place so a refeed that replaces an archive slug is not silently lost.
+    metadata_paths = sorted((root / "demos").glob("*/*/meta.parquet"))
+    metadata_paths.extend((root / "demos").glob("*/*/match.parquet"))
     entries = [
         {"out_dir": str(path.parent.relative_to(root)).replace("/", "\\\\")}
-        for path in sorted((root / "demos").glob("*/*/meta.parquet"))
+        for path in sorted(metadata_paths)
     ]
     accepted, rejected = [], []
     seen = set()
@@ -74,20 +76,27 @@ def join(root: Path, metrics: Path) -> dict:
             continue
         seen.add(entry["out_dir"])
         directory = root / entry["out_dir"]
-        if not (directory / "meta.parquet").exists():
-            rejected.append({"demo": entry["out_dir"], "reason": "manifest output no longer exists"})
+        metadata_path = directory / "match.parquet"
+        if not metadata_path.exists():
+            metadata_path = directory / "meta.parquet"
+        if not metadata_path.exists():
+            rejected.append({"demo": entry["out_dir"], "reason": "output metadata no longer exists"})
             continue
-        meta = pq.read_table(directory / "meta.parquet").to_pylist()[0]
+        meta = pq.read_table(metadata_path).to_pylist()[0]
         archive_date = json.loads(meta["extra"]).get("dem_modified_in_archive")
         if not archive_date:
             rejected.append({"demo": entry["out_dir"], "reason": "no archive date"})
             continue
         demo_date = datetime.strptime(archive_date[:19], "%Y-%m-%d %H:%M:%S")
         rounds = pq.read_table(directory / "rounds.parquet").to_pylist()
-        economy = pq.read_table(directory / "economy.parquet", columns=["round", "steamid", "name", "side"]).to_pylist()
-        names = {r["steamid"]: nickname(r["name"]) for r in economy}
-        roster_t = {names[r["steamid"]] for r in economy if r["round"] == 1 and r["side"] == "T"}
-        roster_ct = {names[r["steamid"]] for r in economy if r["round"] == 1 and r["side"] == "CT"}
+        roster_path = directory / "economy.parquet"
+        if roster_path.exists():
+            roster_rows = pq.read_table(roster_path, columns=["round", "steamid", "name", "side"]).to_pylist()
+        else:
+            roster_rows = pq.read_table(directory / "player_rounds.parquet", columns=["round", "steamid", "name", "side"]).to_pylist()
+        names = {r["steamid"]: nickname(r["name"]) for r in roster_rows}
+        roster_t = {names[r["steamid"]] for r in roster_rows if r["round"] == 1 and r["side"] == "T"}
+        roster_ct = {names[r["steamid"]] for r in roster_rows if r["round"] == 1 and r["side"] == "CT"}
         kills = pq.read_table(directory / "kills.parquet").to_pylist()
         sequences = defaultdict(list)
         end_ticks = {r["round"]: r["end_tick"] for r in rounds}
@@ -97,7 +106,8 @@ def join(root: Path, metrics: Path) -> dict:
             if k["tick"] > end_ticks[k["round"]] or k["is_suicide"] or k["is_teamkill"] or not k["attacker_steamid"]:
                 continue
             sequences[k["round"]].append((names.get(k["attacker_steamid"], "unknown"), names.get(k["victim_steamid"], "unknown")))
-        candidates = [c for c in by_map[meta["map_name"].removeprefix("de_")]
+        map_name = meta["map_name"] if "map_name" in meta else meta["map"]
+        candidates = [c for c in by_map[map_name.removeprefix("de_")]
                       if abs((c["date"] - demo_date).total_seconds()) <= 36 * 3600]
         candidates = [c for c in candidates if len(c["winner_sides"]) == len(rounds)]
         matches = []
