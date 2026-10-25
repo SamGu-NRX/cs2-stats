@@ -1,7 +1,7 @@
 // Round win probability: the rating agent's lookup of HLTV's probabilities (model/rating3/params.json,
 // SPEC.md "Win probability"). Tables run from most to least specific; the first one holding the
 // state's key answers. Test error on held-out matches is in params.winProbability.test.
-import params from "../../../model/rating3/params.json";
+import { PARAMS as params } from "./rating3-params";
 import type { BuyClass } from "./economy";
 
 export interface RoundState {
@@ -17,7 +17,7 @@ export interface RoundState {
 }
 
 type Table = { columns: string[]; states: Record<string, { p_t: number; n: number }> };
-const TABLES = params.winProbability.tables as unknown as Table[];
+const TABLES: Table[] = params.winProbability.tables;
 
 const hltvMap = (map: string) => {
   const s = map.replace(/^de_/, "");

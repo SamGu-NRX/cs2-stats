@@ -5,7 +5,8 @@
 // repo) holds each pro's own metric values per side for "plays like" comparisons; it never ships.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { QUANTILES, roleOf, type Baselines, type SideKey } from "../src/stats/compare";
+import { attributes, QUANTILES, roleOf, type Baselines, type SideKey } from "../src/stats/compare";
+import { performanceScores, styleScores, type PackPlayer } from "../src/stats/identity";
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { METRICS } from "../src/stats/metrics";
@@ -47,21 +48,20 @@ function quantiles(xs: number[]): number[] {
 
 type Unit = { pool: string[]; side: SideKey; vals: Record<string, number | null> };
 const units: Unit[] = [];
-const named: { name: string; role: string; rounds: number; sides: Partial<Record<SideKey, Record<string, number | null>>> }[] = [];
+const kept: { id: string; name: string; role: string; rounds: number; sides: Partial<Record<SideKey, Summary>> }[] = [];
 
 for (const [id, name] of players) {
   const both = rollup(facts, { player: id });
   if (both.m.rounds < MIN_ROUNDS) continue;
   const role = roleOf(both);
-  const entry: (typeof named)[number] = { name, role, rounds: both.m.rounds, sides: {} };
+  const entry: (typeof kept)[number] = { id, name, role, rounds: both.m.rounds, sides: {} };
   for (const side of SIDES) {
     const s = side === "both" ? both : rollup(facts, { player: id, sides: sideFilter(side) });
     if (s.m.rounds < (side === "both" ? MIN_ROUNDS : MIN_ROUNDS / 2)) continue;
-    const vals = values(s);
-    units.push({ pool: ["all", role], side, vals });
-    entry.sides[side] = vals;
+    units.push({ pool: ["all", role], side, vals: values(s) });
+    entry.sides[side] = s;
   }
-  named.push(entry);
+  kept.push(entry);
 }
 const maps = [...new Set(facts.map((f) => f.match.map))];
 for (const map of maps) {
@@ -78,7 +78,7 @@ for (const map of maps) {
 
 const b: Baselines = {
   version: 1, built: new Date().toISOString().slice(0, 10),
-  source: `${facts.length} pro maps from HLTV demos, ${named.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds`,
+  source: `${facts.length} pro maps from HLTV demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds`,
   n: {}, pools: {},
 };
 const poolNames = new Set(units.flatMap((u) => u.pool));
@@ -97,6 +97,13 @@ for (const pool of poolNames) {
     b.pools[pool][side] = out;
   }
 }
+// The named pack: each pro's style and performance scores per side, against the pools just built.
+const named: (PackPlayer & { role: string; rounds: number })[] = kept.map((k) => ({
+  name: k.name, role: k.role, rounds: k.rounds,
+  sides: Object.fromEntries(Object.entries(k.sides).map(([side, s]) => [side, {
+    style: styleScores(attributes(s, b, { side: side as SideKey })), performance: performanceScores(s, b, { side: side as SideKey }),
+  }])),
+}));
 mkdirSync(path.dirname(OUT), { recursive: true });
 writeFileSync(OUT, JSON.stringify(b));
 mkdirSync(path.dirname(NAMED), { recursive: true });

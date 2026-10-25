@@ -1,56 +1,103 @@
 # Stats engine
 
-Pure TypeScript, no UI dependency. Its only input is a match's tables, schema v1
-(`extractor/SCHEMA-v1.md` on branch `feat/extractor-v1`). The same code runs in the app and in the
-Node tools that build the pro baselines.
+Pure TypeScript, no UI dependency. Its only input is one match's tables, schema v1
+(`extractor/SCHEMA-v1.md` on `feat/extractor-v1`). The same code runs in the app and in the Node tools
+that build the pro baselines. Metric definitions are in `METRICS.md`; the evidence behind them is in
+`VALIDATION.md`.
 
 ## Progress
 
 | Phase | State |
 |---|---|
 | Loader (`load.ts`, hyparquet) | done; reads v1 folders and pre-v1 folders |
-| Scoreboard on tables, HLTV gate | done: K 440/440, D 438/440, KAST 411/440, ADR 398/440 within 0.5 on 44 maps; 16 maps exact for every player (`hltv-exact.test.ts`) |
-| Port of the other families | not started |
-| Plugin adapter, delete the plugin-JSON path | not started |
-| Baselines CLI | not started |
-| New families | not started |
-
-The old engine is in `legacy/` until every family is ported, then it goes.
+| Scoreboard on tables, the HLTV gate | done; 16 maps exact for every player on K, D, KAST and ADR (`hltv-exact.test.ts`), kills exact on every joined map |
+| Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done |
+| Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
+| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json` |
+| New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation status per metric in `METRICS.md` |
+| UI on the new API | in progress on this branch: `ui/data` adapters and the worker move to the calls below |
 
 ## Pipeline
 
 ```
 read(name) -> loadTables -> MatchTables -> derive -> MatchFacts -> rollup(facts[], filter) -> Summary
+                                                                       compare(summary, baselines) -> percentiles
 ```
 
+Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginToTables(file)`.
+
+## API
+
+### Input
 | Call | Returns | Notes |
 |---|---|---|
-| `loadTables(read)` (`load.ts`) | `MatchTables` | `read(fileName)` returns the file's bytes or null. Missing required tables or columns throw `TableError` naming them. |
-| `derive(tables)` (`derive.ts`) | `MatchFacts` | One record per round, per player-round and per kill. Plain JSON, safe to cache; `DERIVE_VERSION` changes when a definition does. |
-| `rollup(facts[], filter)` (`rollup.ts`) | `Summary` | Sums one player's player-round measures over the rounds a filter keeps: sides, own and opponent buy class, maps, date range, opponent teams. |
+| `loadTables(read)` (`load.ts`) | `MatchTables` | `read(fileName)` returns the file's bytes or null. A missing required table or column, or a null in a non-nullable column, throws `TableError` naming it. Pre-v1 folders (no `match.parquet`) are read through the legacy mapping in `load.ts`. |
+| `decodeMatch(bytes, name)`, `pluginToTables(file)` (`plugin/`) | `MatchTables` | Transitional; see the header of `plugin/adapter.ts` for when it goes. |
 
-`SCHEMA` in `tables.ts` lists every column the engine reads, and the loader decodes only those.
-Steamids come out as strings because they exceed 2^53.
+### Facts
+| Call | Returns | Notes |
+|---|---|---|
+| `derive(tables)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`); it changes whenever a definition does. |
 
-## Scoreboard definitions
+`MatchFacts` holds `match` (id, source, map, date, teams, score, `pov` = the recording player), `players`
+(index `pi` -> steamid, name, team 0/1, bot), `rounds` (per round: winner, reason, buy classes, team
+equipment, plant, and `winProb`, the win-probability path), `pr` (one row per player per round, with
+`m`, the additive measures), `kills` (per kill: trade, opening, eco points, swing credits), `weapons`
+(per player, round and gun), and the event facts of `aim`, `movement`, `aggression`, `information` and
+`utilq`. Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round number.
 
-HLTV publishes none of these. Each was found by scoring candidate definitions against HLTV's per-map
-scoreboards on 44 pro maps; the numbers are in `VALIDATION.md` (to come) and the scripts in
-`tools/hltv-check.ts`.
+### Summaries and metrics
+| Call | Returns | Notes |
+|---|---|---|
+| `rollup(facts[], filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`. |
+| `METRICS`, `METRIC[id]` (`metrics.ts`) | `Metric` | Every metric once: `label`, `hltv` name, `kind` (performance or identity), `group`, `unit`, `status` (exact, approx, unavailable), `def`, `value(summary)`. |
+| `ATTRIBUTES` (`metrics.ts`) | groups | HLTV's Firepower (performance) and six style attributes (identity), with their metric ids. |
+| `rating3(m)`, `rating3BySide(facts, filter)` (`rating3.ts`) | `Rating3` | Rating 3.0 (approx.). Per side it is the rating of that side's rounds, pooled. Label it `RATING3_LABEL`; while `diagnostic` is true, say so and show `status` (params.json has retired the map polynomial pending the per-round model). |
 
-- **Kills** count when killer and victim were on different sides at the kill, including kills after
-  the round ended.
-- **Deaths** count every cause except a suicide after the round ended.
-- **ADR** sums each hit's reported damage capped at the victim's health before it, not the health
-  lost: the hurt event drops fractional damage, and HLTV uses the event's number.
-- **KAST** is a kill, a damage assist (CS2's named assister, flash assists left out), survival, or a
-  traded death.
-- **Trades.** A kill trades one death: the earliest teammate the victim killed within 5.4 s.
-- **Buy class** is HLTV's PISTOL, ECO, HALF, FULL, by team equipment at freeze end: under $1,000 per
-  player is an eco, $3,250 or more a full buy.
+### Comparisons
+| Call | Returns | Notes |
+|---|---|---|
+| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load `baselines` from `public/baselines.json`. |
+| `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
+| `roleBlend(summary, side)` (`identity.ts`) | `RoleBlend` | Shares of Entry, Lurker, Half-lurker (T) or Anchor, Rotator, Mixed (CT), plus AWPer, with plain-language evidence. Pass a summary rolled up with `sides: [side]`; add `maps`, `spawns` or `ownBuy` for the breakdowns. |
+| `supportTendency(summary, baselines, opt)` | score and evidence | Support has no labelled source, so it stays out of the blend. |
+| `mostSimilar(mine, pack, side, "style" or "performance")` | ranked names | "Plays like" over the six style attributes; "performs like" over the rating inputs. `styleScores(attributes(...))` and `performanceScores(...)` build `mine`. The pack is optional and private (see Baselines). |
+| `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
+| `gunProficiency(facts, filter)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. |
+| `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
 
-## Known gaps in the tables
+### Baselines
+`pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
+(about 220 KB, no names or ids) and the named pack to `<data>/derived/baselines-named.json`, which
+stays outside the repo. Rebuild after any change to `METRICS` or a definition.
 
-- Ten pro demos start with round 1 already live, so `player_rounds` has no round 1 rows. Derive then
-  takes round 1 sides from team names. HLTV's ADR differs on those demos by up to 6 per round in both
-  directions while kills still match, so they stay out of the gate.
+## API changes for the UI
+
+The old API (`deriveMatch`, `MatchView`, `summarize`, `buildProfile`, `Counters`, `RoundDetail`,
+`AimAgg`, `PosAgg`, `scoreAttributes`, `SUBSTATS`, `stats/schema`) is gone. Where each piece now
+comes from:
+
+| Old | New |
+|---|---|
+| `decodeMatch` then `deriveMatch(m, file, model)` | `pluginToTables(await decodeMatch(bytes, name))` or `await loadTables(read)`, then `derive(tables)`. There is no model argument: win probability reads `params.json`. |
+| `MatchView.players[pi]` and `.c` (`Counters`) | `rollup([facts], { player: id }).m` (`Measures`); metric values through `METRIC[id].value(summary)` |
+| `PlayerRow.rating3`, the UI's `sideRating.ts` | `rating3BySide(facts, { player: id })` |
+| `MatchView.roundDetails`, `RoundDetail.players[pi]` | `facts.rounds[ri]` and `facts.pr` rows for `ri`; kills from `facts.kills` filtered by `ri` |
+| `MatchView.econ`, buy classes | `facts.rounds[ri].buy` and `.equip` (HLTV's four classes, renamed: force is now half) |
+| `KillView` swing and win probability | `facts.kills[i].credits`, `facts.rounds[ri].winProb` |
+| `MatchSummary` and `buildProfile(summaries, filter)` | cache `MatchFacts`; `rollup(allFacts, filter)` |
+| `scoreAttributes(counters, careers)` | `attributes(summary, baselines)` |
+| `SUBSTATS`, `METRICS` from `metrics.ts` and `hltv.ts` | `METRICS` (one list; `hltv` holds HLTV's name) |
+| `deriveRole(counters)` | `roleBlend(summary, side)` |
+| `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"` |
+| `PosAgg` heatmaps | from `facts.kills` positions and the movement facts (positions are not cached in facts) |
+| `MatchView.human` | `facts.match.pov` (the recording player's steamid) |
+
+## Gaps in the inputs
+
+- Demos recorded from round 1 already live have no round 1 rows in `player_rounds`. Derive then takes
+  round 1 sides from team names. HLTV's ADR differs on those ten demos, so they stay out of the gate.
+- `params.json` has no flash share for swing (SPEC.md rule 5), so flash assists get no swing credit
+  and Flash Swing is unavailable. It has no equipment bands either; `rating3.ts` keeps them with their
+  derivation until it does.
+- The extractor ships no nav mesh, so path efficiency is unavailable.

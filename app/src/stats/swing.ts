@@ -5,7 +5,7 @@
 // Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and flash assists get no
 // credit because params.json does not yet carry the flash share (SPEC.md rule 5 forbids inventing one).
 // VALIDATION.md compares the result with HLTV's per-player swing.
-import params from "../../../model/rating3/params.json";
+import { PARAMS as params } from "./rating3-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact } from "./facts";
 import type { Side } from "./tables";

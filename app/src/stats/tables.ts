@@ -43,7 +43,7 @@ export const SCHEMA = {
   },
   damages: {
     tick: "i", round: "i", attacker_steamid: "id?", victim_steamid: "id", weapon: "s?",
-    dmg_health: "i", dmg_health_capped: "i", dmg_armor: "i?", hitgroup: "s?", health_before: "i?", health_after: "i?",
+    dmg_health: "i?", dmg_health_capped: "i", dmg_armor: "i?", hitgroup: "s?", health_before: "i?", health_after: "i?",
     a_side: "s?", v_side: "s?", is_team_damage: "b", is_self: "b",
     a_x: "f?", a_y: "f?", a_z: "f?", v_x: "f?", v_y: "f?", v_z: "f?", distance: "f?", grenade_entity_id: "i?",
   },
@@ -53,6 +53,7 @@ export const SCHEMA = {
     accuracy_penalty: "f?", inaccuracy: "f?", spread: "f?", recoil_index: "f?",
     eye_x: "f?", eye_y: "f?", eye_z: "f?", bullet_pitch: "f?", bullet_yaw: "f?",
     vel_x: "f?", vel_y: "f?", vel_z: "f?", speed_2d: "f?", place: "s?",
+    ammo_clip: "i?", flash_duration: "f?", silenced: "b?",
   },
   /** one row per grenade_thrown, linked to its projectile's landing point */
   grenade_throws: {
@@ -138,17 +139,4 @@ export function emptyTable<N extends TableName>(name: N): Table<N> {
   return t as Table<N>;
 }
 
-/** Appends one row; every column must be given (undefined is an error, null is a value). */
-export function pushRow<N extends TableName>(t: Table<N>, row: { [C in keyof (typeof SCHEMA)[N]]: Value<(typeof SCHEMA)[N][C]> }): void {
-  const cols = t as unknown as Record<string, unknown[]>;
-  for (const c of Object.keys(cols)) {
-    if (c === "n") continue;
-    const v = (row as Record<string, unknown>)[c];
-    if (v === undefined) throw new Error(`pushRow: column "${c}" is missing`);
-    cols[c].push(v);
-  }
-  t.n++;
-}
-
 export type Side = "T" | "CT";
-export const otherSide = (s: Side): Side => (s === "T" ? "CT" : "T");

@@ -1,0 +1,55 @@
+// Hand-built one-round matches for the movement, aggression and information tests. Round 1 runs
+// from tick 0, freezes until FREEZE_END and ends at ROUND_END, at 64 ticks per second. Team A is
+// CT and team B is T. Columns a test does not give are null.
+import { derive } from "../derive";
+import type { MatchFacts } from "../facts";
+import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "../tables";
+import { pushRow } from "./tables";
+
+export const TICK_RATE = 64;
+export const FREEZE_END = 640;
+export const ROUND_END = 64 * 120;
+
+type Row = Record<string, unknown>;
+
+function table<N extends TableName>(name: N, rows: Row[]): Table<N> {
+  const t = emptyTable(name);
+  for (const r of rows) pushRow(t, { ...Object.fromEntries(Object.keys(SCHEMA[name]).map((c) => [c, null])), ...r } as Parameters<typeof pushRow<N>>[1]);
+  return t;
+}
+
+export interface OneRound {
+  /** steamid -> side; CT players are on team A, T players on team B */
+  players: Record<string, "CT" | "T">;
+  bots?: string[];
+  kills?: { tick: number; killer: string; victim: string }[];
+  engagements?: Row[];
+  engagement_ticks?: Row[];
+  shots?: Row[];
+  positions?: Row[];
+  spotted?: Row[];
+  player_rounds?: Record<string, Row>;
+}
+
+export function oneRound(m: OneRound): MatchFacts {
+  const ids = Object.keys(m.players);
+  const side = (id: string) => m.players[id];
+  const t: MatchTables = {
+    match: table("match", [{ match_id: "test", source: "local", map: "de_test", tick_rate: TICK_RATE, team_ct_start: "A", team_t_start: "B", convars: "{}", extra: "{}", visibility_status: "ok" }]),
+    players: table("players", ids.map((id) => ({ steamid: id, name: id, team: side(id) === "CT" ? "A" : "B", is_bot: m.bots?.includes(id) ?? false }))),
+    rounds: table("rounds", [{ round: 1, start_tick: 0, freeze_end_tick: FREEZE_END, end_tick: ROUND_END, ct_team: "A", t_team: "B", winner_side: "CT" }]),
+    player_rounds: table("player_rounds", ids.map((id) => ({ round: 1, steamid: id, side: side(id), inventory: [], ...m.player_rounds?.[id] }))),
+    kills: table("kills", (m.kills ?? []).map((k) => ({
+      tick: k.tick, round: 1, attacker_steamid: k.killer, victim_steamid: k.victim, weapon: "ak47", headshot: false,
+      a_side: side(k.killer), v_side: side(k.victim), is_suicide: false, is_teamkill: false,
+    }))),
+    damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
+    grenade_throws: null, grenade_events: null, smokes: null, infernos: null,
+    shots: m.shots ? table("shots", m.shots.map((s) => ({ round: 1, weapon: "ak47", ...s }))) : null,
+    positions: m.positions ? table("positions", m.positions.map((p) => ({ round: 1, is_alive: true, z: 0, ...p }))) : null,
+    spotted: m.spotted ? table("spotted", m.spotted.map((s) => ({ round: 1, ...s }))) : null,
+    engagements: m.engagements ? table("engagements", m.engagements.map((e) => ({ round: 1, hits: 0, damage: 0, outcome: "sight-only", truncated: false, ...e }))) : null,
+    engagement_ticks: m.engagement_ticks ? table("engagement_ticks", m.engagement_ticks) : null,
+  };
+  return derive(t);
+}

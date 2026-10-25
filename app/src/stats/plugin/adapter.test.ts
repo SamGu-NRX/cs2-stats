@@ -22,7 +22,8 @@ it("kills, deaths and headshot kills match the game's per-round totals in every 
       if (!game) continue;
       checked++;
       const [k, d, , , hs] = game;
-      if (r.m.kills !== k || r.m.deaths !== d || r.m.hsKills !== hs) wrong.push(`${file} round ${f.rounds[r.ri].number} ${f.players[r.pi].name}: ${r.m.kills}/${r.m.deaths}/${r.m.hsKills} vs ${k}/${d}/${hs}`);
+      const got = [r.m.kills ?? 0, r.m.deaths ?? 0, r.m.hsKills ?? 0];
+      if (got[0] !== k || got[1] !== d || got[2] !== hs) wrong.push(`${file} round ${f.rounds[r.ri].number} ${f.players[r.pi].name}: ${got.join("/")} vs ${k}/${d}/${hs}`);
     }
   }
   expect(checked).toBeGreaterThan(500);

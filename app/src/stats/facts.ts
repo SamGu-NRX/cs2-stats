@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 2;
+export const DERIVE_VERSION = 3;
 
 export interface MatchInfo {
   id: string;
@@ -117,10 +117,10 @@ export const MEASURES = [
   // opening and trading context (duels.ts): positions needed for the *Pos measures
   "duelRounds", "duelRankSum", "duelTimeSum", "gunShots",
   "posRounds", "deathsPos", "tradeableDeaths", "tradeOpps", "tradeOppsTaken",
+  // team spacing, Packer's features (positioning.ts)
+  "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
   // utility (utility.ts)
-  "smokes", "flashes", "hes", "molotovs", "decoys", "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs",
-  "selfFlashed", "flashKills", "effectiveFlashes", "heDmg", "heHits", "fireDmg", "utilDmg", "utilKills", "utilDmgTaken",
-  "utilBought", "utilUnused",
+  "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
 ] as const;
@@ -142,7 +142,10 @@ export interface PlayerRound {
   spent: number | null;
   /** the primary in hand at freeze end */
   primary: string | null;
-  m: Measures;
+  /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */
+  spawn: string | null;
+  /** the additive measures; a measure that is 0 is left out, which keeps cached facts small */
+  m: Partial<Measures>;
 }
 
 /** Per player, round and weapon: what the weapon did. Gun proficiency and accuracy by gun read these. */

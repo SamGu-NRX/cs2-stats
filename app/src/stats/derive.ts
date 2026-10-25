@@ -6,11 +6,12 @@ import { deriveAim } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
-import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
+import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
 import { ecoAdjust } from "./rating3";
+import { positioning } from "./positioning";
 import { markOpening, markTrades } from "./rules";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
@@ -19,14 +20,14 @@ import type { MatchTables, Side } from "./tables";
 import { utility } from "./utility";
 import { deriveUtilQ } from "./utilq";
 
-export const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
+const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
 
 /**
  * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
  * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
  */
-export function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null } {
+function matchMeta(t: MatchTables): { date: string | null; maxRounds: number; pov: string | null } {
   const extra = JSON.parse(t.match.extra[0]) as Record<string, unknown>;
   const convars = JSON.parse(t.match.convars[0]) as Record<string, unknown>;
   const raw = extra.date ?? extra.dem_modified_in_archive;
@@ -35,6 +36,9 @@ export function matchMeta(t: MatchTables): { date: string | null; maxRounds: num
     pov: typeof extra.pov === "string" ? extra.pov : null,
   };
 }
+
+/** A player-round while the families fill it: every measure present. */
+export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
 
 /** Indexes shared by the families. */
 export interface Ctx {
@@ -50,8 +54,8 @@ export interface Ctx {
   rounds: RoundFact[];
   /** kills[ri], tick order, post-round suicides removed */
   kills: KillFact[][];
-  /** pr[ri][pi], null when the player did not play the round */
-  pr: (PlayerRound | null)[][];
+  /** pr[ri][pi], null when the player did not play the round; every measure present while deriving */
+  pr: (WorkRound | null)[][];
   /** row indexes of a table by round (0-based) */
   byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb") => number[][];
   /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
@@ -159,7 +163,10 @@ export function buildCtx(t: MatchTables): Ctx {
  * this, 398 are. 41 of the 42 misses are on the ten demos recorded from round 1 live.
  */
 export function hitDamage(t: MatchTables, i: number): number {
-  return Math.min(t.damages.dmg_health[i], t.damages.health_before[i] ?? 100);
+  // A hit the extractor rebuilt from a health drop (damages.source = health) has no event damage; the
+  // HP it removed is the only figure there is.
+  const reported = t.damages.dmg_health[i];
+  return reported === null ? t.damages.dmg_health_capped[i] : Math.min(reported, t.damages.health_before[i] ?? 100);
 }
 
 /** True for a damage row that counts as enemy damage (not self, team or world damage). */
@@ -225,7 +232,13 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
   });
 }
 
-function playerRounds(c: Ctx): (PlayerRound | null)[][] {
+/** Spawn point key from the round's first position sample. */
+function spawnOf(c: Ctx, ri: number, p: number): string | null {
+  const at = c.posAt(ri, p, c.t.rounds.start_tick[ri] ?? c.rounds[ri].freezeEndTick ?? c.rounds[ri].endTick);
+  return at ? `${Math.round(at[0] / 16) * 16},${Math.round(at[1] / 16) * 16}` : null;
+}
+
+function playerRounds(c: Ctx): (WorkRound | null)[][] {
   const t = c.t.player_rounds;
   const row = new Map<number, number>();
   for (let i = 0; i < t.n; i++) { const ri = c.riOf(t.round[i]); if (ri !== undefined) row.set(ri * 1024 + c.pi.get(t.steamid[i])!, i); }
@@ -242,10 +255,12 @@ function playerRounds(c: Ctx): (PlayerRound | null)[][] {
       ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
       ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
-      spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], m,
+      spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], spawn: spawnOf(c, rf.ri, p), m,
     };
   }));
 }
+
+const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));
 
 export function derive(t: MatchTables): MatchFacts {
   const c = buildCtx(t);
@@ -258,6 +273,7 @@ export function derive(t: MatchTables): MatchFacts {
   closing(c);
   sniping(c);
   duels(c);
+  positioning(c);
   utility(c);
   ecoAdjust(c);
   swing(c);
@@ -272,7 +288,7 @@ export function derive(t: MatchTables): MatchFacts {
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
     },
     players: c.players, rounds: c.rounds,
-    pr: c.pr.flat().filter((x): x is PlayerRound => x !== null),
+    pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
     kills: c.kills.flat(), weapons,
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
