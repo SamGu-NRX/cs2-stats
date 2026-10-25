@@ -8,7 +8,7 @@ import { isGun } from "../stats/guns";
 import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
-import { RATING3_LABEL, rating3, rating3Of } from "../stats/rating3";
+import { RATING3_LABEL, rating3, rating3Of, ratingFromSides } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
 import type { MatchEntry } from "../ui/data/match";
 import type {
@@ -30,8 +30,10 @@ export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((
 export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
 // Every rating here goes through rating3Of, the engine's one coverage gate; so does the rating3 metric
 // in valuesOf, and with it the comparisons and "Work on".
-const lineOf = (s: Summary): Line => {
-  const r = rating3Of(s);
+// A line over both sides takes its rating from the side ratings (ratingFromSides), so a total always
+// sits between the sides shown beside it.
+const lineOf = (s: Summary, sides?: Record<"CT" | "T", Summary>): Line => {
+  const r = sides ? ratingFromSides(s, sides) : rating3Of(s);
   const q = r.value === null ? null : r.inputs;
   return {
     m: s.m, v: valuesOf(s), rating: r.value,
@@ -40,7 +42,7 @@ const lineOf = (s: Summary): Line => {
 };
 
 /** Rating 3.0 on both sides and on each, as rating3BySide defines it, from the three summaries a caller streamed. */
-export const ratingsOf = (s: Record<"both" | "T" | "CT", Summary>): SideRatings => ({ both: rating3Of(s.both), T: rating3Of(s.T), CT: rating3Of(s.CT) });
+export const ratingsOf = (s: Record<"both" | "T" | "CT", Summary>): SideRatings => ({ both: ratingFromSides(s.both, s), T: rating3Of(s.T), CT: rating3Of(s.CT) });
 
 // ---------------------------------------------------------------- the match list
 
@@ -57,14 +59,15 @@ const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them 
 
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
   const { you, usTeam } = pov(file, f);
-  const s = rollup([f], { player: f.players[you].id });
+  const id = f.players[you].id;
+  const s = rollup([f], { player: id });
   const us = f.match.score[usTeam];
   const them = f.match.score[1 - usTeam];
   return {
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, line: lineOf(s),
+    shots: s.aim.shots, line: lineOf(s, { CT: rollup([f], { player: id, sides: ["CT"] }), T: rollup([f], { player: id, sides: ["T"] }) }),
   };
 }
 
@@ -79,9 +82,10 @@ export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
   const usIds = f.players.filter((p) => p.team === entry.usTeam).map((p) => p.id);
   const themIds = f.players.filter((p) => p.team !== entry.usTeam).map((p) => p.id);
   const you = f.players[entry.you].id;
+  const bySide = (player: string | string[]) => ({ CT: rollup([f], { player, sides: ["CT"] }), T: rollup([f], { player, sides: ["T"] }) });
   const lines = Object.fromEntries(Object.entries(SIDES).map(([k, side]) =>
-    [k, f.players.map((p) => lineOf(rollup([f], { player: p.id, ...side })))])) as MatchBundle["lines"];
-  const team = (ids: string[]) => lineOf(rollup([f], { player: ids }));
+    [k, f.players.map((p) => lineOf(rollup([f], { player: p.id, ...side }), k === "both" ? bySide(p.id) : undefined))])) as MatchBundle["lines"];
+  const team = (ids: string[]) => lineOf(rollup([f], { player: ids }), bySide(ids));
   const byRound = (player: string | string[], n: number) => rollup([f], { player, rounds: [n] });
   return {
     core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills },

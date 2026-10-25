@@ -208,9 +208,20 @@ export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
  * show total, CT and T Rating 3.0 the same way (VALIDATION.md compares them).
  */
 export function rating3BySide(facts: MatchFacts[], filter: Filter): Record<"both" | "CT" | "T", Rating3> {
-  return {
-    both: rating3Of(rollup(facts, filter)),
-    CT: rating3Of(rollup(facts, { ...filter, sides: ["CT"] })),
-    T: rating3Of(rollup(facts, { ...filter, sides: ["T"] })),
-  };
+  const both = rollup(facts, filter), CT = rollup(facts, { ...filter, sides: ["CT"] }), T = rollup(facts, { ...filter, sides: ["T"] });
+  return { both: ratingFromSides(both, { CT, T }), CT: rating3Of(CT), T: rating3Of(T) };
+}
+
+/**
+ * The total rating from the side ratings, weighted by each side's valued rounds:
+ * (valued CT rounds x CT + valued T rounds x T) / valued rounds of the rated sides. A side without a
+ * rating (under half its rounds valued) adds nothing, so the total is always the round-weighted mean of
+ * the side ratings it shows beside. `both` gives the coverage gate and the pooled inputs.
+ */
+export function ratingFromSides(both: Summary, sides: Record<"CT" | "T", Summary>): Rating3 {
+  const base = rating3Of(both);
+  const parts = (["CT", "T"] as const).map((s) => ({ r: rating3Of(sides[s]).value, n: sides[s].m.swingRounds })).filter((p) => p.r !== null && p.n > 0);
+  const n = parts.reduce((a, p) => a + p.n, 0);
+  if (!coveredEnough(both.covered) || !n) return { ...base, value: null, inputs: null };
+  return { ...base, value: parts.reduce((a, p) => a + p.n * p.r!, 0) / n };
 }
