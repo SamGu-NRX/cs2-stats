@@ -46,6 +46,26 @@ describe("HLTV sub-stat counts on a built round", () => {
   });
 });
 
+describe("trade success on a built round", () => {
+  // CT 0-4, T 5-9. CT0 stands next to three teammates as they die:
+  // T5 kills CT1 at 10 s and CT0 kills T5 at 13 s, a trade taken;
+  // T6 kills CT2 at 20 s and CT0 kills T6 at 26 s, too late for the 5 s window;
+  // T7 kills CT3 at 30 s and CT0 kills T8 instead at 31 s, not the killer.
+  const b = new MatchBuilder();
+  b.kill(0, 10, 5, 1).kill(0, 13, 0, 5).kill(0, 20, 6, 2).kill(0, 26, 0, 6).kill(0, 30, 7, 3).kill(0, 31, 0, 8);
+  const p = b.m.pos;
+  for (const secs of [10, 20, 30]) {
+    for (const pi of [0, 1, 2, 3]) { p.ri.push(0); p.tick.push(b.t(0, secs)); p.pi.push(pi); p.x.push(pi * 100); p.y.push(0); p.z.push(0); p.place.push(null); p.alive.push(true); }
+  }
+  const m = b.build();
+  const fake: WinModel = { kind: "model", label: "test", winProbability: () => 0.5 };
+  const h = hltvCounts(buildCtx(m), buildRoundDetails(m, fake));
+
+  test("counts only a kill of the killer within 5 s as a trade taken", () => {
+    expect([h[0].tradeOpps, h[0].tradeOppsTaken]).toEqual([3, 1]);
+  });
+});
+
 describe("sub-stat registry", () => {
   test("every entry has a status, a definition and a unique id", () => {
     const ids = new Set(SUBSTATS.map((s) => s.id));
