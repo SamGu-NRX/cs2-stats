@@ -77,11 +77,15 @@ fn print<T: Serialize>(json: bool, value: &T, text: impl FnOnce(&T) -> String) {
 }
 
 fn meta_line(m: &changes::Meta) -> String {
-    if m.files == 0 {
-        "No files changed.\n".into()
+    let mut o = if m.files == 0 {
+        "No files changed.\n".to_string()
     } else {
         format!("Change {}: {} file(s) written, backed up first. Undo with `botmode rollback`.\n", m.id, m.files)
+    };
+    for w in &m.warnings {
+        o.push_str(&format!("warning: {w}\n"));
     }
+    o
 }
 
 fn run(a: Args) -> Result<(), String> {
@@ -184,7 +188,11 @@ fn run(a: Args) -> Result<(), String> {
         ["rollback"] | ["rollback", _] => {
             let r = changes::rollback(layout, &probe, words.get(1).copied())?;
             print(a.json, &r, |r| {
-                format!("Rolled back {} ({}): {} restored, {} removed, {} already as before.\n", r.id, r.operation, r.restored, r.removed, r.unchanged)
+                let mut o = format!("Rolled back {} ({}): {} restored, {} removed, {} already as before.\n", r.id, r.operation, r.restored, r.removed, r.unchanged);
+                for w in &r.warnings {
+                    o.push_str(&format!("warning: {w}\n"));
+                }
+                o
             });
         }
         ["backups"] => {
@@ -197,13 +205,18 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let plan = launch::launch(layout, &probe, &ctx.steam_config()?)?;
-            print(a.json, &plan, |p| {
+            let report = launch::launch(layout, &probe, &ctx.steam_config()?)?;
+            print(a.json, &report, |r| {
                 let mut o = String::new();
-                if let Some(m) = &p.bot_mode_change {
+                if let Some(m) = &r.plan.bot_mode_change {
                     o.push_str(&format!("Turned Bot Mode on in gameinfo.gi (change {}).\n", m.id));
                 }
-                o.push_str(&format!("Started: \"{}\" {}\n", p.steam_exe, p.args.join(" ")));
+                o.push_str(&format!("Started: \"{}\" {}\n", r.plan.steam_exe, r.plan.args.join(" ")));
+                match (r.pid, &r.warning) {
+                    (Some(pid), _) => o.push_str(&format!("CS2 is running as process {pid} with -insecure confirmed on its command line.\n")),
+                    (None, Some(w)) => o.push_str(&format!("warning: {w}\n")),
+                    (None, None) => {}
+                }
                 o
             });
         }

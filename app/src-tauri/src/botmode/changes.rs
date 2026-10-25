@@ -15,7 +15,7 @@
 
 use super::hash;
 use super::paths::{self, Layout, Protection, TMP_SUFFIX};
-use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -99,6 +99,22 @@ impl Flusher {
         }
     }
 
+    /// After folders were created, flushes the parent of each new one, deepest first, so the
+    /// whole new chain is on disk. `created` comes from `paths::missing_ancestors`.
+    fn created(&mut self, created: &[PathBuf]) -> Result<(), String> {
+        for dir in created {
+            self.parent_of(dir)?;
+        }
+        Ok(())
+    }
+
+    /// Creates `dir` and any missing ancestors, then flushes them.
+    fn create_dir_all(&mut self, dir: &Path) -> Result<(), String> {
+        let missing = paths::missing_ancestors(dir);
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        self.created(&missing)
+    }
+
     fn warnings(&self) -> Vec<String> {
         self.refused
             .iter()
@@ -123,7 +139,7 @@ impl<'p> ChangeSet<'p> {
     /// Starts a change, right before its writes. Needs the operation lock, refuses while CS2
     /// runs, and refuses while an earlier change is unfinished.
     pub fn begin(layout: &Layout, probe: &'p dyn ProcessProbe, _lock: &OpLock, operation: &str) -> Result<ChangeSet<'p>, String> {
-        ensure_cs2_closed(probe)?;
+        ensure_cs2_closed(probe, Phase::ChangeBegin)?;
         let existing = list(layout)?;
         if let Some(m) = existing.iter().find(|m| m.status.unfinished()) {
             return Err(format!(
@@ -136,14 +152,7 @@ impl<'p> ChangeSet<'p> {
         let seq = existing.iter().map(|m| m.seq).max().unwrap_or(0) + 1;
         let id = format!("{seq:04}-{compact}-{operation}");
         let dir = layout.backups().join(&id);
-        fs::create_dir_all(dir.join("files")).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut flusher = Flusher::default();
-        flusher.flush(&layout.backups())?;
-        // The app state (installed release, applied overlays) is restored along with the files.
-        let state = layout.state_file();
-        if state.is_file() {
-            copy_synced(&state, &dir.join(STATE_BEFORE)).map_err(|e| format!("{}: {e}", state.display()))?;
-        }
         let meta = Meta {
             seq,
             id,
@@ -154,14 +163,34 @@ impl<'p> ChangeSet<'p> {
             error: None,
             warnings: Vec::new(),
         };
-        write_meta(&dir, &meta)?;
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join(ENTRIES))
-            .map_err(|e| format!("{}: {e}", dir.display()))?;
-        log.sync_all().map_err(|e| format!("{}: {e}", dir.display()))?;
-        flusher.flush(&dir)?;
+        // The journal and the saved app state exist, on disk, before meta.json records the
+        // change as in progress. A failure before that point removes the partial record, so
+        // no change is ever listed without its journal.
+        let init = |flusher: &mut Flusher| -> Result<File, String> {
+            flusher.create_dir_all(&dir.join("files"))?;
+            let log = OpenOptions::new()
+                .create_new(true)
+                .append(true)
+                .open(dir.join(ENTRIES))
+                .map_err(|e| format!("{}: {e}", dir.display()))?;
+            log.sync_all().map_err(|e| format!("{}: {e}", dir.display()))?;
+            // The app state (installed release, applied overlays) is restored along with the files.
+            let state = layout.state_file();
+            if state.is_file() {
+                copy_synced(&state, &dir.join(STATE_BEFORE)).map_err(|e| format!("{}: {e}", state.display()))?;
+            }
+            flusher.flush(&dir)?;
+            write_meta(&dir, &meta)?;
+            Ok(log)
+        };
+        let log = match init(&mut flusher) {
+            Ok(log) => log,
+            Err(e) => {
+                let _ = fs::remove_dir_all(&dir);
+                let _ = paths::flush_dir(&layout.backups());
+                return Err(format!("starting the change failed: {e}"));
+            }
+        };
         Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher })
     }
 
@@ -226,7 +255,9 @@ impl<'p> ChangeSet<'p> {
         if self.entries.iter().any(|e| e.path.eq_ignore_ascii_case(&rel)) {
             return Err(format!("{rel}: written twice in one change"));
         }
+        let new_dirs = paths::missing_ancestors(self.layout.target(&rel).parent().unwrap_or(&self.layout.csgo));
         let target = self.confine(&rel)?;
+        self.flusher.created(&new_dirs)?;
         let before = hash::file_if_exists(&target)?;
         if before.as_deref() == Some(expected) {
             return Ok(false);
@@ -234,7 +265,7 @@ impl<'p> ChangeSet<'p> {
         if let Some(old) = &before {
             let saved = backup_path(&self.dir, &rel);
             if let Some(parent) = saved.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                self.flusher.create_dir_all(parent)?;
             }
             self.confine(&rel)?;
             copy_synced(&target, &saved).map_err(|e| format!("backing up {rel}: {e}"))?;
@@ -292,6 +323,7 @@ impl<'p> ChangeSet<'p> {
         self.meta.warnings = self.flusher.warnings();
         if self.entries.is_empty() {
             fs::remove_dir_all(&self.dir).map_err(|e| format!("{}: {e}", self.dir.display()))?;
+            self.flusher.parent_of(&self.dir)?;
         } else {
             self.meta.status = Status::Complete;
             write_meta(&self.dir, &self.meta)?;
@@ -306,7 +338,7 @@ impl<'p> ChangeSet<'p> {
     fn abort(mut self, error: String) -> String {
         self.meta.files = self.entries.len();
         self.meta.error = Some(error.clone());
-        let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, Some(self.probe), &mut self.flusher)
+        let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, Some((self.probe, Phase::AutomaticRollback)), &mut self.flusher)
             .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
         self.meta.warnings = self.flusher.warnings();
         let msg = match &undo {
@@ -390,7 +422,13 @@ fn copy_synced(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
     let path = dir.join(ENTRIES);
-    let f = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let f = match File::open(&path) {
+        Ok(f) => f,
+        // A record from before the journal was created first: every write is journaled
+        // before it happens, so no journal means nothing was written.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
     let lines: Vec<String> = BufReader::new(f).lines().collect::<Result<_, _>>().map_err(|e| format!("{}: {e}", path.display()))?;
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -446,7 +484,7 @@ pub struct RollbackReport {
 /// Rolls back the newest change that is still in effect, or the one named by `id`, which
 /// must be that newest one: changes come off in the reverse order they went on.
 pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> Result<RollbackReport, String> {
-    ensure_cs2_closed(probe)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
     let _lock = OpLock::acquire(layout)?;
     let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
     let active: Vec<Meta> = list(layout)?.into_iter().filter(|m| m.status.in_effect()).collect();
@@ -462,8 +500,12 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     let mut meta = newest.clone();
     let dir = layout.backups().join(&meta.id);
     let entries = read_entries(&dir)?;
+    // Recorded, on disk, before anything is put back: if this rollback stops part-way, the
+    // change stays pending and selectable instead of claiming to be complete.
+    meta.status = Status::RollbackPending;
+    write_meta(&dir, &meta)?;
     let mut flusher = Flusher::default();
-    let mut report = restore(layout, &root_canon, &dir, &entries, Some(probe), &mut flusher)?;
+    let mut report = restore(layout, &root_canon, &dir, &entries, Some((probe, Phase::Rollback)), &mut flusher)?;
     restore_state(layout, &dir)?;
     meta.status = Status::RolledBack;
     write_meta(&dir, &meta)?;
@@ -495,7 +537,7 @@ fn restore(
     root_canon: &Path,
     dir: &Path,
     entries: &[Entry],
-    probe: Option<&dyn ProcessProbe>,
+    probe: Option<(&dyn ProcessProbe, Phase)>,
     flusher: &mut Flusher,
 ) -> Result<RollbackReport, String> {
     let confine = |rel: &str| paths::confined(&layout.csgo, root_canon, rel, false);
@@ -522,8 +564,8 @@ fn restore(
             if conflicts.len() > 10 { ", ..." } else { "" }
         ));
     }
-    if let Some(probe) = probe {
-        ensure_cs2_closed(probe)?;
+    if let Some((probe, phase)) = probe {
+        ensure_cs2_closed(probe, phase)?;
     }
     for (e, target) in todo {
         confine(&e.path)?;

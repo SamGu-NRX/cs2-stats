@@ -87,34 +87,49 @@ pub fn owner(rel: &str) -> Option<String> {
     }
 }
 
-/// Hashes every component file present under `csgo`, grouped by component.
-pub fn scan(csgo: &Path) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
-    let mut found = Vec::new();
-    for top in ["addons", "cfg", "overrides", "backup"] {
-        paths::walk_files(csgo, &csgo.join(top), &mut found)?;
-    }
-    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for rel in found {
-        if let Some(name) = owner(&rel) {
-            let digest = hash::file(&paths::join_rel(csgo, &rel))?;
-            out.entry(name).or_default().insert(rel, digest);
+/// Walks one top folder of the game, refusing to follow it if it is itself a link.
+fn walk_top(csgo: &Path, top: &str, found: &mut Vec<String>, links: &mut Vec<String>) -> Result<(), String> {
+    let dir = paths::join_rel(csgo, top);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if paths::is_reparse(&m) => {
+            links.push(top.to_string());
+            Ok(())
         }
+        Ok(_) => paths::walk_files(csgo, &dir, found, links),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", dir.display())),
     }
-    Ok(out)
 }
 
-/// Protected user files present under `csgo`, with their hashes.
-pub fn protected(csgo: &Path) -> Result<BTreeMap<String, String>, String> {
-    let mut found = Vec::new();
-    paths::walk_files(csgo, &csgo.join("cfg"), &mut found)?;
-    paths::walk_files(csgo, &csgo.join("addons").join("metamod").join("animation"), &mut found)?;
-    let mut out = BTreeMap::new();
+/// What a scan of the game folder found.
+pub struct Scan {
+    /// Component name -> game path -> SHA-256.
+    pub components: BTreeMap<String, BTreeMap<String, String>>,
+    /// Protected user files present, with their hashes.
+    pub protected: BTreeMap<String, String>,
+    /// Junctions and symbolic links found, which were not followed.
+    pub links: Vec<String>,
+}
+
+/// Hashes every component file and protected file present under `csgo`. Each file is read
+/// through the same confined resolution as a write, and links are reported, not followed.
+pub fn scan(csgo: &Path) -> Result<Scan, String> {
+    let (mut found, mut links) = (Vec::new(), Vec::new());
+    for top in ["addons", "cfg", "overrides", "backup"] {
+        walk_top(csgo, top, &mut found, &mut links)?;
+    }
+    let mut components: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut protected = BTreeMap::new();
     for rel in found {
+        let read = || paths::confined_read(csgo, &rel).and_then(|p| hash::file(&p));
         if paths::protection(&rel) != Protection::None {
-            out.insert(rel.clone(), hash::file(&paths::join_rel(csgo, &rel))?);
+            protected.insert(rel.clone(), read()?);
+        } else if let Some(name) = owner(&rel) {
+            let digest = read()?;
+            components.entry(name).or_default().insert(rel, digest);
         }
     }
-    Ok(out)
+    Ok(Scan { components, protected, links })
 }
 
 #[cfg(test)]

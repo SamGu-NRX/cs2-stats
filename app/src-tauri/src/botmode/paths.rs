@@ -139,6 +139,11 @@ pub fn is_reparse(meta: &std::fs::Metadata) -> bool {
 /// would therefore protect nothing that matters. These checks exist to stop accidents (a
 /// junction the user made, a hostile path in a zip or manifest), not an attacker who already
 /// runs as the user.
+///
+/// The one gap that does matter, starting the modded game with VAC on, is not left to these
+/// pre-checks: Steam adds launch options from memory that no file read can see. `launch::start`
+/// therefore checks the command line of the `cs2.exe` it started and ends that process unless
+/// `-insecure` is there and nothing turns VAC back on, which closes that gap for good.
 pub fn confined(root: &Path, root_canon: &Path, rel: &str, create: bool) -> Result<PathBuf, String> {
     let rel = self::rel(rel)?;
     let link = |p: &Path| format!("{rel}: {} is a junction or symbolic link; Bot Mode only writes real folders inside the game folder", p.display());
@@ -201,6 +206,29 @@ pub fn flush_dir(dir: &Path) -> Result<bool, String> {
     }
 }
 
+/// Renames `src` to `dst` atomically, failing with `AlreadyExists` instead of replacing an
+/// existing `dst`. On Windows this is `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, which
+/// works on FAT and exFAT drives too, unlike a hard link.
+pub fn rename_no_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let wide = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+        let (s, d) = (wide(src), wide(dst));
+        // SAFETY: both paths are NUL-terminated and outlive the call.
+        if unsafe { MoveFileExW(s.as_ptr(), d.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::hard_link(src, dst)?;
+        std::fs::remove_file(src)
+    }
+}
+
 /// Expands `%NAME%` environment references, as Windows does in paths.
 pub fn expand_env(raw: &str) -> Result<PathBuf, String> {
     let mut out = String::new();
@@ -218,8 +246,26 @@ pub fn expand_env(raw: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(out))
 }
 
-/// Lists every file under `dir` as a path relative to `root`, skipping runtime output.
-pub fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
+/// The folders between `dir` and its nearest existing ancestor that do not exist yet, deepest
+/// first. After they are created, flushing the parent of each in this order puts the whole new
+/// chain on disk from the bottom up.
+pub fn missing_ancestors(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut cur = Some(dir);
+    while let Some(d) = cur {
+        if d.as_os_str().is_empty() || std::fs::symlink_metadata(d).is_ok() {
+            break;
+        }
+        out.push(d.to_path_buf());
+        cur = d.parent();
+    }
+    out
+}
+
+/// Lists every file under `dir` as a path relative to `root`, skipping runtime output. A
+/// junction or symbolic link is never followed: its path goes to `links` instead, for the
+/// caller to report.
+pub fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>, links: &mut Vec<String>) -> Result<(), String> {
     let items = match std::fs::read_dir(dir) {
         Ok(items) => items,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -228,7 +274,7 @@ pub fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), 
     for item in items {
         let item = item.map_err(|e| format!("{}: {e}", dir.display()))?;
         let path = item.path();
-        let ty = item.file_type().map_err(|e| format!("{}: {e}", path.display()))?;
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let rel_path = path
             .strip_prefix(root)
             .map_err(|_| format!("{}: outside {}", path.display(), root.display()))?
@@ -237,9 +283,11 @@ pub fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), 
         if is_runtime_output(&rel_path) {
             continue;
         }
-        if ty.is_dir() {
-            walk_files(root, &path, out)?;
-        } else if ty.is_file() {
+        if is_reparse(&meta) {
+            links.push(rel_path);
+        } else if meta.is_dir() {
+            walk_files(root, &path, out, links)?;
+        } else if meta.is_file() {
             out.push(rel_path);
         }
     }

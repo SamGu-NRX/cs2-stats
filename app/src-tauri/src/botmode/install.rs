@@ -17,7 +17,7 @@ use super::gameinfo;
 use super::github;
 use super::hash;
 use super::paths::{self, Layout, Protection};
-use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use super::settings::{self, Difficulty, ACTIVE_PROFILE, COSMETIC_CONVARS};
 use super::state::{self, Official, SourceLink};
 use serde::{Deserialize, Serialize};
@@ -282,7 +282,7 @@ pub struct InstallSummary {
 /// Installs a downloaded release. Every write is backed up; any failure rolls the whole
 /// install back.
 pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Result<InstallReport, String> {
-    ensure_cs2_closed(probe)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let index = &cached.index;
     let zip_sha = hash::file(&cached.zip)?;

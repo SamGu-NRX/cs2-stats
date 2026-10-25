@@ -161,6 +161,16 @@ export interface LaunchPlan {
   botModeChange: Change | null;
 }
 
+/** What launch found once Steam started the game. */
+export interface LaunchReport extends LaunchPlan {
+  /** the cs2.exe this launch started, when it appeared within 60 s */
+  pid: number | null;
+  /** its command line, read to confirm -insecure */
+  commandLine: string | null;
+  /** set when CS2 did not appear in time, so -insecure is unconfirmed */
+  warning: string | null;
+}
+
 export interface AppSettings { launchOptions: string }
 
 /** Overrides Steam detection with a game\csgo folder. */
@@ -177,7 +187,8 @@ export const botmode = {
   /** Undoes the newest change; `id` must name that change when given. */
   rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
   backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
-  launch: (t: Target = {}) => invoke<LaunchPlan>("botmode_launch", { ...t }),
+  /** Rejects if the started CS2 lacked -insecure or had a secure-enabling token; that process is ended. */
+  launch: (t: Target = {}) => invoke<LaunchReport>("botmode_launch", { ...t }),
   setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
   /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
   setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),

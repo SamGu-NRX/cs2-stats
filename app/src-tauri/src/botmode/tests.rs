@@ -10,7 +10,7 @@ use super::launch;
 use super::overlay::{self, Manifest};
 use super::paths::Layout;
 use super::process::fake::{Broken, Running, Scripted};
-use super::process::{OpLock, ProcessProbe};
+use super::process::{OpLock, Phase, ProcessProbe};
 use super::settings::{self, Cosmetics, Difficulty};
 use super::state::{self, SourceLink};
 use super::status::{self, ComponentState};
@@ -509,24 +509,28 @@ fn launch_turns_bot_mode_back_on_and_refuses_without_the_mod() {
 #[test]
 fn launch_refuses_secure_in_steams_own_options_and_rechecks_before_starting() {
     let s = Scratch::new("launch-secure");
-    let steam = fake_steam_config(&s, Some("-novid -SECURE +exec autoexec"));
+    let steam = fake_steam_config(&s, Some("-novid"));
     let layout = installed(&s);
     let before = snapshot(&layout.csgo);
     let lock = OpLock::acquire(&layout).unwrap();
-    let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
-    assert!(err.contains("contain -secure") && err.contains("VAC"), "{err}");
+    // Steam's file stores a quoted token as \"-secure\".
+    for form in ["-novid -SECURE +exec autoexec", "+secure", "--secure", "-secure=1", "-secure", "-novid \\\"-secure\\\""] {
+        write(&steam.localconfig, localconfig(form).as_bytes());
+        let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
+        assert!(err.contains("in Steam contain") && err.contains("VAC"), "{form}: {err}");
+    }
     assert_eq!(snapshot(&layout.csgo), before);
 
     // CS2 starting between the preparation and the hand-off to Steam stops the launch.
     write(&steam.localconfig, localconfig("-novid").as_bytes());
     let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
-    let err = launch::start(&plan, &Running(true), &steam).unwrap_err();
+    let err = launch::check_start(&plan, &layout, &Running(true), &steam).unwrap_err();
     assert!(err.contains("CS2 started"), "{err}");
 
     // So does -secure added in Steam meanwhile: start reads the options again.
     write(&steam.localconfig, localconfig("-novid -secure").as_bytes());
-    let err = launch::start(&plan, &CLOSED, &steam).unwrap_err();
-    assert!(err.contains("contain -secure"), "{err}");
+    let err = launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap_err();
+    assert!(err.contains("in Steam contain"), "{err}");
 }
 
 #[test]
@@ -545,7 +549,7 @@ fn launch_refuses_when_steams_launch_options_cannot_be_read() {
     write(&missing.localconfig, localconfig("").as_bytes());
     let plan = launch::prepare(&layout, &CLOSED, &missing, &lock).unwrap();
     fs::remove_file(&missing.localconfig).unwrap();
-    assert!(launch::start(&plan, &CLOSED, &missing).is_err());
+    assert!(launch::check_start(&plan, &layout, &CLOSED, &missing).is_err());
 }
 
 #[test]
@@ -574,7 +578,7 @@ fn rollback_rechecks_cs2_after_its_first_pass() {
     let layout = installed(&s);
     let before = snapshot(&layout.csgo);
     // Closed when rollback starts, running by the time it would write.
-    let err = changes::rollback(&layout, &Scripted::new(|n| n >= 2), None).unwrap_err();
+    let err = changes::rollback(&layout, &Scripted(|p| p == Phase::Rollback), None).unwrap_err();
     assert!(err.contains("CS2 is running"), "{err}");
     assert_eq!(snapshot(&layout.csgo), before);
 }
@@ -585,8 +589,8 @@ fn rollback_leaves_a_file_another_program_changed_during_it() {
     let layout = installed(&s);
     let edited = layout.target("cfg/my_bot_normal_config.cfg");
     // Between rollback's first pass and its writes, something else saves this file.
-    let probe = Scripted::new(move |n| {
-        if n == 2 {
+    let probe = Scripted(move |p| {
+        if p == Phase::Rollback {
             fs::write(&edited, b"saved by another program").unwrap();
         }
         false
@@ -594,6 +598,41 @@ fn rollback_leaves_a_file_another_program_changed_during_it() {
     let err = changes::rollback(&layout, &probe, None).unwrap_err();
     assert!(err.contains("cfg/my_bot_normal_config.cfg changed while the rollback ran"), "{err}");
     assert_eq!(read(&layout, "cfg/my_bot_normal_config.cfg"), "saved by another program");
+    // A rollback that stopped part-way never claims the change is still complete: it is
+    // pending, nothing new may start on top of it, and the game may not be launched.
+    let pending = changes::unfinished(&layout).unwrap().expect("the half-undone change is pending");
+    assert_eq!(pending.status, Status::RollbackPending);
+    assert!(settings::set_cosmetics(&layout, &CLOSED, Cosmetics::default()).unwrap_err().contains("is unfinished"));
+}
+
+#[test]
+fn launch_refuses_while_a_change_is_unfinished() {
+    let s = Scratch::new("launch-unfinished");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let layout = installed(&s);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    // A change left interrupted (the process died before committing it).
+    let cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
+    drop(cs);
+    for err in [launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err(), launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap_err()] {
+        assert!(err.contains("is unfinished") && err.contains("botmode rollback` first"), "{err}");
+    }
+}
+
+#[test]
+fn a_change_record_without_its_journal_rolls_back_cleanly() {
+    let s = Scratch::new("no-journal");
+    let layout = fake_game(&s);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let cs = ChangeSet::begin(&layout, &CLOSED, &lock, "test").unwrap();
+    let dir = cs.dir().to_path_buf();
+    drop(cs);
+    drop(lock);
+    // A record from a crash between writing meta.json and creating the journal.
+    fs::remove_file(dir.join("entries.jsonl")).unwrap();
+    changes::rollback(&layout, &CLOSED, None).unwrap();
+    assert!(changes::unfinished(&layout).unwrap().is_none());
 }
 
 #[cfg(windows)]
@@ -690,8 +729,8 @@ fn an_automatic_rollback_waits_while_cs2_runs_and_can_be_finished_later() {
     let s = Scratch::new("abort-cs2");
     let layout = failing_install(&s);
     let before = snapshot(&layout.csgo);
-    // Closed for install's own checks (calls 1 and 2), running by the automatic rollback.
-    let err = install::install(&layout, &Scripted::new(|n| n >= 3), &cached_release(&layout, "v1.4.7")).unwrap_err();
+    // Closed for install's own checks, running by the time of the automatic rollback.
+    let err = install::install(&layout, &Scripted(|p| p == Phase::AutomaticRollback), &cached_release(&layout, "v1.4.7")).unwrap_err();
     let pending = changes::unfinished(&layout).unwrap().expect("left pending");
     assert_eq!(pending.status, Status::RollbackPending);
     assert!(err.contains("CS2 is running") && err.contains(&format!("botmode rollback {}", pending.id)), "{err}");
@@ -711,8 +750,8 @@ fn a_partly_undone_change_stays_reachable_until_it_is_fully_rolled_back() {
     let saved = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let keep = saved.clone();
     // During the automatic rollback, another program rewrites a file the install wrote.
-    let probe = Scripted::new(move |n| {
-        if n == 3 {
+    let probe = Scripted(move |p| {
+        if p == Phase::AutomaticRollback {
             *keep.lock().unwrap() = fs::read(&victim).unwrap();
             fs::write(&victim, b"another program").unwrap();
         }
@@ -812,7 +851,72 @@ fn folders_can_be_flushed_without_administrator_rights() {
 #[test]
 fn launch_needs_cs2_found_through_steam() {
     let s = Scratch::new("no-steam");
-    let ctx = super::Ctx { layout: fake_game(&s), install: None };
+    let why = "Steam is not installed (no SteamPath in the registry)".to_string();
+    let ctx = super::Ctx { layout: fake_game(&s), install: None, discovery_error: Some(why.clone()) };
     let err = ctx.steam_config().unwrap_err();
-    assert!(err.contains("will not launch"), "{err}");
+    assert!(err.contains("will not launch") && err.contains(&why), "the cause is kept: {err}");
+}
+
+// --- round 3 review -------------------------------------------------------------------------
+
+#[test]
+fn a_named_game_folder_must_be_the_install_steam_reports() {
+    let s = Scratch::new("same-install");
+    // Steam reports CS2 in one library; a copy with the right shape sits in another.
+    let lib = |name: &str| s.0.join(name).join("steamapps").join("common").join("Counter-Strike Global Offensive").join("game").join("csgo");
+    let (reported, other) = (lib("C"), lib("Z"));
+    for d in [&reported, &other] {
+        write(&d.join("gameinfo.gi"), b"\"GameInfo\" {}");
+    }
+    let install = super::steam::Cs2Install {
+        steam: s.0.join("Steam"),
+        library: s.0.join("C"),
+        csgo: reported.clone(),
+        build_id: None,
+        owner: Some(76_561_199_138_360_625),
+    };
+    let err = super::same_install(&other, Ok(install.clone())).unwrap_err();
+    assert!(err.contains(&other.canonicalize().unwrap().display().to_string()), "names the --game folder: {err}");
+    assert!(err.contains(&reported.canonicalize().unwrap().display().to_string()), "names Steam's folder: {err}");
+    assert_eq!(super::same_install(&reported, Ok(install)).unwrap().csgo, reported);
+    let err = super::same_install(&reported, Err("Steam is not installed".into())).unwrap_err();
+    assert!(err.contains("omit --game"), "{err}");
+}
+
+#[cfg(windows)]
+#[test]
+fn status_reports_a_junction_and_does_not_read_through_it() {
+    let s = Scratch::new("status-junction");
+    let layout = installed(&s);
+    let outside = s.0.join("outside");
+    write(&outside.join("Evil.dll"), b"not ours");
+    junction(&layout.target("addons/counterstrikesharp/plugins/Evil"), &outside);
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
+    assert!(st.components.iter().all(|c| c.name != "Evil"), "the junction's files are not listed");
+    assert!(
+        st.warnings.iter().any(|w| w.contains("addons/counterstrikesharp/plugins/Evil is a junction")),
+        "{:?}",
+        st.warnings
+    );
+}
+
+#[test]
+fn status_repeats_the_durability_warnings_of_recorded_changes() {
+    let s = Scratch::new("status-warnings");
+    let layout = installed(&s);
+    let meta_path = layout.backups().join(&changes::list(&layout).unwrap()[0].id).join("meta.json");
+    let mut meta: changes::Meta = serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+    meta.warnings.push("Windows would not flush folder X to disk".into());
+    fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
+    assert!(st.warnings.iter().any(|w| w.contains(&meta.id) && w.contains("would not flush")), "{:?}", st.warnings);
+}
+
+#[test]
+fn new_folders_are_listed_deepest_first_for_flushing() {
+    let s = Scratch::new("ancestors");
+    let deep = s.0.join("a").join("b").join("c");
+    assert_eq!(super::paths::missing_ancestors(&deep), [deep.clone(), s.0.join("a").join("b"), s.0.join("a")]);
+    fs::create_dir_all(s.0.join("a")).unwrap();
+    assert_eq!(super::paths::missing_ancestors(&deep), [deep.clone(), s.0.join("a").join("b")]);
 }

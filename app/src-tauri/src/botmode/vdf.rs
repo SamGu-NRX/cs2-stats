@@ -17,6 +17,17 @@ impl Node {
         }
     }
 
+    /// The child named `key`, ignoring case, when there is at most one. Two children with the
+    /// same name is an error: which one a reader honours would be a guess.
+    pub fn get_unique(&self, key: &str) -> Result<Option<&Node>, String> {
+        let mut found = self.entries().iter().filter(|(k, _)| k.eq_ignore_ascii_case(key));
+        let first = found.next().map(|(_, v)| v);
+        if found.next().is_some() {
+            return Err(format!("key \"{key}\" appears more than once"));
+        }
+        Ok(first)
+    }
+
     /// Follows a chain of keys.
     pub fn path(&self, keys: &[&str]) -> Option<&Node> {
         keys.iter().try_fold(self, |n, k| n.get(k))

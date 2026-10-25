@@ -10,7 +10,7 @@ use super::cfg;
 use super::changes::{self, write_atomic, Meta};
 use super::hash;
 use super::paths::{confined_read, Layout, SERVER_CFG};
-use super::process::{ensure_cs2_closed, OpLock, ProcessProbe};
+use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -65,7 +65,7 @@ pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
 }
 
 pub fn set_difficulty(layout: &Layout, probe: &dyn ProcessProbe, level: Difficulty) -> Result<Meta, String> {
-    ensure_cs2_closed(probe)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let src = layout.confined(level.variant())?;
     let sha = hash::file_if_exists(&src)?
@@ -151,7 +151,7 @@ fn check_music_kit(csgo: &Path, id: i32) -> Result<(), String> {
 /// Writes all three convars, zeros included: a CounterStrikeSharp FakeConVar keeps its
 /// value across map changes, so a deleted line would leave the old value active.
 pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) -> Result<Meta, String> {
-    ensure_cs2_closed(probe)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     check_music_kit(&layout.csgo, c.music_kit)?;
     let path = layout.confined(SERVER_CFG)?;
