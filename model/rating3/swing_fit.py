@@ -10,7 +10,7 @@ import runpy
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_paths import demo_layout
+from demo_paths import load_demo_tables
 
 
 def nickname(name: str) -> str:
@@ -39,14 +39,19 @@ def joined_events(root: Path, joins: list[dict], provenance: dict | None = None)
 
     provenance = provenance if provenance is not None else empty_provenance()
     for join in joins:
-        layout = demo_layout(root, join["demo"])
         try:
-            economy = pq.read_table(layout.table("player_rounds")).to_pylist()
-            match = pq.read_table(layout.table("match")).to_pylist()[0]
-            kills = pq.read_table(layout.table("kills")).to_pylist()
-            damages = pq.read_table(layout.table("damages")).to_pylist()
-            blinds = pq.read_table(layout.table("blinds")).to_pylist()
-            rounds = {r["round"]: r for r in pq.read_table(layout.table("rounds")).to_pylist()}
+            layout, tables = load_demo_tables(
+                root,
+                join["demo"],
+                ("player_rounds", "match", "kills", "damages", "blinds", "rounds"),
+                pq.read_table,
+            )
+            economy = tables["player_rounds"].to_pylist()
+            match = tables["match"].to_pylist()[0]
+            kills = tables["kills"].to_pylist()
+            damages = tables["damages"].to_pylist()
+            blinds = tables["blinds"].to_pylist()
+            rounds = {r["round"]: r for r in tables["rounds"].to_pylist()}
         except FileNotFoundError as error:
             provenance["skipped_joins"] += 1
             provenance["skipped"].append({"demo": join["demo"], "reason": str(error)})

@@ -56,7 +56,7 @@ C:\Users\sgu07\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.
 
 HLTV map files with `v: 3` provide the rating and graph targets. The graph target uses the full-precision `performance.rounds.*.events[].y`; display-rounded team text is not used for fitting.
 
-A strict demo join requires the map, archive date, both five-player rosters, every round winner, and every enemy-kill sequence to agree. Kills after the demo round end are excluded because the HLTV event graph stops at round end. The current join command produces **318 accepted joins, 198 rejected folders, 6,928 joined rounds, and 45,055 joined enemy kills** in `demo_joins.json`.
+A strict demo join requires the map, archive date, both five-player rosters, every round winner, and every enemy-kill sequence to agree. Kills after the demo round end are excluded because the HLTV event graph stops at round end. The current join command produces **304 accepted joins, 185 rejected folders, 6,630 joined rounds, and 43,138 joined enemy kills** in `demo_joins.json`. Fourteen previously accepted demo inputs remain unavailable after the extractor refresh; the stale 318-join result is retained only where it is explicitly identified as historical below.
 
 The shared resolver accepts flat legacy `meta.parquet`/`economy.parquet` folders and versioned schema-v1 folders selected by `CURRENT`. A current version is usable only when its `COMPLETE` filename-to-size manifest matches every listed file; incomplete versions are skipped by discovery, and an unsupported resolved folder fails loudly. The joiner stores join references and checks, not player identities or derived tables in the public repository.
 
@@ -68,7 +68,7 @@ The current lookup fit contains **135,628 events across 503 matches**. On its ch
 
 Those values come from the win-probability command above and `C:\Users\sgu07\Programming Projects\cs2-stats-data\model-rating3\winprob_metrics.json`.
 
-The separate post-plant join analysis produces **14,243 aligned event rows over 3,474 rounds**; **8,914 events change after the plant**. This is evidence that post-plant graph values continue to move, not a validated defuse-time threshold. Those values come from the post-plant command above and `postplant_metrics.json`.
+The separate post-plant join analysis produces **13,577 aligned event rows over 3,550 rounds**; **9,115 events change after the plant**. This is evidence that post-plant graph values continue to move, not a validated defuse-time threshold. Those values come from the post-plant command above and `postplant_metrics.json`.
 
 ## Swing credits
 
@@ -103,7 +103,7 @@ The public parameter file also defines every rating input with a definition and 
 
 ## Demo-round probe
 
-The demo-round probe uses strict joins and fits research-only round models. The current run produces **69,280 player-round rows** and **8,850 total/CT/T equations**. Its final `side_identity_expanded_interactions` stage has **MAE 0.06345268721212202**, **p95 0.16563799997223458**, **maximum error 1.5880659961763595**, and **correlation 0.9836252393287469**. This is not a production fit and no demo-derived coefficients are accepted into `params.json`.
+The demo-round probe uses strict joins and fits research-only round models. The current run produces **66,300 player-round rows** and **9,060 total/CT/T equations**. Its final `side_identity_expanded_interactions` stage has **MAE 0.06305474113300961**, **p95 0.16687552328770758**, **maximum error 1.6084772348686291**, and **correlation 0.9837171294075339**. This is not a production fit and no demo-derived coefficients are accepted into `params.json`.
 
 These values come from the demo-round command above and `demo_round_metrics.json`.
 
@@ -115,7 +115,7 @@ These values come from the demo-round command above and `demo_round_metrics.json
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Displayed eco baseline | 7,330 | 503 | 0.046193640980563715 | 0.11843299347110106 | 0.4556835305654009 |
 | All map features plus CT/T | 7,330 | 503 | 0.03878783710901304 | 0.10004827514472744 | 0.28515025855072607 |
-| All map features plus CT/T and exact demo | 2,950 | 161 | 0.034830608267179305 | 0.09230991774771795 | 0.23688756116976628 |
+| All map features plus CT/T and exact demo | 3,020 | 161 | 0.0345957065705249 | 0.09227092820783779 | 0.23073380994966453 |
 
 The strongest all-map hypothesis adds displayed traditional scoreboard columns, result-conditioned and nonlinear terms, and displayed CT/T features. The strongest joined-demo hypothesis adds exact demo damage, actions, outcomes, equipment interactions, and side features. Neither is accepted as the production formula: the demo model covers only the joined subset, and both remain well above the display-level target.
 
