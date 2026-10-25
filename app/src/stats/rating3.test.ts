@@ -5,14 +5,16 @@ import { METRIC, METRICS } from "./metrics";
 import { PARAMS } from "./model-params";
 import { rating3Of, ratingFromSides, type R3Inputs } from "./rating3";
 import { emptySummary, rollup } from "./rollup";
-import { FREEZE_END, oneRound } from "./testing/match";
+import { derive } from "./derive";
+import type { WinProbSource } from "./model-params";
+import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 
 /** A summary of `rounds` rounds whose six inputs (over valued rounds) are `q`. */
 function at(q: R3Inputs, rounds = 100) {
   const s = emptySummary();
   Object.assign(s.m, {
-    rounds, swingRounds: rounds, vEcoKills: q.kpr_eco * rounds, vEcoDmg: q.adr_eco * rounds, vEcoDeaths: q.dpr_eco * rounds,
-    vEcoKast: (q.kast_eco * rounds) / 100, vMultiKillRounds: (q.mk * rounds) / 100, swing: (q.swing * rounds) / 100,
+    rounds, swingRounds: rounds, ecoRounds: rounds, ratedRounds: rounds, vEcoKills: q.kpr_eco * rounds, vEcoDmg: q.adr_eco * rounds, vEcoDeaths: q.dpr_eco * rounds,
+    vEcoKast: (q.kast_eco * rounds) / 100, vMultiKillRounds: (q.mk * rounds) / 100, swing: (q.swing * rounds) / 100, vSwing: (q.swing * rounds) / 100,
   });
   s.matches = 1;
   s.covered = { nRounds: rounds, roundsPlayed: rounds };
@@ -31,6 +33,31 @@ it("rates only over the rounds swing valued, and not at all when under half are"
   expect(one).not.toBeNull();
   expect(rating3Of(rollup([v, u], { player: "a" })).value).toBeCloseTo(one!, 9);
   expect(rating3Of(rollup([v, u, u], { player: "a" })).value).toBeNull();
+});
+
+it("rates only over rounds whose eco values are known, and gives a reason when too few are", () => {
+  // fails if a kill whose economy groups are unknown counts at its raw value (the old ?? 1), so a
+  // rating is built from unadjusted rounds: the lookup values a round without equipment, the eco
+  // adjustment cannot
+  const byAlive: WinProbSource = {
+    kind: "hltv", label: "test lookup", hash: "t",
+    tables: [{ columns: ["alive_t", "alive_ct"], states: { "1|1": { p_t: 0.5, n: 1 }, "0|1": { p_t: 0, n: 1 } } }],
+  };
+  const players = { a: "CT", b: "T" } as const;
+  const kill = [{ tick: FREEZE_END + 300, killer: "a", victim: "b" }];
+  const known = derive(oneRoundTables({ players, kills: kill, player_rounds: { a: { equip_value_game: 4000 }, b: { equip_value_game: 1000 } } }), byAlive);
+  const unknown = derive(oneRoundTables({ players, kills: kill }), byAlive);
+  expect(rollup([unknown], { player: "a" }).m.swingRounds).toBe(1);
+  const one = rating3Of(rollup([known], { player: "a" })).value;
+  expect(one).not.toBeNull();
+  // half the rounds rated: the rating is the known round's, not a mix with the raw one
+  expect(rating3Of(rollup([known, unknown], { player: "a" })).value).toBeCloseTo(one!, 9);
+  const thin = rating3Of(rollup([known, unknown, unknown], { player: "a" }));
+  const why = "both the round's win probability and every eco value known for 1 of 3 rounds; the rating needs half";
+  expect([thin.value, thin.reason]).toEqual([null, why]);
+  const s = rollup([known, unknown, unknown], { player: "a" });
+  const pool: Baselines = { version: 1, built: "x", source: "test", model: s.models[0], n: {}, pools: {} };
+  expect(compare(s, pool, { pool: "all" }).rating3.reason).toBe(`No value: ${why}`);
 });
 
 it("gates the rating, its percentile and so Work on through one coverage rule", () => {

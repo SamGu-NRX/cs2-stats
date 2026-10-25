@@ -17,7 +17,7 @@ import type {
 
 export function metaOf(wp: WinProbSource): Meta {
   return {
-    metrics: METRICS.map(({ value: _value, ...m }) => m),
+    metrics: METRICS.map(({ value: _value, why: _why, ...m }) => m),
     attributes: ATTRIBUTES,
     rating: { label: RATING3_LABEL, status: rating3(emptyMeasures()).status },
     winProb: { kind: wp.kind, label: wp.label },
