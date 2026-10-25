@@ -1487,7 +1487,10 @@ def recover_output(out: Path) -> None:
 # holds them open; prune_map() leaves locked ones for the next try.
 CURRENT = "CURRENT"
 COMPLETE = "COMPLETE"  # JSON {file name: bytes} of a version folder, written after every table
-RETIRED = "RETIRED"  # a map replaced by its re-extraction in another folder; delete it all
+# Readers skip a map with a RETIRED file. Its first line says why: "replaced" (a re-extraction elsewhere
+# replaced it; delete it all) or "stale: <reason>" (keep it until a re-extraction replaces it). An empty
+# file, as extractor 1.5.0 to 1.8.0 wrote, means replaced.
+RETIRED = "RETIRED"
 _VERSION_DIR = re.compile(r"v-[0-9A-Za-z.+_]+-[0-9a-f]{8}")
 
 
@@ -1544,9 +1547,9 @@ def publish_version(tmp: Path, map_dir: Path, version: str) -> Path:
 
 
 def _ours(entry: Path) -> bool:
-    """Written by this extractor's publishing: a version folder, a partial write or a staged pointer."""
+    """Written by this extractor's publishing: a version folder, a partial write or a staged pointer or marker."""
     n = entry.name
-    return bool(_VERSION_DIR.fullmatch(n)) or n.startswith(".tmp-") or (n.startswith(f"{CURRENT}.") and n.endswith(".tmp"))
+    return bool(_VERSION_DIR.fullmatch(n)) or n.startswith(".tmp-") or (n.startswith((f"{CURRENT}.", f"{RETIRED}.")) and n.endswith(".tmp"))
 
 
 def _delete(entry: Path, locked: list[Path]) -> None:
@@ -1570,6 +1573,8 @@ def prune_map(map_dir: Path) -> list[Path]:
         return []
     locked: list[Path] = []
     if (map_dir / RETIRED).exists():
+        if _stale(map_dir):
+            return locked  # skipped by readers, kept until its re-extraction retires it
         for e in sorted(map_dir.iterdir(), key=lambda e: (e.name == RETIRED, e.name != "match.parquet")):
             if e.name != RETIRED:
                 _delete(e, locked)
@@ -1592,11 +1597,28 @@ def prune_map(map_dir: Path) -> list[Path]:
     return locked
 
 
+def _write_marker(map_dir: Path, text: str) -> None:
+    staged = Path(map_dir) / f"{RETIRED}.{os.getpid()}.tmp"
+    staged.write_text(text + "\n", encoding="utf-8")
+    os.replace(staged, Path(map_dir) / RETIRED)
+
+
+def _stale(map_dir: Path) -> bool:
+    try:
+        return (Path(map_dir) / RETIRED).read_text(encoding="utf-8").startswith("stale")
+    except OSError:
+        return False
+
+
 def retire_map(map_dir: Path) -> list[Path]:
     """Withdraw a map at once (resolve_map_dir returns None) and delete it as far as nothing holds it open."""
-    marker = Path(map_dir) / RETIRED
-    marker.touch()
+    _write_marker(map_dir, "replaced")
     return prune_map(map_dir)
+
+
+def mark_stale(map_dir: Path, reason: str) -> None:
+    """Withdraw a map from readers but keep its files until a re-extraction replaces it (retire_map)."""
+    _write_marker(map_dir, f"stale: {reason}")
 
 
 def file_sha256(path: Path) -> str:
