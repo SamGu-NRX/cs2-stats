@@ -82,6 +82,76 @@ def joined_events(root: Path, joins: list[dict]):
                        "per_round": {sid: float(dict(p["perRound"])[str(number)]) for sid, p in zip(player_ids, players)}}
 
 
+def fit_model(events: list[dict]) -> dict:
+    import numpy as np
+
+    buckets = defaultdict(list)
+    debit = defaultdict(list)
+    samples = []
+    for row in events:
+        kill = row["kill"]
+        delta = row["delta"]
+        if not kill or delta < 0.001:
+            continue
+        attacker = kill["attacker_steamid"]
+        victim = kill["victim_steamid"]
+        helpers_damage = {sid: damage for sid, damage in row["damage"].items() if sid != attacker and damage > 0}
+        label = f"damage={bool(helpers_damage)} flash={bool(row['flash'])} trade={bool(row['traded'])}"
+        buckets[label].append(row["observed"][attacker] / delta)
+        debit[f"future_trade={bool(row['future_trades'])}"].append(-row["observed"][victim] / delta)
+        if len(samples) < 80:
+            samples.append({"map": row["map"], "round": row["round"], "index": row["index"],
+                            "title": row["event"]["title"], "delta": delta,
+                            "credits": {str(s): x / delta for s, x in row["observed"].items() if x},
+                            "attacker": attacker, "victim": victim, "damage": row["damage"],
+                            "flash": list(row["flash"]), "trade": [x["victim_steamid"] for x in row["traded"]],
+                            "future_trade": bool(row["future_trades"])})
+
+    def summarise(values: list[float]) -> dict:
+        return {"n": len(values), "median": float(np.median(values)),
+                "p05": float(np.quantile(values, 0.05)), "p95": float(np.quantile(values, 0.95))}
+
+    return {"events": len(events), "kill_credit_ratios": {k: summarise(v) for k, v in buckets.items()},
+            "victim_debit_ratios": {k: summarise(v) for k, v in debit.items()},
+            "note": "perRound is not additive over event tooltip credits; fit the observed player credits directly",
+            "samples": samples}
+
+
+def fit_block(data_root: Path, joins_path: Path) -> dict:
+    joins = json.loads(joins_path.read_text(encoding="utf-8"))
+    metrics = fit_model(list(joined_events(data_root, joins["accepted"])))
+    key = "damage=False flash=True trade=False"
+    if key not in metrics["kill_credit_ratios"]:
+        raise ValueError(f"no clean flash-assist observations found for {key}")
+    flash_ratio = metrics["kill_credit_ratios"][key]
+    return {
+        "source": {
+            "source": "fit",
+            "script": "swing_fit.py",
+            "accepted_joins": joins["counts"]["accepted"],
+            "events": metrics["events"],
+        },
+        "event_credit_model": "damage_share_then_flash_residual",
+        "assist_damage": 40,
+        "trade_window_seconds": 5.0,
+        "flash_credit_fraction": float(1.0 - flash_ratio["median"]),
+        "flash_credit_sample_size": flash_ratio["n"],
+        "zero_rules": [
+            "unpreventable post-bomb kills have zero swing",
+            "kill credit is never negative",
+            "failed trade victim still receives the full victim debit",
+            "round with an unvalued probability event is unknown",
+        ],
+        "round_end_remainder": {
+            "clutcher_weight": 1,
+            "kill_swing_player_weight": 2,
+            "defuser_weight": 1,
+            "survivor_weight": 1,
+        },
+        "fit_status": "event split partially recovered; round-end remainder not yet fitted to player-map totals",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True, type=Path)
@@ -90,33 +160,8 @@ def main() -> None:
     args = parser.parse_args()
     helpers = runpy.run_path(str(Path(__file__).with_name("winprob_fit.py")))
     helpers["idle"]()
-    import numpy as np
-    events = list(joined_events(args.data, json.loads(args.joins.read_text())["accepted"]))
-    buckets = defaultdict(list)
-    debit = defaultdict(list)
-    samples = []
-    for row in events:
-        k = row["kill"]
-        delta = row["delta"]
-        if not k or delta < .001:
-            continue
-        a, v = k["attacker_steamid"], k["victim_steamid"]
-        helpers_damage = {sid: dmg for sid, dmg in row["damage"].items() if sid != a and dmg > 0}
-        label = f"damage={bool(helpers_damage)} flash={bool(row['flash'])} trade={bool(row['traded'])}"
-        buckets[label].append(row["observed"][a] / delta)
-        debit[f"future_trade={bool(row['future_trades'])}"].append(-row["observed"][v] / delta)
-        if len(samples) < 80:
-            samples.append({"map": row["map"], "round": row["round"], "index": row["index"],
-                            "title": row["event"]["title"], "delta": delta,
-                            "credits": {str(s): x / delta for s, x in row["observed"].items() if x},
-                            "attacker": a, "victim": v, "damage": row["damage"],
-                            "flash": list(row["flash"]), "trade": [x["victim_steamid"] for x in row["traded"]],
-                            "future_trade": bool(row["future_trades"])})
-    summarise = lambda values: {"n": len(values), "median": float(np.median(values)), "p05": float(np.quantile(values,.05)), "p95": float(np.quantile(values,.95))}
-    result = {"events": len(events), "kill_credit_ratios": {k: summarise(v) for k, v in buckets.items()},
-              "victim_debit_ratios": {k: summarise(v) for k, v in debit.items()},
-              "note": "perRound is not additive over event tooltip credits; fit the observed player credits directly",
-              "samples": samples}
+    events = list(joined_events(args.data, json.loads(args.joins.read_text(encoding="utf-8"))["accepted"]))
+    result = fit_model(events)
     args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in result.items() if k != "samples"}, indent=2))
 

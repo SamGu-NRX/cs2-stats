@@ -216,6 +216,7 @@ def map_rows(root: Path) -> list[dict]:
                 swing = number(cell(row, "st-roundSwing"))
                 row_data = {
                     "map": path.stem,
+                    "match": str(data["match"]["matchId"]),
                     "player": name,
                     "rating": number(cell(row, "st-rating")),
                     "rounds": float(rounds),
@@ -288,7 +289,7 @@ def held_out(rows: list[dict], feature_names: tuple[str, ...], folds: int = 5) -
     valid = [row for row in rows if np.isfinite([row.get(feature, np.nan) for feature in feature_names]).all() and np.isfinite(row["rating"])]
     x = np.asarray([[row[feature] for feature in feature_names] for row in valid], dtype=float)
     y = np.asarray([row["rating"] for row in valid], dtype=float)
-    groups = np.asarray([row["map"] for row in valid])
+    groups = np.asarray([row["match"] for row in valid])
     prediction = np.full(len(valid), np.nan)
     fold_scores = []
     splitter = GroupKFold(n_splits=folds)
@@ -307,15 +308,15 @@ def held_out(rows: list[dict], feature_names: tuple[str, ...], folds: int = 5) -
         )
         search.fit(x[train], y[train], groups=groups[train])
         prediction[test] = search.predict(x[test])
-        fold_scores.append({"fold": fold, "rows": int(len(test)), "maps": int(len(set(groups[test]))), "alpha": float(search.best_params_["ridge__alpha"]), "score": score(y[test], prediction[test])})
-    return {"features": list(feature_names), "rows": len(valid), "maps": len(set(groups)), "cv": score(y, prediction), "folds": fold_scores}
+        fold_scores.append({"fold": fold, "rows": int(len(test)), "matches": int(len(set(groups[test]))), "alpha": float(search.best_params_["ridge__alpha"]), "score": score(y[test], prediction[test])})
+    return {"features": list(feature_names), "rows": len(valid), "matches": len(set(groups)), "cv": score(y, prediction), "folds": fold_scores}
 
 
 def fit_formula(rows: list[dict], feature_names: tuple[str, ...]) -> dict:
     valid = [row for row in rows if np.isfinite([row.get(feature, np.nan) for feature in feature_names]).all() and np.isfinite(row["rating"])]
     x = np.asarray([[row[feature] for feature in feature_names] for row in valid], dtype=float)
     y = np.asarray([row["rating"] for row in valid], dtype=float)
-    groups = np.asarray([row["map"] for row in valid])
+    groups = np.asarray([row["match"] for row in valid])
     model = Pipeline([
         ("impute", SimpleImputer(strategy="median")),
         ("scale", StandardScaler()),
@@ -405,7 +406,7 @@ def main() -> None:
     )))
     result = {
         "dataset": {"rows": len(rows), "maps": len({row["map"] for row in rows})},
-        "split": "5-fold GroupKFold by map; inner 3-fold GroupKFold selects Ridge alpha by MAE",
+        "split": "5-fold GroupKFold by match; inner 3-fold GroupKFold selects Ridge alpha by MAE",
         "hypotheses": {},
     }
     row_sets: dict[str, list[dict]] = {}
