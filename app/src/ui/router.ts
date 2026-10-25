@@ -74,11 +74,22 @@ export function go(href: string, opts?: { instant?: boolean }) {
   flushSync(publish);
 }
 
+// Which input came last. Keyboard activation (Enter on a row, the palette, a focused button) opens
+// a match instantly, as keyboard navigation does everywhere (design/shell-and-motion.md); callers
+// share openMatch, so it asks here rather than every caller passing how it was triggered.
+let keyboardLast = false;
+if (typeof window !== "undefined") {
+  addEventListener("keydown", () => { keyboardLast = true; }, true);
+  addEventListener("pointerdown", () => { keyboardLast = false; }, true);
+}
+
 /**
- * Opens a match. Where View Transitions exist and motion is allowed, the clicked row's score and map
- * label morph into the hero (the row carries data-vt="score" and data-vt="map" children).
+ * Opens a match. On a pointer activation, where View Transitions exist and motion is allowed, the
+ * clicked row's score and map label morph into the hero (the row carries data-vt="score" and
+ * data-vt="map" children).
  */
 export function openMatch(href: string, row?: Element | null) {
+  if (keyboardLast) return go(href, { instant: true });
   const doc = document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } };
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (!doc.startViewTransition || reduce) return go(href);

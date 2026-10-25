@@ -224,9 +224,9 @@ export interface MenuItem { label: string; run: () => void; hint?: string; disab
 let menu: { x: number; y: number; items: MenuItem[]; from: HTMLElement | null } | null = null;
 const menuListeners = new Set<() => void>();
 
-export function openMenu(e: React.MouseEvent | MouseEvent, items: MenuItem[]) {
-  e.preventDefault();
-  menu = { x: e.clientX, y: e.clientY, items, from: document.activeElement as HTMLElement | null };
+/** Opens the menu at a viewport position; the caller has already cancelled the browser's menu. */
+export function openMenu(at: { x: number; y: number }, items: MenuItem[]) {
+  menu = { x: at.x, y: at.y, items, from: document.activeElement as HTMLElement | null };
   menuListeners.forEach((l) => l());
 }
 const closeMenu = (restore = true) => {
@@ -269,6 +269,8 @@ export function MenuLayer() {
       role="menu"
       className="pop menu"
       style={{ left: m.x, top: m.y }}
+      // the platform may still send contextmenu for the key that opened this menu; no native menu on top
+      onContextMenu={(e) => e.preventDefault()}
       onKeyDown={(e) => {
         if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
         else if (e.key === "ArrowDown") { e.preventDefault(); step(1); }

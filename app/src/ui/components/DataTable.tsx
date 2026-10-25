@@ -1,7 +1,8 @@
 // Sortable table. Headers are buttons inside <th aria-sort>; a click sorts (numbers start
 // descending, text ascending) and a second click flips. Sorting never animates. Rows move with
-// J/K or the arrow keys when the table body has focus, Enter opens the active row. Missing values
-// sort last. Past 200 rows only the visible window renders (fixed 36 px rows).
+// J/K or the arrow keys when the table body has focus, Enter opens the active row, and Shift+F10
+// or the menu key opens its row menu. Missing values sort last. Past 200 rows only the visible
+// window renders (fixed 36 px rows).
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { SortIcon } from "../icons/ui";
 import { nextSort, sortRows, type SortDir, type SortState, type SortValue } from "../lib/sort";
@@ -46,7 +47,8 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
   maxHeight?: number;
   fixed?: boolean;
   activeKey?: string | null;
-  onRowContext?: (row: T, e: React.MouseEvent) => void;
+  /** opens the row's menu at a viewport position (pointer, or under the row from the keyboard) */
+  onRowContext?: (row: T, at: { x: number; y: number }) => void;
 }) {
   const [own, setOwn] = useState<SortState | null>(defaultSort ?? null);
   const sort = sortKey !== undefined ? sortKey : own;
@@ -101,6 +103,22 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
     else if (e.key === "Home") { e.preventDefault(); move(0); }
     else if (e.key === "End") { e.preventDefault(); move(flat.length - 1); }
     else if (e.key === "Enter" && active >= 0 && onOpen) { e.preventDefault(); onOpen(flat[active]); }
+    else if (((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") && active >= 0 && onRowContext) {
+      // Handled here rather than through the browser's contextmenu event: headless Chrome fires
+      // that event for the menu key but not for Shift+F10. The menu opens under the active row.
+      e.preventDefault();
+      const r = body.current?.querySelector(`tr[data-i="${active}"]`)?.getBoundingClientRect();
+      const b = body.current!.getBoundingClientRect();
+      onRowContext(flat[active], r ? { x: r.left + 24, y: r.bottom } : { x: b.left + 24, y: b.top });
+    }
+  };
+  const onContext = (e: React.MouseEvent) => {
+    const tr = (e.target as Element).closest<HTMLElement>("tr[data-i]");
+    if (!onRowContext || !tr) return;
+    e.preventDefault();
+    const i = Number(tr.dataset.i);
+    setActive(i);
+    onRowContext(flat[i], { x: e.clientX, y: e.clientY });
   };
 
   let index = 0;
@@ -114,7 +132,6 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
         data-active={i === active}
         className={cls}
         onClick={onOpen ? () => { setActive(i); onOpen(r); } : () => setActive(i)}
-        onContextMenu={onRowContext ? (e) => { setActive(i); onRowContext(r, e); } : undefined}
       >
         {columns.map((c) => (
           <td
@@ -162,7 +179,7 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
             })}
           </tr>
         </thead>
-        <tbody ref={body} tabIndex={0} onKeyDown={onKey} onFocus={() => active < 0 && flat.length && setActive(0)} aria-label={`${label} rows: J and K move, Enter opens`}>
+        <tbody ref={body} tabIndex={0} onKeyDown={onKey} onContextMenu={onContext} onFocus={() => active < 0 && flat.length && setActive(0)} aria-label={`${label} rows: J and K move, Enter opens${onRowContext ? ", Shift+F10 shows actions" : ""}`}>
           {window && window.start > 0 && <tr aria-hidden style={{ height: window.start * ROW_H }} />}
           {sorted.map((g) => {
             const out: ReactNode[] = [];

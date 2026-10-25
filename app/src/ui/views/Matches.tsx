@@ -66,7 +66,7 @@ export function MatchesView() {
             rowKey={(s) => s.file}
             defaultSort={{ key: "date", dir: "desc" }}
             onOpen={(s) => openMatch(matchHref(s.file), rowOf(s.file))}
-            onRowContext={(s, e) => openMenu(e, [
+            onRowContext={(s, at) => openMenu(at, [
               { label: "Open", hint: "Enter", run: () => openMatch(matchHref(s.file), rowOf(s.file)) },
               { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) },
               { label: "Open economy", run: () => openMatch(matchHref(s.file, "economy")) },
