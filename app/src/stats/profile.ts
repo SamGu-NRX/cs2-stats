@@ -6,6 +6,7 @@ import { addCounters, emptyCounters, type Counters } from "./counters";
 import type { MatchSummary } from "./derive";
 import { rating2 } from "./rating";
 import { rating3, type Rating3 } from "./rating3";
+import { deriveRole, type Role } from "./role";
 
 export interface FormPoint { file: string; startUtc: string; map: string; rating: number; rating3: number | null; result: "W" | "L" | "T"; score: { us: number; them: number } }
 
@@ -18,6 +19,7 @@ export interface ProfileView {
   rating: number;
   /** Rating 3.0 (approx.) over every round with the kill log */
   rating3: Rating3;
+  role: Role;
   attributes: Attributes;
   maps: { map: string; matches: number; wins: number; c: Counters; rating: number }[];
   /** last 20 matches, oldest first */
@@ -67,7 +69,7 @@ export function buildProfile(all: Omit<MatchSummary, "pos">[], filter: ProfileFi
   const last = list[list.length - 1];
   return {
     name: last.human.name,
-    matches: list.length, wins, losses, total, rating: rating2(total), rating3: rating3(total.r3),
+    matches: list.length, wins, losses, total, rating: rating2(total), rating3: rating3(total.r3), role: deriveRole(total),
     attributes: scoreAttributes(total, [...careers.values()]),
     maps: [...maps].map(([map, x]) => ({ map, ...x, rating: rating2(x.c) })).sort((a, b) => b.matches - a.matches),
     form: list.slice(-20).map((s) => ({ file: s.file, startUtc: s.startUtc, map: s.map, rating: s.human.rating, rating3: s.human.rating3 ?? null, result: s.result, score: s.score })),
