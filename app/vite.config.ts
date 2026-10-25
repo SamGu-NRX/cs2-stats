@@ -87,13 +87,15 @@ function devMatches(): Plugin {
   const root = process.env.CS2_DEV_MATCHES ? path.resolve(process.env.CS2_DEV_MATCHES) : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (!root || !url.pathname.startsWith("/__dev-matches/")) return next();
+    if (!url.pathname.startsWith("/__dev-matches/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
       res.setHeader("Content-Type", type);
       res.setHeader("Cache-Control", "no-store");
       res.end(body);
     };
+    // without the setting the endpoint is absent (404), not the app's index page
+    if (!root) return send(404, JSON.stringify({ error: "CS2_DEV_MATCHES is not set" }));
     try {
       if (url.pathname === "/__dev-matches/list") {
         const files: { file: string; size: number; mtime: number }[] = [];
