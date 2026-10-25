@@ -117,6 +117,28 @@ public class ReviewFixTests
         Assert.Equal((0, 2, Nil.V), (k[2].Killer, k[2].KBody, k[2].VBody));
     }
 
+    // ---- visibility validation data ----------------------------------------------------------
+
+    [Fact]
+    public void HitMaskKeepsOnlyHumanDamageToEnemies()
+    {
+        var (r, sink, _) = NewRound();
+        r.HitMask(2100, 0, 1, 0x8000_0001u, 4u, true);   // human -> enemy: kept
+        r.HitMask(2101, 1, 0, 1u, 0u, true);             // bot -> human: ignored
+        r.HitMask(2102, 1, 2, 1u, 0u, false);            // bot -> bot: ignored
+        r.SetHumanEntities(3, 4, 250);
+        r.SetHumanEntities(9, 9, 9);                      // once per match
+        r.Flush();
+        var row = Assert.Single(sink.Store.HitMask.Span.ToArray());
+        Assert.Equal((0, 2100, 1, 0x8000_0001u, 4u, true), (row.Ri, row.Tick, row.Victim, row.M0, row.M1, row.Spotted));
+        using var ms = new MemoryStream();
+        MatchCodec.Write(sink.Store, ms, false);
+        using var doc = JsonDocument.Parse(ms.ToArray());
+        Assert.Equal("[2147483649]", doc.RootElement.GetProperty("aim").GetProperty("hitMask").GetProperty("m0").GetRawText());
+        var env = doc.RootElement.GetProperty("env");
+        Assert.Equal((3, 4, 250), (env.GetProperty("humanSlot").GetInt32(), env.GetProperty("humanController").GetInt32(), env.GetProperty("humanPawn").GetInt32()));
+    }
+
     // ---- P2: clutch inputs -------------------------------------------------------------------
 
     [Fact]

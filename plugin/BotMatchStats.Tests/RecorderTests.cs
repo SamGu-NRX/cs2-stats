@@ -277,6 +277,7 @@ public class RecorderTests
                     r.Impact(t, 100, 900, 60);
                     r.Impact(t, 100, 950, 60);
                     r.Hurt(t, 0, 5 + t % 5, 1, 0, 50, ak, 2, true, Nil.V);
+                    r.HitMask(t, 0, 5 + t % 5, 1u, 0u, true);
                 }
                 if (measure) allocated += GC.GetAllocatedBytesForCurrentThread() - a0;
             }
@@ -329,6 +330,8 @@ public class CodecTests
         r.Grenade(1200, b, GrenadeType.Molotov, 4, 5, 6);
         r.Hurt(1210, b, h, 8, 0, 92, r.Weapons.Get("inferno"), 0, false, (int)GrenadeType.Molotov);
         r.Blind(1220, h, b, 1500);
+        r.HitMask(1225, h, b, 0x8000_0001u, 2u, true);
+        r.SetHumanEntities(0, 1, 213);
         r.UtilBought(h, UtilType.Flash, 200);
         r.BombPlanted(1300, b, 1);
         r.Kill(new KillInput { Tick = 1400, Killer = h, Victim = b, Assister = Nil.V, Weapon = r.Weapons.Get("ak47"), Flags = 3, NadeType = Nil.V, VictimUtil = new UtilCounts { Known = true, Flash = 2 } });

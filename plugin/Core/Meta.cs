@@ -12,6 +12,8 @@ public sealed class EnvInfo
     public bool Halftime = true;
     /// <summary>"pawn", "inventory" or "mixed": the source(s) of equipment values in this match; null before any round.</summary>
     public string? EquipSource;
+    /// <summary>The human's entity slot, controller entity index and pawn entity index, set once per match.</summary>
+    public int HumanSlot = Nil.V, HumanController = Nil.V, HumanPawn = Nil.V;
 
     public EnvInfo Clone() => (EnvInfo)MemberwiseClone();
 }

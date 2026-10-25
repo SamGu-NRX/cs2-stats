@@ -51,6 +51,18 @@ public struct KillRow
     public int KBody, VBody;
 }
 
+/// <summary>
+/// Validation data for IsVisibleToHuman: the victim's raw spotted state when the human damaged it.
+/// A hit implies the human could see the victim in most cases, so these rows show which mask bit
+/// (if any) tracks the human.
+/// </summary>
+public struct HitMaskRow
+{
+    public int Ri, Tick, Victim;
+    public uint M0, M1;
+    public bool Spotted;
+}
+
 /// <summary>A player leaving the server during a recorded round.</summary>
 public struct LeaveRow
 {
