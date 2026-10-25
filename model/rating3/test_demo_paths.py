@@ -72,6 +72,7 @@ class RenamedColumnTests(unittest.TestCase):
         # new name would count no trades on every map written before it, silently.
         self.assertTrue(column({"extractor_trade_kill_5s": True}, "extractor_trade_kill_5s"))
         self.assertTrue(column({"trade_kill_5s": True}, "extractor_trade_kill_5s"))
+        self.assertTrue(column({"traded_death_5s": True}, "extractor_traded_death_5s"))
         self.assertFalse(column({"extractor_traded_death_5s": False, "traded_death_5s": True},
                                 "extractor_traded_death_5s"))
         self.assertIsNone(column({}, "extractor_trade_kill_5s"))
