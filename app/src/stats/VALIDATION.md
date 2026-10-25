@@ -54,30 +54,31 @@ $1,000 and $3,250 per player, are those bands for five players.
 
 ## Rating 3.0 and swing: `pnpm rating-check`
 
-Rating 3.0 is `params.json`'s six-term linear model (PR #17, duel strengths of `2197873`). Against
-HLTV on 395 joined maps (3,950 player-maps), with each win-probability source: `pnpm rating-check`
-uses the HLTV pack when installed, `CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB (394 maps
-there: the pipeline replaced one mid-run). Raw rows compare the engine's counts with HLTV's
-traditional columns, so an eco input's error can be told from a counting error.
+Rating 3.0 is `params.json`'s six-term linear model as merged in #17 (swing and duel refitted on 304
+joins, flash share 0.154). Against HLTV on 371 joined maps (3,710 player-maps) on 2026-10-25, with each
+win-probability source: `pnpm rating-check` uses the HLTV pack when installed,
+`CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB. Raw rows compare the engine's counts with
+HLTV's traditional columns, so an eco input's error can be told from a counting error.
 
 | Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV |
 |---|---|---|---|
 | KPR, raw | 0.0000 / 1.000 | same | 0.655 / 0.655 |
-| eKPR | 0.026 / 0.987 | same | 0.660 / 0.653 |
-| DPR, raw | 0.0004 / 0.999 | same | 0.659 / 0.659 |
-| eDPR | 0.026 / 0.975 | same | 0.660 / 0.676 |
-| ADR, raw | 0.075 / 1.000 | same | 71.73 / 71.74 |
-| eADR | 2.45 / 0.989 | same | 72.84 / 71.35 |
-| KAST, raw (percentage points) | 0.34 / 0.994 | same | 71.06 / 71.08 |
-| eKAST | 4.55 / 0.886 | same | 70.47 / 68.84 |
-| Swing (points per round) | 1.01 / 0.953 | 1.51 / 0.906 | 0.00 / -0.02 |
-| Rating 3.0 | 0.072 / 0.972 | 0.086 / 0.961 | 1.099 / 1.078 |
-| Rating 3.0, CT rounds | 0.128 / 0.966 | 0.141 / 0.952 | 1.182 / 1.097 |
-| Rating 3.0, T rounds | 0.106 / 0.970 | 0.125 / 0.957 | 1.018 / 1.071 |
+| eKPR | 0.028 / 0.986 | same | 0.643 / 0.654 |
+| DPR, raw | 0.0003 / 1.000 | same | 0.660 / 0.659 |
+| eDPR | 0.037 / 0.974 | same | 0.643 / 0.676 |
+| ADR, raw | 0.078 / 1.000 | same | 71.81 / 71.82 |
+| eADR | 1.89 / 0.991 | same | 70.91 / 71.43 |
+| KAST, raw (percentage points) | 0.33 / 0.994 | same | 71.11 / 71.13 |
+| eKAST | 4.48 / 0.885 | same | 70.34 / 68.88 |
+| Swing (points per round) | 1.01 / 0.953 | 1.51 / 0.904 | 0.00 / -0.02 |
+| Rating 3.0 | 0.069 / 0.972 | 0.084 / 0.960 | 1.089 / 1.078 |
+| Rating 3.0, CT rounds | 0.121 / 0.966 | 0.135 / 0.952 | 1.172 / 1.101 |
+| Rating 3.0, T rounds | 0.107 / 0.970 | 0.126 / 0.957 | 1.008 / 1.067 |
 
-The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting:
-eKAST most (its transform `params.json` marks unresolved), then eADR, which runs 1.5 HP per round high
-while raw ADR is level. Targets: swing r above 0.95 (met with the HLTV lookup); rating MAE under 0.04
+The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting.
+eKAST has the largest error and the weakest correlation (its transform `params.json` marks
+unresolved). The merged duel fit moved eKPR and eDPR low (0.643 against 0.654 and 0.676) and eADR from
+1.5 HP high to 0.5 HP low. Targets: swing r above 0.95 (met with the HLTV lookup); rating MAE under 0.04
 (not met) and r above 0.97 (met with the HLTV lookup). `params.json` reports a held-out MAE of 0.046
 when the model reads HLTV's own displayed inputs. Per-side ratings apply the map model to one side's
 rounds, which HLTV does not.
@@ -181,8 +182,8 @@ their code during development, so their figures are not reproducible here; no mo
 ## Baselines: `pnpm baselines`
 
 `public/baselines.json` is 361 KB: 21 quantiles of every metric for each pool and side, with no names or
-ids. Built from 516 pro maps on 2026-10-25 with swing from the HLTV win-probability lookup and the flash share, on the duel strengths of #17's `2197873`: 552 players
-with 40 or more rounds (455 riflers, 97 AWPers), and per-map pools of player-maps with 16 or more
-rounds. A metric's quantiles are written when at least 8 units have a value. The named pack (per-side
-style and performance scores) is written to the
+ids. Built from 489 pro maps on 2026-10-25 with #17's merged parameters and swing from the HLTV
+win-probability lookup: 552 players with 40 or more rounds (454 riflers, 98 AWPers), and per-map pools
+of player-maps with 16 or more rounds. A metric's quantiles are written when at least 8 units have a
+value. The named pack (per-side style and performance scores) is written to the
 private data folder only.
