@@ -1,12 +1,14 @@
 """Extract Valve matchmaking demos (match730_*.dem) into schema v1 tables, one folder per demo.
 
 Usage: python -I valve_import.py --out DIR [DEMO ...] [--mapdata DIR] [--steam DIR] [--user STEAMID64]
-       [--force] [--allow-in-repo] [--result FILE]
+       [--force] [--allow-in-repo] [--progress] [--result FILE]
 
 With no DEMO, every match730_*.dem in the CS2 replays folder of the local Steam install is imported. Each
 demo goes to DIR/<demo file name without .dem>/ in the versioned layout of SCHEMA-v1.md (CURRENT names the
 version folder) and must reproduce its own scoreboard, as extract.py checks. A demo whose current tables
-came from the same file and the same extractor version is skipped unless --force.
+came from the same file, extractor version and importer version is skipped unless --force. match.extra
+records the match date: the match time Steam writes into the .dem.info beside the demo, else the demo's
+file time. --progress writes one JSON line per demo start and end to stderr, which the app shows.
 
 The user is identified by SteamID64: --user, else the one already in DIR/valve-user.local.json, else the
 most recent account in Steam's config/loginusers.vdf. That file is written with the id and where it came
@@ -26,6 +28,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,13 +148,68 @@ def resolve_user(out: Path, steam: Path | None, explicit: int | None) -> dict:
     return user
 
 
+# What import_demos writes into match.extra (the app reads "date"). Bump it when that changes, so maps
+# imported before are imported again rather than skipped.
+IMPORTER_VERSION = 2
+
+
+def _varint(b: bytes, i: int) -> tuple[int, int]:
+    v = shift = 0
+    while True:
+        if i >= len(b) or shift > 63:
+            raise ValueError("truncated varint")
+        c = b[i]
+        i += 1
+        v |= (c & 0x7F) << shift
+        shift += 7
+        if not c & 0x80:
+            return v, i
+
+
+def info_matchtime(info: bytes) -> int | None:
+    """matchtime (field 2, Unix seconds) of the CDataGCCStrike15_v2_MatchInfo message in a .dem.info file,
+    or None when the message has no such field or does not parse."""
+    i = 0
+    try:
+        while i < len(info):
+            key, i = _varint(info, i)
+            field, wire = key >> 3, key & 7
+            if wire == 0:
+                v, i = _varint(info, i)
+                if field == 2:
+                    return v
+            elif wire == 2:
+                n, i = _varint(info, i)
+                i += n
+            elif wire in (1, 5):
+                i += 8 if wire == 1 else 4
+            else:
+                return None
+    except ValueError:
+        return None
+    return None
+
+
+def match_date(dem: Path) -> dict:
+    """{date (UTC ISO-8601), date_source} for a demo. Demos carry no date; Steam writes the match time into
+    the .dem.info beside a matchmaking demo, and the demo's own file time is the fallback."""
+    info = dem.with_name(dem.name + ".info")
+    t = info_matchtime(info.read_bytes()) if info.is_file() else None
+    # matchtime is seconds since 1970; anything before CS2's release (2023-09-27) is not one
+    if t is not None and t >= 1695772800:
+        return dict(date=datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds"), date_source="dem.info")
+    return dict(date=datetime.fromtimestamp(dem.stat().st_mtime, timezone.utc).isoformat(timespec="seconds"),
+                date_source="file time")
+
+
 def already_done(map_dir: Path, dem: Path) -> bool:
-    """The map's current tables came from this exact file and this extractor version."""
+    """The map's current tables came from this exact file, this extractor version and this importer."""
     d = extract.resolve_map_dir(map_dir) if map_dir.exists() else None
     if d is None:
         return False
-    m = pl.read_parquet(d / "match.parquet", columns=["demo_sha256", "extractor_version"]).row(0, named=True)
-    return m["extractor_version"] == extract.EXTRACTOR_VERSION and m["demo_sha256"] == extract.file_sha256(dem)
+    m = pl.read_parquet(d / "match.parquet", columns=["demo_sha256", "extractor_version", "extra"]).row(0, named=True)
+    return (m["extractor_version"] == extract.EXTRACTOR_VERSION and m["demo_sha256"] == extract.file_sha256(dem)
+            and json.loads(m["extra"]).get("importer_version") == IMPORTER_VERSION)
 
 
 def user_in_match(map_dir: Path, steamid: int) -> bool | None:
@@ -161,16 +219,21 @@ def user_in_match(map_dir: Path, steamid: int) -> bool | None:
     return steamid in pl.read_parquet(d / "players.parquet", columns=["steamid"])["steamid"].to_list()
 
 
-def import_demos(demos: list[Path], out: Path, mapdata: Path | None, user: dict, force: bool = False) -> list[dict]:
+def import_demos(demos: list[Path], out: Path, mapdata: Path | None, user: dict, force: bool = False,
+                 progress=None) -> list[dict]:
+    """Extract each demo into out/<demo stem>/. progress(event dict) is told when each demo starts and ends."""
     rows = []
-    for dem in demos:
+    for i, dem in enumerate(demos, 1):
         map_dir = out / dem.stem
         row = dict(demo=dem.name, out=str(map_dir))
+        if progress:
+            progress(dict(event="start", i=i, n=len(demos), demo=dem.name))
         if not force and already_done(map_dir, dem):
             row.update(ok=True, skipped="already extracted from this file by this extractor version")
         else:
             res = extract.extract_demo(dem, map_dir, "valve", mapdata=mapdata, archive=dem.stem,
-                                       meta_extra=dict(importer="valve_import"))
+                                       meta_extra=dict(importer="valve_import", importer_version=IMPORTER_VERSION,
+                                                       **match_date(dem)))
             v = res.get("validation") or {}
             row.update(ok=res["ok"], errors=res["errors"], map=res.get("map_name"), rounds=res.get("rounds"),
                        final_score=res.get("final_score"), tick_rate=res.get("tick_rate"),
@@ -179,6 +242,8 @@ def import_demos(demos: list[Path], out: Path, mapdata: Path | None, user: dict,
             gc.collect()
         row["user_in_match"] = user_in_match(map_dir, user["steamid"]) if row["ok"] else None
         rows.append(row)
+        if progress:
+            progress(dict(event="done", i=i, n=len(demos), demo=dem.name, ok=row["ok"], skipped="skipped" in row))
     return rows
 
 
@@ -193,6 +258,8 @@ def main(argv=None) -> int:
     ap.add_argument("--allow-in-repo", action="store_true",
                     help="allow --out inside a git work tree (it receives the user's SteamID64)")
     ap.add_argument("--result", type=Path, help="also write the JSON summary here")
+    ap.add_argument("--progress", action="store_true",
+                    help="write one JSON line to stderr as each demo starts and ends (for the app)")
     a = ap.parse_args(argv)
     if (repo := git_work_tree(a.out)) and not a.allow_in_repo:
         ap.error(f"--out {a.out} is inside the git work tree {repo}, and {USER_FILE} would hold the user's "
@@ -203,7 +270,8 @@ def main(argv=None) -> int:
     if missing := [str(d) for d in demos if not d.is_file()]:
         ap.error(f"no such demo: {missing}")
     user = resolve_user(a.out, a.steam, a.user)
-    rows = import_demos(demos, a.out, a.mapdata, user, a.force)
+    say = (lambda ev: print(json.dumps(ev), file=sys.stderr, flush=True)) if a.progress else None
+    rows = import_demos(demos, a.out, a.mapdata, user, a.force, say)
     summary = dict(extractor_version=extract.EXTRACTOR_VERSION, user_file=str(a.out / USER_FILE),
                    demos=len(rows), ok=sum(r["ok"] for r in rows), results=rows)
     txt = json.dumps(summary, default=extract._json_default, indent=1)
