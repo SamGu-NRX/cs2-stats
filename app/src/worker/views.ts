@@ -10,6 +10,7 @@ import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
 import { RATING3_LABEL, RATING3_STATUS, rating3Of } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
+import { swingSources } from "../stats/swing";
 import type { MatchEntry } from "../ui/data/match";
 import type {
   Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
@@ -29,7 +30,7 @@ export function metaOf(wp: WinProbSource): Meta {
 export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((m) => [m.id, m.value(s)]));
 /** Each sample-declaring metric's event count (Metric.sample), by metric id. */
 export const samplesOf = (s: Summary): Record<string, number> => Object.fromEntries(METRICS.flatMap((m) => (m.sample ? [[m.id, m.sample.n(s)]] : [])));
-export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), n: samplesOf(s), coverage: visibilityCoverage(s.aim) });
+export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), n: samplesOf(s), swingSources: swingSources(s.m), coverage: visibilityCoverage(s.aim) });
 // Every rating here is rating3Of's, the one definition (side-weighted, under the one coverage gate);
 // so is the rating3 metric in valuesOf, and with it the comparisons and "Work on". A line's eco values
 // are the rating's own inputs, over the rounds it rated.

@@ -198,6 +198,8 @@ export const MEASURES = [
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing",
+  // swing by source (swing.ts swingSources); with flashSwing they sum to swing
+  "swingKills", "swingTrades", "swingDamage", "swingDeaths", "swingEnd",
   // eco-adjusted measures over the player-rounds whose every eco value is known (ecoRounds, rating3.ts ecoAdjust)
   "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
   // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds

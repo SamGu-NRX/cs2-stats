@@ -15,6 +15,7 @@ import type { Rating3 } from "../stats/rating3";
 import type { BuyClass } from "../stats/economy";
 import type { VsOpponents } from "../stats/opponents";
 import type { Filter, Summary } from "../stats/rollup";
+import type { SwingSources } from "../stats/swing";
 import type { MatchEntry } from "../ui/data/match";
 
 /** Which matches a question covers (the map and time filters, resolved to files) and whose rounds. */
@@ -25,9 +26,10 @@ export type Values = Record<string, number | null>;
 
 /**
  * A rollup with its metric values, the event count behind each metric that declares one (Metric.sample:
- * AWP duels, saved rounds, duels), and the visibility coverage meter (aim.ts visibilityCoverage).
+ * AWP duels, saved rounds, duels), round swing by source (swing.ts swingSources), and the visibility
+ * coverage meter (aim.ts visibilityCoverage).
  */
-export type Rolled = Summary & { v: Values; n: Record<string, number>; coverage: number | null };
+export type Rolled = Summary & { v: Values; n: Record<string, number>; swingSources: SwingSources | null; coverage: number | null };
 
 /** A summary cut down to what a table row needs: the measures and the metric values. */
 export interface BuySplits { own: Partial<Record<BuyClass, Rolled>>; opp: Partial<Record<BuyClass, Rolled>> }
