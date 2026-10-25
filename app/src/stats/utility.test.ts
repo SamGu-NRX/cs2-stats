@@ -1,5 +1,7 @@
 // Utility usage on hand-built rounds: who a flash blinded, grenade damage by kind, and thrown grenades.
 import { expect, it } from "vitest";
+import { METRIC } from "./metrics";
+import { emptySummary } from "./rollup";
 import { FREEZE_END, oneRound } from "./testing/match";
 
 it("splits blinds into enemies and teammates and grenade damage into fire and the rest", () => {
@@ -35,4 +37,11 @@ it("counts money spent on grenades, less refunds, over rounds with purchases onl
   const m = f.pr.find((r) => f.players[r.pi].id === "a")!.m;
   expect([m.utilSpent, m.purchaseRounds]).toEqual([500, 1]);
   expect(oneRound({ players: { a: "CT", c: "T" } }).pr[0].m.purchaseRounds).toBeUndefined();
+});
+
+it("rates flash-to-kills per flash and unused utility per death", () => {
+  // fails if either is divided by rounds, which ranks a player by how much he flashes or how early he dies
+  const s = emptySummary();
+  Object.assign(s.m, { rounds: 10, flashes: 4, flashKills: 1, deaths: 5, utilDeaths: 2, utilUnused: 600 });
+  expect([METRIC.flashKillsPerFlash.value(s), METRIC.utilUnused.value(s)]).toEqual([0.25, 300]);
 });

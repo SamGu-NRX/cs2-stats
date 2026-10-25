@@ -67,3 +67,18 @@ it("marks a demo match that stopped before either team won as incomplete", () =>
   // fails if an abandoned one-round match counts as finished in career views
   expect(oneRound({ players: { a: "CT", b: "T" } }).match).toMatchObject({ score: [1, 0], complete: false });
 });
+
+it("counts trade opportunities, attempts and successes for the trader and for the traded", () => {
+  // fails if a teammate who hit the killer without killing him is not an attempt, or the death it
+  // follows does not count as attempted
+  const death = { tick: t(5), killer: "e", victim: "v", at: { v_x: 0, v_y: 0 } };
+  const f = oneRound({
+    players: { v: "CT", m: "CT", e: "T" },
+    kills: [death],
+    positions: [{ tick: t(5), steamid: "m", x: 300, y: 0 }, { tick: t(5), steamid: "v", x: 0, y: 0 }],
+    damages: [{ tick: t(6), attacker_steamid: "m", victim_steamid: "e", weapon: "ak47", dmg_health: 27, dmg_health_capped: 27, health_before: 100 }],
+  });
+  const m = (id: string) => f.pr.find((r) => f.players[r.pi].id === id)!.m;
+  expect([m("m").tradeOpps, m("m").tradeAttempts ?? 0, m("m").tradeOppsTaken ?? 0]).toEqual([1, 1, 0]);
+  expect([m("v").tradeableDeaths, m("v").tradedAttempts, m("v").tradeableTraded ?? 0]).toEqual([1, 1, 0]);
+});
