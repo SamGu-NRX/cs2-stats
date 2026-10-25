@@ -28,7 +28,7 @@ const GATE_MAPS = [
 
 // The extraction pipeline rewrites the data folder while it runs, so the test reads only the pinned
 // gate maps; one that is absent or has no tables yet is skipped by name.
-const gateDir = (m: string) => mapTablesDir(path.join(DATA_DIR, "demos", m));
+const gateDir = (m: string) => { const r = mapTablesDir(path.join(DATA_DIR, "demos", m)); return r && "dir" in r ? r.dir : null; };
 const present = GATE_MAPS.filter((m) => gateDir(m) !== null);
 const absent = GATE_MAPS.filter((m) => !present.includes(m));
 const have = present.length > 0 && hltvMaps().length > 0;
