@@ -151,7 +151,7 @@ const M: Metric[] = [
   { id: "awpDuelWin", label: "AWP duel win", hltv: "AWP Duel Win %", kind: "performance", group: "sniping", unit: "pct", status: "approx",
     def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels) },
   { id: "flashSwing", label: "Flash swing", hltv: "Flash Swing", kind: "performance", group: "utility", unit: "pct", status: "approx",
-    def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), per round.",
+    def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), split equally when several flashes were, per round.",
     value: (s) => (s.m.swingRounds ? (100 * s.m.flashSwing) / s.m.swingRounds : null) },
   { id: "assistsPerFlash", label: "Assists per flash", hltv: "Assists per Flash", kind: "performance", group: "utility", unit: "perRound", status: "approx",
     def: "Flash assists (the game's) per flashbang thrown.", value: (s) => per(s.m.flashAssists, s.m.flashes) },
