@@ -30,8 +30,9 @@ import { sourceOf } from "../data/sources";
 import { fmtSwing, signed } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
-import Playstyle from "./Playstyle";
-import { HowGood } from "./profile/parts";
+import ProfileView from "./Profile";
+import { MetricSlot } from "./profile/parts";
+import { HowGood } from "./profile/performance";
 import { Provisional } from "./shared";
 import Rounds from "./match/Rounds";
 import Utility from "./match/Utility";
@@ -114,63 +115,80 @@ const text = (el: Element | null | undefined) => el?.textContent?.trim() ?? "";
 const byLabel = (sel: string, label: string, name: string) => Array.from(host.querySelectorAll(sel)).find((el) => text(el.querySelector(label)) === name) ?? null;
 
 describe("comparison reasons", () => {
-  it("shows How good's uncompared values with their reason, never a rank or a dash", async () => {
+  /** How good's percentile rows, by metric label. */
+  const howGoodRow = (id: string) => Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label) ?? null;
+
+  it("shows How good's uncompared values with their reason, never a rank", async () => {
     // fails if a metric the engine could not compare (Percentile.reason) shows "Top x%", "Bottom x%" or a
-    // dash where the reason belongs, or loses its value
+    // dot where the reason belongs, or loses its value
     const q = queryOf(samples);
     const r = await calls.compare(q, { side: "both" });
-    answers.compare = r;
-    render(<HowGood q={q} side="both" />);
-    const rows = Array.from(host.querySelectorAll(".howgood li"));
-    const rowOf = (id: string) => rows.find((li) => li.firstElementChild?.firstChild?.textContent === metric(id).label)!;
-    const reasoned = Object.values(r.p).filter((x) => x.reason && rows.some((li) => li === rowOf(x.id)));
+    render(<HowGood cmp={r} error={null} m={summary(q).m} />);
+    const reasoned = Object.values(r.p).filter((x) => x.reason && x.value !== null && howGoodRow(x.id));
     expect(reasoned.length).toBeGreaterThan(0);
     for (const x of reasoned) {
-      const li = rowOf(x.id);
-      expect(li.querySelector(".nocmp")?.getAttribute("data-tip"), x.id).toBe(x.reason);
-      expect(text(li.querySelector("b")), x.id).toBe(fmtMetric(x.id, x.value));
-      expect(text(li), x.id).not.toMatch(/Top \d|Bottom \d/);
+      const row = howGoodRow(x.id)!;
+      expect(text(row.querySelector(".pctl__phrase")), x.id).toBe(x.reason);
+      expect(text(row.querySelector(".pctl__val")), x.id).toBe(fmtMetric(x.id, x.value));
+      expect(row.querySelector(".pctl__bar i"), x.id).toBeNull();
     }
-    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rows.some((li) => li === rowOf(x.id)))!;
-    expect(text(rowOf(ranked.id))).toMatch(/Top \d+%|Bottom \d+%/);
+    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && howGoodRow(x.id))!;
+    expect(text(howGoodRow(ranked.id)!.querySelector(".pctl__phrase"))).toMatch(/^(Top|Bottom) \d+% of pro /);
   });
 
   it("marks How good's approx metrics, and only those", async () => {
     // fails if How good drops the ≈ marker from a metric whose status is "approx", or puts it on an exact one
     const q = queryOf(samples);
-    answers.compare = await calls.compare(q, { side: "both" });
-    render(<HowGood q={q} side="both" />);
-    const rows = Array.from(host.querySelectorAll(".howgood li"));
+    render(<HowGood cmp={await calls.compare(q, { side: "both" })} error={null} m={summary(q).m} />);
+    const rows = Array.from(host.querySelectorAll(".howgood .pctl"));
     expect(rows.length).toBeGreaterThan(0);
     const statuses = new Set<string>();
-    for (const li of rows) {
-      const m = metrics().find((x) => x.label === li.firstElementChild?.firstChild?.textContent)!;
+    for (const row of rows) {
+      const m = metrics().find((x) => x.label === row.querySelector(".pctl__label")?.firstChild?.textContent)!;
       statuses.add(m.status);
-      expect(!!li.querySelector(".approx"), m.id).toBe(m.status === "approx");
+      expect(!!row.querySelector(".pctl__label .approx"), m.id).toBe(m.status === "approx");
     }
     expect(statuses).toContain("approx");
     expect(statuses).toContain("exact");
   });
+});
 
-  it("shows Where you rank's uncompared values with their reason", async () => {
-    // fails if a Playstyle rank row shows a rank or a dash for a value the engine could not compare
+describe("Profile attributes panel", () => {
+  it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
+    // fails if the panel labels Firepower's pro percentiles as bot ranks (or the reverse), drops Sniping's
+    // own population, or shows a rank where the engine gave a reason
     use(samples);
     const q = queryOf(samples);
-    answers.compare = await calls.compare(q, { pool: "all" });
-    answers.style = await calls.style(q, { pool: "all" });
-    render(<Playstyle />);
-    const p = { ...(answers.compare as { p: object }).p, ...(answers.style as { p: object }).p } as Record<string, { reason: string | null }>;
-    const rows = Array.from(host.querySelectorAll(".ranks__group li"));
-    const reasoned = rows.filter((li) => {
-      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
-      return p[m.id].reason;
-    });
-    expect(reasoned.length).toBeGreaterThan(0);
-    for (const li of reasoned) {
-      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
-      expect(li.querySelector(".ranks__p .nocmp")?.getAttribute("data-tip"), m.id).toBe(p[m.id].reason);
+    const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
+    answers.attributeBlock = block;
+    render(<ProfileView />);
+    const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
+    const phrases = (id: string) => Array.from(attr(id).querySelectorAll(".pctl")).map((el) => ({ el, phrase: text(el.querySelector(".pctl__phrase")) }));
+    expect(text(attr("firepower").querySelector(".apa__note"))).toBe(`Compared to ${block.proPool} pro ${block.style.role === "awper" ? "AWPers" : "riflers"}`);
+    expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
+    const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
+    const checks: [string, RegExp][] = [["firepower", / of pro (riflers|AWPers)$/], ["sniping", / against all bots$/], ["entrying", new RegExp(` against ${own}$`)]];
+    for (const [id, pop] of checks) {
+      const score = id === "firepower" ? block.firepower! : block.style.scores.find((a) => a.id === id)!;
+      const rows = phrases(id);
+      expect(rows.length, id).toBe(score.metrics.length);
+      score.metrics.forEach((p, i) => {
+        if (p.reason) expect(rows[i].phrase, `${id} ${p.id}`).toBe(p.reason);
+        else if (p.pct !== null) expect(rows[i].phrase, `${id} ${p.id}`).toMatch(pop);
+      });
     }
   });
+});
+
+it("renders an announced metric's slot only once the engine defines it and has a value", () => {
+  // fails if the slot for a metric the engine has not shipped (buy deviation, save conversion) draws a
+  // placeholder, or a defined metric with a value does not show
+  render(<MetricSlot id="notShippedYet" values={{ notShippedYet: 3 }} ranks={null} kind="style" population="rifler bots" />);
+  expect(host.innerHTML).toBe("");
+  render(<MetricSlot id="kpr" values={{ kpr: null }} ranks={null} kind="performance" population="pros" />);
+  expect(host.innerHTML).toBe("");
+  render(<MetricSlot id="kpr" values={{ kpr: 0.8 }} ranks={null} kind="performance" population="pros" />);
+  expect(text(host.querySelector(".pctl__val"))).toBe(fmtMetric("kpr", 0.8));
 });
 
 describe("Home", () => {

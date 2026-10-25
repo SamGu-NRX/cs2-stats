@@ -34,30 +34,28 @@ export const TradingIcon = (p: IconProps) => (
   </Svg>
 );
 
-/** Opening: a crosshair with a drop of first blood at its centre. */
+/** Opening: a crosshair ring with one tick at 12 o'clock, the first contact (design/shell-and-motion.md). */
 export const OpeningIcon = (p: IconProps) => (
   <Svg {...p}>
-    <circle cx="12" cy="12" r="6.75" />
-    <path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" />
-    <path d="M12 8.6c1.35 1.7 2.1 2.9 2.1 4a2.1 2.1 0 0 1-4.2 0c0-1.1.75-2.3 2.1-4z" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="13" r="7.5" />
+    <path d="M12 2.5v6" />
+    <circle cx="12" cy="13" r="1.25" fill="currentColor" stroke="none" />
   </Svg>
 );
 
-/** Closing: a padlock, the round locked shut. */
+/** Closing: a shield outline, holding the round to its end. */
 export const ClosingIcon = (p: IconProps) => (
   <Svg {...p}>
-    <path d="M7.5 10.5V7.75a4.5 4.5 0 0 1 9 0v2.75" />
-    <rect x="4.5" y="10.5" width="15" height="10.5" rx="2" />
-    <path d="M12 14.5v3" />
+    <path d="M12 2.75l7.5 2.75v6c0 4.6-3.1 8.2-7.5 9.75-4.4-1.55-7.5-5.15-7.5-9.75v-6z" />
   </Svg>
 );
 
-/** Sniping: a scope reticle with thick outer posts and a fine centre. */
+/** Sniping: a scope reticle, a ring with four ticks and a centre dot. */
 export const SnipingIcon = (p: IconProps) => (
   <Svg {...p}>
-    <circle cx="12" cy="12" r="8.75" />
-    <path d="M12 3.25v4.5M12 16.25v4.5M3.25 12h4.5M16.25 12h4.5" strokeWidth="2.25" />
-    <path d="M12 9.5v1.25M12 13.25v1.25M9.5 12h1.25M13.25 12h1.25" strokeWidth="1" />
+    <circle cx="12" cy="12" r="8.25" />
+    <path d="M12 3.75v4M12 16.25v4M3.75 12h4M16.25 12h4" />
+    <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
   </Svg>
 );
 
