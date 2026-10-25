@@ -1,14 +1,17 @@
-// A front-facing human figure for hits by body part, about 7.5 heads tall with shoulders, a tapered
-// waist, hands and feet: head, neck, chest, stomach, two arms and two legs are separate paths, each
-// shaded cream by its share of hits. The figure's left side (the viewer's right) mirrors its right.
+// A front-facing human figure for hits by body part, proportioned like a CS2 agent standing: head,
+// neck, chest, stomach, two arms and two legs are separate paths, each shaded cream by its share of
+// hits (the most-hit region full, an unhit one the panel colour).
 import type { BodyShare } from "../../components/charts";
 
-const HEAD = "M100 10C118 10 130 24 130 44C130 61 123 73 113 79L87 79C77 73 70 61 70 44C70 24 82 10 100 10Z";
-const NECK = "M87 79L113 79L115 95C107 99 93 99 85 95Z";
-const CHEST = "M85 95C93 99 107 99 115 95C129 96 143 100 153 108C157 125 157 147 153 169L149 189L51 189L47 169C43 147 43 125 47 108C57 100 71 96 85 95Z";
-const STOMACH = "M51 191L149 191C149 215 151 237 155 259C139 271 121 275 100 275C79 275 61 271 45 259C49 237 51 215 51 191Z";
-const ARM = "M45 109C36 113 31 123 29 137C26 159 25 179 23 199C21 221 19 241 17 259C15 273 13 285 14 297C15 306 24 308 27 299C30 289 31 277 33 263C36 243 40 223 43 203C45 187 47 171 48 155C48 139 47 123 45 109Z";
-const LEG = "M47 263C62 273 81 279 98 279L98 291C96 325 94 359 92 393C91 419 90 443 90 461C90 466 92 470 95 473L66 473C66 462 66 448 65 434C63 406 61 376 59 346C57 318 52 290 47 263Z";
+// Front view, about eight heads tall (head 57 of 468 units), shoulders a little under two heads wide,
+// arms hanging slightly away from the torso so each region reads on its own. One side is drawn; the
+// other mirrors it. Seams are the background-coloured stroke between regions.
+const HEAD = "M100 8C114 8 124 18 124 33C124 41 122 48 119 53C116 59 109 65 100 65C91 65 84 59 81 53C78 48 76 41 76 33C76 18 86 8 100 8Z";
+const NECK = "M89 58C93 62 96 65 100 65C104 65 107 62 111 58L114 79C108 83 92 83 86 79Z";
+const CHEST = "M86 79C92 83 108 83 114 79C121 81 130 85 137 89C142 92 145 95 147 99C148 104 148 108 148 112C147 118 146 123 145 128C144 136 144 144 144 150C143 160 140 170 138 178L62 178C60 170 57 160 56 150C56 144 56 136 55 128C54 123 53 118 52 112C52 108 52 104 53 99C55 95 58 92 63 89C70 85 79 81 86 79Z";
+const STOMACH = "M62 180L138 180C137 192 136 204 136 216C137 230 140 244 143 258C129 266 115 270 100 270C85 270 71 266 57 258C60 244 63 230 64 216C64 204 63 192 62 180Z";
+const ARM = "M63 89C56 89 46 93 41 100C37 106 36 114 36 124C36 134 36 144 36 152C35 170 34 188 34 204C33 222 31 240 30 260C30 270 30 278 30 286C29 294 28 304 29 312C30 320 34 325 38 324C42 323 43 318 42 310C41 302 41 294 41 287C42 274 44 262 45 250C47 236 48 222 49 206C50 192 51 180 52 168C53 158 53 148 54 140C54 136 55 132 55 128C56 116 58 100 63 89Z";
+const LEG = "M57 260C71 268 85 272 98 272L98 284C97 300 95 316 94 332C93 344 91 354 90 364C90 376 91 386 91 396C91 412 89 432 87 450C87 454 87 456 87 458C90 462 96 466 97 471C97 474 94 476 90 476L69 476C64 476 62 472 65 468C68 464 71 460 72 455C71 446 67 430 63 416C60 406 59 398 60 388C61 380 62 372 62 364C61 350 59 334 58 318C57 300 56 280 57 260Z";
 
 export function BodyFigure({ share, height = 300 }: { share: BodyShare; height?: number }) {
   const max = Math.max(0.0001, ...Object.values(share));
