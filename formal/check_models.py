@@ -14,7 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parent
 FAIL = {
     "PublishFreshCrash", "PublishRetiredCrash", "PublishStrictWithdrawal",
-    "PublishRatingResolveError", "PublishRatingBinding",
+    "PublishRatingResolveError", "PublishRatingBinding", "PublishRatingRetryExhausted",
     "PublishManual", "PublishPruneOneShot", "PublishPruneDangling",
     "PluginLateFreeze", "PluginAfterWin", "PluginHotReload",
     "PipelineLegacyIdentity", "PipelineLegacyInPlace",

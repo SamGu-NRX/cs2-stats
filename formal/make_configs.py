@@ -44,7 +44,7 @@ def main():
     for reader, suffix in [("python","Python"),("node","Node"),("rating","Rating")]:
         publish(suffix, ["NoMix", "StaleKept", "LockDiscipline"], Reader=reader, Failures=True)
         publish(suffix + "Incomplete", ["NoIncomplete", "ValidationSnapshot"], Reader=reader)
-    publish("NodePerFile", ["NoMix"], Reader="node-per-file")
+    publish("NodePerFile", ["NoMix"], ["ReaderEventuallyReturns"], fair=True, Reader="node-per-file")
     publish("RatingRetryExhausted", ["ReaderSucceeds"], Writers=2, Reader="rating", Pruners=0)
     publish("RatingResolveError", ["ReaderSucceeds"], Reader="rating")
     publish("RatingBinding", ["RatingBindsTarget"], Reader="rating", Pruners=0)

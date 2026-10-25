@@ -95,10 +95,10 @@ Violated `temporal`. [Bounds](PublishPruneDangling.cfg).
 
 ```text
 1. Initial: loc=(0 :> "version" @@ 1 :> "version"); marker="none"; current=1; pc=<<11>>
-2. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
-3. owner=2; ppc=<<"branch">>
-4. locks={}
-5. ppc=<<"cache">>
+2. owner=2; ppc=<<"branch">>
+3. locks={}
+4. ppc=<<"cache">>
+5. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
 6. ppc=<<"idle">>
 7. Stuttering
 Then stutter forever (no further state changes).
@@ -174,6 +174,54 @@ Violated `ReaderSucceeds`. [Bounds](PublishRatingResolveError.cfg).
 18. ppc=<<"delete">>; pending=<<{<<0, "version">>}>>
 19. files=(0 :> {"other", "COMPLETE"} @@ 1 :> {"match", "other", "COMPLETE"})
 20. rpc="error"; badValidation=TRUE; readerError=TRUE
+```
+
+## PublishRatingRetryExhausted
+
+Violated `ReaderSucceeds`. [Bounds](PublishRatingRetryExhausted.cfg).
+
+```text
+1. Initial: loc=(0 :> "version" @@ 1 :> "none" @@ 2 :> "none"); marker="none"; current=0; pc=<<0, 0>>
+2. owner=1; loc=(0 :> "version" @@ 1 :> "tmp" @@ 2 :> "none"); pc=<<1, 0>>
+3. files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match"} @@ 2 :> {}); pc=<<2, 0>>
+4. files=( 0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match", "other"} @@ 2 :> {} ); pc=<<3, 0>>
+5. pc=<<4, 0>>
+6. pc=<<5, 0>>
+7. files=( 0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match", "other", "COMPLETE"} @@ 2 :> {} ); pc=<<6, 0>>
+8. loc=(0 :> "version" @@ 1 :> "version" @@ 2 :> "none"); pc=<<7, 0>>
+9. staged={1}; pc=<<8, 0>>
+10. rpc="pointer"
+11. rpc="validate"; chosen=0
+12. rpc="stat"
+13. checked={"match"}
+14. rpc="target"; checked={"match", "other"}
+15. rpc="open"; target=0
+16. current=1; staged={}; pc=<<9, 0>>
+17. pc=<<10, 0>>
+18. owner=0; pc=<<11, 0>>
+19. owner=2; loc=(0 :> "version" @@ 1 :> "version" @@ 2 :> "tmp"); pc=<<11, 1>>
+20. files=( 0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match", "other", "COMPLETE"} @@ 2 :> {"match"} ); pc=<<11, 2>>
+21. files=( 0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match", "other", "COMPLETE"} @@ 2 :> {"match", "other"} ); pc=<<11, 3>>
+22. pc=<<11, 4>>
+23. pc=<<11, 5>>
+24. files=( 0 :> {"match", "other", "COMPLETE"} @@ 1 :> {"match", "other", "COMPLETE"} @@ 2 :> {"match", "other", "COMPLETE"} ); pc=<<11, 6>>
+25. loc=(0 :> "version" @@ 1 :> "version" @@ 2 :> "version"); pc=<<11, 7>>
+26. staged={2}; pc=<<11, 8>>
+27. locks={<<0, "match">>}; loaded=<<0>>
+28. locks={<<0, "match">>, <<0, "other">>}; rpc="finish"; loaded=<<0, 0>>
+29. rpc="missing"
+30. locks={}; rpc="marker"; chosen=-1; target=-1; loaded=<<>>; checked={}; attempt=2
+31. rpc="pointer"
+32. rpc="validate"; chosen=1
+33. rpc="stat"
+34. checked={"match"}
+35. rpc="target"; checked={"match", "other"}
+36. rpc="open"; target=1
+37. current=2; staged={}; pc=<<11, 9>>
+38. locks={<<1, "match">>}; loaded=<<1>>
+39. locks={<<1, "match">>, <<1, "other">>}; rpc="finish"; loaded=<<1, 1>>
+40. rpc="missing"
+41. locks={}; rpc="error"; chosen=-1; target=-1; loaded=<<>>; checked={}; readerError=TRUE
 ```
 
 ## PublishRetiredCrash
