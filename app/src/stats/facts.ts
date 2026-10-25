@@ -47,9 +47,24 @@ export interface MatchInfo {
   winProb: "hltv" | "cs2rb";
   /** model-params.ts modelFingerprint: the rating parameters and win-probability source these facts were derived with */
   model: string;
-  /** the source's throws: logged, or rebuilt from detonations (the plugin's older files), whose throw point and time are approximate */
-  inputs: { throws: "logged" | "rebuilt" | null };
+  inputs: {
+    /** the source's throws: logged, or rebuilt from detonations (the plugin's older files), whose throw point and time are approximate */
+    throws: "logged" | "rebuilt" | null;
+    /**
+     * what a plugin file's "target on screen" comes from: line of sight, the game's spotted flags, or
+     * the spotted flags because line of sight failed partway (ON_SCREEN_NOTE). Null for demos, whose
+     * visibility comes from the extractor's engagements.
+     */
+    onScreen: OnScreenSource | null;
+  };
 }
+
+export type OnScreenSource = "los" | "spotted" | "spotted-los-lost";
+
+/** The note a match whose on-screen source is a fallback carries wherever its aim numbers are shown. */
+export const ON_SCREEN_NOTE: Partial<Record<OnScreenSource, string>> = {
+  "spotted-los-lost": "line of sight lost partway; using the game's spotted flags",
+};
 
 /**
  * Inputs some metrics need, each counted per row by a pair of measures: [rows where the input is

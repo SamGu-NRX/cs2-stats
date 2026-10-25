@@ -52,6 +52,12 @@ function finalScore(m: MatchFile): [number, number] {
   return out;
 }
 
+/** Which record targetOnScreen reads: MatchInfo.inputs.onScreen, from match.extra "on_screen". */
+function onScreenSource(m: MatchFile): "los" | "spotted" | "spotted-los-lost" {
+  if (m.env.visSource === "mixed") return "spotted-los-lost";
+  return m.env.visSource === "los" && m.aim.los?.ri.length ? "los" : "spotted";
+}
+
 /**
  * Whether each shot's target was on screen, by shots row. Line-of-sight files (env.visSource "los",
  * plugin 1.1.0) read aim.los: the target's state at a tick is that of its last transition at or before
@@ -59,20 +65,16 @@ function finalScore(m: MatchFile): [number, number] {
  * + 1, so a read at the kill tick sees the victim; older files stamp it at the death tick, so a hidden
  * row at the target's or the human's death tick is read from the next tick and both give one answer.
  * Other files read visTarget (the spotted mask); files before visTarget named only a visible enemy as
- * the target (SCHEMA.md, aim.shots). A "mixed" file had line of sight until it turned off for the rest
- * of the map (env.losError); the plugin closes the visible enemies at that tick, so its last LOS row
- * marks the failure: shots up to it read LOS, later shots the mask.
+ * the target (SCHEMA.md, aim.shots). A "mixed" file lost line of sight partway (env.losError) and reads
+ * the mask for the whole match: the file does not say exactly when the trace stopped answering, so no
+ * cutoff is guessed. MatchInfo.inputs.onScreen records which was used (facts.ts ON_SCREEN_NOTE).
  */
 function targetOnScreen(m: MatchFile): (i: number) => boolean {
   const s = m.aim.shots;
   const los = m.aim.los;
   const visTarget = s.visTarget;
   const mask = visTarget ? (i: number) => visTarget[i] === 1 : (i: number) => s.target[i] !== null;
-  if (los && los.ri.length && (m.env.visSource === "los" || m.env.visSource === "mixed")) {
-    // the failure point of a mixed file: its last LOS row, by round then tick
-    let fr = -1, ft = -1;
-    los.ri.forEach((ri, r) => { if (ri > fr || (ri === fr && los.tick[r] > ft)) { fr = ri; ft = los.tick[r]; } });
-    const losOn = m.env.visSource === "los" ? () => true : (i: number) => s.ri[i] < fr || (s.ri[i] === fr && s.tick[i] <= ft);
+  if (los && los.ri.length && m.env.visSource === "los") {
     const at = (ri: number, pi: number) => ri * 256 + pi;
     const death = new Map<number, number>();
     m.kills.ri.forEach((ri, k) => death.set(at(ri, m.kills.victim[k]), m.kills.tick[k]));
@@ -86,7 +88,6 @@ function targetOnScreen(m: MatchFile): (i: number) => boolean {
     });
     for (const l of rows.values()) l.sort((a, b) => a[0] - b[0]);
     return (i) => {
-      if (!losOn(i)) return mask(i);
       const target = s.target[i];
       if (target === null) return false;
       let vis = false;
@@ -140,6 +141,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
       pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m),
       // files before plugin 1.0.0 have no throw log; throws are rebuilt from detonations (facts.ts SourceInputs.throws)
       ...(m.throws ? {} : { throws: "rebuilt" }),
+      on_screen: onScreenSource(m),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));
