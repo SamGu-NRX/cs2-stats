@@ -6,6 +6,10 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from demo_paths import demo_layout
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -258,7 +262,7 @@ def build_duel_events(root: Path, joins: list[dict]) -> tuple[list[dict], list[d
     events = []
     targets = []
     for join in joins:
-        directory = root / join["demo"]
+        directory = demo_layout(root, join["demo"]).directory
         if not (directory / "kills.parquet").exists():
             continue
         hltv = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
@@ -315,7 +319,7 @@ def build_duel_events(root: Path, joins: list[dict]) -> tuple[list[dict], list[d
 def build_round_rows(root: Path, joins: list[dict], duel_model: dict) -> list[dict]:
     output = []
     for join in joins:
-        directory = root / join["demo"]
+        directory = demo_layout(root, join["demo"]).directory
         required = ("rounds.parquet", "kills.parquet", "damages.parquet", "players.parquet")
         if not all((directory / name).exists() for name in required):
             continue
@@ -731,7 +735,7 @@ def main() -> None:
         "rounding_floor": identity_quantization_floor(identity_result, identity_records, identity_features),
     }
     exact_game_damage_maps = sum(
-        int((args.data / join["demo"] / "player_rounds.parquet").exists()) for join in joins
+        int(demo_layout(args.data, join["demo"]).format == "schema_v1") for join in joins
     )
     payload = {
         "joins": joins_result["counts"],
