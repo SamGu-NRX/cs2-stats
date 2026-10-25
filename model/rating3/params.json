@@ -4,7 +4,6 @@
     "version": "3.02",
     "status": "approximation",
     "basis": "plain_linear_displayed_eco_inputs",
-    "formula": "0.491216918440 + 0.443550243344*eKPR + 0.004305266302*eADR - 0.362558441743*eDPR + 0.002927218776*eKAST + 0.002228737874*MK + 0.039868033107*Swing",
     "features": [
       "eKPR",
       "eADR",
@@ -13,6 +12,32 @@
       "MK",
       "Swing"
     ],
+    "inputs": {
+      "eKPR": {
+        "definition": "Eco-adjusted kills divided by played rounds",
+        "unit": "kills per round"
+      },
+      "eADR": {
+        "definition": "Eco-adjusted damage divided by played rounds",
+        "unit": "HP per round"
+      },
+      "eDPR": {
+        "definition": "Eco-adjusted deaths divided by played rounds",
+        "unit": "deaths per round"
+      },
+      "eKAST": {
+        "definition": "Eco-adjusted KAST percentage",
+        "unit": "percent, 0-100"
+      },
+      "MK": {
+        "definition": "Rounds in which the player made at least two kills",
+        "unit": "percent of rounds, 0-100"
+      },
+      "Swing": {
+        "definition": "Mean round swing credited to the player",
+        "unit": "percentage points per round"
+      }
+    },
     "intercept": 0.4912169184399224,
     "coefficients": {
       "eKPR": 0.4435502433440879,
@@ -24,76 +49,77 @@
     },
     "dataset": {
       "maps": 733,
+      "matches": 503,
       "player_maps": 7330,
       "date": "2026-10-25",
       "rounds": "regulation_and_overtime"
     },
     "fit": {
       "method": "ordinary_least_squares",
-      "held_out_split": "5-fold GroupKFold by map",
-      "held_out_mae": 0.04621565670292833,
-      "held_out_p95": 0.11793610200755351,
-      "held_out_max": 0.4583705886312567,
-      "held_out_r": 0.987102849394379,
+      "held_out_split": "5-fold GroupKFold by match",
+      "held_out_mae": 0.04619985241532808,
+      "held_out_p95": 0.11833462115735568,
+      "held_out_max": 0.4568360585830392,
+      "held_out_r": 0.9871073278291704,
       "folds": [
         {
           "fold": 1,
           "rows": 1470,
-          "maps": 147,
+          "matches": 100,
           "score": {
             "n": 1470,
-            "mae": 0.04779718538652119,
-            "p95": 0.12555866577509792,
-            "max": 0.35808348730621276,
-            "r": 0.9862593005440834
+            "mae": 0.044778863547499166,
+            "p95": 0.11221198432886244,
+            "max": 0.3141910658007263,
+            "r": 0.9871046776954505
           }
         },
         {
           "fold": 2,
           "rows": 1470,
-          "maps": 147,
+          "matches": 101,
           "score": {
             "n": 1470,
-            "mae": 0.04588241354207168,
-            "p95": 0.11116347308270622,
-            "max": 0.3832481480652503,
-            "r": 0.9871433829920083
+            "mae": 0.04783585111189622,
+            "p95": 0.12241770313527774,
+            "max": 0.3380933752202757,
+            "r": 0.9865608409505963
           }
         },
         {
           "fold": 3,
           "rows": 1470,
-          "maps": 147,
+          "matches": 101,
           "score": {
             "n": 1470,
-            "mae": 0.04508912002452771,
-            "p95": 0.11754851037633053,
-            "max": 0.3201169878973533,
-            "r": 0.9879585464761976
+            "mae": 0.0459145998474038,
+            "p95": 0.11477825418935313,
+            "max": 0.3591570647029815,
+            "r": 0.9876569051182127
           }
         },
         {
           "fold": 4,
           "rows": 1460,
-          "maps": 146,
+          "matches": 100,
           "score": {
             "n": 1460,
-            "mae": 0.04639579216107542,
-            "p95": 0.11781652765006372,
-            "max": 0.4583705886312567,
-            "r": 0.9866155407239149
+            "mae": 0.045636566369289804,
+            "p95": 0.11034354549642805,
+            "max": 0.3183977964498039,
+            "r": 0.9870987295563183
           }
         },
         {
           "fold": 5,
           "rows": 1460,
-          "maps": 146,
+          "matches": 101,
           "score": {
             "n": 1460,
-            "mae": 0.04591293850425158,
-            "p95": 0.11911579414407711,
-            "max": 0.3080143600268017,
-            "r": 0.98774790107343
+            "mae": 0.04683386231520334,
+            "p95": 0.12794653176867127,
+            "max": 0.4568360585830392,
+            "r": 0.9873490413002595
           }
         }
       ]
@@ -101,21 +127,29 @@
   },
   "dataset": {
     "hltv_maps": 733,
+    "matches": 503,
     "player_maps": 7330,
     "fit_date": "2026-10-25",
     "rounds": "regulation_and_overtime"
   },
   "swing": {
+    "source": {
+      "source": "fit",
+      "script": "swing_fit.py",
+      "accepted_joins": 318,
+      "events": 602
+    },
     "event_credit_model": "damage_share_then_flash_residual",
     "assist_damage": 40,
     "trade_window_seconds": 5.0,
+    "flash_credit_fraction": 0.15400502293429819,
+    "flash_credit_sample_size": 23,
     "zero_rules": [
       "unpreventable post-bomb kills have zero swing",
       "kill credit is never negative",
       "failed trade victim still receives the full victim debit",
       "round with an unvalued probability event is unknown"
     ],
-    "observed_flash_credit_fraction": "approximately 0.154 when no damage helper is present; varies with flash evidence and is not fixed by current joins",
     "round_end_remainder": {
       "clutcher_weight": 1,
       "kill_swing_player_weight": 2,
@@ -125,6 +159,13 @@
     "fit_status": "event split partially recovered; round-end remainder not yet fitted to player-map totals"
   },
   "duel": {
+    "source": {
+      "source": "fit",
+      "script": "eco_fit.py",
+      "accepted_joins": 318,
+      "duels": 462,
+      "targets": 30
+    },
     "groups": [
       "sniper",
       "rifle1",
@@ -133,33 +174,86 @@
       "pistolPlus",
       "pistol"
     ],
-    "model": "P(win)=sigmoid(strength[killer]-strength[victim]+side_edge)",
     "strength": {
-      "sniper": 1.502,
-      "rifle1": 1.179,
-      "rifle2": 0.83,
-      "smg": 0.56,
-      "pistolPlus": 0.29,
+      "sniper": 0.8000365369485354,
+      "rifle1": 0.5883787885710595,
+      "rifle2": 0.3002174511530293,
+      "smg": 0.1458257703123428,
+      "pistolPlus": 0.29331672693076777,
       "pistol": 0.0
     },
     "ct_edge": 0.0800427076735365,
-    "kill_points_scale": 2.14,
+    "kill_points_scale": 2.0863386903749372,
+    "duels": 462,
+    "targets": 30,
+    "objective_mae": 0.10760526038940484,
+    "status": "joint fit to eK/eD/eADR; validate exact display rounding before shipping",
     "published_anchors": {
-      "t_rifle_vs_ct_rifle": 0.48,
-      "t_rifle_vs_starter_pistol": 0.75,
-      "awp_vs_rifle_t": 0.56,
-      "awp_vs_rifle_ct": 0.6
+      "t_rifle_vs_ct_rifle": {
+        "value": 0.48,
+        "source": "published",
+        "citation": "HLTV Rating 3.02 methodology, October 2025 update"
+      },
+      "t_rifle_vs_starter_pistol": {
+        "value": 0.75,
+        "source": "published",
+        "citation": "HLTV Rating 3.02 methodology, October 2025 update"
+      },
+      "awp_vs_rifle_t": {
+        "value": 0.56,
+        "source": "published",
+        "citation": "HLTV Rating 3.02 methodology, October 2025 update"
+      },
+      "awp_vs_rifle_ct": {
+        "value": 0.6,
+        "source": "published",
+        "citation": "HLTV Rating 3.02 methodology, October 2025 update"
+      }
     },
-    "fit_status": "published anchors plus provisional strengths; demo-side duel fit remains incomplete"
+    "ct_edge_source": {
+      "source": "published",
+      "citation": "HLTV Rating 3.02 methodology, October 2025 update",
+      "derived_from": "t_rifle_vs_ct_rifle"
+    },
+    "fit_status": "strengths and kill-point scale fit by eco_fit.py; side edge and anchors are published"
   },
   "ecoAdjustment": {
-    "eKAST": "not resolved; scoreboard evidence is compatible with a reduced-power transform but no validated fitted transform",
+    "source": {
+      "source": "research",
+      "script": "fit_params.py",
+      "maps": 733,
+      "fit_date": "2026-10-25"
+    },
+    "eKAST": {
+      "status": "unresolved",
+      "definition": "Eco-adjusted KAST percentage from the HLTV scoreboard",
+      "unit": "percent, 0-100",
+      "note": "A reduced-power winning-team transform is compatible with the observations, but no validated transform was fitted.",
+      "citation": "HLTV Rating 3.02 methodology, October 2025 update"
+    },
     "map_features_available": [
       "eKPR",
       "eADR",
       "eDPR",
       "eKAST"
     ],
-    "eMK": "HLTV map cards do not expose an eMK column; reference fit uses raw MK percent until engine tables expose it"
+    "eMK": {
+      "status": "unavailable",
+      "definition": "Eco-adjusted multi-kill percentage",
+      "unit": "percent of rounds, 0-100",
+      "note": "HLTV map cards do not expose eMK; the rating fit uses raw MK percent."
+    }
+  },
+  "winProbabilitySource": {
+    "preferred": {
+      "path": "%APPDATA%/BotMatchStats/packs/winprob-hltv.json",
+      "label": "HLTV Rating 3.02 lookup, approximate",
+      "source": "private_pack"
+    },
+    "fallback": {
+      "path": "model/export/winprob.ts",
+      "label": "CS2RB logistic model, approximate",
+      "source": "model_export"
+    }
   }
 }

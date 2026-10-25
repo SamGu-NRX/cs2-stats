@@ -57,24 +57,69 @@ def collect(root,joins):
    rows.append({'target':'player','map':join['hltv'],'player':name,'ek':kd(cell('st-kills',True)),'ed':kd(cell('st-deaths',True)),'eadr':number(cell('st-adr',True)),'rounds':rounds})
  return rows,duels
 
+def fit_model(root: Path, joins: list[dict]) -> dict:
+    raw, duels = collect(root, joins)
+    targets = [row for row in raw if row.get("target") == "player"]
+    events = [row for row in raw if row.get("target") != "player"]
+
+    def unpack(parameters):
+        return np.r_[parameters[:5], 0.0], parameters[5]
+
+    def probability(parameters, attacker, victim, side):
+        strengths, _ = unpack(parameters)
+        edge = -np.log(0.48 / 0.52)
+        return sigmoid(strengths[index[attacker]] - strengths[index[victim]] + (edge if side == "CT" else -edge))
+
+    def residual(parameters):
+        strengths, scale = unpack(parameters)
+        predicted = defaultdict(lambda: {"k": 0.0, "d": 0.0, "adr": 0.0})
+        for event in events:
+            points = scale * (1 - probability(parameters, event["a"], event["v"], event["side"]))
+            if event.get("kill"):
+                predicted[(event["map"], event["player"])]["k"] += points
+                predicted[(event["map"], event["victim"])]["d"] += points
+            if event.get("dmg") is not None:
+                predicted[(event["map"], event["player"])]["adr"] += event["dmg"] * points
+        output = []
+        for target in targets:
+            values = predicted[(target["map"], target["player"])]
+            output.extend([
+                (values["k"] - target["ek"]) * 0.2,
+                (values["d"] - target["ed"]) * 0.2,
+                (values["adr"] / target["rounds"] - target["eadr"]) * 0.05,
+            ])
+        return output
+
+    initial = np.array([1.5, 1.18, 0.83, 0.56, 0.29, 2.14])
+    result = least_squares(residual, initial, bounds=([-4] * 5 + [0.1], [4] * 5 + [8]), max_nfev=1000)
+    strengths, scale = unpack(result.x)
+    return {
+        "source": {
+            "source": "fit",
+            "script": "eco_fit.py",
+            "accepted_joins": len(joins),
+            "duels": len(duels),
+            "targets": len(targets),
+        },
+        "groups": list(groups),
+        "strength": dict(zip(groups, strengths.tolist())),
+        "ct_edge": float(-np.log(0.48 / 0.52)),
+        "kill_points_scale": float(scale),
+        "duels": len(duels),
+        "targets": len(targets),
+        "objective_mae": float(np.mean(np.abs(residual(result.x)))),
+        "status": "joint fit to eK/eD/eADR; validate exact display rounding before shipping",
+    }
+
+
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--data',type=Path,required=True);ap.add_argument('--joins',type=Path,required=True);ap.add_argument('--out',type=Path,required=True);a=ap.parse_args();joins=json.loads(a.joins.read_text())['accepted'];raw,duels=collect(a.data,joins);targets=[r for r in raw if r.get('target')=='player'];events=[r for r in raw if r.get('target')!='player']
- def unpack(p):
-  return np.r_[p[:5],0.0],p[5]
- def prob(p,a,v,side):
-  s,k=unpack(p);edge=-np.log(.48/.52);return sigmoid(s[index[a]]-s[index[v]]+(edge if side=='CT' else -edge))
- def residual(p):
-  s,k=unpack(p);pred=defaultdict(lambda:{'k':0.,'d':0.,'adr':0.})
-  for e in events:
-   q=k*(1-prob(p,e['a'],e['v'],e['side']))
-   if e.get('kill'):
-    pred[(e['map'],e['player'])]['k']+=q;pred[(e['map'],e['victim'])]['d']+=q
-   if e.get('dmg') is not None:pred[(e['map'],e['player'])]['adr']+=e['dmg']*q
-  out=[]
-  for t in targets:
-   x=pred[(t['map'],t['player'])];out.extend([(x['k']-t['ek'])*.2,(x['d']-t['ed'])*.2,(x['adr']/t['rounds']-t['eadr'])*.05])
-  return out
- x=np.array([1.5,1.18,.83,.56,.29,2.14]);fit=least_squares(residual,x,bounds=([-4]*5+[.1],[4]*5+[8]),max_nfev=1000);print(fit.x, np.mean(np.abs(residual(fit.x))));
- out={'groups':groups,'strength':dict(zip(groups,unpack(fit.x)[0].tolist())),'ct_edge':float(-np.log(.48/.52)),'k':float(unpack(fit.x)[1]),'duels':len(duels),'targets':len(targets),'objective_mae':float(np.mean(np.abs(residual(fit.x)))),'status':'joint fit to eK/eD/eADR; validate exact display rounding before shipping'}
- a.out.write_text(json.dumps(out,indent=2)+'\n')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", type=Path, required=True)
+    parser.add_argument("--joins", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    joins = json.loads(args.joins.read_text(encoding="utf-8"))["accepted"]
+    result = fit_model(args.data, joins)
+    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(result, indent=2))
 if __name__=='__main__':main()
