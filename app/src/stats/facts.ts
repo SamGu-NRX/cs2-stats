@@ -137,6 +137,8 @@ export const MEASURES = [
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg",
+  // grenades bought (purchases table): money, and the rounds where purchases were recorded
+  "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
 ] as const;

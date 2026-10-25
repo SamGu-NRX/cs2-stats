@@ -61,7 +61,7 @@ export interface Ctx {
   /** pr[ri][pi], null when the player did not play the round; every measure present while deriving */
   pr: (WorkRound | null)[][];
   /** row indexes of a table by round (0-based) */
-  byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb") => number[][];
+  byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb" | "purchases") => number[][];
   /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
   posAt: (ri: number, pi: number, tick: number) => [number, number, number] | null;
   /** a player index from a steamid column value */

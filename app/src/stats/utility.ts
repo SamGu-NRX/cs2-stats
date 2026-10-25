@@ -1,5 +1,5 @@
-// Utility usage: grenades thrown and where they landed, enemies and teammates flashed, flash-to-kills,
-// grenade damage dealt and taken, and grenades a player died holding. Flash definitions are Leetify's (research-data-sources.md): an enemy counts as flashed
+// Utility usage: grenades bought, thrown and where they landed, enemies and teammates flashed,
+// flash-to-kills, grenade damage dealt and taken, and grenades a player died holding. Flash definitions are Leetify's (research-data-sources.md): an enemy counts as flashed
 // at more than 1.1 s of blind, and a flash-to-kill is a flashed enemy dying to the team while still
 // blind. Utility quality beyond usage (smokes) is utilq.ts.
 import { enemyHit, hitDamage, type Ctx } from "./derive";
@@ -61,6 +61,16 @@ export function utility(c: Ctx): void {
       a.m.utilDmg += x;
       if (w === "hegrenade") a.m.heDmg += x;
       if (FIRE.has(w)) a.m.fireDmg += x;
+    }
+
+    // grenades bought, less those refunded in the buy zone
+    const buys = c.t.purchases;
+    if (buys) {
+      for (const p of rows) if (p) p.m.purchaseRounds = 1;
+      for (const i of c.byRound("purchases")[ri]) {
+        const p = row(buys.steamid[i]);
+        if (p && !buys.was_sold[i] && isUtility(classFromDisplay(buys.item[i]))) p.m.utilSpent += buys.cost[i];
+      }
     }
 
     // grenades held: the freeze-end inventory, less those thrown before death

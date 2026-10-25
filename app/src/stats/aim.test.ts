@@ -38,7 +38,7 @@ function match(): MatchTables {
     match: emptyTable("match"), players: emptyTable("players"), rounds: emptyTable("rounds"), player_rounds: emptyTable("player_rounds"),
     kills: emptyTable("kills"), damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
     grenade_throws: null, grenade_events: null, smokes: null, infernos: null, positions: null, spotted: null,
-    shots: emptyTable("shots"), engagements: emptyTable("engagements"), engagement_ticks: emptyTable("engagement_ticks"),
+    shots: emptyTable("shots"), engagements: emptyTable("engagements"), engagement_ticks: emptyTable("engagement_ticks"), purchases: null,
   } satisfies MatchTables;
   add(t.match, "match", { match_id: "m", source: "local", map: "de_test", tick_rate: RATE, team_ct_start: "A", team_t_start: "B", schema_version: 1, convars: "{}", extra: "{}", visibility_status: "ok" });
   add(t.players, "players", { steamid: "1", name: "a", team: "A" });
