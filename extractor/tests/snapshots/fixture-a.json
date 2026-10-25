@@ -766,6 +766,14 @@
      "Int32",
      "61df05208f6073e3"
     ],
+    "extractor_trade_kill_5s": [
+     "Boolean",
+     "137862676512e2a6"
+    ],
+    "extractor_traded_death_5s": [
+     "Boolean",
+     "bd11899333b79f95"
+    ],
     "headshot": [
      "Boolean",
      "9e5ae685ee207065"
@@ -809,14 +817,6 @@
     "tick": [
      "Int32",
      "662dc014f54fa132"
-    ],
-    "trade_kill_5s": [
-     "Boolean",
-     "137862676512e2a6"
-    ],
-    "traded_death_5s": [
-     "Boolean",
-     "bd11899333b79f95"
     ],
     "v_active_weapon": [
      "String",
@@ -967,9 +967,13 @@
      "String",
      "eb4e847aa0b85bf0"
     ],
+    "extractor_trade_window_s": [
+     "Float32",
+     "a7e46e87e47cd9c0"
+    ],
     "extractor_version": [
      "String",
-     "12345128eb64f6b8"
+     "8e8c4c38a37c454d"
     ],
     "final_tick": [
      "Int32",
@@ -1094,10 +1098,6 @@
     "tick_rate": [
      "Float32",
      "d603b0c852f91ec4"
-    ],
-    "trade_window_s": [
-     "Float32",
-     "a7e46e87e47cd9c0"
     ],
     "truncated": [
      "Boolean",
@@ -1432,10 +1432,6 @@
      "Boolean",
      "69dd5f463c656170"
     ],
-    "ct_buy_type": [
-     "String",
-     "c464f1b0e99069a1"
-    ],
     "ct_equip_value": [
      "Int32",
      "080782d40de1ba77"
@@ -1507,10 +1503,6 @@
     "started_live": [
      "Boolean",
      "69dd5f463c656170"
-    ],
-    "t_buy_type": [
-     "String",
-     "3209f991b4f4686f"
     ],
     "t_equip_value": [
      "Int32",

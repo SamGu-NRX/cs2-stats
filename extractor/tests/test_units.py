@@ -901,7 +901,7 @@ def _rounds_frame(**override):
     row.update(round=1, start_tick=1, freeze_end_tick=100, end_tick=900, started_live=False, aborted=False,
                winner_side="CT", reason="t_killed", voided_attempts=0, ct_team="A", t_team="B", winner_team="A",
                ct_team_score_after=1, t_team_score_after=0, duration_s=12.5, ct_equip_value=4000, t_equip_value=4000,
-               ct_buy_type="pistol", t_buy_type="pistol", ct_money_start=4000, t_money_start=4000)
+               ct_money_start=4000, t_money_start=4000)
     row.update(override)
     return pd.DataFrame([row])
 
