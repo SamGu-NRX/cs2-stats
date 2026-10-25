@@ -82,6 +82,11 @@ export const INPUT_COVERAGE = {
    * value give (rating3.ts ecoAdjust).
    */
   eco: ["ecoEventsKnown", "ecoEvents", "both players' loadout", "kills and deaths"],
+  /**
+   * mesh line of sight between the players (the extractor's engagements with visibility_status ok).
+   * Plugin files have none, so a sighting metric there has no value rather than one from radar spotting.
+   */
+  sight: ["sightRounds", "rounds", "line of sight", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
@@ -186,7 +191,7 @@ export const MEASURES = [
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
-  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents",
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)

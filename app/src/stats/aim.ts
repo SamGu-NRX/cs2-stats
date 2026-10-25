@@ -13,6 +13,7 @@ import { MAX_SPEED, RECOIL } from "./aim-ref";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
+import { PEEK_MIN_SPEED } from "./movement";
 import { weaponClass } from "./weapons";
 
 // ---- thresholds. "Ours" means no source and no fit. Distributions on the pro maps: pnpm family-check.
@@ -80,6 +81,19 @@ export const SPRAY_MIN = 3;
  */
 export const CYCLE_TOL_TICKS = 1.01;
 
+// The contact measures below follow the individual-play research's definitions
+// (cs2-stats-data/research/individual/extract_individual.py), which METRICS.md compares with ours.
+/** A sighting's first shot is the first one within this long of the onset, while the enemy stays visible (the research's window). */
+export const CONTACT_SHOT_S = 1;
+/** Peek travel is how far you moved over this long after the onset, while the enemy stayed visible (the research's window). */
+export const PEEK_TRAVEL_S = 0.25;
+/** A kill between the two players this soon after the onset settles the sighting's duel (the research's window). */
+export const DUEL_WINDOW_S = 3;
+/** The stop buffer looks this far back from the first shot for the last tick you were moving (the research's window). */
+export const STOP_LOOKBACK_S = 0.5;
+/** A position sample older than this does not give a player's health at a tick (the research's rule). */
+export const HEALTH_MAX_AGE_S = 0.3;
+
 // ---- facts
 
 /** One sighting: an engagement whose victim became visible on screen. Times in seconds, angles in degrees. */
@@ -108,6 +122,24 @@ export interface SightFact {
   /** ticks tracking a moving target and the sum of their aim errors */
   trackN: number;
   trackSum: number;
+  /** horizontal distance to the victim at the onset (units) */
+  dist: number;
+  /** how far you moved from the onset over PEEK_TRAVEL_S while he stayed visible; null when he did not stay a second tick */
+  travel: number | null;
+  /** your 2D speed (u/s) and the angle from your view to his eye at your first shot within CONTACT_SHOT_S; null without one */
+  shotSpeed: number | null;
+  shotErr: number | null;
+  /** seconds from the last tick you moved faster than PEEK_MIN_SPEED to that shot, when you were moving in the STOP_LOOKBACK_S before it and not at it */
+  stopBuf: number | null;
+  /**
+   * You fired at him before he fired at you. Set on your first sighting of him in the round that has a
+   * first shot, when his first sighting of you with a shot exists too and the two shots fell on different
+   * ticks; null otherwise.
+   */
+  first: boolean | null;
+  /** seconds from the onset to a kill between the two of you within DUEL_WINDOW_S, and whether you made it; null without one */
+  duelS: number | null;
+  duelWon: boolean | null;
 }
 
 /** One player's shots with one gun in one round. */
@@ -207,6 +239,16 @@ export interface AimAgg {
   swSprays: number;
   switches: number;
   switchHits: number;
+  /** samples for medians: onset distance, peek travel, shot speed and error, stop buffer, seconds to the duel's kill */
+  dist: number[];
+  travel: number[];
+  shotSpeed: number[];
+  shotErr: number[];
+  stopBuf: number[];
+  duelS: number[];
+  /** mutual sightings with both first shots timed, and those where you fired first */
+  ffN: number;
+  ff: number;
   /** bullets compared with the pro path, and sums of the residual's length and pitch part */
   cmp: number;
   dev: number;
@@ -221,6 +263,7 @@ export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
   sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
+  dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0,
 });
 
 export function foldAim(a: AimAgg, f: AimFact): void {
@@ -237,6 +280,13 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.micro += f.micro ?? 0;
     a.trackN += f.trackN;
     a.trackSum += f.trackSum;
+    a.dist.push(f.dist);
+    if (f.travel !== null) a.travel.push(f.travel);
+    if (f.shotSpeed !== null) a.shotSpeed.push(f.shotSpeed);
+    if (f.shotErr !== null) a.shotErr.push(f.shotErr);
+    if (f.stopBuf !== null) a.stopBuf.push(f.stopBuf);
+    if (f.duelS !== null) a.duelS.push(f.duelS);
+    if (f.first !== null) { a.ffN++; if (f.first) a.ff++; }
   } else if (f.k === "shots") {
     a.shots += f.shots; a.hits += f.hits; a.sight += f.sight; a.sightHits += f.sightHits;
     a.first += f.first; a.firstHits += f.firstHits;
@@ -276,12 +326,43 @@ type Vec3 = [number, number, number];
 export function deriveAim(c: Ctx): AimFact[] {
   const out: AimFact[] = [];
   const view = viewIndex(c);
-  if (view?.visible) for (let e = 0; e < c.t.engagements!.n; e++) {
-    const f = sighting(c, view, e);
-    if (f) out.push(f);
+  if (view?.visible) {
+    const sights: Sighting[] = [];
+    for (let e = 0; e < c.t.engagements!.n; e++) {
+      const s = sighting(c, view, e);
+      if (s) { sights.push(s); out.push(s.f); }
+    }
+    markFiredFirst(sights);
   }
   if (c.t.shots) shotFacts(c, view, out);
   return out;
+}
+
+/** Counts every player-round of a match with mesh visibility in sightRounds, the `sight` input's known rows (facts.ts INPUT_COVERAGE). */
+export function markSight(c: Ctx): void {
+  if (!c.t.engagements || !c.t.engagement_ticks || c.t.match.visibility_status[0] !== "ok") return;
+  for (const row of c.pr) for (const p of row) if (p) p.m.sightRounds = 1;
+}
+
+/** A sighting's fact, with the onset and first-shot ticks (CONTACT_SHOT_S) the fired-first pairing reads. */
+interface Sighting { f: SightFact; victim: number; onset: number; shot: number | null }
+
+/**
+ * Who fired first, per pair of players and round: each player's earliest sighting of the other that
+ * has a first shot, compared with the other's. Equal ticks settle nothing (the research's rule).
+ */
+function markFiredFirst(sights: Sighting[]): void {
+  const firstShot = new Map<string, Sighting>();
+  for (const s of sights) {
+    if (s.shot === null) continue;
+    const k = `${s.f.ri}:${s.f.pi}:${s.victim}`;
+    const cur = firstShot.get(k);
+    if (!cur || s.onset < cur.onset) firstShot.set(k, s);
+  }
+  for (const s of firstShot.values()) {
+    const other = firstShot.get(`${s.f.ri}:${s.victim}:${s.f.pi}`);
+    if (other && other.shot !== s.shot) s.f.first = s.shot! < other.shot!;
+  }
 }
 
 interface View {
@@ -302,6 +383,8 @@ interface View {
 const key = (tick: number, pi: number) => tick * 256 + pi;
 /** Angles in facts keep 0.001 degrees: aim facts shrink from about 115 to 97 KB per map, and nothing reads finer. */
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
+/** Distances and speeds keep 0.1 units. */
+const r1 = (x: number) => Math.round(x * 10) / 10;
 
 function viewIndex(c: Ctx): View | null {
   const E = c.t.engagements, T = c.t.engagement_ticks;
@@ -348,7 +431,7 @@ function seen(c: Ctx, i: number): boolean {
   return T.mesh_visible[i] === true && T.smoke_blocked[i] === false;
 }
 
-function sighting(c: Ctx, view: View, e: number): SightFact | null {
+function sighting(c: Ctx, view: View, e: number): Sighting | null {
   const E = c.t.engagements!, T = c.t.engagement_ticks!;
   const r = view.rows[e];
   const ri = c.riOf(E.round[e]);
@@ -452,9 +535,39 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
     trackSum += ang;
   }
 
+  // The contact measures (the research's definitions; METRICS.md "Contact").
+  const speed = (k: number) => {
+    const x = T.a_vel_x[r[k]], y = T.a_vel_y[r[k]];
+    return x === null || y === null ? null : Math.hypot(x, y);
+  };
+  const dist = Math.hypot(T.v_x[r[o]]! - T.a_x[r[o]]!, T.v_y[r[o]]! - T.a_y[r[o]]!);
+  let pk = o;
+  for (let k = o + 1; k < v && tick(k) - t0 <= PEEK_TRAVEL_S * rate; k++) pk = k;
+  const travel = pk > o ? Math.hypot(T.a_x[r[pk]]! - T.a_x[r[o]]!, T.a_y[r[pk]]! - T.a_y[r[o]]!) : null;
+  let fk = -1;
+  for (let k = o; k < v && tick(k) - t0 <= CONTACT_SHOT_S * rate && fk < 0; k++) if (T.a_shot_fired[r[k]]) fk = k;
+  let shotSpeed: number | null = null, shotErr: number | null = null, stopBuf: number | null = null;
+  if (fk >= 0) {
+    shotSpeed = speed(fk);
+    shotErr = r3(angle(fk));
+    if (shotSpeed !== null && shotSpeed <= PEEK_MIN_SPEED) {
+      for (let k = fk - 1; k >= 0 && tick(fk) - tick(k) <= STOP_LOOKBACK_S * rate; k--) {
+        const s = speed(k);
+        if (s !== null && s > PEEK_MIN_SPEED) { stopBuf = (tick(fk) - tick(k) - 1) / rate; break; }
+      }
+    }
+  }
+  const duel = c.kills[ri].find((k) => k.enemy && k.tick >= t0 && k.tick <= t0 + DUEL_WINDOW_S * rate
+    && ((k.killer === pi && k.victim === victim) || (k.killer === victim && k.victim === pi)));
+
   return {
-    k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
-    over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
+    f: {
+      k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
+      over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
+      dist: r1(dist), travel: travel === null ? null : r1(travel), shotSpeed: shotSpeed === null ? null : r1(shotSpeed), shotErr, stopBuf, first: null,
+      duelS: duel ? (duel.tick - t0) / rate : null, duelWon: duel ? duel.killer === pi : null,
+    },
+    victim: victim!, onset: t0, shot: fk >= 0 ? tick(fk) : null,
   };
 }
 
@@ -726,4 +839,31 @@ export const AIM_METRICS: Metric[] = [
   { id: "transferHits", label: "Spray transfers that hit", kind: "performance", group: "aim", unit: "pct", status: "approx",
     def: `Target switches inside a spray where the rest of the spray hit the new target. ${PLUGIN_SPRAYS}`,
     value: (s) => pct(s.aim.switchHits, s.aim.switches) },
+
+  // ---- contact measures (METRICS.md "Contact"): one sample per sighting, line of sight required
+  { id: "shotSpeed", label: "Speed at first shot", kind: "identity", group: "aim", unit: "speed", status: "approx", needs: ["sight"],
+    def: "Your median movement speed at your first shot after spotting an enemy.",
+    value: (s) => median(s.aim.shotSpeed) },
+  { id: "shotError", label: "First-shot error", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true, needs: ["sight"],
+    def: "Median angle from your crosshair to the enemy's eye at your first shot.",
+    value: (s) => median(s.aim.shotErr) },
+  { id: "stopBuffer", label: "Stop before shooting", kind: "identity", group: "aim", unit: "ms", status: "approx", needs: ["sight"],
+    def: "Median time between stopping and your first shot at an enemy.",
+    value: (s) => ms(median(s.aim.stopBuf)) },
+];
+
+/** Contact measures that describe how you take a fight; aggression.ts combines them into one scale. */
+export const CONTACT_METRICS: Metric[] = [
+  { id: "peekTravel", label: "Peek travel", kind: "identity", group: "aggression", unit: "units", status: "approx", needs: ["sight"],
+    def: "Median distance you move in the quarter second after spotting an enemy.",
+    value: (s) => median(s.aim.travel) },
+  { id: "duelExposure", label: "Exposure before the duel", kind: "identity", group: "aggression", unit: "secs", status: "approx", needs: ["sight"],
+    def: "Median seconds from first seeing an enemy to the kill between you.",
+    value: (s) => median(s.aim.duelS) },
+  { id: "firedFirst", label: "Fired first", kind: "identity", group: "aggression", unit: "pct", status: "approx", needs: ["sight"],
+    def: "Share of mutual sightings where you shot before the enemy did.",
+    value: (s) => pct(s.aim.ff, s.aim.ffN) },
+  { id: "engageDistance", label: "Engagement distance", kind: "identity", group: "aggression", unit: "units", status: "approx", needs: ["sight"],
+    def: "Median distance to an enemy when you first see him.",
+    value: (s) => median(s.aim.dist) },
 ];
