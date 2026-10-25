@@ -55,6 +55,9 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private CCSGameRules? _rules;
     private CCSTeam? _teamT, _teamCt;
     private bool _needInit = true, _scanPending, _disabled, _memReady;
+    // A game launch loads plugins at the main menu. Reading entities there throws, and CounterStrikeSharp
+    // caches that failure for every plugin until restart, so TryInit waits for a loaded map.
+    private bool _mapLoaded;
     private int _tick, _nextRefresh, _finalizeAt = Nil.V, _matchEndAt = Nil.V, _humanSlot = -1;
     private int _perRoundStride;
     // Scan generations (see Lifecycle.AcceptResume): bumped for every new scan request; answers with
@@ -87,6 +90,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _writer = new MatchWriter(root, gameDir);
         _rec = new Recorder(_writer, _frames, _perf, Warn);
         Array.Fill(_piSlot, -1);
+        _mapLoaded = hotReload && EntityListReady();
 
         RegisterListener<Listeners.OnTick>(OnTick);
         // Everything that can allocate (worker messages, init, slot refresh, economy, round finalization)
@@ -195,7 +199,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         {
             DrainMessages();
             if (_disabled || _rec == null) return;
-            if (_needInit) { TryInit(); return; }
+            if (_needInit) { if (_mapLoaded && EntityListReady()) TryInit(); return; }
             _tick = Server.TickCount;
             if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
             if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }
@@ -625,8 +629,16 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         rec.EndCapture("abandoned", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
     }
 
+    // Asks the native entity list directly; unlike Utilities' cached accessor, a failure here is not remembered.
+    private static bool EntityListReady()
+    {
+        try { return NativeAPI.GetConcreteEntityListPointer() != IntPtr.Zero; }
+        catch (NativeException) { return false; }
+    }
+
     private void OnMapStart(string map)
     {
+        _mapLoaded = true;
         _winPanelSeen = false;
         // Normally OnMapEnd already closed the capture; this covers a map change without it.
         Abandon("map change");
@@ -637,6 +649,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void OnMapEnd()
     {
+        _mapLoaded = false;
         if (_rec == null) return;
         if (_matchEndAt != Nil.V) { _matchEndAt = Nil.V; EndMatch(); }
         else Abandon("map end");
