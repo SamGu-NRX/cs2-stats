@@ -1059,3 +1059,29 @@ def test_startup_tidies_every_map_and_leaves_pre_v1_folders_alone(tmp_path, monk
     assert sorted(x.name for x in live.iterdir()) == ["CURRENT", new.name]
     assert (pre_v1 / "meta.parquet").exists()
 
+
+
+_PLACEHOLDER = {"Boolean": False, "Float32": 1.0, "Int8": 1, "Int16": 1, "Int32": 1, "Int64": 1, "UInt32": 1,
+                "UInt64": 76561190000000001, "String": "x", "List(String)": ["x"], "List(UInt64)": [1]}
+
+
+def _one_row(table, **override):
+    import schema_v1
+    row = {c: _PLACEHOLDER[t] for c, t in schema_v1.TYPES[table].items()}
+    row.update(override)
+    return pd.DataFrame([row]).astype({c: object for c in override})
+
+
+@pytest.mark.parametrize("table, cols", [
+    # Each was seen on a real map that passes validation, and failed it at the writer.
+    ("grenade_throws", ["entity_id", "flight_s", "land_tick", "land_x", "land_y", "land_z", "link_distance",
+                        "projectile"]),  # a molotov never linked to a projectile
+    ("player_rounds", ["best_secondary", "best_secondary_price"]),  # a player holding no pistol
+    ("kills", ["v_best_secondary", "v_best_secondary_price"]),  # a victim holding no pistol
+    ("kills", ["s_since_freeze_end"]),  # a kill in a round recorded already live
+    ("bomb", ["steamid", "place", "x", "y", "z"]),  # a pickup on tick 0 that names no player
+    ("grenade_events", ["steamid"]),  # an inferno_expire that names no player
+    ("rounds", ["winner_side", "winner_team"]),  # an aborted round (no winner, stats kept)
+])
+def test_the_writer_accepts_the_nulls_real_maps_carry(table, cols):
+    ex._to_polars(_one_row(table, **{c: None for c in cols}), table)

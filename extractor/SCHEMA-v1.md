@@ -164,8 +164,8 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `t_team` | String | no | clan name on T |
 | `t_team_score_after` | Int16 | no | score of t_team after the round |
 | `voided_attempts` | Int16 | no | backup-restored attempts of this round |
-| `winner_side` | String | no | CT | T |
-| `winner_team` | String | no | clan name of the winner |
+| `winner_side` | String | yes | CT | T; null for an aborted round |
+| `winner_team` | String | yes | clan name of the winner; null for an aborted round |
 | `aborted` | Boolean | no | a round ended with no winner whose stats the game kept (its kills and deaths count); not part of the score |
 
 ### `player_rounds`
@@ -176,8 +176,8 @@ One row per player per round, read at freeze end. Key: (round, steamid).
 | `armor` | Int32 | no | armor points |
 | `best_primary` | String | yes | most expensive primary held |
 | `best_primary_price` | Int32 | yes | $ |
-| `best_secondary` | String | no | most expensive pistol held |
-| `best_secondary_price` | Int32 | no | $ |
+| `best_secondary` | String | yes | most expensive pistol held; null when he holds none |
+| `best_secondary_price` | Int32 | yes | $; null with best_secondary |
 | `cash_spent` | Int32 | no | spent this round, $ |
 | `defuser` | Boolean | no | has a defuse kit |
 | `equip_value_game` | Int32 | no | the game's own equipment value, $ |
@@ -239,7 +239,7 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `noscope` | Boolean | no |  |
 | `penetrated` | Int32 | no | objects the bullet passed through (0 = no wallbang) |
 | `round` | Int16 | no | round |
-| `s_since_freeze_end` | Float32 | no | s |
+| `s_since_freeze_end` | Float32 | yes | s; null in a round recorded already live (no freeze end) |
 | `s_since_plant` | Float32 | yes | s; null before the plant or without one |
 | `thrusmoke` | Boolean | no |  |
 | `tick` | Int32 | no | tick |
@@ -250,8 +250,8 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `v_armor` | Int32 | no |  |
 | `v_best_primary` | String | yes |  |
 | `v_best_primary_price` | Int32 | yes |  |
-| `v_best_secondary` | String | no |  |
-| `v_best_secondary_price` | Int32 | no |  |
+| `v_best_secondary` | String | yes | null when the victim holds no pistol |
+| `v_best_secondary_price` | Int32 | yes | null with v_best_secondary |
 | `v_ducking` | Boolean | no |  |
 | `v_equip_value_game` | Int32 | no |  |
 | `v_flash_duration` | Float32 | no |  |
@@ -506,20 +506,20 @@ One row per molotov or incendiary fire. Flame extent is not in the demo. Key: en
 | `z` | Float32 | no |  |
 
 ### `grenade_throws`
-One row per grenade_thrown, linked to its projectile. Key: (tick, steamid).
+One row per grenade_thrown, linked to its projectile when one is found. Key: (tick, steamid).
 
 | field | type | null | meaning, units |
 |---|---|---|---|
-| `entity_id` | Int32 | no |  |
-| `flight_s` | Float32 | no | s |
-| `land_tick` | Int32 | no | tick |
-| `land_x` | Float32 | no |  |
-| `land_y` | Float32 | no |  |
-| `land_z` | Float32 | no |  |
-| `link_distance` | Float32 | no | projectile start to thrower eye, Hammer units |
+| `entity_id` | Int32 | yes | null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `flight_s` | Float32 | yes | s; null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `land_tick` | Int32 | yes | tick; null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `land_x` | Float32 | yes | null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `land_y` | Float32 | yes | null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `land_z` | Float32 | yes | null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
+| `link_distance` | Float32 | yes | projectile start to thrower eye, Hammer units; null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
 | `pitch` | Float32 | no | degrees |
 | `place` | String | no |  |
-| `projectile` | Int32 | no | grenade_paths.projectile |
+| `projectile` | Int32 | yes | grenade_paths.projectile; null when the throw was not linked to a projectile (match validation grenade_throws_linked counts them) |
 | `round` | Int16 | no |  |
 | `side` | String | no |  |
 | `steamid` | UInt64 | no | player id (see Conventions) |
@@ -553,7 +553,7 @@ Detonations, smoke and inferno start and end. Key: (tick, event, entity_id).
 | `entity_id` | Int32 | no |  |
 | `event` | String | no | he_detonate | flash_detonate | smoke_detonate | smoke_expired | inferno_start | inferno_expire | ... |
 | `round` | Int16 | no |  |
-| `steamid` | UInt64 | no | player id (see Conventions) |
+| `steamid` | UInt64 | yes | player id (see Conventions); null when the event names no player that resolves (seen on an inferno_expire) |
 | `tick` | Int32 | no | tick |
 | `x` | Float32 | no |  |
 | `y` | Float32 | no |  |
@@ -565,15 +565,15 @@ Bomb events. Key: (tick, event).
 | field | type | null | meaning, units |
 |---|---|---|---|
 | `event` | String | no | planted | defused | exploded | dropped | pickup | ... |
-| `place` | String | no |  |
+| `place` | String | yes | null with steamid |
 | `round` | Int16 | no |  |
 | `site` | String | yes | A | B |
 | `site_entity` | Int32 | yes | bomb site entity index |
-| `steamid` | UInt64 | no | player id (see Conventions) |
+| `steamid` | UInt64 | yes | player id (see Conventions); null when the event names no player that resolves, as for a pickup on the demo's first tick |
 | `tick` | Int32 | no | tick |
-| `x` | Float32 | no |  |
-| `y` | Float32 | no |  |
-| `z` | Float32 | no |  |
+| `x` | Float32 | yes | null with steamid |
+| `y` | Float32 | yes | null with steamid |
+| `z` | Float32 | yes | null with steamid |
 | `zone` | Int8 | yes | planter's bomb zone, 1 = A, 2 = B |
 
 ### `purchases`
