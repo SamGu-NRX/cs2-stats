@@ -201,7 +201,19 @@ function eventBins(events: Map<string, number[]>) {
     return { n, players: halves.length, r: round3(r), sb: round3(sb(r)) };
   });
 }
-const gateOf = (bins: ReturnType<typeof eventBins>) => bins.find((b) => b.sb !== null && b.sb >= RELIABLE)?.n ?? null;
+/**
+ * The sample a gated metric needs: the smallest measured size from which every larger measured size
+ * reaches the bar (a single lucky bin does not count). When none does, the Spearman-Brown projection
+ * from the largest measured size: reliability R at n events becomes kR / (1 + (k - 1)R) at kn.
+ */
+function gateOf(bins: ReturnType<typeof eventBins>): { n: number; how: "measured" | "projected" } | null {
+  const measured = bins.filter((b) => b.sb !== null);
+  for (let i = 0; i < measured.length; i++) if (measured.slice(i).every((b) => b.sb! >= RELIABLE)) return { n: measured[i].n, how: "measured" };
+  const last = measured[measured.length - 1];
+  if (!last || last.sb! <= 0) return null;
+  const k = (RELIABLE * (1 - last.sb!)) / (last.sb! * (1 - RELIABLE));
+  return { n: Math.ceil(k * last.n), how: "projected" };
+}
 
 const entry = mapPlayers.map((mp) => mp.entry);
 const results = Object.entries(CANDIDATES).map(([id, c]) => {
@@ -239,5 +251,5 @@ console.log(`xduel: ${xparams.n} duels, cross-validated AUC ${xparams.auc}, Brie
 console.log(`aggression scale: ${scale.players} players; mean ${scale.mean.map((x) => x.toFixed(3))}; sd ${scale.sd.map((x) => x.toFixed(3))}`);
 console.log("id | player-maps | map-split players | r | SB | max |r| existing | r with entryAttempts | passes");
 for (const r of results) console.log([r.id, r.playerMaps, r.mapSplit.players, r.mapSplit.r, r.mapSplit.sb, r.maxAbsExisting, r.withEntryAttempts, r.passes].join(" | "));
-for (const [id, g] of Object.entries(gates)) console.log(`${id}: gate ${g.gate} ${g.unit}; bins ${g.bins.map((b) => `${b.n}:${b.players}p sb ${b.sb}`).join(", ")}`);
+for (const [id, g] of Object.entries(gates)) console.log(`${id}: gate ${g.gate ? `${g.gate.n} ${g.unit} (${g.gate.how})` : "none"}; bins ${g.bins.map((b) => `${b.n}:${b.players}p sb ${b.sb}`).join(", ")}`);
 console.log(`report: ${OUT}`);
