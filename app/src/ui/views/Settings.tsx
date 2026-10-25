@@ -2,7 +2,7 @@
 // rating versions the numbers use.
 import { useRef, useState } from "react";
 import { DERIVE_VERSION } from "../../stats/facts";
-import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown } from "../../host/host";
+import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport, type ValveProgress } from "../../host/host";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
@@ -19,7 +19,7 @@ export default function Settings() {
   const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync } = useData();
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
-  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, synthetic: 0 };
+  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, synthetic: 0, valve: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
   const newest = (id: SourceId) => matches.find((s) => sourceOf(s).id === id);
@@ -63,6 +63,7 @@ export default function Settings() {
               <input ref={input} type="file" accept=".gz,application/gzip" multiple hidden onChange={(e) => onImport(e.target.files)} />
               <button className="btn press" onClick={() => input.current?.click()}><UploadIcon size={14} />Choose match files</button>
             </div>
+            <ValveSource n={counts.valve} />
           </div>
         </Card>
 
@@ -117,6 +118,63 @@ export default function Settings() {
           </dl>
         </Card>
       </div>
+    </div>
+  );
+}
+
+type ImportState =
+  | { phase: "idle" }
+  | { phase: "running"; at: ValveProgress | null }
+  | { phase: "done"; r: ValveImport }
+  | { phase: "failed"; message: string };
+
+/** What an import's end says, by the importer's exit code (extractor/valve_import.py). */
+function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } {
+  const s = r.summary;
+  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good" };
+  if (r.code === 1 && s) {
+    const bad = s.results.filter((x) => !x.ok).map((x) => x.demo);
+    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor" };
+  }
+  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor" };
+}
+
+/** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
+function ValveSource({ n }: { n: number }) {
+  const { host, refresh } = useData();
+  const [state, setState] = useState<ImportState>({ phase: "idle" });
+  const folder = host?.valve?.folder ?? VALVE_FOLDER;
+  const run = async () => {
+    if (!host || state.phase === "running") return;
+    setState({ phase: "running", at: null });
+    try {
+      const r = await host.importValve((at) => setState({ phase: "running", at }));
+      setState({ phase: "done", r });
+    } catch (e) {
+      // the desktop app's commands reject with a string, the web host with an Error
+      setState({ phase: "failed", message: e instanceof Error ? e.message : String(e) });
+    }
+    refresh();
+  };
+  const outcome = state.phase === "done" ? importOutcome(state.r) : null;
+  return (
+    <div className="source">
+      <div className="source__head"><SourceBadge s={{ id: "valve", label: "Valve matchmaking", missing: [] }} compact /><b className="num source__n">{n}</b></div>
+      <p className="meta">Your matchmaking demos from the game's replays folder, with aim, movement and line of sight. Wingman matches are listed but left out of career views.</p>
+      <div className="source__path">
+        <FolderIcon size={14} />
+        <span className="mono selectable">{folder}</span>
+        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied")} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
+      </div>
+      <p className="meta">{host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{host.valve.user}</span>.</> : "The first import takes your SteamID64 from Steam's most recent login."}{host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}</p>
+      <button className="btn press" onClick={() => void run()} disabled={!host || state.phase === "running"} aria-busy={state.phase === "running"}>
+        <RefreshIcon size={14} />{state.phase === "running" ? "Importing" : "Import Valve matches"}
+      </button>
+      <p className="meta" role="status" aria-live="polite">
+        {state.phase === "running" && (state.at ? `Demo ${state.at.i} of ${state.at.n}${state.at.event === "done" ? (state.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
+        {outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{outcome.text}</span>}
+        {state.phase === "failed" && <span className="poor-text">{state.message}</span>}
+      </p>
     </div>
   );
 }

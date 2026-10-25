@@ -120,6 +120,7 @@
 .src[data-src="recorded"] i { background: var(--cream); }
 .src[data-src="converted"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink2); }
 .src[data-src="synthetic"] i { background: var(--ink3); }
+.src[data-src="valve"] i { background: var(--ink); }
 .src small { font-size: 11px; color: var(--ink3); }
 
 /* ---------------------------------------------------------------- popovers, menus, palette */

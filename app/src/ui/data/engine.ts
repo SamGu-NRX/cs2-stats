@@ -196,9 +196,18 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
  * sidebar, the Rating 3.0 tile and Form's pooled line agree. The Matches list shows every match and
  * labels the others.
  */
-export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete && ratedMatch(s.match));
+export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete && ratedMatch(s.match) && !isWingman(s));
 
-export const INCOMPLETE_TIP = "Not finished: left out of career views (Home, Profile, Playstyle, Career aim, Weapons).";
+/**
+ * A wingman match: a 16-round limit (MR8) with at most two players a side, as Valve's wingman demos are.
+ * The rating and win-probability models and the pro baselines are all 5v5, so career views leave it out.
+ */
+export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
+
+export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Career aim, Weapons), whose models and baselines are 5v5.";
+
+/** What Matches lists: every match in the filter except unfinished ones and those with no round won (0–0). */
+export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete && s.score.us + s.score.them > 0);
 
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {
