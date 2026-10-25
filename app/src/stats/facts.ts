@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 6;
+export const DERIVE_VERSION = 7;
 
 export interface MatchInfo {
   id: string;
@@ -133,7 +133,7 @@ export const MEASURES = [
   "awpDuels", "awpDuelWins",
   // opening and trading context (duels.ts): positions needed for the *Pos measures
   "duelRounds", "duelRankSum", "duelTimeSum", "gunShots",
-  "posRounds", "deathsPos", "tradeableDeaths", "tradeOpps", "tradeOppsTaken",
+  "posRounds", "deathsPos", "tradeableDeaths", "tradeableTraded", "tradeOpps", "tradeOppsTaken",
   // team spacing, Packer's features (positioning.ts)
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
   // utility (utility.ts)

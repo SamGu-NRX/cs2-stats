@@ -23,7 +23,8 @@ export interface OneRound {
   /** steamid -> side; CT players are on team A, T players on team B */
   players: Record<string, "CT" | "T">;
   bots?: string[];
-  kills?: { tick: number; killer: string; victim: string; assister?: string }[];
+  /** extra kills columns (such as v_x, v_y) go in `at` */
+  kills?: { tick: number; killer: string; victim: string; assister?: string; at?: Row }[];
   engagements?: Row[];
   engagement_ticks?: Row[];
   shots?: Row[];
@@ -53,7 +54,7 @@ export function oneRoundTables(m: OneRound): MatchTables {
     player_rounds: table("player_rounds", ids.map((id) => ({ round, steamid: id, side: side(id), inventory: [], ...m.player_rounds?.[id] }))),
     kills: table("kills", (m.kills ?? []).map((k) => ({
       tick: k.tick, round, attacker_steamid: k.killer, victim_steamid: k.victim, assister_steamid: k.assister ?? null, weapon: "ak47", headshot: false,
-      a_side: side(k.killer), v_side: side(k.victim), is_suicide: false, is_teamkill: false,
+      a_side: side(k.killer), v_side: side(k.victim), is_suicide: false, is_teamkill: false, ...k.at,
     }))),
     damages: table("damages", (m.damages ?? []).map((d) => ({ round, is_self: false, is_team_damage: false, ...d }))), blinds: table("blinds", (m.blinds ?? []).map((b) => ({ round, is_self: false, is_team_flash: false, ambiguous: false, ...b }))), bomb: emptyTable("bomb"),
     grenade_throws: m.grenade_throws ? table("grenade_throws", m.grenade_throws.map((g) => ({ round, ...g }))) : null, grenade_events: null, smokes: null, infernos: null,

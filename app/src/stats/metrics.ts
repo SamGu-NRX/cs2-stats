@@ -141,7 +141,7 @@ const M: Metric[] = [
   { id: "tradeKillSuccess", label: "Trade kill success", hltv: "Trade Kill Success %", kind: "performance", group: "trading", unit: "pct", status: "approx",
     def: `Trade opportunities where you killed the killer within ${WINDOW}.`, value: (s) => pct(s.m.tradeOppsTaken, s.m.tradeOpps) },
   { id: "tradedDeathSuccess", label: "Traded death success", hltv: "Traded Death Success %", kind: "performance", group: "entrying", unit: "pct", status: "approx",
-    def: "Tradeable deaths that a teammate traded.", value: (s) => pct(s.m.tradedDeaths, s.m.tradeableDeaths) },
+    def: "Tradeable deaths (a living teammate within 1,000 units) that a teammate traded.", value: (s) => pct(s.m.tradeableTraded, s.m.tradeableDeaths) },
   { id: "openingSwing", label: "Opening swing", hltv: "Opening Swing", kind: "performance", group: "opening", unit: "pct", status: "approx",
     def: "Swing from opening kills and deaths, per round.", value: (s) => (s.m.swingRounds ? (100 * s.m.openingSwing) / s.m.swingRounds : null) },
   { id: "clutchSwing", label: "Clutch swing", hltv: "Clutch Swing", kind: "performance", group: "closing", unit: "pct", status: "approx",

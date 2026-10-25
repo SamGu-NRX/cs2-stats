@@ -81,7 +81,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | id | HLTV name | Status | Definition |
 |---|---|---|---|
 | tradeKillSuccess | Trade Kill Success % | approx | Trade opportunities where you killed the killer within 5.4 s |
-| tradedDeathSuccess | Traded Death Success % | approx | Traded deaths over tradeable deaths |
+| tradedDeathSuccess | Traded Death Success % | approx | Traded deaths among tradeable deaths, over tradeable deaths. Both counts need positions, so a match without them adds to neither. |
 | openingSwing, clutchSwing, awpSwing | Opening, Clutch, AWP Swing | approx | Swing from opening kills and deaths; from kills and deaths after you became your side's last player; from AWP kills and deaths holding the AWP. Per round. |
 | awpDuelWin | AWP Duel Win % | approx | Your AWP kills over AWP kills plus deaths holding the AWP |
 | flashSwing | Flash Swing | approx | Swing your flashes earned: a kill on an enemy your flash was still blinding gives you `params.json`'s flash share (0.154) of its credit; several flashers split it equally (ours) |

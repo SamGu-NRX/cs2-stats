@@ -55,7 +55,9 @@ export function duels(c: Ctx): void {
         mate.m.tradeOpps++;
         if (c.kills[ri].some((x) => x.enemy && x.killer === mate.pi && x.victim === k.killer && x.tick >= k.tick && x.tick - k.tick <= window)) mate.m.tradeOppsTaken++;
       }
-      if (tradeable) victim.m.tradeableDeaths++;
+      if (!tradeable) continue;
+      victim.m.tradeableDeaths++;
+      if (k.traded) victim.m.tradeableTraded++;
     }
   }
 }
