@@ -45,10 +45,21 @@ export function buying(c: Ctx, maxRounds: number, otMaxRounds: number): void {
   }
 }
 
+/**
+ * Saved rounds a save-conversion percentile needs. On the pro maps (pnpm metric-evidence) the mean of
+ * a player's first 10 saves has an alternate-event split-half reliability of 0.54 (Spearman-Brown, 156
+ * players), and 0.67 at 20; the coordinator's bar is 0.4.
+ */
+export const SAVE_MIN = 10;
+
 const per = (a: number, b: number) => (b > 0 ? a / b : null);
 
 export const BUYING_METRICS: Metric[] = [
   { id: "buyDeviation", label: "Buy against the team", kind: "identity", group: "economy", unit: "money", status: "approx",
     def: "Your equipment value minus your team's average, per round.",
     value: (s) => per(s.m.buyDevSum, s.m.buyDevRounds) },
+  { id: "saveConversion", label: "Equipment saved", kind: "identity", group: "economy", unit: "money", status: "approx", needs: ["carry"],
+    def: "Equipment you carried into the next round after surviving a loss.",
+    value: (s) => per(s.m.saveCarrySum, s.m.saveCarryKnown),
+    sample: { n: (s) => s.m.saveCarryKnown, unit: "saved rounds", min: SAVE_MIN } },
 ];

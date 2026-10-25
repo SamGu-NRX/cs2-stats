@@ -82,7 +82,7 @@ export function notComparable(m: Metric, s: Summary, b: Baselines): string | nul
   }
   if (m.sample?.min !== undefined) {
     const n = m.sample.n(s);
-    if (n < m.sample.min) return `Not compared: ${n} ${m.sample.unit}; a percentile needs ${m.sample.min}`;
+    if (n < m.sample.min) return `Not compared: ${n} of the ${m.sample.min} ${m.sample.unit} a percentile needs`;
   }
   return null;
 }
