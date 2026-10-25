@@ -7,6 +7,7 @@
 // definition), "unavailable" (the tables cannot support it yet; value is always null).
 import { AGGRESSION_METRICS } from "./aggression";
 import { AIM_METRICS, CONTACT_METRICS } from "./aim";
+import { BUYING_METRICS } from "./buying";
 import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
 import { rating3Of } from "./rating3";
@@ -226,7 +227,7 @@ const M: Metric[] = [
     def: "Opening duels won.", value: (s) => pct(s.m.openingKills, s.m.openingKills + s.m.openingDeaths) },
 ];
 
-export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
+export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
 export const METRIC: Record<string, Metric> = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 
 /**

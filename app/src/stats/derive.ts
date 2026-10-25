@@ -3,6 +3,7 @@
 // its own measures (facts.ts MEASURES) from the shared indexes built here.
 import { deriveAggro } from "./aggression";
 import { deriveAim, markSight } from "./aim";
+import { buying } from "./buying";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
@@ -44,6 +45,8 @@ function matchMeta(t: MatchTables) {
   const raw = extra.date ?? extra.dem_modified_in_archive;
   return {
     date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
+    // CS2's default overtime is six rounds, three a half
+    otMaxRounds: Number(convars.mp_overtime_maxrounds ?? 6),
     pov: typeof extra.pov === "string" ? extra.pov : null,
     roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
     startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
@@ -311,13 +314,14 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen } = matchMeta(t);
+  const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
 
   scoreboard(c);
   const clutches = closing(c);
+  buying(c, maxRounds, otMaxRounds);
   sniping(c);
   duels(c);
   positioning(c);

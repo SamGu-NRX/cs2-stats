@@ -192,6 +192,8 @@ export const MEASURES = [
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
   "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds",
+  // buying (buying.ts): equipment against the side's mean, and what a save carried into the next round
+  "buyDevSum", "buyDevRounds", "saveEvents", "saveCarryKnown", "saveCarrySum",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
