@@ -11,7 +11,7 @@ import type { MatchEntry, MatchModel } from "../../data/match";
 import { useData } from "../../data/provider";
 import { sourceOf } from "../../data/sources";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
-import { fmtAdr, fmtDate, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
+import { fmtAdr, fmtMatchDay, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
 import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
@@ -46,7 +46,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
   return (
     <div className="view view--flush match" style={{ ["--map-accent" as string]: mapAccent(map) }}>
       <BarContent
-        crumbs={[{ label: s ? s.players[s.you].name : "You", href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }, { label: s ? `${mapName(s.match.map)}, ${fmtDate(s.match.date)}` : "Match" }]}
+        crumbs={[{ label: s ? s.players[s.you].name : "You", href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }, { label: s ? `${mapName(s.match.map)}, ${fmtMatchDay(s.match)}` : "Match" }]}
         tools={
           <span className="pager">
             <button className="btn btn--ghost btn--icon btn--sm press" disabled={!older} onClick={() => older && go(matchHref(older.file, tab))} data-tip="Older match  [" aria-label="Older match"><ChevronLeftIcon size={16} /></button>

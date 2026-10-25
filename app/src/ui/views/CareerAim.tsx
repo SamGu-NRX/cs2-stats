@@ -7,7 +7,7 @@ import { useCall, useRollups, useYourQuery } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import { AimIcon } from "../icons/ui";
-import { fmtDate, plural } from "../lib/format";
+import { fmtMatchDay, plural } from "../lib/format";
 import { BENCH } from "../lib/verdict";
 import { pageHref } from "../router";
 import { BarContent } from "../shell/Bar";
@@ -54,7 +54,7 @@ export default function CareerAim() {
             <div className="trends">
               {TRENDS.map((t, k) => {
                 const m = metric(t.id);
-                const pts = oldestFirst.map((s, i) => ({ key: s.file, value: series[k][i], label: fmtDate(s.match.date) }));
+                const pts = oldestFirst.map((s, i) => ({ key: s.file, value: series[k][i], label: fmtMatchDay(s.match) }));
                 const tr = trends?.[k] ?? null;
                 const fmt = (v: number) => fmtMetric(t.id, v);
                 const better = tr && (m.lowerIsBetter ? tr.slope < 0 : tr.slope > 0);

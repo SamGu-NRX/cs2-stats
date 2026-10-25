@@ -60,8 +60,20 @@ const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-d
 export const fmtTime = (iso: string) => timeFmt.format(new Date(iso));
 /** A match's length in whole minutes: "38 min". */
 export const fmtDuration = (secs: number | null | undefined) => (ok(secs) && secs > 0 ? `${Math.max(1, Math.round(secs / 60))} min` : DASH);
-/** A match's date, with its start time when the source has one. */
-export const fmtWhen = (m: { date: string | null; startedAt: string | null }) => (m.startedAt ? `${fmtDate(m.date)}, ${fmtTime(m.startedAt)}` : fmtDate(m.date));
+/**
+ * A match's day in local time. The start time is a UTC timestamp, and the match's `date` is the UTC
+ * calendar day, a day ahead in the evening west of UTC; so the day comes from the start time when
+ * the source has one, and from `date` only when it has not.
+ */
+export const fmtMatchDay = (m: { date: string | null; startedAt: string | null }) => (m.startedAt ? dateFmt.format(new Date(m.startedAt)) : fmtDate(m.date));
+/** A match's local calendar day as YYYY-MM-DD, for grouping by day ("first match of the day"). */
+export function matchDayKey(m: { date: string | null; startedAt: string | null }): string | null {
+  if (!m.startedAt) return m.date;
+  const d = new Date(m.startedAt);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/** A match's day, with its local start time when the source has one. */
+export const fmtWhen = (m: { date: string | null; startedAt: string | null }) => (m.startedAt ? `${fmtMatchDay(m)}, ${fmtTime(m.startedAt)}` : fmtDate(m.date));
 
 /** "3 matches", "1 match" */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

@@ -7,7 +7,7 @@ import { usePros } from "../data/packs";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
-import { fmtDate, fmtRating, mapName } from "../lib/format";
+import { fmtMatchDay, fmtRating, mapName } from "../lib/format";
 import { go, matchHref, openMatch, pageHref } from "../router";
 import { NAV } from "./Sidebar";
 
@@ -51,9 +51,9 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
       const label = `${mapName(s.match.map)} ${s.score.us}:${s.score.them}`;
       const src = sourceOf(s);
       out.push({
-        id: `m:${s.file}`, group: "Matches", label, hint: `${fmtDate(s.match.date)}  ${fmtRating(entryRating(s))}`,
+        id: `m:${s.file}`, group: "Matches", label, hint: `${fmtMatchDay(s.match)}  ${fmtRating(entryRating(s))}`,
         run: () => openMatch(matchHref(s.file)),
-        text: `${s.match.map} ${mapName(s.match.map)} ${fmtDate(s.match.date)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
+        text: `${s.match.map} ${mapName(s.match.map)} ${fmtMatchDay(s.match)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
       });
     }
     for (const p of pros) out.push({ id: `p:${p.slug}`, group: "Pros", label: p.name, hint: p.team, run: () => go(pageHref("profile", { pro: p.slug })), text: `${p.name} ${p.team} ${p.country}` });

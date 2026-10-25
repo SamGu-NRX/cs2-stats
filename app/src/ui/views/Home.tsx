@@ -21,7 +21,7 @@ import { ATTR_ICON, AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, SkullIcon, WeaponIcon, WinIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
 import { ChevronRightIcon } from "../icons/ui";
-import { fmtAdr, fmtDate, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, openMatch, pageHref } from "../router";
@@ -153,7 +153,7 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
 function FormCard({ list }: { list: MatchEntry[] }) {
   const [noOutliers, setNoOutliers] = useState(false);
   const [noFirst, setNoFirst] = useState(false);
-  const firsts = useMemo(() => firstOfDay(list.map((e) => ({ file: e.file, date: e.match.date }))), [list]);
+  const firsts = useMemo(() => firstOfDay(list.map((e) => ({ file: e.file, date: matchDayKey(e.match) }))), [list]);
   let pool = list.slice(0, 10).reverse().filter((s) => entryRating(s) !== null);
   if (noFirst) pool = pool.filter((s) => !firsts.has(s.file));
   const keep = insideFences(pool.map((s) => entryRating(s)!));
@@ -172,8 +172,8 @@ function FormCard({ list }: { list: MatchEntry[] }) {
         avgLabel="pooled"
         height={176}
         bars={shown.map((s) => ({
-          key: s.file, value: entryRating(s), label: fmtDate(s.match.date), sub: s.result, result: s.result,
-          onClick: () => openMatch(matchHref(s.file)), tip: `${mapName(s.match.map)} ${s.score.us}:${s.score.them}, ${fmtDate(s.match.date)}: ${fmtRating(entryRating(s))}${firsts.has(s.file) ? ", first match of the day" : ""}`,
+          key: s.file, value: entryRating(s), label: fmtMatchDay(s.match), sub: s.result, result: s.result,
+          onClick: () => openMatch(matchHref(s.file)), tip: `${mapName(s.match.map)} ${s.score.us}:${s.score.them}, ${fmtMatchDay(s.match)}: ${fmtRating(entryRating(s))}${firsts.has(s.file) ? ", first match of the day" : ""}`,
         }))}
       />
       <div className="form-card__toggles">
@@ -277,7 +277,7 @@ function RecentMatches({ list }: { list: MatchEntry[] }) {
         onOpen={(s) => openMatch(matchHref(s.file), document.querySelector(`[data-file="${CSS.escape(s.file)}"]`)?.closest("tr"))}
         onRowContext={(s, at) => openMenu(at, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied") }])}
         columns={[
-          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={s.file}><MapThumb map={s.match.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.match.map)}</b><small>{fmtDate(s.match.date)}</small></span></span> },
+          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={s.file}><MapThumb map={s.match.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
           { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span> },
           { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num">{line(s).kills}–{line(s).deaths}</span> },
           { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },
