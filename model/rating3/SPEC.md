@@ -6,7 +6,7 @@ This document describes the research model. The shipped implementation belongs i
 
 HLTV map files with `v: 3` provide the target. Probability targets use the full-precision `performance.rounds.*.events[].y`. For a round whose graph lists team 1 as T, `y` is P(T wins). For a CT-first round, the target is `1 - y` when the engine wants P(T wins). The stream's `teams` text is display-rounded and is not used for fitting.
 
-A demo join is valid only when map, archive date, both five-player rosters, every round winner, and every enemy kill sequence up to the demo round end agree. Kills after `rounds.end_tick` are excluded because HLTV's event graph stops at round end. The current strict join set is 28 maps, 661 rounds, and 4,295 enemy kills; 15 additional current demo folders have no exact HLTV join.
+A demo join is valid only when map, archive date, both five-player rosters, every round winner, and every enemy kill sequence up to the demo round end agree. Kills after `rounds.end_tick` are excluded because HLTV's event graph stops at round end. The current strict join set is 220 maps, 4,818 rounds, and 31,214 enemy kills; 59 additional current demo folders have no exact HLTV join. The joiner accepts both legacy `meta.parquet` and schema-v1 `match.parquet` outputs.
 
 ## Win probability
 
@@ -81,22 +81,23 @@ The degree-two map polynomial is retired. Its 0.0360 MAE on map aggregates is a 
 
 ## Demo-join per-round probe
 
-The current strict joins provide 6,610 player-round rows and 840 total/CT/T equations. The duel model was refit from the displayed eco-adjusted K/D cells, producing fractional kill and death points for the round features. A second duel fit using total plus CT/T eco counts had objective MAE 0.1118, but its best Rating fit was worse than the total-only fit (0.0536 versus 0.0534), so neither is an accepted production model.
+The current strict joins provide 48,180 player-round rows and 6,600 total/CT/T equations. The duel model was refit from the displayed eco-adjusted K/D cells, producing fractional kill and death points for the round features. The selected total-only duel fit has objective MAE 0.1335 over 2,200 player-map targets; a total-plus-CT/T eco-count fit has objective MAE 0.1095 but gives a worse Rating fit, so neither is an accepted production model.
 
 The cumulative research stages are:
 
 | Stage | Total MAE | CT MAE | T MAE | Total correlation |
 | --- | ---: | ---: | ---: | ---: |
-| Fractional eco K/D | 0.1325 | 0.1503 | 0.1453 | 0.9033 |
-| Add game damage | 0.1239 | 0.1424 | 0.1329 | 0.9145 |
-| Raw and per-victim capped damage | 0.1238 | 0.1428 | 0.1319 | 0.9150 |
-| KAST components | 0.1194 | 0.1395 | 0.1239 | 0.9257 |
-| Trade, flash, multikill, swing | 0.0635 | 0.0775 | 0.0639 | 0.9781 |
-| Action counts and outcomes | 0.0634 | 0.0774 | 0.0638 | 0.9783 |
-| Equipment and interaction terms | 0.0534 | 0.0660 | 0.0584 | 0.9838 |
+| Fractional eco K/D | 0.1088 | 0.1668 | 0.1562 | 0.9168 |
+| Add game damage | 0.1076 | 0.1649 | 0.1537 | 0.9186 |
+| Raw and per-victim capped damage | 0.1018 | 0.1587 | 0.1457 | 0.9272 |
+| KAST components | 0.0982 | 0.1532 | 0.1374 | 0.9329 |
+| Trade, flash, multikill, swing | 0.0540 | 0.0884 | 0.0753 | 0.9778 |
+| Action counts and outcomes | 0.0538 | 0.0884 | 0.0754 | 0.9778 |
+| Equipment and interaction terms | 0.0485 | 0.0745 | 0.0690 | 0.9827 |
+| Side-identity weighted interactions | 0.0475 | 0.0737 | 0.0673 | 0.9867 |
 
-The target display floor remains MAE 0.0025 and maximum 0.005. For each stage, local input-rounding probes include eK/eD count rounding of ±0.5 per side or total round count and Swing display rounding of ±0.005. The final-stage probe gives input-quantisation MAE 0.00085, p95 half-width 0.0540, and maximum half-width 0.0973; the fit is therefore not at its floor.
+The target display floor remains MAE 0.0025 and maximum 0.005. For each stage, local input-rounding probes include eK/eD count rounding of ±0.5 per side or total round count and Swing display rounding of ±0.005. The final side-identity stage gives input-quantisation MAE 0.00096, p95 half-width 0.0695, and maximum half-width 0.4291; the fit is therefore not at its floor.
 
-These demo folders do not yet contain `player_rounds.parquet`, so the `damage_game` stage currently falls back to per-victim capped damage. The exact game-owned damage input, and an independent raw-versus-capped comparison on schema-v1 refeed outputs, remain open. No demo-derived coefficients are accepted into `params.json`.
+Of the 220 accepted folders, 192 contain schema-v1 `player_rounds.game_damage`; 28 legacy folders use the capped-damage fallback. The exact game-owned damage input is therefore available for most, but not all, joins. The listed feature families and their tested interactions do not reach the rounding floor. The remaining mismatch is not assigned to a production constant; exact eKAST transformation, sub-rating transforms, and any omitted input remain open. No demo-derived coefficients are accepted into `params.json`.
 
 All numeric constants belong in `params.json`. The engine must not duplicate them in TypeScript.
