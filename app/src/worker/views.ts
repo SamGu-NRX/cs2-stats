@@ -86,7 +86,7 @@ export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
   const team = (ids: string[]) => lineOf(rollup([f], { player: ids }));
   const byRound = (player: string | string[], n: number) => rollup([f], { player, rounds: [n] });
   return {
-    core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills },
+    core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills, totalsRounds: f.totalsRounds },
     lines,
     teams: { us: team(usIds), them: team(themIds) },
     economy: economyOf(f, entry.usTeam),

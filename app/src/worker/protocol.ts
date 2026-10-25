@@ -73,7 +73,7 @@ export interface Meta {
 export interface BaselineInfo { source: string; built: string; n: Record<string, Partial<Record<SideKey, number>>> }
 
 /** One match's facts without the family event facts (aim, movement and so on), which only rollups read. */
-export type MatchCore = Pick<MatchFacts, "v" | "match" | "players" | "rounds" | "pr" | "kills">;
+export type MatchCore = Pick<MatchFacts, "v" | "match" | "players" | "rounds" | "pr" | "kills" | "totalsRounds">;
 
 /** Everything the match views read. Lines are indexed by player index (pi). */
 export interface MatchBundle {
