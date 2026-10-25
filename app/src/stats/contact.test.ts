@@ -65,3 +65,23 @@ describe("contact measures", () => {
     expect(compare(s, pros).peekTravel).toMatchObject({ value: null, pct: null, reason: "Not compared: line of sight known for 0 of 1 rounds" });
   });
 });
+
+describe("shooting while moving", () => {
+  it("averages the moving-bullet share over rifle bursts whose bullets all have a speed", () => {
+    // fails if the 0.3 s burst gap, the strict 75 u/s cut, the rifle-only rule or the unknown-speed
+    // skip changes. Counted: 1000-1012 (2 of 3 above 75 u/s) and 1050-1056 (80 is above, 75 is not:
+    // 1 of 2). Not counted: the lone shot at 1100, the pistol pair, the AK-to-M4 switch, and the pair
+    // with no speed. Mean share (2/3 + 1/2) / 2.
+    const shot = (tick: number, speed: number | null, weapon = "ak47") => ({ tick, steamid: "a", weapon, speed_2d: speed });
+    const f = oneRound({
+      players: { a: "CT", b: "T" },
+      shots: [
+        shot(1000, 0), shot(1006, 200), shot(1012, 100), shot(1050, 80), shot(1056, 75), shot(1100, 250),
+        shot(1200, 200, "glock"), shot(1205, 200, "glock"), shot(1300, 200), shot(1305, 200, "m4a1"), shot(1400, null), shot(1406, null),
+      ],
+    });
+    const s = rollup([f], { player: "a" });
+    expect([s.aim.bursts, s.aim.movingShare]).toEqual([2, 2 / 3 + 1 / 2]);
+    expect(METRIC.movingSpray.value(s)).toBeCloseTo((100 * (2 / 3 + 1 / 2)) / 2, 9);
+  });
+});
