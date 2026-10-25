@@ -57,8 +57,10 @@ export interface Percentile {
   /** 0-100; for performance metrics with lowerIsBetter, flipped so higher is always better */
   pct: number | null;
   pool: string;
-  /** why there is no percentile (an input the matches lack, another model), whether or not there is a value; null otherwise */
+  /** why there is no percentile (an input the matches lack, another model, too small a sample), whether or not there is a value; null otherwise */
   reason: string | null;
+  /** the count of the events the value rests on (Metric.sample), for the metrics that declare one; null otherwise */
+  n: number | null;
 }
 
 /**
@@ -77,6 +79,10 @@ export function notComparable(m: Metric, s: Summary, b: Baselines): string | nul
     }
     const [known, total, what, unit] = INPUT_COVERAGE[need];
     if (s.m[known] < s.m[total]) return `Not compared: ${what} known for ${s.m[known]} of ${s.m[total]} ${unit}`;
+  }
+  if (m.sample?.min !== undefined) {
+    const n = m.sample.n(s);
+    if (n < m.sample.min) return `Not compared: ${n} ${m.sample.unit}; a percentile needs ${m.sample.min}`;
   }
   return null;
 }
@@ -99,7 +105,7 @@ export function compare(s: Summary, b: Baselines, opt: CompareOptions = {}): Rec
     const reason = notComparable(m, s, b);
     let pct = value === null || q === null || reason ? null : percentileOf(q, value);
     if (pct !== null && m.kind === "performance" && m.lowerIsBetter) pct = 100 - pct;
-    out[m.id] = { id: m.id, value, pct, pool, reason };
+    out[m.id] = { id: m.id, value, pct, pool, reason, n: m.sample?.n(s) ?? null };
   }
   return out;
 }

@@ -4,6 +4,7 @@ import { METRICS } from "./metrics";
 import { FREEZE_END, oneRound } from "./testing/match";
 import { emptySummary, rollup } from "./rollup";
 import { mostSimilar, similarity, STYLE, type PackPlayer } from "./identity";
+import { rolled } from "../worker/views";
 
 // Quantiles at 0, 5, ..., 100 percent. Values 0..200 in steps of 10: each step is 5 percentile points.
 const linear = Array.from({ length: 21 }, (_, i) => i * 10);
@@ -75,4 +76,15 @@ it("computes a metric over the rows its input is known on, and gives no percenti
   const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } };
   const p = compare(s, { version: 1, built: "x", source: "t", model: known.match.model, n: {}, pools: { ...pools, rifler: pools.all } }, {});
   expect(p.roundsWithAwp).toMatchObject({ value: 100, pct: null, reason: "Not compared: freeze-end loadout known for 1 of 2 rounds" });
+});
+
+it("gives the AWP duel win rate with the count of AWP duels it rests on", () => {
+  // fails if the AWP duel percentile reaches the UI without its sample size: 4 wins in 7 AWP duels
+  const s = emptySummary();
+  Object.assign(s.m, { rounds: 20, awpDuels: 7, awpDuelWins: 4 });
+  const pools = { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, linear])) } };
+  const p = compare(s, { version: 1, built: "x", source: "t", n: {}, pools: { ...pools, rifler: pools.all } }, {});
+  expect(p.awpDuelWin).toMatchObject({ value: (100 * 4) / 7, n: 7, reason: null });
+  expect(p.kpr.n).toBeNull();
+  expect(rolled(s).n).toEqual({ awpDuelWin: 7 });
 });

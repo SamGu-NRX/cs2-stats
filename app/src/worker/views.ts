@@ -17,7 +17,7 @@ import type {
 
 export function metaOf(wp: WinProbSource): Meta {
   return {
-    metrics: METRICS.map(({ value: _value, why: _why, ...m }) => m),
+    metrics: METRICS.map(({ value: _value, why: _why, sample, ...m }) => (sample ? { ...m, sample: { unit: sample.unit, min: sample.min } } : m)),
     attributes: ATTRIBUTES,
     rating: { label: RATING3_LABEL, status: RATING3_STATUS },
     winProb: { kind: wp.kind, label: wp.label },
@@ -27,7 +27,9 @@ export function metaOf(wp: WinProbSource): Meta {
 }
 
 export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((m) => [m.id, m.value(s)]));
-export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
+/** Each sample-declaring metric's event count (Metric.sample), by metric id. */
+export const samplesOf = (s: Summary): Record<string, number> => Object.fromEntries(METRICS.flatMap((m) => (m.sample ? [[m.id, m.sample.n(s)]] : [])));
+export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), n: samplesOf(s), coverage: visibilityCoverage(s.aim) });
 // Every rating here is rating3Of's, the one definition (side-weighted, under the one coverage gate);
 // so is the rating3 metric in valuesOf, and with it the comparisons and "Work on". A line's eco values
 // are the rating's own inputs, over the rounds it rated.

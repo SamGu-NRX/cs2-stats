@@ -23,8 +23,11 @@ export interface Query { files: string[]; filter: Filter }
 /** Every metric's value over one summary, by metric id (METRIC[id].value). */
 export type Values = Record<string, number | null>;
 
-/** A rollup with its metric values and the visibility coverage meter (aim.ts visibilityCoverage). */
-export type Rolled = Summary & { v: Values; coverage: number | null };
+/**
+ * A rollup with its metric values, the event count behind each metric that declares one (Metric.sample:
+ * AWP duels, saved rounds, duels), and the visibility coverage meter (aim.ts visibilityCoverage).
+ */
+export type Rolled = Summary & { v: Values; n: Record<string, number>; coverage: number | null };
 
 /** A summary cut down to what a table row needs: the measures and the metric values. */
 export interface BuySplits { own: Partial<Record<BuyClass, Rolled>>; opp: Partial<Record<BuyClass, Rolled>> }
@@ -54,6 +57,8 @@ export interface MetricMeta {
   status: Status;
   def: string;
   lowerIsBetter?: boolean;
+  /** what the metric's events are called, and the count a percentile needs (Metric.sample) */
+  sample?: { unit: string; min?: number };
 }
 
 /** Engine descriptions the UI shows, sent once at start. */
