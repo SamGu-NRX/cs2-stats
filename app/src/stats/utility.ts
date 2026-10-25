@@ -18,7 +18,10 @@ export function utility(c: Ctx): void {
   const d = c.t.damages;
   const inv = c.t.player_rounds;
   const held = new Map<number, string[]>();
-  for (let i = 0; i < inv.n; i++) held.set((inv.round[i] - 1) * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].map(classFromDisplay).filter((x) => x in THROWN));
+  for (let i = 0; i < inv.n; i++) {
+    const ri = c.riOf(inv.round[i]);
+    if (ri !== undefined) held.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].map(classFromDisplay).filter((x) => x in THROWN));
+  }
 
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rows = c.pr[ri];

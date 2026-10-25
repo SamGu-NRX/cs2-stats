@@ -26,6 +26,8 @@ export interface MatchInfo {
   nRounds: number;
   /** ok when the extractor computed mesh visibility; aim families that need it are unavailable otherwise */
   visibility: string;
+  /** steamid of the player whose machine recorded the match (match.extra "pov"); null for pro demos */
+  pov: string | null;
 }
 
 export interface PlayerInfo {
@@ -37,7 +39,10 @@ export interface PlayerInfo {
 }
 
 export interface RoundFact {
+  /** row index; facts address rounds by it */
   ri: number;
+  /** the round's number in the match, 1-based; equal to ri + 1 unless the source skipped rounds */
+  number: number;
   /** the team (0/1) on CT this round */
   ctTeam: 0 | 1;
   winner: Side | null;
