@@ -13,6 +13,11 @@
 // mask is on for only 53 of 93 bullet hits, and engagements often start after the human was already
 // shooting at that enemy. The mask is the radar's spotted state, not line of sight, so the stats stay
 // gated until a signal passes VISIBILITY_MIN_COVERAGE.
+//
+// Plugin 1.1.0 replaces the mask with line of sight (aim.los: transitions from 16 Hz traces). For
+// those files the test reads that signal instead: a bullet hit counts as seen when the enemy was in
+// line of sight at the hit, or entered it by the next check (the signal lags by up to one interval).
+// aim.hitMask.los, a trace made at each hit, is reported alongside as a check of the trace itself.
 import { fullRoundTest } from "./context";
 import type { MatchFile } from "./schema";
 import { isUtility } from "./weapons";
@@ -21,6 +26,8 @@ import { isUtility } from "./weapons";
 export const VISIBILITY_MIN_COVERAGE = 0.9;
 /** An engagement whose enemy the human shot at or damaged this long before it started counts as late. */
 export const LATE_WINDOW_S = 2;
+/** Line-of-sight checks per second in plugin 1.1.0; a hit may precede the check that shows its victim visible by up to one interval. */
+export const LOS_HZ = 16;
 
 /** True when bit `bit` (0..63) is set in the two 32-bit mask words. Out-of-range bits are false. */
 export function maskHasBit(m0: number, m1: number, bit: number | null): boolean {
@@ -71,12 +78,21 @@ export interface VisibilityEvidence {
   /** engagements whose enemy the human aimed a shot at (target) / damaged in the LATE_WINDOW_S before tVis */
   shotBeforeVisible: number;
   damagedBeforeVisible: number;
+  /** files whose visibility came from line of sight (env.visSource "los"), and their bullet hits */
+  losFiles: number;
+  losHits: number;
+  /** of those hits: the victim was in line of sight by the 16 Hz signal (aim.los) */
+  losSeen: number;
+  /** hits with a trace made at the hit (hitMask.los not null), and those that were clear */
+  losAtHitKnown: number;
+  losAtHitClear: number;
 }
 
 export function emptyEvidence(): VisibilityEvidence {
   return {
     hitRows: 0, bulletHits: 0, seen: Object.fromEntries(SPOT_CANDIDATES.map((c) => [c, 0])) as Record<SpotCandidate, number>,
     foreignBits: 0, hitsInEngagement: 0, hitShots: 0, hitShotsVisible: 0, engagements: 0, shotBeforeVisible: 0, damagedBeforeVisible: 0,
+    losFiles: 0, losHits: 0, losSeen: 0, losAtHitKnown: 0, losAtHitClear: 0,
   };
 }
 
@@ -102,6 +118,8 @@ export function visibilityEvidence(m: MatchFile): VisibilityEvidence | null {
     if (d.attacker[j] === m.human) hitWeapon.set(`${d.ri[j]}:${d.tick[j]}:${d.victim[j]}`, m.weapons[d.weapon[j]] ?? "");
   }
   const e = m.aim.engagements;
+  const losAt = m.env.visSource === "los" && m.aim.los ? losLookup(m) : null;
+  if (losAt) ev.losFiles++;
   for (let i = 0; i < h.ri.length; i++) {
     if (!isFull(h.ri[i])) continue;
     ev.hitRows++;
@@ -115,6 +133,9 @@ export function visibilityEvidence(m: MatchFile): VisibilityEvidence | null {
     if (w === undefined || isUtility(w)) continue;
     ev.bulletHits++;
     for (const c of SPOT_CANDIDATES) if (candidateSees(c, m.env, h.m0[i], h.m1[i])) ev.seen[c]++;
+    if (losAt) { ev.losHits++; if (losAt(h.ri[i], h.victim[i], h.tick[i])) ev.losSeen++; }
+    const traced = h.los?.[i];
+    if (traced === 0 || traced === 1) { ev.losAtHitKnown++; if (traced === 1) ev.losAtHitClear++; }
     for (let k = 0; k < e.ri.length; k++) {
       if (e.ri[k] === h.ri[i] && e.enemy[k] === h.victim[i] && h.tick[i] >= e.tVis[k] && h.tick[i] <= e.tEnd[k]) { ev.hitsInEngagement++; break; }
     }
@@ -141,10 +162,39 @@ export function visibilityEvidence(m: MatchFile): VisibilityEvidence | null {
   return ev;
 }
 
+/**
+ * Whether an enemy was in the human's line of sight at a tick, by the aim.los transitions: the last
+ * transition at or before the tick says visible, or one within the next check interval does.
+ */
+export function losLookup(m: MatchFile): (ri: number, enemy: number, tick: number) => boolean {
+  const l = m.aim.los!;
+  const lag = Math.ceil((m.env.tickrate || 64) / LOS_HZ);
+  const by = new Map<string, [number, number][]>();
+  for (let i = 0; i < l.ri.length; i++) {
+    const k = `${l.ri[i]}:${l.enemy[i]}`;
+    let a = by.get(k);
+    if (!a) by.set(k, (a = []));
+    a.push([l.tick[i], l.vis[i]]);
+  }
+  for (const a of by.values()) a.sort((x, y) => x[0] - y[0]);
+  return (ri, enemy, tick) => {
+    const a = by.get(`${ri}:${enemy}`);
+    if (!a) return false;
+    let state = 0;
+    for (const [t, v] of a) {
+      if (t <= tick) state = v;
+      else { if (v === 1 && t - tick <= lag) return true; break; }
+    }
+    return state === 1;
+  };
+}
+
 export interface VisibilityVerdict {
   /** the visibility-dependent stats can be shown without a "Validating" flag */
   validated: boolean;
-  /** share of bullet hits the mapped bit calls visible, null without evidence */
+  /** what the verdict tested: line of sight (plugin 1.1.0) or the spotted mask */
+  signal: "los" | "mask" | null;
+  /** share of bullet hits the signal calls visible, null without evidence */
   hitCoverage: number | null;
   /** share of bullet hits inside an engagement with that enemy */
   engagementCoverage: number | null;
@@ -160,8 +210,19 @@ const pct = (a: number, b: number) => `${Math.round((100 * a) / b)}%`;
  */
 export function visibilityVerdict(ev: VisibilityEvidence | null, pluginFlag = false): VisibilityVerdict {
   if (!ev || ev.bulletHits === 0) {
-    return { validated: pluginFlag, hitCoverage: null, engagementCoverage: null,
+    return { validated: pluginFlag, signal: null, hitCoverage: null, engagementCoverage: null,
       reason: pluginFlag ? "The capture plugin marks visibility as validated." : "No hit masks recorded, so the visibility signal cannot be checked." };
+  }
+  if (ev.losFiles > 0 && ev.losHits > 0) {
+    // Mixed sets (some files with line of sight, some without) are judged on the line-of-sight files only.
+    const hitCoverage = ev.losSeen / ev.losHits;
+    const engagementCoverage = ev.hitsInEngagement / ev.bulletHits;
+    const validated = hitCoverage >= VISIBILITY_MIN_COVERAGE && engagementCoverage >= VISIBILITY_MIN_COVERAGE;
+    const atHit = ev.losAtHitKnown ? ` A trace at each hit was clear for ${pct(ev.losAtHitClear, ev.losAtHitKnown)}.` : "";
+    const reason = validated
+      ? `Line of sight showed the enemy for ${pct(ev.losSeen, ev.losHits)} of ${ev.losHits} hits.${atHit}`
+      : `Line of sight showed the enemy for only ${pct(ev.losSeen, ev.losHits)} of your ${ev.losHits} hits (${pct(ev.hitsInEngagement, ev.bulletHits)} inside an encounter), below the ${VISIBILITY_MIN_COVERAGE * 100}% needed.${atHit}`;
+    return { validated, signal: "los", hitCoverage, engagementCoverage, reason };
   }
   const hitCoverage = ev.seen.slot / ev.bulletHits;
   const engagementCoverage = ev.hitsInEngagement / ev.bulletHits;
@@ -170,5 +231,5 @@ export function visibilityVerdict(ev: VisibilityEvidence | null, pluginFlag = fa
     ? `The visibility signal was on for ${pct(ev.seen.slot, ev.bulletHits)} of ${ev.bulletHits} hits.`
     : `The game's spotted flag was on for only ${pct(ev.seen.slot, ev.bulletHits)} of your ${ev.bulletHits} hits, and ` +
       `${ev.shotBeforeVisible} of ${ev.engagements} encounters started after you were already shooting at that enemy, so these timings start late and miss encounters.`;
-  return { validated, hitCoverage, engagementCoverage, reason };
+  return { validated, signal: "mask", hitCoverage, engagementCoverage, reason };
 }

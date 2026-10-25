@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { aimAggregate, aimVisibility, emptyAim, mergeAim } from "./aim";
 import { loadPluginMatch, PLUGIN_MATCHES } from "./testing/load";
 import { MatchBuilder } from "./testing/build";
-import { candidateSees, emptyEvidence, maskHasBit, mergeEvidence, visibilityEvidence, visibilityVerdict, VISIBILITY_MIN_COVERAGE } from "./visibility";
+import { candidateSees, emptyEvidence, losLookup, maskHasBit, mergeEvidence, visibilityEvidence, visibilityVerdict, VISIBILITY_MIN_COVERAGE } from "./visibility";
+import type { MatchFile } from "./schema";
 
 describe("maskHasBit", () => {
   test("bits 0..31 read word 0 and 32..63 read word 1", () => {
@@ -62,6 +63,7 @@ describe("evidence from the three plugin 1.0.0 recordings", () => {
       seen: { slot: 53, controller: 0, slotMinus1: 0, pawn: 0, slotInWord1: 0, anyBit: 57 },
       foreignBits: 0, hitsInEngagement: 53, hitShots: 83, hitShotsVisible: 50,
       engagements: 61, shotBeforeVisible: 24, damagedBeforeVisible: 10,
+      losFiles: 0, losHits: 0, losSeen: 0, losAtHitKnown: 0, losAtHitClear: 0,
     });
     const v = visibilityVerdict(all);
     expect(v.validated).toBe(false);
@@ -74,5 +76,48 @@ describe("evidence from the three plugin 1.0.0 recordings", () => {
     expect(agg.validated).toBe(false);
     expect(agg.visibility!.bulletHits).toBe(93);
     expect(aimVisibility(agg).reason).toMatch(/57% of your 93 hits/);
+  });
+});
+
+/** A plugin 1.1.0 style match: 10 AK hits by the human on enemy 5, line of sight from 10 s to 19 s, one encounter covering every hit. */
+function losMatch(hitSecs: number[], visibleFrom = 10, visibleTo = 19): MatchFile {
+  const b = new MatchBuilder();
+  b.m.env.visSource = "los";
+  b.m.env.humanSlot = 0;
+  const h = { ri: [] as number[], tick: [] as number[], victim: [] as number[], m0: [] as number[], m1: [] as number[], spotted: [] as boolean[], los: [] as (0 | 1 | null)[] };
+  for (const s of hitSecs) {
+    b.damage(0, s, 0, 5, 10);
+    h.ri.push(0); h.tick.push(b.t(0, s)); h.victim.push(5); h.m0.push(0); h.m1.push(0); h.spotted.push(false); h.los.push(1);
+  }
+  b.m.aim.hitMask = h;
+  b.m.aim.los = { ri: [0, 0], tick: [b.t(0, visibleFrom), b.t(0, visibleTo)], enemy: [5, 5], vis: [1, 0] };
+  const e = b.m.aim.engagements;
+  e.ri.push(0); e.enemy.push(5); e.tVis.push(b.t(0, 5)); e.angVis.push(0); e.angVisYaw.push(0); e.angVisPitch.push(0); e.dist.push(500);
+  e.tAimStart.push(null); e.tFirstShot.push(null); e.tFirstDmg.push(null); e.tEnd.push(b.t(0, 30)); e.outcome.push("none");
+  return b.build();
+}
+
+describe("line of sight (plugin 1.1.0)", () => {
+  test("lookup: held state, and a hit just before the check that shows the enemy counts", () => {
+    const m = losMatch([]);
+    const at = losLookup(m);
+    const b = new MatchBuilder();
+    const t = (s: number) => b.t(0, s);
+    expect([at(0, 5, t(9.9)), at(0, 5, t(10) - 4), at(0, 5, t(10) - 5), at(0, 5, t(10)), at(0, 5, t(18.9)), at(0, 5, t(19)), at(0, 6, t(12))])
+      .toEqual([false, true, false, true, true, false, false]);
+  });
+  test("90% of hits in line of sight passes the gate; 80% does not", () => {
+    const pass = visibilityEvidence(losMatch([11, 12, 13, 14, 15, 16, 17, 18, 18.5, 25]))!;
+    expect([pass.losFiles, pass.losHits, pass.losSeen, pass.losAtHitKnown, pass.losAtHitClear]).toEqual([1, 10, 9, 10, 10]);
+    const v = visibilityVerdict(pass);
+    expect(v).toMatchObject({ validated: true, signal: "los" });
+    expect(v.hitCoverage).toBeCloseTo(0.9, 12);
+    const fail = visibilityVerdict(visibilityEvidence(losMatch([11, 12, 13, 14, 15, 16, 17, 18, 25, 26]))!);
+    expect(fail).toMatchObject({ validated: false, signal: "los" });
+    expect(fail.reason).toMatch(/80% of your 10 hits/);
+  });
+  test("the aim aggregate opens the gate on its own for a passing file", () => {
+    expect(aimAggregate(losMatch([11, 12, 13, 14, 15, 16, 17, 18, 18.5, 25]))!.validated).toBe(true);
+    expect(aimAggregate(losMatch([11, 12, 13, 14, 15, 16, 17, 18, 25, 26]))!.validated).toBe(false);
   });
 });

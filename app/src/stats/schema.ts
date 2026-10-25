@@ -26,6 +26,18 @@ export interface Env {
   humanSlot?: number | null;
   humanController?: number | null;
   humanPawn?: number | null;
+  /** plugin 1.1.0: what decided visibility (engagements, visTarget): line of sight, the spotted mask, or both over the match */
+  visSource?: "los" | "mask" | "mixed" | null;
+  /** plugin 1.1.0: why line of sight turned off, when it did */
+  losError?: string | null;
+}
+
+/** Optional (plugin 1.1.0): an enemy entering (vis 1) or leaving (vis 0) the human's line of sight, checked 16 times a second. */
+export interface LosTable {
+  ri: number[];
+  tick: number[];
+  enemy: number[];
+  vis: (0 | 1)[];
 }
 
 /** Optional (plugin 1.0.0): the victim's raw spotted mask at each hit by the human. */
@@ -38,6 +50,8 @@ export interface HitMask {
   m1: number[];
   /** m_bSpotted */
   spotted: boolean[];
+  /** plugin 1.1.0: line of sight traced at the hit, 1 clear, 0 blocked, null when off */
+  los?: (0 | 1 | null)[];
 }
 
 export interface Players {
@@ -241,7 +255,7 @@ export interface MatchFile {
   blinds: Blinds;
   grenades: Grenades;
   pos: Pos;
-  aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask };
+  aim: { engagements: Engagements; shots: Shots; hitMask?: HitMask; los?: LosTable };
   throws?: Throws;
   recon?: Recon;
   /** players who disconnected during a recorded round */
@@ -276,6 +290,7 @@ const TABLE_COLUMNS = {
   ],
   throws: ["ri", "tick", "thrower", "type", "pos"],
   hitMask: ["ri", "tick", "victim", "m0", "m1", "spotted"],
+  los: ["ri", "tick", "enemy", "vis"],
 } as const;
 
 function checkTable(where: string, table: unknown, name: keyof typeof TABLE_COLUMNS): number {
@@ -315,6 +330,7 @@ export function validateMatch(raw: unknown, where = "(unnamed)"): MatchFile {
   checkTable(where, aim.engagements, "engagements");
   checkTable(where, aim.shots, "shots");
   if (aim.hitMask !== undefined) checkTable(where, aim.hitMask, "hitMask");
+  if (aim.los !== undefined) checkTable(where, aim.los, "los");
 
   const human = m.human as number;
   if (human < 0 || human >= nPlayers) throw new SchemaError(where, `human index ${human} is outside players (0..${nPlayers - 1})`);

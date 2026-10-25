@@ -76,7 +76,7 @@ Every set bit in all 104 rows is the slot of a player on the human's team (`fore
 
 - `visibilityVerdict(evidence)` opens the gate when the slot bit and the engagements each cover at least `VISIBILITY_MIN_COVERAGE` (90%) of bullet hits. Files without hit masks fall back to the plugin's `env.visibilityValidated` flag.
 - `aimVisibility(aim)` returns `{ validated, hitCoverage, engagementCoverage, reason }`. Use `reason` as the "Validating" tooltip.
-- A fix needs the plugin: a ray trace from the human's eye to the enemy instead of the spotted mask. The hit test will then report the new coverage.
+- Plugin 1.1.0 (branch `feat/plugin-perf-los`) replaces the mask with line of sight: 16 traces a second from the human's eye to each enemy, stored as transitions in `aim.los` (`SCHEMA.md`). For files with `env.visSource` `los`, the gate tests that signal: a bullet hit counts when its victim was in line of sight at the hit or entered it within one check interval (4 ticks). `aim.hitMask.los`, a trace made at each hit, is reported in the reason. `VisibilityVerdict.signal` says which signal was tested. The first match recorded with 1.1.0 opens or keeps the gate on its own.
 
 ## Rating 3.0 (approx.) (`rating3.ts`)
 
