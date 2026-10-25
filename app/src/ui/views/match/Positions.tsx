@@ -6,10 +6,11 @@ import { CELL, cellCentre } from "../../../stats/positions";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { frameFor, RadarView } from "../../components/MapArt";
-import { sideOf } from "../../data/match";
+import { placesNamed, sideOf } from "../../data/match";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { plural } from "../../lib/format";
 import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 
 type Who = "you" | "team" | "all";
@@ -118,14 +119,11 @@ export default function Positions({ v }: TabProps) {
 
 /** Your top places over the match: seconds alive per place name (your presence, rolled up). */
 function PlacesCard({ v }: { v: TabProps["v"] }) {
-  const places = v.b.presence?.places ?? {};
+  const places = useMemo(() => placesNamed(v.b.presence?.places ?? {}), [v]);
   return (
-    <Card title="Top places" aside={Object.keys(places).length ? <span className="meta">Seconds alive</span> : undefined}>
+    <Card title={<>Top places <Hint tip="Each round's places are in the round panel on Rounds." /></>} aside={Object.keys(places).length ? <span className="meta">Seconds alive</span> : undefined}>
       {Object.keys(places).length ? (
-        <>
-          <PlaceList places={places} />
-          <p className="meta" style={{ marginTop: 10 }}>Where you spent each round is in the round panel on the Rounds tab.</p>
-        </>
+<PlaceList places={places} />
       ) : <p className="meta"><NeedsDemo detail="This match has kill positions but no movement samples." /></p>}
     </Card>
   );

@@ -2,18 +2,20 @@
 // It always docks beside the grid and never covers it (the user found the overlay hid the rounds);
 // the grid scrolls sideways instead. It opens with the drawer spring (320 ms) and only then narrows
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Measure } from "../../../stats/facts";
 import { Num } from "../../components/bits";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
-import { killSwing, roundSecs, sideOf, type MatchModel as MatchView } from "../../data/match";
+import { placesNamed, roundSecs, sideOf, type MatchModel as MatchView } from "../../data/match";
 import { metric } from "../../data/meta";
-import { BUY_LABEL, BuyIcon, FirstKillIcon, KillFlags, NadeIcon, NADE_LABEL, WeaponIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
+import { feedFor } from "../../data/rounds";
+import { BUY_LABEL, BuyIcon, NADE_LABEL, WIN_LABEL, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
 import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
-import { roundSwingScore, scoreText } from "../../lib/scale";
-import { NeedsDemo, PlaceList, PlayerName } from "../shared";
+import { NeedsDemo, PlaceList } from "../shared";
+import { GameNade, RoundEndIcon } from "./glyphs";
+import { Killfeed } from "./Killfeed";
 
 const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
@@ -25,7 +27,6 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
   const [w, setW] = useState(() => Math.max(MIN, Math.min(MAX, Number(localStorage.getItem(W_KEY)) || 420)));
   const [shown, setShown] = useState<number | null>(ri);
   const [phase, setPhase] = useState<"closed" | "opening" | "open" | "closing">(ri === null ? "closed" : "open");
-  const firstOpen = useRef(true);
   const opener = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -42,7 +43,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
       setPhase("closing");
       // back to the cell or round header that opened the drawer
       if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
-      const t = window.setTimeout(() => { setPhase("closed"); setShown(null); firstOpen.current = false; }, reduce ? 120 : 200);
+      const t = window.setTimeout(() => { setPhase("closed"); setShown(null); }, reduce ? 120 : 200);
       return () => clearTimeout(t);
     }
   }, [ri]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -93,7 +94,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
               if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setW((x) => save(Math.max(MIN, x - 20))); }
             }}
           />
-          <RoundDetail v={v} ri={shown} onClose={onClose} onStep={onStep} stagger={firstOpen.current && phase === "opening"} />
+          <RoundDetail v={v} ri={shown} onClose={onClose} onStep={onStep} />
         </aside>
       )}
     </div>
@@ -112,7 +113,7 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 /** Grenades a player threw, by the measure that counts them. */
 const NADES: [Nade, Measure][] = [["flash", "flashes"], ["smoke", "smokes"], ["he", "hes"], ["molotov", "molotovs"]];
 
-function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: number; onClose: () => void; onStep: (d: number) => void; stagger: boolean }) {
+function RoundDetail({ v, ri, onClose, onStep }: { v: MatchView; ri: number; onClose: () => void; onStep: (d: number) => void }) {
   const r = v.rounds[ri];
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
@@ -122,7 +123,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
   const rd = all?.[ri] ?? null;
   const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
-  const opening = r.kills.find((k) => k.opening);
+  const feed = useMemo(() => feedFor(v.facts, ri, v.human), [v, ri]);
   const m = (pi: number) => rd?.players[pi]?.m ?? null;
   const dmgMax = Math.max(1, ...v.players.map((p) => m(p.pi)?.dmg ?? 0));
   const sideCls = (pi: number) => (sideOf(v, r, pi) === "T" ? "t" : "ct");
@@ -131,13 +132,14 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
   const econ = v.b.economy.rounds[ri];
   const you = rd?.players[v.human] ?? null;
   // one round's places come from the match's tables, which the worker reads again for the open match
-  const spent = useCall("places", v.entry.hasPos ? [v.file] : null).data?.[r.number] ?? {};
+  const raw = useCall("places", v.entry.hasPos ? [v.file] : null).data?.[r.number];
+  const spent = useMemo(() => placesNamed(raw ?? {}), [raw]);
   const f = r.fact;
   const name = (pi: number | null) => (pi === null ? "someone" : v.players[pi].name);
   return (
     <div className="drawer__in">
       <header className="drawer__head">
-        <WinIcon how={r.how} size={18} className={side ? `${side}-text` : "faint"} />
+        <span className={side ? `${side}-text` : "faint"}><RoundEndIcon how={r.how} size={18} /></span>
         <div className="drawer__title">
           <b>Round {r.number}</b>
           <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
@@ -149,28 +151,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
       </header>
       <div className="drawer__body">
         <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
-          {r.kills.length ? (
-            <ol className="kf">
-              {r.kills.map((k, i) => {
-                const sw = killSwing(k, k.killer);
-                const anim = stagger && i < 12;
-                return (
-                  <li key={i} className={anim ? "kf__in" : undefined} style={anim ? { animationDelay: `${i * 20}ms` } : undefined}>
-                    <span className="mono faint kf__t">{fmtClock(k.t)}</span>
-                    <span className={`kf__p ${k.killer !== null ? sideCls(k.killer) : ""}`}>{k.killer === null ? "World" : <PlayerName v={v} pi={k.killer} />}</span>
-                    <span className="kf__w">
-                      {opening === k && <FirstKillIcon size={11} className="cream" label="Opening kill" />}
-                      <WeaponIcon name={k.weapon} size={13} />
-                      <KillFlags kill={k} size={12} />
-                    </span>
-                    <span className={`kf__p ${sideCls(k.victim)}`}><PlayerName v={v} pi={k.victim} /></span>
-                    <span className="kf__tags">{k.tradeKill && <span className="chip chip--outline" data-tip="Killed an enemy who had just killed a teammate">trade</span>}</span>
-                    <b className="kf__sw num" style={{ color: sw === null ? "var(--ink3)" : scoreText(roundSwingScore(sw)) }} data-tip="Swing credited to the killer">{sw === null ? "" : fmtSwing(sw)}</b>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : <p className="meta">No kills.</p>}
+          <Killfeed kills={feed} />
           {f.plantTick !== null && (
             <p className="meta" data-tip="Round clock: time since freeze time ended">
               Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
@@ -222,7 +203,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
                 return (
                   <li key={p.key}>
                     <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><GameNade type={n} size={13} label />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
                     <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
                     <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
                   </li>
@@ -271,7 +252,7 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
                 <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
               </div>
               {!v.visibility ? (
-                <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="These need view angles and mesh line of sight, which this match file does not carry." /></p>
+                <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="This file lacks view angles and line of sight." /></p>
               ) : (
                 <div className="daim">
                   <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>

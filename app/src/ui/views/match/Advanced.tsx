@@ -6,10 +6,11 @@ import { Card } from "../../components/Card";
 import { BUY_CLASSES, BUY_CLASS_LABEL, clutchRows } from "../../data/engine";
 import type { MatchModel, Team } from "../../data/match";
 import { metric } from "../../data/meta";
-import { BombIcon, BuyIcon, DefuseIcon, FirstKillIcon, TimeIcon } from "../../icons/game";
+import { BombIcon, BuyIcon, DefuseIcon, FirstKillIcon } from "../../icons/game";
 import { TradingIcon } from "../../icons/attributes";
 import { fmtPct, fmtSecs } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
@@ -84,7 +85,7 @@ export default function Advanced({ v }: TabProps) {
           <Pair label="Plants that exploded" tip="Share of a team's plants that exploded" us={pct(a.exploded, a.plants)} them={pct(b.exploded, b.plants)} fmt={p} />
           <Pair label="Defuses as CT" tip="Rounds the team defused" us={a.defused} them={b.defused} fmt={n} />
         </Block>
-        <Card title={<span className="adv__title"><BuyIcon buy="full" size={15} />Buys won</span>}>
+        <Card title={<span className="adv__title"><BuyIcon buy="full" size={15} />Buys won <Hint tip="The tick is the opponents' rate on the same buy." /></span>} aside={<span className="meta">Pistols: {a.pistols.map((w) => (w ? "won" : "lost")).join(", ") || "none"}</span>}>
           <ul className="buyrates">
             {BUY_CLASSES.map((buy, i) => {
               const x = rates.us[i];
@@ -102,9 +103,8 @@ export default function Advanced({ v }: TabProps) {
               );
             })}
           </ul>
-          <p className="meta" style={{ marginTop: 8 }}>The tick marks the opponents' rate on the same buy. Pistol rounds: {a.pistols.map((w) => (w ? "won" : "lost")).join(", ") || "none"}.</p>
         </Card>
-        <Card title={<span className="adv__title"><DefuseIcon size={15} />Clutches</span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> you, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> them</span>}>
+        <Card title={<span className="adv__title"><DefuseIcon size={15} />Clutches <Hint tip="Your team's 1vX situations by enemies left." /></span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> you, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> them</span>}>
           <ul className="clist">
             {a.clutches.map((c) => (
               <li key={c.vs}>
@@ -114,7 +114,6 @@ export default function Advanced({ v }: TabProps) {
               </li>
             ))}
           </ul>
-          <p className="meta" style={{ marginTop: 8 }}><TimeIcon size={12} className="faint" style={{ display: "inline", verticalAlign: "-2px" }} /> Your team's 1vX situations by the number of enemies left.</p>
         </Card>
       </div>
     </div>
