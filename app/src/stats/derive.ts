@@ -3,11 +3,12 @@
 import { aimAggregate, type AimAgg } from "./aim";
 import { buildCtx, type MatchCtx } from "./context";
 import { countMatch, type Counters, type RoundFacts } from "./counters";
-import { BUY_TYPES, teamEquip, type BuyType } from "./economy";
+import { BUY_TYPES, economyView, teamEquip, type BuyType, type EconomyView } from "./economy";
 import { positionsAggregate, type PosAgg } from "./positions";
 import { hsPercent, rating2 } from "./rating";
 import { computeTrades, isEnemyKill, isSave } from "./rules";
 import type { MatchFile, RoundHow, Side, Vec3 } from "./schema";
+import { roundDetailsFromCtx, type RoundDetail, type TeamId } from "./rounds";
 import { computeSwing } from "./swing";
 import { stubModel, type WinModel } from "./winprob";
 
@@ -15,7 +16,7 @@ import { stubModel, type WinModel } from "./winprob";
 // 7: swing for plugin 1.0.0 files removes the victim's HP after a kill (was unknown for every round).
 export const DERIVE_VERSION = 7;
 
-export type TeamId = "us" | "them";
+export type { TeamId };
 
 export interface PlayerRow {
   pi: number;
@@ -123,6 +124,10 @@ export interface MatchView {
   hasPos: boolean;
   /** the plugin's own check of each round against the game's per-round stats, when recorded */
   recon: ReconSummary | null;
+  /** per round, per player: the round inspector's data (rounds.ts) */
+  roundDetails: RoundDetail[];
+  /** four-way buy classes, win rates, matchups, money and equipment curves, saves (economy.ts) */
+  econ: EconomyView;
 }
 
 export interface ReconSummary {
@@ -257,13 +262,14 @@ export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubMo
   }
 
   const aim = aimAggregate(m);
+  const roundDetails = roundDetailsFromCtx(ctx, trades, swingResult, model);
   return {
     id: m.id, file, map: m.map, startUtc: m.startUtc, endUtc: m.endUtc, status: m.status, env: m.env,
     firstFullRound: m.firstFullRound, nRounds, captured: ctx.rounds.length, statRounds: players[m.human].c.rounds, score: { us, them },
     result: us > them ? "W" : us < them ? "L" : "T", human: m.human, usStartSide: usSide(0), players, rounds,
     killMatrix, economy, model: { kind: model.kind, label: model.label }, aim,
     pos: positionsAggregate(m), hasAim: m.aim.shots.ri.length > 0 || m.aim.engagements.ri.length > 0,
-    hasPos: m.pos.ri.length > 0, recon: reconSummary(m),
+    hasPos: m.pos.ri.length > 0, recon: reconSummary(m), roundDetails, econ: economyView(roundDetails),
   };
 }
 
