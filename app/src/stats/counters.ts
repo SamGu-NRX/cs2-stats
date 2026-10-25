@@ -3,7 +3,9 @@
 import { assistersOf, sameSide, type MatchCtx } from "./context";
 import { BUY_TYPES, teamBuyType, type BuyType } from "./economy";
 import type { RatingInputs } from "./rating";
+import { emptyHltv, type HltvCounts } from "./hltv";
 import { emptyR3, type R3Inputs } from "./rating3";
+import { emptyRoleCounts, type RoleCounts } from "./role";
 import { aliveAtEnd, detectClutches, isEnemyKill, isSave, kastRound, openingKill, roundKills, type Clutch, type Trades } from "./rules";
 import { CT, T, type Side } from "./schema";
 import type { KillSwing, SwingResult } from "./swing";
@@ -83,6 +85,10 @@ export interface Counters extends RatingInputs {
   util: { t: UtilSlice; ct: UtilSlice };
   /** Rating 3.0 (approx.) inputs over full rounds; filled by deriveMatch (rating3.ts r3Inputs) */
   r3: R3Inputs;
+  /** position evidence for the role (role.ts roleCounts); filled by deriveMatch */
+  role: RoleCounts;
+  /** inputs for the HLTV-named sub-stats (hltv.ts hltvCounts); filled by deriveMatch */
+  hl: HltvCounts;
 }
 
 export function emptyCounters(): Counters {
@@ -95,6 +101,7 @@ export function emptyCounters(): Counters {
     clutchN: [0, 0, 0, 0, 0], clutchW: [0, 0, 0, 0, 0], aliveSecs: 0, aliveRounds: 0, saves: 0, swing: 0, swingRounds: 0,
     weaponKills: WEAPON_CLASSES.map(() => 0), pistol: slice(), sideT: slice(), sideCT: slice(),
     own: BUY_TYPES.map(slice), opp: BUY_TYPES.map(slice), util: { t: emptyUtil(), ct: emptyUtil() }, r3: emptyR3(),
+    role: emptyRoleCounts(), hl: emptyHltv(),
   };
 }
 
