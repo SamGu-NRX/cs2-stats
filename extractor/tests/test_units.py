@@ -579,11 +579,11 @@ def test_a_re_extraction_into_the_same_folder_keeps_it(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
     same = dp.DEMOS_DIR / "slug" / "m1-nuke"
-    same.mkdir(parents=True)
-    (same / "match.parquet").write_bytes(b"x")
+    written = _write_map(same)
     dp.NEEDS_REEXTRACT.write_text(json.dumps(dict(dem_file="a.dem", dem_bytes=1, out_dir=str(same.relative_to(tmp_path))))
                                   + "\n")
-    dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1)}, {"x": same})
+    dp.replace_old_extractions({"x": dict(ok=True, dem_file="a.dem", dem_bytes=1, version_dir=written.name)},
+                               {"x": same})
     assert same.exists() and dp.NEEDS_REEXTRACT.read_text() == ""
 
 
@@ -1247,7 +1247,7 @@ def test_an_in_place_re_extraction_never_retires_the_map_it_just_wrote(tmp_path,
     monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
     slug = "lan-final-0123abcd"
     out = dp.DEMOS_DIR / slug / "lan-final-map1"
-    _write_map(out)
+    written = _write_map(out)
     work = dp.WORK_DIR / slug
     work.mkdir(parents=True)
     dem = work / "lan-final-map1.dem"
@@ -1258,7 +1258,7 @@ def test_an_in_place_re_extraction_never_retires_the_map_it_just_wrote(tmp_path,
     dp.NEEDS_REEXTRACT.write_text(json.dumps(dict(dem_file=dem.name, dem_bytes=1,
                                                   out_dir=str(out.relative_to(tmp_path)))) + "\n")
     a = dp.Archive(rar=rar, id="0123abcd-0000", state="parsing", slug=slug, work=work, dems=[dem])
-    a.results = {dem.name: dict(ok=True, dem_file=dem.name, dem_bytes=1, map="de_nuke")}
+    a.results = {dem.name: dict(ok=True, dem_file=dem.name, dem_bytes=1, map="de_nuke", version_dir=written.name)}
     a.out_dirs = {dem.name: out}
     p = dp.Pipeline()
     p.archives[a.id] = a
@@ -1267,87 +1267,13 @@ def test_an_in_place_re_extraction_never_retires_the_map_it_just_wrote(tmp_path,
     assert dp.NEEDS_REEXTRACT.read_text() == ""  # the row is satisfied by the map written in place
 
 
-def test_a_prune_cannot_delete_a_version_published_while_it_runs(tmp_path, monkeypatch):
-    # Audit schedule 1: the pruner cached CURRENT (V0), a writer published V1 and its own prune removed V0,
-    # then the first pruner deleted V1 as "not current", leaving CURRENT dangling.
-    m = tmp_path / "m1"
-    _write_map(m)
-    real, cached, go, pruner = ex.resolve_map_dir, threading.Event(), threading.Event(), []
-
-    def slow(path):
-        found = real(path)
-        if pruner and threading.current_thread() is pruner[0] and not cached.is_set():
-            cached.set()
-            go.wait(5)
-        return found
-
-    monkeypatch.setattr(ex, "resolve_map_dir", slow)
-    pruner.append(threading.Thread(target=ex.prune_map, args=(m,)))
-    pruner[0].start()
-    assert cached.wait(5)
-    writer = threading.Thread(target=_write_map, args=(m,))
-    writer.start()
-    writer.join(0.5)
-    go.set()
-    pruner[0].join(10)
-    writer.join(20)
-    assert real(m) is not None
 
 
-def test_a_retirement_racing_a_writer_leaves_the_map_withdrawn(tmp_path, monkeypatch):
-    # Audit schedule 2: the writer replaced CURRENT, a retirement wrote "replaced" and paused, the writer
-    # removed RETIRED, and the withdrawn version resolved again after retire_map returned.
-    m = tmp_path / "m1"
-    _write_map(m)
-    marked, resume, errors = threading.Event(), threading.Event(), []
-    real_marker, real_publish = ex._write_marker, ex.publish_version
-
-    def marker(path, text):
-        real_marker(path, text)
-        marked.set()
-        resume.wait(10)
-
-    def retire():
-        try:
-            ex.retire_map(m)
-        except BaseException as e:  # noqa: BLE001 - reported below
-            errors.append(e)
-
-    retirer = threading.Thread(target=retire)
-
-    def publishing(*args, **kwargs):
-        out = real_publish(*args, **kwargs)
-        retirer.start()
-        marked.wait(0.5)  # the retirement gets in here unless the writer holds the map's lock
-        return out
-
-    monkeypatch.setattr(ex, "_write_marker", marker)
-    monkeypatch.setattr(ex, "publish_version", publishing)
-    _write_map(m)
-    resume.set()
-    retirer.join(10)
-    assert not errors and ex.resolve_map_dir(m) is None
 
 
-def test_a_prune_never_touches_the_staging_folder_of_a_running_writer(tmp_path, monkeypatch):
-    # Audit schedule 3: a startup prune deleted part of a writer's .tmp-<pid> folder, and the writer then
-    # published only the tables that survived.
-    m = tmp_path / "m1"
-    _write_map(m)
-    real_schema, pruners = ex.pl.read_parquet_schema, []
 
-    def schema(path):
-        if not pruners:
-            pruners.append(threading.Thread(target=ex.prune_map, args=(m,)))
-            pruners[0].start()
-            pruners[0].join(0.5)
-        return real_schema(path)
 
-    monkeypatch.setattr(ex.pl, "read_parquet_schema", schema)
-    new = _write_map(m)
-    pruners[0].join(10)
-    assert ex.resolve_map_dir(m) == new
-    assert sorted(json.loads((new / "COMPLETE").read_text())) == [f"{t}.parquet" for t in sorted(AUDIT_TABLES)]
+
 
 
 def test_complete_lists_every_table_written_and_a_missing_one_fails_the_publish(tmp_path, monkeypatch):
@@ -1479,3 +1405,169 @@ def test_the_startup_tidy_skips_a_map_another_process_holds(tmp_path, monkeypatc
         assert orphan.exists()
     dp.tidy_demos()
     assert not orphan.exists() and ex.resolve_map_dir(m) is not None
+
+
+def _signal_lock_attempts(monkeypatch, events):
+    """Set events[thread] when that thread starts trying to take a map lock (it then waits if it is held)."""
+    real = ex.map_lock._acquire
+
+    def acquire(self, f, path):
+        if threading.current_thread() in events:
+            events[threading.current_thread()].set()
+        return real(self, f, path)
+
+    monkeypatch.setattr(ex.map_lock, "_acquire", acquire)
+
+
+def _run(target, errors):
+    def body():
+        try:
+            target()
+        except BaseException as e:  # noqa: BLE001 - asserted empty by the test
+            errors.append(e)
+    return threading.Thread(target=body)
+
+
+def test_a_prune_cannot_delete_a_version_published_while_it_runs(tmp_path, monkeypatch):
+    # Audit schedule 1: the pruner read CURRENT (V0), a writer published V1, and the pruner then deleted V1
+    # as "not current", leaving CURRENT dangling. The pruner pauses right after reading CURRENT until the
+    # writer has either published (no lock) or started waiting for the map's lock.
+    m = tmp_path / "m1"
+    _write_map(m)
+    real_resolve, real_publish = ex.resolve_map_dir, ex.publish_version
+    cached, writer_moved, errors = threading.Event(), threading.Event(), []
+    pruner = _run(lambda: ex.prune_map(m), errors)
+    writer = _run(lambda: _write_map(m), errors)
+
+    def resolve(path):
+        found = real_resolve(path)
+        if threading.current_thread() is pruner and not cached.is_set():
+            cached.set()
+            assert writer_moved.wait(10), "the writer neither published nor waited for the lock"
+        return found
+
+    def publish(*a, **k):
+        out = real_publish(*a, **k)
+        if threading.current_thread() is writer:
+            writer_moved.set()
+        return out
+
+    monkeypatch.setattr(ex, "resolve_map_dir", resolve)
+    monkeypatch.setattr(ex, "publish_version", publish)
+    _signal_lock_attempts(monkeypatch, {writer: writer_moved})
+    pruner.start()
+    assert cached.wait(10)
+    writer.start()
+    pruner.join(20)
+    writer.join(20)
+    assert not pruner.is_alive() and not writer.is_alive() and not errors, errors
+    assert real_resolve(m) is not None
+
+
+def test_a_retirement_racing_a_writer_leaves_the_map_withdrawn(tmp_path, monkeypatch):
+    # Audit schedule 2: the writer replaced CURRENT, a retirement wrote "replaced" and paused, the writer
+    # removed RETIRED, and the retirement's prune then kept the map: a withdrawn version resolved again.
+    # The writer pauses after publishing until the retirement has written its marker (no lock) or started
+    # waiting for the lock; the retirement prunes only after the writer has finished.
+    m = tmp_path / "m1"
+    _write_map(m)
+    real_marker, real_publish = ex._write_marker, ex.publish_version
+    retirer_moved, writer_done, errors = threading.Event(), threading.Event(), []
+    retirer = _run(lambda: ex.retire_map(m), errors)
+
+    def marker(path, text):
+        real_marker(path, text)
+        if threading.current_thread() is retirer:
+            retirer_moved.set()
+            assert writer_done.wait(10), "the writer never finished"
+
+    def publish(*a, **k):
+        out = real_publish(*a, **k)
+        if threading.current_thread() is threading.main_thread() and not retirer.is_alive():
+            retirer.start()
+            assert retirer_moved.wait(10), "the retirement neither marked the map nor waited for the lock"
+        return out
+
+    monkeypatch.setattr(ex, "_write_marker", marker)
+    monkeypatch.setattr(ex, "publish_version", publish)
+    _signal_lock_attempts(monkeypatch, {retirer: retirer_moved})
+    _write_map(m)
+    writer_done.set()
+    retirer.join(20)
+    assert not retirer.is_alive() and not errors, errors
+    assert ex.resolve_map_dir(m) is None
+
+
+def test_a_prune_never_touches_the_staging_folder_of_a_running_writer(tmp_path, monkeypatch):
+    # Audit schedule 3: a prune deleted a running writer's .tmp-<pid> folder (in the audit, part of it), and
+    # the writer published what survived. The writer pauses after its first table until the prune has
+    # finished (no lock) or started waiting for the lock.
+    m = tmp_path / "m1"
+    _write_map(m)
+    real_schema, pruner_moved, errors = ex.pl.read_parquet_schema, threading.Event(), []
+
+    def prune():
+        try:
+            ex.prune_map(m)
+        finally:
+            pruner_moved.set()
+
+    pruner = _run(prune, errors)
+
+    def schema(path):
+        if threading.current_thread() is threading.main_thread() and not pruner.is_alive() and not pruner_moved.is_set():
+            pruner.start()
+            assert pruner_moved.wait(10), "the prune neither ran nor waited for the lock"
+        return real_schema(path)
+
+    monkeypatch.setattr(ex.pl, "read_parquet_schema", schema)
+    _signal_lock_attempts(monkeypatch, {pruner: pruner_moved})
+    new = _write_map(m)
+    pruner.join(20)
+    assert not pruner.is_alive() and not errors, errors
+    assert ex.resolve_map_dir(m) == new
+    assert sorted(json.loads((new / "COMPLETE").read_text())) == [f"{t}.parquet" for t in sorted(AUDIT_TABLES)]
+
+
+def test_an_in_place_re_extraction_withdrawn_again_keeps_its_row(tmp_path, monkeypatch):
+    # The reviewer's case: the job publishes, then the map is marked stale, then the archive finishes. The
+    # row was dropped because its folder was the job's own, though readers now skip the map.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "NEEDS_REEXTRACT", dp.DEMOS_DIR / "needs_reextract.jsonl")
+    m = dp.DEMOS_DIR / "slug" / "m1-nuke"
+    written = _write_map(m)
+    ex.mark_stale(m, "extractor 1.1.0")
+    row = dict(dem_file="a.dem", dem_bytes=1, out_dir=str(m.relative_to(tmp_path)))
+    dp.NEEDS_REEXTRACT.write_text(json.dumps(row) + "\n")
+    dp.replace_old_extractions({"a.dem": dict(ok=True, dem_file="a.dem", dem_bytes=1, version_dir=written.name)},
+                               {"a.dem": m})
+    assert [json.loads(x) for x in dp.NEEDS_REEXTRACT.read_text().splitlines()] == [row]
+
+
+def test_a_writer_survives_a_retirement_that_deletes_its_map_folder_first(tmp_path, monkeypatch):
+    # write_output created the map folder before taking its lock, so a retirement holding the lock could
+    # delete the folder in between, and the writer then failed creating .tmp-<pid> inside it. The writer
+    # arrives while the retirement holds the lock; the retirement goes on only once the writer waits.
+    m = tmp_path / "slug" / "m1"
+    _write_map(m)
+    real_marker, writer_waiting, errors = ex._write_marker, threading.Event(), []
+    writer = _run(lambda: _write_map(m), errors)
+    holding = threading.Event()
+
+    def marker(path, text):
+        real_marker(path, text)
+        if threading.current_thread() is not writer:
+            holding.set()
+            assert writer_waiting.wait(10), "the writer never reached the lock"
+
+    monkeypatch.setattr(ex, "_write_marker", marker)
+    _signal_lock_attempts(monkeypatch, {writer: writer_waiting})
+    retirer = _run(lambda: ex.retire_map(m), errors)
+    retirer.start()
+    assert holding.wait(10)
+    writer.start()
+    retirer.join(20)
+    writer.join(20)
+    assert not retirer.is_alive() and not writer.is_alive() and not errors, errors
+    assert ex.resolve_map_dir(m) is not None
+

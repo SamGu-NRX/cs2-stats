@@ -393,17 +393,19 @@ def replace_old_extractions(results: dict, out_dirs: dict[str, Path]) -> None:
 
     out_dirs maps each of the archive's demos to the folder its job was given; the worker's own map name is
     never used to find it, because it can differ (a name without "-vs-", a _dup key). A row whose old folder
-    is that same folder was re-extracted in place and is done. Otherwise the old map is retired only while
-    the new one resolves, both maps' locks held; if it does not resolve, the old map and its row stay.
+    is that same folder was re-extracted in place, and is done only if, under the map's lock, the map
+    resolves to the version this job wrote (result["version_dir"]); a map withdrawn again since keeps its
+    row. Otherwise the old map is retired only while the new one resolves, both maps' locks held; if it does
+    not resolve, the old map and its row stay.
     """
     if not NEEDS_REEXTRACT.exists():
         return
     rows = read_jsonl(NEEDS_REEXTRACT)
-    successor = {(r.get("dem_file"), r.get("dem_bytes")): Path(out_dirs[name]) for name, r in results.items()
-                 if r.get("ok") and name in out_dirs}
+    successor = {(r.get("dem_file"), r.get("dem_bytes")): (Path(out_dirs[name]), r.get("version_dir"))
+                 for name, r in results.items() if r.get("ok") and name in out_dirs}
     keep = []
     for row in rows:
-        new = successor.get((row.get("dem_file"), row.get("dem_bytes")))
+        new, version = successor.get((row.get("dem_file"), row.get("dem_bytes")), (None, None))
         if new is None:
             keep.append(row)
             continue
@@ -413,8 +415,21 @@ def replace_old_extractions(results: dict, out_dirs: dict[str, Path]) -> None:
             keep.append(row)
             continue
         old = DATA_ROOT / rel
-        if old.resolve() == new.resolve() or not old.exists():
-            continue  # re-extracted in place, or nothing is left to retire
+        if old.resolve() == new.resolve():
+            try:
+                with extract.map_lock(new):
+                    live = extract.resolve_map_dir(new)
+            except (extract.MapLocked, OSError, ValueError) as e:
+                live = None
+                log.error("cannot check %s: %s", row["out_dir"], e)
+            if live is not None and version and live.name == version:
+                continue  # re-extracted in place, and what readers get is the version this job wrote
+            log.warning("%s was re-extracted in place but does not resolve to %s; keeping its row",
+                        row["out_dir"], version)
+            keep.append(row)
+            continue
+        if not old.exists():
+            continue  # nothing is left to retire
         try:
             # Readers stop resolving it at once; files a reader still has open go at a later start.
             left = extract.retire_map(_deletable(old), successor=_deletable(new))
