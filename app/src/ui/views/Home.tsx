@@ -10,7 +10,7 @@ import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
-import { clutchRows, entryLine, entryRating, filterEntries, fmtMetric, lineOf, multiKillRows, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
+import { clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
@@ -46,7 +46,7 @@ export function HomeView() {
   const { matches, status } = useData();
   const { map, n } = useFilters();
   const list = useMemo(() => {
-    const f = filterEntries(matches, map);
+    const f = careerEntries(matches, map);
     return n ? f.slice(0, n) : f;
   }, [matches, map, n]);
   const last = list[0] ?? null;

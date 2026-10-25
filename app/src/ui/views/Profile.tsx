@@ -16,9 +16,9 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, filterEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
+  attrsOf, botIds, botPoolText, BOTS_TIP, clutchRows, entryRating, careerEntries, fmtMetric, lineOf, mapsIn, multiKillRows, poolText, R3_INPUT_LABEL, rating3Note,
   thinPoolText,
-  ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
+  NO_RATING_TIP, ratingHeadline, RATING_LABEL, RATING_POOLED, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type Attr, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
@@ -61,7 +61,7 @@ export default function ProfileView() {
   const { map, n, side } = useFilters();
   const r = useRoute();
   const [cmp, setCmp] = useState<Compare>(() => (r.query.get("cmp") as Compare) || "bench");
-  const list = useMemo(() => { const f = filterEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const bots = useMemo(() => botIds(list), [list]);
   const files = useMemo(() => list.map((e) => e.file), [list]);
   const qs = useMemo((): Query[] | null => (list.length && ids.length ? [
@@ -246,7 +246,7 @@ function FormRail({ p }: { p: ProfileData }) {
               <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
                 <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtDate(f.match.date)}</small></span></td>
                 <td><span className={`wl wl--${f.result}`}>{f.result}</span> <span className="num">{f.score.us}:{f.score.them}</span></td>
-                <td><b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b></td>
+                <td>{r === null ? <span className="faint" data-tip={NO_RATING_TIP}>–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
               </tr>
             );
           })}

@@ -36,6 +36,21 @@ function add<N extends TableName>(t: Table<N>, name: N, values: Record<string, u
 /** Source engine hit group numbers, named as the demo parser names them. */
 const HITGROUP: Record<number, string> = { 1: "head", 2: "chest", 3: "stomach", 4: "left_arm", 5: "right_arm", 6: "left_leg", 7: "right_leg", 8: "neck" };
 
+/** Rounds won over every round of the file, [team that started CT, team that started T]; the facts cover only some rounds. */
+function finalScore(m: MatchFile): [number, number] {
+  const humanStart = SIDE[m.players.startSide[m.human]];
+  const out: [number, number] = [0, 0];
+  m.rounds.winSide.forEach((w, ri) => {
+    const win = SIDE[w ?? -1];
+    const human = SIDE[m.rounds.side[ri]?.[m.human] ?? -1];
+    if (!win || !human) return;
+    const humanWon = win === human;
+    // index 0 is the team that started CT
+    out[(humanStart === "CT") === humanWon ? 0 : 1]++;
+  });
+  return out;
+}
+
 export function pluginToTables(m: MatchFile): MatchTables {
   const key = m.players.key;
   const human = key[m.human];
@@ -67,7 +82,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     convars: JSON.stringify({ mp_maxrounds: m.env.maxrounds ?? 24 }),
     extra: JSON.stringify({
       date: m.startUtc.slice(0, 10), started_at: m.startUtc, duration_s: (Date.parse(m.endUtc) - Date.parse(m.startUtc)) / 1000,
-      pov: human, rounds_played: m.rounds.winSide.length,
+      pov: human, rounds_played: m.rounds.winSide.length, status: m.status, final_score: finalScore(m),
     }), visibility_status: "no_mapdata",
   });
   key.forEach((id, pi) => add(t.players, "players", { steamid: id, name: m.players.name[pi], team: teamOf(pi), is_bot: m.players.isBot[pi] }));

@@ -10,7 +10,7 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { entryLine } from "./engine";
+import { careerEntries, entryLine, filterEntries } from "./engine";
 import { matchModel, roundMatrix, sideOf, type MatchModel } from "./match";
 import { sourceOf } from "./sources";
 
@@ -80,4 +80,13 @@ describe("match model", async () => {
   it("labels the bundled files by the source that wrote them", () => {
     for (const v of models) expect(sourceOf(v.entry).id, v.file).toBe(v.file.includes("synthetic-demo") ? "synthetic" : "converted");
   });
+});
+
+it("keeps unfinished matches out of career views but in the match list", async () => {
+  // fails if an abandoned match shows in Form or moves a career average
+  const m = await decodeMatch(readFileSync(path.join(SAMPLES, FILES[0])), FILES[0]);
+  const done = entryOf("done", "", derive(pluginToTables(m), CS2RB));
+  const left = entryOf("left", "", derive(pluginToTables({ ...m, status: "abandoned" }), CS2RB));
+  expect(careerEntries([done, left], null).map((e) => e.file)).toEqual(["done"]);
+  expect(filterEntries([done, left], null)).toHaveLength(2);
 });

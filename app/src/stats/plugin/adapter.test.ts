@@ -30,3 +30,13 @@ it("kills, deaths and headshot kills match the game's per-round totals in every 
   expect(checked).toBeGreaterThan(500);
   expect(wrong).toEqual([]);
 });
+
+it("gives a converted log its whole match's score, not the score of the rounds it covers", async () => {
+  // fails if a log whose kill-by-kill rounds are few shows a score like 1:0 for a finished match
+  for (const file of readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"))) {
+    const m = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
+    const f = derive(pluginToTables(m), CS2RB);
+    expect(f.match.score[0] + f.match.score[1], file).toBe(m.rounds.winSide.filter((w) => w !== null).length);
+    expect(f.match.complete, file).toBe(m.status === "complete");
+  }
+});

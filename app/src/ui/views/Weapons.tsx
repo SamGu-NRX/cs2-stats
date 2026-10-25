@@ -7,7 +7,7 @@ import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { Num } from "../components/bits";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
-import { filterEntries, fmtMetric, WEAPON_CLASS_LABEL } from "../data/engine";
+import { careerEntries, fmtMetric, WEAPON_CLASS_LABEL } from "../data/engine";
 import { useCall, useRollups, useYourQuery } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
@@ -57,7 +57,7 @@ function advice(g: Judged, all: Judged[]): string {
 export default function Weapons() {
   const { matches } = useData();
   const { map, n } = useFilters();
-  const list = useMemo(() => { const f = filterEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const base = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
   const names = useMemo(() => Object.keys(base?.weapons ?? {}).filter((w) => GUN.has(weaponClass(w))), [base]);
