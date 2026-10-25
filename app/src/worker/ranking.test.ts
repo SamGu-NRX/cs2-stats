@@ -92,6 +92,10 @@ it("returns Firepower against the pros and the six style attributes against the 
   expect(b.firepower?.metrics.every((x) => x.pct === null || x.pct === 0)).toBe(true);
   expect(b.style.scores.map((a) => a.id)).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
   expect(b.style.scores.every((a) => a.metrics.length === 4 && a.metrics.every((x) => x.pct === null || x.pct === 100))).toBe(true);
+  // fails if the bot-pool Firepower reads the pros, or is missing
+  expect(b.style.firepower?.metrics.length).toBe(8);
+  expect(b.style.firepower?.metrics.some((x) => x.pct === 100)).toBe(true);
+  expect(b.style.firepower?.metrics.every((x) => x.pct === null || x.pct === 100)).toBe(true);
 });
 
 it("gives the role over all rounds and per map, maps with the most rounds first", async () => {
