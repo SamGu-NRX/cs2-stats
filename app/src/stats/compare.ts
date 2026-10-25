@@ -57,7 +57,7 @@ export interface Percentile {
   /** 0-100; for performance metrics with lowerIsBetter, flipped so higher is always better */
   pct: number | null;
   pool: string;
-  /** why there is a value but no percentile (an input the matches lack, another model); null otherwise */
+  /** why there is no percentile (an input the matches lack, another model), whether or not there is a value; null otherwise */
   reason: string | null;
 }
 
@@ -89,7 +89,8 @@ export function compare(s: Summary, b: Baselines, opt: CompareOptions = {}): Rec
     const pool = poolName(s, opt, m.group);
     const q = b.pools[pool]?.[side]?.[m.id] ?? null;
     const value = m.value(s);
-    const reason = value === null ? null : notComparable(m, s, b);
+    // the reason holds with or without a value: a metric whose input is missing may have no value at all
+    const reason = notComparable(m, s, b);
     let pct = value === null || q === null || reason ? null : percentileOf(q, value);
     if (pct !== null && m.kind === "performance" && m.lowerIsBetter) pct = 100 - pct;
     out[m.id] = { id: m.id, value, pct, pool, reason };
