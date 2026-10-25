@@ -1,6 +1,7 @@
-"""Valve matchmaking demos: the ways they differ from GOTV that broke extraction.
-Everything here is synthetic; no real SteamID, name or demo."""
+"""Valve matchmaking demos: the ways they differ from GOTV that broke extraction, and the import CLI's Steam
+lookups. Everything here is synthetic; no real SteamID, name or demo."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import extract as ex  # noqa: E402
+import valve_import as vi  # noqa: E402
 
 
 class SkippingParser:
@@ -87,3 +89,56 @@ def test_rebuilt_blinds_are_checked_against_the_demos_own_player_blind_events():
     assert (agree["ok"], agree["actual"]) == (True, 2)
     off = ex.blinds_vs_event(ours, game.tick, game.victim_steamid, game.attacker_steamid, game.duration + [0, 0.5])
     assert (off["ok"], off["actual"], off["fatal"]) == (False, 1, False)
+
+
+# --- import CLI: Steam files ------------------------------------------------
+
+U1, U2 = vi.STEAMID64_MIN + 1000, vi.STEAMID64_MIN + 2000
+
+
+def _login(users: dict) -> str:
+    body = "".join(f'\t"{sid}"\n\t{{\n' + "".join(f'\t\t"{k}"\t\t"{v}"\n' for k, v in kv.items()) + "\t}\n"
+                   for sid, kv in users.items())
+    return f'"users"\n{{\n{body}}}\n'
+
+
+def test_the_user_is_steams_most_recent_login():
+    # Current Steam clients write only a timestamp; older ones mark MostRecent, which wins when present.
+    by_time = {U1: dict(AccountName="a", timestamp="100"), U2: dict(AccountName="b", timestamp="200")}
+    assert vi.most_recent_user(vi.parse_vdf(_login(by_time))) == U2
+    by_time[U1]["MostRecent"] = "1"
+    assert vi.most_recent_user(vi.parse_vdf(_login(by_time))) == U1
+
+
+def test_a_malformed_vdf_fails_loudly():
+    for bad in ('"users"\n{\n"1"\n{\n', '"users" x', '"a" "b" }'):
+        with pytest.raises(ValueError):
+            vi.parse_vdf(bad)
+
+
+def test_the_replays_folder_is_found_in_the_library_that_holds_cs2(tmp_path):
+    steam, other = tmp_path / "Steam", tmp_path / "Other Lib"
+    (steam / "steamapps").mkdir(parents=True)
+    (other / vi.REPLAYS).mkdir(parents=True)
+    esc = lambda p: str(p).replace("\\", "\\\\")
+    (steam / "steamapps" / "libraryfolders.vdf").write_text(
+        '"libraryfolders"\n{\n'
+        f'\t"0"\n\t{{\n\t\t"path"\t\t"{esc(steam)}"\n\t\t"apps"\n\t\t{{\n\t\t\t"228980"\t\t"1"\n\t\t}}\n\t}}\n'
+        f'\t"1"\n\t{{\n\t\t"path"\t\t"{esc(other)}"\n\t\t"apps"\n\t\t{{\n\t\t\t"730"\t\t"1"\n\t\t}}\n\t}}\n}}\n',
+        encoding="utf-8")
+    assert vi.replays_dir(steam) == other / vi.REPLAYS
+
+
+def test_a_saved_user_survives_a_later_steam_login_and_an_explicit_one_replaces_it(tmp_path):
+    steam = tmp_path / "Steam"
+    (steam / "config").mkdir(parents=True)
+    login = steam / "config" / "loginusers.vdf"
+    login.write_text(_login({U1: dict(timestamp="1")}), encoding="utf-8")
+    out = tmp_path / "out"
+    assert vi.resolve_user(out, steam, None)["steamid"] == U1
+    login.write_text(_login({U2: dict(timestamp="9")}), encoding="utf-8")
+    assert vi.resolve_user(out, steam, None)["steamid"] == U1
+    assert vi.resolve_user(out, steam, U2)["steamid"] == U2
+    assert json.loads((out / vi.USER_FILE).read_text(encoding="utf-8"))["steamid"] == U2
+    with pytest.raises(ValueError):
+        vi.resolve_user(out, steam, 12345)
