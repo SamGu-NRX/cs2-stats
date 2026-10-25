@@ -19,7 +19,7 @@ import { fmtPct, mapName, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
-import { RoleCard } from "./profile/identity";
+import { RoleCard } from "./profile/parts";
 import { Empty, NeedsDemo, NotCompared, Provisional } from "./shared";
 
 export default function Playstyle() {

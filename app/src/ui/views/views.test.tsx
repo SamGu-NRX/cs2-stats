@@ -19,7 +19,7 @@ import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { rollup } from "../../stats/rollup";
 import { weaponLabel } from "../../stats/weapons";
-import type { Method, Query } from "../../worker/protocol";
+import type { ClutchRow, Method, Query } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
 import { careerEntries, fmtMetric, provisionalText, statLine } from "../data/engine";
@@ -28,11 +28,12 @@ import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { fmtSwing, signed } from "../lib/format";
+import { matchHref } from "../router";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
+import Playstyle from "./Playstyle";
 import ProfileView from "./Profile";
-import { MetricSlot } from "./profile/parts";
-import { HowGood } from "./profile/performance";
+import { HowGood } from "./profile/parts";
 import { Provisional } from "./shared";
 import Rounds from "./match/Rounds";
 import Utility from "./match/Utility";
@@ -115,55 +116,91 @@ const text = (el: Element | null | undefined) => el?.textContent?.trim() ?? "";
 const byLabel = (sel: string, label: string, name: string) => Array.from(host.querySelectorAll(sel)).find((el) => text(el.querySelector(label)) === name) ?? null;
 
 describe("comparison reasons", () => {
-  /** How good's percentile rows, by metric label. */
-  const howGoodRow = (id: string) => Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label) ?? null;
-
-  it("shows How good's uncompared values with their reason, never a rank", async () => {
+  it("shows How good's uncompared values with their reason, never a rank or a dash", async () => {
     // fails if a metric the engine could not compare (Percentile.reason) shows "Top x%", "Bottom x%" or a
-    // dot where the reason belongs, or loses its value
+    // dash where the reason belongs, or loses its value
     const q = queryOf(samples);
     const r = await calls.compare(q, { side: "both" });
-    render(<HowGood cmp={r} error={null} m={summary(q).m} />);
-    const reasoned = Object.values(r.p).filter((x) => x.reason && x.value !== null && howGoodRow(x.id));
+    answers.compare = r;
+    render(<HowGood q={q} side="both" />);
+    const rows = Array.from(host.querySelectorAll(".howgood li"));
+    const rowOf = (id: string) => rows.find((li) => li.firstElementChild?.firstChild?.textContent === metric(id).label)!;
+    const reasoned = Object.values(r.p).filter((x) => x.reason && rows.some((li) => li === rowOf(x.id)));
     expect(reasoned.length).toBeGreaterThan(0);
     for (const x of reasoned) {
-      const row = howGoodRow(x.id)!;
-      expect(text(row.querySelector(".pctl__phrase")), x.id).toBe(x.reason);
-      expect(text(row.querySelector(".pctl__val")), x.id).toBe(fmtMetric(x.id, x.value));
-      expect(row.querySelector(".pctl__bar i"), x.id).toBeNull();
+      const li = rowOf(x.id);
+      expect(li.querySelector(".nocmp")?.getAttribute("data-tip"), x.id).toBe(x.reason);
+      expect(text(li.querySelector("b")), x.id).toBe(fmtMetric(x.id, x.value));
+      expect(text(li), x.id).not.toMatch(/Top \d|Bottom \d/);
     }
-    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && howGoodRow(x.id))!;
-    expect(text(howGoodRow(ranked.id)!.querySelector(".pctl__phrase"))).toMatch(/^(Top|Bottom) \d+% of pro /);
+    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rows.some((li) => li === rowOf(x.id)))!;
+    expect(text(rowOf(ranked.id))).toMatch(/Top \d+%|Bottom \d+%/);
   });
 
   it("marks How good's approx metrics, and only those", async () => {
     // fails if How good drops the ≈ marker from a metric whose status is "approx", or puts it on an exact one
     const q = queryOf(samples);
-    render(<HowGood cmp={await calls.compare(q, { side: "both" })} error={null} m={summary(q).m} />);
-    const rows = Array.from(host.querySelectorAll(".howgood .pctl"));
+    answers.compare = await calls.compare(q, { side: "both" });
+    render(<HowGood q={q} side="both" />);
+    const rows = Array.from(host.querySelectorAll(".howgood li"));
     expect(rows.length).toBeGreaterThan(0);
     const statuses = new Set<string>();
-    for (const row of rows) {
-      const m = metrics().find((x) => x.label === row.querySelector(".pctl__label")?.firstChild?.textContent)!;
+    for (const li of rows) {
+      const m = metrics().find((x) => x.label === li.firstElementChild?.firstChild?.textContent)!;
       statuses.add(m.status);
-      expect(!!row.querySelector(".pctl__label .approx"), m.id).toBe(m.status === "approx");
+      expect(!!li.querySelector(".approx"), m.id).toBe(m.status === "approx");
     }
     expect(statuses).toContain("approx");
     expect(statuses).toContain("exact");
   });
+
+  it("shows Where you rank's uncompared values with their reason", async () => {
+    // fails if a Playstyle rank row shows a rank or a dash for a value the engine could not compare
+    use(samples);
+    const q = queryOf(samples);
+    answers.compare = await calls.compare(q, { pool: "all" });
+    answers.style = await calls.style(q, { pool: "all" });
+    render(<Playstyle />);
+    const p = { ...(answers.compare as { p: object }).p, ...(answers.style as { p: object }).p } as Record<string, { reason: string | null }>;
+    const rows = Array.from(host.querySelectorAll(".ranks__group li"));
+    const reasoned = rows.filter((li) => {
+      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
+      return p[m.id].reason;
+    });
+    expect(reasoned.length).toBeGreaterThan(0);
+    for (const li of reasoned) {
+      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
+      expect(li.querySelector(".ranks__p .nocmp")?.getAttribute("data-tip"), m.id).toBe(p[m.id].reason);
+    }
+  });
 });
 
-describe("Profile attributes panel", () => {
-  it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
-    // fails if the panel labels Firepower's pro percentiles as bot ranks (or the reverse), drops Sniping's
-    // own population, or shows a rank where the engine gave a reason
+describe("Profile attributes block", () => {
+  const renderProfile = async () => {
     use(samples);
     const q = queryOf(samples);
     const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
     answers.attributeBlock = block;
     render(<ProfileView />);
-    const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
-    const phrases = (id: string) => Array.from(attr(id).querySelectorAll(".pctl")).map((el) => ({ el, phrase: text(el.querySelector(".pctl__phrase")) }));
+    return block;
+  };
+  const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
+
+  it("lists Firepower first, then the six style attributes in HLTV's order, one per row", async () => {
+    // fails if the block drops an attribute, reorders them, or brings back the paired grid
+    await renderProfile();
+    const ids = Array.from(host.querySelectorAll(".apanel__list > .apa")).map((el) => el.getAttribute("data-attr"));
+    expect(ids).toEqual(["firepower", "entrying", "trading", "opening", "closing", "sniping", "utility"]);
+    expect(host.querySelector(".apanel__grid")).toBeNull();
+    // one home per number: no separate Firepower card besides the block
+    expect(Array.from(host.querySelectorAll(".card__title")).map(text)).not.toContain("Firepower");
+  });
+
+  it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
+    // fails if the block labels Firepower's pro percentiles as bot ranks (or the reverse), drops Sniping's
+    // own population, or shows a rank where the engine gave a reason
+    const block = await renderProfile();
+    const phrases = (id: string) => Array.from(attr(id).querySelectorAll(".pctl")).map((el) => text(el.querySelector(".pctl__phrase")));
     expect(text(attr("firepower").querySelector(".apa__note"))).toBe(`Compared to ${block.proPool} pro ${block.style.role === "awper" ? "AWPers" : "riflers"}`);
     expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
     const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
@@ -173,22 +210,47 @@ describe("Profile attributes panel", () => {
       const rows = phrases(id);
       expect(rows.length, id).toBe(score.metrics.length);
       score.metrics.forEach((p, i) => {
-        if (p.reason) expect(rows[i].phrase, `${id} ${p.id}`).toBe(p.reason);
-        else if (p.pct !== null) expect(rows[i].phrase, `${id} ${p.id}`).toMatch(pop);
+        if (p.reason) expect(rows[i], `${id} ${p.id}`).toBe(p.reason);
+        else if (p.pct !== null) expect(rows[i], `${id} ${p.id}`).toMatch(pop);
       });
     }
   });
+
+  it("opens an attribute from its chevron, instantly from the keyboard", async () => {
+    // fails if the chevron does not toggle its metrics, or a keyboard toggle animates
+    await renderProfile();
+    const chev = attr("trading").querySelector<HTMLButtonElement>(".apa__chev")!;
+    expect(chev.getAttribute("aria-expanded")).toBe("false");
+    act(() => chev.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
+    expect(chev.getAttribute("aria-expanded")).toBe("true");
+    expect(attr("trading").querySelector(".collapse")!.classList.contains("is-instant")).toBe(true);
+    expect(attr("trading").querySelector(".collapse")!.hasAttribute("inert")).toBe(false);
+  });
 });
 
-it("renders an announced metric's slot only once the engine defines it and has a value", () => {
-  // fails if the slot for a metric the engine has not shipped (buy deviation, save conversion) draws a
-  // placeholder, or a defined metric with a value does not show
-  render(<MetricSlot id="notShippedYet" values={{ notShippedYet: 3 }} ranks={null} kind="style" population="rifler bots" />);
-  expect(host.innerHTML).toBe("");
-  render(<MetricSlot id="kpr" values={{ kpr: null }} ranks={null} kind="performance" population="pros" />);
-  expect(host.innerHTML).toBe("");
-  render(<MetricSlot id="kpr" values={{ kpr: 0.8 }} ranks={null} kind="performance" population="pros" />);
-  expect(text(host.querySelector(".pctl__val"))).toBe(fmtMetric("kpr", 0.8));
+describe("Profile clutches", () => {
+  it("opens a clutch row into its rounds, each linking to the round drawer", async () => {
+    // fails if a clutch row with clutches behind it is not a control, or its rounds do not open the round
+    use(samples);
+    const q = queryOf(samples);
+    const m = rolled(summary(q)).m;
+    const vs = ([1, 2, 3, 4, 5] as const).find((n) => m[`clutch${n}`] > 0)!;
+    expect(vs).toBeDefined();
+    const rows: ClutchRow[] = [
+      { file: samples[0].file, round: 7, side: "T", opponents: vs, won: true },
+      { file: samples[0].file, round: 12, side: "CT", opponents: vs, won: false },
+      { file: samples[0].file, round: 3, side: "T", opponents: vs === 5 ? 4 : vs + 1, won: false },
+    ];
+    answers.clutches = rows;
+    render(<ProfileView />);
+    const btn = Array.from(host.querySelectorAll<HTMLButtonElement>("button.clist__row")).find((b) => b.getAttribute("aria-label")?.startsWith(`1v${vs}:`))!;
+    expect(btn).toBeTruthy();
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    act(() => btn.click());
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    const links = Array.from(document.getElementById(btn.getAttribute("aria-controls")!)!.querySelectorAll("a")).map((a) => a.getAttribute("href"));
+    expect(links).toEqual([matchHref(samples[0].file, "rounds", { round: 7 }), matchHref(samples[0].file, "rounds", { round: 12 })]);
+  });
 });
 
 describe("Home", () => {
