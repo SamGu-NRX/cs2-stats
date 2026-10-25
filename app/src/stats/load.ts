@@ -6,7 +6,7 @@
 // missing, or a null in a non-nullable column, throws an error naming the table and column.
 import { parquetMetadata, parquetRead, parquetSchema } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { kindOf, OPTIONAL_TABLES, REQUIRED_TABLES, SCHEMA, type MatchTables, type Table, type TableName } from "./tables";
+import { kindOf, OPTIONAL_TABLES, REQUIRED_TABLES, SCHEMA, SOURCE_COLUMNS, type MatchTables, type Table, type TableName } from "./tables";
 
 export type ReadFile = (name: string) => Promise<ArrayBuffer | null>;
 
@@ -107,7 +107,7 @@ export async function loadTables(read: ReadFile, optional: readonly TableName[] 
 /** Decodes the SCHEMA columns of one table. */
 async function readTable<N extends TableName>(bytes: ArrayBuffer, name: N): Promise<Table<N>> {
   const cols = Object.keys(SCHEMA[name]);
-  const raw = await readRaw(bytes, name, cols);
+  const raw = await readRaw(bytes, name, cols, SOURCE_COLUMNS[name] ?? []);
   const t: Record<string, unknown> = { n: raw.__n };
   for (const c of cols) {
     const kind = kindOf(name, c);
@@ -141,15 +141,16 @@ function convert(kind: string, v: unknown, table: string, col: string): unknown 
 }
 
 /** Raw decoded columns (hyparquet values), plus the row count. */
-async function readRaw(bytes: ArrayBuffer, table: string, columns: string[]): Promise<Record<string, unknown[]> & { __n: number }> {
+async function readRaw(bytes: ArrayBuffer, table: string, columns: string[], sourceOnly: readonly string[] = []): Promise<Record<string, unknown[]> & { __n: number }> {
   const metadata = parquetMetadata(bytes);
   const n = Number(metadata.num_rows);
   const present = new Set(parquetSchema(metadata).children.map((c) => c.element.name));
-  const missing = columns.filter((c) => !present.has(c));
+  const missing = columns.filter((c) => !present.has(c) && !sourceOnly.includes(c));
   if (missing.length) throw new TableError(`${table}: columns missing from the file: ${missing.join(", ")}`);
-  const out: Record<string, unknown[]> = Object.fromEntries(columns.map((c) => [c, new Array(n)]));
+  // a source-only column the file lacks reads as null (tables.ts SOURCE_COLUMNS)
+  const out: Record<string, unknown[]> = Object.fromEntries(columns.map((c) => [c, new Array(n).fill(null)]));
   await parquetRead({
-    file: bytes, metadata, columns, compressors,
+    file: bytes, metadata, columns: columns.filter((c) => present.has(c)), compressors,
     onChunk: ({ columnName, columnData, rowStart }) => {
       const dst = out[columnName];
       for (let i = 0; i < columnData.length && rowStart + i < n; i++) dst[rowStart + i] = columnData[i];

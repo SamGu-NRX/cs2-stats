@@ -8,7 +8,8 @@
 // What the plugin files cannot provide stays null: view angles, inventories, health before a hit,
 // smoke and fire lifetimes, engagements and radar spotting. Rounds the file holds only as totals
 // (converted logs before firstFullRound, and rounds the plugin marked partial) are left out, so
-// every derived rate covers the rounds with a kill-by-kill log.
+// every derived rate covers the rounds with a kill-by-kill log. The plugin's per-shot aim error,
+// target and on-screen state go to the shots columns only plugin rows fill (tables.ts SOURCE_COLUMNS).
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
 import type { GrenadeType, MatchFile } from "./schema";
 
@@ -51,6 +52,48 @@ function finalScore(m: MatchFile): [number, number] {
   return out;
 }
 
+/**
+ * Whether each shot's target was on screen, by shots row. Line-of-sight files (env.visSource "los",
+ * plugin 1.1.0) read aim.los: the target's state at a tick is that of its last transition at or before
+ * the tick, hidden before any. Plugin PR #21 stamps the hidden transition for a death at the death tick
+ * + 1, so a read at the kill tick sees the victim; older files stamp it at the death tick, so a hidden
+ * row at the target's or the human's death tick is read from the next tick and both give one answer.
+ * Other files read visTarget (the spotted mask); files before visTarget named only a visible enemy as
+ * the target (SCHEMA.md, aim.shots).
+ */
+function targetOnScreen(m: MatchFile): (i: number) => boolean {
+  const s = m.aim.shots;
+  const los = m.aim.los;
+  if (los && m.env.visSource === "los") {
+    const at = (ri: number, pi: number) => ri * 256 + pi;
+    const death = new Map<number, number>();
+    m.kills.ri.forEach((ri, k) => death.set(at(ri, m.kills.victim[k]), m.kills.tick[k]));
+    const rows = new Map<number, [number, boolean][]>();
+    los.ri.forEach((ri, r) => {
+      const enemy = los.enemy[r];
+      const t = los.tick[r];
+      const tick = los.vis[r] === 0 && (death.get(at(ri, enemy)) === t || death.get(at(ri, m.human)) === t) ? t + 1 : t;
+      const l = rows.get(at(ri, enemy));
+      if (l) l.push([tick, los.vis[r] === 1]); else rows.set(at(ri, enemy), [[tick, los.vis[r] === 1]]);
+    });
+    for (const l of rows.values()) l.sort((a, b) => a[0] - b[0]);
+    return (i) => {
+      const target = s.target[i];
+      if (target === null) return false;
+      let vis = false;
+      for (const [tick, v] of rows.get(at(s.ri[i], target)) ?? []) {
+        if (tick > s.tick[i]) break;
+        vis = v;
+      }
+      return vis;
+    };
+  }
+  const visTarget = s.visTarget;
+  if (visTarget) return (i) => visTarget[i] === 1;
+  return (i) => s.target[i] !== null;
+}
+
+
 export function pluginToTables(m: MatchFile): MatchTables {
   const key = m.players.key;
   const human = key[m.human];
@@ -66,6 +109,8 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const dur = m.rounds.durTicks[ri];
     return { fe, end: fe !== null && dur !== null ? fe + dur : null };
   };
+  // Shots exist only for the recording player; these rows become the shots table, in this order.
+  const shotRows = m.aim.shots.ri.flatMap((ri, i) => (covered(ri) ? [i] : []));
 
   const t: MatchTables = {
     match: emptyTable("match"), players: emptyTable("players"), rounds: emptyTable("rounds"), player_rounds: emptyTable("player_rounds"),
@@ -192,12 +237,17 @@ export function pluginToTables(m: MatchFile): MatchTables {
     });
   }
 
-  // Shots exist only for the recording player.
   const s = m.aim.shots;
-  for (let i = 0; i < s.ri.length; i++) {
+  const onScreen = targetOnScreen(m);
+  for (const i of shotRows) {
     const ri = s.ri[i];
-    if (!covered(ri)) continue;
-    add(t.shots!, "shots", { tick: s.tick[i], round: ri + 1, steamid: human, weapon: weapon(s.weapon[i]), side: sideOf(ri, m.human), ducked: s.ducked[i], scoped: s.scoped[i], speed_2d: s.speed[i] });
+    const e = s.aimErr[i];
+    add(t.shots!, "shots", {
+      tick: s.tick[i], round: ri + 1, steamid: human, weapon: weapon(s.weapon[i]), side: sideOf(ri, m.human), ducked: s.ducked[i], scoped: s.scoped[i], speed_2d: s.speed[i],
+      // the plugin stores aimErr in hundredths of a degree
+      aim_err_yaw: e ? e[0] / 100 : null, aim_err_pitch: e ? e[1] / 100 : null,
+      target_steamid: s.target[i] === null ? null : key[s.target[i]!], target_on_screen: onScreen(i),
+    });
   }
 
   const p = m.pos;

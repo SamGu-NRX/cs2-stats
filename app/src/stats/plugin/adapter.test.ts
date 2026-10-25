@@ -4,10 +4,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { CS2RB } from "../model-params";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { SprayFact } from "../aim";
 import { derive } from "../derive";
+import { rollup } from "../rollup";
 import { pluginToTables } from "./adapter";
 import { decodeMatch } from "./decode";
+import type { Env, MatchFile } from "./schema";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 
@@ -48,4 +51,85 @@ it("marks throws rebuilt from detonations as such, and logged throws as logged",
     const f = derive(pluginToTables(m), CS2RB);
     expect(f.match.inputs.throws, file).toBe(m.throws ? "logged" : "rebuilt");
   }
+});
+
+/** One shot by the human: tick, and the aim error to the bot as [yaw, pitch] degrees (null: no target). */
+type Shot = [number, [number, number] | null];
+const HUMAN = "76561190000000001";
+
+/**
+ * A one-round plugin file at 64 ticks/s: the human (CT) fires an AK standing still at one bot (T).
+ * visTarget defaults to 1 for every shot; `los` rows are the bot's line-of-sight transitions.
+ */
+function pluginMatch(shots: Shot[], o: { visTarget?: (0 | 1)[]; los?: [number, 0 | 1][]; killTick?: number; env?: Partial<Env> } = {}): MatchFile {
+  const col = <T,>(v: T) => shots.map(() => v);
+  const none = { ri: [], tick: [] };
+  return {
+    v: 1, id: "p", map: "de_test", startUtc: "2026-10-25T00:00:00Z", endUtc: "2026-10-25T00:30:00Z", status: "complete",
+    env: { plugin: "1.1.0", cssharp: null, game: null, tickrate: 64, maxrounds: 24, botDifficulty: null, ...o.env },
+    firstFullRound: 0, weapons: ["ak47"], places: [], human: 0,
+    players: { key: [HUMAN, "B:bot"], name: ["me", "bot"], isBot: [false, true], startSide: [3, 2] },
+    rounds: {
+      winSide: [3], how: ["elim"], freezeTick: [1000], durTicks: [4000], bombSite: [null], plantTick: [null], planter: [null],
+      defuser: [null], ctSetup: [null], score: [[1, 0]], side: [[3, 2]], equip: [[4000, 4000]], money: [[800, 800]],
+    },
+    kills: o.killTick === undefined
+      ? { ...none, killer: [], victim: [], assister: [], flashAssister: [], weapon: [], flags: [], kpos: [], vpos: [], state: [] }
+      : { ri: [0], tick: [o.killTick], killer: [0], victim: [1], assister: [null], flashAssister: [null], weapon: [0], flags: [0], kpos: [null], vpos: [null], state: [null] },
+    damage: { ...none, attacker: [], victim: [], dmg: [], dmgArmor: [], weapon: [], hitgroup: [] },
+    blinds: { ...none, attacker: [], victim: [], ms: [] },
+    grenades: { ...none, thrower: [], type: [], pos: [] },
+    pos: { ...none, pi: [], x: [], y: [], z: [], place: [], alive: [] },
+    aim: {
+      engagements: { ri: [], enemy: [], tVis: [], angVis: [], angVisYaw: [], angVisPitch: [], dist: [], tAimStart: [], tFirstShot: [], tFirstDmg: [], tEnd: [], outcome: [] },
+      shots: {
+        ri: col(0), tick: shots.map((s) => s[0]), weapon: col(0), burst: col(0), idx: col(1), speed: col(0), maxSpeed: col(215),
+        scoped: col(false), ducked: col(false), target: shots.map((s) => (s[1] ? 1 : null)),
+        aimErr: shots.map((s) => (s[1] ? [Math.round(s[1][0] * 100), Math.round(s[1][1] * 100)] : null)), impact: col(null), hit: col(null),
+        visTarget: o.visTarget ?? col(1),
+      },
+      ...(o.los && { los: { ri: o.los.map(() => 0), tick: o.los.map((r) => r[0]), enemy: o.los.map(() => 1), vis: o.los.map((r) => r[1]) } }),
+    },
+  };
+}
+
+// The AK's cycle is 0.1 s, 6.4 ticks: shots 6 or 7 ticks apart continue a spray. Spray A is five
+// bullets pulling down and right; an 11-tick pause (0.17 s) ends it, and the three shots after it
+// cannot start a spray because recoil has not reset (0.3 s); spray B starts 0.78 s later.
+const SPRAYS: Shot[] = [
+  [2000, [0, 1]], [2006, [0.2, 0.5]], [2013, [0.4, 0]], [2019, [0.6, -0.5]], [2026, [0.8, -1]],
+  [2037, [0, 0]], [2043, [0, 0]], [2050, [0, 0]],
+  [2100, [0, 0]], [2106, [-0.1, -0.3]], [2113, [-0.3, -0.7]],
+];
+const sprays = (m: MatchFile) => derive(pluginToTables(m), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+
+describe("plugin sprays", () => {
+  it("cuts sprays by the gun's cycle time and gives each bullet its offset from bullet 1", () => {
+    // fails if plugin shots form no sprays, a pause shorter than the reset starts one, or a bullet's
+    // offset is taken from the wrong bullet or with the wrong sign (aim error at bullet 1 minus this one)
+    const got = sprays(pluginMatch(SPRAYS)).map((f) => ({ bullets: f.bullets, dp: f.dp, dy: f.dy }));
+    expect(got).toEqual([
+      { bullets: 5, dp: [0.5, 1, 1.5, 2], dy: [-0.2, -0.4, -0.6, -0.8] },
+      { bullets: 3, dp: [0.3, 0.7], dy: [0.1, 0.3] },
+    ]);
+  });
+
+  it("puts the plugin's sprays in the summary's per-bullet path and the pro comparison", () => {
+    // fails if plugin sprays never reach Summary.aim.path, the spray chart and spray deviation
+    const a = rollup([derive(pluginToTables(pluginMatch(SPRAYS)), CS2RB)], { player: HUMAN }).aim;
+    const p = a.path.ak47;
+    expect(p.n).toEqual([2, 2, 1, 1]);
+    [0.8, 1.7, 1.5, 2].forEach((x, j) => expect(p.dp[j]).toBeCloseTo(x, 9));
+    [-0.1, -0.1, -0.6, -0.8].forEach((x, j) => expect(p.dy[j]).toBeCloseTo(x, 9));
+    expect(a.cmp).toBe(6);
+  });
+
+  it("counts a bullet at the kill tick as on screen whether the death's hidden row is at the kill tick or the next", () => {
+    // fails if a line-of-sight file is read from visTarget instead of aim.los, or a pre-#21 file's hidden
+    // row at the kill tick drops the killing bullet from the pro comparison
+    const shots = SPRAYS.slice(0, 4);
+    const at = (hidden: number) => sprays(pluginMatch(shots, { visTarget: [0, 0, 0, 0], killTick: 2019, env: { visSource: "los" }, los: [[1990, 1], [hidden, 0]] }));
+    expect(at(2019).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
+    expect(at(2020).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
+  });
 });
