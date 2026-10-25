@@ -108,6 +108,32 @@ public class LosTests
         Assert.False(LosTracker.IsClear(0.5f, startInSolid: false));
     }
 
+    /// <summary>
+    /// Fails if an enemy whose body axis is covered but whose shoulder shows reads hidden. Positions are
+    /// the human and victim at round 0, tick 3529 of the 2026-10-25 17:40 match: a head-shot kill without
+    /// penetration through mid doors that line of sight called hidden for the preceding 115 ticks.
+    /// </summary>
+    [Fact]
+    public void AnEnemyShowingOnlyAShoulderIsVisible()
+    {
+        var f = new FrameSet { ActiveCount = 2 };
+        f.Active[0] = H; f.Active[1] = E1;
+        f.ByPi[H] = new PlayerFrame { Present = true, Alive = true, Team = 2, X = -279, Y = 1122, Z = -76, ViewZ = 64, Yaw = 108 };
+        f.ByPi[E1] = new PlayerFrame { Present = true, Alive = true, Team = 3, X = -467, Y = 1684, Z = -125, ViewZ = 64 };
+        // Cover hides every point on the victim's axis; a point to one side is clear.
+        var ends = new List<(double X, double Y)>();
+        _probe.Answer = (x, y, _) => { ends.Add((x, y)); return Math.Abs(x - -467) > 1 || Math.Abs(y - 1684) > 1; };
+        _los.Check(0, 3528, H, f, _rows);
+        Assert.True(_los.IsVisible(E1));
+        Assert.Equal(LosTracker.Points.Count(p => p.Side == 0) + 1, _probe.Calls); // three axis points, then the first side point
+        // The side point sits 12 units from the body axis, at right angles to the human-to-victim ray
+        // (world-axis offsets, or offsets along the enemy's facing, would not).
+        var (sx, sy) = (ends[^1].X - -467, ends[^1].Y - 1684);
+        var (rx, ry) = (-467.0 - -279, 1684.0 - 1122);
+        Assert.Equal(LosTracker.SideOffset, Math.Sqrt(sx * sx + sy * sy), 6);
+        Assert.Equal(0, (sx * rx + sy * ry) / Math.Sqrt(rx * rx + ry * ry), 6);
+    }
+
     [Fact]
     public void ChecksRunSixteenTimesASecond() => Assert.Equal(4, LosTracker.CheckEveryTicks(64));
 }
@@ -158,16 +184,27 @@ public class RecorderLosTests
         Assert.Equal(1, s.Shots[0].VisTarget); // the spotted mask (Spot0 = 0) would have said 0
         Assert.Equal("los", s.Meta.Env.VisSource);
         var perf = s.Perf[0];
-        Assert.Equal((50, 3 + 3 * 47), (perf.LosChecks, perf.LosTraces)); // 2000..2196 every 4 ticks; blocked checks trace all three points
+        Assert.Equal((50, 3 + LosTracker.Points.Length * 47), (perf.LosChecks, perf.LosTraces)); // 2000..2196 every 4 ticks; blocked checks trace every point
     }
 
-    [Fact]
-    public void ADeadEnemyIsHiddenAtTheKillTick()
+    /// <summary>
+    /// Fails if a read at the kill tick sees the victim hidden, in either order of the death event and
+    /// a check in the same tick (2004 is a scheduled check: freeze 2000, every 4 ticks). The 2026-10-25
+    /// 17:40 match had 0 of 20 kills visible at the kill tick and 17 of 20 one tick earlier.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AKilledEnemyIsVisibleAtTheKillTickAndHiddenAfter(bool deathEventFirst)
     {
-        Ticks(2000, 2003);
-        _r.Kill(new KillInput { Tick = 2003, Killer = H, Victim = B, Assister = Nil.V, Weapon = 0, NadeType = Nil.V });
+        Ticks(2000, 2004);
+        var kill = new KillInput { Tick = 2004, Killer = H, Victim = B, Assister = Nil.V, Weapon = 0, NadeType = Nil.V };
+        _frames.ByPi[B].Alive = false; // the pawn is dead for the whole of tick 2004
+        if (deathEventFirst) { _r.Kill(kill); _r.Tick(2004); }
+        else { _r.Tick(2004); _r.Kill(kill); }
+        Ticks(2005, 2012);
         _r.Flush();
-        Assert.Equal(new[] { (2000, 1), (2003, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
+        Assert.Equal(new[] { (2000, 1), (2005, 0) }, _sink.Store.Los.Span.ToArray().Select(x => (x.Tick, x.Vis)));
     }
 
     [Fact]
@@ -225,6 +262,25 @@ public class RecorderLosTests
         Assert.Equal(("mask", "a trace to a point 4 units above the eye was blocked"), (sink.Store.Meta.Env.VisSource, sink.Store.Meta.Env.LosError));
         r.AttachLos(probe);
         Assert.True(r.Los.Enabled);
+    }
+
+    /// <summary>
+    /// Fails if a capture started mid-round (plugin loaded or resumed during a live round, so no freeze
+    /// end follows) omits the visibility source and an earlier failure (audit PluginMidRoundError/Source).
+    /// </summary>
+    [Fact]
+    public void AMidRoundStartRecordsAnEarlierFailureAndTheMaskSource()
+    {
+        var sink = new ListSink();
+        var r = new Recorder(sink, _frames, new PerfCounter(), _ => { });
+        r.AttachLos(new FakeProbe());
+        r.DisableLos("first trace returned no result", 0); // at map load, before any capture
+        r.StartCapture(new MatchMeta { Id = "00112233445566778899aabbccddeeff", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z", Env = new EnvInfo { Plugin = "t", MaxRounds = 24 } });
+        r.PlayerIndex("76561190000000001", "me", false);
+        r.SetHuman(H);
+        r.BeginRound(3, 5000, 2, 1, partial: true, freezeTickIfLive: 4000);
+        r.Flush();
+        Assert.Equal(("mask", "first trace returned no result"), (sink.Store.Meta.Env.VisSource, sink.Store.Meta.Env.LosError));
     }
 
     [Fact]

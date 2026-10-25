@@ -54,14 +54,13 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private Recorder? _rec;
     private CCSGameRules? _rules;
     private CCSTeam? _teamT, _teamCt;
-    private bool _needInit = true, _scanPending, _disabled, _memReady;
+    private bool _disabled, _memReady;
     /// <summary>No entity read or trace until this says a map is running (see <see cref="MapGate"/>).</summary>
     private readonly MapGate _mapGate = new();
     private int _tick, _nextRefresh, _finalizeAt = Nil.V, _matchEndAt = Nil.V, _humanSlot = -1;
     private int _perRoundStride;
-    // Scan generations (see Lifecycle.AcceptResume): bumped for every new scan request; answers with
-    // another generation are ignored. _scanGameStart/_scanRounds are the game identity the scan was for.
-    private int _scanGen;
+    // Scan generations live in _mapGate (see Lifecycle.AcceptResume): answers with another generation
+    // are ignored. _scanGameStart/_scanRounds are the game identity the scan was for.
     private float _scanGameStart;
     private int _scanRounds;
     /// <summary>cs_win_panel_match fired on this map, even while capture was unavailable.</summary>
@@ -99,29 +98,29 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
-        RegisterEventHandler<EventRoundStart>(OnRoundStart);
-        RegisterEventHandler<EventRoundFreezeEnd>(OnFreezeEnd);
-        RegisterEventHandler<EventRoundEnd>(OnRoundEnd);
-        RegisterEventHandler<EventCsWinPanelMatch>(OnWinPanel);
-        RegisterEventHandler<EventPlayerDeath>(OnDeathPre, HookMode.Pre);
-        RegisterEventHandler<EventPlayerDeath>(OnDeath);
-        RegisterEventHandler<EventPlayerHurt>(OnHurt);
-        RegisterEventHandler<EventPlayerBlind>(OnBlind);
-        RegisterEventHandler<EventWeaponFire>(OnWeaponFire);
-        RegisterEventHandler<EventBulletImpact>(OnBulletImpact);
-        RegisterEventHandler<EventGrenadeThrown>(OnGrenadeThrown);
-        RegisterEventHandler<EventHegrenadeDetonate>(OnHe);
-        RegisterEventHandler<EventFlashbangDetonate>(OnFlash);
-        RegisterEventHandler<EventSmokegrenadeDetonate>(OnSmoke);
-        RegisterEventHandler<EventSmokegrenadeExpired>(OnSmokeExpired);
-        RegisterEventHandler<EventInfernoStartburn>(OnInferno);
-        RegisterEventHandler<EventDecoyStarted>(OnDecoy);
-        RegisterEventHandler<EventBombPlanted>(OnBombPlanted);
-        RegisterEventHandler<EventBombDefused>(OnBombDefused);
-        RegisterEventHandler<EventItemPurchase>(OnItemPurchase);
-        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
-        RegisterEventHandler<EventPlayerTeam>(OnPlayerTeam);
-        RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+        On<EventRoundStart>(OnRoundStart, EventNeed.Map);
+        On<EventRoundFreezeEnd>(OnFreezeEnd, EventNeed.Round);
+        On<EventRoundEnd>(OnRoundEnd, EventNeed.Round);
+        On<EventCsWinPanelMatch>(OnWinPanel, EventNeed.Nothing);
+        On<EventPlayerDeath>(OnDeathPre, EventNeed.Round, HookMode.Pre);
+        On<EventPlayerDeath>(OnDeath, EventNeed.Round);
+        On<EventPlayerHurt>(OnHurt, EventNeed.Round);
+        On<EventPlayerBlind>(OnBlind, EventNeed.Round);
+        On<EventWeaponFire>(OnWeaponFire, EventNeed.Round);
+        On<EventBulletImpact>(OnBulletImpact, EventNeed.Round);
+        On<EventGrenadeThrown>(OnGrenadeThrown, EventNeed.Round);
+        On<EventHegrenadeDetonate>(e => Detonation(e.Userid, GrenadeType.He, e.X, e.Y, e.Z, "hegrenade_detonate"), EventNeed.Round);
+        On<EventFlashbangDetonate>(e => Detonation(e.Userid, GrenadeType.Flash, e.X, e.Y, e.Z, "flashbang_detonate"), EventNeed.Round);
+        On<EventSmokegrenadeDetonate>(e => Detonation(e.Userid, GrenadeType.Smoke, e.X, e.Y, e.Z, "smokegrenade_detonate", e.Entityid), EventNeed.Round);
+        On<EventSmokegrenadeExpired>(OnSmokeExpired, EventNeed.Round);
+        On<EventInfernoStartburn>(OnInferno, EventNeed.Round);
+        On<EventDecoyStarted>(e => Detonation(e.Userid, GrenadeType.Decoy, e.X, e.Y, e.Z, "decoy_started"), EventNeed.Round);
+        On<EventBombPlanted>(OnBombPlanted, EventNeed.Round);
+        On<EventBombDefused>(OnBombDefused, EventNeed.Round);
+        On<EventItemPurchase>(OnItemPurchase, EventNeed.Round);
+        On<EventPlayerSpawn>(OnPlayerSpawn, EventNeed.Capture);
+        On<EventPlayerTeam>(OnPlayerTeam, EventNeed.Nothing);
+        On<EventPlayerDisconnect>(OnPlayerDisconnect, EventNeed.Map);
         Logger.LogInformation("BotMatchStats loaded (hotReload={HotReload}); files go to {Root}", hotReload, root);
     }
 
@@ -168,7 +167,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     /// </summary>
     private void TickBody()
     {
-        if (_disabled || _rec == null || _needInit) return;
+        if (_disabled || _rec == null || !_mapGate.EntitiesReady) return;
         if (!_rec.Capturing || !_rec.Live) return;
         _tick = Server.TickCount;
 
@@ -208,7 +207,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         {
             DrainMessages();
             if (_disabled || _rec == null) return;
-            if (_needInit)
+            if (!_mapGate.EntitiesReady)
             {
                 // Server.MapName reads the game server's globals and returns null when there is no game
                 // server (CounterStrikeSharp 1.0.378 natives_engine.cpp GetMapName, globals.cpp
@@ -236,7 +235,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
             EvEnd("housekeeping");
         }
         // Outside live rounds only, each timed under its own name so a perf row shows what it cost.
-        if (_rec is { Live: false } && !_needInit && !_disabled)
+        if (_rec is { Live: false } && _mapGate.EntitiesReady && !_disabled)
         {
             EvBegin();
             try { WarmStep(); } catch (Exception ex) { Log(LogLevel.Warning, $"warm-up step failed: {ex.Message}"); }
@@ -320,15 +319,15 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         while (w.Messages.TryDequeue(out var m))
         {
             Log(m.Level switch { MessageLevel.Error => LogLevel.Error, MessageLevel.Warn => LogLevel.Warning, _ => LogLevel.Information }, "writer: " + m.Text);
-            if ((m.Resume != null || m.ScanDone) && (!_scanPending || m.Gen != _scanGen))
+            if ((m.Resume != null || m.ScanDone) && !_mapGate.IsCurrentScan(m.Gen))
             {
-                if (m.Resume != null) Log(LogLevel.Information, $"ignoring stale scan answer (generation {m.Gen}, current {_scanGen})");
+                if (m.Resume != null) Log(LogLevel.Information, $"ignoring stale scan answer (generation {m.Gen}, current {_mapGate.ScanGen})");
                 continue;
             }
             if (m.Resume != null) ResumeCapture(m.Resume, m.ResumeRounds, m.Gen);
-            if (m.ScanDone && _scanPending && m.Gen == _scanGen)
+            if (m.ScanDone && _mapGate.IsCurrentScan(m.Gen))
             {
-                _scanPending = false;
+                _mapGate.ScanDone();
                 if (!_rec!.Capturing) StartMidMatchIfLive();
             }
         }
@@ -362,7 +361,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
             else if (t.TeamNum == 3) _teamCt = t;
         }
         _map = Server.MapName;
-        _needInit = false;
+        _mapGate.Initialized();
         _tick = Server.TickCount;
         RefreshSlots(true);
         _winPanelSeen = false;
@@ -374,12 +373,11 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private void Rescan(string why)
     {
         var rules = _rules!;
-        _scanGen++;
-        _scanPending = true;
+        int gen = _mapGate.NewScan();
         _scanGameStart = rules.GameStartTime;
         _scanRounds = rules.TotalRoundsPlayed;
-        Log(LogLevel.Information, $"scan {_scanGen} requested ({why})");
-        _writer!.RequestScan(_map, _scanGameStart, _scanGen);
+        Log(LogLevel.Information, $"scan {gen} requested ({why})");
+        _writer!.RequestScan(_map, _scanGameStart, gen);
     }
 
     private void ResetSlotPis()
@@ -544,7 +542,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     {
         var rules = _rules!;
         meta.RoundCount = roundsInFile;
-        if (!Lifecycle.AcceptResume(gen, _scanGen, meta, _map, rules.GameStartTime, rules.TotalRoundsPlayed, rules.WarmupPeriod))
+        if (!Lifecycle.AcceptResume(gen, _mapGate.ScanGen, meta, _map, rules.GameStartTime, rules.TotalRoundsPlayed, rules.WarmupPeriod))
         {
             // The file is from another game than the one running now (e.g. a restart during the scan).
             // Rescanning with the live identity writes that file out as abandoned.
@@ -664,28 +662,35 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         catch (NativeException) { return false; }
     }
 
+    // At both boundaries the gate closes and the scan is invalidated before the old capture is written
+    // out; the old map's handles are dropped afterwards even if writing out throws.
     private void OnMapStart(string map)
     {
-        _mapGate.MapStarted();
         _winPanelSeen = false;
         // Normally OnMapEnd already closed the capture; this covers a map change without it.
-        Abandon("map change");
-        _finalizeAt = _matchEndAt = Nil.V;
-        _needInit = true;
-        _rules = null;
+        try { _mapGate.MapStarted(() => Abandon("map change")); }
+        finally { ForgetMap(); }
     }
 
     private void OnMapEnd()
     {
-        _mapGate.MapEnded();
-        FlushLogs();
-        if (_rec == null) return;
-        if (_matchEndAt != Nil.V) { _matchEndAt = Nil.V; EndMatch(); }
-        else Abandon("map end");
-        _needInit = true;
+        try
+        {
+            _mapGate.MapEnded(() =>
+            {
+                FlushLogs();
+                if (_rec == null) return;
+                if (_matchEndAt != Nil.V) { _matchEndAt = Nil.V; EndMatch(); }
+                else Abandon("map end");
+            });
+        }
+        finally { ForgetMap(); }
+    }
+
+    private void ForgetMap()
+    {
         _rules = null;
         _teamT = _teamCt = null;
-        _scanPending = false;
-        _finalizeAt = Nil.V;
+        _finalizeAt = _matchEndAt = Nil.V;
     }
 }
