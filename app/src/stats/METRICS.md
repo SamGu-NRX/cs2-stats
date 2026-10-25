@@ -134,10 +134,12 @@ pitch). Ticks after either player's death are cut. Needs v1 maps with visibility
 
 | id | Status | Definition and thresholds |
 |---|---|---|
-| timeToDamage | approx | Median time from sighting to your first damage on the victim |
+| timeToDamage | approx | Median time from sighting to your first damage on the victim while he stays visible; values of 1 s or more are left out (Leetify's cut; the pros' share above it is in VALIDATION.md) |
+| timeToKill | approx | Median time from sighting to your kill on the victim while he stays visible |
 | reactionTime | approx | Median time from sighting to the start of the movement that halves the aim error within 1 s. The movement must peak at 60 deg/s or more (well above idle view drift; ours, no fit); it starts at the first tick holding 10% of that peak. Sightings within 2 degrees of the head, or with the turn already under way, are left out. 0.5 and 1 s: ours, no fit. |
 | timeToShot | approx | Median time from sighting to the first shot, leaving out sightings with a shot in the previous 0.3 s (the recoil asset's reset spacing) |
 | crosshairPlacement | approx | Median angle between the view and the victim's eye at sighting |
+| crosshairMoved | approx | Median angle the view turned from sighting to the first damage (Leetify reports it beside the static error) |
 | preAim | approx | Share of sightings with placement 2 degrees or less (ours: about a player's width at 1,000 units). Its percentile against the pros is the "better or worse than baseline" reading. |
 | flickOvershoot | approx | Median distance past the head, along the flick's direction, during the reaction flick |
 | microCorrections | approx | Movements (view speed rising through 20 deg/s) between the flick's end and the first shot, or 0.5 s without one, per flick. Ours, no fit. |

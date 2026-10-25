@@ -2,7 +2,9 @@
 import { CS2RB } from "./model-params";
 import { describe, expect, it } from "vitest";
 import { aimAngle, aimError } from "./aim-geometry";
-import type { ShotFact, SightFact, SprayFact } from "./aim";
+import { emptyAim, foldAim, type ShotFact, type SightFact, type SprayFact } from "./aim";
+import { METRIC } from "./metrics";
+import type { Summary } from "./rollup";
 import { derive } from "./derive";
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type TableName } from "./tables";
 import { pushRow } from "./testing/tables";
@@ -116,6 +118,9 @@ describe("deriveAim on a hand-built match", () => {
     expect(f.react).toBe((131 - 120) / RATE);
     expect(f.shot).toBe((145 - 120) / RATE);
     expect(f.ttd).toBe((145 - 120) / RATE);
+    // the view turned from yaw 10 at the onset to -0.5 at the damage tick
+    expect(f.moved).toBeCloseTo(10.5, 3);
+    expect(f.ttk).toBeNull();
     expect(f.over).toBeCloseTo(2, 6);
     expect(f.micro).toBe(2);
     expect(f.weapon).toBe("ak47");
@@ -142,6 +147,20 @@ describe("deriveAim on a hand-built match", () => {
     // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
     const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
     expect(s.map((f) => [f.bullets, f.dp.length])).toEqual([[4, 0]]);
+  });
+
+  it("times the kill from the sighting, and leaves out time to damage of a second or more", () => {
+    // fails if a kill while visible is not timed, or a 1 s+ time to damage counts as a reaction
+    const t = match();
+    add(t.kills, "kills", { tick: 150, round: 1, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", headshot: true, a_side: "CT", v_side: "T" });
+    expect(derive(t, CS2RB).aim.find((x): x is SightFact => x.k === "sight")!.ttk).toBe((150 - 120) / RATE);
+    const late = match();
+    late.engagements!.first_damage_tick[0] = 120 + RATE;
+    late.damages.tick[0] = 120 + RATE;
+    const agg = emptyAim();
+    for (const f of derive(late, CS2RB).aim) foldAim(agg, f);
+    expect(agg.ttd).toEqual([1]);
+    expect(METRIC.timeToDamage.value({ aim: agg } as Summary)).toBeNull();
   });
 
   it("times a sighting only within the stretch the enemy stays visible", () => {
