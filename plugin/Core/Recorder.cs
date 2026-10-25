@@ -51,6 +51,9 @@ public sealed class Recorder
     public readonly PerfCounter Perf;
     public readonly NameTable Weapons = new(256);
     public readonly PlaceTable Places = new(128);
+    /// <summary>Line of sight for the human; enabled when the game layer attaches a probe.</summary>
+    public readonly LosTracker Los = new();
+    private bool _losOffReported;
 
     private readonly List<PlayerInfo> _players = new();
     private readonly Dictionary<string, int> _playerByKey = new(StringComparer.Ordinal);
@@ -129,6 +132,8 @@ public sealed class Recorder
         Places.SetMap(meta.Map);
         _burst = new BurstTracker(1);
         _eng.Reset();
+        Los.Reset();
+        _losOffReported = false;
         _buf.Clear();
         _grenadeBase = meta.GrenadeCount;
         _throwBase = meta.ThrowCount;
@@ -194,6 +199,7 @@ public sealed class Recorder
         _plantTick = Nil.V;
         _eventWinner = _eventReason = Nil.V;
         _eng.Reset();
+        Los.Reset();
         Array.Fill(_lastDet, Nil.V);
         Array.Fill(_lastDetTick, Nil.V);
         _pendingThrows.Clear();
@@ -233,6 +239,42 @@ public sealed class Recorder
         _round.FreezeTick = tick;
         Live = true;
         _freezeOver = true;
+        NoteVisSource(Los.Enabled ? "los" : "mask");
+        if (Los.Failure != null) Meta.Env.LosError ??= Los.Failure;
+    }
+
+    /// <summary>
+    /// Every line-of-sight failure ends here: tracing stops at once, visible enemies are closed at
+    /// <paramref name="tick"/>, the file records why (env.losError, env.visSource), and visibility
+    /// falls back to the spotted mask for the rest of the map.
+    /// </summary>
+    /// <summary>Attaches a probe for a new map; a failure on the previous map no longer applies.</summary>
+    public void AttachLos(ILosProbe? probe)
+    {
+        Los.Attach(probe);
+        _losOffReported = false;
+    }
+
+    public void DisableLos(string why, int tick)
+    {
+        Los.Fail(why);
+        if (_losOffReported) return;
+        _losOffReported = true;
+        if (Capturing)
+        {
+            Meta.Env.LosError ??= Los.Failure;
+            NoteVisSource("mask");
+            if (RoundActive && Live) Los.HideAll(Ri, tick, _buf.Los);
+        }
+        _warn($"Line of sight turned off: {Los.Failure}. Visibility falls back to the spotted mask.");
+    }
+
+    /// <summary>env.visSource: "los" or "mask" for the whole match, "mixed" when it changed (line of sight failed or was unavailable for some rounds).</summary>
+    private void NoteVisSource(string name)
+    {
+        var env = Meta.Env;
+        if (env.VisSource == null) env.VisSource = name;
+        else if (env.VisSource != name) env.VisSource = "mixed";
     }
 
     /// <summary>Records which source this round's equipment values came from (see EquipFromPawn/EquipFromInventory).</summary>
@@ -326,6 +368,9 @@ public sealed class Recorder
     {
         if (!RoundActive || (uint)k.Victim >= Limits.MaxPlayers) return;
         int v = k.Victim;
+        // A dead enemy, or every enemy once the human dies, leaves the human's sight at the kill tick.
+        if (v == Meta.Human) Los.HideAll(Ri, k.Tick, _buf.Los);
+        else Los.Hide(Ri, k.Tick, v, _buf.Los);
         int killer = k.Killer == v ? Nil.V : k.Killer;
         int flags = k.Flags;
         if (k.Killer == v) flags |= KillFlagSuicide;
@@ -527,11 +572,13 @@ public sealed class Recorder
     }
 
     /// <summary>
-    /// Whether an enemy is visible to the human. It currently reads the engine's spotted mask at the
-    /// human's slot. That mask is under review: a live probe matched only 76 of 170 human hits.
-    /// Engagements and visTarget both use this one function, so a fix is one change here.
+    /// Whether an enemy is visible to the human: line of sight (<see cref="LosTracker"/>, held between
+    /// its 16 Hz checks) when the game layer provides traces, else the engine's spotted mask at the
+    /// human's slot. The slot bit is right, but the mask is the radar's spotted state and was set for
+    /// only 53 of 93 bullet hits in the 2026-10-25 recordings. Engagements and visTarget both use this.
     /// </summary>
-    private bool IsVisibleToHuman(in PlayerFrame enemy) => Spotted.IsSpottedBy(enemy.Spot0, enemy.Spot1, Frames.HumanSlot);
+    private bool IsVisibleToHuman(int pi, in PlayerFrame enemy) =>
+        Los.Enabled ? Los.IsVisible(pi) : Spotted.IsSpottedBy(enemy.Spot0, enemy.Spot1, Frames.HumanSlot);
 
     private int LinkNade(int attacker, int nadeType, int tick)
     {
@@ -608,7 +655,7 @@ public sealed class Recorder
                     row.Target = pi;
                     row.AimErrYaw = AimMath.Centi(yd);
                     row.AimErrPitch = AimMath.Centi(pd);
-                    row.VisTarget = IsVisibleToHuman(e) ? 1 : 0;
+                    row.VisTarget = IsVisibleToHuman(pi, e) ? 1 : 0;
                     targetDist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
                 }
             }
@@ -646,6 +693,13 @@ public sealed class Recorder
     public bool CtSetupDue(int tick) => Live && Places.HasAreas && !_round.HasCtSetup && _round.FreezeTick != Nil.V
         && !_roundPartial && tick - _round.FreezeTick >= TickRate * 15;
     public bool NeedsAim => Live && (uint)Meta.Human < Limits.MaxPlayers && _alive[Meta.Human];
+    public bool LosDue(int tick) => Live && Los.Enabled && _round.FreezeTick != Nil.V && Due(tick, LosTracker.CheckEveryTicks(TickRate));
+
+    private void CheckLos(int tick, int human)
+    {
+        Los.Check(Ri, tick, human, Frames, _buf.Los);
+        if (Los.Failure != null) DisableLos(Los.Failure, tick);
+    }
 
     private bool Due(int tick, int every)
     {
@@ -661,6 +715,8 @@ public sealed class Recorder
         bool humanOk = (uint)human < Limits.MaxPlayers;
         bool humanAlive = humanOk && Frames.ByPi[human].Present && Frames.ByPi[human].Alive && _alive[human];
 
+        if (humanAlive && LosDue(tick)) CheckLos(tick, human);
+        else if (!humanAlive) Los.HideAll(Ri, tick, _buf.Los);
         if (humanAlive) AimTick(tick, human);
 
         if (humanAlive && HumanPosDue(tick)) AddPos(tick, human);
@@ -702,7 +758,7 @@ public sealed class Recorder
                 if (_eng.IsActive(pi)) _eng.EnemyGone(tick, pi, _buf.Engagements);
                 continue;
             }
-            bool vis = IsVisibleToHuman(e);
+            bool vis = IsVisibleToHuman(pi, e);
             if (!vis)
             {
                 if (_eng.IsActive(pi)) _eng.Observe(Ri, tick, pi, false, double.NaN, 0, 0, 0, _buf.Engagements);
@@ -737,6 +793,7 @@ public sealed class Recorder
         _eventReason = eventReason;
         if (_round.FreezeTick != Nil.V) _round.DurTicks = tick - _round.FreezeTick;
         _eng.CloseAll(tick, _buf.Engagements);
+        Los.HideAll(Ri, tick, _buf.Los);
     }
 
     /// <summary>Economy at round end: equipment value kept (0 when dead) and whether the player survived holding a primary.</summary>
@@ -754,11 +811,12 @@ public sealed class Recorder
         RoundFinalized = true;
         Live = false;
         _eng.CloseAll(tick, _buf.Engagements);
+        Los.HideAll(Ri, tick, _buf.Los);
         SetResult(_round, Ri, resultCode, _eventWinner);
         if (_eventReason != Nil.V && RoundResult.FromEventReason(_eventReason, out int evHow) && _round.How != Nil.V && evHow != _round.How)
             _warn($"Round {Ri}: round_end reason {_eventReason} disagrees with MatchStats_RoundResults code {resultCode}; the file uses the result code.");
         _buf.AddRound(_round);
-        _buf.Perf.Add(Perf.Take(Ri));
+        _buf.Perf.Add(TakePerf());
         Submit(JobKind.InProgress);
     }
 
@@ -838,8 +896,9 @@ public sealed class Recorder
             if (!_partial.Contains(Ri)) _partial.Add(Ri);
             RoundFinalized = true;
             _eng.CloseAll(tick, _buf.Engagements);
+            Los.HideAll(Ri, tick, _buf.Los);
             _buf.AddRound(_round);
-            _buf.Perf.Add(Perf.Take(Ri));
+            _buf.Perf.Add(TakePerf());
         }
         Meta.Status = status;
         Meta.EndUtc = endUtc;
@@ -861,6 +920,16 @@ public sealed class Recorder
         _buf = _sink.Rent();
         _pendingShot = -1;
         _sink.Submit(job);
+    }
+
+    /// <summary>The round's perf row, with the line-of-sight counters.</summary>
+    private PerfRow TakePerf()
+    {
+        var row = Perf.Take(Ri);
+        Los.TakeCounters(out row.LosChecks, out row.LosTraces, out row.LosBudgetHits, out long sum, out long max);
+        row.LosAvgUs = row.LosChecks == 0 ? 0 : PerfCounter.Us(sum) / row.LosChecks;
+        row.LosMaxUs = PerfCounter.Us(max);
+        return row;
     }
 
     private MatchMeta Snapshot() => new()

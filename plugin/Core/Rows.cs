@@ -145,6 +145,9 @@ public struct PerfRow
     public double TickAvgUs, TickMaxUs, EventAvgUs, EventMaxUs;
     public long TickAllocBytes, EventAllocBytes;
     public string? EventMaxName;
+    /// <summary>Line-of-sight checks this round, traces made, checks cut short by the time budget, and µs per check.</summary>
+    public int LosChecks, LosTraces, LosBudgetHits;
+    public double LosAvgUs, LosMaxUs;
 }
 
 /// <summary>One entry of the rounds table. Reused across rounds; copy with <see cref="CopyFrom"/>.</summary>
