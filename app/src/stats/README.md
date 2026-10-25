@@ -52,7 +52,9 @@ Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginTo
 - `kills`: per kill, trade, opening, eco points, swing credits, positions.
 - `weapons`: per player, round and gun, with hits by body part in `groups` (`HIT_GROUPS` order).
 - `grenades`: every throw, with where it was thrown from and landed.
-- `presence`: per player-round, seconds alive per 128-unit grid cell and per place name.
+- `presence`: per player and side, seconds alive per 128-unit grid cell and per place name (not per
+  round: that made cached facts too large; `roundPlaces(tables, round, steamid)` reads one round's
+  places from the tables).
 - The event facts of `aim`, `movement`, `aggression`, `information` and `utilq`.
 
 Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round number.
@@ -60,7 +62,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 ### Summaries and metrics
 | Call | Returns | Notes |
 |---|---|---|
-| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places. |
+| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places; it honours player, side and match filters and is empty under a round-level filter. |
 | `emptySummary()`, `addMatch(summary, facts, filter)` | | The same sum one match at a time, so a caller can stream facts from storage instead of holding them all. |
 | `grenadesOf(facts, filter)` | grenades with their map | The landing map's points. |
 | `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. |
@@ -106,7 +108,7 @@ comes from:
 | `SUBSTATS`, `METRICS` from `metrics.ts` and `hltv.ts` | `METRICS` (one list; `hltv` holds HLTV's name) |
 | `deriveRole(counters)` | `roleBlend(summary, side)` |
 | `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"`; the coverage meter is `visibilityCoverage(summary.aim)` |
-| `PosAgg` heatmaps | `rollup(...).presence[map]`; one round's `facts.presence` row is "where you spent the round"; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
+| `PosAgg` heatmaps | `rollup(...).presence[map]`; "where you spent the round" is `roundPlaces(tables, round, steamid)`; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
 | The interim hit map | `Summary.weapons[gun].groups` by `HIT_GROUPS` |
 | `MatchView.econ` saves, win rates, matchups | `economyOf(facts, team)` |
 | `roundSlice` in the round drawer | `rollup([facts], { player, rounds: [n] })` |

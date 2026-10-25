@@ -196,10 +196,14 @@ export interface GrenadeFact {
   land: [number, number] | null;
 }
 
-/** Where one player spent one round alive (positions.ts): seconds per grid cell and per place name. */
+/**
+ * Where one player spent the match alive on one side (positions.ts): seconds per grid cell and per
+ * place name. Kept per side, not per round, because per-round presence made cached facts too large
+ * (VALIDATION.md); one round's places come from the tables (positions.ts roundPlaces).
+ */
 export interface PresenceFact {
-  ri: number;
   pi: number;
+  side: Side;
   /** [cell, seconds, cell, seconds, ...]; cells are positions.ts cellOf */
   cells: number[];
   places: Record<string, number>;

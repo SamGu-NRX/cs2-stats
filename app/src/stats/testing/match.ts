@@ -38,7 +38,9 @@ export interface OneRound {
   round?: number;
 }
 
-export function oneRound(m: OneRound): MatchFacts {
+export const oneRound = (m: OneRound): MatchFacts => derive(oneRoundTables(m));
+
+export function oneRoundTables(m: OneRound): MatchTables {
   const ids = Object.keys(m.players);
   const round = m.round ?? 1;
   const side = (id: string) => m.players[id];
@@ -59,5 +61,5 @@ export function oneRound(m: OneRound): MatchFacts {
     engagements: m.engagements ? table("engagements", m.engagements.map((e) => ({ round, hits: 0, damage: 0, outcome: "sight-only", truncated: false, ...e }))) : null,
     engagement_ticks: m.engagement_ticks ? table("engagement_ticks", m.engagement_ticks) : null,
   };
-  return derive(t);
+  return t;
 }
