@@ -62,18 +62,31 @@ export interface RoleBlend {
   /** plain-language reasons, one per signal */
   evidence: string[];
   rounds: number;
+  /** share of the rounds with a recorded freeze-end loadout that had an AWP; null when no round has one */
+  awp: number | null;
+  /** rounds with a recorded freeze-end loadout (the AWP share's denominator), of `rounds` */
+  loadoutRounds: number;
 }
 
 const pct = (x: number) => `${Math.round(x)}%`;
 
-/** A role blend for one side's summary (rollup with sides: [side]); any other filter narrows it further. */
+/**
+ * A role blend for one side's summary (rollup with sides: [side]); any other filter narrows it further.
+ * The AWP share counts only rounds whose freeze-end loadout was recorded (plugin files record none);
+ * the evidence says how many when some are missing, and with none the blend has no AWPer share.
+ */
 export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
   const m = s.m;
   const x = packerFeatures(m);
-  const awp = m.rounds ? m.roundsWithAwp / m.rounds : 0;
+  const awp = m.loadoutRounds ? m.roundsWithAwp / m.loadoutRounds : null;
   const evidence: string[] = [];
-  if (m.rounds) evidence.push(`Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`);
-  if (!x) return { side, blend: null, evidence, rounds: m.rounds };
+  if (awp !== null) {
+    evidence.push(m.loadoutRounds < m.rounds
+      ? `Carried an AWP in ${pct(100 * awp)} of the ${m.loadoutRounds} ${side} rounds with a recorded loadout (of ${m.rounds}).`
+      : `Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`);
+  } else if (m.rounds) evidence.push(`No freeze-end loadout recorded in ${side} rounds, so the AWP share is unknown.`);
+  const out = { side, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds };
+  if (!x) return { ...out, blend: null };
   evidence.push(
     `In the opening duel in ${pct(x.oap)} of rounds.`,
     `Died ${Math.round(x.tapd)} s into the round on average.`,
@@ -81,9 +94,9 @@ export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
     `Distance to the nearest teammate ranks ${x.adnt.toFixed(2)} in the team (0.2 = closest, 1.0 = farthest), to the team's centre ${x.adat.toFixed(2)}.`,
   );
   const post = roleProbabilities(MODEL.sides[side], x);
-  const blend: Record<string, number> = { AWPer: awp };
-  for (const [role, p] of Object.entries(post)) blend[ROLE_NAME[role] ?? role] = p * (1 - awp);
-  return { side, blend, evidence, rounds: m.rounds };
+  const blend: Record<string, number> = awp === null ? {} : { AWPer: awp };
+  for (const [role, p] of Object.entries(post)) blend[ROLE_NAME[role] ?? role] = p * (1 - (awp ?? 0));
+  return { ...out, blend };
 }
 
 /** Support tendency 0-100: mean percentile of utility thrown and trading against the comparison pool. */
