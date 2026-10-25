@@ -219,6 +219,15 @@ fn valve_user(root: &Path) -> Result<Option<String>, String> {
     }
 }
 
+/// Whether `p`, with every junction and symbolic link resolved, lies inside `root`'s own resolved path. A
+/// version folder or table that is a link to elsewhere is refused (review of #29: a junction read outside).
+fn inside(root: &Path, p: &Path) -> bool {
+    match (root.canonicalize(), p.canonicalize()) {
+        (Ok(r), Ok(q)) => q != r && q.starts_with(&r),
+        _ => false,
+    }
+}
+
 /// The version folder's COMPLETE list (file name to bytes), when every file is there at its size.
 fn complete_tables(dir: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
     let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| "no COMPLETE file yet".to_string())?;
@@ -274,6 +283,10 @@ fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
             continue;
         }
         let dir = map.join(&current);
+        if dir.join("COMPLETE").exists() && !inside(root, &dir.join("COMPLETE")) {
+            out.skipped.push(skip("its version folder resolves outside the Valve folder".into()));
+            continue;
+        }
         match complete_tables(&dir) {
             Ok(sizes) => {
                 let mtime = fs::metadata(dir.join("COMPLETE"))
@@ -305,6 +318,13 @@ fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
         return Err(format!("{path}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])"));
     }
     let dir = root.join(parts[0]).join(parts[1]);
+    let outside = || format!("{path}: resolves outside the Valve folder");
+    if !dir.join("COMPLETE").exists() {
+        return Err(format!("{path}: this version is gone; rescan"));
+    }
+    if !inside(root, &dir.join("COMPLETE")) {
+        return Err(outside());
+    }
     let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| format!("{path}: this version is gone; rescan"))?;
     let sizes: std::collections::BTreeMap<String, u64> = serde_json::from_str(&text).map_err(|e| format!("{path}: COMPLETE: {e}"))?;
     let Some(table) = parts.get(2) else {
@@ -312,6 +332,9 @@ fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
         return serde_json::to_vec(&names).map_err(|e| e.to_string());
     };
     let want = *sizes.get(*table).ok_or_else(|| format!("{path}: not one of this version's tables"))?;
+    if !inside(root, &dir.join(table)) {
+        return Err(outside());
+    }
     let bytes = fs::read(dir.join(table)).map_err(|e| format!("{path}: {e}"))?;
     if bytes.len() as u64 != want {
         return Err(format!("{path}: {} bytes, not the {want} COMPLETE lists; rescan", bytes.len()));
@@ -462,6 +485,38 @@ mod tests {
         assert_eq!(skipped.len(), 2, "{skipped:?}");
         // a SteamID64 above 2^53 must come back exact
         assert_eq!(l.user.as_deref(), Some("76561197960265729"));
+    }
+
+    /// A directory link: a junction on Windows (no admin rights needed), a symbolic link elsewhere.
+    fn dir_link(target: &Path, link: &Path) {
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[test]
+    fn a_version_folder_that_links_outside_is_neither_listed_nor_read() {
+        // fails if a junction under the Valve folder serves files from elsewhere (review of #29)
+        let s = Scratch::new("valve-link");
+        let root = s.0.join("valve");
+        valve_map(&s.0.join("elsewhere"), "m", V1, &[("match.parquet", b"secret")], None);
+        fs::create_dir_all(root.join("match730_j")).unwrap();
+        fs::write(root.join("match730_j").join("CURRENT"), format!("{V1}\n")).unwrap();
+        dir_link(&s.0.join("elsewhere").join("m").join(V1), &root.join("match730_j").join(V1));
+        let l = list_valve_in(&root).unwrap();
+        assert!(l.files.is_empty() && l.skipped.len() == 1, "{:?}", l.skipped.iter().map(|x| &x.why).collect::<Vec<_>>());
+        for p in [format!("match730_j/{V1}"), format!("match730_j/{V1}/match.parquet")] {
+            let err = read_valve_in(&root, &p).unwrap_err();
+            assert!(err.contains("outside the Valve folder"), "{err}");
+        }
     }
 
     #[test]

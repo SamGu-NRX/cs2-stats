@@ -6,7 +6,7 @@
 // one match's tables never mix two extractions, and a re-import lists as a new file. Reading that path
 // returns its table file names; "valve/<demo>/<version folder>/<table>.parquet" returns one table, only if
 // the version's COMPLETE list names it at its size on disk.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { mapTablesDir, VERSION_DIR } from "./map-dir";
 
@@ -47,12 +47,26 @@ export function valveUser(root: string): string | null {
   return m[1];
 }
 
+/** A demo folder name; "." and ".." match NAME but would lead out of the folder. */
+const isName = (s: string) => NAME.test(s) && s !== "." && s !== "..";
+
+/** Whether p, with every junction and symbolic link resolved, lies inside root's own resolved path. */
+function isInside(root: string, p: string): boolean {
+  const r = realpathSync.native(root), q = realpathSync.native(p);
+  return q.startsWith(r + path.sep);
+}
+
+/** Throws unless p, resolved, lies inside root: a version folder or table that is a link to elsewhere is refused. */
+function contained(root: string, p: string, rel: string): void {
+  if (!isInside(root, p)) throw new ValvePathError(`${rel}: resolves outside the Valve folder`);
+}
+
 export function listValve(root: string): ValveListing {
   const out: ValveListing = { folder: root, user: null, files: [], skipped: [] };
   if (!existsSync(root)) return out;
   out.user = valveUser(root);
   for (const d of readdirSync(root, { withFileTypes: true })) {
-    if (!d.isDirectory() || !NAME.test(d.name)) continue;
+    if (!d.isDirectory() || !isName(d.name)) continue;
     let r;
     try {
       r = mapTablesDir(path.join(root, d.name));
@@ -63,6 +77,7 @@ export function listValve(root: string): ValveListing {
     if (!r) continue;
     if ("skipped" in r) { out.skipped.push({ file: `valve/${d.name}`, why: r.skipped }); continue; }
     if (!r.manifest) { out.skipped.push({ file: `valve/${d.name}`, why: "not in the versioned layout the importer writes" }); continue; }
+    if (!isInside(root, path.join(r.dir, "COMPLETE"))) { out.skipped.push({ file: `valve/${d.name}`, why: "its version folder resolves outside the Valve folder" }); continue; }
     out.files.push({
       file: `valve/${d.name}/${path.basename(r.dir)}`,
       size: Object.values(r.manifest).reduce((a, b) => a + b, 0),
@@ -98,15 +113,17 @@ export function importerCommand(root: string, env: NodeJS.ProcessEnv = process.e
 export function readValve(root: string, rel: string): Buffer {
   const parts = rel.split("/");
   const [demo, version, table] = parts;
-  if (parts.length < 2 || parts.length > 3 || !NAME.test(demo) || !VERSION_DIR.test(version) || (table !== undefined && !/^[a-z0-9_]+\.parquet$/.test(table))) {
+  if (parts.length < 2 || parts.length > 3 || !isName(demo) || !VERSION_DIR.test(version) || (table !== undefined && !/^[a-z0-9_]+\.parquet$/.test(table))) {
     throw new ValvePathError(`${rel}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])`);
   }
   const dir = path.join(root, demo, version);
   const complete = path.join(dir, "COMPLETE");
   if (!existsSync(complete)) throw new Error(`${rel}: this version is gone; rescan`);
+  contained(root, complete, rel);
   const sizes = JSON.parse(readFileSync(complete, "utf-8")) as Record<string, number>;
   if (table === undefined) return Buffer.from(JSON.stringify(Object.keys(sizes).filter((f) => f.endsWith(".parquet"))));
   if (!(table in sizes)) throw new Error(`${rel}: not one of this version's tables`);
+  contained(root, path.join(dir, table), rel);
   const bytes = readFileSync(path.join(dir, table));
   if (bytes.length !== sizes[table]) throw new Error(`${rel}: ${bytes.length} bytes, not the ${sizes[table]} COMPLETE lists; rescan`);
   return bytes;
