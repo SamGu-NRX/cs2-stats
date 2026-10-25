@@ -136,77 +136,91 @@
     "source": {
       "source": "fit",
       "script": "swing_fit.py",
-      "accepted_joins": 318,
-      "consumed_joins": 318,
+      "accepted_joins": 304,
+      "consumed_joins": 304,
       "skipped_joins": 0,
       "layouts": {
-        "schema_v1": 315,
+        "schema_v1": 301,
         "legacy": 3
       },
       "skipped": [],
-      "events": 58391,
-      "unattributed_damage_hp": 0,
-      "excluded_damage_rows": 293,
-      "flash_calibration_layout": "legacy",
-      "flash_calibration_events": 602
+      "events": 55875,
+      "unattributed_damage_hp": 103,
+      "excluded_damage_rows": 280,
+      "flash_calibration_layout": "all_consumed_joins",
+      "flash_calibration_events": 1360,
+      "layout_comparison": {
+        "schema_v1": {
+          "sample_size": 1340,
+          "matches": 155,
+          "killer_credit_median": 0.8460795411487165,
+          "flash_credit_fraction": 0.15392045885128347
+        },
+        "legacy": {
+          "sample_size": 20,
+          "matches": 1,
+          "killer_credit_median": 0.8460031840295292,
+          "flash_credit_fraction": 0.15399681597047077
+        }
+      }
     },
     "event_credit_model": "damage_share_then_single_flash_residual",
     "assist_damage": 40,
     "trade_window_seconds": 5.0,
-    "flash_credit_fraction": 0.15399681597047077,
-    "flash_credit_sample_size": 20,
+    "flash_credit_fraction": 0.15392069881738613,
+    "flash_credit_sample_size": 1360,
     "held_out": {
       "split": "5-fold GroupKFold by match",
-      "n": 1447,
+      "n": 1360,
       "matches": 155,
-      "mae": 0.028531040762445,
-      "p95": 0.15407653440795147,
-      "max": 0.2962218825166375,
+      "mae": 0.028853675207456905,
+      "p95": 0.15407414621631704,
+      "max": 0.2962288051667772,
       "folds": [
         {
           "fold": 1,
-          "n": 290,
-          "matches": 31,
-          "median": 0.8460685677421699,
-          "mae": 0.02761600530004882,
-          "p95": 0.1539877179564524,
-          "max": 0.23503349607506285
+          "n": 272,
+          "matches": 30,
+          "median": 0.8460714591484089,
+          "mae": 0.03032631502893214,
+          "p95": 0.15411210477786244,
+          "max": 0.29611388032095276
         },
         {
           "fold": 2,
-          "n": 290,
+          "n": 272,
           "matches": 31,
-          "median": 0.8460723785324742,
-          "mae": 0.028644439327988273,
-          "p95": 0.15406603654257509,
-          "max": 0.2962218825166375
+          "median": 0.8460836261660326,
+          "mae": 0.024815127219408654,
+          "p95": 0.15398443388629848,
+          "max": 0.2350485544989256
         },
         {
           "fold": 3,
-          "n": 289,
+          "n": 272,
           "matches": 31,
-          "median": 0.8460723785324742,
-          "mae": 0.029639245908668302,
-          "p95": 0.15407818865462639,
-          "max": 0.15491834965875362
+          "median": 0.8460793011826139,
+          "mae": 0.032963733700519186,
+          "p95": 0.15407725574985956,
+          "max": 0.2962288051667772
         },
         {
           "fold": 4,
-          "n": 289,
+          "n": 272,
           "matches": 31,
-          "median": 0.8460904687546404,
-          "mae": 0.029060621554652326,
-          "p95": 0.15411949788250134,
-          "max": 0.29603419453407387
+          "median": 0.8460793011826139,
+          "mae": 0.024394725904022193,
+          "p95": 0.15408998752456973,
+          "max": 0.1598881473117647
         },
         {
           "fold": 5,
-          "n": 289,
-          "matches": 31,
-          "median": 0.8460723785324742,
-          "mae": 0.027697665550960184,
-          "p95": 0.1540926012035293,
-          "max": 0.2961147997050181
+          "n": 272,
+          "matches": 32,
+          "median": 0.8460795411487165,
+          "mae": 0.031768474184402325,
+          "p95": 0.15402852356209196,
+          "max": 0.23465260753707518
         }
       ],
       "target": "damage=False flash=1 trade=False"
@@ -230,16 +244,16 @@
     "source": {
       "source": "fit",
       "script": "eco_fit.py",
-      "accepted_joins": 318,
-      "consumed_joins": 318,
+      "accepted_joins": 304,
+      "consumed_joins": 304,
       "skipped_joins": 0,
       "layouts": {
-        "schema_v1": 315,
+        "schema_v1": 301,
         "legacy": 3
       },
       "skipped": [],
-      "duels": 45319,
-      "targets": 3180
+      "duels": 43387,
+      "targets": 3040
     },
     "groups": [
       "sniper",
@@ -250,65 +264,125 @@
       "pistol"
     ],
     "strength": {
-      "sniper": 0.6211831642060697,
-      "rifle1": 0.5237915968519881,
-      "rifle2": 0.5302156525681799,
-      "smg": 0.40147567806345835,
-      "pistolPlus": 0.15259719869919514,
+      "sniper": 0.765624192288676,
+      "rifle1": 0.6028113291326643,
+      "rifle2": 0.2988708070663434,
+      "smg": 0.4258512403690258,
+      "pistolPlus": 0.23895079722688078,
       "pistol": 0.0
     },
     "ct_edge": 0.0800427076735365,
-    "kill_points_scale": 1.6618416540532308,
-    "duels": 45319,
-    "targets": 3180,
-    "objective_mae": 0.8004568082803943,
+    "kill_points_scale": 2.0250745163650965,
+    "duels": 43387,
+    "targets": 3040,
+    "objective_mae": 0.17693824100640804,
+    "target_definition": {
+      "predicted": "HLTV eco-adjusted kills, deaths, and ADR cells per player-map",
+      "units": {
+        "kills": "kills per map",
+        "deaths": "deaths per map",
+        "adr": "HP per round"
+      },
+      "error_scale": "0.2 times kill/death error and 0.05 times ADR error; MAE is in weighted residual units"
+    },
     "held_out": {
       "split": "5-fold GroupKFold by match",
-      "targets": 3180,
+      "targets": 3040,
       "matches": 161,
-      "mae": 0.803752909530498,
-      "p95": 2.0884243605910955,
-      "max": 4.113072563022001,
+      "mae": 0.18501190527342595,
+      "p95": 0.39309350845304275,
+      "max": 5.054612324100318,
       "folds": [
         {
           "fold": 1,
-          "targets": 640,
+          "targets": 610,
           "matches": 32,
-          "mae": 0.7992700927629668,
-          "p95": 1.9870733770733275,
-          "max": 3.2732878210556566
+          "mae": 0.319672980822546,
+          "p95": 2.351210186588703,
+          "max": 5.054612324100318
         },
         {
           "fold": 2,
-          "targets": 640,
+          "targets": 610,
           "matches": 32,
-          "mae": 0.7700252078446141,
-          "p95": 2.1485138275127986,
-          "max": 3.665299802832907
+          "mae": 0.15152431293142288,
+          "p95": 0.3866905392337451,
+          "max": 0.7923185723979785
         },
         {
           "fold": 3,
-          "targets": 640,
-          "matches": 33,
-          "mae": 0.798413757887194,
-          "p95": 1.9249908843380332,
-          "max": 3.3850005111321226
+          "targets": 610,
+          "matches": 32,
+          "mae": 0.14902132143072702,
+          "p95": 0.37399758005529016,
+          "max": 0.9609112188432398
         },
         {
           "fold": 4,
-          "targets": 630,
-          "matches": 32,
-          "mae": 0.789858007447279,
-          "p95": 2.0839526073412458,
-          "max": 4.113072563022001
+          "targets": 610,
+          "matches": 33,
+          "mae": 0.15489554720481624,
+          "p95": 0.37794650441140115,
+          "max": 0.8656004526564716
         },
         {
           "fold": 5,
-          "targets": 630,
+          "targets": 600,
           "matches": 32,
-          "mae": 0.8618887463151464,
-          "p95": 2.2806688437608615,
-          "max": 4.034600015943221
+          "mae": 0.14936092162268758,
+          "p95": 0.36990767533903945,
+          "max": 0.8092117082326404
+        }
+      ]
+    },
+    "held_out_baseline": {
+      "model": "training-fold target mean; no duel features",
+      "split": "5-fold GroupKFold by match",
+      "targets": 3040,
+      "matches": 161,
+      "mae": 0.7251211422305132,
+      "p95": 1.8612345679012348,
+      "max": 6.9497119341563796,
+      "folds": [
+        {
+          "fold": 1,
+          "targets": 610,
+          "matches": 32,
+          "mae": 0.7295723200431762,
+          "p95": 1.8455967078189301,
+          "max": 4.55440329218107
+        },
+        {
+          "fold": 2,
+          "targets": 610,
+          "matches": 32,
+          "mae": 0.7312300141671727,
+          "p95": 1.9387654320987655,
+          "max": 5.538765432098765
+        },
+        {
+          "fold": 3,
+          "targets": 610,
+          "matches": 32,
+          "mae": 0.7159986912230992,
+          "p95": 1.846008230452675,
+          "max": 5.34477366255144
+        },
+        {
+          "fold": 4,
+          "targets": 610,
+          "matches": 33,
+          "mae": 0.7395352492747758,
+          "p95": 1.9497119341563787,
+          "max": 6.9497119341563796
+        },
+        {
+          "fold": 5,
+          "targets": 600,
+          "matches": 32,
+          "mae": 0.7090052413479053,
+          "p95": 1.857049180327869,
+          "max": 4.542950819672131
         }
       ]
     },
