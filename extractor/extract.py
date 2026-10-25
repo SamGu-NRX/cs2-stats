@@ -2057,9 +2057,11 @@ def write_output(tables: dict[str, pd.DataFrame], out_dir: Path, result: dict) -
     is removed only once the new version is published, so a failed write leaves the old tables withdrawn.
     The map's lock is held from creating the staging folder to the prune after publishing."""
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     tmp = out_dir / f".tmp-{os.getpid()}"
     with map_lock(out_dir):
+        # Created under the lock: a retirement could otherwise delete the folder between its creation and
+        # the lock. The lock file sits beside it, so the lock itself needs no map folder.
+        out_dir.mkdir(parents=True, exist_ok=True)
         try:
             if tmp.exists():
                 shutil.rmtree(tmp)
