@@ -694,41 +694,77 @@ def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, r
 DEATH_COUNTERS = ["kills_total", "deaths_total", "assists_total", "headshot_kills_total"]
 
 
+def settle_tick(t: int, guard: pd.DataFrame, rate: float) -> int:
+    """Where to read the counters a death at tick t moved: the game can commit them a tick later (review of
+    PR 19), so the latest tick within the snap limit that comes before the next guard event after t."""
+    limit = max(1, int(round(MAX_SNAP_S * rate)))
+    nxt = guard.tick[guard.tick > t]
+    return min(t + limit, int(nxt.min()) - 1) if len(nxt) else t + limit
+
+
 def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame, rate: float,
-                        ids=lambda rows: rows.steamid) -> pd.DataFrame:
+                        match_start: int = 0, ids=lambda rows: rows.steamid) -> pd.DataFrame:
     """BASELINE_PROPS per player before the first counted round: zero for a whole match, the earlier parts'
     totals for a later part of a split recording (one demo's second part starts at 8-8 with kills and damage
     carried over). Empty for a round 1 recorded already live.
 
     Read at round 1's freeze end, when the game's counters have settled after any restore and every player
     of the round has a controller, less what the game itself counted in round 1 up to then: a Valve player
-    who disconnected in freeze time died to "world", and deaths_total rose on that tick. deaths: (tick,
-    victim_steamid) of round 1's deaths in the tables. Only the rise the game recorded across each death tick
-    is taken off, never the events themselves: a death in the tables that the game did not count stays in the
-    baseline, so validation still fails on it. A deaths_total rise that the tick's deaths cannot explain is
-    a counter load, as a backup restore does, and fails the map. ids: the player ids of parsed rows
-    (resolve_ids for bots).
+    who disconnected in freeze time died to "world", and deaths_total rose on that tick. deaths: round 1's
+    deaths in the tables (tick, victim_steamid, attacker_steamid, assister_steamid). Only the rise the game
+    recorded across each death tick (from the tick before it to settle_tick) is taken off, never the events
+    themselves: a death in the tables that the game did not count stays in the baseline, so validation still
+    fails on it. Two rises fail the map instead:
+    - a deaths_total rise across a death tick larger than that tick's deaths of the player: a counter load, as
+      a backup restore does;
+    - a rise between the window's start (round 1's start, or the tick after begin_new_match when later) and
+      freeze end that the player's death, kill or assist rows there cannot explain: a death the demo lost.
+    ids: the player ids of parsed rows (resolve_ids for bots).
     """
     fe1 = rounds.freeze_end_tick.iloc[0]
     if pd.isna(fe1):
         return pd.DataFrame(columns=["tick", "steamid", "name"] + BASELINE_PROPS)
-    base = read_at(parser, BASELINE_PROPS, [int(fe1)], after=False, guard=guard, rate=rate)
+    fe1 = int(fe1)
+    base = read_at(parser, BASELINE_PROPS, [fe1], after=False, guard=guard, rate=rate)
     base["steamid"] = ids(base)
-    deaths = deaths[deaths.tick <= int(fe1)]
+    deaths = deaths[deaths.tick <= fe1]
+    who = {c: col(deaths, c, None) for c in ("victim_steamid", "attacker_steamid", "assister_steamid")}
+
+    def keyed(df):
+        df = df.assign(steamid=ids(df)).dropna(subset=["steamid"])
+        df = df.assign(tick=df.tick.astype("int64"), steamid=df.steamid.astype("int64"))
+        return df.drop_duplicates(["tick", "steamid"]).set_index(["tick", "steamid"])[DEATH_COUNTERS]
+
+    def rows_of(mask) -> dict[str, pd.Series]:
+        """Per counter, how many of the masked death rows can raise each player's counter."""
+        d = {k: v[mask] for k, v in who.items()}
+        n = lambda ids_: ids_.dropna().astype("int64").value_counts()
+        return {"deaths_total": n(d["victim_steamid"]), "kills_total": n(d["attacker_steamid"]),
+                "headshot_kills_total": n(d["attacker_steamid"]), "assists_total": n(d["assister_steamid"])}
+
+    # A rise no death row explains, over the whole window before freeze end.
+    w0 = min(max(int(rounds.start_tick.iloc[0]), match_start + 1), fe1)
+    start = keyed(read_at(parser, DEATH_COUNTERS, [w0], after=True, guard=guard, rate=rate)).droplevel("tick")
+    end = keyed(read_at(parser, DEATH_COUNTERS, [fe1], after=False, guard=guard, rate=rate)).droplevel("tick")
+    explained = rows_of((deaths.tick > w0).to_numpy())
+    for sid, r in (end - start).dropna().iterrows():
+        for c in DEATH_COUNTERS:
+            if r[c] > explained[c].get(sid, 0):
+                raise RuntimeError(f"player {sid}'s {c} rose by {int(r[c])} between ticks {w0} and {fe1}, with "
+                                   f"{int(explained[c].get(sid, 0))} rows in the tables to explain it: a death the "
+                                   "demo lost, so round 1's baseline cannot be read")
+
     ticks = sorted({int(t) for t in deaths.tick})
     if ticks:
+        settled = {settle_tick(t, guard, rate): t for t in ticks}
         before = read_at(parser, DEATH_COUNTERS, [t - 1 for t in ticks], after=False, guard=guard, rate=rate)
-        at = read_at(parser, DEATH_COUNTERS, ticks, after=True, guard=guard, rate=rate)
-        before["steamid"], at["steamid"] = ids(before), ids(at)
-        # Per player and death tick: the counters on the tick less those on the tick before it. A player with
-        # no controller on either side of a tick (connecting, leaving) has no rise there.
-        def keyed(df, shift):
-            df = df.dropna(subset=["steamid"]).assign(tick=df.tick.astype("int64") + shift,
-                                                      steamid=df.steamid.astype("int64"))
-            return df.drop_duplicates(["tick", "steamid"]).set_index(["tick", "steamid"])[DEATH_COUNTERS]
-        step = (keyed(at, 0) - keyed(before, 1)).dropna()
-        died = deaths.dropna(subset=["victim_steamid"]).astype({"tick": "int64", "victim_steamid": "int64"})
-        died = died.groupby(["tick", "victim_steamid"]).size()
+        after = read_at(parser, DEATH_COUNTERS, list(settled), after=True, guard=guard, rate=rate)
+        after = after.assign(tick=after.tick.map(settled))
+        # Per player and death tick: the settled counters less those on the tick before it. A player with no
+        # controller on either side of a tick (connecting, leaving) has no rise there.
+        step = (keyed(after) - keyed(before.assign(tick=before.tick + 1))).dropna()
+        died = deaths.assign(v=who["victim_steamid"]).dropna(subset=["v"]).astype({"tick": "int64", "v": "int64"})
+        died = died.groupby(["tick", "v"]).size()
         for (t, s_), d in step.deaths_total.items():
             if not 0 <= d <= died.get((t, s_), 0):
                 raise RuntimeError(f"deaths_total of a player moved by {int(d)} across tick {t}, where the tables "
@@ -1023,8 +1059,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     for df in (pos, econ_raw, sb, dmg_counter, score_at):
         df["steamid"] = resolve_ids(df.steamid, df.name, bots)
     k0 = stamp(ev("player_death"))
-    base = scoreboard_baseline(parser, rounds, pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user")})[
-                                   (k0["round"] == 1).to_numpy()], guard, rate,
+    r1_deaths = pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user"),
+                              "attacker_steamid": pid(k0, "attacker"), "assister_steamid": pid(k0, "assister")})
+    base = scoreboard_baseline(parser, rounds, r1_deaths[(k0["round"] == 1).to_numpy()], guard, rate, match_start,
                                ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots))
     baseline = baseline_of(base)
     # Teams are named by clan name. When the server set no distinct clan names (one pro

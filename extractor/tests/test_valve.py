@@ -101,6 +101,24 @@ def test_a_death_in_round_one_freeze_time_is_not_taken_off_the_scoreboard():
     assert ex.scoreboard_baseline(p, rounds, _deaths((488, 1)), NO_GUARD, 64).deaths_total.tolist() == [0]
 
 
+def test_a_counter_the_game_commits_a_tick_after_the_death_still_comes_off():
+    # Review of PR 19 (Astra, round 2): the snapshot on the death tick still holds the old deaths_total, which
+    # rises on the next tick. Read on the death tick, the death looked uncounted and the map failed.
+    rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 489: {1: dict(deaths_total=1)}})
+    guard = _guard(round_start=[65], player_death=[488])
+    assert ex.scoreboard_baseline(p, rounds, _deaths((488, 1)), guard, 64).deaths_total.tolist() == [0]
+
+
+def test_a_round_one_death_with_no_player_death_row_fails_the_map():
+    # Review of PR 19 (Astra, round 2): the game counted a death the demo has no row for, and the freeze-end
+    # baseline absorbed it, so the scoreboard and the tables agreed while both missed that death.
+    rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 300: {1: dict(deaths_total=1)}})
+    with pytest.raises(RuntimeError, match="player 1's deaths_total rose by 1 between ticks 65 and 1710"):
+        ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)
+
+
 def test_a_round_one_death_the_game_did_not_count_still_fails_validation():
     # An HLTV split recording's later part had 10 "world" deaths on a restore tick that the game never counted.
     # Taking the tables' own deaths off the baseline would have cancelled them on both sides and passed the
