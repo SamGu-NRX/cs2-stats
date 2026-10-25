@@ -37,7 +37,7 @@ Every aim metric derives from the engagement windows: time to damage, reaction, 
 ## Visibility
 The offline mesh model (awpy `.tri` raycast plus smoke volumes) is used for **every** population, because it is the only one that exists for all of them. It sees static geometry only: moving doors and breakables are a known limitation.
 
-The **oracle** is the plugin's live line-of-sight probe (`plugin/Game/LosProbe.cs`, PR #13), not the spotted mask. The oracle must be validated first, on local matches, before it judges anything. The mesh model is then compared against it on:
+The **oracle** is the plugin's live line-of-sight probe (`plugin/Game/LosProbe.cs`, PR #13), not the spotted mask. The oracle must be validated first, on local scenario matches where visibility is known, before it judges anything. Recordings with `env.losError` set are excluded: in them the probe turned itself off and the recorder fell back to the spotted mask, so they hold no oracle data. The probe traces solid geometry only (`SolidBrushOnly`), so it judges the mesh model with smoke volumes turned off; smoke blocking is validated separately, with scenario demos of a smoke thrown between two stationary players. The mesh model is then compared against the oracle on:
 - **visibility onset error** in ms, per encounter;
 - **false positives and negatives per tick.**
 
@@ -46,14 +46,12 @@ An aggregate agreement figure alone can hide timing failures. The game's `spotte
 ## Validation (acceptance)
 | Family | Ground truth | Accept when |
 |---|---|---|
-| Family | Ground truth | Accept when |
-|---|---|---|
 | Extractor: K, D, KAST | the demo's own end-of-match scoreboard; HLTV per-map JSON | exact (integer counts) |
 | Extractor: ADR, equipment, buy type | HLTV per-map JSON | ADR ±0.5 (HLTV rounds to 0.1 and differs in HP capping); buy type exact once HLTV's thresholds are matched |
-| Win probability and swing | HLTV per-event win probabilities and per-player swing credits | win-probability MAE < 0.03; per-player-map swing r > 0.95 on **held-out maps** |
-| Rating 3.0 (approx.) | HLTV per-map rating | MAE < 0.04, r > 0.97 on held-out maps; the UI says "approx." |
-| Visibility | the validated plugin LOS oracle on local matches | onset error and per-tick FP/FN reported; thresholds set after the first measurement |
-| Aim and movement | scenario demos on the local server (known offsets, stationary versus moving shots) | within 1° / 1 tick of the scenario's known value; reaction is judged by measured timing error against the oracle, not by a plausibility range |
+| Win probability and swing | HLTV per-event win probabilities and per-player event credits | an exact recreation: held-out error no larger than HLTV's display rounding explains. `model/rating3/SPEC.md` computes that floor per stage |
+| Rating 3.0 | HLTV per-map rating | the same exact-recreation rule on held-out maps; until it passes, the UI shows "approx." and "calibrating" |
+| Visibility | the validated plugin LOS oracle on local matches | onset error within 1 tick for 90% of encounters and within 2 ticks for 99%; per-tick false positives and false negatives each under 1%, outside smoke. One tick is the resolution of the data; these bounds are set before any measurement, so the first run cannot tune them |
+| Aim and movement | scenario demos on the local server (known offsets, stationary versus moving shots) | within 1° / 1 tick of the scenario's known value; reaction onset within 1 tick of the oracle's visibility onset |
 | Utility | scenario demos; blinds exact | exact pair sets |
 | Roles and identity | HLTV's own style scores for the same pros (validation only); face validity | rank correlation with HLTV per attribute, reported |
 | Leetify import | Leetify's numbers for the same matches | correlation (within-player r > 0.8), not equality; shown with a source label, never merged |
