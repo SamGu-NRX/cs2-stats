@@ -1,9 +1,8 @@
 // Round buy classes, HLTV's four: PISTOL, ECO, HALF, FULL.
 //
-// HLTV labels each team's round with its equipment value and class. Over 733 HLTV maps (2026-10,
-// about 32,000 team-rounds) every ECO was at most $4,950, every HALF $5,000 to $16,200 and every FULL
-// $16,250 or more; PISTOL marks the first round of each half. For five players that is $1,000 and
-// $3,250 per player. HLTV's value is compared with ours on the joined demo maps in VALIDATION.md.
+// HLTV labels each team's round with its equipment value and class: ECO below $5,000, HALF from
+// $5,000, FULL from $16,250, and PISTOL on the first round of each half (bands read from HLTV's labels,
+// VALIDATION.md, pnpm scoreboard-variants). For five players that is $1,000 and $3,250 per player.
 export const BUY_CLASSES = ["pistol", "eco", "half", "full"] as const;
 export type BuyClass = (typeof BUY_CLASSES)[number];
 

@@ -13,12 +13,12 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 
 | Rule | Definition | Source |
 |---|---|---|
-| Enemy kill | Killer and victim on different sides at the kill, including kills after the round ended | Matches HLTV's K on every joined pro map |
-| Death | Every death except a suicide after the round ended | Matches HLTV's D on 438 of 440 player-maps (44-map run) |
-| Hit damage (ADR) | The hurt event's damage, capped at the victim's health before the hit. A hit the extractor rebuilt from a health drop uses the health removed. | HLTV's figure; the game's own scoreboard counts health removed, about 0.3 HP more per non-lethal hit |
-| Trade | A kill on a player who killed one of the killer's teammates within 5.4 s; it trades only the earliest such death | Window and pairing scanned against HLTV's traded deaths and KAST |
-| Opening duel | The round's first enemy kill | HLTV's Op.K-D matches on 433 of 440 |
-| Buy class | Team equipment at freeze end per player: under $1,000 eco, $3,250 or more full, half in between; the first round of each regulation half is pistol | HLTV's round labels on 733 maps: every ECO at most $4,950, every HALF $5,000 to $16,200, every FULL $16,250 or more |
+| Enemy kill | Killer and victim on different sides at the kill, including kills after the round ended | HLTV's K (VALIDATION.md) |
+| Death | Every death except a suicide after the round ended | HLTV's D (VALIDATION.md) |
+| Hit damage (ADR) | The hurt event's damage, capped at the victim's health before the hit. A hit the extractor rebuilt from a health drop uses the health removed. | HLTV's figure; the game's own scoreboard counts health removed instead |
+| Trade | A kill on a player who killed one of the killer's teammates within 5.4 s; it trades only the earliest such death | Window and pairing chosen against HLTV's traded deaths and KAST |
+| Opening duel | The round's first enemy kill | HLTV's Op.K-D |
+| Buy class | Team equipment at freeze end per player: under $1,000 eco, $3,250 or more full, half in between; the first round of each regulation half is pistol | The bands of HLTV's round labels (VALIDATION.md) |
 | AWPer | More than 0.20 AWP kills per round in the sample | `design/identity.md` |
 
 ## Rating and scoreboard (performance)
@@ -101,21 +101,11 @@ blind, and a flash-to-kill is a flashed enemy dying to the team while still blin
 | utilUnused | approx | Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen. |
 | smokeSights | approx | Enemy sightlines blocked per smoke thrown (`utilq.ts`). A sightline is the onset of a directed engagement (`first_visible_tick`); one that opened through a smoke (`smoke_blocked`) counts for the smoke(s) whose sphere crosses it, split equally, and only for a smoke thrown by the victim's team. Smoke model: the extractor's, a sphere of radius 144 centred 60 units above the detonation (awpy 3.1.1 defaults). Needs v1 maps with visibility. |
 
-**Pruned**, from a round-outcome analysis on 5,956 pro team-rounds (logistic regression of the round
-win on the metric summed per team-round, controlling for both buy classes and side; standard errors
-clustered by map):
-
-| Removed | Why |
-|---|---|
-| blindPerFlash | Duplicates enemies flashed per flash (r 0.97) |
-| enemiesPerFlash | No positive link to winning in any model |
-| utilDmgPR | Duplicates damage per HE (r 0.87), the weaker of the two beyond volume |
-| teamFlashPR | Marked lower-is-better, but more team flashes went with winning (odds ratio 1.12); no effect beyond volume |
-| smoke blocked seconds, smoke kills prevented | Duplicate smokeSights (r 0.91, 0.97) |
-| every molotov candidate (enemies flushed, time at the fire's edge, time kept out) | No positive link to winning in any model, and little spread between players |
-
-Kept with caveats: grenadeDmgTaken (HLTV parity; nothing beyond survival), utilUnused (its odds ratio
-of 0.30 mostly reflects dying early). Full table in `VALIDATION.md`.
+**Pruned**, on a round-outcome analysis of pro team-rounds (`pnpm utility-outcomes`; numbers in
+VALIDATION.md): blindPerFlash and utilDmgPR duplicated enemiesPerFlash and dmgPerHe; enemiesPerFlash
+and teamFlashPR showed no lasting link to winning; two smoke variants duplicated smokeSights; no molotov
+candidate earned a place. Kept with caveats: grenadeDmgTaken (HLTV parity), utilUnused (mostly measures
+dying early).
 
 ## Aim (performance unless noted)
 
@@ -127,7 +117,7 @@ pitch). Ticks after either player's death are cut. Needs v1 maps with visibility
 | id | Status | Definition and thresholds |
 |---|---|---|
 | timeToDamage | approx | Median time from sighting to your first damage on the victim |
-| reactionTime | approx | Median time from sighting to the start of the movement that halves the aim error within 1 s. The movement must peak at 60 deg/s or more (between the p90 and p95 of view speed while no enemy was visible, 60,000 ticks); it starts at the first tick holding 10% of that peak. Sightings within 2 degrees of the head, or with the turn already under way, are left out. 0.5 and 1 s: ours, no fit. |
+| reactionTime | approx | Median time from sighting to the start of the movement that halves the aim error within 1 s. The movement must peak at 60 deg/s or more (well above idle view drift; ours, no fit); it starts at the first tick holding 10% of that peak. Sightings within 2 degrees of the head, or with the turn already under way, are left out. 0.5 and 1 s: ours, no fit. |
 | timeToShot | approx | Median time from sighting to the first shot, leaving out sightings with a shot in the previous 0.3 s (the recoil asset's reset spacing) |
 | crosshairPlacement | approx | Median angle between the view and the victim's eye at sighting |
 | preAim | approx | Share of sightings with placement 2 degrees or less (ours: about a player's width at 1,000 units). Its percentile against the pros is the "better or worse than baseline" reading. |
@@ -149,13 +139,13 @@ The recoil reference is `aim-ref.ts`, generated by `pnpm aim-ref` from
 
 ## Movement (identity)
 
-An **exposure** is a run of engagement ticks where `mesh_visible` is true and `smoke_blocked` is not;
+An **exposure** is a run of engagement ticks where `mesh_visible` is true and `smoke_blocked` is false (unknown is not visible);
 gaps under 0.05 s merge. A **peek** is an exposure with an observed onset where your speed is at least
 75 u/s (ours, near 34% of a rifle's max speed). Needs v1 maps with visibility.
 
 | id | Status | Definition and thresholds |
 |---|---|---|
-| shoulderPeekPct | approx | Peeks of 0.3 s or less, with no shot, whose velocity reverses within 0.25 s of losing sight. 0.3 s: exposures of 0.06 to 0.3 s ended in a reversal 391 times and a shot 132 times; past 0.3 s shots led 1,755 to 501 (10 maps). 0.25 s: ours, no fit. |
+| shoulderPeekPct | approx | Peeks of 0.3 s or less, with no shot, whose velocity reverses after sight breaks, within 0.25 s. 0.3 s and 0.25 s: ours, no fit. |
 | jigglePeekPct | approx | Shoulder peeks at the same enemy with onsets at most 1.5 s apart (the engagement merge gap) |
 | widePeekPct | approx | Peeks that travel 64 units or more along the onset direction within 0.5 s (ours, no fit: two hull widths) |
 | exposureBeforeShot | approx | Median time from an exposure's onset to the first gun shot in it |
@@ -172,9 +162,9 @@ gaps under 0.05 s merge. A **peek** is an exposure with an observed onset where 
 |---|---|---|
 | firstContactTime | approx | Seconds from freeze end to contact |
 | firstContactRank | approx | 1 + teammates with strictly earlier contact |
-| entryAttempts | approx | Rounds where you made first contact on your team while moving at 75 u/s or more |
+| entryAttempts | approx | Rounds where you made your team's first contact as the attacker, moving at 75 u/s or more |
 | pushDepth | approx | Furthest projection onto the line from your spawn to the enemy spawn before the first kill or your death; spawns are the mean freeze-end positions of each side |
-| lowBuyBuys | exact | Rounds where your team's buy is eco or half and you spent $1,000 or more |
+| lowBuyBuys | exact | Rounds where your team's buy is eco or half and you spent $1,000 or more, over such rounds with a known spend |
 
 Breakdowns by round type and economy ("aggressive on ecos") are the same metrics over `rollup` with
 `ownBuy` or `oppBuy`.

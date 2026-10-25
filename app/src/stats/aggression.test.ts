@@ -42,3 +42,24 @@ it("measures push depth between the spawns and stops at the round's first kill",
   expect(push.c1).toBeCloseTo(0.25, 9);
   expect(push.t1).toBeCloseTo(0.4, 9);
 });
+
+it("does not count a player who was peeked first as an entry, even while moving", () => {
+  // fails if first contact as the victim counts as an entry attempt
+  const w = sight(0, "t1", "c2", 900, 0, 250);
+  const f = oneRound({ players, engagements: [w.eng], engagement_ticks: w.rows });
+  const c2 = f.aggression.find((a) => f.players[a.pi].id === "c2")!;
+  expect([c2.contactRank, c2.entry]).toEqual([1, false]);
+});
+
+it("leaves a team-save round out of buys when the player's spend is unknown, and gives no push depth with spawns on one point", () => {
+  // fails if an unknown spend counts as not buying, or coincident spawns divide by zero
+  const eco = { equip_value_game: 800 };
+  const f = oneRound({
+    players, round: 2,
+    player_rounds: { c1: { ...eco, cash_spent: null }, c2: { ...eco, cash_spent: 1200 }, t1: { equip_value_game: 5000 }, t2: { equip_value_game: 5000 } },
+    positions: ["c1", "c2", "t1", "t2"].map((steamid) => ({ steamid, tick: FREEZE_END, x: 0, y: 0 })),
+  });
+  const a = Object.fromEntries(f.aggression.map((x) => [f.players[x.pi].id, x]));
+  expect([a.c1.lowBuy, a.c1.bought, a.c2.bought]).toEqual([true, null, true]);
+  expect(a.c1.push).toBeNull();
+});

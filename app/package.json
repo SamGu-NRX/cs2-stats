@@ -14,7 +14,10 @@
     "rating-check": "vite-node tools/rating-check.ts",
     "fit-roles": "vite-node tools/fit-roles.ts",
     "aim-ref": "vite-node tools/aim-ref.ts",
-    "identity-check": "vite-node tools/identity-check.ts"
+    "identity-check": "vite-node tools/identity-check.ts",
+    "family-check": "vite-node tools/family-check.ts",
+    "scoreboard-variants": "vite-node tools/scoreboard-variants.ts",
+    "utility-outcomes": "vite-node tools/utility-outcomes.ts"
   },
   "dependencies": {
     "@fontsource-variable/schibsted-grotesk": "^5.3.0",

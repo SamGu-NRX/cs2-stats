@@ -13,7 +13,7 @@ import { isGun } from "./guns";
 import type { Metric } from "./metrics";
 import { weaponClass } from "./weapons";
 
-// ---- thresholds. "Ours" means no source and no fit; the evidence is from the v1 pro maps.
+// ---- thresholds. "Ours" means no source and no fit. Distributions on the pro maps: pnpm family-check.
 
 /**
  * An enemy counts as on screen when the aim error is within these half-angles: CS2's fixed field of
@@ -31,16 +31,9 @@ export const ON_HEAD_DEG = 2;
 /** The movement that answers a sighting is the one that halves the onset error within this time. Ours. */
 export const ACQUIRE_FRAC = 0.5;
 export const ACQUIRE_WINDOW_S = 1;
-/**
- * That movement's peak speed toward the head must reach this (deg/s). Ours: 60 sits between the p90
- * (32) and p95 (85) of view speed on ticks where a standing attacker saw no one (8 pro maps, 60k ticks).
- */
+/** That movement's peak speed toward the head must reach this (deg/s), well above idle view drift. Ours, no fit. */
 export const PEAK_MIN_DPS = 60;
-/**
- * The movement starts at the first tick of the run whose speed toward the head stays at or above
- * this fraction of the peak. Ours: on 8 pro maps the reaction median moves by at most 16 ms (one
- * tick) between 0.05 and 0.2.
- */
+/** The movement starts at the first tick of the run whose speed toward the head stays at or above this fraction of the peak. Ours, no fit. */
 export const ONSET_FRAC = 0.1;
 /** A shot this soon after the attacker's previous shot continues firing, so it is not a reaction (the recoil asset's reset spacing). */
 export const RESET_GAP_S = 0.3;
@@ -53,8 +46,7 @@ export const MICRO_WINDOW_S = 0.5;
 /**
  * Tracking starts when the crosshair comes within ON_HEAD_DEG of the head and stops when the error
  * passes TRACK_OFF_DEG or sight is lost. Only ticks where the line of sight turns at TRACK_LOS_DPS or
- * more count: the median on visible ticks is 8.4 deg/s, so these are ticks with a target moving
- * across the view. Both ours.
+ * more count, so the target is moving across the view. Both ours, no fit.
  */
 export const TRACK_OFF_DEG = 10;
 export const TRACK_LOS_DPS = 10;
@@ -266,6 +258,9 @@ function viewIndex(c: Ctx): View | null {
   for (let i = 0; i < T.n; i++) {
     const e = ofId.get(T.engagement_id[i]!);
     if (e === undefined || T.tick[i]! > cut[e]) continue;
+    // a tick without both players' eyes and the attacker's view cannot be measured
+    if (T.a_x[i] === null || T.a_y[i] === null || T.a_eye_z[i] === null || T.a_pitch[i] === null || T.a_yaw[i] === null
+      || T.v_x[i] === null || T.v_y[i] === null || T.v_eye_z[i] === null) continue;
     eng[i] = e;
     rows[e].push(i);
     const a = c.idOf(E.attacker_steamid[e])!, v = c.idOf(E.victim_steamid[e])!;
@@ -285,7 +280,7 @@ function viewIndex(c: Ctx): View | null {
 /** The victim is on screen and not behind a smoke (smoke_blocked is an approximation, SCHEMA-v1.md). */
 function seen(c: Ctx, i: number): boolean {
   const T = c.t.engagement_ticks!;
-  return T.mesh_visible[i] === true && T.smoke_blocked[i] !== true;
+  return T.mesh_visible[i] === true && T.smoke_blocked[i] === false;
 }
 
 function sighting(c: Ctx, view: View, e: number): SightFact | null {
@@ -323,7 +318,8 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
   let shotK = -1;
   for (let k = o; k < r.length && shotK < 0; k++) if (T.a_shot_fired[r[k]]) shotK = k;
   const shotRow = shotK < 0 ? undefined : view.shotAt.get(key(tick(shotK), pi));
-  const weapon = shotRow === undefined ? null : c.t.shots!.weapon[shotRow];
+  const shotWeapon = shotRow === undefined ? null : c.t.shots!.weapon[shotRow];
+  const weapon = shotWeapon !== null && isGun(shotWeapon) ? shotWeapon : null;
 
   let react: number | null = null, over: number | null = null, micro: number | null = null;
   const n0 = Math.hypot(e0[0], e0[1]);
@@ -382,11 +378,8 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
 
 /**
  * The visible enemy nearest a shot's direction, within `cone` degrees: [victim player, angle], or
- * null. The direction is fire_bullets' bullet angle when present, else the view. In a spray the view
- * sits below the target by the recoil compensation (10 degrees by the AK's 10th bullet), while the
- * bullet angle tracks the target: on 4 pro maps, the median bullet-minus-view pitch at AK recoil
- * index n is within 0.2 degrees of minus the pro compensation for bullet n + 1, for bullets 2 to 9
- * (52 or more shots each).
+ * null. The direction is fire_bullets' bullet angle when present, else the view: in a spray the view
+ * sits below the target by the recoil compensation, while the bullet angle follows the target.
  */
 function aimedAt(c: Ctx, view: View | null, shot: number, pi: number, cone: number): [number, number] | null {
   if (!view?.visible) return null;
@@ -407,7 +400,8 @@ function strafeClass(c: Ctx, view: View | null, i: number, pi: number): number {
   const S = c.t.shots!;
   const max = MAX_SPEED[S.weapon[i]];
   const limit = ACCURATE_FRAC * (S.scoped[i] && max.length > 1 ? max[1] : max[0]);
-  const s0 = S.speed_2d[i]!;
+  const s0 = S.speed_2d[i];
+  if (s0 === null) return 4;
   if (s0 <= limit) return 0;
   let peak = 0, pv: [number, number] | null = null;
   for (let j = 1; j <= Math.round(CS_HISTORY_S * c.tickRate); j++) {

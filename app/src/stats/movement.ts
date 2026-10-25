@@ -10,23 +10,20 @@
 // never opens that line, so the mesh test cannot see the purest shoulder peeks; ours are the ones
 // that showed the head or chest.
 import type { Ctx } from "./derive";
+import { isGun } from "./guns";
 import type { Metric } from "./metrics";
-import { weaponClass } from "./weapons";
 
 /**
  * A player moving at least this fast (2D, units/s) when an exposure began caused it: they were
  * moving, not holding. Ours, no fit: shots are inaccurate above about 34% of max speed, about 73 u/s
- * for an AK-47 (research-data-sources.md, counter-strafe). Onset speeds on 6 pro maps show no valley
- * between holding and moving (4,398 exposures, median 119 u/s).
+ * for an AK-47 (research-data-sources.md, counter-strafe).
  */
 export const PEEK_MIN_SPEED = 75;
-/** Sight breaks shorter than this are mesh flicker and join the exposures on either side. Ours: 1 to 3 tick gaps are 142 of 1,099 gaps on 6 pro maps. */
+/** Sight breaks shorter than this (1 to 3 ticks at 64 tick) are mesh flicker and join the exposures on either side. Ours, no fit. */
 export const EXPOSURE_GAP_S = 0.05;
 /**
- * A shoulder peek exposes the player for at most this long. Ours: the informal figure is about 50 ms
- * (research-data-sources.md). On 10 pro maps, exposures begun at 100 u/s or more that lasted 0.06 to
- * 0.3 s ended in a reversal without a shot 391 times and in a shot 132 times; past 0.3 s, shots
- * outnumber such reversals 1,755 to 501.
+ * A shoulder peek exposes the player for at most this long. Ours, no fit: the informal figure is about
+ * 50 ms (research-data-sources.md), and mesh onsets lag a real peek, so the cut is longer.
  */
 export const SHOULDER_MAX_S = 0.3;
 /** The reversal that ends a shoulder peek may come this long after sight breaks, because the enemy moves too. Ours, no fit. */
@@ -35,14 +32,8 @@ export const REVERSAL_SLACK_S = 0.25;
 export const JIGGLE_GAP_S = 1.5;
 /** A wide peek keeps moving in its onset direction: at least WIDE_MIN_TRAVEL units in the first WIDE_WINDOW_S. */
 export const WIDE_WINDOW_S = 0.5;
-/**
- * Ours, no fit: two player widths (the player hull is 32 units wide). A rifle at 215 u/s covers 107
- * units in 0.5 s. Travel after onsets at 100 u/s or more on 6 pro maps has no valley to fit to:
- * 641 under 16 units, 820 from 16 to 48, 985 from 48 to 96, 307 above.
- */
+/** Ours, no fit: two player widths (the player hull is 32 units wide). A rifle at 215 u/s covers 107 units in 0.5 s. */
 export const WIDE_MIN_TRAVEL = 64;
-
-const GUN = new Set(["pistol", "smg", "heavy", "rifle", "sniper"]);
 
 export type MoveFact =
   | {
@@ -98,7 +89,9 @@ export function tracks(c: Ctx): Map<number, number[]> {
   for (let i = 0; i < P.n; i++) {
     const p = c.pi.get(P.steamid[i]);
     if (p === undefined) continue;
-    const key = (P.round[i] - 1) * 1024 + p;
+    const ri = c.riOf(P.round[i]);
+    if (ri === undefined) continue;
+    const key = ri * 1024 + p;
     let l = out.get(key);
     if (!l) out.set(key, (l = []));
     l.push(i);
@@ -123,8 +116,8 @@ export function openingEnd(c: Ctx, ri: number, pi: number): number {
 /** One stretch of ticks in an engagement window where the attacker sees the victim: [on, off) as row indexes. */
 export interface Exposure { on: number; off: number; observed: boolean }
 
-/** Visible means mesh line of sight that no smoke blocks. */
-const seen = (c: Ctx, i: number) => c.t.engagement_ticks!.mesh_visible[i] === true && c.t.engagement_ticks!.smoke_blocked[i] !== true;
+/** Visible means mesh line of sight that no smoke blocks; an unknown smoke state is not visible. */
+const seen = (c: Ctx, i: number) => c.t.engagement_ticks!.mesh_visible[i] === true && c.t.engagement_ticks!.smoke_blocked[i] === false;
 
 /**
  * The exposures in one engagement window (rows a..b-1 of engagement_ticks). Gaps under EXPOSURE_GAP_S
@@ -162,19 +155,23 @@ export function engagementRows(c: Ctx): Map<number, [number, number]> {
  * Classifies one exposure the attacker caused (onset velocity non-null), from the attacker's velocity
  * and position per tick up to the window's last row `end - 1`. `shot`: they fired a gun in it.
  */
-function classifyPeek(c: Ctx, e: Exposure, end: number, shot: boolean): "shoulder" | "wide" | "other" {
+function classifyPeek(c: Ctx, e: Exposure, end: number, shot: boolean): "shoulder" | "wide" | "other" | null {
   const E = c.t.engagement_ticks!;
-  const vx = E.a_vel_x as number[], vy = E.a_vel_y as number[], tick = E.tick;
+  const { a_vel_x: vx, a_vel_y: vy, a_x: x, a_y: y, tick } = E;
   const ux = vx[e.on], uy = vy[e.on];
+  if (ux === null || uy === null) return null;
   const dur = (tick[e.off - 1] + 1 - tick[e.on]) / c.tickRate;
   if (dur <= SHOULDER_MAX_S && !shot) {
+    // the reversal comes after sight breaks, within the slack
     const until = tick[e.off - 1] + REVERSAL_SLACK_S * c.tickRate;
-    for (let i = e.on; i < end && tick[i] <= until; i++) if (vx[i] * ux + vy[i] * uy < 0) return "shoulder";
+    for (let i = e.off; i < end && tick[i] <= until; i++) {
+      if (vx[i] !== null && vy[i] !== null && vx[i]! * ux + vy[i]! * uy < 0) return "shoulder";
+    }
   }
   let i = e.on;
   while (i + 1 < end && tick[i + 1] - tick[e.on] <= WIDE_WINDOW_S * c.tickRate) i++;
-  const x = E.a_x as number[], y = E.a_y as number[];
-  const travel = ((x[i] - x[e.on]) * ux + (y[i] - y[e.on]) * uy) / Math.hypot(ux, uy);
+  if (x[i] === null || y[i] === null || x[e.on] === null || y[e.on] === null) return null;
+  const travel = ((x[i]! - x[e.on]!) * ux + (y[i]! - y[e.on]!) * uy) / Math.hypot(ux, uy);
   return travel >= WIDE_MIN_TRAVEL ? "wide" : "other";
 }
 
@@ -198,8 +195,8 @@ export function deriveMove(c: Ctx): MoveFact[] {
   const gunShot = new Map<number, string>(); // tick * 1024 + pi -> weapon
   if (S) for (let i = 0; i < S.n; i++) {
     const pi = c.pi.get(S.steamid[i]);
-    const ri = S.round[i] - 1;
-    if (pi === undefined || !rounds.has(ri * 1024 + pi) || !GUN.has(weaponClass(S.weapon[i]))) continue;
+    const ri = c.riOf(S.round[i]);
+    if (pi === undefined || ri === undefined || !rounds.has(ri * 1024 + pi) || !isGun(S.weapon[i])) continue;
     if (!gunShot.has(S.tick[i] * 1024 + pi)) gunShot.set(S.tick[i] * 1024 + pi, S.weapon[i]);
     if (S.ducked[i] === null) continue;
     const f = weaponFact(ri, pi, S.weapon[i]);
@@ -231,11 +228,12 @@ export function deriveMove(c: Ctx): MoveFact[] {
     const lastShoulder = new Map<string, { tick: number; jiggle: boolean }>();
     const order = [...Array(G.n).keys()].sort((a, b) => G.start_tick[a] - G.start_tick[b]);
     for (const g of order) {
-      const ri = G.round[g] - 1;
+      const ri = c.riOf(G.round[g]);
       const pi = c.pi.get(G.attacker_steamid[g])!;
-      const f = rounds.get(ri * 1024 + pi);
       const span = spans.get(G.engagement_id[g]);
-      if (!f || !span) continue;
+      if (ri === undefined || !span) continue;
+      const f = rounds.get(ri * 1024 + pi);
+      if (!f) continue;
       const [a, b] = span;
       let exposureDone = false;
       for (const e of exposures(c, a, b)) {
@@ -250,8 +248,9 @@ export function deriveMove(c: Ctx): MoveFact[] {
         }
         const vx = E.a_vel_x[e.on], vy = E.a_vel_y[e.on];
         if (!e.observed || vx === null || vy === null || Math.hypot(vx, vy) < PEEK_MIN_SPEED) continue;
-        f.peeks++;
         const cls = classifyPeek(c, e, b, shotTick !== null);
+        if (cls === null) continue;
+        f.peeks++;
         if (cls === "wide") f.wide++;
         if (cls !== "shoulder") continue;
         f.shoulder++;
@@ -282,7 +281,7 @@ export const MOVEMENT_METRICS: Metric[] = [
   { id: "exposureBeforeShot", label: "Exposure before first shot", kind: "identity", group: "movement", unit: "secs", status: "approx",
     def: "Median seconds from the start of an exposure to an enemy (mesh line of sight not blocked by smoke) to your first gun shot in it, one per engagement. Exposures that began before the engagement window are left out.",
     value: (s) => median(s.movement.exposures) },
-  { id: "openingSpeed", label: "Speed before the first kill", kind: "identity", group: "movement", unit: "count", status: "approx",
+  { id: "openingSpeed", label: "Speed before the first kill", kind: "identity", group: "movement", unit: "speed", status: "approx",
     def: "Mean 2D speed in units/s while alive, from freeze end to the round's first kill or your death, from 4 Hz positions.",
     value: (s) => (s.movement.speedN ? s.movement.speedSum / s.movement.speedN : null) },
   { id: "pathEfficiency", label: "Path efficiency", kind: "identity", group: "movement", unit: "pct", status: "unavailable",

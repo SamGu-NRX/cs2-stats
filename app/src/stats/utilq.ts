@@ -3,12 +3,7 @@
 // (design/research-data-sources.md), so this one is ours. Flash quality stays in utility.ts, on
 // Leetify's definitions.
 //
-// Measured on the pro maps (METRICS.md, utility quality): summed per team-round, blocked sightlines
-// predict the round win beyond both buy classes, the grenades thrown and both teams' alive time. Two
-// variants (blocked seconds, and kills prevented from open-versus-smoked kill rates) correlated 0.91
-// and 0.97 with it, so they were dropped. The molotov candidates (enemies flushed, enemy time held at
-// the fire's edge, enemy time kept out against before-and-after occupancy) showed no association with
-// winning, so no molotov metric is defined.
+// Why this metric, and why no molotov metric: the round-outcome analysis in VALIDATION.md.
 import type { Ctx } from "./derive";
 import type { Metric } from "./metrics";
 
@@ -57,9 +52,9 @@ export function deriveUtilQ(c: Ctx): UtilQFact[] {
   const out: (UtilQFact & { start: number; end: number; centre: V3 })[] = [];
   const byRound: number[][] = Array.from({ length: c.nRounds }, () => []);
   for (let i = 0; i < S.n; i++) {
-    const ri = S.round[i] - 1;
+    const ri = c.riOf(S.round[i]);
     const pi = c.idOf(S.steamid[i]);
-    if (ri < 0 || ri >= c.nRounds || pi === null || !c.side[ri][pi]) continue;
+    if (ri === undefined || pi === null || !c.side[ri][pi]) continue;
     byRound[ri].push(out.length);
     out.push({ ri, pi, sights: 0, start: S.start_tick[i], end: S.end_tick[i] ?? Infinity, centre: [S.x[i], S.y[i], S.z[i] + SMOKE_HEIGHT] });
   }
@@ -69,11 +64,14 @@ export function deriveUtilQ(c: Ctx): UtilQFact[] {
   for (let i = 0; i < T.n; i++) {
     const e = onset.get(T.engagement_id[i]);
     if (e === undefined || T.tick[i] !== E.first_visible_tick[e] || !T.smoke_blocked[i]) continue;
-    const ri = E.round[e] - 1;
+    const ri = c.riOf(E.round[e]);
     const att = c.idOf(E.attacker_steamid[e]);
-    if (ri < 0 || ri >= c.nRounds || att === null) continue;
+    if (ri === undefined || att === null) continue;
     const tick = T.tick[i];
-    const a: V3 = [T.a_x[i]!, T.a_y[i]!, T.a_eye_z[i]!], v: V3 = [T.v_x[i]!, T.v_y[i]!, T.v_eye_z[i]!];
+    const ax = T.a_x[i], ay = T.a_y[i], az = T.a_eye_z[i], vx = T.v_x[i], vy = T.v_y[i], vz = T.v_eye_z[i];
+    // without both eyes the sightline cannot be placed
+    if (ax === null || ay === null || az === null || vx === null || vy === null || vz === null) continue;
+    const a: V3 = [ax, ay, az], v: V3 = [vx, vy, vz];
     const blocking = byRound[ri].filter((k) => tick >= out[k].start && tick <= out[k].end && segmentHitsSphere(a, v, out[k].centre, SMOKE_RADIUS));
     for (const k of blocking) if (c.side[ri][out[k].pi] !== c.side[ri][att]) out[k].sights += 1 / blocking.length;
   }

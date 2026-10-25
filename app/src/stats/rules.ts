@@ -4,17 +4,17 @@ import type { KillFact } from "./facts";
 import type { Side } from "./tables";
 
 /**
- * A trade: killing the killer within this many seconds. HLTV's traded deaths and KAST were scanned
- * over windows of 3 to 10 s on 34 pro maps (340 players); 5.4 s matched the most (see VALIDATION.md).
- * HLTV does not publish its window. CS Demo Manager uses 5 s.
+ * A trade: killing the killer within this many seconds. HLTV does not publish its window; 5.4 s
+ * reproduces its traded deaths and KAST best (VALIDATION.md, pnpm scoreboard-variants). CS Demo
+ * Manager uses 5 s.
  */
 export const TRADE_WINDOW_S = 5.4;
 
 /**
  * Marks trade kills and traded deaths in one round's kills (tick order). A later enemy kill is a trade
  * kill when its victim had killed one of the killer's teammates within TRADE_WINDOW_S. It trades one
- * death: the earliest of those. Crediting every such death (CS Demo Manager) matched 211 of 340
- * HLTV traded-death counts; crediting only the earliest matched 308.
+ * death, the earliest of those, which matches HLTV better than crediting every such death (CS Demo
+ * Manager's rule; VALIDATION.md).
  */
 export function markTrades(kills: KillFact[], tickRate: number): void {
   const window = TRADE_WINDOW_S * tickRate;
@@ -41,7 +41,7 @@ export function markOpening(kills: KillFact[]): void {
 
 /**
  * KAST for one player in one round: an enemy kill, a damage assist on an enemy kill, survival, or a
- * traded death. HLTV leaves flash assists out: with them 281 of 340 KAST values matched, without 316.
+ * traded death. HLTV leaves flash assists out (VALIDATION.md).
  */
 export function kastRound(kills: KillFact[], pi: number): boolean {
   let died = false;
