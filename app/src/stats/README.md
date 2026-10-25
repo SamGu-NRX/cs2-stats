@@ -74,7 +74,9 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 ### Comparisons
 | Call | Returns | Notes |
 |---|---|---|
-| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load `baselines` from `public/baselines.json`. |
+| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). |
+| `careerBaselines(careers, built)` | `{ baselines, provisional, careers }` | The user's own population for identity (`design/identity.md`): baselines from the bot careers in the user's matches (each `{ both, CT, T }` summaries; careers under 150 rounds are left out). Style attributes and "plays like" rank the user against these, never against pros. `provisional` is true until 15 careers qualify; say so beside the scores. |
+| `buildPools(units)` | quantiles per pool and side | What both baselines are built from; `tools/baselines.ts` uses it for the pros. |
 | `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
 | `roleBlend(summary, side)` (`identity.ts`) | `RoleBlend` | Shares of Entry, Lurker, Half-lurker (T) or Anchor, Rotator, Mixed (CT), plus AWPer, with plain-language evidence. Pass a summary rolled up with `sides: [side]`; add `maps`, `spawns` or `ownBuy` for the breakdowns. |
 | `supportTendency(summary, baselines, opt)` | score and evidence | Support has no labelled source, so it stays out of the blend. |

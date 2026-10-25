@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { percentileOf } from "./compare";
+import { careerBaselines, percentileOf } from "./compare";
+import { emptySummary } from "./rollup";
 import { mostSimilar, similarity, STYLE, type PackPlayer } from "./identity";
 
 // Quantiles at 0, 5, ..., 100 percent. Values 0..200 in steps of 10: each step is 5 percentile points.
@@ -27,4 +28,18 @@ it("scores similarity by profile shape over both sides, not by level", () => {
     { name: "same on both", sides: { T: { style: style("entrying") }, CT: { style: style("sniping") } } },
   ];
   expect(mostSimilar(mine, pack, "style").map((x) => x.name)).toEqual(["same on both", "same on T only"]);
+});
+
+it("ranks the user against bot careers of 150+ rounds, provisionally until 15 qualify", () => {
+  // fails if short careers enter the user's pool, or the provisional label drops too early
+  const career = (rounds: number, kills: number) => {
+    const s = emptySummary();
+    s.m.rounds = rounds; s.m.kills = kills;
+    return { both: s, CT: s, T: s };
+  };
+  const fourteen = Array.from({ length: 14 }, (_, i) => career(150, 100 + i));
+  expect(careerBaselines([...fourteen, career(149, 999)], "x")).toMatchObject({ provisional: true, careers: 14 });
+  const r = careerBaselines([...fourteen, career(150, 120)], "x");
+  expect(r).toMatchObject({ provisional: false, careers: 15 });
+  expect(r.baselines.pools.all.both!.kpr![0]).toBeCloseTo(100 / 150);
 });
