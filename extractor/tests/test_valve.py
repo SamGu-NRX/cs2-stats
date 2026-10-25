@@ -86,12 +86,19 @@ def test_a_kept_aborted_attempt_is_never_judged_from_a_snapshot_past_its_death()
                    guard=_guard(round_start=[100], player_death=[102], round_end=[200]), rate=64)
 
 
+def _deaths(*rows):
+    return pd.DataFrame({"tick": [r[0] for r in rows], "victim_steamid": pd.array([r[1] for r in rows], dtype="UInt64")})
+
+
+NO_DEATHS = _deaths()
+
+
 def test_a_death_in_round_one_freeze_time_is_not_taken_off_the_scoreboard():
     # A Valve player disconnected in round 1's freeze time and died to "world"; the game counted it and so does
     # the kills table. A baseline of the bare freeze-end counters took that death off the scoreboard (10 vs 11).
     rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
     p = SkippingParser({0: {1: dict(deaths_total=0)}, 488: {1: dict(deaths_total=1)}})
-    assert ex.scoreboard_baseline(p, rounds, [488], NO_GUARD, 64).deaths_total.tolist() == [0]
+    assert ex.scoreboard_baseline(p, rounds, _deaths((488, 1)), NO_GUARD, 64).deaths_total.tolist() == [0]
 
 
 def test_a_round_one_death_the_game_did_not_count_still_fails_validation():
@@ -100,7 +107,16 @@ def test_a_round_one_death_the_game_did_not_count_still_fails_validation():
     # map with 10 deaths too many; only the game's own counter rise may come off.
     rounds = pd.DataFrame(dict(start_tick=[4], freeze_end_tick=[4279]))
     p = SkippingParser({0: {1: dict(deaths_total=7)}})
-    assert ex.scoreboard_baseline(p, rounds, [4], NO_GUARD, 64).deaths_total.tolist() == [7]
+    assert ex.scoreboard_baseline(p, rounds, _deaths((4, 1)), NO_GUARD, 64).deaths_total.tolist() == [7]
+
+
+def test_a_counter_load_on_a_round_one_death_tick_fails_instead_of_emptying_the_baseline():
+    # Another part's restore loaded the backup's counters on its death tick: 0 -> 106 deaths summed. Taken as
+    # the game counting that tick's deaths, it would wipe the baseline out.
+    rounds = pd.DataFrame(dict(start_tick=[4], freeze_end_tick=[5059]))
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 4: {1: dict(deaths_total=11)}})
+    with pytest.raises(RuntimeError, match="moved by 11 across tick 4"):
+        ex.scoreboard_baseline(p, rounds, _deaths((4, 1)), NO_GUARD, 64)
 
 
 def test_a_restore_on_round_one_start_before_the_match_restarts_voids_its_tick():
@@ -110,6 +126,9 @@ def test_a_restore_on_round_one_start_before_the_match_restarts_voids_its_tick()
     rounds, voided = ex.build_round_windows([1, 4], [4279], ends, match_start=5)
     assert (int(rounds.start_tick.iloc[0]), voided) == (4, [(4, 4)])
     assert ex.assign_rounds(pd.Series([4, 5]), rounds, voided).tolist() == [0, 1]
+    # On begin_new_match's own tick it is the recording's leftover first round_end, and nothing is voided.
+    ends0 = pd.DataFrame(dict(tick=[0, 5900], winner=[None, "CT"], reason=[None, "t_killed"]))
+    assert ex.build_round_windows([0], [1279], ends0, match_start=0)[1] == []
 
 
 def test_the_baseline_waits_for_a_restores_rollback_to_settle():
@@ -117,7 +136,7 @@ def test_the_baseline_waits_for_a_restores_rollback_to_settle():
     # end at 400. Read at the replay's start, the baseline would hold the voided death.
     rounds = pd.DataFrame(dict(start_tick=[201], freeze_end_tick=[400]))
     p = SkippingParser({0: {1: dict(deaths_total=0)}, 150: {1: dict(deaths_total=1)}, 240: {1: dict(deaths_total=0)}})
-    assert ex.scoreboard_baseline(p, rounds, [], NO_GUARD, 64).deaths_total.tolist() == [0]
+    assert ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64).deaths_total.tolist() == [0]
 
 
 def test_a_returning_player_carries_his_earlier_totals_into_a_later_part():
@@ -125,7 +144,7 @@ def test_a_returning_player_carries_his_earlier_totals_into_a_later_part():
     # starts still has the earlier parts' kills, and they must not count as this part's.
     rounds = pd.DataFrame(dict(start_tick=[100], freeze_end_tick=[400]))
     p = SkippingParser({0: {1: dict(kills_total=7)}, 300: {1: dict(kills_total=7), 2: dict(kills_total=5)}})
-    base = ex.scoreboard_baseline(p, rounds, [], NO_GUARD, 64)
+    base = ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)
     assert dict(zip(base.steamid, base.kills_total)) == {1: 7, 2: 5}
 
 

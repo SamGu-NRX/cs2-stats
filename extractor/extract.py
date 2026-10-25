@@ -498,10 +498,12 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
         before = rs[rs < r_tick]
         if r_tick > match_start and len(before):
             voided.append((int(before.max()), int(r_tick)))
-        elif first_start is not None and first_start <= r_tick <= match_start:
+        elif first_start is not None and first_start <= r_tick < match_start:
             # A restore on round 1's start tick, before begin_new_match, has no attempt before it, but its tick
-            # is still voided: a split recording's later part opened by restoring the backup at tick 4, all 10
-            # players died to "world" there, and the game counted none of it (deaths_total summed 68 -> 67).
+            # is still voided. Four HLTV split recordings' later parts opened by restoring the backup one tick
+            # before begin_new_match; all 10 players died to "world" there, and the game counted none of it
+            # (deaths_total summed 68 -> 67 on one). A winnerless round_end on begin_new_match's own tick is the
+            # recording's leftover first round_end, not a restore (one pro demo: tick 0, no deaths), and stays.
             voided.append((int(r_tick), int(r_tick)))
     return pd.DataFrame(rows), sorted(set(voided))
 
@@ -692,7 +694,7 @@ def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, r
 DEATH_COUNTERS = ["kills_total", "deaths_total", "assists_total", "headshot_kills_total"]
 
 
-def scoreboard_baseline(parser, rounds: pd.DataFrame, death_ticks, guard: pd.DataFrame, rate: float,
+def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame, rate: float,
                         ids=lambda rows: rows.steamid) -> pd.DataFrame:
     """BASELINE_PROPS per player before the first counted round: zero for a whole match, the earlier parts'
     totals for a later part of a split recording (one demo's second part starts at 8-8 with kills and damage
@@ -700,18 +702,20 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, death_ticks, guard: pd.Dat
 
     Read at round 1's freeze end, when the game's counters have settled after any restore and every player
     of the round has a controller, less what the game itself counted in round 1 up to then: a Valve player
-    who disconnected in freeze time died to "world", and deaths_total rose on that tick. death_ticks: the
-    ticks of round 1's deaths in the tables up to its freeze end. Only the rise the game recorded across each
-    such tick is taken off, never the events themselves: a death in the tables that the game did not count
-    stays in the baseline, so validation still fails on it. ids: the player ids of parsed rows (resolve_ids
-    for bots).
+    who disconnected in freeze time died to "world", and deaths_total rose on that tick. deaths: (tick,
+    victim_steamid) of round 1's deaths in the tables. Only the rise the game recorded across each death tick
+    is taken off, never the events themselves: a death in the tables that the game did not count stays in the
+    baseline, so validation still fails on it. A deaths_total rise that the tick's deaths cannot explain is
+    a counter load, as a backup restore does, and fails the map. ids: the player ids of parsed rows
+    (resolve_ids for bots).
     """
     fe1 = rounds.freeze_end_tick.iloc[0]
     if pd.isna(fe1):
         return pd.DataFrame(columns=["tick", "steamid", "name"] + BASELINE_PROPS)
     base = read_at(parser, BASELINE_PROPS, [int(fe1)], after=False, guard=guard, rate=rate)
     base["steamid"] = ids(base)
-    ticks = sorted({int(t) for t in death_ticks if int(t) <= int(fe1)})
+    deaths = deaths[deaths.tick <= int(fe1)]
+    ticks = sorted({int(t) for t in deaths.tick})
     if ticks:
         before = read_at(parser, DEATH_COUNTERS, [t - 1 for t in ticks], after=False, guard=guard, rate=rate)
         at = read_at(parser, DEATH_COUNTERS, ticks, after=True, guard=guard, rate=rate)
@@ -722,7 +726,15 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, death_ticks, guard: pd.Dat
             df = df.dropna(subset=["steamid"]).assign(tick=df.tick.astype("int64") + shift,
                                                       steamid=df.steamid.astype("int64"))
             return df.drop_duplicates(["tick", "steamid"]).set_index(["tick", "steamid"])[DEATH_COUNTERS]
-        rise = (keyed(at, 0) - keyed(before, 1)).dropna().groupby(level="steamid").sum()
+        step = (keyed(at, 0) - keyed(before, 1)).dropna()
+        died = deaths.dropna(subset=["victim_steamid"]).astype({"tick": "int64", "victim_steamid": "int64"})
+        died = died.groupby(["tick", "victim_steamid"]).size()
+        for (t, s_), d in step.deaths_total.items():
+            if not 0 <= d <= died.get((t, s_), 0):
+                raise RuntimeError(f"deaths_total of a player moved by {int(d)} across tick {t}, where the tables "
+                                   f"have {int(died.get((t, s_), 0))} deaths of his: a counter load (restore?), "
+                                   "so round 1's baseline cannot be read")
+        rise = step.groupby(level="steamid").sum()
         for c in DEATH_COUNTERS:
             base[c] = [int(v) - int(rise[c].get(int(s_), 0)) if not (pd.isna(s_) or pd.isna(v)) else v
                        for s_, v in zip(base.steamid, base[c])]
@@ -1011,7 +1023,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     for df in (pos, econ_raw, sb, dmg_counter, score_at):
         df["steamid"] = resolve_ids(df.steamid, df.name, bots)
     k0 = stamp(ev("player_death"))
-    base = scoreboard_baseline(parser, rounds, k0.tick[k0["round"] == 1], guard, rate,
+    base = scoreboard_baseline(parser, rounds, pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user")})[
+                                   (k0["round"] == 1).to_numpy()], guard, rate,
                                ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots))
     baseline = baseline_of(base)
     # Teams are named by clan name. When the server set no distinct clan names (one pro
