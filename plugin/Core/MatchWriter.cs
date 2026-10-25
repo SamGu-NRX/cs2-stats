@@ -16,6 +16,8 @@ public sealed class WorkerMessage
     /// <summary>Rounds already in the resumed file.</summary>
     public int ResumeRounds;
     public bool ScanDone;
+    /// <summary>Generation of the scan request this answers (Resume and ScanDone messages only).</summary>
+    public int Gen;
 }
 
 /// <summary>
@@ -31,6 +33,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
         public WriteJob? Job;
         public string? ScanMap;
         public float ScanGameStart;
+        public int ScanGen;
         public ManualResetEventSlim? Barrier;
     }
 
@@ -75,7 +78,8 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
     /// Finds the in-progress file for (map, gameStart) and loads it for resuming; every other
     /// in-progress file is written out as an abandoned match.
     /// </summary>
-    public void RequestScan(string map, float gameStart) => _queue.Add(new Work { ScanMap = map, ScanGameStart = gameStart });
+    /// <remarks><paramref name="gen"/> is echoed in the answer so the game thread can discard stale answers.</remarks>
+    public void RequestScan(string map, float gameStart, int gen) => _queue.Add(new Work { ScanMap = map, ScanGameStart = gameStart, ScanGen = gen });
 
     /// <summary>Blocks until queued work is done or the timeout passes. Returns false on timeout.</summary>
     public bool Drain(TimeSpan timeout)
@@ -103,7 +107,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
             {
                 if (w.Barrier != null) w.Barrier.Set();
                 else if (w.Job != null) Write(w.Job);
-                else if (w.ScanMap != null) Scan(w.ScanMap, w.ScanGameStart);
+                else if (w.ScanMap != null) Scan(w.ScanMap, w.ScanGameStart, w.ScanGen);
             }
             catch (Exception ex)
             {
@@ -164,7 +168,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
         s.LastBytes = new FileInfo(dest).Length;
     }
 
-    private void Scan(string map, float gameStart)
+    private void Scan(string map, float gameStart, int gen)
     {
         bool found = false;
         if (Directory.Exists(InProgressDir))
@@ -190,7 +194,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
                     found = true;
                     (_store, _scratch) = (_scratch, _store);
                     _scratch.Clear();
-                    Messages.Enqueue(new WorkerMessage { Level = MessageLevel.Info, Text = $"Resuming match {m.Id} from {file} ({_store.RoundCount} rounds).", Resume = m.Clone(), ResumeRounds = _store.RoundCount });
+                    Messages.Enqueue(new WorkerMessage { Level = MessageLevel.Info, Text = $"Resuming match {m.Id} from {file} ({_store.RoundCount} rounds).", Resume = m.Clone(), ResumeRounds = _store.RoundCount, Gen = gen });
                     continue;
                 }
                 m.Status = "abandoned";
@@ -205,7 +209,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
                 _scratch.Clear();
             }
         }
-        Messages.Enqueue(new WorkerMessage { Level = MessageLevel.Info, Text = found ? "Scan done (resume)." : "Scan done (no matching in-progress file).", ScanDone = true });
+        Messages.Enqueue(new WorkerMessage { Level = MessageLevel.Info, Text = found ? "Scan done (resume)." : "Scan done (no matching in-progress file).", ScanDone = true, Gen = gen });
     }
 
     private void FillGameVersion(MatchMeta m)

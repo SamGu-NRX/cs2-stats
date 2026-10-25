@@ -442,7 +442,7 @@ public class WriterTests
                 Assert.Empty(Directory.GetFiles(w.InProgressDir, "*.tmp"));
 
                 // A scan for the same game resumes it; a scan for another game abandons it.
-                w.RequestScan(meta.Map, meta.GameStart);
+                w.RequestScan(meta.Map, meta.GameStart, 1);
                 Assert.True(w.Drain(TimeSpan.FromSeconds(10)));
                 var msgs = Drain(w);
                 var resume = Assert.Single(msgs, m => m.Resume != null);
@@ -450,7 +450,7 @@ public class WriterTests
                 Assert.Equal(2, resume.ResumeRounds);
                 Assert.Contains(msgs, m => m.ScanDone);
 
-                w.RequestScan(meta.Map, meta.GameStart + 100);
+                w.RequestScan(meta.Map, meta.GameStart + 100, 2);
                 Assert.True(w.Drain(TimeSpan.FromSeconds(10)));
                 Assert.False(File.Exists(inprog));
                 string final = Path.Combine(w.MatchesDir, "2026", meta.BaseName + ".json.gz");

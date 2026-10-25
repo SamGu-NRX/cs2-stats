@@ -7,6 +7,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Memory;
+using CounterStrikeSharp.API.Modules.Timers;
 using Microsoft.Extensions.Logging;
 
 namespace BotMatchStats.Game;
@@ -36,6 +37,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         public UtilCounts Util;
         public UtilCounts DeathUtil;
         public int DeathUtilTick, DeathWeapons;
+        /// <summary>Equipment value read in the player_death pre-hook, before the victim drops anything.</summary>
+        public int DeathEquip, DeathEquipTick;
     }
 
     private readonly Slot[] _slots = new Slot[MaxSlots];
@@ -54,6 +57,13 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private bool _needInit = true, _scanPending, _disabled, _memReady;
     private int _tick, _nextRefresh, _finalizeAt = Nil.V, _matchEndAt = Nil.V, _humanSlot = -1;
     private int _perRoundStride;
+    // Scan generations (see Lifecycle.AcceptResume): bumped for every new scan request; answers with
+    // another generation are ignored. _scanGameStart/_scanRounds are the game identity the scan was for.
+    private int _scanGen;
+    private float _scanGameStart;
+    private int _scanRounds;
+    /// <summary>cs_win_panel_match fired on this map, even while capture was unavailable.</summary>
+    private bool _winPanelSeen;
     private string _map = "";
     private int _tickErrors;
 
@@ -61,6 +71,13 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private uint _shotWeaponHandle = Mem.InvalidHandle;
     private int _shotWeapon = Nil.V, _shotMaxSpeed = Nil.V, _shotClass = Nil.V;
     private bool _shotIsBullet;
+
+    // Equipment value. The pawn's m_unCurrentEquipmentValue is the first choice; when every bot reads 0
+    // at freeze end it is not trusted and values are rebuilt from inventory instead (see InventoryValue).
+    private bool _equipFromInventory;
+    private readonly Dictionary<ulong, int> _priceByName = new();
+    // CS2 store prices, not read from the game: kevlar $650, kevlar + helmet $1000, defuse kit $400.
+    private const int KevlarPrice = 650, KevlarHelmetPrice = 1000, DefuserPrice = 400;
 
     public override void Load(bool hotReload)
     {
@@ -72,6 +89,9 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         Array.Fill(_piSlot, -1);
 
         RegisterListener<Listeners.OnTick>(OnTick);
+        // Everything that can allocate (worker messages, init, slot refresh, economy, round finalization)
+        // runs here, four times a second, so the OnTick handler itself stays allocation-free.
+        AddTimer(0.25f, Housekeeping, TimerFlags.REPEAT);
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
@@ -137,21 +157,15 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _perf.Tick(Stopwatch.GetTimestamp() - t0, GC.GetAllocatedBytesForCurrentThread() - a0);
     }
 
+    /// <summary>
+    /// The per-tick path: raw pawn reads into frames, then <see cref="Recorder.Tick"/>. Allocation-free in
+    /// the steady state; housekeeping that can allocate runs in <see cref="Housekeeping"/>.
+    /// </summary>
     private void TickBody()
     {
-        DrainMessages();
-        if (_disabled || _rec == null) return;
-        if (_needInit) { TryInit(); return; }
-        _tick = Server.TickCount;
-        if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
-        if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }
-        if (_tick >= _nextRefresh)
-        {
-            _nextRefresh = _tick + 64;
-            RefreshSlots(false);
-            if (_rec.Capturing) RefreshEconomy();
-        }
+        if (_disabled || _rec == null || _needInit) return;
         if (!_rec.Capturing || !_rec.Live) return;
+        _tick = Server.TickCount;
 
         bool aim = _rec.NeedsAim, humanPos = _rec.HumanPosDue(_tick), botPos = _rec.BotPosDue(_tick), ct = _rec.CtSetupDue(_tick);
         if (!aim && !humanPos && !botPos && !ct) return;
@@ -173,6 +187,79 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     }
 
     private static bool IsOpposing(int a, int b) => (a == 2 && b == 3) || (a == 3 && b == 2);
+
+    private void Housekeeping()
+    {
+        EvBegin();
+        try
+        {
+            DrainMessages();
+            if (_disabled || _rec == null) return;
+            if (_needInit) { TryInit(); return; }
+            _tick = Server.TickCount;
+            if (_finalizeAt != Nil.V && _tick >= _finalizeAt) { _finalizeAt = Nil.V; FinalizeRound(); }
+            if (_matchEndAt != Nil.V && _tick >= _matchEndAt) { _matchEndAt = Nil.V; EndMatch(); }
+            if (_tick >= _nextRefresh)
+            {
+                _nextRefresh = _tick + 64;
+                RefreshSlots(false);
+                if (_rec.Capturing) RefreshEconomy();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (_tickErrors++ < 5) Logger.LogError(ex, "BotMatchStats housekeeping failed");
+        }
+        finally
+        {
+            EvEnd("housekeeping");
+        }
+    }
+
+    /// <summary>Equipment value from the source chosen at this round's freeze end; Nil when unreadable.</summary>
+    private int EquipOf(nint pawn) => _equipFromInventory ? InventoryValue(pawn) : Mem.EquipValue(pawn);
+
+    /// <summary>
+    /// Equipment value rebuilt from what the pawn holds: each weapon's VData price (cached per designer
+    /// name; a wrapper is created only the first time a weapon type is seen), times the count for
+    /// stacked grenades, plus armor and defuser at store prices. Approximation: the game's own value
+    /// may treat damaged armor differently. Called from events and housekeeping, never per tick.
+    /// </summary>
+    private int InventoryValue(nint pawn)
+    {
+        Span<nint> weapons = stackalloc nint[64];
+        int n = Mem.Weapons(pawn, weapons);
+        if (n < 0) return Nil.V;
+        int total = 0;
+        for (int i = 0; i < n; i++)
+        {
+            nint w = weapons[i];
+            ulong h = Mem.DesignerNameHash(w);
+            if (h == 0) continue;
+            if (!_priceByName.TryGetValue(h, out int price))
+            {
+                price = new CCSWeaponBase(w).VData?.Price ?? 0;
+                _priceByName[h] = price;
+            }
+            int t = Mem.UtilTypeOf(w);
+            total += price * (t >= 0 ? Mem.GrenadeCount(pawn, _ammoSlot[t]) : 1);
+        }
+        if (Mem.ArmorValue(pawn) > 0) total += Mem.HasHelmetItem(pawn) ? KevlarHelmetPrice : KevlarPrice;
+        if (Mem.HasDefuserItem(pawn)) total += DefuserPrice;
+        return total;
+    }
+
+    /// <summary>pi of the bot whose pawn the controller in <paramref name="slot"/> drives, or Nil when it drives its own.</summary>
+    private int BodyPi(int slot)
+    {
+        if ((uint)slot >= MaxSlots) return Nil.V;
+        ref var s = ref _slots[slot];
+        if (!s.Valid) return Nil.V;
+        uint orig = Mem.OriginalControllerHandle(s.Ctrl);
+        if (orig == Mem.InvalidHandle || orig == s.Handle || Mem.ByHandle(orig) == 0) return Nil.V;
+        int bodySlot = (int)(orig & 0x7FFF) - 1;
+        return (uint)bodySlot < MaxSlots ? _slots[bodySlot].Pi : Nil.V;
+    }
 
     private void ReadFrame(int slot, ref PlayerFrame f, bool place)
     {
@@ -210,8 +297,13 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
                 case MessageLevel.Warn: Logger.LogWarning("BotMatchStats writer: {Text}", m.Text); break;
                 default: Logger.LogInformation("BotMatchStats writer: {Text}", m.Text); break;
             }
-            if (m.Resume != null && _scanPending) ResumeCapture(m.Resume, m.ResumeRounds);
-            if (m.ScanDone && _scanPending)
+            if ((m.Resume != null || m.ScanDone) && (!_scanPending || m.Gen != _scanGen))
+            {
+                if (m.Resume != null) Logger.LogInformation("BotMatchStats: ignoring stale scan answer (generation {Got}, current {Cur})", m.Gen, _scanGen);
+                continue;
+            }
+            if (m.Resume != null) ResumeCapture(m.Resume, m.ResumeRounds, m.Gen);
+            if (m.ScanDone && _scanPending && m.Gen == _scanGen)
             {
                 _scanPending = false;
                 if (!_rec!.Capturing) StartMidMatchIfLive();
@@ -250,8 +342,20 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         _needInit = false;
         _tick = Server.TickCount;
         RefreshSlots(true);
+        _winPanelSeen = false;
+        Rescan("map start");
+    }
+
+    /// <summary>Requests a new scan for the live game identity; any answer to an earlier request becomes stale.</summary>
+    private void Rescan(string why)
+    {
+        var rules = _rules!;
+        _scanGen++;
         _scanPending = true;
-        _writer!.RequestScan(_map, _rules.GameStartTime);
+        _scanGameStart = rules.GameStartTime;
+        _scanRounds = rules.TotalRoundsPlayed;
+        Logger.LogInformation("BotMatchStats: scan {Gen} requested ({Why})", _scanGen, why);
+        _writer!.RequestScan(_map, _scanGameStart, _scanGen);
     }
 
     private void ResetSlotPis()
@@ -359,7 +463,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
             if (!s.Valid || s.Pi == Nil.V) continue;
             nint pawn = PawnOfSlot(slot);
             if (pawn == 0 || !Mem.Alive(pawn)) continue;
-            _rec!.SetEquipNow(s.Pi, Mem.EquipValue(pawn));
+            _rec!.SetEquipNow(s.Pi, EquipOf(pawn));
             var u = Mem.Utility(pawn, _ammoSlot, out int n);
             if (n > 0) s.Util = u;
         }
@@ -412,9 +516,18 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         Logger.LogInformation("BotMatchStats: capture {Id} started on {Map}, firstFullRound={First}", meta.Id, _map, firstFullRound);
     }
 
-    private void ResumeCapture(MatchMeta meta, int roundsInFile)
+    private void ResumeCapture(MatchMeta meta, int roundsInFile, int gen)
     {
         var rules = _rules!;
+        meta.RoundCount = roundsInFile;
+        if (!Lifecycle.AcceptResume(gen, _scanGen, meta, _map, rules.GameStartTime, rules.TotalRoundsPlayed, rules.WarmupPeriod))
+        {
+            // The file is from another game than the one running now (e.g. a restart during the scan).
+            // Rescanning with the live identity writes that file out as abandoned.
+            Logger.LogInformation("BotMatchStats: in-progress match {Id} does not match the live game; not resuming it", meta.Id);
+            Rescan("resume rejected");
+            return;
+        }
         var env = CurrentEnv();
         meta.Env.Halftime = env.Halftime;
         meta.Status = "inprogress";
@@ -425,6 +538,13 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         int r = rules.TotalRoundsPlayed;
         AddPriorRounds(roundsInFile, r);
         if (!postRound && roundsInFile <= r) BeginRoundMidway(r);
+        Logger.LogInformation("BotMatchStats: resumed {Id}; last known round {Last}", meta.Id, _rec.LastRound);
+        if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase))
+        {
+            // The match ended while capture was unavailable; nothing later would close it.
+            Logger.LogInformation("BotMatchStats: match already over at resume; writing the final file");
+            _matchEndAt = _tick + _rec.TickRate;
+        }
     }
 
     /// <summary>Loaded while a match is live and nothing to resume: rounds so far come from the game's round results.</summary>
@@ -432,6 +552,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     {
         var rules = _rules;
         if (rules == null || rules.WarmupPeriod || !rules.HasMatchStarted || _humanSlot < 0) return;
+        if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase)) return; // nothing left to record
         int r = rules.TotalRoundsPlayed;
         bool postRound = rules.RoundWinStatus != 0;
         StartCapture(postRound ? r : r + 1);
@@ -506,6 +627,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
 
     private void OnMapStart(string map)
     {
+        _winPanelSeen = false;
         // Normally OnMapEnd already closed the capture; this covers a map change without it.
         Abandon("map change");
         _finalizeAt = _matchEndAt = Nil.V;

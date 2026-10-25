@@ -47,6 +47,14 @@ public struct KillRow
     public int Nade;
     /// <summary>Grenades the victim held when it died.</summary>
     public UtilCounts VUtil;
+    /// <summary>When the killer or victim controlled a bot's pawn: the pi of that bot, else Nil.</summary>
+    public int KBody, VBody;
+}
+
+/// <summary>A player leaving the server during a recorded round.</summary>
+public struct LeaveRow
+{
+    public int Ri, Tick, Pi, Alive;
 }
 
 public struct DamageRow
@@ -144,6 +152,10 @@ public sealed class RoundRow
     public readonly int[] UtilBought = new int[Limits.MaxPlayers * UtilCounts.Types];
     /// <summary>Money spent on grenades this round; Nil when a purchase price could not be read.</summary>
     public readonly int[] UtilSpent = new int[Limits.MaxPlayers];
+    /// <summary>1 if alive at freeze end, 0 if dead; Nil if absent.</summary>
+    public readonly int[] Alive0 = new int[Limits.MaxPlayers];
+    /// <summary>Where equip values came from: 0 pawn field, 1 inventory prices, Nil unknown.</summary>
+    public int EquipSrc = Nil.V;
 
     public RoundRow() => Reset(Nil.V);
 
@@ -160,6 +172,8 @@ public sealed class RoundRow
         Array.Fill(SurvPrimary, Nil.V);
         Array.Clear(UtilBought);
         Array.Clear(UtilSpent);
+        Array.Fill(Alive0, Nil.V);
+        EquipSrc = Nil.V;
     }
 
     public void CopyFrom(RoundRow o)
@@ -175,5 +189,7 @@ public sealed class RoundRow
         o.SurvPrimary.CopyTo(SurvPrimary, 0);
         o.UtilBought.CopyTo(UtilBought, 0);
         o.UtilSpent.CopyTo(UtilSpent, 0);
+        o.Alive0.CopyTo(Alive0, 0);
+        EquipSrc = o.EquipSrc;
     }
 }

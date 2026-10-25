@@ -103,13 +103,22 @@ One row per bullet you fired.
 - **Instrumentation:** the plugin records its own per-round timing (average and max µs per tick and per event, GC count) into the file under `perf`, so the budget can be checked on real matches.
 
 ## Optional fields (plugin 1.0.0)
-Additions to v1 that do not change any field above; the version stays `1`. Readers must treat each as possibly absent. Index columns (`throw`, `flash`, `nade`) are row indices into another table of the same file, or null.
+Additions to v1; the version stays `1`. Two of them change how an existing field is read: `aim.shots.target` (see Shots) and `pos` (delta-encoded, see `pos`). Readers must treat each as possibly absent. Index columns (`throw`, `flash`, `nade`) are row indices into another table of the same file, or null.
 
 ### Economy
 - `rounds.equipEnd[pi]`: equipment value at `round_end`; 0 when the player was dead, null if absent.
 - `rounds.survPrimary[pi]`: 1 if alive at `round_end` holding a primary (any weapon in the rifle gear slot), else 0; null if absent.
 - `rounds.utilBought[pi]`: grenades bought this round as counts `[he, flash, smoke, molotov, incgrenade, decoy]`; null if absent.
 - `rounds.utilSpent[pi]`: money spent on those grenades, from each item's VData price; null if absent or if any price was unreadable.
+- `rounds.equip[pi]` and the equipment values in `kills.state` and `equipEnd` come from the pawn's `m_unCurrentEquipmentValue`, unless every alive bot reads 0 at freeze end. In that case the field is not trusted, and that round's values for all players are rebuilt from inventory: each held item's VData price (times the count for stacked grenades), plus armor ($650 kevlar, $1000 with helmet) and a defuse kit ($400) at store prices. A value that cannot be read is null, never 0.
+- `rounds.equipSrc`: `pawn` or `inventory`, the source of that round's equipment values; null for rounds captured before freeze end. `env.equipSource` summarises the match: `pawn`, `inventory` or `mixed`.
+- A victim's equipment in `kills.state` is read in the `player_death` pre-hook, so a weapon picked up just before death counts.
+
+### Deaths and population
+- `kills.flags` adds 64 = suicide (the victim killed itself: bomb, fall, own grenade) and 128 = during freeze time. Suicides have `killer` null with flag 64; world deaths have `killer` null without it.
+- `kills.kBody`, `kills.vBody`: when the killer or victim was controlling a bot's pawn (`m_hOriginalControllerOfCurrentPawn` differs from its own controller), the pi of that bot; else null. Credit stays with `killer`/`victim`, the controllers named by `player_death`.
+- `rounds.alive0[pi]`: 1 if alive at freeze end, 0 if dead, null if absent. With `side`, this is the round's starting population.
+- `leaves`: `ri, tick, pi, alive`, one row per player who disconnected during a recorded round; `alive` is whether they were alive when they left.
 
 ### Utility
 - `throws`: one row per `grenade_thrown`: `ri, tick, thrower, type (he|flash|smoke|molotov|incgrenade|decoy), pos` (thrower's position).
@@ -127,18 +136,19 @@ Additions to v1 that do not change any field above; the version stays `1`. Reade
 - `cls`: weapon class, one of `rifle`, `sniper`, `smg`, `pistol`, `shotgun`, `heavy`, from the item name. Null for the taser.
 
 ### Reconciliation (`recon`)
-Each round is compared with the game's `CSPerRoundStats_t` at the next `round_start` (or 1 s after `cs_win_panel_match`). Kills count enemy kills, deaths count every death, and assists count damage and flash assists; these must match exactly. Damage must satisfy `0 <= game - ours <= hits`, because `player_hurt` truncates fractional damage (measured on `fixtures/events_two_matches.jsonl`).
-- `rounds`: `ri, checked, kOk, dOk, aOk, dmgOk, missing` (players whose stats could not be read).
+Each round is compared with the game's `CSPerRoundStats_t` at the next `round_start` (or 1 s after `cs_win_panel_match`). Kills count enemy kills, deaths count every death, and assists count damage and flash assists; these must match exactly. Damage cannot match exactly: `player_hurt` reports each hit's damage truncated to an integer while the game's total keeps the fractions, so our sum is a lower bound and the check is `0 <= game - ours <= hits` (at most 1 HP lost per hit). On `fixtures/events_two_matches.jsonl` the gap was 0 to 6 HP and never above the hit count.
+- `rounds`: `ri, checkedPlayers, expectedPlayers, kOk, dOk, aOk, dmgOk`. `expectedPlayers` is everyone with a side that round; `checkedPlayers` is those whose game stats were read and compared. Partial rounds get a row with `checkedPlayers` 0, so coverage is explicit. Rounds before capture began have no row.
 - `mismatch`: `ri, pi, field (k|d|a|dmg), ours, game, hits`.
 - `partial`: rounds with incomplete capture (before `firstFullRound`, or interrupted by a reload). Rounds before capture began have only `winSide` and `how`.
 - `unknownResult`: rounds whose `MatchStats_RoundResults` code is unknown; their `winSide` and `how` are null.
-- `capUnknown`: damage rows whose pre-hit HP was unknown (capped at 100). `dropped`: rows lost to full buffers, by table.
+- `capUnknown`: damage rows whose pre-hit HP was unknown (capped at 100). `dropped`: rows lost to full buffers, by table (including `leaves`).
 
 ### `perf`
-Columns per round: `ri, ticks, tickAvgUs, tickMaxUs, events, evAvgUs, evMaxUs, evMaxName, tickAllocB, evAllocB, gen0`, plus `write: {lastMs, maxMs, lastBytes}` for the worker's previous write. Times cover only the plugin's own handlers; allocation is `GC.GetAllocatedBytesForCurrentThread` measured inside them.
+Columns per round: `ri, ticks, tickAvgUs, tickMaxUs, events, evAvgUs, evMaxUs, evMaxName, tickAllocB, evAllocB, gen0`, plus `write: {lastMs, maxMs, lastBytes}` for the worker's previous write. Times cover only the plugin's own handlers; allocation is `GC.GetAllocatedBytesForCurrentThread` measured inside them. The tick columns cover the OnTick handler only. Housekeeping (a 0.25 s timer that drains worker messages, refreshes the player list and economy, and finalizes rounds) is counted as an event named `housekeeping`.
 
 ### In-progress files
-Files under `inprogress\` have `status: "inprogress"` and a `resume: {gameStart, nextBurst}` object; final files have neither. A hot-reloaded plugin resumes the file whose `map` and `gameStart` (`m_flGameStartTime`) match the running game. Any other in-progress file is written to `matches\` as `abandoned`.
+Files under `inprogress\` have `status: "inprogress"` and a `resume: {gameStart, nextBurst}` object; final files have neither. A hot-reloaded plugin resumes the file whose `map` and `gameStart` (`m_flGameStartTime`) match the running game, provided the live round counter is not behind the file's rounds. A restart or map change while that scan is pending invalidates it. Any other in-progress file is written to `matches\` as `abandoned`. If the match ended while the plugin was reloading (`cs_win_panel_match` seen, or game phase match-ended), the resumed capture is closed as `complete`.
 
 ### `pos`
-Only alive players are sampled, so `alive` is always 1 in plugin 1.0.0.
+- `pos.enc` is `"delta"`. `tick`, `x`, `y` and `z` are then differences from the previous row with the same `pi`; each player's first row is absolute. Decode by a running sum per player. The encoding is lossless, and `ri`, `pi`, `place` and `alive` stay absolute. On the 21-round fixture replay the final file went from 52.6 KB to 35.6 KB.
+- Only alive players are sampled, so `alive` is always 1 in plugin 1.0.0.
