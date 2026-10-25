@@ -38,14 +38,16 @@ The tables land in `out/v-<version>-<hash>/`, and `out/CURRENT` names that folde
 
 ## Import Valve matchmaking demos
 
-`valve_import.py` extracts the user's own matchmaking demos (`match730_*.dem`) with source `valve`. The app's sidecar calls it.
+`valve_import.py` extracts the user's own matchmaking demos (`match730_*.dem`) with source `valve`. The app runs it from Data & settings, "Import Valve matches", into `%APPDATA%\BotMatchStats\valve` (see "The app" below).
 
 ```sh
 .venv/Scripts/python -I valve_import.py --out <cs2-stats-data>/valve-matches --mapdata <cs2-stats-data>/mapdata/2000935
 .venv/Scripts/python -I valve_import.py --out <dir> path/to/match730_x.dem path/to/match730_y.dem
 ```
 
-With no demo arguments it imports every `match730_*.dem` in the CS2 `replays` folder. It finds that folder through the Steam install (registry, then the usual paths, or `--steam`) and `steamapps/libraryfolders.vdf`. Each demo goes to `<out>/<demo name>/` in the same versioned layout, and it must validate exactly against its own scoreboard. A demo whose current tables already came from the same file and extractor version is skipped; `--force` re-extracts it.
+With no demo arguments it imports every `match730_*.dem` in the CS2 `replays` folder. It finds that folder through the Steam install (registry, then the usual paths, or `--steam`) and `steamapps/libraryfolders.vdf`. Each demo goes to `<out>/<demo name>/` in the same versioned layout, and it must validate exactly against its own scoreboard. A demo whose current tables already came from the same file, extractor version and importer version is skipped; `--force` re-extracts it.
+
+A demo has no date, so `match.extra` gets one: the match time Steam writes into the `.dem.info` beside the demo, else the demo's file time (`date_source` says which). `--progress` writes one JSON line to stderr as each demo starts and ends; the app shows them.
 
 The user is identified by SteamID64. The importer uses `--user` if given, else the id already saved in `<out>/valve-user.local.json`, else the most recent account in Steam's `config/loginusers.vdf`, and saves the choice in that file. The file holds a real account id, so the importer refuses an `--out` inside a git work tree unless you pass `--allow-in-repo`, and `.gitignore` lists the file name.
 
@@ -59,3 +61,16 @@ Valve demos differ from HLTV GOTV demos in ways the extractor handles (details i
 - They skip 1 to 3 ticks at round transitions.
 - Players disconnect, rejoin or abandon. An abandoner is checked against his counters at the moment he disconnected.
 - They do carry `player_blind`, so the rebuilt `blinds` are checked against it.
+
+### The app
+
+The app reads the folder through the same host layer as plugin matches: `list_valve` and `read_valve` in `app/src-tauri/src/lib.rs` on the desktop, `/__valve/*` in `app/vite.config.ts` for `vite dev` and `vite preview`. A match is the version folder its `CURRENT` names, and it is seen from the SteamID64 in `valve-user.local.json`. Wingman matches are listed but left out of career views, because the rating and win-probability models and the pro baselines are 5v5.
+
+Until the extractor is packaged as a sidecar binary, the app runs the importer from a Python checkout. These variables set where things are:
+
+| Variable | Default | Used for |
+|---|---|---|
+| `CS2_VALVE_MATCHES` | `%APPDATA%\BotMatchStats\valve` | the folder the app reads and the importer writes |
+| `CS2_EXTRACTOR_DIR` | this folder in `vite dev`; none in the desktop app, which then says the importer is not installed | where `valve_import.py` is |
+| `CS2_EXTRACTOR_PYTHON` | the extractor folder's `.venv` Python | the interpreter |
+| `CS2_MAPDATA` | none (no mesh visibility) | the awpy-data release, such as `<cs2-stats-data>/mapdata/2000935` |
