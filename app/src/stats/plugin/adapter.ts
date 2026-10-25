@@ -59,12 +59,20 @@ function finalScore(m: MatchFile): [number, number] {
  * + 1, so a read at the kill tick sees the victim; older files stamp it at the death tick, so a hidden
  * row at the target's or the human's death tick is read from the next tick and both give one answer.
  * Other files read visTarget (the spotted mask); files before visTarget named only a visible enemy as
- * the target (SCHEMA.md, aim.shots).
+ * the target (SCHEMA.md, aim.shots). A "mixed" file had line of sight until it turned off for the rest
+ * of the map (env.losError); the plugin closes the visible enemies at that tick, so its last LOS row
+ * marks the failure: shots up to it read LOS, later shots the mask.
  */
 function targetOnScreen(m: MatchFile): (i: number) => boolean {
   const s = m.aim.shots;
   const los = m.aim.los;
-  if (los && m.env.visSource === "los") {
+  const visTarget = s.visTarget;
+  const mask = visTarget ? (i: number) => visTarget[i] === 1 : (i: number) => s.target[i] !== null;
+  if (los && los.ri.length && (m.env.visSource === "los" || m.env.visSource === "mixed")) {
+    // the failure point of a mixed file: its last LOS row, by round then tick
+    let fr = -1, ft = -1;
+    los.ri.forEach((ri, r) => { if (ri > fr || (ri === fr && los.tick[r] > ft)) { fr = ri; ft = los.tick[r]; } });
+    const losOn = m.env.visSource === "los" ? () => true : (i: number) => s.ri[i] < fr || (s.ri[i] === fr && s.tick[i] <= ft);
     const at = (ri: number, pi: number) => ri * 256 + pi;
     const death = new Map<number, number>();
     m.kills.ri.forEach((ri, k) => death.set(at(ri, m.kills.victim[k]), m.kills.tick[k]));
@@ -78,6 +86,7 @@ function targetOnScreen(m: MatchFile): (i: number) => boolean {
     });
     for (const l of rows.values()) l.sort((a, b) => a[0] - b[0]);
     return (i) => {
+      if (!losOn(i)) return mask(i);
       const target = s.target[i];
       if (target === null) return false;
       let vis = false;
@@ -88,9 +97,7 @@ function targetOnScreen(m: MatchFile): (i: number) => boolean {
       return vis;
     };
   }
-  const visTarget = s.visTarget;
-  if (visTarget) return (i) => visTarget[i] === 1;
-  return (i) => s.target[i] !== null;
+  return mask;
 }
 
 
@@ -244,7 +251,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const e = s.aimErr[i];
     add(t.shots!, "shots", {
       tick: s.tick[i], round: ri + 1, steamid: human, weapon: weapon(s.weapon[i]), side: sideOf(ri, m.human), ducked: s.ducked[i], scoped: s.scoped[i], speed_2d: s.speed[i],
-      // the plugin stores aimErr in hundredths of a degree
+      // the plugin stores aimErr in hundredths of a degree. It records no absolute view angles yet; when it
+      // does, write them to pitch and yaw here, and its sprays get absolute paths that compare with the
+      // pros' (aim.ts spray), instead of paths relative to the target
+      pitch: null, yaw: null,
       aim_err_yaw: e ? e[0] / 100 : null, aim_err_pitch: e ? e[1] / 100 : null,
       target_steamid: s.target[i] === null ? null : key[s.target[i]!], target_on_screen: onScreen(i),
     });

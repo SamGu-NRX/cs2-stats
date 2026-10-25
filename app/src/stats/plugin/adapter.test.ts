@@ -114,14 +114,23 @@ describe("plugin sprays", () => {
     ]);
   });
 
-  it("puts the plugin's sprays in the summary's per-bullet path and the pro comparison", () => {
-    // fails if plugin sprays never reach Summary.aim.path, the spray chart and spray deviation
+  it("shows the plugin's sprays relative to the target and keeps them out of the pro comparison", () => {
+    // fails if a path that includes the target's movement is compared with the pros' view paths, or the
+    // plugin's sprays never reach the summary's relative per-bullet path
     const a = rollup([derive(pluginToTables(pluginMatch(SPRAYS)), CS2RB)], { player: HUMAN }).aim;
-    const p = a.path.ak47;
+    expect([a.cmp, Object.keys(a.path)]).toEqual([0, []]);
+    const p = a.relPath.ak47;
     expect(p.n).toEqual([2, 2, 1, 1]);
     [0.8, 1.7, 1.5, 2].forEach((x, j) => expect(p.dp[j]).toBeCloseTo(x, 9));
     [-0.1, -0.1, -0.6, -0.8].forEach((x, j) => expect(p.dy[j]).toBeCloseTo(x, 9));
-    expect(a.cmp).toBe(6);
+  });
+
+  it("reads a mixed file's line of sight up to the failure and the spotted mask after it", () => {
+    // fails if a "mixed" file (line of sight turned off mid-map) is read from the mask throughout, which
+    // drops bullets the line of sight saw
+    const shots = SPRAYS.slice(0, 4);
+    const m = pluginMatch(shots, { visTarget: [0, 0, 0, 1], env: { visSource: "mixed", losError: "trace returned no result" }, los: [[1990, 1], [2015, 0]] });
+    expect(sprays(m).map((f) => [f.bullets, f.dp.length])).toEqual([[4, 3]]);
   });
 
   it("counts a bullet at the kill tick as on screen whether the death's hidden row is at the kill tick or the next", () => {
