@@ -8,6 +8,7 @@ import path from "node:path";
 import { attributes, buildPools, roleOf, type Baselines, type PoolUnit, type SideKey } from "../src/stats/compare";
 import { performanceScores, styleScores, type PackPlayer } from "../src/stats/identity";
 import { derive } from "../src/stats/derive";
+import { modelFingerprint } from "../src/stats/model-params";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
 import { DATA_DIR, WINPROB, proMapDirs, proMaps } from "./node-read";
@@ -62,6 +63,7 @@ for (const map of maps) {
 const b: Baselines = {
   version: 1, built: new Date().toISOString().slice(0, 10),
   source: `${facts.length} pro maps from HLTV demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds; swing from the ${WINPROB.label}`,
+  model: modelFingerprint(WINPROB),
   ...buildPools(units),
 };
 // The named pack: each pro's style and performance scores per side, against the pools just built.

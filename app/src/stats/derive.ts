@@ -10,13 +10,13 @@ import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Mea
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
-import { ecoAdjust } from "./rating3";
+import { ecoAdjust, valuedRounds } from "./rating3";
 import { positioning } from "./positioning";
 import { markOpening, markTrades } from "./rules";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
 import { swing } from "./swing";
-import type { WinProbSource } from "./model-params";
+import { modelFingerprint, type WinProbSource } from "./model-params";
 import type { MatchTables, Side } from "./tables";
 import { grenadeFacts, utility } from "./utility";
 import { derivePresence } from "./positions";
@@ -40,6 +40,7 @@ function matchMeta(t: MatchTables) {
     startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
     durationS: typeof extra.duration_s === "number" ? extra.duration_s : null,
     finalScore: Array.isArray(extra.final_score) ? (extra.final_score as [number, number]) : null,
+    throws: extra.throws === "rebuilt" ? ("rebuilt" as const) : null,
     status: typeof extra.status === "string" ? extra.status : null,
   };
 }
@@ -284,7 +285,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -297,6 +298,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   utility(c);
   ecoAdjust(c);
   swing(c);
+  valuedRounds(c);
   const weapons = guns(c);
 
   const counted: [number, number] = [0, 0];
@@ -308,7 +310,12 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
-      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind,
+      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
+      inputs: {
+        loadout: t.player_rounds.best_primary.some((x) => x !== null) || t.player_rounds.inventory.some((x) => x.length > 0),
+        activeWeapon: t.kills.v_active_weapon.some((x) => x !== null),
+        throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null),
+      },
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

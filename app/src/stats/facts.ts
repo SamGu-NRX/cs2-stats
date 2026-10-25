@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 8;
+export const DERIVE_VERSION = 9;
 
 export interface MatchInfo {
   id: string;
@@ -45,6 +45,22 @@ export interface MatchInfo {
   durationS: number | null;
   /** the round win-probability source swing was valued with (model-params.ts) */
   winProb: "hltv" | "cs2rb";
+  /** model-params.ts modelFingerprint: the rating parameters and win-probability source these facts were derived with */
+  model: string;
+  /** what the source records beyond the scoreboard; a metric that needs a missing input gets no percentile (compare.ts) */
+  inputs: SourceInputs;
+}
+
+/** Source fields some metrics need. */
+export const INPUTS = ["loadout", "activeWeapon"] as const;
+export type Input = (typeof INPUTS)[number];
+export interface SourceInputs extends Record<Input, boolean> {
+  /**
+   * loadout: freeze-end inventories and best primaries (unused utility, rounds with a sniper, the eco
+   * groups); activeWeapon: the weapon in each victim's hand (AWP duels). throws: the source's throw log,
+   * or throws rebuilt from detonations (the plugin's older files), whose throw point and time are approximate.
+   */
+  throws: "logged" | "rebuilt" | null;
 }
 
 export interface PlayerInfo {
@@ -147,7 +163,9 @@ export const MEASURES = [
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
-  "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
+  "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing",
+  // Rating 3.0's other inputs over the rounds swing could value (swingRounds), so all six share one set of rounds
+  "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoUnknown",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;

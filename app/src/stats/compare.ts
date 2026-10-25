@@ -4,7 +4,8 @@
 //
 // Pools: "all"; "rifler" and "awper" (design/identity.md: an AWPer has more than 0.20 AWP kills per
 // round in the sample); "map:<name>", whose units are player-maps rather than players.
-import { ATTRIBUTES, METRICS, type Kind } from "./metrics";
+import type { Input } from "./facts";
+import { ATTRIBUTES, METRICS, type Kind, type Metric } from "./metrics";
 import type { Summary } from "./rollup";
 
 export const QUANTILES = Array.from({ length: 21 }, (_, i) => i * 5);
@@ -17,6 +18,11 @@ export interface Baselines {
   built: string;
   /** what the pools were built from, for the UI's source line */
   source: string;
+  /**
+   * model-params.ts modelFingerprint of the facts the pools were built from ("mixed" when they differ).
+   * A model-dependent metric is compared only with baselines of the same model.
+   */
+  model?: string;
   /** players (or player-maps) per pool and side */
   n: Record<string, Partial<Record<SideKey, number>>>;
   /** pool -> side -> metric id -> 21 quantiles (QUANTILES), or null when too few units had a value */
@@ -51,6 +57,22 @@ export interface Percentile {
   /** 0-100; for performance metrics with lowerIsBetter, flipped so higher is always better */
   pct: number | null;
   pool: string;
+  /** why there is a value but no percentile (an input the matches lack, another model); null otherwise */
+  reason: string | null;
+}
+
+const INPUT_LABEL: Record<Input, string> = { loadout: "inventories", activeWeapon: "the weapon in hand at each death" };
+
+/** Why summary s cannot be compared with baselines b on metric m; null when it can. */
+export function notComparable(m: Metric, s: Summary, b: Baselines): string | null {
+  for (const need of m.needs ?? []) {
+    if (need === "model") {
+      if (b.model === undefined || s.models.some((x) => x !== b.model)) return "Not compared: the pro pool was built with another rating or win-probability model";
+    } else if (s.missing[need] > 0) {
+      return `Not compared: ${s.missing[need]} of ${s.matches} matches record no ${INPUT_LABEL[need]}`;
+    }
+  }
+  return null;
 }
 
 function poolName(s: Summary, opt: CompareOptions, metricGroup?: string): string {
@@ -67,9 +89,10 @@ export function compare(s: Summary, b: Baselines, opt: CompareOptions = {}): Rec
     const pool = poolName(s, opt, m.group);
     const q = b.pools[pool]?.[side]?.[m.id] ?? null;
     const value = m.value(s);
-    let pct = value === null || q === null ? null : percentileOf(q, value);
+    const reason = value === null ? null : notComparable(m, s, b);
+    let pct = value === null || q === null || reason ? null : percentileOf(q, value);
     if (pct !== null && m.kind === "performance" && m.lowerIsBetter) pct = 100 - pct;
-    out[m.id] = { id: m.id, value, pct, pool };
+    out[m.id] = { id: m.id, value, pct, pool, reason };
   }
   return out;
 }
@@ -112,6 +135,12 @@ function quantiles(xs: number[]): number[] {
   });
 }
 
+/** The one model fingerprint of the units' facts, or "mixed". */
+export const modelOf = (units: PoolUnit[]) => {
+  const ms = new Set(units.flatMap((u) => u.s.models));
+  return ms.size === 1 ? [...ms][0] : "mixed";
+};
+
 /** Quantiles of every metric per pool and side; a metric with fewer than MIN_UNITS values in a pool is null there. */
 export function buildPools(units: PoolUnit[]): Pick<Baselines, "n" | "pools"> {
   const vals = units.map((u) => ({ ...u, v: Object.fromEntries(METRICS.map((m) => [m.id, m.value(u.s)])) }));
@@ -153,6 +182,6 @@ export function careerBaselines(careers: Record<SideKey, Summary>[], built: stri
       if (c[side].m.rounds >= (side === "both" ? CAREER_MIN_ROUNDS : CAREER_MIN_ROUNDS / 2)) units.push({ pools, side, s: c[side] });
     }
   }
-  const baselines: Baselines = { version: 1, built, source: `${qualified} bot careers with ${CAREER_MIN_ROUNDS}+ rounds`, ...buildPools(units) };
+  const baselines: Baselines = { version: 1, built, source: `${qualified} bot careers with ${CAREER_MIN_ROUNDS}+ rounds`, model: modelOf(units), ...buildPools(units) };
   return { baselines, provisional: qualified < BOT_CAREERS_MIN, careers: qualified };
 }

@@ -9,12 +9,14 @@ import { AGGRESSION_METRICS } from "./aggression";
 import { AIM_METRICS } from "./aim";
 import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
-import { rating3 } from "./rating3";
+import { rating3Of } from "./rating3";
 import { UTILQ_METRICS } from "./utilq";
 import { FLASHED_MIN_S } from "./utility";
+import type { Input } from "./facts";
 import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
+export type Need = Input | "model";
 export type Status = "exact" | "approx" | "unavailable";
 export type Unit = "rating" | "perRound" | "pct" | "secs" | "ms" | "deg" | "count" | "money" | "rank" | "dmg" | "units" | "speed";
 
@@ -31,6 +33,12 @@ export interface Metric {
   def: string;
   /** performance metrics only: lower is better */
   lowerIsBetter?: boolean;
+  /**
+   * Source inputs the value needs (facts.ts INPUTS), and "model" when it depends on the rating
+   * parameters or the win-probability source. compare() shows no percentile when a kept match lacks an
+   * input, or when the baselines were built under another model.
+   */
+  needs?: Need[];
   value: (s: Summary) => number | null;
 }
 
@@ -43,7 +51,7 @@ const M: Metric[] = [
   // ---- rating and scoreboard (performance)
   { id: "rating3", label: "Rating 3.0 (approx.)", hltv: "Rating 3.0", kind: "performance", group: "rating", unit: "rating", status: "approx",
     def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md): a linear model in eco-adjusted KPR, ADR, DPR and KAST, multi-kill rounds and swing, with params.json's coefficients.",
-    value: (s) => rating3(s.m).value },
+    needs: ["model", "loadout"], value: (s) => rating3Of(s).value },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
     def: "Enemy kills (killer and victim on different sides at the kill) per round.", value: (s) => per(s.m.kills, s.m.rounds) },
   { id: "dpr", label: "Deaths per round", hltv: "Deaths per round", kind: "performance", group: "rating", unit: "perRound", status: "exact", lowerIsBetter: true,
@@ -56,14 +64,14 @@ const M: Metric[] = [
     def: "Rounds with two or more kills.", value: (s) => pct(s.m.multiKillRounds, s.m.rounds) },
   { id: "swing", label: "Round swing", hltv: "Round swing", kind: "performance", group: "rating", unit: "pct", status: "approx",
     def: "Average change per round in your team's win probability credited to you (swing.ts).",
-    value: (s) => (s.m.swingRounds ? (100 * s.m.swing) / s.m.swingRounds : null) },
+    needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.swing) / s.m.swingRounds : null) },
   { id: "hs", label: "Headshot kills", kind: "performance", group: "rating", unit: "pct", status: "exact", def: "Headshot kills as a share of kills.", value: (s) => pct(s.m.hsKills, s.m.kills) },
 
   // ---- Firepower (performance, HLTV's attribute)
   { id: "killsPerWin", label: "Kills per round win", hltv: "Kills per Round Win", kind: "performance", group: "firepower", unit: "perRound", status: "exact",
     def: "Kills in rounds your team won, per won round.", value: (s) => per(s.m.killsInWins, s.m.won) },
   { id: "rws", label: "Round win shares", hltv: "Round Win Shares", kind: "performance", group: "firepower", unit: "pct", status: "approx",
-    def: "In won rounds, your share of your team's positive swing (20% is an even share), averaged.", value: (s) => pct(s.m.rws, s.m.rwsRounds) },
+    def: "In won rounds, your share of your team's positive swing (20% is an even share), averaged.", needs: ["model"], value: (s) => pct(s.m.rws, s.m.rwsRounds) },
   { id: "perfectKpr", label: "Perfect kills per round", hltv: "Perfect Kills per Round", kind: "performance", group: "firepower", unit: "perRound", status: "approx",
     def: "Kills where the victim had not damaged you earlier in the round, per round.", value: (s) => per(s.m.perfectKills, s.m.rounds) },
   { id: "tradeDenials", label: "Trade denials per round", hltv: "Trade Denials per Round", kind: "performance", group: "firepower", unit: "perRound", status: "approx",
@@ -119,11 +127,11 @@ const M: Metric[] = [
 
   // ---- Sniping (identity)
   { id: "roundsWithSniper", label: "Rounds with a sniper", hltv: "Rounds with a Sniper", kind: "identity", group: "sniping", unit: "pct", status: "approx",
-    def: "Rounds you carried a sniper rifle at freeze end or killed with one.", value: (s) => pct(s.m.roundsWithSniper, s.m.rounds) },
+    def: "Rounds you carried a sniper rifle at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithSniper, s.m.rounds) },
   { id: "sniperKillsPct", label: "Sniper kills", hltv: "Sniper Kills %", kind: "identity", group: "sniping", unit: "pct", status: "exact",
     def: "Share of your kills made with the AWP, SSG 08, SCAR-20 or G3SG1.", value: (s) => pct(s.m.sniperKills, s.m.kills) },
   { id: "roundsWithAwp", label: "Rounds with an AWP", hltv: "Rounds with an AWP", kind: "identity", group: "sniping", unit: "pct", status: "approx",
-    def: "Rounds you carried an AWP at freeze end or killed with one.", value: (s) => pct(s.m.roundsWithAwp, s.m.rounds) },
+    def: "Rounds you carried an AWP at freeze end or killed with one.", needs: ["loadout"], value: (s) => pct(s.m.roundsWithAwp, s.m.rounds) },
   { id: "awpKillsPct", label: "AWP kills", hltv: "AWP Kills %", kind: "identity", group: "sniping", unit: "pct", status: "exact",
     def: "Share of your kills made with the AWP.", value: (s) => pct(s.m.awpKills, s.m.kills) },
 
@@ -143,16 +151,16 @@ const M: Metric[] = [
   { id: "tradedDeathSuccess", label: "Traded death success", hltv: "Traded Death Success %", kind: "performance", group: "entrying", unit: "pct", status: "approx",
     def: "Tradeable deaths (a living teammate within 1,000 units) that a teammate traded.", value: (s) => pct(s.m.tradeableTraded, s.m.tradeableDeaths) },
   { id: "openingSwing", label: "Opening swing", hltv: "Opening Swing", kind: "performance", group: "opening", unit: "pct", status: "approx",
-    def: "Swing from opening kills and deaths, per round.", value: (s) => (s.m.swingRounds ? (100 * s.m.openingSwing) / s.m.swingRounds : null) },
+    def: "Swing from opening kills and deaths, per round.", needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.openingSwing) / s.m.swingRounds : null) },
   { id: "clutchSwing", label: "Clutch swing", hltv: "Clutch Swing", kind: "performance", group: "closing", unit: "pct", status: "approx",
-    def: "Swing from kills and deaths after you became the last of your side alive, per round.", value: (s) => (s.m.swingRounds ? (100 * s.m.clutchSwing) / s.m.swingRounds : null) },
+    def: "Swing from kills and deaths after you became the last of your side alive, per round.", needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.clutchSwing) / s.m.swingRounds : null) },
   { id: "awpSwing", label: "AWP swing", hltv: "AWP Swing", kind: "performance", group: "sniping", unit: "pct", status: "approx",
-    def: "Swing from your AWP kills and your deaths holding the AWP, per round.", value: (s) => (s.m.swingRounds ? (100 * s.m.awpSwing) / s.m.swingRounds : null) },
+    def: "Swing from your AWP kills and your deaths holding the AWP, per round.", needs: ["model", "activeWeapon"], value: (s) => (s.m.swingRounds ? (100 * s.m.awpSwing) / s.m.swingRounds : null) },
   { id: "awpDuelWin", label: "AWP duel win", hltv: "AWP Duel Win %", kind: "performance", group: "sniping", unit: "pct", status: "approx",
-    def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels) },
+    def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", needs: ["activeWeapon"], value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels) },
   { id: "flashSwing", label: "Flash swing", hltv: "Flash Swing", kind: "performance", group: "utility", unit: "pct", status: "approx",
     def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), split equally when several flashes were, per round.",
-    value: (s) => (s.m.swingRounds ? (100 * s.m.flashSwing) / s.m.swingRounds : null) },
+    needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.flashSwing) / s.m.swingRounds : null) },
   { id: "assistsPerFlash", label: "Assists per flash", hltv: "Assists per Flash", kind: "performance", group: "utility", unit: "perRound", status: "approx",
     def: "Flash assists (the game's) per flashbang thrown.", value: (s) => per(s.m.flashAssists, s.m.flashes) },
   { id: "grenadeDmgTaken", label: "Grenade damage received per round", hltv: "Grenade Damage Received", kind: "performance", group: "utility", unit: "dmg", status: "exact", lowerIsBetter: true,
@@ -166,7 +174,7 @@ const M: Metric[] = [
   { id: "flashKillsPR", label: "Flashes that led to a kill per round", kind: "performance", group: "utility", unit: "perRound", status: "exact",
     def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per round.", value: (s) => per(s.m.flashKills, s.m.rounds) },
   { id: "utilUnused", label: "Unused utility on death", kind: "performance", group: "utility", unit: "money", status: "approx", lowerIsBetter: true,
-    def: "Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen.", value: (s) => per(s.m.utilUnused, s.m.rounds) },
+    def: "Value of grenades you held at freeze end and had not thrown when you died, per round. Grenades picked up later are not seen.", needs: ["loadout"], value: (s) => per(s.m.utilUnused, s.m.rounds) },
 
   // ---- utility description (identity). Not scored as performance: on pro team-rounds these duplicate
   // other metrics or show no lasting link to winning rounds (METRICS.md, "Descriptive utility").

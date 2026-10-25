@@ -8,7 +8,8 @@
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
-import { rollup, type Filter } from "./rollup";
+import { coveredEnough } from "./coverage";
+import { rollup, type Filter, type Summary } from "./rollup";
 import type { Side } from "./tables";
 import { classFromDisplay } from "./weapons";
 
@@ -132,13 +133,31 @@ export const FEATURES = ["kpr_eco", "adr_eco", "dpr_eco", "kast_eco", "mk", "swi
 export type Feature = (typeof FEATURES)[number];
 export type R3Inputs = Record<Feature, number>;
 
-/** The six inputs from summed measures. KAST and MK in percent; swing in percentage points per round. */
+/**
+ * Copies the eco inputs of every player-round swing could value (swingRounds 1) into the v* measures,
+ * so Rating 3.0's six inputs average over one set of rounds. Runs after swing.
+ */
+export function valuedRounds(c: Ctx): void {
+  for (const rows of c.pr) for (const p of rows) {
+    if (!p || !p.m.swingRounds) continue;
+    const m = p.m;
+    m.vEcoKills = m.ecoKills; m.vEcoDeaths = m.ecoDeaths; m.vEcoDmg = m.ecoDmg; m.vEcoKast = m.ecoKast; m.vMultiKillRounds = m.multiKillRounds;
+  }
+}
+
+/** Share of a summary's rounds swing must value for a rating: below it the swing input is too thin. Ours, no fit. */
+export const MIN_VALUED_SHARE = 0.5;
+
+/**
+ * The six inputs over the rounds swing valued: KAST and MK in percent, swing in percentage points per
+ * round. Null with no rounds, or when swing valued under MIN_VALUED_SHARE of them.
+ */
 export function r3Inputs(m: Measures): R3Inputs | null {
-  if (m.rounds <= 0) return null;
-  const n = m.rounds;
+  const n = m.swingRounds;
+  if (m.rounds <= 0 || n < MIN_VALUED_SHARE * m.rounds) return null;
   return {
-    kpr_eco: m.ecoKills / n, adr_eco: m.ecoDmg / n, dpr_eco: m.ecoDeaths / n, kast_eco: (100 * m.ecoKast) / n,
-    mk: (100 * m.multiKillRounds) / n, swing: m.swingRounds ? (100 * m.swing) / m.swingRounds : 0,
+    kpr_eco: m.vEcoKills / n, adr_eco: m.vEcoDmg / n, dpr_eco: m.vEcoDeaths / n, kast_eco: (100 * m.vEcoKast) / n,
+    mk: (100 * m.vMultiKillRounds) / n, swing: (100 * m.swing) / n,
   };
 }
 
@@ -170,6 +189,16 @@ export function rating3(m: Measures): Rating3 {
   return { label: RATING3_LABEL, value: inputs ? rating3FromInputs(inputs) : null, inputs, status: params.rating.status };
 }
 
+/**
+ * Rating 3.0 of a summary under the one coverage gate (coverage.ts): null when the kept matches' facts
+ * cover under half their rounds. Every rating the app shows, the rating metric and so its percentile
+ * and "Work on" come through here.
+ */
+export function rating3Of(s: Summary): Rating3 {
+  const r = rating3(s.m);
+  return coveredEnough(s.covered) ? r : { ...r, value: null, inputs: null };
+}
+
 /** Five seconds: SPEC.md's trade-denial and failed-trade window (params.swing.trade_window_seconds). */
 export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
 
@@ -180,8 +209,8 @@ export const SWING_TRADE_WINDOW_S = params.swing.trade_window_seconds;
  */
 export function rating3BySide(facts: MatchFacts[], filter: Filter): Record<"both" | "CT" | "T", Rating3> {
   return {
-    both: rating3(rollup(facts, filter).m),
-    CT: rating3(rollup(facts, { ...filter, sides: ["CT"] }).m),
-    T: rating3(rollup(facts, { ...filter, sides: ["T"] }).m),
+    both: rating3Of(rollup(facts, filter)),
+    CT: rating3Of(rollup(facts, { ...filter, sides: ["CT"] })),
+    T: rating3Of(rollup(facts, { ...filter, sides: ["T"] })),
   };
 }

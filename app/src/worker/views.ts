@@ -8,9 +8,8 @@ import { isGun } from "../stats/guns";
 import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
-import { RATING3_LABEL, rating3, type Rating3 } from "../stats/rating3";
+import { RATING3_LABEL, rating3, rating3Of } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
-import { ratedMatch } from "../ui/data/engine";
 import type { MatchEntry } from "../ui/data/match";
 import type {
   Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
@@ -29,22 +28,12 @@ export function metaOf(wp: WinProbSource): Meta {
 
 export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((m) => [m.id, m.value(s)]));
 export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
-const lineOf = (s: Summary, rated: boolean): Line => ({ m: s.m, v: valuesOf(s), rating: rated ? rating3(s.m).value : null });
+// Every rating here goes through rating3Of, the engine's one coverage gate; so does the rating3 metric
+// in valuesOf, and with it the comparisons and "Work on".
+const lineOf = (s: Summary): Line => ({ m: s.m, v: valuesOf(s), rating: rating3Of(s).value });
 
-/** A rating under the coverage rule: below it, no value and no inputs to break down. */
-const gated = (r: Rating3, rated: boolean): Rating3 => (rated ? r : { ...r, value: null, inputs: null });
-
-/**
- * Rating 3.0 on both sides and on each, as rating3BySide defines it (the inputs pooled over the kept
- * rounds, rated once), from the three summaries a caller streamed. `rated` is the coverage rule.
- */
-export const ratingsOf = (s: Record<"both" | "T" | "CT", Summary>, rated: boolean): SideRatings => ({
-  both: gated(rating3(s.both.m), rated), T: gated(rating3(s.T.m), rated), CT: gated(rating3(s.CT.m), rated),
-});
-
-/** The coverage rule over several matches: their logged rounds against the rounds they had. */
-export const ratedMatches = (ms: { nRounds: number; roundsPlayed: number }[]) =>
-  ratedMatch({ nRounds: ms.reduce((a, m) => a + m.nRounds, 0), roundsPlayed: ms.reduce((a, m) => a + m.roundsPlayed, 0) });
+/** Rating 3.0 on both sides and on each, as rating3BySide defines it, from the three summaries a caller streamed. */
+export const ratingsOf = (s: Record<"both" | "T" | "CT", Summary>): SideRatings => ({ both: rating3Of(s.both), T: rating3Of(s.T), CT: rating3Of(s.CT) });
 
 // ---------------------------------------------------------------- the match list
 
@@ -68,7 +57,7 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, line: lineOf(s, ratedMatch(f.match)),
+    shots: s.aim.shots, line: lineOf(s),
   };
 }
 
@@ -80,13 +69,12 @@ const SIDES = { both: {}, t: { sides: ["T" as const] }, ct: { sides: ["CT" as co
 export const gunHeadHits = (s: Summary) => Object.entries(s.weapons).reduce((a, [w, t]) => a + (isGun(w) ? t.groups[0] : 0), 0);
 
 export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
-  const rated = ratedMatch(f.match);
   const usIds = f.players.filter((p) => p.team === entry.usTeam).map((p) => p.id);
   const themIds = f.players.filter((p) => p.team !== entry.usTeam).map((p) => p.id);
   const you = f.players[entry.you].id;
   const lines = Object.fromEntries(Object.entries(SIDES).map(([k, side]) =>
-    [k, f.players.map((p) => lineOf(rollup([f], { player: p.id, ...side }), rated))])) as MatchBundle["lines"];
-  const team = (ids: string[]) => lineOf(rollup([f], { player: ids }), rated);
+    [k, f.players.map((p) => lineOf(rollup([f], { player: p.id, ...side })))])) as MatchBundle["lines"];
+  const team = (ids: string[]) => lineOf(rollup([f], { player: ids }));
   const byRound = (player: string | string[], n: number) => rollup([f], { player, rounds: [n] });
   return {
     core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills },
