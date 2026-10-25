@@ -86,5 +86,5 @@ it("gives the AWP duel win rate with the count of AWP duels it rests on", () => 
   const p = compare(s, { version: 1, built: "x", source: "t", n: {}, pools: { ...pools, rifler: pools.all } }, {});
   expect(p.awpDuelWin).toMatchObject({ value: (100 * 4) / 7, n: 7, reason: null });
   expect(p.kpr.n).toBeNull();
-  expect(rolled(s).n).toEqual({ awpDuelWin: 7 });
+  expect(rolled(s).n.awpDuelWin).toBe(7);
 });

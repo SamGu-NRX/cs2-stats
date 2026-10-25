@@ -87,6 +87,8 @@ export const INPUT_COVERAGE = {
    * Plugin files have none, so a sighting metric there has no value rather than one from radar spotting.
    */
   sight: ["sightRounds", "rounds", "line of sight", "rounds"],
+  /** the next round's starting equipment recorded for a save (player_rounds.round_start_equip_value; plugin files have none) */
+  carry: ["saveCarryKnown", "saveEvents", "next round's starting equipment", "saved rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
