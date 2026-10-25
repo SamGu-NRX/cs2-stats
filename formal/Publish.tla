@@ -5,6 +5,7 @@ CONSTANTS Writers, Pruners, Initial, Reader, Retry, Failures, Crashes,
 W == 1..Writers
 V == 0..Writers
 P == 1..Pruners
+\* The writer-supplied catalog for this abstraction; it is not the schema's full required catalog.
 Tables == {"match", "other"}
 \* "match" also abstracts the rating layout's required player_rounds table;
 \* "other" can be damages.parquet, which is not checked by demo_layout.
@@ -200,7 +201,8 @@ ReadMissing ==
   /\ LET retry == Reader \in {"python","node","node-per-file","rating"} /\ s.attempt = 1
      IN s' = [s EXCEPT !.rpc = IF retry THEN "marker" ELSE "error",
        !.attempt = IF retry THEN 2 ELSE @,
-       !.loaded = IF Reader = "node-per-file" /\ retry THEN s.loaded ELSE <<>>, !.locks = {},
+       !.checked = {}, !.chosen = -1, !.target = -1, !.loaded = <<>>, !.locks = {},
+       !.returned = FALSE,
        !.readerError = @ \/ ~retry]
 Unlock == /\ s.locks # {} /\ s' = [s EXCEPT !.locks = {}]
 Read == ReadMarker \/ ReadPointer \/ ReadValidate \/ ReadStat \/ ReadTarget \/ ReadOpen
@@ -210,7 +212,7 @@ Next == (/\ ~s.crashed
          /\ ((\E w \in W : Writer(w) \/ Failure(w)) \/ (\E p \in P : Prune(p))
               \/ Retire \/ RetireDone \/ StaleStart \/ MarkStale \/ Manual \/ Read \/ Unlock)) \/ Crash
 Spec == Init /\ [][Next]_vars
-FairSpec == Spec /\ WF_vars(Unlock) /\ (\A p \in P : WF_vars(Prune(p)))
+FairSpec == Spec /\ WF_vars(Read) /\ WF_vars(Unlock) /\ (\A p \in P : WF_vars(Prune(p)))
 TypeOK == /\ s.current \in {-1} \cup V /\ s.staged \subseteq W
           /\ \A v \in V : s.files[v] \subseteq Files
 NoMix == s.returned => Cardinality({s.loaded[i] : i \in 1..Len(s.loaded)}) <= 1
@@ -224,6 +226,7 @@ CrashAvailable == s.crashed => Available
 CurrentValid == s.current = -1 \/ s.marker # "none" \/ Good(s.current)
 LockDiscipline == Fixed => s.owner = 0 \/ s.owner \in W \cup {Writers+p : p \in 1..Pruners} \cup {Writers+Pruners+1, Writers+Pruners+2}
 ReaderSucceeds == ~s.readerError
+ReaderEventuallyReturns == <> (s.rpc \in {"done", "error"})
 OldEventuallyPruned == (s.current # 0 /\ s.marker = "none" /\ s.locks = {})
                        ~> (s.loc[0] = "none")
 =============================================================================
