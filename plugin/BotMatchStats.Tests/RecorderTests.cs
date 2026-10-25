@@ -208,6 +208,7 @@ public class RecorderTests
         Assert.Equal(2, shots.Length);
         Assert.Equal((B1, -571, 0, 0, 100, 2), (shots[0].Target, shots[0].AimErrYaw, shots[0].AimErrPitch, shots[0].ImpYaw, shots[0].ImpPitch, shots[0].Hit));
         Assert.Equal((1, 1, true), (shots[0].Burst, shots[0].Idx, shots[0].Ducked));
+        Assert.Equal((2, 1, Nil.V), (shots[0].Impacts, shots[0].VisTarget, shots[0].Pen)); // non-fatal hit: pen unknown
         Assert.Equal((2, 1, Nil.V, Nil.V), (shots[1].Burst, shots[1].Idx, shots[1].Hit, shots[1].ImpYaw));
     }
 
@@ -258,6 +259,7 @@ public class RecorderTests
             r.BeginRound(ri, t0, 0, 0, false, Nil.V);
             for (int pi = 0; pi < 10; pi++) r.SetFreezePlayer(pi, pi < 5 ? 3 : 2, 800, 1000, 100, true);
             r.FreezeEnd(t0 + 1000);
+            r.Grenade(t0 + 1000, 5, GrenadeType.Smoke, 0, 1400, 64, entityId: 9); // ahead of the human: shots run the smoke ray test
             for (int t = t0 + 1000; t < t0 + 1000 + 64 * 100; t++)
             {
                 for (int pi = 0; pi < 10; pi++)
@@ -273,6 +275,7 @@ public class RecorderTests
                 {
                     r.Shot(new ShotInput { Tick = t, Weapon = ak, Speed = 100, MaxSpeed = 215 });
                     r.Impact(t, 100, 900, 60);
+                    r.Impact(t, 100, 950, 60);
                     r.Hurt(t, 0, 5 + t % 5, 1, 0, 50, ak, 2, true, Nil.V);
                 }
                 if (measure) allocated += GC.GetAllocatedBytesForCurrentThread() - a0;
@@ -285,6 +288,7 @@ public class RecorderTests
         Round(1, measure: true);
         Assert.True(sink.Store.Engagements.Count > 10);
         Assert.True(sink.Store.Shots.Count > 500);
+        Assert.Contains(sink.Store.Shots.Span.ToArray(), x => x.Smoke == 1);
         Assert.Equal(0, allocated);
     }
 
@@ -388,6 +392,22 @@ public class CodecTests
         var shot = root.GetProperty("aim").GetProperty("shots");
         Assert.True(shot.GetProperty("scoped")[0].GetBoolean());
         Assert.Equal(JsonValueKind.Null, shot.GetProperty("impact")[0].ValueKind);
+    }
+
+    [Fact]
+    public void UnknownRoundResultRoundTrips()
+    {
+        var sink = new ListSink();
+        var r = new Recorder(sink, new FrameSet(), new PerfCounter(), _ => { });
+        r.StartCapture(new MatchMeta { Id = "22222222222222222222222222222222", Map = "de_dust2", StartUtc = "2026-10-24T17:00:00Z" });
+        r.AddPriorRound(0, 2); // unknown code: how is null
+        r.Flush();
+        using var ms = new MemoryStream();
+        MatchCodec.Write(sink.Store, ms, inProgress: true);
+        var back = new MatchStore();
+        MatchCodec.Read(new MemoryStream(ms.ToArray()), back);
+        Assert.Equal(Nil.V, back.Round(0).How);
+        Assert.Equal(new[] { 0 }, back.Meta.UnknownResults);
     }
 
     [Fact]

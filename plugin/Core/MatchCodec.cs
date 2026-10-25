@@ -133,6 +133,12 @@ public static class MatchCodec
         w.WriteStartArray("aimErr"); foreach (ref readonly var r in sh) Pair(w, r.AimErrYaw, r.AimErrPitch); w.WriteEndArray();
         w.WriteStartArray("impact"); foreach (ref readonly var r in sh) Pair(w, r.ImpYaw, r.ImpPitch); w.WriteEndArray();
         Col(w, "hit", sh, static r => r.Hit);
+        // Optional per-shot fields beyond schema v1.
+        Col(w, "smoke", sh, static r => r.Smoke);
+        Col(w, "impacts", sh, static r => r.Impacts);
+        Col(w, "pen", sh, static r => r.Pen);
+        Col(w, "visTarget", sh, static r => r.VisTarget);
+        w.WriteStartArray("cls"); foreach (ref readonly var r in sh) { if (r.Class == Nil.V) w.WriteNullValue(); else w.WriteStringValue(WeaponNames.ClassNames[r.Class]); } w.WriteEndArray();
         w.WriteEndObject();
         w.WriteEndObject(); // aim
 
@@ -446,7 +452,7 @@ public static class MatchCodec
             row.Reset(i);
             row.WinSide = win[i];
             row.How = how[i].ValueKind == JsonValueKind.Null ? Nil.V : Array.IndexOf(RoundResult.HowNames, how[i].GetString());
-            if (row.How < 0) throw new InvalidDataException($"Unknown round 'how' value '{how[i].GetString()}' in round {i}.");
+            if (row.How != Nil.V && row.How < 0) throw new InvalidDataException($"Unknown round 'how' value '{how[i].GetString()}' in round {i}.");
             row.FreezeTick = freeze[i]; row.DurTicks = dur[i];
             row.BombSite = site[i].ValueKind == JsonValueKind.Null ? Nil.V : site[i].GetString() == "B" ? 1 : 0;
             row.PlantTick = plant[i]; row.Planter = planter[i]; row.Defuser = defuser[i];
@@ -612,12 +618,17 @@ public static class MatchCodec
         var scoped = t.GetProperty("scoped"); var ducked = t.GetProperty("ducked");
         var target = Ints(t.GetProperty("target")); var err = t.GetProperty("aimErr"); var imp = t.GetProperty("impact");
         var hit = Ints(t.GetProperty("hit"));
+        var smoke = Ints(t.GetProperty("smoke")); var impacts = Ints(t.GetProperty("impacts"));
+        var pen = Ints(t.GetProperty("pen")); var vis = Ints(t.GetProperty("visTarget")); var cls = t.GetProperty("cls");
         for (int i = 0; i < ri.Length; i++)
         {
+            int c = cls[i].ValueKind == JsonValueKind.Null ? Nil.V : Array.IndexOf(WeaponNames.ClassNames, cls[i].GetString());
+            if (c != Nil.V && c < 0) throw new InvalidDataException($"Unknown weapon class '{cls[i].GetString()}'.");
             var r = new ShotRow
             {
                 Ri = ri[i], Tick = tick[i], Weapon = wpn[i], Burst = burst[i], Idx = idx[i], Speed = speed[i], MaxSpeed = max[i],
                 Scoped = scoped[i].GetBoolean(), Ducked = ducked[i].GetBoolean(), Target = target[i], Hit = hit[i],
+                Smoke = smoke[i], Impacts = impacts[i], Pen = pen[i], VisTarget = vis[i], Class = c,
             };
             Pair(err[i], out r.AimErrYaw, out r.AimErrPitch);
             Pair(imp[i], out r.ImpYaw, out r.ImpPitch);

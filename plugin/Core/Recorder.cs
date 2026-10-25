@@ -11,6 +11,8 @@ public interface IRecorderSink
 public struct KillInput
 {
     public int Tick, Killer, Victim, Assister, Weapon, Flags;
+    /// <summary>The kill was by a gun (used to attribute player_death.penetrated to the human's shot).</summary>
+    public bool Bullet;
     /// <summary>GrenadeType of the killing grenade (from <see cref="WeaponNames.NadeSourceOf"/>), else Nil.</summary>
     public int NadeType;
     public bool AssistedFlash, HasKillerPos;
@@ -21,6 +23,8 @@ public struct KillInput
 public struct ShotInput
 {
     public int Tick, Weapon, Speed, MaxSpeed;
+    /// <summary>WeaponClass, or Nil.</summary>
+    public int Class;
     public bool Scoped, Ducked;
 }
 
@@ -58,6 +62,9 @@ public sealed class Recorder
     private readonly EngagementTracker _eng;
     private BurstTracker _burst = new(1);
     private RoundBuffer _buf;
+
+    private struct ActiveSmoke { public int EntityId, EndTick; public double X, Y, Z; }
+    private readonly FixedBuffer<ActiveSmoke> _smokes = new(32);
 
     private int _pendingShot = -1, _pendingShotTick;
     private bool _pendingImpactSet;
@@ -170,6 +177,7 @@ public sealed class Recorder
         Array.Fill(_lastDet, Nil.V);
         Array.Fill(_lastDetTick, Nil.V);
         _pendingThrows.Clear();
+        _smokes.Clear();
         _roundPartial = partial;
         if (partial && !_partial.Contains(ri)) _partial.Add(ri);
         RoundActive = true;
@@ -282,6 +290,9 @@ public sealed class Recorder
         FillState(ref row, k.Tick, v);
         _buf.Kills.Add(row);
 
+        if (killer != Nil.V && killer == Meta.Human && k.Bullet && IsEnemy(killer, v))
+            MergePen(k.Tick, (k.Flags & KillFlagWallbang) != 0 ? 1 : 0);
+
         _tally[v].Deaths++;
         if (killer != Nil.V && (uint)killer < Limits.MaxPlayers && IsEnemy(killer, v)) _tally[killer].Kills++;
         int anyAssist = assister != Nil.V ? assister : flash;
@@ -361,6 +372,9 @@ public sealed class Recorder
                 ref var s = ref _buf.Shots[_pendingShot];
                 if (s.Hit == Nil.V) s.Hit = hitgroup;
             }
+            // A lethal hit is resolved by player_death.penetrated. Without a ray trace, a non-fatal
+            // hit's path is unknown, so pen becomes null.
+            if (bullet && healthAfter > 0 && IsEnemy(attacker, victim)) MergePen(tick, Nil.V);
         }
     }
 
@@ -387,7 +401,8 @@ public sealed class Recorder
     }
 
     /// <summary>A detonation, linked to the thrower's oldest unlinked throw of the same kind this round.</summary>
-    public void Grenade(int tick, int thrower, GrenadeType type, float x, float y, float z)
+    /// <param name="entityId">Projectile entity index, used to match smokegrenade_expired; Nil if unknown.</param>
+    public void Grenade(int tick, int thrower, GrenadeType type, float x, float y, float z, int entityId = Nil.V)
     {
         if (!RoundActive) return;
         int link = Nil.V;
@@ -407,12 +422,52 @@ public sealed class Recorder
             Ri = Ri, Tick = tick, Thrower = thrower, Type = type, Throw = link,
             X = AimMath.Round(x), Y = AimMath.Round(y), Z = AimMath.Round(z),
         });
+        if (type == GrenadeType.Smoke)
+            _smokes.Add(new ActiveSmoke { EntityId = entityId, EndTick = tick + (int)(SmokeRay.LifetimeSeconds * TickRate), X = x, Y = y, Z = z });
         if (i >= 0 && (uint)thrower < Limits.MaxPlayers)
         {
             _lastDet[thrower * DetTypes + (int)type] = _grenadeBase + i;
             _lastDetTick[thrower * DetTypes + (int)type] = tick;
         }
     }
+
+    /// <summary>smokegrenade_expired: the smoke stops blocking from this tick.</summary>
+    public void SmokeExpired(int tick, int entityId)
+    {
+        if (entityId == Nil.V) return;
+        for (int i = 0; i < _smokes.Count; i++)
+        {
+            ref var s = ref _smokes[i];
+            if (s.EntityId == entityId && s.EndTick > tick) s.EndTick = tick;
+        }
+    }
+
+    private bool RayCrossesSmoke(int tick, double ox, double oy, double oz, double dx, double dy, double dz, double len)
+    {
+        for (int i = 0; i < _smokes.Count; i++)
+        {
+            ref var s = ref _smokes[i];
+            if (tick >= s.EndTick) continue;
+            if (SmokeRay.SegmentHitsSphere(ox, oy, oz, dx, dy, dz, len, s.X, s.Y, s.Z, SmokeRay.Radius)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Penetration evidence for the human's shot in this tick: 1 beats unknown, unknown beats 0.</summary>
+    private void MergePen(int tick, int value)
+    {
+        if (_pendingShot < 0 || _pendingShotTick != tick) return;
+        ref var s = ref _buf.Shots[_pendingShot];
+        if (s.Pen == 1) return;
+        if (value == 1 || value == Nil.V) s.Pen = value;
+    }
+
+    /// <summary>
+    /// Whether an enemy is visible to the human. It currently reads the engine's spotted mask at the
+    /// human's slot. That mask is under review: a live probe matched only 76 of 170 human hits.
+    /// Engagements and visTarget both use this one function, so a fix is one change here.
+    /// </summary>
+    private bool IsVisibleToHuman(in PlayerFrame enemy) => Spotted.IsSpottedBy(enemy.Spot0, enemy.Spot1, Frames.HumanSlot);
 
     private int LinkNade(int attacker, int nadeType, int tick)
     {
@@ -461,7 +516,9 @@ public sealed class Recorder
             Ri = Ri, Tick = s.Tick, Weapon = s.Weapon, Burst = _burst.Burst, Idx = _burst.Index,
             Speed = s.Speed, MaxSpeed = s.MaxSpeed, Scoped = s.Scoped, Ducked = s.Ducked,
             Target = Nil.V, AimErrYaw = Nil.V, AimErrPitch = Nil.V, ImpYaw = Nil.V, ImpPitch = Nil.V, Hit = Nil.V,
+            Smoke = 0, Impacts = 0, Pen = 0, VisTarget = Nil.V, Class = s.Class,
         };
+        double targetDist = SmokeRay.MaxRange;
         ref var h = ref Frames.ByPi[human];
         bool haveView = h.Present;
         if (haveView)
@@ -478,7 +535,8 @@ public sealed class Recorder
                 double ang = AimMath.AngleToDeg(h.Pitch, h.Yaw, dx, dy, dz);
                 if (double.IsNaN(ang)) continue;
                 _eng.Shot(s.Tick, pi, ang);
-                if (!Spotted.IsSpottedBy(e.Spot0, e.Spot1, Frames.HumanSlot)) continue;
+                // target no longer requires visibility: the spotted mask is unreliable (see
+                // IsVisibleToHuman), so visibility is reported separately in visTarget.
                 if (ang <= best)
                 {
                     best = ang;
@@ -486,7 +544,14 @@ public sealed class Recorder
                     row.Target = pi;
                     row.AimErrYaw = AimMath.Centi(yd);
                     row.AimErrPitch = AimMath.Centi(pd);
+                    row.VisTarget = IsVisibleToHuman(e) ? 1 : 0;
+                    targetDist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
                 }
+            }
+            if (_smokes.Count > 0)
+            {
+                AimMath.Forward(h.Pitch, h.Yaw, out double fx, out double fy, out double fz);
+                row.Smoke = RayCrossesSmoke(s.Tick, ex, ey, ez, fx, fy, fz, targetDist) ? 1 : 0;
             }
             _shotEyeX = ex; _shotEyeY = ey; _shotEyeZ = ez; _shotPitch = h.Pitch; _shotYaw = h.Yaw;
         }
@@ -498,7 +563,9 @@ public sealed class Recorder
     /// <summary>The human's bullet_impact; only the first impact after each shot is kept.</summary>
     public void Impact(int tick, float x, float y, float z)
     {
-        if (!RoundActive || _pendingShot < 0 || _pendingImpactSet || _pendingShotTick != tick) return;
+        if (!RoundActive || _pendingShot < 0 || _pendingShotTick != tick) return;
+        _buf.Shots[_pendingShot].Impacts++;
+        if (_pendingImpactSet) return;
         _pendingImpactSet = true;
         AimMath.Delta(_shotPitch, _shotYaw, x - _shotEyeX, y - _shotEyeY, z - _shotEyeZ, out double yd, out double pd);
         ref var s = ref _buf.Shots[_pendingShot];
@@ -561,7 +628,6 @@ public sealed class Recorder
     {
         ref var h = ref Frames.ByPi[human];
         double ex = h.X, ey = h.Y, ez = h.Z + h.ViewZ;
-        int slot = Frames.HumanSlot;
         for (int i = 0; i < Frames.ActiveCount; i++)
         {
             int pi = Frames.Active[i];
@@ -572,7 +638,7 @@ public sealed class Recorder
                 if (_eng.IsActive(pi)) _eng.EnemyGone(tick, pi, _buf.Engagements);
                 continue;
             }
-            bool vis = Spotted.IsSpottedBy(e.Spot0, e.Spot1, slot);
+            bool vis = IsVisibleToHuman(e);
             if (!vis)
             {
                 if (_eng.IsActive(pi)) _eng.Observe(Ri, tick, pi, false, double.NaN, 0, 0, 0, _buf.Engagements);

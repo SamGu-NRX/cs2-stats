@@ -118,6 +118,14 @@ Additions to v1 that do not change any field above; the version stays `1`. Reade
 - `damage.nade`, `kills.nade`: for `hegrenade` damage, the attacker's latest HE detonation at most 1 s earlier; for `inferno` damage, the latest molotov detonation at most 8 s earlier.
 - `kills.vUtil`: grenades the victim held at death as `[he, flash, smoke, molotov, incgrenade, decoy]`, read in the `player_death` pre-hook, falling back to the once-a-second inventory snapshot; null if unknown.
 
+### Shots (`aim.shots`)
+- `target`: the alive enemy closest to the shot's aim within 10°, whether visible or not. This differs from the v1 text above because the spotted mask under-reports visibility; visibility is now in `visTarget`.
+- `visTarget`: 1/0 whether `target` was visible to the human at that tick, from the engine's spotted mask. The mask's bit is under review. Null without a target.
+- `smoke`: 1 if the ray from the eye along the view direction crosses an active smoke before reaching the target, or 4096 units without one; else 0. A smoke is a 144-unit sphere around its detonation point, active from `smokegrenade_detonate` until `smokegrenade_expired` (matched by entity) or 22 s, whichever is first. These constants approximate CS2's volumetric smoke and have not been validated in-game.
+- `impacts`: number of `bullet_impact` events in the shot's tick. More than 1 means penetration or several surfaces (and pellets for shotguns).
+- `pen`: 1 if the shot killed an enemy with `player_death.penetrated` > 0, and 0 if it damaged no enemy or killed without penetrating. It is null when the shot hit an enemy non-fatally, because without a ray trace the plugin cannot tell whether the path was clear.
+- `cls`: weapon class, one of `rifle`, `sniper`, `smg`, `pistol`, `shotgun`, `heavy`, from the item name. Null for the taser.
+
 ### Reconciliation (`recon`)
 Each round is compared with the game's `CSPerRoundStats_t` at the next `round_start` (or 1 s after `cs_win_panel_match`). Kills count enemy kills, deaths count every death, and assists count damage and flash assists; these must match exactly. Damage must satisfy `0 <= game - ours <= hits`, because `player_hurt` truncates fractional damage (measured on `fixtures/events_two_matches.jsonl`).
 - `rounds`: `ri, checked, kOk, dOk, aOk, dmgOk, missing` (players whose stats could not be read).

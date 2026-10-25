@@ -2,6 +2,8 @@ using System.Text;
 
 namespace BotMatchStats.Core;
 
+public enum WeaponClass { Rifle = 0, Sniper = 1, Smg = 2, Pistol = 3, Shotgun = 4, Heavy = 5 }
+
 public static class WeaponNames
 {
     public static string Strip(string name) =>
@@ -39,6 +41,21 @@ public static class WeaponNames
     }
 
     public static readonly string[] GrenadeTypeNames = { "he", "flash", "smoke", "molotov", "decoy" };
+
+    /// <summary>Names for <see cref="WeaponClass"/>, as written in aim.shots.cls.</summary>
+    public static readonly string[] ClassNames = { "rifle", "sniper", "smg", "pistol", "shotgun", "heavy" };
+
+    /// <summary>The class of a gun by its stripped item name; Nil for the taser, non-guns and unknown names.</summary>
+    public static int ClassOf(string strippedName) => strippedName switch
+    {
+        "ak47" or "m4a1" or "m4a1_silencer" or "famas" or "galilar" or "sg556" or "aug" => (int)WeaponClass.Rifle,
+        "awp" or "ssg08" or "g3sg1" or "scar20" => (int)WeaponClass.Sniper,
+        "mac10" or "mp9" or "mp7" or "mp5sd" or "ump45" or "p90" or "bizon" => (int)WeaponClass.Smg,
+        "glock" or "hkp2000" or "usp_silencer" or "p250" or "elite" or "fiveseven" or "tec9" or "cz75a" or "deagle" or "revolver" => (int)WeaponClass.Pistol,
+        "nova" or "xm1014" or "sawedoff" or "mag7" => (int)WeaponClass.Shotgun,
+        "m249" or "negev" => (int)WeaponClass.Heavy,
+        _ => Nil.V,
+    };
     public static readonly string[] UtilTypeNames = { "he", "flash", "smoke", "molotov", "incgrenade", "decoy" };
 
     /// <summary>Maps a grenade item name (with or without the weapon_ prefix) to its type; false for non-grenades.</summary>

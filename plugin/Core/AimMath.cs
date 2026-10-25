@@ -58,6 +58,36 @@ public static class AimMath
     public static int Round(double v) => double.IsNaN(v) ? Nil.V : (int)Math.Round(v, MidpointRounding.AwayFromZero);
 }
 
+public static class SmokeRay
+{
+    // These approximate CS2's volumetric smoke as a sphere with a fixed lifetime. Neither value has
+    // been validated in-game. The radius is 144 units around the detonation point. The lifetime cap
+    // of 22 s applies when smokegrenade_expired does not arrive first.
+    public const double Radius = 144.0;
+    public const double LifetimeSeconds = 22.0;
+    /// <summary>Ray length when the shot has no target.</summary>
+    public const double MaxRange = 4096.0;
+
+    /// <summary>
+    /// True when the segment from the origin along the unit direction, of length <paramref name="len"/>,
+    /// passes strictly inside the sphere. A tangent ray does not count; an origin inside the sphere does.
+    /// </summary>
+    public static bool SegmentHitsSphere(double ox, double oy, double oz, double dx, double dy, double dz, double len,
+        double cx, double cy, double cz, double r)
+    {
+        double mx = cx - ox, my = cy - oy, mz = cz - oz;
+        double r2 = r * r;
+        double m2 = mx * mx + my * my + mz * mz;
+        if (m2 < r2) return true;
+        double t = mx * dx + my * dy + mz * dz; // distance along the ray to the closest approach
+        if (t < 0) return false;                // sphere is behind the shooter
+        double d2 = m2 - t * t;                  // squared distance from the centre to the ray
+        if (d2 >= r2) return false;
+        double tEnter = t - Math.Sqrt(r2 - d2);
+        return tEnter < len;                     // the segment reaches the sphere before it ends
+    }
+}
+
 public static class Spotted
 {
     /// <summary>True when the engine's spotted mask (two 32-bit words) has the bit for <paramref name="slot"/>.</summary>
