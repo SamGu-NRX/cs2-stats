@@ -73,7 +73,7 @@ Self-host two families as woff2, `font-display: block`.
 | Section | 16 / 600 / -0.01em | Card titles |
 | Sub-hero | 20 / 700 / -0.01em | Team names |
 | Tile | 28 / 800 / -0.02em, cream | Stat tiles, six HLTV cells |
-| Hero | 40 / 800 / -0.02em, cream | Rating 2.0, form numbers |
+| Hero | 40 / 800 / -0.02em, cream | Rating 3.0 (approx.), form numbers |
 | Score | 56 / 800 / -0.03em | Match score (loser in `--ink3`) |
 
 Line height 1.3 up to 14, 1.2 to 28, 1.0 from 40. `font-variant-numeric: tabular-nums` on every numeric container.
@@ -101,7 +101,7 @@ Line height 1.3 up to 14, 1.2 to 28, 1.0 from 40. `font-variant-numeric: tabular
 
 Flat `--bg0`. One fixed atmosphere layer per view, `pointer-events: none`, never full-page:
 
-- Home and Profile: the player's agent portrait at 100 % in the hero only, plus the ghosted T and CT heads from the HLTV card at 18 %, radial-masked; the head on the active side brightens to 30 %.
+- Home and Profile: the player's agent portrait (extracted at runtime from the user's own CS2 install, never committed to the repo) at 100 % in the hero only, plus the ghosted T and CT heads from the HLTV card at 18 %, radial-masked; the head on the active side brightens to 30 %.
 - Match: the map's radar overview, desaturated, 6 % opacity, 1400 px, pinned top-right of the hero, masked to transparent by 420 px. Crossfades 240 ms when the match changes.
 - Rounds, Positions, Economy, Aim, Career aim, Settings: nothing. No noise, no vignette, no gradients.
 
@@ -114,11 +114,12 @@ Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)` (enter), `--ease-in-out: cubic-b
 | App launch | First paint | Content pane opacity 0→1, translateY 6→0 (shell is static) | 160 ms | `--ease-out` | n/a | Opacity only |
 | Sidebar collapse | Button click | Sidebar `width`; labels opacity 100 ms | 180 ms | `--ease-in-out` | Retargets | Instant |
 | Sidebar collapse | Ctrl+B | Nothing | 0 | – | – | – |
-| View change | Nav click or Ctrl+N | Out: opacity 80 ms. In: opacity + translateY 6→0. Active bar translateY between items | 180 / 200 ms | `--ease-out` / `--ease-in-out` | New route skips pending | Crossfade; bar jumps |
-| Tab switch | Click or Alt+N | Underline translateX + scaleX only; panel swaps instantly; charts do not replay reveals | 200 ms | `--ease-in-out` | Retargets | Jump |
-| Open match | Row click, Enter | View Transition: `view-transition-name` `match-score` and `match-map` set on the clicked row only, morph into the hero; root crossfade 160 ms. Feature-detect `startViewTransition` (WebView2 ≥ 111), else crossfade | 280 ms | `--ease-drawer` | `skipTransition()` on new nav | Crossfade only |
+| View change | Nav click | Out: opacity 80 ms. In: opacity + translateY 6→0. Active bar translateY between items | 180 / 200 ms | `--ease-out` / `--ease-in-out` | New route skips pending | Crossfade; bar jumps |
+| Tab switch | Click | Underline translateX + scaleX only; panel swaps instantly; charts do not replay reveals | 200 ms | `--ease-in-out` | Retargets | Jump |
+| Open match | Row click | View Transition: `view-transition-name` `match-score` and `match-map` set on the clicked row only, morph into the hero; root crossfade 160 ms. Feature-detect `startViewTransition` (WebView2 ≥ 111), else crossfade | 280 ms | `--ease-drawer` | `skipTransition()` on new nav | Crossfade only |
 | Round drawer open | Cell click | translateX 100 %→0 over the grid; grid width set after the transition ends behind the opaque edge | 320 ms | spring .45 / .08 | Spring reverses | Opacity 120 ms |
-| Round drawer close | Esc, close button | translateX 0→100 % | 200 ms | `--ease-out` | Reverses | Opacity |
+| Round drawer close | Close button | translateX 0→100 % | 200 ms | `--ease-out` | Reverses | Opacity |
+| Any keyboard action | Ctrl+N, Alt+N, Enter, Esc, arrows, palette commands | Nothing: the change is instant | 0 | – | – | – |
 | Drawer content | First open | Killfeed rows opacity + translateY 4, stagger 20 ms, max 12 | 120 ms each | `--ease-out` | – | None |
 | Drawer content | ← → or another cell | Instant swap | 0 | – | – | – |
 | Attribute expand | Row click | `grid-template-rows 0fr→1fr`; sub-stats opacity after 60 ms; chevron rotate 180° | 220 ms | `--ease-in-out` | Retargets | Instant height, fade |
