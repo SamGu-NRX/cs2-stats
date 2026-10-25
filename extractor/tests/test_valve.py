@@ -119,6 +119,20 @@ def test_a_round_one_death_with_no_player_death_row_fails_the_map():
         ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)
 
 
+def test_a_lost_death_of_a_player_who_appears_after_round_one_starts_fails_the_map():
+    # Review of PR 19 (round 3): measured from the window's start only, a player with no controller there was
+    # left out, and a lost death after he appeared was absorbed by the freeze-end baseline. What he holds when
+    # he appears (5 deaths from an earlier part) is not this demo's and passes.
+    rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 300: {1: dict(deaths_total=0), 2: dict(deaths_total=5)},
+                        500: {1: dict(deaths_total=0), 2: dict(deaths_total=6)}})
+    with pytest.raises(RuntimeError, match="player 2's deaths_total rose by 1 between ticks 300 and 1710"):
+        ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)
+    p.counters[500][2]["deaths_total"] = 5
+    assert dict(zip(*ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)[["steamid", "deaths_total"]]
+                    .T.values)) == {1: 0, 2: 5}
+
+
 def test_a_round_one_death_the_game_did_not_count_still_fails_validation():
     # An HLTV split recording's later part had 10 "world" deaths on a restore tick that the game never counted.
     # Taking the tables' own deaths off the baseline would have cancelled them on both sides and passed the

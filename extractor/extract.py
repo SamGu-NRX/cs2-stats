@@ -717,8 +717,9 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     fails on it. Two rises fail the map instead:
     - a deaths_total rise across a death tick larger than that tick's deaths of the player: a counter load, as
       a backup restore does;
-    - a rise between the window's start (round 1's start, or the tick after begin_new_match when later) and
-      freeze end that the player's death, kill or assist rows there cannot explain: a death the demo lost.
+    - a rise between the player's first recorded tick in the window (from round 1's start, or the tick after
+      begin_new_match when later) and freeze end that his death, kill or assist rows there cannot explain: a
+      death the demo lost.
     ids: the player ids of parsed rows (resolve_ids for bots).
     """
     fe1 = rounds.freeze_end_tick.iloc[0]
@@ -742,15 +743,19 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
         return {"deaths_total": n(d["victim_steamid"]), "kills_total": n(d["attacker_steamid"]),
                 "headshot_kills_total": n(d["attacker_steamid"]), "assists_total": n(d["assister_steamid"])}
 
-    # A rise no death row explains, over the whole window before freeze end.
+    # A rise no death row explains, before freeze end. Each player is measured from his first recorded tick in
+    # the window: what he holds then (a reconnect, a split recording's earlier parts) cannot be from this demo,
+    # but everything after it is (review of PR 19: a player who appeared mid-window had a lost death absorbed).
     w0 = min(max(int(rounds.start_tick.iloc[0]), match_start + 1), fe1)
-    start = keyed(read_at(parser, DEATH_COUNTERS, [w0], after=True, guard=guard, rate=rate)).droplevel("tick")
+    span = keyed(parser.parse_ticks(DEATH_COUNTERS, ticks=list(range(w0, fe1 + 1)))).reset_index()
+    first = span.sort_values("tick", kind="stable").groupby("steamid").first()
     end = keyed(read_at(parser, DEATH_COUNTERS, [fe1], after=False, guard=guard, rate=rate)).droplevel("tick")
-    explained = rows_of((deaths.tick > w0).to_numpy())
-    for sid, r in (end - start).dropna().iterrows():
+    for sid, r in (end - first[DEATH_COUNTERS]).dropna().iterrows():
+        f = int(first.tick[sid])
+        explained = rows_of((deaths.tick > f).to_numpy())
         for c in DEATH_COUNTERS:
             if r[c] > explained[c].get(sid, 0):
-                raise RuntimeError(f"player {sid}'s {c} rose by {int(r[c])} between ticks {w0} and {fe1}, with "
+                raise RuntimeError(f"player {sid}'s {c} rose by {int(r[c])} between ticks {f} and {fe1}, with "
                                    f"{int(explained[c].get(sid, 0))} rows in the tables to explain it: a death the "
                                    "demo lost, so round 1's baseline cannot be read")
 
