@@ -20,7 +20,7 @@ import { pageHref } from "../router";
  */
 const SPARK_MIN_POINTS = 3;
 
-/** A pooled headline stat. It carries no delta: the last-match hero is the one place deltas show. */
+/** A pooled headline stat; `delta` is the last match against it (Home's tiles). */
 export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
   label: string;
   value: string;
@@ -159,6 +159,19 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
         <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
       </div>
+    </div>
+  );
+}
+
+/** The hover card of a round the file holds only as totals (MatchInfo.totalsOnly): only its number is known. */
+export function TotalsCardBody({ number }: { number: number }) {
+  return (
+    <div className="rcard">
+      <div className="rcard__head">
+        <WinIcon how={null} size={16} className="faint" />
+        <b>Round {number}</b>
+      </div>
+      <p className="meta">Totals only for this round.</p>
     </div>
   );
 }

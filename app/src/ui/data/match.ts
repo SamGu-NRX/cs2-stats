@@ -2,7 +2,7 @@
 // their kills and player rows, and the per-player cells of the round inspector. Pure grouping of the
 // worker's MatchBundle; every number with a definition comes from the worker (worker/views.ts).
 import type { BuyClass } from "../../stats/economy";
-import type { KillFact, MatchInfo, PlayerInfo, PlayerRound, RoundFact } from "../../stats/facts";
+import type { KillFact, MatchInfo, PlayerInfo, PlayerRound, RoundFact, TotalsRound } from "../../stats/facts";
 import type { Side } from "../../stats/tables";
 import type { Line, MatchBundle, MatchCore } from "../../worker/protocol";
 import { halfStarts } from "../lib/layout";
@@ -124,6 +124,39 @@ export function matchModel(entry: MatchEntry, b: MatchBundle): MatchModel {
     entry, file: entry.file, b, facts, map: facts.match.map, maxRounds: facts.match.maxRounds, nRounds: facts.rounds.length,
     human: entry.you, usStartSide: entry.usStartSide, players, rounds, visibility: facts.match.visibility === "ok",
   };
+}
+
+/**
+ * One column of the round rail and the round inspector: a round with facts, or a round the file
+ * holds only as totals (MatchInfo.totalsOnly), with the game's per-player totals when the file has
+ * them (MatchCore.totalsRounds). halfStart is read over every column's number, so a side swap just
+ * before a totals-only round sits before it.
+ */
+export type RoundColumn =
+  | { kind: "round"; number: number; halfStart: boolean; r: MRound }
+  | { kind: "totals"; number: number; halfStart: boolean; totals: TotalsRound | null };
+
+/** Every round the match had that the file names, in round-number order. */
+export function roundColumns(v: MatchModel): RoundColumn[] {
+  const byNumber = new Map(v.rounds.map((r) => [r.number, r]));
+  const numbers = [...new Set([...byNumber.keys(), ...v.facts.match.totalsOnly])].sort((a, b) => a - b);
+  const starts = halfStarts(numbers, v.maxRounds);
+  const totals = new Map(v.facts.totalsRounds.map((t) => [t.number, t]));
+  return numbers.map((number, i): RoundColumn => {
+    const r = byNumber.get(number);
+    return r ? { kind: "round", number, halfStart: starts[i], r } : { kind: "totals", number, halfStart: starts[i], totals: totals.get(number) ?? null };
+  });
+}
+
+/**
+ * The selected column: the round row `ri` the match view found in the URL, or else the URL's round
+ * number when it names a totals-only round (the match view finds no row for those). null otherwise.
+ */
+export function selectedColumn(cols: RoundColumn[], ri: number | null, urlRound: number | null): number | null {
+  const i = ri !== null
+    ? cols.findIndex((c) => c.kind === "round" && c.r.ri === ri)
+    : cols.findIndex((c) => c.kind === "totals" && c.number === urlRound);
+  return i >= 0 ? i : null;
 }
 
 /** The side a player was on in a round: their row's side, else their team's. */

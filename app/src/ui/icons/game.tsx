@@ -67,6 +67,8 @@ export function WinIcon({ how, ...p }: IconProps & { how: RoundHow | null }) {
 
 // ---------------------------------------------------------------- buy types (16 grid, filled)
 // Ascending bars, HLTV's classes: eco one, half buy two, full buy three. Pistol rounds show a pistol.
+// main also drew CS Demo Manager's "force-buy" as three hollow bars; the engine has no such class
+// (stats/economy.ts classifies HLTV's four), so that glyph is gone.
 
 export const BUY_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", half: "Half buy", full: "Full buy" };
 
@@ -165,18 +167,26 @@ export const SmokeKillIcon = (p: IconProps) => (
 export const NoscopeIcon = (p: IconProps) => (
   <Svg {...p} grid={16}><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v3M8 10.5v3M2.5 8h3M10.5 8h3" /><path d="M2.5 13.5l11-11" /></Svg>
 );
+export const BlindIcon = (p: IconProps) => (
+  <Svg {...p} grid={16}><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.8" /><path d="M2.5 14L13.5 2" /></Svg>
+);
+export const AirIcon = (p: IconProps) => (
+  <Svg {...p} grid={16}><path d="M8 13V3M4.5 6.5L8 3l3.5 3.5" /><path d="M4 14.5h8" /></Svg>
+);
 
-type Flag = "headshot" | "wallbang" | "smoke" | "noscope";
+type Flag = "headshot" | "wallbang" | "smoke" | "noscope" | "killerBlind" | "killerInAir";
 export const KILL_FLAGS: { flag: Flag; label: string; Icon: (p: IconProps) => JSX.Element }[] = [
   { flag: "headshot", label: "Headshot", Icon: HeadshotIcon },
   { flag: "wallbang", label: "Wallbang", Icon: WallbangIcon },
   { flag: "smoke", label: "Through smoke", Icon: SmokeKillIcon },
   { flag: "noscope", label: "No-scope", Icon: NoscopeIcon },
+  { flag: "killerBlind", label: "Killer was blind", Icon: BlindIcon },
+  { flag: "killerInAir", label: "Airborne", Icon: AirIcon },
 ];
 
-/** The flags set on a kill, as icons. */
+/** The flags set on a kill, as icons. killerBlind and killerInAir are null when the source did not record them, which shows nothing. */
 export function KillFlags({ kill, size = 13 }: { kill: Pick<KillFact, Flag>; size?: number }) {
-  const on = KILL_FLAGS.filter((f) => kill[f.flag]);
+  const on = KILL_FLAGS.filter((f) => kill[f.flag] === true);
   if (!on.length) return null;
   return <span className="kflags">{on.map(({ flag, label, Icon }) => <Icon key={flag} size={size} label={label} />)}</span>;
 }

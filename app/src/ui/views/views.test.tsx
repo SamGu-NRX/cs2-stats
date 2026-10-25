@@ -250,10 +250,11 @@ describe("Weapons", () => {
   const all = queryOf(samples);
   const rowOf = (gun: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell")?.childNodes[1]?.textContent === weaponLabel(gun)) ?? null;
   const col = (tr: Element | null, i: number) => tr?.querySelectorAll("td")[i] ?? null;
-  // Every gun table columns: gun, kills, shots, accuracy, first bullet, rounds used, proficiency, vs your other guns
+  // Every gun table columns: gun, kills, HS kills, shots, accuracy, first bullet, head share, rounds used,
+  // proficiency, vs your other guns, advice
   const KILLS = 1;
-  const ROUNDS = 5;
-  const EDGE = 7;
+  const ROUNDS = 7;
+  const EDGE = 9;
   /** your kills or rounds with one gun in the converted logs, summed one match at a time */
   const fromConverted = (gun: string, k: "kills" | "rounds") => converted.reduce((a, s) => a + (rollup([s.facts], { player: s.facts.match.pov! }).weapons[gun]?.[k] ?? 0), 0);
 
@@ -286,8 +287,8 @@ describe("Weapons", () => {
   });
 
   it("gives each gun one signal, its accuracy against your other guns pooled, only when both sides have enough shots", () => {
-    // fails if the signal compares with the gun's class instead of every other gun, shows with too few
-    // shots on either side, or falls back to advice sentences
+    // fails if the signal compares with the gun's class instead of every other gun, or shows with too few
+    // shots on either side
     use(samples);
     render(<Weapons />);
     const total = summary(all).weapons;
