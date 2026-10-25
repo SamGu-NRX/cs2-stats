@@ -1,0 +1,1919 @@
+{
+ "demo": "fixture-b.dem",
+ "demo_sha256": "c929677f465373f31b696f2c57f2796ba5769d675d4c3cfe352f8c342f0965b9",
+ "tables": {
+  "blinds": {
+   "columns": {
+    "ambiguous": [
+     "Boolean",
+     "87b479567e99c5fa"
+    ],
+    "attacker_steamid": [
+     "UInt64",
+     "17b65413128409ae"
+    ],
+    "duration": [
+     "Float32",
+     "6c5b03ea70f23d63"
+    ],
+    "flash_entity_id": [
+     "Int32",
+     "6e9ac64b3fba7ae2"
+    ],
+    "is_self": [
+     "Boolean",
+     "90486f5c37e57a5c"
+    ],
+    "is_team_flash": [
+     "Boolean",
+     "2274d712503a8d07"
+    ],
+    "round": [
+     "Int16",
+     "67d09ab2e1752444"
+    ],
+    "tick": [
+     "Int32",
+     "5b9e22e1b2223fd2"
+    ],
+    "v_x": [
+     "Float32",
+     "034389e20bbf1e6b"
+    ],
+    "v_y": [
+     "Float32",
+     "840408e6a8ee8d5d"
+    ],
+    "v_z": [
+     "Float32",
+     "11e1caac433fabc4"
+    ],
+    "victim_steamid": [
+     "UInt64",
+     "7a1c7ac64b779688"
+    ]
+   },
+   "rows": 242
+  },
+  "bomb": {
+   "columns": {
+    "event": [
+     "String",
+     "123413d7eff45b98"
+    ],
+    "place": [
+     "String",
+     "22ab9a5c86e31d01"
+    ],
+    "round": [
+     "Int16",
+     "01ee111178eb90df"
+    ],
+    "site": [
+     "String",
+     "35ff57074794f79d"
+    ],
+    "site_entity": [
+     "Int32",
+     "83a01883c1385499"
+    ],
+    "steamid": [
+     "UInt64",
+     "76f45d33220d992f"
+    ],
+    "tick": [
+     "Int32",
+     "a21a848d2c4e0092"
+    ],
+    "x": [
+     "Float32",
+     "2176bfd92e80210a"
+    ],
+    "y": [
+     "Float32",
+     "434a95a96f194af0"
+    ],
+    "z": [
+     "Float32",
+     "15f51129941fa350"
+    ],
+    "zone": [
+     "Int8",
+     "1d6d26b1f2b32adb"
+    ]
+   },
+   "rows": 138
+  },
+  "damages": {
+   "columns": {
+    "a_place": [
+     "String",
+     "849a34988b28376f"
+    ],
+    "a_side": [
+     "String",
+     "29dfe6f25ac871de"
+    ],
+    "a_x": [
+     "Float32",
+     "b3559165d16e47a9"
+    ],
+    "a_y": [
+     "Float32",
+     "95b891fb12b05748"
+    ],
+    "a_z": [
+     "Float32",
+     "b9a78620453370d0"
+    ],
+    "armor_after": [
+     "Int32",
+     "17cc4b9b12d79a87"
+    ],
+    "armor_before": [
+     "Int32",
+     "56b3b0b514b7b43f"
+    ],
+    "attacker_steamid": [
+     "UInt64",
+     "2d3c08bf748abdcb"
+    ],
+    "distance": [
+     "Float32",
+     "1583f1e058c86bf6"
+    ],
+    "dmg_armor": [
+     "Int32",
+     "5ef72a6941ad7a25"
+    ],
+    "dmg_armor_capped": [
+     "Int32",
+     "5ef72a6941ad7a25"
+    ],
+    "dmg_health": [
+     "Int32",
+     "0ca0223723710352"
+    ],
+    "dmg_health_capped": [
+     "Int32",
+     "57e8f080fc8eb973"
+    ],
+    "grenade_entity_id": [
+     "Int32",
+     "55df948ad8fbb16e"
+    ],
+    "grenade_link": [
+     "String",
+     "67b88e5fb211b512"
+    ],
+    "health_after": [
+     "Int32",
+     "5ac23d03fed5c0bd"
+    ],
+    "health_before": [
+     "Int32",
+     "ffced14ba743ede1"
+    ],
+    "hitgroup": [
+     "String",
+     "536262ac03e833ba"
+    ],
+    "is_self": [
+     "Boolean",
+     "0e603b06e7877a27"
+    ],
+    "is_team_damage": [
+     "Boolean",
+     "212fe4e39eb01755"
+    ],
+    "reconstructed_ambiguous": [
+     "Boolean",
+     "0a82f91a83d23e36"
+    ],
+    "round": [
+     "Int16",
+     "041d27eb613b2ee0"
+    ],
+    "source": [
+     "String",
+     "1e0a99498c0d636a"
+    ],
+    "tick": [
+     "Int32",
+     "b760f12ff4069361"
+    ],
+    "v_place": [
+     "String",
+     "585fc6eeb846497d"
+    ],
+    "v_side": [
+     "String",
+     "f76c4cbe54e28d6b"
+    ],
+    "v_x": [
+     "Float32",
+     "fca92e86dcfc7b57"
+    ],
+    "v_y": [
+     "Float32",
+     "5805b77b78e447b1"
+    ],
+    "v_z": [
+     "Float32",
+     "09be879434220573"
+    ],
+    "victim_steamid": [
+     "UInt64",
+     "a4b39b65e81ee1d8"
+    ],
+    "weapon": [
+     "String",
+     "9c619709cd85f697"
+    ]
+   },
+   "rows": 608
+  },
+  "engagement_ticks": {
+   "columns": {
+    "a_duck": [
+     "Float32",
+     "54fe2fa6c6a425d5"
+    ],
+    "a_eye_z": [
+     "Float32",
+     "a7f874b95ce100b0"
+    ],
+    "a_pitch": [
+     "Float32",
+     "dc33e2de9bb1702c"
+    ],
+    "a_shot_fired": [
+     "Boolean",
+     "bd657f9b1fdf1260"
+    ],
+    "a_spotted_by_v": [
+     "Boolean",
+     "826d17bb164e33b6"
+    ],
+    "a_vel_x": [
+     "Float32",
+     "2153fb129de1a8bd"
+    ],
+    "a_vel_y": [
+     "Float32",
+     "19f5836572dd643b"
+    ],
+    "a_vel_z": [
+     "Float32",
+     "8f37871e643e56a4"
+    ],
+    "a_x": [
+     "Float32",
+     "cb46ebb9dd4f6e5b"
+    ],
+    "a_y": [
+     "Float32",
+     "1f5784178e842a37"
+    ],
+    "a_yaw": [
+     "Float32",
+     "92237f7a5c203f80"
+    ],
+    "a_z": [
+     "Float32",
+     "de4735486f8490e4"
+    ],
+    "engagement_id": [
+     "Int32",
+     "b6d0f0a4080a04d1"
+    ],
+    "mesh_visible": [
+     "Boolean",
+     "2039373eba8e6026"
+    ],
+    "smoke_blocked": [
+     "Boolean",
+     "69a5721528c84bf6"
+    ],
+    "tick": [
+     "Int32",
+     "3f09b911e9d42bab"
+    ],
+    "v_duck": [
+     "Float32",
+     "2a0b2ac1697b7b42"
+    ],
+    "v_eye_z": [
+     "Float32",
+     "a7f00677193c52e2"
+    ],
+    "v_pitch": [
+     "Float32",
+     "874f7fc9d8493060"
+    ],
+    "v_shot_fired": [
+     "Boolean",
+     "783891612d894558"
+    ],
+    "v_spotted_by_a": [
+     "Boolean",
+     "7fda3350e3fb6bfb"
+    ],
+    "v_vel_x": [
+     "Float32",
+     "9cd1e6cef60b71e7"
+    ],
+    "v_vel_y": [
+     "Float32",
+     "0067de16e857703d"
+    ],
+    "v_vel_z": [
+     "Float32",
+     "5a0299cab201759f"
+    ],
+    "v_x": [
+     "Float32",
+     "43c44dace254935b"
+    ],
+    "v_y": [
+     "Float32",
+     "7644e3575ddc8650"
+    ],
+    "v_yaw": [
+     "Float32",
+     "0c1bf6d29b1643b5"
+    ],
+    "v_z": [
+     "Float32",
+     "7e7c268833ac5673"
+    ]
+   },
+   "rows": 101988
+  },
+  "engagements": {
+   "columns": {
+    "attacker_steamid": [
+     "UInt64",
+     "c5b1517f1aae3587"
+    ],
+    "damage": [
+     "Int32",
+     "30f6f38c92563794"
+    ],
+    "end_tick": [
+     "Int32",
+     "580aa036cad66a6a"
+    ],
+    "engagement_id": [
+     "Int32",
+     "b6fc14398b47f7b5"
+    ],
+    "first_damage_tick": [
+     "Int32",
+     "73789f1fcd58e581"
+    ],
+    "first_shot_tick": [
+     "Int32",
+     "10a43bc59fd800f3"
+    ],
+    "first_visible_tick": [
+     "Int32",
+     "1559608f59364121"
+    ],
+    "hits": [
+     "Int16",
+     "62ccc7c4469cfb8a"
+    ],
+    "outcome": [
+     "String",
+     "d9694c2560e87b53"
+    ],
+    "round": [
+     "Int16",
+     "5a30a088e3242374"
+    ],
+    "start_tick": [
+     "Int32",
+     "e0a6c69fe66f7c82"
+    ],
+    "truncated": [
+     "Boolean",
+     "76059bbfad8e0279"
+    ],
+    "victim_steamid": [
+     "UInt64",
+     "d7a88c77e23e30ad"
+    ],
+    "weapon": [
+     "String",
+     "dadd71e9b77bf534"
+    ]
+   },
+   "rows": 680
+  },
+  "events_misc": {
+   "columns": {
+    "data": [
+     "String",
+     "ce2adea2876f1e83"
+    ],
+    "event": [
+     "String",
+     "cb12f2c81ef840b3"
+    ],
+    "round": [
+     "Int16",
+     "d69dc5a3c119c3cb"
+    ],
+    "steamid": [
+     "UInt64",
+     "fef0ad3abe8c2be8"
+    ],
+    "tick": [
+     "Int32",
+     "79d95fa102774f3d"
+    ]
+   },
+   "rows": 20621
+  },
+  "grenade_events": {
+   "columns": {
+    "entity_id": [
+     "Int32",
+     "2f653dad1da1cd48"
+    ],
+    "event": [
+     "String",
+     "8d96dd7e8e7cfbe6"
+    ],
+    "round": [
+     "Int16",
+     "fcb18e42997e00b9"
+    ],
+    "steamid": [
+     "UInt64",
+     "2e8eff6350388ddd"
+    ],
+    "tick": [
+     "Int32",
+     "e1942267d640e37e"
+    ],
+    "x": [
+     "Float32",
+     "a25977848158ca4c"
+    ],
+    "y": [
+     "Float32",
+     "d726b6901e7a4207"
+    ],
+    "z": [
+     "Float32",
+     "59ba9419c91ea1ed"
+    ]
+   },
+   "rows": 656
+  },
+  "grenade_paths": {
+   "columns": {
+    "entity_id": [
+     "Int32",
+     "c99a2af211e42e59"
+    ],
+    "projectile": [
+     "Int32",
+     "dd4f3998c1faec29"
+    ],
+    "round": [
+     "Int16",
+     "35e30f3bf4273dd9"
+    ],
+    "steamid": [
+     "UInt64",
+     "80e556c8167c2187"
+    ],
+    "tick": [
+     "Int32",
+     "8980c49e22523a65"
+    ],
+    "type": [
+     "String",
+     "9568d4a0d563cc5b"
+    ],
+    "x": [
+     "Float32",
+     "b0b1faa10c5c45a1"
+    ],
+    "y": [
+     "Float32",
+     "781465aa3ae99124"
+    ],
+    "z": [
+     "Float32",
+     "5355cb6d5581effe"
+    ]
+   },
+   "rows": 64083
+  },
+  "grenade_throws": {
+   "columns": {
+    "entity_id": [
+     "Int32",
+     "f09f0be457a0755e"
+    ],
+    "flight_s": [
+     "Float32",
+     "5fd46d2b7666a148"
+    ],
+    "land_tick": [
+     "Int32",
+     "b4548b31c200ea30"
+    ],
+    "land_x": [
+     "Float32",
+     "3224c6dfbbd0c165"
+    ],
+    "land_y": [
+     "Float32",
+     "3fe6ba2401ab5914"
+    ],
+    "land_z": [
+     "Float32",
+     "1d9c0a8de6ac0bf0"
+    ],
+    "link_distance": [
+     "Float32",
+     "db21809d39748923"
+    ],
+    "pitch": [
+     "Float32",
+     "f2c62df73ba1a163"
+    ],
+    "place": [
+     "String",
+     "ef520ce49204ae55"
+    ],
+    "projectile": [
+     "Int32",
+     "40de2045b7e5b55c"
+    ],
+    "round": [
+     "Int16",
+     "8886d1c6f194e8e8"
+    ],
+    "side": [
+     "String",
+     "1d790037125576b7"
+    ],
+    "steamid": [
+     "UInt64",
+     "46fd881a9bdd4ae3"
+    ],
+    "tick": [
+     "Int32",
+     "cea0b2f885d1df3b"
+    ],
+    "weapon": [
+     "String",
+     "fd54c117200ddbd9"
+    ],
+    "x": [
+     "Float32",
+     "d12ad0f6a028e615"
+    ],
+    "y": [
+     "Float32",
+     "715ef3439e1b5a03"
+    ],
+    "yaw": [
+     "Float32",
+     "41a2dfd5d9be739c"
+    ],
+    "z": [
+     "Float32",
+     "25ce76277dd76c2f"
+    ]
+   },
+   "rows": 434
+  },
+  "infernos": {
+   "columns": {
+    "duration_s": [
+     "Float32",
+     "d1812a5bb4ce1213"
+    ],
+    "end_tick": [
+     "Int32",
+     "d5501aef26321849"
+    ],
+    "entity_id": [
+     "Int32",
+     "5ee43d427f917134"
+    ],
+    "round": [
+     "Int16",
+     "6ea3da3f426e358c"
+    ],
+    "start_tick": [
+     "Int32",
+     "747dd4c581a8b772"
+    ],
+    "steamid": [
+     "UInt64",
+     "6ca065fb1a655a46"
+    ],
+    "x": [
+     "Float32",
+     "6aa4a3f1f41b1596"
+    ],
+    "y": [
+     "Float32",
+     "03a966c864212c1a"
+    ],
+    "z": [
+     "Float32",
+     "1d6a3a9d4acb42d5"
+    ]
+   },
+   "rows": 108
+  },
+  "kills": {
+   "columns": {
+    "a_active_weapon": [
+     "String",
+     "f240fe2c67d6a853"
+    ],
+    "a_airborne": [
+     "Boolean",
+     "0251202afb8b004a"
+    ],
+    "a_armor": [
+     "Int32",
+     "aa0f80f0f076f64c"
+    ],
+    "a_best_primary": [
+     "String",
+     "befb43cbedac4a19"
+    ],
+    "a_best_primary_price": [
+     "Int32",
+     "2b5e9e0d07c01f11"
+    ],
+    "a_best_secondary": [
+     "String",
+     "fd119de880be387f"
+    ],
+    "a_best_secondary_price": [
+     "Int32",
+     "0f385871e7ad8d19"
+    ],
+    "a_ducking": [
+     "Boolean",
+     "50234b0d37e83eb3"
+    ],
+    "a_equip_value_game": [
+     "Int32",
+     "7baf3d274bf3af57"
+    ],
+    "a_flash_duration": [
+     "Float32",
+     "a057e6a6f5d3da01"
+    ],
+    "a_health": [
+     "Int32",
+     "9a04fc3c523cac52"
+    ],
+    "a_helmet": [
+     "Boolean",
+     "08a9daa001a1e04b"
+    ],
+    "a_inventory_value": [
+     "Int32",
+     "1342f76d62980bb3"
+    ],
+    "a_money": [
+     "Int32",
+     "541c096be74a0483"
+    ],
+    "a_pitch": [
+     "Float32",
+     "f4df3a7e9a3101cc"
+    ],
+    "a_place": [
+     "String",
+     "487326e33c5d4817"
+    ],
+    "a_scoped": [
+     "Boolean",
+     "3a9cbaa1ccc1f7b7"
+    ],
+    "a_side": [
+     "String",
+     "4486e946502e2e7d"
+    ],
+    "a_walking": [
+     "Boolean",
+     "354908524ee8df40"
+    ],
+    "a_x": [
+     "Float32",
+     "2146692bc20cce4c"
+    ],
+    "a_y": [
+     "Float32",
+     "f7771800f3f9e31d"
+    ],
+    "a_yaw": [
+     "Float32",
+     "cf07bfd8ce5c5cc1"
+    ],
+    "a_z": [
+     "Float32",
+     "2fb4f7f3470ac4df"
+    ],
+    "assistedflash": [
+     "Boolean",
+     "fbf6ece90c44eb3e"
+    ],
+    "assister_side": [
+     "String",
+     "c542e2836a3b21fe"
+    ],
+    "assister_steamid": [
+     "UInt64",
+     "04abceeeaa8f185e"
+    ],
+    "attacker_steamid": [
+     "UInt64",
+     "bd7695ba277950e4"
+    ],
+    "attackerblind": [
+     "Boolean",
+     "ddb83ca0f5d31c30"
+    ],
+    "attackerinair": [
+     "Boolean",
+     "dad568b2e5f3a4aa"
+    ],
+    "distance": [
+     "Float32",
+     "ffac9448cc1f4780"
+    ],
+    "dmg_armor": [
+     "Int32",
+     "be2bf5ff4904fa8f"
+    ],
+    "dmg_health": [
+     "Int32",
+     "9119fd6e32873fed"
+    ],
+    "headshot": [
+     "Boolean",
+     "fc1a731a400e716a"
+    ],
+    "hitgroup": [
+     "String",
+     "9ca1a47712ad9a9c"
+    ],
+    "is_suicide": [
+     "Boolean",
+     "a05e59f10a8c635f"
+    ],
+    "is_teamkill": [
+     "Boolean",
+     "dad568b2e5f3a4aa"
+    ],
+    "noscope": [
+     "Boolean",
+     "dad568b2e5f3a4aa"
+    ],
+    "penetrated": [
+     "Int32",
+     "8221056558c77f81"
+    ],
+    "round": [
+     "Int16",
+     "0b48f7ab10412179"
+    ],
+    "s_since_freeze_end": [
+     "Float32",
+     "f268d500b95b780e"
+    ],
+    "s_since_plant": [
+     "Float32",
+     "263096274987c39d"
+    ],
+    "thrusmoke": [
+     "Boolean",
+     "f517bcdd7a1e13b1"
+    ],
+    "tick": [
+     "Int32",
+     "6dc2d20793ea2aa6"
+    ],
+    "trade_kill_5s": [
+     "Boolean",
+     "1769fdef023ec6d0"
+    ],
+    "traded_death_5s": [
+     "Boolean",
+     "50e04915e7b09e9b"
+    ],
+    "v_active_weapon": [
+     "String",
+     "75641150738fbecc"
+    ],
+    "v_airborne": [
+     "Boolean",
+     "bd3b1a89e8fdd427"
+    ],
+    "v_armor": [
+     "Int32",
+     "004d5c25adcb17df"
+    ],
+    "v_best_primary": [
+     "String",
+     "df3632e3fdd2da1c"
+    ],
+    "v_best_primary_price": [
+     "Int32",
+     "cd7313f598211cb2"
+    ],
+    "v_best_secondary": [
+     "String",
+     "5a81179447f6220f"
+    ],
+    "v_best_secondary_price": [
+     "Int32",
+     "a2661860ed722c8c"
+    ],
+    "v_ducking": [
+     "Boolean",
+     "3eeffc06e32e126e"
+    ],
+    "v_equip_value_game": [
+     "Int32",
+     "ac5e4e4ba3fad551"
+    ],
+    "v_flash_duration": [
+     "Float32",
+     "cd2ace8ec24ceb2e"
+    ],
+    "v_health": [
+     "Int32",
+     "22711987c3a446ac"
+    ],
+    "v_helmet": [
+     "Boolean",
+     "e1edbf29f96d4465"
+    ],
+    "v_inventory_value": [
+     "Int32",
+     "2d47d66cde6bc116"
+    ],
+    "v_money": [
+     "Int32",
+     "daae09081fcc30d8"
+    ],
+    "v_pitch": [
+     "Float32",
+     "7fbc2924260c4a50"
+    ],
+    "v_place": [
+     "String",
+     "6b585cceec83cd40"
+    ],
+    "v_scoped": [
+     "Boolean",
+     "0ac2f3d66cfe020d"
+    ],
+    "v_side": [
+     "String",
+     "5ed5b7e85c56aa23"
+    ],
+    "v_walking": [
+     "Boolean",
+     "0b808ac2a8bb641d"
+    ],
+    "v_x": [
+     "Float32",
+     "75274d54e5b301d8"
+    ],
+    "v_y": [
+     "Float32",
+     "83bbac1343d6de8f"
+    ],
+    "v_yaw": [
+     "Float32",
+     "91f751bedc1e6413"
+    ],
+    "v_z": [
+     "Float32",
+     "233ed6e2b7783f38"
+    ],
+    "victim_steamid": [
+     "UInt64",
+     "d2902afe82b4779c"
+    ],
+    "weapon": [
+     "String",
+     "ef0faee82ca0062d"
+    ]
+   },
+   "rows": 144
+  },
+  "match": {
+   "columns": {
+    "archive": [
+     "String",
+     "692cc4ec77a9a238"
+    ],
+    "awpy_convars": [
+     "String",
+     "9a0f25f369448414"
+    ],
+    "awpy_version": [
+     "String",
+     "edd62dc240df607c"
+    ],
+    "build_num": [
+     "Int32",
+     "16ab9dadcb6952b0"
+    ],
+    "convars": [
+     "String",
+     "9a0f25f369448414"
+    ],
+    "dem_bytes": [
+     "Int64",
+     "f6e4269e44121aca"
+    ],
+    "dem_file": [
+     "String",
+     "d33a4733393384e6"
+    ],
+    "demo_sha256": [
+     "String",
+     "96027a5229707e60"
+    ],
+    "demo_version_guid": [
+     "String",
+     "7b48dddf9bf677d5"
+    ],
+    "demoparser2_version": [
+     "String",
+     "c97244ec16e34208"
+    ],
+    "extra": [
+     "String",
+     "eb4e847aa0b85bf0"
+    ],
+    "extractor_version": [
+     "String",
+     "720151d50ea032db"
+    ],
+    "final_tick": [
+     "Int32",
+     "353c563dbd62469b"
+    ],
+    "map": [
+     "String",
+     "ec4b7df77c5d85c9"
+    ],
+    "map_key": [
+     "String",
+     "ec4b7df77c5d85c9"
+    ],
+    "match_id": [
+     "String",
+     "d713cf56b0c59abf"
+    ],
+    "match_start_tick": [
+     "Int32",
+     "396bc95c35b8ccee"
+    ],
+    "mesh_buildid": [
+     "String",
+     "e418231dc3895a75"
+    ],
+    "mesh_kill_agreement": [
+     "Float32",
+     "96338ebc9f6e7141"
+    ],
+    "mesh_patch_version": [
+     "String",
+     "e79fd0bac8d31268"
+    ],
+    "mesh_release": [
+     "String",
+     "c83e43103c55e192"
+    ],
+    "mesh_sha256": [
+     "String",
+     "0adea3811be6d7c7"
+    ],
+    "n_rounds": [
+     "Int16",
+     "ba65abcef8c57dbd"
+    ],
+    "pandas_version": [
+     "String",
+     "1bf5e38d3354042a"
+    ],
+    "parsed_at_utc": [
+     "String",
+     null
+    ],
+    "patch_version": [
+     "String",
+     "2641b1e1d059161c"
+    ],
+    "playback_ticks": [
+     "Int32",
+     "1b94dd2670685b31"
+    ],
+    "polars_version": [
+     "String",
+     "a09c818f1cfdba9e"
+    ],
+    "position_stride_ticks": [
+     "Int16",
+     "30b874835d221ed8"
+    ],
+    "price_file": [
+     "String",
+     "0fc729d4047b34f9"
+    ],
+    "price_source": [
+     "String",
+     "9addd54339e8d4d0"
+    ],
+    "python_version": [
+     "String",
+     "331a9c262c325c94"
+    ],
+    "schema_version": [
+     "Int16",
+     "2b8d9cc6944cb101"
+    ],
+    "score_ct_start": [
+     "Int16",
+     "f0503ee9eb90d37d"
+    ],
+    "score_t_start": [
+     "Int16",
+     "d713ad7758fba4de"
+    ],
+    "server_name": [
+     "String",
+     "3270bcd63edcf2b4"
+    ],
+    "smoke_model": [
+     "String",
+     "aaedb05dfdbf632a"
+    ],
+    "source": [
+     "String",
+     "ea9083fde75e2604"
+    ],
+    "team1_file": [
+     "String",
+     "11d418ea5fead072"
+    ],
+    "team2_file": [
+     "String",
+     "11d418ea5fead072"
+    ],
+    "team_ct_start": [
+     "String",
+     "44477a542e477877"
+    ],
+    "team_t_start": [
+     "String",
+     "6eeff7e78143730a"
+    ],
+    "tick_rate": [
+     "Float32",
+     "d603b0c852f91ec4"
+    ],
+    "trade_window_s": [
+     "Float32",
+     "a7e46e87e47cd9c0"
+    ],
+    "truncated": [
+     "Boolean",
+     "a1c52f47ee39e4c9"
+    ],
+    "unattributed_damage_hp": [
+     "Int32",
+     "0b1d31977c702a42"
+    ],
+    "unavailable_fields": [
+     "String",
+     "e43c3b335c5102ce"
+    ],
+    "velocity_source": [
+     "String",
+     "c9857057756cd9bb"
+    ],
+    "visibility_status": [
+     "String",
+     "9c08cbe194217edb"
+    ],
+    "voided_windows": [
+     "String",
+     "159c15b8d12cb074"
+    ]
+   },
+   "rows": 1
+  },
+  "player_rounds": {
+   "columns": {
+    "armor": [
+     "Int32",
+     "814666e1159b08af"
+    ],
+    "best_primary": [
+     "String",
+     "a6e9f7d2297f87b5"
+    ],
+    "best_primary_price": [
+     "Int32",
+     "34901b44fafe60a2"
+    ],
+    "best_secondary": [
+     "String",
+     "901e6fe563dd35cf"
+    ],
+    "best_secondary_price": [
+     "Int32",
+     "c56ed81834dbeb02"
+    ],
+    "cash_spent": [
+     "Int32",
+     "323ede582f2d6c6f"
+    ],
+    "defuser": [
+     "Boolean",
+     "8ae5f2ba80e0f5ee"
+    ],
+    "equip_value_game": [
+     "Int32",
+     "d3d06d70c64e0df2"
+    ],
+    "game_damage": [
+     "Int32",
+     "77d8c57d7cf80f2c"
+    ],
+    "helmet": [
+     "Boolean",
+     "56a6e52c56605a1c"
+    ],
+    "inventory": [
+     "List(String)",
+     "02c635b325dae2a8"
+    ],
+    "inventory_value": [
+     "Int32",
+     "0712624de9a2e07f"
+    ],
+    "money": [
+     "Int32",
+     "94ebd2ea4785009c"
+    ],
+    "money_start": [
+     "Int32",
+     "802911b06fbd0074"
+    ],
+    "name": [
+     "String",
+     "391259800ea31689"
+    ],
+    "round": [
+     "Int16",
+     "002608fd2fdfe0ce"
+    ],
+    "round_start_equip_value": [
+     "Int32",
+     "c7c2f436459bcf3e"
+    ],
+    "side": [
+     "String",
+     "7519eaac4b7cc3fb"
+    ],
+    "steamid": [
+     "UInt64",
+     "ea5517352353a49c"
+    ],
+    "survived": [
+     "Boolean",
+     "a4fc12b930149022"
+    ],
+    "tick": [
+     "Int32",
+     "01f17f2811976418"
+    ]
+   },
+   "rows": 210
+  },
+  "players": {
+   "columns": {
+    "is_bot": [
+     "Boolean",
+     "328b060d87164b89"
+    ],
+    "name": [
+     "String",
+     "761e154ac1f62911"
+    ],
+    "rounds_present": [
+     "Int16",
+     "95e0c93920f83744"
+    ],
+    "side_h1": [
+     "String",
+     "4d30e4bfbbedc6ae"
+    ],
+    "side_h2": [
+     "String",
+     "50099c9afa1c0806"
+    ],
+    "side_ot": [
+     "List(String)",
+     "7e104ee89d5b7600"
+    ],
+    "steamid": [
+     "UInt64",
+     "e748b6a038e53382"
+    ],
+    "team": [
+     "String",
+     "648f1d19fd05750c"
+    ]
+   },
+   "rows": 10
+  },
+  "positions": {
+   "columns": {
+    "active_weapon": [
+     "String",
+     "d10476c9c79d5a86"
+    ],
+    "armor": [
+     "Int32",
+     "e3016801f70911c0"
+    ],
+    "duck_amount": [
+     "Float32",
+     "d7f5b0ae8b507445"
+    ],
+    "ducked": [
+     "Boolean",
+     "2109f1fcfe0d05de"
+    ],
+    "ducking": [
+     "Boolean",
+     "80357ec3b0e13a79"
+    ],
+    "flash_duration": [
+     "Float32",
+     "6a290420d3a24f5d"
+    ],
+    "health": [
+     "Int32",
+     "cfb861b541c3ec8a"
+    ],
+    "helmet": [
+     "Boolean",
+     "55d68e66f3bb7472"
+    ],
+    "is_airborne": [
+     "Boolean",
+     "b5214c3d0b34b2f5"
+    ],
+    "is_alive": [
+     "Boolean",
+     "99da56a68a158bdc"
+    ],
+    "is_scoped": [
+     "Boolean",
+     "789cab06c9afa5ff"
+    ],
+    "is_walking": [
+     "Boolean",
+     "9d09be0fa4e2a241"
+    ],
+    "money": [
+     "Int32",
+     "2efb47d72c02ca3b"
+    ],
+    "pitch": [
+     "Float32",
+     "13a25b1c4b3cbb9d"
+    ],
+    "place": [
+     "String",
+     "74f14833b57d8e4d"
+    ],
+    "round": [
+     "Int16",
+     "d115c13498c8df8f"
+    ],
+    "side": [
+     "String",
+     "03f79ae43f69d901"
+    ],
+    "spotted": [
+     "Boolean",
+     "3393a9915006c0c9"
+    ],
+    "spotted_by": [
+     "List(UInt64)",
+     "6c2f97856743f8ba"
+    ],
+    "steamid": [
+     "UInt64",
+     "9e46e9cb8f2763e1"
+    ],
+    "tick": [
+     "Int32",
+     "97b9538c067560d0"
+    ],
+    "user_id": [
+     "Int32",
+     "357c67501b63b0b4"
+    ],
+    "vel_x": [
+     "Float32",
+     "00d94b1360992848"
+    ],
+    "vel_y": [
+     "Float32",
+     "c5fa81f468ca666f"
+    ],
+    "vel_z": [
+     "Float32",
+     "ac43779df278bdf2"
+    ],
+    "velocity_modifier": [
+     "Float32",
+     "97cb4f2e43acf8c7"
+    ],
+    "x": [
+     "Float32",
+     "a34c2589583973a6"
+    ],
+    "y": [
+     "Float32",
+     "3d1a1532edab840a"
+    ],
+    "yaw": [
+     "Float32",
+     "d1a59a53f243d74f"
+    ],
+    "z": [
+     "Float32",
+     "546107b7719c9a66"
+    ]
+   },
+   "rows": 100450
+  },
+  "purchases": {
+   "columns": {
+    "cost": [
+     "Int32",
+     "1af315605c64c552"
+    ],
+    "inventory_slot": [
+     "Int16",
+     "8dafd8d371a4dc7b"
+    ],
+    "item": [
+     "String",
+     "2e2134ef19c92d1e"
+    ],
+    "round": [
+     "Int16",
+     "6c5cdd4a0e3e4a45"
+    ],
+    "side": [
+     "String",
+     "7e2ce9761607666b"
+    ],
+    "steamid": [
+     "UInt64",
+     "fa47be623268acf9"
+    ],
+    "tick": [
+     "Int32",
+     "92e8f1998f1e6827"
+    ],
+    "was_sold": [
+     "Boolean",
+     "47622306f82ec8c2"
+    ],
+    "x": [
+     "Float32",
+     "13253751016ac084"
+    ],
+    "y": [
+     "Float32",
+     "4c2b54a0ba82cc27"
+    ],
+    "z": [
+     "Float32",
+     "72081161cd0cebff"
+    ]
+   },
+   "rows": 1464
+  },
+  "rounds": {
+   "columns": {
+    "aborted": [
+     "Boolean",
+     "b2d10285cdc235dc"
+    ],
+    "ct_buy_type": [
+     "String",
+     "6e862e0a7c7eb62e"
+    ],
+    "ct_equip_value": [
+     "Int32",
+     "6e0f503b26c87fa2"
+    ],
+    "ct_money_start": [
+     "Int32",
+     "829b6c335a5ab838"
+    ],
+    "ct_team": [
+     "String",
+     "4e7849810776c5b5"
+    ],
+    "ct_team_score_after": [
+     "Int16",
+     "dec96bd88d0e1666"
+    ],
+    "defuse_tick": [
+     "Int32",
+     "813dec995aac377e"
+    ],
+    "defuser_steamid": [
+     "UInt64",
+     "5cc91356192b8d74"
+    ],
+    "duration_s": [
+     "Float32",
+     "0b2d3b0478c84cd0"
+    ],
+    "end_tick": [
+     "Int32",
+     "60672e15602ab0a6"
+    ],
+    "explode_tick": [
+     "Int32",
+     "4d20de1092ffa226"
+    ],
+    "freeze_end_tick": [
+     "Int32",
+     "39b9a3e6edb24f7a"
+    ],
+    "official_end_tick": [
+     "Int32",
+     "9f53657a7ac5d301"
+    ],
+    "plant_site": [
+     "String",
+     "08c54db305cf2714"
+    ],
+    "plant_tick": [
+     "Int32",
+     "088744f8c4a2760f"
+    ],
+    "planter_steamid": [
+     "UInt64",
+     "86cef55570a50953"
+    ],
+    "reason": [
+     "String",
+     "7e079e2f05089b8d"
+    ],
+    "round": [
+     "Int16",
+     "baeed0c599165581"
+    ],
+    "start_tick": [
+     "Int32",
+     "98c78a3eed6d84cd"
+    ],
+    "started_live": [
+     "Boolean",
+     "b2d10285cdc235dc"
+    ],
+    "t_buy_type": [
+     "String",
+     "7da7b620125bcf49"
+    ],
+    "t_equip_value": [
+     "Int32",
+     "ca8008e9332a0747"
+    ],
+    "t_money_start": [
+     "Int32",
+     "de08ff5a08ad4991"
+    ],
+    "t_team": [
+     "String",
+     "556adca5e417d6cc"
+    ],
+    "t_team_score_after": [
+     "Int16",
+     "d16cf909cf002e72"
+    ],
+    "voided_attempts": [
+     "Int16",
+     "eed7155f2890bc70"
+    ],
+    "winner_side": [
+     "String",
+     "a45b70f08b40f3cb"
+    ],
+    "winner_team": [
+     "String",
+     "788563dc0c03feaf"
+    ]
+   },
+   "rows": 21
+  },
+  "scoreboard": {
+   "columns": {
+    "3k_rounds_total": [
+     "Int32",
+     "7d80f504b4e1574c"
+    ],
+    "4k_rounds_total": [
+     "Int32",
+     "d3a7b76b7bc41732"
+    ],
+    "ace_rounds_total": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "alive_time_total": [
+     "Int32",
+     "fb3e62941fd4f8bd"
+    ],
+    "assists_total": [
+     "Int32",
+     "8ca82f9b0a71ad4b"
+    ],
+    "assists_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "cash_earned_total": [
+     "Int32",
+     "7f8390551ac5e3e8"
+    ],
+    "crosshair_code": [
+     "String",
+     "c1a190bbe9e19676"
+    ],
+    "damage_total": [
+     "Int32",
+     "f05877affa331fd8"
+    ],
+    "damage_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "deaths_total": [
+     "Int32",
+     "cb694f0bf5c21e0e"
+    ],
+    "deaths_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "enemies_flashed_total": [
+     "Int32",
+     "b6e57ce4ff30d8dc"
+    ],
+    "equipment_value_total": [
+     "Int32",
+     "34624e29de916def"
+    ],
+    "headshot_kills_total": [
+     "Int32",
+     "4fac07f634b11ac8"
+    ],
+    "headshot_kills_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "kill_reward_total": [
+     "Int32",
+     "0239b66c51f60352"
+    ],
+    "kills_total": [
+     "Int32",
+     "c4aec38cab11b248"
+    ],
+    "kills_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "money_saved_total": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "mvps": [
+     "Int32",
+     "8def2fa46b722c73"
+    ],
+    "name": [
+     "String",
+     "04c8dcb62a9869a6"
+    ],
+    "objective_total": [
+     "Int32",
+     "066ca1959c8f235a"
+    ],
+    "score": [
+     "Int32",
+     "bb056e2168f367e4"
+    ],
+    "side": [
+     "String",
+     "bf018c590b62f22b"
+    ],
+    "steamid": [
+     "UInt64",
+     "96a9fbff0083df23"
+    ],
+    "team_clan_name": [
+     "String",
+     "8f432792224765a1"
+    ],
+    "team_rounds_total": [
+     "Int32",
+     "4cac00544baf45e7"
+    ],
+    "team_rounds_total_at_start": [
+     "Int32",
+     "9de6d365d163305c"
+    ],
+    "tick": [
+     "Int32",
+     "3b7e565a8171644a"
+    ],
+    "utility_damage_total": [
+     "Int32",
+     "38e5d0696309ee15"
+    ]
+   },
+   "rows": 10
+  },
+  "shots": {
+   "columns": {
+    "accuracy_penalty": [
+     "Float32",
+     "6dfa5f1e9346d95b"
+    ],
+    "active_weapon": [
+     "String",
+     "723d5f810ca20796"
+    ],
+    "airborne": [
+     "Boolean",
+     "e06c741a4b020e81"
+    ],
+    "ammo_clip": [
+     "Int32",
+     "e8c2dcf5f66e444c"
+    ],
+    "bullet_inair": [
+     "Boolean",
+     "7e38acb4ce1f6f87"
+    ],
+    "bullet_pitch": [
+     "Float32",
+     "24e3f2ea9065e793"
+    ],
+    "bullet_yaw": [
+     "Float32",
+     "fad3b6a59b622ba9"
+    ],
+    "duck_amount": [
+     "Float32",
+     "6477d897eefe747f"
+    ],
+    "ducked": [
+     "Boolean",
+     "19176339ddaee386"
+    ],
+    "ducking": [
+     "Boolean",
+     "09a64693ed69bf05"
+    ],
+    "eye_x": [
+     "Float32",
+     "4832a36bc64e6112"
+    ],
+    "eye_y": [
+     "Float32",
+     "28c9f3adfdd8030d"
+    ],
+    "eye_z": [
+     "Float32",
+     "3bb9116675e5bf7c"
+    ],
+    "flash_duration": [
+     "Float32",
+     "8ad1027197359d42"
+    ],
+    "has_bullet_info": [
+     "Boolean",
+     "3c5fcd0b2a7a4b33"
+    ],
+    "health": [
+     "Int32",
+     "b0d72634b206d9f5"
+    ],
+    "inaccuracy": [
+     "Float32",
+     "3b81e2bcf2ba96f0"
+    ],
+    "item_def_index": [
+     "UInt32",
+     "5dd7c53f37121e65"
+    ],
+    "num_bullets_remaining": [
+     "UInt32",
+     "39e41d61375d6d26"
+    ],
+    "pitch": [
+     "Float32",
+     "c2d46640b682351e"
+    ],
+    "place": [
+     "String",
+     "8790ef9ab0230b23"
+    ],
+    "recoil_index": [
+     "Float32",
+     "e8b182bc09115888"
+    ],
+    "round": [
+     "Int16",
+     "22de9a28a8f2baa1"
+    ],
+    "scoped": [
+     "Boolean",
+     "d0e7a75345456de0"
+    ],
+    "seed": [
+     "UInt32",
+     "b39cce9dcb5ee446"
+    ],
+    "shots_fired": [
+     "Int32",
+     "0a4cc742b0a15556"
+    ],
+    "side": [
+     "String",
+     "a05a867ebda0727d"
+    ],
+    "silenced": [
+     "Boolean",
+     "614c1aa61192b8b6"
+    ],
+    "speed_2d": [
+     "Float32",
+     "8e2182f93e3759a7"
+    ],
+    "spread": [
+     "Float32",
+     "6c7692e583bcd23b"
+    ],
+    "steamid": [
+     "UInt64",
+     "aa37f7a04115becd"
+    ],
+    "tick": [
+     "Int32",
+     "eef55e266bc1fb4e"
+    ],
+    "vel_x": [
+     "Float32",
+     "90074c16f72340e9"
+    ],
+    "vel_y": [
+     "Float32",
+     "26f4bad19c975324"
+    ],
+    "vel_z": [
+     "Float32",
+     "1fda36dbc037cfd5"
+    ],
+    "velocity_modifier": [
+     "Float32",
+     "b1896944285f257c"
+    ],
+    "walking": [
+     "Boolean",
+     "86bdfad037575413"
+    ],
+    "weapon": [
+     "String",
+     "9c8fd316d151bd9d"
+    ],
+    "x": [
+     "Float32",
+     "8e5a8c19a74d24f6"
+    ],
+    "y": [
+     "Float32",
+     "6de9ee3e8abffff1"
+    ],
+    "yaw": [
+     "Float32",
+     "842bc8ae4eb0f7a3"
+    ],
+    "z": [
+     "Float32",
+     "95f51a5ff8a37a20"
+    ],
+    "zoom_lvl": [
+     "Float32",
+     "d4bca27286168cd3"
+    ]
+   },
+   "rows": 3127
+  },
+  "smokes": {
+   "columns": {
+    "duration_s": [
+     "Float32",
+     "df3523f9ec5f0434"
+    ],
+    "end_tick": [
+     "Int32",
+     "c685cb2cfad72b8c"
+    ],
+    "entity_id": [
+     "Int32",
+     "fc93efaaa1590ac5"
+    ],
+    "round": [
+     "Int16",
+     "9d8c9fdf608297fb"
+    ],
+    "start_tick": [
+     "Int32",
+     "532cc1e5c6753415"
+    ],
+    "steamid": [
+     "UInt64",
+     "de1d6da0c6b58d58"
+    ],
+    "x": [
+     "Float32",
+     "2973543981db60cd"
+    ],
+    "y": [
+     "Float32",
+     "47424838a1713639"
+    ],
+    "z": [
+     "Float32",
+     "59eff7fdf686225a"
+    ]
+   },
+   "rows": 125
+  },
+  "spotted": {
+   "columns": {
+    "round": [
+     "Int16",
+     "225b01015a530363"
+    ],
+    "spotted": [
+     "Boolean",
+     "1dfc48549f6e1342"
+    ],
+    "spotter_steamid": [
+     "UInt64",
+     "8611b923117d8774"
+    ],
+    "target_steamid": [
+     "UInt64",
+     "703297a0237f9fd6"
+    ],
+    "tick": [
+     "Int32",
+     "69a8e42b24a77e7c"
+    ]
+   },
+   "rows": 660
+  }
+ }
+}
