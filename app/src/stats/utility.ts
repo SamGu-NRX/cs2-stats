@@ -16,6 +16,20 @@ const THROWN: Record<string, "smokes" | "flashes" | "hes" | "molotovs" | null> =
 /** Damage rows from fire name the grenade or the fire itself. */
 const FIRE = new Set(["molotov", "incgrenade", "inferno"]);
 
+/**
+ * Counts every player-round of a round whose source recorded its grenades and flashes in
+ * utilityRounds, the `utility` input's known rows (facts.ts INPUT_COVERAGE). The tables carry no flag
+ * for it, so it is read from what they hold: any throw, detonation or blind in the round. A round
+ * where nobody threw a grenade reads as unrecorded, which errs toward leaving a value out.
+ */
+export function markUtility(c: Ctx): void {
+  const recorded = new Set<number>();
+  for (const name of ["grenade_throws", "blinds"] as const) c.byRound(name).forEach((rows, ri) => { if (rows.length) recorded.add(ri); });
+  const ev = c.t.grenade_events;
+  if (ev) for (let i = 0; i < ev.n; i++) { const ri = c.riOf(ev.round[i]); if (ri !== undefined) recorded.add(ri); }
+  for (const ri of recorded) for (const p of c.pr[ri]) if (p) p.m.utilityRounds = 1;
+}
+
 export function utility(c: Ctx): void {
   const g = c.t.grenade_throws;
   const b = c.t.blinds;

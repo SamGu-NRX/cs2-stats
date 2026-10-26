@@ -2,14 +2,14 @@
 // per round. rollup() sums them under filters; nothing downstream reads the tables again.
 import type { AggroFact } from "./aggression";
 import type { AimFact } from "./aim";
-import type { BuyClass } from "./economy";
+import type { BuyClass, BuyTier } from "./economy";
 import type { InfoFact } from "./information";
 import type { MoveFact } from "./movement";
 import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 21;
+export const DERIVE_VERSION = 22;
 
 export interface MatchInfo {
   id: string;
@@ -109,8 +109,18 @@ export const INPUT_COVERAGE = {
   /** all four kill flags recorded: blind, in the air, no-scope, through smoke (nullable since #27) */
   flags: ["flagsKnown", "kills", "the kill flags", "kills"],
   deathFlags: ["flagDeathsKnown", "enemyDeaths", "the kill flags", "deaths"],
+  /**
+   * each gun shot's clip count (shots.ammo_clip) and the player's path between shots (positions):
+   * extractor demos have both, plugin files have no clip counts
+   */
+  ammo: ["ammoRounds", "rounds", "the clip count per shot and the player's path", "rounds"],
+  /** the source recorded the round's grenades and flashes (utility.ts markUtility); some plugin files hold none */
+  utility: ["utilityRounds", "rounds", "grenade and flash events", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
+
+/** Every one of the measures' rows has `need` recorded. */
+export const inputKnown = (need: Input, m: Measures): boolean => m[INPUT_COVERAGE[need][0]] >= m[INPUT_COVERAGE[need][1]];
 
 export interface PlayerInfo {
   id: string;
@@ -142,6 +152,8 @@ export interface RoundFact {
   /** team equipment at freeze end and HLTV's buy class, per side */
   equip: Record<Side, number | null>;
   buy: Record<Side, BuyClass | null>;
+  /** the finer tier (economy.ts buyTier: half split into semi-eco and force), per side */
+  tier: Record<Side, BuyTier | null>;
   /** players who disconnected during the round while alive, with the tick (tables leaves; plugin files only) */
   leaves: { tick: number; pi: number }[];
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
@@ -217,7 +229,7 @@ export const MEASURES = [
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
-  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds",
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds", "utilityRounds",
   // buying (buying.ts): equipment against the side's mean, and what a save carried into the next round
   "buyDevSum", "buyDevRounds", "saveEvents", "saveCarryKnown", "saveCarrySum",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
@@ -236,6 +248,8 @@ export const MEASURES = [
   "hsGunKills", "hsGunDeaths", "lhKnown", "lhKills", "lhDeathsKnown", "lhDeaths",
   "flagsKnown", "blindKills", "airKills", "noscopeKills", "smokeKills", "flagDeathsKnown", "flagDeaths",
   "spreadRounds", "luckShots", "luckHits", "luckExp", "luckAgShots", "luckAgHits", "luckAgExp",
+  // weapon handling (handling.ts): reloads between shots, the clip share they threw away, rounds with clip counts
+  "reloads", "reloadWaste", "ammoRounds",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;
@@ -249,6 +263,9 @@ export interface PlayerRound {
   won: boolean | null;
   ownBuy: BuyClass | null;
   oppBuy: BuyClass | null;
+  /** the team's and the opponents' finer tiers (RoundFact.tier) */
+  ownTier: BuyTier | null;
+  oppTier: BuyTier | null;
   /** at freeze end */
   equip: number | null;
   moneyStart: number | null;
