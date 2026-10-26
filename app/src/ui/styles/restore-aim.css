@@ -6,10 +6,74 @@
 .strip__leadtext { display: grid; gap: 3px; min-width: 0; }
 .strip__lead .strip__val { font-size: 24px; }
 
-/* Spray: the two toggles above the chart, each bullet's spread and the target's head on it. */
-.spray-toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-.spray__sd { fill: rgba(255, 215, 173, 0.07); stroke: rgba(255, 215, 173, 0.4); stroke-width: 1; }
-.spray__head { fill: var(--ct); opacity: 0.85; }
+/* ---------------------------------------------------------------- spray (views/aim/AimPanels.tsx SprayCard, components/SprayPath.tsx)
+   The gun chips above; under them the well beside its headline and readouts when the card has room
+   (600 px holds a 300 px well and a 260 px column), stacked headline-first when it does not. */
+.spr { display: grid; gap: 16px; container-type: inline-size; }
+
+.gunpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.gunpick__b { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 8px; border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink2); font: 500 12px/1 var(--f); white-space: nowrap;
+  transition: background-color var(--d-hover) ease, color var(--d-hover) ease, box-shadow var(--d-hover) ease, transform var(--d-press) var(--ease-out); }
+.gunpick__b[aria-checked="true"] { background: var(--raise); color: var(--cream); box-shadow: inset 0 0 0 1px rgba(255, 215, 173, 0.32); }
+.gunpick__b:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+/* press feedback; --mo is 0 under reduced motion, so the chip does not scale */
+.gunpick__b:active { transform: scale(calc(1 - 0.03 * var(--mo))); }
+@media (hover: hover) and (pointer: fine) { .gunpick__b[aria-checked="false"]:hover { background: var(--hover); color: var(--ink); } }
+.gunpick__c { margin-left: 2px; font: 500 11px/1 var(--f-mono); color: var(--ink3); }
+.gunpick__b[aria-checked="true"] .gunpick__c { color: var(--ink2); }
+/* a gun under THIN_SPRAY sprays fades; its tooltip says why */
+.gunpick__b[data-thin] { opacity: 0.55; }
+.gunpick__b[data-thin][aria-checked="true"] { opacity: 0.8; }
+
+.sprf { margin: 0; display: grid; gap: 14px 28px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "well" "read"; }
+@container (min-width: 600px) {
+  .sprf[data-well] { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "well head" "well read"; align-items: start; }
+}
+.sprf__head { grid-area: head; display: grid; gap: 6px; }
+.sprf__title { font: 600 15px/1.4 var(--f); letter-spacing: -0.01em; color: var(--ink); text-wrap: balance; max-width: 34ch; }
+/* the distance in the headline, display-s (SYSTEM.md type scale) on the sentence's baseline */
+.sprf__big { font-size: 24px; line-height: 1; padding: 0 1px; }
+.sprf__well { grid-area: well; display: grid; gap: 10px; min-width: 0; align-content: start; }
+.sprf__well .spray__plot { max-width: 360px; }
+.sprf__read { grid-area: read; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.sprf__read .spray__dist { margin: 0; }
+.sprf__read .sprayd { margin-top: 0; }
+.spray__finding, .spray__note { margin: 0; max-width: 52ch; }
+
+.spray-toggles { display: flex; flex-wrap: wrap; gap: 0 16px; }
+/* the label is the hit area: 16 px of text padded to 28 px tall (better-accessibility hit-areas, 24 px floor) */
+.spray-toggles .check { padding: 6px 0; }
+.spray-key { gap: 4px 14px; font-size: 11px; }
+.spray-key > span[data-tip] { cursor: help; }
+.spray-key svg { flex: none; overflow: visible; }
+
+/* the well's layers, back to front: the game's pattern, the ideal pull, your pull and its spread, your bullets */
+.spray__kick { fill: var(--tan); opacity: 0.5; }
+.spray__lbl { font: 500 10px var(--f); fill: var(--ink3); }
+.spray__pull { fill: none; stroke: var(--cream); stroke-width: 1; stroke-linejoin: round; opacity: 0.5; }
+.spray__pulldot { fill: var(--cream); fill-opacity: 0.5; }
+.spray__sd { fill: rgba(255, 215, 173, 0.06); stroke: rgba(255, 215, 173, 0.35); stroke-width: 1; }
+.spray__head { fill: var(--ct); }
+.spray__land { fill: var(--cream); }
+.spray__land--est { fill: var(--well); stroke: var(--cream); stroke-width: 1.5; }
+/* numbers sit on the well with a halo, so they read over the grid and the line */
+.spray__n { paint-order: stroke; stroke: var(--well); stroke-width: 3px; stroke-linejoin: round; }
+
+/* An overlay switched off fades out and leaves the accessibility tree; switched on it fades in. The
+   toggle is a deliberate click, so the fade is state indication: in at 200 ms, out faster at 140 ms.
+   Opacity only, and none under reduced motion. */
+.spray__layer { transition: opacity 200ms var(--ease-out); }
+.spray__layer[data-off] { opacity: 0; visibility: hidden; transition: opacity 140ms var(--ease-out), visibility 0s linear 140ms; }
+@media (prefers-reduced-motion: reduce) { .spray__layer, .spray__layer[data-off] { transition: none; } }
+
+/* your average spray against the game's pattern with no pull, one scale */
+.stay { display: grid; gap: 6px; }
+.stay__row { display: grid; grid-template-columns: 128px minmax(0, 1fr) 52px; align-items: center; gap: 10px; font-size: 12px; color: var(--ink2); }
+.stay__bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.stay__bar i { display: block; height: 100%; border-radius: 3px; background: var(--cream); }
+.stay__row[data-k="ref"] .stay__bar i { background: var(--tan); opacity: 0.6; }
+.stay__row b { font: 600 12px/1 var(--f); color: var(--ink); text-align: right; }
+.stay__row[data-k="you"] b { color: var(--cream); }
 
 /* On target, bullet by bullet: the distance chart's frame, bars off target faded. */
 .sprayt { margin-top: 14px; }

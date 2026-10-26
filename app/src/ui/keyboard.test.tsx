@@ -204,4 +204,19 @@ describe("spray gun picker", () => {
     scoped = null;
     perGun = {};
   });
+  it("puts the Ideal pull and Spread toggles in the tab order as native checkboxes, so Space flips them", () => {
+    // fails if a toggle becomes a div or a button outside the tab order: jsdom does not run a checkbox's
+    // Space activation, so the contract checked is the element the browser gives it to
+    setMeta(metaOf(CS2RB));
+    const s = rolled(emptySummary());
+    s.weapons.ak47 = { rounds: 1, shots: 10, hits: 1, groups: [0, 0, 0, 0, 0, 0, 0, 0], dmg: 0, kills: 0, hsKills: 0, deaths: 0 };
+    s.aim.sprays = 4;
+    s.aim.path = { ak47: { n: [4, 4], dp: [4, 8], dy: [0, 4] } };
+    s.aim.spread = { ak47: { pp: [8, 20], yy: [0, 8] } };
+    scoped = s;
+    render(<AimPanels query={{ files: [], filter: { player: "x" } }} label="test" visibility={false} />);
+    const boxes = Array.from(host.querySelectorAll<HTMLInputElement>(".spray-toggles input"));
+    expect(boxes.map((b) => [b.type, b.tabIndex, b.disabled, b.closest("label")?.textContent])).toEqual([["checkbox", 0, false, "Ideal pull"], ["checkbox", 0, false, "Spread"]]);
+    scoped = null;
+  });
 });
