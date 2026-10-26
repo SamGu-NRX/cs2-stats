@@ -1301,8 +1301,6 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .rtiles li > span:last-child { color: var(--tan); }
 .rfit__bar { height: 4px; }
 .rmaps__h { display: flex; align-items: center; gap: 6px; }
-.signals2__track { height: 2px; border-radius: 1px; }
-.signals2__track em { top: -5px; bottom: -5px; width: 1px; margin-left: 0; background: var(--ink2); }
 .rmaps li { height: 36px; }
 /* Where you play: places as share lollipops */
 .places { gap: 0; }
@@ -1349,10 +1347,6 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 /* Role by spawn: side pips, and the quiet spawns as one closing line */
 .spawns .pip { min-width: 26px; }
 .spawns__more td { color: var(--ink2); }
-/* a role signal: name, what it measures, its "?", the fit chip, and the value at the row's end */
-.signals2__top { align-items: center; }
-.signals2__top .help { margin-left: -4px; }
-.signals2__v { margin-left: auto; font: 650 13px/1 var(--f); }
 /* a gun's advice: its line of numbers with the sentence in a "?" right after its last word, so a
    line that wraps in the narrow gun column keeps its "?" beside it */
 .guncell .guncell__advice { display: block; font-variant-numeric: tabular-nums; }

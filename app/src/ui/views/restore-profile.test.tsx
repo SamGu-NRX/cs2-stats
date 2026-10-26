@@ -21,7 +21,7 @@ import { rollup } from "../../stats/rollup";
 import type { Method, Query, Session } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { botIds, careerEntries, fmtMetric, multiKillRows, signalBar } from "../data/engine";
+import { botIds, careerEntries, fmtMetric, multiKillRows } from "../data/engine";
 import type { MatchEntry } from "../data/match";
 import { metric, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -173,13 +173,6 @@ it("shows Firepower's score and its lowest-ranked metric in Work on", async () =
   expect(item).not.toBeNull();
   expect(text(item.querySelector(".workon__top .num"))).toBe(`${Math.round(fire.score!)}/100`);
   expect(text(item.querySelector(".workon__body > .meta"))).toBe(`${metric(worst.id).label} ${fmtMetric(worst.id, worst.value)}`);
-});
-
-it("fills a role signal's bar to twice its threshold and says you fit from the threshold up", () => {
-  // fails if "You fit" appears below the threshold or the tick stops marking it
-  expect(signalBar(25, 25)).toEqual({ fill: 0.5, fits: true });
-  expect(signalBar(24.9, 25).fits).toBe(false);
-  expect(signalBar(80, 25).fill).toBe(1);
 });
 
 it("gives each exact multi-kill count its percent of rounds", () => {

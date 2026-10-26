@@ -228,8 +228,6 @@ export const extraSubs = (id: AttributeId, v: Values): Sub[] => (EXTRA_SUBS[id] 
   return { id: mid, label: m.label, def: m.def, value: v[mid], text: fmtMetric(mid, v[mid]), score: null, status: m.status, reason: null };
 });
 
-/** A role signal's bar (main's role card): filled to twice the threshold, and whether the value reaches it. */
-export const signalBar = (value: number, threshold: number) => ({ fill: Math.max(0, Math.min(1, value / (2 * threshold))), fits: value >= threshold });
 
 export const WEAPON_CLASS_LABEL: Record<string, string> = {
   rifle: "Rifles", sniper: "Snipers", smg: "SMGs", heavy: "Heavy", pistol: "Pistols", grenade: "Grenades", knife: "Knife", other: "Other",
