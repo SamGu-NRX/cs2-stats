@@ -111,10 +111,10 @@ const per = (a: number, b: number) => (b > 0 ? a / b : null);
 export const HANDLING_METRICS: Metric[] = [
   { id: "wastedMagazine", label: "Wasted magazine", kind: "identity", group: "aim", unit: "pct", status: "approx", needs: ["ammo"],
     tip: "How much of your magazine you throw away when you reload.",
-    def: "Average share of the clip still loaded when you reloaded between shots.",
+    def: "Average share of the clip still loaded when you reloaded between shots. A gun a living player dropped and you picked up can read as a reload, and the 256-unit reach for a dying player's gun has no measurement behind it.",
     value: (s) => pct(s.m.reloadWaste, s.m.reloads) },
   { id: "reloadsPR", label: "Reloads per round", kind: "identity", group: "aim", unit: "perRound", status: "approx", needs: ["ammo"],
     tip: "How often you reload between shots, per round.",
-    def: "Reloads seen between two shots of one gun, per round with clip counts.",
+    def: "Reloads seen between two shots of one gun, per round with clip counts. A gun a living player dropped and you picked up can read as a reload, and the 256-unit reach for a dying player's gun has no measurement behind it.",
     value: (s) => per(s.m.reloads, s.m.ammoRounds) },
 ];
