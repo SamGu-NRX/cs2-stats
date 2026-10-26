@@ -14,14 +14,14 @@ import type { MatchFacts, Measures } from "../../stats/facts";
 import { CS2RB } from "../../stats/model-params";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
-import { ROLE_SIGNALS, styleZone } from "../../stats/identity";
+import { styleZone } from "../../stats/identity";
 import { rating3FromInputs } from "../../stats/rating3";
 import { emptyMeasures } from "../../stats/facts";
 import { rollup } from "../../stats/rollup";
-import type { Method, Query } from "../../worker/protocol";
+import type { Method, Query, Session } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { botIds, careerEntries, fmtMetric, multiKillRows, signalBar } from "../data/engine";
+import { botIds, careerEntries, fmtMetric, multiKillRows } from "../data/engine";
 import type { MatchEntry } from "../data/match";
 import { metric, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -29,9 +29,14 @@ import { sourceOf } from "../data/sources";
 import { TILES } from "../data/series";
 import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
-import { HomeView } from "./Home";
 import ProfileView from "./Profile";
-import { RatingTerms, RoleSignals, SIGNAL_TEXT } from "./profile/parts";
+import { RatingTerms } from "./profile/parts";
+import { RoleEvidence } from "./profile/evidence";
+import { fmtChange, LuckCard } from "./profile/career";
+import { evidenceScale, fmtRoleValue, splitEvidence } from "./profile/career-logic";
+import { HomeView, workOnHref } from "./Home";
+import { MatchesView } from "./Matches";
+import { matchCalls } from "../../worker/matchcalls";
 import { StatCard, useRanks } from "./profile/tabs";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -170,13 +175,6 @@ it("shows Firepower's score and its lowest-ranked metric in Work on", async () =
   expect(text(item.querySelector(".workon__body > .meta"))).toBe(`${metric(worst.id).label} ${fmtMetric(worst.id, worst.value)}`);
 });
 
-it("fills a role signal's bar to twice its threshold and says you fit from the threshold up", () => {
-  // fails if "You fit" appears below the threshold or the tick stops marking it
-  expect(signalBar(25, 25)).toEqual({ fill: 0.5, fits: true });
-  expect(signalBar(24.9, 25).fits).toBe(false);
-  expect(signalBar(80, 25).fill).toBe(1);
-});
-
 it("gives each exact multi-kill count its percent of rounds", () => {
   // fails if the 2K row counts 3K rounds too, or a share is taken of something other than all rounds
   const m: Measures = { ...emptyMeasures(), rounds: 40, multiKillRounds: 10, k3Rounds: 4, k4Rounds: 1, k5Rounds: 1 };
@@ -214,42 +212,94 @@ it("reaches every bot on the style compass from the keyboard, one tab stop for a
   expect(text(host.querySelector(".compass__you"))).toBe(`You, ${zone(rolled(summary(q)).v)}`);
 });
 
-it("measures each role signal on its own side and says you fit from the threshold up", () => {
-  // fails if Lurker reads both sides instead of T, a signal reads another metric than ROLE_SIGNALS names,
-  // or "You fit" shows on the wrong side of the threshold
-  const check = (q: Query) => {
-    act(() => root.render(<BarProvider><RoleSignals q={q} /></BarProvider>));
-    const both = rolled(summary(q)).v;
-    const t = rolled(summary(sideQuery(q, "T"))).v;
-    return ROLE_SIGNALS.map((sg) => {
-      const li = host.querySelector(`.signals2 li[data-signal="${sg.id}"]`)!;
-      const v = (sg.side === "T" ? t : both)[sg.metric];
-      expect(!!li.querySelector(".chip"), sg.id).toBe(v !== null && v >= sg.threshold);
-      expect((li.querySelector(".signals2__track i") as HTMLElement).style.width, sg.id).toBe(`${v === null ? 0 : 100 * Math.min(1, v / (2 * sg.threshold))}%`);
-      // the row's value is visible; the threshold, or what is missing, is its "?" sentence
-      const tip = li.querySelector(".help[data-tip]")!.getAttribute("data-tip")!;
-      expect(tip, sg.id).toBe(v === null ? SIGNAL_TEXT[sg.id].missing : SIGNAL_TEXT[sg.id].tip(sg.threshold));
-      expect(tip.split(/\s+/).length, sg.id).toBeLessThanOrEqual(12);
-      expect(li.querySelector("p"), sg.id).toBeNull();
-      return { id: sg.id, v, both: both[sg.metric], shown: text(li.querySelector(".signals2__v")), tip };
-    });
-  };
+it("shows each side's role evidence in its unit on one track, with the engine's tip and range", async () => {
+  // fails if a side shows the other side's value, a row loses its tip or its tick, or a measure
+  // neither side has is drawn as a zero instead of named under the rows
   const q = queryOf(samples);
-  const mine = check(q);
-  const support = mine.find((x) => x.id === "Support")!;
-  expect(support.shown).toBe(fmtPct(support.v, 0));
-  expect(support.tip).toBe(`Support players have ${ROLE_SIGNALS.find((sg) => sg.id === "Support")!.threshold}% or more trades and assists.`);
-  // the T-side distance differs from both sides' here, so reading the wrong side shows
-  const lurker = mine.find((x) => x.id === "Lurker")!;
-  expect(lurker.v).not.toBeNull();
-  expect(lurker.v).not.toBe(lurker.both);
-  expect(lurker.shown).toBe(`${Math.round(lurker.v! * 0.0254)} m`);
-  // a sample player who reaches a threshold, for the "You fit" side of the gate
-  const fitter = samples.flatMap((s) => s.facts.players.map((p) => p.id)).find((id) => {
-    const v = rolled(summary({ files: q.files, filter: { player: [id] } })).v;
-    return ROLE_SIGNALS.some((sg) => sg.side === null && v[sg.metric] !== null && v[sg.metric]! >= sg.threshold);
-  })!;
-  expect(fitter).toBeDefined();
-  check({ files: q.files, filter: { player: [fitter] } });
-  expect(host.querySelectorAll(".signals2 .chip").length).toBeGreaterThan(0);
+  const roles = await calls.roles(q);
+  render(<RoleEvidence t={roles.T} ct={roles.CT} />);
+  const { rows, missing } = splitEvidence(roles.T.metrics, roles.CT.metrics);
+  expect(rows.length).toBeGreaterThan(3);
+  for (const r of rows) {
+    const li = host.querySelector(`.evid__row[data-metric="${r.id}"]`)!;
+    const ref = (r.t ?? r.ct)!;
+    expect(text(li.querySelector(".evid__v.t-text")), r.id).toBe(fmtRoleValue(r.t?.value ?? null, ref.unit));
+    expect(text(li.querySelector(".evid__v.ct-text")), r.id).toBe(fmtRoleValue(r.ct?.value ?? null, ref.unit));
+    expect(li.querySelector(".help")!.getAttribute("data-tip"), r.id).toBe(ref.tip);
+    const sc = evidenceScale([r.t?.value ?? null, r.ct?.value ?? null], ref.proRange, ref.threshold, ref.unit);
+    const tick = li.querySelector<HTMLElement>(".evtrk__tick");
+    expect(tick?.style.left ?? null, r.id).toBe(sc.tick === null ? null : `${sc.tick}%`);
+    expect(li.querySelectorAll(".evtrk__dot").length, r.id).toBe([r.t?.value, r.ct?.value].filter((v) => v !== null && v !== undefined).length);
+    // the track is a keyboard stop with its own description
+    expect(li.querySelector(".evtrk")!.getAttribute("tabindex")).toBe("0");
+  }
+  // area changes have no rollup value on either side: named once, never a row
+  expect(missing.map((m) => m.id)).toContain("areaChanges");
+  expect(host.querySelector('.evid__row[data-metric="areaChanges"]')).toBeNull();
+  expect(text(host.querySelector(".evid__missing"))).toContain(missing.find((m) => m.id === "areaChanges")!.label);
+});
+
+it("lists the focus areas in Work on with their tips, and keeps the next weakest numbers reachable", async () => {
+  // fails if a focus area loses its tip, the order stops being weakest first, or the old weakest
+  // metrics vanish from Work on
+  const career = converted.filter((s) => careerEntries([s.entry], null).length);
+  use(career);
+  const q = queryOf(career);
+  answers.compare = await calls.compare(q, {});
+  answers.attributes = await calls.attributes(q, {});
+  answers.focusAreas = await calls.focusAreas(q, {});
+  render(<HomeView />);
+  const areas = (answers.focusAreas as Awaited<ReturnType<typeof calls.focusAreas>>).filter((f) => workOnHref(metric(f.id)) !== null).slice(0, 3);
+  expect(areas.length).toBeGreaterThan(0);
+  const items = Array.from(host.querySelectorAll(".workon__item")).filter((el) => el.querySelector(".workon__tip"));
+  expect(items.map((el) => text(el.querySelector(".workon__top b")))).toEqual(areas.map((f) => metric(f.id).label));
+  expect(items.map((el) => text(el.querySelector(".workon__tip")))).toEqual(areas.map((f) => f.tip));
+  expect(items.map((el) => el.getAttribute("href"))).toEqual(areas.map((f) => workOnHref(metric(f.id))));
+  const also = Array.from(host.querySelectorAll(".workon__also-a"));
+  expect(also.length).toBeGreaterThan(0);
+  for (const a of also) expect(areas.map((f) => metric(f.id).label)).not.toContain(text(a).replace(/\s*(Top|Bottom) \d+%$/, ""));
+});
+
+it("writes a period's change in the metric's unit, shares in points", () => {
+  expect(fmtChange("adr", 4.26)).toBe("+4.3");
+  expect(fmtChange("kast", -2.04)).toBe("−2.0 pts");
+  expect(fmtChange("rating3", 0)).toBe("0.00");
+});
+
+it("says why the career has no luck score and keeps the luck the files do record", () => {
+  // fails if a missing spread reads as a zero score, or the kill-flag rows lose their killfeed icons
+  const career = samples.filter((s) => careerEntries([s.entry], null).length);
+  const s = rolled(summary(queryOf(career)));
+  render(<LuckCard s={s} />);
+  // the bundled samples are plugin recordings, which carry no shot spread
+  expect(s.m.spreadRounds).toBe(0);
+  expect(s.v.luckScore).toBeNull();
+  expect(host.querySelector(".luck__scale")).toBeNull();
+  expect(text(host.querySelector(".luck__none"))).not.toBe("");
+  const blind = byLabel(".mrow", ".mrow__lab", metric("blindKills").label);
+  expect(s.v.blindKills).not.toBeNull();
+  expect(text(blind?.querySelector(".mrow__val"))).toBe(fmtMetric("blindKills", s.v.blindKills));
+});
+
+it("narrows the match table to one session and back", async () => {
+  // fails if a session chip filters by anything but its own matches, or pressing it again keeps the filter
+  const career = samples.filter((s) => careerEntries([s.entry], null).length);
+  use(samples);
+  const q = queryOf(career);
+  const each = async (files: string[], visit: (f: MatchFacts, file: string) => void) => { for (const f of files) visit(factsOf.get(f)!, f); };
+  answers.sessions = await matchCalls(each, async (x) => summary(x)).sessions(q);
+  const sessions = answers.sessions as Session[];
+  expect(sessions.length).toBeGreaterThan(0);
+  render(<MatchesView />);
+  const files = () => Array.from(host.querySelectorAll(".matches__table [data-file]")).map((el) => el.getAttribute("data-file")).sort();
+  const everything = files();
+  const chips = Array.from(host.querySelectorAll<HTMLButtonElement>(".sess"));
+  expect(chips.length).toBe(sessions.length);
+  // newest first
+  const newest = [...sessions].sort((a, b) => b.start - a.start)[0];
+  act(() => chips[0].click());
+  expect(chips[0].getAttribute("aria-pressed")).toBe("true");
+  expect(files()).toEqual([...newest.files].sort());
+  act(() => host.querySelector<HTMLButtonElement>(".sess")!.click());
+  expect(files()).toEqual(everything);
 });

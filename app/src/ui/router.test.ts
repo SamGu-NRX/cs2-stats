@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { matchHref, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
+import { MATCH_TABS, matchHref, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
+
+describe("match tab shortcuts", () => {
+  it("reaches every match tab with Alt and one digit, 0 being the tenth", () => {
+    // fails if a tab is added past the digits, or Luck or Replay loses its key
+    expect(MATCH_TABS.map((_, i) => matchTabOfKey(matchTabKey(i)))).toEqual([...MATCH_TABS]);
+    expect([matchTabOfKey("1"), matchTabOfKey("8"), matchTabOfKey("9"), matchTabOfKey("0")]).toEqual(["overview", "advanced", "luck", "replay"]);
+  });
+  it("ignores keys that are not one digit", () => {
+    expect(["a", "10", "", "Alt"].map(matchTabOfKey)).toEqual([null, null, null, null]);
+  });
+  it("parses the Luck tab from a match link", () => {
+    expect(parseHash(matchHref("2026/a.json.gz", "luck")).tab).toBe("luck");
+  });
+});
 
 describe("parseHash", () => {
   it("defaults to home", () => {

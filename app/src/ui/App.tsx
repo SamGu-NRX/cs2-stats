@@ -13,7 +13,7 @@ import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
 import { RefreshIcon, SearchIcon } from "./icons/ui";
-import { go, matchHref, MATCH_TABS, navWasInstant, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
+import { go, isTextEntry, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
 
@@ -65,7 +65,7 @@ function Body() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      const typing = el.closest("input, textarea, [contenteditable='true']") !== null;
+      const typing = isTextEntry(el);
       const ctrl = e.ctrlKey || e.metaKey;
       if (ctrl && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((p) => !p); return; }
       if (palette) return;
@@ -78,10 +78,13 @@ function Body() {
         if (n) go(pageHref(n.page), { instant: true });
         return;
       }
+      // below here, a field being typed in keeps its keys: Alt and a digit can enter text in some layouts
+      if (typing) return;
       const r = currentRoute();
-      if (e.altKey && /^[1-9]$/.test(e.key) && r.page === "match" && r.file) {
+      const matchTab = e.altKey ? matchTabOfKey(e.key) : null;
+      if (matchTab && r.page === "match" && r.file) {
         e.preventDefault();
-        go(matchHref(r.file, MATCH_TABS[Number(e.key) - 1]), { instant: true });
+        go(matchHref(r.file, matchTab), { instant: true });
         return;
       }
       // Profile's tabs, as the match tabs: Alt+1 to Alt+7
@@ -90,7 +93,7 @@ function Body() {
         go(profileHref(PROFILE_TABS[Number(e.key) - 1], scopeQuery(r.query)), { instant: true });
         return;
       }
-      if (typing || ctrl || e.altKey) return;
+      if (ctrl || e.altKey) return;
       if ((e.key === "[" || e.key === "]") && r.page === "match" && r.file) {
         const i = matches.findIndex((s) => s.file === r.file);
         // matches are newest first: "[" goes to the older match, "]" to the newer one
@@ -134,7 +137,7 @@ function Body() {
         <AppBar onPalette={() => setPalette(true)} />
         <main ref={pane} className="pane" tabIndex={-1} aria-label={TITLES[route.page]}>
           <Suspense fallback={<FirstScan title={title} progress={null} />}>
-            <div key={pageKey} className={navWasInstant() ? undefined : "view-in"}>{view}</div>
+            <div key={pageKey} className={navWasPointer() ? "view-in" : undefined}>{view}</div>
           </Suspense>
         </main>
       </div>

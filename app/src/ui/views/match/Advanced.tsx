@@ -1,5 +1,6 @@
 // Advanced: team-level facts for both teams side by side. Rates come from the worker's rollup of each
-// team's five players and its economy view (economyOf); round counts come from the round facts.
+// team's five players and its economy view (economyOf); round counts come from the round facts. Then
+// your side's man-advantage states and bombsite outcomes (Situations.tsx, worker situations and bombsites).
 import { useMemo, type ReactNode } from "react";
 import { ClutchBadge, FirstPip } from "../../components/bits";
 import { Card } from "../../components/Card";
@@ -12,6 +13,7 @@ import { fmtPct, fmtSecs } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
+import { BombsitesCard, SituationsCard } from "./Situations";
 
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 const other = (t: Team): Team => (t === "us" ? "them" : "us");
@@ -39,7 +41,7 @@ function teamFacts(v: MatchModel, t: Team) {
 function Pair({ label, tip, us, them, fmt, good }: { label: string; tip: string; us: number | null; them: number | null; fmt: (x: number | null) => string; good?: (x: number) => number }) {
   const total = (us ?? 0) + (them ?? 0);
   return (
-    <div className="pair" data-tip={tip}>
+    <div className="pair" data-tip={tip} tabIndex={0}>
       <span className="pair__l">{label}</span>
       <b className="num pair__us" style={good && us !== null ? { color: scoreText(good(us)) } : undefined}>{fmt(us)}</b>
       <span className="pair__bar">{total > 0 && <><i style={{ width: `${(100 * (us ?? 0)) / total}%` }} /><em style={{ width: `${(100 * (them ?? 0)) / total}%` }} /></>}</span>
@@ -56,7 +58,7 @@ function Block({ title, icon, children }: { title: string; icon: ReactNode; chil
   );
 }
 
-export default function Advanced({ v }: TabProps) {
+export default function Advanced({ v, file }: TabProps) {
   const a = useMemo(() => teamFacts(v, "us"), [v]);
   const b = useMemo(() => teamFacts(v, "them"), [v]);
   const rates = v.b.economy.winRate;
@@ -93,7 +95,7 @@ export default function Advanced({ v }: TabProps) {
               if (!x.rounds && !y.rounds) return null;
               const ours = pct(x.wins, x.rounds);
               return (
-                <li key={buy} data-tip={`Opponents won ${y.wins} of ${y.rounds} on this buy`}>
+                <li key={buy} data-tip={`Opponents won ${y.wins} of ${y.rounds} on this buy`} tabIndex={0}>
                   <BuyIcon buy={buy} size={16} beside className="cream" />
                   <b>{BUY_CLASS_LABEL[buy]}</b>
                   <span className="hbar">{ours !== null && <i style={{ width: `${ours}%`, background: ours >= 50 ? "var(--good)" : "var(--poor)" }} />}{y.rounds > 0 && <em className="hbar__ref" style={{ left: `${pct(y.wins, y.rounds)}%` }} />}</span>
@@ -115,6 +117,8 @@ export default function Advanced({ v }: TabProps) {
             ))}
           </ul>
         </Card>
+        <SituationsCard v={v} file={file} />
+        <BombsitesCard v={v} file={file} />
       </div>
     </div>
   );

@@ -1,0 +1,160 @@
+/* The per-match views on #36's worker calls (views/match/RatingByRound, YourMatch, HeadToHead, Openings,
+   Zones, Situations). They extend the v2 instruments in views.css (.ms series, .wfall, .pair, .trk)
+   rather than adding new ones. Nothing here moves on a tab switch or a data change. Hover and focus
+   change colour at once (hover gated to fine pointers); the one fade is the radar stepping back under a
+   picked zone, opacity only and off under reduced motion. */
+
+/* a worker call that failed (views/match/LoadFailed.tsx) */
+.load-failed { padding: 8px 0; }
+
+/* ---------------------------------------------------------------- rating by round (Rounds) */
+.rbr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 32px; min-width: 0; }
+.rbr__scroll { overflow-x: auto; min-width: 0; max-width: 100%; }
+.rbr__chart { flex: none; }
+.rbr__col { outline: none; cursor: pointer; }
+.rbr__band { fill: transparent; }
+.rbr__band.is-on { fill: var(--hover); }
+.rbr__col:focus-visible .rbr__band { fill: var(--hover); stroke: var(--cream); stroke-width: 1.5; }
+.rbr__hollow { fill: var(--s1) !important; stroke-width: 1.5; }
+.is-good > .rbr__hollow { stroke: var(--good-text); }
+.is-poor > .rbr__hollow { stroke: var(--poor-text); }
+.rbr__usual { stroke: var(--ink2); stroke-width: 1; stroke-dasharray: 1 3; stroke-linecap: round; }
+.rbr__side { font-weight: 700; }
+.rbr__side.is-t { fill: var(--t); }
+.rbr__side.is-ct { fill: var(--ct); }
+.rbr__panel { flex: 1 1 300px; max-width: 380px; min-width: 280px; display: grid; gap: 10px; align-content: start; }
+.rbr__head { display: flex; align-items: center; gap: 8px; height: 22px; }
+.rbr__big { display: grid; gap: 4px; }
+/* 1.00, an average player's rating, on the waterfall's track */
+.rbr__one { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dotted var(--ink2); }
+.rbr__wf .wfall__row { grid-template-columns: 88px minmax(0, 1fr) 52px; }
+.rbr__swing { margin-top: 14px; display: grid; gap: 4px; }
+
+/* ---------------------------------------------------------------- your match (Overview) */
+.ym { display: grid; container-type: inline-size; }
+.ym__h { margin: 12px 0 2px; }
+.ym__rows { display: grid; }
+.ymr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(72px, 150px) 60px 56px 60px; column-gap: 12px; align-items: center; min-height: 32px; font-size: 13px; border-radius: var(--r-chip); cursor: help; }
+.ym__rows > .ymr + .ymr { border-top: 1px solid var(--line); }
+.ymr:focus-visible { outline: 2px solid var(--cream); outline-offset: 1px; }
+.ymr--head { min-height: 20px; cursor: default; }
+.ymr__l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.ymr__v, .ymr__avg, .ymr__d { text-align: right; white-space: nowrap; }
+.ymr__v { font-weight: 650; }
+/* --ink2: --ink3 on a card is 3.1:1, under AA for text this small */
+.ymr__avg { color: var(--ink2); font-size: 12px; }
+.ymr__d { font-size: 12px; font-weight: 600; }
+.ymr__scale { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.04em; color: var(--ink2); }
+.ymr__trk .trk__mid { background: var(--ink2); }
+.ymr__stem { position: absolute; top: 7px; height: 2px; background: var(--c, var(--tan)); opacity: 0.6; }
+/* a narrow card keeps the change and drops the usual column (it stays in the row's tooltip) */
+@container (max-width: 440px) {
+  .ymr { grid-template-columns: minmax(0, 1fr) minmax(56px, 1fr) 56px 56px; }
+  .ymr__avg { display: none; }
+}
+
+/* ---------------------------------------------------------------- head to head (Duels) */
+.h2x__aside { display: inline-flex; align-items: center; gap: 16px; }
+/* the grid and the chosen pair side by side when the card is wide, the pair under the grid otherwise */
+.h2x-c { container-type: inline-size; }
+.h2x { display: grid; gap: 16px 24px; }
+@container (min-width: 980px) { .h2x { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; } }
+.h2h td.h2x__td { padding: 0; }
+.h2x__cell { width: 100%; height: var(--row); padding: 0 10px; border-radius: 0; color: inherit; font: inherit; }
+.h2x__cell:disabled { cursor: default; opacity: 1; }
+.h2x__cell.is-on { box-shadow: inset 0 0 0 2px var(--cream); border-radius: var(--r-chip); }
+.h2x__cell:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; border-radius: var(--r-chip); }
+@media (hover: hover) and (pointer: fine) { .h2x__cell:not(:disabled):hover { background: var(--hover); } }
+.h2x__pair { display: grid; gap: 12px; align-content: start; padding: 12px var(--pad-panel) 14px; border-radius: var(--r-ctl); background: var(--s2); }
+/* under the grid the pair keeps the side column's measure, so a label stays near its numbers */
+.h2x__rows { max-width: 420px; }
+.h2x__names { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 14px; }
+.h2x__names b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h2x__rows .pair { grid-template-columns: minmax(0, 1fr) 52px 96px 52px; gap: 10px; min-height: 22px; border-radius: var(--r-chip); }
+.h2x__rows .pair:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.h2x__rows .pair__us, .h2x__rows .pair__them { font-size: 14px; }
+.h2x__rows .pair.h2x__gunrow { grid-template-columns: minmax(0, 1fr) 104px 104px; align-items: start; }
+.h2x__gunside:first-of-type { justify-self: end; }
+.h2x__guns { display: grid; gap: 4px; }
+.h2x__gunside:first-of-type .h2x__guns { justify-items: end; }
+.h2x__guns li { display: inline-flex; align-items: center; gap: 6px; height: 18px; border-radius: var(--r-chip); color: var(--ink2); }
+.h2x__guns li:focus-visible { outline: 2px solid var(--cream); outline-offset: 1px; }
+.h2x__guns .num { font-weight: 650; color: var(--ink); }
+
+/* ---------------------------------------------------------------- first kills (Duels) */
+.opn { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 40px; min-width: 0; }
+.opn__scroll { overflow-x: auto; min-width: 0; max-width: 100%; padding: 2px; }
+.opn__strip { display: flex; }
+.opn__lanes { display: grid; grid-template-rows: 34px 34px 20px; align-items: center; padding-right: 12px; position: sticky; left: 0; background: var(--s1); z-index: 1; }
+.opn__col { display: grid; grid-template-rows: 34px 34px 20px; width: 40px; flex: none; border-radius: var(--r-chip); outline: none; }
+.opn__col.is-half { margin-left: 12px; }
+.opn__col:focus-visible { box-shadow: inset 0 0 0 2px var(--cream); }
+@media (hover: hover) and (pointer: fine) { .opn__col:hover { background: var(--hover); } }
+.opn__cell { display: grid; place-items: center; margin: 1px; border-radius: 3px; background: var(--s2); }
+.opn__k { display: inline-flex; }
+.opn__k.is-you { color: var(--cream); }
+.opn__x { color: var(--ink3); }
+.opn__x.is-you { color: var(--cream); font-weight: 800; }
+.opn__n { text-align: center; font-size: 11px; line-height: 20px; color: var(--ink3); }
+.opn__n.is-won { color: var(--ink); font-weight: 700; }
+.opn__figs { grid-template-columns: repeat(3, minmax(104px, max-content)); }
+.opn__gun { display: inline-flex; align-items: center; gap: 8px; }
+
+/* ---------------------------------------------------------------- zones (Positions) */
+.zn__head, .zn__row { display: grid; grid-template-columns: minmax(0, 1fr) 120px 44px; column-gap: 12px; align-items: center; }
+.zn__head { grid-template-columns: minmax(0, 1fr) 60px 60px 44px; column-gap: 0; height: 18px; font-size: 10px; }
+.zn__head > :first-child { margin-right: 12px; }
+.zn__hd { text-align: right; padding-right: 6px; }
+.zn__hk { padding-left: 6px; }
+.zn { display: grid; }
+.zn li + li { border-top: 1px solid var(--line); }
+.zn__row { min-height: 40px; padding: 0 6px; margin: 0 -6px; width: calc(100% + 12px); border-radius: var(--r-chip); text-align: left; font-size: 13px; color: var(--ink); }
+.zn__row.is-on { background: var(--s3); box-shadow: inset 2px 0 0 var(--cream); }
+.zn__row:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) { .zn__row:not(.is-on):hover { background: var(--hover); } }
+.zn__l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.zn__bars { display: grid; grid-template-columns: 1fr 1fr; height: 8px; }
+.zn__half { position: relative; display: block; }
+.zn__half--d { border-right: 1px solid var(--ink3); }
+.zn__half i { position: absolute; top: 1px; bottom: 1px; border-radius: 1px; }
+.zn__half--d i { right: 0; background: var(--poor-text); opacity: 0.75; }
+.zn__half--k i { left: 0; background: var(--cream); opacity: 0.85; }
+.zn__kd { text-align: right; white-space: nowrap; }
+.zn__more { margin-top: 8px; }
+/* the radar under a picked zone: everything else steps back, the zone's own marks sit on top */
+.pz-base { transition: none; }
+@media (prefers-reduced-motion: no-preference) { .pz-base { transition: opacity var(--d-hover) ease; } }
+.pz-base.is-dim { opacity: 0.22; }
+/* 24 px tall, with an invisible 40 px hit area above and below it; nothing else in the legend is a control */
+.pz-chip { position: relative; height: 24px; color: var(--cream); }
+.pz-chip::after { content: ""; position: absolute; inset: -8px -4px; }
+
+/* ---------------------------------------------------------------- man advantage (Advanced) */
+.sit { display: grid; gap: 3px; }
+.sit__row { display: grid; grid-template-columns: 76px repeat(var(--n), minmax(0, 1fr)); gap: 3px; }
+.sit__corner { align-self: end; font-size: 10px; }
+.sit__colh, .sit__rowh { display: grid; place-items: center; font-weight: 700; color: var(--ink2); font-size: 12px; }
+.sit__colh { height: 20px; }
+.sit__rowh { justify-items: end; padding-right: 10px; }
+.sit__cell { display: grid; place-content: center; justify-items: center; gap: 2px; height: 48px; border-radius: var(--r-chip); background: var(--s2); cursor: help; outline: none; }
+.sit__cell b { font-size: 14px; font-weight: 700; }
+.sit__cell small { font-size: 11px; color: var(--ink2); }
+.sit__cell.is-none { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink3); }
+.sit__cell.is-even { box-shadow: inset 0 0 0 1px var(--line2); }
+.sit__cell:focus-visible { box-shadow: inset 0 0 0 2px var(--cream); }
+
+/* ---------------------------------------------------------------- bombsites (Advanced) */
+/* outcomes down, sites across, so A and B compare along a row */
+.bs { display: grid; grid-template-columns: minmax(104px, auto) repeat(var(--n), minmax(0, 1fr)); column-gap: 20px; }
+.bs__row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 34px; font-size: 13px; }
+.bs__row + .bs__row { border-top: 1px solid var(--line); }
+.bs__row.is-ct-first { border-top-color: var(--line2); }
+.bs__row--head { min-height: 32px; align-items: end; padding-bottom: 6px; }
+.bs__row--head + .bs__row { border-top: 0; }
+.bs__span { display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-chip); cursor: help; justify-self: start; }
+.bs__row--head .bs__span { cursor: default; }
+.bs__l { font-weight: 500; white-space: nowrap; }
+.bs__cell { display: grid; grid-template-columns: minmax(24px, 1fr) 38px 34px; gap: 8px; align-items: center; border-radius: var(--r-chip); cursor: help; }
+.bs__p, .bs__n { text-align: right; white-space: nowrap; }
+.bs__n { font-size: 12px; }
+.bs__span:focus-visible, .bs__cell:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }

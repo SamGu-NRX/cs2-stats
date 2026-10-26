@@ -207,9 +207,10 @@ canvas.radar-img { image-rendering: auto; }
 .msticky__rail { padding: 10px var(--gutter) 6px; overflow-x: auto; }
 .mtabs { position: relative; display: flex; gap: 22px; padding: 0 var(--gutter); height: 40px; overflow-x: auto; scrollbar-width: none; }
 .mtab { display: flex; align-items: center; font: 600 13px/1 var(--f); color: var(--ink2); white-space: nowrap; transition: color var(--d-hover) ease; }
-.mtab[aria-selected="true"] { color: var(--cream); }
+/* the tab bar is a nav of links (MatchView.tsx Sticky); the open section carries aria-current="page" */
+.mtab[aria-current="page"] { color: var(--cream); }
 .mtab.is-dim { color: var(--ink3); }
-@media (hover: hover) and (pointer: fine) { .mtab[aria-selected="false"]:hover { color: var(--ink); } }
+@media (hover: hover) and (pointer: fine) { .mtab:not([aria-current]):hover { color: var(--ink); } }
 /* the underline takes the tab's width at once and slides under it: transform only */
 .mtabs__ul { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--cream); border-radius: 1px 1px 0 0; transition: transform var(--d-tab) var(--ease-in-out); }
 .mtabs__ul.is-instant { transition: none; }
@@ -789,6 +790,9 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* match pages: the "?" after a panel title holds the panel's explanation */
 .hint { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 6px; vertical-align: 2px; border-radius: 50%; font: 700 10px/1 var(--f); color: var(--ink3); box-shadow: inset 0 0 0 1px var(--line2); cursor: help; }
 .hint:focus-visible { outline: 2px solid var(--cream); outline-offset: 1px; }
+/* the glyph stays 16 px; the pointer target is 24 px (WCAG 2.5.8), the same for .help below */
+.hint { position: relative; }
+.hint::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; }
 @media (hover: hover) and (pointer: fine) { .hint:hover { color: var(--ink); } }
 /* scoreboard: "(t)" and "(f)" stay lower case as HLTV writes them */
 .tbl th .th-lc { text-transform: none; }
@@ -813,6 +817,8 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* ---------------------------------------------------------------- attributes panel: see "Profile v2 system" at the end */
 .help { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--ink3); color: var(--ink3); font: 700 9px/1 var(--f); cursor: help; }
 @media (hover: hover) and (pointer: fine) { .help:hover { border-color: var(--ink2); color: var(--ink); } }
+.help { position: relative; }
+.help::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
 .chip--warn { background: rgba(255, 215, 173, 0.08); color: var(--cream); border: 1px solid rgba(255, 215, 173, 0.25); }
 
 /* ---------------------------------------------------------------- aim (views/aim/AimPanels.tsx) */
@@ -1300,8 +1306,6 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .rtiles li > span:last-child { color: var(--tan); }
 .rfit__bar { height: 4px; }
 .rmaps__h { display: flex; align-items: center; gap: 6px; }
-.signals2__track { height: 2px; border-radius: 1px; }
-.signals2__track em { top: -5px; bottom: -5px; width: 1px; margin-left: 0; background: var(--ink2); }
 .rmaps li { height: 36px; }
 /* Where you play: places as share lollipops */
 .places { gap: 0; }
@@ -1348,10 +1352,6 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 /* Role by spawn: side pips, and the quiet spawns as one closing line */
 .spawns .pip { min-width: 26px; }
 .spawns__more td { color: var(--ink2); }
-/* a role signal: name, what it measures, its "?", the fit chip, and the value at the row's end */
-.signals2__top { align-items: center; }
-.signals2__top .help { margin-left: -4px; }
-.signals2__v { margin-left: auto; font: 650 13px/1 var(--f); }
 /* a gun's advice: its line of numbers with the sentence in a "?" right after its last word, so a
    line that wraps in the narrow gun column keeps its "?" beside it */
 .guncell .guncell__advice { display: block; font-variant-numeric: tabular-nums; }

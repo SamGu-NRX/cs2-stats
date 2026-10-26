@@ -11,6 +11,9 @@ import "./ui/styles/views.css";
 import "./ui/styles/restore-aim.css";
 import "./ui/styles/restore-profile.css";
 import "./ui/styles/restore-match.css";
+import "./ui/styles/luck.css";
+import "./ui/styles/career-parity.css";
+import "./ui/styles/match-parity.css";
 
 // Entrance motion is opt-in (views.css, "page enter"): the app turns it on here, so tests and static
 // renders, which never run this file, see every element in its final place.
