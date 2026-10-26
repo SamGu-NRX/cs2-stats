@@ -17,6 +17,10 @@
     0.0806227519124513,
     88.93784265324884
   ],
+  "composite": {
+    "mean": -4.761264985824401e-16,
+    "sd": 0.4773148377158681
+  },
   "players": 551,
   "source": "489 pro maps, players with 40+ rounds and all four parts"
 }

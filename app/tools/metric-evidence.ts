@@ -16,7 +16,7 @@
 // The report (no names or ids either) goes to <data>/derived/metric-evidence-v2.json by default.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { aggroParts, AGGRO_PARTS, scoreOf, type AggroScale } from "../src/stats/aggro-scale";
+import { aggroParts, AGGRO_PARTS, rawScoreOf, scoreOf, type AggroScale } from "../src/stats/aggro-scale";
 import type { SightFact } from "../src/stats/aim";
 import { derive } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
@@ -156,11 +156,15 @@ const xparams: XDuelParams = {
 // ---------------------------------------------------------------- the aggression scale
 
 const pros = [...careers.values()].filter((s) => s.m.rounds >= MIN_ROUNDS).map(aggroParts).filter((v) => v.every((x) => x !== null)) as number[][];
-const scale: AggroScale = {
+const sdOf = (xs: number[]) => { const m = mean(xs); return Math.sqrt(mean(xs.map((x) => (x - m) ** 2))); };
+const parts = {
   parts: [...AGGRO_PARTS],
   mean: AGGRO_PARTS.map((_, j) => mean(pros.map((v) => v[j]))),
-  sd: AGGRO_PARTS.map((_, j) => { const m = mean(pros.map((v) => v[j])); return Math.sqrt(mean(pros.map((v) => (v[j] - m) ** 2))); }),
-  players: pros.length,
+  sd: AGGRO_PARTS.map((_, j) => sdOf(pros.map((v) => v[j]))),
+};
+const raw = pros.map((v) => rawScoreOf(v, parts)!);
+const scale: AggroScale = {
+  ...parts, composite: { mean: mean(raw), sd: sdOf(raw) }, players: pros.length,
   source: `${maps} pro maps, players with ${MIN_ROUNDS}+ rounds and all four parts`,
 };
 
@@ -248,7 +252,7 @@ if (FIT) {
 }
 
 console.log(`xduel: ${xparams.n} duels, cross-validated AUC ${xparams.auc}, Brier ${xparams.brier}`);
-console.log(`aggression scale: ${scale.players} players; mean ${scale.mean.map((x) => x.toFixed(3))}; sd ${scale.sd.map((x) => x.toFixed(3))}`);
+console.log(`aggression scale: ${scale.players} players; mean ${scale.mean.map((x) => x.toFixed(3))}; sd ${scale.sd.map((x) => x.toFixed(3))}; composite mean ${scale.composite.mean.toFixed(4)} sd ${scale.composite.sd.toFixed(4)}`);
 console.log("id | player-maps | map-split players | r | SB | max |r| existing | r with entryAttempts | passes");
 for (const r of results) console.log([r.id, r.playerMaps, r.mapSplit.players, r.mapSplit.r, r.mapSplit.sb, r.maxAbsExisting, r.withEntryAttempts, r.passes].join(" | "));
 for (const [id, g] of Object.entries(gates)) console.log(`${id}: gate ${g.gate ? `${g.gate.n} ${g.unit} (${g.gate.how})` : "none"}; bins ${g.bins.map((b) => `${b.n}:${b.players}p sb ${b.sb}`).join(", ")}`);
