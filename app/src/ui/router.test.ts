@@ -51,11 +51,21 @@ describe("Profile tabs", () => {
     expect(at("#/profile/duels?sec=openings")).toEqual(["duels", "openings", null]);
   });
   it("carries the scope keys a tab switch keeps, and none of a tab's own", () => {
-    // fails if a tab switch drops the map, matches, side, gun class, result or comparison, or carries a
-    // section, attribute or pro into a tab that has none of them
-    const q = parseHash("#/profile/overview?map=de_dust2&n=10&side=t&guns=rifle&result=W&cmp=bots&sec=card&attr=firepower&pro=s1mple").query;
-    expect(scopeQuery(q)).toEqual({ map: "de_dust2", n: "10", side: "t", guns: "rifle", result: "W", cmp: "bots" });
+    // fails if a tab switch drops the map, matches, side or comparison, or carries a section,
+    // attribute or pro into a tab that has none of them
+    const q = parseHash("#/profile/overview?map=de_dust2&n=10&side=t&cmp=bots&sec=card&attr=firepower&pro=s1mple").query;
+    expect(scopeQuery(q)).toEqual({ map: "de_dust2", n: "10", side: "t", cmp: "bots" });
     expect(scopeQuery(parseHash("#/profile").query)).toEqual({});
+  });
+  it("drops the query keys Profile does not read, on its tabs and on the old pages", () => {
+    // fails if a legacy #/aim?guns=rifle&result=W keeps a gun class or result Profile never applies,
+    // so the URL would claim a filter the page does not show
+    for (const h of ["#/aim?guns=rifle&result=W&map=de_dust2&side=t", "#/profile/aim?guns=rifle&result=W&map=de_dust2&side=t", "#/weapons?result=L&guns=smg&map=de_dust2&side=t"]) {
+      expect(Object.fromEntries(parseHash(h).query), h).toEqual({ map: "de_dust2", side: "t" });
+    }
+    expect(Object.fromEntries(parseHash("#/profile/overview?sec=style&attr=entrying&pro=s1mple&cmp=bots&n=5").query)).toEqual({ sec: "style", attr: "entrying", pro: "s1mple", cmp: "bots", n: "5" });
+    // other pages keep theirs
+    expect(parseHash("#/matches?result=W&guns=rifle").query.get("result")).toBe("W");
   });
 });
 

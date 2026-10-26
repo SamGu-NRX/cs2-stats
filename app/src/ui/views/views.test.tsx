@@ -387,6 +387,20 @@ describe("the page's scope across Profile tabs (#39 review)", () => {
       act(() => { tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
       const r = parseHash(location.hash);
       expect([r.ptab, Object.fromEntries(r.query)]).toEqual(["duels", scope]);
+      // Playstyle's link to the attribute block keeps the scope too
+      act(() => go(`#/profile/playstyle?map=${map}&n=10&side=t&cmp=bots`));
+      render(<ProfileView tab="playstyle" />);
+      const xref = parseHash(host.querySelector<HTMLAnchorElement>(".ptab__xref")!.getAttribute("href")!);
+      expect([xref.ptab, Object.fromEntries(xref.query)]).toEqual(["overview", { ...scope, sec: "style" }]);
+    } finally {
+      act(() => go("#/"));
+    }
+  });
+  it("trims a legacy link's gun class and result from the URL on the way into Profile", () => {
+    // fails if #/aim?guns=rifle&result=W keeps keys in the address bar that Profile never applies
+    try {
+      act(() => go("#/aim?guns=rifle&result=W&side=t"));
+      expect(location.hash).toBe("#/aim?side=t");
     } finally {
       act(() => go("#/"));
     }
@@ -497,21 +511,49 @@ describe("Matches", () => {
 });
 
 describe("Style compass", () => {
-  it("places you and every bot career with 20 or more rounds", () => {
-    // fails if the compass drops you, places a thin career, or loses a qualifying one
+  it("places you and every bot career with 20 or more rounds, on the page's side", async () => {
+    // fails if the compass drops you, places a thin career, or loses a qualifying one; or, with the
+    // page on T, places the bots (or ranks you, or picks your role and spawns) over both sides
     use(samples);
-    render(<ProfileView tab="playstyle" />);
-    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Style compass")!;
-    expect(card).toBeTruthy();
     const career = new Set(careerEntries(data.matches, null).map((e) => e.file));
     const files = samples.filter((x) => career.has(x.file));
+    const q = queryOf(files);
+    answers.roles = await calls.roles(q);
+    // the ranking sources here have no spawns, so role by spawn gets one T and one CT spawn by hand
+    const roles = answers.roles as Awaited<ReturnType<typeof calls.roles>>;
+    answers.rolesBySpawn = {
+      T: [{ spawn: "t1", map: "de_dust2", side: "T", place: "TSpawn", position: "front", rounds: 10, blend: roles.T }],
+      CT: [{ spawn: "ct1", map: "de_dust2", side: "CT", place: "CTSpawn", position: "back", rounds: 10, blend: roles.CT }],
+    };
     const bots = [...new Set(files.flatMap((x) => x.entry.players.filter((p) => p.bot).map((p) => p.id)))];
-    const placed = bots.filter((id) => {
-      const m = summary({ files: files.map((x) => x.file), filter: { player: [id] } }).m;
+    const placed = (sides?: ("T" | "CT")[]) => bots.filter((id) => {
+      const m = summary({ files: files.map((x) => x.file), filter: { player: [id], ...(sides ? { sides } : {}) } }).m;
       return m.rounds >= 20 && m.kills + m.assists > 0;
     });
-    expect(card.querySelectorAll("svg circle[r='4.5']")).toHaveLength(placed.length);
-    expect(text(card.querySelector(".compass__you"))).toMatch(/^You, (Support|Entry and support|Entry|Rifler)$/);
+    const compass = () => Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Style compass")!;
+    try {
+      for (const side of [null, "t"] as const) {
+        act(() => go(side ? `#/profile/playstyle?side=${side}` : "#/profile/playstyle"));
+        delete asked.style;
+        render(<ProfileView tab="playstyle" />);
+        const card = compass();
+        expect(card).toBeTruthy();
+        expect(card.querySelectorAll("svg circle[r='4.5']"), side ?? "both").toHaveLength(placed(side ? ["T"] : undefined).length);
+        expect(text(card.querySelector(".compass__you"))).toMatch(/^You, (Support|Entry and support|Entry|Rifler)$/);
+        expect(asked.style?.[1], side ?? "both").toEqual({ pool: "all", side: side ? "T" : "both" });
+      }
+      // the fixture tells the sides apart, so the count above can catch a compass that ignores the side
+      expect(placed(["T"]).length).not.toBe(placed().length);
+      // on T: the role card's rounds, and role by spawn's rows, are T's alone
+      const role = host.querySelector(".rolecard")!;
+      expect(text(role.querySelector(".card__aside"))).toBe(`${roles.T.rounds} T rounds`);
+      expect(role.querySelector(".role__head")).toBeNull();
+      const pips = Array.from(host.querySelectorAll(".spawns tbody .pip")).map((el) => el.className);
+      expect(pips.length).toBeGreaterThan(0);
+      expect(pips.every((c) => c.includes("pip--t"))).toBe(true);
+    } finally {
+      act(() => go("#/"));
+    }
   });
 });
 
