@@ -27,17 +27,23 @@ describe("parseHash", () => {
   });
 });
 
-describe("Playstyle and Weapons", () => {
-  // Both are views of their own again (the redirects to Profile and Career aim dropped the per-gun sprays).
-  it("opens #/playstyle and #/weapons as their own pages, keeping their scope", () => {
+describe("Profile tabs", () => {
+  // Playstyle, Career aim and Weapons are Profile's tabs; their old links open the tab, keeping their scope
+  it("opens #/profile/<tab>, and the old pages as their tab", () => {
+    expect([parseHash("#/profile/duels").page, parseHash("#/profile/duels").ptab]).toEqual(["profile", "duels"]);
+    expect(parseHash("#/profile").ptab).toBe("overview");
+    expect(parseHash("#/profile/nonsense").ptab).toBe("overview");
     const r = parseHash("#/playstyle?map=de_dust2&n=10");
-    expect(r.page).toBe("playstyle");
-    expect(r.query.get("map")).toBe("de_dust2");
-    expect(r.query.has("sec")).toBe(false);
-    expect(parseHash("#/weapons").page).toBe("weapons");
+    expect([r.page, r.ptab, r.query.get("map")]).toEqual(["profile", "playstyle", "de_dust2"]);
+    expect(parseHash("#/aim").ptab).toBe("aim");
+    expect(parseHash("#/weapons").ptab).toBe("weapons");
   });
-  it("still reads a section link", () => {
-    expect(parseHash("#/profile?sec=identity").query.get("sec")).toBe("identity");
+  it("opens an old ?sec= section link on the tab that now holds it", () => {
+    // fails if a bookmark to the one-page Profile lands on the wrong tab
+    const r = parseHash("#/profile?sec=identity");
+    expect([r.ptab, r.query.get("sec")]).toEqual(["playstyle", "identity"]);
+    expect(parseHash("#/profile?sec=howgood").ptab).toBe("duels");
+    expect(parseHash("#/profile?sec=firepower").ptab).toBe("overview");
   });
 });
 

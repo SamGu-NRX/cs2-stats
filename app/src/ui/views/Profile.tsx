@@ -4,18 +4,15 @@
 // app bar drives the whole page: every summary is rolled up over that side's rounds. Performance is
 // compared with that side's pros; style with the bot careers in the same matches on that side
 // (worker/ranking.ts).
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import { isGun } from "../../stats/guns";
-import { weaponClass, weaponLabel } from "../../stats/weapons";
 import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../components/bits";
 import { Card } from "../components/Card";
 import { Gauge, TrendLine } from "../components/charts";
-import { GameIcon } from "../components/GameIcon";
-import { ApproxMark, Percentile, percentilePhrase } from "../components/Percentile";
+import { ApproxMark, Percentile, percentilePhrase, sentence } from "../components/Percentile";
 import { Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
@@ -23,25 +20,28 @@ import { AgentImg } from "../components/Agent";
 import {
   botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText, type BotPool,
-  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
+  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { PANEL_TIP, tipOf } from "../data/tips";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
-import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
+import { FirstKillIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
-import { matchHref, openMatch, setQuery, useRoute, useSection } from "../router";
+import { matchHref, openMatch, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
-import { HowGood, pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
-import { AggressionCard, DotTrack, EconomyCard } from "./profile/v2";
-import { WhereYouPlay } from "./Playstyle";
+import { pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
+import { AggressionCard, DotTrack } from "./profile/v2";
+import { AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import CareerAim from "./CareerAim";
+import WeaponsTab from "./Weapons";
+import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
 
 type Compare = "bench" | "bots";
 
@@ -89,7 +89,23 @@ function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: Mat
   }, [one, sums, rats, list, side]);
 }
 
-export default function ProfileView() {
+/** The tab bar: links to #/profile/<tab>, one tab stop each, Alt+1 to Alt+7 (App.tsx). The underline jumps; a tab switch has no motion. */
+function ProfileTabs({ tab }: { tab: ProfileTab }) {
+  return (
+    <nav className="mtabs ptabs" role="tablist" aria-label="Profile sections">
+      {PROFILE_TABS.map((t, n) => (
+        <a key={t} data-tab={t} role="tab" aria-selected={t === tab} aria-controls="profile-panel" href={profileHref(t)} className="mtab" data-tip={`Alt ${n + 1}`}>
+          {PROFILE_TAB_LABEL[t]}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+/** The tabs without the side control: their panels have their own side filter or none. */
+const NO_SIDE = new Set<ProfileTab>(["aim", "weapons", "playstyle"]);
+
+export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) {
   const { matches, you: ids, baselines, baselinesError } = useData();
   const { map, n, side } = useScope();
   const r = useRoute();
@@ -105,36 +121,36 @@ export default function ProfileView() {
   ] : null), [list, files, ids, bots, side]);
   const sums = useRollups(qs);
   // ?sec= links (Home's "Work on", typed links) scroll to their section once it renders (router.ts useSection)
-  const identityRef = useSection("identity");
   const styleRef = useSection("style");
-  const performanceRef = useSection("performance");
   const firepowerRef = useSection("firepower");
-  const howGoodRef = useSection("howgood");
   const cardRef = useSection("card");
   const openingsRef = useSection("openings");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
   const sideQ = useMemo(() => ({ files, filter: { player: ids, ...sidesOf(side) } }), [files, ids, side]);
+  const ranks = useRanks(base, ratingKey(side));
   const perMatch = usePerMatch(list, ids, side);
   const p: ProfileData | null = sums.data && rats && perMatch && sums.data.length === (qs?.length ?? 0) ? {
     list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null, perMatch,
   } : null;
 
+  const controls = NO_SIDE.has(tab) ? (["map", "matches"] as const) : (["map", "matches", "side"] as const);
   if (!p) {
     return (
       <div className="view view--capped">
-        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
+        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: [...controls] }} />
         <div className="view__in profile">
           {(sums.loading || !matches.length) && !sums.error ? <div className="skel" style={{ height: 340 }} /> : <Card><Empty text={sums.error ?? "No matches in this filter."} /></Card>}
         </div>
       </div>
     );
   }
+  const rankSide = ratingKey(side);
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
+      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }, { label: PROFILE_TAB_LABEL[tab] }]} scope={{ controls: [...controls] }} />
       <div className="view__in profile" data-side={side}>
         <div className="profile__top psec" id="card" ref={cardRef}>
           <PlayerCard p={p} side={side} cmp={cmp} compare={(
@@ -142,37 +158,75 @@ export default function ProfileView() {
             <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
               options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
           )} />
-          <FormRail p={p} side={side} />
         </div>
-        <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" sectionRef={identityRef} />
-        <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
-        <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
-        <div className="identity">
-          <RoleCard q={base} />
-          <WhereYouPlay list={list} side={side} />
-        </div>
-        <div className="profile__pair">
-          <AggressionCard s={p.you} />
-          <EconomyCard q={base} s={p.you} side={ratingKey(side)} />
-        </div>
-        <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" sectionRef={performanceRef} />
-        <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
-        {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
-        {baselines && (
-          <div className="profile__cols">
-            <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} /></div>
-            <div id="howgood" ref={howGoodRef} className="psec"><HowGood q={base} side={ratingKey(side)} /></div>
-          </div>
-        )}
-        <div className="profile__trend">
-          <FormTrend p={p} side={side} />
-          <MapsTable p={p} side={side} />
-        </div>
-        <div className="profile__cols3">
-          <Weapons p={p} files={files} side={side} />
-          <Clutches m={p.you.m} q={base} side={side} list={list} />
-          <Multis m={p.you.m} q={sideQ} list={list} />
-          <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
+        <ProfileTabs tab={tab} />
+        <div id="profile-panel" role="tabpanel" aria-label={PROFILE_TAB_LABEL[tab]} className={`ptab ptab--${tab}`}>
+          {tab === "overview" && (
+            <>
+              {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
+              <div className="profile__cols">
+                {baselines && <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} /></div>}
+                <FormRail p={p} side={side} />
+              </div>
+              <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
+              <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
+              <div className="profile__trend">
+                <FormTrend p={p} side={side} />
+                <MapsTable p={p} side={side} />
+              </div>
+            </>
+          )}
+          {tab === "duels" && (
+            <>
+              <div className="profile__cols">
+                <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
+                <StatCard title="Opening duels, against pros" tip="The first duel of each round." ids={OPENING_ROWS} r={ranks} />
+              </div>
+              <div className="profile__cols">
+                <StatCard title="Trades" tip="Avenging teammates, and being avenged." ids={TRADE_ROWS} r={ranks} id="howgood" />
+                <StatCard title="AWP duels" tip="Duels where you or the enemy holds an AWP." ids={AWP_ROWS} r={ranks} />
+              </div>
+              <div className="profile__cols">
+                <Clutches m={p.you.m} q={base} side={side} list={list} />
+                <StatCard title="Clutches, against pros" tip="Rounds you're your team's last player alive." ids={CLUTCH_ROWS} r={ranks} />
+              </div>
+              <Multis m={p.you.m} q={sideQ} list={list} />
+            </>
+          )}
+          {tab === "aim" && <CareerAim />}
+          {tab === "weapons" && <WeaponsTab />}
+          {tab === "utility" && (
+            <div className="profile__cols">
+              <StatCard title="What you throw" tip="Grenades you throw per round, and what you leave unused." ids={THROW_ROWS} r={ranks} />
+              <div className="profile__stack">
+                <StatCard title="What it does" tip="What your flashes, grenades and fire do to enemies." ids={EFFECT_ROWS} r={ranks} />
+                <StatCard title="What you take" tip="Grenade and fire damage you take." ids={TAKEN_ROWS} r={ranks} />
+              </div>
+            </div>
+          )}
+          {tab === "economy" && (
+            <div className="profile__cols">
+              <StatCard title="Buying" tip="How you spend against your team, and what you keep." ids={ECONOMY_ROWS} r={ranks} />
+              <BuySplitsCard q={sideQ} />
+            </div>
+          )}
+          {tab === "playstyle" && (
+            <>
+              <div className="identity">
+                <RoleCard q={base} />
+                <WhereYouPlay list={list} side={side} />
+              </div>
+              <div className="profile__pair">
+                <AggressionCard s={p.you} />
+                <RoleBySpawnCard q={base} />
+              </div>
+              <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
+              <div className="profile__cols">
+                <StyleCompass list={list} q={base} />
+                <Ranks q={base} />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -234,7 +288,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
         <AgentImg side={side === "ct" ? "ct" : "t"} kind="portrait" className="pcard-hltv__agent" key={side === "ct" ? "ct" : "t"} />
         {role && (
           <div className="pcard-hltv__tags">
-            <span className="tag" data-tip={PANEL_TIP.role}>{role}</span>
+            <span className="tag" data-tip={PANEL_TIP.role} tabIndex={0}>{role}</span>
           </div>
         )}
         <div className="pcard-hltv__id">
@@ -287,7 +341,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
 function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
   const rows = p.list.slice(0, 7);
   return (
-    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form}>{RATING_LABEL}</span><ApproxMark /></span>} flush className="form-rail">
+    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form} tabIndex={0}>{RATING_LABEL}</span><ApproxMark /></span>} flush className="form-rail">
       <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings[ratingKey(side)].value} avgLabel="pooled" />
       <table className="tbl tbl--compact">
         <tbody>
@@ -297,7 +351,7 @@ function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
               <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
                 <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtMatchDay(f.match)}</small></span></td>
                 <td><span className={`wl wl--${f.result}`}>{f.result}</span> <span className="num">{f.score.us}:{f.score.them}</span></td>
-                <td>{r === null ? <span className="faint" data-tip="Not rated: too little kill data in this match.">–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
+                <td>{r === null ? <span className="faint" data-tip="Not rated: too little kill data in this match." tabIndex={0}>–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
               </tr>
             );
           })}
@@ -447,52 +501,6 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
   );
 }
 
-const CLASS_ORDER = ["rifle", "sniper", "smg", "heavy", "pistol"];
-
-/**
- * Every gun you got kills with on the page's side, most kills first within its class, each with the
- * game's own icon from the pack (components/GameIcon.tsx; the app's glyph only when the pack is missing).
- * Accuracy is from recorded matches (converted logs have no shots); headshots are a share of the gun's kills.
- */
-function Weapons({ p, files, side }: { p: ProfileData; files: string[]; side: SideKey }) {
-  const { you: ids } = useData();
-  const guns = Object.entries(p.you.weapons).filter(([w, t]) => isGun(w) && t.kills > 0).map(([w, t]) => ({ w, cls: weaponClass(w), kills: t.kills, hs: t.kills ? (100 * t.hsKills) / t.kills : null }))
-    .sort((a, b) => CLASS_ORDER.indexOf(a.cls) - CLASS_ORDER.indexOf(b.cls) || b.kills - a.kills);
-  const total = guns.reduce((a, r) => a + r.kills, 0);
-  const key = guns.map((g) => g.w).join(",");
-  const accs = useRollups(useMemo(() => guns.map((g) => ({ files, filter: { player: ids, weapons: [g.w], ...sidesOf(side) } })), [key, files, ids, side])).data; // eslint-disable-line react-hooks/exhaustive-deps
-  const acc = (i: number) => (accs?.length === guns.length && accs[i].aim.shots ? accs[i].v.accuracy : null);
-  const most = Math.max(1, ...guns.map((g) => g.kills));
-  return (
-    <Card title="Weapons" tip={PANEL_TIP.weapons} collapsible id="profile-weapons" aside={<span className="meta">{plural(total, "kill")}</span>}>
-      <table className="guns">
-        <thead>
-          <tr>
-            <th scope="col" className="l" colSpan={2}><span className="sr-only">Gun</span></th>
-            <th scope="col" data-tip="Your kills with the gun." tabIndex={0}>Kills</th>
-            <th scope="col" data-tip="Shots that hit, from recorded matches." tabIndex={0} aria-label="Accuracy">Acc</th>
-            <th scope="col" data-tip="Kills that were headshots." tabIndex={0}><span className="guns__hs"><GameIcon id="headshot" width={13} label="Headshots" fallback={<HeadshotIcon size={13} label="Headshots" />} /></span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {guns.map((g, i) => (
-            <Fragment key={g.w}>
-              {(i === 0 || guns[i - 1].cls !== g.cls) && <tr className="guns__cls"><th scope="rowgroup" colSpan={5}>{WEAPON_CLASS_LABEL[g.cls]}</th></tr>}
-              <tr>
-                <td className="guns__ico"><GameIcon id={g.w} width={48} height={16} fallback={<WeaponIcon name={g.w} size={16} />} /></td>
-                <td className="l guns__name">{weaponLabel(g.w)}<span className="guns__bar" aria-hidden><i style={{ width: `${(100 * g.kills) / most}%` }} /></span></td>
-                <td><b className="num">{g.kills}</b></td>
-                <td className="num">{acc(i) === null ? <span className="faint">–</span> : fmtPct(acc(i), 0)}</td>
-                <td className="num">{g.hs === null ? "–" : fmtPct(g.hs, 0)}</td>
-              </tr>
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
-
 /**
  * The 1v1 to 1v5 bars. A row with clutches behind it opens the list of them, each linking to its round
  * in the match's round drawer. Opening and closing a row is instant: nothing moves but the list.
@@ -583,18 +591,19 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
               <MultiBadge k={r.k} />
               <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
               <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
-              <span className="mlist__pro" data-tip={rank === null ? pro?.reason ?? "No pro comparison for this." : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`}>
+              <span className="mlist__pro">
                 <DotTrack at={rank} tone={rank === null ? undefined : scoreFill(rank >= 50 ? 1 : -1)} label={rank === null ? "Not compared with pros" : `${percentilePhrase(rank, "performance")} of pros`} />
               </span>
               <b className="num">{r.rounds}</b>
             </>
           );
+          const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
           const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
-              {r.rounds === 0 ? <div className="clist__row mlist__row" tabIndex={0}>{body}<span className="clist__chev" aria-hidden /></div> : (
-                <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`}
-                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
+              {r.rounds === 0 ? <div className="clist__row mlist__row" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`} data-tip={proText}
+                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds, ${proText} ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
                   {body}<span className="clist__chev" aria-hidden />
                 </button>
@@ -629,7 +638,7 @@ function Openings({ s }: { s: Rolled }) {
   const att = c.openingKills + c.openingDeaths;
   const succ = s.v.openingSuccess;
   return (
-    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={tipOf("openingSuccess")}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
+    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={tipOf("openingSuccess")} tabIndex={0}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
       <div className="odial">
         <svg viewBox="0 0 120 12" width="100%" height="12" aria-hidden>
           <rect x="0" y="2" width="120" height="8" rx="2" fill="var(--track)" />
@@ -638,9 +647,9 @@ function Openings({ s }: { s: Rolled }) {
         <div className="odial__legend"><span><b className="num good-text">{c.openingKills}</b> won</span><span><b className="num poor-text">{c.openingDeaths}</b> lost</span></div>
       </div>
       <dl className="facts">
-        <dt data-tip={tipOf("openingAttempts")}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
-        <dt data-tip={tipOf("openingWinPct")}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
-        <dt data-tip={tipOf("openingTradedPct")}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
+        <dt data-tip={tipOf("openingAttempts")} tabIndex={0}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
+        <dt data-tip={tipOf("openingWinPct")} tabIndex={0}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
+        <dt data-tip={tipOf("openingTradedPct")} tabIndex={0}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
       </dl>
     </Card>
   );

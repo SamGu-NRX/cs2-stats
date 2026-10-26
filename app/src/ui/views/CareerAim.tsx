@@ -1,5 +1,5 @@
-// Career aim: how your aim moves across recorded matches, then every recorded shot together, and
-// every gun you have used (the Weapons table, over every career match).
+// Profile's Aim tab (formerly the Career aim page): how your aim moves across recorded matches,
+// then every recorded shot together. Every gun you have used is the Weapons tab's.
 import { useMemo } from "react";
 import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
@@ -13,7 +13,6 @@ import { AimIcon } from "../icons/ui";
 import { fmtDeg, fmtMatchDay, plural } from "../lib/format";
 import { pageHref } from "../router";
 import { BENCH } from "../lib/verdict";
-import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
 import { Hint } from "./match/glyphs";
@@ -39,7 +38,6 @@ interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number)
 export default function CareerAim() {
   const { matches } = useData();
   const { map, n } = useScope();
-  const career = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const list = useMemo(() => { const f = careerEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const all = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
@@ -63,9 +61,7 @@ export default function CareerAim() {
   ];
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
-    <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"] }} />
-      <div className="view__in careeraim">
+    <div className="careeraim">
         {!query ? (
           <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
@@ -103,10 +99,9 @@ export default function CareerAim() {
                 );
               })}
             </div>
-            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} statuses={list.map((s) => s.match.visibility)} guns={career} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} statuses={list.map((s) => s.match.visibility)} gunTable={false} />
           </>
         )}
-      </div>
     </div>
   );
 }

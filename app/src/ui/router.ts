@@ -3,8 +3,9 @@
 // #/match/<file>/rounds?round=7. A view's section is the `sec` parameter: #/profile?sec=identity
 // scrolls Profile to its Identity section once (useSection below).
 //
-// The app has six views (Home, Matches, Profile, Playstyle, Career aim, Weapons) plus Data & settings
-// and the match view.
+// The app has three views (Home, Matches, Profile) plus Data & settings and the match view. Profile
+// has tabs, #/profile/<tab>; the pages that became its tabs (#/playstyle, #/aim, #/weapons) still
+// parse, as Profile on that tab, so old links and bookmarks keep working.
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
@@ -14,15 +15,28 @@ export const MATCH_TAB_LABEL: Record<MatchTab, string> = {
   overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced",
 };
 
-export type Page = "home" | "matches" | "match" | "profile" | "playstyle" | "aim" | "weapons" | "settings";
+export const PROFILE_TABS = ["overview", "duels", "aim", "weapons", "utility", "economy", "playstyle"] as const;
+export type ProfileTab = (typeof PROFILE_TABS)[number];
+export const PROFILE_TAB_LABEL: Record<ProfileTab, string> = {
+  overview: "Overview", duels: "Duels", aim: "Aim", weapons: "Weapons", utility: "Utility", economy: "Economy", playstyle: "Playstyle",
+};
+
+export type Page = "home" | "matches" | "match" | "profile" | "settings";
 
 export interface Route {
   page: Page;
   /** match page only */
   file?: string;
   tab?: MatchTab;
+  /** profile page only */
+  ptab?: ProfileTab;
   query: URLSearchParams;
 }
+
+/** Old ?sec= sections of the one-page Profile, by the tab that now holds them (Home's links, bookmarks). */
+const SECTION_TAB: Record<string, ProfileTab> = {
+  card: "overview", identity: "playstyle", style: "overview", performance: "overview", firepower: "overview", howgood: "duels", openings: "duels",
+};
 
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
@@ -36,7 +50,15 @@ export function parseHash(hash: string): Route {
     return { page: "match", file: parts.slice(1, hasTab ? -1 : undefined).join("/"), tab: hasTab ? last : "overview", query };
   }
   const p = parts[0];
-  if (p === "matches" || p === "profile" || p === "playstyle" || p === "aim" || p === "weapons" || p === "settings") return { page: p, query };
+  if (p === "profile") {
+    const t = parts[1] as ProfileTab;
+    const sec = query.get("sec");
+    const ptab = (PROFILE_TABS as readonly string[]).includes(t) ? t : (sec && SECTION_TAB[sec]) || "overview";
+    return { page: "profile", ptab, query };
+  }
+  // the pages that became Profile tabs
+  if (p === "playstyle" || p === "aim" || p === "weapons") return { page: "profile", ptab: p, query };
+  if (p === "matches" || p === "settings") return { page: p, query };
   return { page: "home", query };
 }
 
@@ -51,6 +73,7 @@ const qs = (q?: Record<string, string | number | null | undefined>) => {
 export const matchHref = (file: string, tab: MatchTab = "overview", q?: Record<string, string | number | null | undefined>) =>
   `#/match/${file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
 export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string | number | null | undefined>) => `#/${page === "home" ? "" : page}${qs(q)}`;
+export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, string | number | null | undefined>) => `#/profile/${tab}${qs(q)}`;
 
 // The current route is a small store, so navigation can render synchronously (flushSync) inside a
 // View Transition: the new view must be in the DOM when the transition snapshots it.
@@ -129,6 +152,8 @@ export function setQuery(key: string, value: string | null, more?: Record<string
 
 /** A page link that opens one of its sections, e.g. sectionHref("profile", "identity"). */
 export const sectionHref = (page: Exclude<Page, "match">, sec: string, q?: Record<string, string | number | null | undefined>) => pageHref(page, { ...q, sec });
+/** A Profile tab link that scrolls to one of the tab's sections. */
+export const tabSectionHref = (tab: ProfileTab, sec: string, q?: Record<string, string | number | null | undefined>) => profileHref(tab, { ...q, sec });
 
 /**
  * For a view that has sections: returns a ref for the section's element. When the route's `sec` names
@@ -144,9 +169,9 @@ export function useSection(id: string): (el: HTMLElement | null) => void {
   const wanted = r.query.get("sec") === id;
   return useCallback((el: HTMLElement | null) => {
     if (!el || !wanted) return;
-    const visit = `${r.page}|${id}`;
+    const visit = `${r.page}|${r.ptab ?? ""}|${id}`;
     if (sectionDone === visit) return;
     sectionDone = visit;
     requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
-  }, [wanted, r.page, id]);
+  }, [wanted, r.page, r.ptab, id]);
 }

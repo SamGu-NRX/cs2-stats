@@ -1,21 +1,20 @@
-// Playstyle: identity rather than performance (design/research-playstyle-viz.md).
+// Panels of Profile's Playstyle tab: identity rather than performance (design/research-playstyle-viz.md).
 // - Style compass: you and every bot career in your matches on two signals, how often you take the
 //   opening duel and how much of your work is trades and assists, with the zones named in words.
-// - Role: the engine's role blend per side.
 // - Where you play: a radar of your movement, kills and deaths, for any map you have played, with the
 //   places you spend your time.
 // - Where you rank: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
 //   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
-// - Rotations and first contact wait for analysis that has not been built; the page says so.
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Measures } from "../../stats/facts";
 import type { MatchEntry } from "../data/match";
 import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
+import { MetricList, MetricRow } from "../components/MetricRow";
 import { Select } from "../components/controls";
 import { useWidth } from "../components/charts";
 import { frameFor, RadarView } from "../components/MapArt";
-import { botIds, botPopulation, careerEntries, fmtMetric, mapsIn, rankText, sidesOf, type SideKey } from "../data/engine";
+import { botIds, botPopulation, fmtMetric, mapsIn, sidesOf, type SideKey } from "../data/engine";
 import { useCall, useRollups } from "../data/hooks";
 import { metric } from "../data/meta";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
@@ -25,36 +24,10 @@ import { useGameIcon } from "../data/icons";
 import { useData } from "../data/provider";
 import { DeathIcon } from "../icons/game";
 import { fmtPct, mapName, plural } from "../lib/format";
-import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
-import { RoleCard } from "./profile/parts";
-import { Empty, NeedsDemo, NotCompared } from "./shared";
+import { Empty, NeedsDemo } from "./shared";
 
-export default function Playstyle() {
-  const { matches, you } = useData();
-  const { map, n } = useScope();
-  const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
-  const q = useMemo(() => (list.length && you.length ? { files: list.map((e) => e.file), filter: { player: you } } : null), [list, you]);
-  return (
-    <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Playstyle" }]} scope={{ controls: ["map", "matches"] }} />
-      <div className="view__in playstyle">
-        {!q ? <Card><Empty text="No matches in this filter." /></Card> : (
-          <>
-            <div className="ps-top">
-              <StyleCompass list={list} q={q} />
-              <RoleCard q={q} />
-            </div>
-            <WhereYouPlay list={list} side="both" />
-            <Ranks q={q} />
-            <p className="meta ps-next">Rotations between callouts and where you first meet the enemy arrive with the movement analysis and line-of-sight tracing.</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------- style compass
 
@@ -85,7 +58,7 @@ const zoneOf = (d: { x: number; y: number }) => ZONES[d.y >= SUPPORT_Y ? (d.x >=
  * matches (one bot name is one career, as worker/ranking.ts counts them). Restored from main's
  * Playstyle, now read from the engine's rollups.
  */
-function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
+export function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
   const bots = useMemo(() => botIds(list), [list]);
   const names = useMemo(() => new Map(list.flatMap((e) => e.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const))), [list]);
   const qs = useMemo(() => [q, ...bots.map((id) => ({ files: q.files, filter: { player: [id] } }))], [q, bots]);
@@ -99,7 +72,7 @@ function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
     });
   }, [sums, bots, names]);
   return (
-    <Card title="Style compass" tip="You and the bots in your matches, by opening duels and trades." aside={<span className="meta" data-tip={`Bot careers with ${COMPASS_MIN_ROUNDS} or more rounds in your matches.`}>{sums ? `You and ${plural(dots.filter((d) => !d.you).length, "bot career")} (${COMPASS_MIN_ROUNDS}+ rounds)` : ""}</span>}>
+    <Card title="Style compass" tip="You and the bots in your matches, by opening duels and trades." aside={<span className="meta" tabIndex={0} data-tip={`Bot careers with ${COMPASS_MIN_ROUNDS} or more rounds in your matches.`}>{sums ? `You and ${plural(dots.filter((d) => !d.you).length, "bot career")} (${COMPASS_MIN_ROUNDS}+ rounds)` : ""}</span>}>
       {!sums ? <div className="skel" style={{ height: 340 }} /> : <Compass dots={dots} />}
     </Card>
   );
@@ -274,7 +247,7 @@ const RANKS: { tag: string; ids: string[] }[] = [
   { tag: "Utility", ids: ["utilDmgPR", "flashAssistsPR", "flashesPR", "assistsPerFlash", "dmgPerHe"] },
 ];
 
-function Ranks({ q }: { q: Query }) {
+export function Ranks({ q }: { q: Query }) {
   const { baselines, baselinesError } = useData();
   const pros = useCall("compare", baselines ? [q, { pool: "all" }] : null);
   const bots = useCall("style", [q, { pool: "all" }]);
@@ -287,6 +260,7 @@ function Ranks({ q }: { q: Query }) {
     <Card title="Where you rank" tip={PANEL_TIP.whereYouRank} aside={
       <span className="card__aside-row">
         <span className="meta">{proP && botP && careers ? `How well against ${n.pros} pros, style against ${botPopulation(careers, { n: n.bots, role: "all" }).text}` : ""}</span>
+        {careers?.provisional && <span className="chip chip--outline" data-tip={PROVISIONAL_TIP} tabIndex={0}>Provisional</span>}
       </span>
     }>
       {!proP || !botP ? (error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 240 }} />) : (
@@ -294,25 +268,19 @@ function Ranks({ q }: { q: Query }) {
           {RANKS.map((g) => (
             <section key={g.tag} className="ranks__group">
               <h3 className="caps">{g.tag}</h3>
-              <ul>
+              <MetricList label={g.tag}>
                 {g.ids.map((id) => {
                   const m = metric(id);
                   const style = m.kind === "identity";
                   const x = (style ? botP : proP)[id];
-                  const tone = x.pct === null || style ? "" : x.pct >= 67 ? "is-high" : x.pct < 33 ? "is-low" : "";
                   return (
-                    <li key={id} className={tone} data-tip={tipOf(id)}>
-                      <span className="ranks__l">{m.label}<span className="ranks__pop" data-tip={style ? "Ranked against bots in your matches." : "Ranked against pros."}>{style ? "vs bots" : "vs pros"}</span></span>
-                      <b className="num ranks__v">{fmtMetric(id, x.value)}</b>
-                      <span className={`ranks__track ${style ? "is-style" : ""} ${style && careers?.provisional ? "is-prov" : ""}`} {...(style && careers?.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0, "aria-label": "Provisional" } : {})}>{x.pct !== null && <i style={{ left: `${x.pct}%` }} />}<em style={{ left: "50%" }} /></span>
-                      <span className="ranks__p num">{x.reason ? <NotCompared reason={x.reason} /> : style ? (x.pct === null ? "–" : `Above ${Math.round(x.pct)}% of bots`) : rankText(x.pct)}</span>
-                    </li>
+                    <MetricRow key={id} label={m.label} value={x.value === null ? null : fmtMetric(id, x.value)} pct={x.pct} kind={style ? "style" : "performance"}
+                      population={style && careers ? botPopulation(careers, { n: n.bots, role: "all" }).text : `${n.pros} pros`} tip={tipOf(id)} reason={x.reason} approx={m.status === "approx"} />
                   );
                 })}
-              </ul>
+              </MetricList>
             </section>
           ))}
-          <p className="meta ranks__note">The dot shows where you sit, lowest on the left; the tick is the middle. Rows marked vs pros measure how well you play and rank against pro players. Rows marked vs bots describe your style and rank against the bots in your own matches; style has no better or worse, so they say how many of those bots you are above.</p>
         </div>
       )}
     </Card>

@@ -68,15 +68,15 @@ const STRIP = ["firstBulletAccuracy", "timeToKill", "timeToDamage", "crosshairPl
 const FINER = ["flickOvershoot", "microCorrections", "trackingError", "sprayDeviation", "sprayPull"];
 const TRANSFERS = ["sprayTransfers", "transferHits"];
 
-export function AimPanels({ query, label, visibility, guns, statuses = [] }: {
+export function AimPanels({ query, label, visibility, gunTable = true, statuses = [] }: {
   query: Query;
   label: string;
   /** some match in scope has mesh visibility */
   visibility: boolean;
   /** each match's visibility status (MatchInfo.visibility), which says why the timings are gated; omitted, the gate gives no reason */
   statuses?: readonly string[];
-  /** Career aim: every career match, recorded or not, for the per-gun table as Weapons builds it */
-  guns?: MatchEntry[];
+  /** the per-gun table: a match's accuracy by gun; false on Profile's Aim tab, whose Weapons tab has every gun */
+  gunTable?: boolean;
 }) {
   const { baselines } = useData();
   const [side, setSide] = useState<SideFilter>("all");
@@ -105,7 +105,7 @@ export function AimPanels({ query, label, visibility, guns, statuses = [] }: {
         <StrafeCard s={s} />
         <FinerCard s={s} r={rank} visibility={visibility} />
       </div>
-      {guns ? <CareerGuns list={guns} side={side} /> : fired.length > 0 && base && <GunTable query={query} side={side} guns={fired} base={base} />}
+      {gunTable && fired.length > 0 && base && <GunTable query={query} side={side} guns={fired} base={base} />}
       <TimingsCard s={s} visibility={visibility} statuses={statuses} />
     </div>
   );
@@ -462,8 +462,8 @@ function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter;
 
 // ---------------------------------------------------------------- per gun: a career
 
-/** Every gun over every career match, as Weapons judges it, with the aim columns beside it. */
-function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
+/** Every gun over every career match, as Weapons judges it, with the aim columns beside it: Profile's Weapons tab. */
+export function CareerGuns({ list, side = "all" }: { list: MatchEntry[]; side?: SideFilter }) {
   const guns = useGuns(list, sidesFor(side));
   if (!guns) return <div className="skel" style={{ height: 320 }} />;
   if (!guns.length) return null;

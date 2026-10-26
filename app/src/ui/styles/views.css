@@ -1205,3 +1205,24 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .mrow__why { cursor: help; text-align: right; }
 .mrow > b { font-weight: 700; }
 .fpw__aside { display: inline-flex; align-items: center; gap: 12px; }
+
+/* ---------------------------------------------------------------- Profile tabs (views/Profile.tsx, profile/tabs.tsx) */
+/* the tab bar under the player card: the match view's tabs, without its underline motion */
+.ptabs { padding: 0; margin: 4px 0 2px; border-bottom: 1px solid var(--line); }
+.ptab { display: grid; gap: 12px; }
+.profile__stack { display: grid; gap: 12px; align-content: start; }
+/* one metric row everywhere: label, sample, a dotted track with its dot, value */
+.mrows { display: grid; }
+.mrow2 { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(72px, 128px) 72px; gap: 12px; align-items: center; min-height: 32px; font-size: 13px; border-bottom: 1px solid var(--line); border-radius: var(--r-chip); cursor: help; }
+.mrow2:last-child { border-bottom: 0; }
+.mrow2__l { min-width: 0; color: var(--ink); }
+.mrow2__n { font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.mrow2__t { position: relative; height: 12px; }
+.mrow2__t::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dotted var(--line2); transform: translateY(-1px); }
+.mrow2__mid { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px; background: var(--ink3); }
+.mrow2__t i { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--bg1); }
+.mrow2__v { text-align: right; font: 700 14px/1 var(--f); }
+.mrow2[data-na] .mrow2__v { color: var(--ink3); }
+.mrow2:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.approx-legend { cursor: help; }
+.card-pad { padding: var(--pad-panel); margin: 0; }
