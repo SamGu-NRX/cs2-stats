@@ -273,7 +273,7 @@ export type Situations = Record<string, { rounds: number; won: number }>;
 /**
  * Adds one match's man-advantage situations for the rows `filter` keeps: each state your side passed
  * through (the alive counts at freeze end and after every death or disconnect of a living player, in
- * tick order, up to the round's end) counts once per round, with the round's result. A player the
+ * tick order, from freeze end to the round's end) counts once per round, with the round's result. A player the
  * source marks dead at freeze end (PlayerRound.aliveAtStart false) is not counted. States with a side
  * at 0 are the round's end and are left out.
  */
@@ -287,10 +287,13 @@ export function addSituations(out: Situations, f: MatchFacts, filter: Filter): v
     const seen = new Set<string>();
     const note = () => { if (alive[p.side].size && alive[enemy].size) seen.add(`${alive[p.side].size}v${alive[enemy].size}`); };
     note();
-    // deaths and disconnects of living players, in tick order (a death before a disconnect on one tick)
+    // deaths and disconnects of living players, in tick order (a death before a disconnect on one tick).
+    // Only those in the live round: one before freeze end would take a player from a count that, without
+    // the source's alive-at-start flags, never left him out, making a man advantage that never was
+    const live = (tick: number) => (rf.freezeEndTick === null || tick >= rf.freezeEndTick) && tick <= rf.endTick;
     const gone: { tick: number; pi: number }[] = [
-      ...f.kills.filter((k) => k.ri === p.ri && k.tick <= rf.endTick).map((k) => ({ tick: k.tick, pi: k.victim })),
-      ...rf.leaves.filter((l) => l.tick <= rf.endTick),
+      ...f.kills.filter((k) => k.ri === p.ri && live(k.tick)).map((k) => ({ tick: k.tick, pi: k.victim })),
+      ...rf.leaves.filter((l) => live(l.tick)),
     ];
     for (const e of gone.sort((x, y) => x.tick - y.tick)) if (alive.CT.delete(e.pi) || alive.T.delete(e.pi)) note();
     for (const s of seen) {
