@@ -123,8 +123,8 @@ export function bestAndWorst(guns: Judged[]): { best: Judged | null; worst: Judg
 /** A count with its converted-log share: tagged when all of it comes from converted logs, the split in a tooltip when part does. */
 export function SplitCell({ s, what }: { s: Split; what: string }) {
   if (!s.n || !s.converted) return <>{s.n}</>;
-  if (s.converted >= s.n) return <span className="convcell">{s.n}<span className="convtag" tabIndex={0} data-tip={`All ${s.n} ${what} from converted logs, which record no shots`}>converted</span></span>;
-  return <span className="convcell" tabIndex={0} data-tip={`${s.converted} of ${s.n} ${what} from converted logs, which record no shots`}>{s.n}</span>;
+  if (s.converted >= s.n) return <span className="convcell">{s.n}<span className="convtag" tabIndex={0} data-tip={`All ${s.n} ${what} from converted logs, which record no shots.`}>converted</span></span>;
+  return <span className="convcell" tabIndex={0} data-tip={`${s.converted} of ${s.n} ${what} from converted logs, which record no shots.`}>{s.n}</span>;
 }
 
 /**
@@ -147,9 +147,9 @@ export const HEAD_TIP = "Share of your hits on the head, not of your shots.";
 
 /** "+4.2 pts": the gun's accuracy against your other guns' pooled accuracy. */
 export const edgeText = (edge: number) => `${signed(edge, 1)} pts`;
-export const edgeTip = (g: Judged) => `${fmtPct(g.acc)} with the ${weaponLabel(g.weapon)}, ${fmtPct(g.others.acc)} over ${g.others.shots} shots with your other guns`;
+export const edgeTip = (g: Judged) => `${fmtPct(g.acc)} with the ${weaponLabel(g.weapon)}, ${fmtPct(g.others.acc)} over ${g.others.shots} shots with your other guns.`;
 export const EDGE_TIP = "This gun's accuracy minus your other guns' pooled accuracy.";
-export const PROF_TIP = "Familiarity times match-to-match consistency, 0 to 100; not skill.";
+export const PROF_TIP = "Familiarity times match-to-match consistency, 0 to 100, not skill.";
 
 /**
  * A gun as the official CS2 kill icon (data/icons.ts weapons/), at a fixed height; the app's glyph

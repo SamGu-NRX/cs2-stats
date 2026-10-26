@@ -5,9 +5,6 @@
 .strip__lead { grid-column: span 2; grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px; }
 .strip__leadtext { display: grid; gap: 3px; min-width: 0; }
 .strip__lead .strip__val { font-size: 24px; }
-/* A side or class change moves the ring to its new share; a filter change is occasional, so it eases. */
-.ring circle + circle { transition: stroke-dashoffset 320ms var(--ease-out), stroke var(--d-color) ease; }
-@media (prefers-reduced-motion: reduce) { .ring circle + circle { transition: none; } }
 
 /* Spray: the two toggles above the chart, each bullet's spread and the target's head on it. */
 .spray-toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; }

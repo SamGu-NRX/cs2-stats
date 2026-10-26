@@ -36,7 +36,7 @@ import { useCall, useScoped } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { metric, metrics } from "../../data/meta";
 import { useData } from "../../data/provider";
-import { aimTip, TIP } from "../../data/tips";
+import { tipOf } from "../../data/tips";
 import { AimIcon } from "../../icons/ui";
 import { fmtInt, fmtPct, fmtRatio, plural } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
@@ -131,7 +131,7 @@ function stripItems(ids: string[], s: Rolled | null, r: CompareResult | null, vi
     const st = standing(id, s, r, visibility);
     return {
       id, label: m.label, value: s ? fmtMetric(id, st.v) : null, pct: st.pct, kind: m.kind === "performance" ? "performance" : "style",
-      population: r ? population(r) : "", unavailable: st.unavailable, coverage: st.coverage, approx: m.status === "approx", def: aimTip(id),
+      population: r ? population(r) : "", unavailable: st.unavailable, coverage: st.coverage, approx: m.status === "approx", def: tipOf(id),
     };
   });
 }
@@ -236,14 +236,14 @@ function SprayCard({ s }: { s: Rolled | null }) {
   const onTarget = s?.aim.onTarget[cur.w] ?? null;
   return (
     <Card className="aim-spray" title={<>Spray<Hint tip="Your average view path from bullet 1, against pros'." /></>} aside={
-      <span className="meta spray-aside">{plural(cur.sprays, "spray")}{cur.path && cur.deep < THIN_SPRAY ? <span className="chip chip--outline" data-tip={`Under ${THIN_SPRAY} sprays reached bullet 4, so later bullets are noisy`} tabIndex={0}>Few sprays</span> : null}</span>
+      <span className="meta spray-aside">{plural(cur.sprays, "spray")}{cur.path && cur.deep < THIN_SPRAY ? <span className="chip chip--outline" data-tip={`Under ${THIN_SPRAY} sprays reached bullet 4, so later bullets are noisy.`} tabIndex={0}>Few sprays</span> : null}</span>
     }>
       <div className="sprayc">
         <div ref={group} className="gunlist" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
           {list.map((x) => (
             <button key={x.w} data-w={x.w} role="radio" aria-checked={x.w === cur.w} tabIndex={x.w === cur.w ? 0 : -1} className="gunlist__b" onClick={() => setPick(x.w)}>
               <GunIcon weapon={x.w} height={13} />
-              <span className="gunlist__n">{weaponLabel(x.w)}{x.path && x.deep < THIN_SPRAY ? <><i className="gunlist__thin" aria-hidden data-tip="Few sprays" /><span className="sr-only">, few sprays</span></> : null}</span>
+              <span className="gunlist__n">{weaponLabel(x.w)}{x.path && x.deep < THIN_SPRAY ? <><i className="gunlist__thin" aria-hidden /><span className="sr-only">, few sprays</span></> : null}</span>
               <span className="gunlist__c num" aria-hidden>{x.sprays}</span><span className="sr-only">, {plural(x.sprays, "spray")}</span>
             </button>
           ))}
@@ -326,7 +326,7 @@ function HittingList({ s, r, visibility }: { s: Rolled; r: CompareResult | null;
 /** A metric's label with its tooltip and approx mark. */
 function MetricLabel({ id, label, chip }: { id: string; label?: string; chip?: ReactNode }) {
   const m = metric(id);
-  return <span className="amrow__l"><span data-tip={aimTip(id)} tabIndex={0}>{label ?? m.label}{m.status === "approx" ? <ApproxMark /> : null}</span>{chip}</span>;
+  return <span className="amrow__l"><span data-tip={tipOf(id)} tabIndex={0}>{label ?? m.label}{m.status === "approx" ? <ApproxMark /> : null}</span>{chip}</span>;
 }
 
 function StrafeCard({ s }: { s: Rolled | null }) {
@@ -355,9 +355,9 @@ function StrafeCard({ s }: { s: Rolled | null }) {
             {causes.map((c, i) => (
               <li key={i} className="amrow amrow--sub">
                 <i className="sw" style={{ background: c.tone }} />
-                {c.id ? <MetricLabel id={c.id} /> : <span className="amrow__l" data-tip="Too fast, without the velocity history to say why" tabIndex={0}>{c.label}</span>}
+                {c.id ? <MetricLabel id={c.id} /> : <span className="amrow__l" data-tip="Too fast, without the speed history to say why." tabIndex={0}>{c.label}</span>}
                 <span className="amrow__n num">{c.n}</span>
-                <b className="num">{c.id ? <span data-tip="Of the too-fast shots with a known cause"><Num v={text(c.id, s)} /></span> : null}</b>
+                <b className="num">{c.id ? <span data-tip="Of the too-fast shots with a known cause." tabIndex={0}><Num v={text(c.id, s)} /></span> : null}</b>
               </li>
             ))}
           </ul>
@@ -387,7 +387,7 @@ function FinerCard({ s, r, visibility }: { s: Rolled | null; r: CompareResult | 
 
 interface GunRow { weapon: string; cls: string; shots: number; hits: number; kills: number; hsKills: number; rounds: number; s: Rolled | null }
 
-const ACC_TIP = "Gun shots that hit an enemy; the bar fills at 50%.";
+const ACC_TIP = "Gun shots that hit an enemy, the bar full at 50%.";
 
 const accBar = (v: number | null, t: string, color?: string) => (
   <span className="cellbar"><span className="hbar"><i style={{ width: `${Math.min(100, 2 * (v ?? 0))}%`, background: "var(--cream)" }} /></span><span style={color ? { color } : undefined}><Num v={t} /></span></span>
@@ -412,10 +412,10 @@ function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter;
           { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
           { key: "acc", label: "Accuracy", sort: (g) => value("accuracy", g.s), render: (g) => accBar(value("accuracy", g.s), text("accuracy", g.s)), width: 130, tip: ACC_TIP },
           { key: "head", label: "Head share", sort: (g) => value("headAccuracy", g.s), render: (g) => <Num v={text("headAccuracy", g.s)} />, tip: HEAD_TIP },
-          { key: "first", label: "First bullet", sort: (g) => value("firstBulletAccuracy", g.s), render: (g) => <Num v={text("firstBulletAccuracy", g.s)} />, tip: aimTip("firstBulletAccuracy") },
+          { key: "first", label: "First bullet", sort: (g) => value("firstBulletAccuracy", g.s), render: (g) => <Num v={text("firstBulletAccuracy", g.s)} />, tip: tipOf("firstBulletAccuracy") },
           { key: "kills", label: "Kills", sort: (g) => g.kills, render: (g) => g.kills },
-          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: TIP.hs },
-          { key: "rounds", label: "Rounds", tip: "Rounds you fired, hit or killed with it", sort: (g) => g.rounds, render: (g) => g.rounds },
+          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: tipOf("hs") },
+          { key: "rounds", label: "Rounds", tip: "Rounds you fired, hit or killed with it.", sort: (g) => g.rounds, render: (g) => g.rounds },
         ]}
       />
     </Card>
@@ -449,12 +449,12 @@ function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
           columns={[
             { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}</span>, width: 120 },
             { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
-            { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: TIP.hs },
+            { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: tipOf("hs") },
             { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
             { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => accBar(g.acc, fmtMetric("accuracy", g.acc), g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8))), width: 130, tip: "Coloured against your accuracy with your other guns." },
-            { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: aimTip("firstBulletAccuracy") },
+            { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: tipOf("firstBulletAccuracy") },
             { key: "head", label: "Head share", sort: (g) => pct(g.head, g.hits), render: (g) => <Num v={fmtRatio(g.head, g.hits)} />, tip: HEAD_TIP },
-            { key: "ttd", label: "Time to damage", sort: (g) => g.own.v.timeToDamage, render: (g) => <Num v={fmtMetric("timeToDamage", g.own.v.timeToDamage)} />, tip: aimTip("timeToDamage") },
+            { key: "ttd", label: "Time to damage", sort: (g) => g.own.v.timeToDamage, render: (g) => <Num v={fmtMetric("timeToDamage", g.own.v.timeToDamage)} />, tip: tipOf("timeToDamage") },
             { key: "rounds", label: "Rounds used", sort: (g) => g.rounds.n, render: (g) => <SplitCell s={g.rounds} what="rounds" /> },
             { key: "prof", label: "Proficiency", tip: PROF_TIP, sort: (g) => g.prof?.proficiency ?? null, render: (g) => (g.prof ? <span className="profcell" data-tip={g.prof.evidence} tabIndex={0}><Num v={fmtInt(g.prof.proficiency)} /></span> : <Num v={fmtInt(null)} />) },
             {
@@ -522,7 +522,7 @@ function TimingsCard({ s, visibility, statuses }: { s: Rolled | null; visibility
         <div className="grid-2" style={{ marginTop: 14 }}>
           {TIMINGS.map((t) => (
             <div key={t.id}>
-              <div className="hist-title"><span className="caps" data-tip={aimTip(t.id)} tabIndex={0}>{t.label}</span></div>
+              <div className="hist-title"><span className="caps" data-tip={tipOf(t.id)} tabIndex={0}>{t.label}</span></div>
               {s ? <Histogram h={binSamples(t.samples(s))} med={value(t.id, s)} unit={t.unit} bench={t.bench} benchLabel="good" lowerIsBetter /> : <div className="skel" style={{ height: 120 }} />}
             </div>
           ))}
@@ -534,7 +534,7 @@ function TimingsCard({ s, visibility, statuses }: { s: Rolled | null; visibility
     <Card title={<>When an enemy appears<Hint tip={`Needs recorded demos whose map mesh sees ${MESH_AGREEMENT}% of kills.`} /></>} aside={<span className="chip chip--outline">Needs line of sight</span>}>
       <div className="gated">
         <ul className="gated__list">
-          {TIMINGS.map((t) => <li key={t.id}><span className="caps" data-tip={aimTip(t.id)} tabIndex={0}>{t.label}</span><b className="num faint">–</b></li>)}
+          {TIMINGS.map((t) => <li key={t.id}><span className="caps" data-tip={tipOf(t.id)} tabIndex={0}>{t.label}</span><b className="num faint">–</b></li>)}
         </ul>
         <Coverage s={s} />
         <div className="gated__why">
@@ -545,4 +545,3 @@ function TimingsCard({ s, visibility, statuses }: { s: Rolled | null; visibility
     </Card>
   );
 }
-
