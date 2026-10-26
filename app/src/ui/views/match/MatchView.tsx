@@ -13,7 +13,7 @@ import { sourceOf } from "../../data/sources";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
 import { fmtAdr, fmtMatchDay, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
-import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
+import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, matchTabKey, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
 import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
@@ -27,6 +27,7 @@ const Utility = lazy(() => import("./Utility"));
 const Aim = lazy(() => import("./Aim"));
 const Positions = lazy(() => import("./Positions"));
 const Advanced = lazy(() => import("./Advanced"));
+const Luck = lazy(() => import("./Luck"));
 const Replay = lazy(() => import("./replay/Replay"));
 
 /** round: the selected round's row (ri), found from the round number in the URL */
@@ -65,7 +66,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
         <>
           <Hero s={s} v={v} />
           <Sticky v={v} file={file} tab={tab} selected={n} />
-          <div className="match__panel" id="match-panel" role="tabpanel" aria-label={MATCH_TAB_LABEL[tab]}>
+          <section className="match__panel" id="match-panel" aria-label={MATCH_TAB_LABEL[tab]}>
             {!v ? <TabSkeleton tab={tab} /> : (
               <Suspense fallback={<TabSkeleton tab={tab} />}>
                 {tab === "overview" && <Overview v={v} file={file} round={round} />}
@@ -76,10 +77,11 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
                 {tab === "aim" && <Aim v={v} file={file} round={round} />}
                 {tab === "positions" && <Positions v={v} file={file} round={round} />}
                 {tab === "advanced" && <Advanced v={v} file={file} round={round} />}
+                {tab === "luck" && <Luck v={v} file={file} round={round} />}
                 {tab === "replay" && <Replay v={v} file={file} round={round} />}
               </Suspense>
             )}
-          </div>
+          </section>
         </>
       )}
     </div>
@@ -162,7 +164,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
 
 /** selected: the URL's round number, which may name a round held only as totals */
 function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string; tab: MatchTab; selected: number | null }) {
-  const tabs = useRef<HTMLDivElement>(null);
+  const tabs = useRef<HTMLElement>(null);
   const [ul, setUl] = useState<{ x: number; w: number; instant: boolean } | null>(null);
   const first = useRef(true);
   useLayoutEffect(() => {
@@ -175,28 +177,30 @@ function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string
   return (
     <div className="msticky">
       {v ? <div className="msticky__rail"><RoundRail v={v} selected={selected} onPick={pick} /></div> : <div className="skel" style={{ height: 70, margin: "8px var(--gutter)" }} />}
-      <div className="mtabs" role="tablist" aria-label="Match sections" ref={tabs}>
+      {/* links that each open a section's URL, so a nav of links (aria-current) rather than an ARIA tab
+          list, whose arrow-key contract these hash links do not keep */}
+      <nav className="mtabs" aria-label="Match sections" ref={tabs}>
         {ul && <i className={`mtabs__ul ${ul.instant ? "is-instant" : ""}`} style={{ width: ul.w, transform: `translateX(${ul.x}px)` }} aria-hidden />}
         {MATCH_TABS.map((t, n) => {
           const noReplay = t === "replay" && v ? replayUnavailable(file, v.map) : null;
           const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)) || noReplay !== null);
           const why = t === "aim" ? NEEDS_DEMO : noReplay ?? "No positions in this match";
+          const key = matchTabKey(n);
           return (
             <a
               key={t}
               data-tab={t}
-              role="tab"
-              aria-selected={t === tab}
-              aria-controls="match-panel"
+              aria-current={t === tab ? "page" : undefined}
               href={matchHref(file, t, selected !== null && (t === "rounds" || t === "replay") ? { round: selected } : undefined)}
               className={`mtab ${disabled ? "is-dim" : ""}`}
-              data-tip={n < 8 ? `Alt ${n + 1}${disabled ? `: ${why.toLowerCase()}` : ""}` : disabled ? why : undefined}
+              aria-keyshortcuts={`Alt+${key}`}
+              data-tip={`Alt ${key}${disabled ? `: ${why.toLowerCase()}` : ""}`}
             >
               {MATCH_TAB_LABEL[t]}
             </a>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }

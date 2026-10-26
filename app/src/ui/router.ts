@@ -9,11 +9,22 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
-// Replay is last so Alt 1 to 8 keep their tabs (App.tsx reads Alt with one digit, 1 to 8).
-export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "replay"] as const;
+// Luck and Replay come last so Alt 1 to 8 keep the tabs they always had.
+export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "luck", "replay"] as const;
 export type MatchTab = (typeof MATCH_TABS)[number];
 export const MATCH_TAB_LABEL: Record<MatchTab, string> = {
-  overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced", replay: "Replay",
+  overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced", luck: "Luck", replay: "Replay",
+};
+
+// Alt and one digit picks a match tab: 1 to 9 the first nine, 0 the tenth, as a keyboard's digit row runs.
+const TAB_DIGITS = "1234567890";
+if (MATCH_TABS.length > TAB_DIGITS.length) throw new Error(`MATCH_TABS has ${MATCH_TABS.length} tabs; Alt and a digit reaches only ${TAB_DIGITS.length}`);
+/** The digit that opens the i-th match tab with Alt. */
+export const matchTabKey = (i: number): string => TAB_DIGITS[i];
+/** The match tab Alt and this key opens; null for any other key. */
+export const matchTabOfKey = (key: string): MatchTab | null => {
+  const i = key.length === 1 ? TAB_DIGITS.indexOf(key) : -1;
+  return i >= 0 && i < MATCH_TABS.length ? MATCH_TABS[i] : null;
 };
 
 export const PROFILE_TABS = ["overview", "duels", "aim", "weapons", "utility", "economy", "playstyle"] as const;
@@ -89,7 +100,29 @@ let sectionDone: string | null = null;
 /** The last navigation came from a keyboard shortcut: the new view appears without motion. */
 let instant = false;
 export const navWasInstant = () => instant;
-if (typeof window !== "undefined") addEventListener("hashchange", () => { instant = false; sectionDone = null; publish(); });
+
+// Which input came last. Keyboard activation (Enter on a row, the palette, a focused button) opens
+// a match instantly, as keyboard navigation does everywhere (design/shell-and-motion.md); callers
+// share openMatch, so it asks here rather than every caller passing how it was triggered. Both start
+// false: until the first input, nothing was activated by either.
+let keyboardLast = false;
+let pointerLast = false;
+/** Focus is in a field that takes typed text, which keeps its keys from the app's shortcuts (App.tsx). */
+export const isTextEntry = (el: Element) => el.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null;
+if (typeof window !== "undefined") {
+  addEventListener("keydown", () => { keyboardLast = true; pointerLast = false; }, true);
+  addEventListener("pointerdown", () => { keyboardLast = false; pointerLast = true; }, true);
+}
+
+/**
+ * The last navigation came from a pointer: a click on a link or a control. Enter on a focused link,
+ * a keyboard shortcut, a deep link and the first load are not, so motion that should play only on a
+ * click (a view's one-time draw-in) asks this rather than !navWasInstant(), which a link followed
+ * with Enter does not set.
+ */
+let pointerNav = false;
+export const navWasPointer = () => pointerNav;
+if (typeof window !== "undefined") addEventListener("hashchange", () => { instant = false; pointerNav = pointerLast; sectionDone = null; publish(); });
 
 export function useRoute(): Route {
   return useSyncExternalStore((s) => { subs.add(s); return () => subs.delete(s); }, () => current);
@@ -101,18 +134,10 @@ export function go(href: string, opts?: { instant?: boolean }) {
   const h = href.startsWith("#") ? href : `#${href}`;
   if (location.hash === h) return;
   instant = !!opts?.instant;
+  pointerNav = !instant && pointerLast;
   sectionDone = null;
   history.pushState(null, "", h);
   flushSync(publish);
-}
-
-// Which input came last. Keyboard activation (Enter on a row, the palette, a focused button) opens
-// a match instantly, as keyboard navigation does everywhere (design/shell-and-motion.md); callers
-// share openMatch, so it asks here rather than every caller passing how it was triggered.
-let keyboardLast = false;
-if (typeof window !== "undefined") {
-  addEventListener("keydown", () => { keyboardLast = true; }, true);
-  addEventListener("pointerdown", () => { keyboardLast = false; }, true);
 }
 
 /**
