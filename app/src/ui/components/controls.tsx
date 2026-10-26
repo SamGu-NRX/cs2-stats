@@ -86,13 +86,15 @@ export function Segmented<T extends string>({ options, value, onChange, label, k
 }
 
 /** Button that opens a listbox. Arrow keys move, Enter or Space picks, Escape closes. */
-export function Select<T extends string>({ options, value, onChange, label, prefix }: {
+export function Select<T extends string>({ options, value, onChange, label, prefix, disabled }: {
   options: Option<T>[];
   value: T;
   onChange: (v: T) => void;
   label: string;
   /** small muted text before the value, e.g. "Map" */
   prefix?: string;
+  /** why the select does not apply here; set, it stays visible but cannot open, and the reason is its tooltip */
+  disabled?: string;
 }) {
   const btn = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -148,8 +150,10 @@ export function Select<T extends string>({ options, value, onChange, label, pref
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label}: ${typeof current?.label === "string" ? current.label : value}`}
-        onClick={() => (open ? hide() : show())}
-        onKeyDown={(e) => { if (e.key === "ArrowDown" && !open) { e.preventDefault(); show(); } }}
+        aria-disabled={disabled ? true : undefined}
+        data-tip={disabled}
+        onClick={() => { if (disabled) return; if (open) hide(); else show(); }}
+        onKeyDown={(e) => { if (e.key === "ArrowDown" && !open && !disabled) { e.preventDefault(); show(); } }}
       >
         {prefix && <span className="lbl">{prefix}</span>}
         <span>{current?.label ?? value}</span>

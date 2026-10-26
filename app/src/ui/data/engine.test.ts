@@ -10,8 +10,8 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { careerEntries, entryLine, filterEntries } from "./engine";
-import { matchModel, roundMatrix, sideOf, type MatchModel } from "./match";
+import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, recordEntries } from "./engine";
+import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type MatchModel } from "./match";
 import { sourceOf } from "./sources";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -91,6 +91,37 @@ it("keeps unfinished matches and partial logs out of career views but in the mat
   const done = entryOf("done", "", derive(pluginToTables(m), CS2RB));
   const left = entryOf("left", "", derive(pluginToTables({ ...m, status: "abandoned" }), CS2RB));
   const partial = { ...done, file: "partial", match: { ...done.match, nRounds: 1, roundsPlayed: done.match.roundsPlayed } };
-  expect(careerEntries([done, left, partial], null).map((e) => e.file)).toEqual(["done"]);
-  expect(filterEntries([done, left, partial], null)).toHaveLength(3);
+  // a pro demo (served from the dev folder) opens from Matches but is never the user's career
+  const pro = { ...done, file: "dev/faze-vs-sangal" };
+  expect(careerEntries([done, left, partial, pro], null).map((e) => e.file)).toEqual(["done"]);
+  expect(filterEntries([done, left, partial, pro], null)).toHaveLength(4);
+  // W-L counts the user's finished matches, a thin log included (its result is real); not the abandoned one or the pro demo
+  expect(recordEntries([done, left, partial, pro]).map((e) => e.file)).toEqual(["done", "partial"]);
+  // the adapter keeps a thin log's counts but none of its per-round values, so no view shows its few rounds as the match
+  const thin = coverEntry(partial);
+  expect(thin.line.m.kills).toBe(partial.line.m.kills);
+  expect(Object.values(thin.line.v).every((v) => v === null)).toBe(true);
+  expect(thin.line.eco).toBeNull();
+  expect(coverEntry(done)).toBe(done);
+});
+
+it("orders matches newest first by start time, not by day or file name", () => {
+  // the Home hero and the Matches default sort read this order: an evening log from Oct 24 local time
+  // must sit below a recording from the next afternoon, whatever their UTC dates and file names say
+  const at = (file: string, date: string | null, startedAt: string | null) => ({ file, match: { date, startedAt } }) as unknown as MatchEntry;
+  const list = [
+    at("z-evening", "2026-10-25", "2026-10-25T02:06:00Z"),
+    at("a-afternoon", "2026-10-25", "2026-10-25T19:40:00Z"),
+    at("dayonly", "2026-10-13", null),
+    at("unknown", null, null),
+  ];
+  expect([...list].sort(byNewest).map((e) => e.file)).toEqual(["a-afternoon", "z-evening", "dayonly", "unknown"]);
+});
+
+it("names the bot population with one count and the noun of what a sample is", () => {
+  // the provisional chip, the panel and card asides once said "63 bot matches" and "62 bot careers" for one pool
+  const c = { unit: "matches", botMatches: 63, qualified: 2, needed: 8, minRounds: 150, provisional: true, minPool: 8 } as const;
+  expect(botPopulation(c).text).toBe("63 bot matches");
+  expect(botPopulation(c, { n: 62, role: "rifler" }).text).toBe("62 rifler bot matches");
+  expect(botPopulation({ ...c, unit: "careers", qualified: 9 }).text).toBe("9 bot careers");
 });
