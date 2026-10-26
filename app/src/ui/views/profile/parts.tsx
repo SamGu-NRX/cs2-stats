@@ -7,6 +7,7 @@ import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
+import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
 import { attrsOf, fmtMetric, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
@@ -323,7 +324,7 @@ const styleOf = (v: (number | null)[]) => styleIds().map((id) => v[ATTRIBUTE_ORD
  * "Plays like": the shape of your six style attributes on T and on CT against each pro's (identity.ts
  * mostSimilar in the worker, cosine similarity over the twelve scores, design/identity.md). Your scores
  * rank against the bot careers in your matches and a pro's against pros, so only the shape compares;
- * the radar and table show the selected side, each number labelled with its population.
+ * the radar and the two-marker table show the selected side, each number labelled with its population.
  */
 export function PlaysLike({ q, side, initial }: { q: Query; side: PoolSide; initial: string | null }) {
   const pack = usePros();
@@ -355,6 +356,8 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const ranked = useMemo(() => (res.data?.ranked ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
   const attrs = useMemo(() => (mine.data ? attrsOf(mine.data.scores) : []), [mine.data]);
   const [sel, setSel] = useState<string | null>(initial);
+  // a keyboard pick swaps the radar's shape at once; a click morphs it (components/charts.tsx AttrRadar)
+  const [instant, setInstant] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
   const error = res.error ?? mine.error;
@@ -394,7 +397,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>
-                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={() => { setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
+                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={(e) => { setInstant(e.detail === 0); setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
                     <span className="prorow__face"><ProFace pro={x.item} className="prorow__img" /></span>
                     <span className="prorow__name"><b>{x.item.name}</b><ProMarks pro={x.item} /></span>
                     <b className="num prorow__pct">{x.pct}%</b>
@@ -402,6 +405,10 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
                 </li>
               ))}
             </ul>
+          </div>
+          <div className="likes__radar">
+            <AttrRadar labels={labels} you={you} other={styleOf(proScores(pick.item, side))} otherLabel={pick.item.name} size={320} instant={instant} provisional={careers.provisional} provisionalTip={PROVISIONAL_TIP} />
+            <div className="legend likes__legend"><span><i className="swatch" style={{ background: "var(--cream)" }} />You, against bots</span><span><i className="swatch swatch--dash" />{pick.item.name}, against pros</span></div>
           </div>
           <div className="likes__right">
             <VsTable you={you} labels={labels} pro={pick.item} side={side} />
@@ -425,7 +432,7 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
       {styleIds().map((id, i) => (
         <div key={id} className="vs__row">
           <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{labels[i]}</span>
-          <DotTrack at={you[i]} ghost={theirs[i]} label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
+          <DotTrack at={you[i]} ghost={theirs[i]} tone="cream" label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
           <span className="num vs__mine">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
           <span className="num">{theirs[i] ?? "–"}</span>
         </div>

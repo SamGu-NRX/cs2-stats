@@ -1080,7 +1080,8 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .profile .card__head--toggle { padding: 16px var(--pad-panel) 0; }
 .profile .card__toggle { min-height: 22px; padding: 0; border-radius: var(--r-chip); }
 .profile .card__aside--pad { padding-right: 0; }
-.profile .card__title { font: 650 15px/1.25 var(--f); letter-spacing: -0.01em; }
+/* a card title stays on one line (the target's "Plays like" wrapped under a long aside); the aside wraps instead */
+.profile .card__title { font: 650 15px/1.25 var(--f); letter-spacing: -0.01em; white-space: nowrap; }
 .profile .card__body { padding: 16px var(--pad-panel); }
 .profile .card__head + .card__body, .profile .card__head + .collapse .card__body { padding-top: 0; }
 .profile .card__body--flush { padding: 0; }
@@ -1352,12 +1353,19 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .aggro__scale { margin-bottom: 4px; }
 .aggro__score { margin: 10px 0 8px; }
 .aggro__score b { color: var(--cream); }
-/* Plays like: the pick and the list on the left, the two-marker table on the right */
-.likes { grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr); gap: 28px; }
-.likes__right { justify-items: stretch; align-content: start; }
-.probanner { min-height: 156px; grid-template-columns: 132px minmax(0, 1fr) auto; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
-.probanner__face { width: 150px; }
-.probanner__name { font-family: var(--disp); font-variation-settings: "wdth" 85, "wght" 650; font-weight: 650; font-size: 30px; letter-spacing: 0; }
+/* Plays like: the pick and the list, the radar of both shapes, then the two-marker table with the
+   numbers. Below 1240 px the table drops under the other two. */
+.likes { grid-template-columns: minmax(300px, 1fr) max-content minmax(0, 1.1fr); grid-template-areas: "left radar right"; gap: 28px; }
+.likes__left { grid-area: left; }
+.likes__radar { grid-area: radar; display: grid; justify-items: center; align-content: start; gap: 8px; }
+.likes__right { grid-area: right; justify-items: stretch; align-content: start; }
+@media (max-width: 1240px) { .likes { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "left radar" "right right"; } }
+@media (max-width: 860px) { .likes { grid-template-columns: minmax(0, 1fr); grid-template-areas: "left" "radar" "right"; } }
+/* the photo fills its own column, so a long name or the score never runs under it; the name truncates */
+.probanner { min-height: 156px; grid-template-columns: 112px minmax(0, 1fr) auto; column-gap: 8px; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
+.probanner__face { width: 100%; }
+.probanner__body { min-width: 0; }
+.probanner__name { font-family: var(--disp); font-variation-settings: "wdth" 85, "wght" 650; font-weight: 650; font-size: 30px; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .probanner__pct { font-family: var(--disp); font-variation-settings: "wdth" 85, "wght" 650; font-weight: 650; font-size: 30px; }
 .prorow { height: 40px; background: transparent; }
 .prorow[aria-checked="true"] { background: var(--s2); }
@@ -1367,7 +1375,7 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .vs--two .vs__head, .vs--two .vs__row { grid-template-columns: minmax(96px, auto) minmax(80px, 1fr) 40px 64px; gap: 14px; }
 .vs__row { height: 36px; }
 .vs__key { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
-.vs__you, .vs__them { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--tan); }
+.vs__you, .vs__them { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cream); }
 .vs__them { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink2); margin-left: 6px; }
 .vs__mine { color: var(--ink); }
 .vs__row > .num { font-weight: 650; }
