@@ -21,7 +21,8 @@
 // Query keys: map (a map id; absent = all), n (5/10/20; absent = all), side (t/ct; absent = both),
 // guns (rifle/sniper/smg/heavy/pistol; absent = all guns), result (W/L; absent = all).
 import { useMemo } from "react";
-import { careerEntries, mapsIn, SIDE_OPTIONS, WEAPON_CLASS_LABEL, type SideKey } from "../data/engine";
+import { aimEntries, careerEntries, filterEntries, mapsIn, SIDE_OPTIONS, WEAPON_CLASS_LABEL, type SideKey } from "../data/engine";
+import type { MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { Segmented, Select, type Option } from "../components/controls";
 import { mapName } from "../lib/format";
@@ -48,9 +49,18 @@ export interface ScopeDecl {
   controls: ScopeControl[];
   /** controls (or one side) that do not apply right now: shown disabled, the text says why */
   off?: Partial<Record<ScopeControl | "side:t" | "side:ct", string>>;
-  /** which matches the Map list offers: the career set (default) or every listed match, pro demos included (Matches) */
-  maps?: "career" | "all";
+  /**
+   * which matches the Map list and the Matches count read: the career set (default), Career aim's set
+   * (every own match with shots, wingman included: aimEntries), or for the Map list every listed match,
+   * pro demos included (Matches)
+   */
+  maps?: Pool;
 }
+
+export type Pool = "career" | "aim" | "all";
+/** The matches a pool holds, before the map filter. */
+export const poolOf = (pool: Pool, matches: MatchEntry[], map: string | null) =>
+  pool === "aim" ? aimEntries(matches, map) : pool === "all" ? filterEntries(matches, map) : careerEntries(matches, map);
 
 const LAST_N = [5, 10, 20];
 
@@ -73,10 +83,10 @@ export function useScope(): Scope {
   }, [r]);
 }
 
-function MapControl({ off, pool }: { off?: string; pool: "career" | "all" }) {
+function MapControl({ off, pool }: { off?: string; pool: Pool }) {
   const { matches } = useData();
   const { map } = useScope();
-  const maps = useMemo(() => mapsIn(pool === "all" ? matches : careerEntries(matches, null)), [matches, pool]);
+  const maps = useMemo(() => mapsIn(pool === "all" ? matches : poolOf(pool, matches, null)), [matches, pool]);
   return (
     <Select
       label="Map"
@@ -89,10 +99,10 @@ function MapControl({ off, pool }: { off?: string; pool: "career" | "all" }) {
   );
 }
 
-function MatchesControl({ off }: { off?: string }) {
+function MatchesControl({ off, pool }: { off?: string; pool: Pool }) {
   const { matches } = useData();
   const { map, n } = useScope();
-  const total = useMemo(() => careerEntries(matches, map).length, [matches, map]);
+  const total = useMemo(() => poolOf(pool === "all" ? "career" : pool, matches, map).length, [matches, map, pool]);
   const options: Option<string>[] = [{ value: "all", label: `All ${total}` }, ...LAST_N.filter((k) => k < total).map((k) => ({ value: String(k), label: `Last ${k}` }))];
   return (
     <Select
@@ -153,7 +163,7 @@ export function ScopeControls({ controls, off = {}, maps = "career" }: ScopeDecl
       {controls.map((c) => {
         switch (c) {
           case "map": return <MapControl key={c} off={off.map} pool={maps} />;
-          case "matches": return <MatchesControl key={c} off={off.matches} />;
+          case "matches": return <MatchesControl key={c} off={off.matches} pool={maps} />;
           case "side": return <SideControl key={c} off={off.side} offT={off["side:t"]} offCt={off["side:ct"]} />;
           case "guns": return <GunsControl key={c} off={off.guns} />;
           case "result": return <ResultControl key={c} off={off.result} />;

@@ -7,6 +7,7 @@ import { CS2RB } from "../../stats/model-params";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf } from "../../worker/views";
+import { poolOf } from "../shell/filters";
 import { aimEntries, careerEntries } from "./engine";
 import type { MatchEntry } from "./match";
 
@@ -26,4 +27,14 @@ it("reads every own match with shots in Career aim, wingman and unfinished inclu
   const all = [shots, wingman, unfinished, pro, noShots];
   expect(aimEntries(all, null).map((e) => e.file)).toEqual([shots.file, "valve/w/v", "x/unfinished"]);
   expect(careerEntries(all, null).map((e) => e.file)).toEqual([shots.file, "x/none"]);
+});
+
+it("gives Career aim's Map list and Matches count its own match set", () => {
+  // fails if the scope controls on Career aim count the career set, so "All N" and the maps offered
+  // leave out the wingman and unfinished matches the page draws
+  const shots: MatchEntry = { ...base, hasAim: true };
+  const wingman: MatchEntry = { ...shots, file: "valve/w/v", match: { ...shots.match, map: "de_inferno", maxRounds: 16, source: "valve" }, players: shots.players.filter((p) => p.team === 0).slice(0, 2).concat(shots.players.filter((p) => p.team === 1).slice(0, 2)) };
+  const all = [shots, wingman];
+  expect([poolOf("aim", all, null).length, poolOf("career", all, null).length]).toEqual([2, 1]);
+  expect(poolOf("aim", all, "de_inferno").map((e) => e.file)).toEqual(["valve/w/v"]);
 });
