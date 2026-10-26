@@ -394,6 +394,21 @@ What each source gives:
 | Kill flags | yes | yes |
 | Health from damage | yes | yes |
 
+## Per-match views (`matchviews.ts`)
+
+These are views of one match, not metrics: nothing is ranked. The definitions are ours, over schema v1
+data; Leetify's match pages were the checklist.
+
+| View | Definition |
+|---|---|
+| Rating by round | Rating 3.0 is linear in six per-round averages, so each rated round has a rating of its own: the intercept plus each coefficient times the round's eco-adjusted kills, damage and deaths, KAST and multi-kill (0 or 100), and swing (points). Over a set of rated rounds the mean is the rating of those rounds. A round Rating 3.0 does not rate (unknown swing or eco value) has none. Each round also says whether it counts toward the match rating: rated, on a side rating3Of rates (half its rounds rated), in a match past the rating's gates. The counting rounds average to the match's Rating 3.0. |
+| Head to head | Every pair of players on opposite teams, quiet pairs at zero. Each way: enemy kills, hit damage (HLTV's capped figure), kills by weapon class, blinds over 1.1 s (Leetify's cut) with their seconds, and opening kills |
+| Map zones | Your kills and deaths per zone (the map's place name) and side. A kill's zone is the kills table's place for you, else your position sample from the same round within half a second of the kill, since plugin files carry no kill places; with neither, the kill has no zone. The zone list is every place this match's position samples name. |
+| Your match | Every metric over this match against the same metric over your `n` most recent earlier matches, pooled. The direction is better or worse for performance metrics (lower is better where marked) and higher or lower for identity metrics. |
+| Opening duels | Each round's first enemy kill (killer, victim, weapon, time, whether the victim was traded, whether the killer's side won). Your best opening weapon is your gun with the most opening kills, ties broken by rounds won. Rounds won after your opening kill, and after your opening death. Conversions and each weapon's wins count only rounds with a known result. |
+| Situations | The alive counts of your side and the enemy's at freeze end, then after every death or disconnect of a living player, in tick order, up to the round's end. A player the source marks dead at freeze end (plugin `alive0`) is not counted, and disconnects come from the plugin's `leaves`; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
+| Bombsites | Per site letter. T: a take attempt is a round where a living T player entered the site's zone (the map's "Bombsite" place) before the plant; it succeeds when the bomb was planted there. Post-plant: rounds planted there, won. CT: a hold attempt is a round a T player entered the zone before the plant; it succeeds when CT won the round with no plant there. Retake: rounds planted there, won by CT. Take and hold need positions, the round's freeze end and the map's "Bombsite" place names; they are null until a round has all three, and the result says how many rounds could be read and which inputs were missing. Retake and post-plant come from plants alone. |
+
 ## Information (identity)
 
 Source: the radar `spotted` table, clipped to freeze end, round end and both players' deaths. It lags

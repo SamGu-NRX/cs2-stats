@@ -130,7 +130,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     kills: emptyTable("kills"), damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
     grenade_throws: emptyTable("grenade_throws"), grenade_events: emptyTable("grenade_events"), smokes: emptyTable("smokes"),
     infernos: emptyTable("infernos"), shots: emptyTable("shots"), positions: emptyTable("positions"),
-    spotted: null, engagements: null, engagement_ticks: null, purchases: null,
+    spotted: null, engagements: null, engagement_ticks: null, purchases: null, leaves: null,
   };
 
   add(t.match, "match", {
@@ -178,7 +178,11 @@ export function pluginToTables(m: MatchFile): MatchTables {
     key.forEach((id, pi) => {
       const side = sideOf(ri, pi);
       if (!side) return;
-      add(t.player_rounds, "player_rounds", { round: ri + 1, steamid: id, side, money: m.rounds.money[ri][pi], equip_value_game: m.rounds.equip[ri][pi] });
+      const a0 = m.rounds.alive0?.[ri]?.[pi];
+      add(t.player_rounds, "player_rounds", {
+        round: ri + 1, steamid: id, side, money: m.rounds.money[ri][pi], equip_value_game: m.rounds.equip[ri][pi],
+        alive_at_start: a0 === undefined || a0 === null ? null : a0 === 1,
+      });
     });
   }
 
@@ -283,6 +287,15 @@ export function pluginToTables(m: MatchFile): MatchTables {
       tick: p.tick[i], round: ri + 1, steamid: key[p.pi[i]], side: sideOf(ri, p.pi[i]), x: p.x[i], y: p.y[i], z: p.z[i],
       is_alive: p.alive[i], place: p.place[i] === null ? null : m.places[p.place[i]!] ?? null,
     });
+  }
+  // disconnects (plugin "leaves"), for the alive counts a round passes through
+  if (m.leaves) {
+    t.leaves = emptyTable("leaves");
+    const L = m.leaves;
+    for (let i = 0; i < L.ri.length; i++) {
+      if (!covered(L.ri[i])) continue;
+      add(t.leaves, "leaves", { tick: L.tick[i], round: L.ri[i] + 1, steamid: key[L.pi[i]], alive: L.alive[i] === 1 || L.alive[i] === true });
+    }
   }
   return t;
 }
