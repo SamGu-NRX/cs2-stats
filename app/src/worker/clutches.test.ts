@@ -1,6 +1,7 @@
 // Clutch rows through the worker's row builder (views.ts addClutchRows), on hand-built rounds: CT
 // a and b against T c and d unless a test says otherwise.
 import { expect, it } from "vitest";
+import { rollup } from "../stats/rollup";
 import { FREEZE_END, oneRound } from "../stats/testing/match";
 import type { ClutchRow } from "./protocol";
 import { addClutchRows } from "./views";
@@ -38,4 +39,15 @@ it("reads the alive counts before any death only from a freeze-end roster", () =
   });
   expect(rows(round(null), ["a"]).map((r) => [r.opponents, r.won, r.kills])).toEqual([[1, true, 1]]);
   expect(rows(round(FREEZE_END), ["a"]).map((r) => [r.opponents, r.won, r.kills])).toEqual([[2, true, 2]]);
+});
+
+it("counts a player as last alive before any death only from a freeze-end roster", () => {
+  // fails if a live-recorded round's end-of-round rows, where a is CT's only row, make a the last
+  // alive although no CT player died; the same rows read at freeze end do
+  const round = (freezeEnd: number | null) => oneRound({
+    players: { a: "CT", c: "T", b: "T" }, roundRow: { freeze_end_tick: freezeEnd },
+    kills: [{ tick: t(1), killer: "a", victim: "c" }, { tick: t(2), killer: "a", victim: "b" }],
+  });
+  const lastAlive = (f: ReturnType<typeof oneRound>) => rollup([f], { player: "a" }).m.lastAlive;
+  expect([lastAlive(round(null)), lastAlive(round(FREEZE_END))]).toEqual([0, 1]);
 });

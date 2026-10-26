@@ -18,10 +18,17 @@ export function closing(c: Ctx): ClutchFact[] {
     const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
     rows.forEach((p) => { if (p) alive[p.side].add(p.pi); });
 
+    // The rows are the round-start roster only when the extractor read them at freeze end. A round
+    // without a freeze end (recording started live) has them read one tick before the round's end, after
+    // anyone who joined or left mid-round, and a round without rows takes every player with a team
+    // (derive.ts buildCtx). There the alive counts are read only after deaths: being last alive and a
+    // clutch both start with a death.
+    const atStart = rf.freezeEndTick !== null && withRows.has(ri);
+
     // last alive: at some moment the player was the only one of their side alive (counted once)
     const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
     const last = new Set<number>();
-    for (const s of ["CT", "T"] as const) if (live[s].size === 1) last.add([...live[s]][0]);
+    if (atStart) for (const s of ["CT", "T"] as const) if (live[s].size === 1) last.add([...live[s]][0]);
     for (const k of list) {
       if (k.tick > rf.endTick) break;
       for (const s of ["CT", "T"] as const) {
@@ -31,11 +38,6 @@ export function closing(c: Ctx): ClutchFact[] {
     }
 
     const valued = list.filter((k) => k.tick <= rf.endTick);
-    // The rows are the round-start roster only when the extractor read them at freeze end. A round
-    // without a freeze end (recording started live) has them read one tick before the round's end, after
-    // anyone who joined or left mid-round, and a round without rows takes every player with a team
-    // (derive.ts buildCtx). There a clutch starts only after a death.
-    const atStart = rf.freezeEndTick !== null && withRows.has(ri);
     for (const cl of detectClutches(valued, alive, rf.winner, atStart)) {
       const kills = valued.filter((k, i) => i > cl.from && k.enemy && k.killer === cl.pi).length;
       out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, kills });
