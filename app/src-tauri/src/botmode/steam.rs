@@ -236,7 +236,7 @@ mod tests {
         let found = find_cs2(&steam).unwrap();
         assert_eq!(found.csgo, csgo);
         assert_eq!(found.build_id.as_deref(), Some("26144732"));
-        assert_eq!(found.owner, Some(76_561_199_138_360_625));
+        assert_eq!(found.owner, Some(76_561_197_961_265_729));
     }
 
     #[test]
