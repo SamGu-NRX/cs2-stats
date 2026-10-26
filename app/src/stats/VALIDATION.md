@@ -99,17 +99,23 @@ totals (`rounds.basic`, written by the server) on every covered player-round of 
 
 ## Identity: `pnpm fit-roles <csv>`, `pnpm identity-check <csv>`
 
-The CSV is Jamie Packer's `cs2_playstyle_roles_2024.csv` (CC BY 4.0).
+The CSV is Jamie Packer's `cs2_playstyle_roles_2024.csv` (CC BY 4.0). `fit-roles` maps Spacetaker to
+Entry and Half-Lurker to Lurker. It excludes Mixed because it is not an observable role in the new
+contract. Trader, Support and Aggressor use transparent thresholds over demo-derived features.
 
-Role model, leave-one-out on Packer's labelled pros: T 100 of 151 (66.2%), CT 102 of 151 (67.5%), against
-44% and 47% for always guessing the most common role. Confusions sit between neighbours (Spacetaker
-and Half-Lurker, Anchor and Mixed), as expected for graded roles.
+The mapped Gaussian model's leave-one-out accuracy is T 112/151 (74.2%) and CT 102/116 (87.9%). The
+fixed final-20% holdout is T 16/30 (53.3%) and CT 17/23 (73.9%). The confusion matrices are:
 
-Players in both Packer's 2024 data and our October 2026 demos, with 20+ rounds on the side: our top role
-matches his label for 50 of 82 on T and 40 of 82 on CT, and AWPer status agrees for 19 of 25. Spacing
-ranks correlate at r 0.47 and 0.56 on T and 0.30 and 0.34 on CT, with equal means (0.60 against 0.59
-to 0.60); time alive 0.38 and opening attempts 0.44 on T; trade percentages near 0. Two years and small
-samples separate the datasets, so these measure style stability as much as feature agreement.
+- T: Entry -> Entry 44, Lurker 23; Lurker -> Lurker 68, Entry 16.
+- CT: Anchor -> Anchor 40, Rotator 5; Rotator -> Rotator 62, Anchor 9.
+
+The holdout is a deterministic check, not a tuned estimate. The labelled sample is small and the roles
+are adjacent styles, so these scores should not be read as a universal player classifier.
+
+Players in both Packer's 2024 data and our October 2026 demos are not used to tune these thresholds. The
+489-map pro corpus supplies the distributions used for the evidence ranges; the model labels remain the
+only supervised source. IGL is excluded because calls, mid-round plans and leadership are not observable
+in these tables.
 
 ## Families without ground truth: `pnpm family-check`
 

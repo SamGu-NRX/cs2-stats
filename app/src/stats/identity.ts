@@ -1,12 +1,9 @@
-// Identity (how you play): role blend per side with plain-language evidence, a support tendency, and
-// "plays like" / "performs like" similarity. design/identity.md is binding: style stays apart from
-// performance, and "plays like" uses only the six style attributes, per side.
+// Identity (how you play): observable role probabilities per side, evidence rows, and
+// "plays like" / "performs like" similarity. design/identity.md keeps style apart from performance.
 //
-// Roles come from Jamie Packer's labelled pros (CS2 Playstyle & Roles Dataset 2024, CC BY 4.0; labels
-// adapted from Harry Richards' Positions Database). tools/fit-roles.ts fits, per side, a Gaussian naive
-// Bayes over his six features; roles-params.json holds the fit and its leave-one-out accuracy is in
-// VALIDATION.md. The blend is the posterior over roles. AWP use decides the AWPer share, because
-// Packer's features do not carry it. Support has no labelled source, so it is a separate tendency.
+// Packer's labelled pros supply the mapped Entry/Lurker and Anchor/Rotator fit. Trader, Support and
+// Aggressor use explicit thresholds over demo-derived features. AWP use is a separate feature because
+// Packer's dataset does not include inventories. Validation and the holdout result live in VALIDATION.md.
 import type { AttributeScore, Baselines, CompareOptions, SideKey } from "./compare";
 import { compare, roleOf } from "./compare";
 import type { Measures } from "./facts";
@@ -52,74 +49,186 @@ export function roleProbabilities(fit: RoleModel["sides"]["T"], x: Record<Featur
 }
 
 /** Packer's role names in this app's words. */
-export const ROLE_NAME: Record<string, string> = {
-  Spacetaker: "Entry", Lurker: "Lurker", "Half-Lurker": "Half-lurker", Anchor: "Anchor", Rotator: "Rotator", Mixed: "Mixed", AWPer: "AWPer",
+export type RoleName = "Entry" | "Trader" | "Support" | "Lurker" | "Anchor" | "Rotator" | "Aggressor" | "AWPer";
+
+/** Packer's labels mapped onto observable roles. Half-Lurker is deliberately folded into Lurker. */
+export const ROLE_NAME: Record<string, RoleName | null> = {
+  Spacetaker: "Entry", Lurker: "Lurker", "Half-Lurker": "Lurker", Anchor: "Anchor", Rotator: "Rotator", Mixed: null, AWPer: "AWPer",
 };
+
+export const ROLE_TIPS: Record<RoleName, string> = {
+  Entry: "Takes the first fight and creates space for teammates.",
+  Trader: "Follows teammates closely and answers their deaths quickly.",
+  Support: "Uses utility before contact so teammates can take safer fights.",
+  Lurker: "Works apart from the main group and attacks late or elsewhere.",
+  Anchor: "Stays at one site and delays the hit until help arrives.",
+  Rotator: "Moves between defensive areas when the round changes.",
+  Aggressor: "Pushes forward early to find information or the first fight.",
+  AWPer: "Carries the AWP often enough to shape the player's identity.",
+};
+
+export interface RoleMetric {
+  id: string;
+  label: string;
+  value: number | null;
+  unit: "pct" | "secs" | "units" | "perRound" | "count";
+  proRange: [number, number] | null;
+  threshold: number | null;
+  tip: string;
+}
 
 export interface RoleBlend {
   side: "T" | "CT";
-  /** role name -> share, summing to 1; null when the summary lacks the inputs (positions, deaths, kills) */
+  /** The displayed role, or the two leading roles when neither clears confidence. */
+  primary: string | null;
+  /** Probability of the first role in primary. */
+  probability: number | null;
+  /** role name -> probability, with no Mixed or Half-lurker labels */
+  distribution: Record<RoleName, number> | null;
+  /** Kept as an alias for older clients and rolesBySpawn consumers. */
   blend: Record<string, number> | null;
-  /** plain-language reasons, one per signal */
+  metrics: RoleMetric[];
+  /** Plain-language evidence retained for older clients. */
   evidence: string[];
   rounds: number;
-  /** share of the rounds with a recorded freeze-end loadout that had an AWP; null when no round has one */
   awp: number | null;
-  /** rounds with a recorded freeze-end loadout (the AWP share's denominator), of `rounds` */
   loadoutRounds: number;
+  tips: Record<RoleName, string>;
 }
 
 const pct = (x: number) => `${Math.round(x)}%`;
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const share = (n: number, d: number) => d > 0 ? n / d : null;
+const high = (v: number | null, low: number, highValue: number) => v === null ? 0.5 : clamp01((v - low) / (highValue - low));
+const low = (v: number | null, lowValue: number, highValue: number) => v === null ? 0.5 : 1 - high(v, lowValue, highValue);
+const softmax = (scores: Record<string, number>): Record<string, number> => {
+  const max = Math.max(...Object.values(scores));
+  const weights = Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, Math.exp((v - max) * 4)]));
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
+  return Object.fromEntries(Object.entries(weights).map(([k, v]) => [k, v / total]));
+};
+
+const RANGE: Record<string, [number, number]> = {
+  openingAttempts: [10, 35], tradeKills: [10, 40], tradeAssistShare: [30, 60], utilityPR: [0.4, 2.2],
+  teamDistance: [400, 1400], firstContactTime: [30, 52], pushDepth: [25, 75], sitePresence: [15, 70], awpShare: [0, 100],
+};
+const THRESHOLD: Record<string, number> = {
+  openingAttempts: 25, tradeKills: 25, tradeAssistShare: 45, utilityPR: 1.2, teamDistance: 1100,
+  firstContactTime: 40, pushDepth: 50, sitePresence: 50, awpShare: 20,
+};
+
+function sitePresence(s: Summary): number | null {
+  const places = Object.values(s.presence).flatMap((p) => Object.entries(p.places));
+  const total = places.reduce((n, [, seconds]) => n + seconds, 0);
+  if (!total) return null;
+  const site = places.filter(([place]) => /bombsite|site\s*[ab]/i.test(place)).reduce((n, [, seconds]) => n + seconds, 0);
+  return site / total;
+}
+
+function roleMetrics(s: Summary, awp: number | null): RoleMetric[] {
+  const m = s.m;
+  const openingAttempts = share(m.openingKills + m.openingDeaths, m.rounds);
+  const tradeKills = share(m.tradeKills, m.kills);
+  const tradeAssistShare = share(m.tradeKills + m.assists, m.kills + m.assists);
+  const utilityPR = share(m.smokes + m.flashes + m.hes + m.molotovs, m.rounds);
+  const teamDistance = share(m.nearestDistSum, m.spacingSamples);
+  const firstContactTime = share(s.aggression.contactSecs, s.aggression.contactRounds);
+  const pushDepth = share(s.aggression.pushSum, s.aggression.pushRounds);
+  const site = sitePresence(s);
+  const pctValue = (value: number | null) => value === null ? null : value * 100;
+  return [
+    ["openingAttempts", "Opening attempts", pctValue(openingAttempts), "pct", "How often you take part in the round's first fight."],
+    ["tradeKills", "Trade kills", pctValue(tradeKills), "pct", "Share of your kills that answer a teammate's death."],
+    ["tradeAssistShare", "Trade and assist share", pctValue(tradeAssistShare), "pct", "Share of your fragging that plays off teammates."],
+    ["utilityPR", "Utility before contact", utilityPR, "perRound", "Grenades thrown each round; event order is unavailable in rollups."],
+    ["teamDistance", "Nearest teammate distance", teamDistance, "units", "Average distance from your nearest teammate during setup."],
+    ["firstContactTime", "First contact time", firstContactTime, "secs", "Seconds into the round before your first contact."],
+    ["pushDepth", "Early push depth", pctValue(pushDepth), "pct", "Furthest progress toward the enemy before first kill or death."],
+    ["sitePresence", "Site presence", pctValue(site), "pct", "Share of recorded alive time spent at a bombsite."],
+    ["areaChanges", "Area changes", null, "count", "Rotations need per-round area sequences, unavailable in rollup summaries."],
+    ["awpShare", "AWP rounds", awp === null ? null : awp * 100, "pct", "Share of recorded loadout rounds carrying an AWP."],
+  ].map(([id, label, value, unit, tip]) => ({ id: id as string, label: label as string, value: value as number | null, unit: unit as RoleMetric["unit"], proRange: RANGE[id as string] ?? null, threshold: THRESHOLD[id as string] ?? null, tip: tip as string }));
+}
+
+function primaryOf(distribution: Record<string, number> | null): { primary: string | null; probability: number | null } {
+  if (!distribution) return { primary: null, probability: null };
+  const top = Object.entries(distribution).sort((a, b) => b[1] - a[1]);
+  if (!top.length) return { primary: null, probability: null };
+  const [first, second] = top;
+  return first[1] >= 0.45 || !second ? { primary: first[0], probability: first[1] } : { primary: `${first[0]} / ${second[0]}`, probability: first[1] };
+}
+
+function mappedPacker(x: Record<Feature, number>, side: "T" | "CT"): Partial<Record<RoleName, number>> {
+  const raw = roleProbabilities(MODEL.sides[side], x);
+  const out: Partial<Record<RoleName, number>> = {};
+  for (const [role, probability] of Object.entries(raw)) {
+    const mapped = ROLE_NAME[role];
+    if (mapped) out[mapped] = (out[mapped] ?? 0) + probability;
+  }
+  const total = Object.values(out).reduce((a, b) => a + b, 0);
+  return total ? Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v / total])) as Partial<Record<RoleName, number>> : {};
+}
 
 /**
- * A role blend for one side's summary (rollup with sides: [side]); any other filter narrows it further.
- * The AWP share counts only rounds whose freeze-end loadout was recorded (plugin files record none);
- * the evidence says how many when some are missing, and with none the blend has no AWPer share.
+ * A role blend for one side. Packer supplies the labelled Entry/Lurker and Anchor/Rotator signal;
+ * Trader, Support and Aggressor use explicit thresholds over demo-derived features.
  */
 export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
   const m = s.m;
   const x = packerFeatures(m);
   const awp = m.loadoutRounds ? m.roundsWithAwp / m.loadoutRounds : null;
-  const evidence: string[] = [];
-  if (awp !== null) {
-    evidence.push(m.loadoutRounds < m.rounds
-      ? `Carried an AWP in ${pct(100 * awp)} of the ${m.loadoutRounds} ${side} rounds with a recorded loadout (of ${m.rounds}).`
-      : `Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`);
-  } else if (m.rounds) evidence.push(`No freeze-end loadout recorded in ${side} rounds, so the AWP share is unknown.`);
-  const out = { side, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds };
-  if (!x) return { ...out, blend: null };
-  evidence.push(
-    `In the opening duel in ${pct(x.oap)} of rounds.`,
-    `Died ${Math.round(x.tapd)} s into the round on average.`,
-    `${pct(x.podt)} of deaths were traded; ${pct(x.pokt)} of kills were trades.`,
-  );
-  const post = roleProbabilities(MODEL.sides[side], x);
-  const blend: Record<string, number> = awp === null ? {} : { AWPer: awp };
-  for (const [role, p] of Object.entries(post)) blend[ROLE_NAME[role] ?? role] = p * (1 - (awp ?? 0));
-  return { ...out, blend };
+  const metrics = roleMetrics(s, awp);
+  const value = (id: string) => metrics.find((metric) => metric.id === id)?.value ?? null;
+  const evidence: string[] = awp === null
+    ? (m.rounds ? [`No freeze-end loadout recorded in ${side} rounds, so the AWP share is unknown.`] : [])
+    : [m.loadoutRounds < m.rounds ? `Carried an AWP in ${pct(100 * awp)} of the ${m.loadoutRounds} ${side} rounds with a recorded loadout (of ${m.rounds}).` : `Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`];
+  if (!m.rounds || !x) return { side, primary: null, probability: null, distribution: null, blend: null, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
+
+  const opening = value("openingAttempts"), trades = value("tradeKills"), tradeAssist = value("tradeAssistShare");
+  const utility = value("utilityPR"), distance = value("teamDistance"), contact = value("firstContactTime");
+  const push = value("pushDepth"), site = value("sitePresence");
+  const rules: Record<RoleName, number> = side === "T" ? {
+    Entry: (high(opening, 10, 35) + high(push, 25, 75) + low(contact, 30, 52)) / 3,
+    Trader: (high(trades, 10, 40) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
+    Support: (high(utility, 0.4, 2.2) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
+    Lurker: (high(distance, 400, 1400) + high(contact, 30, 52) + low(push, 25, 75)) / 3,
+    AWPer: awp === null ? 0.5 : high(awp, 0.2, 0.65),
+    Anchor: 0, Rotator: 0, Aggressor: 0,
+  } : {
+    Anchor: (high(site, 15, 70) + low(push, 25, 75) + high(contact, 30, 52)) / 3,
+    Rotator: (low(site, 15, 70) + high(distance, 400, 1400) + high(tradeAssist, 30, 60)) / 3,
+    Aggressor: (high(opening, 10, 35) + high(push, 25, 75) + low(contact, 30, 52)) / 3,
+    Support: (high(utility, 0.4, 2.2) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
+    AWPer: awp === null ? 0.5 : high(awp, 0.2, 0.65),
+    Entry: 0, Trader: 0, Lurker: 0,
+  };
+  const packed = mappedPacker(x, side);
+  for (const role of Object.keys(rules) as RoleName[]) if (packed[role] !== undefined) rules[role] = 0.55 * packed[role]! + 0.45 * rules[role];
+  const active = Object.fromEntries(Object.entries(rules).filter(([, score]) => score > 0)) as Record<RoleName, number>;
+  const distribution = softmax(active) as Record<RoleName, number>;
+  const { primary, probability } = primaryOf(distribution);
+  evidence.push(`In the opening duel in ${pct(value("openingAttempts")!)} of rounds.`, `${pct(value("tradeAssistShare")!)} of fragging came from trades or assists.`);
+  return { side, primary, probability, distribution, blend: distribution, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
 }
 
-/** One role blend over all rounds, from the two sides' blends. */
+/** One overall role distribution weighted by the number of rounds on each side. */
 export interface OverallRole {
-  /** role name -> share, summing to 1; null when neither side has a blend */
+  primary: string | null;
+  probability: number | null;
+  distribution: Record<string, number> | null;
   blend: Record<string, number> | null;
-  /** rounds per side behind it; a side without a blend adds no weight */
   rounds: Record<"T" | "CT", number>;
 }
 
-/**
- * The role over all rounds: each side's blend weighted by its rounds. The model is fitted per side and
- * the sides' roles differ (Entry and Lurker on T, Anchor and Rotator on CT), so a role's overall share
- * is its share of the side it belongs to times that side's share of the rounds.
- */
 export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
-  const sides = [t, ct].filter((b) => b.blend && b.rounds > 0);
-  const total = sides.reduce((a, b) => a + b.rounds, 0);
+  const sides = [t, ct].filter((b) => b.distribution && b.rounds > 0);
   const rounds = { T: t.rounds, CT: ct.rounds };
-  if (!total) return { blend: null, rounds };
-  const blend: Record<string, number> = {};
-  for (const b of sides) for (const [role, share] of Object.entries(b.blend!)) blend[role] = (blend[role] ?? 0) + (share * b.rounds) / total;
-  return { blend, rounds };
+  const total = sides.reduce((a, b) => a + b.rounds, 0);
+  if (!total) return { primary: null, probability: null, distribution: null, blend: null, rounds };
+  const distribution: Record<string, number> = {};
+  for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) distribution[role] = (distribution[role] ?? 0) + (share * b.rounds) / total;
+  const { primary, probability } = primaryOf(distribution);
+  return { primary, probability, distribution, blend: distribution, rounds };
 }
 
 // ---- role signals and the style compass ---------------------------------------------------------

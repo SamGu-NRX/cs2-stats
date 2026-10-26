@@ -1,5 +1,5 @@
 {
- "source": "Jamie Packer, CS2 Playstyle & Roles Dataset (2024), CC BY 4.0; roles adapted from Harry Richards' Positions Database",
+ "source": "Jamie Packer, CS2 Playstyle & Roles Dataset (2024), CC BY 4.0; mapped to observable roles; Mixed excluded",
  "features": [
   "tapd",
   "oap",
@@ -92,25 +92,6 @@
       0.09605914935430948
      ]
     },
-    "Mixed": {
-     "n": 35,
-     "mean": [
-      58.74347679049379,
-      20.785207703147343,
-      19.627878742613216,
-      16.799565258280737,
-      0.6086046842830084,
-      0.640659204079304
-     ],
-     "sd": [
-      3.8819976373999667,
-      4.447822937780401,
-      4.744260355114481,
-      4.031808161874094,
-      0.10161329853643865,
-      0.10428197008379379
-     ]
-    },
     "Rotator": {
      "n": 71,
      "mean": [
@@ -131,7 +112,7 @@
      ]
     }
    },
-   "n": 151
+   "n": 116
   }
  }
 }
