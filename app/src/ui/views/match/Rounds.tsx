@@ -191,7 +191,7 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
                 </HoverCard>
               );
             })}
-            <div className="ig__total ig__total--head" role="columnheader" data-tip="Swing per round over the match"><span className="caps">Swing</span></div>
+            <div className="ig__total ig__total--head" role="columnheader" data-tip="Swing per round over the match" tabIndex={0}><span className="caps">Swing</span></div>
           </div>
           {teamRow("us")}
           {us.map((p) => <PlayerRowView key={p.key} v={v} cols={cols} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} line={lines[p.pi]} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} />)}
@@ -275,7 +275,7 @@ function PlayerRowView({ v, cols, pi, r, cells, line, sel, focus, setFocus, onOp
           </div>
         );
       })}
-      <div className="ig__total num" style={{ color: swing === null ? "var(--ink3)" : scoreText(swingScore(swing)) }} data-tip={swingSumTip(line.m)}>{fmtSwing(swing)}</div>
+      <div className="ig__total num" style={{ color: swing === null ? "var(--ink3)" : scoreText(swingScore(swing)) }} data-tip={swingSumTip(line.m)} tabIndex={0}>{fmtSwing(swing)}</div>
     </div>
   );
 }
