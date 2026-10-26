@@ -7,6 +7,7 @@
 //   symmetric scale rounded up to a whole number, the mean as a dashed cream line, the best and worst
 //   labelled and nothing else.
 import type { ReactNode } from "react";
+import { openMatch } from "../router";
 
 /** Pixels per match. */
 export const PITCH = 48;
@@ -17,7 +18,8 @@ export interface MatchPoint {
   /** the match's day, "Oct 24" */
   label: string;
   result?: "W" | "L" | "T";
-  onClick?: () => void;
+  /** the match's page: the match's column becomes a link to it */
+  href?: string;
 }
 
 const WL_H = 22;
@@ -40,9 +42,21 @@ function Foot({ points, x, top }: { points: MatchPoint[]; x: (i: number) => numb
   );
 }
 
-/** A transparent column over each match that opens it; pointer only, the card's figures carry the links. */
-function Hits({ points, x, h }: { points: MatchPoint[]; x: (i: number) => number; h: number }) {
-  return <>{points.map((p, i) => p.onClick && <rect key={p.key} x={x(i) - PITCH / 2} y="0" width={PITCH} height={h} fill="transparent" className="ms__hit" onClick={p.onClick} />)}</>;
+/**
+ * Each match's column as a link to it, one tab stop per match, named by its day and value. A click
+ * opens the match as the match list does (router.ts openMatch); Enter follows the link.
+ */
+function Hits({ points, x, h, fmt }: { points: MatchPoint[]; x: (i: number) => number; h: number; fmt: (v: number) => string }) {
+  return (
+    <>
+      {points.map((p, i) => p.href && (
+        <a key={p.key} href={p.href} className="ms__hit" aria-label={`${p.label}${p.result ? `, ${p.result === "W" ? "won" : p.result === "L" ? "lost" : "tied"}` : ""}: ${p.value === null ? "none" : fmt(p.value)}`}
+          onClick={(e) => { e.preventDefault(); openMatch(p.href!); }}>
+          <rect x={x(i) - PITCH / 2} y="0" width={PITCH} height={h} rx="4" fill="transparent" />
+        </a>
+      ))}
+    </>
+  );
 }
 
 export function MatchLine({ points, fmt, pooled, refValue, refLabel, plot = 84, label }: {
@@ -103,7 +117,7 @@ export function MatchLine({ points, fmt, pooled, refValue, refLabel, plot = 84, 
         );
       })}
       <Foot points={points} x={x} top={plot} />
-      <Hits points={points} x={x} h={plot} />
+      <Hits points={points} x={x} h={plot} fmt={fmt} />
     </svg>
   );
 }
@@ -165,7 +179,7 @@ export function MatchLollipops({ points, fmt, mean, plot = 128, label, axis = (v
         );
       })}
       <Foot points={points} x={x} top={plot} />
-      <Hits points={points} x={x} h={plot} />
+      <Hits points={points} x={x} h={plot} fmt={fmt} />
     </svg>
   );
 }
