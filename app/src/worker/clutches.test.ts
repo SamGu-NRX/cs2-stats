@@ -27,3 +27,15 @@ it("counts a side that starts the round with one player as a clutch before any k
   const won = oneRound({ players: { a: "CT", c: "T", d: "T" }, kills: [{ tick: t(1), killer: "a", victim: "c" }, { tick: t(2), killer: "a", victim: "d" }] });
   expect(rows(won, ["a"]).map((r) => [r.player, r.opponents, r.won, r.kills])).toEqual([["a", 2, true, 2]]);
 });
+
+it("reads the alive counts before any death only from a freeze-end roster", () => {
+  // fails if a live-recorded round's rows, read at its end after b joined T mid-round, are taken for
+  // the round-start roster: there a's clutch starts with the first death (a 1v1 with one kill after),
+  // while the same rows read at freeze end make a 1v2 from the start with both kills
+  const round = (freezeEnd: number | null) => oneRound({
+    players: { a: "CT", c: "T", b: "T" }, roundRow: { freeze_end_tick: freezeEnd },
+    kills: [{ tick: t(1), killer: "a", victim: "c" }, { tick: t(2), killer: "a", victim: "b" }],
+  });
+  expect(rows(round(null), ["a"]).map((r) => [r.opponents, r.won, r.kills])).toEqual([[1, true, 1]]);
+  expect(rows(round(FREEZE_END), ["a"]).map((r) => [r.opponents, r.won, r.kills])).toEqual([[2, true, 2]]);
+});

@@ -70,11 +70,11 @@ export interface Clutch {
 /**
  * Clutch situations (CS Demo Manager's analyzer, MIT): the first time a side is down to one player,
  * that player starts a 1vX against the enemies alive. If both sides then reach one player, the other
- * side's last player gets a 1v1 too. `alive` is each side's players at freeze end. The counts are read
- * at freeze end as well as after each death, so a side that starts the round with one player (after a
- * disconnect) is in a clutch before any kill.
+ * side's last player gets a 1v1 too. `alive` is each side's players. When `atStart` says `alive` is the
+ * round-start roster, the counts are read before the first death as well, so a side that starts the
+ * round with one player (after a disconnect) is in a clutch before any kill; otherwise only after deaths.
  */
-export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number>>, winner: Side | null): Clutch[] {
+export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number>>, winner: Side | null, atStart: boolean): Clutch[] {
   if (winner === null) return [];
   const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
   const out: Clutch[] = [];
@@ -92,7 +92,7 @@ export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number
       out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner, from });
     }
   };
-  check(-1);
+  if (atStart) check(-1);
   kills.forEach((k, i) => {
     live.CT.delete(k.victim);
     live.T.delete(k.victim);
