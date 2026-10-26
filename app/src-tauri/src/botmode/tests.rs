@@ -439,6 +439,90 @@ fn a_music_kit_the_plugin_does_not_know_is_refused_without_writing() {
 }
 
 #[test]
+fn cosmetics_read_before_a_change_are_never_written_back_stale() {
+    let s = Scratch::new("cosmetics-seen");
+    let layout = fake_game(&s);
+    with_catalog(&layout);
+    let seen = settings::read_cosmetics(&layout.csgo).unwrap().cosmetics;
+    assert_eq!(seen, Cosmetics { dropped_knife_skins: true, dropped_knife_premium: false, music_kit: 33 });
+
+    // Another tool turns knife skins off after the view read the cfg; the view's change of
+    // music kit, sent with what it read, is refused and writes nothing.
+    let edited = USER_SERVER_CFG.replace("br_dropped_knife_skins 1", "br_dropped_knife_skins 0");
+    write(&layout.target("cfg/gamemode_competitive_server.cfg"), edited.as_bytes());
+    let err = settings::set_cosmetics_from(&layout, &CLOSED, Cosmetics { music_kit: 5, ..seen }, Some(seen)).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ) && err.contains("br_dropped_knife_skins 0"), "{err}");
+    assert_eq!(read(&layout, "cfg/gamemode_competitive_server.cfg"), edited);
+    assert!(changes::list(&layout).unwrap().is_empty(), "no change was recorded");
+
+    // Sent with the values the cfg now holds, it goes through.
+    let now = settings::read_cosmetics(&layout.csgo).unwrap().cosmetics;
+    settings::set_cosmetics_from(&layout, &CLOSED, Cosmetics { music_kit: 5, ..now }, Some(now)).unwrap();
+    assert_eq!(settings::read_cosmetics(&layout.csgo).unwrap().cosmetics, Cosmetics { music_kit: 5, ..now });
+
+    // With no cfg at all, what the view saw is the plugin defaults.
+    fs::remove_file(layout.target("cfg/gamemode_competitive_server.cfg")).unwrap();
+    let defaults = Cosmetics::default();
+    settings::set_cosmetics_from(&layout, &CLOSED, Cosmetics { dropped_knife_premium: true, ..defaults }, Some(defaults)).unwrap();
+    assert!(settings::read_cosmetics(&layout.csgo).unwrap().cosmetics.dropped_knife_premium);
+}
+
+#[test]
+fn a_cfg_edited_between_the_read_and_the_write_is_kept() {
+    let s = Scratch::new("cosmetics-cas");
+    let layout = fake_game(&s);
+    with_catalog(&layout);
+    let cfg = layout.target("cfg/gamemode_competitive_server.cfg");
+    // The edit lands after set_cosmetics read the cfg, when its change begins.
+    let edited = std::sync::atomic::AtomicBool::new(false);
+    let path = cfg.clone();
+    let probe = Scripted(move |p| {
+        if p == Phase::ChangeBegin && !edited.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            fs::write(&path, "// mine, edited\r\nbr_dropped_knife_skins 1\r\n").unwrap();
+        }
+        false
+    });
+    let err = settings::set_cosmetics(&layout, &probe, Cosmetics { music_kit: 5, ..Cosmetics::default() }).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), "// mine, edited\r\nbr_dropped_knife_skins 1\r\n");
+
+    // The primitive on a cfg that did not exist when it was read: refused once it appears.
+    fs::remove_file(&cfg).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    write(&cfg, b"// appeared\r\n");
+    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| cs.put_merged_cfg_if_unchanged("cfg/gamemode_competitive_server.cfg", b"x", None)).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), "// appeared\r\n");
+    // and it never writes a file other than the merged cfg
+    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| cs.put_merged_cfg_if_unchanged("cfg/autoexec.cfg", b"x", None)).unwrap_err();
+    assert!(err.contains("not a cfg Bot Mode merges convars into"), "{err}");
+}
+
+#[test]
+fn the_catalog_lists_music_kits_knives_and_finish_weights() {
+    let s = Scratch::new("catalog");
+    let layout = fake_game(&s);
+    assert_eq!(settings::read_catalog(&layout.csgo).unwrap(), None, "no BotRandomizer");
+    with_catalog(&layout);
+    let c = settings::read_catalog(&layout.csgo).unwrap().unwrap();
+    assert_eq!(
+        c.music_kits,
+        [(3, None), (5, Some("Insurgency")), (33, None)].map(|(id, name)| settings::MusicKit { id, name: name.map(String::from) })
+    );
+    assert!(c.knives.is_empty() && c.knife_finishes.is_empty());
+    write(
+        &layout.target("addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json"),
+        br#"{"knives": [{"defIndex": 500, "paints": []}, {"defIndex": 507}], "knifeFinishPreferences": [{"finish": "Doppler", "weight": 10}]}"#,
+    );
+    let c = settings::read_catalog(&layout.csgo).unwrap().unwrap();
+    assert_eq!(c.knives, [500, 507]);
+    assert_eq!(c.knife_finishes, [settings::KnifeFinish { finish: "Doppler".into(), weight: 10 }]);
+    write(&layout.target("addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json"), br#"{"musicKits": "all"}"#);
+    let err = settings::read_catalog(&layout.csgo).unwrap_err();
+    assert!(err.contains("cosmetic_catalog.json"), "names the file: {err}");
+}
+
+#[test]
 fn status_reports_each_component_against_the_installed_release() {
     let s = Scratch::new("status");
     let layout = installed(&s);

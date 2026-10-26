@@ -12,6 +12,7 @@ use super::hash;
 use super::paths::{confined_read, Layout, SERVER_CFG};
 use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,15 +120,17 @@ pub fn read_cosmetics(csgo: &Path) -> Result<CosmeticsState, String> {
         }
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let b = |name: &str| cfg::read(&text, name).and_then(|v| parse_bool(&v)).unwrap_or(false);
-    Ok(CosmeticsState {
-        cosmetics: Cosmetics {
-            dropped_knife_skins: b(COSMETIC_CONVARS[0]),
-            dropped_knife_premium: b(COSMETIC_CONVARS[1]),
-            music_kit: cfg::read(&text, COSMETIC_CONVARS[2]).and_then(|v| v.parse().ok()).unwrap_or(0),
-        },
-        cfg_present: true,
-    })
+    Ok(CosmeticsState { cosmetics: cosmetics_in(&text), cfg_present: true })
+}
+
+/// The three values in a cfg's text; a missing or unreadable line is the plugin's default.
+fn cosmetics_in(text: &str) -> Cosmetics {
+    let b = |name: &str| cfg::read(text, name).and_then(|v| parse_bool(&v)).unwrap_or(false);
+    Cosmetics {
+        dropped_knife_skins: b(COSMETIC_CONVARS[0]),
+        dropped_knife_premium: b(COSMETIC_CONVARS[1]),
+        music_kit: cfg::read(text, COSMETIC_CONVARS[2]).and_then(|v| v.parse().ok()).unwrap_or(0),
+    }
 }
 
 /// A kit id must be 0, -1 or listed in the installed BotRandomizer's `musicKits`. The plugin
@@ -151,15 +154,39 @@ fn check_music_kit(csgo: &Path, id: i32) -> Result<(), String> {
 /// Writes all three convars, zeros included: a CounterStrikeSharp FakeConVar keeps its
 /// value across map changes, so a deleted line would leave the old value active.
 pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) -> Result<Meta, String> {
+    set_cosmetics_from(layout, probe, c, None)
+}
+
+/// [`set_cosmetics`] for a caller that read the values first and changed some of them (the
+/// app's Bot Mode view, `botmode set`): refused, writing nothing, when the cfg no longer holds
+/// `seen`, so a value changed in between is never overwritten with the stale one. The write
+/// itself is a compare-and-swap against the cfg as read here
+/// (`ChangeSet::put_merged_cfg_if_unchanged`).
+pub fn set_cosmetics_from(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics, seen: Option<Cosmetics>) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     check_music_kit(&layout.csgo, c.music_kit)?;
     let path = layout.confined(SERVER_CFG)?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => NEW_CFG_HEADER.to_string(),
+    let (text, read_hash) = match std::fs::read(&path) {
+        Ok(b) => {
+            let h = hash::bytes(&b);
+            (String::from_utf8(b).map_err(|e| format!("{}: {e}", path.display()))?, Some(h))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (NEW_CFG_HEADER.to_string(), None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
+    if let Some(seen) = seen {
+        let now = if read_hash.is_some() { cosmetics_in(&text) } else { Cosmetics::default() };
+        if now != seen {
+            return Err(format!(
+                "{SERVER_CFG}: the Bot Mode cosmetics {} (now br_dropped_knife_skins {}, br_dropped_knife_premium {}, br_player_music_kit {}); nothing was written",
+                changes::CHANGED_SINCE_READ,
+                u8::from(now.dropped_knife_skins),
+                u8::from(now.dropped_knife_premium),
+                now.music_kit
+            ));
+        }
+    }
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
     let merged = cfg::merge(
         &text,
@@ -169,8 +196,71 @@ pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) ->
             (COSMETIC_CONVARS[2], c.music_kit.to_string()),
         ],
     );
-    let (_, meta) = changes::run(layout, probe, &lock, "cosmetics", |cs| cs.put_merged_cfg(SERVER_CFG, merged.as_bytes()))?;
+    let (_, meta) = changes::run(layout, probe, &lock, "cosmetics", |cs| {
+        cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())
+    })?;
     Ok(meta)
+}
+
+/// What the installed BotRandomizer's catalog offers the Bot Mode view: the music kits
+/// `br_player_music_kit` accepts, the knives a dropped-knife finish can land on, and the
+/// finish weights `br_dropped_knife_premium` squares.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    pub music_kits: Vec<MusicKit>,
+    /// Item definition indexes, in the catalog's order.
+    pub knives: Vec<u32>,
+    pub knife_finishes: Vec<KnifeFinish>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicKit {
+    pub id: i32,
+    /// From `musicKitNames`, which only the user's BotRandomizer build ships.
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct KnifeFinish {
+    pub finish: String,
+    pub weight: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogFile {
+    #[serde(default)]
+    music_kits: Vec<i32>,
+    #[serde(default)]
+    music_kit_names: BTreeMap<String, String>,
+    #[serde(default)]
+    knives: Vec<CatalogKnife>,
+    #[serde(default)]
+    knife_finish_preferences: Vec<KnifeFinish>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogKnife {
+    def_index: u32,
+}
+
+/// Reads the installed BotRandomizer's `cosmetic_catalog.json`; `None` when there is none.
+pub fn read_catalog(csgo: &Path) -> Result<Option<Catalog>, String> {
+    let path = confined_read(csgo, CATALOG)?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let f: CatalogFile = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(Catalog {
+        music_kits: f.music_kits.iter().map(|&id| MusicKit { id, name: f.music_kit_names.get(&id.to_string()).cloned() }).collect(),
+        knives: f.knives.iter().map(|k| k.def_index).collect(),
+        knife_finishes: f.knife_finish_preferences,
+    }))
 }
 
 /// Settings that live in the app, not the game folder.

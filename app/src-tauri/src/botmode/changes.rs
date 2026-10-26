@@ -154,8 +154,9 @@ pub struct ChangeSet<'p> {
     entries: Vec<Entry>,
     log: File,
     flusher: Flusher,
-    /// Set by `put_bytes_if_unchanged` for the length of its write.
-    guard_hash: Option<String>,
+    /// Set by the `*_if_unchanged` writes for the length of their write: the hash the target
+    /// must still have right before the rename, or `Some(None)` when it must still be absent.
+    guard: Option<Option<String>>,
 }
 
 impl<'p> ChangeSet<'p> {
@@ -228,7 +229,7 @@ impl<'p> ChangeSet<'p> {
                 return Err(format!("starting the change failed: {e}"));
             }
         };
-        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher, guard_hash: None })
+        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher, guard: None })
     }
 
     pub fn id(&self) -> &str {
@@ -271,9 +272,9 @@ impl<'p> ChangeSet<'p> {
             return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
         }
         let expected = hash::bytes(data);
-        self.guard_hash = Some(read_hash.to_string());
+        self.guard = Some(Some(read_hash.to_string()));
         let r = self.put_inner(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()));
-        self.guard_hash = None;
+        self.guard = None;
         r
     }
 
@@ -298,6 +299,26 @@ impl<'p> ChangeSet<'p> {
         }
         let expected = hash::bytes(merged);
         self.put_inner(rel, &expected, |f| f.write_all(merged).map_err(|e| e.to_string()))
+    }
+
+    /// [`put_merged_cfg`](Self::put_merged_cfg) as a compare-and-swap: refused unless the cfg
+    /// still hashes to `read_hash` (`None`: still absent), the content `merged` was computed
+    /// from. Checked when the write starts and again right before the rename, with the same
+    /// limit as [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_merged_cfg_if_unchanged(&mut self, rel: &str, merged: &[u8], read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::MergeConvars {
+            return Err(format!("{rel}: not a cfg Bot Mode merges convars into"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        let expected = hash::bytes(merged);
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, &expected, |f| f.write_all(merged).map_err(|e| e.to_string()));
+        self.guard = None;
+        r
     }
 
     fn confine(&self, rel: &str) -> Result<PathBuf, String> {
@@ -363,8 +384,8 @@ impl<'p> ChangeSet<'p> {
             let _ = fs::remove_file(&tmp);
             return Err(e);
         }
-        if let Some(guard) = &self.guard_hash {
-            if hash::file_if_exists(&target)?.as_deref() != Some(guard.as_str()) {
+        if let Some(guard) = &self.guard {
+            if hash::file_if_exists(&target)? != *guard {
                 let _ = fs::remove_file(&tmp);
                 return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
             }

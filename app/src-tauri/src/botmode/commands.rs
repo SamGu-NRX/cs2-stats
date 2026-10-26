@@ -10,7 +10,7 @@ use super::overlay::{self, OverlayReport};
 use super::paths::Layout;
 use super::process::{session_held, SystemProbe};
 use super::session::{self, SessionStatus};
-use super::settings::{self, AppSettings, Cosmetics, Difficulty};
+use super::settings::{self, AppSettings, Catalog, Cosmetics, Difficulty};
 use super::status::{self, Status};
 use super::{Ctx, Game};
 use std::path::PathBuf;
@@ -155,9 +155,16 @@ pub async fn botmode_set_difficulty(game: Option<String>, level: Difficulty) -> 
     mutating(game, move |ctx| settings::set_difficulty(&ctx.layout, &SystemProbe, level)).await
 }
 
+/// `seen` is what the view read; the write is refused when the cfg no longer holds it.
 #[tauri::command]
-pub async fn botmode_set_cosmetics(game: Option<String>, cosmetics: Cosmetics) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::set_cosmetics(&ctx.layout, &SystemProbe, cosmetics)).await
+pub async fn botmode_set_cosmetics(game: Option<String>, cosmetics: Cosmetics, seen: Option<Cosmetics>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_cosmetics_from(&ctx.layout, &SystemProbe, cosmetics, seen)).await
+}
+
+/// The installed BotRandomizer's music kits, knives and knife finish weights; reads only.
+#[tauri::command]
+pub async fn botmode_catalog(game: Option<String>) -> Result<Option<Catalog>, String> {
+    blocking(game, |ctx| settings::read_catalog(&ctx.layout.csgo)).await
 }
 
 /// App settings only; the game is not touched, so no session cleanup.
