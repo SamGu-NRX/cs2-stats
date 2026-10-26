@@ -37,8 +37,10 @@ ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
 import extract  # noqa: E402
 
-DOWNLOADS = Path(r"C:\Users\sgu07\.t3\userdata\server-browser\downloads")
-DATA_ROOT = Path(r"C:\Users\sgu07\Programming Projects\cs2-stats-data")  # data; holds no code
+# The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
+# to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
+DOWNLOADS: Path | None = Path(os.environ["CS2_DEMO_DOWNLOADS"]) if os.environ.get("CS2_DEMO_DOWNLOADS") else None
+DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-stats-data")  # data; holds no code
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
 FAILED_DIR = DATA_ROOT / "failed"
@@ -309,7 +311,7 @@ def bind_children_to_this_process() -> None:
 def _deletable(path: Path) -> Path:
     """The resolved path, if it lies strictly inside DATA_ROOT, or inside DOWNLOADS (a finished RAR)."""
     r = Path(path).resolve()
-    for root in (DATA_ROOT.resolve(), DOWNLOADS.resolve()):
+    for root in (DATA_ROOT.resolve(), *([DOWNLOADS.resolve()] if DOWNLOADS else [])):
         if r != root and root in r.parents:
             return r
     raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT} or {DOWNLOADS}")
@@ -1010,6 +1012,8 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true", help="exit once nothing is pending, downloading or running")
     ap.add_argument("--retry-failed", action="store_true", help="also process RARs in failed/")
     a = ap.parse_args(argv)
+    if DOWNLOADS is None:
+        ap.error("set CS2_DEMO_DOWNLOADS to the folder the browser saves HLTV demo archives to")
     setup_logging()
     # An earlier instance died without a log line; leave evidence of any future death.
     import atexit

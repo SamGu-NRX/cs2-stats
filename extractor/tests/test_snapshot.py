@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import extract as ex  # noqa: E402
 
-DATA = Path(os.environ.get("CS2_STATS_DATA", r"C:\Users\sgu07\Programming Projects\cs2-stats-data"))
+DATA = Path(os.environ.get("CS2_STATS_DATA") or HERE.parents[2] / "cs2-stats-data")
 FIXTURES = DATA / "fixtures"
 MAPDATA = DATA / "mapdata" / "2000935"
 SNAPSHOTS = HERE / "snapshots"

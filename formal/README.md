@@ -48,7 +48,7 @@ replay (the replay also checks this SHA itself):
 
 ```text
 git fetch origin pull/22/head:refs/remotes/origin/pr22-head
-git -C "C:\Users\sgu07\Programming Projects\cs2-stats-publish" rev-parse HEAD
+git -C "%CS2_FIXED_REPO%" rev-parse HEAD   # CS2_FIXED_REPO: a checkout of the fixed source
 # expected: 5423886465055063ab9a73bdc2c61631483cf8b6
 python -I formal/check_models.py --while-gaming
 python -I formal/report_models.py
@@ -109,7 +109,7 @@ These two original models do not cover CS2 engine behavior, CounterStrikeSharp c
 Java 21 and `curl` are required. `formal/tools/` is ignored. The checked-in runner pins the official TLA+ v1.7.4 release by SHA-256.
 
 ```text
-cd "C:\Users\sgu07\Programming Projects\cs2-stats\formal"
+cd formal
 python -I run.py CaptureNormal
 python -I run.py CaptureReload
 python -I run.py CaptureReloadLive

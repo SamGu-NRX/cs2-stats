@@ -2,8 +2,9 @@
 // The views against the bundled samples (five converted logs and the synthetic demo), each hook
 // answered by the real engine the way the worker would answer it: rollups and ratings from rollup(),
 // comparisons from the worker's ranking calls with public/baselines.json and the samples' bot careers.
-// Under CS2RB the shipped baselines were built with another model, so the model-dependent metrics
-// carry a comparison reason here, as they do for a user without the HLTV pack.
+// The shipped baselines and the samples are both derived on CS2RB, so the model-dependent metrics
+// compare here; the reason test below ranks against a pool built with another model, as a user with
+// the HLTV pack sees it.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -71,9 +72,9 @@ const summary = (q: Query) => {
 const converted = samples.filter((s) => sourceOf(s.entry).id === "converted");
 const modelOf = (s: Sample): MatchModel => matchModel(s.entry, matchBundle(s.entry, s.facts));
 
-const calls = rankingCalls({
+const callsWith = (pros: Baselines) => rankingCalls({
   summary: async (q) => summary(q),
-  pros: async () => PROS,
+  pros: async () => pros,
   careers: async (q) => {
     const careers = new Map<string, Parameters<typeof botPopulation>[0][number]>();
     const matches: Parameters<typeof botPopulation>[1] = [];
@@ -81,6 +82,7 @@ const calls = rankingCalls({
     return botPopulation([...careers.values()], matches, "test");
   },
 });
+const calls = callsWith(PROS);
 
 // What the mocked provider and hooks answer: the match list, your ids, and the worker's answers by method.
 let data: Pick<Data, "matches" | "you"> = { matches: [], you: [] };
@@ -186,7 +188,9 @@ describe("comparison reasons", () => {
     // fails if a Playstyle rank row shows a rank, or loses the reason, for a value the engine could not compare
     use(samples);
     const q = queryOf(samples);
-    answers.compare = await calls.compare(q, { pool: "all" });
+    // a pool built with another win-probability model, as the shipped one is for a user with the HLTV pack
+    const other = callsWith({ ...PROS, model: "hltv-0123abcd-pb88f2902" });
+    answers.compare = await other.compare(q, { pool: "all" });
     answers.style = await calls.style(q, { pool: "all" });
     render(<ProfileView tab="playstyle" />);
     const p = { ...(answers.compare as { p: object }).p, ...(answers.style as { p: object }).p } as Record<string, { reason: string | null }>;
