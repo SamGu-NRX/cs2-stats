@@ -1,5 +1,5 @@
 // Home: the last match as the hero, form, headline stats with trends, recent matches, highlights
-// from the data, and the two performance numbers to work on.
+// from the data, and what to work on: Firepower, the focus areas with their tips, the weakest numbers.
 import { useMemo, useState } from "react";
 import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
@@ -13,7 +13,7 @@ import { openMenu, copyText } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
-import { metric, metrics } from "../data/meta";
+import { hasMetric, metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
@@ -409,28 +409,38 @@ export function workOnHref(m: { id: string; group: string }): string | null {
 
 /**
  * Firepower, the one performance attribute, as main showed its weakest attributes: the score out of 100
- * against pros and its lowest-ranked metric. Then the two performance metrics where you sit lowest among
- * pros, each with its percentile and the pool it was ranked in. Style attributes are left out: they
- * describe how you play, not how well (design/identity.md). A metric the engine could not compare
- * (Percentile.reason) is skipped, never ranked as the lowest, and so is one with no place to open
- * (workOnHref).
+ * against pros and its lowest-ranked metric. Then the focus areas (focusAreas): up to three skills under
+ * the pros' middle, weakest first, each with its percentile and one practical tip. Then, as one line,
+ * the two lowest-ranked performance metrics that are not focus areas (the engine has a tip for only some
+ * skills), so the weakest numbers stay one click away. Style attributes are left out: they describe how
+ * you play, not how well (design/identity.md). A metric the engine could not compare
+ * (Percentile.reason) is skipped, and so is one with no place to open (workOnHref).
  */
 function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   const { baselines } = useData();
   const r = useCall("compare", t && baselines ? [t.q, {}] : null).data;
   const scored = useCall("attributes", t && baselines ? [t.q, {}] : null).data;
+  const areas = useCall("focusAreas", t && baselines ? [t.q, {}] : null).data;
   const fire = useMemo(() => {
     const a = scored ? attrsOf(scored.scores).find((x) => x.id === "firepower") : undefined;
     if (!a || a.score === null) return null;
     const worst = a.subs.filter((x) => x.score !== null && !x.reason).sort((x, y) => x.score! - y.score!)[0] ?? null;
     return { label: a.label, score: a.score, worst };
   }, [scored]);
+  const focus = useMemo(() => (areas ?? []).flatMap((f) => {
+    if (!hasMetric(f.id)) return [];
+    const m = metric(f.id);
+    const href = workOnHref(m);
+    const p = r?.p[f.id];
+    return href ? [{ m, pct: f.pct, tip: f.tip, href, value: p?.value ?? null, population: p ? proPopulation(p.pool) : "pros" }] : [];
+  }).slice(0, 3), [areas, r]);
   const weak = useMemo(() => {
     if (!r) return [];
-    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m) !== null)
+    const shown = new Set(focus.map((f) => f.m.id));
+    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && !shown.has(m.id) && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m) !== null)
       .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value, href: workOnHref(m)!, population: proPopulation(r.p[m.id].pool) }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
-  }, [r, latest]);
+  }, [r, focus, latest]);
   /**
    * The icon of the topic the item opens: the aim metrics' crosshair, the pack's headshot for headshot
    * kills (the Weapons tab's column), the attribute of a metric's group, the economy and utility tabs'
@@ -446,7 +456,7 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   };
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
-      {weak.length === 0 && !fire ? <p className="meta">Not enough rounds to compare with pros.</p> : (
+      {weak.length === 0 && !fire && !focus.length ? <p className="meta">Not enough rounds to compare with pros.</p> : (
         <div className="workon">
           {fire && (
             <a className="workon__item" href={tabSectionHref("overview", "firepower")} data-tip="Firepower against pros: the mean of its metrics' percentiles. Below it, its lowest-ranked metric.">
@@ -459,16 +469,28 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
               </div>
             </a>
           )}
-          {weak.map(({ m, pct, value, href, population }) => (
-            <a key={m.id} className="workon__item" href={href} data-tip={m.def}>
+          {focus.map(({ m, pct, tip, value, href, population }) => (
+            <a key={m.id} className="workon__item" href={href} data-tip={`${m.tip}
+You ${fmtMetric(m.id, value)}, higher than ${Math.round(pct)}% of ${population}.`}>
               {icon(m)}
               <div className="workon__body">
-                <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }} data-tip="Percentile against pros: the share of pros below you">{rankText(pct)}</b></div>
+                <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }}>{rankText(pct)}</b></div>
                 <div className="hbar"><i style={{ width: `${pct}%`, background: "var(--poor)" }} /></div>
-                <div className="meta">You <b className="num" style={{ color: "var(--ink)" }}>{fmtMetric(m.id, value)}</b>, higher than {Math.round(pct)}% of {population}</div>
+                <p className="workon__tip">{tip}</p>
               </div>
             </a>
           ))}
+          {weak.length > 0 && (
+            <p className="workon__also meta">
+              <span>{focus.length ? "Next lowest:" : "Lowest:"}</span>
+              {weak.map(({ m, pct, value, href, population }) => (
+                <a key={m.id} href={href} className="workon__also-a" data-tip={`${m.def}
+You ${fmtMetric(m.id, value)}, higher than ${Math.round(pct)}% of ${population}.`}>
+                  {m.label} <b className="num" style={{ color: scoreText((pct - 50) / 50) }}>{rankText(pct)}</b>
+                </a>
+              ))}
+            </p>
+          )}
         </div>
       )}
     </Card>
