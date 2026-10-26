@@ -9,6 +9,8 @@ import type { PoolKind } from "./baselines-pool";
 import type { EconomyView } from "../stats/economy";
 import type { GrenadeFact, MatchFacts, Measure, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
+import type { HighlightKind } from "../stats/highlights";
+import type { FlashTool } from "../stats/flashes";
 import type { OverallRole, RoleBlend, RoleSignal, StylePoint } from "../stats/identity";
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
@@ -44,7 +46,34 @@ export interface MultiKillRow { file: string; round: number; side: "T" | "CT"; p
  * One clutch, with the player (steamid) and their enemy kills after the clutch started. The engine
  * always sets both; they are optional so the UI's own fixtures, which predate them, still compile.
  */
-export interface ClutchRow { file: string; round: number; side: "T" | "CT"; player?: string; opponents: number; won: boolean; kills?: number }
+export interface ClutchRow {
+  file: string; round: number; side: "T" | "CT"; player?: string; opponents: number; won: boolean; kills?: number;
+  /** lost but alive at the round's end; seconds since freeze end at the start; the clock then (ClutchFact) */
+  saved: boolean; t: number | null; afterPlant: boolean; left: number | null;
+}
+
+/** One of the player's kills in a highlight, with what the killfeed draws for it. */
+export interface HighlightKill {
+  weapon: string; headshot: boolean; wallbang: boolean; smoke: boolean; noscope: boolean;
+  /** the killer was flashed, or in the air; null when the source does not record it */
+  blind: boolean | null; inAir: boolean | null;
+}
+
+/**
+ * A round worth going back to: three or more enemy kills, or a clutch won. `kills` counts the
+ * player's enemy kills in the round and `feed` lists them in order; `clutch` is the won clutch, with
+ * the enemies left when it began and the kills made in it. `start` is the match's start (ms since the
+ * epoch, 0 when unknown), which orders the list newest first.
+ */
+export interface HighlightRow {
+  file: string; round: number; side: "T" | "CT"; player: string; start: number;
+  /** never empty */
+  kinds: HighlightKind[];
+  kills: number;
+  clutch: { opponents: number; kills: number } | null;
+  won: boolean | null;
+  feed: HighlightKill[];
+}
 
 export interface Line {
   m: Measures;
@@ -318,6 +347,10 @@ export interface Api {
   clutches(q: Query): ClutchRow[];
   /** every round of the player's with two or more kills in the query's matches (the rows its filter keeps) */
   multiKills(q: Query): MultiKillRow[];
+  /** the player's 3K-or-better rounds and won clutches in the query's matches (the rows its filter keeps), newest first */
+  highlights(q: Query): HighlightRow[];
+  /** the player's flashbangs in the match: where each detonated, whom it blinded and for how long, and the kills it led to */
+  flashes(file: string, player: string): FlashTool;
 }
 
 export type Method = keyof Api;

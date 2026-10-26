@@ -6,9 +6,40 @@ import type { ClutchFact } from "./facts";
 import { detectClutches } from "./rules";
 import type { Side } from "./tables";
 
+/** A convar's value as a number; null when the match row does not carry it or it is not a number. */
+function convar(c: Ctx, name: string): number | null {
+  const v = (JSON.parse(c.t.match.convars[0] || "{}") as Record<string, unknown>)[name];
+  const x = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(x) ? x : null;
+}
+
+/**
+ * The match's clocks in seconds, for a clutch's time left; null where nothing in the match records
+ * one. The round timer is the match's setting (mp_roundtime_defuse, else mp_roundtime, in minutes:
+ * extractor demos carry it), else the length of a round of this match that ran out of time (plugin
+ * files carry no convars). The bomb timer is mp_c4timer when recorded, else the plant-to-explosion
+ * time of a bomb that exploded in this match. Neither falls back to a game default: the real data
+ * disagrees with one (demos explode 41 s after the plant, the bot server's recordings 51 s).
+ */
+export function matchClocks(c: Ctx): { round: number | null; bomb: number | null } {
+  const minutes = convar(c, "mp_roundtime_defuse") ?? convar(c, "mp_roundtime");
+  let round = minutes === null ? null : 60 * minutes;
+  let bomb = convar(c, "mp_c4timer");
+  for (const rf of c.rounds) {
+    if (round === null && rf.freezeEndTick !== null && (rf.reason === "time_ran_out" || rf.reason === "target_saved")) round = (rf.endTick - rf.freezeEndTick) / c.tickRate;
+    const boom = c.t.rounds.explode_tick[rf.ri];
+    if (bomb === null && rf.plantTick !== null && boom !== null) bomb = (boom - rf.plantTick) / c.tickRate;
+  }
+  return { round, bomb };
+}
+
+/** Seconds left on a clock of `total` seconds after `gone`; null when either is unknown. */
+const clockLeft = (total: number | null, gone: number | null) => (total === null || gone === null ? null : Math.max(0, total - gone));
+
 /** Fills the closing measures and returns the match's clutches, for the clutch list. */
 export function closing(c: Ctx): ClutchFact[] {
   const out: ClutchFact[] = [];
+  const clock = matchClocks(c);
   const withRows = new Set<number>();
   for (let i = 0; i < c.t.player_rounds.n; i++) { const ri = c.riOf(c.t.player_rounds.round[i]); if (ri !== undefined) withRows.add(ri); }
   for (let ri = 0; ri < c.nRounds; ri++) {
@@ -40,7 +71,16 @@ export function closing(c: Ctx): ClutchFact[] {
     const valued = list.filter((k) => k.tick <= rf.endTick);
     for (const cl of detectClutches(valued, alive, rf.winner, atStart)) {
       const kills = valued.filter((k, i) => i > cl.from && k.enemy && k.killer === cl.pi).length;
-      out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, kills });
+      // the clutch starts at the death that left the player alone, or at freeze end for a side that
+      // starts the round with one player
+      const tick = cl.from >= 0 ? valued[cl.from].tick : rf.freezeEndTick;
+      const t = tick === null || rf.freezeEndTick === null ? null : (tick - rf.freezeEndTick) / c.tickRate;
+      const sincePlant = tick !== null && rf.plantTick !== null && rf.plantTick <= tick ? (tick - rf.plantTick) / c.tickRate : null;
+      const afterPlant = sincePlant !== null;
+      const left = afterPlant ? clockLeft(clock.bomb, sincePlant) : clockLeft(clock.round, t);
+      // a save, as closing counts saves below: the round lost and the player alive at its end
+      const saved = !cl.won && !list.some((k) => k.victim === cl.pi && k.tick <= rf.endTick);
+      out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, saved, kills, t, afterPlant, left });
       const m = c.pr[ri][cl.pi]!.m;
       const n = Math.min(5, cl.opponents) as 1 | 2 | 3 | 4 | 5;
       m[`clutch${n}`]++;

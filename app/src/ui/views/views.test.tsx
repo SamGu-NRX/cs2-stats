@@ -772,10 +772,11 @@ describe("Profile clutches", () => {
     const m = rolled(summary(q)).m;
     const vs = ([1, 2, 3, 4, 5] as const).find((n) => m[`clutch${n}`] > 0)!;
     expect(vs).toBeDefined();
+    const rest = { saved: false, t: null, afterPlant: false, left: null };
     const rows: ClutchRow[] = [
-      { file: samples[0].file, round: 7, side: "T", opponents: vs, won: true },
-      { file: samples[0].file, round: 12, side: "CT", opponents: vs, won: false },
-      { file: samples[0].file, round: 3, side: "T", opponents: vs === 5 ? 4 : vs + 1, won: false },
+      { file: samples[0].file, round: 7, side: "T", opponents: vs, won: true, ...rest },
+      { file: samples[0].file, round: 12, side: "CT", opponents: vs, won: false, ...rest },
+      { file: samples[0].file, round: 3, side: "T", opponents: vs === 5 ? 4 : vs + 1, won: false, ...rest },
     ];
     answers.clutches = rows;
     render(<ProfileView tab="overview" />);

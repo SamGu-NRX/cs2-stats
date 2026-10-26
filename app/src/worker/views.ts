@@ -15,8 +15,9 @@ import { spawnPosition } from "../stats/positions";
 import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
 import { startMs, type MatchEntry } from "../ui/data/match";
+import { highlightKinds } from "../stats/highlights";
 import type {
-  ClutchRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
+  ClutchRow, HighlightRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
 
 export function metaOf(wp: WinProbSource): Meta {
@@ -180,7 +181,7 @@ export function addClutchRows(out: ClutchRow[], file: string, f: MatchFacts, fil
   const kept = new Map(keptRounds(f, filter).map((r) => [r.ri * 1024 + r.pi, r]));
   for (const c of f.clutches) {
     const r = kept.get(c.ri * 1024 + c.pi);
-    if (r) out.push({ file, round: f.rounds[c.ri].number, side: r.side, player: f.players[c.pi].id, opponents: c.opponents, won: c.won, kills: c.kills });
+    if (r) out.push({ file, round: f.rounds[c.ri].number, side: r.side, player: f.players[c.pi].id, opponents: c.opponents, won: c.won, kills: c.kills, saved: c.saved, t: c.t, afterPlant: c.afterPlant, left: c.left });
   }
 }
 
@@ -191,6 +192,30 @@ export function addMultiKillRows(out: MultiKillRow[], file: string, f: MatchFact
     if (kills >= 2) out.push({ file, round: f.rounds[r.ri].number, side: r.side, player: f.players[r.pi].id, kills, won: r.won });
   }
 }
+
+/**
+ * Adds the highlights of one match (its `file`) among the player-rounds `filter` keeps: rounds with
+ * three or more enemy kills and rounds with a clutch the player won (highlightKinds), each with the
+ * player's kills in order for the killfeed icons.
+ */
+export function addHighlightRows(out: HighlightRow[], file: string, f: MatchFacts, filter: Filter): void {
+  const won = new Map(f.clutches.filter((c) => c.won).map((c) => [c.ri * 1024 + c.pi, c]));
+  const start = startMs(f.match);
+  for (const r of keptRounds(f, filter)) {
+    const feed = f.kills.filter((k) => k.ri === r.ri && k.enemy && k.killer === r.pi);
+    const c = won.get(r.ri * 1024 + r.pi) ?? null;
+    const kinds = highlightKinds(feed.length, c !== null);
+    if (!kinds.length) continue;
+    out.push({
+      file, round: f.rounds[r.ri].number, side: r.side, player: f.players[r.pi].id, start, kinds, kills: feed.length,
+      clutch: c && { opponents: c.opponents, kills: c.kills }, won: r.won,
+      feed: feed.map((k) => ({ weapon: k.weapon, headshot: k.headshot, wallbang: k.wallbang, smoke: k.smoke, noscope: k.noscope, blind: k.killerBlind, inAir: k.killerInAir })),
+    });
+  }
+}
+
+/** Newest match first, then the later round first; files that share a start time keep one order. */
+export const newestHighlightFirst = (a: HighlightRow, b: HighlightRow) => b.start - a.start || b.file.localeCompare(a.file) || b.round - a.round;
 
 /**
  * The files of the player's `n` most recent matches before `file` (by start time, as the match list

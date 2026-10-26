@@ -105,7 +105,7 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `roles(q)` | The role blend on T and on CT, and `all`: the two weighted by their rounds (`identity.ts` `overallRole`) |
 | `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |
 | `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`); each blend covers that spawn's rounds on its own map under every query filter |
-| `clutches(q)` | Every clutch by round, with the player's steamid (`player`) and their enemy kills after the clutch started (`kills`) |
+| `clutches(q)` | Every clutch by round, with the player's steamid (`player`), their enemy kills after the clutch started (`kills`), whether a lost clutch was a save (`saved`), when it started (`t`) and the clock then (`left`, `afterPlant`; null when the match records no clock) |
 | `careerRatings(q, opt)` | Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100: weighted means of pro percentiles (`career.ts` COMPOSITES), each with its parts and the inputs that are missing |
 | `topStats(q, opt)` | The five performance metrics with the highest pro percentile |
 | `focusAreas(q, opt)` | Performance metrics under the pros' 50th percentile that have a tip, ranked by how far under, each with its tip |
@@ -121,6 +121,8 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `situations(q)` | Every alive-count state ("5v4") the player's side passed through, with rounds and rounds won, over the query's rounds |
 | `bombsites(file, player)` | `sites`: take, hold, retake and post-plant attempts and successes per bombsite letter, take and hold null without positions, freeze times or site names; `takeHold`: the rounds they could be read on and the missing inputs |
 | `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
+| `highlights(q)` | Every round with three or more kills or a won clutch, newest first: its kinds (3k, 4k, ace, clutch), kills, the won clutch, the round's result and the kills' weapons and killfeed flags |
+| `flashes(file, player)` | The player's flashbangs: detonation point, everyone each blinded (seconds, team or enemy, where they stood) and the kills it led to (flash assist or kill while blind), plus `notes` on what the file does not record |
 
 Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
 and `m.tradedDeaths`.

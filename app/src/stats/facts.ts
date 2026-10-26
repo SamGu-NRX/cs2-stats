@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 22;
+export const DERIVE_VERSION = 23;
 
 export interface MatchInfo {
   id: string;
@@ -331,7 +331,21 @@ export interface PresenceFact {
  * One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts
  * detectClutches), and made `kills` enemy kills after that, up to the round's end.
  */
-export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean; kills: number }
+export interface ClutchFact {
+  ri: number;
+  pi: number;
+  opponents: number;
+  won: boolean;
+  /** lost, but the player was alive at the round's end (closing.ts counts the same as a save) */
+  saved: boolean;
+  kills: number;
+  /** seconds since freeze end when the clutch began; null when the round has no freeze end */
+  t: number | null;
+  /** the clutch began with the bomb planted, so `left` reads the bomb timer */
+  afterPlant: boolean;
+  /** seconds on the round's clock, or the bomb's, when the clutch began (closing.ts matchClocks); null when the match records neither */
+  left: number | null;
+}
 
 export interface MatchFacts {
   v: number;
