@@ -115,13 +115,14 @@ describe("shooting while moving", () => {
 });
 
 describe("aggressive-to-passive score", () => {
-  const scale: AggroScale = { parts: [...AGGRO_PARTS], mean: [20, 50, 0.5, 800], sd: [10, 25, 0.25, 80], players: 1, source: "test" };
+  const scale: AggroScale = { parts: [...AGGRO_PARTS], mean: [20, 50, 0.5, 800], sd: [10, 25, 0.25, 80], composite: { mean: 0.5, sd: 0.25 }, players: 1, source: "test" };
 
-  it("averages the parts' signed z-scores, higher for more aggressive", () => {
-    // fails if a sign flips or a part drops out. a travelled 40 (+2), fired first in 100% (+2), waited
-    // 0.625 s for the duel (-0.5: longer is more passive) and met b at 960 units (-2: farther is more
-    // passive): (2 + 2 - 0.5 - 2) / 4
-    expect(aggressionScore(rollup([match], { player: "a" }), scale)).toBeCloseTo(0.375, 12);
+  it("standardizes the mean of the parts' signed z-scores against the pros, higher for more aggressive", () => {
+    // fails if a sign flips, a part drops out or the score is not in pro standard deviations. a
+    // travelled 40 (+2), fired first in 100% (+2), waited 0.625 s for the duel (-0.5: longer is more
+    // passive) and met b at 960 units (-2: farther is more passive): a mean of 0.375, which against
+    // pros averaging 0.5 with a spread of 0.25 is -0.5
+    expect(aggressionScore(rollup([match], { player: "a" }), scale)).toBeCloseTo(-0.5, 12);
   });
 
   it("gives no score unless every part has a value, and refuses a scale for other parts", () => {
