@@ -252,6 +252,7 @@ public class RecorderTests
         int ak = r.Weapons.Get("ak47");
         r.Places.Get("LongA");
         long allocated = 0;
+        int paused = 0; // ticks whose allocation reading a GC pause spoiled (AllocMeter)
 
         void Round(int ri, bool measure)
         {
@@ -269,7 +270,7 @@ public class RecorderTests
                     f.X = pi * 50; f.Y = 800 + (t % 200); f.Z = 0; f.Yaw = 90 + (t % 30); f.Pitch = 0;
                     f.Spot0 = ((t / 40) + pi) % 3 == 0 ? 1u : 0u;
                 }
-                long a0 = GC.GetAllocatedBytesForCurrentThread();
+                var meter = AllocMeter.Start();
                 r.Tick(t);
                 if (t % 7 == 0)
                 {
@@ -279,7 +280,7 @@ public class RecorderTests
                     r.Hurt(t, 0, 5 + t % 5, 1, 0, 50, ak, 2, true, Nil.V);
                     r.HitMask(t, 0, 5 + t % 5, 1u, 0u, true);
                 }
-                if (measure) allocated += GC.GetAllocatedBytesForCurrentThread() - a0;
+                if (measure) { long? read = meter.Read(); if (read == null) paused++; else allocated += read.Value; }
             }
             r.RoundEnd(t0 + 1000 + 64 * 100, 3, 8);
             r.Finalize(1, t0 + 1000 + 64 * 101);
@@ -291,6 +292,7 @@ public class RecorderTests
         Assert.True(sink.Store.Shots.Count > 500);
         Assert.Contains(sink.Store.Shots.Span.ToArray(), x => x.Smoke == 1);
         Assert.Equal(0, allocated);
+        Assert.True(paused < 64, $"{paused} of 6400 ticks were not read"); // the check still covers almost every tick
     }
 
     [Fact]
