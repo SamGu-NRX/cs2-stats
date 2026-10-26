@@ -11,7 +11,8 @@ import { Gauge } from "./charts";
 afterEach(() => vi.unstubAllGlobals());
 
 it("counts up on the first view, then sets a new value (a side switch) at once, even mid-count", () => {
-  // fails if a later value counts up from zero again, or waits for the first count to finish
+  // fails if a later value counts up from zero again, waits for the first count to finish, or leaves
+  // the arc's draw-in animation running
   let now = 0;
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
@@ -23,7 +24,15 @@ it("counts up on the first view, then sets a new value (a side switch) at once, 
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   const value = () => host.querySelector(".gauge__v")!.textContent;
+  const drawing = () => host.querySelector(".gauge__arc")!.classList.contains("gauge__arc--wake");
   act(() => root.render(<Gauge value={1.2} verdict="good" label="Rating" />));
+  expect(value()).toBe("0.00");
+  expect(drawing()).toBe(true);
+  // a re-run of the effect for the same first value (StrictMode) keeps counting rather than settling
+  act(() => root.render(<Gauge value={1.2} verdict="good" label="Rating" />));
+  expect(drawing()).toBe(true);
+  // a frame stamped before the count began (rAF passes the frame's start time) shows zero, never less
+  frame(-50);
   expect(value()).toBe("0.00");
   frame(300);
   const mid = Number(value());
@@ -32,6 +41,8 @@ it("counts up on the first view, then sets a new value (a side switch) at once, 
   // a side switch mid-count: the new value at once, and no frame is left to move it
   act(() => root.render(<Gauge value={0.85} verdict="avg" label="Rating" />));
   expect(value()).toBe("0.85");
+  // and the arc stops drawing in: it sits at the new value at once
+  expect(drawing()).toBe(false);
   frame(600);
   expect(value()).toBe("0.85");
   // a remount later in the session (the card reloading after a filter change) does not count again

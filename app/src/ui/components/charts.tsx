@@ -437,19 +437,28 @@ export function Gauge({ value, verdict, label, size = 156 }: { value: number | n
   const len = (Math.PI * 2 * r * sweep) / 360;
   const frac = value === null ? 0 : Math.max(0, Math.min(1, value / 2));
   const [wake] = useState(() => !gaugeWoke && value !== null && !matchMedia("(prefers-reduced-motion: reduce)").matches);
+  // the arc's draw-in class: on for the first value only, off the moment the value changes
+  const [waking, setWaking] = useState(wake);
   const [shown, setShown] = useState(wake ? 0 : value ?? 0);
-  // whether this gauge has already counted (or never will): every value after the first is set at once
-  const counted = useRef(!wake);
+  // the value the first count is for, and whether the gauge is past it: once the value has changed,
+  // every value is set at once (a re-run of the effect for the same first value, as StrictMode does,
+  // restarts the count instead of skipping it)
+  const first = useRef<number | null>(null);
+  const settled = useRef(!wake);
   useEffect(() => {
     if (value === null) return;
-    if (counted.current) { setShown(value); return; }
-    counted.current = true;
+    if (!settled.current) {
+      if (first.current === null) first.current = value;
+      else if (value !== first.current) settled.current = true;
+    }
+    if (settled.current) { setWaking(false); setShown(value); return; }
     gaugeWoke = true;
     const t0 = performance.now();
     const ease = (t: number) => 1 - Math.pow(1 - t, 3);
     let raf = 0;
     const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / 600);
+      // a frame's timestamp can precede t0 (it is the frame's start), which would ease below zero
+      const t = Math.max(0, Math.min(1, (now - t0) / 600));
       setShown(value * ease(t));
       if (t < 1) raf = requestAnimationFrame(step);
     };
@@ -471,7 +480,7 @@ export function Gauge({ value, verdict, label, size = 156 }: { value: number | n
     <div className="gauge" style={{ width: size, height: size * 0.82 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
         <path d={d} fill="none" stroke="var(--s3)" strokeWidth="5" strokeLinecap="round" />
-        <path d={d} fill="none" stroke="var(--cream2)" strokeWidth="5" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - frac)} className={wake ? "gauge__arc gauge__arc--wake" : "gauge__arc"} />
+        <path d={d} fill="none" stroke="var(--cream2)" strokeWidth="5" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - frac)} className={waking ? "gauge__arc gauge__arc--wake" : "gauge__arc"} />
         <line x1={t0x} y1={t0y} x2={t1x} y2={t1y} stroke="var(--ink2)" strokeWidth="1" />
       </svg>
       <div className="gauge__in">
