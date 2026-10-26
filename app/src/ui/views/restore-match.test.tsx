@@ -226,14 +226,16 @@ describe("Weapons", () => {
       return { ...base, aim: { ...base.aim, shots, first }, v: { ...base.v, accuracy, firstBulletAccuracy } };
     };
     render(<Weapons />);
-    const row = (w: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell")?.childNodes[1]?.textContent === weaponLabel(w));
-    expect(cell(row("ak47"), "Advice")).toBe("You hit 5.0 points more often than with your other guns. Your first bullet lands 20 points less often than with your other guns: stop moving before you fire. Only 10% of hits are on the head: keep the crosshair at head height.");
-    expect(cell(row("glock"), "Advice")).toBe("You hit 5.0 points less often than with your other guns.");
-    expect(cell(row("deagle"), "Advice")).toBe("2 kills so far; 40 recorded shots are needed to judge your aim with it.");
-    expect(cell(row("usp_silencer"), "Advice")).toBe("Fire it in a recorded match to see how you shoot with it.");
+    const row = (w: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell__txt > span")?.firstChild?.textContent === weaponLabel(w));
+    // the advice sits under the gun's name in its first cell
+    const advice = (tr: Element | undefined) => text(tr?.querySelector(".guncell__advice"));
+    expect(advice(row("ak47"))).toBe("You hit 5.0 points more often than with your other guns. Your first bullet lands 20 points less often than with your other guns: stop moving before you fire. Only 10% of hits are on the head: keep the crosshair at head height.");
+    expect(advice(row("glock"))).toBe("You hit 5.0 points less often than with your other guns.");
+    expect(advice(row("deagle"))).toBe("2 kills so far; 40 recorded shots are needed to judge your aim with it.");
+    expect(advice(row("usp_silencer"))).toBe("Fire it in a recorded match to see how you shoot with it.");
     expect([cell(row("ak47"), "HS kills"), cell(row("ak47"), "Head share")]).toEqual(["40.0%", "10.0%"]);
-    expect(text(host.querySelector(".gunhero--best .gunhero__advice"))).toBe(cell(row("ak47"), "Advice"));
-    expect(text(host.querySelector(".gunhero--worst .gunhero__advice"))).toBe(cell(row("glock"), "Advice"));
+    expect(text(host.querySelector(".gunhero--best .gunhero__advice"))).toBe(advice(row("ak47")));
+    expect(text(host.querySelector(".gunhero--worst .gunhero__advice"))).toBe(advice(row("glock")));
   });
 });
 

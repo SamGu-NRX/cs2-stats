@@ -43,7 +43,7 @@ import { scoreText, toScore } from "../../lib/scale";
 import { BENCH, verdictOf } from "../../lib/verdict";
 import { Hint } from "../match/glyphs";
 import { Empty, NeedsDemo } from "../shared";
-import { advice, bestAndWorst, ClassIcon, edgeText, edgeTip, EDGE_TIP, GunHero, GunIcon, HEAD_TIP, MIN_SHOTS, PROF_TIP, SplitCell, useGuns, type Judged } from "./guns";
+import { bestAndWorst, ClassIcon, EDGE_TIP, edgeText, edgeTip, GunCell, GunHero, GunIcon, HEAD_TIP, type Judged, MIN_SHOTS, PROF_TIP, SplitCell, useGuns } from "./guns";
 
 type SideFilter = "all" | "t" | "ct";
 const GUN_CLASSES = ["rifle", "sniper", "smg", "heavy", "pistol"] as const;
@@ -452,7 +452,7 @@ function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
           rowKey={(g) => g.weapon}
           defaultSort={{ key: "kills", dir: "desc" }}
           columns={[
-            { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}</span>, width: 120 },
+            { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <GunCell g={g} />, width: 250 },
             { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
             { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: tipOf("hs") },
             { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
@@ -466,7 +466,6 @@ function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
               key: "edge", label: "Vs other guns", colored: true, sort: (g) => g.edge, tip: EDGE_TIP,
               render: (g) => (g.edge === null ? <span className="faint">–</span> : <span className="num" style={{ color: scoreText(toScore(g.edge, 0, 8)) }} data-tip={edgeTip(g)} tabIndex={0}>{edgeText(g.edge)}</span>),
             },
-            { key: "advice", label: "Advice", align: "l", render: (g) => <span className="advice">{advice(g)}</span>, width: 360 },
           ]}
         />
       </Card>
