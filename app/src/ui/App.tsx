@@ -9,6 +9,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { MenuLayer, ToastLayer, TooltipLayer, toast } from "./components/overlay";
 import { DataProvider, useData } from "./data/provider";
 import { scanErrorText } from "./data/sources";
+import { privacyForced, setHidePersonal, useHidePersonal } from "./data/privacy";
 import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
@@ -43,13 +44,15 @@ function AppBar({ onPalette }: { onPalette: () => void }) {
   );
 }
 
-function Body() {
+/** Everything inside the data and title-bar providers; exported for the privacy test, which renders it with data of its own. */
+export function Shell() {
   const route = useRoute();
   const { status, error, matches, refresh, meta, progress } = useData();
   const pane = useRef<HTMLElement>(null);
   const rail = useRail();
   const [palette, setPalette] = useState(false);
   const pageKey = route.page === "match" ? `match:${route.file}` : route.page;
+  const hide = useHidePersonal();
 
   useEffect(() => {
     document.title = `${TITLES[route.page]} · CS2 Stats`;
@@ -60,7 +63,14 @@ function Body() {
   const actions = useMemo(() => [
     { label: "Rescan the match folder", hint: "Ctrl R", run: () => { refresh(); toast("Scanning the match folder"); } },
     { label: rail.rail ? "Expand the sidebar" : "Collapse the sidebar", hint: "Ctrl B", run: () => rail.toggle(false) },
-  ], [refresh, rail]);
+    // no shortcut of its own: one stray key press mid-capture would show every name again. The capture
+    // switch holds it on, so the palette does not offer to turn it off then.
+    ...(privacyForced() ? [] : [{
+      label: hide ? "Show personal info" : "Hide personal info",
+      words: "privacy screenshot names",
+      run: () => { setHidePersonal(!hide); toast(hide ? "Personal info shown" : "Personal info hidden"); },
+    }]),
+  ], [refresh, rail, hide]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -194,7 +204,7 @@ export function App() {
   return (
     <DataProvider>
       <BarProvider>
-        <Body />
+        <Shell />
       </BarProvider>
     </DataProvider>
   );

@@ -7,7 +7,7 @@
 // the coverage rule applied (engine.ts coverEntry), and `you` names only the user's own accounts, so a
 // pro demo's recording player never becomes "you".
 import { scanQueue } from "./scan-queue";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createHost, type Host } from "../../host/host";
 import { createClient, type Client } from "../../worker/client";
 import type { BaselineInfo } from "../../worker/protocol";
@@ -15,6 +15,7 @@ import { LOCAL_BASELINES } from "../../worker/baselines-pool";
 import { coverEntry, isOwn } from "./engine";
 import type { MatchEntry } from "./match";
 import { setMeta } from "./meta";
+import { hideData, useHidePersonal } from "./privacy";
 
 export interface Data {
   status: "starting" | "syncing" | "ready" | "error";
@@ -130,5 +131,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     else void start();
   }, [sync, start]);
 
-  return <Ctx.Provider value={{ ...state, refresh }}>{children}</Ctx.Provider>;
+  const value = useMemo(() => ({ ...state, refresh }), [state, refresh]);
+  return <DataValue value={value}>{children}</DataValue>;
+}
+
+/**
+ * Hands `value` to the views, with names, errors and paths hidden while "Hide personal info" is on
+ * (privacy.ts). Every view reads the app's data through here; tests render the views under it with
+ * data of their own.
+ */
+export function DataValue({ value, children }: { value: Data; children: ReactNode }) {
+  const hide = useHidePersonal();
+  const shown = useMemo(() => (hide ? hideData(value) : value), [hide, value]);
+  return <Ctx.Provider value={shown}>{children}</Ctx.Provider>;
 }

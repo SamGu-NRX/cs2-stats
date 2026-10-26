@@ -3,6 +3,7 @@
 // closed less than 300 ms ago the next opens instantly with no animation.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { hidingPersonal, hideText } from "../data/privacy";
 import { CloseIcon } from "../icons/ui";
 
 const DELAY = 400;
@@ -302,11 +303,15 @@ export function MenuLayer() {
   );
 }
 
-/** Copies text and confirms with a toast. */
+/**
+ * Copies text and confirms with a toast. With personal info hidden, the clipboard gets the same
+ * placeholders as the page (privacy.ts), and the toast says so.
+ */
 export async function copyText(text: string, what = "Copied") {
+  const out = hidingPersonal() ? hideText(text) : text;
   try {
-    await navigator.clipboard.writeText(text);
-    toast(what);
+    await navigator.clipboard.writeText(out);
+    toast(out === text ? what : `${what}, with personal info hidden`);
   } catch {
     toast("The clipboard is not available here", "poor");
   }

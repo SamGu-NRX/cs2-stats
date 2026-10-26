@@ -50,6 +50,7 @@ export interface Scene {
   reduce: boolean;
   palette: Palette;
   sprites: Sprites;
+  /** display names by SteamID, from the match's players (Replay.tsx) */
   nameOf: Map<string, string>;
 }
 
@@ -58,6 +59,9 @@ const OFF_FLOOR = 0.28;
 
 const sideColour = (p: Palette, s: Side | null) => (s === "T" ? p.t : s === "CT" ? p.ct : p.ink3);
 const easeOut = (f: number) => 1 - Math.pow(1 - f, 3);
+
+/** A player the match does not list. Never their SteamID, which would show with personal info hidden. */
+export const UNKNOWN = "Unknown player";
 
 export function drawScene(g: CanvasRenderingContext2D, tl: RoundTimeline, t: number, players: PlayerState[], s: Scene): void {
   const k = s.size / 1024;
@@ -185,7 +189,7 @@ export function drawScene(g: CanvasRenderingContext2D, tl: RoundTimeline, t: num
   for (const p of players) {
     if (!(s.names || p.id === s.hover)) continue;
     const [x, y] = px(p.x, p.y);
-    const name = s.nameOf.get(p.id) ?? p.id;
+    const name = s.nameOf.get(p.id) ?? UNKNOWN;
     g.globalAlpha = floorAlpha(p.z) * (p.alive ? 1 : 0.7);
     g.lineWidth = 3;
     g.strokeStyle = withAlpha(pal.bg0, 0.85);
