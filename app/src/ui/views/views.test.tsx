@@ -41,6 +41,7 @@ import Playstyle from "./Playstyle";
 import ProfileView from "./Profile";
 import { HowGood } from "./profile/parts";
 import { Provisional } from "./shared";
+import Overview from "./match/Overview";
 import Rounds from "./match/Rounds";
 import Utility from "./match/Utility";
 import Weapons from "./Weapons";
@@ -100,6 +101,7 @@ vi.mock("../data/hooks", async (orig) => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+globalThis.IntersectionObserver ??= class { observe() {} disconnect() {} unobserve() {} takeRecords() { return []; } } as unknown as typeof IntersectionObserver;
 globalThis.CSS ??= { escape: (x: string) => x } as unknown as typeof CSS;
 // not in jsdom; reduced motion, so charts and the drawer draw their end state
 globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia;
@@ -599,6 +601,46 @@ it("shows the round grid's swing per round, as the scoreboard does, with the sum
   expect(cell.getAttribute("data-tip")).toContain(fmtSwing(line.m.swing));
 });
 
+describe("match views", () => {
+  const s = converted.find((x) => x.facts.kills.some((k) => k.tradeKill))!;
+  const v = modelOf(s);
+  const num = (el: Element | null | undefined) => Number((el?.textContent ?? "").replace(/\s*\(.*\)$/, ""));
+
+  it("totals each scoreboard's counts under its five players, with traded deaths and flash assists in brackets", () => {
+    // fails if the team total drops or double-counts a player, or D (t) / A (f) read the wrong measure
+    answers = { clutches: [] };
+    render(<Overview v={v} file={v.file} round={null} />);
+    const board = host.querySelector(".board")!;
+    const heads = Array.from(board.querySelectorAll("thead th")).map((th) => th.textContent);
+    const K = heads.indexOf("K"), D = heads.indexOf("D (t)"), A = heads.indexOf("A (f)");
+    expect(Math.min(K, D, A)).toBeGreaterThan(0);
+    const body = Array.from(board.querySelectorAll("tbody tr"));
+    const total = board.querySelector("tfoot tr")!;
+    expect(body).toHaveLength(5);
+    const us = v.players.filter((p) => p.team === "us");
+    const sum = (f: (m: MatchModel["b"]["lines"]["both"][number]["m"]) => number) => us.reduce((a, p) => a + f(v.b.lines.both[p.pi].m), 0);
+    expect(num(total.children[K])).toBe(sum((m) => m.kills));
+    expect(total.children[D].textContent).toBe(`${sum((m) => m.deaths)} (${sum((m) => m.tradedDeaths)})`);
+    expect(total.children[A].textContent).toBe(`${sum((m) => m.assists)} (${sum((m) => m.flashAssists)})`);
+    const you = board.querySelector("tbody tr.is-you")!;
+    const m = v.b.lines.both[v.human].m;
+    expect(you.children[D].textContent).toBe(`${m.deaths} (${m.tradedDeaths})`);
+  });
+
+  it("marks each grid cell with the player's kills as a number and one cross for a death", () => {
+    // fails if a cell's kill count or death mark disagrees with the round's kills
+    render(<Rounds v={v} file={v.file} round={null} />);
+    // a player who killed and died in the same round, so both marks share one cell
+    const k = v.facts.kills.find((x) => x.enemy && x.killer !== null && v.facts.kills.some((y) => y.ri === x.ri && y.victim === x.killer))!;
+    const pi = k.killer!, r = v.rounds[k.ri];
+    const cell = Array.from(host.querySelectorAll(".ig__cell")).find((c) => c.getAttribute("aria-label")?.startsWith(`${v.players[pi].name}, Round ${r.number} `))!;
+    const kills = r.kills.filter((x) => x.killer === pi && x.enemy).length;
+    expect(cell.querySelector(".ig__k")?.textContent).toBe(String(kills));
+    expect(cell.querySelectorAll(".ig__death")).toHaveLength(1);
+  });
+
+});
+
 it("plots a rebuilt file's detonations as approximate landing points, and a logged file's landings as they are", () => {
   // fails if a file whose throws were rebuilt from detonations shows an empty landing map or presents its
   // points as exact, or a file with a throw log is labelled approximate
@@ -607,7 +649,7 @@ it("plots a rebuilt file's detonations as approximate landing points, and a logg
   const v = modelOf(s);
   render(<Utility v={v} file={v.file} round={null} />);
   expect(text(host.querySelector(".chip--approx"))).toBe("Approximate");
-  expect(text(host.querySelector(".landing__side"))).toContain("this file logs detonations, not throws");
+  expect(host.querySelector(".hint")?.getAttribute("data-tip")).toContain("Points are detonations");
   expect(host.querySelectorAll(".landing__map circle").length).toBeGreaterThan(0);
   // the same match with a throw log but no landing points: nothing to place, nothing approximate
   const logged: MatchModel = { ...v, facts: { ...v.facts, match: { ...v.facts.match, inputs: { ...v.facts.match.inputs, throws: "logged" } } } };
