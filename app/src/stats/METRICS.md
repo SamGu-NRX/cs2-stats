@@ -328,36 +328,54 @@ percentile: `compared: false` makes compare() say "for fun, with no pro percenti
 every pool. Positive luck means the dice favoured you.
 
 **Spread luck.** Every gun shot (shotguns aside, since each pellet has its own spread) fired while an
-enemy was mesh-visible and unsmoked within 30 degrees of the aim counts once, against the enemy whose body
-centre was nearest the aim direction. Its chance of hitting comes from three things:
+enemy was mesh-visible and unsmoked within 30 degrees of the aim counts once. Everything is measured on
+the plane one unit ahead of the eye, in the aim direction's right and up coordinates, because that is
+where the game places the cone. A point there at distance d from the aim is tan(angle) off it.
 
 - **The cone.** The game's own aim angles, inaccuracy and spread for that bullet (`fire_bullets`, which the
-  extractor writes to `shots`). The bullet leaves the aim by inaccuracy x u0 at a uniform angle plus
-  spread x u1 at another, u0 and u1 uniform on [0, 1]. That is CS:GO's published formula, and CS2 is read
-  the same way.
+  extractor writes to `shots`). The bullet's direction is forward + x right + y up, with (x, y) =
+  inaccuracy x u0 at a uniform angle plus spread x u1 at another, u0 and u1 uniform on [0, 1]. That is
+  CS:GO's published formula, and CS2 is read the same way.
 - **The target.** An upright box facing the shooter, 13 units to each side and from the feet to 6 units
-  above the eye. Both sizes are scaled by HIT_AREA_SCALE.
+  above the eye, both half-sizes scaled by HIT_AREA_SCALE. Its four corners are projected onto that plane,
+  each divided by its depth along the aim, and a bullet hits when its point falls inside the projection.
+  The target is the visible enemy whose box centre projects nearest the aim point, and the 30-degree gate
+  is tan 30 degrees on the same plane.
 - **Calibration.** A logistic map of the geometric chance's log-odds (CALIBRATION), because the box and
   cone alone are too sure at both ends.
 
-A shot hit if the shooter damaged that enemy with a gun on the shot's tick. Luck is hits minus the summed
-chances, for your shots (luckHits) and for the enemies' shots at you (luckAgainst). The luck score is the
-first minus the second. All three are per 24 rounds over the rounds with the inputs, so a regulation match
-reads as its own total.
+A shot hit if the shooter damaged that enemy with a gun on the shot's tick; each such hit goes to one
+shot, so two shot rows on one tick never share one hit. Luck is hits minus the summed chances, for your
+shots (luckHits) and for the enemies' shots at you (luckAgainst). The luck score is the first minus the
+second. All three are per 24 rounds over the covered rounds, so a regulation match reads as its own total.
+A round is covered only when every gun shot in it has the cone, both aim angles and the eye position, on
+a map with mesh visibility. A round with one shot missing any of them is unknown, not zero, and a player
+with no covered round has no luck value.
 
-`pnpm fit-luck` fitted both constants on the even-numbered pro maps and checked them on the odd-numbered
-ones (159,100 shots): HIT_AREA_SCALE 0.868 makes the geometric chances
-sum to the hits on the fitting maps. On its own that chance is too sure: on the checking maps, shots
-given 0.4% hit 8.9% of the time, and shots given 95% hit 82%. CALIBRATION (a = -0.123, b = 0.371)
-corrects it. Every band of the calibrated chance is within 0.08 of its hit rate, the widest being 0.257
-against 0.180 and 0.681 against 0.758, and hits are 1.006 of the expected overall. The remaining error is
-what a box, a cone and a nearest-enemy target leave out: limbs, partial cover, and target movement within
-the tick.
+`pnpm fit-luck` fitted both constants on the even-numbered pro maps (153,583 shots in covered rounds) and
+checked them on the odd-numbered ones (154,979). HIT_AREA_SCALE 0.869 makes the geometric chances sum to
+the hits on the fitting maps. On its own that chance is too sure: on the checking maps, shots given 0.4%
+hit 8.6% of the time, and shots given 95% hit 82%. CALIBRATION (a = -0.124, b = 0.374) corrects it.
+
+| Calibrated chance | Checking shots | Mean chance | Hit rate |
+|---|---|---|---|
+| 0.05-0.10 | 40,921 | 0.063 | 0.074 |
+| 0.10-0.20 | 5,517 | 0.158 | 0.146 |
+| 0.20-0.30 | 14,851 | 0.256 | 0.178 |
+| 0.30-0.40 | 19,943 | 0.349 | 0.319 |
+| 0.40-0.50 | 14,876 | 0.450 | 0.459 |
+| 0.50-0.60 | 16,729 | 0.550 | 0.606 |
+| 0.60-0.80 | 20,027 | 0.681 | 0.758 |
+| 0.80-1.00 | 22,115 | 0.912 | 0.872 |
+
+Every band is within 0.08 of its hit rate, and hits are 1.006 of the expected overall. The remaining error
+is what a box, a cone and a nearest-enemy target leave out: limbs, partial cover, and target movement
+within the tick.
 
 | id | Needs | Definition and thresholds |
 |---|---|---|
 | luckHits, luckAgainst, luckScore | spread | As above. Plugin files have no cone and no line of sight, so they give no value. |
-| runAndGunKills, runAndGunDeaths | killShot, deathShot | Gun kills whose killing shot (the killer's gun shot on the kill's tick) was fired above 34% of the gun's max speed, scoped speed when scoped, over the kills with that shot's speed known. Plugin files record only the recording player's shots, so deaths to bots there are unknown. |
+| runAndGunKills, runAndGunDeaths | killShot, deathShot | Gun kills whose killing shot (the killer's gun shot on the kill's tick) was fired above 34% of the gun's max speed, scoped speed when scoped (`speed.ts` accurateSpeed), over the kills with that shot's speed known. For a scoped gun whose scope state is not recorded, the limit, and so the kill, is unknown. Plugin files record only the recording player's shots, so deaths to bots there are unknown. |
 | luckyHeadshots, luckyHeadshotDeaths | hsShot, hsDeathShot | Headshot kills whose killing shot had an inaccuracy cone of 0.05 or more (about 2.9 degrees; ours, no fit). Moving, jumping and spraying all widen the cone, so one threshold covers them. Needs the cone, so demos only. |
 | blindKills, airKills, noscopeKills, smokeKills | flags | Share of your kills with the game's blind, in-the-air, no-scope or through-smoke flag, over kills with all four flags recorded (they are nullable since #27) |
 | flagDeaths | deathFlags | Share of your deaths to an enemy kill with any of those flags |

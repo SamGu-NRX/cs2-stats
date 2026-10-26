@@ -22,18 +22,18 @@ export const TARGET_HALF_WIDTH = 13;
 /**
  * The box over-counts the hit area (limbs are thin, bodies are partly covered), so both half-sizes are
  * scaled by this before the chance is read. Fitted by `pnpm fit-luck` so that the geometric chances
- * sum to the hits over the even-numbered pro maps (158,299 shots at a visible enemy).
+ * sum to the hits over the even-numbered pro maps (153,583 shots at a visible enemy in covered rounds).
  */
-export const HIT_AREA_SCALE = 0.868;
+export const HIT_AREA_SCALE = 0.869;
 /**
- * The geometric chance is too sure at both ends: on the odd-numbered pro maps (159,100 shots), shots it
- * gave 0.4% hit 8.9% of the time, and shots it gave 95% hit 82%. A logistic map of its log-odds,
+ * The geometric chance is too sure at both ends: on the odd-numbered pro maps (154,979 shots), shots it
+ * gave 0.4% hit 8.6% of the time, and shots it gave 95% hit 82%. A logistic map of its log-odds,
  * P = 1 / (1 + e^-(a + b logit(p))), fitted on the even-numbered maps by `pnpm fit-luck`, corrects that:
- * on the odd-numbered maps every band of P is within 0.08 of its hit rate (0.257 against 0.180 and
+ * on the odd-numbered maps every band of P is within 0.08 of its hit rate (0.256 against 0.178 and
  * 0.681 against 0.758 are the widest), and hits are 1.006 of the expected. p is first clamped to
  * [CHANCE_FLOOR, 1 - CHANCE_FLOOR], since a box and a cone can give exactly 0 or 1.
  */
-export const CALIBRATION = { a: -0.123, b: 0.371 };
+export const CALIBRATION = { a: -0.124, b: 0.374 };
 export const CHANCE_FLOOR = 0.001;
 
 /** The calibrated chance of a hit, from the geometric chance. */
