@@ -26,7 +26,7 @@ export function StatStrip({ items, label }: { items: StripItem[]; label: string 
         const na = it.unavailable !== undefined || it.value === null;
         return (
           <div key={it.id} className="strip__item" data-na={na || undefined}>
-            <dt className="caps" data-tip={it.def}>{it.label}{it.approx ? <ApproxMark /> : null}</dt>
+            <dt className="caps" data-tip={it.def} tabIndex={it.def ? 0 : undefined}>{it.label}{it.approx ? <ApproxMark /> : null}</dt>
             <dd className="strip__val num">{na ? "–" : it.value}{!na && it.unit ? <small>{it.unit}</small> : null}</dd>
             <dd className="strip__ph">
               {it.unavailable ?? it.coverage ?? (it.pct === null ? "" : it.kind === "style" ? "Style, not ranked" : <><b>{percentilePhrase(it.pct, "performance")}</b> of {it.population}</>)}

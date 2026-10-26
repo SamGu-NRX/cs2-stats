@@ -1,5 +1,7 @@
-// Career aim: how your aim moves across recorded matches, then every recorded shot together.
+// Career aim: how your aim moves across recorded matches, then every recorded shot together, and
+// every gun you have used (the Weapons table, over every career match).
 import { useMemo } from "react";
+import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
 import { careerEntries, fmtMetric } from "../data/engine";
@@ -12,7 +14,9 @@ import { BENCH } from "../lib/verdict";
 import { BarContent } from "../shell/Bar";
 import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
-import { Delta, Empty, NeedsDemo, SectionAside } from "./shared";
+import { aimTip } from "./aim/tips";
+import { Hint } from "./match/glyphs";
+import { Empty, NeedsDemo, SectionAside } from "./shared";
 
 /** Aim metrics drawn per match; bench is a reference line on the chart. */
 const TRENDS: { id: string; bench?: number }[] = [
@@ -21,12 +25,16 @@ const TRENDS: { id: string; bench?: number }[] = [
   { id: "counterStrafe" },
 ];
 
+/** A per-match slope in the metric's unit: percentages move in points. */
+const perMatch = (id: string, v: number) => (metric(id).unit === "pct" ? `${v.toFixed(1)} pts` : fmtMetric(id, v)) + " a match";
+
 export default function CareerAim() {
   const { matches } = useData();
   const { map, n } = useFilters();
+  const career = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const list = useMemo(() => { const f = careerEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
-  const career = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
+  const all = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
   const visibility = list.some((s) => s.match.visibility === "ok");
   const shots = list.reduce((t, s) => t + s.shots, 0);
   const oldestFirst = useMemo(() => [...list].reverse(), [list]);
@@ -43,8 +51,8 @@ export default function CareerAim() {
           <>
             <div className="aim-head">
               <div>
-                <h1 className="section-title">Your aim over {plural(list.length, "recorded match", "recorded matches")}</h1>
-                <p className="meta">{plural(shots, "shot")} with guns. Converted logs are left out because they have no shots.</p>
+                <h1 className="section-title">Your aim over {plural(list.length, "recorded match", "recorded matches")}<Hint tip="Converted logs have no shots, so they are left out." /></h1>
+                <p className="meta">{plural(shots, "gun shot")}</p>
               </div>
               <div className="toolbar__end">
                 <SectionAside label="Visibility" value={visibility ? "Measured" : "Not in these files"} color={visibility ? "var(--good-text)" : "var(--ink2)"} />
@@ -58,19 +66,23 @@ export default function CareerAim() {
                 const fmt = (v: number) => fmtMetric(t.id, v);
                 const better = tr && (m.lowerIsBetter ? tr.slope < 0 : tr.slope > 0);
                 return (
-                  <Card key={t.id} title={m.label} aside={
+                  <Card key={t.id} title={<span data-tip={aimTip(t.id)} tabIndex={0}>{m.label}</span>} aside={
                     <span className="trend-aside">
-                      {tr && <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={m.lowerIsBetter} fmt={fmt} title={`Change per match over ${tr.n} matches (least-squares slope)`} />}
-                      <b className="num cream" data-tip={m.def}>{fmtMetric(t.id, career ? career.v[t.id] : null)}</b>
+                      {!trends ? null : tr === null ? <span className="meta" data-tip="A trend needs three recorded matches with a value" tabIndex={0}>No trend yet</span> : (
+                        <span className="trend-move" data-tip={`Least-squares change per match over ${tr.n} matches`} tabIndex={0}>
+                          <span className="meta">{tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}</span>
+                          <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={m.lowerIsBetter} fmt={(v) => perMatch(t.id, v)} />
+                        </span>
+                      )}
+                      <b className="num cream">{fmtMetric(t.id, all ? all.v[t.id] : null)}</b>
                     </span>
                   }>
                     <TrendLine points={pts} fmt={fmt} height={120} bench={t.bench} benchLabel="ref" lowerIsBetter={m.lowerIsBetter} />
-                    <p className="meta trend-note">{!trends ? "" : tr === null ? "Three recorded matches with a value are needed to show a trend." : `${tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}: ${fmt(Math.abs(tr.slope))} per match over ${tr.n} matches.`}</p>
                   </Card>
                 );
               })}
             </div>
-            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} guns={career} />
           </>
         )}
       </div>
