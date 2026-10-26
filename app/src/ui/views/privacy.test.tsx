@@ -42,6 +42,7 @@ import { dismissToast, toast } from "../components/overlay";
 import { DataValue, type Data } from "../data/provider";
 import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
+import { rosterTables } from "../../stats/roster";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const PROS = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "../../../public/baselines.json"), "utf8")) as Baselines;
@@ -137,9 +138,9 @@ const answers: Partial<Record<keyof Client, (...a: never[]) => unknown>> = {
   rounds: (file: string) => byFile.get(file)!.facts.rounds.map((r) => roundBundle(byFile.get(file)!.facts, r.number)),
   rollup: (qs: Query[]) => qs.map((q) => rolled(summary(q))),
   ratings: (qs: Query[]) => qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })),
-  headToHead: (file: string) => headToHead(byFile.get(file)!.tables, byFile.get(file)!.facts),
-  mapZones: (file: string, player: string) => mapZones(byFile.get(file)!.tables, player),
-  flashes: (file: string, player: string) => flashTool(byFile.get(file)!.tables, byFile.get(file)!.facts, player),
+  headToHead: (file: string) => headToHead(rosterTables(byFile.get(file)!.tables), byFile.get(file)!.facts),
+  mapZones: (file: string, player: string) => mapZones(rosterTables(byFile.get(file)!.tables), player),
+  flashes: (file: string, player: string) => flashTool(rosterTables(byFile.get(file)!.tables), byFile.get(file)!.facts, player),
   openingDuels: (file: string, player: string) => openingDuels(byFile.get(file)!.facts, player),
   ratingBreakdown: (file: string, player: string) => {
     const f = byFile.get(file)!.facts;

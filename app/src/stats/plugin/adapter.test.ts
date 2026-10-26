@@ -243,6 +243,7 @@ it("carries who was alive at freeze end and who disconnected into the tables and
   expect(t.player_rounds.alive_at_start).toEqual([true, false]);
   expect([t.leaves!.n, t.leaves!.steamid[0], t.leaves!.alive[0]]).toEqual([1, HUMAN, true]);
   const f = derive(t, CS2RB);
-  expect(f.pr.map((r) => r.aliveAtStart)).toEqual([true, false]);
+  // the bot dead at freeze end is off the round's roster, so the facts hold no row for it (rules.ts onRoster)
+  expect(f.pr.map((r) => [r.pi, r.aliveAtStart])).toEqual([[0, true]]);
   expect(f.rounds[0].leaves).toEqual([{ tick: 1500, pi: 0 }]);
 });

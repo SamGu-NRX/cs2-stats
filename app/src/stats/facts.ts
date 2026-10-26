@@ -6,10 +6,11 @@ import type { BuyClass, BuyTier } from "./economy";
 import type { InfoFact } from "./information";
 import type { MoveFact } from "./movement";
 import type { UtilQFact } from "./utilq";
+import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 28;
+export const DERIVE_VERSION = 32;
 
 export interface MatchInfo {
   id: string;
@@ -62,6 +63,12 @@ export interface MatchInfo {
      * visibility comes from the extractor's engagements.
      */
     onScreen: OnScreenSource | null;
+    /**
+     * events of players off their round's roster that roster.ts removed from the tables, by kind: the
+     * source marks the player dead at freeze end or gone before it, yet records them in that round's live
+     * part. They are in no number or view; the match view says what was left out.
+     */
+    offRoster: OffRoster;
   };
 }
 
@@ -157,7 +164,7 @@ export interface RoundFact {
   /** players who disconnected during the round while alive, with the tick (tables leaves; plugin files only) */
   leaves: { tick: number; pi: number }[];
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
-  winProb: { tick: number; event: "start" | "kill" | "plant"; pT: number }[] | null;
+  winProb: { tick: number; event: "start" | "kill" | "plant" | "leave"; pT: number }[] | null;
 }
 
 export interface KillFact {

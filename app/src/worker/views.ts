@@ -16,6 +16,7 @@ import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
 import { startMs, type MatchEntry } from "../ui/data/match";
 import { highlightKinds } from "../stats/highlights";
+import { playedMatch } from "../stats/roster";
 import type {
   ClutchRow, HighlightRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
@@ -65,6 +66,7 @@ function pov(file: string, f: MatchFacts): { you: number; usTeam: 0 | 1 } {
 
 const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them ? "W" : us < them ? "L" : "T");
 
+
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
   const { you, usTeam } = pov(file, f);
   const id = f.players[you].id;
@@ -75,7 +77,7 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, kills: f.kills.length, line: lineOf(s),
+    shots: s.aim.shots, kills: f.kills.length, line: lineOf(s), played: f.players.map((p) => p.id).filter((id) => playedMatch(f, id)),
     activity: f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0),
   };
 }
@@ -219,11 +221,12 @@ export const newestHighlightFirst = (a: HighlightRow, b: HighlightRow) => b.star
 
 /**
  * The files of the player's `n` most recent matches before `file` (by start time, as the match list
- * orders them), for "your match". A match counts when the player is among its players.
+ * orders them), for "your match". A match counts when the player played a round of it (MatchEntry.played),
+ * not merely when they are among its players.
  */
-export function recentFiles(entries: { file: string; match: Pick<MatchEntry["match"], "startedAt" | "date">; players: { id: string }[] }[], file: string, player: string, n: number): string[] {
+export function recentFiles(entries: { file: string; match: Pick<MatchEntry["match"], "startedAt" | "date">; played: string[] }[], file: string, player: string, n: number): string[] {
   const sorted = [...entries].sort((a, b) => startMs(b.match) - startMs(a.match) || b.file.localeCompare(a.file));
   const at = sorted.findIndex((e) => e.file === file);
   if (at < 0) throw new Error(`${file} is not in the match folder; rescan it`);
-  return sorted.slice(at + 1).filter((e) => e.players.some((p) => p.id === player)).slice(0, n).map((e) => e.file);
+  return sorted.slice(at + 1).filter((e) => e.played.includes(player)).slice(0, n).map((e) => e.file);
 }

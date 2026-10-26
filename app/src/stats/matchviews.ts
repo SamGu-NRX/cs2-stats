@@ -10,7 +10,8 @@ import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type F
 import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
 import { roundPopulation } from "./rules";
 import { swingSources, type SwingSources } from "./swing";
-import type { MatchTables, Side } from "./tables";
+import type { Side } from "./tables";
+import type { RosterTables } from "./roster";
 import { FLASHED_MIN_S } from "./utility";
 import { weaponClass, type WeaponClass } from "./weapons";
 
@@ -89,7 +90,7 @@ export interface HeadToHead {
 }
 
 /** Every pair of players on opposite teams, with what each did to the other; a pair with no interaction is all zeros. */
-export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
+export function headToHead(t: RosterTables, f: MatchFacts): HeadToHead[] {
   const pairs = new Map<string, HeadToHead>();
   const slot = (x: number, y: number): [HeadToHead, 0 | 1] | null => {
     const px = f.players[x], py = f.players[y];
@@ -149,7 +150,7 @@ export interface ZoneRow {
  * within half a second (plugin files carry no kill places). A kill with neither has no zone and is left out. `zones` is the map's zone list: every
  * place a position sample of this match names, sorted.
  */
-export function mapZones(t: MatchTables, player: string): { zones: string[]; rows: ZoneRow[] } {
+export function mapZones(t: RosterTables, player: string): { zones: string[]; rows: ZoneRow[] } {
   const P = t.positions, K = t.kills;
   const zones = new Set<string>();
   if (P) for (let i = 0; i < P.n; i++) if (P.place[i]) zones.add(P.place[i]!);
@@ -329,7 +330,7 @@ const siteOf = (place: string | null) => (place ? /^Bombsite([A-Z])$/.exec(place
  * table's (letter "A", "B"). Retake and post-plant come from plants alone; take and hold need the
  * positions, the freeze end and the site names, and are null when no round had them.
  */
-export function bombsites(t: MatchTables, f: MatchFacts, player: string): Bombsites {
+export function bombsites(t: RosterTables, f: MatchFacts, player: string): Bombsites {
   const pi = playerIndex(f, player);
   const sites: Record<string, SiteOutcomes> = {};
   const tally = () => ({ attempts: 0, success: 0 });

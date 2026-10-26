@@ -93,15 +93,18 @@ export function closing(c: Ctx): ClutchFact[] {
     for (const p of rows) {
       if (!p) continue;
       const m = p.m;
+      // the player's round ends at their death or their disconnect in the live round, whichever is first
       const death = list.find((k) => k.victim === p.pi);
+      const leave = leaves.find((l) => l.pi === p.pi);
+      const gone = Math.min(death?.tick ?? Infinity, leave?.tick ?? Infinity);
       if (rf.freezeEndTick !== null) {
-        const until = death && death.tick < rf.endTick ? death.tick : rf.endTick;
+        const until = Math.min(gone, rf.endTick);
         m.aliveSecs += Math.max(0, until - rf.freezeEndTick) / c.tickRate;
       }
       if (last.has(p.pi)) m.lastAlive = 1;
       if (rf.plantTick !== null) {
         m.postPlantRounds = 1;
-        if (!death || death.tick > rf.plantTick) m.aliveAtPlant = 1;
+        if (gone > rf.plantTick) m.aliveAtPlant = 1;
       }
       // a save: alive at the end of a lost round
       if (p.won === false && aliveAtEnd(p.pi)) m.saves = 1;

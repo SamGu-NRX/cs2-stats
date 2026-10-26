@@ -16,6 +16,7 @@ import { deriveMove } from "./movement";
 import { ecoAdjust, valuedRounds } from "./rating3";
 import { positioning } from "./positioning";
 import { markOpening, markTrades } from "./rules";
+import { rosterTables, type RosterTables } from "./roster";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
 import { swing } from "./swing";
@@ -114,7 +115,8 @@ export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
 
 /** Indexes shared by the families. */
 export interface Ctx {
-  t: MatchTables;
+  /** the match's tables with the roster applied (roster.ts): no event of a player off their round's roster */
+  t: RosterTables;
   /** the round win-probability source (model-params.ts) */
   wp: WinProbSource;
   tickRate: number;
@@ -142,7 +144,7 @@ export interface Ctx {
   riOf: (round: number) => number | undefined;
 }
 
-export function buildCtx(t: MatchTables, wp: WinProbSource): Ctx {
+export function buildCtx(t: RosterTables, wp: WinProbSource): Ctx {
   const tickRate = t.match.tick_rate[0];
   const nRounds = t.rounds.n;
   // Rounds are addressed by row. Demos cover every round, but a source may cover only some (the
@@ -277,40 +279,55 @@ function killFacts(c: Ctx): KillFact[][] {
       };
     });
     out.sort((a, b) => a.tick - b.tick);
-    markOpening(out);
-    markTrades(out, c.tickRate);
     return out;
   });
 }
 
-function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
+function roundFacts(c: Ctx): RoundFact[] {
   const r = c.t.rounds;
-  const pr = c.t.player_rounds;
-  const equip = Array.from({ length: c.nRounds }, () => ({ CT: 0 as number | null, T: 0 as number | null, nCT: 0, nT: 0 }));
-  for (let i = 0; i < pr.n; i++) {
-    const ri = c.riOf(pr.round[i]);
-    const s = asSide(pr.side[i]);
-    if (ri === undefined || !s) continue;
-    const e = pr.equip_value_game[i];
-    const x = equip[ri];
-    x[s] = e === null || x[s] === null ? null : x[s]! + e;
-    if (s === "CT") x.nCT++; else x.nT++;
-  }
   return Array.from({ length: c.nRounds }, (_, ri): RoundFact => {
-    const x = equip[ri];
-    const pistol = isPistolRound(r.round[ri] - 1, maxRounds);
-    const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
-    const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
-    const tier = (s: Side): BuyTier | null => (pistol ? "pistol" : team[s] === null ? null : buyTier(team[s]!, s === "CT" ? x.nCT : x.nT, false));
     const fe = r.freeze_end_tick[ri];
     return {
       ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
       durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
       plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], planter: c.idOf(r.planter_steamid[ri]), defuser: c.idOf(r.defuser_steamid[ri]), defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
       leaves: leavesOf(c, ri),
-      equip: team, buy: { CT: buy("CT"), T: buy("T") }, tier: { CT: tier("CT"), T: tier("T") }, winProb: null,
+      // filled by teamEquipment once the roster is known
+      equip: { CT: null, T: null }, buy: { CT: null, T: null }, tier: { CT: null, T: null }, winProb: null,
     };
   });
+}
+
+/** Whether a player is off a round's roster (roster.ts, by round number). */
+const offRoster = (c: Ctx, round: number, id: string) => c.t.roster.off.get(round)?.has(id) === true;
+
+/**
+ * Each side's equipment at freeze end, its buy class and its finer tier, over the players on the
+ * round's roster only, so the total and the head count behind a buy class (and buying.ts's per-player
+ * deviation from the team) are over the same players.
+ */
+function teamEquipment(c: Ctx, maxRounds: number): void {
+  const pr = c.t.player_rounds;
+  const equip = Array.from({ length: c.nRounds }, () => ({ CT: 0 as number | null, T: 0 as number | null, nCT: 0, nT: 0 }));
+  for (let i = 0; i < pr.n; i++) {
+    const ri = c.riOf(pr.round[i]);
+    const s = asSide(pr.side[i]);
+    if (ri === undefined || !s || offRoster(c, pr.round[i], pr.steamid[i])) continue;
+    const e = pr.equip_value_game[i];
+    const x = equip[ri];
+    x[s] = e === null || x[s] === null ? null : x[s]! + e;
+    if (s === "CT") x.nCT++; else x.nT++;
+  }
+  for (const rf of c.rounds) {
+    const x = equip[rf.ri];
+    const pistol = isPistolRound(rf.number - 1, maxRounds);
+    const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
+    const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    const tier = (s: Side): BuyTier | null => (pistol ? "pistol" : team[s] === null ? null : buyTier(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    rf.equip = team;
+    rf.buy = { CT: buy("CT"), T: buy("T") };
+    rf.tier = { CT: tier("CT"), T: tier("T") };
+  }
 }
 
 /** A round's disconnects of players who were alive, in tick order (tables leaves). */
@@ -340,6 +357,8 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
     const side = c.side[rf.ri][p];
     if (!side) return null;
     const i = row.get(rf.ri * 1024 + p);
+    // a player off the round's roster has no row: the round counts for nothing of theirs (roster.ts)
+    if (offRoster(c, rf.number, c.players[p].id)) return null;
     const m = emptyMeasures();
     m.rounds = 1;
     const won = rf.winner === null ? null : rf.winner === side;
@@ -371,9 +390,15 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 /** The shared indexes with the rounds, kills and player-rounds filled, before any family runs: what derive starts from, and what tools that fit a family's parameters read. */
 export function contextOf(t: MatchTables, wp: WinProbSource): Ctx {
-  const c = buildCtx(t, wp);
-  c.rounds = roundFacts(c, matchMeta(t).maxRounds);
+  // the roster is applied to the tables here, once: every family reads events of rostered players only
+  const c = buildCtx(rosterTables(t), wp);
+  c.rounds = roundFacts(c);
   c.kills = killFacts(c);
+  for (const rf of c.rounds) {
+    markOpening(c.kills[rf.ri], rf);
+    markTrades(c.kills[rf.ri], c.tickRate, rf);
+  }
+  teamEquipment(c, matchMeta(t).maxRounds);
   c.pr = playerRounds(c);
   return c;
 }
@@ -408,7 +433,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
       roundsPlayed: roundsPlayed ?? c.nRounds, totalsOnly, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
-      inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen },
+      inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen, offRoster: c.t.roster.removed },
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),

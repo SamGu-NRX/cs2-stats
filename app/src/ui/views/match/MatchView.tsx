@@ -19,6 +19,16 @@ import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
 import Overview from "./Overview";
 import { replayUnavailable } from "./replay/support";
+import type { OffRoster } from "../../../stats/roster";
+
+const OFF_ROSTER_KINDS: [keyof OffRoster, string, string][] = [
+  ["kills", "kill", "kills"], ["assists", "assist", "assists"], ["damages", "hit", "hits"], ["blinds", "blind", "blinds"],
+  ["grenades", "grenade record", "grenade records"], ["shots", "shot", "shots"], ["positions", "position sample", "position samples"],
+  ["spotted", "radar sighting", "radar sightings"], ["engagements", "engagement", "engagements"],
+];
+
+/** What the roster rule removed, as "1 kill, 2 hits"; empty when it removed nothing. */
+const offRosterList = (o: OffRoster) => OFF_ROSTER_KINDS.filter(([k]) => o[k] > 0).map(([k, one, many]) => `${o[k]} ${o[k] === 1 ? one : many}`).join(", ");
 
 const Rounds = lazy(() => import("./Rounds"));
 const Economy = lazy(() => import("./Economy"));
@@ -143,6 +153,13 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
             <span>{fmtWhen(e.match)}</span>
             {e.match.durationS !== null && <span data-tip="From the first round's start to the last round's end" tabIndex={0}>{fmtDuration(e.match.durationS)}</span>}
             <SourceBadge s={src} />
+            {/* events the roster rule removed (stats/roster.ts), said rather than dropped silently */}
+            {offRosterList(e.match.inputs.offRoster) && (
+              <span className="chip chip--warn" tabIndex={0}
+                data-tip={`The file marks a player dead at freeze end, or gone before it, yet records them in that round's live play: ${offRosterList(e.match.inputs.offRoster)}. All of it is left out of every number and view.`}>
+                Off-roster events left out
+              </span>
+            )}
           </div>
         </div>
         <div className="mhero__team mhero__team--them">

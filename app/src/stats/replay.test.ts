@@ -4,6 +4,7 @@ import { deathsOf, frameIndex, lerpYaw, playersAt } from "./replay-interp";
 import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "./tables";
 import { FREEZE_END, ROUND_END, oneRoundTables, type OneRound } from "./testing/match";
 import { pushRow } from "./testing/tables";
+import { rosterTables } from "./roster";
 
 type Row = Record<string, unknown>;
 function table<N extends TableName>(name: N, rows: Row[]): Table<N> {
@@ -64,7 +65,7 @@ const PATHS = paths([
 const s = (tick: number) => (tick - FREEZE_END) / 64;
 
 describe("buildRoundTimeline", () => {
-  const tl = buildRoundTimeline(tables(), PATHS, 1);
+  const tl = buildRoundTimeline(rosterTables(tables()), PATHS, 1);
 
   it("starts at freeze end and runs to the window's end, past the last sample", () => {
     expect(tl.zeroTick).toBe(FREEZE_END);
@@ -77,7 +78,7 @@ describe("buildRoundTimeline", () => {
   it("reaches an event after the last sample, with players holding their last sample", () => {
     // a second kill at 1200, well after the last sample (672)
     const t = tables({ end_tick: 1280, official_end_tick: 1600 }, [{ tick: 1200, killer: "b", victim: "a", at: { v_x: 60, v_y: 40, v_z: 0 } }]);
-    const tl2 = buildRoundTimeline(t, null, 1);
+    const tl2 = buildRoundTimeline(rosterTables(t), null, 1);
     // end 1280 + 3 s = 1472, before the official end 1600
     expect(tl2.duration).toBe(s(1472));
     expect(tl2.kills.map((k) => k.t)).toEqual([0.375, s(1200)]);
@@ -87,7 +88,7 @@ describe("buildRoundTimeline", () => {
   });
 
   it("keeps the last sample before freeze end when none falls on it", () => {
-    const late = buildRoundTimeline(tables({ freeze_end_tick: 648 }), null, 1);
+    const late = buildRoundTimeline(rosterTables(tables({ freeze_end_tick: 648 })), null, 1);
     expect(late.frames.map((f) => f.t)).toEqual([-0.125, 0.125, 0.375]);
   });
 
@@ -139,22 +140,22 @@ describe("buildRoundTimeline", () => {
 
   it("refuses a round without samples or not in the match", () => {
     const t = tables();
-    expect(() => buildRoundTimeline(t, null, 2)).toThrow("round 2 is not in this match");
-    expect(() => buildRoundTimeline({ ...t, positions: null }, null, 1)).toThrow("no position samples");
+    expect(() => buildRoundTimeline(rosterTables(t), null, 2)).toThrow("round 2 is not in this match");
+    expect(() => buildRoundTimeline(rosterTables({ ...t, positions: null }), null, 1)).toThrow("no position samples");
   });
 
   it("stops the window before the next round starts", () => {
     const t = tables({ end_tick: 1280, official_end_tick: 1600 });
     // round 2 starts at 1400, before round 1's official end and before end + 3 s (1472)
     const two = { ...t, rounds: { ...t.rounds, round: [1, 2], start_tick: [0, 1400], freeze_end_tick: [FREEZE_END, 2000], end_tick: [1280, 3000], official_end_tick: [1600, 3400], winner_side: ["CT", "T"] } };
-    expect(buildRoundTimeline(two, null, 1).duration).toBe(s(1399));
+    expect(buildRoundTimeline(rosterTables(two), null, 1).duration).toBe(s(1399));
   });
 
   it("cuts an effect at the window's end", () => {
     const t = tables();
     const short = { ...t, rounds: { ...t.rounds, end_tick: [800], official_end_tick: [880] } };
     // window: end 800 + 3 s (992) cut to the official end, 880; the smoke expires at 900
-    expect(buildRoundTimeline(short, null, 1).effects[0].until).toBe(s(880));
+    expect(buildRoundTimeline(rosterTables(short), null, 1).effects[0].until).toBe(s(880));
   });
 
   describe("effects without an end in the events", () => {
@@ -163,17 +164,17 @@ describe("buildRoundTimeline", () => {
     const fire = { tick: 701, event: "inferno_start", entity_id: 99, x: 200, y: 200 };
 
     it("never run to the window's end: a smoke lasts SMOKE_MAX_S, a fire FIRE_MAX_S", () => {
-      const tl2 = buildRoundTimeline(events([smoke, fire]), null, 1);
+      const tl2 = buildRoundTimeline(rosterTables(events([smoke, fire])), null, 1);
       expect(tl2.effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(701) + FIRE_MAX_S]);
     });
 
     it("take a stop event that names no entity from the open effect of its kind beside it", () => {
-      const tl2 = buildRoundTimeline(events([
+      const tl2 = buildRoundTimeline(rosterTables(events([
         smoke, { ...smoke, tick: 705, entity_id: 8, x: 900, y: 900 },
         { tick: 900, event: "smoke_expired", entity_id: null, x: 905, y: 900 },
         // a stop far from every open smoke ends none of them
         { tick: 950, event: "smoke_expired", entity_id: null, x: 0, y: 0 },
-      ]), null, 1);
+      ])), null, 1);
       expect(tl2.effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(900)]);
     });
 
@@ -183,32 +184,32 @@ describe("buildRoundTimeline", () => {
         { tick: 900, event: "smoke_expired", entity_id: null, x: 510, y: 500 },
       ]);
       // without a lifetime row: both run to the cap
-      expect(buildRoundTimeline(t, null, 1).effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(705) + SMOKE_MAX_S]);
+      expect(buildRoundTimeline(rosterTables(t), null, 1).effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(705) + SMOKE_MAX_S]);
       // with lifetime rows: each takes its own
-      const tl2 = buildRoundTimeline({
+      const tl2 = buildRoundTimeline(rosterTables({
         ...t,
         smokes: table("smokes", [
           { entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 1000, x: 500, y: 500, z: 0 },
           { entity_id: 8, steamid: "a", round: 1, start_tick: 705, end_tick: 900, x: 520, y: 500, z: 0 },
         ]),
-      }, null, 1);
+      }), null, 1);
       expect(tl2.effects.map((e) => e.until)).toEqual([s(1000), s(900)]);
     });
 
     it("read their end from the smokes and infernos lifetime tables", () => {
       const t = events([smoke, fire]);
-      const tl2 = buildRoundTimeline({
+      const tl2 = buildRoundTimeline(rosterTables({
         ...t,
         smokes: table("smokes", [{ entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 1000, x: 500, y: 500, z: 0 }]),
         // no entity id: matched on its start tick and place
         infernos: table("infernos", [{ entity_id: null, steamid: "a", round: 1, start_tick: 701, end_tick: 900, x: 210, y: 200, z: 0 }]),
-      }, null, 1);
+      }), null, 1);
       expect(tl2.effects.map((e) => e.until)).toEqual([s(1000), s(900)]);
     });
 
     it("cap a lifetime longer than the longest seen", () => {
       const t = events([smoke]);
-      const tl2 = buildRoundTimeline({ ...t, smokes: table("smokes", [{ entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 700 + 64 * 700, x: 500, y: 500, z: 0 }]) }, null, 1);
+      const tl2 = buildRoundTimeline(rosterTables({ ...t, smokes: table("smokes", [{ entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 700 + 64 * 700, x: 500, y: 500, z: 0 }]) }), null, 1);
       expect(tl2.effects[0].until).toBe(s(700) + SMOKE_MAX_S);
     });
   });
@@ -228,7 +229,7 @@ describe("weaponId", () => {
 });
 
 describe("interpolation", () => {
-  const tl: RoundTimeline = buildRoundTimeline(tables(), null, 1);
+  const tl: RoundTimeline = buildRoundTimeline(rosterTables(tables()), null, 1);
   const at = (t: number, smooth = true) => Object.fromEntries(playersAt(tl, t, smooth).map((p) => [p.id, { ...p }]));
 
   it("finds the last frame at or before t", () => {
@@ -277,7 +278,7 @@ describe("interpolation", () => {
         pos(688, "a", "CT", 0, 0, 0, "AK-47"), pos(688, "b", "T", 150, 9, 0, "AK-47", { is_alive: false, health: 0 }),
       ],
     });
-    const tl2 = buildRoundTimeline(t, null, 1);
+    const tl2 = buildRoundTimeline(rosterTables(t), null, 1);
     expect(deathsOf(tl2)[0]).toEqual({ t: s(664), at: [110, 0, 0] });
     for (const when of [s(664), s(672), s(688), 10]) {
       expect(playersAt(tl2, when, true).find((p) => p.id === "b")).toMatchObject({ alive: false, x: 110, y: 0 });
@@ -293,7 +294,7 @@ describe("interpolation", () => {
         pos(672, "a", "CT", 0, 0, 0, "AK-47"), pos(672, "b", "T", 170, 0, 0, "AK-47", { is_alive: false, health: 0 }),
       ],
     });
-    const tl2 = buildRoundTimeline(t, null, 1);
+    const tl2 = buildRoundTimeline(rosterTables(t), null, 1);
     expect(deathsOf(tl2)).toEqual([{ t: 0.25, at: [100, 0, 0] }, null]);
     expect(playersAt(tl2, 0.5, true).find((p) => p.id === "b")).toMatchObject({ alive: false, x: 100 });
   });

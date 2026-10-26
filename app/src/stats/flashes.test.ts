@@ -7,12 +7,13 @@ import { CS2RB } from "./model-params";
 import { headToHead } from "./matchviews";
 import { rollup } from "./rollup";
 import { FREEZE_END, oneRoundTables, type OneRound } from "./testing/match";
+import { rosterTables } from "./roster";
 
 const t = (s: number) => FREEZE_END + 64 * s;
 const players = { a: "CT", b: "CT", c: "T", d: "T", e: "T" } as const;
 const tool = (m: Omit<OneRound, "players">, who = "a") => {
   const tables = oneRoundTables({ players, ...m });
-  return flashTool(tables, derive(tables, CS2RB), who);
+  return flashTool(rosterTables(tables), derive(tables, CS2RB), who);
 };
 const pi = { a: 0, b: 1, c: 2, d: 3, e: 4 };
 const det = (s: number, entity: number, by = "a", at: [number, number] | null = [100, 200]) => ({ tick: t(s), event: "flash_detonate", entity_id: entity, steamid: by, x: at?.[0] ?? null, y: at?.[1] ?? null });
@@ -167,12 +168,12 @@ describe("flashTool", () => {
     });
     const f = derive(tables, CS2RB);
     const m = rollup([f], { player: "a" }).m;
-    const flash = flashTool(tables, f, "a").flashes[0];
+    const flash = flashTool(rosterTables(tables), f, "a").flashes[0];
     const enemies = flash.blinded.filter((b) => !b.team && b.flashed);
     const mates = flash.blinded.filter((b) => b.team && b.flashed);
     expect([enemies.length, enemies.reduce((s, b) => s + b.secs, 0), mates.length, flash.kills.filter((k) => k.whileBlind).length]).toEqual([2, 4.5, 1, 2]);
     expect([m.enemiesFlashed, m.enemyBlindSecs, m.teamFlashed, m.flashKills]).toEqual([2, 4.5, 1, 2]);
-    const pair = (x: string, y: string) => headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === [x, y].sort().join());
+    const pair = (x: string, y: string) => headToHead(rosterTables(tables), f).find((h) => [h.a, h.b].sort().join() === [x, y].sort().join());
     const ac = pair("a", "c")!;
     expect((ac.a === "a" ? ac.flashes[0] : ac.flashes[1]).count).toBe(1);
   });
@@ -184,10 +185,10 @@ describe("flashTool", () => {
     const tables = oneRoundTables({ players, grenade_events: [det(10, 7), det(11, 7)], blinds: [blind(10, 7, "c", 2), blind(11, 7, "c", 2)] });
     const f = derive(tables, CS2RB);
     const m = rollup([f], { player: "a" }).m;
-    const tool = flashTool(tables, f, "a");
+    const tool = flashTool(rosterTables(tables), f, "a");
     expect(tool.flashes.map((x) => x.blinded.map((b) => [b.pi, b.secs]))).toEqual([[[pi.c, 2]], [[pi.c, 2]]]);
     expect([m.enemiesFlashed, m.enemyBlindSecs]).toEqual([2, 4]);
-    const ac = headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === "a,c")!;
+    const ac = headToHead(rosterTables(tables), f).find((h) => [h.a, h.b].sort().join() === "a,c")!;
     expect(ac.a === "a" ? ac.flashes[0] : ac.flashes[1]).toEqual({ count: 2, secs: 4 });
   });
 

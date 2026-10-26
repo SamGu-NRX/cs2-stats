@@ -5,6 +5,7 @@
 // Inputs per player: eco-adjusted kills, damage and deaths per round, eco-adjusted KAST, multi-kill
 // rounds (raw, as HLTV's map cards expose no eco version) and round swing. The rating is params.json's
 // linear model in those six inputs.
+import { liveLeaves, survives } from "./rules";
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
@@ -123,13 +124,13 @@ export function ecoAdjust(c: Ctx): void {
       if (ga && gb) dmg.set(a, (dmg.get(a) ?? 0) + hitDamage(c.t, i) * killPoints(ga, gb, side));
       else unknown.add(a);
     }
+    const left = new Set(liveLeaves(c.rounds[ri]).map((l) => l.pi));
     for (const p of c.pr[ri]) {
       if (!p || unknown.has(p.pi)) continue;
       const m = p.m;
       m.ecoRounds = 1;
       m.ecoDmg = dmg.get(p.pi) ?? 0;
       let kast = 0;
-      let died = false;
       for (const kf of c.kills[ri]) {
         if (kf.enemy && kf.killer === p.pi) {
           m.ecoKills += kf.ecoPoints!;
@@ -137,12 +138,12 @@ export function ecoAdjust(c: Ctx): void {
         }
         if (kf.enemy && kf.assister === p.pi && !kf.flashAssist) kast = Math.max(kast, Math.min(1, kf.ecoPoints!));
         if (kf.victim === p.pi) {
-          died = true;
           if (kf.enemy) m.ecoDeaths += kf.ecoPoints!;
           if (kf.traded) kast = 1;
         }
       }
-      if (!died) kast = 1;
+      // survival as the scoreboard's KAST reads it (rules.ts survives): a disconnect is no survival
+      if (survives(c.kills[ri], p.pi, left.has(p.pi))) kast = 1;
       m.ecoKast += kast;
     }
   }

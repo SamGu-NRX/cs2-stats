@@ -8,6 +8,7 @@ import { emptySummary, rollup } from "./rollup";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 import { derive } from "./derive";
 import { CS2RB, PARAMS } from "./model-params";
+import { rosterTables } from "./roster";
 
 const t = (s: number) => FREEZE_END + 64 * s;
 const equip = { equip_value_game: 4000 };
@@ -72,7 +73,7 @@ describe("head to head", () => {
       blinds: [{ tick: t(1), attacker_steamid: "a", victim_steamid: "c", duration: 2 }, { tick: t(1), attacker_steamid: "c", victim_steamid: "a", duration: 0.5 }],
       kills: [{ tick: t(2), killer: "a", victim: "c" }, { tick: t(3), killer: "c", victim: "b", at: { weapon: "awp" } }] };
     const tables = oneRoundTables(m);
-    const pairs = headToHead(tables, derive(tables, CS2RB));
+    const pairs = headToHead(rosterTables(tables), derive(tables, CS2RB));
     const ac = pairs.find((p) => [p.a, p.b].sort().join() === "a,c")!, bc = pairs.find((p) => [p.a, p.b].sort().join() === "b,c")!;
     const ofA = ac.a === "a" ? 0 : 1, ofC = 1 - ofA;
     expect([ac.kills[ofA], ac.kills[ofC], ac.damage[ofA], ac.damage[ofC], ac.openings[ofA]]).toEqual([1, 0, 100, 30, 1]);
@@ -86,7 +87,7 @@ describe("head to head, quiet pairs", () => {
   it("lists every opposing pair, including pairs that never met", () => {
     // fails if a pair with no kills, damage or flashes is left out: two against two with no events is four pairs of zeros
     const tables = oneRoundTables({ players: { a: "CT", b: "CT", c: "T", d: "T" } });
-    const pairs = headToHead(tables, derive(tables, CS2RB));
+    const pairs = headToHead(rosterTables(tables), derive(tables, CS2RB));
     expect(pairs.map((p) => [p.a, p.b].sort().join()).sort()).toEqual(["a,c", "a,d", "b,c", "b,d"]);
     expect(pairs.every((p) => p.kills.join() === "0,0" && p.damage.join() === "0,0" && p.openings.join() === "0,0")).toBe(true);
   });
@@ -101,7 +102,7 @@ describe("map zones", () => {
       kills: [{ tick: t(1), killer: "a", victim: "c", at: { a_place: "LongA", a_x: 10, a_y: 20 } }, { tick: t(2), killer: "d", victim: "a", at: { v_place: null } }],
       positions: [{ steamid: "a", tick: t(2) - 8, x: 0, y: 0, place: "Pit" }, { steamid: "c", tick: t(1), x: 5, y: 5, place: "LongA" }],
     });
-    const z = mapZones(tables, "a");
+    const z = mapZones(rosterTables(tables), "a");
     expect(z.zones).toEqual(["LongA", "Pit"]);
     expect(z.rows.map((r) => [r.zone, r.side, r.kills, r.deaths, r.kd])).toEqual([["LongA", "CT", 1, 0, null], ["Pit", "CT", 0, 1, 0]]);
     expect(z.rows[0].killsAt).toEqual([[10, 20]]);
@@ -114,7 +115,7 @@ describe("map zones", () => {
       kills: [{ tick: t(2), killer: "d", victim: "a", at: { v_place: null } }],
       positions: [{ steamid: "a", tick: t(2) - 40, x: 0, y: 0, place: "Pit" }],
     });
-    expect(mapZones(tables, "a").rows).toEqual([]);
+    expect(mapZones(rosterTables(tables), "a").rows).toEqual([]);
   });
 });
 
@@ -195,7 +196,7 @@ describe("situations", () => {
 describe("bombsites", () => {
   const round = (row: Record<string, unknown>, positions: Record<string, unknown>[] | undefined) => {
     const tables = oneRoundTables({ players: { a: "CT", c: "T", d: "T" }, roundRow: row, positions });
-    return (player: string) => bombsites(tables, derive(tables, CS2RB), player);
+    return (player: string) => bombsites(rosterTables(tables), derive(tables, CS2RB), player);
   };
   const at = (steamid: string, s: number, place: string) => ({ steamid, tick: t(s), x: 0, y: 0, place });
   const tally = (attempts: number, success: number) => ({ attempts, success });
