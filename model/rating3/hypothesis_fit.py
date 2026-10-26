@@ -15,6 +15,9 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import GridSearchCV, GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 BUY_LABELS = {"PISTOL", "ECO", "HALF", "FULL"}
@@ -397,6 +400,8 @@ def main() -> None:
     parser.add_argument("--joins", type=Path)
     parser.add_argument("--demo-metrics", type=Path)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the hypothesis report")
 
     rows = map_rows(args.hltv)
     add_derived_rows(rows)
@@ -494,7 +499,7 @@ def main() -> None:
         "cv": result["hypotheses"][all_maps_name]["cv"],
         "formula": fit_formula(row_sets[all_maps_name], tuple(result["hypotheses"][all_maps_name]["features"])),
     }
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the hypothesis report", indent=2)
     print(json.dumps(result["best"], indent=2))
 
 

@@ -14,6 +14,8 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import load_demo_tables
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 GROUPS = ("sniper", "rifle1", "rifle2", "smg", "pistolPlus", "pistol")
@@ -347,9 +349,11 @@ def main():
     parser.add_argument("--joins", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the eco fit report")
     joins = json.loads(args.joins.read_text(encoding="utf-8"))["accepted"]
     result = fit_model(args.data, joins)
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the eco fit report", indent=2)
     print(json.dumps(result, indent=2))
 
 

@@ -10,6 +10,9 @@ from pathlib import Path
 
 import numpy as np
 from scipy.optimize import least_squares
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 BUY_ORDER = ("PISTOL", "ECO", "HALF", "FULL")
 END_ICONS = {"bomb_exploded.svg", "bomb_defused.svg", "stopwatch.svg"}
@@ -183,6 +186,8 @@ def main() -> None:
     parser.add_argument("--hltv", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the round fit report")
     runpy.run_path(str(Path(__file__).with_name("winprob_fit.py")))["idle"]()
     X, y, meta = load(args.hltv)
     fit = np.linalg.lstsq(X, y, rcond=None)[0]
@@ -190,7 +195,7 @@ def main() -> None:
     result = {"basis": "per_round_event_features", "features": int(X.shape[1]),
               "rows": int(len(y)), "fit": score(y, pred),
               "coefficients": fit.tolist(), "note": "research fit; damage, assists, and exact eco adjustment remain open"}
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the round fit report", indent=2)
     print(json.dumps(result, indent=2))
 
 

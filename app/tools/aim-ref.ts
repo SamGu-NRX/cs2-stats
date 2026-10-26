@@ -2,7 +2,9 @@
 // is recoil.ts (tools/recoil.ts), built from the demos' own shot records.
 // Usage (from app/): pnpm aim-ref <weapons_out>
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { writeOutput } from "./outputs";
 
 const [vdataPath] = process.argv.slice(2);
 const vdataBytes = readFileSync(vdataPath);
@@ -39,5 +41,7 @@ for (const g of GUNS) {
   out += `  ${g}: [${SCOPED.has(g) && s[1] !== s[0] ? `${s[0]}, ${s[1]}` : s[0]}],\n`;
 }
 out += "};\n";
-writeFileSync("src/stats/aim-ref.ts", out);
+const AIM_REF = path.resolve(import.meta.dirname, "../src/stats/aim-ref.ts");
+// read from the game's weapon data, no pack data
+writeOutput(AIM_REF, out, { private: false, what: "aim-ref.ts", inRepo: AIM_REF });
 console.log("wrote src/stats/aim-ref.ts", out.length, "bytes");

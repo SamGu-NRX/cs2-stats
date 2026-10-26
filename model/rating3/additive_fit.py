@@ -12,6 +12,8 @@ from sklearn.isotonic import IsotonicRegression
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fit_params import map_rows
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 FEATURES=('kpr_eco','adr_eco','dpr_eco','kast_eco','mk','swing')
 DISPLAY_STEP={'kpr_eco':.01,'dpr_eco':.01,'adr_eco':.1,'kast_eco':.1,'mk':.1,'swing':.01,'rating':.01}
@@ -21,7 +23,7 @@ def rows(root):
 def score(y,p):
  e=np.abs(y-p);return {'n':len(y),'mae':float(e.mean()),'max':float(e.max()),'rmse':float(np.sqrt(np.mean(e*e))),'r':float(np.corrcoef(y,p)[0,1])}
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--hltv',type=Path,required=True);ap.add_argument('--out',type=Path,required=True);a=ap.parse_args();rs=rows(a.hltv)
+ ap=argparse.ArgumentParser();ap.add_argument('--hltv',type=Path,required=True);ap.add_argument('--out',type=Path,required=True);a=ap.parse_args();check_output(a.out,private=True,what='the additive fit report');rs=rows(a.hltv)
  X=np.array([[r[f] for f in FEATURES] for r in rs]);y=np.array([r['rating'] for r in rs]);groups=np.array([r['match'] for r in rs]);ok=np.isfinite(X).all(1)&np.isfinite(y);X=X[ok];y=y[ok];groups=groups[ok]
  g=GroupShuffleSplit(n_splits=1,test_size=.2,random_state=0);train,test=next(g.split(X,y,groups))
  results={}
@@ -42,5 +44,5 @@ def main():
   noisy=X[test]+rng.uniform(-.5,.5,size=X[test].shape)*np.array([DISPLAY_STEP[f] for f in FEATURES]);pert.append(model.predict(noisy))
  pert=np.array(pert);results['rounding_floor']={'rating_only':{'mae':.0025,'max':.005},'spline_input_quantization':{'mae':float(np.mean(np.abs(pert.mean(0)-base))),'max':float(np.max(np.abs(pert.max(0)-pert.min(0)))),'p95_half_width':float(np.quantile((pert.max(0)-pert.min(0))/2,.95))}}
  out={'features':FEATURES,'display_steps':DISPLAY_STEP,'split':{'train':len(train),'test':len(test),'groups':len(set(groups))},'results':results,'best':best}
- a.out.write_text(json.dumps(out,indent=2)+'\n');print(json.dumps({'best':best,'best_test':results[best]['test'],'floor':results['rounding_floor']},indent=2))
+ write_json(a.out,out,private=True,what='the additive fit report',indent=2);print(json.dumps({'best':best,'best_test':results[best]['test'],'floor':results['rounding_floor']},indent=2))
 if __name__=='__main__':main()

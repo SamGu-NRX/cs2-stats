@@ -10,7 +10,6 @@ A desktop app (Tauri 2, React, TypeScript) that reads match files written by the
 | `pnpm tauri dev` | The desktop app against `%APPDATA%\BotMatchStats\matches\`. |
 | `$env:CARGO_BUILD_JOBS=4; pnpm tauri build` | Release exe in `src-tauri\target\release\` and an NSIS installer in `src-tauri\target\release\bundle\nsis\`. |
 | `pnpm test` | Stats tests (vitest, one process). |
-| `pnpm convert` | Rebuilds `public/samples/` from `../fixtures/`. |
 
 ## Bot Mode
 
@@ -57,7 +56,7 @@ How the app calls it:
 
 ## Fields the app reads beyond SCHEMA.md
 
-These are all optional. Only `tools/convert-legacy.ts` writes the first three today, and the plugin may add any of them.
+These are all optional. The bundled converted samples in `public/samples/` carry the first three (the converter that wrote them has since been removed), and the plugin may add any of them.
 
 | Field | Meaning |
 |---|---|

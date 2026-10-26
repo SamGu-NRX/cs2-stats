@@ -7,6 +7,9 @@ import re
 from pathlib import Path
 
 import numpy as np
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 FEATURES = ("eKPR", "eADR", "eDPR", "eKAST", "MK", "Swing")
 
@@ -203,6 +206,8 @@ def main() -> None:
     parser.add_argument("--hltv", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the side fit report")
     data = rows(args.hltv)
     result = {"features": FEATURES, "target_floor": {"mae": 0.0025, "max": 0.005}, "groups": {}}
     for side in ("ct", "t"):
@@ -211,7 +216,7 @@ def main() -> None:
     result["maps"] = len({row["map"] for row in data})
     result["rows"] = len(data)
     result["regulation_only"] = True
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the side fit report", indent=2)
     print(json.dumps(result, indent=2))
 
 
