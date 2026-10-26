@@ -4,7 +4,7 @@
 //
 // Pools: "all"; "rifler" and "awper" (design/identity.md: an AWPer has more than 0.20 AWP kills per
 // round in the sample); "map:<name>", whose units are player-maps rather than players.
-import { INPUT_COVERAGE } from "./facts";
+import { INPUT_COVERAGE, inputKnown } from "./facts";
 import { ATTRIBUTES, METRICS, type Kind, type Metric } from "./metrics";
 import type { Summary } from "./rollup";
 
@@ -78,7 +78,7 @@ export function notComparable(m: Metric, s: Summary, b: Baselines): string | nul
       continue;
     }
     const [known, total, what, unit] = INPUT_COVERAGE[need];
-    if (s.m[known] < s.m[total]) return `Not compared: ${what} known for ${s.m[known]} of ${s.m[total]} ${unit}`;
+    if (!inputKnown(need, s.m)) return `Not compared: ${what} known for ${s.m[known]} of ${s.m[total]} ${unit}`;
   }
   if (m.sample?.min !== undefined) {
     const n = m.sample.n(s);

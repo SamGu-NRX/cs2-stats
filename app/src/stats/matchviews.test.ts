@@ -128,6 +128,8 @@ describe("your match", () => {
     expect(rows.dpr[1]).toBe("better");
     expect(rows.dpr[0]).toBeCloseTo(-0.3, 12);
     expect(rows.openingAttempts).toEqual([20, "higher"]);
+    // the row keeps its own shape: the recent matches' value is `average`, not metricDeltas' `before`
+    expect(yourMatch(s(10, 2, 4), s(5, 5, 2)).find((r) => r.id === "kpr")).toEqual({ id: "kpr", value: 1, average: 0.5, delta: 0.5, direction: "better" });
   });
 });
 
