@@ -32,6 +32,35 @@ it("refuses a second import while one runs, and a page mounted later sees it run
   expect(seen.at(-1)).toBe(false);
 });
 
+it("drops a state answer sent before an import started, so it cannot report the import idle", async () => {
+  // fails if a superseded idle answer clears a running import (review of #29)
+  let answer: (q: Awaited<ReturnType<Parameters<typeof importStore>[1]>>) => void = () => {};
+  const m = manualRun();
+  const store = importStore(m.run, () => new Promise((r) => { answer = r; }));
+  const following = store.sync(); // the page mounts and asks the backend
+  const started = store.start(); // the user presses the button before the answer is in
+  answer({ running: false, at: null, last: null }); // the answer, from before the import
+  await following;
+  expect(store.get().running).toBe(true);
+  m.finish(OK);
+  await started;
+  expect(store.get()).toMatchObject({ running: false, last: OK });
+});
+
+it("tells the app an import ended even when no page is subscribed, so it can rescan", async () => {
+  // fails if an import that ends while you are on another page leaves the match list stale (review of #29)
+  const m = manualRun();
+  const store = importStore(m.run, async () => ({ running: false, at: null, last: null }));
+  let rescans = 0;
+  store.onFinish(() => rescans++); // the app shell, not a page
+  const page = store.subscribe(() => {});
+  const started = store.start();
+  page(); // Settings is left
+  m.finish(OK);
+  await started;
+  expect(rescans).toBe(1);
+});
+
 it("follows an import the backend runs that this page did not start, to its end", async () => {
   // fails if a page opened during an import (a reload) shows the button as idle
   const states = [
