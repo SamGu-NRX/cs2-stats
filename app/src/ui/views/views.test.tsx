@@ -460,7 +460,7 @@ describe("review round 1 (PR #28)", () => {
     // fails if the tile divides by every round (0% for files that record no loadout)
     use(samples);
     const q = queryOf(samples);
-    answers.roles = { T: { side: "T", blend: null, evidence: [], rounds: 1 }, CT: { side: "CT", blend: null, evidence: [], rounds: 1 }, all: { blend: null, rounds: { T: 1, CT: 1 } } };
+    answers.roles = { T: { side: "T", blend: null, evidence: [], metrics: [], rounds: 1 }, CT: { side: "CT", blend: null, evidence: [], metrics: [], rounds: 1 }, all: { blend: null, rounds: { T: 1, CT: 1 } } };
     render(<RoleCard q={q} />);
     const m = rolled(summary(q)).m;
     const tile = host.querySelector(".rtiles li")!;
@@ -554,9 +554,10 @@ describe("review round 2 (PR #28)", () => {
     const high = Object.fromEntries(Object.entries(r.p).map(([id, x]) => [id, { ...x, pct: x.pct === null ? null : 99 }]));
     answers.compare = { ...r, p: { ...high, awpDuelWin: { ...r.p.awpDuelWin, value: 0.1, pct: 1, reason: null, pool: "all" } } };
     render(<HomeView />);
-    const item = Array.from(host.querySelectorAll(".workon__item")).find((a) => text(a.querySelector(".workon__top b")) === metric("awpDuelWin").label)!;
+    // with no focus area answered, the weakest metrics are Work on's "Lowest" line, each naming its pool in its tooltip
+    const item = Array.from(host.querySelectorAll(".workon__also-a")).find((a) => text(a).startsWith(metric("awpDuelWin").label))!;
     expect(item).toBeTruthy();
-    expect(text(item.querySelector(".meta"))).toMatch(/of pros$/);
+    expect(item.getAttribute("data-tip")).toMatch(/of pros\.$/);
   });
 
   it("names Ranks by topic's bot population as the engine counts it", async () => {
