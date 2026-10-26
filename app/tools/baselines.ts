@@ -31,7 +31,8 @@ if (!proMapDirs().length) throw new Error(`no pro tables under ${DATA_DIR}/demos
 // The committed file ships with the app, so it is built only on the public CS2RB model: swing from the
 // private HLTV win-probability lookup must not leave the machine, even as quantiles. A build with
 // the pack goes to the user's own baselines.local.json, and nothing pack-built goes under public/.
-// on real paths, so neither a case variant (PUBLIC\x on Windows) nor a link or junction gets past it
+// The check compares real paths, so neither a case variant (PUBLIC\x on Windows) nor a link or
+// junction gets past it.
 if (WINPROB.kind !== "cs2rb" && isInside(OUT, path.dirname(PUBLIC))) {
   throw new Error(`refusing to write public/baselines.json from the ${WINPROB.label}: set CS2_WINPROB_PACK=none to build on CS2RB, or pass --out outside public/`);
 }
