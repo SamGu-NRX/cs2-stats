@@ -44,7 +44,7 @@ export default function Playstyle() {
           <>
             <div className="ps-top">
               <StyleCompass list={list} q={q} />
-              <RoleCard q={q} maps={mapsIn(list)} />
+              <RoleCard q={q} />
             </div>
             <WhereYouPlay list={list} side="both" />
             <Ranks q={q} />

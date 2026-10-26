@@ -21,6 +21,7 @@ import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { swingScore } from "../../lib/scale";
 import { BreakRows, NeedsDemo } from "../shared";
+import { DotTrack, SwingSourcesChart } from "./v2";
 import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
@@ -60,10 +61,9 @@ export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
 const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
 
 /**
- * Round swing per match. The career number is the hero card's; this panel shows the matches behind it,
- * the best and worst, and the bots' swing in the same matches. Where the swing comes from (kills,
- * damage, flashes, deaths) needs a per-source split the engine does not keep yet (swing.ts sums each
- * player's credits into one measure; only the flash share is kept apart).
+ * Round swing. The career number is the hero card's; this panel shows where it comes from (the engine's
+ * per-source split, Rolled.swingSources, as a waterfall that ends at the total) beside the matches
+ * behind it, the best and worst, and the bots' swing in the same matches.
  */
 export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: MatchEntry) => number | null }) {
   const swing = swingOf(you.v);
@@ -77,6 +77,9 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
     <Card title="Round swing" tip={PANEL_TIP.swing} aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing</span>} className="swingcard">
       {swing === null ? <div className="meta"><NeedsDemo detail="Swing needs every player's equipment, which converted logs lack." /></div> : (
         <div className="swingcard__chart">
+          {you.swingSources && <SwingSourcesChart you={you.swingSources} bots={bots?.swingSources ?? null} />}
+          <div className="swingcard__bymatch">
+          <h3 className="caps swingcard__h">By match</h3>
           <FormBars height={150} refValue={0} fmt={(x) => fmtSwing(x / 100)} score={(x) => swingScore(x / 100)} bars={per.map((x) => ({
             key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), sub: x.s.result, result: x.s.result,
             onClick: () => openMatch(matchHref(x.s.file)), tip: `${mapName(x.s.match.map)} ${x.s.score.us}:${x.s.score.them}: ${fmtSwing(x.v)} per round`,
@@ -91,6 +94,7 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
                 <Delta d={100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} />
               </span>
             )}
+          </div>
           </div>
         </div>
       )}
@@ -174,30 +178,40 @@ function SideFit({ b }: { b: RoleBlend }) {
   );
 }
 
-/** A map's role on each side, from the engine's role call narrowed to that map. */
-function MapRoles({ q, map }: { q: Query; map: string }) {
-  const mq = useMemo(() => ({ ...q, filter: { ...q.filter, maps: [map] } }), [q, map]);
-  const r = useCall("roles", [mq]).data;
-  const cell = (b: RoleBlend | undefined) => {
-    const top = rankedRoles(b)[0];
-    return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
-  };
+/** The top role of a blend and its share, as a cell; a dash without a blend. */
+function RoleCell({ blend }: { blend: Record<string, number> | null | undefined }) {
+  const top = blend ? Object.entries(blend).sort((x, y) => y[1] - x[1])[0] : undefined;
+  return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
+}
+
+/** Each map's role over all its rounds and on each side, from one rolesByMap call (most rounds first). */
+function MapRoles({ q }: { q: Query }) {
+  const r = useCall("rolesByMap", [q]).data;
+  if (!r?.length) return null;
   return (
-    <li>
-      <span className="rmaps__map"><MapThumb map={map} size={18} />{mapName(map)}</span>
-      <span className="t-text rmaps__side">T</span>{cell(r?.T)}
-      <span className="ct-text rmaps__side">CT</span>{cell(r?.CT)}
-    </li>
+    <>
+      <h3 className="caps rmaps__h">By map</h3>
+      <ul className="rmaps rmaps--all">
+        {r.map((m) => (
+          <li key={m.map}>
+            <span className="rmaps__map"><MapThumb map={m.map} size={18} />{mapName(m.map)}</span>
+            <RoleCell blend={m.all.blend} />
+            <span className="t-text rmaps__side">T</span><RoleCell blend={m.T.blend} />
+            <span className="ct-text rmaps__side">CT</span><RoleCell blend={m.CT.blend} />
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
 /**
- * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend.
- * The headline is the two sides' roles; the engine has no single role over both sides (roles() answers
- * per side only), so none is made up here. Below: the evidence over every round, each side's fit, and
- * each map's roles.
+ * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend,
+ * and roles().all weights the two by their rounds into one role over every round (overallRole). The
+ * headline is that overall role, the two sides' roles beside it. Below: the evidence over every round,
+ * each side's fit, and each map's roles (rolesByMap).
  */
-export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
+export function RoleCard({ q }: { q: Query }) {
   const r = useCall("roles", [q]);
   const all = useRollups(useMemo(() => [q], [q])).data?.[0];
   if (!r.data) {
@@ -205,8 +219,15 @@ export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
   }
   const sides = [r.data.T, r.data.CT];
   const tops = sides.map((b) => rankedRoles(b)[0]?.[0] ?? null);
+  const overall = r.data.all.blend ? Object.entries(r.data.all.blend).sort((x, y) => y[1] - x[1])[0] : null;
   return (
     <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
+      {overall && (
+        <p className="role__overall">
+          <b className="role__name" data-tip={ROLE_WHAT[overall[0]]} tabIndex={0}>{overall[0]}</b>
+          <span className="meta" data-tip="Each side's role weighted by its rounds." tabIndex={0}>{fmtPct(100 * overall[1], 0)} of all rounds</span>
+        </p>
+      )}
       <div className="role__head">
         {sides.map((b, i) => (
           <span key={b.side} className="role__headpart">
@@ -218,12 +239,7 @@ export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
       <RoleSignals q={q} />
-      {maps.length > 0 && (
-        <>
-          <h3 className="caps rmaps__h">By map</h3>
-          <ul className="rmaps">{maps.map((m) => <MapRoles key={m} q={q} map={m} />)}</ul>
-        </>
-      )}
+      <MapRoles q={q} />
     </Card>
   );
 }
@@ -406,18 +422,20 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
 }
 
 /**
- * Your score and the pro's on each style attribute, side by side. No difference column: the two rank
- * against different populations, so their gap is not a level either player could close.
+ * Your score and the pro's on each style attribute: one 0-to-100 track per attribute with your marker
+ * (filled) and theirs (hollow), the two numbers after it. No difference column: the two rank against
+ * different populations, so their gap is not a level either player could close.
  */
 function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: string[]; pro: Pro; side: PoolSide }) {
   const theirs = styleOf(proScores(pro, side));
   return (
-    <div className="vs vs--wide vs--pair">
-      <div className="vs__head"><span className="caps" data-tip="Your score against bots in your matches.">You</span><span /><span className="vs__pro" data-tip="Their score against pros.">{pro.name}</span></div>
+    <div className="vs vs--two">
+      <div className="vs__head"><span /><span /><span className="caps" data-tip="Your score against bots in your matches." tabIndex={0}>You</span><span className="vs__pro caps" data-tip="Their score against pros." tabIndex={0}>{pro.name}</span></div>
       {styleIds().map((id, i) => (
         <div key={id} className="vs__row">
-          <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
           <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{labels[i]}</span>
+          <DotTrack at={you[i]} ghost={theirs[i]} tone="var(--cream)" label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
+          <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
           <span className="num">{theirs[i] ?? "–"}</span>
         </div>
       ))}

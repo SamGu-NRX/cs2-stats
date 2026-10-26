@@ -15,18 +15,18 @@ import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../
 import { Card } from "../components/Card";
 import { Gauge, TrendLine } from "../components/charts";
 import { GameIcon } from "../components/GameIcon";
-import { ApproxMark, Percentile } from "../components/Percentile";
-import { Select, type Option } from "../components/controls";
+import { ApproxMark, Percentile, percentilePhrase } from "../components/Percentile";
+import { Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
   botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
-  rankText, thinPoolText,
+  rankText, thinPoolText, type BotPool,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
 } from "../data/engine";
-import { bundleOf, useCall, useRatings, useRollups, type Loaded } from "../data/hooks";
-import { killsBy, matchModel, sideOf, type MatchEntry } from "../data/match";
+import { useCall, useRatings, useRollups } from "../data/hooks";
+import type { MatchEntry } from "../data/match";
 import { PANEL_TIP, TIP, tipOf } from "../data/tips";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
@@ -40,6 +40,7 @@ import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { HowGood, pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
+import { AggressionCard, DotTrack, EconomyCard } from "./profile/v2";
 import { WhereYouPlay } from "./Playstyle";
 
 type Compare = "bench" | "bots";
@@ -114,6 +115,7 @@ export default function ProfileView() {
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
+  const sideQ = useMemo(() => ({ files, filter: { player: ids, ...sidesOf(side) } }), [files, ids, side]);
   const perMatch = usePerMatch(list, ids, side);
   const p: ProfileData | null = sums.data && rats && perMatch && sums.data.length === (qs?.length ?? 0) ? {
     list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
@@ -146,8 +148,12 @@ export default function ProfileView() {
         <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
         <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
         <div className="identity">
-          <RoleCard q={base} maps={mapsIn(list)} />
+          <RoleCard q={base} />
           <WhereYouPlay list={list} side={side} />
+        </div>
+        <div className="profile__pair">
+          <AggressionCard s={p.you} />
+          <EconomyCard q={base} s={p.you} side={ratingKey(side)} />
         </div>
         <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" sectionRef={performanceRef} />
         <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
@@ -165,7 +171,7 @@ export default function ProfileView() {
         <div className="profile__cols3">
           <Weapons p={p} files={files} side={side} />
           <Clutches m={p.you.m} q={base} side={side} list={list} />
-          <Multis m={p.you.m} list={list} side={side} />
+          <Multis m={p.you.m} q={sideQ} list={list} />
           <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
         </div>
       </div>
@@ -321,19 +327,29 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
  * colours. `values` are your metric values on the page's side, for the unscored rows (engine.ts EXTRA_SUBS).
  */
 function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
+  const [against, setAgainst] = useState<"pros" | "bots">("pros");
   const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
-  const fp = scored?.scores.find((a) => a.id === "firepower");
+  const botScored = useCall("style", against === "bots" ? [q, { side: ratingKey(side) }] : null).data;
+  const fp = against === "pros" ? scored?.scores.find((a) => a.id === "firepower") : botScored?.firepower ?? undefined;
   const t = fp?.score == null ? 0 : toScore(fp.score, 50, 50);
+  const botPop = botScored ? botPopulation(botScored.careers, { n: botScored.n, role: (botScored.careers.pool ?? botScored.role) as BotPool["role"] }).text : "";
+  const population = against === "pros" ? (scored ? proPoolName(scored.role) : "") : botPop;
+  const waiting = against === "pros" ? !scored : !botScored;
   return (
-    <Card title="Firepower" tip={PANEL_TIP.firepower} aside={<span className="meta">{scored ? `Against ${scored.n} ${proPoolName(scored.role)}` : ""}</span>}>
-      {!fp ? <div className="skel" style={{ height: 200 }} /> : (
+    <Card title="Firepower" tip={PANEL_TIP.firepower} aside={
+      <span className="fpw__aside">
+        <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "Pros" }, { value: "bots", label: "Bots" }]} />
+        <span className="meta">{against === "pros" ? (scored ? `Against ${scored.n} ${proPoolName(scored.role)}` : "") : botScored ? `Against ${botPop}` : ""}</span>
+      </span>
+    }>
+      {waiting ? <div className="skel" style={{ height: 200 }} /> : !fp ? <p className="meta"><NeedsDemo detail="Too few bots in these matches to rank Firepower." /></p> : (
         <div className="fpw">
           <div className="fpw__head">
             <span className="fpw__score num" style={{ color: fp.score === null ? undefined : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>
             <span className="fpw__bar" aria-hidden><i style={{ width: `${fp.score ?? 0}%`, background: fp.score === null ? "transparent" : scoreFill(t) }} /></span>
           </div>
           <div className="fpw__more">
-            {panelAttr(fp, "performance", proPoolName(scored!.role)).metrics.map((m) => (
+            {panelAttr(fp, "performance", population).metrics.map((m) => (against === "bots" ? { ...m, population } : m)).map((m) => (
               <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def} approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
             ))}
             {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} />)}
@@ -539,52 +555,17 @@ function ClutchLink({ c, e }: { c: ClutchRow; e: MatchEntry | undefined }) {
 }
 
 /** A round where you got k kills: the match, its number and your side. */
-interface MultiRound { file: string; round: number; side: "T" | "CT" }
-
-/** Matches read at once while listing multi-kill rounds: enough to keep the worker busy, few enough not to flood it. */
-const MULTI_CONCURRENCY = 3;
-
 /**
- * The rounds where you got exactly k kills (5 or more for an ace) on the page's side, read from each
- * match's bundle once the user opens a row (the engine has no multi-kill list like its clutch list).
- * Bundles come through the shared cache (data/hooks.ts bundleOf), MULTI_CONCURRENCY at a time; a
- * failed read is an error, not an empty list.
+ * Each multi-kill size as a share of your rounds, then where that share sits among pros: a dotted track
+ * with the dot at your percentile (compare, rounds2k to rounds5k) and the tick at the pros' median. A
+ * row with rounds behind it opens them, from the engine's multi-kill list (multiKills), each a link to
+ * its round.
  */
-function useMultiRounds(list: MatchEntry[], side: SideKey, k: number | null): Loaded<MultiRound[]> {
-  const { client, version } = useData();
-  const [st, setSt] = useState<Loaded<MultiRound[]>>({ data: null, error: null, loading: false });
-  useEffect(() => {
-    if (!client || k === null) { setSt({ data: null, error: null, loading: false }); return; }
-    let alive = true;
-    setSt({ data: null, error: null, loading: true });
-    const want = side === "both" ? null : ratingKey(side);
-    const out: MultiRound[][] = new Array(list.length);
-    let next = 0;
-    const worker = async () => {
-      while (alive && next < list.length) {
-        const i = next++;
-        const e = list[i];
-        const v = matchModel(e, await bundleOf(client, version, e.file));
-        out[i] = v.rounds.flatMap((r) => {
-          const n = killsBy(r, v.human).length;
-          const s = sideOf(v, r, v.human);
-          return (k === 5 ? n >= 5 : n === k) && (!want || s === want) ? [{ file: e.file, round: r.number, side: s }] : [];
-        });
-      }
-    };
-    Promise.all(Array.from({ length: Math.min(MULTI_CONCURRENCY, list.length) }, worker)).then(
-      () => { if (alive) setSt({ data: out.flat(), error: null, loading: false }); },
-      (err: Error) => { if (alive) setSt({ data: null, error: `The rounds could not be read: ${err.message}`, loading: false }); },
-    );
-    return () => { alive = false; };
-  }, [client, version, list, side, k]);
-  return st;
-}
-
-function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: SideKey }) {
+function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const rows = multiKillRows(m);
   const [open, setOpen] = useState<number | null>(null);
-  const shown = useMultiRounds(list, side, open);
+  const rounds = useCall("multiKills", open === null ? null : [q]);
+  const ranked = useCall("compare", [q, { side: q.filter.sides?.length === 1 ? q.filter.sides[0] : "both" }]).data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
   // each row's percent of rounds is multiKillRows' own pct, null without rounds
@@ -595,17 +576,23 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
       <ul className="mlist">
         {rows.map((r) => {
           const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
+          const pro = ranked?.p[`rounds${Math.min(5, r.k)}k`] ?? null;
+          const rank = pro && !pro.reason && pro.pct !== null ? pro.pct : null;
           const body = (
             <>
               <MultiBadge k={r.k} />
               <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
               <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
+              <span className="mlist__pro" data-tip={rank === null ? pro?.reason ?? "No pro comparison for this." : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`}>
+                <DotTrack at={rank} tone={rank === null ? undefined : scoreFill(rank >= 50 ? 1 : -1)} label={rank === null ? "Not compared with pros" : `${percentilePhrase(rank, "performance")} of pros`} />
+              </span>
               <b className="num">{r.rounds}</b>
             </>
           );
+          const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
-              {r.rounds === 0 ? <div className="clist__row mlist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
+              {r.rounds === 0 ? <div className="clist__row mlist__row" tabIndex={0}>{body}<span className="clist__chev" aria-hidden /></div> : (
                 <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`}
                   aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
@@ -614,7 +601,7 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
               )}
               {open === r.k && (
                 <ul id={`${listId}-${r.k}`} className="clutchlist" aria-label={`Your ${label}`}>
-                  {shown.error ? <li className="meta">{shown.error}</li> : !shown.data ? <li className="meta">Loading the rounds…</li> : shown.data.map((x) => {
+                  {rounds.error ? <li className="meta">{rounds.error}</li> : !rounds.data ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
                     const e = byFile.get(x.file);
                     return (
                       <li key={`${x.file}|${x.round}`}>
@@ -622,7 +609,7 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
                           <MultiBadge k={r.k} />
                           <span className={x.side === "T" ? "t-text" : "ct-text"}>{x.side}</span>
                           <span className="meta">{e ? `${mapName(e.match.map)}, ${fmtMatchDay(e.match)}` : ""}</span>
-                          <span className="meta num">Round {x.round}</span>
+                          <span className="meta num">Round {x.round}{x.won === null ? "" : <span className={`clutchlist__res ${x.won ? "is-won" : ""}`}>{x.won ? ", won" : ", lost"}</span>}</span>
                         </a>
                       </li>
                     );

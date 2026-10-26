@@ -388,7 +388,7 @@ describe("review round 1 (PR #28)", () => {
     // fails if the tile divides by every round (0% for files that record no loadout)
     use(samples);
     const q = queryOf(samples);
-    answers.roles = { T: { side: "T", blend: null, evidence: [], rounds: 1 }, CT: { side: "CT", blend: null, evidence: [], rounds: 1 } };
+    answers.roles = { T: { side: "T", blend: null, evidence: [], rounds: 1 }, CT: { side: "CT", blend: null, evidence: [], rounds: 1 }, all: { blend: null, rounds: { T: 1, CT: 1 } } };
     render(<RoleCard q={q} />);
     const m = rolled(summary(q)).m;
     const tile = host.querySelector(".rtiles li")!;
