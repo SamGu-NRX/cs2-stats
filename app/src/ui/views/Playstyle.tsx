@@ -3,7 +3,7 @@
 //   opening duel and how much of your work is trades and assists, with the zones named in words.
 // - Where you play: a radar of your movement, kills and deaths, for any map you have played, with the
 //   places you spend your time.
-// - Where you rank: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
+// - Ranks by topic: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
 //   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Measures } from "../../stats/facts";
@@ -260,7 +260,7 @@ export function Ranks({ q }: { q: Query }) {
   const error = pros.error ?? bots.error ?? (baselines ? null : baselinesError);
   const n = { pros: baselines?.n.all?.both ?? 0, bots: bots.data?.n ?? 0 };
   return (
-    <Card title="Where you rank" tip={PANEL_TIP.whereYouRank} aside={
+    <Card title="Ranks by topic" tip={PANEL_TIP.ranksByTopic} aside={
       <span className="card__aside-row">
         <span className="meta">{proP && botP && careers ? `How well against ${n.pros} pros, style against ${botPopulation(careers, { n: n.bots, role: "all" }).text}` : ""}</span>
         {careers?.provisional && <span className="chip chip--outline" data-tip={PROVISIONAL_TIP} tabIndex={0}>Provisional</span>}

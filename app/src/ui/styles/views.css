@@ -952,11 +952,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 @media (hover: hover) and (pointer: fine) { .card__tipped:hover, .card__toggle[data-tip]:hover .card__title { text-decoration: underline dotted var(--ink3); text-underline-offset: 4px; } }
 .shead { padding-bottom: 0; }
 
-/* Rating by match takes the row beside a maps table sized to its columns; both are the row's height */
-.profile__trend { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 12px; align-items: stretch; }
-.profile__trend > .card { display: flex; flex-direction: column; }
-.mapscard .tbl { width: auto; }
-@media (max-width: 1240px) { .profile__trend { grid-template-columns: minmax(0, 1fr); } .mapscard .tbl { width: 100%; } }
 
 /* round swing: the bots' number beside yours, no sentence */
 .swingcard__bots { display: inline-flex; align-items: baseline; gap: 8px; font-size: 13px; }
@@ -1069,10 +1064,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .role__name { font: 800 28px/1 var(--f); letter-spacing: -0.02em; color: var(--cream); cursor: help; }
 .rmaps--all li { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr); }
 
-/* Aggression and Economy side by side; one alone keeps its half, so two short rows do not stretch across the page */
-.profile__pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.profile__pair:empty { display: none; }
-@media (max-width: 1100px) { .profile__pair { grid-template-columns: minmax(0, 1fr); } }
 .aggro__scale { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .aggro__score { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 6px; }
 .aggro__score b { font: 800 22px/1 var(--f); color: var(--cream); }
@@ -1297,7 +1288,11 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .swingcard__src { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); max-width: 720px; display: grid; gap: 8px; }
 .wfall__track { height: 6px; }
 .wfall__track i { opacity: 0.7; border-radius: 1px; }
-.profile__cols, .profile__trend, .profile__pair, .identity { gap: 16px; }
+.profile__cols, .identity { gap: 16px; }
+/* a wide card with a 376 px card beside it (Form and Where you rank), as SYSTEM.md's two-column rows */
+.profile__cols--side { grid-template-columns: minmax(0, 1fr) 376px; align-items: stretch; }
+.profile__cols--side > .card { display: flex; flex-direction: column; }
+@media (max-width: 1120px) { .profile__cols--side { grid-template-columns: minmax(0, 1fr); } }
 
 /* ranked share lists (Clutches, Multi-kills, places): a pip, a lollipop from zero, the count, the share */
 .ls { position: relative; display: block; height: 16px; min-width: 48px; }
@@ -1329,7 +1324,9 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .otile .meta { line-height: 1.35; }
 
 /* ---------------------------------------------------------------- Playstyle, v2 */
-.ranks { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+/* Ranks by topic has the row to itself: its four groups run two across where there is room */
+.ranks { grid-template-columns: minmax(0, 1fr); gap: 18px 40px; }
+@media (min-width: 1240px) { .ranks { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .ranks__group { gap: 4px; }
 /* Role (styling only: its content moves to the role model later) */
 .role__overall { align-items: baseline; gap: 14px; margin: 0 0 12px; }
@@ -1375,3 +1372,7 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .vs__mine { color: var(--ink); }
 .vs__row > .num { font-weight: 650; }
 .vs__row > .num:last-child { color: var(--ink2); }
+
+/* ---------------------------------------------------------------- round 2 */
+/* a row with one card (its partner rendered nothing: no aggression data, no spawns) takes the full row */
+.profile__cols > :only-child { grid-column: 1 / -1; }

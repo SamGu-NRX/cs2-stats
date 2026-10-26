@@ -135,9 +135,9 @@ const rowOfId = (id: string) => Array.from(host.querySelectorAll<HTMLElement>(".
 const byLabel = (sel: string, label: string, name: string) => Array.from(host.querySelectorAll(sel)).find((el) => text(el.querySelector(label)) === name) ?? null;
 
 describe("comparison reasons", () => {
-  it("puts a row's rank, or the reason there is none, in its tooltip, and draws no track without a dot", async () => {
+  it("shows a row's rank as text, keeps the reason there is none in its tooltip, and draws no track without a dot", async () => {
     // fails if a metric the engine could not compare (Percentile.reason) shows a rank, an empty track or
-    // loses its value, or a ranked row's "Top x%" moves back onto the row instead of its tooltip
+    // loses its reason, or a ranked row loses its visible "Top x%" or its tooltip's definition
     const q = queryOf(samples);
     const r = await calls.compare(q, { side: "both" });
     answers.compare = r;
@@ -149,14 +149,14 @@ describe("comparison reasons", () => {
       const el = rowOfId(x.id)!;
       expect(el.getAttribute("data-tip"), x.id).toContain(x.reason!);
       expect(el.querySelector(".trk"), x.id).toBeNull();
-      expect(text(el), x.id).not.toMatch(/Top \d|Bottom \d/);
+      expect(text(el.querySelector(".mrow__rank")), x.id).toBe("");
     }
     const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rowOfId(x.id))!;
     const el = rowOfId(ranked.id)!;
-    expect(el.getAttribute("data-tip")).toMatch(/\n(Top|Bottom) \d+% of pro (riflers|AWPers)\.$/);
+    expect(text(el.querySelector(".mrow__rank"))).toMatch(/^(Top|Bottom) \d+%$/);
+    expect(el.getAttribute("data-tip")!.split("\n")[0]).toBe(tipOf(ranked.id));
     expect(el.getAttribute("tabindex")).toBe("0");
     expect(el.querySelector(".trk__dot")).not.toBeNull();
-    expect(text(el)).not.toMatch(/Top \d|Bottom \d/);
   });
 
   it("marks approx metrics, and only those, explaining the mark once in the card's legend", async () => {
@@ -178,7 +178,7 @@ describe("comparison reasons", () => {
     expect(statuses).toContain("exact");
   });
 
-  it("shows Where you rank's uncompared values with their reason", async () => {
+  it("shows Ranks by topic's uncompared values with their reason", async () => {
     // fails if a Playstyle rank row shows a rank, or loses the reason, for a value the engine could not compare
     use(samples);
     const q = queryOf(samples);
@@ -199,19 +199,20 @@ describe("comparison reasons", () => {
 });
 
 describe("Profile attributes", () => {
-  const renderProfile = async () => {
+  /** Firepower is on Overview, the style attributes on Playstyle. */
+  const renderProfile = async (tab: "overview" | "playstyle" = "playstyle") => {
     use(samples);
     const q = queryOf(samples);
     const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
     const firepower = await calls.attributes(q, { side: "both" });
     answers.attributeBlock = block;
     answers.attributes = firepower;
-    render(<ProfileView />);
+    render(<ProfileView tab={tab} />);
     return { block, firepower };
   };
   const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
 
-  it("puts Firepower in its own card and the six style attributes in pairs, in HLTV's order", async () => {
+  it("puts Firepower in its own card on Overview and the six style attributes on Playstyle, in HLTV's order", async () => {
     // fails if Firepower moves back into the style block, the block drops or reorders an attribute, or
     // the block grows its own Side control (the title bar's is the page's one)
     await renderProfile();
@@ -219,6 +220,8 @@ describe("Profile attributes", () => {
     const ids = Array.from(block.querySelectorAll(".apanel__grid > .apa")).map((el) => el.getAttribute("data-attr"));
     expect(ids).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
     expect(block.querySelector('[role="radiogroup"], .seg')).toBeNull();
+    await renderProfile("overview");
+    expect(host.querySelector(".apanel"), "the style attributes left Overview").toBeNull();
     const fpCard = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!;
     expect(fpCard).toBeTruthy();
     expect(fpCard.querySelector(".apa"), "no repeated Firepower row inside its card").toBeNull();
@@ -228,11 +231,13 @@ describe("Profile attributes", () => {
   it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
     // fails if Firepower's pro percentiles read as bot ranks (or the reverse), Sniping loses its own
     // population, or a rank shows where the engine gave a reason
-    const { block, firepower } = await renderProfile();
-    const fpCard = () => Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!;
     // each scored row's rank, or the reason it has none, is the line of its tooltip after the definition
     const rankLine = (el: Element) => el.getAttribute("data-tip")!.split("\n").filter((l) => !/^Only \d+, so this may shift\.$/.test(l)).pop()!;
-    const phrases = (id: string) => Array.from((id === "firepower" ? fpCard() : attr(id).querySelector(".collapse")!).querySelectorAll(".mrow:not([data-extra])")).map(rankLine);
+    const rowsIn = (el: Element) => Array.from(el.querySelectorAll(".mrow:not([data-extra])")).map(rankLine);
+    await renderProfile("overview");
+    const fpRows = rowsIn(Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!);
+    const { block, firepower } = await renderProfile();
+    const phrases = (id: string) => (id === "firepower" ? fpRows : rowsIn(attr(id).querySelector(".collapse")!));
     expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
     const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
     const fp = firepower.scores.find((a) => a.id === "firepower")!;
@@ -277,8 +282,8 @@ describe("Profile attributes", () => {
   });
 });
 
-describe("Weapons and Duels tabs", () => {
-  it("lists every gun on the Weapons tab, grouped by class, most kills first, and each multi-kill on Duels as a share of rounds", () => {
+describe("Weapons and Overview tabs", () => {
+  it("lists every gun on the Weapons tab, grouped by class, most kills first, and each multi-kill on Overview as a share of rounds", () => {
     // fails if the table drops a gun, misorders a class, or the multi-kill shares stop adding up to the counts
     use(samples);
     // the page reads the career matches (careerEntries), not every sample
@@ -299,7 +304,7 @@ describe("Weapons and Duels tabs", () => {
       expect(k, cls).toBeLessThanOrEqual(last);
       last = k;
     }
-    render(<ProfileView tab="duels" />);
+    render(<ProfileView tab="overview" />);
     const multis = Array.from(host.querySelectorAll(".mlist > li"));
     expect(multis).toHaveLength(4);
     const two = s.m.multiKillRounds - s.m.k3Rounds;
@@ -498,7 +503,7 @@ describe("review round 2 (PR #28)", () => {
     expect(text(item.querySelector(".meta"))).toMatch(/of pros$/);
   });
 
-  it("names Where you rank's bot population as the engine counts it", async () => {
+  it("names Ranks by topic's bot population as the engine counts it", async () => {
     // fails if bot-match samples are called bot careers
     use(samples);
     const q = queryOf(samples);
@@ -506,7 +511,7 @@ describe("review round 2 (PR #28)", () => {
     const style = await calls.style(q, { pool: "all" });
     answers.style = style;
     render(<ProfileView tab="playstyle" />);
-    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Where you rank")!;
+    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Ranks by topic")!;
     expect(text(card.querySelector(".card__aside"))).toContain(`style against ${botPopulationText(style.careers, { n: style.n, role: "all" }).text}`);
   });
 
@@ -547,7 +552,7 @@ describe("Profile clutches", () => {
       { file: samples[0].file, round: 3, side: "T", opponents: vs === 5 ? 4 : vs + 1, won: false },
     ];
     answers.clutches = rows;
-    render(<ProfileView tab="duels" />);
+    render(<ProfileView tab="overview" />);
     const btn = Array.from(host.querySelectorAll<HTMLButtonElement>("button.clist__row")).find((b) => b.getAttribute("aria-label")?.startsWith(`1v${vs}:`))!;
     expect(btn).toBeTruthy();
     expect(btn.getAttribute("aria-expanded")).toBe("false");

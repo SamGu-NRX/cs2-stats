@@ -1,14 +1,14 @@
 // The Profile tabs' metric panels. Every metric shows as one MetricRow (components/MetricRow.tsx):
 // performance metrics ranked against pros (compare), style metrics against the bots in your matches
 // (style), each with the sample its value rests on. How good is gone: its rows sit in Duels and Utility.
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
 import type { Query, Rolled } from "../../../worker/protocol";
 import { Card } from "../../components/Card";
 import { MetricList, MetricRow } from "../../components/MetricRow";
 import { APPROX_TIP } from "../../components/Percentile";
-import { botPopulation, fmtMetric, proPopulation, type BotPool } from "../../data/engine";
+import { botPopulation, fmtMetric, proPoolName, proPopulation, type BotPool } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { hasMetric, metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
@@ -20,8 +20,10 @@ import { NeedsDemo } from "../shared";
 /** Every metric's value and percentile for one query and side: performance against the pros, style against the bots. */
 export interface Ranks {
   p: Record<string, Pct>;
-  /** pro population per pool name; the bot population as one text */
+  /** the bot population as one text */
   bots: string;
+  /** the pro pool the performance ranks read, with its size: "454 pro riflers" */
+  pros: string;
   /** the rounds the ranks were read from, for each share's "6 of 39" (Metric.of) */
   m: Measures | null;
 }
@@ -37,7 +39,7 @@ export function useRanks(q: Query, side: PoolSide): Ranks | null {
   return useMemo(() => {
     if (!pro || !style) return null;
     const bots = botPopulation(style.careers, { n: style.n, role: (style.careers.pool ?? style.role) as BotPool["role"] }).text;
-    return { p: { ...style.p, ...pro.p }, bots, m };
+    return { p: { ...style.p, ...pro.p }, bots, pros: `${pro.n} ${proPoolName(pro.role)}`, m };
   }, [pro, style, m]);
 }
 
@@ -69,16 +71,24 @@ export function Stat({ id, r, label, rank }: { id: string; r: Ranks; label?: str
 /** The ≈ legend in a panel's aside: the approximation explained once, through its tooltip. */
 export const ApproxLegend = () => <span className="approx-legend meta" data-tip={APPROX_TIP} tabIndex={0}>≈ approximate</span>;
 
-/** A card of metric rows; rows without the metric in the engine drop out. */
-export function StatCard({ title, tip, ids, r, id }: { title: string; tip: string; ids: string[]; r: Ranks | null; id?: string }) {
+/**
+ * A card of metric rows, each with its rank as text in the last column; rows without the metric in the
+ * engine drop out. `labels` renames rows where the card's context makes the engine's label too long.
+ */
+export function StatCard({ title, tip, ids, r, id, labels, aside }: { title: string; tip: string; ids: string[]; r: Ranks | null; id?: string; labels?: Record<string, string>; aside?: ReactNode }) {
+  const approx = ids.some((x) => hasMetric(x) && metric(x).status === "approx");
   return (
-    <Card title={title} tip={tip} id={id} aside={ids.some((x) => hasMetric(x) && metric(x).status === "approx") ? <ApproxLegend /> : undefined}>
-      {!r ? <div className="skel" style={{ height: 30 * ids.length }} /> : <MetricList label={title}>{ids.map((x) => <Stat key={x} id={x} r={r} />)}</MetricList>}
+    <Card title={title} tip={tip} id={id} aside={aside || approx ? <span className="card__aside-row">{aside}{approx && <ApproxLegend />}</span> : undefined}>
+      {!r ? <div className="skel" style={{ height: 36 * ids.length }} /> : <MetricList label={title} rank>{ids.map((x) => <Stat key={x} id={x} r={r} label={labels?.[x]} rank />)}</MetricList>}
     </Card>
   );
 }
 
 // ---------------------------------------------------------------- the tabs' metric groups
+
+/** Overview's Where you rank: the five headline numbers against pros (design-target-v2 profile-overview). */
+export const RANK_ROWS = ["rating3", "adr", "kast", "kpr", "accuracy"];
+export const RANK_LABELS: Record<string, string> = { rating3: "Rating 3.0" };
 
 /** Duels: opening duels, trades, clutches and AWP duels, each a card of rows. */
 export const OPENING_ROWS = ["openingSuccess", "openingSwing", "openingAttempts", "openingTradedPct"];

@@ -35,7 +35,7 @@ export interface Route {
 
 /** Old ?sec= sections of the one-page Profile, by the tab that now holds them (Home's links, bookmarks). */
 const SECTION_TAB: Record<string, ProfileTab> = {
-  card: "overview", identity: "playstyle", style: "overview", performance: "overview", firepower: "overview", howgood: "duels", openings: "duels",
+  card: "overview", identity: "playstyle", style: "playstyle", performance: "overview", firepower: "overview", howgood: "duels", openings: "duels",
 };
 
 export function parseHash(hash: string): Route {
