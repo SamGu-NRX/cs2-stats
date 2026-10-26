@@ -4,6 +4,7 @@
 import { deriveAggro } from "./aggression";
 import { deriveAim, markSight } from "./aim";
 import { buying } from "./buying";
+import { luck } from "./luck";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
@@ -352,12 +353,18 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  * lookup when its pack is installed, else CS2RB); swing and the win-probability path depend on it, so
  * cache facts by it too.
  */
-export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
+/** The shared indexes with the rounds, kills and player-rounds filled, before any family runs: what derive starts from, and what tools that fit a family's parameters read. */
+export function contextOf(t: MatchTables, wp: WinProbSource): Ctx {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
-  c.rounds = roundFacts(c, maxRounds);
+  c.rounds = roundFacts(c, matchMeta(t).maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
+  return c;
+}
+
+export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
+  const c = contextOf(t, wp);
+  const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
 
   scoreboard(c);
   const clutches = closing(c);
@@ -370,6 +377,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   swing(c);
   valuedRounds(c);
   markSight(c);
+  luck(c);
   const weapons = guns(c);
 
   const counted: [number, number] = [0, 0];
