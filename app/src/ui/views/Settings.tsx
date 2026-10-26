@@ -16,6 +16,7 @@ import { scanErrorText, sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type Sour
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
 import { fmtWhen, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
+import { poolLabel } from "../../worker/baselines-pool";
 import { KeyChips, SHORTCUTS } from "../shell/Palette";
 
 const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
@@ -151,7 +152,13 @@ export default function Settings() {
               <dt>Rating 3.0 weights</dt>
               <dd className="meta">{capitalised(ratingInfo().weights)}.</dd>
               <dt>Pro percentiles</dt>
-              <dd className="meta">{baselines ? <>{baselines.source}. <span className="nowrap">Built {builtText(baselines.built)}.</span></> : baselinesError ?? "Loading"}</dd>
+              <dd className="meta">{baselines ? (
+                <>
+                  <span className="settings__pool">{poolLabel(baselines.pool, baselines.model)}.</span>{" "}
+                  {baselines.source}. <span className="nowrap">Built {builtText(baselines.built)}.</span>
+                  {baselines.localError && <span className="poor-text selectable"> The local pool was not used: {baselines.localError}.</span>}
+                </>
+              ) : baselinesError ?? "Loading"}</dd>
               <dt>Stats engine</dt>
               <dd className="meta num">Version {DERIVE_VERSION}</dd>
               <dt>Map images</dt>

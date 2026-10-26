@@ -20,6 +20,7 @@ import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { loadTables, withPov } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
+import { choosePool, type ChosenPool } from "./baselines-pool";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
 import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
@@ -54,18 +55,25 @@ function bytes(file: string): Promise<ArrayBuffer> {
   });
 }
 
-// ---- the pro baselines, loaded once
+// ---- the pro baselines, loaded once: the local pool when meta() was given a valid one, else the shipped file
+/** The packs folder's baselines.local.json, set by meta(); the pool waits for it (baselines-pool.ts). */
+let setLocal: (bytes: ArrayBuffer | null) => void = () => {};
+const localBytes = new Promise<ArrayBuffer | null>((r) => { setLocal = r; });
+let chosen: ChosenPool | null = null;
 let baselinesP: Promise<Baselines> | null = null;
 function baselines(): Promise<Baselines> {
   baselinesP ??= (async () => {
-    // revalidated on every load, so a rebuilt file is never read from the HTTP cache
-    const res = await fetch(new URL(`${import.meta.env.BASE_URL}baselines.json`, self.location.href), { cache: "no-cache" });
-    if (!res.ok) throw new Error(`baselines.json failed to load (HTTP ${res.status})`);
-    const text = await res.text();
-    const b = JSON.parse(text) as Baselines;
-    baselinesHash = contentHash(text);
-    if (b.version !== 1) throw new Error(`baselines.json: version is ${JSON.stringify(b.version)}, this app reads version 1`);
-    return b;
+    const local = await localBytes;
+    const c = await choosePool(local === null ? null : new TextDecoder().decode(local), async () => {
+      // revalidated on every load, so a rebuilt file is never read from the HTTP cache
+      const res = await fetch(new URL(`${import.meta.env.BASE_URL}baselines.json`, self.location.href), { cache: "no-cache" });
+      if (!res.ok) throw new Error(`baselines.json failed to load (HTTP ${res.status})`);
+      return res.text();
+    });
+    // the entries are keyed by the content of the pool they were shown against, so switching pools re-ranks them
+    baselinesHash = contentHash(c.text);
+    chosen = c;
+    return c.b;
   })();
   // a failed load is tried again on the next question
   baselinesP.catch(() => { baselinesP = null; });
@@ -271,13 +279,14 @@ function entryOfFile(file: string): MatchEntry {
 type Impl = { [K in Method]: (...a: Parameters<Api[K]>) => Promise<ReturnType<Api[K]>> };
 
 const api: Impl = {
-  async meta(winprobPack) {
+  async meta(winprobPack, localBaselines) {
     wp = winProbSource(winprobPack === null ? null : JSON.parse(new TextDecoder().decode(winprobPack)));
+    setLocal(localBaselines);
     return metaOf(wp);
   },
   async baselines() {
     const b = await baselines();
-    return { source: b.source, built: b.built, n: b.n };
+    return { source: b.source, built: b.built, n: b.n, model: b.model ?? "", pool: chosen!.pool, localError: chosen!.localError };
   },
   async sync(entries) {
     // entries are keyed by the baselines they were shown against
