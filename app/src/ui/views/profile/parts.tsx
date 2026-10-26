@@ -434,19 +434,6 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
   );
 }
 
-export function RatingLegend({ children }: { children?: ReactNode }) {
-  return (
-    <div className="legend">
-      <span><svg width="18" height="8" aria-hidden><line x1="0" y1="4" x2="18" y2="4" stroke="var(--cream)" strokeWidth="1.75" /></svg>Rating per match</span>
-      <span><svg width="18" height="8" aria-hidden><line x1="0" y1="4" x2="18" y2="4" stroke="var(--cream)" strokeDasharray="2 4" /></svg>Your pooled rating</span>
-      <span><svg width="18" height="8" aria-hidden><line x1="0" y1="4" x2="18" y2="4" stroke="var(--ink3)" strokeDasharray="3 3" /></svg>1.00, an average player</span>
-      <span><svg width="8" height="8" aria-hidden><circle cx="4" cy="4" r="3.5" fill="var(--good-text)" /></svg>Best</span>
-      <span><svg width="8" height="8" aria-hidden><circle cx="4" cy="4" r="3.5" fill="var(--poor-text)" /></svg>Worst</span>
-      {children}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- one metric as a percentile row
 
 /** A formatted value split from its unit, so the unit can be set smaller: "28.6%" is "28.6" and "%". */

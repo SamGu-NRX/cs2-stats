@@ -27,7 +27,6 @@ export const PANEL_TIP = {
   swing: "Win chance you add each round.",
   firepower: "Kills and damage that win rounds.",
   howGood: "HLTV's performance stats, ranked against pros.",
-  ratingByMatch: "Your rating in each match.",
   maps: "Your numbers on each map.",
   weapons: "Your kills by weapon type.",
   clutches: "Rounds you're your team's last player against survivors.",
@@ -37,7 +36,8 @@ export const PANEL_TIP = {
   role: "Your likeliest role on each side.",
   whereYouPlay: "Where you move, kill and die.",
   playsLike: "Pros whose style has the same shape as yours.",
-  whereYouRank: "Your percentile on the stats that define you.",
+  whereYouRank: "Your percentile among pros on five headline stats.",
+  ranksByTopic: "Skill ranks against pros, style against the bots you played.",
 } as const;
 
 /** A provisional style score: the bot pool behind it is still small. */

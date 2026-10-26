@@ -38,9 +38,9 @@ import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, PanelRow, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
-import { pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
+import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { AggressionCard } from "./profile/v2";
-import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RANK_LABELS, RANK_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import CareerAim from "./CareerAim";
 import WeaponsTab from "./Weapons";
 import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
@@ -208,16 +208,22 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
           {tab === "overview" && (
             <>
               {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
+              <div className="profile__cols profile__cols--side">
+                <FormRail p={p} side={side} />
+                <StatCard title="Where you rank" tip={PANEL_TIP.whereYouRank} ids={RANK_ROWS} labels={RANK_LABELS} r={ranks}
+                  aside={ranks?.pros ? <span className="meta">vs {ranks.pros}</span> : undefined} />
+              </div>
+              <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
+              {/* the target's How good card is gone (its rows live on Duels and Utility), so the two
+                  share lists take its place beside Firepower and Maps gets the row to itself */}
               <div className="profile__cols">
                 {baselines && <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} m={p.you.m} /></div>}
-                <FormRail p={p} side={side} />
+                <div className="profile__stack">
+                  <Multis m={p.you.m} q={sideQ} list={list} />
+                  <Clutches m={p.you.m} q={base} side={side} list={list} />
+                </div>
               </div>
-              <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} m={p.you.m} /></div>
-              <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
-              <div className="profile__trend">
-                <FormTrend p={p} side={side} />
-                <MapsTable p={p} side={side} />
-              </div>
+              <MapsTable p={p} side={side} />
             </>
           )}
           {tab === "duels" && (
@@ -228,13 +234,11 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
               </div>
               <div className="profile__cols">
                 <StatCard title="Trades" tip="Avenging teammates, and being avenged." ids={TRADE_ROWS} r={ranks} id="howgood" />
-                <StatCard title="AWP duels" tip="Duels where you or the enemy holds an AWP." ids={AWP_ROWS} r={ranks} />
+                <div className="profile__stack">
+                  <StatCard title="AWP duels" tip="Duels where you or the enemy holds an AWP." ids={AWP_ROWS} r={ranks} />
+                  <StatCard title="Clutches, against pros" tip="Rounds you're your team's last player alive." ids={CLUTCH_ROWS} r={ranks} />
+                </div>
               </div>
-              <div className="profile__cols">
-                <Clutches m={p.you.m} q={base} side={side} list={list} />
-                <StatCard title="Clutches, against pros" tip="Rounds you're your team's last player alive." ids={CLUTCH_ROWS} r={ranks} />
-              </div>
-              <Multis m={p.you.m} q={sideQ} list={list} />
             </>
           )}
           {tab === "aim" && <CareerAim />}
@@ -260,15 +264,16 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 <RoleCard q={base} />
                 <WhereYouPlay list={list} side={side} />
               </div>
-              <div className="profile__pair">
+              <div className="profile__cols">
+                <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} m={p.you.m} /></div>
                 <AggressionCard s={p.you} />
-                <RoleBySpawnCard q={base} />
               </div>
               <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
               <div className="profile__cols">
+                <RoleBySpawnCard q={base} />
                 <StyleCompass list={list} q={base} />
-                <Ranks q={base} />
               </div>
+              <Ranks q={base} />
             </>
           )}
         </div>
@@ -523,19 +528,6 @@ function StyleAttributes({ q, side, values, m }: { q: Query; side: SideKey; valu
 
 // ---------------------------------------------------------------- breakdowns
 
-function FormTrend({ p, side }: { p: ProfileData; side: SideKey }) {
-  const pooled = p.ratings[ratingKey(side)].value;
-  return (
-    <Card title="Rating by match" tip={PANEL_TIP.ratingByMatch} collapsible id="profile-form" className="trendcard" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
-      <div className="series__scroll">
-        <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1} plot={120}
-          points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, href: matchHref(f.file) }))} />
-      </div>
-      <RatingLegend />
-    </Card>
-  );
-}
-
 interface MapRow { map: string; matches: number; wins: number; s: Rolled; r: SideRatings }
 
 function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
@@ -651,7 +643,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const share = (r: (typeof rows)[number]) => r.pct ?? 0;
   const most = Math.max(1, ...rows.map(share));
   return (
-    <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<span className="meta">{m.multiKillRounds} of {plural(m.rounds, "round")}</span>}>
+    <Card title="Multi-kill rounds" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<span className="meta">{m.multiKillRounds} of {plural(m.rounds, "round")}</span>}>
       <ul className="mlist lslist">
         {rows.map((r) => {
           const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
