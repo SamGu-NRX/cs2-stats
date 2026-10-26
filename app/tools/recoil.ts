@@ -1,0 +1,146 @@
+// Writes src/stats/recoil.ts: the in-game spray pattern of every automatic gun, from the pro demos'
+// own shot records (src/stats/recoil-build.ts says how), and each gun's cycle time and magazine from
+// the game's weapons vdata. Prints the residual check: how far the pros' median view movement sits
+// from the ideal pull, per bullet.
+// Usage (from app/): pnpm recoil <weapons_out>   (the decoded scripts/weapons.vdata_c, KV3 text)
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { parquetMetadata, parquetRead } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
+import { ACCURATE_FRAC } from "../src/stats/aim-geometry";
+import { MAX_SPEED } from "../src/stats/aim-ref";
+import { addShots, emptySamples, patternOf, residualOf, type PatternShot } from "../src/stats/recoil-build";
+import { DATA_DIR, mapLabel, proMapDirs } from "./node-read";
+import { listValve } from "./valve-folder";
+
+/** The automatic guns: rifles, SMGs, LMGs and the CZ75-Auto (the full-auto pistol). */
+export const AUTOMATIC = ["ak47", "m4a1", "m4a1_silencer", "famas", "galilar", "aug", "sg556",
+  "mac10", "mp9", "mp7", "mp5sd", "ump45", "p90", "bizon", "m249", "negev", "cz75a"];
+/**
+ * A bullet's pattern row needs this many kick samples, and its pro band this many sprays. Reporting
+ * cuts, not fits; the kick's middle half (printed per gun) shows how little one sample varies.
+ */
+const MIN_KICK = 10, MIN_SPRAYS = 30;
+/** A pro spray counts for the band from 3 bullets (aim.ts SPRAY_MIN). */
+const MIN_BULLETS = 3;
+
+const vdataPath = process.argv[2];
+if (!vdataPath) throw new Error("usage: pnpm recoil <weapons_out>");
+const vdataBytes = readFileSync(vdataPath);
+const vdata = vdataBytes.toString("utf8");
+const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
+
+// m_flCycleTime (the first value when it lists two) and m_iMaxClip1 per weapon block
+const gun: Record<string, { cycle?: number; mag?: number }> = {};
+let name: string | null = null;
+for (const line of vdata.split(/\r?\n/)) {
+  const m = /^\t([a-z0-9_]+) =\s*$/.exec(line);
+  if (m) name = m[1].startsWith("weapon_") ? m[1].slice("weapon_".length) : null;
+  if (!name) continue;
+  const c = /^\t\tm_flCycleTime = (?:\[ ([\d.]+), [\d.]+ \]|([\d.]+))\s*$/.exec(line);
+  if (c) (gun[name] ??= {}).cycle = Number(c[1] ?? c[2]);
+  const k = /^\t\tm_iMaxClip1 = (\d+)\s*$/.exec(line);
+  if (k) (gun[name] ??= {}).mag = Number(k[1]);
+}
+for (const w of AUTOMATIC) if (!gun[w]?.cycle || !gun[w]?.mag) throw new Error(`weapons vdata: no cycle time or magazine for ${w}`);
+
+const COLS = ["steamid", "tick", "weapon", "recoil_index", "pitch", "yaw", "bullet_pitch", "bullet_yaw", "speed_2d", "scoped", "airborne"];
+async function readShots(dir: string): Promise<PatternShot[]> {
+  const b = readFileSync(path.join(dir, "shots.parquet"));
+  const file = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+  const metadata = parquetMetadata(file);
+  const n = Number(metadata.num_rows);
+  const col: Record<string, unknown[]> = Object.fromEntries(COLS.map((c) => [c, new Array(n).fill(null)]));
+  await parquetRead({ file, metadata, columns: COLS, compressors, onChunk: ({ columnName, columnData, rowStart }) => {
+    const dst = col[columnName];
+    for (let i = 0; i < columnData.length && rowStart + i < n; i++) dst[rowStart + i] = columnData[i];
+  } });
+  const num = (x: unknown) => (x === null || x === undefined ? null : Number(x));
+  return Array.from({ length: n }, (_, i) => {
+    const w = String(col.weapon[i]);
+    const speed = num(col.speed_2d[i]);
+    const max = MAX_SPEED[w]?.[0];
+    return {
+      steamid: String(col.steamid[i]), tick: Number(col.tick[i]), weapon: w, recoilIndex: num(col.recoil_index[i]),
+      pitch: num(col.pitch[i]), yaw: num(col.yaw[i]), bulletPitch: num(col.bullet_pitch[i]), bulletYaw: num(col.bullet_yaw[i]),
+      scoped: col.scoped[i] === true,
+      steady: max !== undefined && speed !== null && speed <= ACCURATE_FRAC * max && col.scoped[i] === false && col.airborne[i] === false,
+    };
+  });
+}
+
+const acc = emptySamples();
+const weapons = new Set(AUTOMATIC);
+const dirs = proMapDirs();
+let maps = 0;
+for (const dir of dirs) {
+  addShots(acc, await readShots(dir), weapons, MIN_BULLETS);
+  if (++maps % 50 === 0) console.log(`${maps}/${dirs.length} ${mapLabel(dir)}`);
+}
+// The kick is the game's own and the same in every demo, so the user's extracted Valve demos add
+// samples for guns pros rarely buy; the pro band stays pros-only.
+const kickOnly = emptySamples();
+const valveRoot = process.env.CS2_VALVE_MATCHES ?? path.join(DATA_DIR, "valve-matches");
+let valveMaps = 0;
+if (existsSync(valveRoot)) {
+  for (const f of listValve(valveRoot).files) {
+    addShots(kickOnly, await readShots(path.join(valveRoot, ...f.file.slice("valve/".length).split("/"))), weapons, MIN_BULLETS);
+    valveMaps++;
+  }
+  for (const [w, rows] of Object.entries(kickOnly.kick)) rows.forEach((b, j) => {
+    if (!b) return;
+    const dst = ((acc.kick[w] ??= [])[j] ??= { p: [], y: [] });
+    dst.p.push(...b.p);
+    dst.y.push(...b.y);
+  });
+}
+
+const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
+let out = `// Generated by tools/recoil.ts from ${maps} pro maps' shot tables (and, for the kick only, the user's
+// ${valveMaps} extracted Valve demos); do not edit by hand. Regenerate when the
+// demos or the game's recoil change, and bump DERIVE_VERSION (facts.ts): spray facts depend on it.
+//
+// Per automatic gun: cycle time (s) and magazine from the game's scripts/weapons.vdata_c, decoded to
+// KV3 text (sha256 ${sha(vdataBytes)}); then per bullet (index 0 is bullet 1), all in
+// degrees with pitch positive down, relative to bullet 1:
+// - kick: the in-game spray pattern, the median of each bullet's direction (fire_bullets) minus the
+//   view at weapon_fire over every shot at that whole recoil index (src/stats/recoil-build.ts). It is
+//   the aim punch times weapon_recoil_scale; no demo or game cfg here changes weapon_recoil_scale
+//   from the game's default (server_cvar carries no change in any demo checked).
+// - ideal: minus kick, the view movement that keeps every bullet on bullet 1's point.
+// - pro: the pros' view change from bullet 1 over steady sprays from a reset, median and middle half
+//   [pitch, yaw, pitchQ25, pitchQ75, yawQ25, yawQ75]; shorter where sprays thin out.
+// - n and proN: kick samples and pro sprays per bullet. Rows need ${MIN_KICK} kick samples and ${MIN_SPRAYS} sprays.
+
+export interface RecoilPattern {
+  cycle: number;
+  mag: number;
+  kick: readonly (readonly [number, number])[];
+  ideal: readonly (readonly [number, number])[];
+  pro: readonly (readonly number[])[];
+  n: readonly number[];
+  proN: readonly number[];
+}
+
+export const RECOIL: Record<string, RecoilPattern> = {\n`;
+const report: string[] = [];
+for (const w of AUTOMATIC) {
+  const p = patternOf(acc, w, MIN_KICK, MIN_SPRAYS);
+  const g = gun[w];
+  const rows = (xs: readonly (readonly number[])[]) => xs.map((r) => `[${r.join(", ")}]`).join(", ");
+  out += `  ${w}: {\n    cycle: ${g.cycle}, mag: ${g.mag},\n    kick: [${rows(p.kick)}],\n    ideal: [${rows(p.ideal)}],\n    pro: [${rows(p.pro)}],\n    n: [${p.n.join(", ")}],\n    proN: [${p.proN.join(", ")}],\n  },\n`;
+  const res = residualOf(p);
+  const len = res.map(([a, b]) => Math.hypot(a, b));
+  const mean = len.length > 1 ? len.slice(1).reduce((a, x) => a + x, 0) / (len.length - 1) : null;
+  const worst = len.reduce((m, x, j) => (x > len[m] ? j : m), 0);
+  const iq = p.iqr.length ? r4(Math.max(...p.iqr.map(([a, b]) => Math.hypot(a, b)))) : "-";
+  report.push(`${w.padEnd(14)} kick ${String(p.kick.length).padStart(3)} bullets (largest middle half ${iq} deg), pro band ${String(p.pro.length).padStart(3)} bullets (${acc.sprays[w] ?? 0} sprays); residual mean ${mean === null ? "-" : r4(mean)} deg over bullets 2-${p.pro.length}, max ${len.length ? r4(len[worst]) : "-"} at bullet ${worst + 1}`);
+}
+out += "};\n";
+writeFileSync(path.resolve(import.meta.dirname, "../src/stats/recoil.ts"), out);
+console.log(`pro maps read: ${maps}`);
+for (const l of report) console.log(l);
+const ak = patternOf(acc, "ak47", MIN_KICK, MIN_SPRAYS);
+console.log("AK-47 per bullet: kick [pitch, yaw] | pro view median | residual");
+residualOf(ak).forEach((r, j) => console.log(`  ${String(j + 1).padStart(2)}: [${ak.kick[j].join(", ")}] | [${ak.pro[j][0]}, ${ak.pro[j][1]}] | [${r.join(", ")}]`));
