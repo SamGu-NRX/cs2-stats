@@ -394,6 +394,24 @@ What each source gives:
 | Kill flags | yes | yes |
 | Health from damage | yes | yes |
 
+## Career views (`career.ts`, `handling.ts`)
+
+Leetify's career pages were the checklist; the definitions and every weight are ours, since Leetify
+publishes neither its rating weights nor its buy bands.
+
+| View or metric | Definition |
+|---|---|
+| Aim Rating | 0-100: the mean of seven pro percentiles, each weight 1: crosshair placement, time to damage, first-bullet accuracy, spray accuracy, headshot accuracy, counter-strafing and accuracy at visible enemies. Lower-is-better metrics are already flipped by compare(). Null unless every input has a percentile. |
+| Utility Rating | The mean of its two sub-ratings. Quantity: the mean percentile of flashes, smokes, HEs and molotovs thrown per round. Quality: the mean percentile of flash-to-kills per flash, enemies flashed and blind time per flash, damage per HE and per molotov, unused utility on death, and teammates flashed per round (inverted, since more is worse). |
+| Period comparison | Every metric over one date range of the query against another, with the delta and its direction (better or worse for performance metrics, higher or lower for identity ones) |
+| Personal bests | The most in one match of kills, assists, headshot kills, damage, multi-kill rounds, opening kills, trade kills, clutches won, enemies flashed and utility damage. And the best match value of every performance metric (the lowest where lower is better), from matches of 10 rounds or more that meet the metric's sample minimum; a tie keeps the earlier match. |
+| Top stats | The five performance metrics with the highest pro percentile |
+| Focus areas | Performance metrics under the pros' 50th percentile that have a tip in `FOCUS_TIPS`, ranked by the gap to 50, each with its tip |
+| Sessions | Matches grouped so that a gap of 3 hours or more between one match's end and the next one's start begins a new session. Each session has its record, rounds, kills, deaths, Rating 3.0 and two awards: the best match (highest Rating 3.0) and the most kills. |
+| Buy tiers | HLTV's classes with the half buy split at $2,000 a player: eco under $1,000, semi-eco $1,000 to $1,999, force $2,000 to $3,249, full from $3,250; the first round of each half is pistol. The $2,000 split is ours. `Filter.ownTier` keeps a tier and `buyTiers` splits a query. |
+| wastedMagazine | Identity. There is no reload event, so a reload is read from the clip count each shot carries (`shots.ammo_clip`, the count before the bullet). When the next shot of the same gun in the round shows more than the earlier one left, there was a reload in between, and the bullets left were thrown away, as a share of the new clip. The metric is the mean share per reload. Shots carry no weapon entity id, so picking up a second copy of the gun looks the same; a rise counts only when no copy was bought between the shots or dropped by a dying player within 256 units of the player's path, which the 4 Hz positions trace (`handling.ts` `PICKUP_REACH`, set wide with no measurement behind it). A switch to another weapon and back keeps the gun: the game drops only the gun in hand. A reload with no later shot in the round, and a copy a living player dropped, are not seen. Needs the clip counts, which plugin files lack, and positions. |
+| reloadsPR | Identity. Those reloads per round with clip counts |
+
 ## Per-match views (`matchviews.ts`)
 
 These are views of one match, not metrics: nothing is ranked. The definitions are ours, over schema v1
@@ -406,7 +424,7 @@ data; Leetify's match pages were the checklist.
 | Map zones | Your kills and deaths per zone (the map's place name) and side. A kill's zone is the kills table's place for you, else your position sample from the same round within half a second of the kill, since plugin files carry no kill places; with neither, the kill has no zone. The zone list is every place this match's position samples name. |
 | Your match | Every metric over this match against the same metric over your `n` most recent earlier matches, pooled. The direction is better or worse for performance metrics (lower is better where marked) and higher or lower for identity metrics. |
 | Opening duels | Each round's first enemy kill (killer, victim, weapon, time, whether the victim was traded, whether the killer's side won). Your best opening weapon is your gun with the most opening kills, ties broken by rounds won. Rounds won after your opening kill, and after your opening death. Conversions and each weapon's wins count only rounds with a known result. |
-| Situations | The alive counts of your side and the enemy's at freeze end, then after every death or disconnect of a living player, in tick order, up to the round's end. A player the source marks dead at freeze end (plugin `alive0`) is not counted, and disconnects come from the plugin's `leaves`; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
+| Situations | The alive counts of your side and the enemy's at freeze end, then after every death or disconnect of a living player, in tick order, from freeze end to the round's end (an event during freeze time is not counted). A player the source marks dead at freeze end (plugin `alive0`) is not counted, and disconnects come from the plugin's `leaves`; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
 | Bombsites | Per site letter. T: a take attempt is a round where a living T player entered the site's zone (the map's "Bombsite" place) before the plant; it succeeds when the bomb was planted there. Post-plant: rounds planted there, won. CT: a hold attempt is a round a T player entered the zone before the plant; it succeeds when CT won the round with no plant there. Retake: rounds planted there, won by CT. Take and hold need positions, the round's freeze end and the map's "Bombsite" place names; they are null until a round has all three, and the result says how many rounds could be read and which inputs were missing. Retake and post-plant come from plants alone. |
 
 ## Information (identity)

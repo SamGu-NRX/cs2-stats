@@ -2,9 +2,9 @@
 // "your match" against your recent matches, opening duels in detail, man-advantage situations and
 // bombsite outcomes. Each is a pure function of one match's facts (and its tables where facts keep too
 // little); the worker calls them and the UI lays them out. Our definitions, over schema v1 data.
+import { metricDeltas } from "./career";
 import { enemyHit, hitDamage } from "./derive";
 import { emptyMeasures, type MatchFacts, type Measures } from "./facts";
-import { METRICS } from "./metrics";
 import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type Feature } from "./rating3";
 import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
 import { swingSources, type SwingSources } from "./swing";
@@ -197,16 +197,9 @@ export interface YourMatchRow {
   direction: "better" | "worse" | "higher" | "lower" | "same" | null;
 }
 
-/** Every metric in this match against the same metric over the reference matches (the player's recent ones). */
+/** Every metric in this match against the same metric over the reference matches (the player's recent ones): career.ts metricDeltas, with `before` named `average`. */
 export function yourMatch(match: Summary, recent: Summary): YourMatchRow[] {
-  return METRICS.map((m) => {
-    const value = m.value(match), average = m.value(recent);
-    if (value === null || average === null) return { id: m.id, value, average, delta: null, direction: null };
-    const delta = value - average;
-    const up = delta > 0;
-    const direction = delta === 0 ? "same" : m.kind === "performance" ? (up !== (m.lowerIsBetter ?? false) ? "better" : "worse") : up ? "higher" : "lower";
-    return { id: m.id, value, average, delta, direction };
-  });
+  return metricDeltas(match, recent).map(({ before, ...row }) => ({ ...row, average: before }));
 }
 
 // ---------------------------------------------------------------- 5. opening duels

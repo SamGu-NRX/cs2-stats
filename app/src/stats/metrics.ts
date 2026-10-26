@@ -9,6 +9,7 @@ import { AGGRESSION_METRICS } from "./aggression";
 import { AGGRO_SCALE_METRICS } from "./aggro-scale";
 import { AIM_METRICS, CONTACT_METRICS } from "./aim";
 import { BUYING_METRICS } from "./buying";
+import { HANDLING_METRICS } from "./handling";
 import { LUCK_METRICS } from "./luck";
 import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
@@ -277,7 +278,7 @@ const M: Metric[] = [
     value: (s) => per(s.m.nearestDistSum, s.m.spacingSamples) },
 ];
 
-export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...AGGRO_SCALE_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS, ...LUCK_METRICS];
+export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...AGGRO_SCALE_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS, ...LUCK_METRICS, ...HANDLING_METRICS];
 export const METRIC: Record<string, Metric> = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 
 /**

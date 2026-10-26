@@ -7,7 +7,7 @@
 // matches, the ones the match views have open. A career question streams facts from IndexedDB one
 // match at a time: the calls the UI sends together (worker/client.ts batches them) share one pass
 // over the files, and each sums its own matches with addMatch as the pass goes by.
-import { BUY_CLASSES } from "../stats/economy";
+import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
 import { addSituations, bombsites, headToHead, mapZones, openingDuels, roundRatings, yourMatch, type Situations } from "../stats/matchviews";
 import { rating3Of } from "../stats/rating3";
 import { METRIC } from "../stats/metrics";
@@ -28,9 +28,10 @@ import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
-import type { Api, Call, ClutchRow, MultiKillRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
+import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addClutchRows, addMapRounds, addMultiKillRows, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
+import { matchCalls } from "./matchcalls";
+import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -154,15 +155,15 @@ async function factsOf(file: string, keep: boolean): Promise<MatchFacts> {
   return facts;
 }
 
-interface Job { files: Set<string>; visit: (f: MatchFacts) => void; resolve: () => void; reject: (e: Error) => void; error?: Error }
+interface Job { files: Set<string>; visit: (f: MatchFacts, file: string) => void; resolve: () => void; reject: (e: Error) => void; error?: Error }
 let waiting: Job[] = [];
 let scheduled = false;
 
 /**
- * Visits each of `files` once, in index order. Calls made before the pass starts join it, so a page's
+ * Visits each of `files` once, in index order, with its facts and its file name. Calls made before the pass starts join it, so a page's
  * questions read every match from IndexedDB once between them.
  */
-function stream(files: string[], visit: (f: MatchFacts) => void): Promise<void> {
+function stream(files: string[], visit: (f: MatchFacts, file: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     waiting.push({ files: new Set(files), visit, resolve, reject });
     if (!scheduled) { scheduled = true; setTimeout(() => void pass(), 0); }
@@ -183,7 +184,7 @@ async function pass() {
     try {
       const f = await factsOf(file, false);
       for (const j of live) {
-        try { j.visit(f); } catch (e) { j.error = e as Error; }
+        try { j.visit(f, file); } catch (e) { j.error = e as Error; }
       }
     } catch (e) {
       for (const j of live) j.error = e as Error;
@@ -259,6 +260,7 @@ async function spawns(q: Query): Promise<SpawnIndex> {
 const careersOf = (q: Query) => botsOf(q).then((b) => b.pop);
 
 const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds, spawns });
+const perMatch = matchCalls(stream, summaryOf);
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -373,6 +375,16 @@ const api: Impl = {
     const [own, opp] = await Promise.all([split("ownBuy"), split("oppBuy")]);
     return { own, opp };
   },
+  async buyTiers(q) {
+    const xs = await Promise.all(BUY_TIERS.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, ownTier: [b] } }))] as const));
+    return Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0));
+  },
+  careerRatings: ranking.careerRatings,
+  topStats: ranking.topStats,
+  focusAreas: ranking.focusAreas,
+  periodCompare: ranking.periodCompare,
+  personalBests: perMatch.personalBests,
+  sessions: perMatch.sessions,
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     const opp = new Set<string>();
@@ -395,20 +407,8 @@ const api: Impl = {
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
   },
   rolesBySpawn: ranking.rolesBySpawn,
-  async clutches(q) {
-    const out: ClutchRow[] = [];
-    const fileOf = new Map<string, string>();
-    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
-    await stream(q.files, (f) => addClutchRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
-    return out;
-  },
-  async multiKills(q) {
-    const out: MultiKillRow[] = [];
-    const fileOf = new Map<string, string>();
-    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
-    await stream(q.files, (f) => addMultiKillRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
-    return out;
-  },
+  clutches: perMatch.clutches,
+  multiKills: perMatch.multiKills,
   async ratingBreakdown(file, player, reference) {
     const f = await factsOf(file, true);
     const match = rating3Of(rollup([f], { player }));
