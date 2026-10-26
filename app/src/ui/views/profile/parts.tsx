@@ -3,24 +3,24 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
-import { packerFeatures, type RoleBlend } from "../../../stats/identity";
+import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
 import { GameIcon } from "../../components/GameIcon";
-import { attrsOf, fmtMetric, proPoolName, proPopulation } from "../../data/engine";
+import { attrsOf, fmtMetric, proPoolName, proPopulation, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, TIP, tipOf } from "../../data/tips";
 import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
-import { metric, styleIds } from "../../data/meta";
+import { metric, roleSignals, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
 import { swingScore } from "../../lib/scale";
-import { NeedsDemo } from "../shared";
+import { BreakRows, NeedsDemo } from "../shared";
 import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
@@ -30,6 +30,27 @@ export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip
     <div className="shead" id={id} ref={sectionRef}>
       <h2 className="shead__t"><span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span></h2>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- rating breakdown
+
+const signedNum = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(3)}`;
+
+/**
+ * Rating 3.0's breakdown, as main showed it: each input with its weight, the input's value and its
+ * contribution, then the constant. The rows add up to the rating (engine.ts ratingTerms).
+ */
+export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
+  const { terms, intercept } = ratingTerms(inputs);
+  return (
+    <BreakRows rows={[
+      ...terms.map((t) => ({
+        label: <>{t.label} <span className="faint">× {t.coefficient < 0 ? "−" : ""}{Math.abs(t.coefficient).toFixed(4)}</span></>,
+        value: <><span className="faint">{t.input} → </span>{signedNum(t.contribution)}</>,
+      })),
+      { label: "Constant", value: signedNum(intercept) },
+    ]} />
   );
 }
 
@@ -196,6 +217,7 @@ export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
       </div>
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
+      <RoleSignals q={q} />
       {maps.length > 0 && (
         <>
           <h3 className="caps rmaps__h">By map</h3>
@@ -203,6 +225,65 @@ export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
         </>
       )}
     </Card>
+  );
+}
+
+const UNIT_M = 0.0254; // one Source unit is one inch
+
+/** Main's sentences for each signal (stats/role.ts on main), with the thresholds from identity.ts ROLE_SIGNALS. */
+const SIGNAL_TEXT: Record<RoleSignal["id"], { what: string; you: (v: number) => string; bar: (t: number) => string; missing: ReactNode }> = {
+  Entry: {
+    what: "Takes the first duel of the round.",
+    you: (v) => `You are in the first duel of ${fmtPct(v, 0)} of rounds.`,
+    bar: (t) => `Entry players: ${t}% or more (the average is 20%).`,
+    missing: "Needs rounds with a kill log.",
+  },
+  Support: {
+    what: "Plays off teammates: trades and assists rather than first kills.",
+    you: (v) => `${fmtPct(v, 0)} of your kills and assists are trades or assists.`,
+    bar: (t) => `Support players: ${t}% or more.`,
+    missing: "Needs kills or assists.",
+  },
+  Lurker: {
+    what: "Plays away from the team on T, before the bomb is planted.",
+    you: (v) => `You stand ${Math.round(v).toLocaleString("en")} units (about ${Math.round(v * UNIT_M)} m) from your nearest teammate.`,
+    bar: (t) => `Lurkers: ${t.toLocaleString("en")} units (about ${Math.round(t * UNIT_M)} m) or more.`,
+    missing: <NeedsDemo detail="The distance comes from position samples taken while all five T players are alive; converted logs have no positions." />,
+  },
+};
+
+/**
+ * Main's role signals under the engine's blend: each signal's metric against its hand-set threshold
+ * (identity.ts ROLE_SIGNALS), the bar filled to twice the threshold with the threshold ticked, and
+ * "You fit" from the threshold up (engine.ts signalBar). Entry and Support read both sides, Lurker T.
+ */
+export function RoleSignals({ q }: { q: Query }) {
+  const qs = useMemo(() => {
+    const { sides: _sides, ...rest } = q.filter;
+    return [{ files: q.files, filter: rest }, { files: q.files, filter: { ...rest, sides: ["T" as const] } }];
+  }, [q]);
+  const r = useRollups(qs).data;
+  if (!r || r.length !== 2) return null;
+  const [both, t] = r;
+  return (
+    <>
+      <h3 className="caps rmaps__h">Signals</h3>
+      <ul className="signals2">
+        {roleSignals().map((sg) => {
+          const v = (sg.side === "T" ? t : both).v[sg.metric];
+          const text = SIGNAL_TEXT[sg.id];
+          const bar = v === null ? null : signalBar(v, sg.threshold);
+          return (
+            <li key={sg.id} className={bar?.fits ? "is-on" : bar ? "" : "is-na"} data-signal={sg.id}>
+              <div className="signals2__top"><b>{sg.id}</b><span className="meta">{text.what}</span>{bar?.fits && <span className="chip chip--outline">You fit</span>}</div>
+              <div className="signals2__track" aria-hidden><i style={{ width: `${100 * (bar?.fill ?? 0)}%` }} /><em style={{ left: "50%" }} /></div>
+              <p className="signals2__you">{v === null ? text.missing : text.you(v)} <span className="faint">{text.bar(sg.threshold)}</span></p>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="meta">The tick on each bar is the threshold; the bar fills to twice it. The thresholds are set by hand, not fitted.</p>
+    </>
   );
 }
 
@@ -372,13 +453,25 @@ function howGoodPool(r: { n: number; role: "awper" | "rifler" }, p: Record<strin
 export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
   const r = useCall("compare", [q, { side }]);
   const p = r.data?.p ?? null;
+  // the rounds compare() ranked, for the counts behind each share ("12 of 30", Metric.of)
+  const scope = useMemo(() => {
+    const { sides: _sides, ...rest } = q.filter;
+    return [{ files: q.files, filter: side === "both" ? rest : { ...rest, sides: [side] } }];
+  }, [q, side]);
+  const counts = useRollups(scope).data?.[0]?.m ?? null;
   return (
     <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? howGoodPool(r.data, p!) : "Against pros"}</span>}>
       {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
         <div className="howgood">
-          {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => (
-            <Percentile key={id} variant="quiet" {...pctProps(id, p[id], p[id].value)} kind="performance" population={proPopulation(p[id].pool)} />
-          ))}
+          {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => {
+            const props = pctProps(id, p[id], p[id].value);
+            const of = metric(id).of;
+            const count = of && counts && p[id].value !== null ? `${counts[of[0]]} of ${counts[of[1]]}` : null;
+            return (
+              <Percentile key={id} variant="quiet" {...props} label={count ? <>{props.label}<span className="howgood__of num">{count}</span></> : props.label}
+                kind="performance" population={proPopulation(p[id].pool)} />
+            );
+          })}
         </div>
       )}
     </Card>

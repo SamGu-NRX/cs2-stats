@@ -3,6 +3,12 @@
 
 const RAD = Math.PI / 180;
 
+// Two aim thresholds kept here, away from the engine code in aim.ts, so the UI can quote them.
+/** A shot is fired at a visible enemy when one is mesh-visible within this half-angle of the view (the extractor's shot trigger, SCHEMA-v1.md). */
+export const SIGHT_CONE_DEG = 30;
+/** Moving accuracy is lost above 34% of the weapon's max speed (research-data-sources.md, NextFrag). */
+export const ACCURATE_FRAC = 0.34;
+
 /** An angle difference folded into [-180, 180). */
 export const wrap180 = (a: number): number => ((((a + 180) % 360) + 360) % 360) - 180;
 

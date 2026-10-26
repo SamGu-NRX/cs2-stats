@@ -67,6 +67,8 @@ export function WinIcon({ how, ...p }: IconProps & { how: RoundHow | null }) {
 
 // ---------------------------------------------------------------- buy types (16 grid, filled)
 // Ascending bars, HLTV's classes: eco one, half buy two, full buy three. Pistol rounds show a pistol.
+// main also drew CS Demo Manager's "force-buy" as three hollow bars; the engine has no such class
+// (stats/economy.ts classifies HLTV's four), so that glyph is gone.
 
 export const BUY_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", half: "Half buy", full: "Full buy" };
 
@@ -166,17 +168,28 @@ export const NoscopeIcon = (p: IconProps) => (
   <Svg {...p} grid={16}><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v3M8 10.5v3M2.5 8h3M10.5 8h3" /><path d="M2.5 13.5l11-11" /></Svg>
 );
 
-type Flag = "headshot" | "wallbang" | "smoke" | "noscope";
+/** The killer was flashed: an eye with a slash. Fallback for the icon pack's "blind". */
+export const BlindIcon = (p: IconProps) => (
+  <Svg {...p} grid={16}><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.8" /><path d="M2.5 13.5l11-11" /></Svg>
+);
+/** The killer was in the air: a rising arc. Fallback for the icon pack's "inair". */
+export const InAirIcon = (p: IconProps) => (
+  <Svg {...p} grid={16}><path d="M2 13c2-6 6-9 12-9" /><path d="M10.5 3.5L14 4l-.6 3.4" /><path d="M2 14.5h4" /></Svg>
+);
+
+type Flag = "headshot" | "wallbang" | "smoke" | "noscope" | "killerBlind" | "killerInAir";
 export const KILL_FLAGS: { flag: Flag; label: string; Icon: (p: IconProps) => JSX.Element }[] = [
   { flag: "headshot", label: "Headshot", Icon: HeadshotIcon },
   { flag: "wallbang", label: "Wallbang", Icon: WallbangIcon },
   { flag: "smoke", label: "Through smoke", Icon: SmokeKillIcon },
   { flag: "noscope", label: "No-scope", Icon: NoscopeIcon },
+  { flag: "killerBlind", label: "Killer was blind", Icon: BlindIcon },
+  { flag: "killerInAir", label: "Airborne", Icon: InAirIcon },
 ];
 
-/** The flags set on a kill, as icons. */
+/** The flags set on a kill, as icons. killerBlind and killerInAir are null when the source did not record them, which shows nothing. */
 export function KillFlags({ kill, size = 13 }: { kill: Pick<KillFact, Flag>; size?: number }) {
-  const on = KILL_FLAGS.filter((f) => kill[f.flag]);
+  const on = KILL_FLAGS.filter((f) => kill[f.flag] === true);
   if (!on.length) return null;
   return <span className="kflags">{on.map(({ flag, label, Icon }) => <Icon key={flag} size={size} label={label} />)}</span>;
 }
@@ -188,11 +201,3 @@ export const FirstKillIcon = ({ death, ...p }: IconProps & { death?: boolean }) 
   </Svg>
 );
 
-/** The killer was flashed: an eye with a slash. Fallback for the icon pack's "blind". */
-export const BlindIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.8" /><path d="M2.5 13.5l11-11" /></Svg>
-);
-/** The killer was in the air: a rising arc. Fallback for the icon pack's "inair". */
-export const InAirIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M2 13c2-6 6-9 12-9" /><path d="M10.5 3.5L14 4l-.6 3.4" /><path d="M2 14.5h4" /></Svg>
-);

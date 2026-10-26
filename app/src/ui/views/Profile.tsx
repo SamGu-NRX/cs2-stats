@@ -21,15 +21,15 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
-  R3_INPUT_LABEL, rankText, thinPoolText,
+  botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
+  rankText, thinPoolText,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
 } from "../data/engine";
 import { bundleOf, useCall, useRatings, useRollups, type Loaded } from "../data/hooks";
 import { killsBy, matchModel, sideOf, type MatchEntry } from "../data/match";
 import { PANEL_TIP, TIP, tipOf } from "../data/tips";
 import { useData } from "../data/provider";
-import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings } from "../../worker/protocol";
+import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
@@ -37,9 +37,9 @@ import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, setQuery, useRoute, useSection } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
-import { BreakRows, Empty, NeedsDemo, SectionAside } from "./shared";
-import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
-import { HowGood, pctProps, PlaysLike, RatingLegend, RoleCard, SectionHead, SwingCard } from "./profile/parts";
+import { Empty, NeedsDemo, SectionAside } from "./shared";
+import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { HowGood, pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 
 type Compare = "bench" | "bots";
@@ -143,7 +143,7 @@ export default function ProfileView() {
           <FormRail p={p} side={side} />
         </div>
         <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" sectionRef={identityRef} />
-        <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} /></div>
+        <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
         <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
         <div className="identity">
           <RoleCard q={base} maps={mapsIn(list)} />
@@ -154,7 +154,7 @@ export default function ProfileView() {
         {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
         {baselines && (
           <div className="profile__cols">
-            <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} /></div>
+            <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} /></div>
             <div id="howgood" ref={howGoodRef} className="psec"><HowGood q={base} side={ratingKey(side)} /></div>
           </div>
         )}
@@ -206,7 +206,6 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   const gaugeV = r3.value;
   const botRating = p.botRatings?.[key].value ?? null;
   const gaugeVerdict = verdictOf(gaugeV, cmp === "bots" && botRating !== null ? benchAround(BENCH.rating, botRating) : BENCH.rating);
-  const parts = r3.inputs ? Object.entries(r3.inputs).map(([k, v]) => ({ label: R3_INPUT_LABEL[k]?.label ?? k, value: R3_INPUT_LABEL[k]?.fmt(v) ?? String(v) })) : null;
   const woke = useRef(!sessionStorage.getItem("cs2stats.cardWoke"));
   useEffect(() => { sessionStorage.setItem("cs2stats.cardWoke", "1"); }, []);
   const roles = useCall("roles", [p.base]).data;
@@ -252,7 +251,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
             <div className="bd">
               <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
               <p className="bd__def">{TIP.rating3}</p>
-              {parts && <BreakRows rows={parts.map((t) => ({ label: t.label, value: t.value }))} />}
+              {r3.inputs && <RatingTerms inputs={r3.inputs} />}
             </div>
           )}>
             <Gauge value={gaugeV} verdict={gaugeVerdict} label={ratingHeadline()} />
@@ -319,9 +318,9 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
 /**
  * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the
  * page's side. Unlike the style scores it is a quality, so its score and bar take the performance
- * colours.
+ * colours. `values` are your metric values on the page's side, for the unscored rows (engine.ts EXTRA_SUBS).
  */
-function Firepower({ q, side }: { q: Query; side: SideKey }) {
+function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
   const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
   const fp = scored?.scores.find((a) => a.id === "firepower");
   const t = fp?.score == null ? 0 : toScore(fp.score, 50, 50);
@@ -337,6 +336,7 @@ function Firepower({ q, side }: { q: Query; side: SideKey }) {
             {panelAttr(fp, "performance", proPoolName(scored!.role)).metrics.map((m) => (
               <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def} approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
             ))}
+            {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} />)}
           </div>
         </div>
       )}
@@ -348,8 +348,9 @@ function Firepower({ q, side }: { q: Query; side: SideKey }) {
  * The six style attributes, from one attributeBlock call for the page's side and the chosen pool: how
  * you play, not how well (HLTV: "rating covers performance, attributes cover style"), ranked against
  * the bot careers in the same matches; Sniping always against every bot. ?attr=<id> opens one.
+ * `values` are your metric values on the page's side, for each attribute's unscored rows.
  */
-function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
+function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [pool, setPool] = useState<StylePool>("role");
@@ -366,8 +367,8 @@ function StyleAttributes({ q, side }: { q: Query; side: SideKey }) {
   const pop = { n: style.n, role } as const;
   const provisional = style.careers.provisional;
   const attrs = style.scores.map((a) => (a.id === "sniping"
-    ? panelAttr(a, "style", botPoolName("all"), { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional })
-    : panelAttr(a, "style", botPoolName(role), { open: focus === a.id, provisional })));
+    ? panelAttr(a, "style", botPoolName("all"), { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
+    : panelAttr(a, "style", botPoolName(role), { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
   const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${pool === "role" ? " All bots may have more." : ""}`} /> : undefined;
   return (
     <AttributesPanel
@@ -586,8 +587,9 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
   const shown = useMultiRounds(list, side, open);
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
-  const share = (n: number) => (m.rounds ? (100 * n) / m.rounds : 0);
-  const most = Math.max(1, ...rows.map((r) => share(r.rounds)));
+  // each row's percent of rounds is multiKillRows' own pct, null without rounds
+  const share = (r: (typeof rows)[number]) => r.pct ?? 0;
+  const most = Math.max(1, ...rows.map(share));
   return (
     <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<SectionAside label="Rounds" value={m.multiKillRounds} />}>
       <ul className="mlist">
@@ -596,8 +598,8 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
           const body = (
             <>
               <MultiBadge k={r.k} />
-              <span className="hbar"><i style={{ width: `${(100 * share(r.rounds)) / most}%` }} /></span>
-              <span className="num mlist__pct">{fmtPct(share(r.rounds), 1)}</span>
+              <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
+              <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
               <b className="num">{r.rounds}</b>
             </>
           );
@@ -605,7 +607,7 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
             <li key={r.k}>
               {r.rounds === 0 ? <div className="clist__row mlist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
                 <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`}
-                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r.rounds), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
+                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
                   {body}<span className="clist__chev" aria-hidden />
                 </button>
@@ -650,6 +652,7 @@ function Openings({ s }: { s: Rolled }) {
       </div>
       <dl className="facts">
         <dt data-tip={tipOf("openingAttempts")}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
+        <dt data-tip={tipOf("openingWinPct")}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
         <dt data-tip={tipOf("openingTradedPct")}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
       </dl>
     </Card>

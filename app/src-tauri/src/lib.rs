@@ -3,7 +3,10 @@
 //! `matches\imported\`, and `read_pack` reads the optional packs folder (pro scores, agent art).
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
 //! `import_valve` runs the importer that writes them.
-//! Decompression and every statistic run in the web view.
+//! Decompression and every statistic run in the web view. The Bot Mode installer and
+//! launcher is in `botmode`.
+
+pub mod botmode;
 
 use serde::Serialize;
 use std::fs;
@@ -530,7 +533,33 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_matches, read_match, import_match, read_pack, list_valve, read_valve, import_valve, valve_import_state])
+        // Bot Mode left on by a session that lost its supervisor is dealt with at once.
+        .setup(|_app| {
+            botmode::commands::on_app_start();
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            list_matches,
+            read_match,
+            import_match,
+            read_pack,
+            list_valve,
+            read_valve,
+            import_valve,
+            valve_import_state,
+            botmode::commands::botmode_status,
+            botmode::commands::botmode_releases,
+            botmode::commands::botmode_download,
+            botmode::commands::botmode_install,
+            botmode::commands::botmode_overlay,
+            botmode::commands::botmode_rollback,
+            botmode::commands::botmode_backups,
+            botmode::commands::botmode_launch,
+            botmode::commands::botmode_session,
+            botmode::commands::botmode_set_difficulty,
+            botmode::commands::botmode_set_cosmetics,
+            botmode::commands::botmode_set_launch_options,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running CS2 Stats");
 }

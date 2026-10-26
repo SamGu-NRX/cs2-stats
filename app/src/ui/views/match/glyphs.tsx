@@ -30,11 +30,18 @@ export function GameWeapon({ name, height }: { name: string; height: number }) {
   return <GameIcon id={name} width={Math.round(height * 2.9)} height={height} label={weaponLabel(name)} className="gicon--gun" fallback={<WeaponIcon name={name} size={height} />} />;
 }
 
-/** A kill's flags (headshot, wallbang, through smoke, no-scope) as the official killfeed icons. */
-export function GameKillFlags({ kill, size }: { kill: Pick<KillFact, "headshot" | "wallbang" | "smoke" | "noscope">; size: number }) {
-  const on = KILL_FLAGS.filter((f) => kill[f.flag]);
+/** The icon pack's id for a kill flag: its own name, except the killer's two states. */
+const FLAG_ID: Partial<Record<(typeof KILL_FLAGS)[number]["flag"], string>> = { killerBlind: "blind", killerInAir: "inair" };
+
+/**
+ * A kill's flags (headshot, wallbang, through smoke, no-scope, killer blind, killer in the air) as the
+ * official killfeed icons. A flag shows only when true: killerBlind and killerInAir are null when the
+ * source did not record them (extractor #27).
+ */
+export function GameKillFlags({ kill, size }: { kill: Pick<KillFact, "headshot" | "wallbang" | "smoke" | "noscope" | "killerBlind" | "killerInAir">; size: number }) {
+  const on = KILL_FLAGS.filter((f) => kill[f.flag] === true);
   if (!on.length) return null;
-  return <span className="kflags">{on.map(({ flag, label, Icon }) => <GameIcon key={flag} id={flag} width={size} label={label} fallback={<Icon size={size} label={label} />} />)}</span>;
+  return <span className="kflags">{on.map(({ flag, label, Icon }) => <GameIcon key={flag} id={FLAG_ID[flag] ?? flag} width={size} label={label} fallback={<Icon size={size} label={label} />} />)}</span>;
 }
 
 /** The "?" after a panel title: the panel's explanation, one short sentence, on hover and focus. */

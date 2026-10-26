@@ -31,3 +31,5 @@ export const ratingInfo = () => need().rating;
 export const winProbInfo = () => need().winProb;
 export const styleIds = () => need().style;
 export const deriveVersion = () => need().deriveVersion;
+export const roleSignals = () => need().signals;
+export const awperKpr = () => need().awperKpr;

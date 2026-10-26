@@ -1,9 +1,6 @@
 // Career aim: how your aim moves across recorded matches, then every recorded shot together, and
 // every gun you have used (the Weapons table, over every career match).
 import { useMemo } from "react";
-import { HIT_GROUPS } from "../../stats/facts";
-import { isGun } from "../../stats/guns";
-import type { Rolled } from "../../worker/protocol";
 import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
@@ -13,7 +10,8 @@ import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import { aimTip } from "../data/tips";
 import { AimIcon } from "../icons/ui";
-import { fmtMatchDay, fmtPct, plural } from "../lib/format";
+import { fmtMatchDay, plural } from "../lib/format";
+import { pageHref } from "../router";
 import { BENCH } from "../lib/verdict";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
@@ -26,19 +24,9 @@ const TRENDS: { id: string; bench?: number }[] = [
   { id: "accuracy", bench: BENCH.acc.ref },
   { id: "firstBulletAccuracy" },
   { id: "counterStrafe" },
+  // main's "Head accuracy" trend: the engine's headAccuracy, gun hits on the head of all gun hits
+  { id: "headAccuracy" },
 ];
-
-const HEAD = HIT_GROUPS.indexOf("head");
-/**
- * Hits on the head as a share of all gun hits (main's "Head accuracy" trend). The engine has no metric
- * for it, so it is read from the rollup's per-gun hit groups, per match and over the career.
- */
-function headShare(r: Rolled): number | null {
-  let head = 0;
-  let hits = 0;
-  for (const [w, t] of Object.entries(r.weapons)) if (isGun(w)) { head += t.groups[HEAD] ?? 0; hits += t.hits; }
-  return hits ? (100 * head) / hits : null;
-}
 
 /** A per-match slope in the stat's unit: percentages move in points. */
 const slopeIn = (pct: boolean, fmt: (v: number) => string) => (v: number) => (pct ? `${v.toFixed(1)} pts` : fmt(v)) + " a match";
@@ -56,24 +44,19 @@ export default function CareerAim() {
   const shots = list.reduce((t, s) => t + s.shots, 0);
   const oldestFirst = useMemo(() => [...list].reverse(), [list]);
   // each metric's value per match comes with the match list; the slope over them is the engine's trend()
-  const perMatch = useRollups(useMemo(() => (query ? oldestFirst.map((s) => ({ files: [s.file], filter: query.filter })) : null), [query, oldestFirst])).data;
-  const headSeries = useMemo(() => (perMatch?.length === oldestFirst.length ? perMatch.map(headShare) : oldestFirst.map(() => null)), [perMatch, oldestFirst]);
-  const series = useMemo(() => [...TRENDS.map((t) => oldestFirst.map((s) => s.line.v[t.id])), headSeries], [oldestFirst, headSeries]);
-  const cards: TrendCard[] = [
-    ...TRENDS.map((t) => {
-      const m = metric(t.id);
-      const fmt = (v: number) => fmtMetric(t.id, v);
-      return { key: t.id, label: m.label, tip: aimTip(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
-    }),
-    { key: "head", label: "Head accuracy", tip: "Hits on the head as a share of all hits.", fmt: fmtPct, slope: slopeIn(true, fmtPct), career: all ? headShare(all) : null },
-  ];
+  const series = useMemo(() => TRENDS.map((t) => oldestFirst.map((s) => s.line.v[t.id])), [oldestFirst]);
+  const cards: TrendCard[] = TRENDS.map((t) => {
+    const m = metric(t.id);
+    const fmt = (v: number) => fmtMetric(t.id, v);
+    return { key: t.id, label: m.label, tip: aimTip(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
+  });
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
       <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in careeraim">
         {!query ? (
-          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} /></Card>
+          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="aim-head">
@@ -82,6 +65,7 @@ export default function CareerAim() {
                 <p className="meta">{plural(shots, "gun shot")}</p>
               </div>
               <div className="toolbar__end">
+                <SectionAside label="Accuracy" value={fmtMetric("accuracy", all ? all.v.accuracy : null)} color="var(--cream)" />
                 <SectionAside label="Visibility" value={visibility ? "Measured" : "Not in these files"} color={visibility ? "var(--good-text)" : "var(--ink2)"} />
               </div>
             </div>
@@ -108,7 +92,7 @@ export default function CareerAim() {
                 );
               })}
             </div>
-            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} guns={career} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} statuses={list.map((s) => s.match.visibility)} guns={career} />
           </>
         )}
       </div>

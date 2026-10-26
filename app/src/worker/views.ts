@@ -5,10 +5,11 @@ import { visibilityCoverage } from "../stats/aim";
 import { economyOf } from "../stats/economy";
 import { DERIVE_VERSION, type MatchFacts } from "../stats/facts";
 import { isGun } from "../stats/guns";
-import { STYLE } from "../stats/identity";
+import { ROLE_SIGNALS, STYLE } from "../stats/identity";
+import { AWPER_MIN_AWP_KPR } from "../stats/compare";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
-import { RATING3_LABEL, RATING3_STATUS, rating3Of } from "../stats/rating3";
+import { RATING3_INTERCEPT, RATING3_LABEL, RATING3_STATUS, RATING3_TERMS, RATING3_WEIGHTS, rating3Of } from "../stats/rating3";
 import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
 import type { MatchEntry } from "../ui/data/match";
 import type {
@@ -19,9 +20,11 @@ export function metaOf(wp: WinProbSource): Meta {
   return {
     metrics: METRICS.map(({ value: _value, why: _why, ...m }) => m),
     attributes: ATTRIBUTES,
-    rating: { label: RATING3_LABEL, status: RATING3_STATUS },
+    rating: { label: RATING3_LABEL, status: RATING3_STATUS, intercept: RATING3_INTERCEPT, terms: RATING3_TERMS, weights: RATING3_WEIGHTS },
     winProb: { kind: wp.kind, label: wp.label },
     style: [...STYLE],
+    signals: ROLE_SIGNALS,
+    awperKpr: AWPER_MIN_AWP_KPR,
     deriveVersion: DERIVE_VERSION,
   };
 }
@@ -87,7 +90,7 @@ export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
   const team = (ids: string[]) => lineOf(rollup([f], { player: ids }));
   const byRound = (player: string | string[], n: number) => rollup([f], { player, rounds: [n] });
   return {
-    core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills },
+    core: { v: f.v, match: f.match, players: f.players, rounds: f.rounds, pr: f.pr, kills: f.kills, totalsRounds: f.totalsRounds },
     lines,
     teams: { us: team(usIds), them: team(themIds) },
     economy: economyOf(f, entry.usTeam),
