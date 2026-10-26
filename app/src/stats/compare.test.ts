@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { careerBaselines, compare, percentileOf, type Baselines } from "./compare";
+import { buildPools, careerBaselines, compare, percentileOf, type Baselines } from "./compare";
 import { METRICS } from "./metrics";
 import { FREEZE_END, oneRound } from "./testing/match";
 import { emptySummary, rollup } from "./rollup";
@@ -87,4 +87,16 @@ it("gives the AWP duel win rate with the count of AWP duels it rests on", () => 
   expect(p.awpDuelWin).toMatchObject({ value: (100 * 4) / 7, n: 7, reason: null });
   expect(p.kpr.n).toBeNull();
   expect(rolled(s).n.awpDuelWin).toBe(7);
+});
+
+it("leaves a pro under a metric's sample minimum out of that metric's pool", () => {
+  // fails if a pro with one save sets save conversion's quantiles: eight pros with 10 saves carrying
+  // $1,000 each and one with a single save carrying $9,000 give a top quantile of $1,000
+  const pro = (saves: number, carried: number) => {
+    const s = emptySummary();
+    Object.assign(s.m, { rounds: 100, saveEvents: saves, saveCarryKnown: saves, saveCarrySum: saves * carried });
+    return { pools: ["all"], side: "both" as const, s };
+  };
+  const pools = buildPools([...Array.from({ length: 8 }, () => pro(10, 1000)), pro(1, 9000)]);
+  expect(pools.pools.all.both!.saveConversion![20]).toBe(1000);
 });
