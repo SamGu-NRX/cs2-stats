@@ -8,6 +8,8 @@
 // match at a time: the calls the UI sends together (worker/client.ts batches them) share one pass
 // over the files, and each sums its own matches with addMatch as the pass goes by.
 import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
+import { addSituations, bombsites, headToHead, mapZones, openingDuels, roundRatings, yourMatch, type Situations } from "../stats/matchviews";
+import { rating3Of } from "../stats/rating3";
 import { METRIC } from "../stats/metrics";
 import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
@@ -29,7 +31,7 @@ import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
-import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
+import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -407,6 +409,36 @@ const api: Impl = {
   rolesBySpawn: ranking.rolesBySpawn,
   clutches: perMatch.clutches,
   multiKills: perMatch.multiKills,
+  async ratingBreakdown(file, player, reference) {
+    const f = await factsOf(file, true);
+    const match = rating3Of(rollup([f], { player }));
+    const average = reference ? rating3Of(await summaryOf(reference)).value : match.value;
+    return { rows: roundRatings(f, player, average), match, average };
+  },
+  async headToHead(file) {
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    return headToHead(t, f);
+  },
+  async mapZones(file, player) {
+    return mapZones(await tablesOf(file), player);
+  },
+  async yourMatch(file, player, n) {
+    const recent = recentFiles([...index.values()].map((x) => x.entry), file, player, n);
+    const [match, past] = await Promise.all([summaryOf({ files: [file], filter: { player } }), summaryOf({ files: recent, filter: { player } })]);
+    return { recent, rows: yourMatch(match, past) };
+  },
+  async openingDuels(file, player) {
+    return openingDuels(await factsOf(file, true), player);
+  },
+  async situations(q) {
+    const out: Situations = {};
+    await stream(q.files, (f) => addSituations(out, f, q.filter));
+    return out;
+  },
+  async bombsites(file, player) {
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    return bombsites(t, f, player);
+  },
   async trends(series) {
     return series.map((values) => trend(values.map((value, i) => ({ match: String(i), date: null, value, won: null }))));
   },

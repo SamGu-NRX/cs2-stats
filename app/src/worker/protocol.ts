@@ -13,6 +13,7 @@ import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
 import type { Best, careerRatings, FocusArea, MetricDelta, SessionAwards } from "../stats/career";
+import type { Bombsites, HeadToHead, OpeningDetail, RoundRating, Situations, YourMatchRow, ZoneRow } from "../stats/matchviews";
 import type { BuyClass, BuyTier } from "../stats/economy";
 import type { VsOpponents } from "../stats/opponents";
 import type { Filter, Summary } from "../stats/rollup";
@@ -226,6 +227,12 @@ export interface Session {
   awards: SessionAwards;
 }
 
+/** "Your match": every metric in this match against the player's recent matches (matchviews.ts yourMatch). */
+export interface YourMatchResult { recent: string[]; rows: YourMatchRow[] }
+
+/** Rating by round: each round's rating and terms, the match's rating, and the average the rounds are compared with. */
+export interface RatingBreakdown { rows: RoundRating[]; match: Rating3; average: number | null }
+
 export interface Api {
   /** Starts the engine: `winprobPack` is the bytes of packs/winprob-hltv.json, null when it is not installed. */
   meta(winprobPack: ArrayBuffer | null): Meta;
@@ -280,6 +287,20 @@ export interface Api {
   personalBests(q: Query): Best[];
   /** the query's matches with rounds its filter keeps, grouped into sessions split by a gap of `gapHours` (3 by default) between one match's end and the next one's start */
   sessions(q: Query, gapHours?: number): Session[];
+  /** each round's Rating 3.0, split by input, with its swing sources and its gap to the reference's rating (the match's own when reference is null) */
+  ratingBreakdown(file: string, player: string, reference: Query | null): RatingBreakdown;
+  /** every pair of enemies in the match: kills, damage, weapon classes, flashes and openings each way */
+  headToHead(file: string): HeadToHead[];
+  /** the player's kills and deaths per map zone and side, with the map's zone list */
+  mapZones(file: string, player: string): { zones: string[]; rows: ZoneRow[] };
+  /** every metric in this match against the player's `n` most recent earlier matches */
+  yourMatch(file: string, player: string, n: number): YourMatchResult;
+  /** the match's opening kills round by round, and the player's best opening weapon and conversion */
+  openingDuels(file: string, player: string): OpeningDetail;
+  /** man-advantage situations ("5v4") over the query's rounds: rounds that reached each, and rounds won */
+  situations(q: Query): Situations;
+  /** take, hold, retake and post-plant attempts and successes per bombsite, over the player's rounds */
+  bombsites(file: string, player: string): Bombsites;
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
   /** every round of the player's with two or more kills in the query's matches (the rows its filter keeps) */

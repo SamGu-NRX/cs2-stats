@@ -154,6 +154,8 @@ export interface RoundFact {
   buy: Record<Side, BuyClass | null>;
   /** the finer tier (economy.ts buyTier: half split into semi-eco and force), per side */
   tier: Record<Side, BuyTier | null>;
+  /** players who disconnected during the round while alive, with the tick (tables leaves; plugin files only) */
+  leaves: { tick: number; pi: number }[];
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
   winProb: { tick: number; event: "start" | "kill" | "plant"; pT: number }[] | null;
 }
@@ -270,6 +272,8 @@ export interface PlayerRound {
   /** money left after buying */
   money: number | null;
   spent: number | null;
+  /** alive at freeze end (player_rounds.alive_at_start); null when the source does not say, which demos do not */
+  aliveAtStart: boolean | null;
   /** the primary in hand at freeze end */
   primary: string | null;
   /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */

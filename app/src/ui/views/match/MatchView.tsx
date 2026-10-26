@@ -18,6 +18,7 @@ import { BarContent } from "../../shell/Bar";
 import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
 import Overview from "./Overview";
+import { replayUnavailable } from "./replay/support";
 
 const Rounds = lazy(() => import("./Rounds"));
 const Economy = lazy(() => import("./Economy"));
@@ -26,6 +27,7 @@ const Utility = lazy(() => import("./Utility"));
 const Aim = lazy(() => import("./Aim"));
 const Positions = lazy(() => import("./Positions"));
 const Advanced = lazy(() => import("./Advanced"));
+const Replay = lazy(() => import("./replay/Replay"));
 
 /** round: the selected round's row (ri), found from the round number in the URL */
 export interface TabProps { v: MatchModel; file: string; round: number | null }
@@ -74,6 +76,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
                 {tab === "aim" && <Aim v={v} file={file} round={round} />}
                 {tab === "positions" && <Positions v={v} file={file} round={round} />}
                 {tab === "advanced" && <Advanced v={v} file={file} round={round} />}
+                {tab === "replay" && <Replay v={v} file={file} round={round} />}
               </Suspense>
             )}
           </div>
@@ -175,7 +178,9 @@ function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string
       <div className="mtabs" role="tablist" aria-label="Match sections" ref={tabs}>
         {ul && <i className={`mtabs__ul ${ul.instant ? "is-instant" : ""}`} style={{ width: ul.w, transform: `translateX(${ul.x}px)` }} aria-hidden />}
         {MATCH_TABS.map((t, n) => {
-          const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)));
+          const noReplay = t === "replay" && v ? replayUnavailable(file, v.map) : null;
+          const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)) || noReplay !== null);
+          const why = t === "aim" ? NEEDS_DEMO : noReplay ?? "No positions in this match";
           return (
             <a
               key={t}
@@ -183,9 +188,9 @@ function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string
               role="tab"
               aria-selected={t === tab}
               aria-controls="match-panel"
-              href={matchHref(file, t, selected !== null && t === "rounds" ? { round: selected } : undefined)}
+              href={matchHref(file, t, selected !== null && (t === "rounds" || t === "replay") ? { round: selected } : undefined)}
               className={`mtab ${disabled ? "is-dim" : ""}`}
-              data-tip={`Alt ${n + 1}${disabled ? (t === "aim" ? `: ${NEEDS_DEMO.toLowerCase()}` : ": no positions in this match") : ""}`}
+              data-tip={n < 8 ? `Alt ${n + 1}${disabled ? `: ${why.toLowerCase()}` : ""}` : disabled ? why : undefined}
             >
               {MATCH_TAB_LABEL[t]}
             </a>

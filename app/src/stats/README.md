@@ -113,6 +113,13 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `personalBests(q)` | The best single-match value of each count and performance metric, with its file, from matches that recorded its inputs in full (a match with no grenade or flash events has no enemies-flashed best) |
 | `sessions(q, gapHours)` | The matches with rounds the filter keeps, grouped into sessions (a gap of 3 hours or more between one match's end and the next one's start), each with its record, totals, Rating 3.0 and awards (best match, most kills) |
 | `buyTiers(q)` | The query split by the team's buy tier: pistol, eco, semi-eco, force, full |
+| `ratingBreakdown(file, player, reference)` | Each round's Rating 3.0 alone (intercept plus each input's coefficient times the round's value), its six terms, its swing sources, its gap to the rating of `reference` (the player's own matches; the match's rating when null), and `counts`: whether the round is one the match rating is made of. Unrated rounds have null. |
+| `headToHead(file)` | Every pair of enemies: kills, damage, kills by weapon class, flashes over 1.1 s and opening kills, each way |
+| `mapZones(file, player)` | The player's kills and deaths per zone (the map's place names) and side, with K/D and positions, and the match's zone list |
+| `yourMatch(file, player, n)` | Every metric in this match against the player's `n` most recent earlier matches (pooled): delta and direction (better or worse for performance metrics, higher or lower for identity ones) |
+| `openingDuels(file, player)` | Each round's opening kill (killer, victim, weapon, time, traded, whether the killer's side won), the player's best opening weapon, and rounds won after their opening kills and deaths |
+| `situations(q)` | Every alive-count state ("5v4") the player's side passed through, with rounds and rounds won, over the query's rounds |
+| `bombsites(file, player)` | `sites`: take, hold, retake and post-plant attempts and successes per bombsite letter, take and hold null without positions, freeze times or site names; `takeHold`: the rounds they could be read on and the missing inputs |
 | `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
 
 Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
