@@ -3,16 +3,16 @@
 .card--flat { background: transparent; }
 /* The header wraps: an aside too wide to sit beside the title (a population line, the provisional
    label) drops below it at narrow widths, such as the 1100 px window at 200% zoom. */
-.card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 48px; padding: 8px 16px; }
+.card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 48px; padding: 8px var(--pad-panel); }
 .card__head + .card__body { padding-top: 0; }
 .card__title { font: 600 16px/1.3 var(--f); letter-spacing: -0.01em; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .card__aside { margin-left: auto; display: flex; align-items: center; gap: 12px; color: var(--ink2); font-size: 12px; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
-.card__body { padding: 16px; }
+.card__body { padding: var(--pad-panel); }
 .card__body--flush { padding: 0; }
-.card__foot { padding: 10px 16px 14px; font-size: 12px; color: var(--ink2); border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
+.card__foot { padding: 10px var(--pad-panel) 14px; font-size: 12px; color: var(--ink2); border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
 
 /* The whole header is the toggle; the chevron turns 180°. */
-.card__toggle { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 48px; padding: 0 12px 0 16px; border-radius: var(--r-card); text-align: left; }
+.card__toggle { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 48px; padding: 0 12px 0 var(--pad-panel); border-radius: var(--r-card); text-align: left; }
 .card__toggle .chev { color: var(--ink3); margin-left: 4px; transition: transform var(--d-expand) var(--ease-in-out); }
 .card__toggle[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 @media (hover: hover) and (pointer: fine) { .card__toggle:hover .chev { color: var(--ink); } }
@@ -29,8 +29,8 @@
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
 .tbl th, .tbl td { height: var(--row); padding: 0 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
 .tbl th { background: var(--bg2); position: sticky; top: 0; z-index: 2; font-weight: 400; height: 32px; }
-.tbl th:first-child, .tbl td:first-child { padding-left: 16px; }
-.tbl th:last-child, .tbl td:last-child { padding-right: 16px; }
+.tbl th:first-child, .tbl td:first-child { padding-left: var(--pad-panel); }
+.tbl th:last-child, .tbl td:last-child { padding-right: var(--pad-panel); }
 .tbl .l { text-align: left; }
 .tbl .c { text-align: center; }
 .tbl th .th { display: inline-flex; align-items: center; gap: 4px; font: 600 11px/1.3 var(--f); letter-spacing: 0.08em; text-transform: uppercase; color: var(--tan); }
@@ -230,3 +230,78 @@ button[data-tip], a[data-tip], [role="button"][data-tip], th [data-tip] { cursor
 .name-cell { font: 600 14px/1.3 var(--f); color: var(--ink); }
 .name-cell small { margin-left: 6px; font: 400 11px/1 var(--f); color: var(--ink3); }
 .palette__input:focus-within { box-shadow: inset 0 -2px 0 var(--cream); }
+
+/* ---------------------------------------------------------------- official CS2 icon (data/icons.ts) */
+.gicon { display: inline-block; flex: none; vertical-align: middle; background: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+
+/* ---------------------------------------------------------------- the percentile component */
+.pctl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; }
+.pctl__label { font-size: 13px; color: var(--ink); min-width: 0; }
+.pctl__val { font: 700 14px var(--f); text-align: right; white-space: nowrap; }
+.pctl__val small { font-size: 11px; font-weight: 600; color: var(--ink3); margin-left: 1px; }
+.pctl__bar { grid-column: 1 / -1; position: relative; height: 4px; margin: 3px 0 1px; border-radius: 2px; background: var(--track); }
+.pctl__bar::before { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink3); }
+.pctl__bar i { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--cream); box-shadow: 0 0 0 2px var(--bg1); }
+.pctl[data-tone="good"] .pctl__bar i { background: var(--good-text); }
+.pctl[data-tone="poor"] .pctl__bar i { background: var(--poor-text); }
+.pctl__phrase { grid-column: 1 / -1; font-size: 12px; color: var(--ink2); }
+.pctl__phrase b { color: var(--ink); font-weight: 600; }
+.pctl[data-na] .pctl__val { color: var(--ink3); }
+.pctl[data-na] .pctl__bar::before { display: none; }
+/* one row in a table: label, value, bar, phrase */
+.pctl--row { grid-template-columns: minmax(0, 1fr) 64px minmax(80px, 140px) minmax(0, 170px); align-items: center; min-height: 36px; border-top: 1px solid var(--line); }
+.pctl--row .pctl__bar, .pctl--row .pctl__phrase { grid-column: auto; margin: 0; }
+
+/* ---------------------------------------------------------------- title-bar scope controls */
+.select-btn[aria-disabled="true"] { color: var(--ink3); background: transparent; cursor: default; }
+.select-btn[aria-disabled="true"] .lbl, .select-btn[aria-disabled="true"] .ico { color: var(--ink3); }
+@media (hover: hover) and (pointer: fine) { .select-btn[aria-disabled="true"]:hover { background: transparent; } }
+.tip { text-wrap: pretty; }
+/* a slash between alternative keys reads "or", so it is never mistaken for the / key */
+.kbd__or { font-size: 11px; color: var(--ink2); padding: 0 3px; }
+.palette__list { mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); }
+.palette .opt__label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.palette .opt small { flex: none; }
+
+/* ---------------------------------------------------------------- Matches */
+.matches__empty { padding: 8px var(--gutter); }
+.search-field__key { position: absolute; right: 7px; pointer-events: none; }
+.matches__table .tbl .matches__date > span { font: 400 13px/1.25 var(--f); color: var(--ink); }
+.matches__table .tbl .matches__date small { color: var(--ink2); }
+.matches__table .mapcell .two small { font-size: 12px; color: var(--ink2); }
+.scorecell--open .num { color: var(--ink2); }
+/* the frozen date column paints the page's own colour, and its hover and active fills are opaque, so
+   cells scrolling under it never show through */
+.matches__table .tbl td.sticky-col { background: var(--bg0); }
+.matches__table .tbl th.sticky-col { background: var(--bg2); }
+.matches__table .tbl tbody tr[data-active="true"] td.sticky-col { background: color-mix(in srgb, #fff 4%, var(--bg0)); }
+@media (hover: hover) and (pointer: fine) { .matches__table .tbl tbody tr:hover td.sticky-col { background: color-mix(in srgb, #fff 4%, var(--bg0)); } }
+.matches__table .tbl tbody tr[data-link]:active td.sticky-col { background: var(--raise); }
+/* the sorted column keeps its weight here: the date is not the row's primary value */
+.matches__table .tbl td.is-sorted { font-weight: inherit; }
+/* sort arrows trail their label on every column */
+.matches__table .tbl th:not(.l) button.th { flex-direction: row; }
+
+/* ---------------------------------------------------------------- Data & settings */
+.nowrap { white-space: nowrap; }
+.settings__failed { display: grid; gap: 6px; margin-bottom: 12px; padding: 10px 12px; border-radius: var(--r-ctl); background: var(--bg2); box-shadow: inset 0 0 0 1px var(--line2); }
+.settings__failed b { color: var(--ink); font-weight: 600; }
+.settings__pro { margin-top: 12px; }
+/* the support table and Models sit side by side only where both fit; below that they stack */
+.settings__pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1280px) { .settings__pair { grid-template-columns: minmax(0, 1fr); } }
+.settings__support th.c, .settings__support td.c { width: 88px; }
+.settings__support td.c > svg { display: block; margin: 0 auto; }
+/* prose cells wrap, and use proportional punctuation (tabular figures widen the commas) */
+.settings__support td.settings__stat { white-space: normal; padding-top: 6px; padding-bottom: 6px; font-variant-numeric: normal; }
+.settings .facts { align-items: baseline; }
+@media (max-width: 1120px) { .sources > .source:nth-child(3) { grid-column: 1 / -1; } }
+/* a path keeps its end (the folder's own name) and truncates the middle */
+.path { display: flex; min-width: 0; flex: 1; white-space: nowrap; }
+.path__head { overflow: hidden; text-overflow: ellipsis; min-width: 2ch; }
+.path__tail { flex: none; }
+.packline { display: inline-flex; align-items: baseline; gap: 8px; }
+.packline .packdot { flex: none; transform: translateY(-1px); }
+.settings .keys { padding-top: 0; }
+/* installed is system state, not performance: a filled neutral dot rather than green */
+.packline .packdot.is-on { background: var(--ink2); }

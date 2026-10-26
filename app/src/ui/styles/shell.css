@@ -1,6 +1,6 @@
-/* The desktop shell: sidebar, app bar and content pane. The window keeps the native Windows title
-   bar (the user's brief); the 44 px app bar sits directly under it and carries the breadcrumb,
-   the view's filters and the command palette button. */
+/* The desktop shell: sidebar, title bar and content pane. The window keeps the native Windows title
+   bar (the user's brief); the 44 px bar sits directly under it and carries the breadcrumb, the
+   view's scope controls (shell/filters.tsx) and the command palette button. */
 
 .shell { display: grid; grid-template-columns: auto minmax(0, 1fr); height: 100%; }
 
@@ -21,11 +21,13 @@
 
 .side__me { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }
 .avatar { width: 28px; height: 28px; border-radius: var(--r-ctl); overflow: hidden; flex: none; background: var(--bg2); display: grid; place-items: center; font: 700 11px/1 var(--f); color: var(--cream); }
-.avatar img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 12%; transform: scale(1.5); transform-origin: 50% 10%; }
+/* the portrait is a head-and-shoulders render: crop to the face so 28 px reads as a person */
+.avatar img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 0%; transform: scale(2.1); transform-origin: 50% 14%; }
 .side__who { min-width: 0; display: grid; gap: 1px; }
 .side__name { font: 600 13px/1.25 var(--f); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side__rating { font: 600 12px/1.25 var(--f); color: var(--cream); white-space: nowrap; }
-.side__rating span { color: var(--ink3); font-weight: 400; margin-right: 4px; }
+.side__rating span { color: var(--ink2); font-weight: 400; margin-right: 4px; }
+.side__name--none { font-weight: 400; color: var(--ink2); }
 
 .side__nav { display: grid; gap: 2px; padding: 10px 8px; position: relative; }
 .side__item {
@@ -43,21 +45,26 @@
 }
 .side__item .ico { width: 20px; height: 20px; }
 .side__item[aria-current="page"] { background: var(--bg2); color: var(--ink); }
+.side__foot .side__item[aria-current="page"] { box-shadow: inset 2px 0 0 var(--cream); }
 @media (hover: hover) and (pointer: fine) { .side__item:not([aria-current="page"]):hover { background: var(--hover); color: var(--ink); } }
 .side__item:active { background: var(--raise); }
 .side__label { transition: opacity calc(var(--d-side) * 0.55) ease; }
 .side[data-rail="true"] .side__label { opacity: 0; }
-/* The active bar moves between items (on-screen move: ease-in-out). */
-.side__bar { position: absolute; left: 8px; top: 0; width: 2px; height: 20px; border-radius: 1px; background: var(--cream); transition: transform var(--d-view) var(--ease-in-out); }
+/* The active bar sits on the sidebar's left edge, above the item's fill (it comes first in the DOM),
+   and moves between items (on-screen move: ease-in-out). */
+.side__bar { position: absolute; z-index: 1; left: 0; top: 0; width: 2px; height: 32px; border-radius: 0 1px 1px 0; background: var(--cream); pointer-events: none; transition: transform var(--d-view) var(--ease-in-out); }
 .side__bar.is-instant { transition: none; }
 
 .side__spacer { flex: 1; }
 .side__foot { display: grid; gap: 2px; padding: 8px; border-top: 1px solid var(--line); }
-.side__sync { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 10px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
+/* Scan state is system state, not performance: a neutral dot, never green or red. */
+.side__sync { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 10px; border-radius: var(--r-ctl); color: var(--ink2); font-size: 12px; white-space: nowrap; transition: background-color var(--d-hover) ease, color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .side__sync:hover { background: var(--hover); color: var(--ink); } }
 .side__sync .dot { width: 20px; display: grid; place-items: center; flex: none; }
-.side__sync .dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+.side__sync .dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink3); }
 .side__sync[data-state="syncing"] .dot i { background: var(--cream); animation: pulse 1.2s ease-in-out infinite; }
-.side__sync[data-state="error"] .dot i { background: var(--poor); }
+.side__sync[data-state="error"] { color: var(--ink); }
+.side__sync[data-state="error"] .dot i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--cream); }
 .side__toggle { color: var(--ink3); }
 .side__toggle .ico { transition: transform var(--d-side) var(--ease-in-out); }
 .side[data-rail="true"] .side__toggle .ico { transform: rotate(180deg); }
@@ -75,8 +82,12 @@
   background: var(--bg-side, #161413);
   min-width: 0;
 }
+/* Leading crumbs (the player's name) truncate at about 18 characters; the current page never does. */
 .crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--ink2); white-space: nowrap; overflow: hidden; }
-.crumbs a, .crumbs span { overflow: hidden; text-overflow: ellipsis; }
+.crumb { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.crumb:not(.crumb--last) { flex: 0 1 auto; max-width: calc(18ch + 16px); }
+.crumb--last { flex: none; }
+.crumb__t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .crumbs a { border-radius: var(--r-chip); padding: 2px 4px; margin: 0 -4px; transition: color var(--d-hover) ease; }
 @media (hover: hover) and (pointer: fine) { .crumbs a:hover { color: var(--ink); } }
 .crumbs .sep { color: var(--ink3); flex: none; }
@@ -100,5 +111,17 @@
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 @media (prefers-reduced-motion: reduce) { .side__sync[data-state="syncing"] .dot i { animation: none; } }
 
-/* Below 1100 px window width the sidebar is a rail (set in JS); the app bar hides long crumbs. */
-@media (max-width: 1180px) { .bar .search-btn .kbd { display: none; } }
+/* At 1100 px window width or narrower the sidebar is a rail (set in JS, Sidebar.tsx RAIL_AT). */
+
+/* ---------------------------------------------------------------- first scan and scan failure */
+.first-scan { display: grid; gap: 10px; justify-items: start; max-width: 480px; padding: 24px 0; }
+.first-scan > p:first-child { font: 600 16px/1.3 var(--f); color: var(--ink); font-variant-numeric: tabular-nums; }
+.first-scan__bar { width: 320px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+/* progress fills by transform only; each step jumps (no transition) so it never lags the count */
+.first-scan__bar i { display: block; height: 100%; background: var(--cream); transform-origin: left center; }
+.scan-failed { display: grid; gap: 12px; justify-items: start; max-width: 640px; padding: 20px; border-radius: var(--r-card); background: var(--bg1); box-shadow: inset 0 0 0 1px var(--line2); }
+.scan-failed h2 { font: 600 16px/1.3 var(--f); letter-spacing: -0.01em; color: var(--ink); }
+.scan-failed p { max-width: 64ch; }
+.scan-failed__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.scan-failed__raw summary, .settings__failed summary { cursor: pointer; font-size: 12px; color: var(--ink2); width: fit-content; border-radius: var(--r-chip); }
+.scan-failed__raw p, .settings__failed details p { margin-top: 6px; color: var(--ink2); word-break: break-all; }

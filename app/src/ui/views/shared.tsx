@@ -263,14 +263,8 @@ export function NotCompared({ reason }: { reason: string }) {
   return <span className="nocmp" tabIndex={0} data-tip={reason}>Not compared</span>;
 }
 
-/** Marks a metric whose status is "approx" (metrics.ts): our reading of an unpublished definition. */
-export function ApproxMark() {
-  return (
-    <span className="approx" data-tip="Approximate: our reading of an unpublished definition">
-      <span aria-hidden>≈</span><span className="sr-only">, approximate</span>
-    </span>
-  );
-}
+// The approx marker lives with the percentile display, which every metric surface uses.
+export { ApproxMark } from "../components/Percentile";
 
 /** A match's swing is shown per round; its sum over the valued rounds goes in the tooltip. */
 export function swingSumTip(m: { swing: number; swingRounds: number }): string | undefined {
