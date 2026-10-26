@@ -11,7 +11,7 @@ import { AttrRadar, FormBars } from "../../components/charts";
 import { GameIcon } from "../../components/GameIcon";
 import { attrsOf, fmtMetric, proPoolName, proPopulation, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
-import { PANEL_TIP, PROVISIONAL_TIP, TIP, tipOf } from "../../data/tips";
+import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
 import { metric, roleSignals, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
@@ -138,11 +138,11 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   const e = evidenceOf(m);
   return (
     <ul className="rtiles">
-      <li data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : TIP.roundsWithAwp}>
+      <li data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : tipOf("roundsWithAwp")}>
         <span className="rtiles__ico"><GameIcon id="awp" width={34} height={12} fallback={<WeaponIcon name="awp" size={12} />} /></span>
         <b className="num">{e.awp === null ? "–" : fmtPct(e.awp, 0)}</b><span>AWP rounds</span>
       </li>
-      <li data-tip={TIP.openingAttempts}>
+      <li data-tip={tipOf("openingAttempts")}>
         <span className="rtiles__ico"><FirstKillIcon size={15} /></span>
         <b className="num">{e.opening === null ? "–" : fmtPct(e.opening, 0)}</b><span>Opening duels</span>
       </li>
