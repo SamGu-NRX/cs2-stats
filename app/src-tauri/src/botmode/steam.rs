@@ -222,7 +222,7 @@ mod tests {
         write(&steam.join("steamapps/libraryfolders.vdf"), &lf);
         write(
             &lib2.join("steamapps/appmanifest_730.acf"),
-            "\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n\t\"installdir\"\t\t\"Counter-Strike Global Offensive\"\n\t\"buildid\"\t\t\"26144732\"\n\t\"LastOwner\"\t\t\"76561199138360625\"\n}\n",
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n\t\"installdir\"\t\t\"Counter-Strike Global Offensive\"\n\t\"buildid\"\t\t\"26144732\"\n\t\"LastOwner\"\t\t\"76561197961265729\"\n}\n",
         );
         let csgo = lib2.join("steamapps/common/Counter-Strike Global Offensive/game/csgo");
         write(&csgo.join("gameinfo.gi"), "\"GameInfo\" {}");
@@ -288,7 +288,7 @@ mod tests {
         let (steam, _) = fake_steam(&s);
         let install = find_cs2(&steam).unwrap();
         let config = SteamConfig::for_install(&install).unwrap();
-        assert_eq!(config.localconfig, steam.join("userdata/1178094897/config/localconfig.vdf"));
+        assert_eq!(config.localconfig, steam.join("userdata/1000001/config/localconfig.vdf"));
 
         // Missing, unreadable and not-a-localconfig files are errors, never "no options".
         assert!(config.read_options().unwrap_err().contains("Start Steam and sign in once"), "missing file says how to fix it");
