@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 29;
+export const DERIVE_VERSION = 30;
 
 export interface MatchInfo {
   id: string;
@@ -62,6 +62,12 @@ export interface MatchInfo {
      * visibility comes from the extractor's engagements.
      */
     onScreen: OnScreenSource | null;
+    /**
+     * kills and enemy damage involving a player off their round's roster (rules.ts onRoster): the
+     * source marks them dead at freeze end or gone before it, yet records them in that round. They are
+     * in none of that player's numbers; the match view says how many there are.
+     */
+    offRoster: number;
   };
 }
 
@@ -157,7 +163,7 @@ export interface RoundFact {
   /** players who disconnected during the round while alive, with the tick (tables leaves; plugin files only) */
   leaves: { tick: number; pi: number }[];
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
-  winProb: { tick: number; event: "start" | "kill" | "plant"; pT: number }[] | null;
+  winProb: { tick: number; event: "start" | "kill" | "plant" | "leave"; pT: number }[] | null;
 }
 
 export interface KillFact {

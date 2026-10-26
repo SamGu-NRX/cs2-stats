@@ -10,6 +10,7 @@ import { blindWindows } from "./blinds";
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact, Measures } from "./facts";
+import { roundPopulation } from "./rules";
 import type { Side } from "./tables";
 import { pTWins, type RoundState } from "./winprob";
 
@@ -24,8 +25,9 @@ export function swing(c: Ctx): void {
     const rf = c.rounds[ri];
     const rows = c.pr[ri];
     if (rf.winner === null) continue;
-    const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-    rows.forEach((p) => { if (p) alive[p.side].add(p.pi); });
+    // the players in the live round, and its deaths and disconnects (rules.ts roundPopulation), as the
+    // clutch and man-advantage counts read them
+    const { alive, deaths, leaves } = roundPopulation(rf, rows, c.kills[ri]);
     // health of the living, from the round's damage up to each event (CS2RB reads it)
     const hp = new Map<number, number>();
     rows.forEach((p) => { if (p) hp.set(p.pi, 100); });
@@ -67,10 +69,14 @@ export function swing(c: Ctx): void {
     const addPart = (m: Map<number, number>, p: number, v: number) => m.set(p, (m.get(p) ?? 0) + v);
     // a player's clutch starts when they are the last of their side alive
     const inClutch = new Set<number>();
-    // HLTV's event graph stops at round end, so later kills are not valued.
-    const events: ({ kind: "kill"; k: KillFact } | { kind: "plant"; tick: number })[] = c.kills[ri].filter((k) => k.tick <= rf.endTick).map((k) => ({ kind: "kill" as const, k }));
+    // HLTV's event graph stops at round end, so later kills are not valued. A disconnect moves the win
+    // probability as a death does but credits no one (ours): nobody's action caused it. On one tick a
+    // death comes before a disconnect, and both before a plant.
+    type Ev = { kind: "kill"; k: KillFact; tick: number } | { kind: "leave"; pi: number; tick: number } | { kind: "plant"; tick: number };
+    const events: Ev[] = [...deaths.map((k): Ev => ({ kind: "kill", k, tick: k.tick })), ...leaves.map((l): Ev => ({ kind: "leave", pi: l.pi, tick: l.tick }))];
     if (rf.plantTick !== null && rf.plantTick <= rf.endTick) events.push({ kind: "plant", tick: rf.plantTick });
-    events.sort((a, b) => (a.kind === "kill" ? a.k.tick : a.tick) - (b.kind === "kill" ? b.k.tick : b.tick));
+    const rank = { kill: 0, leave: 1, plant: 2 } as const;
+    events.sort((a, b) => a.tick - b.tick || rank[a.kind] - rank[b.kind]);
 
     let valued = true;
     for (const e of events) {
@@ -80,6 +86,18 @@ export function swing(c: Ctx): void {
         if (p === null) { valued = false; break; }
         pT = p;
         path.push({ tick: e.tick, event: "plant", pT });
+        continue;
+      }
+      if (e.kind === "leave") {
+        const side = alive.CT.has(e.pi) ? "CT" : alive.T.has(e.pi) ? "T" : null;
+        if (side === null) continue;
+        alive[side].delete(e.pi);
+        if (side === "T") state.aliveT--; else state.aliveCT--;
+        const p = at(e.tick);
+        if (p === null) { valued = false; break; }
+        pT = p;
+        path.push({ tick: e.tick, event: "leave", pT });
+        for (const s of ["CT", "T"] as const) if (alive[s].size === 1) inClutch.add([...alive[s]][0]);
         continue;
       }
       const k = e.k;

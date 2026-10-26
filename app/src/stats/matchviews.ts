@@ -102,8 +102,16 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
   };
   // every opposing pair, interactions or not
   for (let x = 0; x < f.players.length; x++) for (let y = x + 1; y < f.players.length; y++) slot(x, y);
+  // only what passed between two players on the round's roster (rules.ts onRoster), as every other
+  // number of theirs counts it; the rest is MatchInfo.inputs.offRoster
+  const onRow = new Set(f.pr.map((r) => r.ri * 1024 + r.pi));
+  const riOf = new Map(f.rounds.map((r) => [r.number, r.ri]));
+  const both = (round: number, x: number | undefined, y: number | undefined) => {
+    const ri = riOf.get(round);
+    return ri !== undefined && x !== undefined && y !== undefined && onRow.has(ri * 1024 + x) && onRow.has(ri * 1024 + y);
+  };
   for (const k of f.kills) {
-    if (!k.enemy || k.killer === null) continue;
+    if (!k.enemy || k.killer === null || !onRow.has(k.ri * 1024 + k.killer) || !onRow.has(k.ri * 1024 + k.victim)) continue;
     const s = slot(k.killer, k.victim);
     if (!s) continue;
     const [h, i] = s;
@@ -116,13 +124,17 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
   const D = t.damages;
   for (let i = 0; i < D.n; i++) {
     if (!enemyHit(t, i)) continue;
-    const s = slot(id.get(D.attacker_steamid[i]!) ?? -1, id.get(D.victim_steamid[i]) ?? -1);
+    const a = id.get(D.attacker_steamid[i]!), v = id.get(D.victim_steamid[i]);
+    if (!both(D.round[i], a, v)) continue;
+    const s = slot(a!, v!);
     if (s) s[0].damage[s[1]] += hitDamage(t, i);
   }
   // repeated blind rows joined, as the utility measures count them (blinds.ts)
   for (const l of blindWindows(t).values()) for (const b of l) {
     if (b.self || b.team || b.attacker === null || b.secs <= FLASHED_MIN_S) continue;
-    const s = slot(id.get(b.attacker) ?? -1, id.get(b.victim) ?? -1);
+    const a = id.get(b.attacker), v = id.get(b.victim);
+    if (!both(b.round, a, v)) continue;
+    const s = slot(a!, v!);
     if (s) { s[0].flashes[s[1]].count++; s[0].flashes[s[1]].secs += b.secs; }
   }
   return [...pairs.values()];

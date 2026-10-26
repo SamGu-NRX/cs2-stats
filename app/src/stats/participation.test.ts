@@ -2,9 +2,12 @@
 // alive, saves, openings, trades, clutches and the man-advantage states, on hand-built rounds. CT a and
 // b against T c and d unless a test says otherwise; round 1 freezes until FREEZE_END.
 import { describe, expect, it } from "vitest";
-import { addSituations, type Situations } from "./matchviews";
+import { entryOf } from "../worker/views";
+import { derive } from "./derive";
+import { addSituations, headToHead, type Situations } from "./matchviews";
+import { CS2RB } from "./model-params";
 import { rollup } from "./rollup";
-import { FREEZE_END, oneRound, type OneRound } from "./testing/match";
+import { FREEZE_END, oneRound, oneRoundTables, type OneRound } from "./testing/match";
 
 const t = (s: number) => FREEZE_END + 64 * s;
 const m = (f: ReturnType<typeof oneRound>, p: string) => rollup([f], { player: p }).m;
@@ -67,7 +70,8 @@ describe("who took part in a round", () => {
     // too) and dies to d at 20 s, T winning
     const f = oneRound({
       players: { a: "CT", b: "CT", e: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
-      player_rounds: { e: { alive_at_start: false } },
+      // equipment lets the win-probability model value the round (swing)
+      player_rounds: Object.fromEntries(["a", "b", "e", "c", "d"].map((p) => [p, { equip_value_game: 4000, ...(p === "e" ? { alive_at_start: false } : {}) }])),
       leaves: [{ tick: t(5), steamid: "b", alive: true }],
       kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(20), killer: "d", victim: "a" }],
     });
@@ -79,5 +83,58 @@ describe("who took part in a round", () => {
     expect(f.clutches.map((c) => [f.players[c.pi].id, c.opponents, c.won, c.kills, c.t])).toEqual([["a", 2, false, 1, 5], ["d", 1, true, 1, 10]]);
     expect(states(f, "a")).toEqual({ "2v2": { rounds: 1, won: 0 }, "1v2": { rounds: 1, won: 0 }, "1v1": { rounds: 1, won: 0 } });
     expect(states(f, "e")).toEqual({});
+    // swing reads the same population: b's disconnect is an event on the round's win probability
+    expect(f.rounds[0].winProb?.map((e) => e.event)).toEqual(["start", "leave", "kill", "kill"]);
+    // the eco-adjusted KAST (weighted by the kill's economy) credits the same rounds as KAST: b left
+    // without a kill or assist, so 0 both ways, where counting the disconnect as survival would give 1
+    expect(ids.map((p) => (m(f, p).ecoKast > 0 ? 1 : 0))).toEqual(ids.map((p) => m(f, p).kast));
+    expect(m(f, "b").ecoKast).toBe(0);
+    // "your match" picks matches by rounds played: e has none here
+    expect(entryOf("m", "test", { ...f, match: { ...f.match, pov: "a" } }).played).toEqual({ a: 1, b: 1, c: 1, d: 1 });
+  });
+
+  it("counts team equipment over the players on the roster only", () => {
+    // fails if e, off the roster with $4,000, adds to CT's equipment while the head count leaves e out:
+    // CT's total would be $6,000 over two players and a's deviation from the team -$2,000, not $0
+    const f = oneRound({
+      players: { a: "CT", b: "CT", e: "CT", c: "T", d: "T" },
+      player_rounds: { a: { equip_value_game: 1000 }, b: { equip_value_game: 1000 }, e: { equip_value_game: 4000, alive_at_start: false }, c: { equip_value_game: 1000 }, d: { equip_value_game: 1000 } },
+      kills: [{ tick: t(10), killer: "a", victim: "c" }],
+    });
+    expect(f.rounds[0].equip.CT).toBe(2000);
+    expect(pick(f, "a", ["buyDevRounds", "buyDevSum"])).toEqual([1, 0]);
+  });
+
+  it("keeps a player whose death at or before freeze end is recorded, even when also marked dead at freeze end", () => {
+    // fails if the flag drops the round and the death with it: b is marked dead at freeze end and has a
+    // recorded death 1 s before it, so b played the round and died in it, without a clutch population seat
+    const f = round({ player_rounds: { b: { alive_at_start: false } }, kills: [{ tick: FREEZE_END - 64, killer: "c", victim: "b" }, { tick: t(10), killer: "a", victim: "c" }] });
+    expect(pick(f, "b", ["rounds", "deaths", "survived", "kast"])).toEqual([1, 1, 0, 0]);
+    expect(f.clutches.map((c) => [f.players[c.pi].id, c.opponents, c.t])).toEqual([["a", 2, 0], ["d", 1, 10]]);
+  });
+
+  it("counts a flagged player's kill and hit as off-roster events, which head to head and the opening leave out too", () => {
+    // fails if an event by a player off the roster vanishes unnoted, or a raw view still shows it: b is
+    // marked dead at freeze end yet hits c at 3 s and kills c at 5 s. The match counts 2 off-roster
+    // events, head to head has no b-c kill or damage, and the opening is a's kill on d at 8 s
+    const tables = oneRoundTables({
+      players: { a: "CT", b: "CT", c: "T", d: "T" }, player_rounds: { b: { alive_at_start: false } },
+      damages: [{ tick: t(3), attacker_steamid: "b", victim_steamid: "c", dmg_health: 40, dmg_health_capped: 40, health_before: 100 }],
+      kills: [{ tick: t(5), killer: "b", victim: "c" }, { tick: t(8), killer: "a", victim: "d" }],
+    });
+    const f = derive(tables, CS2RB);
+    expect(f.match.inputs.offRoster).toBe(2);
+    const bc = headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === "b,c")!;
+    expect([bc.kills, bc.damage]).toEqual([[0, 0], [0, 0]]);
+    expect(f.kills.map((k) => [f.players[k.killer!].id, k.opening])).toEqual([["b", false], ["a", true]]);
+  });
+
+  it("makes no opening of a kill after the round's end, but lets it trade, as HLTV counts it", () => {
+    // fails if an exit frag becomes the opening duel, or a post-round trade is dropped: the round ends on
+    // time with no kill; d then kills a, and b kills d 2 s later. No opening; b's kill trades a
+    const end = t(30);
+    const f = round({ roundRow: { end_tick: end, winner_side: "CT" }, kills: [{ tick: end + 64, killer: "d", victim: "a" }, { tick: end + 192, killer: "b", victim: "d" }] });
+    expect(f.kills.map((k) => [k.opening, k.tradeKill, k.traded])).toEqual([[false, false, true], [false, true, false]]);
+    expect(pick(f, "a", ["deaths", "tradedDeaths", "kast", "openingDeaths"])).toEqual([1, 1, 1, 0]);
   });
 });

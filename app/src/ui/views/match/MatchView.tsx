@@ -143,6 +143,13 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
             <span>{fmtWhen(e.match)}</span>
             {e.match.durationS !== null && <span data-tip="From the first round's start to the last round's end" tabIndex={0}>{fmtDuration(e.match.durationS)}</span>}
             <SourceBadge s={src} />
+            {/* events the roster rule leaves out (stats/rules.ts onRoster), said rather than dropped silently */}
+            {e.match.inputs.offRoster > 0 && (
+              <span className="chip chip--warn" tabIndex={0}
+                data-tip={`The file marks a player dead at freeze end, or gone before it, yet records ${e.match.inputs.offRoster === 1 ? "a kill or hit" : "kills or hits"} by or on them in that round. Those rounds count for none of that player's numbers.`}>
+                {e.match.inputs.offRoster} off-roster {e.match.inputs.offRoster === 1 ? "event" : "events"}
+              </span>
+            )}
           </div>
         </div>
         <div className="mhero__team mhero__team--them">

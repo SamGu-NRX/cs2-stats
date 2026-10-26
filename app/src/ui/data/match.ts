@@ -34,6 +34,8 @@ export interface MatchEntry {
   shots: number;
   /** the recording player over the whole match, both sides; its rating is under the coverage rule */
   line: Line;
+  /** rounds each player played (has a player-round in; stats/rules.ts onRoster), by player id */
+  played: Record<string, number>;
 }
 
 /**
