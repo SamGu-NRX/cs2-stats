@@ -427,8 +427,8 @@ let gaugeWoke = false;
 /**
  * The card's gauge: a 240° arc filled to rating / 2 in cream, the 1.00 of an average player ticked at
  * its top (the hover card names it), and the verdict as a pill over the number (green only there: the arc measures, the pill
- * judges). On the first view of the session the arc draws and the number counts up (600 ms); after
- * that it is static, and a side switch only changes the number.
+ * judges). On the first view of the session the arc draws and the number counts up (600 ms). Any later
+ * value (a side or filter change, a keyboard action) is set at once, even while that first count runs.
  */
 export function Gauge({ value, verdict, label, size = 156 }: { value: number | null; verdict: "good" | "avg" | "poor" | "na"; label: ReactNode; size?: number }) {
   const sweep = 240;
@@ -438,9 +438,12 @@ export function Gauge({ value, verdict, label, size = 156 }: { value: number | n
   const frac = value === null ? 0 : Math.max(0, Math.min(1, value / 2));
   const [wake] = useState(() => !gaugeWoke && value !== null && !matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [shown, setShown] = useState(wake ? 0 : value ?? 0);
+  // whether this gauge has already counted (or never will): every value after the first is set at once
+  const counted = useRef(!wake);
   useEffect(() => {
     if (value === null) return;
-    if (!wake) { setShown(value); return; }
+    if (counted.current) { setShown(value); return; }
+    counted.current = true;
     gaugeWoke = true;
     const t0 = performance.now();
     const ease = (t: number) => 1 - Math.pow(1 - t, 3);

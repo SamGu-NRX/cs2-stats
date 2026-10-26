@@ -1169,6 +1169,7 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 @keyframes trk-in { from { transform: translateX(calc((50 - var(--p, 50)) * 1cqw)); } }
 html.anim .profile[data-enter] .card { animation: rise 240ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
+html.anim .profile[data-enter] .pcard__agent { animation: fade-in var(--d-color) ease both; }
 html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation: trk-in 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
 @media (prefers-reduced-motion: reduce) {
   html.anim .profile[data-enter] .card, html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation-name: fade-in; }
@@ -1182,7 +1183,8 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .profile__top { container-type: inline-size; }
 .pcard { display: grid; grid-template-columns: minmax(360px, 1.1fr) auto minmax(380px, 1fr); min-height: 200px; overflow: hidden; }
 .pcard__id { position: relative; display: flex; align-items: center; min-width: 0; padding: 20px 20px 20px 168px; }
-.pcard__agent { position: absolute; left: 6px; bottom: 0; height: 196px; width: auto; pointer-events: none; user-select: none; animation: fade-in var(--d-color) ease both;
+/* the portrait fades in with the page's entrance only; a side switch swaps it without motion */
+.pcard__agent { position: absolute; left: 6px; bottom: 0; height: 196px; width: auto; pointer-events: none; user-select: none;
   -webkit-mask-image: linear-gradient(to right, #000 62%, transparent 98%), linear-gradient(to bottom, #000 70%, transparent 100%); -webkit-mask-composite: source-in;
   mask-image: linear-gradient(to right, #000 62%, transparent 98%), linear-gradient(to bottom, #000 70%, transparent 100%); mask-composite: intersect; }
 .pcard__agent.agent-fallback { width: 160px; }

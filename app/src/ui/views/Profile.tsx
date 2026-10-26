@@ -339,7 +339,8 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   return (
     <section className="card hero pcard" aria-label="Player card">
       <div className="pcard__id">
-        <AgentImg side={side === "ct" ? "ct" : "t"} kind="portrait" className="pcard__agent" key={side === "ct" ? "ct" : "t"} />
+        {/* no key: a side switch swaps the art in place, so it never fades again (views.css .pcard__agent) */}
+        <AgentImg side={side === "ct" ? "ct" : "t"} kind="portrait" className="pcard__agent" />
         <div className="pcard__who">
           <h1 className="pcard__name">{p.name}</h1>
           <p className="pcard__sub"><b>{wins}–{losses}</b> · {plural(p.list.length, "match", "matches")} · {plural(p.you.m.rounds, "round")}{maps.length === 1 ? ` · ${mapName(maps[0])}` : ""}</p>
