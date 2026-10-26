@@ -102,3 +102,6 @@
 .guncell--advice .gicon, .guncell--advice .ico { margin-top: 2px; }
 .guncell__txt { display: grid; gap: 3px; min-width: 0; white-space: normal; }
 .guncell__advice { font: 400 12px/1.35 var(--f); font-variant-numeric: normal; color: var(--ink2); text-wrap: pretty; }
+
+/* a landing past the widest well (60 degrees): a cream chevron on the edge, pointing where it went */
+.spray__edge { fill: var(--cream); opacity: 0.9; }

@@ -101,7 +101,7 @@ const V = 360;
  * Degrees of margin around the drawn layers (room for the layer names above the pattern and below the
  * ideal pull at the widest frame), and the smallest and largest side in degrees.
  */
-const PAD = 1.5, MIN_SIDE = 8, MAX_SIDE = 30;
+const PAD = 1.5, MIN_SIDE = 8, MAX_SIDE = 60;
 
 export interface SprayFrame {
   /** the well's side, whole degrees */
@@ -114,18 +114,30 @@ export interface SprayFrame {
 }
 
 /**
- * The square frame that holds every point given, bullet 1 included, with a degree of margin: yaw
- * centred on bullet 1 (the pattern sways both ways), pitch centred on its own range. Past MAX_SIDE the
- * well clips, bullet 1 kept PAD inside the edge.
+ * The square frame that holds every point given, bullet 1 included, with a margin: both axes centred on
+ * the points' own range, so a wide miss to one side widens the well instead of running off its edge
+ * (centring yaw on bullet 1 had cut off his landings on a sideways spray). Past MAX_SIDE the well stops
+ * growing, keeps bullet 1 PAD inside the edge, and the points beyond get edge markers (SprayWell).
  */
 export function sprayFrame(pts: readonly { pitch: number; yaw: number }[]): SprayFrame {
-  let pmin = 0, pmax = 0, ymax = 0;
-  for (const p of pts) { pmin = Math.min(pmin, p.pitch); pmax = Math.max(pmax, p.pitch); ymax = Math.max(ymax, Math.abs(p.yaw)); }
-  const side = Math.min(MAX_SIDE, Math.max(MIN_SIDE, Math.ceil(Math.max(pmax - pmin + 2 * PAD, 2 * (ymax + PAD)))));
+  let pmin = 0, pmax = 0, ymin = 0, ymax = 0;
+  for (const p of pts) { pmin = Math.min(pmin, p.pitch); pmax = Math.max(pmax, p.pitch); ymin = Math.min(ymin, p.yaw); ymax = Math.max(ymax, p.yaw); }
+  const side = Math.min(MAX_SIDE, Math.max(MIN_SIDE, Math.ceil(Math.max(pmax - pmin, ymax - ymin) + 2 * PAD)));
   const s = V / side;
   const half = side / 2 - PAD;
-  const mid = Math.max(-half, Math.min(half, (pmin + pmax) / 2));
-  return { side, s, x0: V / 2, y0: V / 2 - mid * s };
+  const pmid = Math.max(-half, Math.min(half, (pmin + pmax) / 2));
+  const ymid = Math.max(-half, Math.min(half, (ymin + ymax) / 2));
+  // X(yaw) = x0 - yaw * s and Y(pitch) = y0 + pitch * s put the range's middle at the well's middle
+  return { side, s, x0: V / 2 + ymid * s, y0: V / 2 - pmid * s };
+}
+
+/** Where a point outside the well meets its edge, and the direction it lies in, for an edge marker. */
+export function edgeOf(x: number, y: number, cx: number, cy: number): { x: number; y: number; angle: number } | null {
+  if (x >= 0 && x <= V && y >= 0 && y <= V) return null;
+  const dx = x - cx, dy = y - cy;
+  // scale the ray from the centre so it ends on the edge, 6 units inside
+  const t = Math.min(dx ? (dx > 0 ? V - 6 - cx : 6 - cx) / dx : Infinity, dy ? (dy > 0 ? V - 6 - cy : 6 - cy) / dy : Infinity);
+  return { x: cx + dx * t, y: cy + dy * t, angle: (Math.atan2(dy, dx) * 180) / Math.PI };
 }
 
 /** A bullet's landing glyph: filled when measured, a ring when estimated, half filled for a mix. */
@@ -246,6 +258,11 @@ export function SprayWell({ label, reference, landing, path, heads = null, sprea
           {NUMBERED.has(p.bullet) && <BulletNo x={X(p.yaw)} y={Y(p.pitch)} cx={cx} cy={cy} n={p.bullet} />}
         </g>
       ))}
+      {/* a landing past the widest well: a chevron on the edge points to where it went */}
+      {main.slice(1).map((p) => {
+        const e = edgeOf(X(p.yaw), Y(p.pitch), V / 2, V / 2);
+        return e ? <path key={`edge${p.bullet}`} d="M-4,-5 L4,0 L-4,5 Z" transform={`translate(${e.x},${e.y}) rotate(${e.angle})`} className="spray__edge"><title>{`Bullet ${p.bullet} lands outside the chart`}</title></path> : null;
+      })}
       {/* bullet 1's point, the aim point every other bullet is measured from */}
       <circle cx={f.x0} cy={f.y0} r={5} className="spray__origin" />
       {main.length > 0 && <BulletNo x={f.x0} y={f.y0} cx={cx} cy={cy} n={1} />}

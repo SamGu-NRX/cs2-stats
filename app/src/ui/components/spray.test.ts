@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RECOIL, type RecoilRef } from "../../stats/recoil-ref";
-import { landingSource, meanPath, sprayFinding, sprayFrame, sprayStay, type Landing, type PlayerPath } from "./SprayPath";
+import { edgeOf, landingSource, meanPath, sprayFinding, sprayFrame, sprayStay, type Landing, type PlayerPath } from "./SprayPath";
 
 const ak = RECOIL.ak47;
 // A path built from the pro median itself, n sprays per bullet, with an optional pitch offset from bullet `from` on.
@@ -63,8 +63,8 @@ describe("spray frame", () => {
     const x = f.x0 - p.yaw * f.s, y = f.y0 + p.pitch * f.s;
     return x >= 0 && x <= 360 && y >= 0 && y <= 360;
   };
-  it("fits a pattern and its mirror in a square of whole degrees, bullet 1 in the middle", () => {
-    // pitch -10 to 10 and 1.5° of margin each side: 23°, wider than the yaw's 2 × (2 + 1.5)
+  it("fits a pattern and its mirror in a square of whole degrees, centred on their range", () => {
+    // pitch -10 to 10 and 1.5° of margin each side: 23°, wider than the yaw's 4 + 3
     const pts = [{ pitch: -10, yaw: 2 }, { pitch: 10, yaw: -2 }];
     const f = sprayFrame(pts);
     expect([f.side, f.s, f.x0, f.y0]).toEqual([23, 360 / 23, 180, 180]);
@@ -75,8 +75,18 @@ describe("spray frame", () => {
     const f = sprayFrame([{ pitch: 4, yaw: 0 }]);
     expect([f.side, f.y0]).toEqual([8, 180 - 2 * (360 / 8)]);
   });
-  it("stops at 30° and keeps bullet 1 the margin inside the edge", () => {
-    const f = sprayFrame([{ pitch: 50, yaw: 0 }]);
-    expect([f.side, f.y0]).toEqual([30, 1.5 * 12]);
+  it("widens for a wide sideways miss instead of cutting it off at the edge", () => {
+    // fails if yaw is centred on bullet 1 again: a landing 16° to one side ran off a 30° well
+    const pts = [{ pitch: 0, yaw: 0 }, { pitch: 6, yaw: 16 }, { pitch: 9, yaw: 14 }];
+    const f = sprayFrame(pts);
+    expect(pts.every((p) => inside(f, p))).toBe(true);
+    expect(f.side).toBe(19);
+  });
+  it("stops at 60° and keeps bullet 1 the margin inside the edge, marking what lies beyond", () => {
+    const f = sprayFrame([{ pitch: 90, yaw: 0 }]);
+    expect([f.side, f.y0]).toEqual([60, 1.5 * 6]);
+    const far = edgeOf(180, 900, 180, 180)!;
+    expect([Math.round(far.x), Math.round(far.y), far.angle]).toEqual([180, 354, 90]);
+    expect(edgeOf(100, 100, 180, 180)).toBeNull();
   });
 });
