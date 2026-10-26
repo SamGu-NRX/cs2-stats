@@ -36,6 +36,7 @@ import psutil
 ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
 import extract  # noqa: E402
+from repo_guard import OutputRefused, check_output  # noqa: E402
 
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
@@ -1014,6 +1015,11 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if DOWNLOADS is None:
         ap.error("set CS2_DEMO_DOWNLOADS to the folder the browser saves HLTV demo archives to")
+    try:
+        # everything the pipeline writes (tables, ledgers, logs, failed archives) lives under DATA_ROOT
+        check_output(DATA_ROOT, private=True, what="the pipeline's data folder (tables, ledgers, logs)")
+    except OutputRefused as e:
+        ap.error(str(e))
     setup_logging()
     # An earlier instance died without a log line; leave evidence of any future death.
     import atexit

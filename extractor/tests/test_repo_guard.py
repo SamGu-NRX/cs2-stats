@@ -11,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import demo_pipeline as dp  # noqa: E402
 import extract as ex  # noqa: E402
 import repo_guard as rg  # noqa: E402
 import valve_import as vi  # noqa: E402
@@ -89,3 +90,12 @@ class TestExtractor:
         assert vi.resolve_user(tmp_path / "out", None, None) == {"steamid": U1, "source": "--user"}
         with pytest.raises(rg.OutputRefused):
             vi.resolve_user(REPO / "data", None, U1)
+
+    def test_the_pipeline_refuses_a_data_folder_in_the_repository(self, tmp_path, monkeypatch, capsys):
+        # fails if CS2_STATS_DATA can point the pipeline's tables, ledgers and logs into the tree
+        monkeypatch.setattr(dp, "DOWNLOADS", tmp_path)
+        monkeypatch.setattr(dp, "DATA_ROOT", REPO / "data")
+        with pytest.raises(SystemExit) as e:
+            dp.main(["--once"])
+        assert e.value.code == 2 and "refusing to write the pipeline's data folder" in capsys.readouterr().err
+        assert not (REPO / "data").exists()
