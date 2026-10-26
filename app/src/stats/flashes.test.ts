@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { derive } from "./derive";
 import { NO_GRENADE_EVENTS, flashTool } from "./flashes";
 import { CS2RB } from "./model-params";
+import { headToHead } from "./matchviews";
+import { rollup } from "./rollup";
 import { FREEZE_END, oneRoundTables, type OneRound } from "./testing/match";
 
 const t = (s: number) => FREEZE_END + 64 * s;
@@ -151,6 +153,34 @@ describe("flashTool", () => {
     });
     expect(r.flashes[0].blinded.map((b) => [b.pi, b.secs, b.flashed])).toEqual([[pi.c, 3, true]]);
     expect(r.flashes[0].kills.map((k) => [k.victim, k.assist, k.whileBlind])).toEqual([[pi.c, true, true]]);
+  });
+
+  it("counts the same blinds as the utility measures and head to head, with repeated and overlapping rows", () => {
+    // fails if one layer counts raw rows and another joined windows. c's blind is recorded twice
+    // (identical rows), d's in two overlapping parts (10 s for 1 s, 10.5 s for 2 s: one 2.5 s window),
+    // and b, a teammate, twice. b kills c at 11 s and d at 12 s, both inside their windows
+    const tables = oneRoundTables({
+      players,
+      grenade_events: [det(10, 7)],
+      blinds: [blind(10, 7, "c", 2), blind(10, 7, "c", 2), blind(10, 7, "d", 1), blind(10.5, 7, "d", 2), blind(10, 7, "b", 1.5, { is_team_flash: true }), blind(10, 7, "b", 1.5, { is_team_flash: true })],
+      kills: [{ tick: t(11), killer: "b", victim: "c" }, { tick: t(12), killer: "b", victim: "d" }],
+    });
+    const f = derive(tables, CS2RB);
+    const m = rollup([f], { player: "a" }).m;
+    const flash = flashTool(tables, f, "a").flashes[0];
+    const enemies = flash.blinded.filter((b) => !b.team && b.flashed);
+    const mates = flash.blinded.filter((b) => b.team && b.flashed);
+    expect([enemies.length, enemies.reduce((s, b) => s + b.secs, 0), mates.length, flash.kills.filter((k) => k.whileBlind).length]).toEqual([2, 4.5, 1, 2]);
+    expect([m.enemiesFlashed, m.enemyBlindSecs, m.teamFlashed, m.flashKills]).toEqual([2, 4.5, 1, 2]);
+    const pair = (x: string, y: string) => headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === [x, y].sort().join());
+    const ac = pair("a", "c")!;
+    expect((ac.a === "a" ? ac.flashes[0] : ac.flashes[1]).count).toBe(1);
+  });
+
+  it("notes a blind with neither an attacker nor a matching detonation instead of dropping it silently", () => {
+    // fails if a blind that may be a's but names no attacker and no known detonation disappears unnoted
+    const r = tool({ grenade_events: [det(10, 7)], blinds: [blind(20, 99, "c", 2, { attacker_steamid: null }), blind(21, null, "d", 2, { attacker_steamid: null })] });
+    expect(r.notes).toEqual(["2 blinds have neither a recorded attacker nor a matching detonation in this file, so they are left out."]);
   });
 
   it("refuses a player who is not in the match", () => {

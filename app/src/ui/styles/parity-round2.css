@@ -32,7 +32,10 @@
 .fl-dot--team .fl-dot__core { fill: var(--s1); stroke: var(--poor-text); stroke-width: 3.5; }
 .fl-dot--none .fl-dot__core { fill: var(--ink3); }
 @media (hover: hover) and (pointer: fine) { .fl-dot:hover .fl-dot__core { stroke: var(--ink); } }
-.fl-dots.is-dim { opacity: 0.22; }
+/* a picked flash steps the other dots back; a dot with keyboard focus stays clear, with a cream ring */
+.fl-dot.is-dim:not(:focus-visible) { opacity: 0.22; }
+.fl-dot:focus { outline: none; }
+.fl-dot:focus-visible .fl-dot__hit { stroke: var(--cream); stroke-width: 3; }
 .fl-ray line { stroke: var(--cream); stroke-width: 2.5; stroke-opacity: 0.85; }
 .fl-ray.is-team line { stroke: var(--poor-text); stroke-dasharray: 8 6; }
 .fl-ray.is-short line { stroke-opacity: 0.35; }

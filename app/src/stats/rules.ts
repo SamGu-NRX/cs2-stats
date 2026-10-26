@@ -70,23 +70,32 @@ export interface Clutch {
 }
 
 /**
- * A round's population: the players alive at its freeze end, by side, and the disconnects of living
- * players during the live round, after freeze end and up to its end. A player is left out when the
- * source marks them dead at freeze end (player_rounds.alive_at_start, plugin files; README.md "Fields
- * the app reads") or when they disconnected at or before freeze end, whatever that flag says (it is
- * null in files without it). Clutches, saves and last alive (closing.ts) and the man-advantage states
- * (matchviews.ts addSituations) all read this, so no view counts a player another leaves out.
+ * A round's population: the players alive at its freeze end, by side, and the deaths and disconnects
+ * of the live round, after freeze end and up to its end. A player is left out when the source marks
+ * them dead at freeze end (player_rounds.alive_at_start, plugin files; README.md "Fields the app
+ * reads"), or when they died or disconnected at or before freeze end, whatever that flag says (it is
+ * null in files without it). A round without a freeze end has no such cut: all of its deaths and
+ * disconnects up to its end are live. Clutches, saves and last alive (closing.ts) and the
+ * man-advantage states (matchviews.ts addSituations) all read this, so no view counts a player, or a
+ * death, that another leaves out.
  */
 export function roundPopulation(
   rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">,
   rows: Iterable<{ pi: number; side: Side; aliveAtStart: boolean | null } | null>,
-): { alive: Record<Side, Set<number>>; inRound: (pi: number) => boolean; leaves: { tick: number; pi: number }[] } {
+  kills: readonly KillFact[],
+): { alive: Record<Side, Set<number>>; inRound: (pi: number) => boolean; deaths: KillFact[]; leaves: { tick: number; pi: number }[] } {
   const fe = rf.freezeEndTick;
-  const leftEarly = new Set(fe === null ? [] : rf.leaves.filter((l) => l.tick <= fe).map((l) => l.pi));
+  const early = (tick: number) => fe !== null && tick <= fe;
+  const live = (tick: number) => !early(tick) && tick <= rf.endTick;
+  const gone = new Set([...rf.leaves.filter((l) => early(l.tick)).map((l) => l.pi), ...kills.filter((k) => early(k.tick)).map((k) => k.victim)]);
   const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-  for (const r of rows) if (r && r.aliveAtStart !== false && !leftEarly.has(r.pi)) alive[r.side].add(r.pi);
+  for (const r of rows) if (r && r.aliveAtStart !== false && !gone.has(r.pi)) alive[r.side].add(r.pi);
   const members = new Set([...alive.CT, ...alive.T]);
-  return { alive, inRound: (pi) => members.has(pi), leaves: rf.leaves.filter((l) => (fe === null || l.tick > fe) && l.tick <= rf.endTick) };
+  return {
+    alive, inRound: (pi) => members.has(pi),
+    deaths: kills.filter((k) => live(k.tick)).sort((a, b) => a.tick - b.tick),
+    leaves: rf.leaves.filter((l) => live(l.tick)),
+  };
 }
 
 /**

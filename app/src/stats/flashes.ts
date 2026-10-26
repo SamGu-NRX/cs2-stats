@@ -4,6 +4,7 @@
 // and the match's facts (kills, sides), like the other per-match views (matchviews.ts).
 import type { KillFact, MatchFacts } from "./facts";
 import type { MatchTables, Side } from "./tables";
+import { blindWindows } from "./blinds";
 import { FLASHED_MIN_S } from "./utility";
 
 /** One player a flash blinded. `at` is where they stood, from the position sample nearest the blind. */
@@ -65,7 +66,7 @@ const DETONATE = "flash_detonate";
  * detonation's tick): its recorded attacker's latest such detonation at or before it, or with no
  * attacker recorded, the latest by anyone, which makes it this player's only when that one is theirs.
  * A blind without that link is left out and counted in the notes, never placed by guess. A repeated
- * detonation or throw row counts once, and one player's blind rows under one flash join into one window. A flash led to a kill
+ * detonation or throw row counts once, and repeated blind rows are one window (blinds.ts blindWindows). A flash led to a kill
  * when either holds:
  * - assist: the kill carries a flash assist for the thrower, and this flash is the thrower's latest
  *   one to have blinded the victim before the kill;
@@ -153,37 +154,28 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
 
   const near = positionsNear(t, tr);
   let unlinked = 0;
-  for (let i = 0; i < B.n; i++) {
+  let orphaned = 0;
+  // repeated blind rows joined into one window, as the utility measures count them (blinds.ts)
+  for (const l of blindWindows(t).values()) for (const b of l) {
     // A blind with a recorded attacker belongs to that attacker's latest detonation of its entity at or
     // before it. One with no attacker belongs to the latest detonation of that entity by anyone, and is
     // this player's only when that detonation is theirs.
-    const by = B.attacker_steamid[i];
+    const by = b.attacker;
     if (by !== null && by !== player) continue;
-    const id = B.flash_entity_id[i];
-    const d = (id === null ? [] : byEntity.get(`${B.round[i]}|${id}`) ?? [])
-      .filter((x) => x.tick <= B.tick[i] && (by === null || x.by === by))
-      .sort((a, b) => b.tick - a.tick)[0];
+    const d = (b.entity === null ? [] : byEntity.get(`${b.round}|${b.entity}`) ?? [])
+      .filter((x) => x.tick <= b.tick && (by === null || x.by === by))
+      .sort((x, y) => y.tick - x.tick)[0];
     const w = d?.work ?? null;
     if (!w) {
-      if (by === player && !B.is_self[i]) unlinked++;
+      if (by === player && !b.self) unlinked++;
+      // no attacker and no detonation to read one from: it may be this player's, and nothing says
+      if (by === null && !d && !b.self) orphaned++;
       continue;
     }
-    const v = piOf.get(B.victim_steamid[i]);
-    if (v === undefined || v === me || B.is_self[i]) continue;
-    // one flash blinds a player once: repeated blind rows join into one window, from the earliest start
-    // to the latest end, so a kill or assist inside either still counts
-    const secs = B.duration[i];
-    const j = w.row.blinded.findIndex((b) => b.pi === v);
-    if (j >= 0) {
-      const from = Math.min(w.ticks[j], B.tick[i]);
-      const until = Math.max(w.ticks[j] + w.row.blinded[j].secs * tr, B.tick[i] + secs * tr);
-      const joined = (until - from) / tr;
-      w.row.blinded[j] = { ...w.row.blinded[j], secs: joined, flashed: joined > FLASHED_MIN_S };
-      w.ticks[j] = from;
-      continue;
-    }
-    w.row.blinded.push({ pi: v, secs, team: B.is_team_flash[i], flashed: secs > FLASHED_MIN_S, at: near(B.round[i], B.victim_steamid[i], B.tick[i]) });
-    w.ticks.push(B.tick[i]);
+    const v = piOf.get(b.victim);
+    if (v === undefined || v === me || b.self) continue;
+    w.row.blinded.push({ pi: v, secs: b.secs, team: b.team, flashed: b.secs > FLASHED_MIN_S, at: near(b.round, b.victim, b.tick) });
+    w.ticks.push(b.tick);
   }
 
   // kills while blind: each blind over the cut, against the kills of its round
@@ -231,6 +223,7 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const blinded = flashes.flatMap((x) => x.blinded);
   const unseen = blinded.filter((b) => !b.at).length;
   if (unseen) notes.push(`${unseen} of the ${blinded.length} players these flashes blinded have no position sample near the blind, so no line can be drawn to them.`);
+  if (orphaned) notes.push(`${orphaned} ${orphaned === 1 ? "blind has" : "blinds have"} neither a recorded attacker nor a matching detonation in this file, so ${orphaned === 1 ? "it is" : "they are"} left out.`);
   if (unlinked) notes.push(`${unlinked} ${unlinked === 1 ? "blind names" : "blinds name"} no detonation in this file, so ${unlinked === 1 ? "it is" : "they are"} left out.`);
   return { flashes, thrown, notes };
 }

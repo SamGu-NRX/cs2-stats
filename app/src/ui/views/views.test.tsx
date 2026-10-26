@@ -1006,7 +1006,7 @@ describe("parity round 2: flashes, clutches and highlights", () => {
     expect(Array.from(detail.querySelectorAll(".fl-blind__s")).map(text)).toEqual(["2.4 s", "1.5 s"]);
     expect(detail.querySelector(".fl-kill")?.getAttribute("data-tip")).toBe("Your flash assist, Killed while blind");
     // the picked flash draws its ray over the dimmed rest: one, to the victim whose position is known
-    expect(host.querySelector(".fl-dots.is-dim")).not.toBeNull();
+    expect(host.querySelectorAll(".fl-dot.is-dim")).toHaveLength(1);
     expect(host.querySelectorAll(".fl-ray")).toHaveLength(1);
   });
 
@@ -1021,6 +1021,21 @@ describe("parity round 2: flashes, clutches and highlights", () => {
     const ctBtn = Array.from(host.querySelectorAll<HTMLButtonElement>(".fl__bar .seg__item")).find((b) => text(b) === "CT")!;
     act(() => ctBtn.click());
     expect(Array.from(host.querySelectorAll(".fl-row .pip")).map(text)).toEqual(["15"]);
+  });
+
+  it("reaches the radar dots from the keyboard: one tab stop, arrows between them, Enter to pick", () => {
+    // fails if a dot cannot take focus, the arrows do not move between dots, or Enter does not open the
+    // flash as a click would
+    answers = { flashes: tool };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    const dots = () => Array.from(host.querySelectorAll<SVGGElement>(".fl-dot"));
+    expect(dots().map((d) => d.getAttribute("tabindex"))).toEqual(["0", "-1"]);
+    expect(dots()[0].getAttribute("data-tip")).toMatch(/^Round 3, /);
+    act(() => { dots()[0].focus(); dots()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+    expect(document.activeElement).toBe(dots()[1]);
+    act(() => { dots()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(dots()[1].getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".fl-row.is-open .pip")?.textContent).toBe("15");
   });
 
   it("shows the replay's unavailable state for a map without radar calibration, and keeps the list", () => {

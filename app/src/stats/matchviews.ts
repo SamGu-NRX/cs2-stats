@@ -2,6 +2,7 @@
 // "your match" against your recent matches, opening duels in detail, man-advantage situations and
 // bombsite outcomes. Each is a pure function of one match's facts (and its tables where facts keep too
 // little); the worker calls them and the UI lays them out. Our definitions, over schema v1 data.
+import { blindWindows } from "./blinds";
 import { metricDeltas } from "./career";
 import { enemyHit, hitDamage } from "./derive";
 import { emptyMeasures, type MatchFacts, type Measures } from "./facts";
@@ -118,11 +119,11 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
     const s = slot(id.get(D.attacker_steamid[i]!) ?? -1, id.get(D.victim_steamid[i]) ?? -1);
     if (s) s[0].damage[s[1]] += hitDamage(t, i);
   }
-  const B = t.blinds;
-  for (let i = 0; i < B.n; i++) {
-    if (B.is_self[i] || B.is_team_flash[i] || B.attacker_steamid[i] === null || B.duration[i] <= FLASHED_MIN_S) continue;
-    const s = slot(id.get(B.attacker_steamid[i]!) ?? -1, id.get(B.victim_steamid[i]) ?? -1);
-    if (s) { s[0].flashes[s[1]].count++; s[0].flashes[s[1]].secs += B.duration[i]; }
+  // repeated blind rows joined, as the utility measures count them (blinds.ts)
+  for (const l of blindWindows(t).values()) for (const b of l) {
+    if (b.self || b.team || b.attacker === null || b.secs <= FLASHED_MIN_S) continue;
+    const s = slot(id.get(b.attacker) ?? -1, id.get(b.victim) ?? -1);
+    if (s) { s[0].flashes[s[1]].count++; s[0].flashes[s[1]].secs += b.secs; }
   }
   return [...pairs.values()];
 }
@@ -276,18 +277,14 @@ export function addSituations(out: Situations, f: MatchFacts, filter: Filter): v
     const rf = f.rounds[p.ri];
     if (rf.winner === null) continue;
     // the players alive at freeze end and the live round's disconnects, as clutches read them (rules.ts roundPopulation)
-    const { alive, leaves } = roundPopulation(rf, f.pr.filter((r) => r.ri === p.ri));
+    const { alive, deaths, leaves } = roundPopulation(rf, f.pr.filter((r) => r.ri === p.ri), f.kills.filter((k) => k.ri === p.ri));
     const enemy: Side = p.side === "CT" ? "T" : "CT";
     const seen = new Set<string>();
     const note = () => { if (alive[p.side].size && alive[enemy].size) seen.add(`${alive[p.side].size}v${alive[enemy].size}`); };
     note();
-    // deaths in the live round and disconnects after freeze end, in tick order (a death before a
-    // disconnect on one tick); a player who left at or before freeze end was never in the counts
-    const live = (tick: number) => (rf.freezeEndTick === null || tick >= rf.freezeEndTick) && tick <= rf.endTick;
-    const gone: { tick: number; pi: number }[] = [
-      ...f.kills.filter((k) => k.ri === p.ri && live(k.tick)).map((k) => ({ tick: k.tick, pi: k.victim })),
-      ...leaves,
-    ];
+    // the live round's deaths and disconnects, in tick order (a death before a disconnect on one tick);
+    // a player who died or left at or before freeze end was never in the counts
+    const gone: { tick: number; pi: number }[] = [...deaths.map((k) => ({ tick: k.tick, pi: k.victim })), ...leaves];
     for (const e of gone.sort((x, y) => x.tick - y.tick)) if (alive.CT.delete(e.pi) || alive.T.delete(e.pi)) note();
     for (const s of seen) {
       const x = (out[s] ??= { rounds: 0, won: 0 });

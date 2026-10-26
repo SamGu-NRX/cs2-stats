@@ -119,7 +119,11 @@ Restored from main's unscored rows (E20): shown under the attributes, not part o
 ## Utility quality (performance)
 
 Flash rules are Leetify's (`research-data-sources.md`): an enemy counts as flashed above 1.1 s of
-blind, and a flash-to-kill is a flashed enemy dying to the team while still blind.
+blind, and a flash-to-kill is a flashed enemy dying to the team while still blind. A blind is a
+window of the blinds table with repeated rows joined (`blinds.ts` `blindWindows`: rows with the same
+round, attacker, victim and flash entity id whose windows overlap or touch are one blind, from the
+earliest start to the latest end). The utility measures, swing's flash share, head to head and the
+flash tool all count these windows.
 
 | id | Status | Definition |
 |---|---|---|
@@ -425,7 +429,7 @@ data; Leetify's match pages were the checklist.
 | Map zones | Your kills and deaths per zone (the map's place name) and side. A kill's zone is the kills table's place for you, else your position sample from the same round within half a second of the kill, since plugin files carry no kill places; with neither, the kill has no zone. The zone list is every place this match's position samples name. |
 | Your match | Every metric over this match against the same metric over your `n` most recent earlier matches, pooled. The direction is better or worse for performance metrics (lower is better where marked) and higher or lower for identity metrics. |
 | Opening duels | Each round's first enemy kill (killer, victim, weapon, time, whether the victim was traded, whether the killer's side won). Your best opening weapon is your gun with the most opening kills, ties broken by rounds won. Rounds won after your opening kill, and after your opening death. Conversions and each weapon's wins count only rounds with a known result. |
-| Situations | The alive counts of your side and the enemy's at freeze end, then after every death or disconnect of a living player, in tick order, from freeze end to the round's end (a death during freeze time is not counted). The round's population is the one clutches read (`rules.ts` `roundPopulation`): a player the source marks dead at freeze end (plugin `alive0`), or who disconnected at or before it, is not counted, and disconnects come from the plugin's `leaves`; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
+| Situations | The alive counts of your side and the enemy's at freeze end, then after every death or disconnect of a living player, in tick order, from freeze end to the round's end. The round's population is the one clutches read (`rules.ts` `roundPopulation`): a player the source marks dead at freeze end (plugin `alive0`), or who died or disconnected at or before it, is not counted, and disconnects come from the plugin's `leaves`; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
 | Bombsites | Per site letter. T: a take attempt is a round where a living T player entered the site's zone (the map's "Bombsite" place) before the plant; it succeeds when the bomb was planted there. Post-plant: rounds planted there, won. CT: a hold attempt is a round a T player entered the zone before the plant; it succeeds when CT won the round with no plant there. Retake: rounds planted there, won by CT. Take and hold need positions, the round's freeze end and the map's "Bombsite" place names; they are null until a round has all three, and the result says how many rounds could be read and which inputs were missing. Retake and post-plant come from plants alone. |
 
 ## Information (identity)

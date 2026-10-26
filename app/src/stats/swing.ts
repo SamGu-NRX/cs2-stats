@@ -6,6 +6,7 @@
 // Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and the flash share
 // (params.json swing.flash_credit_fraction) comes from 23 clean observations. VALIDATION.md compares
 // the result with HLTV's per-player swing.
+import { blindWindows } from "./blinds";
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact, Measures } from "./facts";
@@ -175,12 +176,12 @@ export function swing(c: Ctx): void {
 
 /** Players on the gaining side whose flash was blinding the victim at the kill (SPEC.md's eligible flashes). */
 function flashersOf(c: Ctx, ri: number, k: KillFact, gainer: Side): number[] {
-  const b = c.t.blinds;
   const out: number[] = [];
-  for (const i of c.byRound("blinds")[ri]) {
-    if (b.is_team_flash[i] || b.is_self[i] || b.ambiguous[i] || b.tick[i] > k.tick || k.tick > b.tick[i] + b.duration[i] * c.tickRate) continue;
-    if (c.pi.get(b.victim_steamid[i]) !== k.victim) continue;
-    const a = c.idOf(b.attacker_steamid[i]);
+  // repeated blind rows joined (blinds.ts), so a duplicated row does not count its flasher twice
+  for (const b of blindWindows(c.t).get(c.rounds[ri].number) ?? []) {
+    if (b.team || b.self || b.ambiguous || b.tick > k.tick || k.tick > b.tick + b.secs * c.tickRate) continue;
+    if (c.pi.get(b.victim) !== k.victim) continue;
+    const a = c.idOf(b.attacker);
     if (a !== null && a !== k.killer && c.side[ri][a] === gainer) out.push(a);
   }
   return out;

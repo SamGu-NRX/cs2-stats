@@ -46,8 +46,8 @@ export function closing(c: Ctx): ClutchFact[] {
     const rf = c.rounds[ri];
     const list = c.kills[ri];
     const rows = c.pr[ri];
-    // the players alive at freeze end, and the live round's disconnects (rules.ts roundPopulation)
-    const { alive, inRound, leaves } = roundPopulation(rf, rows);
+    // the players alive at freeze end, and the live round's deaths and disconnects (rules.ts roundPopulation)
+    const { alive, inRound, deaths: valued, leaves } = roundPopulation(rf, rows, list);
 
     // The rows are the round-start roster only when the extractor read them at freeze end. A round
     // without a freeze end (recording started live) has them read one tick before the round's end, after
@@ -56,7 +56,6 @@ export function closing(c: Ctx): ClutchFact[] {
     // clutch both start with a death.
     const atStart = rf.freezeEndTick !== null && withRows.has(ri);
 
-    const valued = list.filter((k) => k.tick <= rf.endTick);
     // alive at the round's end: in the round's population, not killed by its end and not disconnected
     // (a death after the end does not count, HLTV's rule). Saves and clutch saves both read this.
     const aliveAtEnd = (pi: number) => inRound(pi) && !valued.some((k) => k.victim === pi) && !leaves.some((l) => l.pi === pi);

@@ -132,3 +132,18 @@ it("agrees with the man-advantage states on who is in the round", () => {
   addSituations(states, f, { player: "a" });
   expect(states).toEqual({ "1v2": { rounds: 1, won: 0 } });
 });
+
+it("agrees with the man-advantage states on a death during freeze time", () => {
+  // fails if the clutch list counts a freeze-time death the man-advantage states drop, or the other way
+  // round: c kills b at 1 s before freeze end, so b was never in the live round. a is alone from the
+  // start, a 1v2 a loses, and a's side is at 1v2 and nothing else. Counting b, the states would add 2v2
+  // and the clutch would start at -1 s
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
+    kills: [{ tick: FREEZE_END - 64, killer: "c", victim: "b" }, { tick: t(10), killer: "c", victim: "a" }],
+  });
+  expect(rows(f, ["a", "b"]).map((r) => [r.player, r.opponents, r.won, r.t])).toEqual([["a", 2, false, 0]]);
+  const states: Situations = {};
+  addSituations(states, f, { player: "a" });
+  expect(states).toEqual({ "1v2": { rounds: 1, won: 0 } });
+});

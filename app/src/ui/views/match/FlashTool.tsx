@@ -1,13 +1,14 @@
 // The flash tool (Utility): your flashbangs on the radar where they detonated, and as a list with
 // whom each blinded, for how long, and the kills it led to (worker flashes, stats/flashes.ts). Side
-// and round filters; each flash links to its round. The list is the keyboard path: a radar dot is a
-// pointer shortcut to its row. Nothing moves; picking a flash steps the other dots back at once. Only
-// a mouse lights a row from the map and back, so a tap does not leave a row lit.
+// and round filters; each flash links to its round. The list and the radar both take the keyboard:
+// the dots are one tab stop with arrow keys between them (FlashRadar). Nothing moves; picking a flash
+// steps the other dots back at once. Only a mouse lights a row from the map and back, so a tap does
+// not leave a row lit.
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { FlashRow } from "../../../stats/flashes";
 import { FLASHED_MIN_S } from "../../../stats/utility";
 import { Card } from "../../components/Card";
-import { Segmented, Select, type Option } from "../../components/controls";
+import { rovingIndex, Segmented, Select, type Option } from "../../components/controls";
 import { frameFor, RadarView, type Frame } from "../../components/MapArt";
 import { useCall } from "../../data/hooks";
 import { mapInfo } from "../../data/maps";
@@ -98,7 +99,7 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
         <div className="fl__grid">
           <div className="fl__map">
             {frame ? (
-              <FlashRadar v={v} frame={frame} shown={shown} focus={focus} onPick={pickFromMap} onHover={setHover} />
+              <FlashRadar v={v} frame={frame} shown={shown} focus={focus} picked={picked} onPick={pickFromMap} onHover={setHover} />
             ) : <div className="fl__nomap"><Empty text={NO_MAP_FLASHES} /></div>}
             <p className="legend fl__legend" aria-hidden>
               <span><i className="fl-key fl-key--kill" />Led to a kill</span>
@@ -125,20 +126,39 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
   );
 }
 
-function FlashRadar({ v, frame, shown, focus, onPick, onHover }: {
-  v: TabProps["v"]; frame: Frame; shown: { f: FlashRow; i: number }[]; focus: number | null; onPick: (i: number) => void; onHover: (i: number | null) => void;
+/**
+ * The dots. One tab stop for the whole radar (the picked dot, else the first): the arrow keys, Home and
+ * End move between dots in list order, Enter or Space picks one as a click does, and a focused dot
+ * shows its ring and its tooltip.
+ */
+function FlashRadar({ v, frame, shown, focus, picked, onPick, onHover }: {
+  v: TabProps["v"]; frame: Frame; shown: { f: FlashRow; i: number }[]; focus: number | null; picked: number | null; onPick: (i: number) => void; onHover: (i: number | null) => void;
 }) {
   const placed = shown.filter(({ f }) => f.at);
   const on = placed.find(({ i }) => i === focus) ?? null;
+  const dots = useRef<SVGGElement>(null);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const stop = placed.some(({ i }) => i === cursor) ? cursor : placed.some(({ i }) => i === picked) ? picked : placed[0]?.i ?? null;
+  const onKey = (e: KeyboardEvent, i: number) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(i); return; }
+    const to = rovingIndex(e.key, placed.findIndex((p) => p.i === i), placed.length, true);
+    if (to === null) return;
+    e.preventDefault();
+    setCursor(placed[to].i);
+    dots.current?.querySelector<SVGGElement>(`[data-dot="${placed[to].i}"]`)?.focus();
+  };
   return (
-    <RadarView map={v.map} frame={frame} label={on ? `Round ${on.f.round} flash: ${plural(enemiesOf(on.f).length, "enemy", "enemies")} blinded` : `${placed.length} flash detonations`}>
-      <g className={`fl-dots ${on ? "is-dim" : ""}`}>
+    <RadarView map={v.map} frame={frame} interactive label={on ? `Round ${on.f.round} flash: ${plural(enemiesOf(on.f).length, "enemy", "enemies")} blinded` : `${placed.length} flash detonations. Arrow keys move between them, Enter picks one.`}>
+      <g className="fl-dots" ref={dots}>
         {placed.map(({ f, i }) => {
           const [x, y] = frame.to(...f.at!);
           const r = 7 + 2.5 * Math.min(4, enemiesOf(f).length);
+          const what = `Round ${f.round}, ${fmtClock(f.t)}: ${plural(enemiesOf(f).length, "enemy", "enemies")} blinded${f.kills.length ? `, led to ${plural(f.kills.length, "kill")}` : ""}`;
           return (
-            <g key={i} className={`fl-dot fl-dot--${outcome(f)}`} transform={`translate(${x} ${y})`} onClick={() => onPick(i)} onPointerEnter={(e) => e.pointerType === "mouse" && onHover(i)} onPointerLeave={() => onHover(null)}>
-              <title>{`Round ${f.round}, ${fmtClock(f.t)}: ${plural(enemiesOf(f).length, "enemy", "enemies")} blinded${f.kills.length ? `, led to ${plural(f.kills.length, "kill")}` : ""}`}</title>
+            <g key={i} data-dot={i} className={`fl-dot fl-dot--${outcome(f)} ${on && on.i !== i ? "is-dim" : ""}`} transform={`translate(${x} ${y})`}
+              role="button" tabIndex={i === stop ? 0 : -1} aria-pressed={picked === i} aria-label={what} data-tip={what}
+              onClick={() => onPick(i)} onKeyDown={(e) => onKey(e, i)} onFocus={() => setCursor(i)}
+              onPointerEnter={(e) => e.pointerType === "mouse" && onHover(i)} onPointerLeave={() => onHover(null)}>
               <circle className="fl-dot__hit" r={r + 10} />
               {f.kills.length > 0 && <circle className="fl-dot__ring" r={r + 6} />}
               <circle className="fl-dot__core" r={r} />
