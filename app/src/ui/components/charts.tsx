@@ -425,13 +425,14 @@ export type BodyShare = { head: number; neck: number; chest: number; stomach: nu
 let gaugeWoke = false;
 
 /**
- * The card's gauge: a 240° arc filled to rating / 2, green when good, grey when average, red when
- * poor. On the first view of the session the arc draws and the number counts up (600 ms); after
- * that it is static, and a side switch only recolours it.
+ * The card's gauge: a 240° arc filled to rating / 2 in cream, the 1.00 of an average player ticked at
+ * its top (the hover card names it), and the verdict as a pill over the number (green only there: the arc measures, the pill
+ * judges). On the first view of the session the arc draws and the number counts up (600 ms); after
+ * that it is static, and a side switch only changes the number.
  */
-export function Gauge({ value, verdict, label, size = 176 }: { value: number | null; verdict: "good" | "avg" | "poor" | "na"; label: ReactNode; size?: number }) {
+export function Gauge({ value, verdict, label, size = 156 }: { value: number | null; verdict: "good" | "avg" | "poor" | "na"; label: ReactNode; size?: number }) {
   const sweep = 240;
-  const r = size / 2 - 10;
+  const r = size / 2 - 8;
   const c = size / 2;
   const len = (Math.PI * 2 * r * sweep) / 360;
   const frac = value === null ? 0 : Math.max(0, Math.min(1, value / 2));
@@ -453,23 +454,26 @@ export function Gauge({ value, verdict, label, size = 176 }: { value: number | n
     return () => cancelAnimationFrame(raf);
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   const start = 90 + (360 - sweep) / 2;
-  const arc = (deg: number) => {
+  const arc = (deg: number, rr = r) => {
     const a = (Math.PI / 180) * deg;
-    return [c + r * Math.cos(a), c + r * Math.sin(a)];
+    return [c + rr * Math.cos(a), c + rr * Math.sin(a)];
   };
   const [sx, sy] = arc(start);
   const [ex, ey] = arc(start + sweep);
   const d = `M${sx} ${sy} A${r} ${r} 0 1 1 ${ex} ${ey}`;
-  const stroke = verdict === "good" ? "var(--good)" : verdict === "poor" ? "var(--poor)" : "var(--avg)";
+  // 1.00 sits at the arc's top: half of the 0 to 2 range
+  const [t0x, t0y] = arc(270, r - 7);
+  const [t1x, t1y] = arc(270, r + 5);
   return (
-    <div className="gauge" style={{ width: size, height: size * 0.8 }}>
+    <div className="gauge" style={{ width: size, height: size * 0.82 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
-        <path d={d} fill="none" stroke="var(--track)" strokeWidth="7" strokeLinecap="round" />
-        <path d={d} fill="none" stroke={stroke} strokeWidth="7" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - frac)} className={wake ? "gauge__arc gauge__arc--wake" : "gauge__arc"} style={{ transition: "stroke var(--d-color) ease" }} />
+        <path d={d} fill="none" stroke="var(--s3)" strokeWidth="5" strokeLinecap="round" />
+        <path d={d} fill="none" stroke="var(--cream2)" strokeWidth="5" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - frac)} className={wake ? "gauge__arc gauge__arc--wake" : "gauge__arc"} />
+        <line x1={t0x} y1={t0y} x2={t1x} y2={t1y} stroke="var(--ink2)" strokeWidth="1" />
       </svg>
       <div className="gauge__in">
-        <span className="verdict" data-v={verdict}>{verdict === "na" ? "" : verdict === "avg" ? "Average" : verdict === "good" ? "Good" : "Poor"}</span>
-        <b className="gauge__v num">{value === null ? "–" : shown.toFixed(2)}</b>
+        {verdict !== "na" && <span className={`vpill vpill--${verdict}`}>{verdict === "avg" ? "Average" : verdict === "good" ? "Good" : "Poor"}</span>}
+        <b className="gauge__v disp disp--l">{value === null ? "–" : shown.toFixed(2)}</b>
         <span className="gauge__l">{label}</span>
       </div>
     </div>
