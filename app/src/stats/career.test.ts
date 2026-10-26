@@ -62,6 +62,9 @@ describe("personal bests", () => {
     expect([acc.enemiesFlashed, acc.utilDmg, acc.awpDuelWin, acc.kills.value]).toEqual([undefined, undefined, undefined, 0]);
     addBests(acc, "m2", summary({ rounds: 12, utilityRounds: 12, enemiesFlashed: 3, awpDuels: 2, awpDuelWins: 1, deathsHandKnown: 2, deathsHandTotal: 2 }));
     expect([acc.enemiesFlashed, acc.awpDuelWin].map((b) => [b.file, b.value])).toEqual([["m2", 3], ["m2", 50]]);
+    // a match with grenades and flashes recorded for 11 of its 12 rounds is not known in full: its 5 is no best
+    addBests(acc, "m3", summary({ rounds: 12, utilityRounds: 11, enemiesFlashed: 5 }));
+    expect(acc.enemiesFlashed.file).toBe("m2");
   });
 
   it("keeps the rating's best when only its percentile input, the duel loadouts, is short", () => {
