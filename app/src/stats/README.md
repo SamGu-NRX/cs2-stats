@@ -122,7 +122,7 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `bombsites(file, player)` | `sites`: take, hold, retake and post-plant attempts and successes per bombsite letter, take and hold null without positions, freeze times or site names; `takeHold`: the rounds they could be read on and the missing inputs |
 | `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
 | `highlights(q)` | Every round with three or more kills or a won clutch, newest first: its kinds (3k, 4k, ace, clutch), kills, the won clutch, the round's result and the kills' weapons and killfeed flags |
-| `flashes(file, player)` | The player's flashbangs: detonation point, everyone each blinded (seconds, team or enemy, where they stood) and the kills it led to (flash assist or kill while blind), plus `notes` on what the file does not record |
+| `flashes(file, player)` | The player's flashbangs: detonation point, everyone each blinded (seconds, team or enemy, where they stood) and the kills it led to (flash assist or kill while blind), the player's logged flashbang throws (`thrown`, null without a throw log), and `notes` on what the file does not record |
 
 Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
 and `m.tradedDeaths`.

@@ -982,6 +982,7 @@ describe("parity round 2: flashes, clutches and highlights", () => {
       flash(4, "T", null),
       flash(15, "CT", [0, 0]),
     ],
+    thrown: null,
     notes: ["1 of 3 flashes have no detonation point in this file, so they are not on the map."],
   };
   const onMap = (map: string): MatchModel => ({ ...v, map });
@@ -1033,7 +1034,7 @@ describe("parity round 2: flashes, clutches and highlights", () => {
 
   it("says why a file has no flashes rather than showing zeros", () => {
     // fails if a file without grenade events shows the figures (zeros) instead of the engine's reason
-    answers = { flashes: { flashes: [], notes: ["This file records no grenade or flash events."] } };
+    answers = { flashes: { flashes: [], thrown: null, notes: ["This file records no grenade or flash events."] } };
     render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
     expect(host.querySelector(".fl__figs")).toBeNull();
     expect(Array.from(host.querySelectorAll(".empty")).map(text)).toContain("This file records no grenade or flash events.");

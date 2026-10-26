@@ -19,13 +19,14 @@ const blind = (s: number, entity: number | null, victim: string, secs: number, m
 describe("flashTool", () => {
   it("places each flash and lists whom it blinded, enemies first and longest first, without the thrower", () => {
     // fails if the thrower's own blind is listed, a teammate sorts among the enemies, the 1.1 s cut is
-    // not marked, or another player's detonation is taken for a's. c stood at (500, 600) when blinded
+    // not marked, another player's detonation is taken for a's, or the two blinded players without a
+    // position sample go unreported. c stood at (500, 600) when blinded
     const r = tool({
       grenade_events: [det(10, 7), det(20, 8, "b")],
       blinds: [blind(10, 7, "d", 0.8), blind(10, 7, "b", 1.5, { is_team_flash: true }), blind(10, 7, "c", 2.5), blind(10, 7, "a", 1, { is_self: true })],
       positions: [{ tick: t(10), steamid: "c", x: 500, y: 600 }],
     });
-    expect(r.notes).toEqual([]);
+    expect(r.notes).toEqual(["2 of the 3 players these flashes blinded on the map have no position sample near the blind, so no line is drawn to them."]);
     expect(r.flashes.map((f) => [f.round, f.side, f.t, f.at])).toEqual([[1, "CT", 10, [100, 200]]]);
     expect(r.flashes[0].blinded).toEqual([
       { pi: pi.c, secs: 2.5, team: false, flashed: true, at: [500, 600] },
@@ -80,8 +81,31 @@ describe("flashTool", () => {
 
   it("says the file records no grenade events rather than reporting no flashes", () => {
     // fails if a file without any grenade or flash rows reads as a player who threw nothing
-    expect(tool({})).toEqual({ flashes: [], notes: [NO_GRENADE_EVENTS] });
-    expect(tool({ grenade_events: [det(20, 8, "b")] })).toEqual({ flashes: [], notes: [] });
+    expect(tool({})).toEqual({ flashes: [], thrown: null, notes: [NO_GRENADE_EVENTS] });
+    expect(tool({ grenade_events: [det(20, 8, "b")] })).toEqual({ flashes: [], thrown: null, notes: [] });
+  });
+
+  it("says how many logged flashbang throws have no detonation, apart from a player who threw none", () => {
+    // fails if throws without detonations read as "threw no flashbangs", or other players' throws and
+    // other grenades count toward a's. a threw three flashbangs and one smoke; one flash detonated
+    const throw_ = (s: number, by: string, weapon = "flashbang") => ({ tick: t(s), steamid: by, weapon });
+    const none = tool({ grenade_throws: [throw_(3, "a"), throw_(4, "a"), throw_(5, "b")] });
+    expect(none).toEqual({ flashes: [], thrown: 2, notes: ["2 of the 2 flashbangs you threw have no detonation in this file, so they are not listed."] });
+    const some = tool({ grenade_throws: [throw_(3, "a"), throw_(4, "a"), throw_(6, "a"), throw_(7, "a", "smokegrenade")], grenade_events: [det(10, 7)] });
+    expect([some.flashes.length, some.thrown, some.notes]).toEqual([1, 3, ["2 of the 3 flashbangs you threw have no detonation in this file, so they are not listed."]]);
+    const zero = tool({ grenade_throws: [throw_(5, "b")] });
+    expect(zero).toEqual({ flashes: [], thrown: 0, notes: [] });
+  });
+
+  it("keeps another thrower's blind off a flash whose entity id it reuses, and keeps a blind with no attacker", () => {
+    // fails if b's flash, which reuses entity 7 after a's, attaches b's blind on d to a's flash, or a
+    // blind with no recorded attacker is dropped. a's flash 7 detonates at 5 s; b's at 20 s
+    const r = tool({
+      grenade_events: [det(5, 7), det(20, 7, "b")],
+      blinds: [blind(5, 7, "c", 2), blind(5, 7, "e", 1.5, { attacker_steamid: null }), blind(20, 7, "d", 3, { attacker_steamid: "b" })],
+    });
+    expect(r.flashes.map((f) => f.blinded.map((b) => [b.pi, b.secs]))).toEqual([[[pi.c, 2], [pi.e, 1.5]]]);
+    expect(r.notes.filter((n) => /name no detonation|names no detonation/.test(n))).toEqual([]);
   });
 
   it("refuses a player who is not in the match", () => {

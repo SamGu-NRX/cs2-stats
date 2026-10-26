@@ -45,6 +45,11 @@ export interface FlashRow {
 export interface FlashTool {
   /** the player's flashbangs in round and tick order */
   flashes: FlashRow[];
+  /**
+   * the player's flashbang throws in the throw log (grenade_throws), in rounds the player has a row;
+   * null when the file has no throw log (Valve and plugin files before 1.0.0 log detonations only)
+   */
+  thrown: number | null;
   /** what the file does not record, in a sentence each; empty when nothing is missing */
   notes: string[];
 }
@@ -73,7 +78,16 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const ev = t.grenade_events;
   const B = t.blinds;
 
-  if (!(ev && ev.n) && !B.n && !(t.grenade_throws && t.grenade_throws.n)) return { flashes: [], notes: [NO_GRENADE_EVENTS] };
+  const g = t.grenade_throws;
+  if (!(ev && ev.n) && !B.n && !(g && g.n)) return { flashes: [], thrown: null, notes: [NO_GRENADE_EVENTS] };
+  let thrown: number | null = null;
+  if (g) {
+    thrown = 0;
+    for (let i = 0; i < g.n; i++) {
+      const ri = riOf.get(g.round[i]);
+      if (g.weapon[i] === "flashbang" && g.steamid[i] === player && ri !== undefined && sideOf.has(ri * 1024 + me)) thrown++;
+    }
+  }
 
   interface Work { row: FlashRow; ri: number; tick: number; ticks: number[]; credited: Map<KillFact, FlashKill> }
   const work: Work[] = [];
@@ -101,12 +115,16 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const near = positionsNear(t, tr);
   let unlinked = 0;
   for (let i = 0; i < B.n; i++) {
+    // another thrower's blind never joins this player's flash, even when its entity id matches one of
+    // theirs (the game reuses entity ids); a blind whose attacker is unknown can still be theirs
+    const by = B.attacker_steamid[i];
+    if (by !== null && by !== player) continue;
     const id = B.flash_entity_id[i];
     const cands = id === null ? undefined : byEntity.get(`${B.round[i]}|${id}`);
     // an entity id can come back later in a round: the latest detonation at or before the blind
     const w = cands?.filter((c) => c.tick <= B.tick[i]).sort((a, b) => b.tick - a.tick)[0];
     if (!w) {
-      if (B.attacker_steamid[i] === player && !B.is_self[i]) unlinked++;
+      if (by === player && !B.is_self[i]) unlinked++;
       continue;
     }
     const v = piOf.get(B.victim_steamid[i]);
@@ -152,10 +170,18 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const flashes = work.map((w) => w.row);
 
   const notes: string[] = [];
+  if (thrown !== null && thrown > flashes.length) {
+    const lost = thrown - flashes.length;
+    notes.push(`${lost} of the ${thrown} flashbangs you threw ${lost === 1 ? "has" : "have"} no detonation in this file, so ${lost === 1 ? "it is" : "they are"} not listed.`);
+  }
   const unplaced = flashes.filter((x) => !x.at).length;
   if (unplaced) notes.push(`${unplaced} of ${flashes.length} flashes have no detonation point in this file, so they are not on the map.`);
+  // a placed flash draws a line to each player it blinded; without a position sample near the blind there is none
+  const onMap = flashes.filter((x) => x.at).flatMap((x) => x.blinded);
+  const unseen = onMap.filter((b) => !b.at).length;
+  if (unseen) notes.push(`${unseen} of the ${onMap.length} players these flashes blinded on the map have no position sample near the blind, so no line is drawn to them.`);
   if (unlinked) notes.push(`${unlinked} ${unlinked === 1 ? "blind names" : "blinds name"} no detonation in this file, so ${unlinked === 1 ? "it is" : "they are"} left out.`);
-  return { flashes, notes };
+  return { flashes, thrown, notes };
 }
 
 /** A player's [x, y] at the position sample nearest a tick, within half a second and alive; null otherwise (derive.ts posAt's rule). */

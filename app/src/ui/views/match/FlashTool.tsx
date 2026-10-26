@@ -72,7 +72,7 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
   const title = "Your flashes";
   if (call.error && !call.stale) return <Card title={title}><LoadFailed what="Your flashes" error={call.error} /></Card>;
   if (!tool) return <Card title={title}><div className="skel" style={{ height: 320 }} /></Card>;
-  if (!all.length) return <Card title={title} icon={<NadeIcon type="flash" size={16} beside />}><Empty text={notes[0] ?? "You threw no flashbangs this match."} /></Card>;
+  if (!all.length) return <Card title={title} icon={<NadeIcon type="flash" size={16} beside />}><Empty text={notes.length ? notes.join(" ") : "You threw no flashbangs this match."} /></Card>;
 
   const focus = picked ?? hover;
   // the map's own overview transform only: a frame fitted around the points would place them over nothing
@@ -87,7 +87,7 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
           <Select label="Round" value={round} onChange={(r) => { setRound(r); setPicked(null); setHover(null); }} options={rounds} />
         </div>
         <dl className="fl__figs" aria-label="Your flashes, as filtered">
-          <div><dt className="caps">Thrown</dt><dd className="num">{shown.length}</dd></div>
+          <div><dt className="caps" data-tip="Flashbangs with a recorded detonation" tabIndex={0}>Flashes</dt><dd className="num">{shown.length}</dd></div>
           <div><dt className="caps" data-tip={`Enemies blinded for over ${FLASHED_MIN_S} s, once per flash`} tabIndex={0}>Enemies blinded</dt><dd className="num cream">{enemies}</dd></div>
           <div><dt className="caps">Per enemy</dt><dd className="num">{enemies ? fmtSecs(enemySecs / enemies) : "–"}</dd></div>
           <div><dt className="caps" data-tip={`Teammates blinded for over ${FLASHED_MIN_S} s`} tabIndex={0}>Teammates</dt><dd className={`num ${mates ? "poor-text" : ""}`}>{mates}</dd></div>
