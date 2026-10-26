@@ -1,7 +1,7 @@
 // Profile: the player card (design-target-v2), then tabs. Overview: HLTV's attributes, Form, Where you
 // rank (or its change since the period before), Strongest and Records, round swing, multi-kill rounds,
-// clutches, Luck and maps. Duels: metric rows. Utility: Utility rating, then metric rows. Economy:
-// metric rows, buy classes and team-buy tiers. Aim and Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
+// clutches, highlights (profile/Highlights.tsx), Luck and maps. Duels: metric rows. Utility: Utility
+// rating, then metric rows. Economy: metric rows, buy classes and team-buy tiers. Aim and Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
 // like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
 // whole page: every summary is rolled up over that side's rounds. Performance is compared with that
 // side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
@@ -42,6 +42,7 @@ import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profil
 import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { roleValueDescriptor } from "./profile/role-decision";
 import { AggressionCard } from "./profile/v2";
+import { HighlightsCard } from "./profile/Highlights";
 import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import { BuyTiersCard, CareerRatingCard, LuckCard, RecordsCard, TopStatsCard, WhereYouRank } from "./profile/career";
 import { AttrIcon } from "../icons/attributes";
@@ -181,6 +182,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   const firepowerRef = useSection("firepower");
   const cardRef = useSection("card");
   const openingsRef = useSection("openings");
+  const highlightsRef = useSection("highlights");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
@@ -239,6 +241,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 <Multis m={p.you.m} q={sideQ} list={list} />
                 <Clutches m={p.you.m} q={base} side={side} list={list} />
               </div>
+              <HighlightsCard q={sideQ} list={list} sectionRef={highlightsRef} />
               <LuckCard s={p.you} />
               <MapsTable p={p} side={side} />
             </>
@@ -584,7 +587,9 @@ function Clutches({ m, q, side, list }: { m: Measures; q: Query; side: SideKey; 
   const won = rows.reduce((a, r) => a + r.won, 0);
   const played = rows.reduce((a, r) => a + r.played, 0);
   const [open, setOpen] = useState<number | null>(null);
-  const all = useCall("clutches", [q]).data;
+  const clutchCall = useCall("clutches", [q]);
+  // the previous scope's rounds never show while this scope's load
+  const all = clutchCall.stale ? null : clutchCall.data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
   return (
@@ -648,6 +653,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const rows = multiKillRows(m);
   const [open, setOpen] = useState<number | null>(null);
   const rounds = useCall("multiKills", open === null ? null : [q]);
+  const fresh = rounds.stale ? null : rounds.data;
   const ranked = useCall("compare", [q, { side: q.filter.sides?.length === 1 ? q.filter.sides[0] : "both" }]).data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
@@ -669,7 +675,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
             </>
           );
           const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
-          const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
+          const mine = (fresh ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
               {r.rounds === 0 ? <div className="clist__row lsrow" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
@@ -681,7 +687,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
               )}
               {open === r.k && (
                 <ul id={`${listId}-${r.k}`} className="clutchlist" aria-label={`Your ${label}`}>
-                  {rounds.error ? <li className="meta">{rounds.error}</li> : !rounds.data ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
+                  {rounds.error && !rounds.stale ? <li className="meta">{rounds.error}</li> : !fresh ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
                     const e = byFile.get(x.file);
                     return (
                       <li key={`${x.file}|${x.round}`}>

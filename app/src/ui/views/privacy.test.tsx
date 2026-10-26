@@ -20,6 +20,7 @@ import type { ImportStatus, ImportStore } from "../../host/import-store";
 import type { Baselines } from "../../stats/compare";
 import { derive } from "../../stats/derive";
 import type { MatchFacts } from "../../stats/facts";
+import { flashTool } from "../../stats/flashes";
 import { headToHead, mapZones, openingDuels, roundRatings } from "../../stats/matchviews";
 import { CS2RB } from "../../stats/model-params";
 import { pluginToTables } from "../../stats/plugin/adapter";
@@ -86,6 +87,16 @@ async function fixture(f: string, file: string, source?: "valve" | "hltv"): Prom
     s.players.isBot[i] = false;
     s.players.name[i] = name;
   }
+  // the samples predate the plugin's blind-to-flash link; give each blind its attacker's latest flash
+  // detonation at most 1 s earlier (the plugin's own rule, SCHEMA.md), so the flash tool lists whom
+  // each flash blinded
+  s.blinds.flash = s.blinds.tick.map((tick, i) => {
+    let best: number | null = null;
+    s.grenades.tick.forEach((gt, j) => {
+      if (s.grenades.type[j] === "flash" && s.grenades.ri[j] === s.blinds.ri[i] && s.grenades.thrower[j] === s.blinds.attacker[i] && gt <= tick && tick - gt <= 64 && (best === null || gt > s.grenades.tick[best])) best = j;
+    });
+    return best;
+  });
   const tables = pluginToTables(s);
   const facts = derive(tables, CS2RB);
   if (source) facts.match = { ...facts.match, source };
@@ -128,6 +139,7 @@ const answers: Partial<Record<keyof Client, (...a: never[]) => unknown>> = {
   ratings: (qs: Query[]) => qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })),
   headToHead: (file: string) => headToHead(byFile.get(file)!.tables, byFile.get(file)!.facts),
   mapZones: (file: string, player: string) => mapZones(byFile.get(file)!.tables, player),
+  flashes: (file: string, player: string) => flashTool(byFile.get(file)!.tables, byFile.get(file)!.facts, player),
   openingDuels: (file: string, player: string) => openingDuels(byFile.get(file)!.facts, player),
   ratingBreakdown: (file: string, player: string) => {
     const f = byFile.get(file)!.facts;
@@ -298,6 +310,49 @@ describe("Hide personal info", () => {
       expect(part!.outerHTML).toMatch(/Teammate 1|Opponent 1|You/);
     }
   }, 30_000);
+
+  it("hides them in the flash tool's victims, the clutch list and the highlight lists, whose links open rounds by id", async () => {
+    // fails if one of these views names a player from raw facts or links a round by its file path:
+    // each is drawn with rows, a flash opened to list whom it blinded, and checked for every sentinel
+    hidePersonal(true);
+    const leaks: string[] = [];
+    let opened = 0;
+    let masked = "";
+    const check = (where: string, html: string, visible: string) => {
+      for (const s of found(html)) leaks.push(`${where}: ${s}`);
+      if (visible.includes(FILE)) leaks.push(`${where}: ${FILE}`);
+    };
+    for (const x of [main, valve]) {
+      let { html, visible } = await show(matchHref(x.file, "utility"), dataWith());
+      // open every flash that blinded someone, and check each opened list
+      const blinding = Array.from(document.querySelectorAll<HTMLButtonElement>(".fl-row__btn")).filter((b) => !/0 enemies blinded, 0 teammates/.test(b.getAttribute("aria-label") ?? ""));
+      for (const row of blinding) {
+        opened++;
+        act(() => row.click());
+        const detail = document.querySelector(".fl-detail")!;
+        masked += Array.from(detail.querySelectorAll(".fl-blind__who"), (n) => n.textContent).join(" ");
+        check(`${x.file} utility, a flash opened`, document.documentElement.outerHTML, [document.body.textContent, ...Array.from(document.querySelectorAll("*"), (n) => Array.from(n.attributes, (a) => a.value).join(" "))].join(" "));
+      }
+      for (const a of document.querySelectorAll<HTMLAnchorElement>(".fl-row__go")) expect(a.getAttribute("href")).toContain(matchId(x.file));
+      check(`${x.file} utility`, html, visible);
+      ({ html, visible } = await show(matchHref(x.file, "advanced"), dataWith()));
+      expect(document.querySelector(".clutchtbl"), `${x.file} draws every clutch`).not.toBeNull();
+      for (const a of document.querySelectorAll<HTMLAnchorElement>(".clutchtbl__r")) expect(a.getAttribute("href")).toContain(matchId(x.file));
+      check(`${x.file} advanced`, html, visible);
+    }
+    expect(opened, "a flash was opened to list whom it blinded").toBeGreaterThan(0);
+    // the strangers a flash blinded are listed under their placeholders
+    expect(masked).toMatch(/Teammate 1|Opponent 1/);
+    for (const href of [profileHref("overview"), pageHref("home")]) {
+      const { html, visible } = await show(href, dataWith());
+      const rows = Array.from(document.querySelectorAll<HTMLAnchorElement>(".hlr"));
+      expect(rows.length, `${href} lists highlights`).toBeGreaterThan(0);
+      for (const a of rows) expect(a.getAttribute("href")).toMatch(/^#\/match\/[^/]+\/rounds\?round=\d+$/);
+      for (const a of rows) expect(all.some((y) => a.getAttribute("href")!.includes(matchId(y.file)))).toBe(true);
+      check(href, html, visible);
+    }
+    expect(leaks).toEqual([]);
+  }, 60_000);
 
   it("opens a match by its id while hiding personal info, and by its file path too", async () => {
     hidePersonal(true);

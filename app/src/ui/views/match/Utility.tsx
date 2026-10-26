@@ -1,4 +1,5 @@
-// Utility: flashes, grenade damage and smokes per player, split by side, and where grenades landed.
+// Utility: flashes, grenade damage and smokes per player, split by side, your flashes on the radar
+// (FlashTool.tsx), and where grenades landed.
 import { useMemo, useState } from "react";
 import type { Measures } from "../../../stats/facts";
 import { Num } from "../../components/bits";
@@ -13,6 +14,7 @@ import { NADE_LABEL, NadeIcon, type Nade } from "../../icons/game";
 import { fmtSecs, plural } from "../../lib/format";
 import { PlayerName, SectionAside, Empty, NeedsDemo } from "../shared";
 import { Hint } from "./glyphs";
+import { FlashCard } from "./FlashTool";
 import type { TabProps } from "./MatchView";
 
 export default function Utility({ v }: TabProps) {
@@ -56,6 +58,8 @@ export default function Utility({ v }: TabProps) {
           ]}
         />
       </Card>
+      {/* keyed by file: a new match starts with no flash picked and no round filter */}
+      <FlashCard key={v.file} v={v} />
       <Landing v={v} />
     </div>
   );

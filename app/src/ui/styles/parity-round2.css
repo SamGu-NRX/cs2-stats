@@ -1,0 +1,140 @@
+/* Parity round 2: the flash tool (match Utility), every clutch (match Advanced) and the highlight rows
+   (Profile Overview, Home). They extend the v2 instruments: rows are 36 px with hairlines, hover and
+   focus change colour at once (hover gated to fine pointers), and nothing moves. Picking a flash steps
+   the other dots back without a fade, because the pick is as often from the keyboard as the pointer. */
+
+/* ---------------------------------------------------------------- flash tool (Utility) */
+.fl { display: grid; gap: 14px; container-type: inline-size; }
+.fl__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fl__figs { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 0; }
+.fl__figs > div { display: grid; gap: 6px; }
+.fl__figs dt { width: max-content; }
+.fl__figs dd { margin: 0; font-family: var(--disp); font-weight: var(--disp-weight); font-variation-settings: var(--disp-axes); font-size: 24px; line-height: 1; }
+.fl__figs dd .faint { font-size: 16px; }
+.fl__notes { display: grid; gap: 4px; }
+.fl__notes li { display: flex; align-items: center; gap: 8px; }
+.fl__notes .chip { height: 18px; font-size: 10px; }
+.fl__grid { display: grid; grid-template-columns: minmax(300px, 500px) minmax(0, 1fr); gap: 16px 20px; align-items: start; }
+@container (max-width: 760px) {
+  .fl__grid { grid-template-columns: minmax(0, 1fr); }
+  .fl__map { max-width: 500px; }
+}
+.fl__map { display: grid; gap: 8px; min-width: 0; }
+.fl__nomap { display: grid; place-items: center; aspect-ratio: 1; border-radius: var(--r-card); background: var(--well); }
+.fl__legend { margin: 0; }
+
+/* the dots: size grows with the enemies blinded; the outcome sets the colour */
+.fl-dot { cursor: pointer; }
+.fl-dot__hit { fill: transparent; }
+.fl-dot__core { stroke: var(--bg0); stroke-width: 3; }
+.fl-dot--kill .fl-dot__core, .fl-dot--enemy .fl-dot__core { fill: var(--cream); }
+.fl-dot__ring { fill: none; stroke: var(--good-text); stroke-width: 3.5; }
+.fl-dot--team .fl-dot__core { fill: var(--s1); stroke: var(--poor-text); stroke-width: 3.5; }
+.fl-dot--none .fl-dot__core { fill: var(--ink3); }
+@media (hover: hover) and (pointer: fine) { .fl-dot:hover .fl-dot__core { stroke: var(--ink); } }
+/* a picked flash steps the other dots back; a dot with keyboard focus stays clear, with a cream ring */
+.fl-dot.is-dim:not(:focus-visible) { opacity: 0.22; }
+.fl-dot:focus { outline: none; }
+.fl-dot:focus-visible .fl-dot__hit { stroke: var(--cream); stroke-width: 3; }
+.fl-ray line { stroke: var(--cream); stroke-width: 2.5; stroke-opacity: 0.85; }
+.fl-ray.is-team line { stroke: var(--poor-text); stroke-dasharray: 8 6; }
+.fl-ray.is-short line { stroke-opacity: 0.35; }
+.fl-ray__t, .fl-ray__ct, .fl-ray__unknown { stroke: var(--bg0); stroke-width: 3; }
+/* a blinded player with no row in the round has no known side: neither side's colour */
+.fl-ray__unknown { fill: var(--ink2); }
+.fl-ray__t { fill: var(--t); }
+.fl-ray__ct { fill: var(--ct); }
+.fl-ray text { fill: var(--ink); font: 600 22px/1 var(--f); paint-order: stroke; stroke: var(--bg0); stroke-width: 6px; stroke-linejoin: round; }
+.fl-ray__src { fill: var(--cream); stroke: var(--ink); stroke-width: 3; }
+.fl-ray__src.fl-dot--team, .fl-ray__src.fl-dot--none { fill: var(--s1); }
+
+.fl-key { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: -1px; }
+.fl-key--kill { background: var(--cream); box-shadow: 0 0 0 2px var(--s1), 0 0 0 3.5px var(--good-text); }
+.fl-key--enemy { background: var(--cream); }
+.fl-key--team { box-shadow: inset 0 0 0 2px var(--poor-text); }
+.fl-key--none { background: var(--ink3); }
+
+/* the list: one row per flash, the round link in its own column */
+.fl__side { min-width: 0; }
+/* the header repeats a row's two grids (the button's columns, then the round link's), so the labels sit over their cells */
+.fl-head, .fl-row__line { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 4px; }
+.fl-head__cols, .fl-row__btn { display: grid; grid-template-columns: 34px 40px minmax(76px, 1fr) 40px minmax(56px, 1.2fr) auto; column-gap: 10px; align-items: center; }
+.fl-head { height: 22px; font-size: 10px; color: var(--ink2); overflow: hidden; scrollbar-gutter: stable; }
+.fl-head__cols { padding: 0 8px; }
+.fl__list { display: grid; max-height: min(560px, 72vh); overflow-y: auto; scrollbar-gutter: stable; }
+.fl-row + .fl-row { border-top: 1px solid var(--line); }
+.fl-row__btn { height: 36px; padding: 0 8px; border-radius: var(--r-chip); text-align: left; color: inherit; font-size: 13px; }
+.fl-row__btn:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; }
+.fl-row.is-lit .fl-row__btn { background: var(--hover); }
+.fl-row.is-open .fl-row__btn { background: var(--s3); box-shadow: inset 2px 0 0 var(--cream); }
+.fl-row .pip { justify-self: start; }
+.fl-row__t { color: var(--ink2); }
+.fl-row__en { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
+.fl-row__k { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--ink); }
+.fl-row__np { height: 18px; font-size: 10px; }
+.fl-row__go { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--ink3); position: relative; }
+/* the link draws 28 px but takes the row's full height and the gap beside it */
+.fl-row__go::after { content: ""; position: absolute; inset: -4px -4px -4px -6px; }
+.fl-row__go:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .fl-row__go:hover { color: var(--ink); background: var(--hover); } }
+.fl-detail { padding: 4px 8px 10px 52px; }
+.fl-blinds { display: grid; }
+.fl-blind { display: grid; grid-template-columns: minmax(72px, 1fr) minmax(48px, 96px) 44px minmax(0, 1.3fr); column-gap: 10px; align-items: center; min-height: 26px; font-size: 12px; }
+.fl-blind__who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fl-blind__bar { display: block; height: 6px; border-radius: 3px; background: var(--s3); overflow: hidden; }
+.fl-blind__bar i { display: block; height: 100%; background: var(--cream); transform-origin: left center; }
+.fl-blind__bar i.is-team { background: var(--poor-text); }
+.fl-blind.is-short { color: var(--ink2); }
+.fl-blind.is-short .fl-blind__bar i { opacity: 0.4; }
+.fl-blind__s { text-align: right; }
+.fl-blind__k { min-width: 0; }
+.fl-kill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--good-text); }
+.fl-kill .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- every clutch (Advanced) */
+.advanced .clutchtbl { grid-column: 1 / -1; }
+/* both teams side by side, as Duels' clutch list sits; one under the other in a narrow pane */
+.clutchtbl__cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1px; background: var(--line); }
+.clutchtbl__cols > section { background: var(--s1); min-width: 0; }
+.clutchtbl__h { padding: 10px var(--pad-panel) 4px; }
+@media (max-width: 1000px) { .clutchtbl__cols { grid-template-columns: minmax(0, 1fr); gap: 1px 0; } }
+.clutchtbl__none { padding: 8px var(--pad-panel) 12px; }
+.clutchtbl__r { color: var(--ink); font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .clutchtbl__r:hover { color: var(--cream); } }
+.clutchtbl__res { font-weight: 600; }
+.clutchtbl__res.is-won { color: var(--good-text); }
+.clutchtbl__res.is-saved { color: var(--cream); }
+.clutchtbl__res.is-lost { color: var(--ink2); }
+.clutchtbl__left { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------------------------------------------------------------- highlights (Profile, Home) */
+.hl-list { display: grid; gap: 12px; }
+.hl-list > .seg { justify-self: start; }
+.hl-seg__n { color: var(--ink3); font-size: 11px; }
+.seg__item[data-on="true"] .hl-seg__n { color: var(--ink2); }
+.hlrows { display: grid; margin: 0 calc(-1 * var(--pad-panel)); }
+.hlrows > li + li { border-top: 1px solid var(--line); }
+.hlr { display: grid; grid-template-columns: 76px minmax(0, 1fr) 120px 64px 64px; column-gap: 12px; align-items: center; min-height: 36px; padding: 0 var(--pad-panel); font-size: 13px; color: var(--ink); }
+.hlr:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; }
+@media (hover: hover) and (pointer: fine) { .hlr:hover { background: var(--hover); } }
+.hlr__kinds { display: inline-flex; gap: 4px; }
+.hlr__feed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; padding: 6px 0; color: var(--ink); }
+.hlr__kill { display: inline-flex; align-items: center; gap: 3px; }
+.hlr__map { display: inline-flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.hlr__when { white-space: nowrap; }
+.hlr__r { text-align: right; white-space: nowrap; color: var(--ink2); }
+.hl-more { justify-self: start; }
+/* Home's side card: no map column, the map named beside the day */
+.hl__item--list { gap: 4px; }
+.hl__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hlrows--compact { margin: 0 -12px; }
+.hlr--compact { grid-template-columns: 64px minmax(0, 1fr) auto; column-gap: 10px; min-height: 40px; padding: 0 12px; font-size: 12px; border-radius: var(--r-chip); }
+.hlr--compact .hlr__feed { flex-wrap: nowrap; gap: 8px; overflow: hidden; }
+.hlr__end { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
+.hlr__end .hlr__r { font-size: 12px; }
+.hlr__end .meta { font-size: 11px; }
+/* a narrow pane keeps the map's thumbnail and drops its name (the row's label still says it) */
+@media (max-width: 1100px) {
+  .hlr:not(.hlr--compact) { grid-template-columns: 76px minmax(0, 1fr) 18px 56px 56px; }
+  .hlr__mapname { display: none; }
+}

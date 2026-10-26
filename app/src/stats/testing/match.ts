@@ -35,6 +35,10 @@ export interface OneRound {
   blinds?: Row[];
   purchases?: Row[];
   grenade_throws?: Row[];
+  /** detonations and other grenade events: tick, event, entity_id, steamid, x, y */
+  grenade_events?: Row[];
+  /** the match row's convars, such as { mp_roundtime_defuse: "1.92" } */
+  convars?: Row;
   /** disconnects: tick, steamid and whether the player was alive */
   leaves?: Row[];
   /** columns of the rounds row to override, such as plant_tick */
@@ -50,7 +54,7 @@ export function oneRoundTables(m: OneRound): MatchTables {
   const round = m.round ?? 1;
   const side = (id: string) => m.players[id];
   const t: MatchTables = {
-    match: table("match", [{ match_id: "test", source: "local", map: "de_test", tick_rate: TICK_RATE, team_ct_start: "A", team_t_start: "B", convars: "{}", extra: "{}", visibility_status: "ok" }]),
+    match: table("match", [{ match_id: "test", source: "local", map: "de_test", tick_rate: TICK_RATE, team_ct_start: "A", team_t_start: "B", convars: JSON.stringify(m.convars ?? {}), extra: "{}", visibility_status: "ok" }]),
     players: table("players", ids.map((id) => ({ steamid: id, name: id, team: side(id) === "CT" ? "A" : "B", is_bot: m.bots?.includes(id) ?? false }))),
     rounds: table("rounds", [{ round, start_tick: 0, freeze_end_tick: FREEZE_END, end_tick: ROUND_END, ct_team: "A", t_team: "B", winner_side: "CT", ...m.roundRow }]),
     player_rounds: table("player_rounds", ids.map((id) => ({ round, steamid: id, side: side(id), inventory: [], ...m.player_rounds?.[id] }))),
@@ -59,7 +63,7 @@ export function oneRoundTables(m: OneRound): MatchTables {
       a_side: side(k.killer), v_side: side(k.victim), is_suicide: false, is_teamkill: false, ...k.at,
     }))),
     damages: table("damages", (m.damages ?? []).map((d) => ({ round, is_self: false, is_team_damage: false, ...d }))), blinds: table("blinds", (m.blinds ?? []).map((b) => ({ round, is_self: false, is_team_flash: false, ambiguous: false, ...b }))), bomb: emptyTable("bomb"),
-    grenade_throws: m.grenade_throws ? table("grenade_throws", m.grenade_throws.map((g) => ({ round, ...g }))) : null, grenade_events: null, smokes: null, infernos: null,
+    grenade_throws: m.grenade_throws ? table("grenade_throws", m.grenade_throws.map((g) => ({ round, ...g }))) : null, grenade_events: m.grenade_events ? table("grenade_events", m.grenade_events.map((g) => ({ round, ...g }))) : null, smokes: null, infernos: null,
     shots: m.shots ? table("shots", m.shots.map((s) => ({ round, weapon: "ak47", ...s }))) : null,
     positions: m.positions ? table("positions", m.positions.map((p) => ({ round, is_alive: true, z: 0, ...p }))) : null,
     spotted: m.spotted ? table("spotted", m.spotted.map((s) => ({ round, ...s }))) : null,

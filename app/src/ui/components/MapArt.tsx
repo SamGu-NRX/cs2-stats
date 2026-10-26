@@ -140,13 +140,14 @@ export interface RadarMark { key: string; x: number; y: number; node: ReactNode 
 
 /**
  * A square radar with marks placed in radar pixels. Marks are SVG (crisp at any size, focusable for
- * hover cards); the image sits underneath.
+ * hover cards); the image sits underneath. `interactive`: the marks are controls, so the radar is a
+ * group (an image's children are hidden from assistive technology).
  */
-export function RadarView({ map, frame, children, label }: { map: string; frame: Frame; children: ReactNode; label: string }) {
+export function RadarView({ map, frame, children, label, interactive }: { map: string; frame: Frame; children: ReactNode; label: string; interactive?: boolean }) {
   return (
     <div className="radar-view">
       <RadarImage map={map} frame={frame} />
-      <svg viewBox={`0 0 ${frame.size} ${frame.size}`} className="radar-marks" role="img" aria-label={label}>
+      <svg viewBox={`0 0 ${frame.size} ${frame.size}`} className="radar-marks" role={interactive ? "group" : "img"} aria-label={label}>
         {children}
       </svg>
     </div>

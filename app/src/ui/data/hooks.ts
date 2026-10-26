@@ -10,32 +10,46 @@ import { matchModel, type MatchEntry, type MatchModel } from "./match";
 import { hideBundle, hideTextAndFiles, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
-export interface Loaded<T> { data: T | null; error: string | null; loading: boolean }
+export interface Loaded<T> {
+  data: T | null;
+  error: string | null;
+  loading: boolean;
+  /**
+   * data and error answer an earlier question than the one asked now: they are kept while the new
+   * answer loads, so a view that must not show another match's or another filter's rows reads this
+   */
+  stale?: boolean;
+}
 
-/** `file`: a match file the call is about, hidden in its error with the listed ones (privacy.ts). */
-function useAsync<T>(key: string | null, run: () => Promise<T>, file?: string | null): Loaded<T> {
-  const [st, setSt] = useState<Loaded<T>>({ data: null, error: null, loading: !!key });
+/**
+ * `question` names what is asked, without the sync version, so a refetch after a sync is not stale.
+ * `file`: a match file the call is about, hidden in its error with the listed ones (privacy.ts).
+ */
+function useAsync<T>(key: string | null, run: () => Promise<T>, opts: { question?: string | null; file?: string | null } = {}): Loaded<T> {
+  const question = opts.question === undefined ? key : opts.question;
+  const [st, setSt] = useState<Loaded<T> & { for: string | null }>({ data: null, error: null, loading: !!key, for: question });
   useEffect(() => {
-    if (!key) { setSt({ data: null, error: null, loading: false }); return; }
+    if (!key) { setSt({ data: null, error: null, loading: false, for: question }); return; }
     let alive = true;
-    setSt((s) => ({ data: s.data, error: null, loading: true }));
+    setSt((s) => ({ ...s, error: null, loading: true }));
     run().then(
-      (data) => alive && setSt({ data, error: null, loading: false }),
-      (e: Error) => alive && setSt({ data: null, error: e.message, loading: false }),
+      (data) => alive && setSt({ data, error: null, loading: false, for: question }),
+      (e: Error) => alive && setSt({ data: null, error: e.message, loading: false, for: question }),
     );
     return () => { alive = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   // a worker's error can name a match file, a path or a SteamID (privacy.ts)
   const hide = useHidePersonal();
   const { matches } = useData();
-  return hide && st.error ? { ...st, error: hideTextAndFiles(st.error, [...matches.map((m) => m.file), ...(file ? [file] : [])]) } : st;
+  const error = hide && st.error ? hideTextAndFiles(st.error, [...matches.map((m) => m.file), ...(opts.file ? [opts.file] : [])]) : st.error;
+  return { data: st.data, error, loading: st.loading, stale: st.for !== question };
 }
 
 /** One worker call; null args skip it. Refetches after a sync. */
 export function useCall<K extends Method>(method: K, args: Parameters<Api[K]> | null): Loaded<Result<K>> {
   const { client, version } = useData();
-  const key = client && args ? `${version}|${method}|${JSON.stringify(args)}` : null;
-  return useAsync(key, () => (client![method] as (...a: unknown[]) => Promise<Result<K>>)(...args!));
+  const question = client && args ? `${method}|${JSON.stringify(args)}` : null;
+  return useAsync(question && `${version}|${question}`, () => (client![method] as (...a: unknown[]) => Promise<Result<K>>)(...args!), { question });
 }
 
 // The open match's bundle, shared by every view that shows it (the Home hero and highlights ask for
@@ -66,7 +80,7 @@ export function useMatch(file: string | null): Loaded<MatchModel> {
     if (!entry) throw new Error(`${file} is not in the match folder`);
     const b = await bundleOf(client!, version, file!);
     return matchModel(entry, hide ? hideBundle(b, entry) : b);
-  }, file);
+  }, { file });
 }
 
 export const useRollups = (qs: Query[] | null) => useCall("rollup", qs?.length ? [qs] : null);

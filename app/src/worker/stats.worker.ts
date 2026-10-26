@@ -16,6 +16,7 @@ import type { FileEntry } from "../host/host";
 import { matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
+import { flashTool } from "../stats/flashes";
 import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { loadTables, withPov } from "../stats/load";
@@ -418,6 +419,11 @@ const api: Impl = {
   rolesBySpawn: ranking.rolesBySpawn,
   clutches: perMatch.clutches,
   multiKills: perMatch.multiKills,
+  highlights: perMatch.highlights,
+  async flashes(file, player) {
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    return flashTool(t, f, player);
+  },
   async ratingBreakdown(file, player, reference) {
     const f = await factsOf(file, true);
     const match = rating3Of(rollup([f], { player }));

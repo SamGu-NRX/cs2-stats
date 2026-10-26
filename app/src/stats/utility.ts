@@ -2,6 +2,7 @@
 // flash-to-kills, grenade damage dealt and taken, and grenades a player died holding. Flash definitions are Leetify's (research-data-sources.md): an enemy counts as flashed
 // at more than 1.1 s of blind, and a flash-to-kill is a flashed enemy dying to the team while still
 // blind. Utility quality beyond usage (smokes) is utilq.ts.
+import { blindWindows } from "./blinds";
 import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import type { GrenadeFact } from "./facts";
 import { classFromDisplay, isUtility, PRICE } from "./weapons";
@@ -32,8 +33,9 @@ export function markUtility(c: Ctx): void {
 
 export function utility(c: Ctx): void {
   const g = c.t.grenade_throws;
-  const b = c.t.blinds;
   const d = c.t.damages;
+  // repeated blind rows joined, as every view counts them (blinds.ts)
+  const windows = blindWindows(c.t);
   // grenades held at freeze end, null where the row records no loadout
   const held = new Map([...loadouts(c)].map(([k, items]) => [k, items && items.map(classFromDisplay).filter((x) => x in THROWN)]));
 
@@ -49,15 +51,15 @@ export function utility(c: Ctx): void {
       throws.push([p.pi, g.tick[i], g.weapon[i]]);
     }
 
-    for (const i of c.byRound("blinds")[ri]) {
-      const p = row(b.attacker_steamid[i]);
-      if (!p || b.duration[i] <= FLASHED_MIN_S || b.is_self[i]) continue;
-      if (b.is_team_flash[i]) { p.m.teamFlashed++; p.m.teamBlindSecs += b.duration[i]; continue; }
+    for (const b of windows.get(c.rounds[ri].number) ?? []) {
+      const p = row(b.attacker);
+      if (!p || b.secs <= FLASHED_MIN_S || b.self) continue;
+      if (b.team) { p.m.teamFlashed++; p.m.teamBlindSecs += b.secs; continue; }
       p.m.enemiesFlashed++;
-      p.m.enemyBlindSecs += b.duration[i];
-      const v = c.pi.get(b.victim_steamid[i])!;
-      const until = b.tick[i] + b.duration[i] * c.tickRate;
-      if (c.kills[ri].some((k) => k.enemy && k.victim === v && k.killerSide === p.side && k.tick >= b.tick[i] && k.tick <= until)) p.m.flashKills++;
+      p.m.enemyBlindSecs += b.secs;
+      const v = c.pi.get(b.victim)!;
+      const until = b.tick + b.secs * c.tickRate;
+      if (c.kills[ri].some((k) => k.enemy && k.victim === v && k.killerSide === p.side && k.tick >= b.tick && k.tick <= until)) p.m.flashKills++;
     }
 
     const burned = new Set<string>();
