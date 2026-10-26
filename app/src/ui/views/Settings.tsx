@@ -139,16 +139,11 @@ function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } 
 
 /** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
 function ValveSource({ n }: { n: number }) {
-  const { host, refresh } = useData();
+  const { host } = useData();
   // The import's state lives in the host, so an import keeps showing after navigating away and back.
   const status = useSyncExternalStore(host?.imports.subscribe ?? noImports, host ? host.imports.get : () => IDLE_IMPORT);
   useEffect(() => { void host?.imports.sync(); }, [host]);
-  // rescan once an import ends, whichever page started it
-  const ended = useRef(status.last);
-  useEffect(() => {
-    if (status.last && status.last !== ended.current) refresh();
-    ended.current = status.last;
-  }, [status.last, refresh]);
+  // the app shell rescans when an import ends (provider.tsx), so this page only shows the state
   const folder = host?.valve?.folder ?? VALVE_FOLDER;
   const run = () => { if (host && !status.running) void host.imports.start(); };
   const outcome = status.last && !status.running ? importOutcome(status.last) : null;

@@ -72,9 +72,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let alive = true;
+    let stopImports = () => {};
     (async () => {
       try {
         const host = await createHost();
+        // An import that ends rescans the matches whichever page is open, and one already running when the
+        // app opens is followed to its end (review of #29).
+        stopImports = host.imports.onFinish(() => { last.current = 0; void sync(); });
+        void host.imports.sync();
         const client = createClient(host);
         client.onProgress((p) => alive && setState((s) => ({ ...s, progress: p })));
         ref.current = { host, client };
@@ -94,6 +99,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addEventListener("focus", onFocus);
     return () => {
       alive = false;
+      stopImports();
       removeEventListener("focus", onFocus);
     };
   }, [sync]);
