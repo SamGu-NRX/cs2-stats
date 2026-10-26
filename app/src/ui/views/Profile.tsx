@@ -39,6 +39,7 @@ import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
+import { roleValueDescriptor } from "./profile/role-decision";
 import { AggressionCard } from "./profile/v2";
 import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RANK_LABELS, RANK_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import CareerAim from "./CareerAim";
@@ -291,10 +292,16 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
 interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string }
 
-/** A side's likeliest role and its share of that side's rounds, or null without a blend. */
-function topRole(b: RoleBlend | undefined): { role: string; share: number } | null {
-  const top = b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1])[0] : undefined;
-  return top ? { role: top[0], share: top[1] } : null;
+/**
+ * A side's role for the card's pip (role-decision.ts's rule): the gated primary with its share, else
+ * the top two as "A / B" with no share, else null (the engine withheld it).
+ */
+function topRole(b: RoleBlend | undefined): { role: string; share: number | null; what: string } | null {
+  if (b?.primary) {
+    const d = roleValueDescriptor(b, b.primary);
+    return { role: b.primary, share: b.probability, what: d === "calibrated probability" ? "" : ` ${d}` };
+  }
+  return b?.top2 ? { role: b.top2.join(" / "), share: null, what: "" } : null;
 }
 
 /**
@@ -351,7 +358,7 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
           {roles && (
             <p className="pcard__roles">
               {sides.map(({ s, r, rounds }) => r && (
-                <span key={s} className="pcard__role" data-tip={`${fmtPct(100 * r.share, 0)} of ${rounds} ${s} rounds.`} tabIndex={0}>
+                <span key={s} className="pcard__role" data-tip={r.share === null ? `The two leading roles over ${rounds} ${s} rounds are close.` : `${fmtPct(100 * r.share, 0)}${r.what} over ${rounds} ${s} rounds.`} tabIndex={0}>
                   <span className={`pip pip--${s.toLowerCase()}`}>{s}</span><b>{r.role}</b>
                 </span>
               ))}

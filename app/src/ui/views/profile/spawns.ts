@@ -43,7 +43,8 @@ export function groupSpawns(rows: (SpawnRow & { blend: RoleBlend })[]): SpawnSum
     g.rounds += r.rounds;
     if (!r.blend.blend) continue;
     g.weight += r.rounds;
-    for (const [role, share] of Object.entries(r.blend.blend)) g.mix.set(role, (g.mix.get(role) ?? 0) + r.rounds * share);
+    // an unknown share (roles-v2's AWPer without a recorded loadout) is null: it adds no weight to its role
+    for (const [role, share] of Object.entries(r.blend.blend)) if (share !== null) g.mix.set(role, (g.mix.get(role) ?? 0) + r.rounds * share);
   }
   const all: SpawnGroup[] = [...groups.values()].map((g) => {
     const top = g.weight > 0 ? [...g.mix].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] : undefined;

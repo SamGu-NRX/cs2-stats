@@ -22,6 +22,7 @@ import { BreakRows, NeedsDemo } from "../shared";
 import { DotTrack, SwingSourcesChart } from "./v2";
 import { MapThumb } from "../../components/bits";
 import { matchHref, setQuery } from "../../router";
+import { roleValueDescriptor } from "./role-decision";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -104,21 +105,37 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
 
 // ---------------------------------------------------------------- role blend
 
-/** What each role means, for the role name's tooltip. */
+/** What each role means, for the role name's tooltip (roles-v2's taxonomy: no Mixed, no Half-lurker). */
 const ROLE_WHAT: Record<string, string> = {
-  Entry: "Takes space first on T.",
-  Lurker: "Plays away from the team on T.",
-  "Half-lurker": "Starts with the team on T, then splits off.",
-  Anchor: "Holds a bombsite on CT.",
-  Rotator: "Moves between sites on CT.",
-  Mixed: "Neither anchors nor rotates in most CT rounds.",
-  AWPer: "Carries the AWP.",
+  Entry: "Takes the first fight and creates space on T.",
+  Trader: "Follows teammates closely and answers their deaths on T.",
+  Support: "Uses utility and trades to make teammates' fights safer.",
+  Lurker: "Works apart from the main group and attacks late on T.",
+  Anchor: "Stays at one bombsite and delays the hit on CT.",
+  Rotator: "Moves between defensive areas when the round changes on CT.",
+  Aggressor: "Pushes forward early to find information or the first fight on CT.",
+  AWPer: "Carries the AWP often enough to shape the player's identity.",
 };
+
+/** What a role decision shows (role-decision.ts's rule): the gated primary, else the top two, else why. */
+type Decided = Pick<RoleBlend, "primary" | "probability" | "top2" | "reason" | "calibrationStatus">;
+interface Decision { label: string; role: string | null; share: number | null; narrow: boolean; descriptor: string | null; reason: string | null }
+function decide(b: Decided | undefined): Decision {
+  if (b?.primary) {
+    const d = roleValueDescriptor(b as RoleBlend, b.primary);
+    return { label: b.primary, role: b.primary, share: b.probability, narrow: false, descriptor: d === "calibrated probability" ? null : d, reason: null };
+  }
+  if (b?.top2) return { label: b.top2.join(" / "), role: b.top2[0], share: null, narrow: true, descriptor: null, reason: b.reason };
+  return { label: "", role: null, share: null, narrow: false, descriptor: null, reason: b?.reason ?? "Not enough role data." };
+}
+/** "52% fit", "13% AWP rounds", or just "52%" when the share is a calibrated probability. */
+const shareText = (d: Decision) => (d.share === null ? "" : `${fmtPct(100 * d.share, 0)}${d.descriptor ? ` ${d.descriptor}` : ""}`);
 
 /** Role shades: categorical, never good or bad; the top role is cream, the rest step down in tan. */
 const SHADES = ["var(--cream)", "var(--tan)", "rgba(196, 160, 118, 0.6)", "rgba(196, 160, 118, 0.35)", "rgba(196, 160, 118, 0.2)"];
 
-const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : []);
+/** A side's roles by share. An unknown AWP share is null and takes no segment, rather than reading as 0. */
+const rankedRoles = (b: RoleBlend | undefined) => (b?.distribution ? Object.entries(b.distribution).filter((e): e is [string, number] => e[1] !== null).sort((x, y) => y[1] - x[1]) : []);
 
 /**
  * The evidence behind the role as three numbers over every round: how often you carried an AWP, how
@@ -155,30 +172,32 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   );
 }
 
-/** One side's blend: the top role and its fit on one line, every role as a segment of one bar. */
+/** One side: the engine's decision on one line, every role with a share as a segment of one bar. */
 function SideFit({ b }: { b: RoleBlend }) {
   const roles = rankedRoles(b);
-  const top = roles[0];
+  const d = decide(b);
+  const seg = (r: string, v: number) => `${r} ${fmtPct(100 * v, 0)} ${roleValueDescriptor(b, r)}.`;
   return (
     <div className="rfit">
       <span className={`rfit__side ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}</span>
-      {top ? (
+      {d.label ? (
         <>
-          <span className="rfit__role" data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span>
-          <b className="num rfit__pct">{fmtPct(100 * top[1], 0)}</b>
+          <span className="rfit__role" data-tip={d.narrow ? d.reason ?? "The top two roles are close." : ROLE_WHAT[d.role!]} tabIndex={0}>{d.label}{d.narrow && <span className="vpill vpill--plain rfit__narrow">Narrow lead</span>}</span>
+          <b className="num rfit__pct">{shareText(d)}</b>
           <span className="rfit__bar" role="group" aria-label={`${b.side} role fit`}>
-            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={`${r} ${fmtPct(100 * v, 0)}`} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${r} ${fmtPct(100 * v, 0)}. ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
+            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={seg(r, v)} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${seg(r, v)} ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
           </span>
         </>
-      ) : <span className="meta rfit__none"><NeedsDemo detail="The role needs positions, which converted logs lack." /></span>}
+      ) : <span className="meta rfit__none">{d.reason}</span>}
     </div>
   );
 }
 
-/** The top role of a blend and its share, as a cell; a dash without a blend. */
-function RoleCell({ blend }: { blend: Record<string, number> | null | undefined }) {
-  const top = blend ? Object.entries(blend).sort((x, y) => y[1] - x[1])[0] : undefined;
-  return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
+/** A decision as a table cell: the role and its share, "A / B" when the lead is narrow, a dash with its reason when withheld. */
+function RoleCell({ b }: { b: Decided | undefined }) {
+  const d = decide(b);
+  if (!d.label) return <span className="faint" data-tip={d.reason ?? undefined} tabIndex={d.reason ? 0 : undefined}>–</span>;
+  return <span className="rmaps__cell"><span data-tip={d.narrow ? d.reason ?? "The top two roles are close." : ROLE_WHAT[d.role!]} tabIndex={0}>{d.label}</span><b className="num">{d.share === null ? "" : fmtPct(100 * d.share, 0)}</b></span>;
 }
 
 /** Each map's role over all its rounds and on each side, from one rolesByMap call (most rounds first). */
@@ -192,9 +211,9 @@ function MapRoles({ q }: { q: Query }) {
         {r.map((m) => (
           <li key={m.map}>
             <span className="rmaps__map"><MapThumb map={m.map} size={18} />{mapName(m.map)}</span>
-            <RoleCell blend={m.all.blend} />
-            <span className="t-text rmaps__side">T</span><RoleCell blend={m.T.blend} />
-            <span className="ct-text rmaps__side">CT</span><RoleCell blend={m.CT.blend} />
+            <RoleCell b={m.all} />
+            <span className="t-text rmaps__side">T</span><RoleCell b={m.T} />
+            <span className="ct-text rmaps__side">CT</span><RoleCell b={m.CT} />
           </li>
         ))}
       </ul>
@@ -215,23 +234,27 @@ export function RoleCard({ q }: { q: Query }) {
     return <Card title="Role" tip={PANEL_TIP.role} className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
   const sides = [r.data.T, r.data.CT];
-  const tops = sides.map((b) => rankedRoles(b)[0]?.[0] ?? null);
-  const overall = r.data.all.blend ? Object.entries(r.data.all.blend).sort((x, y) => y[1] - x[1])[0] : null;
+  const overall = decide(r.data.all);
   return (
     <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
-      {overall && (
+      {overall.label ? (
         <p className="role__overall">
-          <b className="role__name" data-tip={ROLE_WHAT[overall[0]]} tabIndex={0}>{overall[0]}</b>
-          <span className="meta" data-tip="Each side's role weighted by its rounds." tabIndex={0}>{fmtPct(100 * overall[1], 0)} of all rounds</span>
+          <b className="role__name" data-tip={overall.narrow ? overall.reason ?? "The top two roles are close." : ROLE_WHAT[overall.role!]} tabIndex={0}>{overall.label}</b>
+          {overall.narrow ? <span className="vpill vpill--plain" data-tip={overall.reason ?? "The top two roles are close."} tabIndex={0}>Narrow lead</span>
+            : overall.share !== null && <span className="meta" data-tip="Each side's role weighted by its rounds." tabIndex={0}>{shareText(overall)} over all rounds</span>}
         </p>
-      )}
+      ) : <p className="meta role__overall">{overall.reason}</p>}
       <div className="role__head">
-        {sides.map((b, i) => (
-          <span key={b.side} className="role__headpart">
-            <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
-            <b className="role__label" {...(tops[i] ? { "data-tip": ROLE_WHAT[tops[i]!], tabIndex: 0 } : {})}>{tops[i] ?? "Not enough data"}</b>
-          </span>
-        ))}
+        {sides.map((b) => {
+          const d = decide(b);
+          return (
+            <span key={b.side} className="role__headpart">
+              <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
+              <b className="role__label" data-tip={d.label ? (d.narrow ? d.reason ?? "The top two roles are close." : ROLE_WHAT[d.role!]) : d.reason ?? undefined} tabIndex={0}>{d.label || "Withheld"}</b>
+              {d.share !== null && <span className="meta">{shareText(d)}</span>}
+            </span>
+          );
+        })}
       </div>
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
