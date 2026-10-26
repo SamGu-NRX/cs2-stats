@@ -16,7 +16,6 @@ import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
-import { roleBlend } from "../stats/identity";
 import { loadTables } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
@@ -29,7 +28,7 @@ import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, spawnRows } from "./views";
+import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -224,19 +223,21 @@ function careersOf(q: Query): Promise<BotPopulation> {
   return p;
 }
 
-/** The query's players' rounds per map, over its matches and map filter. */
+/** The query's players' rounds per map that its filter keeps. */
 async function mapRounds(q: Query): Promise<Record<string, number>> {
-  const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
   const out: Record<string, number> = {};
-  await stream(q.files, (f) => {
-    if (q.filter.maps && !q.filter.maps.includes(f.match.map)) return;
-    const n = f.pr.filter((r) => me.has(f.players[r.pi].id)).length;
-    if (n) out[f.match.map] = (out[f.match.map] ?? 0) + n;
-  });
+  await stream(q.files, (f) => addMapRounds(out, f, q.filter));
   return out;
 }
 
-const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds });
+/** The spawns of the query's matches, with the rows its filter keeps. */
+async function spawns(q: Query): Promise<SpawnIndex> {
+  const acc = emptySpawns();
+  await stream(q.files, (f) => addSpawns(acc, f, q.filter));
+  return acc;
+}
+
+const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds, spawns });
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -366,16 +367,7 @@ const api: Impl = {
     });
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
   },
-  async rolesBySpawn(q) {
-    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
-    const acc = emptySpawns();
-    await stream(q.files, (f) => addSpawns(acc, f, me));
-    const rows = spawnRows(acc);
-    const side = (s: "T" | "CT") => Promise.all(rows[s].map(async (row) =>
-      ({ ...row, blend: roleBlend(await summaryOf({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [row.spawn] } }), s) })));
-    const [T, CT] = await Promise.all([side("T"), side("CT")]);
-    return { T, CT };
-  },
+  rolesBySpawn: ranking.rolesBySpawn,
   async clutches(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     const out: ClutchRow[] = [];

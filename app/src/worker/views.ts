@@ -9,7 +9,7 @@ import { STYLE } from "../stats/identity";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
 import { RATING3_LABEL, RATING3_STATUS, rating3Of } from "../stats/rating3";
-import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
+import { grenadesOf, keptRounds, rollup, type Filter, type Summary } from "../stats/rollup";
 import { spawnPosition } from "../stats/positions";
 import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
@@ -137,15 +137,17 @@ export interface SpawnIndex {
 
 export const emptySpawns = (): SpawnIndex => ({ all: new Map(), mine: new Map() });
 
-/** Adds one match's spawns; `me` are the queried player ids. */
-export function addSpawns(acc: SpawnIndex, f: MatchFacts, me: Set<string>): void {
+/**
+ * Adds one match's spawns: every player's to the map's spawn areas, and the rows `filter` keeps (its
+ * players, sides, dates and every other filter, as rollup keeps them) to the queried players' spawns.
+ */
+export function addSpawns(acc: SpawnIndex, f: MatchFacts, filter: Filter): void {
   const map = f.match.map;
   const all = acc.all.get(map) ?? { T: new Set<string>(), CT: new Set<string>() };
   acc.all.set(map, all);
-  for (const r of f.pr) {
+  for (const r of f.pr) if (r.spawn) all[r.side].add(r.spawn);
+  for (const r of keptRounds(f, filter)) {
     if (!r.spawn) continue;
-    all[r.side].add(r.spawn);
-    if (!me.has(f.players[r.pi].id)) continue;
     const k = `${map}|${r.side}|${r.spawn}`;
     const cur = acc.mine.get(k);
     if (cur) cur.rounds++;
@@ -162,4 +164,10 @@ export function spawnRows(acc: SpawnIndex): Record<Side, SpawnRow[]> {
   }
   for (const side of ["T", "CT"] as const) out[side].sort((a, b) => b.rounds - a.rounds);
   return out;
+}
+
+/** Adds one match's rounds that `filter` keeps to its map's count (the rounds per map rolesByMap orders by). */
+export function addMapRounds(acc: Record<string, number>, f: MatchFacts, filter: Filter): void {
+  const n = keptRounds(f, filter).length;
+  if (n) acc[f.match.map] = (acc[f.match.map] ?? 0) + n;
 }

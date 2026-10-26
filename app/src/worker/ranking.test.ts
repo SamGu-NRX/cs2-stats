@@ -12,6 +12,7 @@ import { decodeMatch } from "../stats/plugin/decode";
 import { emptySummary, rollup } from "../stats/rollup";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
 import { botPopulation, careersFor, rankingCalls } from "./ranking";
+import { addSpawns, emptySpawns } from "./views";
 
 const SAMPLE = path.resolve(import.meta.dirname, "../../public/samples/synthetic-demo.json.gz");
 
@@ -132,4 +133,21 @@ it("gives the role over all rounds and per map, maps with the most rounds first"
   const t = one.T.rounds, ct = one.CT.rounds;
   expect(one.T.blend).not.toBeNull();
   for (const [role, share] of Object.entries(one.T.blend!)) expect(one.all.blend![role]).toBeCloseTo((share * t) / (t + ct), 12);
+});
+
+it("blends each spawn's role over that spawn's rounds on its own map", async () => {
+  // fails if a spawn's blend mixes maps: the same match under a second map name gives every spawn a
+  // row per map, and each row's blend must cover only that row's rounds
+  const m = await decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz");
+  const facts = derive(pluginToTables(m), CS2RB);
+  const other = { ...facts, match: { ...facts.match, map: "de_other" } };
+  const calls = rankingCalls({
+    summary: async (q) => rollup([facts, other], q.filter), pros: async () => flat(0), careers: async () => { throw new Error("not used"); },
+    spawns: async (q) => { const acc = emptySpawns(); for (const f of [facts, other]) addSpawns(acc, f, q.filter); return acc; },
+  });
+  const r = await calls.rolesBySpawn({ files: ["x"], filter: { player: facts.match.pov! } });
+  const rows = [...r.T, ...r.CT];
+  expect(rows.length).toBeGreaterThan(0);
+  expect(new Set(rows.map((x) => x.map))).toEqual(new Set([facts.match.map, "de_other"]));
+  for (const row of rows) expect(row.blend.rounds, `${row.map} ${row.spawn}`).toBe(row.rounds);
 });
