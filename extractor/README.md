@@ -47,7 +47,7 @@ The tables land in `out/v-<version>-<hash>/`, and `out/CURRENT` names that folde
 
 With no demo arguments it imports every `match730_*.dem` in the CS2 `replays` folder. It finds that folder through the Steam install (registry, then the usual paths, or `--steam`) and `steamapps/libraryfolders.vdf`. Each demo goes to `<out>/<demo name>/` in the same versioned layout, and it must validate exactly against its own scoreboard. A demo whose current tables already came from the same file, extractor version and importer version is skipped; `--force` re-extracts it.
 
-A demo has no date, so `match.extra` gets one: the match time Steam writes into the `.dem.info` beside the demo, else the demo's file time (`date_source` says which). `--progress` writes one JSON line to stderr as each demo starts and ends; the app shows them.
+A demo has no date, so `match.extra` gets one, as `date` and `started_at` in UTC: the match time Steam writes into the `.dem.info` beside the demo, else the demo's file time (`date_source` says which). The app shows `started_at` in local time. `--progress` writes one JSON line to stderr as each demo starts and ends; the app shows them. `valve-user.local.json` is replaced whole through a staged copy, and only when it changes, because the app reads it while it lists matches.
 
 The user is identified by SteamID64. The importer uses `--user` if given, else the id already saved in `<out>/valve-user.local.json`, else the most recent account in Steam's `config/loginusers.vdf`, and saves the choice in that file. The file holds a real account id, so the importer refuses an `--out` inside a git work tree unless you pass `--allow-in-repo`, and `.gitignore` lists the file name.
 
