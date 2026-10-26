@@ -12,7 +12,7 @@ import type { OverallRole, RoleBlend, RoleSignal, StylePoint } from "../stats/id
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
-import type { HeadToHead, OpeningDetail, RoundRating, SiteOutcomes, Situations, YourMatchRow, ZoneRow } from "../stats/matchviews";
+import type { Bombsites, HeadToHead, OpeningDetail, RoundRating, Situations, YourMatchRow, ZoneRow } from "../stats/matchviews";
 import type { BuyClass } from "../stats/economy";
 import type { VsOpponents } from "../stats/opponents";
 import type { Filter, Summary } from "../stats/rollup";
@@ -262,7 +262,7 @@ export interface Api {
   /** man-advantage situations ("5v4") over the query's rounds: rounds that reached each, and rounds won */
   situations(q: Query): Situations;
   /** take, hold, retake and post-plant attempts and successes per bombsite, over the player's rounds */
-  bombsites(file: string, player: string): Record<string, SiteOutcomes>;
+  bombsites(file: string, player: string): Bombsites;
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
   /** every round of the player's with two or more kills in the query's matches (the rows its filter keeps) */
