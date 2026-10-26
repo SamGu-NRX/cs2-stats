@@ -60,6 +60,22 @@ describe("contact measures", () => {
     expect(contactRound(980).aim.find((f): f is SightFact => f.k === "sight" && f.pi === 0)!.xf).toBeNull();
   });
 
+  it("reads health from before the onset, never a sample that already holds the duel's outcome", () => {
+    // fails if the onset tick's sample (b already hit: 0 health, dead) gives the model the result it is
+    // meant to predict; b's last sample strictly before the onset says 73
+    const leaked = oneRound({
+      players: { a: "CT", b: "T" },
+      engagements: [{ engagement_id: 0, attacker_steamid: "a", victim_steamid: "b", ...window }, { engagement_id: 1, attacker_steamid: "b", victim_steamid: "a", ...window }],
+      engagement_ticks: [...ticks(0, true, 1030), ...ticks(1, false, 1040)],
+      kills: [{ tick: 1050, killer: "a", victim: "b" }],
+      positions: [
+        { steamid: "a", tick: 1000, x: 0, y: 0, health: 100 }, { steamid: "b", tick: 1000, x: 1000, y: 0, health: 73 },
+        { steamid: "b", tick: 1010, x: 1000, y: 0, health: 0, is_alive: false },
+      ],
+    });
+    expect(leaked.aim.find((f): f is SightFact => f.k === "sight" && f.pi === 0)!.xf![5]).toBe(73);
+  });
+
   it("turns the sightings into the contact metrics", () => {
     // fails if a metric reads the wrong sample or scale (ms, percent)
     const s = rollup([match], { player: "a" });
