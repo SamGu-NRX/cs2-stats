@@ -17,6 +17,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import iter_demo_roots
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 def nickname(name: str) -> str:
@@ -134,10 +136,12 @@ def main() -> None:
     parser.add_argument("--metrics", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the demo joins (HLTV rows matched to demos)")
     helpers = runpy.run_path(str(Path(__file__).with_name("winprob_fit.py")))
     helpers["idle"]()
     result = join(args.data, args.metrics)
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the demo joins (HLTV rows matched to demos)", indent=2)
     print(json.dumps(result["counts"]))
 
 

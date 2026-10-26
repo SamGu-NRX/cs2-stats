@@ -11,6 +11,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import load_demo_tables
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 def nickname(name: str) -> str:
@@ -323,13 +325,15 @@ def main() -> None:
     parser.add_argument("--joins", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the swing fit report")
     helpers = runpy.run_path(str(Path(__file__).with_name("winprob_fit.py")))
     helpers["idle"]()
     provenance = empty_provenance()
     events = list(joined_events(args.data, json.loads(args.joins.read_text(encoding="utf-8"))["accepted"], provenance))
     result = fit_model(events)
     result["provenance"] = provenance
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the swing fit report", indent=2)
     print(json.dumps({key: value for key, value in result.items() if key != "samples"}, indent=2))
 
 

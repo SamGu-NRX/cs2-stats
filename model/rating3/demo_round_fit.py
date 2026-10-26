@@ -14,6 +14,8 @@ from demo_paths import column, demo_layout
 import numpy as np
 import pyarrow.parquet as pq
 from scipy.optimize import least_squares
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 GROUPS = ("sniper", "rifle1", "rifle2", "smg", "pistolPlus", "pistol")
 GROUP_INDEX = {name: index for index, name in enumerate(GROUPS)}
@@ -708,6 +710,8 @@ def main() -> None:
     parser.add_argument("--joins", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the demo round fit report")
     joins_result = json.loads(args.joins.read_text(encoding="utf-8"))
     joins = joins_result["accepted"]
     duel_events, duel_targets = build_duel_events(args.data, joins)
@@ -751,7 +755,7 @@ def main() -> None:
         "stages": results,
         "note": "Research-only fits. Fractional eco values are inferred from displayed eK/eD targets; no production constants are accepted.",
     }
-    args.out.write_text(json.dumps(payload, indent=2, default=lambda value: value.tolist() if isinstance(value, np.ndarray) else value) + "\n", encoding="utf-8")
+    write_json(args.out, payload, private=True, what="the demo round fit report", indent=2, default=lambda value: value.tolist() if isinstance(value, np.ndarray) else value)
     print(json.dumps({"joins": joins_result["counts"], "duel_model": duel_model, "round_rows": len(rows), "equations": len(y), "stages": {name: value["fit"] for name, value in results.items()}}, indent=2))
 
 

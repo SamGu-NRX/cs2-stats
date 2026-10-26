@@ -1,0 +1,63 @@
+# SteamID64s scripts/check-public-tree.mjs accepts in the tracked tree, one per line with the reason it
+# is not a real person's: a bot in a plugin fixture, a synthetic test id, or a named constant. Any other
+# SteamID64 fails the check. Add one only with a reason that holds.
+
+76561190000000001 synthetic test id (account numbers 1 to 99 below the public universe's range) in app/public/samples/synthetic-demo.json.gz, app/src/stats/plugin/adapter.test.ts
+76561190000000002 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_engagements.py, extractor/tests/test_units.py
+76561190000000011 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000012 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000013 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000014 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000021 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000022 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000023 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000031 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561190000000032 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
+76561197960265728 SteamID64 of account 0 in the public universe: the lower bound valve_import.py, valve-folder.ts and lib.rs check against
+76561197960265729 account 1, the fake user in the Valve import tests (lib.rs, valve-folder.test.ts, test_repo_guard.py)
+76561197960390124 bot Gunner (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561197960976520 bot Syfers (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561197961265729 the synthetic replacement for the user's real id (8bd950b), in the samples, fixtures and tests
+76561197973790391 bot Ava (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561197975812463 bot Operator (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561197978896853 bot Shamat (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561197987691560 bot Ricksaw (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561197989430253 bot Crew (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561197991584421 bot Rebel (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561197999004070 bot Shark (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561197999532274 bot Stone (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198001301885 bot Shark (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198008077806 bot Crusher (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198014914403 bot Rock (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198024248129 bot Rock (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561198045356879 bot Crusher (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198063336407 bot Rebel (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198064448499 bot Soldier (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561198064596050 bot Shark (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561198070801093 bot Osiris (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198074310843 bot Stone (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198086856525 bot Wolf (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561198090174682 bot Shamat (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198112397674 bot Rock (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198114431069 bot Shamat (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198119154550 bot Rip (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198120853150 bot McCoy (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198131134848 bot Ricksaw (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198139436566 bot Steel (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198143856298 bot Delrow (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198155673341 bot Wolf (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198158971650 bot Operator (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198176229901 bot Commando (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198214129660 bot Delrow (IsBot: true) in fixtures/de_dust2_20261024_183231_match_end.json
+76561198250627188 bot Crusher (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198253891911 bot Muhlik (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198269049260 bot Crusher (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561198275275704 bot Buckshot (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198284027458 bot Crusher (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198296417934 bot Osiris (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198363151851 bot Shark (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198383973750 bot Commando (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
+76561198414507112 bot Rip (IsBot: true) in fixtures/de_dust2_20261024_193943_match_end.json
+76561198417348056 bot Gunner (IsBot: true) in fixtures/de_dust2_20261024_180954_match_end.json
+76561198832272185 bot Osiris (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
+76561199026226346 bot Gunner (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json

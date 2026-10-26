@@ -39,9 +39,31 @@ export function checkOutput(file: string, kind: OutputKind, repo = REPO_ROOT): v
   }
 }
 
-/** Checks where `file` may go, then writes it, making its folder. */
+/** The private marker, the same as extractor/repo_guard.py's; scripts/check-public-tree fails a tree holding it. */
+export const PRIVATE_KEY = "_private";
+export const PRIVATE_VALUE = "do not commit";
+
+/**
+ * A private output's text with the marker: a JSON object gets "_private": "do not commit" as its first
+ * key, keeping the indentation and final newline it had; a file named *.private.* carries the marker in
+ * its name. Anything else is refused, so no private output goes out unmarked.
+ */
+export function marked(file: string, data: string): string {
+  if (/\.private\./.test(path.basename(file))) return data;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(data);
+  } catch {
+    obj = null;
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error(`${file}: a private output must be a JSON object or be named *.private.*, to carry the private marker`);
+  const indent = /^\{\s*\n(\s+)"/.exec(data)?.[1].length ?? 0;
+  return JSON.stringify({ [PRIVATE_KEY]: PRIVATE_VALUE, ...(obj as object) }, null, indent || undefined) + (data.endsWith("\n") ? "\n" : "");
+}
+
+/** Checks where `file` may go, then writes it, making its folder; a private output gets the marker. */
 export function writeOutput(file: string, data: string, kind: OutputKind, repo = REPO_ROOT): void {
   checkOutput(file, kind, repo);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, data);
+  writeFileSync(file, kind.private ? marked(file, data) : data);
 }

@@ -403,7 +403,10 @@ def test_the_importer_refuses_to_write_the_users_id_inside_a_repository(tmp_path
     with pytest.raises(SystemExit) as e:
         vi.main([str(dem), "--out", str(out), "--user", str(U1)])
     assert e.value.code == 2 and not (out / vi.USER_FILE).exists()
-    assert vi.main([str(dem), "--out", str(out), "--user", str(U1), "--allow-in-repo"]) == 0
+    # there is no flag to allow it any more
+    with pytest.raises(SystemExit) as e:
+        vi.main([str(dem), "--out", str(out), "--user", str(U1), "--allow-in-repo"])
+    assert e.value.code == 2 and not (out / vi.USER_FILE).exists()
 
 
 def test_an_empty_replays_folder_is_an_error_not_a_successful_import(tmp_path):

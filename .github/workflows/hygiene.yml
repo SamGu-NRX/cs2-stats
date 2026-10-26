@@ -1,0 +1,26 @@
+name: Public tree hygiene
+
+# Fails a pull request whose tracked tree holds something that must not be published: a SteamID64
+# outside scripts/steamid-allowlist.txt, an absolute developer path, "hltv" under app/public/, or a
+# file carrying the private marker (scripts/check-public-tree.mjs). It reads the checked-out tree only,
+# with no secrets and read-only permissions.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-public-tree:
+    name: Check the public tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-public-tree.mjs

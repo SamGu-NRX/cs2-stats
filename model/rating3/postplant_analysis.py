@@ -10,6 +10,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import demo_layout
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 def norm(value: str) -> str:
@@ -98,6 +100,8 @@ def main() -> None:
     parser.add_argument("--joins", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    # private: built from HLTV rows and pro demos; checked before any data is read
+    check_output(args.out, private=True, what="the post-plant report")
     joins = json.loads(args.joins.read_text(encoding="utf-8"))["accepted"]
     rows = [row for join in joins for row in read_join(args.data, join)]
 
@@ -135,7 +139,7 @@ def main() -> None:
         "rows_data": rows,
         "candidate_thresholds": candidates,
     }
-    args.out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    write_json(args.out, result, private=True, what="the post-plant report", indent=2)
     print(json.dumps({key: result[key] for key in ("rows", "rounds", "events_changed_after_plant")}, indent=2))
 
 
