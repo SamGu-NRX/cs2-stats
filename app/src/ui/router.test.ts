@@ -27,6 +27,20 @@ describe("parseHash", () => {
   });
 });
 
+describe("Playstyle and Weapons", () => {
+  // Both are views of their own again (the redirects to Profile and Career aim dropped the per-gun sprays).
+  it("opens #/playstyle and #/weapons as their own pages, keeping their scope", () => {
+    const r = parseHash("#/playstyle?map=de_dust2&n=10");
+    expect(r.page).toBe("playstyle");
+    expect(r.query.get("map")).toBe("de_dust2");
+    expect(r.query.has("sec")).toBe(false);
+    expect(parseHash("#/weapons").page).toBe("weapons");
+  });
+  it("still reads a section link", () => {
+    expect(parseHash("#/profile?sec=identity").query.get("sec")).toBe("identity");
+  });
+});
+
 describe("hrefs", () => {
   it("round-trips a match link", () => {
     const href = matchHref("2026/a b.json.gz", "economy", { round: 3, empty: null });
