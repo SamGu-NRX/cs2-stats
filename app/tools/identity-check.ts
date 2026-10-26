@@ -35,7 +35,7 @@ for (const side of ["T", "CT"] as const) {
     if (x) for (const f of FEATURES) { (ours[f] ??= []).push(x[f]); (theirs[f] ??= []).push(Number(row[`${COL[f]}_${side.toLowerCase()}`])); }
     const b = roleBlend(s, side);
     const decision = b.primary ?? (b.top2 ? `top2:${b.top2.join("/")}` : b.reason!);
-    lines.push(`${(row.player_name ?? row.steamid).padEnd(12)} ${want.padEnd(11)} ours ${decision} ${Object.entries(b.distribution ?? {}).map(([r, v]) => `${r} ${Math.round(100 * v)}%`).join(", ")}`);
+    lines.push(`${(row.player_name ?? row.steamid).padEnd(12)} ${want.padEnd(11)} ours ${decision} ${Object.entries(b.distribution ?? {}).map(([r, v]) => `${r} ${v === null ? "unknown" : `${Math.round(100 * v)}%`}`).join(", ")}`);
   }
   const result = evaluateRoleRows(side, rows, summaries, () => model as unknown as RoleModel);
   console.log(`\n${side}: ${ours.tapd?.length ?? 0} labelled players with features and ${ROLE_MIN_ROUNDS}+ side rounds; Mixed excluded`);

@@ -116,7 +116,10 @@ export function trainRoleModel(data: readonly RoleRow[], summaries: RoleSummarie
     for (const side of eligible) {
       const b = roleBlend(summaries.get(row.steamid)![side]!, side, inner);
       if (!b.distribution) continue;
-      for (const role of MAPPED[side]) (samples[side][role] ??= []).push({ x: b.distribution[role], y: evaluationLabel(row, side) === role ? 1 : 0 });
+      for (const role of MAPPED[side]) {
+        const value = b.distribution[role];
+        if (value !== null) (samples[side][role] ??= []).push({ x: value, y: evaluationLabel(row, side) === role ? 1 : 0 });
+      }
     }
     calibrationIds.push(row.steamid);
   }
@@ -161,7 +164,7 @@ export function evaluateRoleRows(side: RoleSide, rows: readonly RoleRow[], summa
       count(out.decisions, truth, "insufficient");
       continue;
     }
-    const [top, probability] = Object.entries(result.distribution).sort((a, b) => b[1] - a[1])[0];
+    const [top, probability] = Object.entries(result.distribution).filter((entry): entry is [string, number] => entry[1] !== null).sort((a, b) => b[1] - a[1])[0];
     const correct = top === truth;
     if (correct) out.top1Correct++;
     // Reliability tests the probability's prediction, not whether the confidence gate abstained.

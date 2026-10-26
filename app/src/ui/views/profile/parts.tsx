@@ -24,7 +24,7 @@ import { BreakRows, NeedsDemo } from "../shared";
 import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
-import { roleDecisionLabel } from "./role-decision";
+import { roleDecisionLabel, roleValueDescriptor } from "./role-decision";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -116,17 +116,10 @@ const ROLE_WHAT: Record<string, string> = {
 /** Role shades: categorical, never good or bad; the top role is cream, the rest step down in tan. */
 const SHADES = ["var(--cream)", "var(--tan)", "rgba(196, 160, 118, 0.6)", "rgba(196, 160, 118, 0.35)", "rgba(196, 160, 118, 0.2)"];
 
-const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : []);
+const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).filter((entry): entry is [string, number] => entry[1] !== null).sort((x, y) => y[1] - x[1]) : []);
 
 function decisionLabel(b: RoleBlend): string {
   return roleDecisionLabel(b) ?? "Not enough role data.";
-}
-
-function roleValueDescriptor(b: RoleBlend, role: string): string {
-  const status = b.calibrationStatus[role as keyof typeof b.calibrationStatus];
-  if (status === "measured") return "AWP rounds";
-  if (status === "calibrated") return "calibrated probability";
-  return "fit";
 }
 
 function roleValueTip(b: RoleBlend, role: string, value: number): string {

@@ -96,12 +96,12 @@ export interface RoleBlend {
   top2: [RoleName, RoleName] | null;
   /** Why a single primary was withheld, including the under-30-rounds case. */
   reason: string | null;
-  /** Role name -> fit share, with no Mixed or Half-lurker labels. */
-  distribution: Record<RoleName, number> | null;
+  /** Role name -> fit share, with no Mixed or Half-lurker labels. Unknown AWP usage is null. */
+  distribution: Record<RoleName, number | null> | null;
   /** How each role's distribution share was obtained. */
   calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>>;
   /** Kept as an alias for older clients and rolesBySpawn consumers. */
-  blend: Record<string, number> | null;
+  blend: Record<string, number | null> | null;
   metrics: RoleMetric[];
   /** Plain-language evidence retained for older clients. */
   evidence: string[];
@@ -186,17 +186,17 @@ function isotonic(points: { x: number; y: number }[], value: number): number {
   return points[points.length - 1].y;
 }
 
-function calibrated(distribution: Record<RoleName, number>, calibration: RoleCalibration | undefined, fixedAwper: number): Record<RoleName, number> {
+function calibrated(distribution: Record<RoleName, number | null>, calibration: RoleCalibration | undefined, fixedAwper: number | null): Record<RoleName, number | null> {
   if (!calibration) return distribution;
-  const adjusted = Object.fromEntries(Object.entries(distribution).filter(([role]) => role !== "AWPer").map(([role, value]) => [role, isotonic(calibration[role as RoleName] ?? [], value)])) as Record<RoleName, number>;
+  const adjusted = Object.fromEntries(Object.entries(distribution).filter(([role, value]) => role !== "AWPer" && value !== null).map(([role, value]) => [role, isotonic(calibration[role as RoleName] ?? [], value as number)])) as Record<RoleName, number>;
   const total = Object.values(adjusted).reduce((a, b) => a + b, 0);
   if (!total) return distribution;
-  return { ...Object.fromEntries(Object.entries(adjusted).map(([role, value]) => [role, (value / total) * (1 - fixedAwper)])), AWPer: fixedAwper } as Record<RoleName, number>;
+  return { ...Object.fromEntries(Object.entries(adjusted).map(([role, value]) => [role, (value / total) * (1 - (fixedAwper ?? 0))])), AWPer: fixedAwper } as Record<RoleName, number | null>;
 }
 
-export function roleDecision(distribution: Record<RoleName, number> | null, rounds: number): { primary: RoleName | null; probability: number | null; top2: [RoleName, RoleName] | null; reason: string | null } {
+export function roleDecision(distribution: Record<RoleName, number | null> | null, rounds: number): { primary: RoleName | null; probability: number | null; top2: [RoleName, RoleName] | null; reason: string | null } {
   if (!distribution) return { primary: null, probability: null, top2: null, reason: "No role evidence is available." };
-  const top = Object.entries(distribution).sort((a, b) => b[1] - a[1]) as [RoleName, number][];
+  const top = Object.entries(distribution).filter((entry): entry is [RoleName, number] => entry[1] !== null).sort((a, b) => b[1] - a[1]);
   if (!top.length) return { primary: null, probability: null, top2: null, reason: "No role evidence is available." };
   const first = top[0], second = top[1];
   const top2 = second ? [first[0], second[0]] as [RoleName, RoleName] : null;
@@ -259,11 +259,11 @@ export function roleBlend(s: Summary, side: "T" | "CT", fitModel: RoleModel = MO
   const sideRoles: RoleName[] = side === "T" ? ["Entry", "Trader", "Support", "Lurker"] : ["Anchor", "Rotator", "Aggressor", "Support"];
   const active = Object.fromEntries(sideRoles.map((role) => [role, rules[role]]));
   const nonAwper = softmax(active) as Record<RoleName, number>;
-  const awpProbability = awp === null ? 0 : clamp01(awp);
+  const awpProbability = awp === null ? null : clamp01(awp);
   const distribution = {
-    ...Object.fromEntries(Object.entries(nonAwper).map(([role, share]) => [role, share * (1 - awpProbability)])),
+    ...Object.fromEntries(Object.entries(nonAwper).map(([role, share]) => [role, share * (1 - (awpProbability ?? 0))])),
     AWPer: awpProbability,
-  } as Record<RoleName, number>;
+  } as Record<RoleName, number | null>;
   const calibratedDistribution = calibrated(distribution, fitModel.calibration?.[side], awpProbability);
   const decision = roleDecision(calibratedDistribution, m.rounds);
   evidence.push(`In the opening duel in ${pct(value("openingAttempts")!)} of rounds.`, `${pct(value("tradeAssistShare")!)} of fragging came from trades or assists.`);
@@ -276,9 +276,9 @@ export interface OverallRole {
   probability: number | null;
   top2: [RoleName, RoleName] | null;
   reason: string | null;
-  distribution: Record<string, number> | null;
+  distribution: Record<string, number | null> | null;
   calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>>;
-  blend: Record<string, number> | null;
+  blend: Record<string, number | null> | null;
   rounds: Record<"T" | "CT", number>;
 }
 
@@ -287,13 +287,20 @@ export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
   const rounds = { T: t.rounds, CT: ct.rounds };
   const total = sides.reduce((a, b) => a + b.rounds, 0);
   if (!total) return { primary: null, probability: null, top2: null, reason: "No role evidence is available.", distribution: null, calibrationStatus: {}, blend: null, rounds };
-  const distribution: Record<RoleName, number> = {} as Record<RoleName, number>;
+  const distribution: Record<RoleName, number | null> = {} as Record<RoleName, number | null>;
   const calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>> = {};
+  const awpKnown = sides.every((b) => b.distribution!.AWPer !== null);
   for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) {
+    if (share === null || role === "AWPer") continue;
     distribution[role as RoleName] = (distribution[role as RoleName] ?? 0) + (share * b.rounds) / total;
     const status = b.calibrationStatus[role as RoleName];
     if (status && (!calibrationStatus[role as RoleName] || status === "measured" || (status === "calibrated" && calibrationStatus[role as RoleName] === "fit"))) calibrationStatus[role as RoleName] = status;
   }
+  distribution.AWPer = awpKnown
+    ? sides.reduce((sum, b) => sum + (b.distribution!.AWPer! * b.rounds) / total, 0)
+    : null;
+  const awpStatus = sides.find((b) => b.calibrationStatus.AWPer)?.calibrationStatus.AWPer;
+  if (awpStatus) calibrationStatus.AWPer = awpStatus;
   const decision = roleDecision(distribution, total);
   return { ...decision, distribution, calibrationStatus, blend: distribution, rounds };
 }
