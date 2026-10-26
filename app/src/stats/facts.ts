@@ -110,10 +110,10 @@ export const INPUT_COVERAGE = {
   flags: ["flagsKnown", "kills", "the kill flags", "kills"],
   deathFlags: ["flagDeathsKnown", "enemyDeaths", "the kill flags", "deaths"],
   /**
-   * each gun shot's clip count (shots.ammo_clip) and the weapon in hand between shots (positions):
+   * each gun shot's clip count (shots.ammo_clip) and the player's path between shots (positions):
    * extractor demos have both, plugin files have no clip counts
    */
-  ammo: ["ammoRounds", "rounds", "the clip count per shot and the weapon in hand", "rounds"],
+  ammo: ["ammoRounds", "rounds", "the clip count per shot and the player's path", "rounds"],
   /** the source recorded the match's grenades and flashes (utility.ts markUtility); some plugin files hold none */
   utility: ["utilityRounds", "rounds", "grenade and flash events", "rounds"],
 } as const;

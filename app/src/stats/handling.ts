@@ -5,11 +5,16 @@
 // left are what the reload threw away, as a share of the clip the second shot fired from.
 //
 // A gun picked up shows the same rise, and shots carry no weapon entity id that would tell two copies
-// of one gun apart. So a rise counts only when the 4 Hz positions show the gun in the player's hand
-// throughout, and no copy of it could have been picked up in between: none was bought, and none was
-// dropped by a dying player within PICKUP_REACH of where the player went. Without positions no round
-// has a reload to read. A reload with no later shot in the round, and a copy dropped alive by a
-// teammate, are not seen.
+// of one gun apart. A player ends up with another copy only by buying one or picking one up, and a
+// pickup needs a copy on the ground. So a rise counts only when no copy was bought in between and none
+// was dropped by a dying player within PICKUP_REACH of the player's path, which the 4 Hz positions
+// trace (a hole in them leaves the rise out; without positions no round has a reload to read).
+//
+// Switching to a knife, grenade or pistol and back does not end the run. Requiring the gun in hand on
+// every sample between the shots was tried and ruled out: the game drops only the gun in hand, so a
+// switch alone cannot change which copy the player owns, and on 8 pro maps that rule turned down 246
+// of the 347 rises between consecutive shots of one gun, mostly knife-outs between fights. A reload with no later
+// shot of the gun in the round, and a copy a living player dropped, are not seen.
 import type { Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
@@ -23,13 +28,13 @@ import { classFromDisplay } from "./weapons";
  */
 export const PICKUP_REACH = 256;
 
-/** The longest wait between two position samples, in seconds, over which the gun still counts as seen in hand: one missed 4 Hz sample. */
+/** The longest wait between two position samples, in seconds, over which the player's path still counts as traced: one missed 4 Hz sample. */
 const SAMPLE_GAP_S = 0.5;
 
 /**
  * Fills reloads and reloadWaste (the summed share of the clip thrown away per reload) per player-round,
- * and ammoRounds for the rounds whose every gun shot of the player has a clip count and whose weapon
- * in hand the positions sample.
+ * and ammoRounds for the rounds whose every gun shot of the player has a clip count and whose path
+ * the positions sample.
  */
 export function handling(c: Ctx): void {
   const S = c.t.shots, P = c.t.positions, K = c.t.kills;
@@ -70,13 +75,13 @@ export function handling(c: Ctx): void {
     const near = (x: number | null, y: number | null, d: { x: number | null; y: number | null }) =>
       x === null || y === null || d.x === null || d.y === null || Math.hypot(x - d.x, y - d.y) <= PICKUP_REACH;
 
-    /** The same copy of `gun` was in hand from shot `a` to shot `b`, as far as the tables can show. */
+    /** No other copy of `gun` could have reached the player between shots `a` and `b`, as far as the tables can show. */
     const sameCopy = (a: number, b: number, gun: string): boolean => {
       const ta = S.tick[a], tb = S.tick[b];
       const between = own.filter((j) => P.tick[j] > ta && P.tick[j] < tb);
       let last = ta;
       for (const j of between) {
-        if (P.tick[j] - last > gap || classFromDisplay(P.active_weapon[j] ?? "") !== gun) return false;
+        if (P.tick[j] - last > gap) return false;
         last = P.tick[j];
       }
       if (tb - last > gap) return false;
@@ -88,14 +93,14 @@ export function handling(c: Ctx): void {
       ));
     };
 
-    for (let n = 1; n < rows.length; n++) {
-      const prev = rows[n - 1], i = rows[n];
-      // a different gun fired in between ends the run: the first gun left the hand
-      if (S.weapon[prev] !== S.weapon[i]) continue;
-      if (S.ammo_clip[i]! > S.ammo_clip[prev]! - 1 && S.ammo_clip[i]! > 0 && sameCopy(prev, i, S.weapon[i])) {
+    const last = new Map<string, number>();
+    for (const i of rows) {
+      const prev = last.get(S.weapon[i]);
+      if (prev !== undefined && S.ammo_clip[i]! > S.ammo_clip[prev]! - 1 && S.ammo_clip[i]! > 0 && sameCopy(prev, i, S.weapon[i])) {
         m.reloads++;
         m.reloadWaste += (S.ammo_clip[prev]! - 1) / S.ammo_clip[i]!;
       }
+      last.set(S.weapon[i], i);
     }
   }
 }
