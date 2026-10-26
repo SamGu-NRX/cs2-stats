@@ -118,7 +118,9 @@ export function importerCommand(root: string, env: NodeJS.ProcessEnv = process.e
   const dir = env.CS2_EXTRACTOR_DIR ? path.resolve(env.CS2_EXTRACTOR_DIR) : path.resolve(appDir, "..", "extractor");
   const script = path.join(dir, "valve_import.py");
   if (!existsSync(script)) return { missing: `no importer at ${script}; set CS2_EXTRACTOR_DIR to the extractor folder` };
-  const py = env.CS2_EXTRACTOR_PYTHON ?? path.join(dir, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  // resolved here: the importer runs with the extractor folder as its working folder (review of #29)
+  const py = env.CS2_EXTRACTOR_PYTHON ? path.resolve(env.CS2_EXTRACTOR_PYTHON)
+    : path.join(dir, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   if (!existsSync(py)) return { missing: `no Python at ${py}; create the extractor's .venv (extractor/README.md) or set CS2_EXTRACTOR_PYTHON` };
   const args = ["-I", script, "--progress", "--out", root];
   if (env.CS2_MAPDATA) args.push("--mapdata", path.resolve(env.CS2_MAPDATA));
