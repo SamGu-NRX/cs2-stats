@@ -11,6 +11,7 @@ import type { Side } from "../../stats/tables";
 import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs } from "../lib/format";
 import type { MatchEntry } from "./match";
+import { sourceOf } from "./sources";
 import { metric, ratingInfo, winProbInfo } from "./meta";
 import type { AttributeId } from "./proPack";
 
@@ -23,8 +24,8 @@ export const ratingHeadline = () => ratingInfo().label;
 export const winProbText = () => {
   const w = winProbInfo();
   return w.kind === "hltv"
-    ? `${w.label}, from packs/winprob-hltv.json; it drives round swing.`
-    : `${w.label}. Install packs/winprob-hltv.json for HLTV's lookup; it drives round swing.`;
+    ? `${w.label}, from winprob-hltv.json in the packs folder. It values each round's swing.`
+    : `${w.label}. It values each round's swing; add winprob-hltv.json to the packs folder to use HLTV's table instead.`;
 };
 export const rating3Note = () => {
   const r = ratingInfo();
@@ -39,6 +40,23 @@ export const RATING_POOLED = "Rated per side over the rounds it can value; a sid
  */
 export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log, so it is left out of career views.";
 export const ratedMatch = coveredEnough;
+
+/** "1 of 16 rounds logged": how much of a match the kill-by-kill log covers. */
+export const loggedText = (m: { nRounds: number; roundsPlayed: number }) => `${m.nRounds} of ${m.roundsPlayed} rounds logged`;
+
+/**
+ * The coverage rule, applied once where the match list arrives (data/provider.tsx), so every view
+ * reads it: a match whose kill-by-kill log covers under half its rounds keeps its counts (the logged
+ * rounds' kills and deaths) but none of its per-round values (ADR, KAST, HS%, swing, rating, the eco
+ * scoreboard). Those values describe the few logged rounds, not the match, and would read as the
+ * match's result in Matches, the Home hero and the match header.
+ */
+export function coverEntry(e: MatchEntry): MatchEntry {
+  if (ratedMatch(e.match)) return e;
+  const v: Values = {};
+  for (const k of Object.keys(e.line.v)) v[k] = null;
+  return { ...e, line: { ...e.line, v, eco: null, rating: null } };
+}
 /** A match entry's own rating, null under the coverage rule. */
 export const entryRating = (e: MatchEntry) => e.line.rating;
 
@@ -92,6 +110,21 @@ export function lineOf(l: Pick<Line, "m" | "v">, rating: number | null): StatLin
     m, v, rounds: m.rounds, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
     adr: v.adr, kast: v.kast, hs: v.hs, kpr: v.kpr, dpr: v.dpr, mk: v.mk,
     swing: v.swing === null ? null : v.swing / 100, rating,
+  };
+}
+
+/**
+ * Rates for several players together (a team total), from their summed measures: the same ratios as
+ * stats/metrics.ts adr, kast, hs and swing, which read only these measures. Swing is a fraction.
+ */
+export function pooledRates(ms: Measures[]): { adr: number | null; kast: number | null; hs: number | null; swing: number | null } {
+  const sum = (k: keyof Measures) => ms.reduce((a, m) => a + ((m[k] as number | undefined) ?? 0), 0);
+  const rounds = sum("rounds"), kills = sum("kills"), swingRounds = sum("swingRounds");
+  return {
+    adr: rounds ? sum("dmg") / rounds : null,
+    kast: rounds ? (100 * sum("kast")) / rounds : null,
+    hs: kills ? (100 * sum("hsKills")) / kills : null,
+    swing: swingRounds ? sum("swing") / swingRounds : null,
   };
 }
 
@@ -163,24 +196,51 @@ export const WEAPON_CLASS_LABEL: Record<string, string> = {
 // Performance ranks against the pros, the user's style against the bot careers in their own matches
 // (design/identity.md, worker/ranking.ts). Every percentile on screen names one of the two.
 
-/** A pro pool's name and size, for a card's aside. */
-export const poolText = (role: "awper" | "rifler" | "all", n: number) => `Percentile against ${n} ${role === "all" ? "pros" : role === "awper" ? "pro AWPers" : "pro riflers"}`;
+/** The words a percentile phrase names its population with: "pro riflers", "pros". */
+export const proPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "pros" : role === "awper" ? "pro AWPers" : "pro riflers");
+/**
+ * The population a pro percentile was read in, from its pool (compare.ts Percentile.pool): the role
+ * pools, everyone ("all": sniping metrics always compare with every pro), or one map's player-maps.
+ */
+export const proPopulation = (pool: string) => (pool === "awper" ? "pro AWPers" : pool === "rifler" ? "pro riflers" : pool.startsWith("map:") ? "pros on this map" : "pros");
+/** The same for the bot pools the user's style ranks against: "rifler bots", "all bots". */
+export const botPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "all bots" : role === "awper" ? "AWPer bots" : "rifler bots");
 
-/** A bot career pool's name and size. */
-export const botPoolText = (role: "awper" | "rifler" | "all", n: number) =>
-  `Percentile against ${n} ${role === "all" ? "" : role === "awper" ? "AWPer " : "rifler "}bot ${n === 1 ? "career" : "careers"}`;
+
+/**
+ * The bot population the user's style ranks against, as one count with one noun. Every place that
+ * names the population (the attributes panel, the provisional chip, a card aside) reads it here, so a
+ * screen never says "63 bot matches" in one spot and "62 bot careers" in the next.
+ *
+ * - The noun follows what one sample is (Careers.unit): a bot career, or one bot in one match while
+ *   too few careers qualify.
+ * - The count is the pool the scores read when the caller has it (StyleResult.n with its role), else
+ *   the whole population: every bot match, or every qualifying career.
+ *
+ *   const pop = botPopulation(style.careers, { n: style.n, role: cmp === "all" ? "all" : style.role });
+ *   pop.text  // "62 rifler bot matches"
+ */
+export interface BotPool { n: number; role: "awper" | "rifler" | "all" }
+export interface BotPopulation { count: number; noun: string; text: string }
+export function botPopulation(c: Careers, pool?: BotPool): BotPopulation {
+  const count = pool ? pool.n : c.unit === "matches" ? c.botMatches : c.qualified;
+  const role = !pool || pool.role === "all" ? "" : pool.role === "awper" ? "AWPer " : "rifler ";
+  const noun = c.unit === "matches" ? (count === 1 ? "bot match" : "bot matches") : count === 1 ? "bot career" : "bot careers";
+  return { count, noun, text: `${count} ${role}${noun}` };
+}
+
+/** A bot pool's name and size, for a card's aside: "Percentile against 62 rifler bot matches". */
+export const botPoolText = (c: Careers, pool?: BotPool) => `Percentile against ${botPopulation(c, pool).text}`;
 
 /** The sentence behind the "Provisional" chip the style scores carry until enough bot careers qualify. */
-export const provisionalText = (c: Careers) => (c.unit === "matches"
-  ? `Provisional: against ${c.botMatches} bot ${c.botMatches === 1 ? "match" : "matches"}; career scores need ${c.minPool} bot careers with ${c.minRounds}+ rounds`
+export const provisionalText = (c: Careers, pool?: BotPool) => (c.unit === "matches"
+  ? `Provisional: against ${botPopulation(c, pool).text}; career scores need ${c.minPool} bot careers with ${c.minRounds}+ rounds`
   : `Provisional: ${c.qualified} of ${c.needed} bot careers with ${c.minRounds}+ rounds`);
 
 export const BOTS_TIP = "Style is ranked against the bots in your own matches: each bot name is one career, summed over the same matches as you. Pros are ranked against pros.";
 
 /** Why a style pool shows no scores (the detail behind "Needs a recorded demo"): fewer samples in it than the engine needs to write its quantiles. */
-export const thinPoolText = (c: Careers, n: number) => (c.unit === "matches"
-  ? `This pool has ${n} bot ${n === 1 ? "match" : "matches"}, and a style score needs ${c.minPool}.`
-  : `This pool has ${n} bot ${n === 1 ? "career" : "careers"} with ${c.minRounds}+ rounds, and a style score needs ${c.minPool}.`);
+export const thinPoolText = (c: Careers, n: number) => `This pool has ${botPopulation(c, { n, role: "all" }).text}${c.unit === "careers" ? ` with ${c.minRounds}+ rounds` : ""}, and a style score needs ${c.minPool}.`;
 
 // ---------------------------------------------------------------- lists
 
@@ -189,16 +249,57 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
   return map ? all.filter((s) => s.match.map === map) : all;
 }
 
-/**
- * The one match set every career number reads (the sidebar, Home, Profile, Playstyle, Career aim and
- * Weapons): finished matches whose kill-by-kill log covers at least half their rounds. An unfinished
- * match or a partial converted log neither appears in a career list nor moves an average, so the
- * sidebar, the Rating 3.0 tile and Form's pooled line agree. The Matches list shows every match and
- * labels the others.
- */
-export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => s.match.complete && ratedMatch(s.match));
+// Which matches count. Matches lists every match; each rule below is shared by every view.
 
-export const INCOMPLETE_TIP = "Not finished: left out of career views (Home, Profile, Playstyle, Career aim, Weapons).";
+/** The user's own match: anything but a pro demo (data/sources.ts). Pro demos open from Matches, labelled, and count nowhere. */
+export const isOwn = (e: MatchEntry) => sourceOf(e).id !== "pro";
+/** Played to its end. An abandoned match opens normally but is in no W-L and no career total. */
+export const isFinished = (e: MatchEntry) => e.match.complete;
+/**
+ * Whether a match is a match at all: it has activity, a completed round, a kill or a damage event
+ * (MatchEntry.activity). A recording stopped before anything happened is left out of Matches and every
+ * career number; a winnerless one with kills or damage is listed and labelled unfinished. (The rule and
+ * names #29 uses.)
+ */
+export const isListed = (s: MatchEntry) => s.activity;
+
+/** What Matches lists: the matches in the filter that isListed keeps. */
+export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter(isListed);
+
+/** The result is known: some round has a winner. A 0:0 with unknown winners is no draw, so it stays out of W-L. */
+export const hasKnownResult = (e: MatchEntry) => e.score.us + e.score.them > 0;
+/** The kill-by-kill log covers at least half the rounds (the coverage rule; see coverEntry). */
+export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
+
+/**
+ * The one match set every career number reads (the sidebar, Home, Profile, Career aim, and the
+ * Matches summary's rating): the user's own finished matches whose kill-by-kill log covers at least
+ * half their rounds, wingman left out (isWingman). Pro demos, unfinished matches, wingman and thin logs
+ * neither appear in a career list nor move an average, so the sidebar, the Rating 3.0 tile and Form's
+ * pooled line agree.
+ */
+export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
+
+/** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
+export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
+
+/** Why a match is left out of the career, for its row's tooltip; null when it counts. */
+export function notCountedText(e: MatchEntry): string | null {
+  if (!isOwn(e)) return "Pro demo: not part of your career.";
+  if (isWingman(e)) return WINGMAN_TIP;
+  if (!isFinished(e)) return `Unfinished: abandoned after ${e.match.nRounds} ${e.match.nRounds === 1 ? "round" : "rounds"}. It opens normally, but is left out of W–L and career totals.`;
+  if (!isLogged(e)) return `${loggedText(e.match)}: too few for a rating, so it is left out of career totals.`;
+  return null;
+}
+
+
+/**
+ * A wingman match: a 16-round limit (MR8) with at most two players a side, as Valve's wingman demos are.
+ * The rating and win-probability models and the pro baselines are all 5v5, so career views leave it out.
+ */
+export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
+
+export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Career aim, Weapons), whose models and baselines are 5v5.";
 
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {

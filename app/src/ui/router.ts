@@ -1,6 +1,11 @@
-// Hash routes, so every view and tab can be deep-linked (and screenshotted). Filters live in the
-// hash's query string, e.g. #/profile?side=t&map=de_dust2 or #/match/<file>/rounds?round=7.
-import { useSyncExternalStore } from "react";
+// Hash routes, so every view and tab can be deep-linked (and screenshotted). Scope controls live in
+// the hash's query string (shell/filters.tsx), e.g. #/aim?side=t&map=de_dust2 or
+// #/match/<file>/rounds?round=7. A view's section is the `sec` parameter: #/profile?sec=identity
+// scrolls Profile to its Identity section once (useSection below).
+//
+// The app has six views (Home, Matches, Profile, Playstyle, Career aim, Weapons) plus Data & settings
+// and the match view.
+import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
 export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced"] as const;
@@ -55,10 +60,12 @@ const publish = () => {
   current = parseHash(location.hash);
   subs.forEach((s) => s());
 };
+/** The section scroll useSection has done for this visit; cleared on navigation, kept on scope changes. */
+let sectionDone: string | null = null;
 /** The last navigation came from a keyboard shortcut: the new view appears without motion. */
 let instant = false;
 export const navWasInstant = () => instant;
-if (typeof window !== "undefined") addEventListener("hashchange", () => { instant = false; publish(); });
+if (typeof window !== "undefined") addEventListener("hashchange", () => { instant = false; sectionDone = null; publish(); });
 
 export function useRoute(): Route {
   return useSyncExternalStore((s) => { subs.add(s); return () => subs.delete(s); }, () => current);
@@ -70,6 +77,7 @@ export function go(href: string, opts?: { instant?: boolean }) {
   const h = href.startsWith("#") ? href : `#${href}`;
   if (location.hash === h) return;
   instant = !!opts?.instant;
+  sectionDone = null;
   history.pushState(null, "", h);
   flushSync(publish);
 }
@@ -117,4 +125,28 @@ export function setQuery(key: string, value: string | null, more?: Record<string
   const s = r.query.toString();
   history.replaceState(null, "", `${base}${s ? `?${s}` : ""}`);
   flushSync(publish);
+}
+
+/** A page link that opens one of its sections, e.g. sectionHref("profile", "identity"). */
+export const sectionHref = (page: Exclude<Page, "match">, sec: string, q?: Record<string, string | number | null | undefined>) => pageHref(page, { ...q, sec });
+
+/**
+ * For a view that has sections: returns a ref for the section's element. When the route's `sec` names
+ * this section, the element scrolls to the top of the pane when it first renders (it may render after
+ * its data loads), once per visit: changing a scope control does not scroll again. No smooth scroll
+ * (design/shell-and-motion.md). Give the element `scroll-margin-top` if a sticky bar covers it.
+ *
+ *   const identityRef = useSection("identity");
+ *   <section ref={identityRef} id="identity">…</section>
+ */
+export function useSection(id: string): (el: HTMLElement | null) => void {
+  const r = useRoute();
+  const wanted = r.query.get("sec") === id;
+  return useCallback((el: HTMLElement | null) => {
+    if (!el || !wanted) return;
+    const visit = `${r.page}|${id}`;
+    if (sectionDone === visit) return;
+    sectionDone = visit;
+    requestAnimationFrame(() => el.scrollIntoView({ block: "start" }));
+  }, [wanted, r.page, id]);
 }

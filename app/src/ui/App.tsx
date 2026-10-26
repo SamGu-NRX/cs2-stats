@@ -1,12 +1,18 @@
-// The desktop shell: sidebar, app bar, content pane and the floating layers, plus the global
+// The desktop shell: sidebar, title bar, content pane and the floating layers, plus the global
 // keyboard shortcuts. Keyboard-triggered actions never animate.
+//
+// Until the first scan finishes, the pane says how far it got rather than drawing a skeleton (a cold
+// first scan of many matches takes seconds). If the scan fails before any match is known, every view
+// but Data & settings shows the failure with Try again; Data & settings stays usable, since its
+// Rescan, Import and source switches are the ways out.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { MenuLayer, ToastLayer, TooltipLayer, toast } from "./components/overlay";
 import { DataProvider, useData } from "./data/provider";
-import { BarProvider, useBarSlots } from "./shell/Bar";
-import { Palette } from "./shell/Palette";
+import { scanErrorText } from "./data/sources";
+import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
+import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
-import { SearchIcon } from "./icons/ui";
+import { RefreshIcon, SearchIcon } from "./icons/ui";
 import { go, matchHref, MATCH_TABS, navWasInstant, pageHref, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
@@ -15,8 +21,8 @@ const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
 const PlaystyleView = lazy(() => import("./views/Playstyle"));
 const AimView = lazy(() => import("./views/CareerAim"));
-const SettingsView = lazy(() => import("./views/Settings"));
 const WeaponsView = lazy(() => import("./views/Weapons"));
+const SettingsView = lazy(() => import("./views/Settings"));
 
 const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", playstyle: "Playstyle", aim: "Career aim", weapons: "Weapons", settings: "Data & settings" };
 
@@ -30,10 +36,10 @@ function AppBar({ onPalette }: { onPalette: () => void }) {
       <div ref={crumbs} style={{ display: "contents" }} />
       <div className="bar__tools">
         <div ref={tools} style={{ display: "contents" }} />
-        <button className="search-btn" onClick={onPalette} aria-label="Open the command palette (Ctrl K)">
+        <button className="search-btn" onClick={onPalette} aria-label="Search" aria-keyshortcuts="Control+K">
           <SearchIcon size={14} />
           <span>Search</span>
-          <span className="kbd"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+          <KeyChips keys="Ctrl K" />
         </button>
       </div>
     </header>
@@ -42,7 +48,7 @@ function AppBar({ onPalette }: { onPalette: () => void }) {
 
 function Body() {
   const route = useRoute();
-  const { status, error, matches, refresh, meta } = useData();
+  const { status, error, matches, refresh, meta, progress } = useData();
   const pane = useRef<HTMLElement>(null);
   const rail = useRail();
   const [palette, setPalette] = useState(false);
@@ -50,7 +56,8 @@ function Body() {
 
   useEffect(() => {
     document.title = `${TITLES[route.page]} · CS2 Stats`;
-    pane.current?.scrollTo({ top: 0 });
+    // a link to a section (?sec=) scrolls there itself (router.ts useSection)
+    if (!route.query.get("sec")) pane.current?.scrollTo({ top: 0 });
   }, [pageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const actions = useMemo(() => [
@@ -71,7 +78,7 @@ function Body() {
       if (ctrl && /^[1-6]$/.test(e.key)) {
         e.preventDefault();
         const n = NAV.find((x) => x.key === e.key);
-        if (n) go(pageHref(n.page as never), { instant: true });
+        if (n) go(pageHref(n.page), { instant: true });
         return;
       }
       const r = currentRoute();
@@ -102,17 +109,15 @@ function Body() {
     return () => removeEventListener("keydown", onKey);
   }, [palette, rail, refresh, matches]);
 
+  const title = TITLES[route.page];
+  const firstScan = !matches.length && (status === "starting" || status === "syncing");
   let view: JSX.Element;
-  if (status === "error") {
-    view = (
-      <div className="view"><div className="error-box" role="alert">
-        <h2>Matches could not be read</h2>
-        <p className="selectable muted">{error}</p>
-      </div></div>
-    );
-  } else if (!meta) {
-    // the views read metric labels and units the worker sends once at start (data/meta.ts)
-    view = <div className="view"><div className="skel" style={{ height: 160 }} /></div>;
+  if (status === "error" && !matches.length && !(route.page === "settings" && meta)) {
+    view = <ScanFailed title={title} error={error ?? ""} onRetry={refresh} />;
+  } else if (!meta || (firstScan && route.page !== "settings")) {
+    // the views read metric labels and units the worker sends once at start (data/meta.ts), and
+    // would say "no matches yet" while the first scan is still reading them
+    view = <FirstScan title={title} progress={meta ? progress : null} />;
   } else if (route.page === "match" && route.file) view = <MatchView file={route.file} tab={route.tab ?? "overview"} />;
   else if (route.page === "matches") view = <MatchesView />;
   else if (route.page === "profile") view = <ProfileView />;
@@ -128,7 +133,7 @@ function Body() {
       <div className="main">
         <AppBar onPalette={() => setPalette(true)} />
         <main ref={pane} className="pane" tabIndex={-1} aria-label={TITLES[route.page]}>
-          <Suspense fallback={<div className="view"><div className="skel" style={{ height: 160 }} /></div>}>
+          <Suspense fallback={<FirstScan title={title} progress={null} />}>
             <div key={pageKey} className={navWasInstant() ? undefined : "view-in"}>{view}</div>
           </Suspense>
         </main>
@@ -137,6 +142,47 @@ function Body() {
       <TooltipLayer />
       <ToastLayer />
       <MenuLayer />
+    </div>
+  );
+}
+
+/** The first scan, with how far it got. The title bar keeps the page's name. */
+function FirstScan({ title, progress }: { title: string; progress: { done: number; total: number } | null }) {
+  const text = progress && progress.total ? `Reading matches: ${progress.done} of ${progress.total}` : "Starting the stats engine…";
+  return (
+    <div className="view">
+      <BarContent crumbs={[{ label: title }]} />
+      <div className="first-scan" role="status">
+        <p>{text}</p>
+        {progress && progress.total > 0 && (
+          <div className="first-scan__bar" aria-hidden><i style={{ transform: `scaleX(${progress.done / progress.total})` }} /></div>
+        )}
+        <p className="meta">The first scan reads every match once; later scans read only new files.</p>
+      </div>
+    </div>
+  );
+}
+
+/** The match folder could not be read and no match is known yet: what failed, what to do, and the raw error on request. */
+function ScanFailed({ title, error, onRetry }: { title: string; error: string; onRetry: () => void }) {
+  return (
+    <div className="view">
+      <BarContent crumbs={[{ label: title }]} />
+      <div className="scan-failed" role="alert">
+        <h2>Matches could not be read</h2>
+        <p>{scanErrorText(error)}</p>
+        <div className="scan-failed__actions">
+          <button className="btn btn--primary press" onClick={onRetry}><RefreshIcon size={14} />Try again</button>
+          <a className="btn" href={pageHref("settings")}>Open Data & settings</a>
+        </div>
+        <p className="meta">Your packs and settings are unaffected.</p>
+        {error && (
+          <details className="scan-failed__raw">
+            <summary>Details</summary>
+            <p className="mono selectable">{error}</p>
+          </details>
+        )}
+      </div>
     </div>
   );
 }
