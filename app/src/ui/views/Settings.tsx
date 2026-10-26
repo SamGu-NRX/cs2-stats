@@ -58,7 +58,6 @@ export default function Settings() {
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
   const hide = useHidePersonal();
-  const shown = (s: string, files: string[] = []) => (hide ? hideTextAndFiles(s, files) : s);
   const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
@@ -72,7 +71,8 @@ export default function Settings() {
     if (!files || !host) return;
     const r = await host.importFiles([...files]);
     if (r.imported.length) toast(`Imported ${plural(r.imported.length, "match file")}`, "good");
-    for (const s of r.skipped) toast(shown(`${s.name} was not imported: ${s.reason}`, [s.name]), "poor", 6000);
+    // the file names are hidden as the toast draws, so turning the setting on hides them in a toast already showing
+    for (const s of r.skipped) toast(`${s.name} was not imported: ${s.reason}`, "poor", 6000, [s.name]);
     refresh();
     if (input.current) input.current.value = "";
   };
@@ -295,7 +295,7 @@ function Privacy() {
     <Card title="Privacy">
       <div className="privacy">
         <label className="check">
-          <input type="checkbox" checked={hide} disabled={forced} aria-describedby="privacy-what" onChange={(e) => setHidePersonal(e.target.checked)} />
+          <input type="checkbox" checked={hide} disabled={forced} aria-describedby="privacy-what" onChange={(e) => { const problem = setHidePersonal(e.target.checked); if (problem) toast(problem, "poor", 6000); }} />
           <span>Hide personal info</span>
         </label>
         <p className="meta" id="privacy-what">

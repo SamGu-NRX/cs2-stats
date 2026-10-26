@@ -39,7 +39,15 @@ const KEY = "cs2stats.hidePersonal";
 export const privacySwitch = (env: unknown, search: string) => env === "1" || new URLSearchParams(search).get("privacy") === "1";
 
 const FORCED = privacySwitch(import.meta.env.VITE_PRIVACY, typeof location === "undefined" ? "" : location.search);
-let saved = typeof localStorage === "undefined" ? false : localStorage.getItem(KEY) === "1";
+/** The saved choice; off when storage is missing or blocked (reading a blocked localStorage throws). */
+function readSaved(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+let saved = readSaved();
 const listeners = new Set<() => void>();
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 
@@ -47,13 +55,26 @@ const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listen
 export const privacyForced = () => FORCED;
 /** Personal info is hidden: forced by the switch, or saved in Data & settings. */
 export const hidingPersonal = () => FORCED || saved;
-/** The saved setting, off until the user turns it on. */
+/** The setting, off until the user turns it on; on for the session after a choice that could not be saved. */
 export const savedHidePersonal = () => saved;
 
-export function setHidePersonal(on: boolean) {
-  saved = on;
-  localStorage.setItem(KEY, on ? "1" : "0");
+/**
+ * Saves the choice, then applies it. When storage refuses the write (blocked or full), the setting
+ * is on for this session whichever way the user turned it, since hiding is the safe way to be wrong,
+ * and the returned sentence says so for a toast; null when the choice was saved.
+ */
+export function setHidePersonal(on: boolean): string | null {
+  let problem: string | null = null;
+  try {
+    localStorage.setItem(KEY, on ? "1" : "0");
+  } catch {
+    problem = on
+      ? "Hide personal info is on until you close the app; the setting could not be saved."
+      : "Hide personal info stays on: the setting could not be saved.";
+  }
+  saved = problem ? true : on;
   for (const fn of listeners) fn();
+  return problem;
 }
 
 /** Calls `fn` whenever the setting changes; returns the unsubscribe. */

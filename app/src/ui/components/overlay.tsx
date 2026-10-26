@@ -3,7 +3,7 @@
 // closed less than 300 ms ago the next opens instantly with no animation.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { hidingPersonal, hideText } from "../data/privacy";
+import { hidingPersonal, hideText, hideTextAndFiles, onHidePersonalChange, useHidePersonal } from "../data/privacy";
 import { CloseIcon } from "../icons/ui";
 
 const DELAY = 400;
@@ -83,6 +83,9 @@ export function TooltipLayer() {
       const target = document.activeElement?.closest("[data-tip]");
       if (target && target !== current && target.getAttribute("data-tip")) show(target, true);
     };
+    // an open tooltip holds the text it was opened with; turning "Hide personal info" over closes it,
+    // and the next one opens with the page's new text
+    const stop = onHidePersonalChange(hide);
     document.addEventListener("pointerover", enter);
     document.addEventListener("pointerout", leave);
     document.addEventListener("focusin", enter);
@@ -91,6 +94,7 @@ export function TooltipLayer() {
     addEventListener("scroll", scroll, true);
     addEventListener("scrollend", scrollEnd, true);
     return () => {
+      stop();
       document.removeEventListener("pointerover", enter);
       document.removeEventListener("pointerout", leave);
       document.removeEventListener("focusin", enter);
@@ -172,7 +176,10 @@ export function HoverCard({ card, children, prefer = "bottom", className, as: Ta
 // Toasts: information and confirmations leave after 4 s (paused while the window is in the
 // background); errors stay until dismissed and are announced as alerts. Every toast has a close
 // button. Entry and exit are CSS transitions (interruptible), not keyframes.
-export interface Toast { id: number; text: ReactNode; tone: "good" | "poor" | "info"; out?: boolean }
+//
+// A toast keeps its text as written and hides personal info as it draws (data/privacy.ts), so turning
+// the setting on hides it in a toast already showing. `files` are the file names the text mentions.
+export interface Toast { id: number; text: string; files: string[]; tone: "good" | "poor" | "info"; out?: boolean }
 let toasts: Toast[] = [];
 let nextId = 1;
 const listeners = new Set<() => void>();
@@ -181,9 +188,9 @@ const dismissers = new Map<number, () => void>();
 
 export function dismissToast(id: number) { dismissers.get(id)?.(); }
 
-export function toast(text: ReactNode, tone: Toast["tone"] = "info", ms = 4000) {
+export function toast(text: string, tone: Toast["tone"] = "info", ms = 4000, files: string[] = []) {
   const id = nextId++;
-  toasts = [...toasts.slice(-2), { id, text, tone }];
+  toasts = [...toasts.slice(-2), { id, text, files, tone }];
   emit();
   let left = ms;
   let started = performance.now();
@@ -208,10 +215,11 @@ export function toast(text: ReactNode, tone: Toast["tone"] = "info", ms = 4000) 
 }
 
 function ToastItem({ t }: { t: Toast }) {
+  const hide = useHidePersonal();
   return (
     <div className={`toast ${t.out ? "is-out" : ""}`} data-tone={t.tone}>
       <i className="toast__dot" data-tone={t.tone} aria-hidden />
-      <div className="toast__text">{t.text}</div>
+      <div className="toast__text">{hide ? hideTextAndFiles(t.text, t.files) : t.text}</div>
       <button className="toast__close" onClick={() => dismissToast(t.id)} aria-label="Dismiss"><CloseIcon size={14} /></button>
     </div>
   );

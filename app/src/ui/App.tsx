@@ -70,7 +70,10 @@ export function Shell() {
     ...(privacyForced() ? [] : [{
       label: hide ? "Show personal info" : "Hide personal info",
       words: "privacy screenshot names",
-      run: () => { setHidePersonal(!hide); toast(hide ? "Personal info shown" : "Personal info hidden"); },
+      run: () => {
+        const problem = setHidePersonal(!hide);
+        toast(problem ?? (hide ? "Personal info shown" : "Personal info hidden"), problem ? "poor" : "info");
+      },
     }]),
   ], [refresh, rail, hide]);
 

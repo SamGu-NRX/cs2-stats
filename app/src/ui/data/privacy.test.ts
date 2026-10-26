@@ -1,6 +1,6 @@
 // The rules of "Hide personal info" one at a time (privacy.ts). privacy.test.tsx in views/ checks
 // that every page applies them.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlayerInfo } from "../../stats/facts";
 import type { MatchEntry } from "./match";
 import { hideFile, hidePlayers, hideText, hideTextAndFiles, isProDemo, privacySwitch } from "./privacy";
@@ -15,6 +15,37 @@ describe("privacySwitch", () => {
     expect(privacySwitch(undefined, "")).toBe(false);
     expect(privacySwitch("0", "?privacy=0")).toBe(false);
     expect(privacySwitch("true", "?privacy")).toBe(false);
+  });
+});
+
+describe("the setting with storage the browser refuses", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); });
+  const refusing = { getItem: () => { throw new DOMException("denied", "SecurityError"); }, setItem: () => { throw new DOMException("full", "QuotaExceededError"); } };
+
+  it("starts off when reading throws, and holds a choice it could not save on, saying so", async () => {
+    vi.stubGlobal("localStorage", refusing);
+    vi.resetModules();
+    const p = await import("./privacy");
+    expect(p.hidingPersonal()).toBe(false);
+    const seen: boolean[] = [];
+    p.onHidePersonalChange(() => seen.push(p.hidingPersonal()));
+    expect(p.setHidePersonal(true)).toMatch(/could not be saved/);
+    expect(p.hidingPersonal()).toBe(true);
+    // turning it off cannot be kept either, so it stays on rather than off
+    expect(p.setHidePersonal(false)).toMatch(/stays on/);
+    expect(p.hidingPersonal()).toBe(true);
+    expect(seen).toEqual([true, true]);
+  });
+
+  it("applies a choice only once it is saved", async () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } });
+    vi.resetModules();
+    const p = await import("./privacy");
+    expect(p.setHidePersonal(true)).toBeNull();
+    expect([p.hidingPersonal(), store.get("cs2stats.hidePersonal")]).toEqual([true, "1"]);
+    expect(p.setHidePersonal(false)).toBeNull();
+    expect([p.hidingPersonal(), store.get("cs2stats.hidePersonal")]).toEqual([false, "0"]);
   });
 });
 

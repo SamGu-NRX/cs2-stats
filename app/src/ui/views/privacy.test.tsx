@@ -37,6 +37,7 @@ import { Shell } from "../App";
 import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
 import { setHidePersonal } from "../data/privacy";
+import { dismissToast, toast } from "../components/overlay";
 import { DataValue, type Data } from "../data/provider";
 import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
@@ -341,6 +342,35 @@ describe("Hide personal info", () => {
     expect(location.hash).toBe(`#/match/imported/${encodeURIComponent(`${FILE} vs friends.json.gz`)}/economy`);
     hidePersonal(true);
     expect(location.hash).toBe(`#/match/${id}/economy`);
+  }, 30_000);
+
+  it("hides them in a toast and a tooltip already open when the setting comes on", async () => {
+    await show(pageHref("home"), dataWith());
+    act(() => { toast(`${FILE}.json.gz was not imported: ${FILE}.json.gz: already imported`, "poor", 6000, [`${FILE}.json.gz`]); });
+    const toastText = () => document.querySelector(".toasts")?.textContent ?? "";
+    expect(toastText()).toContain(FILE);
+    // the sidebar's identity carries the user's name in its tooltip
+    const me = document.querySelector(".side__me")!;
+    await act(async () => {
+      me.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    const tip = document.getElementById("app-tip")!;
+    expect(tip.classList.contains("is-on")).toBe(true);
+    expect(tip.textContent).toContain(NAME);
+    hidePersonal(true);
+    expect(toastText()).not.toContain(FILE);
+    expect(toastText()).toContain("<file>.json.gz was not imported");
+    // the open tooltip closed; opened again, it reads the page's new text
+    expect(tip.classList.contains("is-on")).toBe(false);
+    await act(async () => {
+      me.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+      me.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    expect(tip.textContent).not.toContain(NAME);
+    expect(tip.textContent).toContain("You");
+    act(() => { for (let i = 1; i < 100; i++) dismissToast(i); });
   }, 30_000);
 
   it("hides them in failures too: the failed scan, the Valve folder's error and the importer's", async () => {
