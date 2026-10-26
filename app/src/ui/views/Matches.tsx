@@ -10,6 +10,7 @@ import { useMemo, type ReactNode } from "react";
 import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
+import { hideFile } from "../data/privacy";
 import {
   careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
 } from "../data/engine";
@@ -238,7 +239,7 @@ export function MatchesView() {
               { label: "Open", hint: "Enter", run: () => openMatch(matchHref(s.file), rowOf(s.file)) },
               { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) },
               { label: "Open economy", run: () => openMatch(matchHref(s.file, "economy")) },
-              { label: "Copy file name", run: () => copyText(s.file, "File name copied") },
+              { label: "Copy file name", run: () => copyText(s.file, "File name copied", hideFile(s.file)) },
             ])}
             columns={[
               {

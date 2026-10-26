@@ -7,12 +7,13 @@ import type { Client } from "../../worker/client";
 import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
 import { careerEntries } from "./engine";
 import { matchModel, type MatchEntry, type MatchModel } from "./match";
-import { hideBundle, hideText, useHidePersonal } from "./privacy";
+import { hideBundle, hideTextAndFiles, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
 export interface Loaded<T> { data: T | null; error: string | null; loading: boolean }
 
-function useAsync<T>(key: string | null, run: () => Promise<T>): Loaded<T> {
+/** `file`: a match file the call is about, hidden in its error with the listed ones (privacy.ts). */
+function useAsync<T>(key: string | null, run: () => Promise<T>, file?: string | null): Loaded<T> {
   const [st, setSt] = useState<Loaded<T>>({ data: null, error: null, loading: !!key });
   useEffect(() => {
     if (!key) { setSt({ data: null, error: null, loading: false }); return; }
@@ -24,9 +25,10 @@ function useAsync<T>(key: string | null, run: () => Promise<T>): Loaded<T> {
     );
     return () => { alive = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  // a worker's error can name a file's path or a SteamID (privacy.ts)
+  // a worker's error can name a match file, a path or a SteamID (privacy.ts)
   const hide = useHidePersonal();
-  return hide && st.error ? { ...st, error: hideText(st.error) } : st;
+  const { matches } = useData();
+  return hide && st.error ? { ...st, error: hideTextAndFiles(st.error, [...matches.map((m) => m.file), ...(file ? [file] : [])]) } : st;
 }
 
 /** One worker call; null args skip it. Refetches after a sync. */
@@ -64,7 +66,7 @@ export function useMatch(file: string | null): Loaded<MatchModel> {
     if (!entry) throw new Error(`${file} is not in the match folder`);
     const b = await bundleOf(client!, version, file!);
     return matchModel(entry, hide ? hideBundle(b, entry) : b);
-  });
+  }, file);
 }
 
 export const useRollups = (qs: Query[] | null) => useCall("rollup", qs?.length ? [qs] : null);

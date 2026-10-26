@@ -2,7 +2,8 @@
 // that every page applies them.
 import { describe, expect, it } from "vitest";
 import type { PlayerInfo } from "../../stats/facts";
-import { hidePlayers, hideText, privacySwitch } from "./privacy";
+import type { MatchEntry } from "./match";
+import { hideFile, hidePlayers, hideText, hideTextAndFiles, isProDemo, privacySwitch } from "./privacy";
 
 const ID = "76561190000000099";
 
@@ -34,6 +35,40 @@ describe("hidePlayers", () => {
   });
 });
 
+describe("isProDemo", () => {
+  const tagged = (source: string) => ({ match: { source } }) as Pick<MatchEntry, "match">;
+  it("takes only the match's own hltv tag as evidence, whatever folder the file is in", () => {
+    expect(isProDemo(tagged("hltv"))).toBe(true);
+    for (const s of ["local", "valve", "faceit", ""]) expect(isProDemo(tagged(s))).toBe(false);
+  });
+});
+
+describe("hideFile", () => {
+  it.each([
+    ["imported/Ann Lee.json.gz", "imported/<file>.json.gz"],
+    ["picked/ann.json.gz", "picked/<file>.json.gz"],
+    ["2026/20261024T223834Z_de_dust2_abe5d91c.json.gz", "2026/<file>.json.gz"],
+    ["valve/match730_003/v1", "valve/<file>"],
+    ["valve/match730_003/v1/match.parquet", "valve/<file>.parquet"],
+    ["dev/scrim", "dev/<file>"],
+    ["Ann Lee.json.gz", "<file>.json.gz"],
+    ["samples/20261024T223834Z_de_dust2_abe5d91c.json.gz", "samples/20261024T223834Z_de_dust2_abe5d91c.json.gz"],
+  ])("%s reads %s", (file, hidden) => {
+    expect(hideFile(file)).toBe(hidden);
+  });
+
+  it("hides a file by its path and by its bare name in text, then applies hideText", () => {
+    expect(hideTextAndFiles("Ann Lee.json.gz was not imported: Ann Lee.json.gz: already imported", ["Ann Lee.json.gz"]))
+      .toBe("<file>.json.gz was not imported: <file>.json.gz: already imported");
+    expect(hideTextAndFiles(`imported/Ann Lee.json.gz: the recording player (match pov ${ID}) is not among the players`, ["imported/Ann Lee.json.gz"]))
+      .toBe("imported/<file>.json.gz: the recording player (match pov <SteamID>) is not among the players");
+    expect(hideTextAndFiles("2 of 3 failed validation and are not shown: ann_scrim.dem, match730_1.dem.", ["ann_scrim.dem", "match730_1.dem"]))
+      .toBe("2 of 3 failed validation and are not shown: <file>.dem, <file>.dem.");
+    // a version folder's bare name ("v1") is not replaced inside other words
+    expect(hideTextAndFiles("valve/m/v1 has v1 tables", ["valve/m/v1"])).toBe("valve/<file> has v1 tables");
+  });
+});
+
 describe("hideText", () => {
   const user = ["C:", "Users", "Ann Example"].join("\\");
   it.each([
@@ -48,6 +83,12 @@ describe("hideText", () => {
     [`see https://steamcommunity.com/profiles/${ID}/ for more`, "see <Steam profile> for more"],
     [`see https://www.steamcommunity.com/profiles/${ID} or http://www.steamcommunity.com/id/annlee/`, "see <Steam profile> or <Steam profile>"],
     ["www.steamcommunity.com/id/annlee", "<Steam profile>"],
+    ["add me: https://s.team/p/abcd-efgh or s.team/p/wxyz-1234/ABCDEF", "add me: <Steam profile> or <Steam profile>"],
+    ["HTTPS://STEAMCOMMUNITY.COM/ID/AnnLee", "<Steam profile>"],
+    // file URLs, percent-encoded or with spaces
+    [`open file:///${["C:", "Users", "Ann%20Lee", "x.dem"].join("/")} now`, "open <path> now"],
+    ["open file:///home/ann/My Demos/x.dem, then", "open <path>, then"],
+    [`"file://${["", "Users", "ann", "x.json.gz"].join("/")}"`, `"<path>"`],
     // folder names with spaces, quoted and not, in both path styles
     ["cannot open /home/ann/My Demos/x.dem, retrying", "cannot open <path>, retrying"],
     ["cannot open '/home/ann/My Demos/x.dem'", "cannot open '<path>'"],

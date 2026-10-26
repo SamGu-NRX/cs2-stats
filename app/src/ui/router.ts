@@ -33,7 +33,9 @@ export const PROFILE_TAB_LABEL: Record<ProfileTab, string> = {
   overview: "Overview", duels: "Duels", aim: "Aim", weapons: "Weapons", utility: "Utility", economy: "Economy", playstyle: "Playstyle",
 };
 
-export type Page = "home" | "matches" | "match" | "profile" | "settings";
+/** Every page; App.tsx titles each, and the privacy test renders each. */
+export const PAGES = ["home", "matches", "match", "profile", "settings"] as const;
+export type Page = (typeof PAGES)[number];
 
 export interface Route {
   page: Page;

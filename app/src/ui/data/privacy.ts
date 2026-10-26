@@ -4,8 +4,11 @@
 // - every other human in a match that is not a pro demo reads "Teammate 1", "Opponent 3" or, without a
 //   side, "Player 2", numbered in the file's player order within each team, so a match reads the same
 //   in every view and every tab;
-// - bots keep their names, which are the game's, and players in pro demos keep theirs, being public;
-// - absolute paths, SteamIDs and Steam profile links in any text the app shows become placeholders.
+// - bots keep their names, which are the game's, and players in pro demos keep theirs, being public.
+//   A match is a pro demo only when its own source tag says so (isProDemo); without that, every human
+//   in it is hidden;
+// - absolute paths, file URLs, SteamIDs and Steam profile links in any text the app shows become
+//   placeholders, and so do the names of match files, which the user chooses for imported ones.
 // Numbers are never touched. SteamIDs stay inside the data, because every query is keyed by them; no
 // view prints one.
 //
@@ -13,7 +16,7 @@
 // - DataValue (provider.tsx): the match list, the scan and file errors, the baselines' errors;
 // - useMatch and useAsync (hooks.ts): a match's players, and every worker call's error;
 // - usePros (packs.ts) and the replay's round loader (Replay.tsx): their errors;
-// - copyText (overlay.tsx): text put on the clipboard;
+// - copyText (overlay.tsx): text put on the clipboard, or the hidden form its caller gives;
 // - Data & settings, the one view that shows the host's folders, the Valve user and the importer's
 //   output, passes them through hideText and FOLDER_HIDDEN.
 // privacy.test.tsx renders every page and tab with sentinel names, SteamIDs and paths, and fails when
@@ -27,7 +30,6 @@ import type { PlayerInfo } from "../../stats/facts";
 import type { MatchBundle } from "../../worker/protocol";
 import type { MatchEntry } from "./match";
 import type { Data } from "./provider";
-import { sourceOf } from "./sources";
 
 // ---------------------------------------------------------------- the setting
 
@@ -71,7 +73,15 @@ interface Seat {
   pro: boolean;
 }
 
-const seatOf = (e: MatchEntry): Seat => ({ you: e.you, usTeam: e.usTeam, pro: sourceOf(e).id === "pro" });
+/**
+ * A pro demo, whose players keep their names: the match's own source tag is "hltv", the tag the
+ * extractor gives demos downloaded from HLTV (extractor/extract.py --source) and the pre-v1 table
+ * loader gives the same demos (stats/load.ts). Where a file sits says nothing about who played in it:
+ * a scrim in the development folder is labelled "Pro demo" by sources.ts, and its humans are hidden.
+ */
+export const isProDemo = (e: Pick<MatchEntry, "match">) => e.match.source === "hltv";
+
+const seatOf = (e: MatchEntry): Seat => ({ you: e.you, usTeam: e.usTeam, pro: isProDemo(e) });
 
 /** One match's players under the rules at the top of this file, in the same order. */
 export function hidePlayers(players: PlayerInfo[], seat: Seat): PlayerInfo[] {
@@ -107,7 +117,10 @@ export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>" } 
 const NAME_END = String.raw`[^\\/\s<>|"'?*:,;)]*`;
 const SEGMENTS = String.raw`(?:[^\\/\r\n<>|"'?*:]*[\\/])*`;
 const RULES: [RegExp, string][] = [
-  [/(?:\bhttps?:\/\/)?(?:\bwww\.)?\bsteamcommunity\.com\/(?:profiles|id)\/[^\s'"<>)]+/gi, "<Steam profile>"],
+  // steamcommunity.com/profiles/<id> and /id/<vanity name>, and the s.team/p/<code> short links
+  [/(?:\bhttps?:\/\/)?(?:\bwww\.)?\b(?:steamcommunity\.com\/(?:profiles|id)|s\.team\/p)\/[^\s'"<>)]+/gi, "<Steam profile>"],
+  // file:///C:/Users/... and file:///home/...: the whole URL, spaces in folder names included
+  [new RegExp(String.raw`\bfile:\/\/(?:[^\\/\r\n<>|"'?*]*[\\/])*${NAME_END}`, "gi"), PATH_HIDDEN],
   [/\b7656119\d{10}\b/g, STEAMID_HIDDEN],
   [/\bSTEAM_[0-5]:[01]:\d+\b|\[U:1:\d+\]/g, STEAMID_HIDDEN],
   // C:\... or C:/..., then \\server\share\...
@@ -124,16 +137,52 @@ export function hideText(s: string): string {
   return out;
 }
 
-const hideOrNull = (s: string | null) => (s === null ? null : hideText(s));
+// ---------------------------------------------------------------- file names
+
+export const FILE_HIDDEN = "<file>";
+const FILE_EXT = /(?:\.json\.gz|\.dem\.bz2|\.dem|\.parquet|\.json|\.gz)$/i;
+
+/**
+ * A match file's path with its name hidden and its top folder and extension kept:
+ * "imported/<file>.json.gz", "valve/<file>". A bare name keeps only its extension. The user names
+ * imported and picked files and can rename anything in the match folder, so every name is hidden
+ * but the bundled samples'.
+ */
+export function hideFile(file: string): string {
+  if (file.startsWith("samples/")) return file;
+  const slash = file.indexOf("/");
+  const top = slash > 0 ? file.slice(0, slash + 1) : "";
+  return `${top}${FILE_HIDDEN}${FILE_EXT.exec(file)?.[0] ?? ""}`;
+}
+
+/**
+ * Text with each of these match files hidden (hideFile) wherever it appears, as its path or as its
+ * bare name with an extension ("x.json.gz: already imported"), then hideText's rules applied.
+ */
+export function hideTextAndFiles(s: string, files: Iterable<string>): string {
+  const swaps = new Map<string, string>();
+  for (const f of files) {
+    if (f.startsWith("samples/")) continue;
+    swaps.set(f, hideFile(f));
+    const base = f.slice(f.lastIndexOf("/") + 1);
+    if (FILE_EXT.test(base)) swaps.set(base, hideFile(base));
+  }
+  let out = s;
+  for (const [from, to] of [...swaps].sort((a, b) => b[0].length - a[0].length)) out = out.split(from).join(to);
+  return hideText(out);
+}
+
+const hideOrNull = (s: string | null, files: Iterable<string>) => (s === null ? null : hideTextAndFiles(s, files));
 
 /** What the views read from the provider, with personal info hidden; the host is passed as it is (see the top of this file). */
 export function hideData(d: Data): Data {
+  const files = [...d.matches.map((m) => m.file), ...d.fileErrors.map((e) => e.file)];
   return {
     ...d,
     matches: d.matches.map(hideEntry),
-    error: hideOrNull(d.error),
-    fileErrors: d.fileErrors.map((e) => ({ file: hideText(e.file), message: hideText(e.message) })),
-    baselines: d.baselines && { ...d.baselines, source: hideText(d.baselines.source), localError: hideOrNull(d.baselines.localError) },
-    baselinesError: hideOrNull(d.baselinesError),
+    error: hideOrNull(d.error, files),
+    fileErrors: d.fileErrors.map((e) => ({ file: hideFile(e.file), message: hideTextAndFiles(e.message, [e.file]) })),
+    baselines: d.baselines && { ...d.baselines, source: hideText(d.baselines.source), localError: hideOrNull(d.baselines.localError, []) },
+    baselinesError: hideOrNull(d.baselinesError, []),
   };
 }

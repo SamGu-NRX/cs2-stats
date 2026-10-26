@@ -14,7 +14,7 @@ import { weaponLabel } from "../../../../stats/weapons";
 import { replayClient } from "../../../../worker/replay-client";
 import { Segmented } from "../../../components/controls";
 import { frameFor, RadarImage } from "../../../components/MapArt";
-import { hideText, useHidePersonal } from "../../../data/privacy";
+import { hideTextAndFiles, useHidePersonal } from "../../../data/privacy";
 import { useData } from "../../../data/provider";
 import { hasLevels, levelRadarUrl, type Level } from "../../../data/radar-levels";
 import { feedFor } from "../../../data/rounds";
@@ -84,7 +84,7 @@ function useRoundTimeline(file: string, round: number, neighbours: number[]): { 
   useEffect(() => () => { if (host) replayClient(host).dispose(); }, [host]);
   // the reason a round could not load can name the file's path (data/privacy.ts)
   const hide = useHidePersonal();
-  return hide && st.error ? { ...st, error: hideText(st.error) } : st;
+  return hide && st.error ? { ...st, error: hideTextAndFiles(st.error, [file]) } : st;
 }
 
 function readPalette(el: Element): Palette {

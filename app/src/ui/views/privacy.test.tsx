@@ -38,7 +38,7 @@ import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
 import { setHidePersonal } from "../data/privacy";
 import { DataValue, type Data } from "../data/provider";
-import { go, MATCH_TABS, matchHref, pageHref, PROFILE_TABS, profileHref } from "../router";
+import { go, MATCH_TABS, matchHref, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -54,13 +54,24 @@ const HOME_DIR = ["C:", "Users", "SENTINEL_USER"].join("\\");
 const DATA_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\matches`;
 const VALVE_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\valve`;
 const SENTINELS = [NAME, MATE, OPPONENT, ID, "SENTINEL_USER"];
+/**
+ * A file name the user chose. It may stay in a link's target and a row's data-file key, which are not
+ * shown, so it is checked in the page's text and in the attributes a person sees: tooltips, titles and
+ * accessible names.
+ */
+const FILE = "SENTINEL_FILE";
 /** A pro demo's players keep their names. */
 const PRO_NAME = "KEPT_PRO";
 
 interface Fixture { file: string; facts: MatchFacts; tables: MatchTables; entry: MatchEntry }
 
-/** A sample as the user's own match: the user is the sentinel, one bot on each side is a human stranger. */
-async function fixture(f: string, file: string, pro = false): Promise<Fixture> {
+/**
+ * A sample as one of the user's matches: the user is the sentinel, one bot on each side is a human
+ * stranger. `source` is the match's own tag (MatchInfo.source): "valve" for a Valve matchmaking demo,
+ * "hltv" for a pro demo, whose players keep their names.
+ */
+async function fixture(f: string, file: string, source?: "valve" | "hltv"): Promise<Fixture> {
+  const pro = source === "hltv";
   const m = await decodeMatch(gunzipSync(readFileSync(path.join(SAMPLES, f))), f);
   const you = m.players.isBot.findIndex((b) => !b);
   const realId = m.players.key[you];
@@ -76,13 +87,18 @@ async function fixture(f: string, file: string, pro = false): Promise<Fixture> {
   }
   const tables = pluginToTables(s);
   const facts = derive(tables, CS2RB);
+  if (source) facts.match = { ...facts.match, source };
   return { file, facts, tables, entry: entryOf(file, s.env.plugin ?? "", facts) };
 }
 
 const names = readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"));
 const own = await Promise.all(names.map((f) => fixture(f, `samples/${f}`)));
-const pro = await fixture("synthetic-demo.json.gz", "dev/pro-demo", true);
-const all = [...own, pro];
+// a Valve match is an extracted folder, so it has a replay (replay/support.ts) whose sidebar lists the round's kills
+const valve = await fixture("20261025T000642Z_de_dust2_9b00e592.json.gz", "valve/sentinel-demo/v1", "valve");
+// a match from the development folder that is not a pro demo: its strangers are hidden like any other's
+const devMatch = await fixture("20261024T223834Z_de_dust2_abe5d91c.json.gz", "dev/scrim");
+const pro = await fixture("synthetic-demo.json.gz", "dev/pro-demo", "hltv");
+const all = [...own, valve, devMatch, pro];
 const byFile = new Map(all.map((x) => [x.file, x]));
 const main = own.find((x) => x.file === "samples/synthetic-demo.json.gz")!;
 
@@ -127,8 +143,13 @@ const client = new Proxy({} as Client, {
 // ---------------------------------------------------------------- the host
 
 const failedImport: ImportStatus = { running: false, at: null, error: null, last: { code: 2, summary: null, error: `valve_import.py: cannot read ${VALVE_FOLDER}\\demo.dem for ${ID}` } };
-function hostWith(valve: ValveFolder): Host {
-  const imports: ImportStore = { get: () => failedImport, subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} };
+// an import whose demos failed validation, which names them
+const failedDemos: ImportStatus = {
+  running: false, at: null, error: null,
+  last: { code: 1, error: null, summary: { demos: 2, ok: 1, results: [{ demo: `${FILE} scrim.dem`, ok: false, user_in_match: true }, { demo: "match730_1.dem", ok: true, user_in_match: true }] } },
+};
+function hostWith(valve: ValveFolder, status = failedDemos): Host {
+  const imports: ImportStore = { get: () => status, subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} };
   return {
     kind: "web", folder: DATA_FOLDER, valve, imports,
     list: async () => [],
@@ -142,7 +163,8 @@ function dataWith(over: Partial<Data> = {}): Data {
   return {
     status: "ready", error: null, host: hostWith({ folder: VALVE_FOLDER, user: ID, userError: null, skipped: [] }), client, meta: true,
     matches: all.map((x) => x.entry), you: [ID],
-    fileErrors: [{ file: "valve/demo/v1", message: `${VALVE_FOLDER}\\demo\\v1\\match.parquet: the recording player (match pov ${ID}) is not among the players` }],
+    fileErrors: [{ file: "valve/demo/v1", message: `${VALVE_FOLDER}\\demo\\v1\\match.parquet: the recording player (match pov ${ID}) is not among the players` },
+      { file: `picked/${FILE}.json.gz`, message: `picked/${FILE}.json.gz: not a match file` }],
     progress: null,
     baselines: { source: PROS.source, built: PROS.built, n: PROS.n, model: PROS.model ?? "", pool: "local", localError: `${HOME_DIR}\\packs\\baselines.local.json is not valid JSON` },
     baselinesError: null, version: 1, lastSync: Date.now(), refresh: () => {},
@@ -160,17 +182,35 @@ globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventLi
 // jsdom has no canvas; the replay's radar draws nothing, and its names are read from the same map the drawing reads
 HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
 Element.prototype.scrollTo ??= () => {};
+globalThis.PointerEvent ??= class extends MouseEvent {} as unknown as typeof PointerEvent;
 Element.prototype.scrollIntoView ??= () => {};
 setMeta(metaOf(CS2RB));
 
-/** Every route: each page, each Profile tab, each tab of an own match and of a pro demo. */
-const ROUTES = [
-  pageHref("home"), pageHref("matches"), pageHref("settings"),
-  ...PROFILE_TABS.map((t) => profileHref(t)),
-  ...MATCH_TABS.map((t) => matchHref(main.file, t)),
-  ...own.filter((x) => x !== main).map((x) => matchHref(x.file)),
-  matchHref(pro.file),
-];
+// The replay asks its worker for a round's positions; this one never answers, so the replay stays on
+// its loading state with its killfeed sidebar drawn.
+globalThis.Worker ??= class { onmessage = null; onerror = null; onmessageerror = null; postMessage() {} terminate() {} } as unknown as typeof Worker;
+
+/**
+ * Every route, from the router's own list of pages: each page, each Profile tab, each tab of a
+ * recorded match and of a Valve match, the Valve match's round drawer and replay on one round, and
+ * the other matches' overviews. A page added to PAGES is rendered here without editing this list.
+ */
+const ROUND = 2;
+function routesOf(page: Page): string[] {
+  switch (page) {
+    case "match":
+      return [
+        ...MATCH_TABS.flatMap((t) => [matchHref(main.file, t), matchHref(valve.file, t)]),
+        matchHref(valve.file, "rounds", { round: ROUND }), matchHref(valve.file, "replay", { round: ROUND }),
+        ...all.filter((x) => x !== main && x !== valve).map((x) => matchHref(x.file)),
+      ];
+    case "profile":
+      return PROFILE_TABS.map((t) => profileHref(t));
+    default:
+      return [pageHref(page)];
+  }
+}
+const ROUTES = PAGES.flatMap(routesOf);
 
 let root: Root;
 let el: HTMLDivElement;
@@ -208,7 +248,8 @@ async function show(href: string, data: Data) {
   await settle();
   // the page drew its own view, not the loading state of a page or tab (App.tsx FirstScan, MatchView.tsx TabSkeleton)
   expect(document.querySelector(".pane .first-scan, .pane [aria-busy='true']"), href).toBeNull();
-  return { html: document.documentElement.outerHTML, title: document.title };
+  const shown = ["title", "aria-label", "data-tip", "alt", "placeholder"].flatMap((a) => Array.from(document.querySelectorAll(`[${a}]`), (n) => n.getAttribute(a)));
+  return { html: document.documentElement.outerHTML, title: document.title, visible: [document.body.textContent, ...shown, document.title].join(" ") };
 }
 
 const found = (text: string) => SENTINELS.filter((s) => text.includes(s));
@@ -223,10 +264,11 @@ describe("Hide personal info", () => {
     const leaks: string[] = [];
     let union = "";
     for (const href of ROUTES) {
-      const { html, title } = await show(href, dataWith());
+      const { html, title, visible } = await show(href, dataWith());
       union += html;
       for (const s of found(html)) leaks.push(`${href}: ${s}`);
       for (const s of found(title)) leaks.push(`${href} (title): ${s}`);
+      if (visible.includes(FILE)) leaks.push(`${href}: ${FILE}`);
     }
     expect(leaks).toEqual([]);
     // what replaced them, and what stays
@@ -237,12 +279,26 @@ describe("Hide personal info", () => {
     expect(union).toContain(`${PRO_NAME}_1`);
     expect(union).toContain("&lt;data folder&gt;");
     expect(union).toContain("&lt;SteamID&gt;");
+    expect(union).toContain("picked/&lt;file&gt;.json.gz");
+    expect(union).toContain("&lt;file&gt;.dem");
   }, 120_000);
+
+  it("hides them in the killfeeds read straight from a match's facts: the round drawer and the replay's sidebar", async () => {
+    hidePersonal(true);
+    for (const [href, sel] of [[matchHref(valve.file, "rounds", { round: ROUND }), ".drawer"], [matchHref(valve.file, "replay", { round: ROUND }), ".replay__feed"]] as const) {
+      const { html } = await show(href, dataWith());
+      const part = document.querySelector(sel);
+      expect(part, `${href} draws ${sel}`).not.toBeNull();
+      expect(part!.querySelectorAll(".kfeed__n, .kf__p").length, `${href} lists kills`).toBeGreaterThan(0);
+      expect(found(html)).toEqual([]);
+      expect(part!.outerHTML).toMatch(/Teammate 1|Opponent 1|You/);
+    }
+  }, 30_000);
 
   it("hides them in failures too: the failed scan, the Valve folder's error and the importer's", async () => {
     hidePersonal(true);
     const error = `ENOENT: no such file or directory, scandir '${DATA_FOLDER}' (pov ${ID})`;
-    const broken = dataWith({ status: "error", error, matches: [], host: hostWith({ folder: VALVE_FOLDER, user: null, userError: null, error: `${VALVE_FOLDER} for ${ID} could not be listed`, skipped: [] }) });
+    const broken = dataWith({ status: "error", error, matches: [], host: hostWith({ folder: VALVE_FOLDER, user: null, userError: null, error: `${VALVE_FOLDER} for ${ID} could not be listed`, skipped: [] }, failedImport) });
     for (const href of [pageHref("home"), pageHref("settings")]) {
       const { html, title } = await show(href, broken);
       expect(found(html + title)).toEqual([]);
@@ -251,9 +307,10 @@ describe("Hide personal info", () => {
   }, 30_000);
 
   it("reaches the page with the setting off, so the check above is not vacuous", async () => {
-    let union = "";
-    for (const href of ROUTES) union += (await show(href, dataWith())).html;
+    let union = "", visible = "";
+    for (const href of ROUTES) { const r = await show(href, dataWith()); union += r.html; visible += r.visible; }
     expect(found(union).sort()).toEqual([...SENTINELS].sort());
+    expect(visible).toContain(FILE);
   }, 120_000);
 
   it("replaces identity, never numbers: the scoreboard's figures are the same either way", async () => {

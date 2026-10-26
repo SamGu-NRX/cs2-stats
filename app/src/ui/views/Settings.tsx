@@ -13,7 +13,7 @@ import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
 import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
 import { ratingInfo } from "../data/meta";
-import { FOLDER_HIDDEN, hideText, privacyForced, setHidePersonal, STEAMID_HIDDEN, useHidePersonal, useSavedHidePersonal } from "../data/privacy";
+import { FOLDER_HIDDEN, hideTextAndFiles, privacyForced, setHidePersonal, STEAMID_HIDDEN, useHidePersonal, useSavedHidePersonal } from "../data/privacy";
 import { useData } from "../data/provider";
 import { scanErrorText, sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
@@ -56,7 +56,7 @@ export default function Settings() {
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
   const hide = useHidePersonal();
-  const shown = (s: string) => (hide ? hideText(s) : s);
+  const shown = (s: string, files: string[] = []) => (hide ? hideTextAndFiles(s, files) : s);
   const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
@@ -70,7 +70,7 @@ export default function Settings() {
     if (!files || !host) return;
     const r = await host.importFiles([...files]);
     if (r.imported.length) toast(`Imported ${plural(r.imported.length, "match file")}`, "good");
-    for (const s of r.skipped) toast(shown(`${s.name} was not imported: ${s.reason}`), "poor", 6000);
+    for (const s of r.skipped) toast(shown(`${s.name} was not imported: ${s.reason}`, [s.name]), "poor", 6000);
     refresh();
     if (input.current) input.current.value = "";
   };
@@ -94,7 +94,7 @@ export default function Settings() {
               <div className="source__path">
                 <FolderIcon size={14} />
                 <PathText path={host?.folder ? (hide ? FOLDER_HIDDEN.data : host.folder) : "%APPDATA%\\BotMatchStats\\matches"} />
-                {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied")} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
+                {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied", FOLDER_HIDDEN.data)} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
               </div>
               <p className="meta">
                 {reading ? "Reading the folder…" : newest("recorded") ? `Newest ${fmtWhen(newest("recorded")!.match)}.` : "None yet."}
@@ -197,15 +197,15 @@ export default function Settings() {
 const IDLE_IMPORT: ImportStatus = { running: false, at: null, last: null, error: null };
 const noImports = () => () => {};
 
-/** What an import's end says, by the importer's exit code (extractor/valve_import.py). */
-function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } {
+/** What an import's end says, by the importer's exit code (extractor/valve_import.py), and the demos it names. */
+function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor"; demos: string[] } {
   const s = r.summary;
-  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good" };
+  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good", demos: [] };
   if (r.code === 1 && s) {
     const bad = s.results.filter((x) => !x.ok).map((x) => x.demo);
-    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor" };
+    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor", demos: bad };
   }
-  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor" };
+  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor", demos: s?.results.map((x) => x.demo) ?? [] };
 }
 
 /** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
@@ -216,7 +216,7 @@ function ValveSource({ n }: { n: number }) {
   useEffect(() => { void host?.imports.sync(); }, [host]);
   // the app shell rescans when an import ends (provider.tsx), so this page only shows the state
   const hide = useHidePersonal();
-  const shown = (s: string) => (hide ? hideText(s) : s);
+  const shown = (s: string, files: string[] = []) => (hide ? hideTextAndFiles(s, files) : s);
   const folder = host?.valve?.folder ?? VALVE_FOLDER;
   const run = () => { if (host && !status.running) void host.imports.start(); };
   const outcome = status.last && !status.running ? importOutcome(status.last) : null;
@@ -227,7 +227,7 @@ function ValveSource({ n }: { n: number }) {
       <div className="source__path">
         <FolderIcon size={14} />
         <span className="mono selectable">{hide && host?.valve?.folder ? FOLDER_HIDDEN.valve : folder}</span>
-        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied")} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied", host?.valve?.folder ? FOLDER_HIDDEN.valve : undefined)} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
       </div>
       <p className="meta">
         {host?.valve?.error ? <span className="poor-text selectable">{shown(host.valve.error)}</span>
@@ -242,7 +242,7 @@ function ValveSource({ n }: { n: number }) {
       <p className="meta" role="status" aria-live="polite">
         {status.running && (status.at ? `Demo ${status.at.i} of ${status.at.n}${status.at.event === "done" ? (status.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
         {status.error && !status.running ? <span className="poor-text">{shown(status.error)}</span>
-          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{shown(outcome.text)}</span>}
+          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{shown(outcome.text, outcome.demos)}</span>}
       </p>
     </div>
   );

@@ -304,11 +304,12 @@ export function MenuLayer() {
 }
 
 /**
- * Copies text and confirms with a toast. With personal info hidden, the clipboard gets the same
- * placeholders as the page (privacy.ts), and the toast says so.
+ * Copies text and confirms with a toast. With personal info hidden, the clipboard gets what the page
+ * shows instead: `hidden` when the caller gives it (a placeholder folder, a hidden file name), and the
+ * text through hideText either way (privacy.ts); the toast says so.
  */
-export async function copyText(text: string, what = "Copied") {
-  const out = hidingPersonal() ? hideText(text) : text;
+export async function copyText(text: string, what = "Copied", hidden?: string) {
+  const out = hidingPersonal() ? hideText(hidden ?? text) : text;
   try {
     await navigator.clipboard.writeText(out);
     toast(out === text ? what : `${what}, with personal info hidden`);
