@@ -143,6 +143,16 @@ describe("deriveAim on a hand-built match", () => {
     expect(s[0].dy.map((x) => +x.toFixed(9))).toEqual([1.5, 2, 2.5]);
   });
 
+  it("measures each spray's distance from the enemy bullet 1 aimed at", () => {
+    // fails if the distance reads the wrong target, view or bullets. V sits at yaw 180, pitch 0; the
+    // four bullets are off by (0, 1), (0.5, 0.5), (1.5, 1) and (3, 1.5) degrees of pitch and yaw, so
+    // about 1, 0.707, 1.803 and 3.354 degrees; with V hidden there is no target
+    const s = facts.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.SQRT1_2 + Math.hypot(1.5, 1) + Math.hypot(3, 1.5)) / 4, 2);
+    const hidden = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(hidden[0].dist).toBeNull();
+  });
+
   it("compares a spray with the pros' only while an enemy is on screen", () => {
     // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
     const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");

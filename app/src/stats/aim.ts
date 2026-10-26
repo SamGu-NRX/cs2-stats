@@ -201,6 +201,13 @@ export interface SprayFact {
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
   sw: number;
   swHits: number;
+  /**
+   * Distance from the target: the mean angle (deg) between each bullet's direction and the eye of the
+   * enemy bullet 1 aimed at (the visible enemy nearest its direction within SIGHT_CONE_DEG), over the
+   * bullets where he was visible. Plugin sprays use the plugin's aim error to bullet 1's target while
+   * on screen. Null without a target.
+   */
+  dist: number | null;
 }
 
 export type AimFact = SightFact | ShotFact | SprayFact;
@@ -274,12 +281,14 @@ export interface AimAgg {
   path: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for sprays whose path is relative to the target (plugin recordings): shown, not compared with pros */
   relPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** each spray's distance from its target (SprayFact.dist), in spray order */
+  sprayDist: number[];
 }
 
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
-  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {},
+  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, sprayDist: [],
   dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0, xN: 0, xWins: 0, xExp: 0,
 });
 
@@ -312,6 +321,7 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.bursts += f.bursts; a.movingShare += f.movingShare;
   } else {
     a.sprays++;
+    if (f.dist !== null) a.sprayDist.push(f.dist);
     if (f.sw > 0) a.swSprays++;
     a.switches += f.sw;
     a.switchHits += f.swHits;
@@ -815,7 +825,22 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     cur = t;
     if (run.slice(j).some((i) => hitOn.get(key(S.tick[i], pi))?.has(t))) swHits++;
   }
-  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits };
+  // Distance from bullet 1's target, per bullet while he is visible.
+  const T = c.t.engagement_ticks, E = c.t.engagements;
+  const angles: number[] = [];
+  if (ps && target0 !== null) {
+    for (const i of run) if (ps.onScreen[i] && ps.err[i] && ps.target[i] === target0) angles.push(aimAngle(0, 0, [0, 0, 0], forward(ps.err[i]![1], ps.err[i]![0])));
+  } else if (!ps && view?.visible && T && E) {
+    const t0 = aimedAt(c, view, run[0], pi, SIGHT_CONE_DEG)?.[0] ?? null;
+    if (t0 !== null) for (const i of run) {
+      const pitch = S.bullet_pitch[i] ?? S.pitch[i], yaw = S.bullet_yaw[i] ?? S.yaw[i];
+      if (pitch === null || yaw === null) continue;
+      const row = (view.atTick.get(key(S.tick[i], pi)) ?? []).find((x) => seen(c, x) && c.idOf(E.victim_steamid[view.eng[x]]) === t0);
+      if (row !== undefined) angles.push(aimAngle(pitch, yaw, [T.a_x[row]!, T.a_y[row]!, T.a_eye_z[row]!], [T.v_x[row]!, T.v_y[row]!, T.v_eye_z[row]!]));
+    }
+  }
+  const dist = angles.length ? r3(angles.reduce((a, x) => a + x, 0) / angles.length) : null;
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits, dist };
 }
 
 // ---- metrics
