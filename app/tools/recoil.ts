@@ -8,8 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parquetMetadata, parquetRead } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { ACCURATE_FRAC } from "../src/stats/aim-geometry";
-import { MAX_SPEED } from "../src/stats/aim-ref";
+import { accurateSpeed } from "../src/stats/speed";
 import { addShots, emptySamples, patternOf, residualOf, type PatternShot } from "../src/stats/recoil-build";
 import { mapLabel, proMapDirs } from "./node-read";
 
@@ -59,13 +58,15 @@ async function readShots(dir: string): Promise<PatternShot[]> {
   return Array.from({ length: n }, (_, i) => {
     const w = String(col.weapon[i]);
     const speed = num(col.speed_2d[i]);
-    const max = MAX_SPEED[w]?.[0];
+    const scoped = col.scoped[i] === null ? null : col.scoped[i] === true;
+    // the shared accurate-speed limit (speed.ts): null for an unknown gun or an unrecorded scope state
+    const limit = accurateSpeed(w, scoped);
     return {
       steamid: String(col.steamid[i]), tick: Number(col.tick[i]), weapon: w, recoilIndex: num(col.recoil_index[i]),
       pitch: num(col.pitch[i]), yaw: num(col.yaw[i]), bulletPitch: num(col.bullet_pitch[i]), bulletYaw: num(col.bullet_yaw[i]),
-      scoped: col.scoped[i] === null ? null : col.scoped[i] === true,
+      scoped,
       silenced: col.silenced[i] === null ? null : col.silenced[i] === true,
-      steady: max !== undefined && speed !== null && speed <= ACCURATE_FRAC * max && col.airborne[i] === false,
+      steady: limit !== null && speed !== null && speed <= limit && col.airborne[i] === false,
     };
   });
 }
