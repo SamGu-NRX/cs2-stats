@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchHref, pageHref, parseHash, scopeQuery } from "./router";
+import { matchHref, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
 
 describe("parseHash", () => {
   it("defaults to home", () => {
@@ -66,6 +66,19 @@ describe("Profile tabs", () => {
     expect(Object.fromEntries(parseHash("#/profile/overview?sec=style&attr=entrying&pro=s1mple&cmp=bots&n=5").query)).toEqual({ sec: "style", attr: "entrying", pro: "s1mple", cmp: "bots", n: "5" });
     // other pages keep theirs
     expect(parseHash("#/matches?result=W&guns=rifle").query.get("result")).toBe("W");
+  });
+});
+
+describe("profileCanonicalHash", () => {
+  it("names the tab a legacy link resolved to, so a reload or Back lands on the same tab", () => {
+    // fails if the rewritten address keeps the old path: #/profile?sec=identity tidies to #/profile,
+    // which parses as Overview
+    for (const h of ["#/profile?sec=identity&map=de_dust2", "#/profile?sec=performance&side=t", "#/aim?guns=rifle&side=t", "#/weapons?map=de_inferno", "#/playstyle", "#/profile"]) {
+      const r = parseHash(h);
+      const again = parseHash(profileCanonicalHash(r));
+      expect([again.page, again.ptab, again.query.toString()], h).toEqual(["profile", r.ptab, r.query.toString()]);
+    }
+    expect(profileCanonicalHash(parseHash("#/profile?sec=identity&map=de_dust2"))).toBe("#/profile/playstyle?map=de_dust2");
   });
 });
 
