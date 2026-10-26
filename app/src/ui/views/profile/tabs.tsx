@@ -14,6 +14,7 @@ import { hasMetric, metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
 import { fmtAdr, fmtPct, fmtRating, plural } from "../../lib/format";
 import { NeedsDemo } from "../shared";
+import { groupSpawns } from "./spawns";
 
 // ---------------------------------------------------------------- ranks
 
@@ -149,28 +150,32 @@ export function BuySplitsCard({ q }: { q: Query }) {
 // ---------------------------------------------------------------- playstyle: role by spawn
 
 /**
- * The role blend per spawn you started rounds from (rolesBySpawn): the spawn's place and position in
- * the spawn area, its rounds, and its top role. A spawn without a blend shows a dash.
+ * Your likeliest role by where you spawned (rolesBySpawn), one row per side, place and position with
+ * the rounds summed and the role weighted by rounds (spawns.ts groupSpawns). The quiet spawns close
+ * the table as one line.
  */
 export function RoleBySpawnCard({ q }: { q: Query }) {
   const r = useCall("rolesBySpawn", [q]);
-  const rows = r.data ? (["T", "CT"] as const).flatMap((side) => r.data![side].map((x) => ({ ...x, top: x.blend.blend ? Object.entries(x.blend.blend).sort((a, b) => b[1] - a[1])[0] : null }))) : null;
-  if (rows && !rows.length) return null;
+  const g = useMemo(() => (r.data ? groupSpawns([...r.data.T, ...r.data.CT]) : null), [r.data]);
+  if (g && !g.shown.length && !g.more.groups) return null;
   return (
     <Card title="Role by spawn" tip="Your likeliest role from each spawn you start at." flush>
-      {!rows ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 160 }} />) : (
-        <table className="tbl">
+      {!g ? (r.error ? <p className="meta card-pad">{r.error}</p> : <div className="skel" style={{ height: 160 }} />) : (
+        <table className="tbl spawns">
           <thead><tr><th className="l">Side</th><th className="l">Spawn</th><th>Rounds</th><th className="l">Role</th><th>Fit</th></tr></thead>
           <tbody>
-            {rows.map((x) => (
-              <tr key={`${x.side}|${x.spawn}`}>
-                <td className={`l ${x.side === "T" ? "t-text" : "ct-text"}`}>{x.side}</td>
-                <td className="l">{[x.position, x.place].filter(Boolean).join(", ") || x.spawn}</td>
+            {g.shown.map((x) => (
+              <tr key={`${x.side}|${x.label}`}>
+                <td className="l"><span className={`pip pip--${x.side.toLowerCase()}`}>{x.side}</span></td>
+                <td className="l">{x.label}</td>
                 <td className="num">{x.rounds}</td>
-                <td className="l">{x.top ? x.top[0] : <span className="faint">–</span>}</td>
-                <td className="num">{x.top ? fmtPct(100 * x.top[1], 0) : ""}</td>
+                <td className="l">{x.role ?? <span className="faint">–</span>}</td>
+                <td className="num">{x.fit === null ? "" : fmtPct(100 * x.fit, 0)}</td>
               </tr>
             ))}
+            {g.more.groups > 0 && (
+              <tr className="spawns__more"><td className="l meta" colSpan={5}>{g.shown.length ? `and ${plural(g.more.groups, "more spawn")}` : plural(g.more.groups, "spawn")}, {plural(g.more.rounds, "round")}</td></tr>
+            )}
           </tbody>
         </table>
       )}

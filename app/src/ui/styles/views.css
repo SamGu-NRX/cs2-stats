@@ -1376,3 +1376,6 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 /* ---------------------------------------------------------------- round 2 */
 /* a row with one card (its partner rendered nothing: no aggression data, no spawns) takes the full row */
 .profile__cols > :only-child { grid-column: 1 / -1; }
+/* Role by spawn: side pips, and the quiet spawns as one closing line */
+.spawns .pip { min-width: 26px; }
+.spawns__more td { color: var(--ink2); }
