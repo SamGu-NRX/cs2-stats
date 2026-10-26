@@ -57,8 +57,21 @@ it("hides a recording with no round won and no kill, and nothing hidden counts i
   const t = valveTables({ 1: "CT", 3: "T" }, 24);
   const done = entry(t);
   const winnerless = entry(t, { complete: false }, { us: 0, them: 0 });
-  const stub = { ...entry(t, {}, { us: 0, them: 0 }), kills: 0 };
-  expect(winnerless.kills).toBeGreaterThan(0);
+  const stub = { ...entry(t, {}, { us: 0, them: 0 }), activity: false };
+  expect(winnerless.activity).toBe(true);
   expect(listedEntries([done, winnerless, stub], null)).toEqual([done, winnerless]);
   expect(careerEntries([done, winnerless, stub], null)).toEqual([done]);
+});
+
+it("keeps a recording whose only activity is damage", () => {
+  // fails if a round abandoned with hits but no kill and no winner is hidden as a stub (review of #29)
+  // one round that ended with no winner, holding only the given hits
+  const winnerless = (damages: Record<string, unknown>[]) => {
+    const t = oneRoundTables({ players: { 1: "CT", 3: "T" }, roundRow: { winner_side: null }, damages });
+    return entryOf("valve/d/v-1-00000000", "", derive(withPov({ ...t, match: { ...t.match, source: ["valve"] } }, "1"), CS2RB));
+  };
+  const hit = winnerless([{ tick: 2000, attacker_steamid: "1", victim_steamid: "3", weapon: "ak47", dmg_health_capped: 40, a_side: "CT", v_side: "T" }]);
+  expect([hit.score.us + hit.score.them, hit.activity, listedEntries([hit], null).length]).toEqual([0, true, 1]);
+  const quiet = winnerless([]);
+  expect([quiet.activity, listedEntries([quiet], null).length]).toEqual([false, 0]);
 });
