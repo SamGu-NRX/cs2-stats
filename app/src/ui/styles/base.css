@@ -32,7 +32,7 @@ svg { display: block; flex: none; }
 .mono { font-family: var(--f-mono); font-size: 12px; }
 
 /* display numerals: Bahnschrift narrow and heavy, so a score or rating reads like the game's HUD */
-.disp { font-family: var(--disp); font-variation-settings: "wdth" 85, "wght" 650; font-weight: 650; line-height: 1; letter-spacing: 0; color: var(--cream); font-feature-settings: "tnum"; }
+.disp { font-family: var(--disp); font-variation-settings: var(--disp-axes); font-weight: var(--disp-weight); line-height: 1; letter-spacing: 0; color: var(--cream); font-feature-settings: "tnum"; }
 .disp--xl { font-size: 60px; }
 .disp--l { font-size: 44px; }
 .disp--m { font-size: 30px; }

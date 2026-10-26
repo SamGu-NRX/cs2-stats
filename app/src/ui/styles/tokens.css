@@ -102,8 +102,12 @@
   /* type */
   --f: "Schibsted Grotesk", "Segoe UI Variable Text", "Segoe UI", sans-serif;
   --f-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
-  /* display numerals: Windows' Bahnschrift, a DIN like CS2's HUD face, set narrow and heavy (.disp) */
+  /* display numerals: Windows' Bahnschrift, a DIN like CS2's HUD face, set narrow and heavy (.disp).
+     Without it (main.tsx adds html.no-bahnschrift) the fallback is Schibsted Grotesk at 800: the 650
+     weight and width axis are Bahnschrift's, and Schibsted at 650 reads too light for a numeral. */
   --disp: "Bahnschrift", "Schibsted Grotesk", "Segoe UI Variable Display", sans-serif;
+  --disp-weight: 650;
+  --disp-axes: "wdth" 85, "wght" 650;
 
   /* layout */
   --side-w: 232px;
@@ -153,3 +157,5 @@
 @media (prefers-reduced-motion: reduce) {
   :root { --mo: 0; }
 }
+
+html.no-bahnschrift { --disp-weight: 800; --disp-axes: normal; }
