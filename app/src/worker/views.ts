@@ -15,7 +15,7 @@ import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
 import type { MatchEntry } from "../ui/data/match";
 import type {
-  ClutchRow, Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
+  ClutchRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
 
 export function metaOf(wp: WinProbSource): Meta {
@@ -178,5 +178,13 @@ export function addClutchRows(out: ClutchRow[], file: string, f: MatchFacts, fil
   for (const c of f.clutches) {
     const r = kept.get(c.ri * 1024 + c.pi);
     if (r) out.push({ file, round: f.rounds[c.ri].number, side: r.side, player: f.players[c.pi].id, opponents: c.opponents, won: c.won, kills: c.kills });
+  }
+}
+
+/** Adds the rounds of one match (its `file`) where a player the filter keeps got two or more kills. */
+export function addMultiKillRows(out: MultiKillRow[], file: string, f: MatchFacts, filter: Filter): void {
+  for (const r of keptRounds(f, filter)) {
+    const kills = r.m.kills ?? 0;
+    if (kills >= 2) out.push({ file, round: f.rounds[r.ri].number, side: r.side, player: f.players[r.pi].id, kills, won: r.won });
   }
 }

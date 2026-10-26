@@ -34,6 +34,9 @@ export type Rolled = Summary & { v: Values; n: Record<string, number>; swingSour
 /** A summary cut down to what a table row needs: the measures and the metric values. */
 export interface BuySplits { own: Partial<Record<BuyClass, Rolled>>; opp: Partial<Record<BuyClass, Rolled>> }
 
+/** One round where a player got two or more enemy kills; `won` is null when the round has no result. */
+export interface MultiKillRow { file: string; round: number; side: "T" | "CT"; player: string; kills: number; won: boolean | null }
+
 /**
  * One clutch, with the player (steamid) and their enemy kills after the clutch started. The engine
  * always sets both; they are optional so the UI's own fixtures, which predate them, still compile.
@@ -223,6 +226,8 @@ export interface Api {
   rolesBySpawn(q: Query): Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>;
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
+  /** every round of the player's with two or more kills in the query's matches (the rows its filter keeps) */
+  multiKills(q: Query): MultiKillRow[];
 }
 
 export type Method = keyof Api;
