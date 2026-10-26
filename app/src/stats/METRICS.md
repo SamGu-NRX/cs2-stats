@@ -4,6 +4,10 @@ Every metric the engine computes, with its definition, every threshold and where
 from. `metrics.ts` holds the same list as code; `VALIDATION.md` holds the checks. "Ours" marks a choice
 with no published source; "no fit" means no data run picked the number.
 
+Every metric also has a tooltip (`tip`): one sentence of 12 words or fewer in a player's words. A
+metric with a sample minimum (`sample.min`) is pooled only over pros who meet it, so its quantiles never
+rest on a thin sample; a value under the minimum is still shown, with the count.
+
 Each metric is **performance** (how well) or **identity** (how you play), following
 `design/identity.md`. Identity metrics have no better or worse; their percentiles say how much more of
 a habit a player has than the pool. Status is **exact** (a direct count, or checked against HLTV),
@@ -26,6 +30,7 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 | id | HLTV name | Status | Definition |
 |---|---|---|---|
 | rating3 | Rating 3.0 | approx | `model/rating3/SPEC.md`. A linear model in eco-adjusted KPR, ADR, DPR and KAST, raw multi-kill % and swing: `params.json` `rating.intercept` plus `rating.coefficients` times each input (ordinary least squares on HLTV's displayed inputs, PR #17). `rating3.ts` throws on any other `rating.basis`. Per side it is the rating of that side's rounds (`rating3BySide`); the total is the side inputs weighted by each side's rated rounds (`rating3Of`), so a side too thin to rate adds nothing. |
+| rounds2k, rounds3k, rounds4k, rounds5k | | exact | Share of rounds with exactly 2, 3 or 4 kills, and with 5. As metrics they have pro quantiles in every pool; the 50th is the pros' median. |
 | kpr, dpr, adr, kast, mk, hs | KPR, DPR, ADR, KAST, Multi-kill | exact | Per round over the shared rules. KAST counts a kill, a damage assist (flash assists left out), survival or a traded death. Each KAST round is also credited to the first of those that earned it, so the parts sum to KAST: `killRounds + kastA + kastS + kastT`. |
 | swing | Round swing | approx | `swing.ts`: each kill's and plant's change in win probability (HLTV's lookup from the private pack when installed, else the CS2RB round model, which also reads the living players' health, team equipment and time; `model-params.ts`), with the victim charged the drop and the gaining side credited by damage share, else the killer. The round-end remainder goes to winners by weight (clutcher 1, players with kill swing 2, defuser 1, survivors 1, from `params.json`) and is charged equally to the losing side's survivors (all losers when none survived; ours). An eligible flash (the gaining side's, still blinding the victim at the kill, not the killer's, a team flash or an ambiguous one) takes `params.json`'s flash share first. |
 
@@ -78,7 +83,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | timeAlive | Time Alive per Round | exact | Freeze end to your death or the round end |
 | alivePostPlant | Alive for Post-Plant % | approx | Planted rounds where you were alive at the plant |
 | lastAlive | Last Alive in Team | approx | Rounds where you were at some moment the only one of your side alive |
-| clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection) |
+| clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection, with the alive counts read at freeze end as well as after each death, so a side that starts a round with one player is in a clutch before any kill) |
 | roundsWithSniper, roundsWithAwp | Rounds with a Sniper, with an AWP | approx | Rounds you carried one at freeze end or killed with one |
 | sniperKillsPct, awpKillsPct | Sniper Kills %, AWP Kills % | exact | Share of kills |
 | smokesPR, flashesPR, molotovsPR, hesPR | Smokes, Flashbangs, Molotovs, HE Grenades Thrown per Round | exact | Throws per round (molotovs include incendiaries) |
@@ -159,6 +164,12 @@ pitch). Ticks after either player's death are cut. Needs v1 maps with visibility
 | sprayPull | approx, identity | Mean pitch residual per bullet against the same path; positive is more pull-down than pros. Plugin recordings: as sprayDeviation. |
 | sprayTransfers | approx, identity | Sprays whose target changes: each bullet aims at the visible enemy nearest its direction within 5 degrees, and a switch holds for 2 bullets. Ours. Plugin recordings: sprays as in sprayDeviation, and the enemy is the shot's `target` when on screen and within 5 degrees of the view. |
 | transferHits | approx | Switches after which the rest of the spray hit the new target. Plugin recordings: as sprayTransfers. |
+
+Each spray also records its distance from the target (`SprayFact.dist`, listed per spray in
+`Summary.aim.sprayDist`): the mean angle between each bullet's direction and the eye of the enemy bullet 1
+aimed at (the visible enemy nearest its direction within 30 degrees), over the bullets where he was
+visible. Plugin sprays use the plugin's aim error to bullet 1's target while on screen. It is a measure
+for the spray views, not a ranked metric.
 
 The recoil reference is `aim-ref.ts`, generated by `pnpm aim-ref` from
 `cs2-stats-data/derived/recoil_patterns.json` and the decoded weapons vdata (hashes in its header).
@@ -310,6 +321,7 @@ real sight and is used for nothing else.
 | Role blend (`roleBlend`) | Per side, a Gaussian naive Bayes over Jamie Packer's six features (time alive per death, opening attempts, traded deaths %, trade kills %, and team-relative ranks of distance to the nearest teammate and to the team's centre), fitted on his labelled pros (CS2 Playstyle & Roles Dataset 2024, CC BY 4.0; labels from Harry Richards' Positions Database). The blend is the posterior over Entry, Lurker, Half-lurker (T) or Anchor, Rotator, Mixed (CT). AWPer share is the rounds you carried an AWP. Spacing samples: every 3 s from 10 s after freeze end, before the plant, with all five alive; ranks per sample, ties sharing the mean rank. |
 | Support tendency | Mean percentile of flashes and smokes thrown, trade kills % and assisted kills %. Reported beside the blend because no labelled source for support exists. |
 | Overall and per-map role (`overallRole`, the worker's `roles(q).all` and `rolesByMap`) | Each side's blend weighted by its rounds; a side without a blend adds no weight. The model is fitted per side and the sides' roles differ, so a role's overall share is its share of its side times that side's share of the rounds. Per map it is the same over that map's rounds. |
+| Clutch rows (`clutches`) | Each clutch with the player's steamid and their enemy kills after the death that left them alone (`ClutchFact.kills`), over the rounds the query's filter keeps |
 | Spawn names (`rolesBySpawn`) | Each spawn with its map, the map's place name at the spawn sample (`PlayerRound.spawnPlace`), and its position in the side's spawn area: facing the mean of the enemy's spawns from the mean of the side's, "front" or "back" when 64 units or more along that line, "left" or "right" when 64 or more across it, else "centre". 64 units (two player widths) is ours, no fit. Every spawn on a side shares one place name on the pro maps checked (TSpawn, CTSpawn), which is why the position is there. |
 | Populations | Style attributes and "plays like" rank the user against the bot careers in their own matches (`careerBaselines`; careers with 150 or more rounds, provisional until 15 qualify) and each pro against pros. Performance metrics and "Work on" rank against the pros. `design/identity.md`. Firepower is also scored against the same bots (`StyleResult.firepower`). An AWPer pool with fewer than 8 samples on a side takes the all-bots pool there and says so (`Careers.pool`): in the user's seven recorded matches of 2026-10-25 two bot matches passed 0.20 AWP kills per round and no bot id played twice. |
 | Plays like | Cosine similarity, as a percentage, of twelve scores: the six style attributes on T and on CT, each taken as its distance from the pool middle (score minus 50). The user and the pros are scored against different populations, so only the profile's shape compares (`design/identity.md`): 100 is the same shape, 0 unrelated, -100 the opposite. Keys either player lacks are left out. |
