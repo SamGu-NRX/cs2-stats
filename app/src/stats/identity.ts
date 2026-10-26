@@ -9,7 +9,7 @@ import { compare, roleOf } from "./compare";
 import type { Measures } from "./facts";
 import { METRIC } from "./metrics";
 import type { Summary } from "./rollup";
-import { ROLE_THRESHOLDS, roleHigh, type RoleMetricId } from "./role-thresholds";
+import { ROLE_THRESHOLDS, roleHigh, type RoleMetricId, type RoleThresholds } from "./role-thresholds";
 import model from "./roles-params.json";
 
 export const FEATURES = ["tapd", "oap", "podt", "pokt", "adnt", "adat"] as const;
@@ -23,8 +23,9 @@ export interface RoleModel {
   features: string[];
   sides: Record<"T" | "CT", { n: number; roles: Record<string, RoleFit> }>;
   calibration?: Record<"T" | "CT", RoleCalibration>;
+  thresholds?: RoleThresholds;
 }
-const MODEL = model as RoleModel;
+const MODEL = model as unknown as RoleModel;
 
 /** Packer's features from summed measures; null when a denominator is zero. */
 export function packerFeatures(m: Measures): Record<Feature, number> | null {
@@ -54,6 +55,7 @@ export function roleProbabilities(fit: RoleModel["sides"]["T"], x: Record<Featur
 
 /** Packer's role names in this app's words. */
 export type RoleName = "Entry" | "Trader" | "Support" | "Lurker" | "Anchor" | "Rotator" | "Aggressor" | "AWPer";
+export type RoleCalibrationStatus = "calibrated" | "fit" | "measured";
 
 /** Packer's labels mapped onto observable roles. Half-Lurker is deliberately folded into Lurker. */
 export const ROLE_NAME: Record<string, RoleName | null> = {
@@ -94,8 +96,10 @@ export interface RoleBlend {
   top2: [RoleName, RoleName] | null;
   /** Why a single primary was withheld, including the under-30-rounds case. */
   reason: string | null;
-  /** role name -> probability, with no Mixed or Half-lurker labels */
+  /** Role name -> fit share, with no Mixed or Half-lurker labels. */
   distribution: Record<RoleName, number> | null;
+  /** How each role's distribution share was obtained. */
+  calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>>;
   /** Kept as an alias for older clients and rolesBySpawn consumers. */
   blend: Record<string, number> | null;
   metrics: RoleMetric[];
@@ -123,6 +127,12 @@ export const ROLE_MIN_ROUNDS = 30;
 export const ROLE_MIN_PROBABILITY = 0.60;
 export const ROLE_MIN_MARGIN = 0.15;
 
+function calibrationStatus(side: "T" | "CT"): Partial<Record<RoleName, RoleCalibrationStatus>> {
+  return side === "T"
+    ? { Entry: "calibrated", Trader: "fit", Support: "fit", Lurker: "calibrated", AWPer: "measured" }
+    : { Anchor: "calibrated", Rotator: "calibrated", Aggressor: "fit", Support: "fit", AWPer: "measured" };
+}
+
 function sitePresence(s: Summary): number | null {
   const places = Object.values(s.presence).flatMap((p) => Object.entries(p.places));
   const total = places.reduce((n, [, seconds]) => n + seconds, 0);
@@ -131,7 +141,7 @@ function sitePresence(s: Summary): number | null {
   return site / total;
 }
 
-function roleMetrics(s: Summary, awp: number | null): RoleMetric[] {
+function roleMetrics(s: Summary, awp: number | null, thresholds: RoleThresholds = ROLE_THRESHOLDS): RoleMetric[] {
   const m = s.m;
   const openingAttempts = share(m.openingKills + m.openingDeaths, m.rounds);
   const tradeKills = share(m.tradeKills, m.kills);
@@ -154,9 +164,15 @@ function roleMetrics(s: Summary, awp: number | null): RoleMetric[] {
     ["areaChanges", "Area changes", null, "count", "Rotations need per-round area sequences, unavailable in rollup summaries."],
     ["awpShare", "AWP rounds", awp === null ? null : awp * 100, "pct", "Share of recorded loadout rounds carrying an AWP."],
   ].map(([id, label, value, _unit, tip]) => {
-    const provenance = ROLE_THRESHOLDS[id as RoleMetricId];
+    const provenance = thresholds[id as RoleMetricId];
     return { id: id as string, label: label as string, value: value as number | null, unit: provenance.unit, proRange: provenance?.proRange ?? null, threshold: provenance?.threshold ?? null, tip: tip as string };
   });
+}
+
+/** Metric values used to fit fold-local rule ranges. */
+export function roleMetricRows(s: Summary, thresholds: RoleThresholds = ROLE_THRESHOLDS): RoleMetric[] {
+  const awp = s.m.loadoutRounds ? s.m.roundsWithAwp / s.m.loadoutRounds : null;
+  return roleMetrics(s, awp, thresholds);
 }
 
 function isotonic(points: { x: number; y: number }[], value: number): number {
@@ -207,20 +223,22 @@ function mappedPacker(x: Record<Feature, number>, side: "T" | "CT", fitModel: Ro
  */
 export function roleBlend(s: Summary, side: "T" | "CT", fitModel: RoleModel = MODEL): RoleBlend {
   const m = s.m;
+  const statuses = calibrationStatus(side);
   const x = packerFeatures(m);
   const awp = m.loadoutRounds ? m.roundsWithAwp / m.loadoutRounds : null;
-  const metrics = roleMetrics(s, awp);
+  const thresholds = fitModel.thresholds ?? ROLE_THRESHOLDS;
+  const metrics = roleMetrics(s, awp, thresholds);
   const value = (id: string) => metrics.find((metric) => metric.id === id)?.value ?? null;
   const evidence: string[] = awp === null
     ? (m.rounds ? [`No freeze-end loadout recorded in ${side} rounds, so the AWP share is unknown.`] : [])
     : [m.loadoutRounds < m.rounds ? `Carried an AWP in ${pct(100 * awp)} of the ${m.loadoutRounds} ${side} rounds with a recorded loadout (of ${m.rounds}).` : `Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`];
-  if (!m.rounds || !x) return { side, primary: null, probability: null, top2: null, reason: m.rounds < ROLE_MIN_ROUNDS ? `Need at least ${ROLE_MIN_ROUNDS} side rounds for a role.` : "No role evidence is available.", distribution: null, blend: null, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
+  if (!m.rounds || !x) return { side, primary: null, probability: null, top2: null, reason: m.rounds < ROLE_MIN_ROUNDS ? `Need at least ${ROLE_MIN_ROUNDS} side rounds for a role.` : "No role evidence is available.", distribution: null, calibrationStatus: statuses, blend: null, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
 
   const opening = value("openingAttempts"), trades = value("tradeKills"), tradeAssist = value("tradeAssistShare");
   const utility = value("utilityPR"), distance = value("teamDistance"), contact = value("firstContactTime");
   const push = value("pushDepth"), site = value("sitePresence");
-  const high = (v: number | null, id: RoleMetricId) => roleHigh(id, v);
-  const low = (v: number | null, id: RoleMetricId) => 1 - roleHigh(id, v);
+  const high = (v: number | null, id: RoleMetricId) => roleHigh(id, v, thresholds);
+  const low = (v: number | null, id: RoleMetricId) => 1 - roleHigh(id, v, thresholds);
   const rules: Record<RoleName, number> = side === "T" ? {
     Entry: (high(opening, "openingAttempts") + high(push, "pushDepth") + low(contact, "firstContactTime")) / 3,
     Trader: (high(trades, "tradeKills") + high(tradeAssist, "tradeAssistShare") + low(opening, "openingAttempts")) / 3,
@@ -249,7 +267,7 @@ export function roleBlend(s: Summary, side: "T" | "CT", fitModel: RoleModel = MO
   const calibratedDistribution = calibrated(distribution, fitModel.calibration?.[side], awpProbability);
   const decision = roleDecision(calibratedDistribution, m.rounds);
   evidence.push(`In the opening duel in ${pct(value("openingAttempts")!)} of rounds.`, `${pct(value("tradeAssistShare")!)} of fragging came from trades or assists.`);
-  return { side, ...decision, distribution: calibratedDistribution, blend: calibratedDistribution, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
+  return { side, ...decision, distribution: calibratedDistribution, calibrationStatus: statuses, blend: calibratedDistribution, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
 }
 
 /** One overall role distribution weighted by the number of rounds on each side. */
@@ -259,6 +277,7 @@ export interface OverallRole {
   top2: [RoleName, RoleName] | null;
   reason: string | null;
   distribution: Record<string, number> | null;
+  calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>>;
   blend: Record<string, number> | null;
   rounds: Record<"T" | "CT", number>;
 }
@@ -267,11 +286,16 @@ export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
   const sides = [t, ct].filter((b) => b.distribution && b.rounds > 0);
   const rounds = { T: t.rounds, CT: ct.rounds };
   const total = sides.reduce((a, b) => a + b.rounds, 0);
-  if (!total) return { primary: null, probability: null, top2: null, reason: "No role evidence is available.", distribution: null, blend: null, rounds };
+  if (!total) return { primary: null, probability: null, top2: null, reason: "No role evidence is available.", distribution: null, calibrationStatus: {}, blend: null, rounds };
   const distribution: Record<RoleName, number> = {} as Record<RoleName, number>;
-  for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) distribution[role as RoleName] = (distribution[role as RoleName] ?? 0) + (share * b.rounds) / total;
+  const calibrationStatus: Partial<Record<RoleName, RoleCalibrationStatus>> = {};
+  for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) {
+    distribution[role as RoleName] = (distribution[role as RoleName] ?? 0) + (share * b.rounds) / total;
+    const status = b.calibrationStatus[role as RoleName];
+    if (status && (!calibrationStatus[role as RoleName] || status === "measured" || (status === "calibrated" && calibrationStatus[role as RoleName] === "fit"))) calibrationStatus[role as RoleName] = status;
+  }
   const decision = roleDecision(distribution, total);
-  return { ...decision, distribution, blend: distribution, rounds };
+  return { ...decision, distribution, calibrationStatus, blend: distribution, rounds };
 }
 
 // ---- role signals and the style compass ---------------------------------------------------------

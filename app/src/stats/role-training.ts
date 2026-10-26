@@ -1,5 +1,6 @@
 // Offline fitting and evaluation. The worker imports identity.ts, never this module.
-import { FEATURES, mapRoleName, roleBlend, type CalibrationPoint, type Feature, type RoleModel, type RoleName } from "./identity";
+import { FEATURES, mapRoleName, roleBlend, roleMetricRows, type CalibrationPoint, type Feature, type RoleModel, type RoleName } from "./identity";
+import { ROLE_THRESHOLDS, type RoleMetricId, type RoleThresholds } from "./role-thresholds";
 import { assertUniqueSteamids, type RoleSplitRow } from "./role-validation";
 import type { Summary } from "./rollup";
 
@@ -8,6 +9,29 @@ export type RoleRow = Record<string, string> & RoleSplitRow;
 export type RoleSummaries = Map<string, Partial<Record<RoleSide, Summary>>>;
 const COL: Record<Feature, string> = { tapd: "tapd", oap: "oap", podt: "podt", pokt: "pokt", adnt: "adnt_rank", adat: "adat_rank" };
 const MAPPED = { T: ["Entry", "Lurker"], CT: ["Anchor", "Rotator"] } as const;
+
+const quantile = (values: number[], p: number) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = (sorted.length - 1) * p;
+  const low = Math.floor(index), high = Math.ceil(index);
+  return sorted[low] + (sorted[high] - sorted[low]) * (index - low);
+};
+
+/** Fit evidence ranges from the rows available to one validation fold. */
+export function fitRoleThresholds(data: readonly RoleRow[], summaries: RoleSummaries): RoleThresholds {
+  const values: Partial<Record<RoleMetricId, number[]>> = {};
+  for (const row of data) for (const side of ["T", "CT"] as const) {
+    const summary = summaries.get(row.steamid)?.[side];
+    if (!summary || summary.m.rounds < 16) continue;
+    for (const metric of roleMetricRows(summary)) if (metric.value !== null) (values[metric.id as RoleMetricId] ??= []).push(metric.value);
+  }
+  return Object.fromEntries(Object.entries(ROLE_THRESHOLDS).map(([id, source]) => {
+    const xs = values[id as RoleMetricId] ?? [];
+    const q10 = xs.length >= 2 ? quantile(xs, 0.1) : null;
+    const q90 = xs.length >= 2 ? quantile(xs, 0.9) : null;
+    return [id, q10 !== null && q90 !== null && q90 > q10 ? { ...source, n: xs.length, proRange: [q10, q90] as [number, number] } : source];
+  })) as RoleThresholds;
+}
 
 export const evaluationLabel = (row: RoleRow, side: RoleSide) => mapRoleName(row[`role_${side.toLowerCase()}`]);
 
@@ -69,16 +93,16 @@ export function fitIsotonic(samples: readonly CalibrationPoint[]): CalibrationPo
 
 // The callback is for fold-isolation tests, not part of the runtime model.
 export type FitObserver = (stage: "gaussian" | "calibration", ids: readonly string[]) => void;
-export function trainRoleModel(data: readonly RoleRow[], summaries: RoleSummaries, observe?: FitObserver): RoleModel {
+export function trainRoleModel(data: readonly RoleRow[], summaries: RoleSummaries, observe?: FitObserver, thresholds: RoleThresholds = ROLE_THRESHOLDS): RoleModel {
   assertUniqueSteamids(data);
-  const gaussian = (rows: readonly RoleRow[]): RoleModel => {
+  const gaussian = (rows: readonly RoleRow[], ranges: RoleThresholds): RoleModel => {
     observe?.("gaussian", rows.map((row) => row.steamid));
     return {
       source: "Jamie Packer 2024, CC BY 4.0; merged Lurker class; isotonic fit on inner-LOO pro summaries. Threshold-only roles have no labels. AWPer is measured loadout share.",
-      features: [...FEATURES], sides: { T: fitRoleSide("T", rows), CT: fitRoleSide("CT", rows) },
+      features: [...FEATURES], thresholds: ranges, sides: { T: fitRoleSide("T", rows), CT: fitRoleSide("CT", rows) },
     };
   };
-  const base = gaussian(data);
+  const base = gaussian(data, thresholds);
   const samples: Record<RoleSide, Partial<Record<RoleName, CalibrationPoint[]>>> = { T: {}, CT: {} };
   const calibrationIds: string[] = [];
   for (const row of data) {
@@ -87,7 +111,8 @@ export function trainRoleModel(data: readonly RoleRow[], summaries: RoleSummarie
       return truth && (MAPPED[side] as readonly string[]).includes(truth) && summaries.get(row.steamid)?.[side];
     });
     if (!eligible.length) continue;
-    const inner = gaussian(data.filter((candidate) => candidate.steamid !== row.steamid));
+    const innerRows = data.filter((candidate) => candidate.steamid !== row.steamid);
+    const inner = gaussian(innerRows, fitRoleThresholds(innerRows, summaries));
     for (const side of eligible) {
       const b = roleBlend(summaries.get(row.steamid)![side]!, side, inner);
       if (!b.distribution) continue;

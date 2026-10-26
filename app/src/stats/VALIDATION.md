@@ -99,18 +99,19 @@ totals (`rounds.basic`, written by the server) on every covered player-round of 
 
 ## Identity: `pnpm fit-roles <csv>`, `pnpm identity-check <csv>`
 
-The 2026-10-25 run uses 489 pro maps and 634 unique careers. Four retired map folders were skipped by
+The 2026-10-26 run uses 489 pro maps and 634 unique careers. Four retired map folders were skipped by
 `proMaps`; no extraction or game process ran. The input is Jamie Packer's 2024 CSV, CC BY 4.0,
-SHA256 `2c14a735b4d6365abb43768da1ff6a85c63aeeb477836c750ada3c7bb6aa484b`.
+SHA256 `162f8c10e41bfe11a3f4a351143d7a875724be1ec11b8d6fe3be59af61d09352`.
 These results replace the earlier Gaussian-only figures. They measure cross-era label agreement,
-not same-era ground truth.
+not same-era ground truth. Evaluation fold q10/q90 evidence ranges are fitted from each fold's
+training summaries; the production model retains the full-corpus ranges in `role-thresholds.ts`.
 
 `role-training.ts` calls production `roleBlend` for every prediction, including fixed threshold rules,
-softmax, measured AWPer mass, isotonic adjustment and confidence decisions. Each outer leave-one-player-out
-fold excludes that steamid from Gaussian fitting and inner-LOO calibration. Half-Lurker and Lurker merge
-before fitting one equal-prior class. Calibration fits only Entry/Lurker and Anchor/Rotator. There are no
-invented labels for Trader, Support or Aggressor. AWPer-labelled players enter evaluation, but AWP
-probability remains measured loadout share rather than a fitted value.
+softmax, measured AWP rounds, isotonic adjustment and confidence decisions. Each outer leave-one-player-out
+fold excludes that steamid from Gaussian fitting, fold-local threshold fitting and inner-LOO calibration.
+Half-Lurker and Lurker merge before fitting one equal-prior class. Calibration fits only Entry/Lurker and
+Anchor/Rotator. There are no invented labels for Trader, Support or Aggressor. AWPer-labelled players enter
+evaluation, but AWP rounds remain measured loadout share rather than a fitted value.
 
 The headline holdout is stratified by mapped side label with seed `0x5EED`, holding about 20% of each
 class. The team holdout uses seed `0xC0DE` and removes every held team's CSV rows from both fitting
@@ -133,16 +134,16 @@ primaries only. Production rows use the final full-data fit and are not held-out
 
 | Side | Evaluation | Top-one accuracy | Single accuracy | Returned set | Single / top2 / insufficient |
 |---|---|---|---|---|---|
-| T | LOO | 89/145 (61.4%) | 4/7 (57.1%) | 101/145 (69.7%) | 7 / 117 / 21 of 145 |
-| T | Stratified | 20/27 (74.1%) | 0/0, unavailable | 22/27 (81.5%) | 0 / 25 / 2 of 27 |
-| T | Team holdout | 25/31 (80.6%) | 2/2 (100.0%) | 28/31 (90.3%) | 2 / 27 / 2 of 31 |
-| T | Tail diagnostic | 14/21 (66.7%) | 2/3 (66.7%) | 17/21 (81.0%) | 3 / 16 / 2 of 21 |
-| T | Production, in-sample | 95/145 (65.5%) | 6/9 (66.7%) | 107/145 (73.8%) | 9 / 115 / 21 of 145 |
-| CT | LOO | 75/116 (64.7%) | 16/19 (84.2%) | 81/116 (69.8%) | 19 / 80 / 17 of 116 |
-| CT | Stratified | 16/22 (72.7%) | 1/2 (50.0%) | 16/22 (72.7%) | 2 / 18 / 2 of 22 |
-| CT | Team holdout | 18/26 (69.2%) | 1/1 (100.0%) | 19/26 (73.1%) | 1 / 23 / 2 of 26 |
-| CT | Tail diagnostic | 8/15 (53.3%) | 3/4 (75.0%) | 11/15 (73.3%) | 4 / 10 / 1 of 15 |
-| CT | Production, in-sample | 76/116 (65.5%) | 20/21 (95.2%) | 83/116 (71.6%) | 21 / 78 / 17 of 116 |
+| T | LOO | 86/145 (59.3%) | 9/13 (69.2%) | 96/145 (66.2%) | 13 / 111 / 21 of 145 |
+| T | Stratified | 18/27 (66.7%) | 0/0, unavailable | 19/27 (70.4%) | 0 / 25 / 2 of 27 |
+| T | Team holdout | 24/31 (77.4%) | 5/5 (100.0%) | 29/31 (93.5%) | 5 / 24 / 2 of 31 |
+| T | Tail diagnostic | 14/21 (66.7%) | 3/5 (60.0%) | 16/21 (76.2%) | 5 / 14 / 2 of 21 |
+| T | Production, in-sample | 90/145 (62.1%) | 2/4 (50.0%) | 102/145 (70.3%) | 4 / 120 / 21 of 145 |
+| CT | LOO | 76/116 (65.5%) | 18/21 (85.7%) | 80/116 (69.0%) | 21 / 78 / 17 of 116 |
+| CT | Stratified | 16/22 (72.7%) | 3/4 (75.0%) | 17/22 (77.3%) | 4 / 16 / 2 of 22 |
+| CT | Team holdout | 17/26 (65.4%) | 4/4 (100.0%) | 20/26 (76.9%) | 4 / 20 / 2 of 26 |
+| CT | Tail diagnostic | 8/15 (53.3%) | 3/3 (100.0%) | 10/15 (66.7%) | 3 / 11 / 1 of 15 |
+| CT | Production, in-sample | 69/116 (59.5%) | 15/16 (93.8%) | 80/116 (69.0%) | 16 / 83 / 17 of 116 |
 
 ### Packer map-count ranges
 
@@ -170,73 +171,74 @@ Rows are mapped truth. Missing entries are zero; insufficient decisions are coun
 
 | Side | Evaluation | Truth | Predicted counts |
 |---|---|---|---|
-| T | LOO | Entry | Entry: 28, Lurker: 14, Support: 2 |
-| T | LOO | Lurker | AWPer: 1, Entry: 15, Lurker: 37, Support: 1 |
-| T | LOO | AWPer | AWPer: 24, Entry: 1, Lurker: 1 |
-| T | Stratified | Entry | Entry: 6, Lurker: 3 |
+| T | LOO | Entry | Lurker: 7, Support: 6, Entry: 30, Trader: 1 |
+| T | LOO | Lurker | Entry: 14, Lurker: 34, AWPer: 1, Support: 4, Trader: 1 |
+| T | LOO | AWPer | AWPer: 22, Lurker: 1, Support: 1, Entry: 2 |
+| T | Stratified | Entry | Entry: 6, Support: 2, Lurker: 1 |
 | T | Stratified | AWPer | AWPer: 5 |
-| T | Stratified | Lurker | Entry: 1, Lurker: 9, Support: 1 |
-| T | Team holdout | Lurker | Entry: 2, Lurker: 12, Trader: 1 |
-| T | Team holdout | Entry | Entry: 9 |
-| T | Team holdout | AWPer | AWPer: 4, Entry: 1 |
-| T | Tail diagnostic | Lurker | Entry: 4, Lurker: 7 |
-| T | Tail diagnostic | Entry | Entry: 7, Lurker: 1 |
-| CT | LOO | Rotator | AWPer: 1, Anchor: 5, Rotator: 36, Support: 3 |
+| T | Stratified | Lurker | Lurker: 7, Support: 1, Trader: 1, Entry: 2 |
+| T | Team holdout | Lurker | Lurker: 12, Entry: 2, Trader: 1 |
+| T | Team holdout | Entry | Entry: 8, Lurker: 1 |
+| T | Team holdout | AWPer | AWPer: 4, Lurker: 1 |
+| T | Tail diagnostic | Lurker | Lurker: 8, Entry: 3 |
+| T | Tail diagnostic | Entry | Lurker: 1, Entry: 6, Support: 1 |
+| CT | LOO | Rotator | Rotator: 36, Support: 4, Anchor: 4, AWPer: 1 |
 | CT | LOO | AWPer | AWPer: 25, Anchor: 1 |
-| CT | LOO | Anchor | Anchor: 14, Rotator: 13, Support: 1 |
-| CT | Stratified | Rotator | AWPer: 1, Anchor: 1, Rotator: 6, Support: 1 |
-| CT | Stratified | Anchor | Anchor: 5, Rotator: 1 |
+| CT | LOO | Anchor | Anchor: 15, Rotator: 12, Support: 1 |
+| CT | Stratified | Rotator | Rotator: 6, AWPer: 1, Anchor: 1, Support: 1 |
+| CT | Stratified | Anchor | Anchor: 5, Support: 1 |
 | CT | Stratified | AWPer | AWPer: 5 |
-| CT | Team holdout | Anchor | Anchor: 6, Rotator: 2 |
+| CT | Team holdout | Anchor | Anchor: 5, Rotator: 3 |
 | CT | Team holdout | AWPer | AWPer: 6 |
-| CT | Team holdout | Rotator | Anchor: 4, Rotator: 6 |
-| CT | Tail diagnostic | Rotator | Anchor: 3, Rotator: 5 |
-| CT | Tail diagnostic | Anchor | Anchor: 3, Rotator: 3 |
+| CT | Team holdout | Rotator | Rotator: 6, Support: 3, Anchor: 1 |
+| CT | Tail diagnostic | Rotator | Rotator: 5, Anchor: 3 |
+| CT | Tail diagnostic | Anchor | Rotator: 3, Anchor: 3 |
 
 ### Reliability of the final distribution
 
-Reliability uses the highest-probability role's correctness even when the confidence gate returns
+Reliability uses the highest-share role's correctness even when the confidence gate returns
 top2. Bins include the lower bound and exclude the upper bound, except the final bin includes 1.
-Empty bins are omitted. These results do not establish calibrated probabilities across all roles:
-isotonic adjustment covers mapped classes only, followed by non-AWPer normalization. The frequent
-0.4-to-0.6 predictions are underconfident on these labels; the sparse high-confidence bins do not
-support a strong precision claim.
+Empty bins are omitted. These results do not establish calibrated probability across all roles:
+isotonic adjustment covers mapped classes only, while rule-only roles remain fit shares and AWPer
+remains measured AWP rounds. The frequent 0.4-to-0.6 predictions are underconfident on these labels;
+the sparse high-confidence bins do not support a strong precision claim.
 
 | Side | Evaluation | Probability bin | n | Mean probability | Observed correct |
 |---|---|---|---|---|---|
-| T | LOO | 0.2-0.4 | 49 | 0.333 | 0.551 |
-| T | LOO | 0.4-0.6 | 68 | 0.510 | 0.853 |
-| T | LOO | 0.6-0.8 | 6 | 0.630 | 0.667 |
-| T | LOO | 0.8-1.0 | 1 | 0.862 | 0.000 |
-| T | Stratified | 0.2-0.4 | 13 | 0.326 | 0.692 |
-| T | Stratified | 0.4-0.6 | 12 | 0.511 | 0.917 |
-| T | Team holdout | 0.2-0.4 | 12 | 0.321 | 0.750 |
-| T | Team holdout | 0.4-0.6 | 15 | 0.513 | 0.933 |
-| T | Team holdout | 0.6-0.8 | 2 | 0.604 | 1.000 |
-| T | Tail diagnostic | 0.2-0.4 | 6 | 0.323 | 0.500 |
-| T | Tail diagnostic | 0.4-0.6 | 10 | 0.534 | 0.900 |
-| T | Tail diagnostic | 0.6-0.8 | 3 | 0.629 | 0.667 |
-| CT | LOO | 0.2-0.4 | 13 | 0.356 | 0.231 |
-| CT | LOO | 0.4-0.6 | 67 | 0.522 | 0.836 |
-| CT | LOO | 0.6-0.8 | 19 | 0.634 | 0.842 |
-| CT | Stratified | 0.2-0.4 | 4 | 0.359 | 0.250 |
-| CT | Stratified | 0.4-0.6 | 14 | 0.524 | 1.000 |
-| CT | Stratified | 0.6-0.8 | 2 | 0.720 | 0.500 |
-| CT | Team holdout | 0.2-0.4 | 5 | 0.365 | 0.200 |
-| CT | Team holdout | 0.4-0.6 | 18 | 0.528 | 0.889 |
-| CT | Team holdout | 0.6-0.8 | 1 | 0.676 | 1.000 |
-| CT | Tail diagnostic | 0.2-0.4 | 3 | 0.349 | 0.333 |
-| CT | Tail diagnostic | 0.4-0.6 | 7 | 0.527 | 0.571 |
-| CT | Tail diagnostic | 0.6-0.8 | 4 | 0.620 | 0.750 |
+| T | LOO | 0.2-0.4 | 51 | 0.338 | 0.529 |
+| T | LOO | 0.4-0.6 | 60 | 0.494 | 0.833 |
+| T | LOO | 0.6-0.8 | 12 | 0.662 | 0.750 |
+| T | LOO | 0.8-1.0 | 1 | 0.829 | 0.000 |
+| T | Stratified | 0.2-0.4 | 13 | 0.318 | 0.538 |
+| T | Stratified | 0.4-0.6 | 12 | 0.508 | 0.917 |
+| T | Team holdout | 0.2-0.4 | 12 | 0.330 | 0.667 |
+| T | Team holdout | 0.4-0.6 | 12 | 0.470 | 0.917 |
+| T | Team holdout | 0.6-0.8 | 5 | 0.629 | 1.000 |
+| T | Tail diagnostic | 0.2-0.4 | 7 | 0.328 | 0.571 |
+| T | Tail diagnostic | 0.4-0.6 | 7 | 0.518 | 1.000 |
+| T | Tail diagnostic | 0.6-0.8 | 5 | 0.668 | 0.600 |
+| CT | LOO | 0.2-0.4 | 7 | 0.376 | 0.429 |
+| CT | LOO | 0.4-0.6 | 71 | 0.520 | 0.775 |
+| CT | LOO | 0.6-0.8 | 21 | 0.644 | 0.857 |
+| CT | Stratified | 0.2-0.4 | 3 | 0.349 | 0.333 |
+| CT | Stratified | 0.4-0.6 | 13 | 0.514 | 0.923 |
+| CT | Stratified | 0.6-0.8 | 4 | 0.695 | 0.750 |
+| CT | Team holdout | 0.2-0.4 | 5 | 0.346 | 0.000 |
+| CT | Team holdout | 0.4-0.6 | 15 | 0.538 | 0.867 |
+| CT | Team holdout | 0.6-0.8 | 4 | 0.651 | 1.000 |
+| CT | Tail diagnostic | 0.2-0.4 | 3 | 0.346 | 0.333 |
+| CT | Tail diagnostic | 0.4-0.6 | 8 | 0.539 | 0.500 |
+| CT | Tail diagnostic | 0.6-0.8 | 3 | 0.635 | 1.000 |
 
 ### Threshold provenance and remaining limits
 
 `role-thresholds.ts` records units, sample counts and measured q10/q90 ranges used by both the evidence
 display and rule-score widths. The reference population contains only player-map-side summaries with
 at least 16 side rounds: 312 summaries, or 290 to 310 when a metric lacks a denominator. This selects
-long halves. These fixed ranges include the validation corpus; they are not refitted per fold and are
-not an independent population. All decision ticks, the 55% Gaussian blend weight and softmax multiplier
-4 remain hand-chosen, without a threshold-tuning experiment.
+long halves. Evaluation folds refit q10/q90 from their training summaries only; degenerate fold ranges
+fall back to the shared range because a zero-width score cannot be evaluated. Production retains the
+full-corpus ranges. All decision ticks, the 55% Gaussian blend weight and softmax multiplier 4 remain
+hand-chosen, without a threshold-tuning experiment.
 
 Nearest-teammate distance uses 3D `Math.hypot(dx,dy,dz)` in `positioning.ts`. Its q10/q90 are
 374.78/881.27 Source units across 300 summaries. Only 4/300 reach the retained 1,100-unit Lurker tick.

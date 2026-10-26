@@ -7,6 +7,8 @@ export interface RoleThreshold {
   threshold: number | null;
   thresholdSource: "hand-chosen" | "unavailable";
 }
+export type RoleMetricId = keyof typeof ROLE_THRESHOLDS;
+export type RoleThresholds = Record<RoleMetricId, RoleThreshold>;
 
 // pnpm fit-roles, 2026-10-25: q10/q90 of player-map-side summaries with >=16 side rounds.
 // This restricts the sample to long halves, not all careers. Keep that population visible.
@@ -33,12 +35,10 @@ export const ROLE_THRESHOLDS: Record<"openingAttempts" | "tradeKills" | "tradeAs
   // AWP share is measured directly. This legacy signal tick does not classify AWP usage.
   awpShare: { unit: "pct", proRange: [0, 62.5], n: 310, threshold: 20, thresholdSource: "hand-chosen" },
 };
-export type RoleMetricId = keyof typeof ROLE_THRESHOLDS;
-
 /** A high-value rule signal, centred on the same hand-chosen tick shown to the player. */
-export function roleHigh(id: RoleMetricId, value: number | null): number {
+export function roleHigh(id: RoleMetricId, value: number | null, thresholds: RoleThresholds = ROLE_THRESHOLDS): number {
   if (value === null) return 0.5;
-  const { proRange, threshold } = ROLE_THRESHOLDS[id];
+  const { proRange, threshold } = thresholds[id];
   if (!proRange || threshold === null || proRange[1] <= proRange[0]) throw new Error(`No score range for role metric ${id}`);
   return Math.max(0, Math.min(1, 0.5 + (value - threshold) / (proRange[1] - proRange[0])));
 }
