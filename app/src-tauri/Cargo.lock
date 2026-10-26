@@ -431,6 +431,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "ureq",
+ "webview2-com",
  "windows-sys 0.59.0",
  "zip",
 ]

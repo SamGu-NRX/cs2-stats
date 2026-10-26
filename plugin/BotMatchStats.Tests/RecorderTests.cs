@@ -252,6 +252,9 @@ public class RecorderTests
         int ak = r.Weapons.Get("ak47");
         r.Places.Get("LongA");
         long allocated = 0;
+        // AllocMeter: a paused tick is held to the slack a pause can add; every 64th tick also reads exactly
+        int paused = 0, exactN = 0;
+        long pausedMax = 0;
 
         void Round(int ri, bool measure)
         {
@@ -269,7 +272,7 @@ public class RecorderTests
                     f.X = pi * 50; f.Y = 800 + (t % 200); f.Z = 0; f.Yaw = 90 + (t % 30); f.Pitch = 0;
                     f.Spot0 = ((t / 40) + pi) % 3 == 0 ? 1u : 0u;
                 }
-                long a0 = GC.GetAllocatedBytesForCurrentThread();
+                var meter = AllocMeter.Start(exact: measure && t % 64 == 0);
                 r.Tick(t);
                 if (t % 7 == 0)
                 {
@@ -279,7 +282,13 @@ public class RecorderTests
                     r.Hurt(t, 0, 5 + t % 5, 1, 0, 50, ak, 2, true, Nil.V);
                     r.HitMask(t, 0, 5 + t % 5, 1u, 0u, true);
                 }
-                if (measure) allocated += GC.GetAllocatedBytesForCurrentThread() - a0;
+                if (measure)
+                {
+                    var (bytes, wasPaused, exact) = meter.Read();
+                    if (exact) exactN++;
+                    if (wasPaused) { paused++; pausedMax = Math.Max(pausedMax, bytes); }
+                    else allocated += bytes;
+                }
             }
             r.RoundEnd(t0 + 1000 + 64 * 100, 3, 8);
             r.Finalize(1, t0 + 1000 + 64 * 101);
@@ -291,6 +300,9 @@ public class RecorderTests
         Assert.True(sink.Store.Shots.Count > 500);
         Assert.Contains(sink.Store.Shots.Span.ToArray(), x => x.Smoke == 1);
         Assert.Equal(0, allocated);
+        Assert.True(paused < 64, $"{paused} of 6400 ticks were paused by a GC"); // the zero check still covers almost every tick
+        Assert.InRange(pausedMax, 0, AllocMeter.PausedSlack);
+        Assert.True(exactN >= 50, $"only {exactN} of 100 sampled ticks were read exactly");
     }
 
     [Fact]

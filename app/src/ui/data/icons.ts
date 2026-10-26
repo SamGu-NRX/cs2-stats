@@ -1,18 +1,20 @@
-// Official CS2 icons from the local icon pack: %APPDATA%\BotMatchStats\packs\icons, extracted from the
-// user's own CS2 install by cs2-stats-data/tools/icon-pack/extract-icons.js. They are Valve's art, so
-// they never enter the repository. Every game object draws through components/GameIcon.tsx, which shows
-// the object's name as text when the pack or the icon is missing.
+// Official CS2 art from the local icon pack: %APPDATA%\BotMatchStats\packs\icons, extracted from the
+// user's own CS2 install by scripts/extract-icon-pack.cjs. It is Valve's art, so it never enters the
+// repository. Every game object draws through components/GameIcon.tsx, which shows the object's name as
+// text when the pack or the icon is missing; radars and map emblems (maps.ts) fall back to drawn shapes.
 //
-// packs/icons/manifest.json: { "version": 1, "source": string, "icons": { "<id>": "<folder>/<file>.svg" } }
+// packs/icons/manifest.json: { "version": 1, "source": string, "icons": { "<id>": "<folder>/<file>.svg|png" } }
 // Ids are the game's weapon names (ak47, m4a1_silencer, hegrenade, …), killfeed modifiers (headshot,
-// wallbang, smoke, noscope, blind, inair, …) and round ends (elimination, bomb_exploded, bomb_defused, time).
+// wallbang, smoke, noscope, blind, inair, …), round ends (elimination, bomb_exploded, bomb_defused, time),
+// and map art: radar_<map>, radar_lower_<map> for a map's lower floor, and map_<map> for its emblem.
 import { useEffect, useState } from "react";
 import type { Host } from "../../host/host";
 import { useData } from "./provider";
 
 export interface IconManifest { source: string; icons: Record<string, string> }
 
-const SAFE_PATH = /^[a-z0-9_]+\/[a-z0-9_]+\.svg$/;
+// radars are raster textures in the game files, so the extractor writes them as .png
+const SAFE_PATH = /^[a-z0-9_]+\/[a-z0-9_]+\.(svg|png)$/;
 
 /** Checks the manifest's shape and names the first problem; a path must stay inside the icons folder. */
 export function parseIconManifest(text: string): IconManifest {
@@ -21,7 +23,7 @@ export function parseIconManifest(text: string): IconManifest {
   if (!raw.icons || typeof raw.icons !== "object" || Array.isArray(raw.icons)) throw new Error('icons/manifest.json: "icons" must be an object');
   const icons: Record<string, string> = {};
   for (const [id, file] of Object.entries(raw.icons as Record<string, unknown>)) {
-    if (typeof file !== "string" || !SAFE_PATH.test(file)) throw new Error(`icons/manifest.json: icons.${id} must be "<folder>/<name>.svg" inside the icons folder`);
+    if (typeof file !== "string" || !SAFE_PATH.test(file)) throw new Error(`icons/manifest.json: icons.${id} must be "<folder>/<name>.svg" or ".png" inside the icons folder`);
     icons[id] = file;
   }
   return { source: typeof raw.source === "string" ? raw.source : "", icons };
@@ -46,11 +48,24 @@ function loadIcon(host: Host, id: string): Promise<string | null> {
       const file = m?.icons[id];
       if (!file) return null;
       const b = await host.readPack(`icons/${file}`).catch(() => null);
-      return b ? URL.createObjectURL(new Blob([b], { type: "image/svg+xml" })) : null;
+      return b ? URL.createObjectURL(new Blob([b], { type: file.endsWith(".png") ? "image/png" : "image/svg+xml" })) : null;
     });
     urls.set(id, u);
   }
   return u;
+}
+
+/** The pack's manifest; undefined while loading, null when the pack is missing or unreadable. */
+export function useIconManifest(): IconManifest | null | undefined {
+  const { host } = useData();
+  const [m, setM] = useState<IconManifest | null | undefined>(undefined);
+  useEffect(() => {
+    if (!host) return;
+    let alive = true;
+    void loadManifest(host).then((x) => alive && setM(x));
+    return () => { alive = false; };
+  }, [host]);
+  return m;
 }
 
 /** The icon's URL; undefined while loading, null when the pack or the icon is missing. */

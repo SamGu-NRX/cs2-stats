@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { MATCH_TABS, matchHref, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
+import { describe, expect, it, vi } from "vitest";
+import { knownMatchFiles, MATCH_TABS, matchFile, matchHref, matchId, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
 
 describe("match tab shortcuts", () => {
   it("reaches every match tab with Alt and one digit, 0 being the tenth", () => {
@@ -12,6 +12,76 @@ describe("match tab shortcuts", () => {
   });
   it("parses the Luck tab from a match link", () => {
     expect(parseHash(matchHref("2026/a.json.gz", "luck")).tab).toBe("luck");
+  });
+});
+
+describe("match ids", () => {
+  const files = ["imported/Ann Lee vs friends.json.gz", "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz", "valve/match730_003/v1"];
+  it("are short, stable, distinct and carry nothing of the file name", () => {
+    const ids = files.map(matchId);
+    expect(ids).toEqual(files.map(matchId));
+    expect(new Set(ids).size).toBe(files.length);
+    for (const id of ids) expect(id).toMatch(/^m-[0-9a-f]{16}$/);
+    expect(ids[0]).not.toMatch(/ann|lee|friends/i);
+  });
+  it("open their match once the app has listed it, and the file path still opens it", () => {
+    knownMatchFiles(files);
+    expect(parseHash(`#/match/${matchId(files[0])}/rounds?round=3`)).toMatchObject({ page: "match", file: files[0], tab: "rounds" });
+    expect(parseHash(`#/match/${matchId(files[2])}`)).toMatchObject({ page: "match", file: files[2], tab: "overview" });
+    expect(parseHash(matchHref(files[1], "economy"))).toMatchObject({ page: "match", file: files[1], tab: "economy" });
+    // an id no listed match has stays as it is, and the match view says it is not in the folder
+    expect(parseHash("#/match/m-zzzz/overview").file).toBe("m-zzzz");
+  });
+  it("never hashes an id again", () => {
+    const id = matchId(files[0]);
+    expect(matchId(id)).toBe(id);
+    expect(matchHref(id, "rounds")).toBe(`#/match/${id}/rounds`);
+    knownMatchFiles([]);
+    // before the list arrives the id is kept, not taken for a file name
+    expect(matchId("m-abc123")).toBe("m-abc123");
+    expect(matchFile("m-abc123")).toBe("m-abc123");
+  });
+  it("gives colliding files ids from their own paths, which do not change when another colliding file goes", () => {
+    // A, B and C share their plain hash; their second hashes differ
+    const second: Record<string, string> = { "a/1.json.gz": "aaaa1111", "b/2.json.gz": "aaaa2222", "c/3.json.gz": "cccc3333" };
+    const hash = (f: string, seed = 0) => (seed === 0 ? (f === "d/4.json.gz" ? "dddd" : "beef") : second[f] ?? "0000");
+    knownMatchFiles(["b/2.json.gz", "c/3.json.gz", "a/1.json.gz", "d/4.json.gz"], hash);
+    const before = ["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId);
+    expect(before).toEqual(["m-beef-aaaa1111", "m-beef-aaaa2222", "m-beef-cccc3333", "m-dddd"]);
+    // A is deleted and the folder rescanned: B and C keep their ids, and each still opens its own file
+    knownMatchFiles(["c/3.json.gz", "b/2.json.gz", "d/4.json.gz"], hash);
+    expect(["b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId)).toEqual(before.slice(1));
+    expect(before.slice(1).map(matchFile)).toEqual(["b/2.json.gz", "c/3.json.gz", "d/4.json.gz"]);
+    expect(matchFile(before[0])).toBe(before[0]);
+    // C deleted too: B's id is its plain one again, and its bookmarked longer id still opens it
+    knownMatchFiles(["b/2.json.gz", "d/4.json.gz"], hash);
+    expect(matchId("b/2.json.gz")).toBe("m-beef");
+    expect(matchFile("m-beef-aaaa2222")).toBe("b/2.json.gz");
+    knownMatchFiles([]);
+  });
+  it("give files that share both hashes no working id, without throwing, and keep every other file", () => {
+    // A and B share both hashes; C shares only the plain one; D shares neither
+    const hash = (f: string, seed = 0) => (seed === 0 ? (f === "d/4.json.gz" ? "dddd" : "beef") : f === "c/3.json.gz" ? "cccc" : "aaaa");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => knownMatchFiles(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"], hash)).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0][0])).toMatch(/^2 match files/);
+    expect(String(error.mock.calls[0][0])).not.toMatch(/json\.gz/);
+    error.mockRestore();
+    const [a, b, c, d] = ["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId);
+    expect(a).toBe(b);
+    expect(matchFile(a)).toBe(a);
+    expect(matchFile("m-beef")).toBe("m-beef");
+    expect([matchFile(c), matchFile(d)]).toEqual(["c/3.json.gz", "d/4.json.gz"]);
+    knownMatchFiles([]);
+  });
+  it("are 64 bits of the path, the same for a path whatever else is listed", () => {
+    knownMatchFiles([]);
+    const alone = matchId("imported/x.json.gz");
+    knownMatchFiles(["imported/x.json.gz", "2026/y.json.gz"]);
+    expect(matchId("imported/x.json.gz")).toBe(alone);
+    expect(alone).toMatch(/^m-[0-9a-f]{16}$/);
+    knownMatchFiles([]);
   });
 });
 
@@ -67,7 +137,7 @@ describe("Profile tabs", () => {
   it("carries the scope keys a tab switch keeps, and none of a tab's own", () => {
     // fails if a tab switch drops the map, matches, side or comparison, or carries a section,
     // attribute or pro into a tab that has none of them
-    const q = parseHash("#/profile/overview?map=de_dust2&n=10&side=t&cmp=bots&sec=card&attr=firepower&pro=s1mple").query;
+    const q = parseHash("#/profile/overview?map=de_dust2&n=10&side=t&cmp=bots&sec=card&attr=firepower&pro=some-pro").query;
     expect(scopeQuery(q)).toEqual({ map: "de_dust2", n: "10", side: "t", cmp: "bots" });
     expect(scopeQuery(parseHash("#/profile").query)).toEqual({});
   });
@@ -77,7 +147,7 @@ describe("Profile tabs", () => {
     for (const h of ["#/aim?guns=rifle&result=W&map=de_dust2&side=t", "#/profile/aim?guns=rifle&result=W&map=de_dust2&side=t", "#/weapons?result=L&guns=smg&map=de_dust2&side=t"]) {
       expect(Object.fromEntries(parseHash(h).query), h).toEqual({ map: "de_dust2", side: "t" });
     }
-    expect(Object.fromEntries(parseHash("#/profile/overview?sec=style&attr=entrying&pro=s1mple&cmp=bots&n=5").query)).toEqual({ sec: "style", attr: "entrying", pro: "s1mple", cmp: "bots", n: "5" });
+    expect(Object.fromEntries(parseHash("#/profile/overview?sec=style&attr=entrying&pro=some-pro&cmp=bots&n=5").query)).toEqual({ sec: "style", attr: "entrying", pro: "some-pro", cmp: "bots", n: "5" });
     // other pages keep theirs
     expect(parseHash("#/matches?result=W&guns=rifle").query.get("result")).toBe("W");
   });

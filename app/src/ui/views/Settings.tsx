@@ -1,16 +1,21 @@
 // Data & settings: where matches come from, what each source supports, import, the optional packs,
-// and which models the numbers use. It stays usable when the match folder cannot be read (App.tsx),
-// since Rescan, Import and the converted-log switch are the ways out; the failure shows on Sources.
+// hiding personal info, and which models the numbers use. It stays usable when the match folder cannot
+// be read (App.tsx), since Rescan, Import and the converted-log switch are the ways out; the failure
+// shows on Sources. It is the one view that shows the host's folders, the Valve user and the
+// importer's output, so it hides those itself while personal info is hidden (data/privacy.ts).
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DERIVE_VERSION } from "../../stats/facts";
 import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport } from "../../host/host";
 import type { ImportStatus } from "../../host/import-store";
+import { useIconManifest } from "../data/icons";
+import { knownMaps, radarIcon } from "../data/maps";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
 import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
 import { ratingInfo } from "../data/meta";
+import { FOLDER_HIDDEN, hideTextAndFiles, privacyForced, setHidePersonal, STEAMID_HIDDEN, useHidePersonal, useSavedHidePersonal } from "../data/privacy";
 import { useData } from "../data/provider";
 import { scanErrorText, sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
@@ -52,6 +57,7 @@ export default function Settings() {
   const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync, status, error } = useData();
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
+  const hide = useHidePersonal();
   const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
@@ -65,7 +71,8 @@ export default function Settings() {
     if (!files || !host) return;
     const r = await host.importFiles([...files]);
     if (r.imported.length) toast(`Imported ${plural(r.imported.length, "match file")}`, "good");
-    for (const s of r.skipped) toast(`${s.name} was not imported: ${s.reason}`, "poor", 6000);
+    // the file names are hidden as the toast draws, so turning the setting on hides them in a toast already showing
+    for (const s of r.skipped) toast(`${s.name} was not imported: ${s.reason}`, "poor", 6000, [s.name]);
     refresh();
     if (input.current) input.current.value = "";
   };
@@ -88,8 +95,8 @@ export default function Settings() {
               <p className="meta">Written by the capture plugin while you play: aim, movement, economy and utility.</p>
               <div className="source__path">
                 <FolderIcon size={14} />
-                <PathText path={host?.folder ?? "%APPDATA%\\BotMatchStats\\matches"} />
-                {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied")} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
+                <PathText path={host?.folder ? (hide ? FOLDER_HIDDEN.data : host.folder) : "%APPDATA%\\BotMatchStats\\matches"} />
+                {host?.folder && <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(host.folder!, "Folder path copied", FOLDER_HIDDEN.data)} aria-label="Copy the folder path"><CopyIcon size={14} /></button>}
               </div>
               <p className="meta">
                 {reading ? "Reading the folder…" : newest("recorded") ? `Newest ${fmtWhen(newest("recorded")!.match)}.` : "None yet."}
@@ -116,6 +123,8 @@ export default function Settings() {
         </Card>
 
         <Packs />
+
+        <Privacy />
 
         <div className="settings__pair">
           <Card title="What each source supports" flush foot={notes.length ? <>{notes.map((s) => <span key={s.stat}>* {SUPPORT_NOTE[s.stat]}</span>)}</> : undefined}>
@@ -162,7 +171,7 @@ export default function Settings() {
               <dt>Stats engine</dt>
               <dd className="meta num">Version {DERIVE_VERSION}</dd>
               <dt>Map images</dt>
-              <dd className="meta">Radars and emblems from the cs2-map-icons project on GitHub (MurkyYT), downloaded when a view first shows them.</dd>
+              <dd className="meta">Radars and emblems from the game icons pack below, which scripts/extract-icon-pack.cjs builds from your own CS2 install. Without it, maps are drawn from where players stood.</dd>
             </dl>
           </Card>
         </div>
@@ -190,15 +199,15 @@ export default function Settings() {
 const IDLE_IMPORT: ImportStatus = { running: false, at: null, last: null, error: null };
 const noImports = () => () => {};
 
-/** What an import's end says, by the importer's exit code (extractor/valve_import.py). */
-function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } {
+/** What an import's end says, by the importer's exit code (extractor/valve_import.py), and the demos it names. */
+function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor"; demos: string[] } {
   const s = r.summary;
-  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good" };
+  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good", demos: [] };
   if (r.code === 1 && s) {
     const bad = s.results.filter((x) => !x.ok).map((x) => x.demo);
-    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor" };
+    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor", demos: bad };
   }
-  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor" };
+  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor", demos: s?.results.map((x) => x.demo) ?? [] };
 }
 
 /** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
@@ -208,6 +217,8 @@ function ValveSource({ n }: { n: number }) {
   const status = useSyncExternalStore(host?.imports.subscribe ?? noImports, host ? host.imports.get : () => IDLE_IMPORT);
   useEffect(() => { void host?.imports.sync(); }, [host]);
   // the app shell rescans when an import ends (provider.tsx), so this page only shows the state
+  const hide = useHidePersonal();
+  const shown = (s: string, files: string[] = []) => (hide ? hideTextAndFiles(s, files) : s);
   const folder = host?.valve?.folder ?? VALVE_FOLDER;
   const run = () => { if (host && !status.running) void host.imports.start(); };
   const outcome = status.last && !status.running ? importOutcome(status.last) : null;
@@ -217,13 +228,13 @@ function ValveSource({ n }: { n: number }) {
       <p className="meta">Your matchmaking demos from the game's replays folder, with aim, movement and line of sight. Wingman matches are listed but left out of career views.</p>
       <div className="source__path">
         <FolderIcon size={14} />
-        <span className="mono selectable">{folder}</span>
-        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied")} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
+        <span className="mono selectable">{hide && host?.valve?.folder ? FOLDER_HIDDEN.valve : folder}</span>
+        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied", host?.valve?.folder ? FOLDER_HIDDEN.valve : undefined)} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
       </div>
       <p className="meta">
-        {host?.valve?.error ? <span className="poor-text selectable">{host.valve.error}</span>
-          : host?.valve?.userError ? <span className="poor-text selectable">{host.valve.userError}. Matches are listed without you until it is fixed.</span>
-          : host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{host.valve.user}</span>.</>
+        {host?.valve?.error ? <span className="poor-text selectable">{shown(host.valve.error)}</span>
+          : host?.valve?.userError ? <span className="poor-text selectable">{shown(host.valve.userError)}. Matches are listed without you until it is fixed.</span>
+          : host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{hide ? STEAMID_HIDDEN : host.valve.user}</span>.</>
           : "The first import takes your SteamID64 from Steam's most recent login."}
         {host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}
       </p>
@@ -232,17 +243,25 @@ function ValveSource({ n }: { n: number }) {
       </button>
       <p className="meta" role="status" aria-live="polite">
         {status.running && (status.at ? `Demo ${status.at.i} of ${status.at.n}${status.at.event === "done" ? (status.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
-        {status.error && !status.running ? <span className="poor-text">{status.error}</span>
-          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{outcome.text}</span>}
+        {status.error && !status.running ? <span className="poor-text">{shown(status.error)}</span>
+          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{shown(outcome.text, outcome.demos)}</span>}
       </p>
     </div>
   );
 }
 
-/** The optional packs: pro scores for "Plays like" and agent art for the player card. */
+/** The optional packs: pro scores for "Plays like", agent art for the player card, and the game's icons and map art. */
 function Packs() {
+  // a pack's "source" is free text its builder wrote, which can name the folder it was built from
+  const hide = useHidePersonal();
+  const shown = (s: string) => (hide ? hideTextAndFiles(s, []) : s);
   const pros = usePros();
   const agents = useAgents();
+  const icons = useIconManifest();
+  const radars = icons ? knownMaps().filter((m) => icons.icons[radarIcon(m)!]).length : 0;
+  const iconText = icons === undefined ? "Loading"
+    : icons ? `${Object.keys(icons.icons).length} icons, radars for ${radars} of ${knownMaps().length} maps. ${icons.source}`
+    : "Not installed. Weapons and kill flags show their names, and maps are drawn from where players stood.";
   const proText = pros.state === "ready" ? `${pros.pros.length} pros for Plays like. ${pros.source}` : pros.state === "missing" ? "Not installed. Plays like stays hidden until pros.json is in the packs folder." : pros.state === "error" ? pros.message : "Loading";
   const agentText = !agents ? "Loading" : agents.t && agents.ct ? "T and CT renders" : agents.t || agents.ct ? "One side only; the other draws a silhouette." : "Not installed. The player card draws silhouettes.";
   return (
@@ -254,10 +273,36 @@ function Packs() {
       </div>
       <dl className="facts facts--wide packs">
         <dt>Pro pack <span className="mono faint">pros.json</span></dt>
-        <dd><span className="packline"><span className={`packdot ${pros.state === "ready" ? "is-on" : ""}`} />{proText}</span></dd>
+        <dd><span className="packline"><span className={`packdot ${pros.state === "ready" ? "is-on" : ""}`} />{shown(proText)}</span></dd>
         <dt>Agent art <span className="mono faint">agents/*.png</span></dt>
         <dd><span className="packline"><span className={`packdot ${agents?.t && agents?.ct ? "is-on" : ""}`} />{agentText}</span></dd>
+        <dt>Game icons <span className="mono faint">icons/manifest.json</span></dt>
+        <dd><span className="packline"><span className={`packdot ${icons ? "is-on" : ""}`} />{shown(iconText)}</span></dd>
       </dl>
+    </Card>
+  );
+}
+
+/**
+ * Hide personal info: names, SteamIDs and paths become placeholders on every page (data/privacy.ts).
+ * The capture switch holds it on for the session, so the box shows that and cannot be cleared.
+ */
+function Privacy() {
+  const hide = useHidePersonal();
+  const saved = useSavedHidePersonal();
+  const forced = privacyForced();
+  return (
+    <Card title="Privacy">
+      <div className="privacy">
+        <label className="check">
+          <input type="checkbox" checked={hide} disabled={forced} aria-describedby="privacy-what" onChange={(e) => { const problem = setHidePersonal(e.target.checked); if (problem) toast(problem, "poor", 6000); }} />
+          <span>Hide personal info</span>
+        </label>
+        <p className="meta" id="privacy-what">
+          For screenshots and screen sharing. Your name shows as You, other people in your matches as Teammate 1 or Opponent 3, and SteamIDs and folder paths as placeholders. Bots and players in pro demos keep their names. Every number stays as it is.
+        </p>
+        {forced && <p className="meta">On for this session: the app was started with the privacy switch, <span className="mono nowrap">VITE_PRIVACY=1</span> or <span className="mono nowrap">?privacy=1</span>.{saved ? "" : " Your saved setting is off."}</p>}
+      </div>
     </Card>
   );
 }

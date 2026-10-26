@@ -18,7 +18,7 @@ import { moveIndex } from "../../lib/layout";
 import { fmtSwing } from "../../lib/format";
 import { scoreText, swingScore } from "../../lib/scale";
 import { setQuery, useRoute } from "../../router";
-import { PlayerName, RoundCardBody, swingSumTip, TotalsCardBody } from "../shared";
+import { PlayerName, RoundCardBody, swingSumTip, TotalsCardBody, YouTag } from "../shared";
 import type { Line } from "../../../worker/protocol";
 import type { TabProps } from "./MatchView";
 import { RatingByRound } from "./RatingByRound";
@@ -224,7 +224,7 @@ function PlayerRowView({ v, cols, pi, r, cells, line, sel, focus, setFocus, onOp
       <div className="ig__name" role="rowheader">
         <span className={`ig__dot ${p.team}`} />
         <PlayerName v={v} pi={pi} />
-        {p.isHuman && <small className="faint">You</small>}
+        <YouTag v={v} pi={pi} className="faint" />
       </div>
       {cols.map((col, ci) => {
         const at = focus.r === r && focus.c === ci;

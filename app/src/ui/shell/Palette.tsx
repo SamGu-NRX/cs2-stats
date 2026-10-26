@@ -33,7 +33,7 @@ export function KeyChips({ keys }: { keys: string }) {
 
 const RECENT = 5;
 
-export function Palette({ open, onClose, actions }: { open: boolean; onClose: () => void; actions: { label: string; hint?: string; run: () => void }[] }) {
+export function Palette({ open, onClose, actions }: { open: boolean; onClose: () => void; actions: { label: string; hint?: string; words?: string; run: () => void }[] }) {
   const { matches } = useData();
   const pack = usePros();
   const pros = pack.state === "ready" ? pack.pros : [];
@@ -71,7 +71,7 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
         text: `${s.match.map} ${fmtMatchDay(s.match)} ${s.result === "W" ? "win" : "loss"} ${src.label}`,
       });
     }
-    for (const a of actions) out.push({ id: `a:${a.label}`, group: "Actions", label: a.label, keys: a.hint, run: a.run, text: a.label });
+    for (const a of actions) out.push({ id: `a:${a.label}`, group: "Actions", label: a.label, keys: a.hint, run: a.run, text: a.words ? `${a.label} ${a.words}` : a.label });
     for (const n of NAV) out.push({ id: `v:${n.page}`, group: "Views", label: n.label, keys: `Ctrl ${n.key}`, run: instant(pageHref(n.page)), text: n.label });
     out.push({ id: "v:settings", group: "Views", label: "Data & settings", keys: "Ctrl ,", run: instant(pageHref("settings")), text: "data settings import folder sources" });
     for (const p of pros) out.push({ id: `p:${p.slug}`, group: "Pros", label: p.name, hint: p.team, run: instant(pageHref("profile", { pro: p.slug })), text: `${p.team} ${p.country}` });

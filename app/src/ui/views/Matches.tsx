@@ -10,6 +10,7 @@ import { useMemo, type ReactNode } from "react";
 import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
+import { hideFile } from "../data/privacy";
 import {
   careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
 } from "../data/engine";
@@ -21,13 +22,13 @@ import { SearchIcon } from "../icons/ui";
 import { fmtAdr, fmtDate, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
 import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
-import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
+import { matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { LoadFailed } from "./match/LoadFailed";
 import { Empty, SectionAside, swingSumTip } from "./shared";
 
-const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(file)}"]`)?.closest("tr") ?? null;
+const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(matchKey(file))}"]`)?.closest("tr") ?? null;
 const DASH = "–";
 
 /** A per-round value, or a dash that says why when the match's log is too thin to have one. */
@@ -238,13 +239,13 @@ export function MatchesView() {
               { label: "Open", hint: "Enter", run: () => openMatch(matchHref(s.file), rowOf(s.file)) },
               { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) },
               { label: "Open economy", run: () => openMatch(matchHref(s.file, "economy")) },
-              { label: "Copy file name", run: () => copyText(s.file, "File name copied") },
+              { label: "Copy file name", run: () => copyText(s.file, "File name copied", hideFile(s.file)) },
             ])}
             columns={[
               {
                 key: "date", label: "Date", align: "l", sticky: true, width: 120, firstDir: "desc",
                 sort: (s) => startMs(s.match),
-                render: (s) => <span className="two matches__date" data-file={s.file}><span>{fmtMatchDay(s.match)}</span><small>{s.match.startedAt ? fmtTime(s.match.startedAt) : " "}</small></span>,
+                render: (s) => <span className="two matches__date" data-file={matchKey(s.file)}><span>{fmtMatchDay(s.match)}</span><small>{s.match.startedAt ? fmtTime(s.match.startedAt) : " "}</small></span>,
               },
               {
                 key: "map", label: "Map", align: "l", width: 190, sort: (s) => mapName(s.match.map),

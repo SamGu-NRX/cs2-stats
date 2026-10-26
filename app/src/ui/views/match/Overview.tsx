@@ -17,7 +17,7 @@ import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
 import { matchHref } from "../../router";
-import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip } from "../shared";
+import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip, YouTag } from "../shared";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { YourMatch } from "./YourMatch";
@@ -53,7 +53,7 @@ export default function Overview({ v, file }: TabProps) {
   const paren = (n: number) => <small className="faint"> ({n})</small>;
 
   const columns = [
-    { key: "name", label: "Player", align: "l" as const, sticky: true, sort: (r: Row) => (r.pi === null ? "" : v.players[r.pi].name), render: (r: Row) => (r.pi === null ? <span className="name-cell faint">Team total</span> : <span className="name-cell"><PlayerName v={v} pi={r.pi} />{r.isHuman && <small>You</small>}</span>), width: 180 },
+    { key: "name", label: "Player", align: "l" as const, sticky: true, sort: (r: Row) => (r.pi === null ? "" : v.players[r.pi].name), render: (r: Row) => (r.pi === null ? <span className="name-cell faint">Team total</span> : <span className="name-cell"><PlayerName v={v} pi={r.pi} /><YouTag v={v} pi={r.pi} /></span>), width: 180 },
     { key: "k", label: "K", tip: "Kills", sort: (r: Row) => r.l.kills, render: (r: Row) => r.l.kills },
     { key: "d", label: <>D <span className="th-lc">(t)</span></>, tip: "Deaths; traded deaths in brackets", sort: (r: Row) => r.l.deaths, firstDir: "asc" as const, render: (r: Row) => <span className="num">{r.l.deaths}{paren(r.l.m.tradedDeaths)}</span> },
     { key: "a", label: <>A <span className="th-lc">(f)</span></>, tip: "Assists; flash assists in brackets", sort: (r: Row) => r.l.assists, render: (r: Row) => <span className="num">{r.l.assists}{paren(r.l.m.flashAssists)}</span> },

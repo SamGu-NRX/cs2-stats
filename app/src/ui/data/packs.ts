@@ -8,6 +8,7 @@
 // packs/agents/{t,ct}-{portrait,ghost}.png: agent renders for the player card.
 import { useEffect, useState } from "react";
 import type { Host } from "../../host/host";
+import { hideText, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
 import { parseProPack, type Pro } from "./proPack";
@@ -36,7 +37,9 @@ export function usePros(): ProPack {
     void loadPros(host).then((p) => alive && setPack(p));
     return () => { alive = false; };
   }, [host]);
-  return pack;
+  // the reason a pack could not be read can name its path (privacy.ts)
+  const hide = useHidePersonal();
+  return hide && pack.state === "error" ? { ...pack, message: hideText(pack.message) } : pack;
 }
 
 export interface AgentArt { portrait: string; ghost: string }
