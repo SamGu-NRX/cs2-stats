@@ -143,6 +143,13 @@ describe("buildRoundTimeline", () => {
     expect(() => buildRoundTimeline({ ...t, positions: null }, null, 1)).toThrow("no position samples");
   });
 
+  it("stops the window before the next round starts", () => {
+    const t = tables({ end_tick: 1280, official_end_tick: 1600 });
+    // round 2 starts at 1400, before round 1's official end and before end + 3 s (1472)
+    const two = { ...t, rounds: { ...t.rounds, round: [1, 2], start_tick: [0, 1400], freeze_end_tick: [FREEZE_END, 2000], end_tick: [1280, 3000], official_end_tick: [1600, 3400], winner_side: ["CT", "T"] } };
+    expect(buildRoundTimeline(two, null, 1).duration).toBe(s(1399));
+  });
+
   it("cuts an effect at the window's end", () => {
     const t = tables();
     const short = { ...t, rounds: { ...t.rounds, end_tick: [800], official_end_tick: [880] } };
@@ -168,6 +175,24 @@ describe("buildRoundTimeline", () => {
         { tick: 950, event: "smoke_expired", entity_id: null, x: 0, y: 0 },
       ]), null, 1);
       expect(tl2.effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(900)]);
+    });
+
+    it("leave an ambiguous stop unmatched: two open smokes beside it both fall back", () => {
+      const t = events([
+        smoke, { ...smoke, tick: 705, entity_id: 8, x: 520, y: 500 },
+        { tick: 900, event: "smoke_expired", entity_id: null, x: 510, y: 500 },
+      ]);
+      // without a lifetime row: both run to the cap
+      expect(buildRoundTimeline(t, null, 1).effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(705) + SMOKE_MAX_S]);
+      // with lifetime rows: each takes its own
+      const tl2 = buildRoundTimeline({
+        ...t,
+        smokes: table("smokes", [
+          { entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 1000, x: 500, y: 500, z: 0 },
+          { entity_id: 8, steamid: "a", round: 1, start_tick: 705, end_tick: 900, x: 520, y: 500, z: 0 },
+        ]),
+      }, null, 1);
+      expect(tl2.effects.map((e) => e.until)).toEqual([s(1000), s(900)]);
     });
 
     it("read their end from the smokes and infernos lifetime tables", () => {

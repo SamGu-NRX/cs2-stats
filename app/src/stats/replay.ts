@@ -119,7 +119,7 @@ export const FIRE_LINK_UNITS = 32;
  */
 export const SMOKE_MAX_S = 22.0625;
 export const FIRE_MAX_S = 7.03125;
-/** A stop event that names no entity ends the open effect of its kind within this many units of it. */
+/** A stop event that names no entity ends the one open effect of its kind within this many units of it. */
 export const STOP_LINK_UNITS = 32;
 
 /** The extractor's grenade_paths table: one row per projectile per tick it moved (extractor/SCHEMA-v1.md). */
@@ -167,7 +167,10 @@ export function buildRoundTimeline(t: MatchTables, paths: GrenadePaths | null, r
   const zero = R.freeze_end_tick[ri] ?? R.start_tick[ri];
   if (zero === null) throw new Error(`round ${round} has neither a freeze end nor a start tick`);
   const endTick = R.end_tick[ri];
-  const stopTick = Math.min(R.official_end_tick[ri] ?? endTick, endTick + Math.round(END_TAIL_S * rate));
+  // the window never reaches into the next round, whose start can come before this one's official end
+  const nextRi = R.round.indexOf(round + 1);
+  const nextStart = nextRi >= 0 ? R.start_tick[nextRi] : null;
+  const stopTick = Math.min(R.official_end_tick[ri] ?? endTick, endTick + Math.round(END_TAIL_S * rate), nextStart === null ? Infinity : nextStart - 1);
   const sec = (tick: number) => (tick - zero) / rate;
 
   // the round's samples from the last tick at or before zero to stopTick
@@ -265,10 +268,10 @@ export function buildRoundTimeline(t: MatchTables, paths: GrenadePaths | null, r
       if (!stop) continue;
       const open = lasting.filter((l) => !l.ended && l.e.kind === stop && l.tick <= E.tick[i]);
       const stopAt = vec(E.x[i], E.y[i], E.z[i]);
-      const match = E.entity_id[i] !== null
-        ? open.find((l) => l.entity === E.entity_id[i])
-        : stopAt ? open.filter((l) => Math.hypot(l.e.at[0] - stopAt[0], l.e.at[1] - stopAt[1]) <= STOP_LINK_UNITS)
-          .sort((a, b) => Math.hypot(a.e.at[0] - stopAt[0], a.e.at[1] - stopAt[1]) - Math.hypot(b.e.at[0] - stopAt[0], b.e.at[1] - stopAt[1]))[0] : undefined;
+      // a stop naming no entity ends an effect only when exactly one open effect of its kind is near it;
+      // with two, it could end the wrong one, so both fall back to the lifetime table or the cap
+      const near = E.entity_id[i] === null && stopAt ? open.filter((l) => Math.hypot(l.e.at[0] - stopAt[0], l.e.at[1] - stopAt[1]) <= STOP_LINK_UNITS) : [];
+      const match = E.entity_id[i] !== null ? open.find((l) => l.entity === E.entity_id[i]) : near.length === 1 ? near[0] : undefined;
       if (match) { match.ended = true; match.e.until = sec(E.tick[i]); }
     }
   }
