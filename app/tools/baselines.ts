@@ -16,6 +16,7 @@ import { modelFingerprint } from "../src/stats/model-params";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
 import { LOCAL_BASELINES } from "../src/worker/baselines-pool";
+import { isInside } from "./paths";
 import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, WINPROB, proMapDirs, proMaps } from "./node-read";
 
 const arg = (name: string, dflt: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
@@ -30,7 +31,8 @@ if (!proMapDirs().length) throw new Error(`no pro tables under ${DATA_DIR}/demos
 // The committed file ships with the app, so it is built only on the public CS2RB model: swing from the
 // private HLTV win-probability lookup must not leave the machine, even as quantiles. A build with
 // the pack goes to the user's own baselines.local.json, and nothing pack-built goes under public/.
-if (WINPROB.kind !== "cs2rb" && OUT.startsWith(path.dirname(PUBLIC) + path.sep)) {
+// on real paths, so neither a case variant (PUBLIC\x on Windows) nor a link or junction gets past it
+if (WINPROB.kind !== "cs2rb" && isInside(OUT, path.dirname(PUBLIC))) {
   throw new Error(`refusing to write public/baselines.json from the ${WINPROB.label}: set CS2_WINPROB_PACK=none to build on CS2RB, or pass --out outside public/`);
 }
 const facts: MatchFacts[] = [];

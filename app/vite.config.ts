@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Connect, Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { packsFolder } from "./tools/packs-folder";
 import { fileParam, requestUrl } from "./tools/request-param";
 import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
 
@@ -19,21 +20,9 @@ const host = process.env.TAURI_DEV_HOST;
  */
 function matchFolder(): Plugin {
   const root = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "matches") : null;
-  const packs = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs") : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
     const url = requestUrl(req);
     if (!url) { res.statusCode = 400; return res.end(); }
-    if (url.pathname === "/__packs/file") {
-      // the optional packs folder: pro scores, agent art and the CS2 icon pack, kept out of the repository
-      const rel = fileParam(url.search, "f");
-      if (rel === null) { res.statusCode = 400; return res.end(); }
-      const abs = packs ? path.resolve(packs, rel) : "";
-      if (!packs || !/\.(json|png|svg)$/.test(rel) || !abs.startsWith(path.resolve(packs) + path.sep)) { res.statusCode = 400; return res.end(); }
-      if (!existsSync(abs)) { res.statusCode = 404; return res.end(); }
-      res.setHeader("Content-Type", rel.endsWith(".png") ? "image/png" : rel.endsWith(".svg") ? "image/svg+xml" : "application/json");
-      res.setHeader("Cache-Control", "no-store");
-      return res.end(await fs.readFile(abs));
-    }
     if (!url.pathname.startsWith("/__matches/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
@@ -217,7 +206,8 @@ function devMatches(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), matchFolder(), valveFolder(), devMatches()],
+  // packsFolder serves the private packs to `vite dev` only, never to `vite preview` (tools/packs-folder.ts)
+  plugins: [react(), matchFolder(), packsFolder(), valveFolder(), devMatches()],
   clearScreen: false,
   server: {
     port: 1420,
