@@ -113,6 +113,21 @@ export function lineOf(l: Pick<Line, "m" | "v">, rating: number | null): StatLin
   };
 }
 
+/**
+ * Rates for several players together (a team total), from their summed measures: the same ratios as
+ * stats/metrics.ts adr, kast, hs and swing, which read only these measures. Swing is a fraction.
+ */
+export function pooledRates(ms: Measures[]): { adr: number | null; kast: number | null; hs: number | null; swing: number | null } {
+  const sum = (k: keyof Measures) => ms.reduce((a, m) => a + ((m[k] as number | undefined) ?? 0), 0);
+  const rounds = sum("rounds"), kills = sum("kills"), swingRounds = sum("swingRounds");
+  return {
+    adr: rounds ? sum("dmg") / rounds : null,
+    kast: rounds ? (100 * sum("kast")) / rounds : null,
+    hs: kills ? (100 * sum("hsKills")) / kills : null,
+    swing: swingRounds ? sum("swing") / swingRounds : null,
+  };
+}
+
 /** A worker line (its rating already under the coverage rule) as a stat line. */
 export const statLine = (l: Line) => lineOf(l, l.rating);
 
@@ -259,10 +274,11 @@ export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
 /**
  * The one match set every career number reads (the sidebar, Home, Profile, Career aim, and the
  * Matches summary's rating): the user's own finished matches whose kill-by-kill log covers at least
- * half their rounds. Pro demos, unfinished matches and thin logs neither appear in a career list nor
- * move an average, so the sidebar, the Rating 3.0 tile and Form's pooled line agree.
+ * half their rounds, wingman left out (isWingman). Pro demos, unfinished matches, wingman and thin logs
+ * neither appear in a career list nor move an average, so the sidebar, the Rating 3.0 tile and Form's
+ * pooled line agree.
  */
-export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s));
+export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
 
 /** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
 export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
@@ -270,11 +286,20 @@ export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s)
 /** Why a match is left out of the career, for its row's tooltip; null when it counts. */
 export function notCountedText(e: MatchEntry): string | null {
   if (!isOwn(e)) return "Pro demo: not part of your career.";
+  if (isWingman(e)) return WINGMAN_TIP;
   if (!isFinished(e)) return `Unfinished: abandoned after ${e.match.nRounds} ${e.match.nRounds === 1 ? "round" : "rounds"}. It opens normally, but is left out of W–L and career totals.`;
   if (!isLogged(e)) return `${loggedText(e.match)}: too few for a rating, so it is left out of career totals.`;
   return null;
 }
 
+
+/**
+ * A wingman match: a 16-round limit (MR8) with at most two players a side, as Valve's wingman demos are.
+ * The rating and win-probability models and the pro baselines are all 5v5, so career views leave it out.
+ */
+export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
+
+export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Career aim, Weapons), whose models and baselines are 5v5.";
 
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {

@@ -31,10 +31,13 @@ const Advanced = lazy(() => import("./Advanced"));
 export interface TabProps { v: MatchModel; file: string; round: number | null }
 
 export default function MatchView({ file, tab }: { file: string; tab: MatchTab }) {
-  const { matches } = useData();
+  const { matches, status } = useData();
   const r = useRoute();
   const s = matches.find((x) => x.file === file) ?? null;
-  const { data: v, error } = useMatch(file);
+  const loaded = useMatch(file);
+  const v = loaded.data;
+  // before the first scan finishes the match list is empty, so "not in the folder" is not yet an answer
+  const error = status === "starting" || (status === "syncing" && !matches.length) ? null : loaded.error;
   const n = r.query.get("round") ? Number(r.query.get("round")) : null;
   const ri = v && n !== null ? v.rounds.findIndex((x) => x.number === n) : -1;
   const round = ri >= 0 ? ri : null;
