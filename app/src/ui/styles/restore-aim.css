@@ -1,0 +1,32 @@
+/* Styles for elements restored from main (REMOVALS.md, E20), aim slice, in Career aim's layout
+   (views/aim/AimPanels.tsx, components/SprayPath.tsx). */
+
+/* The stat strip's lead: the accuracy ring beside its label, value and percentile, two columns wide. */
+.strip__lead { grid-column: span 2; grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px; }
+.strip__leadtext { display: grid; gap: 3px; min-width: 0; }
+.strip__lead .strip__val { font-size: 24px; }
+/* A side or class change moves the ring to its new share; a filter change is occasional, so it eases. */
+.ring circle + circle { transition: stroke-dashoffset 320ms var(--ease-out), stroke var(--d-color) ease; }
+@media (prefers-reduced-motion: reduce) { .ring circle + circle { transition: none; } }
+
+/* Spray: the two toggles above the chart, each bullet's spread and the target's head on it. */
+.spray-toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.spray__sd { fill: rgba(255, 215, 173, 0.07); stroke: rgba(255, 215, 173, 0.4); stroke-width: 1; }
+.spray__head { fill: var(--ct); opacity: 0.85; }
+
+/* On target, bullet by bullet: the distance chart's frame, bars off target faded. */
+.sprayt { margin-top: 14px; }
+.sprayt__head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.sprayd .sprayt__head .caps { margin: 0; cursor: help; }
+.sprayt__head b { font: 700 12px/1 var(--f); color: var(--cream); }
+.sprayd__plot i[data-off] { opacity: 0.4; }
+
+/* Where you hit: the hitting figures under the body, a chip after a label. */
+.hitting { margin-top: 14px; border-top: 1px solid var(--line); }
+.amrow__l > span[data-tip] { cursor: help; }
+.amrow__chip { margin-left: 8px; height: 18px; padding: 0 6px; font-size: 10px; vertical-align: 1px; }
+
+/* When an enemy appears, gated: why, per match file. */
+.gated__why { display: grid; gap: 4px; }
+.gated__why p { margin: 0; }
+.gated__reason { cursor: help; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }

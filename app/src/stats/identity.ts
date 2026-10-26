@@ -8,8 +8,9 @@
 // VALIDATION.md. The blend is the posterior over roles. AWP use decides the AWPer share, because
 // Packer's features do not carry it. Support has no labelled source, so it is a separate tendency.
 import type { AttributeScore, Baselines, CompareOptions, SideKey } from "./compare";
-import { compare } from "./compare";
+import { compare, roleOf } from "./compare";
 import type { Measures } from "./facts";
+import { METRIC } from "./metrics";
 import type { Summary } from "./rollup";
 import model from "./roles-params.json";
 
@@ -97,6 +98,51 @@ export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
   const blend: Record<string, number> = awp === null ? {} : { AWPer: awp };
   for (const [role, p] of Object.entries(post)) blend[ROLE_NAME[role] ?? role] = p * (1 - (awp ?? 0));
   return { ...out, blend };
+}
+
+// ---- role signals and the style compass ---------------------------------------------------------
+
+/**
+ * One measured tendency with a hand-set threshold: the role card's signals and the style compass's
+ * lines (main's stats/role.ts). `metric` is read over both sides, or over `side` alone. The thresholds
+ * are main's, chosen by hand from typical values; no fit is behind them, and none was rerun on this
+ * engine's measures.
+ */
+export interface RoleSignal { id: "Entry" | "Support" | "Lurker"; metric: string; threshold: number; side: "T" | null }
+
+export const ROLE_SIGNALS: readonly RoleSignal[] = [
+  // in an opening duel in a quarter of rounds; ten players share two openings, so the average is 20%
+  { id: "Entry", metric: "openingAttempts", threshold: 25, side: null },
+  { id: "Support", metric: "tradeAssistShare", threshold: 45, side: null },
+  // Main measured this in 2D over every T sample before the plant; teamDistance samples in 3D while all
+  // five are alive (positioning.ts). The 1,100 units were not re-checked against the new samples.
+  { id: "Lurker", metric: "teamDistance", threshold: 1100, side: "T" },
+];
+
+const signal = (id: RoleSignal["id"]) => ROLE_SIGNALS.find((x) => x.id === id)!;
+
+/** Where a point sits against the Entry and Support thresholds: the compass's four zones. */
+export type StyleZone = "Entry" | "Support" | "Entry and support" | "Rifler";
+
+/** The compass zone of opening attempts and trade/assist share, both in percent. */
+export function styleZone(openingAttempts: number, tradeAssistShare: number): StyleZone {
+  const entry = openingAttempts >= signal("Entry").threshold;
+  const support = tradeAssistShare >= signal("Support").threshold;
+  return entry && support ? "Entry and support" : entry ? "Entry" : support ? "Support" : "Rifler";
+}
+
+/** A compass point's role in main's wording: "AWPer" for the AWPer pool (compare.ts roleOf), else "Rifler (zone)". */
+export const styleLabel = (role: "awper" | "rifler", zone: StyleZone) => (role === "awper" ? "AWPer" : zone === "Rifler" ? "Rifler" : `Rifler (${zone})`);
+
+/** One player on the style compass: x opening attempts, y trade/assist share, both percent. */
+export interface StylePoint { name: string; rounds: number; x: number; y: number; label: string }
+
+/** A summary's compass point; null when either axis has no value (no rounds, or no kills and assists). */
+export function stylePoint(name: string, s: Summary): StylePoint | null {
+  const x = METRIC.openingAttempts.value(s);
+  const y = METRIC.tradeAssistShare.value(s);
+  if (x === null || y === null) return null;
+  return { name, rounds: s.m.rounds, x, y, label: styleLabel(roleOf(s), styleZone(x, y)) };
 }
 
 /** Support tendency 0-100: mean percentile of utility thrown and trading against the comparison pool. */

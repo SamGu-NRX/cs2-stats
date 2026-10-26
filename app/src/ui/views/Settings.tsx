@@ -10,6 +10,7 @@ import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { copyText, toast } from "../components/overlay";
 import { rating3Note, ratingHeadline, winProbText } from "../data/engine";
+import { ratingInfo } from "../data/meta";
 import { useData } from "../data/provider";
 import { scanErrorText, sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type SourceId } from "../data/sources";
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
@@ -44,6 +45,8 @@ function Support({ v }: { v: boolean | string }) {
   return <span className="meta has-def" tabIndex={0} data-tip={v}>Partly</span>;
 }
 
+
+const capitalised = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
 export default function Settings() {
   const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync, status, error } = useData();
   const input = useRef<HTMLInputElement>(null);
@@ -143,7 +146,10 @@ export default function Settings() {
               <dt>Round win probability</dt>
               <dd className="meta">{winProbText()}</dd>
               <dt>Rating</dt>
-              <dd><span className="has-def" tabIndex={0} data-tip={rating3Note()}>{ratingHeadline()}</span></dd>
+              {/* main's "Calibrating" chip, now params.json's own word for the model's state: the weights are fitted */}
+              <dd><span className="has-def" tabIndex={0} data-tip={rating3Note()}>{ratingHeadline()}</span><span className="chip chip--outline settings__chip">{capitalised(ratingInfo().status)}</span></dd>
+              <dt>Rating 3.0 weights</dt>
+              <dd className="meta">{capitalised(ratingInfo().weights)}.</dd>
               <dt>Pro percentiles</dt>
               <dd className="meta">{baselines ? <>{baselines.source}. <span className="nowrap">Built {builtText(baselines.built)}.</span></> : baselinesError ?? "Loading"}</dd>
               <dt>Stats engine</dt>

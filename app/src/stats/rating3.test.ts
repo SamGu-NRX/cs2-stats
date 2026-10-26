@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { compare, type Baselines } from "./compare";
 import { METRIC, METRICS } from "./metrics";
 import { PARAMS } from "./model-params";
-import { rating3FromInputs, rating3Of } from "./rating3";
+import { RATING3_INTERCEPT, RATING3_TERMS, rating3FromInputs, rating3Of } from "./rating3";
 import { rollup } from "./rollup";
 import { derive } from "./derive";
 import type { WinProbSource } from "./model-params";
@@ -79,4 +79,13 @@ it("takes the total rating from the sides, weighted by their rated rounds", () =
   // one rated side covering under half of all rounds is no total
   const r = rating3Of(combine(thin, side("T", 300, 160, 3)));
   expect([r.value, r.reason]).toEqual([null, "the sides with half their own rounds rated cover 160 of 400 rounds; the rating needs half"]);
+});
+
+it("gives a breakdown whose terms add up to the rating", () => {
+  // fails if RATING3_TERMS pairs a coefficient with the wrong input, so a shown breakdown would not sum
+  // to the shown rating
+  const q = { kpr_eco: 0.7, adr_eco: 80, dpr_eco: 0.6, kast_eco: 72, mk: 18, swing: 1.5 };
+  const sum = RATING3_TERMS.reduce((a, t) => a + t.coefficient * q[t.input], RATING3_INTERCEPT);
+  expect(sum).toBeCloseTo(rating3FromInputs(q), 12);
+  expect(RATING3_TERMS.map((t) => t.input).sort()).toEqual(["adr_eco", "dpr_eco", "kast_eco", "kpr_eco", "mk", "swing"]);
 });

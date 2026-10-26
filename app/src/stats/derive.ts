@@ -6,7 +6,7 @@ import { deriveAim } from "./aim";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
-import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact } from "./facts";
+import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
@@ -33,6 +33,37 @@ function onScreenOf(v: unknown): OnScreenSource | null {
   return v as OnScreenSource;
 }
 
+/** match.extra "totals_only_rounds": absent means none; anything but a list of round numbers is an error. */
+function totalsOnlyOf(v: unknown): number[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v) || !v.every((x) => Number.isInteger(x) && x > 0)) throw new Error(`derive: match.extra totals_only_rounds ${JSON.stringify(v)} is not a list of round numbers`);
+  return v as number[];
+}
+
+/**
+ * match.extra "totals_rounds": [{ round, winner, players: [[steamid, kills, deaths, assists, damage,
+ * headshot kills], ...] }]; absent means none. A row naming an unknown player or holding a
+ * non-number is an error.
+ */
+function totalsRoundsOf(v: unknown, pi: Map<string, number>): TotalsRound[] {
+  if (v === undefined) return [];
+  const bad = () => new Error(`derive: match.extra totals_rounds ${JSON.stringify(v).slice(0, 200)} is not a list of round totals`);
+  if (!Array.isArray(v)) throw bad();
+  return v.map((r: { round?: unknown; winner?: unknown; players?: unknown }) => {
+    if (!Number.isInteger(r.round) || !(r.winner === "CT" || r.winner === "T" || r.winner === null) || !Array.isArray(r.players)) throw bad();
+    return {
+      number: r.round as number, winner: r.winner,
+      players: (r.players as unknown[][]).map((row) => {
+        const p = pi.get(row[0] as string);
+        const n = row.slice(1);
+        if (p === undefined || n.length !== 5 || !n.every((x) => typeof x === "number")) throw bad();
+        const [kills, deaths, assists, dmg, hsKills] = n as number[];
+        return { pi: p, kills, deaths, assists, dmg, hsKills };
+      }),
+    };
+  });
+}
+
 /**
  * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
  * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
@@ -51,6 +82,9 @@ function matchMeta(t: MatchTables) {
     finalScore: Array.isArray(extra.final_score) ? (extra.final_score as [number, number]) : null,
     throws: extra.throws === "rebuilt" ? ("rebuilt" as const) : null,
     onScreen: onScreenOf(extra.on_screen),
+    totalsOnly: totalsOnlyOf(extra.totals_only_rounds),
+    /** parsed in derive, which knows the players' indices (totalsRoundsOf) */
+    totalsRaw: extra.totals_rounds,
     status: typeof extra.status === "string" ? extra.status : null,
   };
 }
@@ -311,7 +345,7 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen } = matchMeta(t);
+  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
@@ -336,12 +370,12 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
-      roundsPlayed: roundsPlayed ?? c.nRounds, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
+      roundsPlayed: roundsPlayed ?? c.nRounds, totalsOnly, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
       inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen },
     },
     players: c.players, rounds: c.rounds,
     pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
-    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c),
+    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c), totalsRounds: totalsRoundsOf(totalsRaw, c.pi),
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
 }

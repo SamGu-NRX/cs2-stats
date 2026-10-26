@@ -1,6 +1,7 @@
 // One line of stats where the aim views had a ring and bento tiles: each item is a label, a value and
 // the shared percentile phrase (components/Percentile.tsx). An item whose data cannot exist for the
 // selection shows a dash and a short reason instead of a fake number.
+import type { ReactNode } from "react";
 import { ApproxMark, percentilePhrase, type PercentileKind } from "./Percentile";
 
 export interface StripItem {
@@ -19,9 +20,11 @@ export interface StripItem {
   def?: string;
 }
 
-export function StatStrip({ items, label }: { items: StripItem[]; label: string }) {
+/** `lead`: a first cell of the caller's own (Career aim's accuracy ring), a div with a dt and dds like the items. */
+export function StatStrip({ items, label, lead }: { items: StripItem[]; label: string; lead?: ReactNode }) {
   return (
     <dl className="strip" aria-label={label}>
+      {lead}
       {items.map((it) => {
         const na = it.unavailable !== undefined || it.value === null;
         return (

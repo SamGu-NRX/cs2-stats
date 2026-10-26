@@ -338,32 +338,72 @@ export function meanPath(p: SprayPath): { i: number; pitch: number; yaw: number;
   return out;
 }
 
+/** Sums of the squared view change per bullet (Summary.aim.spread), indexed as SprayPath. */
+export interface SpraySpread { pp: number[]; yy: number[] }
+/** Per-bullet sums with index 0 at bullet 1 (Summary.aim.heads and onTarget): bullets with a value and the summed pitch and yaw. */
+export interface BulletSums { n: number[]; dp: number[]; dy: number[] }
+
+/** Standard deviation from a count, a sum and a sum of squares; 0 under two values. */
+const sd = (n: number, s: number, ss: number) => (n > 1 ? Math.sqrt(Math.max(0, ss / n - (s / n) ** 2)) : 0);
+
+/** One standard deviation of your view movement per bullet, pitch and yaw, for the bullets in meanPath (bullet 1 has none). */
+export function spreadOf(p: SprayPath, s: SpraySpread): { i: number; pitch: number; yaw: number }[] {
+  return p.n.flatMap((n, j) => (n > 0 ? [{ i: j + 1, pitch: sd(n, p.dp[j], s.pp[j] ?? 0), yaw: sd(n, p.dy[j], s.yy[j] ?? 0) }] : []));
+}
+
+/** Mean per bullet of BulletSums (index 0 is bullet 1), bullets without a value left out. */
+export function meanBullets(b: BulletSums): { i: number; pitch: number; yaw: number; n: number }[] {
+  return b.n.flatMap((n, i) => (n > 0 ? [{ i, pitch: b.dp[i] / n, yaw: b.dy[i] / n, n }] : []));
+}
+
+/** Your average bullet counts as on target while it lands within this many degrees of the target's eye. */
+export const CONTROL_DEG = 1.5;
+
+/**
+ * Bullet by bullet, how far your average bullet landed from the target's eye (the length of the mean
+ * offset), for bullets with three or more values among the first 20; and the last bullet of the run from
+ * bullet 1 that stayed within CONTROL_DEG (0 when bullet 1 missed or has no value).
+ */
+export function targetControl(b: BulletSums): { rows: { i: number; dev: number; n: number }[]; controlled: number } {
+  const rows = meanBullets(b).filter((r) => r.n >= 3 && r.i < 20).map((r) => ({ i: r.i, dev: Math.hypot(r.pitch, r.yaw), n: r.n }));
+  let controlled = 0;
+  for (const r of rows) { if (r.i === controlled && r.dev <= CONTROL_DEG) controlled++; else break; }
+  return { rows, controlled };
+}
+
 /**
  * Spray for one weapon: your mean view movement per bullet (x = −yaw, y = pitch, so pulling down
- * draws downward as in game), and optionally the median pro compensation path with the middle half
- * of pros per bullet as a box. 1° grid.
+ * draws downward as in game); optionally its spread per bullet as a one-standard-deviation ellipse,
+ * the median pro compensation path with the middle half of pros per bullet as a box, and where the
+ * target's eye was for each bullet, in CT blue. 1° grid.
  */
-export function SprayPattern({ path, pro, size = 320, bands = true }: { path: SprayPath; pro: ProPath | null; size?: number; bands?: boolean }) {
+export function SprayPattern({ path, pro, size = 320, bands = true, spread = null, heads = null }: { path: SprayPath; pro: ProPath | null; size?: number; bands?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null }) {
   const pts = meanPath(path).map((p) => ({ i: p.i, x: -p.yaw, y: p.pitch }));
   const ref = pro && bands ? pro.slice(0, Math.max(pts.length, 1)).map((r, i) => ({ i, x: -r[1], y: r[0], x0: -r[5], x1: -r[4], y0: r[2], y1: r[3] })) : [];
+  const sds = spread ? spreadOf(path, spread) : [];
+  const ells = sds.map((e) => ({ ...e, x: pts.find((p) => p.i === e.i)!.x, y: pts.find((p) => p.i === e.i)!.y }));
+  const eyes = heads ? meanBullets(heads).map((h) => ({ i: h.i, x: -h.yaw, y: h.pitch })) : [];
   if (pts.length < 2) return <div className="chart chart--empty">No sprays of three bullets or more</div>;
-  const ext = Math.max(2, ...pts.flatMap((p) => [Math.abs(p.x), Math.abs(p.y)]), ...ref.flatMap((r) => [Math.abs(r.x0), Math.abs(r.x1), Math.abs(r.y0), Math.abs(r.y1)])) * 1.15;
+  const ext = Math.max(2, ...pts.flatMap((p) => [Math.abs(p.x), Math.abs(p.y)]), ...ref.flatMap((r) => [Math.abs(r.x0), Math.abs(r.x1), Math.abs(r.y0), Math.abs(r.y1)]),
+    ...ells.flatMap((e) => [Math.abs(e.x) + e.yaw, Math.abs(e.y) + e.pitch]), ...eyes.flatMap((h) => [Math.abs(h.x), Math.abs(h.y)])) * 1.15;
   const S = size / (2 * ext);
   const X = (x: number) => size / 2 + x * S;
   const Y = (y: number) => size / 2 + y * S;
   const grid: number[] = [];
   for (let g = -Math.floor(ext); g <= Math.floor(ext); g++) grid.push(g);
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ref.length ? ", with the pro path" : ""}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ells.length ? ", with the spread per bullet" : ""}${ref.length ? ", with the pro path" : ""}${eyes.length ? ", with where the target's head was" : ""}`}>
       {grid.map((g) => (
         <g key={g}>
           <line x1={X(g)} x2={X(g)} y1="0" y2={size} stroke={g === 0 ? "var(--line2)" : "var(--line)"} />
           <line x1="0" x2={size} y1={Y(g)} y2={Y(g)} stroke={g === 0 ? "var(--line2)" : "var(--line)"} />
         </g>
       ))}
+      {ells.map((e) => <ellipse key={`e${e.i}`} cx={X(e.x)} cy={Y(e.y)} rx={Math.max(2, e.yaw * S)} ry={Math.max(2, e.pitch * S)} fill="rgba(255,215,173,.07)" stroke="rgba(255,215,173,.42)" strokeWidth="1" />)}
       {ref.map((r) => <rect key={`b${r.i}`} x={X(Math.min(r.x0, r.x1))} y={Y(Math.min(r.y0, r.y1))} width={Math.max(2, Math.abs(r.x1 - r.x0) * S)} height={Math.max(2, Math.abs(r.y1 - r.y0) * S)} rx="2" fill="rgba(43,163,224,.07)" stroke="rgba(43,163,224,.4)" strokeWidth="1" />)}
       {ref.length > 1 && <polyline points={ref.map((r) => `${X(r.x)},${Y(r.y)}`).join(" ")} fill="none" stroke="var(--ct)" strokeWidth="1.25" strokeDasharray="3 3" opacity="0.85" />}
       <polyline points={pts.map((p) => `${X(p.x)},${Y(p.y)}`).join(" ")} fill="none" stroke="var(--cream)" strokeWidth="1.25" strokeLinejoin="round" opacity="0.8" />
+      {eyes.map((h) => <circle key={`h${h.i}`} cx={X(h.x)} cy={Y(h.y)} r="2" fill="var(--ct)" opacity="0.8" />)}
       {pts.map((p) => <circle key={p.i} cx={X(p.x)} cy={Y(p.y)} r={p.i === 0 ? 4.5 : 3.5} fill={p.i === 0 ? "var(--bg1)" : "var(--cream)"} stroke="var(--cream)" strokeWidth="1.5" />)}
       {placeLabels(pts.filter((p) => p.i === 0 || (p.i + 1) % 5 === 0).map((p) => ({ i: p.i, x: X(p.x), y: Y(p.y) })), pts.map((p) => [X(p.x), Y(p.y)] as const), size).map((l) => (
         <g key={`l${l.i}`}>

@@ -170,3 +170,92 @@ describe("deriveAim on a hand-built match", () => {
     expect(f.react).toBe((131 - 120) / RATE);
   });
 });
+
+describe("the aim panels' restored measures", () => {
+  const agg = (t: MatchTables) => { const a = emptyAim(); for (const f of derive(t, CS2RB).aim) foldAim(a, f); return a; };
+  /** The hand-built match with A killing V at tick 320 (the last counter-strafe shot), with these kill flags. */
+  const withKill = (penetrated: number | null, thrusmoke: boolean | null) => {
+    const t = match();
+    add(t.kills, "kills", { tick: 320, round: 1, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", headshot: false, penetrated, thrusmoke, a_side: "CT", v_side: "T" });
+    return t;
+  };
+
+  it("leaves wallbang kill shots out of adjusted accuracy, and sets aside a kill shot whose penetration is unknown", () => {
+    // fails if a wallbang or unrecorded-penetration kill shot counts, or a clear kill shot is dropped
+    // ten shots at V while visible (four in round 1, six in round 2), the one at 145 hits; the kill is
+    // on the shot at 320
+    expect([agg(withKill(0, false)).adj, agg(withKill(0, false)).adjHits]).toEqual([10, 1]);
+    const wall = agg(withKill(1, false));
+    expect([wall.adj, wall.adjHits]).toEqual([9, 1]);
+    expect(METRIC.adjustedAccuracy.value({ aim: wall } as Summary)).toBeCloseTo(100 / 9, 9);
+    expect(agg(withKill(null, false)).adj).toBe(9);
+  });
+
+  it("counts gun kills through walls and smoke only where the source records the flag", () => {
+    // fails if an unrecorded flag reads as a plain kill, or the flags are swapped
+    const a = agg(withKill(1, true));
+    expect([a.killsWbKnown, a.killsWb, a.killsSmokeKnown, a.killsSmoke]).toEqual([1, 1, 1, 1]);
+    const b = agg(withKill(null, null));
+    expect([b.killsWbKnown, b.killsWb, b.killsSmokeKnown, b.killsSmoke]).toEqual([0, 0, 0, 0]);
+  });
+
+  it("counts a shot through smoke when the only enemy near it is behind one, and none on a map without mesh visibility", () => {
+    // fails if a smoke-blocked enemy still counts as visible, an unknown smoke state is guessed, or a map
+    // without visibility reports a share
+    const at260 = (blocked: boolean | null) => {
+      const t = match();
+      t.engagement_ticks!.smoke_blocked[t.engagement_ticks!.tick.indexOf(260)] = blocked;
+      return agg(t);
+    };
+    // ten gun shots, all with V on screen: four in round 1, six in round 2
+    const smoked = at260(true);
+    expect([smoked.smokeShotsKnown, smoked.smokeShots, smoked.sight]).toEqual([10, 1, 9]);
+    expect(METRIC.shotsThroughSmoke.value({ aim: smoked } as Summary)).toBe(10);
+    expect([at260(null).smokeShotsKnown, at260(null).smokeShots]).toEqual([9, 0]);
+    const blind = match();
+    blind.match.visibility_status[0] = "no_mesh";
+    expect(METRIC.shotsThroughSmoke.value({ aim: agg(blind) } as Summary)).toBeNull();
+  });
+
+  it("counts spray accuracy over bullets 4 and later fired at a visible enemy", () => {
+    // fails if bullets 1 to 3 count, or a bullet-4 hit is not linked
+    const t = match();
+    add(t.damages, "damages", { tick: 1119, round: 2, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", dmg_health: 27, dmg_health_capped: 27, health_before: 100, health_after: 73 });
+    const s = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s.map((f) => [f.deep, f.deepHits])).toEqual([[1, 1]]);
+    expect(derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.deep)).toEqual([0]);
+  });
+
+  it("places the target's eye from the view at bullet 1, and from each bullet's direction when the shot has one", () => {
+    // V stands still 1,000 units away at yaw 180 while A's view drifts from 179 to -178.5: the eye stays
+    // 1 degree left of the first view, so a yaw slip or a missing unwrap moves it
+    const [plain] = derive(match(), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(plain.hp).toEqual([0, 0, 0, 0]);
+    expect(plain.hy.map((x) => +x!.toFixed(6))).toEqual([1, 1, 1, 1]);
+    expect([plain.tp, plain.ty]).toEqual([[], []]);
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i, j) => { t.shots!.bullet_pitch[i] = [0, -0.5, -1, -1.5][j]; t.shots!.bullet_yaw[i] = [180, 180, 180, 181][j]; });
+    const [aimed] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(aimed.tp).toEqual([0, 0.5, 1, 1.5]);
+    expect(aimed.ty.map((x) => +x!.toFixed(6))).toEqual([0, 0, 0, -1]);
+    expect(derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].hp).toEqual([]);
+  });
+
+  it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
+    // fails if squares, bullet indexes or the null skip go wrong
+    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], sw: 0, swHits: 0, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
+    const a = emptyAim();
+    foldAim(a, base);
+    foldAim(a, { ...base, dp: [3, 2], dy: [0, -1], hp: [], hy: [] });
+    expect(a.spread.ak47).toEqual({ pp: [10, 8], yy: [0, 2] });
+    expect(a.heads.ak47).toEqual({ n: [1, 1], dp: [0, 1], dy: [1, 1] });
+    expect(a.onTarget.ak47).toBeUndefined();
+  });
+
+  it("measures head accuracy over gun hits only", () => {
+    // fails if a knife or grenade hit counts, or the denominator is the body-part sum rather than hits
+    const w = (head: number, hits: number) => ({ groups: [head, 0, 0, 0, 0, 0, 0, 0], hits });
+    expect(METRIC.headAccuracy.value({ weapons: { ak47: w(3, 10), knife: w(5, 5), hegrenade: w(0, 4) } } as unknown as Summary)).toBe(30);
+  });
+});
