@@ -84,6 +84,7 @@ export function notComparable(m: Metric, s: Summary, b: Baselines): string | nul
     const n = m.sample.n(s);
     if (n < m.sample.min) return `Not compared: ${n} of the ${m.sample.min} ${m.sample.unit} a percentile needs`;
   }
+  if (m.compared === false) return "Not compared: for fun, with no pro percentile";
   return null;
 }
 
@@ -160,7 +161,7 @@ export const modelOf = (units: PoolUnit[]) => {
  * here, so the pool holds only samples big enough to rank against.
  */
 export function buildPools(units: PoolUnit[]): Pick<Baselines, "n" | "pools"> {
-  const valueIn = (m: Metric, s: Summary) => (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min ? null : m.value(s));
+  const valueIn = (m: Metric, s: Summary) => (m.compared === false || (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min) ? null : m.value(s));
   const vals = units.map((u) => ({ ...u, v: Object.fromEntries(METRICS.map((m) => [m.id, valueIn(m, u.s)])) }));
   const out: Pick<Baselines, "n" | "pools"> = { n: {}, pools: {} };
   for (const pool of new Set(units.flatMap((u) => u.pools))) {
