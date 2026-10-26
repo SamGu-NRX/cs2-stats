@@ -34,8 +34,22 @@ const STEAMID = /7656119\d{10}/g;
 const DEV_PATH = /(?:\b[A-Za-z]:(?:\\\\|\\|\/)|(?<![\w.])\/)Users(?:\\\\|\\|\/)(?![<%$*{])([^\\/\s"'`<>|:*?]+)(?:\\\\|\\|\/)/gi;
 // the private marker as a JSON key with its value (tools/outputs.ts, extractor/repo_guard.py), any spacing
 const MARKER = new RegExp(`"_private"\\s*:\\s*"${["do", "not", "commit"].join(" ")}"`);
-/** \uXXXX escapes decoded, as JSON and JavaScript strings would decode them. */
-const unescape16 = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+/** String escapes decoded as JSON and JavaScript would: \uXXXX, then \" \\ \/ (a JSON document inside a string literal). */
+const unescape16 = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\(["\\/])/g, "$1");
+/**
+ * A file's readings. UTF-16 text has NUL bytes, so a NUL alone does not mean binary. A UTF-16 byte order
+ * mark is decoded as such (Windows PowerShell 5's `>` writes UTF-16 LE with one). Any other file with a
+ * NUL is read as Latin-1 and also as UTF-16 LE and BE, so UTF-16 text without a mark is still scanned.
+ */
+function readingsOf(bytes) {
+  const even = (b) => b.subarray(0, b.length - (b.length % 2));
+  const le = (b) => even(b).toString("utf16le");
+  const be = (b) => Buffer.from(even(b)).swap16().toString("utf16le");
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return { binary: false, raw: le(bytes.subarray(2)), also: [] };
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return { binary: false, raw: be(bytes.subarray(2)), also: [] };
+  if (!bytes.includes(0)) return { binary: false, raw: bytes.toString("utf8"), also: [] };
+  return { binary: true, raw: bytes.toString("latin1"), also: [le(bytes), be(bytes)] };
+}
 /** Every string in a parsed JSON value, keys included. */
 function strings(v, out = []) {
   if (typeof v === "string") out.push(v);
@@ -63,11 +77,10 @@ for (const file of files) {
       continue;
     }
   }
-  // A text file (no NUL byte, after the gzip decode) is read with its JSON-style \uXXXX escapes decoded,
-  // so "76..." cannot hide a SteamID; a binary file is read as bytes.
-  const binary = bytes.includes(0);
-  const raw = bytes.toString(binary ? "latin1" : "utf8");
-  const texts = binary ? [raw] : [raw, unescape16(raw)];
+  // Every reading is scanned as written and with its string escapes decoded, so an escaped SteamID or a
+  // marker inside an embedded JSON string is still seen.
+  const { binary, raw, also } = readingsOf(bytes);
+  const texts = [raw, ...also].flatMap((t) => [t, unescape16(t)]);
   // a .json file's string values too, as JSON.parse decodes them; its numbers are digit runs the text
   // scan already reads exactly (a SteamID64 is past 2^53, so a parsed number would be rounded)
   if (!binary && /\.json(\.gz)?$/i.test(file)) {
@@ -89,7 +102,7 @@ for (const file of files) {
   for (const p of paths) report(file, `absolute developer path ${JSON.stringify(p)}`);
   if (file.startsWith("app/public/") && texts.some((t) => /hltv/i.test(t))) report(file, `"hltv" under app/public/`);
   // the marker as a key and its value, in any text file: a private JSON pasted into a .txt, .md or .ts
-  if (!binary && texts.some((t) => MARKER.test(t))) report(file, "holds the private marker (the _private key with its do-not-commit value)");
+  if (texts.some((t) => MARKER.test(t))) report(file, "holds the private marker (the _private key with its do-not-commit value)");
 }
 
 if (findings.length) {
