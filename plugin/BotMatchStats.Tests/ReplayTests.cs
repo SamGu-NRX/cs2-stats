@@ -168,7 +168,10 @@ public class ReplayTests
         var tickDur = new long[200_000];
         int tickN = 0;
         long tickAlloc = 0, tickAllocLater = 0, evMax = 0, evN = 0, evTs = 0;
-        int ticksPaused = 0; // ticks whose allocation reading a GC pause spoiled (AllocMeter)
+        // AllocMeter: a GC pause spoils a reading by up to one allocation context, so a paused tick is held to
+        // that slack instead of to zero; every 512th tick also reads exactly, inside a no-GC region
+        int ticksPaused = 0, ticksExact = 0;
+        long pausedMax = 0;
         var evDur = new long[10_000];
         string evMaxName = "";
         var allocTicks = new (int tick, long bytes)[32];
@@ -216,14 +219,15 @@ public class ReplayTests
             {
                 if (finalizeAt != Nil.V && t >= finalizeAt) { finalizeAt = Nil.V; Finalize(t); }
                 if (!rec.Live) continue;
-                var meter = AllocMeter.Start();
+                var meter = AllocMeter.Start(exact: rec.Ri > 0 && t % 512 == 0);
                 long t0 = Stopwatch.GetTimestamp();
                 FillFrames();
                 rec.Tick(t);
                 long dt = Stopwatch.GetTimestamp() - t0;
-                long? read = meter.Read();
-                if (read == null) ticksPaused++;
-                long da = read ?? 0;
+                var (bytes, paused, exact) = meter.Read();
+                if (exact) ticksExact++;
+                if (paused && rec.Ri > 0) { ticksPaused++; pausedMax = Math.Max(pausedMax, bytes); }
+                long da = paused ? 0 : bytes;
                 if (da != 0 && allocTickN < allocTicks.Length) allocTicks[allocTickN++] = (t, da);
                 tickAlloc += da;
                 if (rec.Ri > 0) tickAllocLater += da;
@@ -335,7 +339,7 @@ public class ReplayTests
         _out.WriteLine($"rounds {store.RoundCount}, kills {store.Kills.Count}, damage {store.Damage.Count}, blinds {store.Blinds.Count}, grenades {store.Grenades.Count}, pos {store.Pos.Count}, engagements {store.Engagements.Count}, shots {store.Shots.Count}");
         _out.WriteLine($"file {bytes} bytes gzip; last write {store.LastWriteMs:F1} ms, max write {store.MaxWriteMs:F1} ms (worker thread)");
         _out.WriteLine($"tick path (rounds >= 1): {tickN} ticks, avg {Us(sorted.Sum()) / tickN:F2} us, p50 {Pct(0.5):F2}, p99 {Pct(0.99):F2}, p99.9 {Pct(0.999):F2}, max {Us(sorted[^1]):F1} us");
-        _out.WriteLine($"tick path allocated {tickAlloc} bytes in total, {tickAllocLater} in rounds >= 1; ticks that allocated: {string.Join(", ", allocTicks.Take(allocTickN).Select(a => $"{a.tick}:{a.bytes}"))}; {ticksPaused} ticks not read (GC pause)");
+        _out.WriteLine($"tick path allocated {tickAlloc} bytes in total, {tickAllocLater} in rounds >= 1; ticks that allocated: {string.Join(", ", allocTicks.Take(allocTickN).Select(a => $"{a.tick}:{a.bytes}"))}; {ticksExact} ticks read exactly; {ticksPaused} ticks paused by a GC, at most {pausedMax} bytes");
         _out.WriteLine($"recorder event calls: {evN}, avg {Us(evTs) / evN:F2} us, p99 {EvPct(0.99):F1}, p99.9 {EvPct(0.999):F1}, max {Us(evMax):F1} us ({evMaxName}, rounds >= 1)");
         _out.WriteLine($"event-path allocation per round (bytes): {string.Join(", ", evAllocByRound)}");
         _out.WriteLine($"buffer pool misses on the game thread: {writer.BufferMisses}");
@@ -355,7 +359,9 @@ public class ReplayTests
             Assert.All(Enumerable.Range(0, 21), ri => Assert.Equal(RoundResult.FromMatchStatsCode(results[ri], out int ws, out _) ? ws : Nil.V, store.Round(ri).WinSide));
             Assert.Equal(0, writer.BufferMisses); // the pre-warmed pool covers every hand-off
             Assert.Equal(0, tickAllocLater);
-            Assert.True(ticksPaused < tickN / 100, $"{ticksPaused} of {tickN} ticks were not read"); // the check still covers almost every tick
+            Assert.True(ticksPaused < tickN / 100, $"{ticksPaused} of {tickN} ticks were paused by a GC"); // the zero check still covers almost every tick
+            Assert.InRange(pausedMax, 0, AllocMeter.PausedSlack); // a paused tick allocating more than a pause can add
+            Assert.True(ticksExact >= 50, $"only {ticksExact} ticks were read exactly");
 
             // Size breakdown last: it clears tables.
             foreach (var level in new[] { CompressionLevel.Fastest, CompressionLevel.Optimal })
