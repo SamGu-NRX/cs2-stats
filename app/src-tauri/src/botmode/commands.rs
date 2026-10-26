@@ -126,7 +126,13 @@ fn view(layout: &Layout) -> SessionView {
 #[tauri::command]
 pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String> {
     mutating(game, |ctx| {
-        let run_id = session::start_and_wait(&ctx.layout, &monitor::Windows, session::RunMode::Launch)?;
+        let run_id = session::start_launch(
+            &ctx.layout,
+            &SystemProbe,
+            &monitor::Windows,
+            &|| session::start_and_wait(&ctx.layout, &monitor::Windows, session::RunMode::Launch),
+            &|| start_adopter(&ctx.layout),
+        )?;
         // Past "ready" means Steam has been asked (or the launch failed).
         let status = session::follow(&ctx.layout, &monitor::Windows, &run_id, &|s| s.state != "ready", &|_| {})?;
         if status.state == "failed" {
