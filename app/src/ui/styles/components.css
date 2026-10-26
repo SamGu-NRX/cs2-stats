@@ -162,8 +162,9 @@
 .palette__empty { padding: 20px 16px; color: var(--ink2); }
 
 /* ---------------------------------------------------------------- tooltip */
+/* one block of text: display is set here so no inherited layout rule can split its lines into columns */
 .tip {
-  position: fixed; z-index: 80; max-width: 280px; padding: 6px 9px; border-radius: var(--r-ctl);
+  display: block; position: fixed; z-index: 80; max-width: 280px; padding: 6px 9px; border-radius: var(--r-ctl);
   background: var(--bg0); box-shadow: 0 0 0 1px var(--line2); color: var(--ink); font: 400 12px/1.4 var(--f);
   pointer-events: none; opacity: 0; transform: scale(calc(1 - 0.03 * var(--mo))); transform-origin: var(--tip-origin, 50% 100%);
   transition: opacity var(--d-tip) var(--ease-out), transform var(--d-tip) var(--ease-out);
