@@ -99,6 +99,20 @@ it("validates every name and path before opening it, and never reads a COMPLETE 
   expect(() => readValve(root, `match730_e/${V1}`)).toThrow(ValvePathError);
 });
 
+it("skips a match whose COMPLETE is not a name-to-size object, and lists the others", () => {
+  // fails if one malformed COMPLETE (valid JSON null) hides every Valve match (review of #29)
+  const root = fresh();
+  map(root, "match730_good", { "match.parquet": "abc" });
+  for (const [demo, body] of [["match730_null", "null"], ["match730_list", "[1]"], ["match730_size", '{"match.parquet": "3"}']]) {
+    map(root, demo, { "match.parquet": "abc" });
+    writeFileSync(path.join(root, demo, V1, "COMPLETE"), body);
+  }
+  const l = listValve(root);
+  expect(l.files.map((f) => f.file)).toEqual([`valve/match730_good/${V1}`]);
+  expect(l.skipped.map((s) => s.file).sort()).toEqual(["valve/match730_list", "valve/match730_null", "valve/match730_size"]);
+  expect(() => readValve(root, `match730_null/${V1}`)).toThrow(ValvePathError);
+});
+
 it("runs the importer with progress into the Valve folder, and says what is missing when it cannot", () => {
   // fails if the importer runs without --progress (the app shows nothing), writes elsewhere, or fails silently
   const dir = fresh();

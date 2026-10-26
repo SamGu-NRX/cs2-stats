@@ -647,6 +647,23 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_complete_list_skips_only_its_own_match() {
+        // fails if one COMPLETE holding valid JSON that is not a name-to-size object hides every match
+        // (review of #29: the dev host failed this way; the desktop host must not)
+        let s = Scratch::new("valve-malformed");
+        valve_map(&s.0, "match730_good", V1, &[("match.parquet", b"abc")], None);
+        for (demo, body) in [("match730_null", "null"), ("match730_list", "[1]"), ("match730_size", "{\"match.parquet\": \"3\"}")] {
+            valve_map(&s.0, demo, V1, &[("match.parquet", b"abc")], None);
+            fs::write(s.0.join(demo).join(V1).join("COMPLETE"), body).unwrap();
+        }
+        let l = list_valve_in(&s.0).unwrap();
+        let files: Vec<String> = l.files.into_iter().map(|f| f.file).collect();
+        assert_eq!(files, [format!("valve/match730_good/{V1}")]);
+        assert_eq!(l.skipped.len(), 3);
+        assert!(read_valve_in(&s.0, &format!("match730_null/{V1}")).is_err());
+    }
+
+    #[test]
     fn an_unreadable_valve_user_file_is_reported_and_the_matches_still_listed() {
         // fails if a half-written or broken user file hides every match (review of #29)
         let s = Scratch::new("valve-user");
