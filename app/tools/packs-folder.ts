@@ -22,6 +22,10 @@ export async function packFile(root: string | null, rel: string | null): Promise
   const abs = path.resolve(root, rel);
   if (!isInside(abs, root)) return { status: 400 };
   if (!existsSync(abs)) return { status: 404 };
+  // The file can change between these checks and the read (a time-of-check race). That is
+  // accepted: swapping it needs a process already running as the user with write access to the packs
+  // folder, which can read anything this route could reach, so no privilege boundary is crossed;
+  // and the dev server listens on localhost only.
   const real = realpathSync.native(abs);
   if (!existsSync(root) || !isInside(real, realpathSync.native(root))) return { status: 400 };
   if (!(await fs.stat(real)).isFile()) return { status: 400 };
