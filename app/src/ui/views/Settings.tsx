@@ -1,9 +1,10 @@
 // Data & settings: where matches come from, what each source supports, import, the optional packs,
 // and which models the numbers use. It stays usable when the match folder cannot be read (App.tsx),
 // since Rescan, Import and the converted-log switch are the ways out; the failure shows on Sources.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DERIVE_VERSION } from "../../stats/facts";
-import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown } from "../../host/host";
+import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport } from "../../host/host";
+import type { ImportStatus } from "../../host/import-store";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
@@ -50,7 +51,7 @@ export default function Settings() {
   const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync, status, error } = useData();
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
-  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0 };
+  const counts: Record<SourceId, number> = { recorded: 0, converted: 0, pro: 0, synthetic: 0, valve: 0 };
   for (const s of matches) counts[sourceOf(s).id]++;
   const bundled = matches.filter((s) => isBundled(s.file)).length;
   const newest = (id: SourceId) => matches.find((s) => sourceOf(s).id === id);
@@ -108,6 +109,7 @@ export default function Settings() {
               <input ref={input} type="file" accept=".gz,application/gzip" multiple hidden onChange={(e) => onImport(e.target.files)} />
               <button className="btn press" onClick={() => input.current?.click()}><UploadIcon size={14} />Choose match files</button>
             </div>
+            <ValveSource n={counts.valve} />
           </div>
           {counts.pro > 0 && <p className="meta settings__pro">{plural(counts.pro, "pro demo is", "pro demos are")} listed in Matches from the development folder. They open like any match and never count toward your career.</p>}
         </Card>
@@ -174,6 +176,58 @@ export default function Settings() {
           </dl>
         </Card>
       </div>
+    </div>
+  );
+}
+
+const IDLE_IMPORT: ImportStatus = { running: false, at: null, last: null, error: null };
+const noImports = () => () => {};
+
+/** What an import's end says, by the importer's exit code (extractor/valve_import.py). */
+function importOutcome(r: ValveImport): { text: string; tone: "good" | "poor" } {
+  const s = r.summary;
+  if (r.code === 0 && s) return { text: `${plural(s.demos, "demo")} imported; every one matches its scoreboard.`, tone: "good" };
+  if (r.code === 1 && s) {
+    const bad = s.results.filter((x) => !x.ok).map((x) => x.demo);
+    return { text: `${bad.length} of ${s.demos} failed validation and are not shown: ${bad.join(", ")}.`, tone: "poor" };
+  }
+  return { text: r.error ?? `The importer stopped with exit code ${r.code ?? "none"}.`, tone: "poor" };
+}
+
+/** The user's Valve matchmaking matches: where they are, whose they are, and the importer. */
+function ValveSource({ n }: { n: number }) {
+  const { host } = useData();
+  // The import's state lives in the host, so an import keeps showing after navigating away and back.
+  const status = useSyncExternalStore(host?.imports.subscribe ?? noImports, host ? host.imports.get : () => IDLE_IMPORT);
+  useEffect(() => { void host?.imports.sync(); }, [host]);
+  // the app shell rescans when an import ends (provider.tsx), so this page only shows the state
+  const folder = host?.valve?.folder ?? VALVE_FOLDER;
+  const run = () => { if (host && !status.running) void host.imports.start(); };
+  const outcome = status.last && !status.running ? importOutcome(status.last) : null;
+  return (
+    <div className="source">
+      <div className="source__head"><SourceBadge s={{ id: "valve", label: "Valve matchmaking", missing: [] }} compact /><b className="num source__n">{n}</b></div>
+      <p className="meta">Your matchmaking demos from the game's replays folder, with aim, movement and line of sight. Wingman matches are listed but left out of career views.</p>
+      <div className="source__path">
+        <FolderIcon size={14} />
+        <span className="mono selectable">{folder}</span>
+        <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied")} aria-label="Copy the Valve folder path"><CopyIcon size={14} /></button>
+      </div>
+      <p className="meta">
+        {host?.valve?.error ? <span className="poor-text selectable">{host.valve.error}</span>
+          : host?.valve?.userError ? <span className="poor-text selectable">{host.valve.userError}. Matches are listed without you until it is fixed.</span>
+          : host?.valve?.user ? <>Your SteamID64 <span className="mono selectable">{host.valve.user}</span>.</>
+          : "The first import takes your SteamID64 from Steam's most recent login."}
+        {host?.valve?.skipped.length ? ` ${plural(host.valve.skipped.length, "folder")} without a complete match.` : ""}
+      </p>
+      <button className="btn press" onClick={run} disabled={!host || status.running} aria-busy={status.running}>
+        <RefreshIcon size={14} />{status.running ? "Importing" : "Import Valve matches"}
+      </button>
+      <p className="meta" role="status" aria-live="polite">
+        {status.running && (status.at ? `Demo ${status.at.i} of ${status.at.n}${status.at.event === "done" ? (status.at.ok ? ", done" : ", failed") : ""}` : "Starting the importer")}
+        {status.error && !status.running ? <span className="poor-text">{status.error}</span>
+          : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{outcome.text}</span>}
+      </p>
     </div>
   );
 }

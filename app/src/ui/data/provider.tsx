@@ -6,6 +6,7 @@
 // Data truth lives here: the list arrives newest first by start time (data/match.ts byNewest), with
 // the coverage rule applied (engine.ts coverEntry), and `you` names only the user's own accounts, so a
 // pro demo's recording player never becomes "you".
+import { scanQueue } from "./scan-queue";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createHost, type Host } from "../../host/host";
 import { createClient, type Client } from "../../worker/client";
@@ -55,13 +56,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
     baselines: null, baselinesError: null, version: 0, lastSync: null,
   });
   const ref = useRef<{ host: Host; client: Client } | null>(null);
-  const busy = useRef(false);
   const last = useRef(0);
-
-  const sync = useCallback(async () => {
+  // One scan at a time; a forced rescan (refresh, an import ending) asked for during one runs right after
+  // it instead of being dropped (scan-queue.ts).
+  const scans = useRef(scanQueue(async () => {
     const r = ref.current;
-    if (!r || busy.current || Date.now() - last.current < MIN_GAP_MS) return;
-    busy.current = true;
+    if (!r) return;
     last.current = Date.now();
     try {
       setState((s) => ({ ...s, status: s.status === "ready" ? "ready" : "syncing" }));
@@ -72,14 +72,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setState((s) => ({ ...s, status: "ready", error: null, matches, you, fileErrors: synced.errors, progress: null, version: s.version + 1, lastSync: Date.now() }));
     } catch (e) {
       setState((s) => ({ ...s, status: "error", error: errorText(e) }));
-    } finally {
-      busy.current = false;
     }
+  }));
+
+  // A focus event within MIN_GAP_MS of the last scan does nothing; refresh and an import's end clear `last` first.
+  const sync = useCallback(async () => {
+    if (!ref.current || Date.now() - last.current < MIN_GAP_MS) return;
+    await scans.current();
   }, []);
 
   // Each start is one run; a newer run (a retry, or StrictMode's second mount) or an unmount makes the
   // older one stop at its next step, so only one client is ever synced and handed to the views.
   const run = useRef(0);
+  const stopImports = useRef(() => {});
   const start = useCallback(async () => {
     const mine = ++run.current;
     const live = () => mine === run.current;
@@ -95,6 +100,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setMeta(await client.meta(await host.readPack("winprob-hltv.json")));
       if (!live()) return;
       ref.current = { host, client };
+      // An import that ends rescans the matches whichever page is open, and one already running when the
+      // app opens is followed to its end (review of #29).
+      stopImports.current();
+      stopImports.current = host.imports.onFinish(() => { last.current = 0; void sync(); });
+      void host.imports.sync();
       setState((s) => ({ ...s, host, client, meta: true }));
       await sync();
     } catch (e) {
@@ -108,6 +118,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addEventListener("focus", onFocus);
     return () => {
       run.current++;
+      stopImports.current();
       removeEventListener("focus", onFocus);
     };
   }, [start, sync]);
