@@ -22,6 +22,9 @@ import { setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { KillFlags } from "../icons/game";
 import { GameKillFlags } from "./match/glyphs";
+import { go, matchHref, useRoute } from "../router";
+import { RoundRail } from "./match/RoundRail";
+import Rounds from "./match/Rounds";
 import { BarProvider } from "../shell/Bar";
 import Weapons from "./Weapons";
 
@@ -56,6 +59,7 @@ vi.mock("../data/hooks", async (orig) => ({
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+globalThis.IntersectionObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof IntersectionObserver;
 globalThis.CSS ??= { escape: (x: string) => x } as unknown as typeof CSS;
 globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia;
 // jsdom has no 2D canvas; the sampled shape only needs its canvas element to exist here
@@ -122,6 +126,73 @@ describe("totals-only rounds", () => {
     const col = roundColumns(v).find((c) => c.number === 5)!;
     expect(col.kind === "totals" && col.totals).toEqual(s.facts.totalsRounds.find((t) => t.number === 5));
     expect(col.kind === "totals" && col.totals && col.totals.players.length).toBe(v.players.length);
+  });
+});
+
+describe("totals-only rounds in the match views", () => {
+  // round 5 of this converted log is held only as totals
+  const s = byName("8ecfd307");
+  const key = (k: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); });
+  // as MatchView does: the URL's round number to a round row, null for a totals-only number
+  function Tab({ v }: { v: MatchModel }) {
+    const q = useRoute().query.get("round");
+    const n = q ? Number(q) : null;
+    const ri = v.rounds.findIndex((r) => r.number === n);
+    return <><RoundRail v={v} selected={n} onPick={(x) => go(matchHref(v.file, "rounds", { round: x }))} /><Rounds v={v} file={v.file} round={ri >= 0 ? ri : null} /></>;
+  }
+
+  it("puts the round in the rail and the grid in number order, with the game's totals in each cell", () => {
+    // fails if the rail or grid iterates only the rounds with facts, so round 5 disappears, or a
+    // totals-only cell drops the recorded kills and death
+    const v = modelOf(s);
+    use([s]);
+    act(() => go(matchHref(v.file, "rounds")));
+    render(<Tab v={v} />);
+    const nums = (sel: string) => Array.from(host.querySelectorAll(sel)).map(text);
+    expect(nums(".rail__n")).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"]);
+    expect(nums(".ig__headbtn .num")).toEqual(nums(".rail__n"));
+    expect(text(host.querySelector(".rail__col.is-lite .rail__n"))).toBe("5");
+    const totals = s.facts.totalsRounds.find((t) => t.number === 5)!;
+    const rows = Array.from(host.querySelectorAll(".ig__row:not(.ig__row--head):not(.ig__row--team)"));
+    for (const t of totals.players) {
+      const name = v.players[t.pi].name;
+      const cell = rows.find((r) => r.querySelector(".ig__name")?.textContent?.startsWith(name))!.querySelector(".ig__cell.is-lite")!;
+      expect([text(cell.querySelector(".ig__k")) || "0", !!cell.querySelector(".ig__death")], name).toEqual([String(t.kills), t.deaths > 0]);
+      expect(cell.getAttribute("aria-label"), name).toContain("Round 5, totals only");
+    }
+  });
+
+  it("selects round 5 from the URL, opens its totals in the drawer, and steps to its neighbours", () => {
+    // fails if round=5 cannot select the totals-only round, its drawer shows no totals, or stepping skips it
+    const v = modelOf(s);
+    use([s]);
+    act(() => go(matchHref(v.file, "rounds", { round: 5 })));
+    render(<Tab v={v} />);
+    const drawer = () => host.querySelector(".drawer");
+    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 5");
+    expect(host.querySelector(".rail__col.is-lite")?.classList.contains("is-on")).toBe(true);
+    expect(host.querySelector('.ig__headbtn[aria-label^="Open round 5"]')?.closest(".ig__head")?.classList.contains("is-on")).toBe(true);
+    const top = [...s.facts.totalsRounds.find((t) => t.number === 5)!.players].sort((a, b) => b.dmg - a.dmg)[0];
+    const first = drawer()?.querySelector(".dtotals li");
+    expect([text(first?.querySelector(".kf__p")), text(first?.querySelector("b"))]).toEqual([v.players[top.pi].name, String(top.dmg)]);
+    key("ArrowRight");
+    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 6");
+    key("ArrowLeft");
+    key("ArrowLeft");
+    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 4");
+  });
+
+  it("shows a dash where the file holds no totals for a player", () => {
+    // fails if a missing totals row reads as zero kills, or a value is guessed
+    const base = modelOf(s);
+    const v: MatchModel = { ...base, facts: { ...base.facts, totalsRounds: base.facts.totalsRounds.map((t) => ({ ...t, players: t.players.filter((x) => x.pi !== base.human) })) } };
+    use([s]);
+    act(() => go(matchHref(v.file, "rounds", { round: 5 })));
+    render(<Tab v={v} />);
+    const you = Array.from(host.querySelectorAll(".ig__row.is-you"))[0];
+    expect(text(you.querySelector(".ig__cell.is-lite"))).toBe("–");
+    const mine = host.querySelector(".dtotals li.is-you");
+    expect(Array.from(mine?.querySelectorAll(".num") ?? []).map(text)).toEqual(["–", "–", "–"]);
   });
 });
 

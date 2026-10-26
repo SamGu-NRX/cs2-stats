@@ -2,12 +2,14 @@
 // It always docks beside the grid and never covers it (the user found the overlay hid the rounds);
 // the grid scrolls sideways instead. It opens with the drawer spring (320 ms) and only then narrows
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
+// It steps over the inspector's columns (roundColumns), so a round the file holds only as totals
+// opens too: the game's recorded totals per player, and a dash for what the file does not hold.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Measure } from "../../../stats/facts";
 import { Num } from "../../components/bits";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
-import { placesNamed, roundSecs, sideOf, type MatchModel as MatchView } from "../../data/match";
+import { placesNamed, roundSecs, sideOf, totalsWinner, usSideAt, type MatchModel as MatchView, type RoundColumn } from "../../data/match";
 import { metric } from "../../data/meta";
 import { feedFor } from "../../data/rounds";
 import { BUY_LABEL, BuyIcon, NADE_LABEL, WIN_LABEL, type Nade } from "../../icons/game";
@@ -21,8 +23,9 @@ const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
 const MAX = 640;
 
-export function RoundDrawer({ v, ri, onClose, onStep, children }: {
-  v: MatchView; ri: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
+/** col: the open column of `cols` (Rounds' roundColumns), or null when the drawer is closed. */
+export function RoundDrawer({ v, cols, col: ri, onClose, onStep, children }: {
+  v: MatchView; cols: RoundColumn[]; col: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
 }) {
   const [w, setW] = useState(() => Math.max(MIN, Math.min(MAX, Number(localStorage.getItem(W_KEY)) || 420)));
   const [shown, setShown] = useState<number | null>(ri);
@@ -76,7 +79,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
           className={`drawer drawer--${phase}`}
           style={{ width: w }}
           role="dialog"
-          aria-label={`Round ${v.rounds[shown].number}`}
+          aria-label={`Round ${cols[shown].number}`}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
         >
           <div
@@ -94,7 +97,13 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
               if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setW((x) => save(Math.max(MIN, x - 20))); }
             }}
           />
-          <RoundDetail v={v} ri={shown} onClose={onClose} onStep={onStep} />
+          {(() => {
+            const c = cols[shown];
+            const ends = { first: shown === 0, last: shown === cols.length - 1 };
+            return c.kind === "round"
+              ? <RoundDetail key="round" v={v} ri={c.r.ri} {...ends} onClose={onClose} onStep={onStep} />
+              : <TotalsDetail key="totals" v={v} col={c} {...ends} onClose={onClose} onStep={onStep} />;
+          })()}
         </aside>
       )}
     </div>
@@ -113,7 +122,59 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
 /** Grenades a player threw, by the measure that counts them. */
 const NADES: [Nade, Measure][] = [["flash", "flashes"], ["smoke", "smokes"], ["he", "hes"], ["molotov", "molotovs"]];
 
-function RoundDetail({ v, ri, onClose, onStep }: { v: MatchView; ri: number; onClose: () => void; onStep: (d: number) => void }) {
+/**
+ * A round held only as totals: its number and winner when the totals name a side, the killfeed's
+ * "totals only" line, and each player's recorded kills, deaths, assists and damage; a dash for a
+ * player the file holds no totals for.
+ */
+function TotalsDetail({ v, col, first, last, onClose, onStep }: {
+  v: MatchView; col: Extract<RoundColumn, { kind: "totals" }>; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void;
+}) {
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
+  const w = totalsWinner(v, col);
+  const us = usSideAt(v, col.number);
+  const sideCls = (pi: number) => (us === null ? "" : (v.players[pi].team === "us") === (us === "T") ? "t" : "ct");
+  const byPi = new Map((col.totals?.players ?? []).map((t) => [t.pi, t]));
+  const max = Math.max(1, ...[...byPi.values()].map((t) => t.dmg));
+  const rows = [...v.players].sort((a, b) => (byPi.get(b.pi)?.dmg ?? -1) - (byPi.get(a.pi)?.dmg ?? -1));
+  return (
+    <div className="drawer__in">
+      <header className="drawer__head">
+        <span className="faint" />
+        <div className="drawer__title">
+          <b>Round {col.number}</b>
+          <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}, totals only</span>
+        </div>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+        <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
+      </header>
+      <div className="drawer__body">
+        <Section title="Killfeed"><p className="meta">Only the game's round totals exist for this round.</p></Section>
+        <Section title="Players" aside="Game totals: K–D, assists, damage">
+          <ul className="ddmg dtotals">
+            {rows.map((p) => {
+              const t = byPi.get(p.pi) ?? null;
+              const s = sideCls(p.pi);
+              return (
+                <li key={p.key} className={p.isHuman ? "is-you" : undefined}>
+                  <span className={`kf__p ${s}`}>{p.name}</span>
+                  <span className="num">{t ? `${t.kills}–${t.deaths}` : "–"}</span>
+                  <span className="num">{t ? t.assists : "–"}</span>
+                  <span className="hbar"><i style={{ width: `${t ? (t.dmg / max) * 100 : 0}%`, background: s === "t" ? "var(--t)" : s === "ct" ? "var(--ct)" : "var(--ink3)", opacity: 0.8 }} /></span>
+                  <b className="num">{t ? t.dmg : "–"}</b>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri: number; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void }) {
   const r = v.rounds[ri];
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
@@ -145,8 +206,8 @@ function RoundDetail({ v, ri, onClose, onStep }: { v: MatchView; ri: number; onC
           <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
         </div>
         {r.scoreAfter && <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>}
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={ri === 0} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={ri === v.nRounds - 1} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
         <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
       </header>
       <div className="drawer__body">
