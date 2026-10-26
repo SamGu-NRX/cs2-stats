@@ -112,4 +112,16 @@ describe("the Luck tab with spread luck", () => {
     expect(links).toEqual(v.rounds.map((r) => expect.stringMatching(new RegExp(`/rounds\\?round=${r.number}$`))));
     expect(texts(".lk-figs dt")).toEqual(["Luckiest round"]);
   });
+
+  it("makes the round strip one tab stop that the arrow keys walk", () => {
+    // fails if every round is its own tab stop (a long match would cost dozens of Tabs), or ArrowRight
+    // stops moving focus along the strip
+    render(withSpread());
+    const rounds = () => Array.from(host.querySelectorAll<SVGAElement>(".lk-rs__r"));
+    expect(rounds().filter((a) => a.getAttribute("tabindex") === "0")).toHaveLength(1);
+    act(() => rounds()[0].focus());
+    act(() => { rounds()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+    expect(document.activeElement).toBe(rounds()[1]);
+    expect(rounds().map((a) => a.getAttribute("tabindex"))).toEqual(rounds().map((_, i) => (i === 1 ? "0" : "-1")));
+  });
 });

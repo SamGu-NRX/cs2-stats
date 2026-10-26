@@ -60,14 +60,15 @@
 .lk-figs { margin: 0; grid-template-columns: repeat(auto-fit, minmax(104px, max-content)); }
 
 /* the strip draws in once, on a pointer visit to the tab (Luck.tsx sets data-enter): each stem grows
-   from the zero axis and its dot rides out with it, 12 ms apart. The stem starts at scaleY(0) because
+   from the zero axis and its dot rides out with it, 12 ms apart, the wave capped at 240 ms so a long
+   match does not draw in longer. The stem starts at scaleY(0) because
    its length is the value, so zero is where it truly begins; nothing pops in from nowhere. html.anim keeps tests and static renders at the
    end state; reduced motion keeps only the fade. */
 @keyframes lk-grow { from { transform: scaleY(0); } }
 @keyframes lk-ride { from { transform: translateY(var(--dy)); } }
 @keyframes lk-fade { from { opacity: 0; } }
-html.anim .luck[data-enter] .lk-rs__stem { animation: lk-grow 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 12ms); }
-html.anim .luck[data-enter] .lk-rs__pop { animation: lk-ride 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 12ms); }
+html.anim .luck[data-enter] .lk-rs__stem { animation: lk-grow 240ms var(--ease-out) both; animation-delay: min(calc(var(--i, 0) * 12ms), 240ms); }
+html.anim .luck[data-enter] .lk-rs__pop { animation: lk-ride 240ms var(--ease-out) both; animation-delay: min(calc(var(--i, 0) * 12ms), 240ms); }
 @media (prefers-reduced-motion: reduce) {
   html.anim .luck[data-enter] .lk-rs__stem, html.anim .luck[data-enter] .lk-rs__pop { animation: lk-fade 200ms ease both; animation-delay: 0ms; }
 }

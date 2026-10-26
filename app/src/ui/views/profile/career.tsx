@@ -452,4 +452,3 @@ export function ReloadCard({ s }: { s: Rolled | null }) {
     </Card>
   );
 }
-
