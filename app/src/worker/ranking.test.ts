@@ -132,7 +132,14 @@ it("gives the role over all rounds and per map, maps with the most rounds first"
   expect(byMap.map((r) => [r.map, r.T.rounds, r.CT.rounds])).toEqual([["de_other", 2 * one.T.rounds, 2 * one.CT.rounds], [facts.match.map, one.T.rounds, one.CT.rounds]]);
   const t = one.T.rounds, ct = one.CT.rounds;
   expect(one.T.blend).not.toBeNull();
-  for (const [role, share] of Object.entries(one.T.blend!)) expect(one.all.blend![role]).toBeCloseTo((share * t) / (t + ct), 12);
+  for (const [role, share] of Object.entries(one.T.blend!)) {
+    const expected = ((share * t) + (one.CT.blend?.[role] ?? 0) * ct) / (t + ct);
+    expect(one.all.blend![role]).toBeCloseTo(expected, 12);
+  }
+  for (const [role, share] of Object.entries(one.CT.blend ?? {})) {
+    const expected = ((one.T.blend?.[role] ?? 0) * t + share * ct) / (t + ct);
+    expect(one.all.blend![role]).toBeCloseTo(expected, 12);
+  }
 });
 
 it("blends each spawn's role over that spawn's rounds on its own map", async () => {
