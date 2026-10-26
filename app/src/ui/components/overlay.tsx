@@ -46,7 +46,8 @@ export function TooltipLayer() {
       target.setAttribute("aria-describedby", "app-tip");
       tip.textContent = target.getAttribute("data-tip");
       tip.classList.toggle("is-instant", instant);
-      place(target.getBoundingClientRect(), tip);
+      // data-tip-place="right" opens beside the anchor (the sidebar, whose tooltips would cover the item above)
+      place(target.getBoundingClientRect(), tip, target.getAttribute("data-tip-place") === "right" ? "right" : "top");
       tip.classList.add("is-on");
       anyOpen = true;
     };

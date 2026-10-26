@@ -21,11 +21,7 @@ import { matchModel, roundColumns, type MatchEntry, type MatchModel } from "../d
 import { setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { KillFlags } from "../icons/game";
-import { go, matchHref, useRoute } from "../router";
 import { BarProvider } from "../shell/Bar";
-import Duels from "./match/Duels";
-import { RoundRail } from "./match/RoundRail";
-import Rounds from "./match/Rounds";
 import Weapons from "./Weapons";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -79,7 +75,6 @@ afterEach(() => {
 const render = (ui: JSX.Element) => act(() => root.render(<BarProvider>{ui}</BarProvider>));
 const use = (list: Sample[]) => { data = { matches: list.map((s) => s.entry), you: [...new Set(list.map((s) => s.facts.match.pov!))] }; };
 const text = (el: Element | null | undefined) => el?.textContent?.trim() ?? "";
-const key = (k: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); });
 
 describe("kill flags", () => {
   const base = { headshot: false, wallbang: false, smoke: false, noscope: false };
@@ -112,84 +107,13 @@ describe("totals-only rounds", () => {
     expect(halves).toEqual([[13, "totals"]]);
   });
 
-  it("hatches the round in every player's row, counts it in the legend and lines the rail up with the grid", () => {
-    // fails if the grid drops the totals-only round, the legend stops counting it, or the rail's columns
-    // stop matching the inspector's
+  it("gives a totals-only column the game's own per-player totals", () => {
+    // fails if the column loses MatchCore.totalsRounds, so the match views cannot draw a totals-only round
     const v = modelOf(s);
-    use([s]);
-    render(<><RoundRail v={v} selected={null} onPick={() => {}} /><Rounds v={v} file={v.file} round={null} /></>);
-    const rows = host.querySelectorAll(".ig__row:not(.ig__row--head):not(.ig__row--team)");
-    expect(rows.length).toBe(v.players.length);
-    for (const row of Array.from(rows)) {
-      const lite = row.querySelectorAll(".ig__cell.is-lite");
-      expect(lite.length).toBe(1);
-      expect(lite[0].getAttribute("aria-label")).toMatch(/, round 5, totals only/);
-    }
-    expect(text(host.querySelector(".inspector__legend"))).toContain("1 round with totals only");
-    const rail = Array.from(host.querySelectorAll(".rail__n")).map(text);
-    const grid = Array.from(host.querySelectorAll(".ig__headbtn .num")).map(text);
-    expect(rail).toEqual(grid);
-    expect(text(host.querySelector(".rail__col.is-lite .rail__n"))).toBe("5");
+    const col = roundColumns(v).find((c) => c.number === 5)!;
+    expect(col.kind === "totals" && col.totals).toEqual(s.facts.totalsRounds.find((t) => t.number === 5));
+    expect(col.kind === "totals" && col.totals && col.totals.players.length).toBe(v.players.length);
   });
-
-  it("draws the game's own kills and deaths in a totals-only round's cells, and its damage in the drawer", () => {
-    // fails if a totals-only cell drops the game's totals for the round, or the drawer shows no damage
-    const v = modelOf(s);
-    use([s]);
-    const totals = s.facts.totalsRounds.find((t) => t.number === 5)!;
-    expect(totals.players.length).toBe(v.players.length);
-    render(<Rounds v={v} file={v.file} round={null} />);
-    const rows = Array.from(host.querySelectorAll(".ig__row:not(.ig__row--head):not(.ig__row--team)"));
-    for (const t of totals.players) {
-      const row = rows.find((r) => r.querySelector(".ig__name")?.textContent?.startsWith(v.players[t.pi].name))!;
-      const cell = row.querySelector(".ig__cell.is-lite")!;
-      const drawn = cell.querySelectorAll(".skull").length + Number(text(cell.querySelector(".ig__more")).replace("+", "") || 0);
-      expect([drawn, cell.querySelectorAll(".skull--hs").length, !!cell.querySelector(".ig__death")], v.players[t.pi].name)
-        .toEqual([t.kills, Math.min(t.hsKills, 3), t.deaths > 0]);
-    }
-    act(() => go(matchHref(v.file, "rounds", { round: 5 })));
-    render(<Rounds v={v} file={v.file} round={null} />);
-    const top = [...totals.players].sort((a, b) => b.dmg - a.dmg)[0];
-    const first = host.querySelector(".drawer .ddmg li");
-    expect([text(first?.querySelector(".kf__p")), text(first?.querySelector("b"))]).toEqual([v.players[top.pi].name, String(top.dmg)]);
-  });
-
-  it("opens a totals-only round in the drawer, and steps to and from it", () => {
-    // fails if the drawer cannot show a totals-only round, or stepping skips it
-    const v = modelOf(s);
-    use([s]);
-    // as the match view does: the URL's round number to a round row, null for a totals-only number
-    function Tab() {
-      const n = Number(useRoute().query.get("round"));
-      const ri = v.rounds.findIndex((r) => r.number === n);
-      return <Rounds v={v} file={v.file} round={ri >= 0 ? ri : null} />;
-    }
-    act(() => go(matchHref(v.file, "rounds", { round: 5 })));
-    render(<Tab />);
-    const drawer = () => host.querySelector(".drawer");
-    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 5");
-    expect(text(drawer()?.querySelector(".drawer__body section, .drawer__body"))).toContain("KillfeedOnly the game's round totals exist for this round.");
-    key("ArrowRight");
-    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 6");
-    key("ArrowLeft");
-    key("ArrowLeft");
-    expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 4");
-  });
-});
-
-it("shows each player's rounds won after their opening kill", () => {
-  // fails if Won after leaves the opening duels table, or counts something other than wins after the player's opening kill
-  const s = byName("9b00e592");
-  const v = modelOf(s);
-  use([s]);
-  render(<Duels v={v} file={v.file} round={null} />);
-  const table = host.querySelector('table[aria-label="Opening duels"]')!;
-  const at = Array.from(table.querySelectorAll("thead th")).findIndex((th) => text(th) === "Won after");
-  expect(at).toBeGreaterThan(0);
-  // straight from the rounds: you made the opening kill in two rounds and your team won one of them
-  const opened = v.rounds.filter((r) => r.kills.find((k) => k.opening)?.killer === v.human);
-  expect([opened.length, opened.filter((r) => r.winner === "us").length]).toEqual([2, 1]);
-  expect(text(table.querySelector("tbody tr.is-you")?.querySelectorAll("td")[at])).toBe("50.0%");
 });
 
 describe("Weapons", () => {

@@ -12,6 +12,13 @@ export const mapName = (m: string) => MAP_NAMES[m] ?? m.replace(/^(de|cs|ar)_/, 
 
 const ok = (v: number | null | undefined): v is number => v !== null && v !== undefined && Number.isFinite(v);
 
+/** toFixed with a true minus sign (U+2212) for negatives; a value that rounds to zero gets no sign. */
+export function fixed(v: number, digits: number): string {
+  const s = v.toFixed(digits);
+  if (!s.startsWith("-")) return s;
+  return Number(s) === 0 ? s.slice(1) : MINUS + s.slice(1);
+}
+
 /** Sign prefix with a true minus sign; zero gets no sign. */
 export function signed(v: number, digits: number): string {
   const s = Math.abs(v).toFixed(digits);
@@ -19,19 +26,19 @@ export function signed(v: number, digits: number): string {
   return (v > 0 ? "+" : MINUS) + s;
 }
 
-export const fmtRating = (v: number | null | undefined) => (ok(v) ? v.toFixed(2) : DASH);
+export const fmtRating = (v: number | null | undefined) => (ok(v) ? fixed(v, 2) : DASH);
 /** Swing is stored as a win-probability fraction: 0.0503 → "+5.03%". */
 export const fmtSwing = (v: number | null | undefined) => (ok(v) ? `${signed(100 * v, 2)}%` : DASH);
 /** Percent already on a 0–100 scale: 71 → "71.0%". */
-export const fmtPct = (v: number | null | undefined, digits = 1) => (ok(v) ? `${v.toFixed(digits)}%` : DASH);
+export const fmtPct = (v: number | null | undefined, digits = 1) => (ok(v) ? `${fixed(v, digits)}%` : DASH);
 export const fmtRatio = (a: number, b: number, digits = 1) => (b > 0 ? fmtPct((100 * a) / b, digits) : DASH);
-export const fmtDec = (v: number | null | undefined, digits = 2) => (ok(v) ? v.toFixed(digits) : DASH);
+export const fmtDec = (v: number | null | undefined, digits = 2) => (ok(v) ? fixed(v, digits) : DASH);
 export const fmtAdr = (v: number | null | undefined) => fmtDec(v, 1);
-export const fmtInt = (v: number | null | undefined) => (ok(v) ? String(Math.round(v)) : DASH);
+export const fmtInt = (v: number | null | undefined) => (ok(v) ? fixed(Math.round(v), 0) : DASH);
 export const fmtDiff = (v: number | null | undefined) => (ok(v) ? signed(v, 0) : DASH);
 export const fmtMs = (v: number | null | undefined) => (ok(v) ? `${Math.round(v)} ms` : DASH);
-export const fmtDeg = (v: number | null | undefined, digits = 1) => (ok(v) ? `${v.toFixed(digits)}°` : DASH);
-export const fmtSecs = (v: number | null | undefined, digits = 1) => (ok(v) ? `${v.toFixed(digits)} s` : DASH);
+export const fmtDeg = (v: number | null | undefined, digits = 1) => (ok(v) ? `${fixed(v, digits)}°` : DASH);
+export const fmtSecs = (v: number | null | undefined, digits = 1) => (ok(v) ? `${fixed(v, digits)} s` : DASH);
 export const fmtMoney = (v: number | null | undefined) => (ok(v) ? `$${Math.round(v).toLocaleString("en-US")}` : DASH);
 /** $4,750 → "$4.8k"; under $1,000 stays exact. */
 export const fmtMoneyShort = (v: number | null | undefined) => (!ok(v) ? DASH : Math.abs(v) < 1000 ? `$${Math.round(v)}` : `$${(v / 1000).toFixed(1)}k`);
