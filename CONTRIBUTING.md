@@ -30,3 +30,18 @@ It decodes gzip files first. Run it before you push with `node scripts/check-pub
 The allowlist holds only IDs that aren't a real person's: bots in the plugin fixtures, synthetic test IDs, and named constants. Each line gives its reason. Add one only with a reason that holds.
 
 `.gitignore` drops `*.private.*` and `*.local.json`, so a marked file isn't committed by accident in the first place.
+
+## Checks
+
+Each pull request runs these workflows. The job name is the status name on the pull request.
+
+| Workflow | Job | Command |
+|---|---|---|
+| `tests.yml` | App typecheck, vitest and build | in `app/`: `pnpm install --frozen-lockfile`, `pnpm exec tsc -p tsconfig.app.json --noEmit`, `pnpm exec tsc -p tsconfig.node.json --noEmit`, `pnpm test`, `pnpm build` |
+| `tests.yml` | Rust tests (cargo test --lib) | in `app/src-tauri/`: `cargo test --lib --locked`, on Windows |
+| `tests.yml` | Extractor tests (pytest) | in `extractor/`: `python -m pytest -q` |
+| `tests.yml` | Model tests (unittest) | `python -m unittest discover -s model/rating3 -p "test_*.py"` |
+| `tests.yml` | Plugin tests (dotnet test) | `dotnet test plugin/BotMatchStats.Tests` |
+| `hygiene.yml` | Check the public tree | `node scripts/check-public-tree.mjs` |
+
+A test that needs the private data folder or the packs must skip with a message saying what is missing, because CI has neither. No check is required by a branch rule yet. A green run shows that these suites passed, and nothing more.
