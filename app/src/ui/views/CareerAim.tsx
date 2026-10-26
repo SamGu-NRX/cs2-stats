@@ -1,5 +1,5 @@
-// Profile's Aim tab (formerly the Career aim page): how your aim moves across recorded matches,
-// then every recorded shot together. Every gun you have used is the Weapons tab's.
+// Profile's Aim tab (formerly the Career aim page): the Aim rating and your reloading, how your aim
+// moves across recorded matches, then every recorded shot together. Every gun you have used is the Weapons tab's.
 import { useMemo } from "react";
 import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
@@ -15,6 +15,7 @@ import { pageHref } from "../router";
 import { BENCH } from "../lib/verdict";
 import { useScope } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
+import { CareerRatingCard, ReloadCard } from "./profile/career";
 import { Hint } from "./match/glyphs";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 
@@ -36,7 +37,7 @@ const sprayControl = (r: { aim: { sprayDist: number[] } } | null | undefined) =>
 interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number) => string; slope: (v: number) => string; lowerIsBetter?: boolean; bench?: number; career: number | null }
 
 export default function CareerAim() {
-  const { matches } = useData();
+  const { matches, baselines } = useData();
   const { map, n } = useScope();
   // aim reads every own match with shots, wingman and unfinished included (aimEntries)
   const list = useMemo(() => { const f = aimEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
@@ -76,6 +77,10 @@ export default function CareerAim() {
                 <SectionAside label="Accuracy" value={fmtMetric("accuracy", all ? all.v.accuracy : null)} color="var(--cream)" />
                 <SectionAside label="Visibility" value={visibility ? "Measured" : "Not in these files"} color={visibility ? "var(--good-text)" : "var(--ink2)"} />
               </div>
+            </div>
+            <div className="profile__cols profile__cols--side aim-rating">
+              {baselines ? <CareerRatingCard which="aim" q={query} side="both" values={all?.v ?? null} icon={<AimIcon size={22} />} /> : <div />}
+              <ReloadCard s={all} />
             </div>
             <div className="trends">
               {cards.map((t, k) => {
