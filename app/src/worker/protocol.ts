@@ -34,7 +34,11 @@ export type Rolled = Summary & { v: Values; n: Record<string, number>; swingSour
 /** A summary cut down to what a table row needs: the measures and the metric values. */
 export interface BuySplits { own: Partial<Record<BuyClass, Rolled>>; opp: Partial<Record<BuyClass, Rolled>> }
 
-export interface ClutchRow { file: string; round: number; side: "T" | "CT"; opponents: number; won: boolean }
+/**
+ * One clutch, with the player (steamid) and their enemy kills after the clutch started. The engine
+ * always sets both; they are optional so the UI's own fixtures, which predate them, still compile.
+ */
+export interface ClutchRow { file: string; round: number; side: "T" | "CT"; player?: string; opponents: number; won: boolean; kills?: number }
 
 export interface Line {
   m: Measures;

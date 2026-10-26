@@ -278,8 +278,11 @@ export interface PresenceFact {
   places: Record<string, number>;
 }
 
-/** One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts detectClutches). */
-export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean }
+/**
+ * One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts
+ * detectClutches), and made `kills` enemy kills after that, up to the round's end.
+ */
+export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean; kills: number }
 
 export interface MatchFacts {
   v: number;

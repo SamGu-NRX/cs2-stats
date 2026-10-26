@@ -28,8 +28,10 @@ export function closing(c: Ctx): ClutchFact[] {
       }
     }
 
-    for (const cl of detectClutches(list.filter((k) => k.tick <= rf.endTick), alive, rf.winner)) {
-      out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won });
+    const valued = list.filter((k) => k.tick <= rf.endTick);
+    for (const cl of detectClutches(valued, alive, rf.winner)) {
+      const kills = valued.filter((k, i) => i > cl.from && k.enemy && k.killer === cl.pi).length;
+      out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, kills });
       const m = c.pr[ri][cl.pi]!.m;
       const n = Math.min(5, cl.opponents) as 1 | 2 | 3 | 4 | 5;
       m[`clutch${n}`]++;

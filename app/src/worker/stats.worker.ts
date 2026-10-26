@@ -28,7 +28,7 @@ import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
+import { addClutchRows, addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -369,17 +369,10 @@ const api: Impl = {
   },
   rolesBySpawn: ranking.rolesBySpawn,
   async clutches(q) {
-    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     const out: ClutchRow[] = [];
     const fileOf = new Map<string, string>();
     for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
-    await stream(q.files, (f) => {
-      for (const c of f.clutches) {
-        if (!me.has(f.players[c.pi].id)) continue;
-        const pr = f.pr.find((r) => r.ri === c.ri && r.pi === c.pi);
-        out.push({ file: fileOf.get(f.match.id) ?? f.match.id, round: f.rounds[c.ri].number, side: pr?.side ?? "T", opponents: c.opponents, won: c.won });
-      }
-    });
+    await stream(q.files, (f) => addClutchRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
     return out;
   },
   async trends(series) {
