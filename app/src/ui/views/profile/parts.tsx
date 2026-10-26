@@ -1,29 +1,34 @@
 // Profile sections: the round-swing card, the role blend in plain words, the "plays like" view
 // against the pro pack, and the how-good table.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { SideKey as PoolSide } from "../../../stats/compare";
+import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
+import type { Measures } from "../../../stats/facts";
+import { packerFeatures, type RoleBlend } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
-import { attrsOf, BOTS_TIP, fmtMetric, rankText } from "../../data/engine";
-import { useCall } from "../../data/hooks";
+import { GameIcon } from "../../components/GameIcon";
+import { attrsOf, fmtMetric, proPoolName, proPopulation } from "../../data/engine";
+import { useCall, useRollups } from "../../data/hooks";
+import { PANEL_TIP, PROVISIONAL_TIP, TIP, tipOf } from "../../data/tips";
+import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
 import { metric, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
-import { scoreText, swingScore } from "../../lib/scale";
-import { ApproxMark, NeedsDemo, NotCompared, Provisional } from "../shared";
-import { BENCH, verdictOf } from "../../lib/verdict";
+import { swingScore } from "../../lib/scale";
+import { NeedsDemo } from "../shared";
+import { Percentile } from "../../components/Percentile";
+import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
 
-export function SectionHead({ title, sub, id }: { title: string; sub: string; id?: string }) {
+export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
-    <div className="shead" id={id}>
-      <h2 className="shead__t">{title}</h2>
-      <p className="shead__s">{sub}</p>
+    <div className="shead" id={id} ref={sectionRef}>
+      <h2 className="shead__t"><span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span></h2>
     </div>
   );
 }
@@ -33,27 +38,23 @@ export function SectionHead({ title, sub, id }: { title: string; sub: string; id
 /** The swing metric is in percent; fmtSwing and swingScore take a fraction. */
 const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
 
-export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null }) {
+/**
+ * Round swing per match. The career number is the hero card's; this panel shows the matches behind it,
+ * the best and worst, and the bots' swing in the same matches. Where the swing comes from (kills,
+ * damage, flashes, deaths) needs a per-source split the engine does not keep yet (swing.ts sums each
+ * player's credits into one measure; only the flash share is kept apart).
+ */
+export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: MatchEntry) => number | null }) {
   const swing = swingOf(you.v);
   const botSwing = bots ? swingOf(bots.v) : null;
-  const per = [...list].reverse().map((s) => ({ s, v: swingOf(s.line.v) }));
+  const per = [...list].reverse().map((s) => ({ s, v: matchSwing(s) }));
   const known = per.filter((x) => x.v !== null) as { s: MatchEntry; v: number }[];
   const best = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v > b.v ? x : b), null);
   const worst = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v < b.v ? x : b), null);
   const positive = known.filter((x) => x.v > 0).length;
-  const v = verdictOf(swing === null ? null : 100 * swing, BENCH.swing);
   return (
-    <Card title="Round swing" aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing</span>} className="swingcard">
-      <div className="swingcard__grid">
-        <div className="swingcard__big">
-          <b className="num" style={{ color: swing === null ? undefined : scoreText(swingScore(swing)) }}>{fmtSwing(swing)}</b>
-          <span className="verdict" data-v={v}>{v === "good" ? "Good" : v === "poor" ? "Poor" : v === "avg" ? "Average" : ""}</span>
-          <p className="swingcard__say">
-            {swing === null ? <NeedsDemo detail="No round in these matches has swing: a converted log values a round only where every player's equipment is known." />
-              : `Each round you ${swing >= 0 ? "add" : "take"} ${Math.abs(100 * swing).toFixed(2)} percentage points ${swing >= 0 ? "to" : "from"} your team's chance of winning it, through your kills and deaths.`}
-          </p>
-          {botSwing !== null && <p className="meta">Bots in the same matches: <b className="num">{fmtSwing(botSwing)}</b>. <Delta d={swing === null ? null : 100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} /> against them.</p>}
-        </div>
+    <Card title="Round swing" tip={PANEL_TIP.swing} aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing</span>} className="swingcard">
+      {swing === null ? <div className="meta"><NeedsDemo detail="Swing needs every player's equipment, which converted logs lack." /></div> : (
         <div className="swingcard__chart">
           <FormBars height={150} refValue={0} fmt={(x) => fmtSwing(x / 100)} score={(x) => swingScore(x / 100)} bars={per.map((x) => ({
             key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), sub: x.s.result, result: x.s.result,
@@ -63,60 +64,144 @@ export function SwingCard({ you, list, bots }: { you: Rolled; list: MatchEntry[]
             <span><b className="num">{positive}</b><span className="faint">/{known.length}</span> matches with positive swing</span>
             {best && <a href={matchHref(best.s.file)}>Best <b className="num good-text">{fmtSwing(best.v)}</b> {fmtMatchDay(best.s.match)}</a>}
             {worst && <a href={matchHref(worst.s.file)}>Worst <b className="num poor-text">{fmtSwing(worst.v)}</b> {fmtMatchDay(worst.s.match)}</a>}
+            {botSwing !== null && (
+              <span className="swingcard__bots" data-tip="Bots in the same matches.">
+                <span className="meta">Bots</span><b className="num">{fmtSwing(botSwing)}</b>
+                <Delta d={100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} />
+              </span>
+            )}
           </div>
         </div>
-      </div>
+      )}
     </Card>
   );
 }
 
 // ---------------------------------------------------------------- role blend
 
+/** What each role means, for the role name's tooltip. */
 const ROLE_WHAT: Record<string, string> = {
   Entry: "Takes space first on T.",
   Lurker: "Plays away from the team on T.",
   "Half-lurker": "Starts with the team on T, then splits off.",
   Anchor: "Holds a bombsite on CT.",
   Rotator: "Moves between sites on CT.",
-  Mixed: "Neither anchors nor rotates most CT rounds.",
+  Mixed: "Neither anchors nor rotates in most CT rounds.",
   AWPer: "Carries the AWP.",
 };
 
+/** Role shades: categorical, never good or bad; the top role is cream, the rest step down in tan. */
+const SHADES = ["var(--cream)", "var(--tan)", "rgba(196, 160, 118, 0.6)", "rgba(196, 160, 118, 0.35)", "rgba(196, 160, 118, 0.2)"];
+
+const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : []);
+
 /**
- * The engine's role blend per side (identity.ts): shares of each role from a model fitted on
- * labelled pros, with the evidence behind them in words.
+ * The evidence behind the role as three numbers over every round: how often you carried an AWP, how
+ * often you were in the opening duel, and when you died. They are the role model's own inputs
+ * (identity.ts packerFeatures, roleBlend's AWP share), read from the rollup rather than parsed from the
+ * engine's evidence sentences.
  */
-export function RoleCard({ q }: { q: Query }) {
+function evidenceOf(m: Measures | undefined) {
+  const x = m ? packerFeatures(m) : null;
+  return {
+    // the AWP share counts only rounds whose freeze-end loadout was recorded (identity.ts roleBlend)
+    awp: m?.loadoutRounds ? (100 * m.roundsWithAwp) / m.loadoutRounds : null,
+    loadoutRounds: m?.loadoutRounds ?? 0,
+    rounds: m?.rounds ?? 0,
+    opening: x?.oap ?? null,
+    deathTime: x?.tapd ?? null,
+  };
+}
+
+function RoleTiles({ m }: { m: Measures | undefined }) {
+  const e = evidenceOf(m);
+  return (
+    <ul className="rtiles">
+      <li data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : TIP.roundsWithAwp}>
+        <span className="rtiles__ico"><GameIcon id="awp" width={34} height={12} fallback={<WeaponIcon name="awp" size={12} />} /></span>
+        <b className="num">{e.awp === null ? "–" : fmtPct(e.awp, 0)}</b><span>AWP rounds</span>
+      </li>
+      <li data-tip={TIP.openingAttempts}>
+        <span className="rtiles__ico"><FirstKillIcon size={15} /></span>
+        <b className="num">{e.opening === null ? "–" : fmtPct(e.opening, 0)}</b><span>Opening duels</span>
+      </li>
+      <li data-tip="Seconds into the round when you usually die.">
+        <span className="rtiles__ico"><GameIcon id="time" width={15} fallback={<TimeIcon size={15} />} /></span>
+        <b className="num">{e.deathTime === null ? "–" : `${Math.round(e.deathTime)} s`}</b><span>Death time</span>
+      </li>
+    </ul>
+  );
+}
+
+/** One side's blend: the top role and its fit on one line, every role as a segment of one bar. */
+function SideFit({ b }: { b: RoleBlend }) {
+  const roles = rankedRoles(b);
+  const top = roles[0];
+  return (
+    <div className="rfit">
+      <span className={`rfit__side ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}</span>
+      {top ? (
+        <>
+          <span className="rfit__role" data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span>
+          <b className="num rfit__pct">{fmtPct(100 * top[1], 0)}</b>
+          <span className="rfit__bar" role="group" aria-label={`${b.side} role fit`}>
+            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={`${r} ${fmtPct(100 * v, 0)}`} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${r} ${fmtPct(100 * v, 0)}. ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
+          </span>
+        </>
+      ) : <span className="meta rfit__none"><NeedsDemo detail="The role needs positions, which converted logs lack." /></span>}
+    </div>
+  );
+}
+
+/** A map's role on each side, from the engine's role call narrowed to that map. */
+function MapRoles({ q, map }: { q: Query; map: string }) {
+  const mq = useMemo(() => ({ ...q, filter: { ...q.filter, maps: [map] } }), [q, map]);
+  const r = useCall("roles", [mq]).data;
+  const cell = (b: RoleBlend | undefined) => {
+    const top = rankedRoles(b)[0];
+    return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
+  };
+  return (
+    <li>
+      <span className="rmaps__map"><MapThumb map={map} size={18} />{mapName(map)}</span>
+      <span className="t-text rmaps__side">T</span>{cell(r?.T)}
+      <span className="ct-text rmaps__side">CT</span>{cell(r?.CT)}
+    </li>
+  );
+}
+
+/**
+ * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend.
+ * The headline is the two sides' roles; the engine has no single role over both sides (roles() answers
+ * per side only), so none is made up here. Below: the evidence over every round, each side's fit, and
+ * each map's roles.
+ */
+export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
   const r = useCall("roles", [q]);
+  const all = useRollups(useMemo(() => [q], [q])).data?.[0];
   if (!r.data) {
-    return <Card title="Role" className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
+    return <Card title="Role" tip={PANEL_TIP.role} className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
   const sides = [r.data.T, r.data.CT];
+  const tops = sides.map((b) => rankedRoles(b)[0]?.[0] ?? null);
   return (
-    <Card title="Role" aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
-      {sides.map((b) => {
-        const roles = b.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : [];
-        return (
-          <div key={b.side}>
-            <div className="rolecard__head">
-              <b className={`role__label ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}: {roles[0]?.[0] ?? "Not enough data"}</b>
-              <p className="meta">{b.evidence.join(" ")}</p>
-            </div>
-            {b.blend ? (
-              <ul className="signals2">
-                {roles.map(([role, share], i) => (
-                  <li key={role} className={i === 0 ? "is-on" : ""}>
-                    <div className="signals2__top"><b>{role}</b><span className="meta">{ROLE_WHAT[role] ?? ""}</span></div>
-                    <div className="signals2__track" aria-hidden><i style={{ width: `${100 * share}%` }} /></div>
-                    <p className="signals2__you">{fmtPct(100 * share, 0)}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="meta"><NeedsDemo detail="The blend needs kills, deaths and position samples on this side; converted logs have no positions." /></p>}
-          </div>
-        );
-      })}
-      <p className="meta">Shares come from a model of labelled pro roles (Jamie Packer's CS2 roles dataset) over opening duels, death timing, trades and spacing; the AWPer share is how often you carried an AWP.</p>
+    <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
+      <div className="role__head">
+        {sides.map((b, i) => (
+          <span key={b.side} className="role__headpart">
+            <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
+            <b className="role__label" {...(tops[i] ? { "data-tip": ROLE_WHAT[tops[i]!], tabIndex: 0 } : {})}>{tops[i] ?? "Not enough data"}</b>
+          </span>
+        ))}
+      </div>
+      <RoleTiles m={all?.m} />
+      <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
+      {maps.length > 0 && (
+        <>
+          <h3 className="caps rmaps__h">By map</h3>
+          <ul className="rmaps">{maps.map((m) => <MapRoles key={m} q={q} map={m} />)}</ul>
+        </>
+      )}
     </Card>
   );
 }
@@ -152,7 +237,7 @@ export function PlaysLike({ q, side, initial }: { q: Query; side: PoolSide; init
   const pack = usePros();
   if (pack.state === "ready") return <PlaysLikeBody q={q} side={side} initial={initial} pros={pack.pros} />;
   return (
-    <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
+    <Card title="Plays like" tip={PANEL_TIP.playsLike}>
       {pack.state === "loading" ? <div className="skel" style={{ height: 220 }} /> : (
         <div className="packmiss">
           <svg viewBox="0 0 120 80" width="120" height="80" aria-hidden className="packmiss__art">
@@ -178,33 +263,34 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const ranked = useMemo(() => (res.data?.ranked ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
   const attrs = useMemo(() => (mine.data ? attrsOf(mine.data.scores) : []), [mine.data]);
   const [sel, setSel] = useState<string | null>(initial);
+  // a keyboard pick swaps the radar's shape at once; a click morphs it (components/charts.tsx AttrRadar)
+  const [instant, setInstant] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
   const error = res.error ?? mine.error;
   if (!res.data || !mine.data) {
-    return <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>{error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
+    return <Card title="Plays like" tip={PANEL_TIP.playsLike}>{error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
   const careers = res.data.careers;
   const top = ranked.slice(0, 6);
   const pick = (sel && ranked.find((x) => x.item.slug === sel)) || top[0];
   if (!pick) {
     return (
-      <Card title="Plays like" aside={<span className="meta">Six style attributes</span>}>
-        <p className="meta"><NeedsDemo detail="Your style scores rank against the bot careers in your matches, and these matches hold too few to score." /></p>
-        <Provisional c={careers} />
+      <Card title="Plays like" tip={PANEL_TIP.playsLike}>
+        <p className="meta"><NeedsDemo detail="Too few bot careers in these matches to score your style." /></p>
       </Card>
     );
   }
   const style = styleIds();
   const you = style.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
   const labels = style.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
-  const sideLabel = side === "both" ? "both sides" : side;
+  const sideLabel = side === "both" ? "Both sides" : `${side} side`;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" aside={<span className="card__aside-row"><Provisional c={careers} /><span className="meta">Six style attributes on T and CT; radar: {sideLabel}</span></span>} foot={<><span data-tip={BOTS_TIP}>Your scores rank against the bots in your matches, a pro's against pros, so the match compares the shape of the twelve scores (six attributes, T and CT), not how high they sit.</span><span>Pro scores and photos: HLTV</span></>}>
+      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">{sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
-            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens the player's HLTV page">
+            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens their HLTV page.">
               <ProFace pro={pick.item} className="probanner__face" />
               <div className="probanner__body">
                 <ProMarks pro={pick.item} />
@@ -212,14 +298,13 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
                 <span className="meta">Rating 3.0 {pick.item.rating3.toFixed(2)} against top-20 teams</span>
               </div>
               <span className="probanner__score">
-                <b className="probanner__pct num">{pick.pct}<small>%</small></b>
-                {careers.provisional && <span className="calib">provisional</span>}
+                <b className={`probanner__pct num ${careers.provisional ? "is-prov" : ""}`} data-tip={careers.provisional ? PROVISIONAL_TIP : "How closely your style's shape matches theirs."}>{pick.pct}<small>%</small></b>
               </span>
             </a>
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>
-                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={() => { setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
+                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={(e) => { setInstant(e.detail === 0); setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
                     <span className="prorow__face"><ProFace pro={x.item} className="prorow__img" /></span>
                     <span className="prorow__name"><b>{x.item.name}</b><ProMarks pro={x.item} /></span>
                     <b className="num prorow__pct">{x.pct}%</b>
@@ -229,7 +314,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
             </ul>
           </div>
           <div className="likes__right">
-            <AttrRadar labels={labels} you={you} other={styleOf(proScores(pick.item, side))} otherLabel={pick.item.name} size={380} />
+            <AttrRadar labels={labels} you={you} other={styleOf(proScores(pick.item, side))} otherLabel={pick.item.name} size={380} instant={instant} provisional={careers.provisional} provisionalTip={PROVISIONAL_TIP} />
             <div className="legend likes__legend"><span><i className="swatch" style={{ background: "var(--cream)" }} />You, against bot careers</span><span><i className="swatch swatch--dash" />{pick.item.name}, against pros</span></div>
             <VsTable you={you} labels={labels} pro={pick.item} side={side} />
           </div>
@@ -247,7 +332,7 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
   const theirs = styleOf(proScores(pro, side));
   return (
     <div className="vs vs--wide vs--pair">
-      <div className="vs__head"><span className="caps" data-tip="Percentile against the bot careers in your matches">You</span><span /><span className="vs__pro" data-tip="Percentile against pros">{pro.name}</span></div>
+      <div className="vs__head"><span className="caps" data-tip="Your score against bots in your matches.">You</span><span /><span className="vs__pro" data-tip="Their score against pros.">{pro.name}</span></div>
       {styleIds().map((id, i) => (
         <div key={id} className="vs__row">
           <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
@@ -255,7 +340,6 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
           <span className="num">{theirs[i] ?? "–"}</span>
         </div>
       ))}
-      <p className="meta vs__note">You against bot careers, {pro.name} against pros, both 0 to 100.</p>
     </div>
   );
 }
@@ -276,33 +360,53 @@ export function RatingLegend({ children }: { children?: ReactNode }) {
 // ---------------------------------------------------------------- how good
 
 /** HLTV's "how good" metrics, in the order HLTV lists them beside Rating 3.0. */
-const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
+export const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
+
+/** The aside's population: the role pool, and every pro for the rows that always compare with everyone (sniping). */
+function howGoodPool(r: { n: number; role: "awper" | "rifler" }, p: Record<string, Pct>) {
+  const own = `Against ${r.n} ${proPoolName(r.role)}`;
+  return HOW_GOOD.some((id) => p[id]?.pool === "all") ? `${own}, AWP rows against all pros` : own;
+}
 
 /** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros on the page's side. */
 export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
   const r = useCall("compare", [q, { side }]);
   const p = r.data?.p ?? null;
   return (
-    <Card title="How good" aside={<span className="meta">HLTV's performance tables, against pros</span>}>
+    <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? howGoodPool(r.data, p!) : "Against pros"}</span>}>
       {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
-        <ul className="howgood">
-          {HOW_GOOD.map((id) => {
-            const m = metric(id);
-            const x = p[id];
-            return (
-              <li key={id} data-tip={m.def}>
-                <span>{m.label}{m.status === "approx" && <ApproxMark />}</span>
-                <span className="howgood__v">
-                  {m.status === "unavailable" ? <span className="meta">Not measured yet</span>
-                    : x.reason ? <NotCompared reason={x.reason} />
-                    : <span className="meta num">{rankText(x.pct)}</span>}
-                  <b className="num">{m.status === "unavailable" ? <span className="faint">n/a</span> : fmtMetric(id, x.value)}</b>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="howgood">
+          {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => (
+            <Percentile key={id} variant="quiet" {...pctProps(id, p[id], p[id].value)} kind="performance" population={proPopulation(p[id].pool)} />
+          ))}
+        </div>
       )}
     </Card>
   );
+}
+
+// ---------------------------------------------------------------- one metric as a percentile row
+
+/** A formatted value split from its unit, so the unit can be set smaller: "28.6%" is "28.6" and "%". */
+export function splitUnit(text: string): { value: string; unit?: string } {
+  const m = /^([−+-]?\$?[\d.,]+)(\s?(?:%|ms|s|°))$/.exec(text);
+  return m ? { value: m[1], unit: m[2] } : { value: text };
+}
+
+/** The percentile row's props for one metric, from a metric value and its engine percentile. */
+export function pctProps(id: string, p: Pct | undefined, value: number | null | undefined) {
+  const m = metric(id);
+  const v = value ?? p?.value ?? null;
+  const text = v === null ? null : splitUnit(fmtMetric(id, v));
+  return {
+    label: m.label,
+    value: text?.value ?? null,
+    unit: text?.unit,
+    pct: p?.pct ?? null,
+    def: tipOf(id),
+    approx: m.status === "approx",
+    reason: p?.reason ?? null,
+    // a missing value with no reason means the matches hold none of it (no 1v1s, no AWP duels)
+    unavailable: v === null && !p?.reason ? "None in these matches" : undefined,
+  };
 }

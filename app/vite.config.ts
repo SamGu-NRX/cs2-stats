@@ -22,12 +22,12 @@ function matchFolder(): Plugin {
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/__packs/file") {
-      // the optional packs folder: pro scores and agent art kept out of the repository
+      // the optional packs folder: pro scores, agent art and the CS2 icon pack, kept out of the repository
       const rel = url.searchParams.get("f") ?? "";
       const abs = packs ? path.resolve(packs, rel) : "";
-      if (!packs || !/\.(json|png)$/.test(rel) || !abs.startsWith(path.resolve(packs) + path.sep)) { res.statusCode = 400; return res.end(); }
+      if (!packs || !/\.(json|png|svg)$/.test(rel) || !abs.startsWith(path.resolve(packs) + path.sep)) { res.statusCode = 400; return res.end(); }
       if (!existsSync(abs)) { res.statusCode = 404; return res.end(); }
-      res.setHeader("Content-Type", rel.endsWith(".png") ? "image/png" : "application/json");
+      res.setHeader("Content-Type", rel.endsWith(".png") ? "image/png" : rel.endsWith(".svg") ? "image/svg+xml" : "application/json");
       res.setHeader("Cache-Control", "no-store");
       return res.end(await fs.readFile(abs));
     }

@@ -144,13 +144,14 @@ async fn import_match(name: String, data: Vec<u8>) -> Result<String, String> {
 }
 
 /// Returns a file from the optional packs folder `%APPDATA%\BotMatchStats\packs` (pro scores, agent
-/// art), which stays out of the repository. The name must be relative, end in `.json` or `.png` and
+/// art, the CS2 icon pack), which stays out of the repository. The name must be relative, end in
+/// `.json`, `.png` or `.svg` and
 /// resolve inside the folder. A missing file returns an empty response, which the UI reads as "no
 /// pack".
 #[tauri::command]
 async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
     let rel = Path::new(&name);
-    let ok_ext = name.ends_with(".json") || name.ends_with(".png");
+    let ok_ext = name.ends_with(".json") || name.ends_with(".png") || name.ends_with(".svg");
     if !ok_ext || rel.components().any(|c| !matches!(c, Component::Normal(_))) {
         return Err(format!("{name}: not a pack file path"));
     }
