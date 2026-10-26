@@ -163,7 +163,7 @@ describe("totals-only rounds in the match views", () => {
     const drawer = () => host.querySelector(".drawer");
     expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 5");
     expect(host.querySelector(".rail__col.is-lite")?.classList.contains("is-on")).toBe(true);
-    expect(host.querySelector('.ig__headbtn[aria-label^="Open round 5"]')?.closest(".ig__head")?.classList.contains("is-on")).toBe(true);
+    expect(host.querySelector('.ig__headbtn[aria-label^="Round 5,"]')?.closest(".ig__head")?.classList.contains("is-on")).toBe(true);
     const top = [...s.facts.totalsRounds.find((t) => t.number === 5)!.players].sort((a, b) => b.dmg - a.dmg)[0];
     const first = drawer()?.querySelector(".dtotals li");
     expect([text(first?.querySelector(".kf__p")), text(first?.querySelector("b"))]).toEqual([v.players[top.pi].name, String(top.dmg)]);

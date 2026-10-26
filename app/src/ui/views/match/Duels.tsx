@@ -1,69 +1,32 @@
-// Duels: who killed whom (head to head), opening duels and trades per player, and every clutch.
+// Duels: head to head by kills, damage, first kills and blinds (HeadToHead), your duels round by round,
+// opening duels and trades per player, the match's first kills round by round (Openings), and every clutch.
 import { useEffect, useMemo, useState } from "react";
 import { TRADE_WINDOW_S } from "../../../stats/rules";
 import { ClutchBadge, FirstPip, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable } from "../../components/DataTable";
-import { Hint, TradingGlyph } from "./glyphs";
+import { TradingGlyph } from "./glyphs";
+import { HeadToHead } from "./HeadToHead";
+import { Openings } from "./Openings";
 import { fmtMetric } from "../../data/engine";
-import { deathOf, killMatrix, killsBy, type MPlayer as PlayerRow } from "../../data/match";
+import { deathOf, killsBy, type MPlayer as PlayerRow } from "../../data/match";
 import { metric as meta } from "../../data/meta";
 import { useData } from "../../data/provider";
 import { FlagIcon, WinIcon } from "../../icons/game";
 import { matchHref } from "../../router";
 import type { ClutchRow } from "../../../worker/protocol";
-import { fmtDiff } from "../../lib/format";
-import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
+import { scoreText, toScore } from "../../lib/scale";
 import { NEEDS_DEMO, PlayerName, SectionAside } from "../shared";
 import type { TabProps } from "./MatchView";
 
 export default function Duels({ v }: TabProps) {
-  const us = v.players.filter((p) => p.team === "us");
-  const them = v.players.filter((p) => p.team === "them");
-  const km = useMemo(() => killMatrix(v), [v]);
   const lines = v.b.lines.both;
   const m = (p: PlayerRow) => lines[p.pi].m;
   const metric = (p: PlayerRow, id: string) => lines[p.pi].v[id];
-  const totalUs = us.reduce((a, p) => a + them.reduce((b, q) => b + km[p.pi][q.pi], 0), 0);
-  const totalThem = them.reduce((a, q) => a + us.reduce((b, p) => b + km[q.pi][p.pi], 0), 0);
   const fk = (t: "us" | "them") => v.players.filter((p) => p.team === t).reduce((a, p) => a + m(p).openingKills, 0);
   return (
     <div className="tabpad duels">
-      <Card title={<>Head to head <Hint tip="Your player's kills on that opponent, then the opponent's kills back." /></>} aside={<SectionAside label="Kills" value={<><span className="cream">{totalUs}</span><span className="faint">–</span>{totalThem}</>} />}>
-        <div className="tbl-wrap">
-          <table className="tbl h2h">
-            <thead>
-              <tr>
-                <th className="l"><span className="th">Your team ↓ vs →</span></th>
-                {them.map((q) => <th key={q.key}><span className="th"><PlayerName v={v} pi={q.pi} /></span></th>)}
-                <th><span className="th">Total</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {us.map((p) => {
-                const rowK = them.reduce((a, q) => a + km[p.pi][q.pi], 0);
-                const rowD = them.reduce((a, q) => a + km[q.pi][p.pi], 0);
-                return (
-                  <tr key={p.key} className={p.isHuman ? "is-you" : undefined}>
-                    <td className="l name-cell"><PlayerName v={v} pi={p.pi} /></td>
-                    {them.map((q) => {
-                      const k = km[p.pi][q.pi];
-                      const d = km[q.pi][p.pi];
-                      const t = k + d ? toScore(k - d, 0, 4) : 0;
-                      return (
-                        <td key={q.key} style={{ background: k + d ? scoreTint(t, 0.4) : undefined }} data-tip={`${p.name} killed ${q.name} ${k} ${k === 1 ? "time" : "times"}; ${q.name} killed ${p.name} ${d}`} tabIndex={0}>
-                          <span className="num"><b>{k}</b><span className="faint">–</span>{d}</span>
-                        </td>
-                      );
-                    })}
-                    <td><b className="num" style={{ color: scoreText(diffScore(rowK - rowD)) }}>{fmtDiff(rowK - rowD)}</b></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      <HeadToHead v={v} />
       <YourRounds v={v} />
       <div className="grid-2">
         <Card title="Opening duels" icon={<FirstPip />} aside={<SectionAside label="First kills" value={<><span className="cream">{fk("us")}</span><span className="faint">–</span>{fk("them")}</>} />} flush>
@@ -99,6 +62,7 @@ export default function Duels({ v }: TabProps) {
           />
         </Card>
       </div>
+      <Openings v={v} file={v.file} />
       <Clutches v={v} file={v.file} />
     </div>
   );
