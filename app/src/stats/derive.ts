@@ -4,6 +4,7 @@
 import { deriveAggro } from "./aggression";
 import { deriveAim, markSight } from "./aim";
 import { buying } from "./buying";
+import { handling } from "./handling";
 import { luck } from "./luck";
 import { closing } from "./closing";
 import { duels } from "./duels";
@@ -377,6 +378,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   swing(c);
   valuedRounds(c);
   markSight(c);
+  handling(c);
   luck(c);
   const weapons = guns(c);
 
