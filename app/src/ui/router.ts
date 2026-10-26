@@ -84,9 +84,12 @@ function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
 
 // ---------------------------------------------------------------- match ids
 
-/** cyrb53: a 53-bit hash of a file path in base 36, so ids of one user's matches do not collide in practice. */
-export function pathHash(file: string): string {
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+/**
+ * A 64-bit hash of a file path as 16 hex digits: two 32-bit cyrb53-style lanes. `seed` gives an
+ * independent hash of the same path, which tells apart files whose plain hashes collide.
+ */
+export function pathHash(file: string, seed = 0): string {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
   for (let i = 0; i < file.length; i++) {
     const c = file.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 2654435761);
@@ -94,59 +97,66 @@ export function pathHash(file: string): string {
   }
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
 }
+/** The seed of the second hash, for files whose plain hashes collide. */
+const SALT = 0x9e3779b9;
 
-/** A match id: "m-", the hash, and "-2", "-3"... for the later paths in sorted order of files whose hashes collide. No match file looks like one. */
-const MATCH_ID = /^m-[0-9a-z]+(?:-\d+)?$/;
+/** A match id: "m-" and the path's hash, then "-" and its second hash when another listed file shares the first. No match file looks like one. */
+const MATCH_ID = /^m-([0-9a-z]+)(?:-([0-9a-z]+))?$/;
 export const isMatchId = (s: string) => MATCH_ID.test(s);
 
 let hashOf = pathHash;
-const idOfFile = new Map<string, string>();
-const fileOfId = new Map<string, string>();
+/** listed files by their plain hash; a list of more than one is a collision */
+const filesOfHash = new Map<string, string[]>();
 
 /**
- * A match's id in an address while personal info is hidden: "m-" and a hash of its file path. A
- * match link shows its target in the browser's status bar on hover, and an imported file's name is
+ * A match's id in an address while personal info is hidden: "m-" and a 64-bit hash of its file path.
+ * A match link shows its target in the browser's status bar on hover, and an imported file's name is
  * the user's choice, often a person's name (data/privacy.ts). The id resolves through the files the
- * app has listed (knownMatchFiles); an address with the file path still opens it. An id is never
- * hashed again.
+ * app has listed (knownMatchFiles); an address with the file path still opens it.
+ *
+ * An id depends on its own path only. When another listed file has the same hash, both ids add the
+ * path's second hash ("m-<hash>-<second>"), which no other file changes; matchFile resolves either
+ * form while it names one file. An id is never hashed again.
  */
 export function matchId(file: string): string {
   if (isMatchId(file)) return file;
-  return idOfFile.get(file) ?? `m-${hashOf(file)}`;
+  const h = hashOf(file, 0);
+  return (filesOfHash.get(h)?.length ?? 0) > 1 ? `m-${h}-${hashOf(file, SALT)}` : `m-${h}`;
 }
 
 /**
  * The file a match id names, from the files the app has listed; the id itself while it names none
- * (the list is still loading, or the match is gone). Anything else is a file path already.
+ * (the list is still loading, the match is gone, or a plain id now names two colliding files).
+ * Anything else is a file path already.
  */
-export const matchFile = (s: string) => (isMatchId(s) ? fileOfId.get(s) ?? s : s);
+export function matchFile(s: string): string {
+  const m = MATCH_ID.exec(s);
+  if (!m) return s;
+  const found = (filesOfHash.get(m[1]) ?? []).filter((f) => m[2] === undefined || hashOf(f, SALT) === m[2]);
+  return found.length === 1 ? found[0] : s;
+}
 
 /** What a page writes in a data-file attribute to find a match's row again: its id while personal info is hidden, else its file. */
 export const matchKey = (file: string) => (hidingPersonal() ? matchId(file) : file);
 
 /**
  * The match files the app lists (data/provider.tsx calls it as it renders a new list), so an id in
- * the address resolves to its file. Files whose hashes collide take "-2", "-3"... after the first in
- * sorted path order, so each id names one file and the same list always gives the same ids. `hash`
- * is for tests that force a collision. Only fills the tables; refreshMatchRoute re-reads the address.
+ * the address resolves to its file. `hash` is for tests that force a collision. Only fills the
+ * table; refreshMatchRoute re-reads the address.
  */
-export function knownMatchFiles(files: string[], hash: (file: string) => string = pathHash) {
+export function knownMatchFiles(files: string[], hash: (file: string, seed?: number) => string = pathHash) {
   hashOf = hash;
-  idOfFile.clear();
-  fileOfId.clear();
-  const byHash = new Map<string, string[]>();
+  filesOfHash.clear();
   for (const f of new Set(files)) {
-    const h = hash(f);
-    byHash.set(h, [...(byHash.get(h) ?? []), f]);
+    const h = hash(f, 0);
+    filesOfHash.set(h, [...(filesOfHash.get(h) ?? []), f]);
   }
-  for (const [h, group] of byHash) {
-    group.sort().forEach((f, i) => {
-      const id = i === 0 ? `m-${h}` : `m-${h}-${i + 1}`;
-      idOfFile.set(f, id);
-      fileOfId.set(id, f);
-    });
+  for (const group of filesOfHash.values()) {
+    if (group.length < 2) continue;
+    const seconds = new Set(group.map((f) => hash(f, SALT)));
+    if (seconds.size < group.length) throw new Error(`Two match files share both 64-bit hashes, so no id tells them apart: ${group.join(", ")}`);
   }
 }
 

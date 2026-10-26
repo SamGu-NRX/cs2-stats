@@ -21,7 +21,7 @@ describe("match ids", () => {
     const ids = files.map(matchId);
     expect(ids).toEqual(files.map(matchId));
     expect(new Set(ids).size).toBe(files.length);
-    for (const id of ids) expect(id).toMatch(/^m-[0-9a-z]{1,11}$/);
+    for (const id of ids) expect(id).toMatch(/^m-[0-9a-f]{16}$/);
     expect(ids[0]).not.toMatch(/ann|lee|friends/i);
   });
   it("open their match once the app has listed it, and the file path still opens it", () => {
@@ -41,13 +41,30 @@ describe("match ids", () => {
     expect(matchId("m-abc123")).toBe("m-abc123");
     expect(matchFile("m-abc123")).toBe("m-abc123");
   });
-  it("gives files whose hashes collide their own ids, in sorted path order, the same every time", () => {
-    const hash = (f: string) => (f.startsWith("c") ? "y" : "x");
-    knownMatchFiles(["b/2.json.gz", "c/3.json.gz", "a/1.json.gz"], hash);
-    expect(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz"].map(matchId)).toEqual(["m-x", "m-x-2", "m-y"]);
-    expect(["m-x", "m-x-2", "m-y"].map(matchFile)).toEqual(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz"]);
-    knownMatchFiles(["a/1.json.gz", "c/3.json.gz", "b/2.json.gz"], hash);
-    expect(matchId("b/2.json.gz")).toBe("m-x-2");
+  it("gives colliding files ids from their own paths, which do not change when another colliding file goes", () => {
+    // A, B and C share their plain hash; their second hashes differ
+    const second: Record<string, string> = { "a/1.json.gz": "aaaa1111", "b/2.json.gz": "aaaa2222", "c/3.json.gz": "cccc3333" };
+    const hash = (f: string, seed = 0) => (seed === 0 ? (f === "d/4.json.gz" ? "dddd" : "beef") : second[f] ?? "0000");
+    knownMatchFiles(["b/2.json.gz", "c/3.json.gz", "a/1.json.gz", "d/4.json.gz"], hash);
+    const before = ["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId);
+    expect(before).toEqual(["m-beef-aaaa1111", "m-beef-aaaa2222", "m-beef-cccc3333", "m-dddd"]);
+    // A is deleted and the folder rescanned: B and C keep their ids, and each still opens its own file
+    knownMatchFiles(["c/3.json.gz", "b/2.json.gz", "d/4.json.gz"], hash);
+    expect(["b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId)).toEqual(before.slice(1));
+    expect(before.slice(1).map(matchFile)).toEqual(["b/2.json.gz", "c/3.json.gz", "d/4.json.gz"]);
+    expect(matchFile(before[0])).toBe(before[0]);
+    // C deleted too: B's id is its plain one again, and its bookmarked longer id still opens it
+    knownMatchFiles(["b/2.json.gz", "d/4.json.gz"], hash);
+    expect(matchId("b/2.json.gz")).toBe("m-beef");
+    expect(matchFile("m-beef-aaaa2222")).toBe("b/2.json.gz");
+    knownMatchFiles([]);
+  });
+  it("are 64 bits of the path, the same for a path whatever else is listed", () => {
+    knownMatchFiles([]);
+    const alone = matchId("imported/x.json.gz");
+    knownMatchFiles(["imported/x.json.gz", "2026/y.json.gz"]);
+    expect(matchId("imported/x.json.gz")).toBe(alone);
+    expect(alone).toMatch(/^m-[0-9a-f]{16}$/);
     knownMatchFiles([]);
   });
 });
