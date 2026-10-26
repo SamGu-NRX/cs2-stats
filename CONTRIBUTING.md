@@ -23,6 +23,7 @@ When you add a script that writes a file, use these functions and choose the kin
 - a SteamID64 that isn't in `scripts/steamid-allowlist.txt`;
 - an absolute developer path such as `C:\Users\<name>\` or `/Users/<name>/`, in either slash style;
 - `hltv` anywhere under `app/public/`;
+- HLTV's image host, `img-cdn.hltv.org`, in a test or fixture file (code may name it: the CSP and the pro pack's origin allowlist do);
 - a file carrying the private marker, or a parquet table.
 
 It decodes gzip files first. Run it before you push with `node scripts/check-public-tree.mjs`.
