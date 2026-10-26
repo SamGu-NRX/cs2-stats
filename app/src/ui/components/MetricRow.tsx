@@ -43,6 +43,20 @@ export function Track({ at, ghost, tone, hollow, label, className }: {
   );
 }
 
+/**
+ * A share as a lollipop from the left edge (ranked lists: clutches, multi-kills, places): the stem
+ * runs to value / max, and the dot is hollow when the share rests on fewer than THIN events.
+ */
+export function ShareTrack({ value, max, hollow }: { value: number; max: number; hollow?: boolean }) {
+  const at = max > 0 ? clamp((100 * value) / max) : 0;
+  return (
+    <span className="ls" aria-hidden>
+      <i className="ls__stem" style={{ width: `${at}%` }} />
+      <i className={`ls__dot ${hollow ? "is-hollow" : ""}`} style={{ left: `max(4.5px, ${at}%)` }} />
+    </span>
+  );
+}
+
 export interface MetricRowProps {
   label: ReactNode;
   /** the formatted value; null shows a dash */

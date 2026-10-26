@@ -9,12 +9,12 @@ import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import { ClutchBadge, Delta, MapThumb, MultiBadge, Num } from "../components/bits";
+import { Delta, MapThumb, MultiBadge, Num } from "../components/bits";
 import { Card } from "../components/Card";
 import { Gauge } from "../components/charts";
 import { Fig, MatchLine } from "../components/MatchSeries";
 import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
-import { MetricList, quintile, Track } from "../components/MetricRow";
+import { MetricList, quintile, ShareTrack, THIN, Track } from "../components/MetricRow";
 import { Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
@@ -27,9 +27,9 @@ import {
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
 import { PANEL_TIP, tipOf } from "../data/tips";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
-import { FirstKillIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
@@ -39,8 +39,8 @@ import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, PanelRow, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
-import { AggressionCard, DotTrack } from "./profile/v2";
-import { sampleOf, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import { AggressionCard } from "./profile/v2";
+import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import CareerAim from "./CareerAim";
 import WeaponsTab from "./Weapons";
 import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
@@ -218,7 +218,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
           {tab === "duels" && (
             <>
               <div className="profile__cols">
-                <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
+                <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} r={ranks} /></div>
                 <StatCard title="Opening duels, against pros" tip="The first duel of each round." ids={OPENING_ROWS} r={ranks} />
               </div>
               <div className="profile__cols">
@@ -580,21 +580,23 @@ function Clutches({ m, q, side, list }: { m: Measures; q: Query; side: SideKey; 
   const listId = useId();
   return (
     <Card title="Clutches" tip={PANEL_TIP.clutches} collapsible id="profile-clutches" aside={<SectionAside label="Won" value={<>{won}<span className="faint">/{played}</span></>} />}>
-      <ul className="clist">
+      <ul className="clist lslist">
         {rows.map((r) => {
+          const rate = r.played ? (100 * r.won) / r.played : null;
           const body = (
             <>
-              <ClutchBadge vs={r.vs} won={r.won > 0} />
-              <span className="hbar"><i style={{ width: r.played ? `${(100 * r.won) / r.played}%` : 0, background: "var(--good)" }} /></span>
-              <b className="num">{r.won}<span className="faint">/{r.played}</span></b>
+              <span className={`pip ${r.won > 0 ? "pip--hi" : ""}`}>1v{r.vs}</span>
+              <ShareTrack value={rate ?? 0} max={100} hollow={r.played < THIN} />
+              <span className="lsrow__n">{r.won} of {r.played}</span>
+              <b className="num lsrow__v"><Num v={rate === null ? "–" : fmtPct(rate, 0)} /></b>
             </>
           );
           // the worker lists clutches on both sides; the bars count the page's side
           const shown = (all ?? []).filter((c) => c.opponents === r.vs && (side === "both" || c.side === ratingKey(side)));
           return (
             <li key={r.vs}>
-              {r.played === 0 ? <div className="clist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
-                <button className="clist__row" aria-expanded={open === r.vs} aria-controls={`${listId}-${r.vs}`}
+              {r.played === 0 ? <div className="clist__row lsrow">{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row lsrow" aria-expanded={open === r.vs} aria-controls={`${listId}-${r.vs}`}
                   aria-label={`1v${r.vs}: won ${r.won} of ${r.played}. ${open === r.vs ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.vs ? null : r.vs))}>
                   {body}<span className="clist__chev" aria-hidden />
@@ -627,12 +629,11 @@ function ClutchLink({ c, e }: { c: ClutchRow; e: MatchEntry | undefined }) {
   );
 }
 
-/** A round where you got k kills: the match, its number and your side. */
 /**
- * Each multi-kill size as a share of your rounds, then where that share sits among pros: a dotted track
- * with the dot at your percentile (compare, rounds2k to rounds5k) and the tick at the pros' median. A
- * row with rounds behind it opens them, from the engine's multi-kill list (multiKills), each a link to
- * its round.
+ * Each multi-kill size as a share of your rounds, a lollipop against the largest share, hollow under
+ * THIN rounds; where the share sits among pros (compare, rounds2k to rounds5k) is in the row's
+ * tooltip. A row with rounds behind it opens them, from the engine's multi-kill list (multiKills),
+ * each a link to its round.
  */
 function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const rows = multiKillRows(m);
@@ -645,8 +646,8 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const share = (r: (typeof rows)[number]) => r.pct ?? 0;
   const most = Math.max(1, ...rows.map(share));
   return (
-    <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<SectionAside label="Rounds" value={m.multiKillRounds} />}>
-      <ul className="mlist">
+    <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<span className="meta">{m.multiKillRounds} of {plural(m.rounds, "round")}</span>}>
+      <ul className="mlist lslist">
         {rows.map((r) => {
           const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
           const pro = ranked?.p[`rounds${Math.min(5, r.k)}k`] ?? null;
@@ -654,20 +655,17 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
           const body = (
             <>
               <MultiBadge k={r.k} />
-              <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
-              <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
-              <span className="mlist__pro">
-                <DotTrack at={rank} label={rank === null ? "Not compared with pros" : `${percentilePhrase(rank, "performance")} of pros`} />
-              </span>
-              <b className="num">{r.rounds}</b>
+              <ShareTrack value={share(r)} max={most} hollow={r.rounds < THIN} />
+              <span className="lsrow__n">{r.rounds}</span>
+              <b className="num lsrow__v mlist__pct"><Num v={fmtPct(share(r), 1)} /></b>
             </>
           );
           const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
           const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
-              {r.rounds === 0 ? <div className="clist__row mlist__row" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
-                <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`} data-tip={proText}
+              {r.rounds === 0 ? <div className="clist__row lsrow" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row lsrow" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`} data-tip={proText}
                   aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds, ${proText} ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
                   {body}<span className="clist__chev" aria-hidden />
@@ -698,24 +696,54 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   );
 }
 
-function Openings({ s }: { s: Rolled }) {
+/** An opening-duel figure: display number, caps label, its percentile track, then its sample and rank. */
+function OpenTile({ id, label, s, r }: { id: string; label: string; s: Rolled; r: RankSet | null }) {
+  const p = r?.p[id];
+  const ranked = p && p.pct !== null && !p.reason ? p.pct : null;
+  const kind = metric(id).kind === "performance" ? "performance" : "style";
+  const sample = p && r ? sampleOf(id, p, r.m) : null;
+  const sub = [sample?.text, ranked === null ? null : kind === "performance" ? percentilePhrase(ranked, "performance") : `${percentilePhrase(ranked, "style")} vs bots`].filter(Boolean).join(" · ");
+  const thin = sample?.n != null && sample.n < THIN;
+  return (
+    <li className="otile" tabIndex={0} data-tip={[tipOf(id), ranked === null ? (p?.reason ? sentence(p.reason) : null) : `${percentilePhrase(ranked, kind)} ${kind === "performance" ? `of ${proPopulation(p!.pool)}` : `against ${r!.bots}`}.`].filter(Boolean).join("\n")}>
+      <b className={`disp disp--s otile__v ${thin ? "is-thin" : ""}`}><Num v={fmtMetric(id, s.v[id] ?? null)} /></b>
+      <span className="caps">{label}</span>
+      {ranked === null ? <span className="otile__none" /> : <Track at={ranked} tone={kind === "performance" ? `q${quintile(ranked)}` : undefined} hollow={thin} />}
+      {sub && <span className="meta">{sub}</span>}
+    </li>
+  );
+}
+
+/**
+ * Opening duels: the share won as the big figure with its pro rank as a pill, the won and lost duels
+ * as one bar, then the attempts, the rounds won after an opening kill and the opening deaths traded,
+ * each a figure with its track.
+ */
+function Openings({ s, r }: { s: Rolled; r: RankSet | null }) {
   const c = s.m;
   const att = c.openingKills + c.openingDeaths;
   const succ = s.v.openingSuccess;
+  const p = r?.p.openingSuccess;
+  const ranked = p && p.pct !== null && !p.reason ? p.pct : null;
+  const q = ranked === null ? null : quintile(ranked);
   return (
-    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={tipOf("openingSuccess")} tabIndex={0}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
-      <div className="odial">
-        <svg viewBox="0 0 120 12" width="100%" height="12" aria-hidden>
-          <rect x="0" y="2" width="120" height="8" rx="2" fill="var(--track)" />
-          {att > 0 && <rect x="0" y="2" width={(120 * c.openingKills) / att} height="8" rx="2" fill="var(--good)" />}
-        </svg>
-        <div className="odial__legend"><span><b className="num good-text">{c.openingKills}</b> won</span><span><b className="num poor-text">{c.openingDeaths}</b> lost</span></div>
+    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<span className="pip pip--hi" aria-hidden>1st</span>}
+      aside={<span className="meta">{plural(att, "opening duel")} in {plural(c.rounds, "round")}</span>}>
+      <div className="open">
+        <div className="open__big">
+          <div className="open__head">
+            <b className="disp disp--xl" data-tip={tipOf("openingSuccess")} tabIndex={0}><Num v={fmtPct(succ, 1)} /></b>
+            {ranked !== null && <span className={`vpill ${q! >= 4 ? "vpill--good" : q! <= 2 ? "vpill--poor" : ""}`} data-tip={`${percentilePhrase(ranked, "performance")} of ${proPopulation(p!.pool)}.`} tabIndex={0}>{percentilePhrase(ranked, "performance")}</span>}
+          </div>
+          <span className="open__bar" aria-hidden><i style={{ width: att ? `${(100 * c.openingKills) / att}%` : 0 }} /></span>
+          <div className="open__legend"><span><b className="num">{c.openingKills}</b> won</span><span><b className="num">{c.openingDeaths}</b> lost</span></div>
+        </div>
+        <ul className="open__tiles">
+          <OpenTile id="openingAttempts" label="Attempts" s={s} r={r} />
+          <OpenTile id="openingWinPct" label="Rounds won after" s={s} r={r} />
+          <OpenTile id="openingTradedPct" label="Deaths traded" s={s} r={r} />
+        </ul>
       </div>
-      <dl className="facts">
-        <dt data-tip={tipOf("openingAttempts")} tabIndex={0}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
-        <dt data-tip={tipOf("openingWinPct")} tabIndex={0}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
-        <dt data-tip={tipOf("openingTradedPct")} tabIndex={0}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
-      </dl>
     </Card>
   );
 }
