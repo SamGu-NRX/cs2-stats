@@ -1,9 +1,9 @@
-// Profile: HLTV's night-mode player card, then two sections: Performance (how well you play: swing,
-// how good, rating by match, breakdowns) and Identity (how you play: HLTV's attributes block, Firepower
-// first, then the role blend per side and the pro whose style matches yours). The side switch in the
-// app bar drives the whole page: every summary is rolled up over that side's rounds. Performance is
-// compared with that side's pros; style with the bot careers in the same matches on that side
-// (worker/ranking.ts).
+// Profile: the player card (design-target-v2), then tabs. Overview: Form, Where you rank, round swing,
+// Firepower, multi-kill rounds, clutches and maps. Duels, Utility and Economy: metric rows. Aim and
+// Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
+// like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
+// whole page: every summary is rolled up over that side's rounds. Performance is compared with that
+// side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
