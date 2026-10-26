@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RECOIL } from "../../stats/aim-ref";
+import { RECOIL } from "../../stats/recoil-ref";
 import { meanPath, sprayFinding, type PlayerPath } from "./SprayPath";
 
 const ak = RECOIL.ak47;

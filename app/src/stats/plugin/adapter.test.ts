@@ -4,6 +4,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { CS2RB } from "../model-params";
+import { RECOIL } from "../recoil-ref";
 import { describe, expect, it } from "vitest";
 import type { SprayFact } from "../aim";
 import { ON_SCREEN_NOTE } from "../facts";
@@ -137,6 +138,25 @@ describe("plugin sprays", () => {
     [0.5, 1.2, 2, 2.6].forEach((x, j) => expect(spray.dp[j]).toBeCloseTo(x, 9));
     [-0.1, -0.2, -0.2, -0.3].forEach((x, j) => expect(spray.dy[j]).toBeCloseTo(x, 9));
     expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(4);
+    // the file records the view but not the bullet: each bullet lands at the view change plus the
+    // game's kick for that bullet (recoil-ref.ts), marked as taken from the pattern
+    const kick = RECOIL.ak47.kick;
+    expect(spray.landing).toBe("pattern");
+    spray.lp.forEach((x, j) => expect(x).toBeCloseTo(spray.dp[j] + kick[j + 1][0], 2));
+    spray.ly.forEach((x, j) => expect(x).toBeCloseTo(spray.dy[j] + kick[j + 1][1], 2));
+    expect(spray.lp.length).toBe(4);
+  });
+
+  it("compares no plugin M4A1-S spray, whose silencer state the plugin does not record", () => {
+    // fails if a plugin M4A1-S spray is set against the silenced pattern without knowing the silencer
+    // was on, or gets landing points inferred from that pattern
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [1.2, 9.8], [2, 9.8], [2.6, 9.7]];
+    const m = pluginMatch(SPRAYS.slice(0, 5), { angles });
+    m.weapons = ["m4a1_silencer"];
+    const f = derive(pluginToTables(m), CS2RB);
+    const [spray] = f.aim.filter((x): x is SprayFact => x.k === "spray");
+    expect([spray.weapon, spray.recoilKnown, spray.dp.length, spray.landing, spray.lp]).toEqual(["m4a1_silencer", false, 4, null, []]);
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(0);
   });
 
   it("keeps a plugin spray relative to the target when a bullet has no angles", () => {
