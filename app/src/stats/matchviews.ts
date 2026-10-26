@@ -227,9 +227,12 @@ export interface OpeningRow {
 
 export interface OpeningDetail {
   rows: OpeningRow[];
-  /** the player's gun with the most opening kills (ties: more rounds won, then name); null without any */
-  bestWeapon: { weapon: string; kills: number; won: number } | null;
-  /** rounds where the player made, or suffered, the opening kill, and how many their team won */
+  /**
+   * the player's gun with the most opening kills (ties: more rounds won, then name), its rounds with a
+   * known result and the wins among them; null without any
+   */
+  bestWeapon: { weapon: string; kills: number; decided: number; won: number } | null;
+  /** rounds with a known result where the player made, or suffered, the opening kill, and how many their team won */
   afterKill: { rounds: number; won: number };
   afterDeath: { rounds: number; won: number };
 }
@@ -239,23 +242,22 @@ export function openingDuels(f: MatchFacts, player: string): OpeningDetail {
   const pi = playerIndex(f, player);
   const rows: OpeningRow[] = [];
   const out: OpeningDetail = { rows, bestWeapon: null, afterKill: { rounds: 0, won: 0 }, afterDeath: { rounds: 0, won: 0 } };
-  const byWeapon = new Map<string, { kills: number; won: number }>();
+  const byWeapon = new Map<string, { kills: number; decided: number; won: number }>();
   for (const k of f.kills) {
     if (!k.opening) continue;
     const rf = f.rounds[k.ri];
     const killerWon = rf.winner === null || k.killerSide === null ? null : rf.winner === k.killerSide;
     rows.push({ number: rf.number, killer: k.killer === null ? null : f.players[k.killer].id, victim: f.players[k.victim].id, killerSide: k.killerSide, weapon: k.weapon, t: k.t, traded: k.traded, killerWon });
     if (k.killer === pi) {
-      out.afterKill.rounds++;
-      if (killerWon) out.afterKill.won++;
-      const w = byWeapon.get(k.weapon) ?? { kills: 0, won: 0 };
+      if (killerWon !== null) { out.afterKill.rounds++; if (killerWon) out.afterKill.won++; }
+      const w = byWeapon.get(k.weapon) ?? { kills: 0, decided: 0, won: 0 };
       w.kills++;
-      if (killerWon) w.won++;
+      if (killerWon !== null) { w.decided++; if (killerWon) w.won++; }
       byWeapon.set(k.weapon, w);
     }
-    if (k.victim === pi) {
+    if (k.victim === pi && killerWon !== null) {
       out.afterDeath.rounds++;
-      if (killerWon === false) out.afterDeath.won++;
+      if (!killerWon) out.afterDeath.won++;
     }
   }
   const best = [...byWeapon].sort((a, b) => b[1].kills - a[1].kills || b[1].won - a[1].won || a[0].localeCompare(b[0]))[0];

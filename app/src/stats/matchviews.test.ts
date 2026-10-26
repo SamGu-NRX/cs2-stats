@@ -138,7 +138,14 @@ describe("opening duels", () => {
     const f = oneRound({ players: { a: "CT", c: "T", d: "T" }, kills: [{ tick: t(1), killer: "a", victim: "c" }, { tick: t(2), killer: "a", victim: "d" }] });
     const a = openingDuels(f, "a"), c = openingDuels(f, "c");
     expect(a.rows.map((r) => [r.number, r.killer, r.victim, r.weapon, r.traded, r.killerWon])).toEqual([[1, "a", "c", "ak47", false, true]]);
-    expect([a.bestWeapon, a.afterKill, c.afterDeath]).toEqual([{ weapon: "ak47", kills: 1, won: 1 }, { rounds: 1, won: 1 }, { rounds: 1, won: 0 }]);
+    expect([a.bestWeapon, a.afterKill, c.afterDeath]).toEqual([{ weapon: "ak47", kills: 1, decided: 1, won: 1 }, { rounds: 1, won: 1 }, { rounds: 1, won: 0 }]);
+  });
+
+  it("leaves a round without a result out of the conversions, not counted as a loss", () => {
+    // fails if an unknown result counts as a lost conversion: the round has no winner recorded
+    const f = oneRound({ players: { a: "CT", c: "T" }, roundRow: { winner_side: null }, kills: [{ tick: t(1), killer: "a", victim: "c" }] });
+    const a = openingDuels(f, "a"), c = openingDuels(f, "c");
+    expect([a.rows[0].killerWon, a.afterKill, c.afterDeath, a.bestWeapon]).toEqual([null, { rounds: 0, won: 0 }, { rounds: 0, won: 0 }, { weapon: "ak47", kills: 1, decided: 0, won: 0 }]);
   });
 });
 
