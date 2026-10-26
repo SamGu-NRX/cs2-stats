@@ -22,7 +22,7 @@ import { weaponLabel } from "../../stats/weapons";
 import type { ClutchRow, Method, Query } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { careerEntries, provisionalText, statLine } from "../data/engine";
+import { botPopulation as botPopulationText, careerEntries, provisionalText, statLine } from "../data/engine";
 import { matchModel, type MatchEntry, type MatchModel } from "../data/match";
 import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -35,7 +35,7 @@ import { RoleCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 import { fmtRating } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
-import { HomeView } from "./Home";
+import { HomeView, workOnHref } from "./Home";
 import Playstyle from "./Playstyle";
 import ProfileView from "./Profile";
 import { HowGood } from "./profile/parts";
@@ -429,6 +429,57 @@ describe("review round 1 (PR #28)", () => {
     for (const h of ["HS kills", "Head share", "Advice"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
     render(<CareerAim />);
     expect(Array.from(host.querySelectorAll(".card__title")).map(text)).toContain("Head accuracy");
+  });
+});
+
+describe("review round 2 (PR #28)", () => {
+  it("gives every recommendable Work on metric a place that shows it, and recommends none without one", () => {
+    // fails if a recommendation opens a page or section that does not show its metric (the old ?sec=performance fallback)
+    use(samples);
+    render(<ProfileView />);
+    const perf = metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable");
+    const latest = careerEntries(data.matches, null)[0].file;
+    const dest = new Map(perf.map((m) => [m.id, workOnHref(m, latest)]));
+    for (const id of ["tradeAttemptPct", "flashKillsPerFlash", "utilUnused"]) expect(dest.get(id), id).toBeNull();
+    for (const [id, href] of dest) {
+      if (!href) continue;
+      const sec = /^#\/profile\?sec=(\w+)$/.exec(href)?.[1];
+      if (sec) expect(host.querySelector(`#${sec}`), `${id} -> ${href}`).not.toBeNull();
+      else expect(href, id).toMatch(/^#\/(aim|weapons|match\/.+\/utility)$/);
+    }
+  });
+
+  it("names a Work on item's population from the pool it was ranked in", async () => {
+    // fails if an AWP row ranked against every pro reads "pro riflers" on Home
+    use(samples);
+    const q = queryOf(samples.filter((x) => new Set(careerEntries(data.matches, null).map((e) => e.file)).has(x.file)));
+    const r = await calls.compare(q, {});
+    // every other metric ranks high, so the AWP row is the weakest
+    const high = Object.fromEntries(Object.entries(r.p).map(([id, x]) => [id, { ...x, pct: x.pct === null ? null : 99 }]));
+    answers.compare = { ...r, p: { ...high, awpDuelWin: { ...r.p.awpDuelWin, value: 0.1, pct: 1, reason: null, pool: "all" } } };
+    render(<HomeView />);
+    const item = Array.from(host.querySelectorAll(".workon__item")).find((a) => text(a.querySelector(".workon__top b")) === metric("awpDuelWin").label)!;
+    expect(item).toBeTruthy();
+    expect(text(item.querySelector(".meta"))).toMatch(/of pros$/);
+  });
+
+  it("names Where you rank's bot population as the engine counts it", async () => {
+    // fails if bot-match samples are called bot careers
+    use(samples);
+    const q = queryOf(samples);
+    answers.compare = await calls.compare(q, { pool: "all" });
+    const style = await calls.style(q, { pool: "all" });
+    answers.style = style;
+    render(<Playstyle />);
+    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Where you rank")!;
+    expect(text(card.querySelector(".card__aside"))).toContain(`style against ${botPopulationText(style.careers, { n: style.n, role: "all" }).text}`);
+  });
+
+  it("leaves a 0:0 match out of the career even when it is marked complete", () => {
+    // fails if the list rule and the career rule disagree about a match with no round won
+    const base = samples[0].entry;
+    const zero = { ...base, file: "samples/zero-complete.json.gz", score: { us: 0, them: 0 }, match: { ...base.match, complete: true } };
+    expect(careerEntries([zero], null)).toHaveLength(0);
   });
 });
 

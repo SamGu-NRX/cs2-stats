@@ -109,6 +109,8 @@ export default function ProfileView() {
   const performanceRef = useSection("performance");
   const firepowerRef = useSection("firepower");
   const howGoodRef = useSection("howgood");
+  const cardRef = useSection("card");
+  const openingsRef = useSection("openings");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
@@ -132,7 +134,7 @@ export default function ProfileView() {
     <div className="view view--capped">
       <BarContent crumbs={[{ label: p.name }, { label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
       <div className="view__in profile" data-side={side}>
-        <div className="profile__top">
+        <div className="profile__top psec" id="card" ref={cardRef}>
           <PlayerCard p={p} side={side} cmp={cmp} compare={(
             // what the card's verdicts measure against; it lives on the card it governs
             <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
@@ -164,7 +166,7 @@ export default function ProfileView() {
           <Weapons p={p} files={files} side={side} />
           <Clutches m={p.you.m} q={base} side={side} list={list} />
           <Multis m={p.you.m} list={list} side={side} />
-          <Openings s={p.you} />
+          <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
         </div>
       </div>
     </div>

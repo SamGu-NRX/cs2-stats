@@ -15,7 +15,7 @@ import { Card } from "../components/Card";
 import { Select } from "../components/controls";
 import { useWidth } from "../components/charts";
 import { frameFor, RadarView } from "../components/MapArt";
-import { botIds, careerEntries, fmtMetric, mapsIn, rankText, sidesOf, type SideKey } from "../data/engine";
+import { botIds, botPopulation, careerEntries, fmtMetric, mapsIn, rankText, sidesOf, type SideKey } from "../data/engine";
 import { useCall, useRollups } from "../data/hooks";
 import { metric } from "../data/meta";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
@@ -99,7 +99,7 @@ function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
     });
   }, [sums, bots, names]);
   return (
-    <Card title="Style compass" tip="You and the bots in your matches, by opening duels and trades." aside={<span className="meta">{sums ? `You and ${plural(dots.filter((d) => !d.you).length, "bot career")}` : ""}</span>}>
+    <Card title="Style compass" tip="You and the bots in your matches, by opening duels and trades." aside={<span className="meta" data-tip={`Bot careers with ${COMPASS_MIN_ROUNDS} or more rounds in your matches.`}>{sums ? `You and ${plural(dots.filter((d) => !d.you).length, "bot career")} (${COMPASS_MIN_ROUNDS}+ rounds)` : ""}</span>}>
       {!sums ? <div className="skel" style={{ height: 340 }} /> : <Compass dots={dots} />}
     </Card>
   );
@@ -255,7 +255,7 @@ function Ranks({ q }: { q: Query }) {
   return (
     <Card title="Where you rank" tip={PANEL_TIP.whereYouRank} aside={
       <span className="card__aside-row">
-        <span className="meta">{proP && botP ? `How well against ${n.pros} pros; style against ${n.bots} bot ${n.bots === 1 ? "career" : "careers"}` : ""}</span>
+        <span className="meta">{proP && botP && careers ? `How well against ${n.pros} pros, style against ${botPopulation(careers, { n: n.bots, role: "all" }).text}` : ""}</span>
       </span>
     }>
       {!proP || !botP ? (error ? <p className="meta">{error}</p> : <div className="skel" style={{ height: 240 }} />) : (
@@ -281,7 +281,7 @@ function Ranks({ q }: { q: Query }) {
               </ul>
             </section>
           ))}
-          <p className="meta ranks__note">The dot shows where you sit, lowest on the left; the tick is the middle. Rows marked vs pros measure how well you play and rank against pro players. Rows marked vs bots describe your style and rank against the bots in your own matches, each bot name one career; style has no better or worse, so they say how many bot careers you are above.</p>
+          <p className="meta ranks__note">The dot shows where you sit, lowest on the left; the tick is the middle. Rows marked vs pros measure how well you play and rank against pro players. Rows marked vs bots describe your style and rank against the bots in your own matches; style has no better or worse, so they say how many of those bots you are above.</p>
         </div>
       )}
     </Card>
