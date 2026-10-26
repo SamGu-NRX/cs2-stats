@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Filter } from "../../stats/rollup";
 import type { Client } from "../../worker/client";
 import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
+import { careerEntries } from "./engine";
 import { matchModel, type MatchEntry, type MatchModel } from "./match";
 import { useData } from "./provider";
 
@@ -36,7 +37,7 @@ export function useCall<K extends Method>(method: K, args: Parameters<Api[K]> | 
 // the same match). At most BUNDLES are kept; the worker holds the facts themselves.
 const BUNDLES = 3;
 const bundles = new Map<string, Promise<MatchBundle>>();
-function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
+export function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
   const k = `${version}|${file}`;
   let p = bundles.get(k);
   if (p) { bundles.delete(k); bundles.set(k, p); return p; }
@@ -73,4 +74,18 @@ export function useScoped(q: Query, extra: Omit<Filter, "player">[]) {
   const k = JSON.stringify(extra);
   const qs = useMemo(() => extra.map((e) => ({ files: q.files, filter: { ...q.filter, ...e } })), [q, k]); // eslint-disable-line react-hooks/exhaustive-deps
   return useRollups(qs).data;
+}
+
+/**
+ * The career matches under the title bar's Map and Matches controls (shell/filters.tsx useScope):
+ * the user's own finished, logged matches (engine.ts careerEntries), newest first, cut to the last N.
+ * Every block on a career view reads this one list, so a filter reaches all of them. `all` is the
+ * same set before the last-N cut (what "All 8" counts).
+ */
+export function useCareer(scope: { map: string | null; n: number | null }): { list: MatchEntry[]; all: MatchEntry[] } {
+  const { matches } = useData();
+  return useMemo(() => {
+    const all = careerEntries(matches, scope.map);
+    return { all, list: scope.n ? all.slice(0, scope.n) : all };
+  }, [matches, scope.map, scope.n]);
 }
