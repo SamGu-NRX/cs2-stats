@@ -79,7 +79,7 @@ function Body() {
         return;
       }
       const r = currentRoute();
-      if (e.altKey && /^[1-8]$/.test(e.key) && r.page === "match" && r.file) {
+      if (e.altKey && /^[1-9]$/.test(e.key) && r.page === "match" && r.file) {
         e.preventDefault();
         go(matchHref(r.file, MATCH_TABS[Number(e.key) - 1]), { instant: true });
         return;
