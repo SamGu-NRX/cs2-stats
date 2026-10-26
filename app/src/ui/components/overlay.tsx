@@ -99,7 +99,8 @@ export function TooltipLayer() {
       removeEventListener("scrollend", scrollEnd, true);
     };
   }, []);
-  return <div ref={el} id="app-tip" className="tip" role="tooltip" />;
+  // portalled to <body>: no ancestor's grid or flex rules can reach the layer and split its text
+  return createPortal(<div ref={el} id="app-tip" className="tip" role="tooltip" />, document.body);
 }
 
 /**
