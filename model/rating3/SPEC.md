@@ -4,52 +4,52 @@ This document describes the public approximation and the private research output
 
 ## Reproducibility
 
-The commands below use the current private data root and isolated Python mode. They are the producers for the counts and metrics retained in this specification.
+The commands below run from the repository root in isolated Python mode; `<cs2-stats-data>` is the private data root. They are the producers for the counts and metrics retained in this specification.
 
 ### Strict joins
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\join_demos.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --metrics C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\winprob_metrics.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json
+model\.venv\Scripts\python.exe -I model\rating3\join_demos.py --data <cs2-stats-data> --metrics <cs2-stats-data>\model-rating3\winprob_metrics.json --out <cs2-stats-data>\model-rating3\demo_joins.json
 ```
 
 ### Win-probability lookup
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\winprob_fit.py --data C:\Users\<user>\Programming Projects\cs2-stats-data\hltv
+model\.venv\Scripts\python.exe -I model\rating3\winprob_fit.py --data <cs2-stats-data>\hltv
 ```
 
 ### Post-plant analysis
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\postplant_analysis.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\postplant_metrics.json
+model\.venv\Scripts\python.exe -I model\rating3\postplant_analysis.py --data <cs2-stats-data> --joins <cs2-stats-data>\model-rating3\demo_joins.json --out <cs2-stats-data>\model-rating3\postplant_metrics.json
 ```
 
 ### Demo-round probe
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\demo_round_fit.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_round_metrics.json
+model\.venv\Scripts\python.exe -I model\rating3\demo_round_fit.py --data <cs2-stats-data> --joins <cs2-stats-data>\model-rating3\demo_joins.json --out <cs2-stats-data>\model-rating3\demo_round_metrics.json
 ```
 
 ### Swing and duel fits
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\swing_fit.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\swing_metrics.json
+model\.venv\Scripts\python.exe -I model\rating3\swing_fit.py --data <cs2-stats-data> --joins <cs2-stats-data>\model-rating3\demo_joins.json --out <cs2-stats-data>\model-rating3\swing_metrics.json
 ```
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\eco_fit.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\eco_metrics.json
+model\.venv\Scripts\python.exe -I model\rating3\eco_fit.py --data <cs2-stats-data> --joins <cs2-stats-data>\model-rating3\demo_joins.json --out <cs2-stats-data>\model-rating3\eco_metrics.json
 ```
 
 ### Shipped fit
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\fit_params.py --data C:\Users\<user>\Programming Projects\cs2-stats-data --hltv C:\Users\<user>\Programming Projects\cs2-stats-data\hltv --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --out C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\params.json --date 2026-10-25
+model\.venv\Scripts\python.exe -I model\rating3\fit_params.py --data <cs2-stats-data> --hltv <cs2-stats-data>\hltv --joins <cs2-stats-data>\model-rating3\demo_joins.json --out model\rating3\params.json --date 2026-10-25
 ```
 
 ### Held-out hypothesis fits
 
 ```text
-C:\Users\<user>\Programming Projects\cs2-stats-rating\model\.venv\Scripts\python.exe -I C:\Users\<user>\Programming Projects\cs2-stats-rating3\model\rating3\hypothesis_fit.py --hltv C:\Users\<user>\Programming Projects\cs2-stats-data\hltv --data C:\Users\<user>\Programming Projects\cs2-stats-data --joins C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_joins.json --demo-metrics C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\demo_round_metrics.json --out C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\hypothesis_metrics.json
+model\.venv\Scripts\python.exe -I model\rating3\hypothesis_fit.py --hltv <cs2-stats-data>\hltv --data <cs2-stats-data> --joins <cs2-stats-data>\model-rating3\demo_joins.json --demo-metrics <cs2-stats-data>\model-rating3\demo_round_metrics.json --out <cs2-stats-data>\model-rating3\hypothesis_metrics.json
 ```
 
 ## Data contract
@@ -66,7 +66,7 @@ The private lookup uses the most specific available state table. Its selected mo
 
 The current lookup fit contains **135,628 events across 503 matches**. On its chronological test split, the selected `last_kill_side` model has **20,235 events**, **0.15259069454690377 percentage-point MAE** overall, and **0.0018920528807220588 percentage-point MAE over 15,064 pre-plant events**. The lookup remains approximate: post-plant timing is not fully identified.
 
-Those values come from the win-probability command above and `C:\Users\<user>\Programming Projects\cs2-stats-data\model-rating3\winprob_metrics.json`.
+Those values come from the win-probability command above and `<cs2-stats-data>\model-rating3\winprob_metrics.json`.
 
 The separate post-plant join analysis produces **13,577 aligned event rows over 3,550 rounds**; **9,115 events change after the plant**. This is evidence that post-plant graph values continue to move, not a validated defuse-time threshold. Those values come from the post-plant command above and `postplant_metrics.json`.
 

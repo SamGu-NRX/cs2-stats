@@ -7,9 +7,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DataTable } from "./components/DataTable";
 import { MenuLayer, openMenu } from "./components/overlay";
-import { navWasInstant, openMatch } from "./router";
+import { MATCH_TABS, matchTabOfKey, navWasInstant, openMatch, PROFILE_TABS } from "./router";
 import type { Data } from "./data/provider";
-import { Palette } from "./shell/Palette";
+import { Palette, SHORTCUTS } from "./shell/Palette";
+import { NAV } from "./shell/Sidebar";
 import { emptySummary } from "../stats/rollup";
 import { CS2RB } from "../stats/model-params";
 import { metaOf, rolled } from "../worker/views";
@@ -218,5 +219,16 @@ describe("spray gun picker", () => {
     const boxes = Array.from(host.querySelectorAll<HTMLInputElement>(".spray-toggles input"));
     expect(boxes.map((b) => [b.type, b.tabIndex, b.disabled, b.closest("label")?.textContent])).toEqual([["checkbox", 0, false, "Ideal pull"], ["checkbox", 0, false, "Spread"]]);
     scoped = null;
+  });
+});
+
+describe("the shortcut list (palette and Data & settings)", () => {
+  it("names the keys the app binds", () => {
+    // fails if the list drifts from the bindings again: it said Ctrl 1–6 with three views and Alt 1–8 with ten match tabs
+    const keys = Object.fromEntries(SHORTCUTS.map(([k, label]) => [label, k]));
+    expect(keys["Views"]).toBe(`Ctrl 1–${NAV.length}`);
+    expect(keys["Profile tabs"]).toBe(`Alt 1–${PROFILE_TABS.length}`);
+    expect(keys["Match tabs"]).toBe("Alt 1–9 / 0");
+    expect(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map(matchTabOfKey)).toEqual([...MATCH_TABS]);
   });
 });

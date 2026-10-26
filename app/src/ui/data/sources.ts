@@ -1,6 +1,6 @@
 // Where a match came from, and what that source can and cannot support. Four sources exist:
 // - recorded: written by the capture plugin (aim, movement positions, economy, utility purchases);
-// - converted: an older console log converted by tools/convert-legacy.ts (no aim, no movement;
+// - converted: an older console log converted to the plugin format (no aim, no movement;
 //   rounds held as totals only are left out);
 // - pro: a pro match demo, extracted to tables. Today these arrive only as "dev/<folder>" paths, which
 //   `vite dev` serves when CS2_DEV_MATCHES is set (host.ts). They open from Matches like any match but

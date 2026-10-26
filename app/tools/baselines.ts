@@ -19,6 +19,12 @@ const NAMED = path.resolve(arg("--named", path.join(DATA_DIR, "derived", "baseli
 const SIDES: SideKey[] = ["both", "CT", "T"];
 
 if (!proMapDirs().length) throw new Error(`no pro tables under ${DATA_DIR}/demos (set CS2_STATS_DATA)`);
+// The committed file ships with the app, so it is built only on the public CS2RB model: swing from the
+// private HLTV win-probability lookup must not leave the machine, even as quantiles. A local build
+// with the pack (--out outside public/) is the developer's own.
+if (WINPROB.kind !== "cs2rb" && OUT === path.resolve("public/baselines.json")) {
+  throw new Error(`refusing to write public/baselines.json from the ${WINPROB.label}: set CS2_WINPROB_PACK=none to build on CS2RB, or pass --out outside public/`);
+}
 const facts: MatchFacts[] = [];
 for await (const { t } of proMaps()) facts.push(derive(t, WINPROB));
 
@@ -57,7 +63,7 @@ for (const map of maps) {
 
 const b: Baselines = {
   version: 1, built: new Date().toISOString().slice(0, 10),
-  source: `${facts.length} pro maps from HLTV demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds; swing from the ${WINPROB.label}`,
+  source: `${facts.length} maps from public pro match demos, ${kept.length} players with ${MIN_ROUNDS}+ rounds; map pools use player-maps with ${MAP_MIN_ROUNDS}+ rounds; swing from the ${WINPROB.label}`,
   model: modelFingerprint(WINPROB),
   ...buildPools(units),
 };

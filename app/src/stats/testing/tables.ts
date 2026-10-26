@@ -14,4 +14,3 @@ export function pushRow<N extends TableName>(t: Table<N>, row: Row<N>): void {
   }
   t.n++;
 }
-
