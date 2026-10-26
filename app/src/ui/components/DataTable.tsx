@@ -171,7 +171,7 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
                   {c.sort ? (
                     <button className="th" data-tip={c.tip} onClick={() => setSort(nextSort(sort, c.key, c.firstDir ?? (c.align === "l" ? "asc" : "desc")))}>
                       <span>{c.label}</span>
-                      <SortIcon dir={on ? sort!.dir : null} size={10} />
+                      <SortIcon dir={on ? sort!.dir : null} size={12} />
                     </button>
                   ) : (
                     <span className="th" data-tip={c.tip} tabIndex={c.tip ? 0 : undefined}>{c.label}</span>

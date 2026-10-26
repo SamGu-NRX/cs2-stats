@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentImg } from "../components/Agent";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
-import { ChevronLeftIcon, HomeIcon, MatchesIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
+import { HomeIcon, MatchesIcon, PanelCloseIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
 import { careerEntries, isOwn, ratingHeadline } from "../data/engine";
 import { scanErrorText } from "../data/sources";
 import { fmtRating, plural } from "../lib/format";
@@ -128,7 +128,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
           </button>
         )}
         <button className="side__item side__toggle" onClick={onToggle} aria-label={rail ? "Expand sidebar" : "Collapse sidebar"} aria-keyshortcuts="Control+B" data-tip={rail ? "Expand  ·  Ctrl B" : "Ctrl B"} data-tip-place="right">
-          <ChevronLeftIcon size={20} />
+          <PanelCloseIcon size={20} />
           <span className="side__label">Collapse</span>
         </button>
       </div>
