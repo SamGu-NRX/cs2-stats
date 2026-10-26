@@ -164,30 +164,33 @@ describe("opening a match", () => {
 });
 
 describe("spray gun picker", () => {
-  it("is one tab stop; arrows, Home and End pick a gun and move focus with it", () => {
+  it("lists every gun with a pro path, most sprayed first, as one tab stop; arrows, Home and End pick and move focus", () => {
     setMeta(metaOf(CS2RB));
     const s = rolled(emptySummary());
-    // sprays on six guns: five get buttons, the sixth goes to the More menu
-    const guns = Object.keys(RECOIL).slice(0, 6);
-    s.aim.path = Object.fromEntries(guns.map((w, i) => [w, { n: [60 - i, 50 - i, 40 - i], dp: [1, 2, 3], dy: [0, 0.5, 1] }]));
+    // every gun with a pro path gets a button, most sprayed first; guns without sprays still show their pro path
+    const guns = Object.keys(RECOIL).filter((w) => RECOIL[w].path.length > 0);
+    const sprayed = ["galilar", "famas", "ak47"];
+    s.aim.path = Object.fromEntries(sprayed.map((w, i) => [w, { n: [60 - i, 50 - i, 40 - i], dp: [1, 2, 3], dy: [0, 0.5, 1] }]));
     scoped = s;
     render(<AimPanels query={{ files: [], filter: { player: "x" } }} label="test" visibility={false} />);
     const radios = () => Array.from(host.querySelectorAll<HTMLElement>('[aria-label="Gun"] [role=radio]'));
     const picked = () => radios().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.w;
-    expect(radios().map((b) => b.dataset.w)).toEqual(guns.slice(0, 5));
-    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    const order = [...sprayed, ...guns.filter((w) => !sprayed.includes(w))];
+    expect(radios().map((b) => b.dataset.w)).toEqual(order);
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([order[0]]);
     act(() => radios()[0].focus());
     key(document.activeElement!, "ArrowRight");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[1], guns[1]]);
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([order[1], order[1]]);
     key(document.activeElement!, "End");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[4], guns[4]]);
+    const last = order[order.length - 1];
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([last, last]);
     key(document.activeElement!, "ArrowDown");
-    expect(picked()).toBe(guns[0]);
+    expect(picked()).toBe(order[0]);
     key(document.activeElement!, "ArrowUp");
-    expect(picked()).toBe(guns[4]);
+    expect(picked()).toBe(last);
     key(document.activeElement!, "Home");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[0], guns[0]]);
-    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([order[0], order[0]]);
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([order[0]]);
     scoped = null;
   });
 });

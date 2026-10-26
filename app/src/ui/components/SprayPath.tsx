@@ -42,7 +42,8 @@ export function findingTitle(gun: string, f: SprayFinding): string {
   return `Your ${gun} spray ${what} the pros' middle half from bullet ${f.bullet}`;
 }
 
-const S = 26, W = 330, H = 360, TOP = 24;
+/** 26 px per degree on both axes, so the 1° bar measures every gun; the height follows the deepest bullet drawn. */
+const S = 26, W = 330, TOP = 24, MIN_H = 160;
 
 /**
  * `relative`: the path is measured against the target, not as absolute view angles (plugin recordings
@@ -54,6 +55,8 @@ export function SprayPath({ gun, reference, path, relative = false }: { gun: str
   const ref = relative ? [] : reference.path;
   const until = relative ? 0 : Math.min(ref.length, Math.max(pts.length, 12));
   const X = (yaw: number) => W / 2 + yaw * S, Y = (pitch: number) => TOP + pitch * S;
+  const deepest = Math.max(0, ...ref.slice(0, until).map((b) => b[3]), ...pts.map((p) => p.pitch));
+  const H = Math.max(MIN_H, Math.ceil(Y(deepest) + 24));
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
   const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
   return (
@@ -75,7 +78,7 @@ export function SprayPath({ gun, reference, path, relative = false }: { gun: str
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">This recording measures your aim against the target rather than your absolute view angles, so it isn't compared with the pro path.</p> : null}
+      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : null}
     </figure>
   );
 }

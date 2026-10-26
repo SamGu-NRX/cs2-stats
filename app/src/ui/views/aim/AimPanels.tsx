@@ -1,36 +1,42 @@
 // Aim panels, shared by a match's Aim tab and Career aim. Every number is an aim metric or an aim
-// measure over a summary the worker rolled up, narrowed by side and weapon.
-// - The hero shows accuracy as a ring over an agent backdrop, beside three groups (hitting, spray
-//   and flicks, movement); each group opens inline to its finer stats.
-// - Spray: pick a gun (the five most sprayed as buttons, every gun in a menu, thin samples marked),
-//   see your mean view path against the pro path and a per-bullet chart.
-// - Where you hit: gun hits by body part.
-// - Accuracy by gun rolls up each gun on its own; head share and headshot kills come from its totals.
+// measure over a summary the worker rolled up, narrowed by side and weapon class.
+// - The stat strip: the headline aim metrics, each with its percentile against the pros of your role
+//   (compare), shown for all guns only: pros are pooled over every gun.
+// - Spray: one gun with a pro path at a time, your mean view path against the pros' (SprayPath).
+// - Where you hit: gun hits on the agent figure by hit group.
+// - Counter-strafing: first shots by how you stopped; flicks and spray: the finer aim metrics.
+// - Guns: on a match, accuracy by gun; on Career aim, every gun as Weapons judges it.
 // - Time to damage, reaction, first shot and crosshair placement need view angles and mesh line of
-//   sight; their distributions draw only for matches with mesh visibility, and the card shows the
-//   visibility coverage either way.
-import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+//   sight; their distributions draw only for matches with mesh visibility.
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { RECOIL } from "../../../stats/aim-ref";
+import type { SideKey as PoolSide } from "../../../stats/compare";
 import { HIT_GROUPS } from "../../../stats/facts";
 import type { Side } from "../../../stats/tables";
 import { weaponClass, weaponLabel } from "../../../stats/weapons";
-import type { Query, Rolled } from "../../../worker/protocol";
+import type { CompareResult, Query, Rolled } from "../../../worker/protocol";
 import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
-import { binSamples, Histogram, meanPath, SprayPattern, useWidth, type BodyShare, type ProPath, type SprayPath } from "../../components/charts";
-import { rovingIndex, Segmented, Select } from "../../components/controls";
+import { binSamples, Histogram } from "../../components/charts";
+import { rovingIndex, Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
-import { AgentImg } from "../../components/Agent";
+import { HitFigure } from "../../components/HitFigure";
+import { ApproxMark, percentilePhrase } from "../../components/Percentile";
+import { MIN_SPRAYS, SprayDistance, SprayPath, type PlayerPath } from "../../components/SprayPath";
+import { StatStrip, type StripItem } from "../../components/StatStrip";
 import { fmtMetric, WEAPON_CLASS_LABEL } from "../../data/engine";
-import { useScoped } from "../../data/hooks";
-import { metric } from "../../data/meta";
-import { WeaponClassIcon, WeaponIcon } from "../../icons/game";
-import { AimIcon, ChevronIcon, HeadHitIcon, SprayIcon, StrafeIcon } from "../../icons/ui";
-import { fmtPct, fmtRatio, plural } from "../../lib/format";
-import { scoreFill, toScore } from "../../lib/scale";
-import { BENCH, verdictOf } from "../../lib/verdict";
+import { useCall, useScoped } from "../../data/hooks";
+import type { MatchEntry } from "../../data/match";
+import { metric, metrics } from "../../data/meta";
+import { useData } from "../../data/provider";
+import { AimIcon } from "../../icons/ui";
+import { fmtInt, fmtPct, fmtRatio, plural } from "../../lib/format";
+import { scoreText, toScore } from "../../lib/scale";
+import { BENCH } from "../../lib/verdict";
+import { Hint } from "../match/glyphs";
 import { Empty, NeedsDemo } from "../shared";
-import { BodyFigure } from "./BodyFigure";
+import { bestAndWorst, ClassIcon, edgeText, edgeTip, EDGE_TIP, GunHero, GunIcon, MIN_SHOTS, PROF_TIP, SplitCell, useGuns, type Judged } from "./guns";
+import { aimTip } from "./tips";
 
 type SideFilter = "all" | "t" | "ct";
 const GUN_CLASSES = ["rifle", "sniper", "smg", "heavy", "pistol"] as const;
@@ -38,281 +44,249 @@ type ClassFilter = "all" | (typeof GUN_CLASSES)[number];
 const isGun = (w: string) => (GUN_CLASSES as readonly string[]).includes(weaponClass(w));
 
 const sidesFor = (s: SideFilter): { sides?: Side[] } => (s === "all" ? {} : { sides: [s === "t" ? "T" : "CT"] });
+const poolSide = (s: SideFilter): PoolSide => (s === "all" ? "both" : s === "t" ? "T" : "CT");
 const value = (id: string, s: Rolled | null) => (s ? s.v[id] : null);
 const text = (id: string, s: Rolled | null) => fmtMetric(id, value(id, s));
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 
-export function AimPanels({ query, label, visibility }: { query: Query; label: string; visibility: boolean }) {
+/** Metrics that need view angles and mesh line of sight: without visibility they have no value. */
+const SIGHT = new Set(["firstBulletAccuracy", "sightAccuracy", "timeToDamage", "timeToKill", "reactionTime", "timeToShot", "crosshairPlacement", "crosshairMoved", "preAim", "flickOvershoot", "microCorrections", "trackingError", "shotError"]);
+
+/** The stat strip, in reading order. shotError and movingSpray are metrics-v2 ids: drawn once the engine has them. */
+const STRIP = ["accuracy", "firstBulletAccuracy", "sightAccuracy", "timeToKill", "timeToDamage", "crosshairPlacement", "crosshairMoved", "preAim", "counterStrafe", "shotError", "movingSpray"];
+const FINER = ["flickOvershoot", "microCorrections", "trackingError", "sprayDeviation", "sprayPull", "sprayTransfers", "transferHits"];
+
+export function AimPanels({ query, label, visibility, guns }: {
+  query: Query;
+  label: string;
+  visibility: boolean;
+  /** Career aim: every career match, recorded or not, for the per-gun table as Weapons builds it */
+  guns?: MatchEntry[];
+}) {
+  const { baselines } = useData();
   const [side, setSide] = useState<SideFilter>("all");
   const [cls, setCls] = useState<ClassFilter>("all");
   const base = useScoped(query, [sidesFor(side)])?.[0] ?? null;
-  const guns = useMemo(() => Object.keys(base?.weapons ?? {}).filter(isGun), [base]);
-  const inClass = cls === "all" ? guns : guns.filter((w) => weaponClass(w) === cls);
+  const fired = useMemo(() => Object.keys(base?.weapons ?? {}).filter(isGun), [base]);
+  const inClass = cls === "all" ? fired : fired.filter((w) => weaponClass(w) === cls);
   const s = useScoped(query, [{ ...sidesFor(side), ...(cls === "all" ? {} : { weapons: inClass }) }])?.[0] ?? null;
-  const classes = GUN_CLASSES.filter((c) => guns.some((w) => weaponClass(w) === c));
+  // pros are pooled over every gun, so a class's numbers are not ranked against them
+  const r = useCall("compare", baselines && cls === "all" ? [query, { side: poolSide(side) }] : null).data;
+  const classes = GUN_CLASSES.filter((c) => fired.some((w) => weaponClass(w) === c));
   const kills = inClass.reduce((t, w) => t + (base?.weapons[w].kills ?? 0), 0);
+  const rank = cls === "all" ? r ?? null : null;
   return (
     <div className="aimp">
       <div className="toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={[{ value: "all", label: "Both sides" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
         <Segmented label="Weapon class" value={cls} onChange={setCls} options={[{ value: "all" as ClassFilter, label: "All guns" }, ...GUN_CLASSES.map((c) => ({ value: c as ClassFilter, label: WEAPON_CLASS_LABEL[c], disabled: !classes.includes(c) }))]} />
-        <span className="toolbar__end meta">{plural(s?.aim.shots ?? 0, "shot")}, {plural(kills, "kill")}, {label}</span>
+        <span className="toolbar__end meta">{plural(s?.aim.shots ?? 0, "shot")}, {plural(s?.aim.hits ?? 0, "hit")}, {plural(kills, "kill")}, {label}</span>
       </div>
-      <AimHero s={s} side={side} visibility={visibility} />
-      <div className="aim-grid">
+      <StatStrip label="Aim" items={stripItems(STRIP, s, rank, visibility)} />
+      {!visibility && <p className="aimp__needs meta"><NeedsDemo detail="Dashed stats need view angles and mesh line of sight." /></p>}
+      <div className="aim-body">
         <SprayCard s={s} />
         <HitsCard s={s} />
+        <StrafeCard s={s} />
+        <FinerCard s={s} r={rank} visibility={visibility} />
       </div>
-      {guns.length > 0 && base && <GunTable query={query} side={side} guns={guns} base={base} />}
+      {guns ? <CareerGuns list={guns} side={side} /> : fired.length > 0 && base && <GunTable query={query} side={side} guns={fired} base={base} />}
       <TimingsCard s={s} visibility={visibility} />
     </div>
   );
 }
 
-// ---------------------------------------------------------------- hero
+// ---------------------------------------------------------------- strip
 
-function Disclose({ label, children }: { label: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [instant, setInstant] = useState(true);
-  const id = useId();
-  return (
-    <div className="disclose">
-      <button className="disclose__btn" aria-expanded={open} aria-controls={id} onClick={(e) => { setInstant(e.detail === 0); setOpen((o) => !o); }}>
-        <span>{label}</span><ChevronIcon size={14} className="chev" />
-      </button>
-      <div id={id} className={`collapse ${instant ? "is-instant" : ""}`} data-open={open} {...(open ? {} : { inert: "" })}>
-        <div className="collapse__in"><div className="disclose__body">{children}</div></div>
-      </div>
-    </div>
-  );
+const population = (r: CompareResult) => (r.role === "awper" ? "pro AWPers" : "pro riflers");
+
+/** What a metric's cell says beside its value: its percentile, the coverage it rests on, or why it has no value. */
+function standing(id: string, s: Rolled | null, r: CompareResult | null, visibility: boolean) {
+  const v = value(id, s);
+  const p = r?.p[id] ?? null;
+  const unavailable = s && v === null ? (!visibility && SIGHT.has(id) ? "Needs line of sight" : "Not measured here") : undefined;
+  const coverage = p?.reason?.startsWith("Not compared: ") ? p.reason.slice("Not compared: ".length) : undefined;
+  return { v, pct: p && !p.reason ? p.pct : null, unavailable, coverage };
 }
 
-function Fig({ id, s }: { id: string; s: Rolled | null }) {
-  return (
-    <div className="fig" data-tip={metric(id).def}>
-      <b className="fig__v num"><Num v={text(id, s)} /></b>
-      <span className="fig__l">{metric(id).label}</span>
-    </div>
-  );
-}
-
-function Row({ id, s }: { id: string; s: Rolled | null }) {
-  return <div className="drow" data-tip={metric(id).def}><span>{metric(id).label}</span><b className="num"><Num v={text(id, s)} /></b></div>;
-}
-
-function AimHero({ s, side, visibility }: { s: Rolled | null; side: SideFilter; visibility: boolean }) {
-  const acc = value("accuracy", s);
-  const R = 62;
-  const len = 2 * Math.PI * R;
-  const v = verdictOf(acc, BENCH.acc);
-  const ring = v === "good" ? "var(--good)" : v === "poor" ? "var(--poor)" : "var(--avg)";
-  return (
-    <section className="aimhero card" aria-label="Aim summary">
-      <AgentImg side={side === "ct" ? "ct" : "t"} kind="ghost" className="aimhero__ghost" />
-      <div className="aimhero__ring">
-        <svg width="156" height="156" viewBox="0 0 156 156" aria-hidden>
-          <circle cx="78" cy="78" r={R} fill="none" stroke="var(--track)" strokeWidth="9" />
-          <circle cx="78" cy="78" r={R} fill="none" stroke={ring} strokeWidth="9" strokeLinecap="round" strokeDasharray={len} strokeDashoffset={len * (1 - Math.min(1, (acc ?? 0) / 50))} transform="rotate(-90 78 78)" style={{ transition: "stroke var(--d-color) ease" }} />
-        </svg>
-        <div className="aimhero__ringin">
-          <span className="verdict" data-v={v}>{v === "na" ? "" : v === "avg" ? "Average" : v === "good" ? "Good" : "Poor"}</span>
-          <b className="num"><Num v={text("accuracy", s)} /></b>
-          <span className="meta">accuracy</span>
-        </div>
-        <p className="aimhero__note meta">{plural(s?.aim.hits ?? 0, "hit")} from {plural(s?.aim.shots ?? 0, "shot")}. The ring fills at 50%.</p>
-      </div>
-      <div className="aimhero__groups">
-        <div className="agroup">
-          <div className="agroup__head"><HeadHitIcon size={18} /><b>Hitting</b></div>
-          <div className="agroup__figs">
-            <Fig id="firstBulletAccuracy" s={s} />
-            <Fig id="sightAccuracy" s={s} />
-          </div>
-          <Disclose label="Spray transfers">
-            <Row id="sprayTransfers" s={s} />
-            <Row id="transferHits" s={s} />
-          </Disclose>
-        </div>
-        <div className="agroup">
-          <div className="agroup__head"><SprayIcon size={18} /><b>Spray and flicks</b></div>
-          <div className="agroup__figs">
-            <Fig id="sprayDeviation" s={s} />
-            <Fig id="flickOvershoot" s={s} />
-          </div>
-          <Disclose label="Pull-down, corrections, tracking">
-            <Row id="sprayPull" s={s} />
-            <Row id="microCorrections" s={s} />
-            <Row id="trackingError" s={s} />
-          </Disclose>
-        </div>
-        <div className="agroup">
-          <div className="agroup__head"><StrafeIcon size={18} /><b>Movement</b></div>
-          <div className="agroup__figs">
-            <Fig id="counterStrafe" s={s} />
-          </div>
-          <Disclose label="When the stop went wrong">
-            <Row id="csTooEarly" s={s} />
-            <Row id="csLateReversal" s={s} />
-            <Row id="csNoStop" s={s} />
-          </Disclose>
-        </div>
-        {!visibility && <p className="meta">Dashed stats: <NeedsDemo detail="They need view angles or mesh line of sight, which this match file does not carry." /></p>}
-      </div>
-    </section>
-  );
+function stripItems(ids: string[], s: Rolled | null, r: CompareResult | null, visibility: boolean): StripItem[] {
+  const known = new Set(metrics().map((m) => m.id));
+  return ids.filter((id) => known.has(id)).map((id) => {
+    const m = metric(id);
+    const st = standing(id, s, r, visibility);
+    return {
+      id, label: m.label, value: s ? fmtMetric(id, st.v) : null, pct: st.pct, kind: m.kind === "performance" ? "performance" : "style",
+      population: r ? population(r) : "", unavailable: st.unavailable, coverage: st.coverage, approx: m.status === "approx", def: aimTip(id),
+    };
+  });
 }
 
 // ---------------------------------------------------------------- spray
 
-/** Sprays that reach bullet 4 below this many are marked thin in the gun menu. */
+/** Sprays that reach bullet 4 below this many are marked few. */
 const THIN_SPRAY = 30;
+/** Every gun the recoil reference has a pro path for, in its order. */
+const PRO_GUNS = Object.keys(RECOIL).filter((w) => RECOIL[w].path.length > 0);
+
+interface SprayGun { w: string; path: PlayerPath | null; relative: boolean; sprays: number; deep: number }
+
+/** Each pro-path gun with the path to draw: absolute view angles when there are any, else the target-relative path (plugin files). Most sprayed first. */
+export function sprayGuns(s: Rolled | null): SprayGun[] {
+  return PRO_GUNS.map((w) => {
+    const abs = s?.aim.path[w], rel = s?.aim.relPath[w];
+    const path = abs?.n.length ? abs : rel?.n.length ? rel : null;
+    return { w, path, relative: !abs?.n.length && !!path, sprays: path?.n[0] ?? 0, deep: path?.n[2] ?? 0 };
+  }).sort((a, b) => b.sprays - a.sprays);
+}
 
 function SprayCard({ s }: { s: Rolled | null }) {
-  const path = s?.aim.path ?? {};
-  // n[0] counts sprays reaching bullet 2 (every spray), n[2] those reaching bullet 4
-  const weapons = useMemo(() => Object.entries(path)
-    .map(([w, p]) => ({ w, n: p.n.reduce((t, x) => t + (x ?? 0), 0), bursts: p.n[0] ?? 0, deep: p.n[2] ?? 0 }))
-    .filter((x) => x.n > 2).sort((x, y) => y.n - x.n), [path]);
+  const list = useMemo(() => sprayGuns(s), [s]);
   const [pick, setPick] = useState<string | null>(null);
-  const w = pick && path[pick] ? pick : weapons[0]?.w ?? null;
-  const [bands, setBands] = useState(true);
   const group = useRef<HTMLDivElement>(null);
-  const top = weapons.slice(0, 5);
-  const more = weapons.slice(5);
-  const cur = weapons.find((x) => x.w === w);
-  if (!w || !cur) {
-    return <Card title="Spray"><Empty icon={<SprayIcon size={32} />} text="No sprays to show. A spray is three or more bullets in one burst, tracked through each shot's recoil index and ammo count, which these match files do not record." /></Card>;
-  }
-  const pro = RECOIL[w]?.path.length ? RECOIL[w].path : null;
-  // a gun picked from the menu takes the fifth button's place
-  const shown = top.some((x) => x.w === w) ? top : [...top.slice(0, 4), cur];
+  const cur = list.find((x) => x.w === pick) ?? list[0];
   // one tab stop, the picked gun; arrows pick and move focus, as Segmented does
   const onKey = (e: KeyboardEvent) => {
-    const to = rovingIndex(e.key, shown.findIndex((x) => x.w === w), shown.length, true);
+    const to = rovingIndex(e.key, list.findIndex((x) => x.w === cur.w), list.length, true);
     if (to === null) return;
     e.preventDefault();
-    setPick(shown[to].w);
-    group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(shown[to].w)}"]`)?.focus();
+    setPick(list[to].w);
+    group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(list[to].w)}"]`)?.focus();
   };
+  const name = weaponLabel(cur.w);
   return (
-    <Card title="Spray" aside={<span className="meta">{plural(cur.bursts, "spray")} {cur.deep < THIN_SPRAY ? <span className="chip chip--outline" data-tip={`Fewer than ${THIN_SPRAY} sprays reached bullet 4, so the pattern past the first bullets is noisy.`}>Few sprays</span> : null}</span>}>
-      <div className="gunpick">
-        <div ref={group} className="gunpick__btns" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
-          {shown.map((x) => (
-            <button key={x.w} data-w={x.w} role="radio" aria-checked={x.w === w} tabIndex={x.w === w ? 0 : -1} className="gunbtn" onClick={() => setPick(x.w)} data-tip={`${plural(x.bursts, "spray")}${x.deep < THIN_SPRAY ? ", few sprays" : ""}`}>
-              <WeaponIcon name={x.w} size={13} label={undefined} />
-              <span>{weaponLabel(x.w)}</span>
-              {x.deep < THIN_SPRAY && <><i className="gunbtn__thin" aria-hidden /><span className="sr-only">, few sprays</span></>}
+    <Card className="aim-spray" title={<>Spray<Hint tip="Your average view path from bullet 1, against pros'." /></>} aside={
+      <span className="meta spray-aside">{plural(cur.sprays, "spray")}{cur.path && cur.deep < THIN_SPRAY ? <span className="chip chip--outline" data-tip={`Under ${THIN_SPRAY} sprays reached bullet 4, so later bullets are noisy`} tabIndex={0}>Few sprays</span> : null}</span>
+    }>
+      <div className="sprayc">
+        <div ref={group} className="gunlist" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
+          {list.map((x) => (
+            <button key={x.w} data-w={x.w} role="radio" aria-checked={x.w === cur.w} tabIndex={x.w === cur.w ? 0 : -1} className="gunlist__b" onClick={() => setPick(x.w)}>
+              <GunIcon weapon={x.w} height={13} />
+              <span className="gunlist__n">{weaponLabel(x.w)}{x.path && x.deep < THIN_SPRAY ? <><i className="gunlist__thin" aria-hidden data-tip="Few sprays" /><span className="sr-only">, few sprays</span></> : null}</span>
+              <span className="gunlist__c num" aria-hidden>{x.sprays}</span><span className="sr-only">, {plural(x.sprays, "spray")}</span>
             </button>
           ))}
         </div>
-        {more.length > 0 && (
-          <Select label="More guns" prefix="More" value={more.some((x) => x.w === w) ? w : "_"} onChange={(v) => v !== "_" && setPick(v)}
-            options={[{ value: "_", label: `${more.length} guns` }, ...more.map((x) => ({ value: x.w, label: `${weaponLabel(x.w)}${x.deep < THIN_SPRAY ? " (few sprays)" : ""}` }))]} />
-        )}
-        {pro && <label className="check gunpick__bands"><input type="checkbox" checked={bands} onChange={(e) => setBands(e.target.checked)} /><span>Pro path</span></label>}
-      </div>
-      <SprayBody path={path[w]} pro={pro} bands={bands} />
-    </Card>
-  );
-}
-
-function SprayBody({ path, pro, bands }: { path: SprayPath; pro: ProPath | null; bands: boolean }) {
-  const [ref, width] = useWidth<HTMLDivElement>(420);
-  // Beside the legend the chart gets the width less 230 px (the legend's 180 px minimum, the 20 px gap
-  // and some air), down to 300 px; below that the legend drops under it and the chart takes the whole
-  // width. The svg also caps itself at its container (.spray), keeping its square, before the width
-  // is measured.
-  const stacked = width - 230 < 300;
-  const size = Math.min(480, stacked ? width : width - 230);
-  return (
-    <div className="spray-body" ref={ref}>
-      <div className={`spray-main ${stacked ? "is-stacked" : ""}`}>
-        <SprayPattern path={path} pro={pro} size={size} bands={bands} />
-        <div className="legend spray-legend">
-          <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="var(--cream)" /></svg>Your average view movement from the first bullet, bullet by bullet</span>
-          {pro && bands && <span><svg width="14" height="10" aria-hidden><rect x="1" y="1" width="12" height="8" rx="2" fill="rgba(43,163,224,.07)" stroke="rgba(43,163,224,.4)" /></svg>The median pro path; boxes hold the middle half of pros</span>}
-          <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="4" fill="var(--bg1)" stroke="var(--cream)" strokeWidth="1.5" /></svg>Bullet 1; numbers mark every fifth bullet</span>
-          {!pro && <span className="faint">There is no pro path for this gun in the recoil reference.</span>}
+        <div className="sprayc__fig">
+          <SprayPath gun={name} reference={RECOIL[cur.w]} path={cur.path} relative={cur.relative} />
+          <div className="legend spray-key" aria-hidden>
+            <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="2" /></svg>You</span>
+            {!cur.relative && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Pro median</span>}
+            {!cur.relative && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}
+            {cur.path && cur.path.n.some((n) => n < MIN_SPRAYS) ? <span className="faint">Faded: under {MIN_SPRAYS} sprays</span> : null}
+          </div>
+          {cur.path && !cur.relative ? <SprayDistance reference={RECOIL[cur.w]} path={cur.path} /> : null}
         </div>
       </div>
-      {pro && <BulletControl path={path} pro={pro} />}
-    </div>
-  );
-}
-
-/**
- * Bullet by bullet, how far your mean view movement sat from the median pro compensation, and whether
- * it fell inside the middle half of pros for that bullet (both pitch and yaw). Display only: the
- * spray metrics themselves (sprayDeviation, sprayPull) are the engine's.
- */
-function BulletControl({ path, pro }: { path: SprayPath; pro: ProPath }) {
-  const [ref, w] = useWidth<HTMLDivElement>(600);
-  const rows = meanPath(path).filter((p) => p.i > 0 && p.n >= 3 && p.i < pro.length && p.i < 20).map((p) => {
-    const [pp, py, p25, p75, y25, y75] = pro[p.i];
-    return { i: p.i, dev: Math.hypot(p.pitch - pp, p.yaw - py), inside: p.pitch >= p25 && p.pitch <= p75 && p.yaw >= y25 && p.yaw <= y75, n: p.n };
-  });
-  if (rows.length < 2) return <p className="meta">Not enough sprays to compare bullet by bullet.</p>;
-  let held = 0;
-  for (const r of rows) { if (r.i === held + 1 && r.inside) held = r.i; else break; }
-  const max = Math.max(1, ...rows.map((r) => r.dev));
-  const h = 130;
-  const bw = Math.max(8, Math.min(40, (w - 24) / rows.length - 4));
-  const Y = (d: number) => h - 18 - (d / max) * (h - 30);
-  return (
-    <div className="bctl" ref={ref}>
-      <div className="bctl__head"><span className="caps">Bullet by bullet</span><b className="num">{held ? `Inside the pro range through bullet ${held + 1}` : "Outside the pro range from bullet 2"}</b></div>
-      <svg width={w} height={h} role="img" aria-label={`Distance from the pro path by bullet: ${rows.map((r) => `${r.i + 1}: ${r.dev.toFixed(1)} degrees${r.inside ? ", inside" : ""}`).join(", ")}`}>
-        {rows.map((r, j) => {
-          const x = 12 + j * (bw + 4);
-          const t = r.inside ? 0.6 : -toScore(r.dev, 0, max) * 0.8 - 0.2;
-          return (
-            <g key={r.i}>
-              <rect x={x} y={Y(r.dev)} width={bw} height={Math.max(2, h - 18 - Y(r.dev))} rx="2" fill={scoreFill(t)} opacity={0.45 + 0.55 * Math.abs(t)}><title>{`Bullet ${r.i + 1}: ${r.dev.toFixed(2)}° from the pro median, ${r.inside ? "inside" : "outside"} the middle half of pros, ${r.n} sprays`}</title></rect>
-              <text x={x + bw / 2} y={h - 4} textAnchor="middle" className="ax">{r.i + 1}</text>
-            </g>
-          );
-        })}
-      </svg>
-      <p className="meta">Each bar is how far your average view movement for that bullet sat from the median pro's. Green bars fall inside the middle half of pros. Target movement changes the ideal path, so this compares with pros rather than grading you.</p>
-    </div>
+    </Card>
   );
 }
 
 // ---------------------------------------------------------------- hits
 
-const BODY_PARTS: { id: keyof BodyShare; group: (typeof HIT_GROUPS)[number]; label: string }[] = [
-  { id: "head", group: "head", label: "Head" }, { id: "neck", group: "neck", label: "Neck" }, { id: "chest", group: "chest", label: "Chest" }, { id: "stomach", group: "stomach", label: "Stomach" },
-  { id: "leftArm", group: "left_arm", label: "Left arm" }, { id: "rightArm", group: "right_arm", label: "Right arm" }, { id: "leftLeg", group: "left_leg", label: "Left leg" }, { id: "rightLeg", group: "right_leg", label: "Right leg" },
-];
+const PART_LABEL: Record<(typeof HIT_GROUPS)[number], string> = {
+  head: "Head", neck: "Neck", chest: "Chest", stomach: "Stomach", left_arm: "Left arm", right_arm: "Right arm", left_leg: "Left leg", right_leg: "Right leg",
+};
 
 function HitsCard({ s }: { s: Rolled | null }) {
   // gun hits by body part, HIT_GROUPS order, summed over the guns in the summary
   const counts = HIT_GROUPS.map((_, g) => Object.entries(s?.weapons ?? {}).reduce((t, [w, x]) => t + (isGun(w) ? x.groups[g] : 0), 0));
   const total = counts.reduce((a, b) => a + b, 0);
-  const count = (b: (typeof BODY_PARTS)[number]) => counts[HIT_GROUPS.indexOf(b.group)];
   return (
-    <Card title="Where you hit" aside={total ? <span className="meta">{plural(total, "hit")}</span> : undefined}>
-      {!s ? <div className="skel" style={{ height: 270 }} /> : !total ? <Empty icon={<AimIcon size={32} />} text="No gun hits recorded." /> : (() => {
-        const share = Object.fromEntries(BODY_PARTS.map((b) => [b.id, count(b) / total])) as BodyShare;
-        return (
-          <div className="bodymap-wrap">
-            <BodyFigure share={share} height={270} />
-            <ul className="bodymap-list">
-              {BODY_PARTS.filter((b) => b.id !== "neck" || share.neck > 0).map((b) => (
-                <li key={b.id}><span>{b.label}</span><span className="hbar"><i style={{ width: `${share[b.id] * 100}%`, background: "var(--cream)" }} /></span><b className="num"><Num v={fmtPct(100 * share[b.id], 0)} /></b><span className="faint num">{count(b)}</span></li>
-              ))}
-            </ul>
-          </div>
-        );
-      })()}
+    <Card className="aim-hits" title="Where you hit" aside={total ? <span className="meta">{plural(total, "hit")}</span> : undefined}>
+      {!s ? <div className="skel" style={{ height: 270 }} /> : !total ? <Empty icon={<AimIcon size={32} />} text="No gun hits recorded." /> : (
+        <div className="bodymap-wrap">
+          <HitFigure groups={counts} width={112} />
+          <ul className="bodymap-list">
+            {HIT_GROUPS.map((g, i) => (g === "neck" && !counts[i] ? null : (
+              <li key={g}><span>{PART_LABEL[g]}</span><span className="hbar"><i style={{ width: `${(100 * counts[i]) / total}%`, background: "var(--cream)" }} /></span><b className="num"><Num v={fmtPct((100 * counts[i]) / total, 0)} /></b><span className="faint num">{counts[i]}</span></li>
+            )))}
+          </ul>
+        </div>
+      )}
     </Card>
   );
 }
 
-// ---------------------------------------------------------------- per gun
+// ---------------------------------------------------------------- counter-strafing and the finer metrics
+
+/** A metric's label with its tooltip and approx mark. */
+function MetricLabel({ id }: { id: string }) {
+  const m = metric(id);
+  return <span className="amrow__l" data-tip={aimTip(id)} tabIndex={0}>{m.label}{m.status === "approx" ? <ApproxMark /> : null}</span>;
+}
+
+function StrafeCard({ s }: { s: Rolled | null }) {
+  // aim.cs: rifle and sniper first bullets on the ground as [accurate, still slowing, late reversal, no stop, too fast with the cause unknown]
+  const cs = s?.aim.cs ?? [0, 0, 0, 0, 0];
+  const total = cs.reduce((a, b) => a + b, 0);
+  const fast = total - cs[0];
+  const causes: { id: string | null; label?: string; n: number; tone: string }[] = [
+    { id: "csTooEarly", n: cs[1], tone: "var(--tan)" },
+    { id: "csLateReversal", n: cs[2], tone: "var(--ink2)" },
+    { id: "csNoStop", n: cs[3], tone: "var(--ink3)" },
+    { id: null, label: "Cause unknown", n: cs[4], tone: "var(--line2)" },
+  ];
+  return (
+    <Card className="aim-strafe" title={<>Counter-strafing<Hint tip="Rifle and sniper first bullets fired on the ground." /></>} aside={total ? <span className="meta">{plural(total, "first shot")}</span> : undefined}>
+      {!s ? <div className="skel" style={{ height: 150 }} /> : !total ? <p className="meta">Not measured in these files.</p> : (
+        <div className="strafe">
+          <div className="strafe__bar" aria-hidden>
+            <i style={{ flexGrow: cs[0], background: "var(--cream)" }} />
+            {causes.map((c, i) => (c.n ? <i key={i} style={{ flexGrow: c.n, background: c.tone }} /> : null))}
+          </div>
+          <ul className="amlist">
+            <li className="amrow amrow--lead"><i className="sw" style={{ background: "var(--cream)" }} /><MetricLabel id="counterStrafe" /><span className="amrow__n num">{cs[0]}</span><b className="num"><Num v={text("counterStrafe", s)} /></b></li>
+            <li className="amrow amrow--lead"><i className="sw sw--none" /><span className="amrow__l">Too fast</span><span className="amrow__n num">{fast}</span><b className="num"><Num v={fmtRatio(fast, total)} /></b></li>
+            {causes.map((c, i) => (
+              <li key={i} className="amrow amrow--sub">
+                <i className="sw" style={{ background: c.tone }} />
+                {c.id ? <MetricLabel id={c.id} /> : <span className="amrow__l" data-tip="Too fast, without the velocity history to say why" tabIndex={0}>{c.label}</span>}
+                <span className="amrow__n num">{c.n}</span>
+                <b className="num">{c.id ? <span data-tip="Of the too-fast shots with a known cause"><Num v={text(c.id, s)} /></span> : null}</b>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function FinerCard({ s, r, visibility }: { s: Rolled | null; r: CompareResult | null; visibility: boolean }) {
+  return (
+    <Card className="aim-finer" title="Flicks and spray">
+      {!s ? <div className="skel" style={{ height: 150 }} /> : (
+        <ul className="amlist">
+          {FINER.map((id) => {
+            const m = metric(id);
+            const st = standing(id, s, r, visibility);
+            const phrase = st.unavailable ?? st.coverage ?? (m.kind !== "performance" ? "Style, not ranked" : st.pct === null || !r ? "" : <><b>{percentilePhrase(st.pct, "performance")}</b> of {population(r)}</>);
+            return (
+              <li key={id} className="amrow">
+                <MetricLabel id={id} />
+                <span className="amrow__ph">{phrase}</span>
+                <b className="num"><Num v={text(id, s)} /></b>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- per gun: a match
 
 interface GunRow { weapon: string; cls: string; shots: number; hits: number; head: number; kills: number; hsKills: number; rounds: number; s: Rolled | null }
+
+const ACC_TIP = "Gun shots that hit an enemy; the bar fills at 50%.";
+const HEAD_TIP = "Share of your hits on the head, not of your shots.";
+const HSK_TIP = "Share of your kills with the gun that were headshots.";
+
+const accBar = (v: number | null, t: string, color?: string) => (
+  <span className="cellbar"><span className="hbar"><i style={{ width: `${Math.min(100, 2 * (v ?? 0))}%`, background: "var(--cream)" }} /></span><span style={color ? { color } : undefined}><Num v={t} /></span></span>
+);
 
 function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter; guns: string[]; base: Rolled }) {
   const per = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
@@ -320,26 +294,72 @@ function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter;
     const t = base.weapons[w];
     return { weapon: w, cls: weaponClass(w), shots: t.shots, hits: t.hits, head: t.groups[0], kills: t.kills, hsKills: t.hsKills, rounds: t.rounds, s: per?.[i] ?? null };
   });
-  const byClass = GUN_CLASSES.map((c) => ({ key: c, label: <span className="classcell"><WeaponClassIcon cls={c} size={12} />{WEAPON_CLASS_LABEL[c]}</span>, rows: rows.filter((g) => g.cls === c && (g.shots || g.kills)) })).filter((g) => g.rows.length);
+  const byClass = GUN_CLASSES.map((c) => ({ key: c, label: <span className="classcell"><ClassIcon cls={c} />{WEAPON_CLASS_LABEL[c]}</span>, rows: rows.filter((g) => g.cls === c && (g.shots || g.kills)) })).filter((g) => g.rows.length);
   return (
-    <Card title="Accuracy by gun" aside={<span className="meta">{plural(rows.filter((g) => g.shots).length, "gun")} fired</span>} flush>
+    <Card className="guntbl guntbl--match" title="Accuracy by gun" aside={<span className="meta">{plural(rows.filter((g) => g.shots).length, "gun")} fired</span>} flush>
       <DataTable<GunRow>
         label="Accuracy by gun"
         groups={byClass}
         rowKey={(g) => g.weapon}
         defaultSort={{ key: "shots", dir: "desc" }}
         columns={[
-          { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><WeaponIcon name={g.weapon} size={12} label={undefined} />{weaponLabel(g.weapon)}</span>, width: 150 },
+          { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}</span>, width: 170 },
           { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
-          { key: "acc", label: "Accuracy", sort: (g) => value("accuracy", g.s), render: (g) => <span className="cellbar"><span className="hbar"><i style={{ width: `${Math.min(100, 2 * (value("accuracy", g.s) ?? 0))}%`, background: "var(--cream)" }} /></span><Num v={text("accuracy", g.s)} /></span>, width: 130, tip: `${metric("accuracy").def} The bar fills at 50%.` },
-          { key: "head", label: "Head share", sort: (g) => pct(g.head, g.hits), render: (g) => <Num v={fmtRatio(g.head, g.hits)} />, tip: "Share of your hits that landed on the head, not of your shots" },
-          { key: "first", label: "First bullet", sort: (g) => value("firstBulletAccuracy", g.s), render: (g) => <Num v={text("firstBulletAccuracy", g.s)} />, tip: metric("firstBulletAccuracy").def },
+          { key: "acc", label: "Accuracy", sort: (g) => value("accuracy", g.s), render: (g) => accBar(value("accuracy", g.s), text("accuracy", g.s)), width: 130, tip: ACC_TIP },
+          { key: "head", label: "Head share", sort: (g) => pct(g.head, g.hits), render: (g) => <Num v={fmtRatio(g.head, g.hits)} />, tip: HEAD_TIP },
+          { key: "first", label: "First bullet", sort: (g) => value("firstBulletAccuracy", g.s), render: (g) => <Num v={text("firstBulletAccuracy", g.s)} />, tip: aimTip("firstBulletAccuracy") },
           { key: "kills", label: "Kills", sort: (g) => g.kills, render: (g) => g.kills },
-          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: "Share of your kills with the gun that were headshots" },
-          { key: "rounds", label: "Rounds", tip: "Rounds in which you fired it, hit with it or killed with it", sort: (g) => g.rounds, render: (g) => g.rounds },
+          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: HSK_TIP },
+          { key: "rounds", label: "Rounds", tip: "Rounds you fired, hit or killed with it", sort: (g) => g.rounds, render: (g) => g.rounds },
         ]}
       />
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------- per gun: a career
+
+/** Every gun over every career match, as Weapons judges it, with the aim columns beside it. */
+function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
+  const guns = useGuns(list, sidesFor(side));
+  if (!guns) return <div className="skel" style={{ height: 320 }} />;
+  if (!guns.length) return null;
+  const { best, worst } = bestAndWorst(guns);
+  const byClass = GUN_CLASSES.map((c) => ({ key: c, label: <span className="classcell"><ClassIcon cls={c} />{WEAPON_CLASS_LABEL[c]}</span>, rows: guns.filter((g) => g.cls === c) })).filter((g) => g.rows.length);
+  const recorded = list.filter((e) => e.hasAim).length;
+  return (
+    <>
+      {best && (
+        <div className="grid-2">
+          <GunHero g={best} tone="best" />
+          {worst && <GunHero g={worst} tone="worst" />}
+        </div>
+      )}
+      <Card className="guntbl" title={<>Every gun<Hint tip={`Accuracy is judged from ${MIN_SHOTS} or more recorded shots.`} /></>} aside={<span className="meta">Kills from {plural(list.length, "match", "matches")}, shots from {recorded}</span>} flush>
+        <DataTable<Judged>
+          label="Every gun"
+          groups={byClass}
+          rowKey={(g) => g.weapon}
+          defaultSort={{ key: "kills", dir: "desc" }}
+          columns={[
+            { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}</span>, width: 120 },
+            { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
+            { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: HSK_TIP },
+            { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
+            { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => accBar(g.acc, fmtMetric("accuracy", g.acc), g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8))), width: 130, tip: "Coloured against your accuracy with your other guns." },
+            { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: aimTip("firstBulletAccuracy") },
+            { key: "head", label: "Head share", sort: (g) => pct(g.head, g.hits), render: (g) => <Num v={fmtRatio(g.head, g.hits)} />, tip: HEAD_TIP },
+            { key: "ttd", label: "Time to damage", sort: (g) => g.own.v.timeToDamage, render: (g) => <Num v={fmtMetric("timeToDamage", g.own.v.timeToDamage)} />, tip: aimTip("timeToDamage") },
+            { key: "rounds", label: "Rounds used", sort: (g) => g.rounds.n, render: (g) => <SplitCell s={g.rounds} what="rounds" /> },
+            { key: "prof", label: "Proficiency", tip: PROF_TIP, sort: (g) => g.prof?.proficiency ?? null, render: (g) => (g.prof ? <span className="profcell" data-tip={g.prof.evidence} tabIndex={0}><Num v={fmtInt(g.prof.proficiency)} /></span> : <Num v={fmtInt(null)} />) },
+            {
+              key: "edge", label: "Vs other guns", colored: true, sort: (g) => g.edge, tip: EDGE_TIP,
+              render: (g) => (g.edge === null ? <span className="faint">–</span> : <span className="num" style={{ color: scoreText(toScore(g.edge, 0, 8)) }} data-tip={edgeTip(g)} tabIndex={0}>{edgeText(g.edge)}</span>),
+            },
+          ]}
+        />
+      </Card>
+    </>
   );
 }
 
@@ -357,7 +377,7 @@ const TIMINGS: { id: string; label: string; samples: (s: Rolled) => number[]; un
 function Coverage({ s }: { s: Rolled | null }) {
   const cov = s?.coverage ?? null;
   return (
-    <div className="gated__meter" aria-label={`Visibility coverage ${cov === null ? "not measurable" : `${Math.round(100 * cov)}%`}`} data-tip="Share of your gun hits fired while an enemy was mesh-visible near your view. Low coverage means the timings describe only part of your fights.">
+    <div className="gated__meter" tabIndex={0} aria-label={`Visibility coverage ${cov === null ? "not measurable" : `${Math.round(100 * cov)}%`}`} data-tip="Share of your gun hits fired at a mesh-visible enemy.">
       <div className="gated__track"><i style={{ width: `${Math.min(100, 100 * (cov ?? 0))}%` }} /></div>
       <span className="meta">Visibility coverage {cov === null ? "not measurable here" : `${Math.round(100 * cov)}% of your hits`}</span>
     </div>
@@ -371,8 +391,8 @@ function TimingsCard({ s, visibility }: { s: Rolled | null; visibility: boolean 
         <Coverage s={s} />
         <div className="grid-2" style={{ marginTop: 14 }}>
           {TIMINGS.map((t) => (
-            <div key={t.id} data-tip={metric(t.id).def}>
-              <div className="hist-title"><span className="caps">{t.label}</span></div>
+            <div key={t.id}>
+              <div className="hist-title"><span className="caps" data-tip={aimTip(t.id)} tabIndex={0}>{t.label}</span></div>
               {s ? <Histogram h={binSamples(t.samples(s))} med={value(t.id, s)} unit={t.unit} bench={t.bench} benchLabel="good" lowerIsBetter /> : <div className="skel" style={{ height: 120 }} />}
             </div>
           ))}
@@ -381,29 +401,15 @@ function TimingsCard({ s, visibility }: { s: Rolled | null; visibility: boolean 
     );
   }
   return (
-    <Card title="When an enemy appears" aside={<span className="chip chip--outline">Waiting for line of sight</span>}>
+    <Card title="When an enemy appears" aside={<span className="chip chip--outline">Needs line of sight</span>}>
       <div className="gated">
-        <div className="gated__cards">
-          {[
-            { l: "Time to damage", d: "How long from an enemy appearing to your first damage on them.", eg: "milliseconds" },
-            { l: "Reaction", d: "How long until your crosshair starts moving toward them.", eg: "milliseconds" },
-            { l: "Crosshair placement", d: "How far your crosshair was from their head when they appeared.", eg: "degrees" },
-          ].map((c) => (
-            <div key={c.l} className="gated__card">
-              <span className="caps">{c.l}</span>
-              <b className="gated__eg">{c.eg}</b>
-              <svg viewBox="0 0 160 36" width="100%" height="36" aria-hidden>
-                {[4, 9, 15, 22, 18, 12, 8, 5, 3, 2].map((v, i) => <rect key={i} x={i * 16 + 2} y={34 - v} width="12" height={v} rx="2" fill="var(--line2)" />)}
-              </svg>
-              <p className="meta">{c.d}</p>
-            </div>
-          ))}
-        </div>
-        <div className="gated__why">
-          <Coverage s={s} />
-          <p><NeedsDemo detail="These need your view angles and mesh line of sight to each enemy. Plugin match files carry neither; the extractor computes visibility on the map's mesh for recorded demos." /></p>
-        </div>
+        <ul className="gated__list">
+          {TIMINGS.map((t) => <li key={t.id}><span className="caps" data-tip={aimTip(t.id)} tabIndex={0}>{t.label}</span><b className="num faint">–</b></li>)}
+        </ul>
+        <Coverage s={s} />
+        <NeedsDemo detail="Needs view angles and mesh line of sight to each enemy." />
       </div>
     </Card>
   );
 }
+
