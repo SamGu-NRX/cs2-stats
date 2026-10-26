@@ -7,7 +7,7 @@ import type { BuyClass, BuyTier } from "./economy";
 import { emptyInfo, foldInfo, type InfoAgg } from "./information";
 import { emptyMove, foldMove, type MoveAgg } from "./movement";
 import { emptyUtilQ, foldUtilQ, type UtilQAgg } from "./utilq";
-import { emptyMeasures, HIT_GROUPS, MEASURES, type GrenadeFact, type MatchFacts, type Measures, type PlayerRound, type WeaponFact } from "./facts";
+import { emptyMeasures, HIT_GROUPS, MEASURES, type GrenadeFact, type MatchFacts, type MatchInfo, type Measures, type PlayerRound, type WeaponFact } from "./facts";
 import { foldPresence, type Presence } from "./positions";
 import type { Side } from "./tables";
 
@@ -22,9 +22,11 @@ export interface Filter {
   /** the opponents' buy class */
   oppBuy?: BuyClass[];
   maps?: string[];
-  /** inclusive YYYY-MM-DD bounds */
+  /** inclusive YYYY-MM-DD bounds on the day each match was played (matchDay) */
   from?: string;
   to?: string;
+  /** the IANA time zone from and to are days in; the runtime's own zone when absent, which in the worker is the user's */
+  timeZone?: string;
   /** opponent team names */
   opponents?: string[];
   /** weapon class names; applies to the per-weapon rows and to event facts with a weapon */
@@ -63,12 +65,32 @@ export interface Summary {
   presence: Record<string, Presence>;
 }
 
+/** A formatter of the calendar day per time zone ("" for the runtime's own), made once: keptRounds asks per match. */
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * The day a match was played, YYYY-MM-DD, as Filter.from and to read it: the calendar day of
+ * `startedAt` in `timeZone` (the runtime's own zone when absent), so a match started at 00:06 UTC
+ * counts on the evening before in America/Chicago. A source with a date but no clock time gives that
+ * date unchanged, since there is no time to move into another zone. Null when it has neither.
+ */
+export function matchDay(m: Pick<MatchInfo, "startedAt" | "date">, timeZone?: string): string | null {
+  const ms = m.startedAt ? Date.parse(m.startedAt) : NaN;
+  if (Number.isNaN(ms)) return m.date;
+  let fmt = dayFormats.get(timeZone ?? "");
+  if (!fmt) dayFormats.set(timeZone ?? "", (fmt = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })));
+  const part = Object.fromEntries(fmt.formatToParts(ms).map((x) => [x.type, x.value]));
+  return `${part.year}-${part.month}-${part.day}`;
+}
+
 /** The player-round rows a filter keeps in one match, for families that sum their own facts and for the worker's per-row lists. */
 export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
   const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
   if (filter.maps && !filter.maps.includes(f.match.map)) return [];
-  if (filter.from && (!f.match.date || f.match.date < filter.from)) return [];
-  if (filter.to && (!f.match.date || f.match.date > filter.to)) return [];
+  if (filter.from || filter.to) {
+    const day = matchDay(f.match, filter.timeZone);
+    if (!day || (filter.from && day < filter.from) || (filter.to && day > filter.to)) return [];
+  }
   return f.pr.filter((r) => {
     if (!ids.has(f.players[r.pi].id)) return false;
     if (filter.sides && !filter.sides.includes(r.side)) return false;

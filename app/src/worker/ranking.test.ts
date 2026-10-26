@@ -158,8 +158,9 @@ it("compares the current period with the previous one, each over its own matches
   // fails if a period's dates are ignored or swapped: the earlier match plays every round, the later one
   // only the first five, so each period's KPR is its own match's
   const m = await sampleFacts;
-  const before = { ...m, match: { ...m.match, date: "2026-10-01" } };
-  const now = { ...m, match: { ...m.match, date: "2026-10-10" }, pr: m.pr.filter((r) => r.ri < 5), kills: m.kills.filter((k) => k.ri < 5) };
+  // started at noon UTC: the same calendar day in any zone from UTC-12 to UTC+11, where the test machine's day is read
+  const before = { ...m, match: { ...m.match, date: "2026-10-01", startedAt: "2026-10-01T12:00:00Z" } };
+  const now = { ...m, match: { ...m.match, date: "2026-10-10", startedAt: "2026-10-10T12:00:00Z" }, pr: m.pr.filter((r) => r.ri < 5), kills: m.kills.filter((k) => k.ri < 5) };
   const calls = rankingCalls({ summary: async (q) => rollup([before, now], q.filter), pros: async () => flat(0), careers: async () => { throw new Error("not used"); } });
   const player = m.match.pov!;
   const rows = await calls.periodCompare({ files: ["x"], filter: { player } }, { from: "2026-10-05", to: "2026-10-31" }, { from: "2026-10-01", to: "2026-10-04" });
