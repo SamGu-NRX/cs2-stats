@@ -148,7 +148,7 @@ function useEnter(ready: boolean, scope: string) {
   useLayoutEffect(() => {
     if (!ready || !enter) return;
     ref.current?.querySelectorAll<HTMLElement>(".card").forEach((el, i) => el.style.setProperty("--i", String(Math.min(i, 7))));
-    // the last card's delay (7 × 30 ms) plus the dots' 320 ms, with room to spare
+    // the last card's delay (7 × 30 ms) plus the dots' 280 ms, with room to spare
     const t = window.setTimeout(() => setEnter(false), 900);
     return () => window.clearTimeout(t);
   }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps

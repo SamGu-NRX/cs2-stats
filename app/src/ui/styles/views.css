@@ -210,8 +210,10 @@ canvas.radar-img { image-rendering: auto; }
 .mtab[aria-selected="true"] { color: var(--cream); }
 .mtab.is-dim { color: var(--ink3); }
 @media (hover: hover) and (pointer: fine) { .mtab[aria-selected="false"]:hover { color: var(--ink); } }
-.mtabs__ul { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--cream); border-radius: 1px 1px 0 0; transition: transform var(--d-tab) var(--ease-in-out), width var(--d-tab) var(--ease-in-out); }
+/* the underline takes the tab's width at once and slides under it: transform only */
+.mtabs__ul { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--cream); border-radius: 1px 1px 0 0; transition: transform var(--d-tab) var(--ease-in-out); }
 .mtabs__ul.is-instant { transition: none; }
+@media (prefers-reduced-motion: reduce) { .mtabs__ul { transition: none; } }
 .tabpad { padding: 16px var(--gutter) 40px; display: grid; gap: 12px; }
 
 .overview__bar { justify-content: flex-start; }
@@ -1125,7 +1127,7 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 @keyframes trk-in { from { transform: translateX(calc((50 - var(--p, 50)) * 1cqw)); } }
 html.anim .profile[data-enter] .card { animation: rise 240ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
 html.anim .profile[data-enter] .pcard__agent { animation: fade-in var(--d-color) ease both; }
-html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation: trk-in 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
+html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation: trk-in 280ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
 @media (prefers-reduced-motion: reduce) {
   html.anim .profile[data-enter] .card, html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation-name: fade-in; }
 }
