@@ -88,9 +88,9 @@ export function deriveUtilQ(c: Ctx): UtilQFact[] {
 
 export const UTILQ_METRICS: Metric[] = [
   { id: "smokeSights", label: "Enemy sightlines blocked per smoke", kind: "performance", group: "utility", unit: "count", status: "approx",
-    def: `Times an enemy's mesh line of sight to your team opened through your smoke (modelled as a sphere of radius ${SMOKE_RADIUS} centred ${SMOKE_HEIGHT} units above the detonation), per smoke. Maps without mesh visibility are left out.`,
+    tip: "Enemy sightlines your smokes blocked, per smoke.", def: `Times an enemy's mesh line of sight to your team opened through your smoke (modelled as a sphere of radius ${SMOKE_RADIUS} centred ${SMOKE_HEIGHT} units above the detonation), per smoke. Maps without mesh visibility are left out.`,
     value: (s) => (s.utilq.smokes ? s.utilq.sights / s.utilq.smokes : null) },
   { id: "smokeBlockedSecs", label: "Enemy sight blocked per smoke", kind: "performance", group: "utility", unit: "secs", status: "approx",
-    def: `Seconds an enemy's mesh line of sight to your team ran through your smoke (the same sphere), per smoke, from the engagement ticks: a smoke that sat on a contested line scores, one thrown where nobody looks does not. Maps without mesh visibility are left out.`,
+    tip: "Seconds your smokes blocked enemy sight, per smoke.", def: `Seconds an enemy's mesh line of sight to your team ran through your smoke (the same sphere), per smoke, from the engagement ticks: a smoke that sat on a contested line scores, one thrown where nobody looks does not. Maps without mesh visibility are left out.`,
     value: (s) => (s.utilq.smokes ? s.utilq.blockedSecs / s.utilq.smokes : null) },
 ];

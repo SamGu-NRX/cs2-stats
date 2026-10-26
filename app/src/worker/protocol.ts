@@ -65,6 +65,8 @@ export interface MetricMeta {
   unit: Unit;
   status: Status;
   def: string;
+  /** the tooltip: one sentence of 12 words or fewer, in a player's words (Metric.tip) */
+  tip: string;
   lowerIsBetter?: boolean;
   /** what the metric's events are called, and the count a percentile needs (Metric.sample) */
   sample?: { unit: string; min?: number };

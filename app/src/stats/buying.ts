@@ -56,10 +56,10 @@ const per = (a: number, b: number) => (b > 0 ? a / b : null);
 
 export const BUYING_METRICS: Metric[] = [
   { id: "buyDeviation", label: "Buy against the team", kind: "identity", group: "economy", unit: "money", status: "approx",
-    def: "Your equipment value minus your team's average, per round.",
+    tip: "How much more or less you spend than your teammates.", def: "Your equipment value minus your team's average, per round.",
     value: (s) => per(s.m.buyDevSum, s.m.buyDevRounds) },
   { id: "saveConversion", label: "Equipment saved", kind: "identity", group: "economy", unit: "money", status: "approx", needs: ["carry"],
-    def: "Equipment you carried into the next round after surviving a loss.",
+    tip: "Gear you keep for next round after surviving a loss.", def: "Equipment you carried into the next round after surviving a loss.",
     value: (s) => per(s.m.saveCarrySum, s.m.saveCarryKnown),
     sample: { n: (s) => s.m.saveCarryKnown, unit: "saved rounds", min: SAVE_MIN } },
 ];

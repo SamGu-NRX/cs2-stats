@@ -125,11 +125,11 @@ const tooFew = (min: number) => (s: { aim: { xN: number } }) => (s.aim.xN < min 
 
 export const DUEL_METRICS: Metric[] = [
   { id: "expectedDuel", label: "Expected duel win", kind: "identity", group: "duels", unit: "pct", status: "approx", needs: ["sight"],
-    def: "Your average chance of winning your duels, given their context.",
+    tip: "How winnable your fights were before anyone shot.", def: "Your average chance of winning your duels, given their context.",
     value: (s) => (s.aim.xN >= EXPECTED_DUEL_MIN ? (100 * s.aim.xExp) / s.aim.xN : null), why: tooFew(EXPECTED_DUEL_MIN),
     sample: { n: (s) => s.aim.xN, unit: "settled duels", min: EXPECTED_DUEL_MIN } },
   { id: "duelsOverExpected", label: "Duels won over expected", kind: "performance", group: "duels", unit: "pct", status: "approx", needs: ["sight"],
-    def: "Duels you won beyond what their context predicted, in percentage points.",
+    tip: "How many more fights you won than expected.", def: "Duels you won beyond what their context predicted, in percentage points.",
     value: (s) => (s.aim.xN >= OVER_EXPECTED_MIN ? (100 * (s.aim.xWins - s.aim.xExp)) / s.aim.xN : null), why: tooFew(OVER_EXPECTED_MIN),
     sample: { n: (s) => s.aim.xN, unit: "settled duels", min: OVER_EXPECTED_MIN } },
 ];

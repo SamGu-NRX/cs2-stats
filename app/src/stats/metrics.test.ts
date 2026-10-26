@@ -1,7 +1,7 @@
 // The metrics-v2 contract: the ids the UI binds to, each defined in one plain sentence of 12 words or
 // fewer (the long form is METRICS.md's).
 import { expect, it } from "vitest";
-import { METRIC } from "./metrics";
+import { METRIC, METRICS } from "./metrics";
 import { emptySummary } from "./rollup";
 
 const V2 = [
@@ -25,4 +25,12 @@ it("counts multi-kill rounds by exact kills", () => {
   const s = emptySummary();
   Object.assign(s.m, { rounds: 10, multiKillRounds: 4, k3Rounds: 2, k4Rounds: 1, k5Rounds: 0 });
   expect(["rounds2k", "rounds3k", "rounds4k", "rounds5k"].map((id) => METRIC[id].value(s))).toEqual([20, 10, 10, 0]);
+});
+
+it("gives every metric a tooltip of one sentence and 12 words or fewer", () => {
+  // fails if a metric ships without a tooltip, or a tooltip grows past one short sentence
+  for (const m of METRICS) {
+    expect(m.tip, m.id).toMatch(/^[^.]+\.$/);
+    expect(m.tip.split(/\s+/).length, `${m.id}: ${m.tip}`).toBeLessThanOrEqual(12);
+  }
 });
