@@ -392,7 +392,8 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
       <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel.toLowerCase()}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
-            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip={careers.provisional ? `${PROVISIONAL_TIP}\nOpens their HLTV page.` : "Opens their HLTV page."}>
+            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer"
+              data-tip={[careers.provisional ? PROVISIONAL_TIP : null, "The match is how closely your style's shape fits theirs.", "Opens their HLTV page."].filter(Boolean).join("\n")}>
               <ProFace pro={pick.item} className="probanner__face" />
               <div className="probanner__body">
                 <ProMarks pro={pick.item} />
@@ -400,7 +401,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
                 <span className="meta">Rating 3.0 {pick.item.rating3.toFixed(2)} against top-20 teams</span>
               </div>
               <span className="probanner__score">
-                <b className={`probanner__pct num ${careers.provisional ? "is-prov" : ""}`} data-tip={careers.provisional ? PROVISIONAL_TIP : "How closely your style's shape matches theirs."}>{pick.pct}<small>%</small></b>
+                <b className={`probanner__pct num ${careers.provisional ? "is-prov" : ""}`}>{pick.pct}<small>%</small></b>
               </span>
             </a>
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
