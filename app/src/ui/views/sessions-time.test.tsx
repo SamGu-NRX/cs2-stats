@@ -23,6 +23,7 @@ import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { BarProvider } from "../shell/Bar";
+import { go, parseHash } from "../router";
 import { MatchesView } from "./Matches";
 
 // before any module formats a date: the formatters take the zone when they are built
@@ -47,7 +48,13 @@ const list: Sample[] = [
   as(career[2], "x/dated-b", { startedAt: null, date: "2026-10-24" }),
   as(career[3], "x/undated", { startedAt: null, date: null }),
 ];
-const factsOf = new Map(list.map((s) => [s.file, s.facts]));
+// a mixed day: a timed match starting at a UTC midnight, and a date-only match on that date, whose
+// session the worker also starts at that midnight
+const mixed: Sample[] = [
+  as(career[0], "y/midnight", { startedAt: "2026-10-24T00:00:00.000Z", date: "2026-10-24" }),
+  as(career[1], "y/dated", { startedAt: null, date: "2026-10-24" }),
+];
+const factsOf = new Map([...list, ...mixed].map((s) => [s.file, s.facts]));
 const summary = (q: Query) => rollup(q.files.map((f) => factsOf.get(f)!), q.filter);
 const calls = matchCalls(async (files, visit) => { for (const f of files) visit(factsOf.get(f)!, f); }, async (q) => summary(q));
 
@@ -105,6 +112,38 @@ describe("session chips west of UTC", () => {
     expect(chips()[0]).toMatch(/^Oct 24, 9:10 PM – \d{1,2}:\d{2} (PM|AM)$/);
     expect(chips()[1]).toBe("Oct 24");
     expect(host.textContent).not.toMatch(/Dec 31|Oct 23|1969/);
+  });
+
+  it("tells apart a timed and a date-only session that start at the same instant", async () => {
+    // fails if the two share an identity: pressing one marks both pressed, or the table shows the other's matches
+    data = { matches: mixed.map((s) => s.entry), you: [...new Set(mixed.map((s) => s.facts.match.pov!))] };
+    const rows = () => Array.from(host.querySelectorAll(".matches__table [data-file]")).map((el) => el.getAttribute("data-file")).sort();
+    const buttons = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".sess"));
+    const pressed = () => buttons().filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.querySelector(".sess__when")!.textContent);
+    try {
+      act(() => go("#/matches"));
+      render();
+      for (const args of asked) sessionsBy.set(JSON.stringify(args), await calls.sessions(...(args as [Query, number?])));
+      render();
+      expect(chips()).toHaveLength(2);
+      const day = buttons().findIndex((b) => b.querySelector(".sess__when")!.textContent === "Oct 24");
+      act(() => buttons()[day].click());
+      render();
+      expect(pressed()).toEqual(["Oct 24"]);
+      expect(rows()).toEqual(["y/dated"]);
+      expect(parseHash(location.hash).query.get("session")).toBe("d:2026-10-24");
+      act(() => buttons()[1 - day].click());
+      render();
+      expect(pressed()).toHaveLength(1);
+      expect(pressed()[0]).not.toBe("Oct 24");
+      expect(rows()).toEqual(["y/midnight"]);
+      // a link from before ids names the session by its start: the timed one
+      act(() => go(`#/matches?session=${Date.parse("2026-10-24T00:00:00.000Z")}`));
+      render();
+      expect(rows()).toEqual(["y/midnight"]);
+    } finally {
+      act(() => go("#/"));
+    }
   });
 
   it("says the sessions call failed instead of loading for good", () => {
