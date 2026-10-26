@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "name": "BotState",
+      "target": "addons/counterstrikesharp/plugins/BotState",
+      "files": ["BotState.dll", "BotState.deps.json", "BotState.pdb"],
+      "source": {
+        "kind": "local",
+        "repo": "SamGu-NRX/CS2-Smarter-Bot",
+        "branch": "fix/postplant-hold-and-carrier",
+        "checkout": "%USERPROFILE%\\Programming Projects\\CS2-Smarter-Bot",
+        "build": "bin\\Release\\net10.0"
+      }
+    },
+    {
+      "name": "BotRandomizer",
+      "target": "addons/counterstrikesharp/plugins/BotRandomizer",
+      "files": ["BotRandomizer.dll", "BotRandomizer.deps.json", "BotRandomizer.pdb", "cosmetic_catalog.json"],
+      "source": {
+        "kind": "local",
+        "repo": "SamGu-NRX/CS2-Bot-Randomizer",
+        "branch": "feat/combined-1.4.7",
+        "checkout": "%USERPROFILE%\\Programming Projects\\CS2-Bot-Randomizer-147",
+        "build": "bin\\Release\\net10.0"
+      }
+    },
+    {
+      "name": "BotBuy",
+      "target": "addons/counterstrikesharp/plugins/BotBuy",
+      "files": ["BotBuy.dll", "BotBuy.deps.json", "BotBuy.pdb"],
+      "source": {
+        "kind": "local",
+        "repo": "SamGu-NRX/CS2-Bot-Buy",
+        "branch": "feat/chatwheel-economy-calls",
+        "checkout": "%USERPROFILE%\\Programming Projects\\CS2-Bot-Buy",
+        "build": "bin\\Release\\net10.0"
+      }
+    },
+    {
+      "name": "BotMatchStats",
+      "target": "addons/counterstrikesharp/plugins/BotMatchStats",
+      "files": ["BotMatchStats.dll", "BotMatchStats.deps.json", "BotMatchStats.pdb"],
+      "source": {
+        "kind": "local",
+        "repo": "SamGu-NRX/cs2-stats",
+        "branch": "main",
+        "checkout": "%USERPROFILE%\\Programming Projects\\cs2-stats-main-build",
+        "build": "plugin\\bin\\Release\\net10.0",
+        "commit": "35d9c78c8b1e71d8bab256288f917e561ad3b38d"
+      }
+    }
+  ]
+}
