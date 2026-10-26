@@ -3,11 +3,11 @@
 // On the public CS2RB model (no HLTV pack, or CS2_WINPROB_PACK=none) the default output is the
 // committed public/baselines.json. With the private HLTV pack it is the user's own pool,
 // %APPDATA%\BotMatchStats\packs\baselines.local.json, which the app ranks against instead
-// (worker/baselines-pool.ts); a pack-built pool never goes to public/.
+// (worker/baselines-pool.ts). Every file goes through tools/outputs.ts writeOutput: a pack-built
+// pool and the named pack are private and never land in the repository.
 // Writes 21 quantiles per metric for each pool (all, rifler, awper, map:<name>) and side, with no
 // names or ids. The optional named pack (default: <data>/derived/baselines-named.json, outside the
 // repo) holds each pro's own metric values per side for "plays like" comparisons; it never ships.
-import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { attributes, buildPools, roleOf, type Baselines, type PoolUnit, type SideKey } from "../src/stats/compare";
 import { performanceScores, styleScores, type PackPlayer } from "../src/stats/identity";
@@ -16,26 +16,25 @@ import { modelFingerprint } from "../src/stats/model-params";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
 import { LOCAL_BASELINES } from "../src/worker/baselines-pool";
-import { isInside } from "./paths";
+import { checkOutput, shippedPool, writeOutput, type OutputKind } from "./outputs";
 import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, WINPROB, proMapDirs, proMaps } from "./node-read";
 
 const arg = (name: string, dflt: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
-const PUBLIC = path.resolve("public/baselines.json");
+const PUBLIC = shippedPool();
 const LOCAL = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs", LOCAL_BASELINES) : null;
 if (WINPROB.kind !== "cs2rb" && !LOCAL && !process.argv.includes("--out")) throw new Error("APPDATA is not set, so there is no packs folder for baselines.local.json: pass --out");
 const OUT = path.resolve(arg("--out", WINPROB.kind === "cs2rb" ? PUBLIC : LOCAL!));
 const NAMED = path.resolve(arg("--named", path.join(DATA_DIR, "derived", "baselines-named.json")));
 const SIDES: SideKey[] = ["both", "CT", "T"];
 
+// The pool is private when it is built on the private HLTV win-probability lookup: its swing must not
+// leave the machine, even as quantiles. The named pack holds pro names, so it is always private.
+const POOL: OutputKind = { private: WINPROB.kind !== "cs2rb", what: `the pro pool built on the ${WINPROB.label}` };
+const NAMED_PACK: OutputKind = { private: true, what: "the named pro pack" };
+// both destinations are checked before any map is read, and again as each file is written
+checkOutput(OUT, POOL);
+checkOutput(NAMED, NAMED_PACK);
 if (!proMapDirs().length) throw new Error(`no pro tables under ${DATA_DIR}/demos (set CS2_STATS_DATA)`);
-// The committed file ships with the app, so it is built only on the public CS2RB model: swing from the
-// private HLTV win-probability lookup must not leave the machine, even as quantiles. A build with
-// the pack goes to the user's own baselines.local.json, and nothing pack-built goes under public/.
-// The check compares real paths, so neither a case variant (PUBLIC\x on Windows) nor a link or
-// junction gets past it.
-if (WINPROB.kind !== "cs2rb" && isInside(OUT, path.dirname(PUBLIC))) {
-  throw new Error(`refusing to write public/baselines.json from the ${WINPROB.label}: set CS2_WINPROB_PACK=none to build on CS2RB, or pass --out outside public/`);
-}
 const facts: MatchFacts[] = [];
 for await (const { t } of proMaps()) facts.push(derive(t, WINPROB));
 
@@ -85,10 +84,8 @@ const named: (PackPlayer & { role: string; rounds: number })[] = kept.map((k) =>
     style: styleScores(attributes(s, b, { side: side as SideKey })), performance: performanceScores(s, b, { side: side as SideKey }),
   }])),
 }));
-mkdirSync(path.dirname(OUT), { recursive: true });
-writeFileSync(OUT, JSON.stringify(b));
-mkdirSync(path.dirname(NAMED), { recursive: true });
-writeFileSync(NAMED, JSON.stringify({ built: b.built, source: b.source, players: named }));
+writeOutput(OUT, JSON.stringify(b), POOL);
+writeOutput(NAMED, JSON.stringify({ built: b.built, source: b.source, players: named }), NAMED_PACK);
 console.log(`${OUT}: ${(JSON.stringify(b).length / 1024).toFixed(0)} KB; pools ${Object.keys(b.pools).join(", ")}`);
 for (const [pool, n] of Object.entries(b.n)) console.log(`  ${pool}: ${JSON.stringify(n)}`);
 console.log(`${NAMED}: ${named.length} players (private, not shipped)`);

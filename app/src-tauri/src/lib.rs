@@ -153,16 +153,22 @@ async fn import_match(name: String, data: Vec<u8>) -> Result<String, String> {
 /// pack".
 #[tauri::command]
 async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
-    let rel = Path::new(&name);
+    let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
+    let root = PathBuf::from(appdata).join("BotMatchStats").join("packs");
+    read_pack_in(&root, &name).map(tauri::ipc::Response::new)
+}
+
+/// One file from the packs folder `root`: empty when it does not exist, an error when the name is not
+/// a pack file path or the file resolves outside the folder (links and junctions included).
+fn read_pack_in(root: &Path, name: &str) -> Result<Vec<u8>, String> {
+    let rel = Path::new(name);
     let ok_ext = name.ends_with(".json") || name.ends_with(".png") || name.ends_with(".svg");
     if !ok_ext || rel.components().any(|c| !matches!(c, Component::Normal(_))) {
         return Err(format!("{name}: not a pack file path"));
     }
-    let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
-    let root = PathBuf::from(appdata).join("BotMatchStats").join("packs");
     let path = root.join(rel);
     if !path.is_file() {
-        return Ok(tauri::ipc::Response::new(Vec::new()));
+        return Ok(Vec::new());
     }
     let (root, path) = (
         root.canonicalize().map_err(|e| format!("packs folder: {e}"))?,
@@ -171,7 +177,10 @@ async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
     if !path.starts_with(&root) {
         return Err(format!("{name}: outside the packs folder"));
     }
-    fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| format!("{name}: {e}"))
+    // The file can change between these checks and the read (a time-of-check race). That is
+    // accepted: swapping it needs a process already running as the user with write access to the packs
+    // folder, which can read anything this route could reach, so no privilege boundary is crossed.
+    fs::read(&path).map_err(|e| format!("{name}: {e}"))
 }
 
 // ---------------------------------------------------------------- the user's Valve matches
@@ -581,6 +590,25 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn read_pack_reads_inside_the_packs_folder_only() {
+        // fails if a pack name with `..`, an absolute path or another type can read outside the folder
+        let s = Scratch::new("packs");
+        let root = s.0.join("packs");
+        fs::create_dir_all(root.join("icons")).unwrap();
+        fs::write(root.join("pros.json"), b"{}").unwrap();
+        fs::write(root.join("icons").join("ak47.svg"), b"<svg/>").unwrap();
+        fs::write(s.0.join("secret.json"), b"{\"secret\":1}").unwrap();
+        assert_eq!(read_pack_in(&root, "pros.json").unwrap(), b"{}");
+        assert_eq!(read_pack_in(&root, "icons/ak47.svg").unwrap(), b"<svg/>");
+        assert!(read_pack_in(&root, "missing.json").unwrap().is_empty());
+        let outside = s.0.join("secret.json").display().to_string();
+        for bad in ["../secret.json", "icons/../../secret.json", outside.as_str(), "pros.txt", "./pros.json"] {
+            let err = read_pack_in(&root, bad).expect_err(bad);
+            assert!(err.contains("not a pack file path"), "{bad}: {err}");
         }
     }
 
