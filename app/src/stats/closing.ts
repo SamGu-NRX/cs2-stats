@@ -56,30 +56,36 @@ export function closing(c: Ctx): ClutchFact[] {
     // clutch both start with a death.
     const atStart = rf.freezeEndTick !== null && withRows.has(ri);
 
+    // living players who disconnected in the live round leave the counts as a death does (only in it:
+    // one before freeze end would take a player from a roster that still counts him, as in
+    // matchviews.ts addSituations)
+    const leaves = rf.leaves.filter((l) => (rf.freezeEndTick === null || l.tick >= rf.freezeEndTick) && l.tick <= rf.endTick);
+    const valued = list.filter((k) => k.tick <= rf.endTick);
+
     // last alive: at some moment the player was the only one of their side alive (counted once)
     const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
     const last = new Set<number>();
     if (atStart) for (const s of ["CT", "T"] as const) if (live[s].size === 1) last.add([...live[s]][0]);
-    for (const k of list) {
-      if (k.tick > rf.endTick) break;
+    const gone = [...valued.map((k) => ({ tick: k.tick, pi: k.victim, leave: 0 })), ...leaves.map((l) => ({ ...l, leave: 1 }))].sort((a, b) => a.tick - b.tick || a.leave - b.leave);
+    for (const e of gone) {
       for (const s of ["CT", "T"] as const) {
-        if (!live[s].delete(k.victim)) continue;
+        if (!live[s].delete(e.pi)) continue;
         if (live[s].size === 1) last.add([...live[s]][0]);
       }
     }
 
-    const valued = list.filter((k) => k.tick <= rf.endTick);
-    for (const cl of detectClutches(valued, alive, rf.winner, atStart)) {
+    for (const cl of detectClutches(valued, alive, rf.winner, atStart, leaves)) {
       const kills = valued.filter((k, i) => i > cl.from && k.enemy && k.killer === cl.pi).length;
       // the clutch starts at the death that left the player alone, or at freeze end for a side that
       // starts the round with one player
-      const tick = cl.from >= 0 ? valued[cl.from].tick : rf.freezeEndTick;
+      const tick = cl.tick ?? rf.freezeEndTick;
       const t = tick === null || rf.freezeEndTick === null ? null : (tick - rf.freezeEndTick) / c.tickRate;
       const sincePlant = tick !== null && rf.plantTick !== null && rf.plantTick <= tick ? (tick - rf.plantTick) / c.tickRate : null;
       const afterPlant = sincePlant !== null;
       const left = afterPlant ? clockLeft(clock.bomb, sincePlant) : clockLeft(clock.round, t);
       // a save, as closing counts saves below: the round lost and the player alive at its end
-      const saved = !cl.won && !list.some((k) => k.victim === cl.pi && k.tick <= rf.endTick);
+      // (a clutch player who disconnected was not alive at the end either)
+      const saved = !cl.won && !list.some((k) => k.victim === cl.pi && k.tick <= rf.endTick) && !leaves.some((l) => l.pi === cl.pi);
       out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, saved, kills, t, afterPlant, left });
       const m = c.pr[ri][cl.pi]!.m;
       const n = Math.min(5, cl.opponents) as 1 | 2 | 3 | 4 | 5;

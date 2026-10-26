@@ -51,3 +51,26 @@ it("counts a player as last alive before any death only from a freeze-end roster
   const lastAlive = (f: ReturnType<typeof oneRound>) => rollup([f], { player: "a" }).m.lastAlive;
   expect([lastAlive(round(null)), lastAlive(round(FREEZE_END))]).toEqual([0, 1]);
 });
+
+it("counts the clutch a teammate's disconnect leaves the player in", () => {
+  // fails if a living player who disconnects still counts as alive: b leaves at 5 s, so a's death at
+  // 10 s leaves c alone against d and e, a 1v2 c wins with two kills; c's kill on d then leaves e
+  // alone too, a 1v1. Without the leave, CT keeps b and c, and e gets a 1v2 instead
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "CT", d: "T", e: "T" },
+    leaves: [{ tick: t(5), steamid: "b", alive: true }],
+    kills: [{ tick: t(10), killer: "d", victim: "a" }, { tick: t(20), killer: "c", victim: "d" }, { tick: t(30), killer: "c", victim: "e" }],
+  });
+  expect(rows(f, ["a", "b", "c", "d", "e"]).map((r) => [r.player, r.opponents, r.won, r.kills, r.t])).toEqual([["c", 2, true, 2, 10], ["e", 1, false, 0, 20]]);
+});
+
+it("gives no clutch to a player who disconnected", () => {
+  // fails if b, who left at 5 s, still counts as alive: then a's death at 10 s makes b CT's last player
+  // in a false 1v2. With the leave, a is the one left alone, in a 1v2 from 5 s that a loses
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
+    leaves: [{ tick: t(5), steamid: "b", alive: true }],
+    kills: [{ tick: t(10), killer: "c", victim: "a" }],
+  });
+  expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.saved, r.t])).toEqual([["a", 2, false, false, 5]]);
+});
