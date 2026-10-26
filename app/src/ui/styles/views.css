@@ -2,7 +2,8 @@
 .view__in { display: grid; gap: 16px; }
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.unit { font-size: 0.62em; font-weight: 600; color: inherit; opacity: 0.7; margin-left: 1px; letter-spacing: 0; }
+/* a unit after a number (%, ms, s) is 55% of the number and quieter: the number carries the weight */
+.unit, .disp small { font-size: 55%; font-weight: 500; color: var(--ink2); margin-left: 1px; letter-spacing: 0; }
 .us-text { color: var(--ink); }
 .them-text { color: var(--ink2); }
 .link { display: inline-flex; align-items: center; gap: 4px; color: var(--ink2); font-size: 12px; border-radius: var(--r-chip); transition: color var(--d-hover) ease; }

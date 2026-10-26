@@ -1,6 +1,8 @@
 /* ---------------------------------------------------------------- cards and collapsible sections */
-.card { background: var(--bg1); border-radius: var(--r-card); min-width: 0; }
-.card--flat { background: transparent; }
+/* a card: the surface step, a hairline, radius 10 and the one card shadow (its top-edge highlight is
+   what makes a dark card read as a surface rather than a hole) */
+.card { background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-card); min-width: 0; }
+.card--flat { background: transparent; border-color: transparent; box-shadow: none; }
 /* The header wraps: an aside too wide to sit beside the title (a population line, the provisional
    label) drops below it at narrow widths, such as the 1100 px window at 200% zoom. */
 .card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 48px; padding: 8px var(--pad-panel); }
