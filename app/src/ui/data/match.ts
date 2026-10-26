@@ -170,6 +170,28 @@ export function selectedColumn(cols: RoundColumn[], ri: number | null, urlRound:
   return i >= 0 ? i : null;
 }
 
+/**
+ * Your team's side in a round known only by number: the starting side in the first half, the other in
+ * the second; null in overtime, where the file gives no order.
+ */
+export function usSideAt(v: MatchModel, number: number): Side | null {
+  if (number > v.maxRounds) return null;
+  return number <= v.maxRounds / 2 ? v.usStartSide : v.usStartSide === "CT" ? "T" : "CT";
+}
+
+/** Who won a totals-only round, from its totals' winning side: null when either side is unknown. */
+export function totalsWinner(v: MatchModel, col: Extract<RoundColumn, { kind: "totals" }>): "us" | "them" | null {
+  const us = usSideAt(v, col.number);
+  const w = col.totals?.winner ?? null;
+  return us === null || w === null ? null : w === us ? "us" : "them";
+}
+
+/** The column holding a round number, or null. */
+export const columnOf = (cols: RoundColumn[], number: number | null) => {
+  const i = number === null ? -1 : cols.findIndex((c) => c.number === number);
+  return i >= 0 ? i : null;
+};
+
 /** The side a player was on in a round: their row's side, else their team's. */
 export function sideOf(v: MatchModel, r: MRound, pi: number): Side {
   const row = r.pr[pi];

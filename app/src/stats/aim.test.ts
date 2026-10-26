@@ -143,6 +143,30 @@ describe("deriveAim on a hand-built match", () => {
     expect(s[0].dy.map((x) => +x.toFixed(9))).toEqual([1.5, 2, 2.5]);
   });
 
+  it("measures each spray's distance from the enemy bullet 1 aimed at", () => {
+    // fails if the distance reads the wrong target, view or bullets. V sits at yaw 180, pitch 0; the
+    // four bullets are off by (0, 1), (0.5, 0.5), (1.5, 1) and (3, 1.5) degrees of pitch and yaw, so
+    // about 1, 0.707, 1.803 and 3.354 degrees; with V hidden there is no target
+    const s = facts.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.SQRT1_2 + Math.hypot(1.5, 1) + Math.hypot(3, 1.5)) / 4, 2);
+    const hidden = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(hidden[0].dist).toBeNull();
+  });
+
+  it("skips a spray bullet whose tick lacks finite coordinates, and gives no distance when none is left", () => {
+    // fails if a null or NaN coordinate mid-spray turns the distance into NaN: with bullet 2's tick
+    // missing V's x and bullet 3's holding a NaN, the distance is the mean of bullets 1 and 4
+    const t = match();
+    const T = t.engagement_ticks!;
+    const rowAt = (tick: number) => T.tick.findIndex((x, i) => x === tick && T.engagement_id[i] === 1);
+    T.v_x[rowAt(1106)] = null;
+    T.a_x[rowAt(1113)] = Number.NaN;
+    const s = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.hypot(3, 1.5)) / 2, 2);
+    for (const tick of [1100, 1106, 1113, 1119]) T.v_eye_z[rowAt(tick)] = Number.NaN;
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].dist).toBeNull();
+  });
+
   it("compares a spray with the pros' only while an enemy is on screen", () => {
     // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
     const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
@@ -244,7 +268,7 @@ describe("the aim panels' restored measures", () => {
 
   it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
     // fails if squares, bullet indexes or the null skip go wrong
-    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], sw: 0, swHits: 0, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
+    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
     const a = emptyAim();
     foldAim(a, base);
     foldAim(a, { ...base, dp: [3, 2], dy: [0, -1], hp: [], hy: [] });

@@ -10,15 +10,18 @@ import { AWPER_MIN_AWP_KPR } from "../stats/compare";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
 import { RATING3_INTERCEPT, RATING3_LABEL, RATING3_STATUS, RATING3_TERMS, RATING3_WEIGHTS, rating3Of } from "../stats/rating3";
-import { grenadesOf, rollup, type Filter, type Summary } from "../stats/rollup";
+import { grenadesOf, keptRounds, rollup, type Filter, type Summary } from "../stats/rollup";
+import { spawnPosition } from "../stats/positions";
+import { swingSources } from "../stats/swing";
+import type { Side } from "../stats/tables";
 import type { MatchEntry } from "../ui/data/match";
 import type {
-  Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, Values,
+  ClutchRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
 
 export function metaOf(wp: WinProbSource): Meta {
   return {
-    metrics: METRICS.map(({ value: _value, why: _why, ...m }) => m),
+    metrics: METRICS.map(({ value: _value, why: _why, sample, ...m }) => (sample ? { ...m, sample: { unit: sample.unit, min: sample.min } } : m)),
     attributes: ATTRIBUTES,
     rating: { label: RATING3_LABEL, status: RATING3_STATUS, intercept: RATING3_INTERCEPT, terms: RATING3_TERMS, weights: RATING3_WEIGHTS },
     winProb: { kind: wp.kind, label: wp.label },
@@ -30,7 +33,9 @@ export function metaOf(wp: WinProbSource): Meta {
 }
 
 export const valuesOf = (s: Summary): Values => Object.fromEntries(METRICS.map((m) => [m.id, m.value(s)]));
-export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), coverage: visibilityCoverage(s.aim) });
+/** Each sample-declaring metric's event count (Metric.sample), by metric id. */
+export const samplesOf = (s: Summary): Record<string, number> => Object.fromEntries(METRICS.flatMap((m) => (m.sample ? [[m.id, m.sample.n(s)]] : [])));
+export const rolled = (s: Summary): Rolled => ({ ...s, v: valuesOf(s), n: samplesOf(s), swingSources: swingSources(s.m), coverage: visibilityCoverage(s.aim) });
 // Every rating here is rating3Of's, the one definition (side-weighted, under the one coverage gate);
 // so is the rating3 metric in valuesOf, and with it the comparisons and "Work on". A line's eco values
 // are the rating's own inputs, over the rounds it rated.
@@ -122,5 +127,67 @@ export function addPositions(out: PositionsResult, f: MatchFacts, filter: Filter
   for (const k of f.kills) {
     if (k.enemy && k.killer !== null && k.kpos && ids.has(f.players[k.killer].id)) out.kills.push(k.kpos);
     if (k.vpos && ids.has(f.players[k.victim].id)) out.deaths.push(k.vpos);
+  }
+}
+
+// ---------------------------------------------------------------- spawns
+
+/** Spawns seen per map and side over a stream of matches: every player's, and the queried players' with their round counts. */
+export interface SpawnIndex {
+  all: Map<string, Record<Side, Set<string>>>;
+  mine: Map<string, { map: string; side: Side; spawn: string; place: string | null; rounds: number }>;
+}
+
+export const emptySpawns = (): SpawnIndex => ({ all: new Map(), mine: new Map() });
+
+/**
+ * Adds one match's spawns: every player's to the map's spawn areas, and the rows `filter` keeps (its
+ * players, sides, dates and every other filter, as rollup keeps them) to the queried players' spawns.
+ */
+export function addSpawns(acc: SpawnIndex, f: MatchFacts, filter: Filter): void {
+  const map = f.match.map;
+  const all = acc.all.get(map) ?? { T: new Set<string>(), CT: new Set<string>() };
+  acc.all.set(map, all);
+  for (const r of f.pr) if (r.spawn) all[r.side].add(r.spawn);
+  for (const r of keptRounds(f, filter)) {
+    if (!r.spawn) continue;
+    const k = `${map}|${r.side}|${r.spawn}`;
+    const cur = acc.mine.get(k);
+    if (cur) cur.rounds++;
+    else acc.mine.set(k, { map, side: r.side, spawn: r.spawn, place: r.spawnPlace, rounds: 1 });
+  }
+}
+
+/** The queried players' spawns per side, most used first, each with its map, place name and position in the spawn area (positions.ts spawnPosition). */
+export function spawnRows(acc: SpawnIndex): Record<Side, SpawnRow[]> {
+  const out: Record<Side, SpawnRow[]> = { T: [], CT: [] };
+  for (const s of acc.mine.values()) {
+    const sides = acc.all.get(s.map)!;
+    out[s.side].push({ ...s, position: spawnPosition(s.spawn, [...sides[s.side]], [...sides[s.side === "T" ? "CT" : "T"]]) });
+  }
+  for (const side of ["T", "CT"] as const) out[side].sort((a, b) => b.rounds - a.rounds);
+  return out;
+}
+
+/** Adds one match's rounds that `filter` keeps to its map's count (the rounds per map rolesByMap orders by). */
+export function addMapRounds(acc: Record<string, number>, f: MatchFacts, filter: Filter): void {
+  const n = keptRounds(f, filter).length;
+  if (n) acc[f.match.map] = (acc[f.match.map] ?? 0) + n;
+}
+
+/** Adds the clutches of one match (its `file`) whose player-round `filter` keeps. */
+export function addClutchRows(out: ClutchRow[], file: string, f: MatchFacts, filter: Filter): void {
+  const kept = new Map(keptRounds(f, filter).map((r) => [r.ri * 1024 + r.pi, r]));
+  for (const c of f.clutches) {
+    const r = kept.get(c.ri * 1024 + c.pi);
+    if (r) out.push({ file, round: f.rounds[c.ri].number, side: r.side, player: f.players[c.pi].id, opponents: c.opponents, won: c.won, kills: c.kills });
+  }
+}
+
+/** Adds the rounds of one match (its `file`) where a player the filter keeps got two or more kills. */
+export function addMultiKillRows(out: MultiKillRow[], file: string, f: MatchFacts, filter: Filter): void {
+  for (const r of keptRounds(f, filter)) {
+    const kills = r.m.kills ?? 0;
+    if (kills >= 2) out.push({ file, round: f.rounds[r.ri].number, side: r.side, player: f.players[r.pi].id, kills, won: r.won });
   }
 }

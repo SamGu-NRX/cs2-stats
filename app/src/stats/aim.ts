@@ -13,6 +13,8 @@ import { MAX_SPEED, RECOIL } from "./aim-ref";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
+import { PEEK_MIN_SPEED, tracks } from "./movement";
+import { XDUEL, xduelP } from "./xduel";
 import { weaponClass } from "./weapons";
 
 // ---- thresholds. "Ours" means no source and no fit. Distributions on the pro maps: pnpm family-check.
@@ -79,6 +81,19 @@ export const SPRAY_MIN = 3;
  */
 export const CYCLE_TOL_TICKS = 1.01;
 
+// The contact measures below follow the individual-play research's definitions
+// (cs2-stats-data/research/individual/extract_individual.py), which METRICS.md compares with ours.
+/** A sighting's first shot is the first one within this long of the onset, while the enemy stays visible (the research's window). */
+export const CONTACT_SHOT_S = 1;
+/** Peek travel is how far you moved over this long after the onset, while the enemy stayed visible (the research's window). */
+export const PEEK_TRAVEL_S = 0.25;
+/** A kill between the two players this soon after the onset settles the sighting's duel (the research's window). */
+export const DUEL_WINDOW_S = 3;
+/** The stop buffer looks this far back from the first shot for the last tick you were moving (the research's window). */
+export const STOP_LOOKBACK_S = 0.5;
+/** A position sample older than this does not give a player's health at a sighting's onset (the research's rule; the sample must also be strictly before the onset). */
+export const HEALTH_MAX_AGE_S = 0.3;
+
 // ---- facts
 
 /** One sighting: an engagement whose victim became visible on screen. Times in seconds, angles in degrees. */
@@ -107,6 +122,26 @@ export interface SightFact {
   /** ticks tracking a moving target and the sum of their aim errors */
   trackN: number;
   trackSum: number;
+  /** horizontal distance to the victim at the onset (units) */
+  dist: number;
+  /** how far you moved from the onset over PEEK_TRAVEL_S while he stayed visible; null when he did not stay a second tick */
+  travel: number | null;
+  /** your 2D speed (u/s) and the angle from your view to his eye at your first shot within CONTACT_SHOT_S; null without one */
+  shotSpeed: number | null;
+  shotErr: number | null;
+  /** seconds from the last tick you moved faster than PEEK_MIN_SPEED to that shot, when you were moving in the STOP_LOOKBACK_S before it and not at it */
+  stopBuf: number | null;
+  /**
+   * You fired at him before he fired at you. Set on your first sighting of him in the round that has a
+   * first shot, when his first sighting of you with a shot exists too and the two shots fell on different
+   * ticks; null otherwise.
+   */
+  first: boolean | null;
+  /** seconds from the onset to a kill between the two of you within DUEL_WINDOW_S, and whether you made it; null without one */
+  duelS: number | null;
+  duelWon: boolean | null;
+  /** the duel's context at the onset, in xduel.ts XDUEL_FEATURES order; null without a duel or with a feature unknown */
+  xf: number[] | null;
 }
 
 /** One player's shots with one gun in one round. */
@@ -126,6 +161,13 @@ export interface ShotFact {
   firstHits: number;
   /** rifle and sniper first bullets on the ground: [accurate, too early, late reversal, no stop, unknown] */
   cs: number[];
+  /**
+   * Rifle bursts (two or more shots of one rifle, each within RESET_GAP_S of the last, the research's
+   * cut) whose every bullet has a known speed, and the sum over them of the share of bullets fired
+   * faster than PEEK_MIN_SPEED. A burst counts for its gun.
+   */
+  bursts: number;
+  movingShare: number;
   /**
    * sight shots not fired on a tick where one of the shooter's kills went through a wall or object
    * (kills.penetrated); a sight shot on a kill tick whose penetration is not recorded is set aside, in
@@ -182,6 +224,13 @@ export interface SprayFact {
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
   sw: number;
   swHits: number;
+  /**
+   * Distance from the target: the mean angle (deg) between each bullet's direction and the eye of the
+   * enemy bullet 1 aimed at (the visible enemy nearest its direction within SIGHT_CONE_DEG), over the
+   * bullets where he was visible. Plugin sprays use the plugin's aim error to bullet 1's target while
+   * on screen. Null without a target.
+   */
+  dist: number | null;
   /** bullets 4 and later fired at a visible enemy (as ShotFact.sight counts them), and those that hit */
   deep: number;
   deepHits: number;
@@ -240,11 +289,28 @@ export interface AimAgg {
   first: number;
   firstHits: number;
   cs: number[];
+  /** rifle bursts and their summed moving-bullet shares (ShotFact) */
+  bursts: number;
+  movingShare: number;
   sprays: number;
   /** sprays with at least one target switch, switches, and switches that hit the new target */
   swSprays: number;
   switches: number;
   switchHits: number;
+  /** samples for medians: onset distance, peek travel, shot speed and error, stop buffer, seconds to the duel's kill */
+  dist: number[];
+  travel: number[];
+  shotSpeed: number[];
+  shotErr: number[];
+  stopBuf: number[];
+  duelS: number[];
+  /** mutual sightings with both first shots timed, and those where you fired first */
+  ffN: number;
+  ff: number;
+  /** settled duels with their context known, your wins among them, and the expected-duel model's expected wins (xduel.ts) */
+  xN: number;
+  xWins: number;
+  xExp: number;
   /** bullets compared with the pro path, and sums of the residual's length and pitch part */
   cmp: number;
   dev: number;
@@ -253,6 +319,8 @@ export interface AimAgg {
   path: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for sprays whose path is relative to the target (plugin recordings): shown, not compared with pros */
   relPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /** each spray's distance from its target (SprayFact.dist), in spray order */
+  sprayDist: number[];
   /** per weapon, indexed as path: sums of the squared view change, pitch and yaw, for the spread per bullet */
   spread: Record<string, { pp: number[]; yy: number[] }>;
   /** per weapon and bullet of path's sprays (index 0 is bullet 1): bullets with a value, and sums of SprayFact.hp and hy */
@@ -276,9 +344,10 @@ export interface AimAgg {
 
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
-  shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0],
-  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, spread: {}, heads: {}, onTarget: {},
+  shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
+  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, sprayDist: [], spread: {}, heads: {}, onTarget: {},
   adj: 0, adjHits: 0, smokeShotsKnown: 0, smokeShots: 0, killsWbKnown: 0, killsWb: 0, killsSmokeKnown: 0, killsSmoke: 0, deep: 0, deepHits: 0,
+  dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0, xN: 0, xWins: 0, xExp: 0,
 });
 
 /** Adds per-bullet values (null skipped) into a { n, dp, dy } sum, index for index. */
@@ -303,15 +372,25 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.micro += f.micro ?? 0;
     a.trackN += f.trackN;
     a.trackSum += f.trackSum;
+    a.dist.push(f.dist);
+    if (f.travel !== null) a.travel.push(f.travel);
+    if (f.shotSpeed !== null) a.shotSpeed.push(f.shotSpeed);
+    if (f.shotErr !== null) a.shotErr.push(f.shotErr);
+    if (f.stopBuf !== null) a.stopBuf.push(f.stopBuf);
+    if (f.duelS !== null) a.duelS.push(f.duelS);
+    if (f.first !== null) { a.ffN++; if (f.first) a.ff++; }
+    if (f.xf !== null && f.duelWon !== null) { a.xN++; if (f.duelWon) a.xWins++; a.xExp += xduelP(f.xf, XDUEL); }
   } else if (f.k === "shots") {
     a.shots += f.shots; a.hits += f.hits; a.sight += f.sight; a.sightHits += f.sightHits;
     a.first += f.first; a.firstHits += f.firstHits;
     for (let i = 0; i < 5; i++) a.cs[i] += f.cs[i];
+    a.bursts += f.bursts; a.movingShare += f.movingShare;
     a.adj += f.adj; a.adjHits += f.adjHits; a.smokeShotsKnown += f.smokeKnown; a.smokeShots += f.smoke;
   } else if (f.k === "kills") {
     a.killsWbKnown += f.wbKnown; a.killsWb += f.wb; a.killsSmokeKnown += f.smokeKnown; a.killsSmoke += f.smoke;
   } else {
     a.sprays++;
+    if (f.dist !== null) a.sprayDist.push(f.dist);
     if (f.sw > 0) a.swSprays++;
     a.switches += f.sw;
     a.switchHits += f.swHits;
@@ -351,12 +430,43 @@ type Vec3 = [number, number, number];
 export function deriveAim(c: Ctx): AimFact[] {
   const out: AimFact[] = [];
   const view = viewIndex(c);
-  if (view?.visible) for (let e = 0; e < c.t.engagements!.n; e++) {
-    const f = sighting(c, view, e);
-    if (f) out.push(f);
+  if (view?.visible) {
+    const sights: Sighting[] = [];
+    for (let e = 0; e < c.t.engagements!.n; e++) {
+      const s = sighting(c, view, e);
+      if (s) { sights.push(s); out.push(s.f); }
+    }
+    markFiredFirst(sights);
   }
   if (c.t.shots) { shotFacts(c, view, out); killFacts(c, out); }
   return out;
+}
+
+/** Counts every player-round of a match with mesh visibility in sightRounds, the `sight` input's known rows (facts.ts INPUT_COVERAGE). */
+export function markSight(c: Ctx): void {
+  if (!c.t.engagements || !c.t.engagement_ticks || c.t.match.visibility_status[0] !== "ok") return;
+  for (const row of c.pr) for (const p of row) if (p) p.m.sightRounds = 1;
+}
+
+/** A sighting's fact, with the onset and first-shot ticks (CONTACT_SHOT_S) the fired-first pairing reads. */
+interface Sighting { f: SightFact; victim: number; onset: number; shot: number | null }
+
+/**
+ * Who fired first, per pair of players and round: each player's earliest sighting of the other that
+ * has a first shot, compared with the other's. Equal ticks settle nothing (the research's rule).
+ */
+function markFiredFirst(sights: Sighting[]): void {
+  const firstShot = new Map<string, Sighting>();
+  for (const s of sights) {
+    if (s.shot === null) continue;
+    const k = `${s.f.ri}:${s.f.pi}:${s.victim}`;
+    const cur = firstShot.get(k);
+    if (!cur || s.onset < cur.onset) firstShot.set(k, s);
+  }
+  for (const s of firstShot.values()) {
+    const other = firstShot.get(`${s.f.ri}:${s.victim}:${s.f.pi}`);
+    if (other && other.shot !== s.shot) s.f.first = s.shot! < other.shot!;
+  }
 }
 
 /** Enemy gun kills (the kills guns.ts counts per weapon), per round, player and gun, with the source's wallbang and smoke flags. */
@@ -394,6 +504,8 @@ interface View {
   shotAt: Map<number, number>;
   /** engagement row of each engagement tick row */
   eng: Int32Array;
+  /** positions rows per round and player (movement.ts tracks) */
+  track: Map<number, number[]>;
 }
 
 const key = (tick: number, pi: number) => tick * 256 + pi;
@@ -402,6 +514,8 @@ const key = (tick: number, pi: number) => tick * 256 + pi;
  * reads finer. Adding 0 turns -0 (a level lookAt pitch) into 0, as JSON would.
  */
 const r3 = (x: number) => Math.round(x * 1000) / 1000 + 0;
+/** Distances and speeds keep 0.1 units. */
+const r1 = (x: number) => Math.round(x * 10) / 10;
 
 function viewIndex(c: Ctx): View | null {
   const E = c.t.engagements, T = c.t.engagement_ticks;
@@ -439,7 +553,7 @@ function viewIndex(c: Ctx): View | null {
   const shotAt = new Map<number, number>();
   const S = c.t.shots;
   if (S) for (let i = 0; i < S.n; i++) { const p = c.idOf(S.steamid[i]); if (p !== null) shotAt.set(key(S.tick[i], p), i); }
-  return { visible: c.t.match.visibility_status[0] === "ok", rows, atTick, vel, shotAt, eng };
+  return { visible: c.t.match.visibility_status[0] === "ok", rows, atTick, vel, shotAt, eng, track: tracks(c) };
 }
 
 /** The victim is on screen and not behind a smoke (smoke_blocked is an approximation, SCHEMA-v1.md). */
@@ -448,7 +562,7 @@ function seen(c: Ctx, i: number): boolean {
   return T.mesh_visible[i] === true && T.smoke_blocked[i] === false;
 }
 
-function sighting(c: Ctx, view: View, e: number): SightFact | null {
+function sighting(c: Ctx, view: View, e: number): Sighting | null {
   const E = c.t.engagements!, T = c.t.engagement_ticks!;
   const r = view.rows[e];
   const ri = c.riOf(E.round[e]);
@@ -552,9 +666,63 @@ function sighting(c: Ctx, view: View, e: number): SightFact | null {
     trackSum += ang;
   }
 
+  // The contact measures (the research's definitions; METRICS.md "Contact").
+  const speed = (k: number) => {
+    const x = T.a_vel_x[r[k]], y = T.a_vel_y[r[k]];
+    return x === null || y === null ? null : Math.hypot(x, y);
+  };
+  const dist = Math.hypot(T.v_x[r[o]]! - T.a_x[r[o]]!, T.v_y[r[o]]! - T.a_y[r[o]]!);
+  let pk = o;
+  for (let k = o + 1; k < v && tick(k) - t0 <= PEEK_TRAVEL_S * rate; k++) pk = k;
+  const travel = pk > o ? Math.hypot(T.a_x[r[pk]]! - T.a_x[r[o]]!, T.a_y[r[pk]]! - T.a_y[r[o]]!) : null;
+  let fk = -1;
+  for (let k = o; k < v && tick(k) - t0 <= CONTACT_SHOT_S * rate && fk < 0; k++) if (T.a_shot_fired[r[k]]) fk = k;
+  let shotSpeed: number | null = null, shotErr: number | null = null, stopBuf: number | null = null;
+  if (fk >= 0) {
+    shotSpeed = speed(fk);
+    shotErr = r3(angle(fk));
+    if (shotSpeed !== null && shotSpeed <= PEEK_MIN_SPEED) {
+      for (let k = fk - 1; k >= 0 && tick(fk) - tick(k) <= STOP_LOOKBACK_S * rate; k--) {
+        const s = speed(k);
+        if (s !== null && s > PEEK_MIN_SPEED) { stopBuf = (tick(fk) - tick(k) - 1) / rate; break; }
+      }
+    }
+  }
+  const duel = c.kills[ri].find((k) => k.enemy && k.tick >= t0 && k.tick <= t0 + DUEL_WINDOW_S * rate
+    && ((k.killer === pi && k.victim === victim) || (k.killer === victim && k.victim === pi)));
+  let xf: number[] | null = null;
+  const fe = c.rounds[ri].freezeEndTick;
+  if (duel && fe !== null) {
+    // Health from the latest living sample strictly before the onset: a sample on or after it can
+    // already hold the duel's outcome (the victim at 0), which is what the model predicts.
+    const health = (p: number) => {
+      const P = c.t.positions!;
+      let h: number | null = null;
+      for (const i of view.track.get(ri * 1024 + p) ?? []) {
+        if (P.tick[i] >= t0) break;
+        if (P.is_alive[i]) h = t0 - P.tick[i] <= HEALTH_MAX_AGE_S * rate ? P.health[i] : null;
+      }
+      return h;
+    };
+    const vx = T.v_vel_x[r[o]], vy = T.v_vel_y[r[o]];
+    const mySide = c.pr[ri][pi]!.side;
+    let alive = 0;
+    for (const p of c.pr[ri]) {
+      if (!p || c.kills[ri].some((k) => k.victim === p.pi && k.tick < t0)) continue;
+      alive += p.side === mySide ? 1 : -1;
+    }
+    const xs = [place, dist, speed(o), vx === null || vy === null ? null : Math.hypot(vx, vy), health(pi), health(victim!), alive, (t0 - fe) / rate, Math.abs(e0[1])];
+    if (xs.every((x) => x !== null)) xf = (xs as number[]).map(r3);
+  }
+
   return {
-    k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
-    over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
+    f: {
+      k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
+      over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
+      dist: r1(dist), travel: travel === null ? null : r1(travel), shotSpeed: shotSpeed === null ? null : r1(shotSpeed), shotErr, stopBuf, first: null,
+      duelS: duel ? (duel.tick - t0) / rate : null, duelWon: duel ? duel.killer === pi : null, xf,
+    },
+    victim: victim!, onset: t0, shot: fk >= 0 ? tick(fk) : null,
   };
 }
 
@@ -690,6 +858,16 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
       const perGun = new Map<string, ShotFact>();
       let run: number[] = [];
       const finish = () => { if (run.length >= SPRAY_MIN) out.push(spray(c, view, ps, ri, pi, run, hitOn)); run = []; };
+      // rifle bursts for the moving-bullet share (ShotFact.bursts); gun shots only
+      let burst: number[] = [];
+      const endBurst = () => {
+        if (burst.length >= 2 && weaponClass(S.weapon[burst[0]]) === "rifle" && burst.every((i) => S.speed_2d[i] !== null)) {
+          const f = perGun.get(S.weapon[burst[0]])!;
+          f.bursts++;
+          f.movingShare += burst.filter((i) => S.speed_2d[i]! > PEEK_MIN_SPEED).length / burst.length;
+        }
+        burst = [];
+      };
       let prev = -1;
       for (const i of list) {
         const w = S.weapon[i];
@@ -697,7 +875,10 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
         const reset = S.recoil_index[i] !== null && S.recoil_index[i]! >= 0 && S.recoil_index[i]! <= RESET_RECOIL && spaced;
         if (isGun(w)) {
           let f = perGun.get(w);
-          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], adj: 0, adjHits: 0, smokeKnown: 0, smoke: 0 }));
+          if (!f) perGun.set(w, (f = { k: "shots", ri, pi, weapon: w, shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0, adj: 0, adjHits: 0, smokeKnown: 0, smoke: 0 }));
+          const last = burst[burst.length - 1];
+          if (last !== undefined && (S.weapon[last] !== w || S.tick[i] - S.tick[last] > RESET_GAP_S * rate)) endBurst();
+          burst.push(i);
           const h = hitOn.has(key(S.tick[i], pi));
           f.shots++;
           if (h) f.hits++;
@@ -726,6 +907,7 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
         prev = i;
       }
       finish();
+      endBurst();
       for (const f of perGun.values()) out.push(f);
     }
   });
@@ -778,6 +960,28 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     cur = t;
     if (run.slice(j).some((i) => hitOn.get(key(S.tick[i], pi))?.has(t))) swHits++;
   }
+  // Distance from bullet 1's target, per bullet while he is visible. A bullet whose angles or either
+  // player's position on its tick are not all finite numbers (a null or NaN in the tables) is skipped.
+  const T = c.t.engagement_ticks, E = c.t.engagements;
+  const finite = (...xs: (number | null)[]) => xs.every((x) => x !== null && Number.isFinite(x));
+  const angles: number[] = [];
+  if (ps && target0 !== null) {
+    for (const i of run) {
+      const e = ps.err[i];
+      if (ps.onScreen[i] && e && finite(e[0], e[1]) && ps.target[i] === target0) angles.push(aimAngle(0, 0, [0, 0, 0], forward(e[1], e[0])));
+    }
+  } else if (!ps && view?.visible && T && E) {
+    const t0 = aimedAt(c, view, run[0], pi, SIGHT_CONE_DEG)?.[0] ?? null;
+    if (t0 !== null) for (const i of run) {
+      const pitch = S.bullet_pitch[i] ?? S.pitch[i], yaw = S.bullet_yaw[i] ?? S.yaw[i];
+      const row = (view.atTick.get(key(S.tick[i], pi)) ?? []).find((x) => seen(c, x) && c.idOf(E.victim_steamid[view.eng[x]]) === t0);
+      if (row === undefined) continue;
+      const eye = [T.a_x[row], T.a_y[row], T.a_eye_z[row]], head = [T.v_x[row], T.v_y[row], T.v_eye_z[row]];
+      if (!finite(pitch, yaw, ...eye, ...head)) continue;
+      angles.push(aimAngle(pitch!, yaw!, eye as [number, number, number], head as [number, number, number]));
+    }
+  }
+  const dist = angles.length ? r3(angles.reduce((a, x) => a + x, 0) / angles.length) : null;
   // Spray accuracy: bullets 4 and later fired at a visible enemy, as first-bullet accuracy counts them.
   let deep = 0, deepHits = 0;
   for (let j = 3; j < run.length; j++) {
@@ -786,7 +990,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     if (hitOn.has(key(S.tick[run[j]], pi))) deepHits++;
   }
   const { hp, hy, tp, ty } = relative || !dp.length ? { hp: [], hy: [], tp: [], ty: [] } : targetPath(c, view, ps, pi, run.slice(0, dp.length + 1), dy);
-  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits, deep, deepHits, hp, hy, tp, ty };
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits, dist, deep, deepHits, hp, hy, tp, ty };
 }
 
 /**
@@ -841,78 +1045,108 @@ const PLUGIN_PATH = "Plugin 1.2.0 records view angles, so its sprays use them as
 
 export const AIM_METRICS: Metric[] = [
   { id: "timeToDamage", label: "Time to damage", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
-    def: `Median time from an enemy becoming visible on your screen (mesh line of sight, not behind a smoke, within 45 by 36.87 degrees of your view) to your first damage on him while he stayed visible; values of ${TTD_MAX_S} s or more are left out, as Leetify does.`,
+    tip: "How fast you hit an enemy after he appears.", def: `Median time from an enemy becoming visible on your screen (mesh line of sight, not behind a smoke, within 45 by 36.87 degrees of your view) to your first damage on him while he stayed visible; values of ${TTD_MAX_S} s or more are left out, as Leetify does.`,
     value: (s) => ms(median(s.aim.ttd.filter((x) => x < TTD_MAX_S))) },
   { id: "timeToKill", label: "Time to kill", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
-    def: "Median time from an enemy becoming visible on your screen to your kill on him while he stayed visible.",
+    tip: "How fast you kill an enemy after he appears.", def: "Median time from an enemy becoming visible on your screen to your kill on him while he stayed visible.",
     value: (s) => ms(median(s.aim.ttk)) },
   { id: "reactionTime", label: "Reaction time", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
-    def: `Median time from a sighting to the start of the mouse movement that halves the error to his head within ${ACQUIRE_WINDOW_S} s. The movement must peak at ${PEAK_MIN_DPS} deg/s or more toward the head; it starts where its speed first stays above ${ONSET_FRAC * 100}% of that peak. Sightings within ${ON_HEAD_DEG} degrees of the head, and movements already under way at the onset, are left out.`,
+    tip: "How fast your aim starts moving after an enemy appears.", def: `Median time from a sighting to the start of the mouse movement that halves the error to his head within ${ACQUIRE_WINDOW_S} s. The movement must peak at ${PEAK_MIN_DPS} deg/s or more toward the head; it starts where its speed first stays above ${ONSET_FRAC * 100}% of that peak. Sightings within ${ON_HEAD_DEG} degrees of the head, and movements already under way at the onset, are left out.`,
     value: (s) => ms(median(s.aim.react)) },
   { id: "timeToShot", label: "Time to first shot", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
-    def: `Median time from a sighting to your first shot, leaving out sightings where you had fired in the ${RESET_GAP_S} s before it.`,
+    tip: "How fast you fire after an enemy appears.", def: `Median time from a sighting to your first shot, leaving out sightings where you had fired in the ${RESET_GAP_S} s before it.`,
     value: (s) => ms(median(s.aim.shot)) },
   { id: "crosshairPlacement", label: "Crosshair placement", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
-    def: "Median angle between your view and the enemy's eye at the first tick he is visible on your screen.",
+    tip: "How far your crosshair is from the enemy's head when he appears.", def: "Median angle between your view and the enemy's eye at the first tick he is visible on your screen.",
     value: (s) => median(s.aim.place) },
   { id: "crosshairMoved", label: "Degrees moved to damage", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
-    def: "Median angle your view turned from the tick an enemy became visible to your first damage on him (Leetify reports it beside the error at sighting): placement says where the crosshair was, this how far it had to travel.",
+    tip: "How far you moved your aim before hitting the enemy.", def: "Median angle your view turned from the tick an enemy became visible to your first damage on him (Leetify reports it beside the error at sighting): placement says where the crosshair was, this how far it had to travel.",
     value: (s) => median(s.aim.moved) },
   { id: "preAim", label: "Pre-aimed sightings", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Sightings where your crosshair was already within ${ON_HEAD_DEG} degrees of the enemy's eye when he became visible.`,
+    tip: "Fights where your crosshair was already on the enemy's head.", def: `Sightings where your crosshair was already within ${ON_HEAD_DEG} degrees of the enemy's eye when he became visible.`,
     value: (s) => pct(s.aim.preAimed, s.aim.sightings) },
   { id: "flickOvershoot", label: "Flick overshoot", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
-    def: `Median angle by which a reaction flick carried past the head, measured along the flick's starting direction until its speed dropped under ${ONSET_FRAC * 100}% of its peak (0 when it stopped short).`,
+    tip: "How far your flicks go past the enemy's head.", def: `Median angle by which a reaction flick carried past the head, measured along the flick's starting direction until its speed dropped under ${ONSET_FRAC * 100}% of its peak (0 when it stopped short).`,
     value: (s) => median(s.aim.over) },
   { id: "microCorrections", label: "Micro-corrections per flick", kind: "performance", group: "aim", unit: "count", status: "approx", lowerIsBetter: true,
-    def: `Separate view movements of ${MICRO_DPS} deg/s or more after a reaction flick ends and before the first shot (or ${MICRO_WINDOW_S} s), per flick.`,
+    tip: "Small aim corrections after a flick, before you shoot.", def: `Separate view movements of ${MICRO_DPS} deg/s or more after a reaction flick ends and before the first shot (or ${MICRO_WINDOW_S} s), per flick.`,
     value: (s) => per(s.aim.micro, s.aim.over.length) },
   { id: "trackingError", label: "Tracking error", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true,
-    def: `Mean angle to the enemy's eye while tracking him: from the crosshair reaching ${ON_HEAD_DEG} degrees of the head until it passes ${TRACK_OFF_DEG} degrees or sight is lost, on ticks where the line of sight turns at ${TRACK_LOS_DPS} deg/s or more.`,
+    tip: "How close your crosshair stays to a moving enemy's head.", def: `Mean angle to the enemy's eye while tracking him: from the crosshair reaching ${ON_HEAD_DEG} degrees of the head until it passes ${TRACK_OFF_DEG} degrees or sight is lost, on ticks where the line of sight turns at ${TRACK_LOS_DPS} deg/s or more.`,
     value: (s) => per(s.aim.trackSum, s.aim.trackN) },
   { id: "accuracy", label: "Accuracy", kind: "performance", group: "aim", unit: "pct", status: "exact",
-    def: "Gun shots that hit an enemy (a hit on the same tick by the same player), of all gun shots. Filter by weapon for accuracy per gun.",
+    tip: "Share of your shots that hit an enemy.", def: "Gun shots that hit an enemy (a hit on the same tick by the same player), of all gun shots. Filter by weapon for accuracy per gun.",
     value: (s) => pct(s.aim.hits, s.aim.shots) },
   { id: "sightAccuracy", label: "Accuracy at visible enemies", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Hits per gun shot fired while an enemy was mesh-visible within ${SIGHT_CONE_DEG} degrees of the view.`,
+    tip: "Share of your shots that hit while an enemy was visible.", def: `Hits per gun shot fired while an enemy was mesh-visible within ${SIGHT_CONE_DEG} degrees of the view.`,
     value: (s) => pct(s.aim.sightHits, s.aim.sight) },
   { id: "headAccuracy", label: "Head accuracy", kind: "performance", group: "aim", unit: "pct", status: "exact",
-    def: "Gun hits on the head, of all your gun hits on enemies (a hit the game files under no body part counts in the total only).",
+    tip: "Share of your gun hits that landed on the head.", def: "Gun hits on the head, of all your gun hits on enemies (a hit the game files under no body part counts in the total only).",
     value: (s) => { let head = 0, hits = 0; for (const [w, t] of Object.entries(s.weapons)) if (isGun(w)) { head += t.groups[0]; hits += t.hits; } return pct(head, hits); } },
   { id: "adjustedAccuracy", label: "Adjusted accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Accuracy at visible enemies without the shots fired on a tick where your kill went through a wall or object (the game's penetration flag); a kill shot whose penetration is not recorded is set aside. Shots at an enemy behind a smoke are already out of the visible-enemy shots.`,
+    tip: "Your hit rate at visible enemies, wallbang kills left out.", def: `Accuracy at visible enemies without the shots fired on a tick where your kill went through a wall or object (the game's penetration flag); a kill shot whose penetration is not recorded is set aside. Shots at an enemy behind a smoke are already out of the visible-enemy shots.`,
     value: (s) => pct(s.aim.adjHits, s.aim.adj) },
   { id: "shotsThroughSmoke", label: "Shots through smoke", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: `Gun shots fired while every enemy mesh-visible within ${SIGHT_CONE_DEG} degrees of the shot stood behind a smoke (the extractor's smoke spheres, an approximation), of your gun shots on maps with mesh visibility.`,
+    tip: "Share of your shots fired at enemies hidden by smoke.", def: `Gun shots fired while every enemy mesh-visible within ${SIGHT_CONE_DEG} degrees of the shot stood behind a smoke (the extractor's smoke spheres, an approximation), of your gun shots on maps with mesh visibility.`,
     value: (s) => pct(s.aim.smokeShots, s.aim.smokeShotsKnown) },
   { id: "sprayAccuracy", label: "Spray accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within ${SIGHT_CONE_DEG} degrees. A spray is ${SPRAY_MIN} or more shots of one automatic gun in a continuous run from a reset (the recoil asset's rule).`,
+    tip: "How often your later spray bullets hit a visible enemy.", def: `Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within ${SIGHT_CONE_DEG} degrees. A spray is ${SPRAY_MIN} or more shots of one automatic gun in a continuous run from a reset (the recoil asset's rule).`,
     value: (s) => pct(s.aim.deepHits, s.aim.deep) },
   { id: "firstBulletAccuracy", label: "First-bullet accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Hits per first bullet (recoil index reset, ${RESET_GAP_S} s since your previous shot) fired at a visible enemy within ${SIGHT_CONE_DEG} degrees.`,
+    tip: "Share of your first bullets at a visible enemy that hit.", def: `Hits per first bullet (recoil index reset, ${RESET_GAP_S} s since your previous shot) fired at a visible enemy within ${SIGHT_CONE_DEG} degrees.`,
     value: (s) => pct(s.aim.firstHits, s.aim.first) },
   { id: "counterStrafe", label: "Counter-strafed first shots", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Rifle and sniper first bullets fired on the ground at or under ${ACCURATE_FRAC * 100}% of the weapon's max speed (scoped speed when scoped; the game's weapon data).`,
+    tip: "First shots fired after stopping properly.", def: `Rifle and sniper first bullets fired on the ground at or under ${ACCURATE_FRAC * 100}% of the weapon's max speed (scoped speed when scoped; the game's weapon data).`,
     value: (s) => pct(s.aim.cs[0], s.aim.cs.reduce((a, b) => a + b, 0)) },
   { id: "csTooEarly", label: "Shot during the stop", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: still slowing down, at or under ${CS_DECEL_FRAC * 100}% of the recent peak speed and in the same direction.`,
+    tip: "Bad first shots fired while still slowing down.", def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: still slowing down, at or under ${CS_DECEL_FRAC * 100}% of the recent peak speed and in the same direction.`,
     value: (s) => pct(s.aim.cs[1], csKnown(s)) },
   { id: "csLateReversal", label: "Late reversal", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: moving against the direction of the recent peak speed (held the counter-strafe key too long).`,
+    tip: "Bad first shots fired after overshooting your stop.", def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: moving against the direction of the recent peak speed (held the counter-strafe key too long).`,
     value: (s) => pct(s.aim.cs[2], csKnown(s)) },
   { id: "csNoStop", label: "No counter-strafe", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: no stop attempted (speed above ${CS_DECEL_FRAC * 100}% of the recent peak, or rising).`,
+    tip: "Bad first shots fired without trying to stop.", def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: no stop attempted (speed above ${CS_DECEL_FRAC * 100}% of the recent peak, or rising).`,
     value: (s) => pct(s.aim.cs[3], csKnown(s)) },
   { id: "sprayDeviation", label: "Spray path vs pros", kind: "identity", group: "aim", unit: "deg", status: "approx",
-    def: `Mean distance per bullet between your view path in a spray (relative to the first bullet) and the median pro compensation path for that gun and bullet (recoil_patterns.json, provisional). Relative to pro compensation, not a grade: target movement changes the path too. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
+    tip: "How far your spray control differs from pros' for that gun.", def: `Mean distance per bullet between your view path in a spray (relative to the first bullet) and the median pro compensation path for that gun and bullet (recoil_patterns.json, provisional). Relative to pro compensation, not a grade: target movement changes the path too. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
     value: (s) => per(s.aim.dev, s.aim.cmp) },
   { id: "sprayPull", label: "Spray pull-down vs pros", kind: "identity", group: "aim", unit: "deg", status: "approx",
-    def: `Mean pitch difference per bullet from the median pro compensation path: positive pulls down more than pros, negative less. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
+    tip: "Whether you pull your spray down more or less than pros.", def: `Mean pitch difference per bullet from the median pro compensation path: positive pulls down more than pros, negative less. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
     value: (s) => per(s.aim.pull, s.aim.cmp) },
   { id: "sprayTransfers", label: "Spray transfers", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: `Sprays (${SPRAY_MIN}+ bullets) where you switched targets: the enemy nearest your view (within ${TRANSFER_CONE_DEG} degrees, visible) changed and the new one stayed nearest for ${TRANSFER_HOLD} bullets. ${PLUGIN_SPRAYS} The nearest enemy there is the plugin's shot target, when on screen.`,
+    tip: "Sprays where you moved onto a second enemy.", def: `Sprays (${SPRAY_MIN}+ bullets) where you switched targets: the enemy nearest your view (within ${TRANSFER_CONE_DEG} degrees, visible) changed and the new one stayed nearest for ${TRANSFER_HOLD} bullets. ${PLUGIN_SPRAYS} The nearest enemy there is the plugin's shot target, when on screen.`,
     value: (s) => pct(s.aim.swSprays, s.aim.sprays) },
   { id: "transferHits", label: "Spray transfers that hit", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    def: `Target switches inside a spray where the rest of the spray hit the new target. ${PLUGIN_SPRAYS}`,
+    tip: "Spray transfers that hit the second enemy.", def: `Target switches inside a spray where the rest of the spray hit the new target. ${PLUGIN_SPRAYS}`,
     value: (s) => pct(s.aim.switchHits, s.aim.switches) },
+
+  // ---- contact measures (METRICS.md "Contact"): one sample per sighting, line of sight required
+  { id: "shotSpeed", label: "Speed at first shot", kind: "identity", group: "aim", unit: "speed", status: "approx", needs: ["sight"],
+    tip: "How fast you were moving when you fired at an enemy.", def: "Your median movement speed at your first shot after spotting an enemy.",
+    value: (s) => median(s.aim.shotSpeed) },
+  { id: "shotError", label: "First-shot error", kind: "performance", group: "aim", unit: "deg", status: "approx", lowerIsBetter: true, needs: ["sight"],
+    tip: "How far off your crosshair was when you first fired.", def: "Median angle between your crosshair and the enemy's eye at first shot.",
+    value: (s) => median(s.aim.shotErr) },
+  { id: "stopBuffer", label: "Stop before shooting", kind: "identity", group: "aim", unit: "ms", status: "approx", needs: ["sight"],
+    tip: "How long you wait after stopping before you shoot.", def: "Median time between stopping and your first shot at an enemy.",
+    value: (s) => ms(median(s.aim.stopBuf)) },
+  { id: "movingSpray", label: "Shooting while moving", kind: "identity", group: "aim", unit: "pct", status: "approx",
+    tip: "How much of your rifle spraying happens while moving.", def: "Average moving-bullet share per rifle burst.",
+    value: (s) => pct(s.aim.movingShare, s.aim.bursts) },
+];
+
+/** Contact measures that describe how you take a fight; aggression.ts combines them into one scale. */
+export const CONTACT_METRICS: Metric[] = [
+  { id: "peekTravel", label: "Peek travel", kind: "identity", group: "aggression", unit: "units", status: "approx", needs: ["sight"],
+    tip: "How far you move while peeking an enemy.", def: "Median distance you move in the quarter second after spotting an enemy.",
+    value: (s) => median(s.aim.travel) },
+  { id: "duelExposure", label: "Exposure before the duel", kind: "identity", group: "aggression", unit: "secs", status: "approx", needs: ["sight"],
+    tip: "How long fights last from first sight to a kill.", def: "Median seconds from first seeing an enemy to the kill between you.",
+    value: (s) => median(s.aim.duelS) },
+  { id: "firedFirst", label: "Fired first", kind: "identity", group: "aggression", unit: "pct", status: "approx", needs: ["sight"],
+    tip: "How often you shoot first when you and an enemy meet.", def: "Share of mutual sightings where you shot before the enemy did.",
+    value: (s) => pct(s.aim.ff, s.aim.ffN) },
+  { id: "engageDistance", label: "Engagement distance", kind: "identity", group: "aggression", unit: "units", status: "approx", needs: ["sight"],
+    tip: "How far away enemies are when you first see them.", def: "Median distance to an enemy when you first see him.",
+    value: (s) => median(s.aim.dist) },
 ];

@@ -11,12 +11,7 @@ import { derive } from "../src/stats/derive";
 import { modelFingerprint } from "../src/stats/model-params";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
-import { DATA_DIR, WINPROB, proMapDirs, proMaps } from "./node-read";
-
-/** Rounds a player needs, over all maps, to count in the player pools; per side, half of it. */
-export const MIN_ROUNDS = 40;
-/** Rounds a player needs on one map to count in that map's pool. */
-export const MAP_MIN_ROUNDS = 16;
+import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, WINPROB, proMapDirs, proMaps } from "./node-read";
 
 const arg = (name: string, dflt: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
 const OUT = path.resolve(arg("--out", "public/baselines.json"));
