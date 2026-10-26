@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./ui/App";
 import { isTauri } from "./host/host";
+import { hasFont } from "./ui/lib/fonts";
 import "./ui/styles/tokens.css";
 import "./ui/styles/base.css";
 import "./ui/styles/shell.css";
@@ -14,6 +15,9 @@ import "./ui/styles/restore-match.css";
 // Entrance motion is opt-in (views.css, "page enter"): the app turns it on here, so tests and static
 // renders, which never run this file, see every element in its final place.
 document.documentElement.classList.add("anim");
+// Display numerals are set in Bahnschrift, which ships with Windows 10 and 11; elsewhere tokens.css
+// switches them to the fallback's own weight.
+if (!hasFont("Bahnschrift")) document.documentElement.classList.add("no-bahnschrift");
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
