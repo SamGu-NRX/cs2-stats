@@ -63,32 +63,40 @@ export interface Clutch {
   /** enemies alive when the player became the last of their side */
   opponents: number;
   won: boolean;
+  /** the index in `kills` of the death that left the player alone; -1 when the round started that way */
+  from: number;
 }
 
 /**
- * Clutch situations (CS Demo Manager's analyzer, MIT): after each death, the first time a side is
- * down to one player, that player starts a 1vX against the enemies alive. If both sides then reach
- * one player, the other side's last player gets a 1v1 too. `alive` is each side's players at freeze end.
+ * Clutch situations (CS Demo Manager's analyzer, MIT): the first time a side is down to one player,
+ * that player starts a 1vX against the enemies alive. If both sides then reach one player, the other
+ * side's last player gets a 1v1 too. `alive` is each side's players. When `atStart` says `alive` is the
+ * round-start roster, the counts are read before the first death as well, so a side that starts the
+ * round with one player (after a disconnect) is in a clutch before any kill; otherwise only after deaths.
  */
-export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number>>, winner: Side | null): Clutch[] {
+export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number>>, winner: Side | null, atStart: boolean): Clutch[] {
   if (winner === null) return [];
   const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
   const out: Clutch[] = [];
   let first: Clutch | null = null;
-  for (const k of kills) {
-    live.CT.delete(k.victim);
-    live.T.delete(k.victim);
+  const check = (from: number) => {
     const ct = live.CT.size;
     const t = live.T.size;
     if (!first && (ct === 1 || t === 1)) {
       const side: Side = ct === 1 ? "CT" : "T";
-      first = { pi: [...live[side]][0], side, opponents: side === "CT" ? t : ct, won: side === winner };
+      first = { pi: [...live[side]][0], side, opponents: side === "CT" ? t : ct, won: side === winner, from };
       if (first.opponents > 0) out.push(first);
     }
     if (first && ct === 1 && t === 1 && out.length < 2) {
       const side: Side = first.side === "CT" ? "T" : "CT";
-      out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner });
+      out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner, from });
     }
-  }
+  };
+  if (atStart) check(-1);
+  kills.forEach((k, i) => {
+    live.CT.delete(k.victim);
+    live.T.delete(k.victim);
+    check(i);
+  });
   return out;
 }

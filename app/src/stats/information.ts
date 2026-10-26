@@ -102,12 +102,12 @@ const RADAR = "From the radar's spotted state, which lags real sight.";
 
 export const INFORMATION_METRICS: Metric[] = [
   { id: "firstSpotPct", label: "First spots", kind: "identity", group: "information", unit: "pct", status: "approx",
-    def: `Rounds where you were the first of your team (ties count) to spot an enemy after freeze end. Rounds with a bot teammate are left out, because bots are never recorded as spotters. ${RADAR}`,
+    tip: "Rounds where you spotted an enemy first on your team.", def: `Rounds where you were the first of your team (ties count) to spot an enemy after freeze end. Rounds with a bot teammate are left out, because bots are never recorded as spotters. ${RADAR}`,
     value: (s) => pct(s.information.firstSpots, s.information.firstSpotRounds) },
   { id: "spotSecsPR", label: "Enemy time spotted per round", kind: "identity", group: "information", unit: "secs", status: "approx",
-    def: `Seconds you had enemies spotted, summed over enemies, while you and they were alive, per round. ${RADAR}`,
+    tip: "Seconds of enemies you had spotted per round.", def: `Seconds you had enemies spotted, summed over enemies, while you and they were alive, per round. ${RADAR}`,
     value: (s) => per(s.information.spotSecs, s.information.rounds) },
   { id: "spotAssistsPR", label: "Spots before a teammate's kill per round", kind: "identity", group: "information", unit: "perRound", status: "approx",
-    def: `Teammates' kills on an enemy you had spotted at some moment in the ${SPOT_ASSIST_S} s before the kill, per round. ${RADAR}`,
+    tip: "Teammate kills on enemies you spotted, per round.", def: `Teammates' kills on an enemy you had spotted at some moment in the ${SPOT_ASSIST_S} s before the kill, per round. ${RADAR}`,
     value: (s) => per(s.information.spotAssists, s.information.rounds) },
 ];

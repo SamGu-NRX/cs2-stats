@@ -83,3 +83,38 @@ export function foldPresence(a: Presence, f: PresenceFact): void {
   for (let j = 0; j < f.cells.length; j += 2) a.cells[f.cells[j]] = (a.cells[f.cells[j]] ?? 0) + f.cells[j + 1];
   for (const [pl, s] of Object.entries(f.places)) a.places[pl] = (a.places[pl] ?? 0) + s;
 }
+
+// ---- spawns
+
+/**
+ * A spawn this far (units) or more from the middle of its side's spawn area, along the line to the
+ * enemy spawn or across it, is to the front, back, left or right. Ours, no fit: two player widths.
+ */
+export const SPAWN_OFFSET_UNITS = 64;
+
+const xy = (key: string): [number, number] => { const [x, y] = key.split(",").map(Number); return [x, y]; };
+
+/**
+ * Where a spawn ("x,y", PlayerRound.spawn) sits in its side's spawn area, facing the enemy spawn:
+ * "front left", "back", "centre" and so on. `own` and `enemy` are the spawn keys seen for each side on
+ * the map; their means are the two spawn areas' middles. Null when either side has none, or both
+ * middles fall on one point, so there is no facing.
+ */
+export function spawnPosition(spawn: string, own: string[], enemy: string[]): string | null {
+  if (!own.length || !enemy.length) return null;
+  const mean = (keys: string[]) => keys.map(xy).reduce(([a, b], [x, y]) => [a + x / keys.length, b + y / keys.length], [0, 0]);
+  const o = mean(own), e = mean(enemy);
+  const len = Math.hypot(e[0] - o[0], e[1] - o[1]);
+  if (!len) return null;
+  const f: [number, number] = [(e[0] - o[0]) / len, (e[1] - o[1]) / len];
+  const [x, y] = xy(spawn);
+  const dx = x - o[0], dy = y - o[1];
+  const ahead = dx * f[0] + dy * f[1];
+  // world y points north and x east, so facing f, left is f turned a quarter counter-clockwise
+  const left = -dx * f[1] + dy * f[0];
+  const parts = [
+    ahead >= SPAWN_OFFSET_UNITS ? "front" : ahead <= -SPAWN_OFFSET_UNITS ? "back" : null,
+    left >= SPAWN_OFFSET_UNITS ? "left" : left <= -SPAWN_OFFSET_UNITS ? "right" : null,
+  ].filter((p) => p !== null);
+  return parts.length ? parts.join(" ") : "centre";
+}

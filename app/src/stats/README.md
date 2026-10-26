@@ -75,7 +75,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 ### Comparisons
 | Call | Returns | Notes |
 |---|---|---|
-| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). Each `Percentile` has `reason` when it is withheld: a metric's `needs` (an input not known on every row it uses, with the known count, or a model other than the baselines' `model`). Show the value and the reason, never a rank. |
+| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). Each `Percentile` has `reason` when it is withheld: a metric's `needs` (an input not known on every row it uses, with the known count, or a model other than the baselines' `model`), or a `sample` under its minimum (`n` is the count). Show the value and the reason, never a rank. |
 | `careerBaselines(careers, built)` | `{ baselines, provisional, careers }` | The user's own population for identity (`design/identity.md`): baselines from the bot careers in the user's matches (each `{ both, CT, T }` summaries; careers under 150 rounds are left out). Style attributes and "plays like" rank the user against these, never against pros. `provisional` is true until 15 careers qualify; say so beside the scores. |
 | `buildPools(units)` | quantiles per pool and side | What both baselines are built from; `tools/baselines.ts` uses it for the pros. |
 | `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
@@ -89,8 +89,12 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 
 ### Worker calls (`worker/protocol.ts` `Api`)
 
-Views read engine numbers through the stats worker. Besides `rollup` (every metric's value in `v`), `ratings`,
-`compare`, `attributes`, `style`, `roles`, `playsLike`, `guns`, `positions`, `match`, `rounds` and `places`:
+Every metric in `meta().metrics` has `tip`, a tooltip of 12 words or fewer, beside the longer `def`.
+Views read engine numbers through the stats worker. Besides `rollup` (every metric's value in `v`, the event
+count behind each metric that declares one in `n`, and round swing by source in `swingSources`), `ratings`,
+`compare` (each `Percentile` carries that count as `n`), `attributes`, `style` (`firepower` is Firepower against
+the same bot pool; `careers.pool` names the pool the scores came from, "all" when the AWPer bot pool was too thin),
+`playsLike`, `guns`, `positions`, `match`, `rounds` and `places`:
 
 | Call | Returns |
 |---|---|
@@ -98,8 +102,11 @@ Views read engine numbers through the stats worker. Besides `rollup` (every metr
 | `buySplits(q)` | The query by own and opponent buy class: aggression by economy, pistol and eco splits |
 | `opponents(q)` | Every metric against the opponents of the same matches, with a rank for performance metrics |
 | `winCorrelation(q, ids)` | Each metric's per-match correlation with winning |
-| `rolesBySpawn(q)` | The role blend per side and per spawn used |
-| `clutches(q)` | Every clutch by round |
+| `roles(q)` | The role blend on T and on CT, and `all`: the two weighted by their rounds (`identity.ts` `overallRole`) |
+| `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |
+| `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`); each blend covers that spawn's rounds on its own map under every query filter |
+| `clutches(q)` | Every clutch by round, with the player's steamid (`player`) and their enemy kills after the clutch started (`kills`) |
+| `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
 
 Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
 and `m.tradedDeaths`.

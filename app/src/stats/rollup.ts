@@ -61,8 +61,8 @@ export interface Summary {
   presence: Record<string, Presence>;
 }
 
-/** The player-round rows a filter keeps in one match, for families that sum their own facts. */
-function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
+/** The player-round rows a filter keeps in one match, for families that sum their own facts and for the worker's per-row lists. */
+export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
   const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
   if (filter.maps && !filter.maps.includes(f.match.map)) return [];
   if (filter.from && (!f.match.date || f.match.date < filter.from)) return [];
