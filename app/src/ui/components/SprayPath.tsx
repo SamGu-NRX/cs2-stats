@@ -1,8 +1,11 @@
-// A spray compared with the ideal pull. The reference is stats/recoil-ref.ts RECOIL path: per bullet
-// the ideal pull (minus the game's own recoil kick, measured on demos), with the pros' middle half of
-// view movement as the band, pitch positive down. The chart compares and never grades: no red or green. The player's path is stats/aim.ts AimAgg.path,
-// per bullet sums of the view movement from the first bullet.
+// A spray compared with the ideal pull. The reference is stats/recoil-ref.ts RECOIL path: per bullet the
+// ideal pull (minus the game's own recoil kick, measured on demos) and the pros' middle half of view
+// movement, pitch positive down. So the
+// chart compares and never grades: no red or green. The player's path is stats/aim.ts AimAgg.path,
+// per bullet sums of the view movement from the first bullet; AimAgg.spread, heads and onTarget add the
+// spread per bullet, where the target's head was and how far each bullet landed from it.
 import type { RecoilRef } from "../../stats/recoil-ref";
+import { CONTROL_DEG, meanBullets, spreadOf, targetControl, type BulletSums, type SpraySpread } from "./charts";
 
 export interface PlayerPath { n: number[]; dp: number[]; dy: number[] }
 export interface PathPoint { bullet: number; pitch: number; yaw: number; n: number }
@@ -41,28 +44,45 @@ export function findingTitle(gun: string, f: SprayFinding): string {
   return `Your ${gun} spray ${what} the pros' middle half from bullet ${f.bullet}`;
 }
 
-const S = 26, W = 330, H = 360, TOP = 24;
+/** 26 px per degree on both axes, so the 1° bar measures every gun; the height follows the deepest bullet drawn. */
+const S = 26, W = 330, TOP = 24, MIN_H = 160;
 
 /**
  * `relative`: the path is measured against the target, not as absolute view angles (plugin recordings
  * until the plugin stores view angles), so it cannot be set against the ideal pull: the chart draws your
  * path only, says why in one sentence, and shows no band, no reference line and no distance bars.
+ * `reference` null: the game's pattern for the gun is not known yet, so only your path draws.
+ * `pro` false hides the pros' band and the ideal pull (the Ideal pull toggle); `spread` draws each bullet's spread as
+ * a one-standard-deviation ellipse and `heads` where the target's head was for each bullet, both in the
+ * absolute frame, so neither draws on a relative path.
  */
-export function SprayPath({ gun, reference, path, relative = false }: { gun: string; reference: RecoilRef; path: PlayerPath | null; relative?: boolean }) {
+export function SprayPath({ gun, reference, path, relative = false, pro = true, spread = null, heads = null }: {
+  gun: string; reference: RecoilRef | null; path: PlayerPath | null; relative?: boolean; pro?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null;
+}) {
   const pts = path ? meanPath(path) : [];
-  const ref = relative ? [] : reference.path;
-  const until = relative ? 0 : Math.min(ref.length, Math.max(pts.length, 12));
+  const ref = relative || !pro || !reference ? [] : reference.path;
+  const until = Math.min(ref.length, Math.max(pts.length, 12));
   const X = (yaw: number) => W / 2 + yaw * S, Y = (pitch: number) => TOP + pitch * S;
+  // spreadOf's i is the bullet's index from 0, so bullet i + 1; its mean is that bullet's point on the path
+  const ells = path && spread && !relative ? spreadOf(path, spread).flatMap((e) => {
+    const p = pts.find((q) => q.bullet === e.i + 1);
+    return p && p.n >= MIN_SPRAYS ? [{ bullet: p.bullet, x: p.yaw, y: p.pitch, rx: e.yaw, ry: e.pitch }] : [];
+  }) : [];
+  const eyes = heads && !relative ? meanBullets(heads) : [];
+  const deepest = Math.max(0, ...ref.slice(0, until).map((b) => b[3]), ...pts.map((p) => p.pitch), ...ells.map((e) => e.y + e.ry), ...eyes.map((h) => h.pitch));
+  const H = Math.max(MIN_H, Math.ceil(Y(deepest) + 24));
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
-  const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the ideal pull`;
+  const finding = relative ? `Your ${gun} spray, relative to the target` : !reference ? `Your ${gun} spray` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the ideal pull`;
   return (
     <figure className="spray">
       <figcaption className="spray__title">{finding}</figcaption>
       <svg viewBox={`0 0 ${W} ${H + 30}`} className="spray__plot" role="img" aria-label={finding}>
-        {relative ? null : <polygon points={band} className="spray__band" />}
+        {ref.length ? <polygon points={band} className="spray__band" /> : null}
+        {ells.map((e) => <ellipse key={`e${e.bullet}`} cx={X(e.x)} cy={Y(e.y)} rx={Math.max(2, e.rx * S)} ry={Math.max(2, e.ry * S)} className="spray__sd" />)}
         {ref.slice(1, until).map((b, i) => <line key={i} x1={X(b[1])} x2={X(b[1])} y1={Y(b[2])} y2={Y(b[3])} className="spray__tick" />)}
-        {relative ? null : <polyline points={ref.slice(0, until).map((b) => `${X(b[1])},${Y(b[0])}`).join(" ")} className="spray__pro" />}
+        {ref.length ? <polyline points={ref.slice(0, until).map((b) => `${X(b[1])},${Y(b[0])}`).join(" ")} className="spray__pro" /> : null}
         {pts.length ? <polyline points={pts.map((p) => `${X(p.yaw)},${Y(p.pitch)}`).join(" ")} className="spray__mine" /> : null}
+        {eyes.map((h) => <circle key={`h${h.i}`} cx={X(h.yaw)} cy={Y(h.pitch)} r="2.5" className="spray__head" />)}
         {pts.map((p, i) => (
           <g key={p.bullet} opacity={p.n >= MIN_SPRAYS ? 1 : 0.4}>
             <circle cx={X(p.yaw)} cy={Y(p.pitch)} r={p.bullet === 1 ? 5 : 4} className={p.bullet === 1 ? "spray__origin" : "spray__dot"} />
@@ -74,12 +94,12 @@ export function SprayPath({ gun, reference, path, relative = false }: { gun: str
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">This recording measures your aim against the target rather than your absolute view angles, so it isn't compared with the ideal pull.</p> : null}
+      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : !reference ? <p className="spray__note">No in-game pattern for this gun yet: the demos hold too few of its shots.</p> : null}
     </figure>
   );
 }
 
-/** Distance of each bullet from the pro median, with the edge of the pros' middle half for reference. */
+/** Distance of each bullet from the ideal pull, with the edge of the pros' middle half for reference. */
 export function SprayDistance({ reference, path }: { reference: RecoilRef; path: PlayerPath }) {
   const pts = meanPath(path).filter((p) => p.bullet > 1 && p.bullet <= reference.path.length);
   if (!pts.length) return null;
@@ -92,10 +112,35 @@ export function SprayDistance({ reference, path }: { reference: RecoilRef; path:
     <div className="sprayd">
       <div className="caps">Distance from the ideal pull, bullet by bullet</div>
       <div className="sprayd__plot">
-        {rows.map((r) => <i key={r.b} data-thin={r.n < MIN_SPRAYS || undefined} style={{ height: `${(100 * r.d) / max}%` }} title={`Bullet ${r.b}: ${r.d.toFixed(2)}° from the pro median, ${r.n} sprays`} />)}
+        {rows.map((r) => <i key={r.b} data-thin={r.n < MIN_SPRAYS || undefined} style={{ height: `${(100 * r.d) / max}%` }} title={`Bullet ${r.b}: ${r.d.toFixed(2)}° from the ideal pull, ${r.n} sprays`} />)}
         <span className="sprayd__edge" style={{ bottom: `${(100 * edge) / max}%` }}><span>edge of the pros' middle half</span></span>
       </div>
       <div className="sprayd__x mono">{rows.map((r) => <span key={r.b}>{r.b}</span>)}</div>
+    </div>
+  );
+}
+
+/**
+ * Bullet by bullet, how far your average bullet landed from the target's head (stats/aim.ts
+ * AimAgg.onTarget, by each shot's fire direction), against CONTROL_DEG; "Controlled through bullet N"
+ * is the run from bullet 1 that stayed within it. Needs bullet angles and the target's head, so plugin
+ * files have no data and the caller draws nothing.
+ */
+export function SprayOnTarget({ sums }: { sums: BulletSums }) {
+  const { rows, controlled } = targetControl(sums);
+  if (rows.length < 2) return <p className="meta sprayd">Not enough sprays to judge against the target yet.</p>;
+  const max = Math.max(CONTROL_DEG * 2, ...rows.map((r) => r.dev));
+  return (
+    <div className="sprayd sprayt">
+      <div className="sprayt__head">
+        <span className="caps" data-tip="Your average bullet's distance from the target's head." tabIndex={0}>On target, bullet by bullet</span>
+        <b className="num">{controlled ? `Controlled through bullet ${controlled}` : "Bullet 1 off target"}</b>
+      </div>
+      <div className="sprayd__plot" role="img" aria-label={`Distance from the target by bullet: ${rows.map((r) => `${r.i + 1}: ${r.dev.toFixed(1)} degrees`).join(", ")}`}>
+        {rows.map((r) => <i key={r.i} data-off={r.dev > CONTROL_DEG || undefined} style={{ height: `${(100 * r.dev) / max}%` }} title={`Bullet ${r.i + 1}: ${r.dev.toFixed(2)}° from the target's head, ${r.n} sprays`} />)}
+        <span className="sprayd__edge" style={{ bottom: `${(100 * CONTROL_DEG) / max}%` }}><span>{CONTROL_DEG}° on target</span></span>
+      </div>
+      <div className="sprayd__x mono">{rows.map((r) => <span key={r.i}>{r.i + 1}</span>)}</div>
     </div>
   );
 }

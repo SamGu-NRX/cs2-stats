@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-// The aim slice's restored elements (REMOVALS.md, E20). The aim panels read one hand-built summary
-// (its metric values from the engine's own valuesOf), so every expected figure is worked out by hand.
+// The aim slice's restored elements (REMOVALS.md, E20) in Career aim's layout: the accuracy ring leads
+// the stat strip, main's Hitting group sits under Where you hit, its spray-accuracy rows in Flicks and
+// spray, its counter-strafe rule in that card's "?". The aim panels read one hand-built summary (its
+// metric values from the engine's own valuesOf), so every expected figure is worked out by hand.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,11 +19,12 @@ import { AimPanels } from "./aim/AimPanels";
 import CareerAim from "./CareerAim";
 
 let scoped: Rolled | null = null;
-vi.mock("../data/provider", () => ({ useData: (): Pick<Data, "matches" | "you"> & { version: number; client: null } => ({ matches: [], you: [], version: 0, client: null }) }));
+vi.mock("../data/provider", () => ({ useData: (): Pick<Data, "matches" | "you"> & { version: number; client: null; baselines: null } => ({ matches: [], you: [], version: 0, client: null, baselines: null }) }));
 vi.mock("../data/packs", () => ({ usePros: () => ({ state: "missing" }), useAgents: () => null }));
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
-  useScoped: (_q: unknown, extra: unknown[]) => (scoped ? extra.map(() => scoped) : null),
+  // as the real hook: null while loading, and null for an empty query list (useRollups asks nothing)
+  useScoped: (_q: unknown, extra: unknown[]) => (scoped && extra.length ? extra.map(() => scoped) : null),
   useRollups: () => ({ data: null, error: null, loading: false }),
   useCall: () => ({ data: null, error: null, loading: false }),
 }));
@@ -58,21 +61,34 @@ function summary(aim: Partial<Summary["aim"]> = {}): Rolled {
   Object.assign(s.aim, { shots: 40, hits: 10 }, aim);
   return rolled(s);
 }
-/** The text of the hero figure or disclosure row labelled `label`. */
-const fig = (label: string) => Array.from(host.querySelectorAll(".fig")).find((f) => f.querySelector(".fig__l")?.textContent === label);
-const row = (label: string) => Array.from(host.querySelectorAll(".drow")).find((r) => r.querySelector("span")?.firstChild?.textContent === label);
-const rowValue = (label: string) => row(label)?.querySelector("b")?.textContent;
+/** The card-list row labelled `label` (its label's own text, without an approx mark or a chip). */
+const row = (label: string) => Array.from(host.querySelectorAll(".amrow")).find((r) => r.querySelector(".amrow__l > span")?.firstChild?.textContent === label);
+const value = (label: string) => row(label)?.querySelector<HTMLElement>(":scope > b");
+const rowValue = (label: string) => value(label)?.textContent;
 
-describe("aim hero, restored figures", () => {
+describe("accuracy ring, leading the stat strip", () => {
+  it("fills the ring at 50% accuracy and gives the strip's first cell to it", () => {
+    // fails if the ring leaves the strip, or stops filling at 50% (10 of 40 shots, 25%, is half the ring)
+    scoped = summary();
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    const lead = host.querySelector(".strip > .strip__lead")!;
+    expect(host.querySelector(".strip")!.firstElementChild).toBe(lead);
+    expect(lead.querySelector(".strip__val")!.textContent).toMatch(/^25\.0%/);
+    const arc = lead.querySelectorAll("svg.ring circle")[1];
+    const len = Number(arc.getAttribute("stroke-dasharray"));
+    expect(Number(arc.getAttribute("stroke-dashoffset"))).toBeCloseTo(len / 2, 6);
+  });
+});
+
+describe("hitting figures, restored", () => {
   it("shows head accuracy and headshot kills over guns only, the headshot share coloured", () => {
     // fails if the knife counts, or the verdict colour is lost or computed from the wrong share
     scoped = summary();
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(fig("Head accuracy")?.querySelector(".fig__v")?.textContent).toBe("40.0%");
-    const hsk = fig("Headshot kills")!.querySelector<HTMLElement>(".fig__v")!;
-    expect(hsk.textContent).toBe("70.0%");
+    expect(rowValue("Head accuracy")).toBe("40.0%");
+    expect(rowValue("Headshot kills")).toBe("70.0%");
     // 70% is past 45 + 25, the end of the scale: full good-text green
-    expect(hsk.style.color).toBe("rgb(45, 186, 42)");
+    expect(value("Headshot kills")!.style.color).toBe("rgb(45, 186, 42)");
   });
 
   it("leaves the headshot figure uncoloured without gun kills", () => {
@@ -80,7 +96,7 @@ describe("aim hero, restored figures", () => {
     scoped.weapons.ak47.kills = 0;
     scoped.weapons.ak47.hsKills = 0;
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(fig("Headshot kills")!.querySelector<HTMLElement>(".fig__v")!.style.color).toBe("");
+    expect(value("Headshot kills")!.style.color).toBe("");
   });
 
   it("marks the visibility rows Validating, focusably, only where mesh visibility exists", () => {
@@ -89,11 +105,11 @@ describe("aim hero, restored figures", () => {
     render(<AimPanels query={QUERY} label="t" visibility />);
     expect(rowValue("Accuracy at visible enemies")).toBe("25.0%");
     expect(rowValue("Adjusted accuracy")).toBe("40.0%");
-    const chips = Array.from(host.querySelectorAll(".drow .chip"));
+    const chips = Array.from(host.querySelectorAll(".amrow .chip"));
     expect(chips.map((c) => c.textContent)).toEqual(["Validating", "Validating"]);
     expect(chips.every((c) => c.getAttribute("tabindex") === "0" && c.getAttribute("data-tip"))).toBe(true);
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(host.querySelectorAll(".drow .chip")).toHaveLength(0);
+    expect(host.querySelectorAll(".amrow .chip")).toHaveLength(0);
   });
 
   it("shows wallbang and smoke kills only where the file records the flag", () => {
@@ -114,30 +130,33 @@ describe("aim hero, restored figures", () => {
     expect([rowValue("First bullets on target"), rowValue("Spray bullets on target")]).toEqual(["–", "–"]);
   });
 
-  it("explains counter-strafing with its counts, colours the figure, and drops the counts when none is known", () => {
-    // fails if the counts are not cs[0] of all known first bullets, or "0 first bullets" shows
+  it("puts the counter-strafe rule in the card's tooltip, shows its counts, colours the figure, and drops the counts when none is known", () => {
+    // fails if the 34% rule is lost, the counts are not cs[0] of all known first bullets, or "0 first shots" shows
     scoped = summary({ cs: [6, 1, 1, 1, 1] });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    const p = host.querySelector(".disclose__p")!.textContent!;
-    expect(p).toContain("at or under 34% of the weapon's top speed");
-    expect(p).toContain("10 first bullets had a known speed; 6 of them were counter-strafed.");
+    const card = host.querySelector(".aim-strafe")!;
+    expect(card.querySelector(".hint")!.getAttribute("data-tip")).toContain("at or under 34% of the gun's top speed");
+    expect(card.textContent).toContain("10 first shots");
+    expect(row("Counter-strafed first shots")!.querySelector(".amrow__n")!.textContent).toBe("6");
     // 60% is the scale's neutral middle
-    expect(fig("Counter-strafed first shots")!.querySelector<HTMLElement>(".fig__v")!.style.color).toBe("rgb(230, 226, 220)");
+    expect(value("Counter-strafed first shots")!.style.color).toBe("rgb(230, 226, 220)");
     scoped = summary();
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(host.querySelector(".disclose__p")!.textContent).not.toContain("known speed");
+    expect(host.querySelector(".aim-strafe")!.textContent).not.toContain("first shot");
   });
 
   it("gives no verdict colour to spray vs the ideal pull, which the engine defines as a comparison", () => {
     scoped = summary({ cmp: 4, dev: 12 });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(fig("Spray vs the ideal pull")!.querySelector<HTMLElement>(".fig__v")!.style.color).toBe("");
+    expect(rowValue("Spray vs the ideal pull")).not.toBe("–");
+    expect(value("Spray vs the ideal pull")!.style.color).toBe("");
   });
 });
 
 describe("spray card, restored parts", () => {
   /** An AK spray summary: 4 sprays to bullet 3, with spread and target sums. */
   const spray = (onTarget: Summary["aim"]["onTarget"] = {}) => summary({
+    sprays: 4,
     path: { ak47: { n: [4, 4], dp: [4, 8], dy: [0, 4] } },
     spread: { ak47: { pp: [8, 20], yy: [0, 8] } },
     heads: { ak47: { n: [4, 4, 4], dp: [0, 0, 0], dy: [4, 4, 4] } },
@@ -145,23 +164,73 @@ describe("spray card, restored parts", () => {
   });
 
   it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Ideal pull", () => {
-    // fails if the toggle is missing, unlabelled, replaces Ideal pull, or does not hide the ellipses
+    // fails if either toggle is missing or unlabelled, or a toggle does not hide what it names
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);
-    const boxes = Array.from(host.querySelectorAll<HTMLLabelElement>(".gunpick__bands label"));
+    const boxes = Array.from(host.querySelectorAll<HTMLLabelElement>(".spray-toggles label"));
     expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Ideal pull"]);
-    expect(host.querySelectorAll("svg.spray ellipse")).toHaveLength(2);
-    expect(host.querySelector(".spray-legend")!.textContent).toContain("one standard deviation");
+    expect(host.querySelectorAll("svg.spray__plot ellipse")).toHaveLength(2);
+    expect(host.querySelector(".spray-key")!.textContent).toContain("one standard deviation");
     act(() => boxes[0].querySelector("input")!.click());
-    expect(host.querySelectorAll("svg.spray ellipse")).toHaveLength(0);
-    expect(host.querySelector(".spray-legend")!.textContent).not.toContain("one standard deviation");
+    expect(host.querySelectorAll("svg.spray__plot ellipse")).toHaveLength(0);
+    expect(host.querySelector(".spray-key")!.textContent).not.toContain("one standard deviation");
+    expect(host.querySelector("svg.spray__plot .spray__pro")).not.toBeNull();
+    act(() => boxes[1].querySelector("input")!.click());
+    expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
+    expect(host.querySelector(".spray-key")!.textContent).not.toContain("Pro median");
+  });
+
+  it("keeps a sprayed gun the game's pattern is not known for, drawn without a reference", () => {
+    // fails if the gun list drops a gun without a pattern (the Negev: no demo shots yet), or such a gun
+    // shows an Ideal pull toggle or a reference line
+    scoped = summary({ sprays: 5, path: { negev: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    scoped.weapons.negev = gun({ shots: 15, hits: 3 });
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="negev"]')!;
+    expect(btn).not.toBeNull();
+    act(() => btn.click());
+    expect(host.querySelector(".spray__title")!.textContent).toBe("Your Negev spray");
+    expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
+    expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
+    expect(host.querySelector(".spray__note")!.textContent).toContain("No in-game pattern");
+  });
+
+  it("lists every sprayed gun with its count after the name, fades a thin one with the reason, and draws no mark", () => {
+    // fails if the hollow few-sprays mark comes back, a gun without sprays lists, or a thin gun loses its reason
+    scoped = summary({ sprays: 3, sprayDist: [1.5, 2.5, 2] });
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    const rows = Array.from(host.querySelectorAll<HTMLButtonElement>(".gunlist__b"));
+    // the knife is not a gun; the AK has three sprays without angles (a plugin file) and still lists
+    expect(rows.map((b) => b.getAttribute("data-w"))).toEqual(["ak47"]);
+    expect(rows[0].querySelector(".gunlist__n")!.textContent).toBe("AK-47 3");
+    expect(rows[0].hasAttribute("data-thin")).toBe(true);
+    expect(rows[0].getAttribute("data-tip")).toBe("3 sprays, the pattern settles at 30.");
+    expect(host.querySelector(".gunlist__thin, .gunbtn__thin")).toBeNull();
+    // without per-bullet angles the chart is the ideal pull alone, and the distance from the target shows
+    expect(host.querySelector(".spray__title")!.textContent).toBe("AK-47: the ideal pull");
+    expect(host.querySelector(".spray__dist b")!.textContent).toBe("2.00°");
+    expect(host.querySelector(".spray__dist .meta")!.textContent).toBe("mean over 3 sprays");
+    scoped = summary({ sprays: 0 });
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    expect(host.querySelectorAll(".gunlist__b")).toHaveLength(0);
+    expect(host.querySelector(".aim-spray")!.textContent).toContain("No sprays of three bullets or more.");
+  });
+
+  it("shows the no-sprays state, not a skeleton, when no gun was fired on the side and class in view", () => {
+    // fails if an empty gun set reads as loading (sprays only on T with Side set to CT left a skeleton)
+    scoped = summary({ sprays: 0 });
+    delete scoped.weapons.ak47;
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    const card = host.querySelector(".aim-spray")!;
+    expect(card.querySelector(".skel")).toBeNull();
+    expect(card.textContent).toContain("No sprays of three bullets or more.");
   });
 
   it("marks where the target's head was for each bullet, with its legend entry", () => {
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);
-    expect(host.querySelectorAll('svg.spray circle[fill="var(--ct)"]')).toHaveLength(3);
-    expect(host.querySelector(".spray-legend")!.textContent).toContain("Where the target's head was");
+    expect(host.querySelectorAll("svg.spray__plot circle.spray__head")).toHaveLength(3);
+    expect(host.querySelector(".spray-key")!.textContent).toContain("Where the target's head was");
   });
 
   it("charts bullets against the 1.5 degree on-target line only when the target data exists", () => {
@@ -189,15 +258,18 @@ describe("targetControl", () => {
 
 describe("timings gate", () => {
   it("says why the timings are gated, per visibility status, with the extractor's 90% mesh rule", () => {
-    // fails if a status loses its reason or the counts are wrong
+    // fails if a status loses its reason or its tooltip, or the counts are wrong
     scoped = summary();
     render(<AimPanels query={QUERY} label="t" visibility={false} statuses={["no_mapdata", "mesh_mismatch", "mesh_mismatch", "ok"]} />);
-    const why = host.querySelector(".gated__why")!.textContent!;
-    expect(why).toContain("One match file has no mesh line of sight: plugin recordings never do");
-    expect(why).toContain("2 match files failed the mesh check: the map's mesh gave line of sight at fewer than 90% of the kills that were not wallbangs");
-    expect(why).toContain("keeps the mesh only when it gives line of sight at 90% or more");
+    const why = host.querySelector(".gated__why")!;
+    const lines = Array.from(why.querySelectorAll(".gated__reason"));
+    expect(lines.map((l) => l.textContent)).toEqual(["One match file has no map data", "2 match files failed the mesh check"]);
+    expect(lines[0].getAttribute("data-tip")).toContain("Plugin recordings never carry it");
+    expect(lines[1].getAttribute("data-tip")).toContain("under 90% of non-wallbang kills");
+    expect(lines.every((l) => l.getAttribute("tabindex") === "0")).toBe(true);
+    expect(why.closest(".card")!.querySelector(".hint")!.getAttribute("data-tip")).toContain("90% of kills");
     render(<AimPanels query={QUERY} label="t" visibility={false} statuses={["no_mesh"]} />);
-    expect(host.querySelector(".gated__why")!.textContent).toContain("This match file has no mesh line of sight: the extractor has no collision mesh for the map.");
+    expect(host.querySelector(".gated__why")!.textContent).toContain("This match file has no collision mesh");
   });
 });
 
