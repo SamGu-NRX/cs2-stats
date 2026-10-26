@@ -29,14 +29,14 @@ import { useCall, useScoped } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { metric, metrics } from "../../data/meta";
 import { useData } from "../../data/provider";
+import { aimTip, TIP } from "../../data/tips";
 import { AimIcon } from "../../icons/ui";
 import { fmtInt, fmtPct, fmtRatio, plural } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 import { BENCH } from "../../lib/verdict";
 import { Hint } from "../match/glyphs";
 import { Empty, NeedsDemo } from "../shared";
-import { bestAndWorst, ClassIcon, edgeText, edgeTip, EDGE_TIP, GunHero, GunIcon, MIN_SHOTS, PROF_TIP, SplitCell, useGuns, type Judged } from "./guns";
-import { aimTip } from "./tips";
+import { advice, bestAndWorst, ClassIcon, edgeText, edgeTip, EDGE_TIP, GunHero, GunIcon, HEAD_TIP, MIN_SHOTS, PROF_TIP, SplitCell, useGuns, type Judged } from "./guns";
 
 type SideFilter = "all" | "t" | "ct";
 const GUN_CLASSES = ["rifle", "sniper", "smg", "heavy", "pistol"] as const;
@@ -281,8 +281,6 @@ function FinerCard({ s, r, visibility }: { s: Rolled | null; r: CompareResult | 
 interface GunRow { weapon: string; cls: string; shots: number; hits: number; head: number; kills: number; hsKills: number; rounds: number; s: Rolled | null }
 
 const ACC_TIP = "Gun shots that hit an enemy; the bar fills at 50%.";
-const HEAD_TIP = "Share of your hits on the head, not of your shots.";
-const HSK_TIP = "Share of your kills with the gun that were headshots.";
 
 const accBar = (v: number | null, t: string, color?: string) => (
   <span className="cellbar"><span className="hbar"><i style={{ width: `${Math.min(100, 2 * (v ?? 0))}%`, background: "var(--cream)" }} /></span><span style={color ? { color } : undefined}><Num v={t} /></span></span>
@@ -309,7 +307,7 @@ function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter;
           { key: "head", label: "Head share", sort: (g) => pct(g.head, g.hits), render: (g) => <Num v={fmtRatio(g.head, g.hits)} />, tip: HEAD_TIP },
           { key: "first", label: "First bullet", sort: (g) => value("firstBulletAccuracy", g.s), render: (g) => <Num v={text("firstBulletAccuracy", g.s)} />, tip: aimTip("firstBulletAccuracy") },
           { key: "kills", label: "Kills", sort: (g) => g.kills, render: (g) => g.kills },
-          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: HSK_TIP },
+          { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills)} />, tip: TIP.hs },
           { key: "rounds", label: "Rounds", tip: "Rounds you fired, hit or killed with it", sort: (g) => g.rounds, render: (g) => g.rounds },
         ]}
       />
@@ -344,7 +342,7 @@ function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
           columns={[
             { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}</span>, width: 120 },
             { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
-            { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: HSK_TIP },
+            { key: "hsk", label: "HS kills", sort: (g) => pct(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} />, tip: TIP.hs },
             { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
             { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => accBar(g.acc, fmtMetric("accuracy", g.acc), g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8))), width: 130, tip: "Coloured against your accuracy with your other guns." },
             { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: aimTip("firstBulletAccuracy") },
@@ -356,6 +354,7 @@ function CareerGuns({ list, side }: { list: MatchEntry[]; side: SideFilter }) {
               key: "edge", label: "Vs other guns", colored: true, sort: (g) => g.edge, tip: EDGE_TIP,
               render: (g) => (g.edge === null ? <span className="faint">–</span> : <span className="num" style={{ color: scoreText(toScore(g.edge, 0, 8)) }} data-tip={edgeTip(g)} tabIndex={0}>{edgeText(g.edge)}</span>),
             },
+            { key: "advice", label: "Advice", align: "l", render: (g) => <span className="advice">{advice(g)}</span>, width: 360 },
           ]}
         />
       </Card>

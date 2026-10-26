@@ -4,6 +4,7 @@
 // rounds with no shots behind them) is marked. Proficiency (familiarity and consistency rather than
 // raw results) is the engine's gunProficiency.
 import { useMemo } from "react";
+import { HIT_GROUPS } from "../../../stats/facts";
 import type { GunProficiency } from "../../../stats/guns";
 import type { Filter } from "../../../stats/rollup";
 import { weaponClass, weaponLabel } from "../../../stats/weapons";
@@ -13,7 +14,7 @@ import { useCall, useRollups, useYourQuery } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { sourceOf } from "../../data/sources";
 import { WeaponIcon } from "../../icons/game";
-import { fmtPct, signed } from "../../lib/format";
+import { fmtPct, plural, signed } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 
 /** A gun, or your other guns pooled, needs this many shots before its accuracy is judged. */
@@ -42,10 +43,16 @@ export interface Judged {
   others: { acc: number | null; shots: number };
   /** acc minus others.acc, percentage points; null unless both sides have MIN_SHOTS shots */
   edge: number | null;
+  /** first bullets fired (the first-bullet accuracy's sample), and your other guns' first-bullet accuracy */
+  firstShots: number;
+  othersFirst: number | null;
   prof: GunProficiency | null;
 }
 
 const acc = (s: Rolled) => (s.aim.shots >= MIN_SHOTS ? s.v.accuracy : null);
+const HEAD = HIT_GROUPS.indexOf("head");
+/** a as a percentage of b; null when b is 0 */
+export const share = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 
 /**
  * Each gun's numbers from the worker's rollups: `all` over every kept match, `recorded` over the ones
@@ -59,11 +66,12 @@ function judge(names: string[], all: Rolled, recorded: Rolled | null, per: Rolle
     const a = acc(per[i]);
     const o = acc(others[i]);
     return {
-      weapon: w, cls: weaponClass(w), shots: t.shots, hits: t.hits, head: t.groups[0],
+      weapon: w, cls: weaponClass(w), shots: t.shots, hits: t.hits, head: t.groups[HEAD] ?? 0,
       kills: { n: t.kills, converted: t.kills - (r?.kills ?? 0) }, hsKills: t.hsKills,
       rounds: { n: t.rounds, converted: t.rounds - (r?.rounds ?? 0) },
       acc: a, first: per[i].v.firstBulletAccuracy, own: per[i], others: { acc: o, shots: others[i].aim.shots },
       edge: a !== null && o !== null ? a - o : null, prof: prof?.find((p) => p.weapon === w) ?? null,
+      firstShots: per[i].aim.first, othersFirst: others[i].v.firstBulletAccuracy,
     };
   });
 }
@@ -119,6 +127,24 @@ export function SplitCell({ s, what }: { s: Split; what: string }) {
   return <span className="convcell" tabIndex={0} data-tip={`${s.converted} of ${s.n} ${what} from converted logs, which record no shots`}>{s.n}</span>;
 }
 
+/**
+ * Advice read off the gun's own numbers, against your other guns (main's Weapons advice, with "your
+ * other guns" in place of the class average the old data model kept): accuracy, then the first bullet,
+ * then how many hits land on the head.
+ */
+export function advice(g: Judged): string {
+  if (g.shots < MIN_SHOTS) return g.kills.n ? `${plural(g.kills.n, "kill")} so far; ${MIN_SHOTS} recorded shots are needed to judge your aim with it.` : "Fire it in a recorded match to see how you shoot with it.";
+  const lines: string[] = [];
+  if (g.edge !== null) lines.push(g.edge >= 0 ? `You hit ${g.edge.toFixed(1)} points more often than with your other guns.` : `You hit ${Math.abs(g.edge).toFixed(1)} points less often than with your other guns.`);
+  if (g.first !== null && g.othersFirst !== null && g.firstShots >= 10 && g.first < g.othersFirst - 5) lines.push(`Your first bullet lands ${(g.othersFirst - g.first).toFixed(0)} points less often than with your other guns: stop moving before you fire.`);
+  const head = share(g.head, g.hits);
+  if (head !== null && g.hits >= 15 && head < 15 && g.cls !== "sniper") lines.push(`Only ${head.toFixed(0)}% of hits are on the head: keep the crosshair at head height.`);
+  if (!lines.length) lines.push("In line with your other guns; keep using it.");
+  return lines.join(" ");
+}
+
+export const HEAD_TIP = "Share of your hits on the head, not of your shots.";
+
 /** "+4.2 pts": the gun's accuracy against your other guns' pooled accuracy. */
 export const edgeText = (edge: number) => `${signed(edge, 1)} pts`;
 export const edgeTip = (g: Judged) => `${fmtPct(g.acc)} with the ${weaponLabel(g.weapon)}, ${fmtPct(g.others.acc)} over ${g.others.shots} shots with your other guns`;
@@ -139,7 +165,7 @@ export function ClassIcon({ cls, height = 12 }: { cls: string; height?: number }
   return <GunIcon weapon={CLASS_GUN[cls] ?? "ak47"} height={height} />;
 }
 
-/** The best or the weakest gun: the official icon, its accuracy, its edge over your other guns and its kills. */
+/** The best or the weakest gun: the official icon, its accuracy, its edge over your other guns, its kills and the advice. */
 export function GunHero({ g, tone }: { g: Judged; tone: "best" | "worst" }) {
   return (
     <section className={`gunhero card gunhero--${tone}`} aria-label={tone === "best" ? "Best gun" : "Weakest gun"}>
@@ -152,6 +178,7 @@ export function GunHero({ g, tone }: { g: Judged; tone: "best" | "worst" }) {
           <span data-tip={edgeTip(g)} tabIndex={0}><b className="num" style={{ color: scoreText(toScore(g.edge ?? 0, 0, 8)) }}>{g.edge === null ? "–" : edgeText(g.edge)}</b><small className="meta">vs your other guns</small></span>
           <span><b className="num">{g.kills.n}</b><small className="meta">kills</small></span>
         </div>
+        <p className="gunhero__advice">{advice(g)}</p>
       </div>
     </section>
   );
