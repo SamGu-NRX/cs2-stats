@@ -2,7 +2,7 @@
 // per round. rollup() sums them under filters; nothing downstream reads the tables again.
 import type { AggroFact } from "./aggression";
 import type { AimFact } from "./aim";
-import type { BuyClass } from "./economy";
+import type { BuyClass, BuyTier } from "./economy";
 import type { InfoFact } from "./information";
 import type { MoveFact } from "./movement";
 import type { UtilQFact } from "./utilq";
@@ -144,6 +144,8 @@ export interface RoundFact {
   /** team equipment at freeze end and HLTV's buy class, per side */
   equip: Record<Side, number | null>;
   buy: Record<Side, BuyClass | null>;
+  /** the finer tier (economy.ts buyTier: half split into semi-eco and force), per side */
+  tier: Record<Side, BuyTier | null>;
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
   winProb: { tick: number; event: "start" | "kill" | "plant"; pT: number }[] | null;
 }
@@ -251,6 +253,9 @@ export interface PlayerRound {
   won: boolean | null;
   ownBuy: BuyClass | null;
   oppBuy: BuyClass | null;
+  /** the team's and the opponents' finer tiers (RoundFact.tier) */
+  ownTier: BuyTier | null;
+  oppTier: BuyTier | null;
   /** at freeze end */
   equip: number | null;
   moneyStart: number | null;

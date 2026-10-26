@@ -3,7 +3,7 @@
 // the same sum over fewer rows, and every ratio is computed from the totals.
 import { emptyAggro, foldAggro, type AggroAgg } from "./aggression";
 import { emptyAim, foldAim, type AimAgg } from "./aim";
-import type { BuyClass } from "./economy";
+import type { BuyClass, BuyTier } from "./economy";
 import { emptyInfo, foldInfo, type InfoAgg } from "./information";
 import { emptyMove, foldMove, type MoveAgg } from "./movement";
 import { emptyUtilQ, foldUtilQ, type UtilQAgg } from "./utilq";
@@ -17,6 +17,8 @@ export interface Filter {
   sides?: Side[];
   /** the player's team's buy class */
   ownBuy?: BuyClass[];
+  /** the player's team's finer buy tier (economy.ts BUY_TIERS) */
+  ownTier?: BuyTier[];
   /** the opponents' buy class */
   oppBuy?: BuyClass[];
   maps?: string[];
@@ -72,6 +74,7 @@ export function keptRounds(f: MatchFacts, filter: Filter): PlayerRound[] {
     if (filter.sides && !filter.sides.includes(r.side)) return false;
     if (filter.ownBuy && (!r.ownBuy || !filter.ownBuy.includes(r.ownBuy))) return false;
     if (filter.oppBuy && (!r.oppBuy || !filter.oppBuy.includes(r.oppBuy))) return false;
+    if (filter.ownTier && (!r.ownTier || !filter.ownTier.includes(r.ownTier))) return false;
     if (filter.opponents && !filter.opponents.includes(f.match.teams[1 - r.team])) return false;
     if (filter.spawns && (!r.spawn || !filter.spawns.includes(r.spawn))) return false;
     if (filter.rounds && !filter.rounds.includes(f.rounds[r.ri].number)) return false;
@@ -125,7 +128,7 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   keep(f.aggression, (x) => foldAggro(s.aggression, x));
   keep(f.information, (x) => foldInfo(s.information, x));
   keep(f.utilq, (x) => foldUtilQ(s.utilq, x));
-  if (!(filter.ownBuy || filter.oppBuy || filter.spawns || filter.weapons || filter.rounds)) {
+  if (!(filter.ownBuy || filter.oppBuy || filter.ownTier || filter.spawns || filter.weapons || filter.rounds)) {
     const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
     for (const x of f.presence) {
       if (ids.has(f.players[x.pi].id) && (!filter.sides || filter.sides.includes(x.side))) foldPresence((s.presence[f.match.map] ??= { cells: {}, places: {} }), x);
