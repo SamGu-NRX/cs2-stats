@@ -3,7 +3,7 @@
 // - The stat strip: accuracy as a ring in the lead, then the headline aim metrics, each with its
 //   percentile against the pros of your role (compare), shown for all guns only: pros are pooled over
 //   every gun.
-// - Spray: one gun with a pro path at a time, your mean view path with its spread against the pros'
+// - Spray: one gun at a time, your mean view path with its spread against the ideal pull (the game's recoil mirrored) and the pros'
 //   and where the target's head was (SprayPath), then distance from the pros and from the target.
 // - Where you hit: gun hits on the agent figure by hit group, then the hitting figures: head accuracy,
 //   headshot kills, accuracy at visible enemies and adjusted, wallbang and smoke kills.
@@ -16,7 +16,7 @@
 //   says why for each match file.
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ACCURATE_FRAC, SIGHT_CONE_DEG } from "../../../stats/aim-geometry";
-import { RECOIL } from "../../../stats/aim-ref";
+import { RECOIL } from "../../../stats/recoil-ref";
 import type { SideKey as PoolSide } from "../../../stats/compare";
 import { HIT_GROUPS } from "../../../stats/facts";
 import type { Side } from "../../../stats/tables";
@@ -207,6 +207,11 @@ interface SprayGun {
   /** the view path to draw: absolute view angles when there are any, else the target-relative path (plugin files); null without per-bullet angles */
   path: PlayerPath | null;
   relative: boolean;
+  /**
+   * the path is from sprays whose recoil state is unknown (AimAgg.unknownPath: a plugin M4A1-S, no
+   * silencer state), so it is drawn alone, with no reference, ideal-pull controls or distance bars
+   */
+  recoilUnknown: boolean;
   /** every spray of three or more bullets with this gun (AimAgg.sprays) */
   sprays: number;
   /** each spray's mean distance from bullet 1's target, in degrees (AimAgg.sprayDist); empty without a tracked target */
@@ -227,9 +232,10 @@ export function sprayGuns(guns: string[], per: Rolled[] | null): SprayGun[] {
   return guns.flatMap((w, i) => {
     const a = per[i].aim;
     if (!a.sprays) return [];
-    const abs = a.path[w], rel = a.relPath[w];
-    const path = abs?.n.length ? abs : rel?.n.length ? rel : null;
-    return [{ w, path, relative: !abs?.n.length && !!path, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
+    const abs = a.path[w], unk = a.unknownPath?.[w], rel = a.relPath[w];
+    const known = !!abs?.n.length, unknown = !known && !!unk?.n.length;
+    const path = known ? abs : unknown ? unk : rel?.n.length ? rel : null;
+    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
   }).sort((x, y) => y.sprays - x.sprays);
 }
 
@@ -256,16 +262,16 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
     group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(list[to].w)}"]`)?.focus();
   };
   const name = weaponLabel(cur.w);
-  const ref = RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
+  const ref = !cur.recoilUnknown && RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
   const a = cur.own.aim;
   const spread = showSpread && !cur.relative ? a.spread[cur.w] ?? null : null;
   const heads = cur.relative ? null : a.heads[cur.w] ?? null;
   const onTarget = a.onTarget[cur.w] ?? null;
   const dist = mean(cur.dist);
-  // a chart needs your path or a pro path to draw; a plugin gun without angles shows its distance alone
+  // a chart needs your path or the ideal pull to draw; a plugin gun without angles shows its distance alone
   const chart = cur.path !== null || (ref !== null && !cur.relative);
   return (
-    <Card className="aim-spray" title={<>Spray<Hint tip="Your average view path from bullet 1, against pros'." /></>} aside={
+    <Card className="aim-spray" title={<>Spray<Hint tip="Your average view path from bullet 1, against the pull that cancels recoil." /></>} aside={
       <span className="meta spray-aside">{plural(cur.sprays, "spray")}{cur.sprays < THIN_SPRAY ? <span className="chip chip--outline" data-tip={thinTip(cur.sprays)} tabIndex={0}>Few sprays</span> : null}</span>
     }>
       <div className="sprayc">
@@ -283,18 +289,18 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
           })}
         </div>
         <div className="sprayc__fig">
-          {chart && !cur.relative && (
+          {chart && !cur.relative && !cur.recoilUnknown && (
             <div className="spray-toggles">
               <label className="check"><input type="checkbox" checked={showSpread} onChange={(e) => setShowSpread(e.target.checked)} /><span>Spread bands</span></label>
-              {ref && <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Pro path</span></label>}
+              {ref && <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Ideal pull</span></label>}
             </div>
           )}
-          {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} pro={showPro} spread={spread} heads={heads} />}
+          {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} recoilUnknown={cur.recoilUnknown} pro={showPro} spread={spread} heads={heads} />}
           {chart && (
             <div className="legend spray-key" aria-hidden>
               <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="1.5" /></svg>You</span>
               {spread && <span><svg width="14" height="10"><ellipse cx="7" cy="5" rx="6" ry="4" className="spray__sd" /></svg>Your spread, one standard deviation</span>}
-              {ref && !cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Pro median</span>}
+              {ref && !cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Ideal pull</span>}
               {ref && !cur.relative && showPro && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}
               {heads && <span><svg width="10" height="10"><circle cx="5" cy="5" r="2.5" className="spray__head" /></svg>Where the target's head was</span>}
               {cur.path && cur.path.n.some((n) => n < MIN_SPRAYS) ? <span className="faint">Faded: under {MIN_SPRAYS} sprays</span> : null}

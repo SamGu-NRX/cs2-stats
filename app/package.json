@@ -19,6 +19,8 @@
     "scoreboard-variants": "vite-node tools/scoreboard-variants.ts",
     "utility-outcomes": "vite-node tools/utility-outcomes.ts",
     "metric-evidence": "vite-node tools/metric-evidence.ts",
+    "recoil": "vite-node tools/recoil.ts",
+    "spray-counts": "vite-node tools/spray-counts.ts",
     "fit-luck": "vite-node tools/fit-luck.ts"
   },
   "dependencies": {

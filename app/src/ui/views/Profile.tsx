@@ -193,7 +193,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   if (!p) {
     return (
       <div className="view view--capped">
-        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: [...controls] }} />
+        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: [...controls], maps: tab === "aim" ? "aim" : "career" }} />
         <div className="view__in profile">
           {(sums.loading || !matches.length) && !sums.error ? <div className="skel" style={{ height: 340 }} /> : <Card><Empty text={sums.error ?? "No matches in this filter."} /></Card>}
         </div>
@@ -203,7 +203,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   const rankSide = ratingKey(side);
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }, { label: PROFILE_TAB_LABEL[tab] }]} scope={{ controls: [...controls] }} />
+      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }, { label: PROFILE_TAB_LABEL[tab] }]} scope={{ controls: [...controls], maps: tab === "aim" ? "aim" : "career" }} />
       <div className="view__in profile" data-side={side} data-enter={enter || undefined} ref={enterRef}>
         <div className="profile__top psec" id="card" ref={cardRef}>
           <PlayerCard p={p} side={side} cmp={cmp} />
