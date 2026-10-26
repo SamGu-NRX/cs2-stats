@@ -910,7 +910,7 @@ export const AIM_METRICS: Metric[] = [
     def: "Median time between stopping and your first shot at an enemy.",
     value: (s) => ms(median(s.aim.stopBuf)) },
   { id: "movingSpray", label: "Shooting while moving", kind: "identity", group: "aim", unit: "pct", status: "approx",
-    def: "Share of your rifle burst bullets fired while moving.",
+    def: "Average moving-bullet share per rifle burst.",
     value: (s) => pct(s.aim.movingShare, s.aim.bursts) },
 ];
 
