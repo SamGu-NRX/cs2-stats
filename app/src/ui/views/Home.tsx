@@ -5,6 +5,7 @@ import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
 import { ClutchBadge, Delta, FirstPip, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
+import { GameIcon } from "../components/GameIcon";
 import { FormBars } from "../components/charts";
 import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
@@ -18,9 +19,9 @@ import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { seriesOf, tileDelta, tileValue, TILES } from "../data/series";
 import { ATTR_ICON, AttrIcon } from "../icons/attributes";
-import { FlagIcon, WeaponIcon } from "../icons/game";
+import { BuyIcon, FlagIcon, WeaponIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
-import { ChevronRightIcon } from "../icons/ui";
+import { AimIcon, ChevronRightIcon, TrendIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
@@ -430,7 +431,19 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
       .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value, href: workOnHref(m)!, population: proPopulation(r.p[m.id].pool) }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
   }, [r, latest]);
-  const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
+  /**
+   * The icon of the topic the item opens: the aim metrics' crosshair, the pack's headshot for headshot
+   * kills (the Weapons tab's column), the attribute of a metric's group, the economy and utility tabs'
+   * own, and a neutral trend glyph where no topic fits. Firepower's icon is Firepower's alone.
+   */
+  const icon = (m: { id: string; group: string }) => {
+    if (CAREER_AIM.has(m.id)) return <AimIcon size={20} className="workon__ico" />;
+    if (m.id === "hs") return <span className="workon__ico"><GameIcon id="headshot" name="Headshot kills" width={20} beside /></span>;
+    if (m.group !== "firepower" && m.group in ATTR_ICON) return <AttrIcon id={m.group as AttributeId} size={20} className="workon__ico" />;
+    if (TAB_METRICS.economy.includes(m.id)) return <span className="workon__ico"><BuyIcon buy="full" size={20} beside /></span>;
+    if (TAB_METRICS.utility.includes(m.id)) return <AttrIcon id="utility" size={20} className="workon__ico" />;
+    return <TrendIcon size={20} className="workon__ico" />;
+  };
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
       {weak.length === 0 && !fire ? <p className="meta">Not enough rounds to compare with pros.</p> : (
@@ -448,7 +461,7 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
           )}
           {weak.map(({ m, pct, value, href, population }) => (
             <a key={m.id} className="workon__item" href={href} data-tip={m.def}>
-              <AttrIcon id={icon(m.group)} size={20} className="workon__ico" />
+              {icon(m)}
               <div className="workon__body">
                 <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }} data-tip="Percentile against pros: the share of pros below you">{rankText(pct)}</b></div>
                 <div className="hbar"><i style={{ width: `${pct}%`, background: "var(--poor)" }} /></div>
