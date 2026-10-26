@@ -52,12 +52,14 @@ const S = 26, W = 330, TOP = 24, MIN_H = 160;
  * until the plugin stores view angles), so it cannot be set against the ideal pull: the chart draws your
  * path only, says why in one sentence, and shows no band, no reference line and no distance bars.
  * `reference` null: the game's pattern for the gun is not known yet, so only your path draws.
+ * `recoilUnknown`: the sprays' recoil state is not recorded (a plugin M4A1-S, AimAgg.unknownPath); the
+ * caller passes no reference, and the note says why instead.
  * `pro` false hides the pros' band and the ideal pull (the Ideal pull toggle); `spread` draws each bullet's spread as
  * a one-standard-deviation ellipse and `heads` where the target's head was for each bullet, both in the
  * absolute frame, so neither draws on a relative path.
  */
-export function SprayPath({ gun, reference, path, relative = false, pro = true, spread = null, heads = null }: {
-  gun: string; reference: RecoilRef | null; path: PlayerPath | null; relative?: boolean; pro?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null;
+export function SprayPath({ gun, reference, path, relative = false, recoilUnknown = false, pro = true, spread = null, heads = null }: {
+  gun: string; reference: RecoilRef | null; path: PlayerPath | null; relative?: boolean; recoilUnknown?: boolean; pro?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null;
 }) {
   const pts = path ? meanPath(path) : [];
   const ref = relative || !pro || !reference ? [] : reference.path;
@@ -94,7 +96,7 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : !reference ? <p className="spray__note">No in-game pattern for this gun yet: the demos hold too few of its shots.</p> : null}
+      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : recoilUnknown ? <p className="spray__note">Your recordings don't say whether the silencer was on, so this path isn't compared with the game's pattern.</p> : !reference ? <p className="spray__note">No in-game pattern for this gun yet: the demos hold too few of its shots.</p> : null}
     </figure>
   );
 }

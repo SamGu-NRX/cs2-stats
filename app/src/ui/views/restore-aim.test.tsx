@@ -180,6 +180,21 @@ describe("spray card, restored parts", () => {
     expect(host.querySelector(".spray-key")!.textContent).not.toContain("Pro median");
   });
 
+  it("draws a plugin M4A1-S path with no reference, controls, key or distance bars when its silencer state is unknown", () => {
+    // fails if a spray whose recoil state the plugin did not record is drawn against the silenced
+    // pattern: the ideal pull, its toggle and key, or "Distance from the ideal pull"
+    scoped = summary({ sprays: 5, unknownPath: { m4a1_silencer: { n: [5, 5, 5], dp: [1, 2, 3], dy: [0, 0.5, 1] } } });
+    scoped.weapons.m4a1_silencer = gun({ shots: 15, hits: 3 });
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    act(() => host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="m4a1_silencer"]')!.click());
+    expect(host.querySelector(".spray__title")!.textContent).toBe("Your M4A1-S spray");
+    expect(host.querySelector("svg.spray__plot .spray__mine")).not.toBeNull();
+    expect([host.querySelector("svg.spray__plot .spray__pro"), host.querySelector("svg.spray__plot .spray__band"), host.querySelector(".spray-toggles")]).toEqual([null, null, null]);
+    expect(host.querySelector(".spray-key")!.textContent).not.toContain("Ideal pull");
+    expect(host.textContent).not.toContain("Distance from the ideal pull");
+    expect(host.querySelector(".spray__note")!.textContent).toContain("silencer");
+  });
+
   it("keeps a sprayed gun the game's pattern is not known for, drawn without a reference", () => {
     // fails if the gun list drops a gun without a pattern (the Negev: no demo shots yet), or such a gun
     // shows an Ideal pull toggle or a reference line

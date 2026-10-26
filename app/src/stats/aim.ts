@@ -344,6 +344,11 @@ export interface AimAgg {
   path: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for sprays whose path is relative to the target (plugin recordings): shown, not compared with pros */
   relPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /**
+   * the same for sprays whose recoil state is unknown (SprayFact.recoilKnown false: a plugin M4A1-S,
+   * silencer not recorded): the user's own view path, set against no reference
+   */
+  unknownPath: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** each spray's distance from its target (SprayFact.dist), in spray order */
   sprayDist: number[];
   /** per weapon, indexed as path: sums of the squared view change, pitch and yaw, for the spread per bullet */
@@ -377,7 +382,7 @@ export interface AimAgg {
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
-  sprays: 0, sprayGuns: {}, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, land: {}, sprayDist: [], spread: {}, heads: {}, onTarget: {},
+  sprays: 0, sprayGuns: {}, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, unknownPath: {}, land: {}, sprayDist: [], spread: {}, heads: {}, onTarget: {},
   adj: 0, adjHits: 0, smokeShotsKnown: 0, smokeShots: 0, killsWbKnown: 0, killsWb: 0, killsSmokeKnown: 0, killsSmoke: 0, deep: 0, deepHits: 0,
   dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0, xN: 0, xWins: 0, xExp: 0,
 });
@@ -435,6 +440,11 @@ export function foldAim(a: AimAgg, f: AimFact): void {
       f.dp.forEach((dp, j) => { r.n[j] = (r.n[j] ?? 0) + 1; r.dp[j] = (r.dp[j] ?? 0) + dp; r.dy[j] = (r.dy[j] ?? 0) + f.dy[j]; });
       return;
     }
+    if (!f.recoilKnown) {
+      const u = (a.unknownPath[f.weapon] ??= { n: [], dp: [], dy: [] });
+      f.dp.forEach((dp, j) => { u.n[j] = (u.n[j] ?? 0) + 1; u.dp[j] = (u.dp[j] ?? 0) + dp; u.dy[j] = (u.dy[j] ?? 0) + f.dy[j]; });
+      return;
+    }
     const ref = RECOIL[f.weapon].path;
     const w = (a.path[f.weapon] ??= { n: [], dp: [], dy: [] });
     const sq = (a.spread[f.weapon] ??= { pp: [], yy: [] });
@@ -444,9 +454,8 @@ export function foldAim(a: AimAgg, f: AimFact): void {
       if (f.landing === "measured") l.measured++; else l.pattern++;
     }
     f.dp.forEach((dp, j) => {
-      // compared with the ideal pull only for the bullets the in-game pattern covers, and only when the
-      // spray's recoil state is known
-      if (ref[j + 1] && f.recoilKnown) {
+      // compared with the ideal pull only for the bullets the in-game pattern covers
+      if (ref[j + 1]) {
         const rp = dp - ref[j + 1][0], ry = f.dy[j] - ref[j + 1][1];
         a.cmp++; a.dev += Math.hypot(rp, ry); a.pull += rp;
       }

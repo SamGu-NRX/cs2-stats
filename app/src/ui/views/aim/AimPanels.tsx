@@ -207,6 +207,11 @@ interface SprayGun {
   /** the view path to draw: absolute view angles when there are any, else the target-relative path (plugin files); null without per-bullet angles */
   path: PlayerPath | null;
   relative: boolean;
+  /**
+   * the path is from sprays whose recoil state is unknown (AimAgg.unknownPath: a plugin M4A1-S, no
+   * silencer state), so it is drawn alone, with no reference, ideal-pull controls or distance bars
+   */
+  recoilUnknown: boolean;
   /** every spray of three or more bullets with this gun (AimAgg.sprays) */
   sprays: number;
   /** each spray's mean distance from bullet 1's target, in degrees (AimAgg.sprayDist); empty without a tracked target */
@@ -227,9 +232,10 @@ export function sprayGuns(guns: string[], per: Rolled[] | null): SprayGun[] {
   return guns.flatMap((w, i) => {
     const a = per[i].aim;
     if (!a.sprays) return [];
-    const abs = a.path[w], rel = a.relPath[w];
-    const path = abs?.n.length ? abs : rel?.n.length ? rel : null;
-    return [{ w, path, relative: !abs?.n.length && !!path, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
+    const abs = a.path[w], unk = a.unknownPath?.[w], rel = a.relPath[w];
+    const known = !!abs?.n.length, unknown = !known && !!unk?.n.length;
+    const path = known ? abs : unknown ? unk : rel?.n.length ? rel : null;
+    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
   }).sort((x, y) => y.sprays - x.sprays);
 }
 
@@ -256,7 +262,7 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
     group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(list[to].w)}"]`)?.focus();
   };
   const name = weaponLabel(cur.w);
-  const ref = RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
+  const ref = !cur.recoilUnknown && RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
   const a = cur.own.aim;
   const spread = showSpread && !cur.relative ? a.spread[cur.w] ?? null : null;
   const heads = cur.relative ? null : a.heads[cur.w] ?? null;
@@ -283,13 +289,13 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
           })}
         </div>
         <div className="sprayc__fig">
-          {chart && !cur.relative && (
+          {chart && !cur.relative && !cur.recoilUnknown && (
             <div className="spray-toggles">
               <label className="check"><input type="checkbox" checked={showSpread} onChange={(e) => setShowSpread(e.target.checked)} /><span>Spread bands</span></label>
               {ref && <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Ideal pull</span></label>}
             </div>
           )}
-          {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} pro={showPro} spread={spread} heads={heads} />}
+          {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} recoilUnknown={cur.recoilUnknown} pro={showPro} spread={spread} heads={heads} />}
           {chart && (
             <div className="legend spray-key" aria-hidden>
               <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="2" /></svg>You</span>

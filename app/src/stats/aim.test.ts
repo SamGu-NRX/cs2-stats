@@ -294,9 +294,13 @@ describe("the aim panels' restored measures", () => {
     foldAim(a, { ...s, lp: [0.5], ly: [-1], landing: "pattern" });
     // fails if the land sums lose which points were measured and which were inferred from the pattern
     expect(a.land.ak47).toEqual({ n: [2, 1, 1], dp: [0, -1, -1.5], dy: [0, 1.5, -0.5], measured: 1, pattern: 1 });
+    // a spray of unknown recoil state goes to unknownPath, compared with nothing
+    const before = [a.cmp, a.path.ak47.n.slice()];
+    foldAim(a, { ...s, weapon: "m4a1_silencer", recoilKnown: false, lp: [], ly: [], landing: null });
+    expect([a.unknownPath.m4a1_silencer, a.path.m4a1_silencer, a.cmp, a.path.ak47.n]).toEqual([{ n: [1, 1, 1], dp: s.dp, dy: s.dy }, undefined, ...before]);
     // every spray puts its gun in the picker, charted or not
     foldAim(a, { ...s, weapon: "negev", dp: [], dy: [], lp: [], ly: [] });
-    expect(a.sprayGuns).toEqual({ ak47: 2, negev: 1 });
+    expect(a.sprayGuns).toEqual({ ak47: 2, m4a1_silencer: 1, negev: 1 });
   });
 
   it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
