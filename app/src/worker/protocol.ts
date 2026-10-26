@@ -5,6 +5,7 @@
 import type { FileEntry } from "../host/host";
 import type { AimAgg } from "../stats/aim";
 import type { AttributeScore, CompareOptions, Percentile, SideKey } from "../stats/compare";
+import type { PoolKind } from "./baselines-pool";
 import type { EconomyView } from "../stats/economy";
 import type { GrenadeFact, MatchFacts, Measure, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
@@ -93,8 +94,19 @@ export interface Meta {
   deriveVersion: number;
 }
 
-/** What public/baselines.json says about itself; null fields while it failed to load. */
-export interface BaselineInfo { source: string; built: string; n: Record<string, Partial<Record<SideKey, number>>> }
+/**
+ * What the pro pool in use says about itself: the shipped public/baselines.json, or the packs folder's
+ * baselines.local.json (worker/baselines-pool.ts), with why a local file was passed over.
+ */
+export interface BaselineInfo {
+  source: string;
+  built: string;
+  n: Record<string, Partial<Record<SideKey, number>>>;
+  /** the pool's model fingerprint (model-params.ts modelFingerprint) */
+  model: string;
+  pool: PoolKind;
+  localError: string | null;
+}
 
 /** One match's facts without the family event facts (aim, movement and so on), which only rollups read. */
 export type MatchCore = Pick<MatchFacts, "v" | "match" | "players" | "rounds" | "pr" | "kills" | "totalsRounds">;
@@ -235,7 +247,8 @@ export interface RatingBreakdown { rows: RoundRating[]; match: Rating3; average:
 
 export interface Api {
   /** Starts the engine: `winprobPack` is the bytes of packs/winprob-hltv.json, null when it is not installed. */
-  meta(winprobPack: ArrayBuffer | null): Meta;
+  /** winprobPack: the packs folder's winprob-hltv.json; localBaselines: its baselines.local.json; null when absent */
+  meta(winprobPack: ArrayBuffer | null, localBaselines: ArrayBuffer | null): Meta;
   baselines(): BaselineInfo;
   sync(entries: FileEntry[]): { matches: MatchEntry[]; errors: { file: string; message: string }[] };
   match(file: string): MatchBundle;

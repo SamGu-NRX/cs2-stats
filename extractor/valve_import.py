@@ -1,7 +1,7 @@
 """Extract Valve matchmaking demos (match730_*.dem) into schema v1 tables, one folder per demo.
 
 Usage: python -I valve_import.py --out DIR [DEMO ...] [--mapdata DIR] [--steam DIR] [--user STEAMID64]
-       [--force] [--allow-in-repo] [--progress] [--result FILE]
+       [--force] [--progress] [--result FILE]
 
 With no DEMO, every match730_*.dem in the CS2 replays folder of the local Steam install is imported. Each
 demo goes to DIR/<demo file name without .dem>/ in the versioned layout of SCHEMA-v1.md (CURRENT names the
@@ -13,8 +13,8 @@ file time. --progress writes one JSON line per demo start and end to stderr, whi
 The user is identified by SteamID64: --user, else the one already in DIR/valve-user.local.json, else the
 most recent account in Steam's config/loginusers.vdf. That file is written with the id and where it came
 from, and each result says whether the user played in that match. It holds the user's own id, so it lives
-next to the outputs, never in the repository: an --out inside a git work tree is refused unless
---allow-in-repo.
+next to the outputs, never in the repository: an --out inside this repository (repo_guard.py) or any other
+git work tree is refused, and there is no flag to allow it.
 
 Prints a JSON summary (also written to --result). Exit code 0: every demo validated; 1: at least one failed;
 2: bad arguments, an --out inside a repository, or no demo to import.
@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import polars as pl  # noqa: E402
 
 import extract  # noqa: E402
+from repo_guard import PRIVATE_KEY, PRIVATE_VALUE, OutputRefused, check_output, write_json  # noqa: E402
 
 USER_FILE = "valve-user.local.json"
 DEMO_GLOB = "match730_*.dem"
@@ -143,8 +144,11 @@ def resolve_user(out: Path, steam: Path | None, explicit: int | None) -> dict:
                     source=f"most recent account in {login}")
     if user["steamid"] < STEAMID64_MIN:
         raise ValueError(f"{user['steamid']} is not a SteamID64")
+    check_output(out, private=True, what=f"the folder holding {USER_FILE} (the user's SteamID64)")
     out.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(user, indent=1) + "\n"
+    user = {k: v for k, v in user.items() if k != PRIVATE_KEY}
+    # the private marker first, so scripts/check-public-tree finds a copy committed anyway
+    text = json.dumps({PRIVATE_KEY: PRIVATE_VALUE, **user}, indent=1) + "\n"
     # The app reads this file while it lists matches, so it is replaced whole, never rewritten in place,
     # and left alone when nothing changed (review of #29).
     if not path.exists() or path.read_text(encoding="utf-8") != text:
@@ -265,15 +269,19 @@ def main(argv=None) -> int:
     ap.add_argument("--steam", type=Path, help="Steam install folder (default: found from the system)")
     ap.add_argument("--user", type=int, help="the user's SteamID64 (default: saved, else Steam's most recent login)")
     ap.add_argument("--force", action="store_true", help="re-extract demos that are already up to date")
-    ap.add_argument("--allow-in-repo", action="store_true",
-                    help="allow --out inside a git work tree (it receives the user's SteamID64)")
     ap.add_argument("--result", type=Path, help="also write the JSON summary here")
     ap.add_argument("--progress", action="store_true",
                     help="write one JSON line to stderr as each demo starts and ends (for the app)")
     a = ap.parse_args(argv)
-    if (repo := git_work_tree(a.out)) and not a.allow_in_repo:
+    if repo := git_work_tree(a.out):
         ap.error(f"--out {a.out} is inside the git work tree {repo}, and {USER_FILE} would hold the user's "
-                 "SteamID64; choose a folder outside it, or pass --allow-in-repo")
+                 "SteamID64; choose a folder outside it")
+    try:
+        check_output(a.out, private=True, what="the per-demo tables and the user's SteamID64")
+        if a.result:
+            check_output(a.result, private=True, what="the import summary")
+    except OutputRefused as e:
+        ap.error(str(e))
     demos = a.demos or sorted(replays_dir(a.steam or steam_root()).glob(DEMO_GLOB))
     if not demos:
         ap.error("no demo to import: none given, and no match730_*.dem in the replays folder")
@@ -286,7 +294,7 @@ def main(argv=None) -> int:
                    demos=len(rows), ok=sum(r["ok"] for r in rows), results=rows)
     txt = json.dumps(summary, default=extract._json_default, indent=1)
     if a.result:
-        a.result.write_text(txt, encoding="utf-8")
+        write_json(a.result, summary, private=True, what="the import summary", default=extract._json_default, indent=1)
     print(txt)
     return 0 if all(r["ok"] for r in rows) else 1
 

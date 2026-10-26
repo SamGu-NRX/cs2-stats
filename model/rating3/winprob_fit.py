@@ -14,6 +14,9 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 def idle() -> None:
@@ -222,6 +225,11 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, help="Private report path; defaults to winprob_metrics.json")
     args = parser.parse_args()
+    # private: the lookup is the HLTV win-probability pack; checked before any data is read
+    for path, what in ((args.private_data or args.data.parent / "model-rating3", "the HLTV win-probability lookup"),
+                       (args.out, "the win-probability report")):
+        if path is not None:
+            check_output(path, private=True, what=what)
     idle()
     # One BLAS/OpenMP worker keeps this job out of the way of games and other jobs.
     for name in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
@@ -276,13 +284,10 @@ def main() -> None:
         "note": "Training partition only. Test matches were not added after evaluation.",
         "tables": fitted[selected],
     }
-    serialized_lookup = json.dumps(payload, indent=2) + "\n"
-    private_data.mkdir(parents=True, exist_ok=True)
-    pack_path.parent.mkdir(parents=True, exist_ok=True)
-    lookup.write_text(serialized_lookup, encoding="utf-8")
-    pack_path.write_text(serialized_lookup, encoding="utf-8")
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    # the lookup is the private HLTV win-probability pack, and the report is fitted on HLTV's rows
+    write_json(lookup, payload, private=True, what="the HLTV win-probability lookup", indent=2)
+    write_json(pack_path, payload, private=True, what="the HLTV win-probability pack", indent=2)
+    write_json(report_path, report, private=True, what="the win-probability report", indent=2)
     print(json.dumps({"lookup": str(lookup), "pack": str(pack_path), "report": str(report_path)}, indent=2), flush=True)
 
 

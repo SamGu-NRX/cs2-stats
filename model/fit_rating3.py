@@ -26,10 +26,14 @@ import argparse
 import csv
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.append(str(Path(__file__).resolve().parents[1] / "extractor"))
+from repo_guard import check_text_output, write_text  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 FEATURES = ["kpr", "adr", "dpr", "kast", "mk", "swing"]
 ECO = {"kpr": "kpr_eco", "adr": "adr_eco", "dpr": "dpr_eco", "kast": "kast_eco", "mk": "mk_eco", "swing": "swing"}
@@ -121,13 +125,21 @@ def report(label: str, r: dict) -> None:
     print("   largest errors: " + "; ".join(f"{p} {y:.2f} vs {f:.2f}" for p, y, f in r["worst"]))
 
 
+def output_kind(path: Path) -> dict:
+    """The fixed rating3-params.ts is public: aggregate weights, no names or rows, the same call as
+    model/rating3/params.json. A fit written anywhere else is private: it comes from the HLTV players CSV."""
+    if os.path.normcase(os.path.abspath(path)) == os.path.normcase(str(OUT)):
+        return dict(private=False, what="rating3-params.ts", in_repo=OUT)
+    return dict(private=True, what="the Rating 3.0 fit from a private players CSV")
+
+
 def write_ts(r: dict, features: str, source_csv: str, path: Path) -> None:
     w = dict(zip(FEATURES, r["w"][1:]))
     today = dt.date.today().isoformat()
     source = (f"fit_rating3.py on {r['n']} HLTV players ({source_csv}, {today}): {features} features, "
               f"R² {r['r2']:.3f}, CV MAE {r['cv_mae']:.3f}")
     body = ",\n".join(f"    {k}: {v:.9g}" for k, v in w.items())
-    path.write_text(
+    write_text(path,
         f"// Written by model/fit_rating3.py on {today} from {source_csv}. Rerun the script instead of editing.\n"
         'import type { R3Params } from "./rating3";\n\n'
         "export const FITTED_R3: R3Params | null = {\n"
@@ -137,7 +149,7 @@ def write_ts(r: dict, features: str, source_csv: str, path: Path) -> None:
         f"  w: {{\n{body},\n  }},\n"
         f"  source: {json.dumps(source, ensure_ascii=False)},\n"
         "};\n",
-        encoding="utf-8",
+        **output_kind(path),
     )
     print(f"\nwrote {path}")
 
@@ -170,6 +182,8 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
+    if a.write:
+        check_text_output(a.out, **output_kind(a.out))  # before the CSV is read
     if a.self_test:
         self_test()
         return

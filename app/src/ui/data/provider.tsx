@@ -11,6 +11,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { createHost, type Host } from "../../host/host";
 import { createClient, type Client } from "../../worker/client";
 import type { BaselineInfo } from "../../worker/protocol";
+import { LOCAL_BASELINES } from "../../worker/baselines-pool";
 import { coverEntry, isOwn } from "./engine";
 import type { MatchEntry } from "./match";
 import { setMeta } from "./meta";
@@ -97,7 +98,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         (baselines) => live() && setState((s) => ({ ...s, baselines })),
         (e: Error) => live() && setState((s) => ({ ...s, baselinesError: e.message })),
       );
-      setMeta(await client.meta(await host.readPack("winprob-hltv.json")));
+      setMeta(await client.meta(await host.readPack("winprob-hltv.json"), await host.readPack(LOCAL_BASELINES)));
       if (!live()) return;
       ref.current = { host, client };
       // An import that ends rescans the matches whichever page is open, and one already running when the
