@@ -65,7 +65,7 @@ export default function CareerAim() {
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"] }} />
+      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"], maps: "aim" }} />
       <div className="view__in careeraim">
         {!query ? (
           <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
