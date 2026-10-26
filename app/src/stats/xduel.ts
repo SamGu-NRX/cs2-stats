@@ -1,6 +1,6 @@
 // Expected duel: the chance the player wins a duel given its context at first sight, from a logistic
 // model over the research's nine features, fitted on the pro maps by `pnpm metric-evidence --fit`.
-// The research fitted the same model (analysis.json xduel: AUC 0.69); ours scores 0.68 (xduel-params.json).
+// The research fitted the same model (analysis.json xduel: AUC 0.692); ours scores 0.681 (xduel-params.json).
 import type { Metric } from "./metrics";
 import params from "./xduel-params.json";
 
@@ -113,13 +113,14 @@ export function auc(scores: number[], ys: (0 | 1)[]): number {
 
 /**
  * Settled duels the two metrics need before they show a value; the coordinator's bar is a reliability of
- * 0.4. On the pro maps (pnpm metric-evidence) the expected chance's alternate-duel split-half reliability
- * is 0.47 at 80 duels and stays above 0.4 at every larger size measured (0.51 at 160, 0.74 at 320); it
- * dips to 0.39 at 40. Duels over expected never reaches 0.4 in the data (0.33 at 320 duels, 81 players),
- * so its gate is the Spearman-Brown projection of that figure to 0.4: 442 duels.
+ * 0.4. On the pro maps (pnpm metric-evidence, after the fit that reads health strictly before the onset)
+ * the expected chance's alternate-duel split-half reliability is 0.47 at 80 duels and stays above 0.4 at
+ * every larger size measured (0.51 at 160, 0.74 at 320); it dips to 0.40 at 40. Duels over expected
+ * never reaches 0.4 in the data (0.325 at 320 duels, 81 players), so its gate is the Spearman-Brown
+ * projection of that figure to 0.4: 444 duels.
  */
 export const EXPECTED_DUEL_MIN = 80;
-export const OVER_EXPECTED_MIN = 442;
+export const OVER_EXPECTED_MIN = 444;
 
 const tooFew = (min: number) => (s: { aim: { xN: number } }) => (s.aim.xN < min ? `${s.aim.xN} of the ${min} settled duels it needs` : null);
 

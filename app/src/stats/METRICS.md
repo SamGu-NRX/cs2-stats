@@ -224,15 +224,15 @@ flashed attacker (the research dropped those above 0.1 s of blindness).
 | firedFirst | identity | approx | Share of mutual sightings where you fired first: per pair and round, each player's earliest sighting of the other with a first shot, compared by tick; equal ticks count for neither |
 | engageDistance | identity | approx | Median horizontal distance to the enemy at the onset |
 | aggressionScore | identity | approx | The mean of four signed z-scores: peek travel and fired first count toward aggressive, exposure before the duel and engagement distance toward passive. Each z-score is against the pros' mean and standard deviation over 551 players with 40+ rounds (`aggression-scale.json`). Null unless all four parts have a value. The signs are ours: on the pro player-maps every part correlates under 0.1 with entry attempts, either way, so no data run set them. |
-| expectedDuel | identity | approx | Mean chance of winning your settled duels, from a logistic model of the research's nine features at the onset: placement, distance, both speeds, both health values (the latest 4 Hz sample no older than 0.3 s), living players a side, round time and the pitch error. Fitted on 88,069 pro duels from 489 maps with the research's ridge of 1e-3 (`xduel-params.json`); five-fold cross-validation grouped by match gives AUC 0.682 and Brier 0.223 (the research's: 0.692, 0.221). Shows a value from 80 settled duels. |
-| duelsOverExpected | performance | approx | Your settled duels won minus the expected wins, per duel, in percentage points. Shows a value from 442 settled duels. |
+| expectedDuel | identity | approx | Mean chance of winning your settled duels, from a logistic model of the research's nine features at the onset: placement, distance, both speeds, both health values (the latest 4 Hz sample no older than 0.3 s), living players a side, round time and the pitch error. Fitted on 88,069 pro duels from 489 maps with the research's ridge of 1e-3 (`xduel-params.json`); five-fold cross-validation grouped by match gives AUC 0.681 and Brier 0.223 (the research's: 0.692, 0.221). Health comes from the latest living sample strictly before the onset, so it never holds the duel's own outcome. Shows a value from 80 settled duels. |
+| duelsOverExpected | performance | approx | Your settled duels won minus the expected wins, per duel, in percentage points. Shows a value from 444 settled duels. |
 
 The two duel gates come from `pnpm metric-evidence`: a player's first n settled duels split into
 alternate halves, Spearman's r between the halves' means across players, then Spearman-Brown. The gate is
 the smallest n from which every larger measured n reaches 0.4. Expected duel reaches 0.445 at 10 duels,
-dips to 0.393 at 40, and holds 0.469, 0.508 and 0.743 at 80, 160 and 320, so its gate is 80. Duels over
+dips to 0.396 at 40, and holds 0.468, 0.508 and 0.739 at 80, 160 and 320, so its gate is 80. Duels over
 expected never reaches 0.4 (0.20 to 0.33 from 10 to 320 duels), so its gate is a projection, not a
-measurement: Spearman-Brown carries its 0.326 at 320 duels to 0.4 at 442. Under its gate a metric has no
+measurement: Spearman-Brown carries its 0.325 at 320 duels to 0.4 at 444. Under its gate a metric has no
 value, and compare() says how many duels there are and how many it needs.
 
 ## Buying (identity)
@@ -269,7 +269,7 @@ and the same seven comparisons with Rating 3.0 in place of HLTV's rating. The fu
 | engageDistance | distance | 0.53, 0.28 | 0.55 (354), 0.30 (AWP share) | yes |
 | aggressionScore | none | | 0.50 (354), 0.27 (AWP share) | yes |
 | expectedDuel | expected_duel | 0.34, 0.29 | 0.25 (354), 0.25 (KPR); per duel 0.47 at 80 | yes, from 80 duels |
-| duelsOverExpected | execution_over_expected | 0.21, 0.69 (rating) | 0.32 (354), 0.70 (Rating 3.0); per duel 0.33 at 320 | yes, from 442 duels |
+| duelsOverExpected | execution_over_expected | 0.21, 0.69 (rating) | 0.32 (354), 0.70 (Rating 3.0); per duel 0.33 at 320 | yes, from 444 duels |
 | buyDeviation | buy_deviation | 0.70, 0.20 | 0.87 (377), 0.61 (AWP share) | yes; see below |
 | saveConversion | save_conversion_proxy | 0.27, 0.16 | 0.45 (259), 0.28 (AWP share); per save 0.54 at 10 | yes, percentile from 10 saves |
 | ecoFights | none | | 0.28 (349), 0.05 | no: under 0.4 |
@@ -285,7 +285,7 @@ Two of the shipped metrics clear the bar in the research file but not on the eng
 are flagged for the coordinator rather than dropped. buyDeviation correlates 0.61 with AWP share of kills,
 a stat the team research did not compare against: an AWP costs $4,750, so AWPers buy above their team.
 duelsOverExpected correlates 0.70 with Rating 3.0, as the research's 0.69 with HLTV's rating already
-showed; it ships under the duel-difficulty exception with its 442-duel gate.
+showed; it ships under the duel-difficulty exception with its 444-duel gate.
 
 Fights taken (`ecoFights`: rounds with contact over eco and half-buy rounds with visibility) and kills per
 round on those rounds (`ecoKills`) are the eco-aggression candidates. Neither is in the research files;
