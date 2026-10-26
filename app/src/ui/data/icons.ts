@@ -1,7 +1,7 @@
 // Official CS2 icons from the local icon pack: %APPDATA%\BotMatchStats\packs\icons, extracted from the
 // user's own CS2 install by cs2-stats-data/tools/icon-pack/extract-icons.js. They are Valve's art, so
-// they never enter the repository; every place that draws one falls back to the app's own glyph when
-// the pack or the icon is missing (components/GameIcon.tsx).
+// they never enter the repository. Every game object draws through components/GameIcon.tsx, which shows
+// the object's name as text when the pack or the icon is missing.
 //
 // packs/icons/manifest.json: { "version": 1, "source": string, "icons": { "<id>": "<folder>/<file>.svg" } }
 // Ids are the game's weapon names (ak47, m4a1_silencer, hegrenade, …), killfeed modifiers (headshot,

@@ -135,6 +135,19 @@ export function MultiBadge({ k }: { k: number }) {
   return <span className="mk" data-k={Math.min(5, k)}>{k >= 5 ? "ACE" : `${k}K`}</span>;
 }
 
+/**
+ * The round's first kill (filled) or first death (outlined) as a "1st" pip, text rather than an icon
+ * (SYSTEM.md). `label` names it for assistive tech where no text beside it says which.
+ */
+export function FirstPip({ death, label }: { death?: boolean; label?: string }) {
+  return <span className={`pip ${death ? "pip--o" : "pip--hi"}`} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>1st</span>;
+}
+
+/** A death in a round grid or list: "×" as text (SYSTEM.md). */
+export function DeathMark({ label, className }: { label?: string; className?: string }) {
+  return <span className={`xmark ${className ?? ""}`} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>×</span>;
+}
+
 /** "1v3" clutch badge, filled when won. */
 export function ClutchBadge({ vs, won }: { vs: number; won: boolean }) {
   return <span className="clutch" data-won={won}>1v{vs}</span>;

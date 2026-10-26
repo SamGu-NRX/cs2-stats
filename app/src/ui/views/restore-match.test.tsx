@@ -19,9 +19,9 @@ import { entryOf, matchBundle, metaOf, rolled } from "../../worker/views";
 import { MapAtmosphere, RadarView, frameFor } from "../components/MapArt";
 import { matchModel, roundColumns, type MatchEntry, type MatchModel } from "../data/match";
 import { setMeta } from "../data/meta";
+import { signed } from "../lib/format";
 import type { Data } from "../data/provider";
 import { KillFlags } from "../icons/game";
-import { GameKillFlags } from "./match/glyphs";
 import { go, matchHref, useRoute } from "../router";
 import { RoundRail } from "./match/RoundRail";
 import Rounds from "./match/Rounds";
@@ -93,14 +93,6 @@ describe("kill flags", () => {
     expect(labels()).toEqual(["Headshot", "Airborne"]);
     render(<KillFlags kill={{ ...base, killerBlind: false, killerInAir: null }} />);
     expect(host.querySelector(".kflags")).toBeNull();
-  });
-
-  it("does the same in the killfeed's official icons", () => {
-    // fails if the match killfeed (#30's GameKillFlags) drops the killer's flags or shows a null one
-    render(<GameKillFlags kill={{ ...base, killerBlind: true, killerInAir: null }} size={11} />);
-    expect(labels()).toEqual(["Killer was blind"]);
-    render(<GameKillFlags kill={{ ...base, killerBlind: null, killerInAir: true }} size={11} />);
-    expect(labels()).toEqual(["Airborne"]);
   });
 });
 
@@ -227,15 +219,26 @@ describe("Weapons", () => {
     };
     render(<Weapons />);
     const row = (w: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell__txt > span")?.firstChild?.textContent === weaponLabel(w));
-    // the advice sits under the gun's name in its first cell
-    const advice = (tr: Element | undefined) => text(tr?.querySelector(".guncell__advice"));
-    expect(advice(row("ak47"))).toBe("You hit 5.0 points more often than with your other guns. Your first bullet lands 20 points less often than with your other guns: stop moving before you fire. Only 10% of hits are on the head: keep the crosshair at head height.");
-    expect(advice(row("glock"))).toBe("You hit 5.0 points less often than with your other guns.");
-    expect(advice(row("deagle"))).toBe("2 kills so far; 40 recorded shots are needed to judge your aim with it.");
-    expect(advice(row("usp_silencer"))).toBe("Fire it in a recorded match to see how you shoot with it.");
+    // under the gun's name: the advice's line of numbers, and its one sentence in the "?" beside it
+    const line = (tr: Element | undefined) => tr?.querySelector(".guncell__advice")?.firstChild?.textContent ?? "";
+    const tip = (el: Element | null | undefined) => el?.querySelector(".help[data-tip]")?.getAttribute("data-tip") ?? "";
+    // the ak47 has a slow first bullet and a low head share: the first bullet is the one the tip names
+    expect([line(row("ak47")), tip(row("ak47"))]).toEqual([`First bullet ${signed(-20, 0)} pts`, "First bullets land 20 points less often, so stop before firing."]);
+    expect([line(row("glock")), tip(row("glock"))]).toEqual([`${signed(-5, 1)} pts vs other guns`, "You hit 5.0 points less often than with other guns."]);
+    expect([line(row("deagle")), tip(row("deagle"))]).toEqual(["10 of 40 shots", "It takes 40 recorded shots to judge your aim with it."]);
+    expect([line(row("usp_silencer")), tip(row("usp_silencer"))]).toEqual(["5 of 40 shots", "It takes 40 recorded shots to judge your aim with it."]);
+    // no sentence in the row itself, and every tip is one sentence of 12 words or fewer
+    for (const w of Object.keys(weapons)) {
+      expect(text(row(w)?.querySelector(".guncell__advice")), w).not.toMatch(/\.\s|\.$/);
+      expect(tip(row(w)).split(/\s+/).length, w).toBeLessThanOrEqual(12);
+      expect(tip(row(w)), w).toMatch(/^[^;]+\.$/);
+      expect(tip(row(w)), w).not.toMatch(/\.\s/);
+    }
     expect([cell(row("ak47"), "HS kills"), cell(row("ak47"), "Head share")]).toEqual(["40.0%", "10.0%"]);
-    expect(text(host.querySelector(".gunhero--best .gunhero__advice"))).toBe(advice(row("ak47")));
-    expect(text(host.querySelector(".gunhero--worst .gunhero__advice"))).toBe(advice(row("glock")));
+    // the heroes carry the same advice in the "?" by their label, and no paragraph
+    expect(tip(host.querySelector(".gunhero--best"))).toBe(tip(row("ak47")));
+    expect(tip(host.querySelector(".gunhero--worst"))).toBe(tip(row("glock")));
+    expect(host.querySelector(".gunhero p")).toBeNull();
   });
 });
 

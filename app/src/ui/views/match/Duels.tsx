@@ -1,19 +1,18 @@
 // Duels: who killed whom (head to head), opening duels and trades per player, and every clutch.
 import { useEffect, useMemo, useState } from "react";
 import { TRADE_WINDOW_S } from "../../../stats/rules";
-import { ClutchBadge, Num } from "../../components/bits";
+import { ClutchBadge, FirstPip, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable } from "../../components/DataTable";
-import { FirstKillIcon, Hint, TradingGlyph } from "./glyphs";
+import { Hint, TradingGlyph } from "./glyphs";
 import { fmtMetric } from "../../data/engine";
 import { deathOf, killMatrix, killsBy, type MPlayer as PlayerRow } from "../../data/match";
 import { metric as meta } from "../../data/meta";
 import { useData } from "../../data/provider";
-import { DefuseIcon } from "../../icons/game";
+import { FlagIcon, WinIcon } from "../../icons/game";
 import { matchHref } from "../../router";
 import type { ClutchRow } from "../../../worker/protocol";
 import { fmtDiff } from "../../lib/format";
-import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
 import { NEEDS_DEMO, PlayerName, SectionAside } from "../shared";
 import type { TabProps } from "./MatchView";
@@ -52,7 +51,7 @@ export default function Duels({ v }: TabProps) {
                       const d = km[q.pi][p.pi];
                       const t = k + d ? toScore(k - d, 0, 4) : 0;
                       return (
-                        <td key={q.key} style={{ background: k + d ? scoreTint(t, 0.4) : undefined }} data-tip={`${p.name} killed ${q.name} ${k} ${k === 1 ? "time" : "times"}; ${q.name} killed ${p.name} ${d}`}>
+                        <td key={q.key} style={{ background: k + d ? scoreTint(t, 0.4) : undefined }} data-tip={`${p.name} killed ${q.name} ${k} ${k === 1 ? "time" : "times"}; ${q.name} killed ${p.name} ${d}`} tabIndex={0}>
                           <span className="num"><b>{k}</b><span className="faint">–</span>{d}</span>
                         </td>
                       );
@@ -67,7 +66,7 @@ export default function Duels({ v }: TabProps) {
       </Card>
       <YourRounds v={v} />
       <div className="grid-2">
-        <Card title="Opening duels" icon={<FirstKillIcon size={16} className="cream" />} aside={<SectionAside label="First kills" value={<><span className="cream">{fk("us")}</span><span className="faint">–</span>{fk("them")}</>} />} flush>
+        <Card title="Opening duels" icon={<FirstPip />} aside={<SectionAside label="First kills" value={<><span className="cream">{fk("us")}</span><span className="faint">–</span>{fk("them")}</>} />} flush>
           <DataTable<PlayerRow>
             label="Opening duels"
             rows={v.players}
@@ -122,7 +121,7 @@ function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
   const of = (t: "us" | "them") => (rows ?? []).filter((c) => v.players[c.pi].team === t);
   const score = (t: "us" | "them") => <>{of(t).filter((c) => c.won).length}<span className="faint">/{of(t).length}</span></>;
   return (
-    <Card title="Clutches" icon={<DefuseIcon size={16} className="cream" />} aside={<><SectionAside label="You" value={score("us")} color="var(--cream)" /><SectionAside label="Them" value={score("them")} /></>}>
+    <Card title="Clutches" icon={<span className="cream"><WinIcon how="defuse" size={16} beside /></span>} aside={<><SectionAside label="You" value={score("us")} color="var(--cream)" /><SectionAside label="Them" value={score("them")} /></>}>
       {rows === null ? <div className="skel" style={{ height: 120 }} /> : (
         <div className="clutches">
           {(["us", "them"] as const).map((t) => (
@@ -168,9 +167,9 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
             <th className="l"><span className="th">Round</span></th>
             <th className="l"><span className="th">Killed</span></th>
             <th className="l"><span className="th">Died to</span></th>
-            <th><span className="th" data-tip={meta("accuracy").def}>Accuracy</span></th>
-            <th><span className="th" data-tip={meta("timeToDamage").def}>TTD</span></th>
-            <th><span className="th" data-tip={meta("reactionTime").def}>Reaction</span></th>
+            <th><span className="th" data-tip={meta("accuracy").def} tabIndex={0}>Accuracy</span></th>
+            <th><span className="th" data-tip={meta("timeToDamage").def} tabIndex={0}>TTD</span></th>
+            <th><span className="th" data-tip={meta("reactionTime").def} tabIndex={0}>Reaction</span></th>
           </tr></thead>
           <tbody>
             {rows.map(({ r, kills, death, s }) => {
@@ -178,11 +177,11 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
               return (
                 <tr key={r.ri}>
                   <td className="l"><span className={`wl wl--${won ? "W" : "L"}`}>{r.number}</span></td>
-                  <td className="l"><span className="yrounds__names">{kills.map((k, i) => <span key={i} className="yrounds__kill"><SkullIcon hs={k.headshot} size={10} className={k.headshot ? "skull skull--hs" : "skull"} />{v.players[k.victim].name}</span>)}{!kills.length && <span className="faint">–</span>}</span></td>
-                  <td className="l">{death ? <span className="yrounds__kill"><DeathIcon size={10} className="poor-text" />{death.killer === null ? "World" : v.players[death.killer].name}{death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
+                  <td className="l"><span className="yrounds__names">{kills.map((k, i) => <span key={i} className="yrounds__kill">{v.players[k.victim].name}{k.headshot && <FlagIcon id="headshot" label="Headshot" size={11} />}</span>)}{!kills.length && <span className="faint">–</span>}</span></td>
+                  <td className="l">{death ? <span className="yrounds__kill">{death.killer === null ? "World" : v.players[death.killer].name}{death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
                   <td><Num v={v.entry.hasAim ? metric(s, "accuracy") : "–"} /></td>
-                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "timeToDamage")} />}</td>
-                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "reactionTime")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate} tabIndex={0}>–</span> : <Num v={metric(s, "timeToDamage")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate} tabIndex={0}>–</span> : <Num v={metric(s, "reactionTime")} />}</td>
                 </tr>
               );
             })}

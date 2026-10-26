@@ -9,10 +9,10 @@ import { frameFor, RadarView } from "../../components/MapArt";
 import { SIDE_OPTIONS, fmtMetric, type SideKey } from "../../data/engine";
 import type { MPlayer as PlayerRow } from "../../data/match";
 import { metric } from "../../data/meta";
-import { NADE_LABEL, type Nade } from "../../icons/game";
+import { NADE_LABEL, NadeIcon, type Nade } from "../../icons/game";
 import { fmtSecs, plural } from "../../lib/format";
 import { PlayerName, SectionAside, Empty, NeedsDemo } from "../shared";
-import { GameNade, Hint } from "./glyphs";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 
 export default function Utility({ v }: TabProps) {
@@ -41,15 +41,15 @@ export default function Utility({ v }: TabProps) {
           rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
           columns={[
             { key: "name", label: "Player", align: "l", sticky: true, sort: (p) => p.name, render: (p) => <span className="name-cell"><PlayerName v={v} pi={p.pi} /></span>, width: 170 },
-            { key: "fl", label: <><GameNade type="flash" size={12} />Flashes thrown</>, tip: "Flashbangs thrown", sort: (p) => sl(p).flashes, render: (p) => sl(p).flashes },
+            { key: "fl", label: <><NadeIcon type="flash" size={12} beside />Flashes thrown</>, tip: "Flashbangs thrown", sort: (p) => sl(p).flashes, render: (p) => sl(p).flashes },
             { key: "ef", label: "Blinded", tip: "Enemies your flashes blinded, once per enemy per flash", sort: (p) => sl(p).enemiesFlashed, render: (p) => sl(p).enemiesFlashed },
             { key: "bt", label: "Blind time", tip: "Seconds of blindness your flashes caused on enemies", sort: (p) => sl(p).enemyBlindSecs, render: (p) => <span data-tip={`${fmtMetric("blindPerFlash", val(p, "blindPerFlash"))} per flash`}><Num v={fmtSecs(sl(p).enemyBlindSecs)} /></span> },
             { key: "pf", label: "Per flash", tip: metric("enemiesPerFlash").def, sort: (p) => val(p, "enemiesPerFlash"), render: (p) => fmtMetric("enemiesPerFlash", val(p, "enemiesPerFlash")) },
             { key: "fa", label: "Assists", tip: "Flash assists: a teammate killed an enemy you had blinded", sort: (p) => sl(p).flashAssists, render: (p) => sl(p).flashAssists },
             { key: "tf", label: "Team flashed", tip: "Times your flashes blinded a teammate", sort: (p) => sl(p).teamFlashed, firstDir: "asc", render: (p) => <span className={sl(p).teamFlashed ? "poor-text" : undefined} data-tip={`${fmtSecs(sl(p).teamBlindSecs)} of teammate blindness, ${fmtMetric("teamFlashPR", val(p, "teamFlashPR"))} per round`}>{sl(p).teamFlashed}</span> },
-            { key: "he", label: <><GameNade type="he" size={12} />HE damage</>, tip: "Damage from your HE grenades to enemies", sort: (p) => sl(p).heDmg, render: (p) => sl(p).heDmg },
-            { key: "fire", label: <><GameNade type="molotov" size={12} />Fire damage</>, tip: "Fire damage from your molotovs and incendiaries to enemies", sort: (p) => sl(p).fireDmg, render: (p) => <span data-tip={`${fmtMetric("fireDmgPR", val(p, "fireDmgPR"))} per round`}>{sl(p).fireDmg}</span> },
-            { key: "sm", label: <><GameNade type="smoke" size={12} />Smokes thrown</>, tip: "Smokes thrown", sort: (p) => sl(p).smokes, render: (p) => sl(p).smokes },
+            { key: "he", label: <><NadeIcon type="he" size={12} beside />HE damage</>, tip: "Damage from your HE grenades to enemies", sort: (p) => sl(p).heDmg, render: (p) => sl(p).heDmg },
+            { key: "fire", label: <><NadeIcon type="molotov" size={12} beside />Fire damage</>, tip: "Fire damage from your molotovs and incendiaries to enemies", sort: (p) => sl(p).fireDmg, render: (p) => <span data-tip={`${fmtMetric("fireDmgPR", val(p, "fireDmgPR"))} per round`} tabIndex={0}>{sl(p).fireDmg}</span> },
+            { key: "sm", label: <><NadeIcon type="smoke" size={12} beside />Smokes thrown</>, tip: "Smokes thrown", sort: (p) => sl(p).smokes, render: (p) => sl(p).smokes },
             { key: "dmg", label: "Utility damage", tip: "All grenade and fire damage to enemies", sort: (p) => sl(p).utilDmg, render: (p) => (
               <span className="cellbar" data-tip={`${fmtMetric("utilDmgPR", val(p, "utilDmgPR"))} per round`}><span className="hbar"><i style={{ width: `${(sl(p).utilDmg / maxDmg) * 100}%`, background: p.team === "us" ? "var(--cream)" : "var(--ink2)" }} /></span><b className="num">{sl(p).utilDmg}</b></span>
             ), width: 150 },
@@ -89,7 +89,7 @@ function Landing({ v }: { v: TabProps["v"] }) {
   return (
     <Card title={<>Where grenades landed {nades.length > 0 && <Hint tip={rebuilt ? "Points are detonations; where each was thrown is unknown." : "Lines run from where each grenade was thrown."} />}</>} aside={<span className="card__aside-row">{rebuilt && nades.length > 0 && <span className="chip chip--approx">Approximate</span>}<span className="meta">{plural(shown.length, "grenade")}</span></span>} collapsible id="match-landing">
       {!nades.length || !frame ? (
-        <Empty icon={<GameNade type="smoke" size={36} />} text={<NeedsDemo detail={v.b.grenades.some((g) => g.from)
+        <Empty text={<NeedsDemo detail={v.b.grenades.some((g) => g.from)
           ? "This file has throw points but no landing points."
           : "This match has no grenade positions."} />} />
       ) : (
@@ -101,7 +101,7 @@ function Landing({ v }: { v: TabProps["v"] }) {
                 const n = nades.filter((x) => x.type === t && mine(x.pi)).length;
                 return (
                   <button key={t} className="landing__type" aria-pressed={types.has(t)} onClick={() => toggle(t)}>
-                    <i style={{ background: COLOR[t] }} /><GameNade type={t} size={14} /><span>{NADE_LABEL[t]}</span><b className="num">{n}</b>
+                    <i style={{ background: COLOR[t] }} /><NadeIcon type={t} size={14} beside /><span>{NADE_LABEL[t]}</span><b className="num">{n}</b>
                   </button>
                 );
               })}

@@ -13,18 +13,15 @@ import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
 import { RefreshIcon, SearchIcon } from "./icons/ui";
-import { go, matchHref, MATCH_TABS, navWasInstant, pageHref, useRoute, currentRoute } from "./router";
+import { go, matchHref, MATCH_TABS, navWasInstant, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
 
 const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
-const PlaystyleView = lazy(() => import("./views/Playstyle"));
-const AimView = lazy(() => import("./views/CareerAim"));
-const WeaponsView = lazy(() => import("./views/Weapons"));
 const SettingsView = lazy(() => import("./views/Settings"));
 
-const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", playstyle: "Playstyle", aim: "Career aim", weapons: "Weapons", settings: "Data & settings" };
+const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", settings: "Data & settings" };
 
 function AppBar({ onPalette }: { onPalette: () => void }) {
   const { set } = useBarSlots();
@@ -75,16 +72,22 @@ function Body() {
       if (ctrl && e.key.toLowerCase() === "b") { e.preventDefault(); rail.toggle(false); return; }
       if (ctrl && e.key === ",") { e.preventDefault(); go(pageHref("settings"), { instant: true }); return; }
       if (ctrl && e.key.toLowerCase() === "r") { e.preventDefault(); refresh(); toast("Scanning the match folder"); return; }
-      if (ctrl && /^[1-6]$/.test(e.key)) {
+      if (ctrl && /^[1-3]$/.test(e.key)) {
         e.preventDefault();
         const n = NAV.find((x) => x.key === e.key);
         if (n) go(pageHref(n.page), { instant: true });
         return;
       }
       const r = currentRoute();
-      if (e.altKey && /^[1-8]$/.test(e.key) && r.page === "match" && r.file) {
+      if (e.altKey && /^[1-9]$/.test(e.key) && r.page === "match" && r.file) {
         e.preventDefault();
         go(matchHref(r.file, MATCH_TABS[Number(e.key) - 1]), { instant: true });
+        return;
+      }
+      // Profile's tabs, as the match tabs: Alt+1 to Alt+7
+      if (e.altKey && /^[1-7]$/.test(e.key) && r.page === "profile") {
+        e.preventDefault();
+        go(profileHref(PROFILE_TABS[Number(e.key) - 1], scopeQuery(r.query)), { instant: true });
         return;
       }
       if (typing || ctrl || e.altKey) return;
@@ -120,10 +123,7 @@ function Body() {
     view = <FirstScan title={title} progress={meta ? progress : null} />;
   } else if (route.page === "match" && route.file) view = <MatchView file={route.file} tab={route.tab ?? "overview"} />;
   else if (route.page === "matches") view = <MatchesView />;
-  else if (route.page === "profile") view = <ProfileView />;
-  else if (route.page === "playstyle") view = <PlaystyleView />;
-  else if (route.page === "aim") view = <AimView />;
-  else if (route.page === "weapons") view = <WeaponsView />;
+  else if (route.page === "profile") view = <ProfileView tab={route.ptab ?? "overview"} />;
   else if (route.page === "settings") view = <SettingsView />;
   else view = <HomeView />;
 

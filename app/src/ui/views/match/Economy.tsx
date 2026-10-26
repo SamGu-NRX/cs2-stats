@@ -137,8 +137,8 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
           const r = e.rounds[c.ri];
           return (
             <HoverCard key={c.ri} as="div" tabbable={false} card={() => <RoundCardBody v={v} r={v.rounds[c.ri]} />} className="echart__buy" style={{ left: c.x - gap / 2, width: cell + gap }}>
-              <BuyIcon buy={r.us.buy} size={12} className="cream" />
-              <BuyIcon buy={r.them.buy} size={12} className="muted" />
+              <BuyIcon buy={r.us.buy} size={12} compact className="cream" />
+              <BuyIcon buy={r.them.buy} size={12} compact className="muted" />
             </HoverCard>
           );
         })}
@@ -149,7 +149,7 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
         <span><i className="swatch" style={{ background: "var(--ct)" }} />CT</span>
         <span>Left bar yours, right theirs, bright when it won</span>
         <span><svg width="18" height="6" aria-hidden><line x1="0" y1="3" x2="18" y2="3" stroke="var(--cream)" strokeDasharray="3 3" /></svg>Your bank after buying</span>
-        <span className="legend__icons">{BUY_CLASSES.map((b) => <span key={b} data-tip={BUY_DEF[b]}><BuyIcon buy={b} size={12} />{BUY_CLASS_LABEL[b]}</span>)}</span>
+        <span className="legend__icons">{BUY_CLASSES.map((b) => <span key={b} data-tip={BUY_DEF[b]} tabIndex={0}><BuyIcon buy={b} size={12} beside />{BUY_CLASS_LABEL[b]}</span>)}</span>
       </div>
     </div>
   );
@@ -165,8 +165,8 @@ function BuyRates({ v }: { v: MatchView }) {
         const pct = r.us.rounds ? (100 * r.us.wins) / r.us.rounds : null;
         const theirs = r.them.rounds ? (100 * r.them.wins) / r.them.rounds : null;
         return (
-          <li key={r.b} data-tip={`Opponents won ${r.them.wins} of ${r.them.rounds} on this buy (${fmtPct(theirs, 0)})`}>
-            <BuyIcon buy={r.b} size={16} className="cream" />
+          <li key={r.b} tabIndex={0} data-tip={`Opponents won ${r.them.wins} of ${r.them.rounds} on this buy (${fmtPct(theirs, 0)})`}>
+            <BuyIcon buy={r.b} size={16} beside className="cream" />
             <b>{BUY_CLASS_LABEL[r.b]}</b>
             <span className="hbar">{pct !== null && <i style={{ width: `${pct}%`, background: pct >= 50 ? "var(--good)" : "var(--poor)", opacity: 0.85 }} />}{theirs !== null && <em className="hbar__ref" style={{ left: `${theirs}%` }} />}</span>
             <b className="num" style={{ color: pct === null ? undefined : scoreText(toScore(pct, 50, 40)) }}>{fmtPct(pct, 0)}</b>
@@ -186,12 +186,12 @@ function BuyMatrix({ v }: { v: MatchView }) {
   return (
     <table className="tbl bmatrix">
       <thead>
-        <tr><th className="l"><span className="th">You \ them</span></th>{cols.map(({ b }) => <th key={b}><span className="th" data-tip={`Opponents on ${BUY_CLASS_LABEL[b].toLowerCase()}`}><BuyIcon buy={b} size={12} /></span></th>)}</tr>
+        <tr><th className="l"><span className="th">You \ them</span></th>{cols.map(({ b }) => <th key={b}><span className="th" data-tip={`Opponents on ${BUY_CLASS_LABEL[b].toLowerCase()}`} tabIndex={0} aria-label={`Opponents on ${BUY_CLASS_LABEL[b].toLowerCase()}`}><BuyIcon buy={b} size={12} compact /></span></th>)}</tr>
       </thead>
       <tbody>
         {rows.map(({ b, i }) => (
           <tr key={b}>
-            <td className="l"><span className="bmatrix__lbl"><BuyIcon buy={b} size={13} />{BUY_CLASS_LABEL[b]}</span></td>
+            <td className="l"><span className="bmatrix__lbl"><BuyIcon buy={b} size={13} beside />{BUY_CLASS_LABEL[b]}</span></td>
             {cols.map(({ j }) => {
               const c = m[i][j];
               if (!c.rounds) return <td key={j} className="faint">·</td>;

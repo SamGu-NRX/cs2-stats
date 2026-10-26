@@ -7,7 +7,7 @@ import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { frameFor, RadarView } from "../../components/MapArt";
 import { placesNamed, sideOf } from "../../data/match";
-import { DeathIcon, SkullIcon } from "../../icons/game";
+import { FlagIcon } from "../../icons/game";
 import { plural } from "../../lib/format";
 import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
 import { Hint } from "./glyphs";
@@ -33,7 +33,7 @@ export default function Positions({ v }: TabProps) {
   const cells = useMemo(() => Object.entries(v.b.presence?.cells ?? {}).map(([c, secs]) => ({ c: +c, secs, at: cellCentre(+c) })), [v]);
   const frame = useMemo(() => frameFor(v.map, [...events.flatMap((e) => [[e.kx, e.ky], [e.vx, e.vy]] as [number, number][]), ...cells.map((c) => c.at)]), [v.map, events, cells]);
   if (!events.length || !frame) {
-    return <div className="tabpad"><div className="card"><Empty icon={<SkullIcon size={36} />} text={<NeedsDemo detail="This match has no kill positions." />} /></div></div>;
+    return <div className="tabpad"><div className="card"><Empty text={<NeedsDemo detail="This match has no kill positions." />} /></div></div>;
   }
   const human = v.human;
   const team = (pi: number | null) => (pi === null ? null : v.players[pi].team);
@@ -82,8 +82,8 @@ export default function Positions({ v }: TabProps) {
               return (
                 <g key={`d${i}`} transform={`translate(${x} ${y})`} className="radar-death">
                   <title>{`Round ${e.n}: ${v.players[e.victim].name} died to ${e.killer === null ? "the world" : v.players[e.killer].name}`}</title>
-                  <path d="M-9 -9L9 9M9 -9L-9 9" stroke="var(--bg0)" strokeWidth="7" strokeLinecap="round" />
-                  <path d="M-9 -9L9 9M9 -9L-9 9" stroke="var(--poor-text)" strokeWidth="3.5" strokeLinecap="round" />
+                  <circle r="7.5" fill="none" stroke="var(--bg0)" strokeWidth="6" />
+                  <circle r="7.5" fill="none" stroke="var(--poor-text)" strokeWidth="3" />
                 </g>
               );
             })}
@@ -92,7 +92,7 @@ export default function Positions({ v }: TabProps) {
             <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="5" fill="var(--t)" /></svg>Kill on T</span>
             <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="5" fill="var(--ct)" /></svg>Kill on CT</span>
             <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="5" fill="var(--ink2)" /><circle cx="6" cy="6" r="1.8" fill="var(--bg0)" /></svg>Headshot</span>
-            <span><DeathIcon size={12} className="poor-text" />Death</span>
+            <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--poor-text)" strokeWidth="2" /></svg>Death</span>
             {cells.length > 0 && <span><i className="swatch" style={{ background: "rgba(255,215,173,.4)" }} />Where you moved</span>}
             <span>Kills sit where the killer stood</span>
           </div>
@@ -104,8 +104,8 @@ export default function Positions({ v }: TabProps) {
               {events.filter((e) => e.killer === human || e.victim === human).slice(0, 14).map((e, i) => (
                 <li key={i}>
                   <span className="num faint">R{e.n}</span>
-                  {e.killer === human ? <SkullIcon hs={e.hs} size={11} className={e.hs ? "skull skull--hs" : "skull"} /> : <DeathIcon size={11} className="poor-text" />}
-                  <span>{e.killer === human ? v.players[e.victim].name : e.killer === null ? "World" : v.players[e.killer].name}</span>
+                  {e.killer === human ? <i className="dmark dmark--k" role="img" aria-label="Your kill" /> : <i className="dmark dmark--d" role="img" aria-label="Your death" />}
+                  <span>{e.killer === human ? v.players[e.victim].name : e.killer === null ? "World" : v.players[e.killer].name}{e.killer === human && e.hs && <FlagIcon id="headshot" label="Headshot" size={11} />}</span>
                   <span className={e.side === "t" ? "t-text" : "ct-text"}>{e.side.toUpperCase()}</span>
                 </li>
               ))}

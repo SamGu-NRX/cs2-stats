@@ -30,8 +30,9 @@ import { TILES } from "../data/series";
 import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
-import Playstyle from "./Playstyle";
-import { HowGood, RatingTerms, RoleSignals } from "./profile/parts";
+import ProfileView from "./Profile";
+import { RatingTerms, RoleSignals, SIGNAL_TEXT } from "./profile/parts";
+import { StatCard, useRanks } from "./profile/tabs";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const PROS = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "../../../public/baselines.json"), "utf8")) as Baselines;
@@ -139,16 +140,18 @@ it("breaks Rating 3.0 into weighted terms and a constant that add up to the rati
   expect(text(rows[0].querySelector("b"))).toMatch(/^0\.74 → \+0\.\d{3}$/);
 });
 
-it("shows the counts behind How good's shares, from the rounds it ranked", async () => {
+it("shows the counts behind a share's row, from the rounds it ranked", async () => {
   // fails if "x of y" is dropped, or counts another side's rounds than the percentile beside it
   const q = queryOf(samples);
   answers.compare = await calls.compare(q, { side: "T" });
-  render(<HowGood q={q} side="T" />);
+  answers.style = await calls.style(q, { side: "T" });
+  function Rows() { return <StatCard title="Rows" tip="Rows." ids={["tradeKillSuccess", "openingSwing"]} r={useRanks(q, "T")} />; }
+  render(<Rows />);
   const m = summary(sideQuery(q, "T")).m;
-  const rowOf = (id: string) => Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label)!;
+  const rowOf = (id: string) => Array.from(host.querySelectorAll(".mrow")).find((el) => el.querySelector(".mrow__lab")?.firstChild?.textContent === metric(id).label)!;
   expect(m.tradeOpps).toBeGreaterThan(0);
-  expect(text(rowOf("tradeKillSuccess").querySelector(".howgood__of"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
-  expect(rowOf("openingSwing").querySelector(".howgood__of")).toBeNull();
+  expect(text(rowOf("tradeKillSuccess").querySelector(".mrow__smp"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
+  expect(text(rowOf("openingSwing").querySelector(".mrow__smp"))).toBe("");
 });
 
 it("shows Firepower's score and its lowest-ranked metric in Work on", async () => {
@@ -186,7 +189,7 @@ it("reaches every bot on the style compass from the keyboard, one tab stop for a
   // compass places you or a bot in another zone than the engine's opening attempts and trade/assist share give
   const career = samples.filter((s) => careerEntries([s.entry], null).length);
   use(career);
-  render(<Playstyle />);
+  render(<ProfileView tab="playstyle" />);
   const q = queryOf(career);
   const names = new Map(career.flatMap((s) => s.entry.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const)));
   const zone = (v: Record<string, number | null>) => styleZone(v.openingAttempts!, v.tradeAssistShare!);
@@ -223,18 +226,24 @@ it("measures each role signal on its own side and says you fit from the threshol
       const v = (sg.side === "T" ? t : both)[sg.metric];
       expect(!!li.querySelector(".chip"), sg.id).toBe(v !== null && v >= sg.threshold);
       expect((li.querySelector(".signals2__track i") as HTMLElement).style.width, sg.id).toBe(`${v === null ? 0 : 100 * Math.min(1, v / (2 * sg.threshold))}%`);
-      return { id: sg.id, v, both: both[sg.metric], you: text(li.querySelector(".signals2__you")) };
+      // the row's value is visible; the threshold, or what is missing, is its "?" sentence
+      const tip = li.querySelector(".help[data-tip]")!.getAttribute("data-tip")!;
+      expect(tip, sg.id).toBe(v === null ? SIGNAL_TEXT[sg.id].missing : SIGNAL_TEXT[sg.id].tip(sg.threshold));
+      expect(tip.split(/\s+/).length, sg.id).toBeLessThanOrEqual(12);
+      expect(li.querySelector("p"), sg.id).toBeNull();
+      return { id: sg.id, v, both: both[sg.metric], shown: text(li.querySelector(".signals2__v")), tip };
     });
   };
   const q = queryOf(samples);
   const mine = check(q);
   const support = mine.find((x) => x.id === "Support")!;
-  expect(support.you.startsWith(`${fmtPct(support.v, 0)} of your kills and assists are trades or assists.`)).toBe(true);
+  expect(support.shown).toBe(fmtPct(support.v, 0));
+  expect(support.tip).toBe(`Support players have ${ROLE_SIGNALS.find((sg) => sg.id === "Support")!.threshold}% or more trades and assists.`);
   // the T-side distance differs from both sides' here, so reading the wrong side shows
   const lurker = mine.find((x) => x.id === "Lurker")!;
   expect(lurker.v).not.toBeNull();
   expect(lurker.v).not.toBe(lurker.both);
-  expect(lurker.you).toContain(`You stand ${Math.round(lurker.v!).toLocaleString("en")} units`);
+  expect(lurker.shown).toBe(`${Math.round(lurker.v! * 0.0254)} m`);
   // a sample player who reaches a threshold, for the "You fit" side of the gate
   const fitter = samples.flatMap((s) => s.facts.players.map((p) => p.id)).find((id) => {
     const v = rolled(summary({ files: q.files, filter: { player: [id] } })).v;

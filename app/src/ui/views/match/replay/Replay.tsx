@@ -21,7 +21,7 @@ import { Svg, type IconProps } from "../../../icons/Icon";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../../icons/ui";
 import { setQuery } from "../../../router";
 import { Empty } from "../../shared";
-import { RoundEndIcon } from "../glyphs";
+import { WinIcon } from "../../../icons/game";
 import { KillRow } from "../Killfeed";
 import type { TabProps } from "../MatchView";
 import { drawScene, type Palette, type Scene } from "./draw";
@@ -444,7 +444,7 @@ function ReplayView({ v, file, round }: TabProps) {
               <h2 className="replay__title">Round <span className="num">{number}</span></h2>
               <button className="btn btn--ghost btn--icon btn--sm press" disabled={ri === rounds.length - 1} onClick={() => goRound(1)} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
               <span className={`replay__result ${winText}`}>
-                <RoundEndIcon how={r.how} size={14} />
+                <WinIcon how={r.how} size={14} />
                 <span>{r.winSide ? `${r.winSide} win` : "No result"}</span>
               </span>
             </div>

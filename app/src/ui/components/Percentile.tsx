@@ -20,6 +20,9 @@ export function ApproxMark({ plain = false }: { plain?: boolean }) {
   );
 }
 
+/** A tooltip line as a sentence: the engine's reasons come without a full stop. */
+export const sentence = (x: string) => (/[.!?]$/.test(x) ? x : `${x}.`);
+
 /** "Top 4%" / "Bottom 3%" for performance, "63/100" for style. Never "Top 0%". */
 export function percentilePhrase(pct: number, kind: PercentileKind): string {
   if (kind === "style") return `${Math.round(pct)}/100`;
@@ -63,7 +66,6 @@ export function Percentile({ label, value, unit, pct, kind, population, sample, 
   const quiet = variant === "quiet";
   const phraseText = Array.isArray(phrase) ? phrase.join("") : phrase ?? "";
   // the row's tooltip: the engine's reason alone when there is one; else the rank, the approx note, what it is
-  const sentence = (x: string) => (/[.!?]$/.test(x) ? x : `${x}.`);
   const rowTip = !quiet ? undefined : reason ? reason : [phraseText ? sentence(phraseText) : null, approx ? APPROX_TIP : null, def ?? null].filter(Boolean).join(" ");
   return (
     <div className={`pctl pctl--${variant}`} data-tone={percentileTone(unranked ? null : pct, kind)} data-na={na || undefined}

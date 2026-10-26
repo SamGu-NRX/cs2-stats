@@ -1,17 +1,17 @@
-// HLTV's attributes. The style block (Profile's Identity section) holds the six style attributes in
-// pairs, in HLTV's order, under one "Compared to" control; the page's Side control (title bar) sets the
-// side. Each attribute shows a score out of 100 (the mean of its metrics' percentiles in its population)
-// and opens to the metrics behind it. Firepower uses the same row, alone and open, in its own card.
-// The bars are cream, never red or green: a style score has no better or worse. A provisional score
-// (a still-small bot pool) draws its bar hatched.
+// HLTV's attribute block, as HLTV draws it on a player's page and the user asked to keep: Firepower
+// wide across the top with its score out of 100 over a filled bar in the performance colours, then
+// the six style attributes in pairs, each with its icon, its score out of 100 and a filled bar in the
+// neutral style colour (hatched while the bot pool behind it is still small). Every attribute opens
+// to the metrics behind it, as dotted-track metric rows (components/MetricRow.tsx). The block's header
+// carries what the scores rank against: the side, Firepower's pros or bots, and the style pool.
 import { useId, useState, type MouseEvent, type ReactNode } from "react";
-import { Select, type Option } from "../../components/controls";
-import { ApproxMark, Percentile, type PercentileKind } from "../../components/Percentile";
+import { MetricList, MetricRow } from "../../components/MetricRow";
+import type { PercentileKind } from "../../components/Percentile";
 import type { Sub } from "../../data/engine";
+import type { AttributeId } from "../../data/proPack";
 import { ATTR_TIP, PROVISIONAL_TIP } from "../../data/tips";
 import { AttrIcon } from "../../icons/attributes";
-import type { AttributeId } from "../../data/proPack";
-import { splitUnit } from "./parts";
+import { scoreFill, scoreText, toScore } from "../../lib/scale";
 
 export interface PanelMetric {
   id: string; label: string; value: string | null; unit?: string; pct: number | null; kind: PercentileKind; population: string; def?: string;
@@ -21,10 +21,13 @@ export interface PanelMetric {
   reason?: string | null;
   /** one honest sentence when the value cannot exist for this selection */
   unavailable?: string;
+  /** what the value rests on ("6 of 39") and how many events that is (tabs.tsx sampleOf) */
+  sample?: string | null;
+  n?: number | null;
 }
 export interface PanelAttribute {
   id: AttributeId; label: string; score: number | null; metrics: PanelMetric[];
-  /** the population when it is not the panel's, e.g. "Compared to everyone" */
+  /** the population when it is not the block's, e.g. "Compared to everyone" */
   note?: string;
   /** starts expanded */
   open?: boolean;
@@ -34,24 +37,29 @@ export interface PanelAttribute {
   extra?: Sub[];
 }
 
-/**
- * A metric with its value only, under an attribute's scored metrics (main's unscored rows). The label
- * carries the definition, as the scored rows' labels do; there is no bar because nothing ranks it.
- */
-export function ValueRow({ s }: { s: Sub }) {
-  const v = splitUnit(s.text);
+/** A scored metric as a metric row; a value that cannot exist shows a dash and says why. */
+export function PanelRow({ m, rank }: { m: PanelMetric; rank?: boolean }) {
   return (
-    <div className="vrow" data-metric={s.id}>
-      <span className="vrow__label" data-tip={s.def} tabIndex={0}>{s.label}{s.status === "approx" ? <ApproxMark /> : null}</span>
-      <span className="vrow__val num">{v.value}{v.unit ? <small>{v.unit}</small> : null}</span>
-    </div>
+    <MetricRow label={m.label} value={m.unavailable || m.value === null ? null : `${m.value}${m.unit ?? ""}`} sample={m.sample} n={m.n} pct={m.pct} kind={m.kind}
+      population={m.population} tip={m.def} reason={m.reason ?? (m.unavailable ? m.unavailable : null)} approx={m.approx} rank={rank} />
   );
+}
+
+/** A metric with its value only, under an attribute's scored metrics (main's unscored rows): no track, since nothing ranks it. */
+export function ValueRow({ s, rank }: { s: Sub; rank?: boolean }) {
+  return <MetricRow label={s.label} value={s.value === null ? null : s.text} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra />;
 }
 
 /** The metric ranked highest, shown beside a closed attribute so its row says what drives the score. */
 const peekOf = (a: PanelAttribute) => a.metrics.filter((m) => m.pct !== null && m.value !== null && !m.reason).sort((x, y) => y.pct! - x.pct!)[0];
 
-export function Attribute({ a, wide = false }: { a: PanelAttribute; wide?: boolean }) {
+/**
+ * One attribute: icon, name, its (?), the score out of 100 and a filled bar, opening to its metrics.
+ * `performance` (Firepower) colours the score and the bar by how good it is; a style attribute stays
+ * neutral, since a style has no better or worse. The whole head opens it for a pointer; the chevron
+ * is its keyboard control, and a keyboard toggle (detail 0) opens instantly where a click animates.
+ */
+export function Attribute({ a, performance = false, wide = false, rank = false }: { a: PanelAttribute; performance?: boolean; wide?: boolean; rank?: boolean }) {
   const [open, setOpen] = useState(!!a.open);
   // ?attr= or the data can ask for another attribute to open: follow that change, keep the user's toggles otherwise
   const [asked, setAsked] = useState(!!a.open);
@@ -62,66 +70,69 @@ export function Attribute({ a, wide = false }: { a: PanelAttribute; wide?: boole
   const [instant, setInstant] = useState(true);
   const id = useId();
   const peek = open ? undefined : peekOf(a);
-  // The whole row opens the attribute for a pointer; the chevron button is its keyboard control, and
-  // a keyboard toggle (detail 0) changes instantly where a click animates. The (?) and a provisional
-  // score keep their own tooltips.
+  const t = a.score === null ? 0 : toScore(a.score, 50, 50);
   const toggle = (e: MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".help, .apa__score[tabindex]")) return;
+    if ((e.target as HTMLElement).closest(".help, .hatt__score[tabindex]")) return;
     setInstant(e.detail === 0);
     setOpen((o) => !o);
   };
   return (
-    <div className={`apa ${wide ? "apa--wide" : ""}`} data-open={open || undefined} data-attr={a.id} data-prov={a.provisional || undefined}>
-      <div className="apa__row" onClick={toggle}>
-        <AttrIcon id={a.id} size={18} className="apa__icon" />
-        <h3 className="apa__name">{a.label}</h3>
+    <div className={`hatt ${wide ? "hatt--wide" : ""} ${performance ? "hatt--perf" : ""}`} data-open={open || undefined} data-attr={a.id} data-prov={a.provisional || undefined}>
+      <div className="hatt__head" onClick={toggle}>
+        <AttrIcon id={a.id} size={wide ? 22 : 18} className="hatt__icon" />
+        <h3 className="hatt__name">{a.label}</h3>
         <span className="help" data-tip={ATTR_TIP[a.id]} tabIndex={0} aria-label={`What ${a.label} means`}>?</span>
-        {a.note ? <span className="apa__note">{a.note}</span> : null}
-        {peek ? <span className="apa__peek meta">{peek.label} <b className="num">{peek.value}{peek.unit}</b></span> : null}
-        <span className="apa__score num" {...(a.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0 } : {})}>{a.score === null ? "–" : Math.round(a.score)}<small>/100</small></span>
-        <button className={`apa__chev ${instant ? "is-instant" : ""}`} aria-expanded={open} aria-controls={id} aria-label={`${open ? "Hide" : "Show"} the metrics behind ${a.label}`} />
+        {a.note ? <span className="hatt__note">{a.note}</span> : null}
+        {peek ? <span className="hatt__peek meta">{peek.label} <b className="num">{peek.value}{peek.unit}</b></span> : <span className="hatt__peek" />}
+        <span className="hatt__score disp" style={performance && a.score !== null ? { color: scoreText(t) } : undefined} {...(a.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0 } : {})}>
+          {a.score === null ? "–" : Math.round(a.score)}<small>/100</small>
+        </span>
+        <button className={`hatt__chev ${instant ? "is-instant" : ""}`} aria-expanded={open} aria-controls={id} aria-label={`${open ? "Hide" : "Show"} the metrics behind ${a.label}`} />
       </div>
-      <div className="apa__bar" aria-hidden><i style={{ width: `${a.score ?? 0}%` }} /></div>
+      <div className="hatt__bar" aria-hidden>
+        <i style={{ width: `${a.score ?? 0}%`, ...(performance && a.score !== null ? { background: scoreFill(t) } : {}) }} />
+        {performance && <span className="hatt__mid" />}
+      </div>
       <div id={id} className={`collapse ${instant ? "is-instant" : ""}`} data-open={open} {...(open ? {} : { inert: "" })}>
         <div className="collapse__in">
-          <div className="apa__more">
-            {a.metrics.map((m) => (
-              <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def}
-                approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
-            ))}
-            {a.extra?.map((s) => <ValueRow key={s.id} s={s} />)}
-          </div>
+          <MetricList label={`${a.label} metrics`} rank={rank}>
+            {a.metrics.map((m) => <PanelRow key={m.id} m={m} rank={rank} />)}
+            {a.extra?.map((s) => <ValueRow key={s.id} s={s} rank={rank} />)}
+          </MetricList>
         </div>
       </div>
     </div>
   );
 }
 
-export function AttributesPanel<P extends string>({ title, tip, pool, pools, onPool, poolNote, message, style }: {
-  title: string;
-  /** the title's tooltip */
-  tip: string;
-  pool: P;
-  pools: Option<P>[];
-  onPool: (p: P) => void;
-  /** the chosen pool's size in words, e.g. "Against 62 rifler bot matches" */
-  poolNote?: string;
-  /** one line under the controls, e.g. why the chosen pool gives no scores */
+/**
+ * The block: a header with its controls, Firepower wide, the six style attributes in two columns.
+ * `firepower` is null while it loads or when the pool cannot rank it; `message` is one line under the
+ * header (why the chosen pool gives no scores).
+ */
+export function AttributesPanel({ controls, note, message, firepower, style, provisional }: {
+  /** the header's controls: side, Firepower's population, the style pool */
+  controls: ReactNode;
+  /** who the scores rank against, in words */
+  note?: ReactNode;
   message?: ReactNode;
+  firepower: PanelAttribute | null;
   /** entrying, trading, opening, closing, sniping, utility, in that order */
   style: PanelAttribute[];
+  /** the style scores rank against a still-small bot pool: said once, in the header */
+  provisional?: boolean;
 }) {
   return (
-    <section className="card apanel" aria-label={title}>
-      <div className="apanel__head">
-        <h2 className="card__title apanel__title"><span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span></h2>
-        <div className="apanel__cmp">
-          {poolNote ? <span className="meta">{poolNote}</span> : null}
-          <Select options={pools} value={pool} onChange={onPool} label="Compared to" prefix="Compared to" />
-        </div>
+    <section className="card hblock" aria-label="Attributes">
+      <div className="hblock__head">
+        <h2 className="card__title">Attributes</h2>
+        {provisional && <span className="vpill vpill--plain" data-tip={PROVISIONAL_TIP} tabIndex={0}>Provisional</span>}
+        {note ? <span className="meta hblock__note">{note}</span> : null}
+        <div className="hblock__controls">{controls}</div>
       </div>
-      {message ? <p className="apanel__msg meta">{message}</p> : null}
-      <div className="apanel__grid">{style.map((a) => <Attribute key={a.id} a={a} />)}</div>
+      {message ? <p className="hblock__msg meta">{message}</p> : null}
+      {firepower && <Attribute a={firepower} performance wide rank />}
+      <div className="hblock__grid">{style.map((a) => <Attribute key={a.id} a={a} />)}</div>
     </section>
   );
 }
