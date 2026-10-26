@@ -8,6 +8,7 @@
 // parse, as Profile on that tab, so old links and bookmarks keep working.
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
+import { hidingPersonal } from "./data/privacy";
 
 // Luck and Replay come last so Alt 1 to 8 keep the tabs they always had.
 export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "luck", "replay"] as const;
@@ -81,6 +82,47 @@ function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
   return { page: "profile", ptab, query };
 }
 
+// ---------------------------------------------------------------- match ids
+
+/**
+ * A match's id in an address while personal info is hidden: "m-" and a hash of its file path. A
+ * match link shows its target in the browser's status bar on hover, and an imported file's name is
+ * the user's choice, often a person's name (data/privacy.ts). The id resolves through the files the
+ * app has listed (knownMatchFiles); an address with the file path still opens it.
+ */
+export function matchId(file: string): string {
+  // cyrb53: 53 bits, so ids of one user's matches do not collide in practice
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < file.length; i++) {
+    const c = file.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `m-${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+}
+const MATCH_ID = /^m-[0-9a-z]+$/;
+const fileOfId = new Map<string, string>();
+
+/** What a page writes in a data-file attribute to find a match's row again: its id while personal info is hidden, else its file. */
+export const matchKey = (file: string) => (hidingPersonal() ? matchId(file) : file);
+
+/**
+ * The match files the app lists (data/provider.tsx), so an id in the address resolves to its file.
+ * An address read before the list arrived is read again.
+ */
+export function knownMatchFiles(files: string[]) {
+  fileOfId.clear();
+  for (const f of files) fileOfId.set(matchId(f), f);
+  if (typeof location === "undefined") return;
+  const next = parseHash(location.hash);
+  if (next.page === "match" && next.file !== current.file) {
+    current = next;
+    subs.forEach((s) => s());
+  }
+}
+
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathPart, qs = ""] = raw.split("?");
@@ -90,7 +132,9 @@ export function parseHash(hash: string): Route {
     // the file path may contain slashes; the last part is the tab when it names one
     const last = parts[parts.length - 1] as MatchTab;
     const hasTab = parts.length >= 3 && (MATCH_TABS as readonly string[]).includes(last);
-    return { page: "match", file: parts.slice(1, hasTab ? -1 : undefined).join("/"), tab: hasTab ? last : "overview", query };
+    const path = parts.slice(1, hasTab ? -1 : undefined).join("/");
+    const file = MATCH_ID.test(path) ? fileOfId.get(path) ?? path : path;
+    return { page: "match", file, tab: hasTab ? last : "overview", query };
   }
   const p = parts[0];
   if (p === "profile") {
@@ -115,8 +159,9 @@ const qs = (q?: Record<string, string | number | null | undefined>) => {
   return s ? `?${s}` : "";
 };
 
+/** A match's address: its file path, or its id while personal info is hidden (matchId). */
 export const matchHref = (file: string, tab: MatchTab = "overview", q?: Record<string, string | number | null | undefined>) =>
-  `#/match/${file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
+  `#/match/${hidingPersonal() ? matchId(file) : file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
 export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string | number | null | undefined>) => `#/${page === "home" ? "" : page}${qs(q)}`;
 export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, string | number | null | undefined>) => `#/profile/${tab}${qs(q)}`;
 
@@ -139,11 +184,20 @@ function tidyProfileUrl() {
   const canon = profileCanonicalHash(current);
   if (location.hash !== canon) history.replaceState(null, "", canon);
 }
-if (typeof location !== "undefined") tidyProfileUrl();
+/** While personal info is hidden, rewrites a match address that names its file to the match's id, without a history entry. */
+function tidyMatchUrl() {
+  if (current.page !== "match" || !current.file || !hidingPersonal()) return;
+  const path = location.hash.split("?")[0].replace(/^#\/match\//, "");
+  if (path.startsWith(matchId(current.file))) return;
+  const q = current.query.toString();
+  history.replaceState(null, "", matchHref(current.file, current.tab) + (q ? `?${q}` : ""));
+}
+if (typeof location !== "undefined") { tidyProfileUrl(); tidyMatchUrl(); }
 const subs = new Set<() => void>();
 const publish = () => {
   current = parseHash(location.hash);
   tidyProfileUrl();
+  tidyMatchUrl();
   subs.forEach((s) => s());
 };
 /** The section scroll useSection has done for this visit; cleared on navigation, kept on scope changes. */

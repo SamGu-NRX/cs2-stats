@@ -546,12 +546,38 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
     result
 }
 
+/// Turns off WebView2's status bar in every window. Like a browser, WebView2 shows a link's target in
+/// a bubble at the lower left while the pointer is over it. A desktop app has no use for that, and a
+/// match link names the match's file, which the user may have named after a person; with "Hide
+/// personal info" on, the page hides it (src/ui/data/privacy.ts), and the bubble must not show it.
+#[cfg(windows)]
+fn hide_status_bar(app: &tauri::App) {
+    use tauri::Manager;
+    for (label, window) in app.webview_windows() {
+        let done = window.with_webview(move |webview| {
+            // SAFETY: COM calls on the window's own WebView2 controller, which with_webview runs on
+            // the thread that owns it
+            let result = unsafe { webview.controller().CoreWebView2().and_then(|core| core.Settings()).and_then(|settings| settings.SetIsStatusBarEnabled(false)) };
+            if let Err(e) = result {
+                eprintln!("could not turn off the WebView2 status bar: {e}");
+            }
+        });
+        if let Err(e) = done {
+            eprintln!("could not reach the webview of window {label}: {e}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
-        .setup(|_app| {
+        .setup(|app| {
             botmode::commands::on_app_start();
+            #[cfg(windows)]
+            hide_status_bar(app);
+            #[cfg(not(windows))]
+            let _ = app;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_TABS, matchHref, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
+import { knownMatchFiles, MATCH_TABS, matchHref, matchId, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
 
 describe("match tab shortcuts", () => {
   it("reaches every match tab with Alt and one digit, 0 being the tenth", () => {
@@ -12,6 +12,25 @@ describe("match tab shortcuts", () => {
   });
   it("parses the Luck tab from a match link", () => {
     expect(parseHash(matchHref("2026/a.json.gz", "luck")).tab).toBe("luck");
+  });
+});
+
+describe("match ids", () => {
+  const files = ["imported/Ann Lee vs friends.json.gz", "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz", "valve/match730_003/v1"];
+  it("are short, stable, distinct and carry nothing of the file name", () => {
+    const ids = files.map(matchId);
+    expect(ids).toEqual(files.map(matchId));
+    expect(new Set(ids).size).toBe(files.length);
+    for (const id of ids) expect(id).toMatch(/^m-[0-9a-z]{1,11}$/);
+    expect(ids[0]).not.toMatch(/ann|lee|friends/i);
+  });
+  it("open their match once the app has listed it, and the file path still opens it", () => {
+    knownMatchFiles(files);
+    expect(parseHash(`#/match/${matchId(files[0])}/rounds?round=3`)).toMatchObject({ page: "match", file: files[0], tab: "rounds" });
+    expect(parseHash(`#/match/${matchId(files[2])}`)).toMatchObject({ page: "match", file: files[2], tab: "overview" });
+    expect(parseHash(matchHref(files[1], "economy"))).toMatchObject({ page: "match", file: files[1], tab: "economy" });
+    // an id no listed match has stays as it is, and the match view says it is not in the folder
+    expect(parseHash("#/match/m-zzzz/overview").file).toBe("m-zzzz");
   });
 });
 

@@ -55,9 +55,9 @@ const DATA_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\matches`;
 const VALVE_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\valve`;
 const SENTINELS = [NAME, MATE, OPPONENT, ID, "SENTINEL_USER"];
 /**
- * A file name the user chose. It may stay in a link's target and a row's data-file key, which are not
- * shown, so it is checked in the page's text and in the attributes a person sees: tooltips, titles and
- * accessible names.
+ * A file name the user chose, of an imported match and of a file that could not be read. With personal
+ * info hidden it may not appear in the page's text, in any attribute (a link's target shows in the
+ * status bar on hover), or in the address.
  */
 const FILE = "SENTINEL_FILE";
 /** A pro demo's players keep their names. */
@@ -97,8 +97,10 @@ const own = await Promise.all(names.map((f) => fixture(f, `samples/${f}`)));
 const valve = await fixture("20261025T000642Z_de_dust2_9b00e592.json.gz", "valve/sentinel-demo/v1", "valve");
 // a match from the development folder that is not a pro demo: its strangers are hidden like any other's
 const devMatch = await fixture("20261024T223834Z_de_dust2_abe5d91c.json.gz", "dev/scrim");
+// a match file the user imported and named
+const imported = await fixture("20261024T231251Z_de_dust2_8ecfd307.json.gz", `imported/${FILE} vs friends.json.gz`);
 const pro = await fixture("synthetic-demo.json.gz", "dev/pro-demo", "hltv");
-const all = [...own, valve, devMatch, pro];
+const all = [...own, valve, devMatch, imported, pro];
 const byFile = new Map(all.map((x) => [x.file, x]));
 const main = own.find((x) => x.file === "samples/synthetic-demo.json.gz")!;
 
@@ -248,8 +250,8 @@ async function show(href: string, data: Data) {
   await settle();
   // the page drew its own view, not the loading state of a page or tab (App.tsx FirstScan, MatchView.tsx TabSkeleton)
   expect(document.querySelector(".pane .first-scan, .pane [aria-busy='true']"), href).toBeNull();
-  const shown = ["title", "aria-label", "data-tip", "alt", "placeholder"].flatMap((a) => Array.from(document.querySelectorAll(`[${a}]`), (n) => n.getAttribute(a)));
-  return { html: document.documentElement.outerHTML, title: document.title, visible: [document.body.textContent, ...shown, document.title].join(" ") };
+  const attrs = Array.from(document.querySelectorAll("*"), (n) => Array.from(n.attributes, (a) => `${a.name}=${a.value}`).join(" "));
+  return { html: document.documentElement.outerHTML, title: document.title, visible: [document.body.textContent, ...attrs, document.title, location.hash].join(" ") };
 }
 
 const found = (text: string) => SENTINELS.filter((s) => text.includes(s));
@@ -280,6 +282,7 @@ describe("Hide personal info", () => {
     expect(union).toContain("&lt;data folder&gt;");
     expect(union).toContain("&lt;SteamID&gt;");
     expect(union).toContain("picked/&lt;file&gt;.json.gz");
+    expect(union).toContain(`href="${matchHref(imported.file)}"`);
     expect(union).toContain("&lt;file&gt;.dem");
   }, 120_000);
 
@@ -293,6 +296,22 @@ describe("Hide personal info", () => {
       expect(found(html)).toEqual([]);
       expect(part!.outerHTML).toMatch(/Teammate 1|Opponent 1|You/);
     }
+  }, 30_000);
+
+  it("opens a match by its id while hiding personal info, and by its file path too", async () => {
+    hidePersonal(true);
+    const href = matchHref(imported.file);
+    expect(href).not.toContain(FILE);
+    await show(href, dataWith());
+    expect(document.querySelector(".mhero__name")?.textContent).toContain("You");
+    expect(document.querySelector(".pane .error-box")).toBeNull();
+    // an address that names the file, such as an old bookmark, opens the same match and is rewritten to the id
+    act(() => { location.hash = `#/match/imported/${encodeURIComponent(`${FILE} vs friends.json.gz`)}/rounds`; });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    await show(location.hash, dataWith());
+    expect(location.hash).not.toContain(FILE);
+    expect(document.querySelector(".mhero__name")).not.toBeNull();
+    expect(document.querySelector(".pane .error-box")).toBeNull();
   }, 30_000);
 
   it("hides them in failures too: the failed scan, the Valve folder's error and the importer's", async () => {
