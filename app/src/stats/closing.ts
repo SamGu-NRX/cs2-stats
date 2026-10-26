@@ -47,7 +47,9 @@ export function closing(c: Ctx): ClutchFact[] {
     const list = c.kills[ri];
     const rows = c.pr[ri];
     const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-    rows.forEach((p) => { if (p) alive[p.side].add(p.pi); });
+    // a player the source marks dead at freeze end (player_rounds.alive_at_start, plugin files) is not
+    // part of the round's population, as README.md "Fields the app reads" says
+    rows.forEach((p) => { if (p && p.aliveAtStart !== false) alive[p.side].add(p.pi); });
 
     // The rows are the round-start roster only when the extractor read them at freeze end. A round
     // without a freeze end (recording started live) has them read one tick before the round's end, after

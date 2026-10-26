@@ -85,7 +85,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | timeAlive | Time Alive per Round | exact | Freeze end to your death or the round end |
 | alivePostPlant | Alive for Post-Plant % | approx | Planted rounds where you were alive at the plant |
 | lastAlive | Last Alive in Team | approx | Rounds where you were at some moment the only one of your side alive, a teammate's mid-round disconnect counting as a death. Before any death this reads the round's rows, so it counts only when they are a freeze-end snapshot; in a round recorded live it starts with a death, as clutches do |
-| clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection, with the alive counts read at freeze end as well as after each death and each mid-round disconnect of a living player, so a side that starts a round with one player is in a clutch before any kill and a disconnect can start one) |
+| clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection, with the alive counts read at freeze end as well as after each death and each mid-round disconnect of a living player, so a side that starts a round with one player is in a clutch before any kill and a disconnect can start one; a player the source marks dead at freeze end is not counted) |
 | roundsWithSniper, roundsWithAwp | Rounds with a Sniper, with an AWP | approx | Rounds you carried one at freeze end or killed with one |
 | sniperKillsPct, awpKillsPct | Sniper Kills %, AWP Kills % | exact | Share of kills |
 | smokesPR, flashesPR, molotovsPR, hesPR | Smokes, Flashbangs, Molotovs, HE Grenades Thrown per Round | exact | Throws per round (molotovs include incendiaries) |

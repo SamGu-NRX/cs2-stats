@@ -74,3 +74,15 @@ it("gives no clutch to a player who disconnected", () => {
   });
   expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.saved, r.t])).toEqual([["a", 2, false, false, 5]]);
 });
+
+it("leaves a player dead at freeze end out of the clutch population", () => {
+  // fails if b, whom the source marks dead at freeze end, counts as alive: a is CT's only player from
+  // the start, a 1v2 from 0 s that a wins with two kills, and a's kill on c leaves d alone in a 1v1.
+  // Counting b, CT never gets down to one and d gets a false 1v2
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" },
+    player_rounds: { b: { alive_at_start: false } },
+    kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(20), killer: "a", victim: "d" }],
+  });
+  expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.kills, r.t])).toEqual([["a", 2, true, 2, 0], ["d", 1, false, 0, 10]]);
+});
