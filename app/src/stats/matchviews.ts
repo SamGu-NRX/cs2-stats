@@ -304,14 +304,27 @@ export function addSituations(out: Situations, f: MatchFacts, filter: Filter): v
 // ---------------------------------------------------------------- 7. bombsites
 
 export interface SiteOutcomes {
-  /** T: rounds a living teammate (or you) entered the site's zone before the plant, and those planted there */
-  take: { attempts: number; success: number };
-  /** CT: rounds an enemy entered the site's zone before the plant, and those not planted there */
-  hold: { attempts: number; success: number };
+  /**
+   * T: rounds a living teammate (or you) entered the site's zone before the plant, and those planted
+   * there. Null when no round had the inputs (Bombsites.takeHold).
+   */
+  take: { attempts: number; success: number } | null;
+  /** CT: rounds an enemy entered the site's zone before the plant, and those your side won without a plant there; null as take */
+  hold: { attempts: number; success: number } | null;
   /** CT: rounds the bomb was planted at the site, and those your side won */
   retake: { attempts: number; success: number };
   /** T: rounds your side planted at the site, and those your side won */
   postPlant: { attempts: number; success: number };
+}
+
+export interface Bombsites {
+  sites: Record<string, SiteOutcomes>;
+  /**
+   * The rounds take and hold could be read on (positions, the round's freeze end, and the map's
+   * "Bombsite" place names all present), of the player's rounds with a result, and which inputs were
+   * missing on the others.
+   */
+  takeHold: { rounds: number; known: number; missing: ("positions" | "site names" | "freeze time")[] };
 }
 
 const siteOf = (place: string | null) => (place ? /^Bombsite([A-Z])$/.exec(place)?.[1] ?? null : null);
@@ -320,39 +333,54 @@ const siteOf = (place: string | null) => (place ? /^Bombsite([A-Z])$/.exec(place
  * Site outcomes per bombsite letter over the rounds the player played. A site's zone is the map's
  * "Bombsite<letter>" place; a T player "entered" it when a living position sample of theirs names it
  * between freeze end and the plant (or the round's end without one). The plant's site is the rounds
- * table's (letter "A", "B").
+ * table's (letter "A", "B"). Retake and post-plant come from plants alone; take and hold need the
+ * positions, the freeze end and the site names, and are null when no round had them.
  */
-export function bombsites(t: MatchTables, f: MatchFacts, player: string): Record<string, SiteOutcomes> {
+export function bombsites(t: MatchTables, f: MatchFacts, player: string): Bombsites {
   const pi = playerIndex(f, player);
-  const out: Record<string, SiteOutcomes> = {};
-  const site = (s: string) => (out[s] ??= { take: { attempts: 0, success: 0 }, hold: { attempts: 0, success: 0 }, retake: { attempts: 0, success: 0 }, postPlant: { attempts: 0, success: 0 } });
+  const sites: Record<string, SiteOutcomes> = {};
+  const tally = () => ({ attempts: 0, success: 0 });
+  const site = (s: string) => (sites[s] ??= { take: null, hold: null, retake: tally(), postPlant: tally() });
   const P = t.positions;
+  const named = !!P && P.place.some((x) => siteOf(x) !== null);
+  const missing = new Set<"positions" | "site names" | "freeze time">();
+  if (!P) missing.add("positions");
+  else if (!named) missing.add("site names");
+  const takeHold = { rounds: 0, known: 0, missing: [] as Bombsites["takeHold"]["missing"] };
   const id = new Map(f.players.map((p, i) => [p.id, i]));
   for (const me of f.pr) {
     if (me.pi !== pi) continue;
     const rf = f.rounds[me.ri];
     if (rf.winner === null) continue;
+    takeHold.rounds++;
     const planted = rf.plantSite ? rf.plantSite.toUpperCase() : null;
+    const won = rf.winner === me.side;
+    if (planted) {
+      const x = site(planted)[me.side === "T" ? "postPlant" : "retake"];
+      x.attempts++;
+      if (won) x.success++;
+    }
+    if (rf.freezeEndTick === null) missing.add("freeze time");
+    if (!P || !named || rf.freezeEndTick === null) continue;
+    takeHold.known++;
     // sites a living T entered before the plant
     const entered = new Set<string>();
     const until = rf.plantTick ?? rf.endTick;
-    if (P && rf.freezeEndTick !== null) {
-      for (let i = 0; i < P.n; i++) {
-        if (P.round[i] !== rf.number || !P.is_alive[i] || P.tick[i] < rf.freezeEndTick || P.tick[i] > until) continue;
-        const who = id.get(P.steamid[i]);
-        const r = who === undefined ? undefined : f.pr.find((x) => x.ri === me.ri && x.pi === who);
-        const s = siteOf(P.place[i]);
-        if (r?.side === "T" && s) entered.add(s);
-      }
+    for (let i = 0; i < P.n; i++) {
+      if (P.round[i] !== rf.number || !P.is_alive[i] || P.tick[i] < rf.freezeEndTick || P.tick[i] > until) continue;
+      const who = id.get(P.steamid[i]);
+      const r = who === undefined ? undefined : f.pr.find((x) => x.ri === me.ri && x.pi === who);
+      const s = siteOf(P.place[i]);
+      if (r?.side === "T" && s) entered.add(s);
     }
-    const won = rf.winner === me.side;
-    if (me.side === "T") {
-      for (const s of entered) { site(s).take.attempts++; if (planted === s) site(s).take.success++; }
-      if (planted) { site(planted).postPlant.attempts++; if (won) site(planted).postPlant.success++; }
-    } else {
-      for (const s of entered) { site(s).hold.attempts++; if (planted !== s) site(s).hold.success++; }
-      if (planted) { site(planted).retake.attempts++; if (won) site(planted).retake.success++; }
+    for (const s of entered) {
+      const o = site(s);
+      if (me.side === "T") { o.take ??= tally(); o.take.attempts++; if (planted === s) o.take.success++; }
+      else { o.hold ??= tally(); o.hold.attempts++; if (won && planted !== s) o.hold.success++; }
     }
   }
-  return out;
+  // with any round read, a site no one entered has take and hold at zero rather than unknown
+  if (takeHold.known) for (const o of Object.values(sites)) { o.take ??= tally(); o.hold ??= tally(); }
+  takeHold.missing = [...missing];
+  return { sites, takeHold };
 }

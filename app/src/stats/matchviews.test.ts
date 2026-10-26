@@ -178,17 +178,34 @@ describe("situations", () => {
 });
 
 describe("bombsites", () => {
+  const round = (row: Record<string, unknown>, positions: Record<string, unknown>[] | undefined) => {
+    const tables = oneRoundTables({ players: { a: "CT", c: "T", d: "T" }, roundRow: row, positions });
+    return (player: string) => bombsites(tables, derive(tables, CS2RB), player);
+  };
+  const at = (steamid: string, s: number, place: string) => ({ steamid, tick: t(s), x: 0, y: 0, place });
+  const tally = (attempts: number, success: number) => ({ attempts, success });
+
   it("scores take, hold, retake and post-plant per site from the zone entered and the plant", () => {
     // fails if a phase reads the wrong side or the entry is taken after the plant: c walks into Bombsite A
     // and plants there, T wins. c took A and won the post-plant; a failed to hold A and to retake it.
-    // d's later visit to Bombsite B, after the plant, is not a take attempt
-    const tables = oneRoundTables({
-      players: { a: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T", plant_tick: t(5), plant_site: "A" },
-      positions: [{ steamid: "c", tick: t(3), x: 0, y: 0, place: "BombsiteA" }, { steamid: "d", tick: t(6), x: 0, y: 0, place: "BombsiteB" }],
-    });
-    const f = derive(tables, CS2RB);
-    const none = { attempts: 0, success: 0 };
-    expect(bombsites(tables, f, "c")).toEqual({ A: { take: { attempts: 1, success: 1 }, hold: none, retake: none, postPlant: { attempts: 1, success: 1 } } });
-    expect(bombsites(tables, f, "a")).toEqual({ A: { take: none, hold: { attempts: 1, success: 0 }, retake: { attempts: 1, success: 0 }, postPlant: none } });
+    // d's visit to Bombsite B after the plant is not an attempt
+    const of = round({ winner_side: "T", plant_tick: t(5), plant_site: "A" }, [at("c", 3, "BombsiteA"), at("d", 6, "BombsiteB")]);
+    expect(of("c")).toEqual({ sites: { A: { take: tally(1, 1), hold: tally(0, 0), retake: tally(0, 0), postPlant: tally(1, 1) } }, takeHold: { rounds: 1, known: 1, missing: [] } });
+    expect(of("a").sites.A).toEqual({ take: tally(0, 0), hold: tally(1, 0), retake: tally(1, 0), postPlant: tally(0, 0) });
+  });
+
+  it("holds a site only when CT wins the round with no plant there", () => {
+    // fails if a round T won counts as a hold: T entered A both times and planted nowhere; CT won the
+    // first round (a hold) and lost the second (no hold, though A saw no plant)
+    expect(round({ winner_side: "CT" }, [at("c", 3, "BombsiteA")])("a").sites.A.hold).toEqual(tally(1, 1));
+    expect(round({ winner_side: "T" }, [at("c", 3, "BombsiteA")])("a").sites.A.hold).toEqual(tally(1, 0));
+  });
+
+  it("gives no take or hold without positions or site names, and keeps the plant outcomes", () => {
+    // fails if missing inputs read as zero takes and holds, or the plant-based outcomes are lost with them
+    const none = round({ winner_side: "T", plant_tick: t(5), plant_site: "B" }, undefined)("c");
+    expect(none).toEqual({ sites: { B: { take: null, hold: null, retake: tally(0, 0), postPlant: tally(1, 1) } }, takeHold: { rounds: 1, known: 0, missing: ["positions"] } });
+    const unnamed = round({ winner_side: "T", plant_tick: t(5), plant_site: "B" }, [at("c", 3, "Middle")])("c");
+    expect([unnamed.sites.B.take, unnamed.takeHold.missing]).toEqual([null, ["site names"]]);
   });
 });
