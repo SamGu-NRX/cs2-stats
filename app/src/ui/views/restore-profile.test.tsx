@@ -14,13 +14,14 @@ import type { MatchFacts, Measures } from "../../stats/facts";
 import { CS2RB } from "../../stats/model-params";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
+import { ROLE_SIGNALS, styleZone } from "../../stats/identity";
 import { rating3FromInputs } from "../../stats/rating3";
 import { emptyMeasures } from "../../stats/facts";
 import { rollup } from "../../stats/rollup";
-import type { CompassResult, Method, Query } from "../../worker/protocol";
+import type { Method, Query } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { careerEntries, fmtMetric, multiKillRows, signalBar } from "../data/engine";
+import { botIds, careerEntries, fmtMetric, multiKillRows, signalBar } from "../data/engine";
 import type { MatchEntry } from "../data/match";
 import { metric, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -30,7 +31,7 @@ import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
 import Playstyle from "./Playstyle";
-import { HowGood, RatingTerms } from "./profile/parts";
+import { HowGood, RatingTerms, RoleSignals } from "./profile/parts";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const PROS = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "../../../public/baselines.json"), "utf8")) as Baselines;
@@ -144,11 +145,10 @@ it("shows the counts behind How good's shares, from the rounds it ranked", async
   answers.compare = await calls.compare(q, { side: "T" });
   render(<HowGood q={q} side="T" />);
   const m = summary(sideQuery(q, "T")).m;
-  const row = Array.from(host.querySelectorAll(".howgood li")).find((li) => li.firstElementChild?.firstChild?.textContent === metric("tradeKillSuccess").label)!;
+  const rowOf = (id: string) => Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label)!;
   expect(m.tradeOpps).toBeGreaterThan(0);
-  expect(text(row.querySelector(".howgood__of"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
-  const noOf = Array.from(host.querySelectorAll(".howgood li")).find((li) => li.firstElementChild?.firstChild?.textContent === metric("openingSwing").label)!;
-  expect(noOf.querySelector(".howgood__of")).toBeNull();
+  expect(text(rowOf("tradeKillSuccess").querySelector(".howgood__of"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
+  expect(rowOf("openingSwing").querySelector(".howgood__of")).toBeNull();
 });
 
 it("shows Firepower's score and its lowest-ranked metric in Work on", async () => {
@@ -182,23 +182,65 @@ it("gives each exact multi-kill count its percent of rounds", () => {
 });
 
 it("reaches every bot on the style compass from the keyboard, one tab stop for all", () => {
-  // fails if the bots' hover cards open only on pointer hover, or each dot is its own tab stop
-  use(samples);
-  const dot = (name: string, x: number, y: number) => ({ name, rounds: 160, x, y, label: "Rifler" });
-  const c: CompassResult = {
-    you: { name: "You", rounds: 300, x: 30, y: 50, label: "Rifler (Entry and support)" },
-    bots: [dot("Zed", 40, 20), dot("Abe", 10, 20), dot("Mia", 20, 60)],
-    careers: { unit: "careers", botMatches: 30, qualified: 3, needed: 15, minRounds: 150, provisional: true, minPool: 8 },
-  };
-  answers.compass = c;
+  // fails if the bots' hover cards open only on pointer hover, each dot is its own tab stop, or the
+  // compass places you or a bot in another zone than the engine's opening attempts and trade/assist share give
+  const career = samples.filter((s) => careerEntries([s.entry], null).length);
+  use(career);
   render(<Playstyle />);
+  const q = queryOf(career);
+  const names = new Map(career.flatMap((s) => s.entry.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const)));
+  const zone = (v: Record<string, number | null>) => styleZone(v.openingAttempts!, v.tradeAssistShare!);
+  // every bot career over the same matches with 20+ rounds and a kill or assist (Playstyle.tsx COMPASS_MIN_ROUNDS), left to right
+  const bots = botIds(career.map((s) => s.entry))
+    .map((id) => ({ id, s: rolled(summary({ files: q.files, filter: { player: [id] } })) }))
+    .filter((b) => b.s.m.rounds >= 20 && b.s.v.tradeAssistShare !== null)
+    .sort((a, b) => a.s.v.openingAttempts! - b.s.v.openingAttempts! || a.s.v.tradeAssistShare! - b.s.v.tradeAssistShare!);
+  expect(bots.length).toBeGreaterThan(1);
   const dots = Array.from(host.querySelectorAll<SVGGElement>(".compass__dot"));
-  expect(dots.map((d) => d.getAttribute("tabindex"))).toEqual(["0", "-1", "-1"]);
-  // left to right: Abe (10), Mia (20), Zed (40)
-  expect(dots[0].getAttribute("data-tip")).toMatch(/^Abe: Rifler, 160 rounds\./);
+  expect(dots.map((d) => d.getAttribute("tabindex"))).toEqual(bots.map((_, i) => (i === 0 ? "0" : "-1")));
+  expect(dots[0].getAttribute("aria-label")).toBe(`${names.get(bots[0].id)}: ${zone(bots[0].s.v)}, ${bots[0].s.m.rounds} rounds. Opening duels in ${Math.round(bots[0].s.v.openingAttempts!)}% of rounds, ${Math.round(bots[0].s.v.tradeAssistShare!)}% trades and assists.`);
   act(() => dots[0].focus());
+  // focus opens the same card a pointer hover does
+  expect(text(host.querySelector(".compass svg [pointer-events='none']"))).toBe(`${names.get(bots[0].id)}${zone(bots[0].s.v)}, ${bots[0].s.m.rounds} rounds`);
   act(() => { dots[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
   expect(document.activeElement).toBe(dots[1]);
-  expect(dots.map((d) => d.getAttribute("tabindex"))).toEqual(["-1", "0", "-1"]);
-  expect(text(host.querySelector(".compass__you"))).toBe("You, Rifler (Entry and support)");
+  expect(dots.map((d) => d.getAttribute("tabindex"))).toEqual(bots.map((_, i) => (i === 1 ? "0" : "-1")));
+  act(() => { dots[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })); });
+  act(() => { dots[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })); });
+  expect(document.activeElement).toBe(dots[dots.length - 1]);
+  expect(text(host.querySelector(".compass__you"))).toBe(`You, ${zone(rolled(summary(q)).v)}`);
+});
+
+it("measures each role signal on its own side and says you fit from the threshold up", () => {
+  // fails if Lurker reads both sides instead of T, a signal reads another metric than ROLE_SIGNALS names,
+  // or "You fit" shows on the wrong side of the threshold
+  const check = (q: Query) => {
+    act(() => root.render(<BarProvider><RoleSignals q={q} /></BarProvider>));
+    const both = rolled(summary(q)).v;
+    const t = rolled(summary(sideQuery(q, "T"))).v;
+    return ROLE_SIGNALS.map((sg) => {
+      const li = host.querySelector(`.signals2 li[data-signal="${sg.id}"]`)!;
+      const v = (sg.side === "T" ? t : both)[sg.metric];
+      expect(!!li.querySelector(".chip"), sg.id).toBe(v !== null && v >= sg.threshold);
+      expect((li.querySelector(".signals2__track i") as HTMLElement).style.width, sg.id).toBe(`${v === null ? 0 : 100 * Math.min(1, v / (2 * sg.threshold))}%`);
+      return { id: sg.id, v, both: both[sg.metric], you: text(li.querySelector(".signals2__you")) };
+    });
+  };
+  const q = queryOf(samples);
+  const mine = check(q);
+  const support = mine.find((x) => x.id === "Support")!;
+  expect(support.you.startsWith(`${fmtPct(support.v, 0)} of your kills and assists are trades or assists.`)).toBe(true);
+  // the T-side distance differs from both sides' here, so reading the wrong side shows
+  const lurker = mine.find((x) => x.id === "Lurker")!;
+  expect(lurker.v).not.toBeNull();
+  expect(lurker.v).not.toBe(lurker.both);
+  expect(lurker.you).toContain(`You stand ${Math.round(lurker.v!).toLocaleString("en")} units`);
+  // a sample player who reaches a threshold, for the "You fit" side of the gate
+  const fitter = samples.flatMap((s) => s.facts.players.map((p) => p.id)).find((id) => {
+    const v = rolled(summary({ files: q.files, filter: { player: [id] } })).v;
+    return ROLE_SIGNALS.some((sg) => sg.side === null && v[sg.metric] !== null && v[sg.metric]! >= sg.threshold);
+  })!;
+  expect(fitter).toBeDefined();
+  check({ files: q.files, filter: { player: [fitter] } });
+  expect(host.querySelectorAll(".signals2 .chip").length).toBeGreaterThan(0);
 });
