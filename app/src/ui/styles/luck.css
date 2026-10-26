@@ -1,0 +1,128 @@
+/* The Luck match tab (views/match/Luck.tsx). Colour carries whose luck it is, never a verdict: luck is
+   not a skill, so green and red stay out. Cream is luck that went your way, grey luck that went against
+   you, tan another player's. */
+
+/* The match tab bar (MatchView.tsx Sticky) marks the open section with aria-current="page" since it
+   became a nav of links; these replace views.css's .mtab[aria-selected] rules, which no longer match.
+   They live here because this slice owns the tab bar and not views.css. */
+.mtab[aria-current="page"] { color: var(--cream); }
+@media (hover: hover) and (pointer: fine) { .mtab:not([aria-current]):hover { color: var(--ink); } }
+
+.luck { container-type: inline-size; }
+
+/* ---------------------------------------------------------------- hero */
+/* .hero is also the match header's class, with its own height; this hero sizes to its content */
+.card.lk-hero { min-height: 0; }
+.lk-hero__top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 20px 48px; align-items: center; }
+.lk-verdict { display: grid; gap: 12px; min-width: 0; }
+.lk-verdict__row { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.lk-verdict__row > .disp { flex: none; }
+.lk-verdict__words { display: grid; gap: 6px; min-width: 0; }
+.lk-verdict__line { color: var(--ink); text-wrap: balance; }
+.lk-verdict__them { color: var(--ink2); }
+.lk-tipped { justify-self: start; cursor: help; border-radius: var(--r-chip); }
+
+/* your hits beyond the odds against theirs on you */
+.lk-balance { display: grid; gap: 8px; }
+.lk-balance dl { display: grid; gap: 4px; margin: 0; }
+.lk-balance p { margin: 0; }
+.lk-lolly { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 30px; border-radius: var(--r-chip); cursor: help; }
+.lk-lolly dt { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.lk-lolly.is-you dt { color: var(--cream); font-weight: 600; }
+.lk-lolly dd { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 12px; margin: 0; }
+.lk-lolly b, .lk-lobby b { text-align: right; font-weight: 650; }
+
+/* a diverging lollipop from a dotted zero in the middle */
+.lk-div { --c: var(--tan); position: relative; display: block; height: 16px; min-width: 64px; }
+.lk-div::before { content: ""; position: absolute; left: 0; right: 0; top: 7.5px; height: 1px; background: var(--line); }
+.lk-div__zero { position: absolute; left: 50%; top: 1px; bottom: 1px; border-left: 1px dotted var(--ink3); }
+.lk-div__stem { position: absolute; top: 7px; height: 2px; background: var(--c); opacity: 0.6; }
+.lk-div__dot { position: absolute; top: 3.5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--s1); }
+.lk-div__stem.is-neg, .lk-div__dot.is-neg { background: var(--ink2); }
+.lk-lolly.is-you .lk-div, .lk-lobby li.is-you .lk-div { --c: var(--cream); }
+.lk-lolly:not(.is-you) .lk-div { --c: var(--ink2); }
+
+/* round by round */
+.lk-strip { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); overflow-x: auto; }
+.lk-rs { display: block; overflow: visible; }
+.lk-rs__r { cursor: pointer; outline: none; }
+.lk-rs__hit { fill: transparent; transition: fill var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .lk-rs__r:hover .lk-rs__hit { fill: var(--hover); } }
+.lk-rs__r:focus-visible .lk-rs__hit { stroke: var(--cream); stroke-width: 2; }
+.lk-rs__stem { stroke-width: 2; stroke-linecap: round; opacity: 0.6; transform-box: fill-box; }
+.lk-rs__pop { stroke: var(--s1); stroke-width: 2; }
+.is-pos > .lk-rs__stem { stroke: var(--cream); transform-origin: center bottom; }
+.is-neg > .lk-rs__stem { stroke: var(--ink2); transform-origin: center top; }
+.is-pos > .lk-rs__pop { fill: var(--cream); }
+.is-neg > .lk-rs__pop { fill: var(--ink2); }
+.lk-rs__none { fill: var(--ink3); }
+.lk-rs__ext { font-weight: 600; fill: var(--ink); }
+.lk-rs__n { font-size: 10px; }
+.lk-rs__n.is-won { fill: var(--cream); font-weight: 700; }
+.lk-rs__half { stroke: var(--line2); stroke-dasharray: 2 3; }
+.lk-strip__head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+.lk-strip__body { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 48px; }
+.lk-strip__body > .lk-rs { flex: none; }
+.lk-figs { margin: 0; grid-template-columns: repeat(auto-fit, minmax(104px, max-content)); }
+
+/* the strip draws in once, on a pointer visit to the tab (Luck.tsx sets data-enter): each stem grows
+   from the zero axis and its dot rides out with it, 12 ms apart. The stem starts at scaleY(0) because
+   its length is the value, so zero is where it truly begins; nothing pops in from nowhere. html.anim keeps tests and static renders at the
+   end state; reduced motion keeps only the fade. */
+@keyframes lk-grow { from { transform: scaleY(0); } }
+@keyframes lk-ride { from { transform: translateY(var(--dy)); } }
+@keyframes lk-fade { from { opacity: 0; } }
+html.anim .luck[data-enter] .lk-rs__stem { animation: lk-grow 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 12ms); }
+html.anim .luck[data-enter] .lk-rs__pop { animation: lk-ride 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 12ms); }
+@media (prefers-reduced-motion: reduce) {
+  html.anim .luck[data-enter] .lk-rs__stem, html.anim .luck[data-enter] .lk-rs__pop { animation: lk-fade 200ms ease both; animation-delay: 0ms; }
+}
+
+/* ---------------------------------------------------------------- moments */
+.lk-tally { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 8px; padding: 0 0 12px; list-style: none; border-bottom: 1px solid var(--line); }
+.lk-tally li { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); border-radius: var(--r-chip); cursor: help; }
+.lk-tally b { color: var(--ink); font-weight: 700; }
+.lk-tally__mark { display: inline-flex; align-items: center; gap: 2px; color: var(--cream); }
+.lk-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.lk-row { display: grid; grid-template-columns: 26px 52px minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 12px; height: 34px; padding: 0 8px; margin: 0 -8px; border-radius: var(--r-ctl); font-size: 13px; transition: background-color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .lk-row:hover { background: var(--hover); } }
+.lk-row__r { width: 26px; }
+.lk-mark { display: inline-flex; align-items: center; gap: 3px; color: var(--cream); }
+.is-against .lk-mark, .is-against .lk-tally__mark { color: var(--ink2); }
+.lk-pip { height: 16px; font-size: 9.5px; letter-spacing: 0.04em; }
+.lk-row__what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
+/* right-aligned, so without a clip a long name or gun would spill left over the row's words */
+.lk-who { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; overflow: hidden; font-size: 12px; color: var(--ink2); }
+.lk-who__gun { flex: none; color: var(--ink2); }
+.lk-who__names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-more { margin-top: 8px; }
+/* a narrow card keeps the names and drops the gun icons */
+.lk-moments { container-type: inline-size; }
+@container (max-width: 440px) { .lk-who__gun { display: none; } }
+.lk-empty { margin: 4px 0; }
+.lk-missing { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+
+/* ---------------------------------------------------------------- the lobby and the numbers */
+.lk-lobby { display: grid; margin: 0; padding: 0; list-style: none; }
+.lk-lobby li { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr) 44px; gap: 12px; align-items: center; height: 30px; font-size: 13px; border-radius: var(--r-chip); cursor: help; }
+.lk-lobby li + li { border-top: 1px solid var(--line); }
+.lk-lobby__n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-lobby li.is-you .lk-lobby__n { color: var(--cream); font-weight: 650; }
+.lk-lobby__foot { margin: 10px 0 0; }
+.lk-groups { display: grid; gap: 16px; }
+/* luck is never ranked, so MetricRow draws no track: its column closes and the label takes the room */
+.lk-groups .mrows { grid-template-columns: minmax(0, 1fr) 0 auto auto; column-gap: 12px; }
+.lk-group__h { margin: 0 0 2px; }
+.lk-group__gone { margin: 6px 0 0; }
+.lk-solo { display: grid; }
+/* without the lobby beside it, the metric card has the row: its groups run two across */
+@container (min-width: 900px) {
+  .lk-solo .lk-groups { display: block; columns: 2; column-gap: 40px; }
+  .lk-solo .lk-group { break-inside: avoid; padding-bottom: 16px; }
+}
+
+/* narrow panes: the hero's balance goes under the verdict, and the paired cards stack */
+@container (max-width: 900px) {
+  .lk-hero__top { grid-template-columns: minmax(0, 1fr); }
+  .lk-pair { grid-template-columns: minmax(0, 1fr); }
+}
