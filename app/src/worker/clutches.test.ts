@@ -100,3 +100,19 @@ it("agrees with the saves count: a clutch player who disconnects in a lost round
   expect(rows(f, ["a"]).map((r) => [r.player, r.opponents, r.won, r.saved])).toEqual([["a", 2, false, false]]);
   expect(["a", "e"].map((p) => rollup([f], { player: p }).m.saves)).toEqual([0, 0]);
 });
+
+it("leaves a player who disconnected at or before freeze end out of the population, whatever alive_at_start says", () => {
+  // fails if b, who left at freeze end with no alive-at-start flag, counts as alive: then a's death at
+  // 10 s makes b CT's last player in a 1v2 b "saves" by never dying. b was never in the round: a is
+  // alone from the start, a 1v2 a loses, and b saved nothing
+  const round = (leftAt: number) => oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
+    leaves: [{ tick: leftAt, steamid: "b", alive: true }],
+    kills: [{ tick: t(10), killer: "c", victim: "a" }],
+  });
+  for (const leftAt of [FREEZE_END - 64, FREEZE_END]) {
+    const f = round(leftAt);
+    expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.saved, r.t])).toEqual([["a", 2, false, false, 0]]);
+    expect(rollup([f], { player: "b" }).m.saves).toBe(0);
+  }
+});

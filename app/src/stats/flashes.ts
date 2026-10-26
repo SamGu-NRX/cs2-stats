@@ -64,8 +64,8 @@ const DETONATE = "flash_detonate";
  * (the extractor's and the plugin's link; in every file seen so far the blind lands on the
  * detonation's tick): its recorded attacker's latest such detonation at or before it, or with no
  * attacker recorded, the latest by anyone, which makes it this player's only when that one is theirs.
- * A blind without that link is left out and counted in the notes, never placed by guess. Repeated rows
- * (a detonation, a throw, or one player's blind under one flash) count once. A flash led to a kill
+ * A blind without that link is left out and counted in the notes, never placed by guess. A repeated
+ * detonation or throw row counts once, and one player's blind rows under one flash join into one window. A flash led to a kill
  * when either holds:
  * - assist: the kill carries a flash assist for the thrower, and this flash is the thrower's latest
  *   one to have blinded the victim before the kill;
@@ -170,11 +170,16 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
     }
     const v = piOf.get(B.victim_steamid[i]);
     if (v === undefined || v === me || B.is_self[i]) continue;
-    // one flash blinds a player once: a repeated blind row keeps the longest
+    // one flash blinds a player once: repeated blind rows join into one window, from the earliest start
+    // to the latest end, so a kill or assist inside either still counts
     const secs = B.duration[i];
     const j = w.row.blinded.findIndex((b) => b.pi === v);
     if (j >= 0) {
-      if (secs > w.row.blinded[j].secs) { w.row.blinded[j] = { ...w.row.blinded[j], secs, flashed: secs > FLASHED_MIN_S }; w.ticks[j] = B.tick[i]; }
+      const from = Math.min(w.ticks[j], B.tick[i]);
+      const until = Math.max(w.ticks[j] + w.row.blinded[j].secs * tr, B.tick[i] + secs * tr);
+      const joined = (until - from) / tr;
+      w.row.blinded[j] = { ...w.row.blinded[j], secs: joined, flashed: joined > FLASHED_MIN_S };
+      w.ticks[j] = from;
       continue;
     }
     w.row.blinded.push({ pi: v, secs, team: B.is_team_flash[i], flashed: secs > FLASHED_MIN_S, at: near(B.round[i], B.victim_steamid[i], B.tick[i]) });

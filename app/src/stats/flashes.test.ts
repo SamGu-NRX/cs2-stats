@@ -140,10 +140,17 @@ describe("flashTool", () => {
     expect([noIds.flashes.length, noIds.thrown, noIds.notes]).toEqual([2, 3, ["1 of the 3 flashbangs you threw has no detonation in this file, so it is not listed."]]);
   });
 
-  it("counts a player blinded twice by one flash once, at the longer blind", () => {
-    // fails if a repeated blind row lists the same player twice under one flash
-    const r = tool({ grenade_events: [det(10, 7)], blinds: [blind(10, 7, "c", 1.5), blind(10, 7, "c", 2.5)] });
-    expect(r.flashes[0].blinded.map((b) => [b.pi, b.secs, b.flashed])).toEqual([[pi.c, 2.5, true]]);
+  it("joins a player's repeated blinds under one flash into one window", () => {
+    // fails if a repeated row lists the player twice, or keeps one row's start and so loses a kill in the
+    // other: c is blinded from 10 s for 1 s and from 11 s for 2 s, one window from 10 s to 13 s, and the
+    // assisted kill at 10.5 s lies inside it
+    const r = tool({
+      grenade_events: [det(10, 7)],
+      blinds: [blind(10, 7, "c", 1), blind(11, 7, "c", 2)],
+      kills: [{ tick: t(10.5), killer: "b", victim: "c", assister: "a", at: { assistedflash: true } }],
+    });
+    expect(r.flashes[0].blinded.map((b) => [b.pi, b.secs, b.flashed])).toEqual([[pi.c, 3, true]]);
+    expect(r.flashes[0].kills.map((k) => [k.victim, k.assist, k.whileBlind])).toEqual([[pi.c, true, true]]);
   });
 
   it("refuses a player who is not in the match", () => {
