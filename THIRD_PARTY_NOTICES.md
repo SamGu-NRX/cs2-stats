@@ -126,6 +126,7 @@ These values are Counter-Strike 2's own, read from Valve's game files or from a 
 | File | What it holds | Where it comes from |
 |---|---|---|
 | `extractor/prices_cs2_1.41.9.2.json` | Weapon and item prices | CS2 build 1.41.9.2: `scripts/weapons.vdata_c` and `scripts/items/items_game.txt` (its `source` field) |
+| `app/src/stats/weapons.ts`, `PRICE` | Weapon and item store prices, for rebuilding equipment values in legacy logs | The game's store prices, the same source as the extractor's price file |
 | `app/src/stats/aim-ref.ts`, `MAX_SPEED` | Each weapon's maximum speed | `scripts/weapons.vdata_c`, decoded with Source2Viewer-CLI |
 | `app/src/stats/recoil.ts`, the cycle time and magazine per gun | Fire rate and magazine size | `scripts/weapons.vdata_c`. The spray patterns in the same file are measured from demos, not copied |
 | `app/src/ui/data/maps.ts`, `MAPS` (`posX`, `posY`, `scale`) | Each map's radar transform | The game's overview files, as copied in `data/radar_info/<map>.txt` of [MurkyYT/cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons), which declares no licence. Only these numbers come from it, and no images |
