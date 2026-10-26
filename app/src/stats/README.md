@@ -89,6 +89,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 
 ### Worker calls (`worker/protocol.ts` `Api`)
 
+Every metric in `meta().metrics` has `tip`, a tooltip of 12 words or fewer, beside the longer `def`.
 Views read engine numbers through the stats worker. Besides `rollup` (every metric's value in `v`, the event
 count behind each metric that declares one in `n`, and round swing by source in `swingSources`), `ratings`,
 `compare` (each `Percentile` carries that count as `n`), `attributes`, `style` (`firepower` is Firepower against
@@ -102,9 +103,10 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `opponents(q)` | Every metric against the opponents of the same matches, with a rank for performance metrics |
 | `winCorrelation(q, ids)` | Each metric's per-match correlation with winning |
 | `roles(q)` | The role blend on T and on CT, and `all`: the two weighted by their rounds (`identity.ts` `overallRole`) |
-| `rolesByMap(q)` | `roles(q)` for each map played, most rounds first |
-| `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`) |
-| `clutches(q)` | Every clutch by round |
+| `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |
+| `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`); each blend covers that spawn's rounds on its own map under every query filter |
+| `clutches(q)` | Every clutch by round, with the player's steamid (`player`) and their enemy kills after the clutch started (`kills`) |
+| `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
 
 Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
 and `m.tradedDeaths`.
