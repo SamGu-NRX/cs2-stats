@@ -28,10 +28,13 @@ export function matchCalls(each: EachMatch, summary: (q: Query) => Promise<Summa
       const spans = new Map<string, { start: number; end: number }>();
       const rows = new Map<string, { file: string; rating: number | null; kills: number; won: boolean | null }>();
       await each(q.files, (f, file) => {
+        // a match the filter keeps none of the player's rounds in (another map, outside the dates, a
+        // match without the player) is not part of any session, and does not bridge two of them
+        const s = rollup([f], q.filter);
+        if (!s.m.rounds) return;
         const start = startMs(f.match);
         spans.set(file, { start, end: start + 1000 * (f.match.durationS ?? 0) });
-        const s = rollup([f], q.filter);
-        rows.set(file, s.m.rounds ? { file, rating: rating3Of(s).value, kills: s.m.kills, won: matchWon(f, me) } : { file, rating: null, kills: 0, won: null });
+        rows.set(file, { file, rating: rating3Of(s).value, kills: s.m.kills, won: matchWon(f, me) });
       });
       const groups = groupSessions([...spans].map(([file, x]) => ({ file, ...x })), gapHours);
       return Promise.all(groups.map(async (files) => {

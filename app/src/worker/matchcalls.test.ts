@@ -34,3 +34,17 @@ it("keeps each match's own file when two files hold the same match id", async ()
   expect([session.files, session.kills, session.awards.mostKills]).toEqual([["a.json", "b.json"], 4, { file: "a.json", kills: 3 }]);
   expect((await calls.multiKills(q)).map((r) => [r.file, r.kills])).toEqual([["a.json", 3]]);
 });
+
+it("builds sessions from the matches the query's filters keep", async () => {
+  // fails if a filtered-out match joins a session or bridges two: with the Mirage match (20:00 to
+  // 20:30) the Dust2 matches at 18:00 and 23:00 sit 1.5 and 2.5 hours from it, one session; under a
+  // Dust2 filter they are 4.5 hours apart, two sessions. The match without player a is left out too
+  const z = oneRound({ players: { z: "CT", c: "T" } });
+  const calls = callsOver({
+    d1: match(1, "2026-10-24T18:00:00Z", "de_dust2"), m: match(1, "2026-10-24T20:00:00Z", "de_mirage"),
+    d2: match(2, "2026-10-24T23:00:00Z", "de_dust2"), none: { ...z, match: { ...z.match, map: "de_dust2", startedAt: "2026-10-24T21:00:00Z" } },
+  });
+  const sessions = await calls.sessions({ files: ["d1", "m", "d2", "none"], filter: { player: "a", maps: ["de_dust2"] } });
+  expect(sessions.map((s) => [s.files, s.kills, s.wins + s.losses + s.ties])).toEqual([[["d1"], 1, 1], [["d2"], 2, 1]]);
+  expect((await calls.sessions({ files: ["d1", "m", "d2"], filter: { player: "a" } })).map((s) => s.files)).toEqual([["d1", "m", "d2"]]);
+});

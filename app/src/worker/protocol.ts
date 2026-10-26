@@ -278,7 +278,7 @@ export interface Api {
   periodCompare(q: Query, current: Period, previous: Period): MetricDelta[];
   /** the best single-match value of every count and performance metric, with the match it came from */
   personalBests(q: Query): Best[];
-  /** the query's matches grouped into sessions split by a gap of `gapHours` (3 by default) between one match's end and the next one's start */
+  /** the query's matches with rounds its filter keeps, grouped into sessions split by a gap of `gapHours` (3 by default) between one match's end and the next one's start */
   sessions(q: Query, gapHours?: number): Session[];
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
