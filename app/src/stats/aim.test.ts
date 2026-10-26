@@ -153,6 +153,20 @@ describe("deriveAim on a hand-built match", () => {
     expect(hidden[0].dist).toBeNull();
   });
 
+  it("skips a spray bullet whose tick lacks finite coordinates, and gives no distance when none is left", () => {
+    // fails if a null or NaN coordinate mid-spray turns the distance into NaN: with bullet 2's tick
+    // missing V's x and bullet 3's holding a NaN, the distance is the mean of bullets 1 and 4
+    const t = match();
+    const T = t.engagement_ticks!;
+    const rowAt = (tick: number) => T.tick.findIndex((x, i) => x === tick && T.engagement_id[i] === 1);
+    T.v_x[rowAt(1106)] = null;
+    T.a_x[rowAt(1113)] = Number.NaN;
+    const s = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.hypot(3, 1.5)) / 2, 2);
+    for (const tick of [1100, 1106, 1113, 1119]) T.v_eye_z[rowAt(tick)] = Number.NaN;
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].dist).toBeNull();
+  });
+
   it("compares a spray with the pros' only while an enemy is on screen", () => {
     // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
     const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");

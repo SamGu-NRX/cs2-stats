@@ -825,18 +825,25 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     cur = t;
     if (run.slice(j).some((i) => hitOn.get(key(S.tick[i], pi))?.has(t))) swHits++;
   }
-  // Distance from bullet 1's target, per bullet while he is visible.
+  // Distance from bullet 1's target, per bullet while he is visible. A bullet whose angles or either
+  // player's position on its tick are not all finite numbers (a null or NaN in the tables) is skipped.
   const T = c.t.engagement_ticks, E = c.t.engagements;
+  const finite = (...xs: (number | null)[]) => xs.every((x) => x !== null && Number.isFinite(x));
   const angles: number[] = [];
   if (ps && target0 !== null) {
-    for (const i of run) if (ps.onScreen[i] && ps.err[i] && ps.target[i] === target0) angles.push(aimAngle(0, 0, [0, 0, 0], forward(ps.err[i]![1], ps.err[i]![0])));
+    for (const i of run) {
+      const e = ps.err[i];
+      if (ps.onScreen[i] && e && finite(e[0], e[1]) && ps.target[i] === target0) angles.push(aimAngle(0, 0, [0, 0, 0], forward(e[1], e[0])));
+    }
   } else if (!ps && view?.visible && T && E) {
     const t0 = aimedAt(c, view, run[0], pi, SIGHT_CONE_DEG)?.[0] ?? null;
     if (t0 !== null) for (const i of run) {
       const pitch = S.bullet_pitch[i] ?? S.pitch[i], yaw = S.bullet_yaw[i] ?? S.yaw[i];
-      if (pitch === null || yaw === null) continue;
       const row = (view.atTick.get(key(S.tick[i], pi)) ?? []).find((x) => seen(c, x) && c.idOf(E.victim_steamid[view.eng[x]]) === t0);
-      if (row !== undefined) angles.push(aimAngle(pitch, yaw, [T.a_x[row]!, T.a_y[row]!, T.a_eye_z[row]!], [T.v_x[row]!, T.v_y[row]!, T.v_eye_z[row]!]));
+      if (row === undefined) continue;
+      const eye = [T.a_x[row], T.a_y[row], T.a_eye_z[row]], head = [T.v_x[row], T.v_y[row], T.v_eye_z[row]];
+      if (!finite(pitch, yaw, ...eye, ...head)) continue;
+      angles.push(aimAngle(pitch!, yaw!, eye as [number, number, number], head as [number, number, number]));
     }
   }
   const dist = angles.length ? r3(angles.reduce((a, x) => a + x, 0) / angles.length) : null;
