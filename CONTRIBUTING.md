@@ -42,7 +42,7 @@ Each pull request runs these workflows. The job name is the status name on the p
 | `tests.yml` | Rust tests (cargo test --lib) | in `app/src-tauri/`: `cargo test --lib --locked`, on Windows |
 | `tests.yml` | Extractor tests (pytest) | in `extractor/`: `python -m pytest -q` |
 | `tests.yml` | Model tests (unittest) | `python -m unittest discover -s model/rating3 -p "test_*.py"` |
-| `tests.yml` | Plugin tests (dotnet test) | `dotnet test plugin/BotMatchStats.Tests` |
+| `tests.yml` | Plugin build and tests (dotnet) | `dotnet build plugin/BotMatchStats.csproj -c Release`, `dotnet test plugin/BotMatchStats.Tests` |
 | `hygiene.yml` | Check the public tree | `node scripts/check-public-tree.mjs` |
 
 A test that needs the private data folder or the packs must skip with a message saying what is missing, because CI has neither. No check is required by a branch rule yet. A green run shows that these suites passed, and nothing more.

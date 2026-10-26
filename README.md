@@ -61,7 +61,7 @@ CI runs all of these on every pull request (`.github/workflows/tests.yml`):
 (cd app/src-tauri && cargo test --lib --locked)
 (cd extractor && python -m pytest -q)
 python -m unittest discover -s model/rating3 -p "test_*.py"
-dotnet test plugin/BotMatchStats.Tests
+dotnet build plugin/BotMatchStats.csproj -c Release && dotnet test plugin/BotMatchStats.Tests
 node scripts/check-public-tree.mjs
 ```
 
