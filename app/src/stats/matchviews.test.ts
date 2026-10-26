@@ -161,6 +161,20 @@ describe("situations", () => {
     expect(of("b")).toEqual({ "2v2": { rounds: 1, won: 1 }, "1v2": { rounds: 1, won: 1 }, "1v1": { rounds: 1, won: 1 } });
     expect(of("c")).toEqual({ "2v2": { rounds: 1, won: 0 }, "2v1": { rounds: 1, won: 0 }, "1v1": { rounds: 1, won: 0 } });
   });
+
+  it("starts from the players alive at freeze end and counts disconnects in time order", () => {
+    // fails if a player the source marks dead at freeze end is counted, or a disconnect is ignored or
+    // applied out of order: e is dead at the start (CT 2v2, not 3v2); d disconnects alive at 1 s (2v1);
+    // c kills a at 2 s (1v1); b kills c, CT wins
+    const f = oneRound({
+      players: { a: "CT", b: "CT", e: "CT", c: "T", d: "T" }, player_rounds: { e: { alive_at_start: false } },
+      leaves: [{ tick: t(1), steamid: "d", alive: true }],
+      kills: [{ tick: t(2), killer: "c", victim: "a" }, { tick: t(3), killer: "b", victim: "c" }],
+    });
+    const out: Situations = {};
+    addSituations(out, f, { player: "b" });
+    expect(out).toEqual({ "2v2": { rounds: 1, won: 1 }, "2v1": { rounds: 1, won: 1 }, "1v1": { rounds: 1, won: 1 } });
+  });
 });
 
 describe("bombsites", () => {
