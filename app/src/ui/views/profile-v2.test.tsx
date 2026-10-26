@@ -70,23 +70,43 @@ describe("swing by source", () => {
 });
 
 describe("role", () => {
-  it("leads with the overall role and lists each map's overall, T and CT roles", () => {
-    // fails if the headline falls back to the two sides, or a map loses a side
-    const blend = (b: Record<string, number> | null, side: "T" | "CT") => ({ side, blend: b, evidence: [], rounds: 10, awp: null, loadoutRounds: 0 });
-    answers.roles = { T: blend({ Entry: 0.7, Lurker: 0.3 }, "T"), CT: blend({ Anchor: 0.6, Rotator: 0.4 }, "CT"), all: { blend: { Entry: 0.35, Anchor: 0.3, Lurker: 0.15, Rotator: 0.2 }, rounds: { T: 10, CT: 10 } } };
-    answers.rolesByMap = [{ map: "de_dust2", T: blend({ Lurker: 1 }, "T"), CT: blend(null, "CT"), all: { blend: { Lurker: 1 }, rounds: { T: 10, CT: 0 } } }];
+  /** A roles-v2 decision: a gated primary with its probability, or the top two, or neither with a reason. */
+  const side = (sideName: "T" | "CT", d: { primary?: string; probability?: number; top2?: [string, string]; reason?: string; dist?: Record<string, number | null> | null; cal?: Record<string, string> }) => ({
+    side: sideName, primary: d.primary ?? null, probability: d.probability ?? null, top2: d.top2 ?? null, reason: d.reason ?? null,
+    distribution: d.dist ?? null, blend: d.dist ?? null, calibrationStatus: d.cal ?? {}, metrics: [], evidence: [], rounds: 40, awp: null, loadoutRounds: 0, tips: {},
+  });
+  const overall = (d: Parameters<typeof side>[1]) => ({ ...side("T", d), rounds: { T: 40, CT: 40 } });
+
+  it("leads with the engine's overall decision, fit-labelled, and lists each map's overall, T and CT roles", () => {
+    // fails if the card infers a role from the distribution, drops the "fit" label on an uncalibrated share,
+    // or a map loses a side
+    answers.roles = {
+      T: side("T", { primary: "Entry", probability: 0.62, dist: { Entry: 0.62, Trader: 0.38 } }),
+      CT: side("CT", { top2: ["Anchor", "Rotator"], reason: "Anchor leads Rotator by 4 points.", dist: { Anchor: 0.45, Rotator: 0.41, AWPer: null } }),
+      all: overall({ primary: "Entry", probability: 0.31, dist: { Entry: 0.31 } }),
+    };
+    answers.rolesByMap = [{ map: "de_dust2", T: side("T", { primary: "Lurker", probability: 1 }), CT: side("CT", { reason: "12 of the 30 CT rounds a role needs." }), all: overall({ primary: "Lurker", probability: 1 }) }];
     render(<RoleCard q={Q} />);
     expect(text(host.querySelector(".role__name"))).toBe("Entry");
-    expect(text(host.querySelector(".role__overall .meta"))).toBe("35% of all rounds");
+    expect(text(host.querySelector(".role__overall .meta"))).toBe("31% fit over all rounds");
+    // CT's lead is narrow: "A / B" with the tag, no share
+    const ct = Array.from(host.querySelectorAll(".rfit")).find((el) => text(el.querySelector(".rfit__side")) === "CT")!;
+    expect(text(ct.querySelector(".rfit__role"))).toBe("Anchor / RotatorNarrow lead");
+    expect(text(ct.querySelector(".rfit__pct"))).toBe("");
+    // the unknown AWPer share is null: no segment, rather than a 0% one
+    expect(Array.from(ct.querySelectorAll(".rfit__bar i")).map((el) => el.getAttribute("aria-label"))).toEqual(["Anchor 45% fit.", "Rotator 41% fit."]);
     const cells = Array.from(host.querySelectorAll(".rmaps--all li > *")).map(text);
     expect(cells).toEqual(["Dust II", "Lurker100%", "T", "Lurker100%", "CT", "–"]);
+    expect(host.querySelector(".rmaps--all .faint")!.getAttribute("data-tip")).toBe("12 of the 30 CT rounds a role needs.");
   });
 
-  it("shows no overall headline when neither side has a blend", () => {
-    const blend = (side: "T" | "CT") => ({ side, blend: null, evidence: [], rounds: 3, awp: null, loadoutRounds: 0 });
-    answers.roles = { T: blend("T"), CT: blend("CT"), all: { blend: null, rounds: { T: 3, CT: 3 } } };
+  it("says why when the engine withholds the overall role, and never shows Mixed", () => {
+    answers.roles = { T: side("T", { reason: "Too few rounds." }), CT: side("CT", { reason: "Too few rounds." }), all: overall({ reason: "Too few rounds on either side." }) };
+    answers.rolesByMap = [];
     render(<RoleCard q={Q} />);
-    expect(host.querySelector(".role__overall")).toBeNull();
+    expect(host.querySelector(".role__name")).toBeNull();
+    expect(text(host.querySelector(".role__overall"))).toBe("Too few rounds on either side.");
+    expect(host.textContent).not.toContain("Mixed");
   });
 });
 

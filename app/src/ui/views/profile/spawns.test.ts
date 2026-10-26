@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { RoleBlend } from "../../../stats/identity";
 import { groupSpawns, SPAWN_MIN_ROUNDS, SPAWN_TOP } from "./spawns";
 
 let n = 0;
 /** One engine spawn row: a fresh spawn id each time, as the engine lists each spawn point once. */
 function row(side: "T" | "CT", position: string | null, place: string | null, rounds: number, blend: Record<string, number> | null) {
-  return { spawn: `s${++n}`, map: "de_dust2", side, place, position, rounds, blend: { side, blend, evidence: [], rounds, awp: null, loadoutRounds: 0 } };
+  const decision = { side, primary: null, probability: null, top2: null, reason: null, distribution: blend, blend, calibrationStatus: {}, metrics: [], evidence: [], rounds, awp: null, loadoutRounds: 0, tips: {} as RoleBlend["tips"] };
+  return { spawn: `s${++n}`, map: "de_dust2", side, place, position, rounds, blend: decision };
 }
 
 describe("groupSpawns", () => {
