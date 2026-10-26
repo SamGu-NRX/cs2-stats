@@ -20,8 +20,11 @@ a habit a player has than the pool. Status is **exact** (a direct count, or chec
 | Enemy kill | Killer and victim on different sides at the kill, including kills after the round ended | HLTV's K (VALIDATION.md) |
 | Death | Every death except a suicide after the round ended | HLTV's D (VALIDATION.md) |
 | Hit damage (ADR) | The hurt event's damage, capped at the victim's health before the hit. A hit the extractor rebuilt from a health drop uses the health removed. | HLTV's figure; the game's own scoreboard counts health removed instead |
-| Trade | A kill on a player who killed one of the killer's teammates within 5.4 s; it trades only the earliest such death | Window and pairing chosen against HLTV's traded deaths and KAST |
-| Opening duel | The round's first enemy kill | HLTV's Op.K-D |
+| Round played | A round counts for a player with a side unless the source marks them dead at freeze end (plugin `alive0`) or they disconnected at or before freeze end (`rules.ts` `onRoster`). Off the roster, the round is in none of their rates, KAST or totals. A player killed at or before freeze end stays on it: HLTV counts that round and that death (the gate map astral-vs-iberian-soul m1-cache has one, from the bomb of the round before) | HLTV's rounds where it shows; ours for the plugin's flags and disconnects |
+| Live round | From freeze end to the round's end. Clutches, last alive, saves and the man-advantage states start from the players on the roster who were not killed at or before freeze end (`roundPopulation`) | Ours |
+| Disconnect | A living player who disconnected in the live round played it but did not survive it: no survival, no KAST by survival, no save, and their time alive and alive-at-plant stop at the disconnect | Ours |
+| Trade | A kill on a player who killed one of the killer's teammates within 5.4 s; it trades only the earliest such death. Kills before freeze end neither trade nor are traded | Window and pairing chosen against HLTV's traded deaths and KAST |
+| Opening duel | The live round's first enemy kill; a kill before freeze end is no duel (nobody can shoot then: the ones in the data are suicides and the bomb of the round before) | HLTV's Op.K-D |
 | Buy class | Team equipment at freeze end per player: under $1,000 eco, $3,250 or more full, half in between; the first round of each regulation half is pistol | The bands of HLTV's round labels (VALIDATION.md) |
 | AWPer comparison pool | Above 0.20 AWP kills per round, independent of the identity distribution | `compare.ts`, `roleOf`; existing performance-pool rule |
 | AWPer identity share | Measured AWP rounds: the share of recorded freeze-end loadouts carrying an AWP. Missing loadouts give `awp: null` and zero AWPer mass, not a measured zero. No softmax or calibration changes known AWP mass. | `identity.ts`; `role-thresholds.ts` retains a separate hand-chosen 20% display tick |
@@ -82,7 +85,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | firstDuelRank | First Duel Rank in Team | approx | Your place among teammates in first dealing or taking enemy damage, averaged |
 | firstDuelTime | First Duel Time | approx | Seconds after freeze end of that first damage |
 | weaponAttacks | Weapon Attacks per Round | approx | Gun shots fired per round |
-| timeAlive | Time Alive per Round | exact | Freeze end to your death or the round end |
+| timeAlive | Time Alive per Round | exact | Freeze end to your death, your disconnect or the round end |
 | alivePostPlant | Alive for Post-Plant % | approx | Planted rounds where you were alive at the plant |
 | lastAlive | Last Alive in Team | approx | Rounds where you were at some moment the only one of your side alive, a teammate's mid-round disconnect counting as a death. Before any death this reads the round's rows, so it counts only when they are a freeze-end snapshot; in a round recorded live it starts with a death, as clutches do |
 | clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection, with the alive counts read at freeze end as well as after each death and each mid-round disconnect of a living player, so a side that starts a round with one player is in a clutch before any kill and a disconnect can start one; a player the source marks dead at freeze end, or who disconnected at or before it, is not counted) |

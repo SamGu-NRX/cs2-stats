@@ -22,10 +22,11 @@ export function markTrades(kills: KillFact[], tickRate: number): void {
   const window = TRADE_WINDOW_S * tickRate;
   for (let b = 0; b < kills.length; b++) {
     const later = kills[b];
-    if (!later.enemy) continue;
+    if (!later.enemy || !liveKill(later)) continue;
     for (let a = 0; a < b; a++) {
       const earlier = kills[a];
-      if (!earlier.enemy || earlier.killer !== later.victim || earlier.victimSide !== later.killerSide) continue;
+      // a kill before freeze end is no trade and cannot be traded (see onRoster)
+      if (!earlier.enemy || !liveKill(earlier) || earlier.killer !== later.victim || earlier.victimSide !== later.killerSide) continue;
       if (later.tick - earlier.tick <= window) {
         later.tradeKill = true;
         earlier.traded = true;
@@ -35,17 +36,18 @@ export function markTrades(kills: KillFact[], tickRate: number): void {
   }
 }
 
-/** The opening duel: the round's first enemy kill. */
+/** The opening duel: the live round's first enemy kill (a kill before freeze end is none; see onRoster). */
 export function markOpening(kills: KillFact[]): void {
-  const first = kills.find((k) => k.enemy);
+  const first = kills.find((k) => k.enemy && liveKill(k));
   if (first) first.opening = true;
 }
 
 /**
- * KAST for one player in one round: an enemy kill, a damage assist on an enemy kill, survival, or a
- * traded death. HLTV leaves flash assists out (VALIDATION.md).
+ * KAST for one player in one round on their roster: an enemy kill, a damage assist on an enemy kill,
+ * survival, or a traded death. HLTV leaves flash assists out (VALIDATION.md). Only a live kill is ever
+ * traded (markTrades). A player who disconnected in the live round (`left`) did not survive it.
  */
-export function kastRound(kills: KillFact[], pi: number): boolean {
+export function kastRound(kills: KillFact[], pi: number, left: boolean): boolean {
   let died = false;
   for (const k of kills) {
     if (k.enemy && (k.killer === pi || (k.assister === pi && !k.flashAssist))) return true;
@@ -54,7 +56,7 @@ export function kastRound(kills: KillFact[], pi: number): boolean {
       if (k.traded) return true;
     }
   }
-  return !died;
+  return !died && !left;
 }
 
 export interface Clutch {
@@ -69,32 +71,59 @@ export interface Clutch {
   tick: number | null;
 }
 
+// ---------------------------------------------------------------- who took part in a round
+//
+// One rule for every stat that assumes a player took part, in three parts:
+// - on the roster (onRoster): the round counts for the player (rounds played, won and lost, the
+//   denominators of every per-round rate and of KAST). Off it when the source marks them dead at freeze
+//   end (player_rounds.alive_at_start, plugin files; README.md "Fields the app reads") or when they
+//   disconnected at or before freeze end: they never played the round. A player killed at or before
+//   freeze end stays on it: the death is that round's, and HLTV counts both the round and the death
+//   (astral-vs-iberian-soul m1-cache, a gate map in hltv-exact.test.ts, has one, from the bomb of the
+//   round before, and matches HLTV exactly on deaths and KAST).
+// - in the live round (roundPopulation): on the roster and not killed at or before freeze end. The
+//   clutch, last-alive and man-advantage counts start from these players.
+// - the live round's events (afterFreezeEnd, liveKill): kills and disconnects after freeze end. Only
+//   these make an opening duel or a trade, or start a clutch. A kill before freeze end is not a duel
+//   (nobody can shoot then; the ones in the data are suicides and the bomb of the round before), but it
+//   still counts in K, D and assists, as the game and HLTV count it, and so in KAST's kill and assist.
+//   A disconnect in the live round ends the player's round alive but not surviving it: no survival,
+//   no KAST by survival, and their time alive stops there.
+// A round without a freeze end has no such cut: all of its kills and disconnects are live.
+
+/** A tick in the live round's span from freeze end on (any tick for a round without a freeze end). */
+export const afterFreezeEnd = (rf: Pick<RoundFact, "freezeEndTick">, tick: number) => rf.freezeEndTick === null || tick > rf.freezeEndTick;
+
+/** A kill in the live round, read from the kill itself (KillFact.t is seconds since freeze end; null without one). */
+export const liveKill = (k: Pick<KillFact, "t">) => k.t === null || k.t > 0;
+
+/** The round counts for a player with a side: see the rule above. */
+export function onRoster(rf: Pick<RoundFact, "freezeEndTick" | "leaves">, pi: number, aliveAtStart: boolean | null): boolean {
+  return aliveAtStart !== false && !rf.leaves.some((l) => l.pi === pi && !afterFreezeEnd(rf, l.tick));
+}
+
+/** The live round's disconnects of living players: after freeze end, up to the round's end. */
+export const liveLeaves = (rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">) => rf.leaves.filter((l) => afterFreezeEnd(rf, l.tick) && l.tick <= rf.endTick);
+
 /**
- * A round's population: the players alive at its freeze end, by side, and the deaths and disconnects
- * of the live round, after freeze end and up to its end. A player is left out when the source marks
- * them dead at freeze end (player_rounds.alive_at_start, plugin files; README.md "Fields the app
- * reads"), or when they died or disconnected at or before freeze end, whatever that flag says (it is
- * null in files without it). A round without a freeze end has no such cut: all of its deaths and
- * disconnects up to its end are live. Clutches, saves and last alive (closing.ts) and the
- * man-advantage states (matchviews.ts addSituations) all read this, so no view counts a player, or a
- * death, that another leaves out.
+ * A round's population: the players in the live round, by side (on the roster and not killed at or
+ * before freeze end), with the live round's deaths, up to its end, and disconnects. Clutches, saves and
+ * last alive (closing.ts) and the man-advantage states (matchviews.ts addSituations) all read this, so
+ * no view counts a player, or a death, that another leaves out.
  */
 export function roundPopulation(
   rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">,
   rows: Iterable<{ pi: number; side: Side; aliveAtStart: boolean | null } | null>,
   kills: readonly KillFact[],
 ): { alive: Record<Side, Set<number>>; inRound: (pi: number) => boolean; deaths: KillFact[]; leaves: { tick: number; pi: number }[] } {
-  const fe = rf.freezeEndTick;
-  const early = (tick: number) => fe !== null && tick <= fe;
-  const live = (tick: number) => !early(tick) && tick <= rf.endTick;
-  const gone = new Set([...rf.leaves.filter((l) => early(l.tick)).map((l) => l.pi), ...kills.filter((k) => early(k.tick)).map((k) => k.victim)]);
+  const killedEarly = new Set(kills.filter((k) => !afterFreezeEnd(rf, k.tick)).map((k) => k.victim));
   const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-  for (const r of rows) if (r && r.aliveAtStart !== false && !gone.has(r.pi)) alive[r.side].add(r.pi);
+  for (const r of rows) if (r && onRoster(rf, r.pi, r.aliveAtStart) && !killedEarly.has(r.pi)) alive[r.side].add(r.pi);
   const members = new Set([...alive.CT, ...alive.T]);
   return {
     alive, inRound: (pi) => members.has(pi),
-    deaths: kills.filter((k) => live(k.tick)).sort((a, b) => a.tick - b.tick),
-    leaves: rf.leaves.filter((l) => live(l.tick)),
+    deaths: kills.filter((k) => afterFreezeEnd(rf, k.tick) && k.tick <= rf.endTick).sort((a, b) => a.tick - b.tick),
+    leaves: liveLeaves(rf),
   };
 }
 

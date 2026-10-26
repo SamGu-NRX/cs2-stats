@@ -3,7 +3,7 @@
 // hltv-exact.test.ts and VALIDATION.md; the rest state their own definition.
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import { SWING_TRADE_WINDOW_S } from "./rating3";
-import { kastRound } from "./rules";
+import { kastRound, liveLeaves } from "./rules";
 
 /** "Saved a teammate": killing an enemy who had hit that teammate in the last 2 s, while the teammate lives. Our window. */
 export const SAVE_WINDOW_S = 2;
@@ -44,6 +44,8 @@ export function scoreboard(c: Ctx): void {
       }
     }
     const window = SWING_TRADE_WINDOW_S * tr;
+    // players who disconnected in the live round: their round ends there, alive but not surviving it
+    const left = new Set(liveLeaves(c.rounds[ri]).map((l) => l.pi));
     for (const p of c.pr[ri]) {
       if (!p) continue;
       const m = p.m;
@@ -75,8 +77,8 @@ export function scoreboard(c: Ctx): void {
       m.dmg = dealt.get(p.pi) ?? 0;
       m.dmgTaken = taken.get(p.pi) ?? 0;
       m.teamDmg = teamDealt.get(p.pi) ?? 0;
-      m.kast = kastRound(list, p.pi) ? 1 : 0;
-      m.survived = list.some((k) => k.victim === p.pi) ? 0 : 1;
+      m.kast = kastRound(list, p.pi, left.has(p.pi)) ? 1 : 0;
+      m.survived = list.some((k) => k.victim === p.pi) || left.has(p.pi) ? 0 : 1;
       if (m.kills > 0) m.killRounds = 1;
       else if (m.kast) {
         // the first of A, S, T that earned the round (K is killRounds)

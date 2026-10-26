@@ -15,7 +15,7 @@ import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
 import { ecoAdjust, valuedRounds } from "./rating3";
 import { positioning } from "./positioning";
-import { markOpening, markTrades } from "./rules";
+import { markOpening, markTrades, onRoster } from "./rules";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
 import { swing } from "./swing";
@@ -340,6 +340,8 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
     const side = c.side[rf.ri][p];
     if (!side) return null;
     const i = row.get(rf.ri * 1024 + p);
+    // a player off the round's roster has no row: the round counts for nothing of theirs (rules.ts onRoster)
+    if (!onRoster(rf, p, i === undefined ? null : t.alive_at_start[i])) return null;
     const m = emptyMeasures();
     m.rounds = 1;
     const won = rf.winner === null ? null : rf.winner === side;
