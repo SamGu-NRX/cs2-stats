@@ -37,3 +37,16 @@ it("reads one round's places from the tables", () => {
   });
   expect(roundPlaces(t, 1, "a")).toEqual({ Mid: 0.25 });
 });
+
+it("reads from and to as days in the user's time zone, and a date-only source as its date", () => {
+  // fails if the bounds compare the UTC day: 00:06:42 UTC on 25 October is 19:06 on 24 October in
+  // America/Chicago, so the match counts on the 24th there and on the 25th in UTC. A source with only
+  // the date 2026-10-25 has no clock time to move, so it counts on the 25th in any zone
+  const f = oneRound({ players: { a: "CT", c: "T" } });
+  const at = (startedAt: string | null) => ({ ...f, match: { ...f.match, startedAt, date: "2026-10-25" } });
+  const kept = (g: typeof f, day: string, timeZone: string) => rollup([g], { player: "a", from: day, to: day, timeZone }).m.rounds;
+  const late = at("2026-10-25T00:06:42Z");
+  expect([kept(late, "2026-10-24", "America/Chicago"), kept(late, "2026-10-25", "America/Chicago"), kept(late, "2026-10-25", "UTC")]).toEqual([1, 0, 1]);
+  const dateOnly = at(null);
+  expect([kept(dateOnly, "2026-10-25", "America/Chicago"), kept(dateOnly, "2026-10-24", "America/Chicago")]).toEqual([1, 0]);
+});

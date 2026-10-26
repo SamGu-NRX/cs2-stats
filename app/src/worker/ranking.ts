@@ -51,11 +51,11 @@ export function sideQuery(q: Query, side: SideKey): Query {
 // ---------------------------------------------------------------- bot careers
 
 /**
- * The match-level part of a filter (maps and dates), which bot careers share with the user's query.
+ * The match-level part of a filter (maps, and dates with their time zone), which bot careers share with the user's query.
  * Player, side and round-level filters are the user's own and do not narrow the population.
  */
 export function careerScope(f: Filter): Omit<Filter, "player"> {
-  return { ...(f.maps && { maps: f.maps }), ...(f.from && { from: f.from }), ...(f.to && { to: f.to }) };
+  return { ...(f.maps && { maps: f.maps }), ...(f.from && { from: f.from }), ...(f.to && { to: f.to }), ...(f.timeZone && { timeZone: f.timeZone }) };
 }
 
 type Sided = Record<SideKey, Summary>;
