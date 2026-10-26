@@ -5,7 +5,7 @@ import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
 import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
 import type { Careers } from "../../worker/protocol";
-import { roundSwing, sideOf, type MatchModel, type MRound } from "../data/match";
+import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
 import { BUY_LABEL, BuyIcon, SkullIcon, WIN_LABEL } from "../icons/game";
 import { GameKillFlags, GameWeapon, RoundEndIcon } from "./match/glyphs";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
@@ -159,6 +159,29 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
         {you !== null && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(you)) }}>{fmtSwing(you)}</b></span>}
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
         <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The hover card of a round the file holds only as totals (MatchInfo.totalsOnly): its number, the
+ * winner when the totals name a side, and your recorded kills and deaths; a dash where the file
+ * holds nothing.
+ */
+export function TotalsCardBody({ v, col }: { v: MatchModel; col: Extract<RoundColumn, { kind: "totals" }> }) {
+  const w = totalsWinner(v, col);
+  const you = col.totals?.players.find((p) => p.pi === v.human) ?? null;
+  return (
+    <div className="rcard">
+      <div className="rcard__head">
+        <b>Round {col.number}</b>
+        <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}</span>
+      </div>
+      <p className="meta">Totals only for this round.</p>
+      <div className="rcard__foot">
+        <span>You <b className="num">{you ? `${you.kills}–${you.deaths}` : "–"}</b></span>
+        <span>Damage <b className="num">{you ? you.dmg : "–"}</b></span>
       </div>
     </div>
   );

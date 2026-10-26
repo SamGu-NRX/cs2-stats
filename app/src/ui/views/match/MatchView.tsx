@@ -62,7 +62,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
       ) : (
         <>
           <Hero s={s} v={v} />
-          <Sticky v={v} file={file} tab={tab} round={round} />
+          <Sticky v={v} file={file} tab={tab} selected={n} />
           <div className="match__panel" id="match-panel" role="tabpanel" aria-label={MATCH_TAB_LABEL[tab]}>
             {!v ? <TabSkeleton tab={tab} /> : (
               <Suspense fallback={<TabSkeleton tab={tab} />}>
@@ -157,7 +157,8 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
   );
 }
 
-function Sticky({ v, file, tab, round }: { v: MatchModel | null; file: string; tab: MatchTab; round: number | null }) {
+/** selected: the URL's round number, which may name a round held only as totals */
+function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string; tab: MatchTab; selected: number | null }) {
   const tabs = useRef<HTMLDivElement>(null);
   const [ul, setUl] = useState<{ x: number; w: number; instant: boolean } | null>(null);
   const first = useRef(true);
@@ -167,10 +168,10 @@ function Sticky({ v, file, tab, round }: { v: MatchModel | null; file: string; t
     setUl({ x: el.offsetLeft, w: el.offsetWidth, instant: first.current || navWasInstant() });
     first.current = false;
   }, [tab]);
-  const pick = (ri: number) => v && go(matchHref(file, "rounds", { round: v.rounds[ri].number }));
+  const pick = (number: number) => go(matchHref(file, "rounds", { round: number }));
   return (
     <div className="msticky">
-      {v ? <div className="msticky__rail"><RoundRail v={v} selected={round} onPick={pick} /></div> : <div className="skel" style={{ height: 70, margin: "8px var(--gutter)" }} />}
+      {v ? <div className="msticky__rail"><RoundRail v={v} selected={selected} onPick={pick} /></div> : <div className="skel" style={{ height: 70, margin: "8px var(--gutter)" }} />}
       <div className="mtabs" role="tablist" aria-label="Match sections" ref={tabs}>
         {ul && <i className={`mtabs__ul ${ul.instant ? "is-instant" : ""}`} style={{ width: ul.w, transform: `translateX(${ul.x}px)` }} aria-hidden />}
         {MATCH_TABS.map((t, n) => {
@@ -182,7 +183,7 @@ function Sticky({ v, file, tab, round }: { v: MatchModel | null; file: string; t
               role="tab"
               aria-selected={t === tab}
               aria-controls="match-panel"
-              href={matchHref(file, t, v && round !== null && t === "rounds" ? { round: v.rounds[round].number } : undefined)}
+              href={matchHref(file, t, selected !== null && t === "rounds" ? { round: selected } : undefined)}
               className={`mtab ${disabled ? "is-dim" : ""}`}
               data-tip={`Alt ${n + 1}${disabled ? (t === "aim" ? `: ${NEEDS_DEMO.toLowerCase()}` : ": no positions in this match") : ""}`}
             >

@@ -143,7 +143,7 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
           {stat("KAST", fmtPct(line.kast), line.kast, avg?.kast, (x) => fmtPct(x), 10, (x) => `${x.toFixed(1)}%`)}
           {stat("HS%", fmtPct(line.hs), line.hs, avg?.hs, (x) => fmtPct(x), 15, (x) => `${x.toFixed(1)}%`)}
         </div>
-        {v && <div className="hero__rail"><RoundRail v={v} compact selected={null} onPick={(ri) => openMatch(matchHref(s.file, "rounds", { round: v.rounds[ri].number }))} /></div>}
+        {v && <div className="hero__rail"><RoundRail v={v} compact selected={null} onPick={(number) => openMatch(matchHref(s.file, "rounds", { round: number }))} /></div>}
         <div className="hero__actions">
           <button className="btn btn--primary press" onClick={(e) => openMatch(matchHref(s.file), e.currentTarget.closest(".hero"))}>Open match <ChevronRightIcon size={14} /></button>
           <a className="btn btn--ghost" href={matchHref(s.file, "rounds")}>Rounds</a>
