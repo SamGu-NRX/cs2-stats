@@ -232,8 +232,9 @@ def cs2_running() -> bool:
     return False
 
 
-def free_gb(path: Path = DATA_ROOT) -> float:
-    return shutil.disk_usage(path).free / 1e9
+def free_gb(path: Path | None = None) -> float:
+    # DATA_ROOT is read at call time, not bound as a default, so tests that move it are measured there
+    return shutil.disk_usage(path or DATA_ROOT).free / 1e9
 
 
 def tree_bytes(path: Path) -> int:
