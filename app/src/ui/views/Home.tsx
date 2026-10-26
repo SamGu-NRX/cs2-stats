@@ -381,17 +381,19 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 
 /** Profile's hero card stats: a Work on item for one of them opens the card. */
 const CARD_STATS = new Set(["kpr", "dpr", "adr", "kast", "mk", "swing"]);
+/** The aim metrics Career aim renders (CareerAim.tsx trends, views/aim/AimPanels.tsx); other aim metrics have no place yet. */
+const CAREER_AIM = new Set(["accuracy", "firstBulletAccuracy", "counterStrafe", "sightAccuracy", "crosshairPlacement", "flickOvershoot", "microCorrections", "reactionTime", "timeToDamage", "timeToShot", "trackingError", "transferHits"]);
 /** Metrics the latest match's Utility tab shows (views/match/Utility.tsx). */
 const UTILITY_TAB = new Set(["enemiesPerFlash", "blindPerFlash", "teamFlashPR", "utilDmgPR", "fireDmgPR"]);
 
 /**
- * Where a Work on item opens: the place that shows the metric. Aim metrics are Career aim's; Firepower's
+ * Where a Work on item opens: the place that shows the metric. The aim metrics Career aim renders are its; Firepower's
  * metrics are its card; How good's rows, the hero card's stats and opening duel success have their
  * Profile sections; headshot kills are Weapons' per-gun column; the flash and utility-damage figures
  * are the latest match's Utility tab. Null for a metric nothing shows, which Work on never recommends.
  */
 export function workOnHref(m: { id: string; group: string }, latest: string | null): string | null {
-  if (m.group === "aim") return pageHref("aim");
+  if (CAREER_AIM.has(m.id)) return pageHref("aim");
   if (m.group === "firepower") return sectionHref("profile", "firepower");
   if (HOW_GOOD.includes(m.id)) return sectionHref("profile", "howgood");
   if (CARD_STATS.has(m.id)) return sectionHref("profile", "card");

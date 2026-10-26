@@ -22,7 +22,8 @@ import { weaponLabel } from "../../stats/weapons";
 import type { ClutchRow, Method, Query } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { botPopulation as botPopulationText, careerEntries, provisionalText, statLine } from "../data/engine";
+import { botPopulation as botPopulationText, careerEntries, listedEntries, provisionalText, recordEntries, statLine } from "../data/engine";
+import { tipOf } from "../data/tips";
 import { matchModel, type MatchEntry, type MatchModel } from "../data/match";
 import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -314,19 +315,18 @@ describe("section links", () => {
 });
 
 describe("Matches", () => {
-  it("leaves out a match that ended before any round was won, and keeps the other unfinished ones", () => {
-    // fails if a 0:0 match is listed, or an unfinished match with rounds played disappears
+  it("leaves out a recording with no round won and no kill, and keeps a winnerless match with kills", () => {
+    // fails if a 0:0 recording with nothing in it is listed, or a 0:0 with logged rounds and kills disappears
     use(samples);
-    // one match that ended 0:0, made from a sample so the case is always present
     const base = samples[0].entry;
-    data = { ...data, matches: [...data.matches, { ...base, file: "samples/zero.json.gz", score: { us: 0, them: 0 }, match: { ...base.match, complete: false } }] };
-    const zero = data.matches.filter((e) => e.score.us + e.score.them === 0);
-    expect(zero.length).toBeGreaterThan(0);
-    const unfinished = data.matches.filter((e) => !e.match.complete && e.score.us + e.score.them > 0);
+    const empty = { ...base, file: "samples/empty.json.gz", score: { us: 0, them: 0 }, kills: 0, activity: false, match: { ...base.match, complete: false } };
+    const winnerless = { ...base, file: "samples/winnerless.json.gz", score: { us: 0, them: 0 }, kills: 30, activity: true, match: { ...base.match, complete: true } };
+    const damageOnly = { ...base, file: "samples/damage-only.json.gz", score: { us: 0, them: 0 }, kills: 0, activity: true, match: { ...base.match, complete: false } };
+    data = { ...data, matches: [...data.matches, empty, winnerless, damageOnly] };
     render(<MatchesView />);
+    expect(host.querySelectorAll("tbody tr").length).toBe(data.matches.length - 1);
+    const unfinished = data.matches.filter((e) => !e.match.complete && e.score.us + e.score.them > 0);
     const listed = text(host.querySelector("tbody"));
-    const shown = host.querySelectorAll("tbody tr").length;
-    expect(shown).toBe(data.matches.length - zero.length);
     for (const e of unfinished) expect(listed).toContain(`${e.score.us}:${e.score.them}`);
   });
 });
@@ -433,19 +433,38 @@ describe("review round 1 (PR #28)", () => {
 });
 
 describe("review round 2 (PR #28)", () => {
-  it("gives every recommendable Work on metric a place that shows it, and recommends none without one", () => {
-    // fails if a recommendation opens a page or section that does not show its metric (the old ?sec=performance fallback)
+  it("opens every recommendable Work on metric where it is actually shown, and recommends none without a place", async () => {
+    // fails if a recommendation opens a page or section that does not render its metric: the old
+    // ?sec=performance fallback, or Career aim for aim metrics it never draws (time to kill, pre-aim)
     use(samples);
-    render(<ProfileView />);
+    const career = careerEntries(data.matches, null);
+    const q = queryOf(samples.filter((x) => career.some((e) => e.file === x.file)));
     const perf = metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable");
-    const latest = careerEntries(data.matches, null)[0].file;
+    const latest = career[0].file;
     const dest = new Map(perf.map((m) => [m.id, workOnHref(m, latest)]));
-    for (const id of ["tradeAttemptPct", "flashKillsPerFlash", "utilUnused"]) expect(dest.get(id), id).toBeNull();
-    for (const [id, href] of dest) {
-      if (!href) continue;
+    for (const id of ["tradeAttemptPct", "flashKillsPerFlash", "utilUnused", "timeToKill", "crosshairMoved", "preAim"]) expect(dest.get(id), id).toBeNull();
+    // a metric is shown where its label is drawn, or where an element's tooltip is its own
+    const shows = (root: Element | null, id: string) => !!root && (text(root).includes(metric(id).label)
+      || Array.from(root.querySelectorAll("[data-tip]")).some((el) => { const t = el.getAttribute("data-tip") ?? ""; return (!!tipOf(id) && t.includes(tipOf(id)!)) || t.includes(metric(id).def); }));
+    const byPage = new Map<string, string[]>();
+    for (const [id, href] of dest) if (href) byPage.set(href, [...(byPage.get(href) ?? []), id]);
+    answers.compare = await calls.compare(q, { side: "both" });
+    answers.attributes = await calls.attributes(q, { side: "both" });
+    for (const [href, ids] of byPage) {
       const sec = /^#\/profile\?sec=(\w+)$/.exec(href)?.[1];
-      if (sec) expect(host.querySelector(`#${sec}`), `${id} -> ${href}`).not.toBeNull();
-      else expect(href, id).toMatch(/^#\/(aim|weapons|match\/.+\/utility)$/);
+      if (sec) render(<ProfileView />);
+      else if (href === "#/aim") {
+        // the sighting timings draw once the files carry visibility; without it they are not ranked, so never recommended
+        const saved = data;
+        data = { ...data, matches: data.matches.map((e) => ({ ...e, match: { ...e.match, visibility: "ok" } })) };
+        render(<CareerAim />);
+        data = saved;
+      }
+      else if (href === "#/weapons") render(<Weapons />);
+      else if (href.endsWith("/utility")) { const v = modelOf(samples.find((x) => x.file === latest)!); render(<Utility v={v} file={v.file} round={null} />); }
+      else throw new Error(`no view for ${href}`);
+      const root = sec ? host.querySelector(`#${sec}`) : host;
+      for (const id of ids) expect(shows(root, id), `${id} on ${href}`).toBe(true);
     }
   });
 
@@ -475,11 +494,26 @@ describe("review round 2 (PR #28)", () => {
     expect(text(card.querySelector(".card__aside"))).toContain(`style against ${botPopulationText(style.careers, { n: style.n, role: "all" }).text}`);
   });
 
-  it("leaves a 0:0 match out of the career even when it is marked complete", () => {
-    // fails if the list rule and the career rule disagree about a match with no round won
-    const base = samples[0].entry;
-    const zero = { ...base, file: "samples/zero-complete.json.gz", score: { us: 0, them: 0 }, match: { ...base.match, complete: true } };
-    expect(careerEntries([zero], null)).toHaveLength(0);
+  it("counts a winnerless match with logged rounds and kills, and keeps it out of W–L", () => {
+    // Sol's case: 24 logged rounds, 30 kills, round winners unknown (0:0). It is a real match: listed and
+    // in the career, but its result is unknown, so it is no draw in the record. An empty 0:0 is in neither.
+    const base = samples.find((x) => careerEntries([x.entry], null).length === 1)!.entry;
+    const winnerless = { ...base, file: "samples/winnerless.json.gz", score: { us: 0, them: 0 }, kills: 30, activity: true, match: { ...base.match, complete: true, nRounds: 24, roundsPlayed: 24 } };
+    const empty = { ...winnerless, file: "samples/empty.json.gz", kills: 0, activity: false };
+    expect(listedEntries([winnerless, empty], null).map((e) => e.file)).toEqual([winnerless.file]);
+    expect(careerEntries([winnerless, empty], null).map((e) => e.file)).toEqual([winnerless.file]);
+    expect(recordEntries([winnerless, empty])).toHaveLength(0);
+  });
+
+  it("marks a match active on a completed round, a kill or a damage event, and nothing else", () => {
+    // fails if entryOf misses damage-only recordings or calls an empty one active
+    const s = samples[0];
+    const f = s.facts;
+    const stripped = { ...f, rounds: f.rounds.map((r) => ({ ...r, winner: null })), kills: [], pr: f.pr.map((r) => ({ ...r, m: {} })) };
+    expect(entryOf(s.file, s.entry.origin, f).activity).toBe(true);
+    expect(entryOf(s.file, s.entry.origin, stripped).activity).toBe(false);
+    const damaged = { ...stripped, pr: stripped.pr.map((r, i) => (i === 0 ? { ...r, m: { dmg: 12 } } : r)) };
+    expect(entryOf(s.file, s.entry.origin, damaged).activity).toBe(true);
   });
 });
 
