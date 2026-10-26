@@ -10,7 +10,7 @@ import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
 import {
-  careerEntries, entryLine, entryRating, isFinished, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
+  careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
 } from "../data/engine";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { startMs, type MatchEntry } from "../data/match";
@@ -130,7 +130,11 @@ export function MatchesView() {
                       <MapThumb map={s.match.map} size={26} />
                       <span className="two">
                         <b data-vt="map">{mapName(s.match.map)}</b>
-                        {src.id !== "recorded" && <small data-tip={src.id === "pro" ? notCountedText(s) ?? undefined : src.missing.length ? `No ${src.missing.join(" or ")} data.` : undefined}>{src.label}</small>}
+                        {(src.id !== "recorded" || isWingman(s)) && (
+                          <small data-tip={src.id === "pro" || isWingman(s) ? notCountedText(s) ?? undefined : src.missing.length ? `No ${src.missing.join(" or ")} data.` : undefined}>
+                            {[src.id !== "recorded" ? src.label : null, isWingman(s) ? "Wingman" : null].filter(Boolean).join(" · ")}
+                          </small>
+                        )}
                       </span>
                     </span>
                   );
@@ -166,7 +170,7 @@ export function MatchesView() {
                   const v = entryRating(s);
                   if (v === null) return <span className="faint" data-tip={notCountedText(s) ?? undefined}>{DASH}</span>;
                   // a match outside the career keeps its rating, uncoloured, with the reason it does not count
-                  if (!isOwn(s) || !isFinished(s)) return <span className="num muted has-def" data-tip={notCountedText(s) ?? undefined}>{fmtRating(v)}</span>;
+                  if (!isOwn(s) || !isFinished(s) || isWingman(s)) return <span className="num muted has-def" data-tip={notCountedText(s) ?? undefined}>{fmtRating(v)}</span>;
                   return <b className="num" style={{ color: ratingText(v) }}>{fmtRating(v)}</b>;
                 },
               },
