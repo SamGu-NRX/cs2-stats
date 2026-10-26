@@ -18,7 +18,9 @@
     "family-check": "vite-node tools/family-check.ts",
     "scoreboard-variants": "vite-node tools/scoreboard-variants.ts",
     "utility-outcomes": "vite-node tools/utility-outcomes.ts",
-    "metric-evidence": "vite-node tools/metric-evidence.ts"
+    "metric-evidence": "vite-node tools/metric-evidence.ts",
+    "recoil": "vite-node tools/recoil.ts",
+    "spray-counts": "vite-node tools/spray-counts.ts"
   },
   "dependencies": {
     "@fontsource-variable/schibsted-grotesk": "^5.3.0",
