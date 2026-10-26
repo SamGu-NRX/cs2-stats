@@ -1,47 +1,50 @@
-// Profile: HLTV's night-mode player card, then two sections: Performance (how well you play: swing,
-// how good, rating by match, breakdowns) and Identity (how you play: HLTV's attributes block, Firepower
-// first, then the role blend per side and the pro whose style matches yours). The side switch in the
-// app bar drives the whole page: every summary is rolled up over that side's rounds. Performance is
-// compared with that side's pros; style with the bot careers in the same matches on that side
-// (worker/ranking.ts).
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+// Profile: the player card (design-target-v2), then tabs. Overview: Form, Where you rank, round swing,
+// Firepower, multi-kill rounds, clutches and maps. Duels, Utility and Economy: metric rows. Aim and
+// Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
+// like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
+// whole page: every summary is rolled up over that side's rounds. Performance is compared with that
+// side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import { isGun } from "../../stats/guns";
-import { weaponClass, weaponLabel } from "../../stats/weapons";
-import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../components/bits";
+import { Delta, MapThumb, MultiBadge, Num } from "../components/bits";
 import { Card } from "../components/Card";
-import { Gauge, TrendLine } from "../components/charts";
-import { GameIcon } from "../components/GameIcon";
-import { ApproxMark, Percentile } from "../components/Percentile";
-import { Select, type Option } from "../components/controls";
+import { Gauge } from "../components/charts";
+import { Fig, MatchLine } from "../components/MatchSeries";
+import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
+import { quintile, ShareTrack, THIN, Track } from "../components/MetricRow";
+import { rovingIndex, Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
   botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText,
-  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, WEAPON_CLASS_LABEL, type SideKey,
+  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type SideKey,
 } from "../data/engine";
-import { bundleOf, useCall, useRatings, useRollups, type Loaded } from "../data/hooks";
-import { killsBy, matchModel, sideOf, type MatchEntry } from "../data/match";
+import { useCall, useRatings, useRollups } from "../data/hooks";
+import type { MatchEntry } from "../data/match";
 import { PANEL_TIP, tipOf } from "../data/tips";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
-import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
-import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
-import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
-import { matchHref, openMatch, setQuery, useRoute, useSection } from "../router";
+import { ratingText } from "../lib/scale";
+import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
+import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, scopeQuery, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
-import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
-import { HowGood, pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
-import { WhereYouPlay } from "./Playstyle";
-import { roleDecisionLabel } from "./profile/role-decision";
+import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
+import { roleValueDescriptor } from "./profile/role-decision";
+import { AggressionCard } from "./profile/v2";
+import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RANK_LABELS, RANK_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import CareerAim from "./CareerAim";
+import WeaponsTab from "./Weapons";
+import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
 
 type Compare = "bench" | "bots";
 
@@ -89,7 +92,72 @@ function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: Mat
   }, [one, sums, rats, list, side]);
 }
 
-export default function ProfileView() {
+/**
+ * The tab bar: links to #/profile/<tab>, Alt+1 to Alt+7 (App.tsx), and on its right the tab's sample and
+ * the controls that govern the whole page. As WAI-ARIA tabs: one tab stop (the selected tab), Left and
+ * Right move to the next tab and open it, Home and End jump to the ends (controls.tsx rovingIndex). The
+ * cream underline jumps: tabs are switched many times a day, so a tab switch has no motion.
+ */
+function ProfileTabs({ tab, meta, children }: { tab: ProfileTab; meta: string; children?: ReactNode }) {
+  const list = useRef<HTMLElement>(null);
+  // a tab switch keeps the page's scope (map, matches, side, comparison), by mouse or by keyboard
+  const scope = scopeQuery(useRoute().query);
+  const onKey = (e: KeyboardEvent) => {
+    const to = rovingIndex(e.key, PROFILE_TABS.indexOf(tab), PROFILE_TABS.length, false);
+    if (to === null || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    go(profileHref(PROFILE_TABS[to], scope), { instant: true });
+    list.current?.querySelector<HTMLElement>(`[data-tab="${PROFILE_TABS[to]}"]`)?.focus();
+  };
+  return (
+    <div className="ptabs">
+      <nav ref={list} className="ptabs__list" role="tablist" aria-label="Profile sections" onKeyDown={onKey}>
+        {PROFILE_TABS.map((t, n) => (
+          <a key={t} data-tab={t} role="tab" aria-selected={t === tab} tabIndex={t === tab ? 0 : -1} aria-controls="profile-panel" href={profileHref(t, scope)} className="ptabs__tab" data-tip={`Alt ${n + 1}`}>
+            {PROFILE_TAB_LABEL[t]}
+          </a>
+        ))}
+      </nav>
+      <div className="ptabs__end">
+        <span className="meta">{meta}</span>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** The sample each tab rests on, for the tab bar's right side. */
+function tabMeta(tab: ProfileTab, p: ProfileData, side: SideKey): string {
+  const m = p.you.m;
+  if (tab === "duels") return `${plural(m.kills, "kill")}, ${plural(m.deaths, "death")}`;
+  if (tab === "playstyle") return side === "both" ? `${plural(p.t.m.rounds, "T round")}, ${plural(p.ct.m.rounds, "CT round")}` : plural(m.rounds, `${side.toUpperCase()} round`);
+  return `${plural(p.list.length, "match", "matches")}, ${plural(m.rounds, "round")}`;
+}
+
+/**
+ * The page's entrance: true from the first render with data until the cards have risen in, false
+ * after a keyboard navigation. Only then does views.css animate the cards and the track dots, so a
+ * tab switch or a filter change later renders without motion. Each card gets its stagger index.
+ */
+function useEnter(ready: boolean, scope: string) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [entered, setEnter] = useState(() => !navWasInstant());
+  // the scope (tab, side, filters, comparison) the page entered with: any change ends the entrance at
+  // once, so cards a tab switch or a filter change mounts inside the window never rise
+  const [first] = useState(scope);
+  if (entered && scope !== first) setEnter(false);
+  const enter = entered && scope === first;
+  useLayoutEffect(() => {
+    if (!ready || !enter) return;
+    ref.current?.querySelectorAll<HTMLElement>(".card").forEach((el, i) => el.style.setProperty("--i", String(Math.min(i, 7))));
+    // the last card's delay (7 × 30 ms) plus the dots' 280 ms, with room to spare
+    const t = window.setTimeout(() => setEnter(false), 900);
+    return () => window.clearTimeout(t);
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  return [ref, enter] as const;
+}
+
+export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) {
   const { matches, you: ids, baselines, baselinesError } = useData();
   const { map, n, side } = useScope();
   const r = useRoute();
@@ -105,69 +173,114 @@ export default function ProfileView() {
   ] : null), [list, files, ids, bots, side]);
   const sums = useRollups(qs);
   // ?sec= links (Home's "Work on", typed links) scroll to their section once it renders (router.ts useSection)
-  const identityRef = useSection("identity");
   const styleRef = useSection("style");
-  const performanceRef = useSection("performance");
   const firepowerRef = useSection("firepower");
-  const howGoodRef = useSection("howgood");
   const cardRef = useSection("card");
   const openingsRef = useSection("openings");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
+  const sideQ = useMemo(() => ({ files, filter: { player: ids, ...sidesOf(side) } }), [files, ids, side]);
+  const ranks = useRanks(base, ratingKey(side));
   const perMatch = usePerMatch(list, ids, side);
   const p: ProfileData | null = sums.data && rats && perMatch && sums.data.length === (qs?.length ?? 0) ? {
     list, name: list[0].players[list[0].you].name, base, you: sums.data[0], t: sums.data[1], ct: sums.data[2], bots: bots.length ? sums.data[3] : null,
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null, perMatch,
   } : null;
 
+  const [enterRef, enter] = useEnter(!!p, `${tab}|${side}|${map}|${n}|${cmp}`);
+  // every tab reads the side: Aim's panels, Weapons' guns and Playstyle's role, compass and ranks too
+  const controls = ["map", "matches", "side"] as const;
   if (!p) {
     return (
       <div className="view view--capped">
-        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
+        <BarContent crumbs={[{ label: "Profile" }]} scope={{ controls: [...controls], maps: tab === "aim" ? "aim" : "career" }} />
         <div className="view__in profile">
           {(sums.loading || !matches.length) && !sums.error ? <div className="skel" style={{ height: 340 }} /> : <Card><Empty text={sums.error ?? "No matches in this filter."} /></Card>}
         </div>
       </div>
     );
   }
+  const rankSide = ratingKey(side);
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }]} scope={{ controls: ["map", "matches", "side"] }} />
-      <div className="view__in profile" data-side={side}>
+      <BarContent crumbs={[{ label: p.name }, { label: "Profile" }, { label: PROFILE_TAB_LABEL[tab] }]} scope={{ controls: [...controls], maps: tab === "aim" ? "aim" : "career" }} />
+      <div className="view__in profile" data-side={side} data-enter={enter || undefined} ref={enterRef}>
         <div className="profile__top psec" id="card" ref={cardRef}>
-          <PlayerCard p={p} side={side} cmp={cmp} compare={(
-            // what the card's verdicts measure against; it lives on the card it governs
-            <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
-              options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
-          )} />
-          <FormRail p={p} side={side} />
+          <PlayerCard p={p} side={side} cmp={cmp} />
         </div>
-        <SectionHead title="How you play" tip={PANEL_TIP.identity} id="identity" sectionRef={identityRef} />
-        <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
-        <PlaysLike q={base} side={ratingKey(side)} initial={r.query.get("pro")} />
-        <div className="identity">
-          <RoleCard q={base} maps={mapsIn(list)} />
-          <WhereYouPlay list={list} side={side} />
-        </div>
-        <SectionHead title="How well you play" tip={PANEL_TIP.performance} id="performance" sectionRef={performanceRef} />
-        <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
-        {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
-        {baselines && (
-          <div className="profile__cols">
-            <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} /></div>
-            <div id="howgood" ref={howGoodRef} className="psec"><HowGood q={base} side={ratingKey(side)} /></div>
-          </div>
-        )}
-        <div className="profile__trend">
-          <FormTrend p={p} side={side} />
-          <MapsTable p={p} side={side} />
-        </div>
-        <div className="profile__cols3">
-          <Weapons p={p} files={files} side={side} />
-          <Clutches m={p.you.m} q={base} side={side} list={list} />
-          <Multis m={p.you.m} list={list} side={side} />
-          <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} /></div>
+        <ProfileTabs tab={tab} meta={tabMeta(tab, p, side)}>
+          {/* what the player card's verdicts measure against; the card is on every tab, so is this */}
+          <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
+            options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
+        </ProfileTabs>
+        <div id="profile-panel" role="tabpanel" aria-label={PROFILE_TAB_LABEL[tab]} className={`ptab ptab--${tab}`}>
+          {tab === "overview" && (
+            <>
+              {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
+              {/* HLTV's block sits under the player card, as on HLTV's player page */}
+              {baselines && <div id="style" ref={styleRef} className="psec"><div id="firepower" ref={firepowerRef}><HltvBlock q={base} side={side} values={p.you.v} m={p.you.m} /></div></div>}
+              <div className="profile__cols profile__cols--side">
+                <FormRail p={p} side={side} />
+                <StatCard title="Where you rank" tip={PANEL_TIP.whereYouRank} ids={RANK_ROWS} labels={RANK_LABELS} r={ranks}
+                  aside={ranks?.pros ? <span className="meta">vs {ranks.pros}</span> : undefined} />
+              </div>
+              <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
+              <div className="profile__cols">
+                <Multis m={p.you.m} q={sideQ} list={list} />
+                <Clutches m={p.you.m} q={base} side={side} list={list} />
+              </div>
+              <MapsTable p={p} side={side} />
+            </>
+          )}
+          {tab === "duels" && (
+            <>
+              <div className="profile__cols">
+                <div id="openings" ref={openingsRef} className="psec"><Openings s={p.you} r={ranks} /></div>
+                <StatCard title="Opening duels, against pros" tip="The first duel of each round." ids={OPENING_ROWS} r={ranks} />
+              </div>
+              <div className="profile__cols">
+                <StatCard title="Trades" tip="Avenging teammates, and being avenged." ids={TRADE_ROWS} r={ranks} id="howgood" />
+                <div className="profile__stack">
+                  <StatCard title="AWP duels" tip="Duels where you or the enemy holds an AWP." ids={AWP_ROWS} r={ranks} />
+                  <StatCard title="Clutches, against pros" tip="Rounds you're your team's last player alive." ids={CLUTCH_ROWS} r={ranks} />
+                </div>
+              </div>
+            </>
+          )}
+          {tab === "aim" && <CareerAim />}
+          {tab === "weapons" && <WeaponsTab />}
+          {tab === "utility" && (
+            <div className="profile__cols">
+              <StatCard title="What you throw" tip="Grenades you throw per round, and what you leave unused." ids={THROW_ROWS} r={ranks} />
+              <div className="profile__stack">
+                <StatCard title="What it does" tip="What your flashes, grenades and fire do to enemies." ids={EFFECT_ROWS} r={ranks} />
+                <StatCard title="What you take" tip="Grenade and fire damage you take." ids={TAKEN_ROWS} r={ranks} />
+              </div>
+            </div>
+          )}
+          {tab === "economy" && (
+            <div className="profile__cols">
+              <StatCard title="Buying" tip="How you spend against your team, and what you keep." ids={ECONOMY_ROWS} r={ranks} />
+              <BuySplitsCard q={sideQ} />
+            </div>
+          )}
+          {tab === "playstyle" && (
+            <>
+              <div className="identity">
+                <RoleCard q={sideQ} side={side} />
+                <WhereYouPlay list={list} side={side} />
+              </div>
+              <a className="ptab__xref" href={tabSectionHref("overview", "style", scopeQuery(r.query))}>Style attributes are on Overview, in HLTV's attribute block</a>
+              <AggressionCard s={p.you} />
+              <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
+              <div className="profile__cols">
+                <RoleBySpawnCard q={base} side={side} />
+                <StyleCompass list={list} q={sideQ} />
+              </div>
+              <Ranks q={base} side={rankSide} />
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -177,14 +290,27 @@ export default function ProfileView() {
 // ---------------------------------------------------------------- the card
 
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
-interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string; unit?: string }
+interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string }
 
-/** The engine's decision for one side, including abstention and its reason. */
-function topRoles(b: RoleBlend | undefined) {
-  return b ? roleDecisionLabel(b) : null;
+/**
+ * A side's role for the card's pip (role-decision.ts's rule): the gated primary with its share, else
+ * the top two as "A / B" with no share, else null (the engine withheld it).
+ */
+function topRole(b: RoleBlend | undefined): { role: string; share: number | null; what: string } | null {
+  if (b?.primary) {
+    const d = roleValueDescriptor(b, b.primary);
+    return { role: b.primary, share: b.probability, what: d === "calibrated probability" ? "" : ` ${d}` };
+  }
+  return b?.top2 ? { role: b.top2.join(" / "), share: null, what: "" } : null;
 }
 
-function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; cmp: Compare; compare: ReactNode }) {
+/**
+ * The hero (design-target-v2 player card): who you are and your roles on the left, the rating gauge
+ * between the T and CT ratings in the middle, six stat tiles on the right. Each tile's track is your
+ * percentile among the pros named on the left; the "Compared to" select in the tab bar sets what the
+ * gauge's verdict and each tile's verdict (in its tooltip) measure against.
+ */
+function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Compare }) {
   const key = ratingKey(side);
   const line = lineOf(p.you, p.ratings[key].value);
   const botLine = p.bots && p.botRatings ? lineOf(p.bots, p.botRatings[key].value) : null;
@@ -192,11 +318,11 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   const swingPct = line.swing === null ? null : 100 * line.swing;
   const cells: CellDef[] = [
     { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, text: fmtSwing(line.swing) },
-    { id: "dpr", metric: "dpr", label: "DPR", bench: bench(BENCH.dpr, botLine?.dpr), value: line.dpr, text: fmtDec(line.dpr) },
-    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, botLine?.kast), value: line.kast, text: line.kast === null ? "–" : line.kast.toFixed(1), unit: "%" },
-    { id: "multi", metric: "mk", label: "Multi-kill", bench: bench(BENCH.multi, botLine?.mk), value: line.mk, text: line.mk?.toFixed(1) ?? "–", unit: "%" },
+    { id: "dpr", metric: "dpr", label: "Deaths per round", bench: bench(BENCH.dpr, botLine?.dpr), value: line.dpr, text: fmtDec(line.dpr) },
+    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, botLine?.kast), value: line.kast, text: line.kast === null ? "–" : `${line.kast.toFixed(1)}%` },
+    { id: "multi", metric: "mk", label: "Multi-kill rounds", bench: bench(BENCH.multi, botLine?.mk), value: line.mk, text: line.mk === null ? "–" : `${line.mk.toFixed(1)}%` },
     { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
-    { id: "kpr", metric: "kpr", label: "KPR", bench: bench(BENCH.kpr, botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
+    { id: "kpr", metric: "kpr", label: "Kills per round", bench: bench(BENCH.kpr, botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
   ];
   // One rating definition (rating3.ts rating3Of): each side rated over its rated rounds, a side under
   // half rated left out, the total weighted by rated rounds, so it lies between the rated sides.
@@ -206,97 +332,120 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   const gaugeV = r3.value;
   const botRating = p.botRatings?.[key].value ?? null;
   const gaugeVerdict = verdictOf(gaugeV, cmp === "bots" && botRating !== null ? benchAround(BENCH.rating, botRating) : BENCH.rating);
-  const woke = useRef(!sessionStorage.getItem("cs2stats.cardWoke"));
-  useEffect(() => { sessionStorage.setItem("cs2stats.cardWoke", "1"); }, []);
   const roles = useCall("roles", [p.base]).data;
   const { baselines } = useData();
   const pros = useCall("compare", baselines ? [p.base, { side: key }] : null).data;
-  /** "Top 6% of pro riflers. Win chance you add each round." */
+  const against = cmp === "bots" ? "the bots you played" : "HLTV-style benchmarks";
+  /** "Top 6% of pro riflers. Good against HLTV-style benchmarks. Win chance you add each round." */
   const cellTip = (c: CellDef) => {
     const pct = pros?.p[c.metric];
-    const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}. ` : "";
-    return `${rank}${tipOf(c.metric) ?? ""}`.trim();
+    const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}.` : null;
+    const v = verdictOf(c.value, c.bench);
+    return [rank, v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`, tipOf(c.metric)].filter(Boolean).join("\n");
   };
-  const roleT = topRoles(roles?.T);
-  const roleCT = topRoles(roles?.CT);
-  const role = side === "t" ? roleT : side === "ct" ? roleCT : roleT && roleCT ? `${roleT} on T, ${roleCT} on CT` : roleT ?? roleCT;
+  const sides = [{ s: "T", r: topRole(roles?.T), rounds: roles?.T.rounds }, { s: "CT", r: topRole(roles?.CT), rounds: roles?.CT.rounds }] as const;
   const wins = p.list.filter((e) => e.result === "W").length;
   const losses = p.list.filter((e) => e.result === "L").length;
+  const maps = mapsIn(p.list);
   return (
-    <section className={`pcard-hltv ${woke.current ? "is-waking" : ""}`} aria-label="Player card">
-      <div className="pcard-hltv__photo">
-        <AgentImg side={side === "ct" ? "ct" : "t"} kind="portrait" className="pcard-hltv__agent" key={side === "ct" ? "ct" : "t"} />
-        {role && (
-          <div className="pcard-hltv__tags">
-            <span className="tag" data-tip={PANEL_TIP.role}>{role}</span>
+    <section className="card hero pcard" aria-label="Player card">
+      <div className="pcard__id">
+        {/* no key: a side switch swaps the art in place, so it never fades again (views.css .pcard__agent) */}
+        <AgentImg side={side === "ct" ? "ct" : "t"} kind="portrait" className="pcard__agent" />
+        <div className="pcard__who">
+          <h1 className="pcard__name">{p.name}</h1>
+          <p className="pcard__sub"><b>{wins}–{losses}</b> · {plural(p.list.length, "match", "matches")} · {plural(p.you.m.rounds, "round")}{maps.length === 1 ? ` · ${mapName(maps[0])}` : ""}</p>
+          {roles && (
+            <p className="pcard__roles">
+              {sides.map(({ s, r, rounds }) => r && (
+                <span key={s} className="pcard__role" data-tip={r.share === null ? `The two leading roles over ${rounds} ${s} rounds are close.` : `${fmtPct(100 * r.share, 0)}${r.what} over ${rounds} ${s} rounds.`} tabIndex={0}>
+                  <span className={`pip pip--${s.toLowerCase()}`}>{s}</span><b>{r.role}</b>
+                </span>
+              ))}
+            </p>
+          )}
+          {pros && (
+            <p className="pcard__pool meta">
+              Against {pros.n} {proPoolName(pros.role)}
+              <span className="help" data-tip="Each tile's dot is your rank among these pros." tabIndex={0} aria-label="What the tile tracks show">?</span>
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="pcard__rating">
+        <button className={`pcard__side pcard__side--t ${side === "t" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "t" ? null : "t")} aria-pressed={side === "t"}>
+          <b className="disp disp--m">{fmtRating(tR)}</b><span className="caps">T rating</span>
+        </button>
+        <HoverCard as="div" className="gauge-wrap" card={() => (
+          <div className="bd">
+            <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
+            <p className="bd__def">{tipOf("rating3")}</p>
+            {r3.inputs && <RatingTerms inputs={r3.inputs} />}
           </div>
-        )}
-        <div className="pcard-hltv__id">
-          <b className="pcard-hltv__name">{p.name}</b>
-          <span className="pcard-hltv__sub">{wins}–{losses}, {plural(p.list.length, "map", "maps")}</span>
-        </div>
+        )}>
+          <Gauge value={gaugeV} verdict={gaugeVerdict} label={ratingHeadline()} />
+        </HoverCard>
+        <button className={`pcard__side pcard__side--ct ${side === "ct" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "ct" ? null : "ct")} aria-pressed={side === "ct"}>
+          <b className="disp disp--m">{fmtRating(ctR)}</b><span className="caps">CT rating</span>
+        </button>
       </div>
-      <div className="pcard-hltv__stage">
-        <AgentImg side="t" kind="ghost" className={`ghost ghost--t ${side === "t" ? "is-lit" : ""}`} />
-        <AgentImg side="ct" kind="ghost" className={`ghost ghost--ct ${side === "ct" ? "is-lit" : ""}`} />
-        <div className="pcard-hltv__scope">
-          {compare}
-          <span className="pill">{plural(p.list.length, "map", "maps")}, {p.you.m.rounds} rounds</span>
-        </div>
-        <div className="ratings">
-          <button className={`band band--t ${side === "t" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "t" ? null : "t")} aria-pressed={side === "t"}>
-            <b className="num">{fmtRating(tR)}</b><span>T rating</span>
-          </button>
-          <HoverCard as="div" className="gauge-wrap" card={() => (
-            <div className="bd">
-              <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
-              <p className="bd__def">{tipOf("rating3")}</p>
-              {r3.inputs && <RatingTerms inputs={r3.inputs} />}
-            </div>
-          )}>
-            <Gauge value={gaugeV} verdict={gaugeVerdict} label={ratingHeadline()} />
-          </HoverCard>
-          <button className={`band band--ct ${side === "ct" ? "is-on" : ""}`} onClick={() => setQuery("side", side === "ct" ? null : "ct")} aria-pressed={side === "ct"}>
-            <b className="num">{fmtRating(ctR)}</b><span>CT rating</span>
-          </button>
-        </div>
-        <div className="cells">
-          {cells.map((c, i) => {
-            const v = verdictOf(c.value, c.bench);
-            return (
-              <div key={c.id} className="cell" tabIndex={0} data-tip={cellTip(c)}>
-                <b className="cell__v num">{c.text}{c.unit && c.text !== "–" && <small>{c.unit}</small>}</b>
-                <span className="cell__l">{c.label}</span>
-                <div className="cell__meter" style={{ ["--i" as string]: i }}><Meter v={c.value} bench={c.bench} animate={woke.current} /></div>
-                <div className="cell__foot" data-v={v}><VerdictLabel v={v} /></div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <ul className="pcard__tiles">
+        {cells.map((c) => {
+          const pct = pros?.p[c.metric];
+          const at = pct && pct.pct !== null && !pct.reason ? pct.pct : null;
+          return (
+            <li key={c.id} className="ptile" tabIndex={0} data-tip={cellTip(c)}>
+              <b className="disp disp--m ptile__v"><Num v={c.text} /></b>
+              <span className="caps ptile__l">{c.label}</span>
+              {at === null ? <span className="ptile__none" /> : <Track at={at} tone={`q${quintile(at)}`} />}
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
 
+/** The rated match with the highest (or lowest) rating among `list`, or null without one. */
+function extremeMatch(p: ProfileData, list: MatchEntry[], sign: 1 | -1) {
+  let out: { e: MatchEntry; r: number } | null = null;
+  for (const e of list) {
+    const r = p.perMatch(e).rating;
+    if (r !== null && (!out || sign * (r - out.r) > 0)) out = { e, r };
+  }
+  return out;
+}
+
+/** "Oct 24, 13:8": a match's day and score, under a figure. */
+const dayScore = (e: MatchEntry) => `${fmtMatchDay(e.match)}, ${e.score.us}:${e.score.them}`;
+
+/**
+ * Form: the last ten matches' ratings on the page's side as a line plus dots, oldest first, with the
+ * pooled rating dashed; beside it the pooled rating, the last match against it, and the best and
+ * worst, each a link to its match.
+ */
 function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
-  const rows = p.list.slice(0, 7);
+  const pooled = p.ratings[ratingKey(side)].value;
+  const recent = p.list.slice(0, 10).reverse();
+  const last = p.list[0];
+  const lastR = p.perMatch(last).rating;
+  const best = extremeMatch(p, recent, 1);
+  const worst = extremeMatch(p, recent, -1);
+  const wins = p.list.filter((e) => e.result === "W").length;
+  const losses = p.list.filter((e) => e.result === "L").length;
   return (
-    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form}>{RATING_LABEL}</span><ApproxMark /></span>} flush className="form-rail">
-      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings[ratingKey(side)].value} avgLabel="pooled" />
-      <table className="tbl tbl--compact">
-        <tbody>
-          {rows.map((f) => {
-            const r = p.perMatch(f).rating;
-            return (
-              <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
-                <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtMatchDay(f.match)}</small></span></td>
-                <td><span className={`wl wl--${f.result}`}>{f.result}</span> <span className="num">{f.score.us}:{f.score.them}</span></td>
-                <td>{r === null ? <span className="faint" data-tip="Not rated: too little kill data in this match.">–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form} tabIndex={0}>{RATING_LABEL}</span><ApproxMark /> by match, oldest first</span>} className="form-rail">
+      <div className="series">
+        <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1}
+          points={recent.map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, href: matchHref(f.file) }))} />
+        <dl className="figs">
+          <Fig label="Pooled" value={fmtRating(pooled)} sub={`${plural(p.list.length, "match", "matches")}, ${wins}–${losses}`} />
+          <Fig className="fig--last" label="Last match" value={fmtRating(lastR)} href={matchHref(last.file)}
+            sub={lastR !== null && pooled !== null ? <><Delta d={lastR - pooled} span={0.3} fmt={(x) => x.toFixed(2)} /> vs pooled</> : dayScore(last)} />
+          {best && <Fig label="Best" tone="good" value={fmtRating(best.r)} href={matchHref(best.e.file)} sub={dayScore(best.e)} />}
+          {worst && worst.e !== best?.e && <Fig label="Worst" tone="poor" value={fmtRating(worst.r)} href={matchHref(worst.e.file)} sub={dayScore(worst.e)} />}
+        </dl>
+      </div>
     </Card>
   );
 }
@@ -305,96 +454,75 @@ function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
 
 type StylePool = "role" | "all";
 
-/** One metric of the block as the panel's percentile row. */
-/** One metric of an attribute as a percentile row; a pro percentile names the pool it was read in. */
-function panelMetric(p: Pct, kind: "performance" | "style", population: string): PanelMetric {
-  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population: kind === "performance" ? proPopulation(p.pool) : population };
+/** One metric of an attribute as a metric row; a pro percentile names the pool it was read in, and `m` gives its sample. */
+function panelMetric(p: Pct, kind: "performance" | "style", population: string, m: Measures | null): PanelMetric {
+  const s = sampleOf(p.id, p, m);
+  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population: kind === "performance" ? proPopulation(p.pool) : population, sample: s.text, n: s.n };
 }
 
-function panelAttr(a: AttributeScore, kind: "performance" | "style", population: string, extra: Partial<PanelAttribute> = {}): PanelAttribute {
-  return { id: a.id as PanelAttribute["id"], label: a.label, score: a.score, metrics: a.metrics.map((p) => panelMetric(p, kind, population)), ...extra };
-}
-
-/**
- * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the
- * page's side. Unlike the style scores it is a quality, so its score and bar take the performance
- * colours. `values` are your metric values on the page's side, for the unscored rows (engine.ts EXTRA_SUBS).
- */
-function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
-  const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
-  const fp = scored?.scores.find((a) => a.id === "firepower");
-  const t = fp?.score == null ? 0 : toScore(fp.score, 50, 50);
-  return (
-    <Card title="Firepower" tip={PANEL_TIP.firepower} aside={<span className="meta">{scored ? `Against ${scored.n} ${proPoolName(scored.role)}` : ""}</span>}>
-      {!fp ? <div className="skel" style={{ height: 200 }} /> : (
-        <div className="fpw">
-          <div className="fpw__head">
-            <span className="fpw__score num" style={{ color: fp.score === null ? undefined : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>
-            <span className="fpw__bar" aria-hidden><i style={{ width: `${fp.score ?? 0}%`, background: fp.score === null ? "transparent" : scoreFill(t) }} /></span>
-          </div>
-          <div className="fpw__more">
-            {panelAttr(fp, "performance", proPoolName(scored!.role)).metrics.map((m) => (
-              <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def} approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
-            ))}
-            {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} />)}
-          </div>
-        </div>
-      )}
-    </Card>
-  );
+function panelAttr(a: AttributeScore, kind: "performance" | "style", population: string, m: Measures | null, extra: Partial<PanelAttribute> = {}): PanelAttribute {
+  return { id: a.id as PanelAttribute["id"], label: a.label, score: a.score, metrics: a.metrics.map((p) => panelMetric(p, kind, population, m)), ...extra };
 }
 
 /**
- * The six style attributes, from one attributeBlock call for the page's side and the chosen pool: how
- * you play, not how well (HLTV: "rating covers performance, attributes cover style"), ranked against
- * the bot careers in the same matches; Sniping always against every bot. ?attr=<id> opens one.
- * `values` are your metric values on the page's side, for each attribute's unscored rows.
+ * HLTV's attribute block (profile/AttributesPanel.tsx), from one attributeBlock call for the page's
+ * side and the chosen style pool: Firepower, the one performance attribute (design/identity.md),
+ * against the pros or against the bots in your matches (StyleResult.firepower), and the six style
+ * attributes against the bot careers in the same matches, Sniping always against every bot. How you
+ * play, not how well, for the six (HLTV: "rating covers performance, attributes cover style").
+ * ?attr=<id> opens one. `values` are your metric values on the page's side, for each attribute's
+ * unscored rows (engine.ts EXTRA_SUBS); `m` the measures behind them, for each row's sample.
  */
-function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
+/** A careers pool name as a bot pool's role; null for a name the UI does not know. */
+const botRole = (p: string | undefined): BotPool["role"] | null => (p === "awper" || p === "rifler" || p === "all" ? p : null);
+
+function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [pool, setPool] = useState<StylePool>("role");
+  const [against, setAgainst] = useState<"pros" | "bots">("pros");
   const block = useCall("attributeBlock", [q, { side: ratingKey(side), pool }]);
   const b: AttributeBlock | null = block.data;
-  if (!b) return block.error ? <Card title="Style attributes" tip={PANEL_TIP.style}><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 300 }} />;
+  if (!b) return block.error ? <Card title="Attributes"><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 320 }} />;
   const style = b.style;
-  const role = pool === "all" ? "all" : style.role;
+  // the pool the scores read: the one asked for, or all bots when the role's pool was too thin (careers.pool)
+  const role = botRole(style.careers.pool) ?? (pool === "all" ? "all" : style.role);
   const peer = style.role === "awper" ? "AWPer" : "Rifler";
+  const bots = botPopulation(style.careers, { n: style.n, role }).text;
+  const fpScore = against === "pros" ? b.firepower : style.firepower;
+  const fpPop = against === "pros" ? `${b.proPool} ${proPoolName(style.role)}` : bots;
+  const firepower = fpScore ? { ...panelAttr(fpScore, "performance", fpPop, m, { open: focus === "firepower", extra: extraSubs("firepower", values) }), note: `vs ${fpPop}` } : null;
+  if (firepower && against === "bots") firepower.metrics = firepower.metrics.map((x) => ({ ...x, population: fpPop }));
+  const provisional = style.careers.provisional;
+  const attrs = style.scores.map((a) => (a.id === "sniping"
+    ? panelAttr(a, "style", botPoolName("all"), m, { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
+    : panelAttr(a, "style", botPoolName(role), m, { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
+  const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${role !== "all" ? " All bots may have more." : ""}`} /> : undefined;
   const pools: Option<StylePool>[] = [
     { value: "role", label: `${peer} bots`, tip: `Bots that play your role.` },
     { value: "all", label: "All bots" },
   ];
-  const pop = { n: style.n, role } as const;
-  const provisional = style.careers.provisional;
-  const attrs = style.scores.map((a) => (a.id === "sniping"
-    ? panelAttr(a, "style", botPoolName("all"), { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
-    : panelAttr(a, "style", botPoolName(role), { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
-  const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${pool === "role" ? " All bots may have more." : ""}`} /> : undefined;
   return (
     <AttributesPanel
-      title="Style attributes"
-      tip={PANEL_TIP.style}
-      pool={pool}
-      pools={pools}
-      onPool={setPool}
-      poolNote={`Against ${botPopulation(style.careers, pop).text}`}
+      provisional={provisional}
+      note={`Style vs ${bots}`}
       message={thin}
+      firepower={firepower}
       style={attrs}
+      controls={(
+        <>
+          {/* the page's own side, here too, as HLTV keeps it on the block: one state, the URL's side */}
+          <Segmented label="Side" value={side} onChange={(v) => setQuery("side", v === "both" ? null : v)}
+            options={[{ value: "both", label: "Both" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
+          <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "vs pros" }, { value: "bots", label: "vs bots" }]} />
+          <Select options={pools} value={pool} onChange={setPool} label="Style compared to" prefix="Style vs" />
+        </>
+      )}
     />
   );
 }
 
 // ---------------------------------------------------------------- breakdowns
-
-function FormTrend({ p, side }: { p: ProfileData; side: SideKey }) {
-  const pooled = p.ratings[ratingKey(side)].value;
-  return (
-    <Card title="Rating by match" tip={PANEL_TIP.ratingByMatch} collapsible id="profile-form" className="trendcard" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
-      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
-      <RatingLegend />
-    </Card>
-  );
-}
 
 interface MapRow { map: string; matches: number; wins: number; s: Rolled; r: SideRatings }
 
@@ -431,52 +559,6 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
   );
 }
 
-const CLASS_ORDER = ["rifle", "sniper", "smg", "heavy", "pistol"];
-
-/**
- * Every gun you got kills with on the page's side, most kills first within its class, each with the
- * game's own icon from the pack (components/GameIcon.tsx; the app's glyph only when the pack is missing).
- * Accuracy is from recorded matches (converted logs have no shots); headshots are a share of the gun's kills.
- */
-function Weapons({ p, files, side }: { p: ProfileData; files: string[]; side: SideKey }) {
-  const { you: ids } = useData();
-  const guns = Object.entries(p.you.weapons).filter(([w, t]) => isGun(w) && t.kills > 0).map(([w, t]) => ({ w, cls: weaponClass(w), kills: t.kills, hs: t.kills ? (100 * t.hsKills) / t.kills : null }))
-    .sort((a, b) => CLASS_ORDER.indexOf(a.cls) - CLASS_ORDER.indexOf(b.cls) || b.kills - a.kills);
-  const total = guns.reduce((a, r) => a + r.kills, 0);
-  const key = guns.map((g) => g.w).join(",");
-  const accs = useRollups(useMemo(() => guns.map((g) => ({ files, filter: { player: ids, weapons: [g.w], ...sidesOf(side) } })), [key, files, ids, side])).data; // eslint-disable-line react-hooks/exhaustive-deps
-  const acc = (i: number) => (accs?.length === guns.length && accs[i].aim.shots ? accs[i].v.accuracy : null);
-  const most = Math.max(1, ...guns.map((g) => g.kills));
-  return (
-    <Card title="Weapons" tip={PANEL_TIP.weapons} collapsible id="profile-weapons" aside={<span className="meta">{plural(total, "kill")}</span>}>
-      <table className="guns">
-        <thead>
-          <tr>
-            <th scope="col" className="l" colSpan={2}><span className="sr-only">Gun</span></th>
-            <th scope="col" data-tip="Your kills with the gun." tabIndex={0}>Kills</th>
-            <th scope="col" data-tip="Shots that hit, from recorded matches." tabIndex={0} aria-label="Accuracy">Acc</th>
-            <th scope="col" data-tip="Kills that were headshots." tabIndex={0}><span className="guns__hs"><GameIcon id="headshot" width={13} label="Headshots" fallback={<HeadshotIcon size={13} label="Headshots" />} /></span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {guns.map((g, i) => (
-            <Fragment key={g.w}>
-              {(i === 0 || guns[i - 1].cls !== g.cls) && <tr className="guns__cls"><th scope="rowgroup" colSpan={5}>{WEAPON_CLASS_LABEL[g.cls]}</th></tr>}
-              <tr>
-                <td className="guns__ico"><GameIcon id={g.w} width={48} height={16} fallback={<WeaponIcon name={g.w} size={16} />} /></td>
-                <td className="l guns__name">{weaponLabel(g.w)}<span className="guns__bar" aria-hidden><i style={{ width: `${(100 * g.kills) / most}%` }} /></span></td>
-                <td><b className="num">{g.kills}</b></td>
-                <td className="num">{acc(i) === null ? <span className="faint">–</span> : fmtPct(acc(i), 0)}</td>
-                <td className="num">{g.hs === null ? "–" : fmtPct(g.hs, 0)}</td>
-              </tr>
-            </Fragment>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
-
 /**
  * The 1v1 to 1v5 bars. A row with clutches behind it opens the list of them, each linking to its round
  * in the match's round drawer. Opening and closing a row is instant: nothing moves but the list.
@@ -491,21 +573,23 @@ function Clutches({ m, q, side, list }: { m: Measures; q: Query; side: SideKey; 
   const listId = useId();
   return (
     <Card title="Clutches" tip={PANEL_TIP.clutches} collapsible id="profile-clutches" aside={<SectionAside label="Won" value={<>{won}<span className="faint">/{played}</span></>} />}>
-      <ul className="clist">
+      <ul className="clist lslist">
         {rows.map((r) => {
+          const rate = r.played ? (100 * r.won) / r.played : null;
           const body = (
             <>
-              <ClutchBadge vs={r.vs} won={r.won > 0} />
-              <span className="hbar"><i style={{ width: r.played ? `${(100 * r.won) / r.played}%` : 0, background: "var(--good)" }} /></span>
-              <b className="num">{r.won}<span className="faint">/{r.played}</span></b>
+              <span className={`pip ${r.won > 0 ? "pip--hi" : ""}`}>1v{r.vs}</span>
+              <ShareTrack value={rate ?? 0} max={100} hollow={r.played < THIN} />
+              <span className="lsrow__n">{r.won} of {r.played}</span>
+              <b className="num lsrow__v"><Num v={rate === null ? "–" : fmtPct(rate, 0)} /></b>
             </>
           );
           // the worker lists clutches on both sides; the bars count the page's side
           const shown = (all ?? []).filter((c) => c.opponents === r.vs && (side === "both" || c.side === ratingKey(side)));
           return (
             <li key={r.vs}>
-              {r.played === 0 ? <div className="clist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
-                <button className="clist__row" aria-expanded={open === r.vs} aria-controls={`${listId}-${r.vs}`}
+              {r.played === 0 ? <div className="clist__row lsrow">{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row lsrow" aria-expanded={open === r.vs} aria-controls={`${listId}-${r.vs}`}
                   aria-label={`1v${r.vs}: won ${r.won} of ${r.played}. ${open === r.vs ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.vs ? null : r.vs))}>
                   {body}<span className="clist__chev" aria-hidden />
@@ -538,83 +622,50 @@ function ClutchLink({ c, e }: { c: ClutchRow; e: MatchEntry | undefined }) {
   );
 }
 
-/** A round where you got k kills: the match, its number and your side. */
-interface MultiRound { file: string; round: number; side: "T" | "CT" }
-
-/** Matches read at once while listing multi-kill rounds: enough to keep the worker busy, few enough not to flood it. */
-const MULTI_CONCURRENCY = 3;
-
 /**
- * The rounds where you got exactly k kills (5 or more for an ace) on the page's side, read from each
- * match's bundle once the user opens a row (the engine has no multi-kill list like its clutch list).
- * Bundles come through the shared cache (data/hooks.ts bundleOf), MULTI_CONCURRENCY at a time; a
- * failed read is an error, not an empty list.
+ * Each multi-kill size as a share of your rounds, a lollipop against the largest share, hollow under
+ * THIN rounds; where the share sits among pros (compare, rounds2k to rounds5k) is in the row's
+ * tooltip. A row with rounds behind it opens them, from the engine's multi-kill list (multiKills),
+ * each a link to its round.
  */
-function useMultiRounds(list: MatchEntry[], side: SideKey, k: number | null): Loaded<MultiRound[]> {
-  const { client, version } = useData();
-  const [st, setSt] = useState<Loaded<MultiRound[]>>({ data: null, error: null, loading: false });
-  useEffect(() => {
-    if (!client || k === null) { setSt({ data: null, error: null, loading: false }); return; }
-    let alive = true;
-    setSt({ data: null, error: null, loading: true });
-    const want = side === "both" ? null : ratingKey(side);
-    const out: MultiRound[][] = new Array(list.length);
-    let next = 0;
-    const worker = async () => {
-      while (alive && next < list.length) {
-        const i = next++;
-        const e = list[i];
-        const v = matchModel(e, await bundleOf(client, version, e.file));
-        out[i] = v.rounds.flatMap((r) => {
-          const n = killsBy(r, v.human).length;
-          const s = sideOf(v, r, v.human);
-          return (k === 5 ? n >= 5 : n === k) && (!want || s === want) ? [{ file: e.file, round: r.number, side: s }] : [];
-        });
-      }
-    };
-    Promise.all(Array.from({ length: Math.min(MULTI_CONCURRENCY, list.length) }, worker)).then(
-      () => { if (alive) setSt({ data: out.flat(), error: null, loading: false }); },
-      (err: Error) => { if (alive) setSt({ data: null, error: `The rounds could not be read: ${err.message}`, loading: false }); },
-    );
-    return () => { alive = false; };
-  }, [client, version, list, side, k]);
-  return st;
-}
-
-function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: SideKey }) {
+function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const rows = multiKillRows(m);
   const [open, setOpen] = useState<number | null>(null);
-  const shown = useMultiRounds(list, side, open);
+  const rounds = useCall("multiKills", open === null ? null : [q]);
+  const ranked = useCall("compare", [q, { side: q.filter.sides?.length === 1 ? q.filter.sides[0] : "both" }]).data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
-  // each row's percent of rounds is multiKillRows' own pct, null without rounds
-  const share = (r: (typeof rows)[number]) => r.pct ?? 0;
-  const most = Math.max(1, ...rows.map(share));
+  // each row's percent of rounds is multiKillRows' own pct, null without rounds: no value, no track
+  const most = Math.max(1, ...rows.map((r) => r.pct ?? 0));
   return (
-    <Card title="Multi-kills" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<SectionAside label="Rounds" value={m.multiKillRounds} />}>
-      <ul className="mlist">
+    <Card title="Multi-kill rounds" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<span className="meta">{m.multiKillRounds} of {plural(m.rounds, "round")}</span>}>
+      {!m.rounds ? <Empty text="No rounds in this filter, so no share of rounds." /> : <ul className="mlist lslist">
         {rows.map((r) => {
           const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
+          const pro = ranked?.p[`rounds${Math.min(5, r.k)}k`] ?? null;
+          const rank = pro && !pro.reason && pro.pct !== null ? pro.pct : null;
           const body = (
             <>
               <MultiBadge k={r.k} />
-              <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
-              <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
-              <b className="num">{r.rounds}</b>
+              {r.pct === null ? <span aria-hidden /> : <ShareTrack value={r.pct} max={most} hollow={r.rounds < THIN} />}
+              <span className="lsrow__n">{r.rounds}</span>
+              <b className="num lsrow__v mlist__pct"><Num v={fmtPct(r.pct, 1)} /></b>
             </>
           );
+          const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
+          const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
-              {r.rounds === 0 ? <div className="clist__row mlist__row">{body}<span className="clist__chev" aria-hidden /></div> : (
-                <button className="clist__row mlist__row" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`}
-                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds. ${open === r.k ? "Hide" : "Show"} the rounds`}
+              {r.rounds === 0 ? <div className="clist__row lsrow" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
+                <button className="clist__row lsrow" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`} data-tip={proText}
+                  aria-label={`${label}: ${r.rounds}${r.pct === null ? "" : `, ${fmtPct(r.pct, 1)} of rounds`}, ${proText} ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
                   {body}<span className="clist__chev" aria-hidden />
                 </button>
               )}
               {open === r.k && (
                 <ul id={`${listId}-${r.k}`} className="clutchlist" aria-label={`Your ${label}`}>
-                  {shown.error ? <li className="meta">{shown.error}</li> : !shown.data ? <li className="meta">Loading the rounds…</li> : shown.data.map((x) => {
+                  {rounds.error ? <li className="meta">{rounds.error}</li> : !rounds.data ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
                     const e = byFile.get(x.file);
                     return (
                       <li key={`${x.file}|${x.round}`}>
@@ -622,7 +673,7 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
                           <MultiBadge k={r.k} />
                           <span className={x.side === "T" ? "t-text" : "ct-text"}>{x.side}</span>
                           <span className="meta">{e ? `${mapName(e.match.map)}, ${fmtMatchDay(e.match)}` : ""}</span>
-                          <span className="meta num">Round {x.round}</span>
+                          <span className="meta num">Round {x.round}{x.won === null ? "" : <span className={`clutchlist__res ${x.won ? "is-won" : ""}`}>{x.won ? ", won" : ", lost"}</span>}</span>
                         </a>
                       </li>
                     );
@@ -632,29 +683,59 @@ function Multis({ m, list, side }: { m: Measures; list: MatchEntry[]; side: Side
             </li>
           );
         })}
-      </ul>
+      </ul>}
     </Card>
   );
 }
 
-function Openings({ s }: { s: Rolled }) {
+/** An opening-duel figure: display number, caps label, its percentile track, then its sample and rank. */
+function OpenTile({ id, label, s, r }: { id: string; label: string; s: Rolled; r: RankSet | null }) {
+  const p = r?.p[id];
+  const ranked = p && p.pct !== null && !p.reason ? p.pct : null;
+  const kind = metric(id).kind === "performance" ? "performance" : "style";
+  const sample = p && r ? sampleOf(id, p, r.m) : null;
+  const sub = [sample?.text, ranked === null ? null : kind === "performance" ? percentilePhrase(ranked, "performance") : `${percentilePhrase(ranked, "style")} vs bots`].filter(Boolean).join(" · ");
+  const thin = sample?.n != null && sample.n < THIN;
+  return (
+    <li className="otile" tabIndex={0} data-tip={[tipOf(id), ranked === null ? (p?.reason ? sentence(p.reason) : null) : `${percentilePhrase(ranked, kind)} ${kind === "performance" ? `of ${proPopulation(p!.pool)}` : `against ${r!.bots}`}.`].filter(Boolean).join("\n")}>
+      <b className={`disp disp--s otile__v ${thin ? "is-thin" : ""}`}><Num v={fmtMetric(id, s.v[id] ?? null)} /></b>
+      <span className="caps">{label}</span>
+      {ranked === null ? <span className="otile__none" /> : <Track at={ranked} tone={kind === "performance" ? `q${quintile(ranked)}` : undefined} hollow={thin} />}
+      {sub && <span className="meta">{sub}</span>}
+    </li>
+  );
+}
+
+/**
+ * Opening duels: the share won as the big figure with its pro rank as a pill, the won and lost duels
+ * as one bar, then the attempts, the rounds won after an opening kill and the opening deaths traded,
+ * each a figure with its track.
+ */
+function Openings({ s, r }: { s: Rolled; r: RankSet | null }) {
   const c = s.m;
   const att = c.openingKills + c.openingDeaths;
   const succ = s.v.openingSuccess;
+  const p = r?.p.openingSuccess;
+  const ranked = p && p.pct !== null && !p.reason ? p.pct : null;
+  const q = ranked === null ? null : quintile(ranked);
   return (
-    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={tipOf("openingSuccess")}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
-      <div className="odial">
-        <svg viewBox="0 0 120 12" width="100%" height="12" aria-hidden>
-          <rect x="0" y="2" width="120" height="8" rx="2" fill="var(--track)" />
-          {att > 0 && <rect x="0" y="2" width={(120 * c.openingKills) / att} height="8" rx="2" fill="var(--good)" />}
-        </svg>
-        <div className="odial__legend"><span><b className="num good-text">{c.openingKills}</b> won</span><span><b className="num poor-text">{c.openingDeaths}</b> lost</span></div>
+    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<span className="pip pip--hi" aria-hidden>1st</span>}
+      aside={<span className="meta">{plural(att, "opening duel")} in {plural(c.rounds, "round")}</span>}>
+      <div className="open">
+        <div className="open__big">
+          <div className="open__head">
+            <b className="disp disp--xl" data-tip={tipOf("openingSuccess")} tabIndex={0}><Num v={fmtPct(succ, 1)} /></b>
+            {ranked !== null && <span className={`vpill ${q! >= 4 ? "vpill--good" : q! <= 2 ? "vpill--poor" : ""}`} data-tip={`${percentilePhrase(ranked, "performance")} of ${proPopulation(p!.pool)}.`} tabIndex={0}>{percentilePhrase(ranked, "performance")}</span>}
+          </div>
+          <span className="open__bar" aria-hidden><i style={{ width: att ? `${(100 * c.openingKills) / att}%` : 0 }} /></span>
+          <div className="open__legend"><span><b className="num">{c.openingKills}</b> won</span><span><b className="num">{c.openingDeaths}</b> lost</span></div>
+        </div>
+        <ul className="open__tiles">
+          <OpenTile id="openingAttempts" label="Attempts" s={s} r={r} />
+          <OpenTile id="openingWinPct" label="Rounds won after" s={s} r={r} />
+          <OpenTile id="openingTradedPct" label="Deaths traded" s={s} r={r} />
+        </ul>
       </div>
-      <dl className="facts">
-        <dt data-tip={tipOf("openingAttempts")}>Attempts</dt><dd><b className="num">{fmtMetric("openingAttempts", s.v.openingAttempts)}</b><span className="meta">of rounds</span></dd>
-        <dt data-tip={tipOf("openingWinPct")}>Rounds won after</dt><dd><b className="num">{fmtMetric("openingWinPct", s.v.openingWinPct)}</b></dd>
-        <dt data-tip={tipOf("openingTradedPct")}>Opening deaths traded</dt><dd><b className="num">{fmtMetric("openingTradedPct", s.v.openingTradedPct)}</b></dd>
-      </dl>
     </Card>
   );
 }

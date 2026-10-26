@@ -5,26 +5,18 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentImg } from "../components/Agent";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
-import { AimIcon, ChevronLeftIcon, HomeIcon, MatchesIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
-import { OpeningIcon } from "../icons/attributes";
-import { WeaponIcon } from "../icons/game";
+import { HomeIcon, MatchesIcon, PanelCloseIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
 import { careerEntries, isOwn, ratingHeadline } from "../data/engine";
 import { scanErrorText } from "../data/sources";
 import { fmtRating, plural } from "../lib/format";
 import { navWasInstant, pageHref, useRoute, type Page } from "../router";
 
-/** Weapons' nav icon: the AK silhouette, centred in the 20 px icon box the other entries use. */
-const GunNavIcon = ({ size = 20 }: { size?: number }) => <span className="navgun" style={{ width: size, height: size }}><WeaponIcon name="ak47" size={Math.round(size * 0.55)} label={undefined} /></span>;
-
 type NavPage = Exclude<Page, "match" | "settings">;
-/** The six views, in order; Ctrl+key opens each. */
+/** The three views, in order; Ctrl+key opens each. Playstyle, Career aim and Weapons are Profile's tabs. */
 export const NAV: { page: NavPage; label: string; Icon: typeof HomeIcon; key: string }[] = [
   { page: "home", label: "Home", Icon: HomeIcon, key: "1" },
   { page: "matches", label: "Matches", Icon: MatchesIcon, key: "2" },
   { page: "profile", label: "Profile", Icon: ProfileIcon, key: "3" },
-  { page: "playstyle", label: "Playstyle", Icon: OpeningIcon, key: "4" },
-  { page: "aim", label: "Career aim", Icon: AimIcon, key: "5" },
-  { page: "weapons", label: "Weapons", Icon: GunNavIcon, key: "6" },
 ];
 
 const RAIL_KEY = "cs2stats.rail";
@@ -136,7 +128,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
           </button>
         )}
         <button className="side__item side__toggle" onClick={onToggle} aria-label={rail ? "Expand sidebar" : "Collapse sidebar"} aria-keyshortcuts="Control+B" data-tip={rail ? "Expand  ·  Ctrl B" : "Ctrl B"} data-tip-place="right">
-          <ChevronLeftIcon size={20} />
+          <PanelCloseIcon size={20} />
           <span className="side__label">Collapse</span>
         </button>
       </div>

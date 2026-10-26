@@ -137,7 +137,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
           <div className="mhero__meta">
             <span className="mhero__map"><MapThumb map={map} size={18} /><b>{mapName(map)}</b></span>
             <span>{fmtWhen(e.match)}</span>
-            {e.match.durationS !== null && <span data-tip="From the first round's start to the last round's end">{fmtDuration(e.match.durationS)}</span>}
+            {e.match.durationS !== null && <span data-tip="From the first round's start to the last round's end" tabIndex={0}>{fmtDuration(e.match.durationS)}</span>}
             <SourceBadge s={src} />
           </div>
         </div>
@@ -150,7 +150,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
       <div className="mhero__you">
         <span className="caps">You</span>
         <span className="mhero__stat"><span className="meta">{ratingHeadline()}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
-        <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }} data-tip={swingSumTip(line.m)}><Num v={fmtSwing(line.swing)} /></b></span>
+        <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }} data-tip={swingSumTip(line.m)} tabIndex={0}><Num v={fmtSwing(line.swing)} /></b></span>
         <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{line.kills}<span className="faint">–</span>{line.deaths}</b></span>
         <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(line.adr)}</b></span>
         <span className="mhero__stat"><span className="meta">KAST</span><b className="num"><Num v={fmtPct(line.kast)} /></b></span>

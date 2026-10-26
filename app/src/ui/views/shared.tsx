@@ -6,8 +6,7 @@ import { HoverCard } from "../components/overlay";
 import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
 import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
-import { BUY_LABEL, BuyIcon, SkullIcon, WIN_LABEL } from "../icons/game";
-import { GameKillFlags, GameWeapon, RoundEndIcon } from "./match/glyphs";
+import { BUY_LABEL, BuyIcon, KillFlags, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
@@ -131,15 +130,15 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
   return (
     <div className="rcard">
       <div className="rcard__head">
-        <span className={side ? `${side}-text` : "faint"}><RoundEndIcon how={r.how} size={16} /></span>
+        <span className={side ? `${side}-text` : "faint"}><WinIcon how={r.how} size={16} beside /></span>
         <b>Round {r.number}</b>
         <span className="meta">{r.how ? WIN_LABEL[r.how] : "Result unknown"}</span>
         {r.scoreAfter && <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>}
       </div>
       <div className="rcard__eco">
-        <span><BuyIcon buy={r.buy.us} size={14} /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
+        <span><BuyIcon buy={r.buy.us} size={14} beside /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
         <span className="faint">vs</span>
-        <span><BuyIcon buy={r.buy.them} size={14} /> {r.buy.them ? BUY_LABEL[r.buy.them] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.them)}</span></span>
+        <span><BuyIcon buy={r.buy.them} size={14} beside /> {r.buy.them ? BUY_LABEL[r.buy.them] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.them)}</span></span>
       </div>
       {r.kills.length > 0 ? (
         <ol className="kf kf--compact">
@@ -147,8 +146,8 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
             <li key={i}>
               <span className="mono faint">{fmtClock(k.t)}</span>
               <span className={k.killer !== null && v.players[k.killer].team === "us" ? "us-text" : "them-text"}>{k.killer === null ? "World" : v.players[k.killer].name}</span>
-              <GameWeapon name={k.weapon} height={11} />
-              <GameKillFlags kill={k} size={11} />
+              <WeaponIcon name={k.weapon} height={11} />
+              <KillFlags kill={k} size={11} />
               <span className={v.players[k.victim].team === "us" ? "us-text" : "them-text"}>{v.players[k.victim].name}</span>
             </li>
           ))}
@@ -185,11 +184,6 @@ export function TotalsCardBody({ v, col }: { v: MatchModel; col: Extract<RoundCo
       </div>
     </div>
   );
-}
-
-/** Kill icons for one player's round, headshots marked. */
-export function Skulls({ kills, size = 10 }: { kills: { hs: boolean }[]; size?: number }) {
-  return <span className="skulls">{kills.map((k, i) => <SkullIcon key={i} hs={k.hs} size={size} className={k.hs ? "skull skull--hs" : "skull"} />)}</span>;
 }
 
 // ---------------------------------------------------------------- places
@@ -260,7 +254,8 @@ export const NEEDS_DEMO = "Needs a recorded demo";
 export function NeedsDemo({ detail }: { detail?: string }) {
   return (
     <span className="needs">
-      <span className="needs__t" data-tip={detail}>{NEEDS_DEMO}</span>
+      {/* the reason is the label's tooltip, so the label takes focus when there is one */}
+      <span className="needs__t" data-tip={detail} tabIndex={detail ? 0 : undefined}>{NEEDS_DEMO}</span>
       <a className="needs__link" href={pageHref("settings")} data-tip={detail}>Data & settings</a>
     </span>
   );

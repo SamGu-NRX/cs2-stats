@@ -4,9 +4,8 @@
 // round the file holds only as totals (MatchInfo.totalsOnly) is a hatched column with no round end.
 import { columnOf, roundColumns, totalsWinner, type MatchModel } from "../../data/match";
 import { HoverCard } from "../../components/overlay";
-import { WIN_LABEL } from "../../icons/game";
+import { WIN_LABEL, WinIcon } from "../../icons/game";
 import { RoundCardBody, TotalsCardBody } from "../shared";
-import { RoundEndIcon } from "./glyphs";
 
 /** selected and onPick are round numbers, so totals-only rounds can be picked too. */
 export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; selected: number | null; onPick: (number: number) => void; compact?: boolean }) {
@@ -37,7 +36,7 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
               data-tip={`Round ${r.number}: ${r.winner === "us" ? "won" : "lost"}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}`}
               onClick={() => onPick(r.number)}
             >
-              <RoundEndIcon how={r.how} size={10} />
+              <WinIcon how={r.how} size={10} compact />
             </button>
           );
         })}
@@ -78,8 +77,8 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
               card={() => <RoundCardBody v={v} r={r} />}
             >
               <button className="rail__btn" onClick={() => onPick(r.number)} aria-label={`Round ${r.number}, ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "result unknown"}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}`} aria-pressed={pressed}>
-                <span className="rail__cell" data-side={r.winner === "us" ? side : "none"}>{r.winner === "us" && <RoundEndIcon how={r.how} size={12} />}</span>
-                <span className="rail__cell" data-side={r.winner === "them" ? side : "none"}>{r.winner === "them" && <RoundEndIcon how={r.how} size={12} />}</span>
+                <span className="rail__cell" data-side={r.winner === "us" ? side : "none"}>{r.winner === "us" && <WinIcon how={r.how} size={12} compact />}</span>
+                <span className="rail__cell" data-side={r.winner === "them" ? side : "none"}>{r.winner === "them" && <WinIcon how={r.how} size={12} compact />}</span>
                 <span className="rail__n num">{r.number}</span>
               </button>
             </HoverCard>

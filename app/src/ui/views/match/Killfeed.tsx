@@ -1,12 +1,11 @@
 // The round drawer's killfeed, read like CS2's: killer, gun, modifiers, victim, in fixed columns so
 // nothing overlaps at any name length. Time sits on the left; swing on the right is always from your
-// team's side (a kill by an enemy reads negative). Official icons come from the local pack, with the
-// app's glyphs as the fallback.
+// team's side (a kill by an enemy reads negative). Every icon is the CS2 pack's (icons/game.tsx); without
+// the pack each shows its name.
 import type { ReactNode } from "react";
-import { GameIcon } from "../../components/GameIcon";
-import { BlindIcon, HeadshotIcon, InAirIcon, NoscopeIcon, SmokeKillIcon, WallbangIcon, WeaponIcon } from "../../icons/game";
+import { FirstPip } from "../../components/bits";
+import { FlagIcon, WeaponIcon } from "../../icons/game";
 import type { Side } from "../../../stats/tables";
-import { weaponLabel } from "../../../stats/weapons";
 
 export interface FeedKill {
   /** seconds since freeze end */
@@ -31,11 +30,11 @@ export interface FeedKill {
   mine: boolean;
 }
 
-const MODS: { key: "noscope" | "smoke" | "wallbang" | "headshot"; id: string; label: string; Glyph: typeof HeadshotIcon }[] = [
-  { key: "noscope", id: "noscope", label: "No scope", Glyph: NoscopeIcon },
-  { key: "smoke", id: "smoke", label: "Through smoke", Glyph: SmokeKillIcon },
-  { key: "wallbang", id: "wallbang", label: "Through a wall", Glyph: WallbangIcon },
-  { key: "headshot", id: "headshot", label: "Headshot", Glyph: HeadshotIcon },
+const MODS: { key: "noscope" | "smoke" | "wallbang" | "headshot"; id: string; label: string }[] = [
+  { key: "noscope", id: "noscope", label: "No scope" },
+  { key: "smoke", id: "smoke", label: "Through smoke" },
+  { key: "wallbang", id: "wallbang", label: "Through a wall" },
+  { key: "headshot", id: "headshot", label: "Headshot" },
 ];
 
 const clock = (t: number | null) => (t === null ? "–" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
@@ -55,13 +54,13 @@ export function KillRow({ k, name = plain }: { k: FeedKill; name?: NameRenderer 
         {k.assister ? <small> + {name(k.assister.pi, k.assister.name)}</small> : null}
       </span>
       <span className="kfeed__w">
-        {k.blind ? <span title="Killer was flashed"><GameIcon id="blind" width={14} label="Killer was flashed" fallback={<BlindIcon size={14} label="Killer was flashed" />} /></span> : null}
-        {k.inAir ? <span title="Killer was in the air"><GameIcon id="inair" width={14} label="Killer was in the air" fallback={<InAirIcon size={14} label="Killer was in the air" />} /></span> : null}
-        <GameIcon id={k.weapon} width={40} height={14} label={weaponLabel(k.weapon)} fallback={<WeaponIcon name={k.weapon} size={14} />} />
+        {k.blind ? <span title="Killer was flashed"><FlagIcon id="blind" label="Killer was flashed" size={14} /></span> : null}
+        {k.inAir ? <span title="Killer was in the air"><FlagIcon id="inair" label="Killer was in the air" size={14} /></span> : null}
+        <WeaponIcon name={k.weapon} height={14} />
         {MODS.filter((m) => k[m.key]).map((m) => (
-          <span key={m.key} title={m.label}><GameIcon id={m.id} width={14} label={m.label} fallback={<m.Glyph size={14} label={m.label} />} /></span>
+          <span key={m.key} title={m.label}><FlagIcon id={m.id} label={m.label} size={14} /></span>
         ))}
-        {k.opening ? <span className="kfeed__tag" title="First kill of the round">1ST</span> : null}
+        {k.opening ? <FirstPip label="First kill of the round" /> : null}
         {k.tradeKill ? <span className="kfeed__tag" title="Avenged a teammate killed in the last 5 s">TRADE</span> : null}
       </span>
       <span className={`kfeed__n ${sideClass(k.victim.side)}`} title={k.victim.name}>{name(k.victim.pi, k.victim.name)}</span>

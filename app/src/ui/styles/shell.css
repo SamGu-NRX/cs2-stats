@@ -17,6 +17,8 @@
   transition: width var(--d-side) var(--ease-in-out);
 }
 .side.is-instant { transition: none; }
+/* reduced motion: the sidebar snaps between full and rail, whatever toggled it */
+@media (prefers-reduced-motion: reduce) { .side { transition: none; } }
 .side[data-rail="true"] { width: var(--side-rail); }
 
 .side__me { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; border-bottom: 1px solid var(--line); flex: none; }

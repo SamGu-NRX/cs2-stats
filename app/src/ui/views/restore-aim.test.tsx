@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HIT_GROUPS } from "../../stats/facts";
 import { CS2RB } from "../../stats/model-params";
+import { RECOIL } from "../../stats/recoil-ref";
 import { emptySummary, type Summary, type WeaponTotals } from "../../stats/rollup";
 import type { Rolled } from "../../worker/protocol";
 import { metaOf, rolled } from "../../worker/views";
@@ -15,7 +16,7 @@ import { targetControl } from "../components/charts";
 import { setMeta } from "../data/meta";
 import { BarProvider } from "../shell/Bar";
 import type { Data } from "../data/provider";
-import { AimPanels } from "./aim/AimPanels";
+import { AimPanels, sprayGuns } from "./aim/AimPanels";
 import CareerAim from "./CareerAim";
 
 let scoped: Rolled | null = null;
@@ -153,44 +154,100 @@ describe("hitting figures, restored", () => {
   });
 });
 
-describe("spray card, restored parts", () => {
-  /** An AK spray summary: 4 sprays to bullet 3, with spread and target sums. */
-  const spray = (onTarget: Summary["aim"]["onTarget"] = {}) => summary({
+describe("spray card", () => {
+  /** An AK spray summary: 4 sprays to bullet 3, with spread and target sums, and landing points when given. */
+  const spray = (onTarget: Summary["aim"]["onTarget"] = {}, land: Summary["aim"]["land"] = {}) => summary({
     sprays: 4,
     path: { ak47: { n: [4, 4], dp: [4, 8], dy: [0, 4] } },
     spread: { ak47: { pp: [8, 20], yy: [0, 8] } },
     heads: { ak47: { n: [4, 4, 4], dp: [0, 0, 0], dy: [4, 4, 4] } },
     onTarget,
+    land,
+  });
+  /** Bullets 2 and 3 landing 0.5° and 1° from bullet 1 (3-4-5 triangles), over 4 sprays of the given kinds. */
+  const land = (measured: number, pattern: number): Summary["aim"]["land"] => ({ ak47: { n: [4, 4], dp: [1.2, 2.4], dy: [1.6, 3.2], measured, pattern } });
+  const layer = (name: string) => host.querySelector(`svg.spray__plot [data-layer="${name}"]`);
+  const key = () => host.querySelector(".spray-key")!.textContent!;
+
+  it("heads the chart with how far the bullets stayed from bullet 1's point, against the pattern with no pull", () => {
+    // fails if the headline averages the wrong bullets, or the no-pull bar is not the AK's own pattern over bullets 2 and 3
+    scoped = spray({}, land(4, 0));
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    expect(host.querySelector("figcaption .sprf__title")!.textContent).toBe("Your AK-47 bullets stayed 0.75° from bullet 1's point");
+    expect(host.querySelector("figcaption .meta")!.textContent).toBe("Your average spray over bullets 2–3, from 4 sprays");
+    const k = RECOIL.ak47.kick;
+    const noPull = (Math.hypot(k[1][0], k[1][1]) + Math.hypot(k[2][0], k[2][1])) / 2;
+    expect(Array.from(host.querySelectorAll(".stay__row b")).map((b) => b.textContent)).toEqual(["0.75°", `${noPull.toFixed(2)}°`]);
   });
 
-  it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Ideal pull", () => {
+  it("tells measured landing points from estimated ones, in the well and in the key", () => {
+    // fails if estimated points look measured, or a mix claims either kind
+    scoped = spray({}, land(4, 0));
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    expect(host.querySelectorAll("svg.spray__plot circle.spray__land:not(.spray__land--est)")).toHaveLength(2);
+    expect(host.querySelector("svg.spray__plot .spray__land--est")).toBeNull();
+    expect(key()).toContain("Your bullets, measured");
+    scoped = spray({}, land(0, 4));
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    expect(host.querySelectorAll("svg.spray__plot circle.spray__land--est")).toHaveLength(2);
+    expect(key()).toContain("Your bullets, estimated");
+    scoped = spray({}, land(1, 3));
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    expect(host.querySelectorAll("svg.spray__plot path.spray__land")).toHaveLength(2);
+    expect(key()).toContain("Your bullets: 1 spray measured, 3 estimated");
+  });
+
+  it("draws a bullet that went left to the left of bullet 1's point", () => {
+    // fails if the chart mirrors yaw again: yaw is positive turning left (aim-geometry.ts)
+    scoped = spray({}, { ak47: { n: [4, 4], dp: [0, 0], dy: [4, 8], measured: 4, pattern: 0 } });
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    const origin = Number(host.querySelector("svg.spray__plot .spray__origin")!.getAttribute("cx"));
+    const dots = Array.from(host.querySelectorAll("svg.spray__plot circle.spray__land")).map((c) => Number(c.getAttribute("cx")));
+    expect(dots.length).toBe(2);
+    expect(dots.every((x) => x < origin)).toBe(true);
+  });
+
+  it("switches the ideal pull and the spread on and off, each hiding what it names", () => {
     // fails if either toggle is missing or unlabelled, or a toggle does not hide what it names
-    scoped = spray();
+    scoped = spray({}, land(4, 0));
     render(<AimPanels query={QUERY} label="t" visibility />);
     const boxes = Array.from(host.querySelectorAll<HTMLLabelElement>(".spray-toggles label"));
-    expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Ideal pull"]);
-    expect(host.querySelectorAll("svg.spray__plot ellipse")).toHaveLength(2);
-    expect(host.querySelector(".spray-key")!.textContent).toContain("one standard deviation");
+    expect(boxes.map((l) => l.textContent)).toEqual(["Ideal pull", "Spread"]);
+    // the ideal pull starts on, the spread off; your pull shows with either
+    expect([layer("ideal")!.hasAttribute("data-off"), layer("spread")!.hasAttribute("data-off"), layer("pull")!.hasAttribute("data-off")]).toEqual([false, true, false]);
+    expect(layer("ideal")!.querySelector(".spray__pro")).not.toBeNull();
+    expect(layer("spread")!.querySelectorAll("ellipse")).toHaveLength(2);
+    expect(key()).toContain("Ideal pull");
+    expect(key()).not.toContain("one standard deviation");
     act(() => boxes[0].querySelector("input")!.click());
-    expect(host.querySelectorAll("svg.spray__plot ellipse")).toHaveLength(0);
-    expect(host.querySelector(".spray-key")!.textContent).not.toContain("one standard deviation");
-    expect(host.querySelector("svg.spray__plot .spray__pro")).not.toBeNull();
+    expect([layer("ideal")!.hasAttribute("data-off"), layer("pull")!.hasAttribute("data-off")]).toEqual([true, true]);
+    expect(key()).not.toContain("Ideal pull");
     act(() => boxes[1].querySelector("input")!.click());
-    expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
-    expect(host.querySelector(".spray-key")!.textContent).not.toContain("Pro median");
+    expect([layer("spread")!.hasAttribute("data-off"), layer("pull")!.hasAttribute("data-off")]).toEqual([false, false]);
+    expect(key()).toContain("one standard deviation");
+  });
+
+  it("says where the pull leaves the pros' middle half under the key while the ideal pull shows", () => {
+    // the path's bullet 2 is 1° down and the AK pros' middle half ends at 0.65°: more pull, from bullet 2
+    scoped = spray({}, land(4, 0));
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    expect(host.querySelector(".spray__finding")!.textContent).toBe("Your AK-47 pull overshoots the pros' middle half from bullet 2.");
+    act(() => host.querySelector<HTMLInputElement>(".spray-toggles input")!.click());
+    expect(host.querySelector(".spray__finding")).toBeNull();
   });
 
   it("draws a plugin M4A1-S path with no reference, controls, key or distance bars when its silencer state is unknown", () => {
     // fails if a spray whose recoil state the plugin did not record is drawn against the silenced
-    // pattern: the ideal pull, its toggle and key, or "Distance from the ideal pull"
+    // pattern: the game's pattern, the ideal pull, its toggle and key, or "Distance from the ideal pull"
     scoped = summary({ sprays: 5, unknownPath: { m4a1_silencer: { n: [5, 5, 5], dp: [1, 2, 3], dy: [0, 0.5, 1] } } });
     scoped.weapons.m4a1_silencer = gun({ shots: 15, hits: 3 });
     render(<AimPanels query={QUERY} label="t" visibility />);
-    act(() => host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="m4a1_silencer"]')!.click());
-    expect(host.querySelector(".spray__title")!.textContent).toBe("Your M4A1-S spray");
+    act(() => host.querySelector<HTMLButtonElement>('.gunpick__b[data-w="m4a1_silencer"]')!.click());
+    expect(host.querySelector(".sprf__title")!.textContent).toBe("Your M4A1-S pull");
     expect(host.querySelector("svg.spray__plot .spray__mine")).not.toBeNull();
-    expect([host.querySelector("svg.spray__plot .spray__pro"), host.querySelector("svg.spray__plot .spray__band"), host.querySelector(".spray-toggles")]).toEqual([null, null, null]);
-    expect(host.querySelector(".spray-key")!.textContent).not.toContain("Ideal pull");
+    expect([".spray__pro", ".spray__band", ".spray__kick"].map((c) => host.querySelector(`svg.spray__plot ${c}`))).toEqual([null, null, null]);
+    expect(host.querySelector(".spray-toggles")).toBeNull();
+    expect(key()).not.toContain("Ideal pull");
     expect(host.textContent).not.toContain("Distance from the ideal pull");
     expect(host.querySelector(".spray__note")!.textContent).toContain("silencer");
   });
@@ -198,15 +255,15 @@ describe("spray card, restored parts", () => {
   it("keeps a sprayed gun the game's pattern is not known for, drawn without a reference", () => {
     // fails if the gun list drops a gun without a pattern (the Negev: no demo shots yet), or such a gun
     // shows an Ideal pull toggle or a reference line
-    scoped = summary({ sprays: 5, path: { negev: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    scoped = summary({ sprays: 5, path: { negev: { n: [5, 5], dp: [3, 6], dy: [1, 2] } }, spread: { negev: { pp: [10, 40], yy: [1, 4] } } });
     scoped.weapons.negev = gun({ shots: 15, hits: 3 });
     render(<AimPanels query={QUERY} label="t" visibility />);
-    const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="negev"]')!;
+    const btn = host.querySelector<HTMLButtonElement>('.gunpick__b[data-w="negev"]')!;
     expect(btn).not.toBeNull();
     act(() => btn.click());
-    expect(host.querySelector(".spray__title")!.textContent).toBe("Your Negev spray");
+    expect(host.querySelector(".sprf__title")!.textContent).toBe("Your Negev pull");
     expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
-    expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
+    expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread"]);
     expect(host.querySelector(".spray__note")!.textContent).toContain("No in-game pattern");
   });
 
@@ -214,20 +271,22 @@ describe("spray card, restored parts", () => {
     // fails if the hollow few-sprays mark comes back, a gun without sprays lists, or a thin gun loses its reason
     scoped = summary({ sprays: 3, sprayDist: [1.5, 2.5, 2] });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    const rows = Array.from(host.querySelectorAll<HTMLButtonElement>(".gunlist__b"));
+    const rows = Array.from(host.querySelectorAll<HTMLButtonElement>(".gunpick__b"));
     // the knife is not a gun; the AK has three sprays without angles (a plugin file) and still lists
     expect(rows.map((b) => b.getAttribute("data-w"))).toEqual(["ak47"]);
-    expect(rows[0].querySelector(".gunlist__n")!.textContent).toBe("AK-47 3");
+    expect(rows[0].querySelector(".gunpick__n")!.textContent).toBe("AK-47 3");
+    expect(rows[0].querySelector(".gicon--gun")).not.toBeNull();
     expect(rows[0].hasAttribute("data-thin")).toBe(true);
     expect(rows[0].getAttribute("data-tip")).toBe("3 sprays, the pattern settles at 30.");
     expect(host.querySelector(".gunlist__thin, .gunbtn__thin")).toBeNull();
-    // without per-bullet angles the chart is the ideal pull alone, and the distance from the target shows
-    expect(host.querySelector(".spray__title")!.textContent).toBe("AK-47: the ideal pull");
+    // without per-bullet angles the chart is the game's pattern alone, and the distance from the target shows
+    expect(host.querySelector(".sprf__title")!.textContent).toBe("AK-47: the game's pattern and its ideal pull");
+    expect(host.querySelectorAll("svg.spray__plot .spray__kick")).toHaveLength(RECOIL.ak47.kick.length - 1);
     expect(host.querySelector(".spray__dist b")!.textContent).toBe("2.00°");
     expect(host.querySelector(".spray__dist .meta")!.textContent).toBe("mean over 3 sprays");
     scoped = summary({ sprays: 0 });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(host.querySelectorAll(".gunlist__b")).toHaveLength(0);
+    expect(host.querySelectorAll(".gunpick__b")).toHaveLength(0);
     expect(host.querySelector(".aim-spray")!.textContent).toContain("No sprays of three bullets or more.");
   });
 
@@ -245,7 +304,7 @@ describe("spray card, restored parts", () => {
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);
     expect(host.querySelectorAll("svg.spray__plot circle.spray__head")).toHaveLength(3);
-    expect(host.querySelector(".spray-key")!.textContent).toContain("Where the target's head was");
+    expect(key()).toContain("Where the target's head was");
   });
 
   it("charts bullets against the 1.5 degree on-target line only when the target data exists", () => {
@@ -293,5 +352,17 @@ describe("empty states", () => {
     render(<BarProvider><CareerAim /></BarProvider>);
     const btn = host.querySelector<HTMLAnchorElement>(".empty a.btn")!;
     expect([btn.textContent, btn.getAttribute("href")]).toEqual(["Open Data & settings", "#/settings"]);
+  });
+});
+
+describe("landings with an unknown silencer state (#39 review)", () => {
+  it("keeps a gun's measured landings when its path cannot be set against the game's pattern", () => {
+    // fails if a recoil-unknown gun drops AimAgg.land: where the bullets landed is measured either way
+    const land = { n: [3, 3], dp: [1, 2], dy: [0, 1], measured: 3, pattern: 0 };
+    const unknownPath = { ak47: { n: [3, 3], dp: [2, 4], dy: [0, 1] } };
+    const [g] = sprayGuns(["ak47"], [summary({ sprays: 3, unknownPath, land: { ak47: land } })]);
+    expect([g.recoilUnknown, g.path, g.land]).toEqual([true, unknownPath.ak47, land]);
+    // and a gun without landings has none to keep
+    expect(sprayGuns(["ak47"], [summary({ sprays: 3, unknownPath })])[0].land).toBeNull();
   });
 });

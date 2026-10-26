@@ -1,6 +1,8 @@
 /* ---------------------------------------------------------------- cards and collapsible sections */
-.card { background: var(--bg1); border-radius: var(--r-card); min-width: 0; }
-.card--flat { background: transparent; }
+/* a card: the surface step, a hairline, radius 10 and the one card shadow (its top-edge highlight is
+   what makes a dark card read as a surface rather than a hole) */
+.card { background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-card); min-width: 0; }
+.card--flat { background: transparent; border-color: transparent; box-shadow: none; }
 /* The header wraps: an aside too wide to sit beside the title (a population line, the provisional
    label) drops below it at narrow widths, such as the 1100 px window at 200% zoom. */
 .card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 48px; padding: 8px var(--pad-panel); }
@@ -12,6 +14,8 @@
 .card__foot { padding: 10px var(--pad-panel) 14px; font-size: 12px; color: var(--ink2); border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: space-between; }
 
 /* The whole header is the toggle; the chevron turns 180°. */
+.card__head--toggle { padding: 0; }
+.card__aside--pad { padding-right: var(--pad-panel); }
 .card__toggle { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 48px; padding: 0 12px 0 var(--pad-panel); border-radius: var(--r-card); text-align: left; }
 .card__toggle .chev { color: var(--ink3); margin-left: 4px; transition: transform var(--d-expand) var(--ease-in-out); }
 .card__toggle[aria-expanded="false"] .chev { transform: rotate(-90deg); }
@@ -76,8 +80,11 @@
 .btn[disabled], .btn[aria-disabled="true"] { opacity: 0.4; pointer-events: none; }
 
 .seg { position: relative; display: inline-flex; padding: 2px; border-radius: var(--r-ctl); background: var(--bg0); box-shadow: inset 0 0 0 1px var(--line); flex: none; }
-.seg__thumb { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 4px; background: var(--pill); transition: transform 160ms var(--ease-in-out), width 160ms var(--ease-in-out); }
+/* the thumb takes its new width at once and slides there: only transform animates (a width
+   transition re-lays the control every frame) */
+.seg__thumb { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 4px; background: var(--pill); transition: transform 160ms var(--ease-in-out); }
 .seg__thumb.is-instant { transition: none; }
+@media (prefers-reduced-motion: reduce) { .seg__thumb { transition: none; } }
 .seg__item { position: relative; height: 26px; padding: 0 10px; border-radius: 4px; color: var(--ink2); font: 500 12px/1 var(--f); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: color var(--d-color) ease; }
 .seg__item[data-on="true"] { color: var(--cream); }
 .seg__item[data-on="true"][data-side="t"] { color: var(--t); }
@@ -158,8 +165,9 @@
 .palette__empty { padding: 20px 16px; color: var(--ink2); }
 
 /* ---------------------------------------------------------------- tooltip */
+/* one block of text: display is set here so no inherited layout rule can split its lines into columns */
 .tip {
-  position: fixed; z-index: 80; max-width: 280px; padding: 6px 9px; border-radius: var(--r-ctl);
+  display: block; position: fixed; z-index: 80; max-width: 280px; padding: 6px 9px; border-radius: var(--r-ctl);
   background: var(--bg0); box-shadow: 0 0 0 1px var(--line2); color: var(--ink); font: 400 12px/1.4 var(--f);
   pointer-events: none; opacity: 0; transform: scale(calc(1 - 0.03 * var(--mo))); transform-origin: var(--tip-origin, 50% 100%);
   transition: opacity var(--d-tip) var(--ease-out), transform var(--d-tip) var(--ease-out);
