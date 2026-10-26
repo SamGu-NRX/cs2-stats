@@ -392,6 +392,21 @@ What each source gives:
 | Kill flags | yes | yes |
 | Health from damage | yes | yes |
 
+## Per-match views (`matchviews.ts`)
+
+These are views of one match, not metrics: nothing is ranked. The definitions are ours, over schema v1
+data; Leetify's match pages were the checklist.
+
+| View | Definition |
+|---|---|
+| Rating by round | Rating 3.0 is linear in six per-round averages, so each rated round has a rating of its own: the intercept plus each coefficient times the round's eco-adjusted kills, damage and deaths, KAST and multi-kill (0 or 100), and swing (points). Over a set of rated rounds the mean is the rating of those rounds. A round Rating 3.0 does not rate (unknown swing or eco value) has none. |
+| Head to head | Per pair of enemies, each way: enemy kills, hit damage (HLTV's capped figure), kills by weapon class, blinds over 1.1 s (Leetify's cut) with their seconds, and opening kills |
+| Map zones | Your kills and deaths per zone (the map's place name) and side. A kill's zone is the kills table's place for you, else your position sample nearest the tick, since plugin files carry no kill places. The zone list is every place this match's position samples name. |
+| Your match | Every metric over this match against the same metric over your `n` most recent earlier matches, pooled. The direction is better or worse for performance metrics (lower is better where marked) and higher or lower for identity metrics. |
+| Opening duels | Each round's first enemy kill (killer, victim, weapon, time, whether the victim was traded, whether the killer's side won). Your best opening weapon is your gun with the most opening kills, ties broken by rounds won. Rounds won after your opening kill, and after your opening death. |
+| Situations | The alive counts of your side and the enemy's at freeze end and after every death up to the round's end; each state reached counts once per round, with the round's result. States with a side at 0 are the end and are left out. |
+| Bombsites | Per site letter. T: a take attempt is a round where a living T player entered the site's zone (the map's "Bombsite" place) before the plant; it succeeds when the bomb was planted there. Post-plant: rounds planted there, won. CT: a hold attempt is a round a T player entered the zone before the plant; it succeeds when the bomb was not planted there. Retake: rounds planted there, won by CT. |
+
 ## Information (identity)
 
 Source: the radar `spotted` table, clipped to freeze end, round end and both players' deaths. It lags
