@@ -207,9 +207,10 @@ canvas.radar-img { image-rendering: auto; }
 .msticky__rail { padding: 10px var(--gutter) 6px; overflow-x: auto; }
 .mtabs { position: relative; display: flex; gap: 22px; padding: 0 var(--gutter); height: 40px; overflow-x: auto; scrollbar-width: none; }
 .mtab { display: flex; align-items: center; font: 600 13px/1 var(--f); color: var(--ink2); white-space: nowrap; transition: color var(--d-hover) ease; }
-.mtab[aria-selected="true"] { color: var(--cream); }
+/* the tab bar is a nav of links (MatchView.tsx Sticky); the open section carries aria-current="page" */
+.mtab[aria-current="page"] { color: var(--cream); }
 .mtab.is-dim { color: var(--ink3); }
-@media (hover: hover) and (pointer: fine) { .mtab[aria-selected="false"]:hover { color: var(--ink); } }
+@media (hover: hover) and (pointer: fine) { .mtab:not([aria-current]):hover { color: var(--ink); } }
 /* the underline takes the tab's width at once and slides under it: transform only */
 .mtabs__ul { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--cream); border-radius: 1px 1px 0 0; transition: transform var(--d-tab) var(--ease-in-out); }
 .mtabs__ul.is-instant { transition: none; }
