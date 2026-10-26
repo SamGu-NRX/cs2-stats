@@ -1,5 +1,9 @@
 # Contributing
 
+## Licence
+
+The repository is under GPL-3.0-only (`LICENSE`), and contributions are accepted under the same licence. By opening a pull request, you agree that your contribution is licensed under GPL-3.0-only. Don't add numbers or art copied from the game unless `THIRD_PARTY_NOTICES.md` lists the file and its source.
+
 ## Private data
 
 This repository is public. Some of what the tools read and write must never be committed:

@@ -69,8 +69,8 @@ Tests that need private data (pro demos, HLTV files, the packs) skip with a mess
 
 ## Licensing
 
-- The capture plugin, everything under `plugin/`, is under GPL-3.0-only (`plugin/LICENSE`). It compiles against CounterStrikeSharp, which is GPL-3.0-only.
-- Everything else is under the MIT licence (`LICENSE`).
-- Some files hold numbers taken from the game: prices, weapon speeds, fire rates and magazine sizes, and the radar transforms. Neither licence covers those numbers. `THIRD_PARTY_NOTICES.md` lists each file and where its numbers come from.
+The whole repository is under the GNU General Public License, version 3 only (`GPL-3.0-only`, text in `LICENSE`). It is version 3 only, not "or later", to match CounterStrikeSharp, which the capture plugin compiles against and which is GPL-3.0-only.
+
+Some files hold numbers taken from the game: prices, weapon speeds, fire rates and magazine sizes, and the radar transforms. The GPL does not cover those numbers. `THIRD_PARTY_NOTICES.md` lists each file and where its numbers come from.
 
 `THIRD_PARTY_NOTICES.md` also lists the libraries, fonts and datasets the project uses, with their licences.

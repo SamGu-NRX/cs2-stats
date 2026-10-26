@@ -1,6 +1,20 @@
 # Third-party notices
 
-cs2-stats is under the MIT licence (`LICENSE`), except the capture plugin in `plugin/`, which is under GPL-3.0-only (`plugin/LICENSE`), and the numbers taken from the game, which neither licence covers (see the last section). This file lists the third-party code, fonts and data the project uses, with each one's licence. Each licence comes from the project's own metadata: `package.json` or `package-lock.json` for npm packages, `cargo metadata` for crates, the `.nuspec` for NuGet packages, the release's PyPI record for Python packages, and the project's repository where a package declares none. The full licence texts ship inside each package.
+cs2-stats is under GPL-3.0-only (`LICENSE`), the whole repository including the capture plugin. The GPL does not cover the numbers taken from the game (see "Numbers taken from the game"). This file lists the third-party code, fonts and data the project uses, with each one's licence. Each licence comes from the project's own metadata: `package.json` or `package-lock.json` for npm packages, `cargo metadata` for crates, the `.nuspec` for NuGet packages, the release's PyPI record for Python packages, and the project's repository where a package declares none. The full licence texts ship inside each package.
+
+## Compatibility with GPL-3.0-only
+
+Every licence listed below lets its code or data be used in a GPL-3.0-only project:
+
+- MIT, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, CC0-1.0, Unicode-3.0 and the Unlicense are permissive and GPL-compatible. A dual or multiple licence (MIT OR Apache-2.0, MIT OR Apache-2.0 OR LGPL-2.1-or-later) is used under one of these.
+- Apache-2.0, and Apache-2.0 WITH LLVM-exception, are compatible with GPL version 3.
+- MPL-2.0 (five Rust crates and part of tqdm) is compatible with the GPL as a "Secondary License". None of those packages applies MPL's "Incompatible With Secondary Licenses" notice: the phrase appears only in the licence text itself.
+- CDLA-Permissive-2.0 (webpki-roots' certificate data) only asks that its licence text accompany the data.
+- CC BY 4.0 (the CS2RB and CS2 Playstyle datasets) permits use in GPL-3.0 adaptations, with the attribution given below.
+- CounterStrikeSharp.API is GPL-3.0-only, the same licence. This is why the repository is version 3 only.
+- The two fonts are under OFL-1.1. OFL does not let the fonts themselves be relicensed under the GPL, but it allows them to be bundled with software under any licence, so the app ships them as separate font files that stay under OFL-1.1.
+
+Two things the app uses are not distributed with it, so their licences place no conditions on this repository: Bot Mode downloads CS2-Bot-Improver (AGPL-3.0, which GPL-3.0 section 13 would also allow combining with), and the icon pack script runs Source2Viewer-CLI (MIT). Both are listed under "Used at run time, not included".
 
 ## In the desktop app
 
@@ -35,7 +49,7 @@ The Rust side (`app/src-tauri/Cargo.toml`) depends directly on:
 
 ## In the capture plugin
 
-The plugin in `plugin/` is under GPL-3.0-only (`plugin/LICENSE`), because it compiles against CounterStrikeSharp, which is under GPL-3.0-only.
+The plugin compiles against CounterStrikeSharp, which is under GPL-3.0-only, the repository's own licence.
 
 | Package | Version | Licence | Use |
 |---|---|---|---|
@@ -119,9 +133,9 @@ These run only when someone refits a model. Nothing ships with them.
 
 Source: https://github.com/Jamie-Packer/cs2-playstyle-dataset-2024
 
-## Numbers taken from the game: not covered by this repository's licences
+## Numbers taken from the game: not covered by the GPL
 
-These values are Counter-Strike 2's own, read from Valve's game files or from a copy of them. Neither the MIT licence nor the GPL grants any right to them. They are here so the code can interpret match data from the game.
+These values are Counter-Strike 2's own, read from Valve's game files or from a copy of them. The GPL grants no right to them. They are here so the code can interpret match data from the game.
 
 | File | What it holds | Where it comes from |
 |---|---|---|
