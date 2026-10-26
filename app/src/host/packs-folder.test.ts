@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { packFile, packsFolder } from "../../tools/packs-folder";
+import type { Connect } from "vite";
+import { isLoopback, packFile, packsFolder } from "../../tools/packs-folder";
 import { isInside } from "../../tools/paths";
 
 const base = mkdtempSync(path.join(tmpdir(), "cs2-packs-"));
@@ -41,6 +42,33 @@ describe("packFile", () => {
 });
 
 describe("the packs route", () => {
+  /** the route's middleware, as the dev server registers it */
+  const handler = () => {
+    let h: Connect.NextHandleFunction | null = null;
+    (packsFolder(root).configureServer as (s: unknown) => void)({ middlewares: { use: (f: Connect.NextHandleFunction) => { h = f; } } });
+    return h!;
+  };
+  const ask = async (remoteAddress: string | undefined) => {
+    const res = { statusCode: 0, body: null as unknown, headers: {} as Record<string, string>, setHeader(k: string, v: string) { this.headers[k] = v; }, end(b?: unknown) { this.body = b ?? null; } };
+    const req = { url: "/__packs/file?f=pros.json", headers: { host: "localhost" }, socket: { remoteAddress } };
+    await handler()(req as never, res as never, () => { res.statusCode = -1; });
+    return res;
+  };
+
+  it("answers loopback clients and refuses every other address with a 403", async () => {
+    // fails if TAURI_DEV_HOST=0.0.0.0 lets another machine on the LAN read the private packs
+    for (const a of ["127.0.0.1", "127.8.9.10", "::1", "::ffff:127.0.0.1"]) expect((await ask(a)).statusCode, a).toBe(200);
+    for (const a of ["192.168.1.20", "10.0.0.5", "::ffff:192.168.1.20", "fe80::1", "0.0.0.0", "128.0.0.1", "127.0.0.1.evil", undefined]) {
+      const r = await ask(a);
+      expect([r.statusCode, r.body], String(a)).toEqual([403, null]);
+    }
+  });
+
+  it("recognizes the loopback ranges exactly", () => {
+    expect(["127.0.0.1", "127.255.255.254", "::1", "::ffff:127.1.2.3"].every(isLoopback)).toBe(true);
+    expect(["::2", "::ffff:10.0.0.1", "1.127.0.0", "localhost", ""].some(isLoopback)).toBe(false);
+  });
+
   it("exists for `vite dev` only, never for `vite preview` of a production build", () => {
     // fails if the private packs are served by preview again
     const p = packsFolder(root);

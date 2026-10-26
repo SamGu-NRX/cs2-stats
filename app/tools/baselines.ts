@@ -29,7 +29,7 @@ const SIDES: SideKey[] = ["both", "CT", "T"];
 
 // The pool is private when it is built on the private HLTV win-probability lookup: its swing must not
 // leave the machine, even as quantiles. The named pack holds pro names, so it is always private.
-const POOL: OutputKind = { private: WINPROB.kind !== "cs2rb", what: `the pro pool built on the ${WINPROB.label}` };
+const POOL: OutputKind = { private: WINPROB.kind !== "cs2rb", what: `the pro pool built on the ${WINPROB.label}`, inRepo: PUBLIC };
 const NAMED_PACK: OutputKind = { private: true, what: "the named pro pack" };
 // both destinations are checked before any map is read, and again as each file is written
 checkOutput(OUT, POOL);

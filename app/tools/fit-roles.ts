@@ -1,6 +1,6 @@
 // pnpm fit-roles <Packer CSV> [--cache-write <private JSON> | --cache-read <private JSON>] [--report <JSON>]
 // Caches hold only input summaries, not fits or labels. Explicit reuse avoids re-reading parquet.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { derive } from "../src/stats/derive";
@@ -11,6 +11,7 @@ import { seededStratifiedSplit, teamGroupedSplit } from "../src/stats/role-valid
 import { evaluateRoleRows, evaluationLabel, fitRoleThresholds, parseRoleCsv, reliabilityTable, trainRoleModel, type RoleEvaluation, type RoleRow, type RoleSide, type RoleSummaries } from "../src/stats/role-training";
 import { ROLE_THRESHOLDS } from "../src/stats/role-thresholds";
 import { WINPROB, proMaps } from "./node-read";
+import { checkOutput, writeOutput, type OutputKind } from "./outputs";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
 const csv = process.argv[2];
@@ -28,6 +29,13 @@ interface CorpusCache {
 }
 let corpus: CorpusCache;
 const cacheRead = arg("--cache-read"), cacheWrite = arg("--cache-write");
+// The cache holds each labelled pro's summaries by steamid, and the report their labels and teams: both
+// private. The fitted model reads six role features (identity.ts FEATURES), none of them swing or
+// rating, and holds no ids, so it is public and lives in the repository.
+const PRIVATE: OutputKind = { private: true, what: "the role corpus cache or report (pro ids and labels)" };
+const MODEL_OUT = path.resolve(import.meta.dirname, "../src/stats/roles-params.json");
+const MODEL: OutputKind = { private: false, what: "roles-params.json", inRepo: MODEL_OUT };
+for (const f of [cacheWrite, arg("--report")]) if (f) checkOutput(path.resolve(f), PRIVATE);
 if (cacheRead) {
   corpus = JSON.parse(readFileSync(cacheRead, "utf8"));
   if (corpus.deriveVersion !== DERIVE_VERSION || !corpus.maps || !Array.isArray(corpus.summaries) || !corpus.metrics) throw new Error("Role cache has incompatible derive version or missing corpus data");
@@ -57,7 +65,7 @@ if (cacheRead) {
   }
   if (!maps) throw new Error("No pro maps found; cannot evaluate roleBlend from Packer features alone");
   corpus = { deriveVersion: DERIVE_VERSION, maps, summaries: [...summaries], metrics };
-  if (cacheWrite) writeFileSync(cacheWrite, JSON.stringify(corpus));
+  if (cacheWrite) writeOutput(path.resolve(cacheWrite), JSON.stringify(corpus), PRIVATE);
 }
 const summaries: RoleSummaries = new Map(corpus.summaries);
 function quantile(values: number[], p: number): number | null {
@@ -129,8 +137,7 @@ for (const side of sides) {
     teamHoldout: [...teamNames].sort(),
   };
 }
-const out = path.resolve(import.meta.dirname, "../src/stats/roles-params.json");
-writeFileSync(out, JSON.stringify(finalModel, null, 1) + "\n");
+writeOutput(MODEL_OUT, JSON.stringify(finalModel, null, 1) + "\n", MODEL);
 const reportFile = arg("--report");
-if (reportFile) writeFileSync(reportFile, JSON.stringify({ maps: corpus.maps, csvHash, quantiles, distanceCheck, results }, null, 2) + "\n");
-console.log(`wrote ${out}`);
+if (reportFile) writeOutput(path.resolve(reportFile), JSON.stringify({ maps: corpus.maps, csvHash, quantiles, distanceCheck, results }, null, 2) + "\n", PRIVATE);
+console.log(`wrote ${MODEL_OUT}`);

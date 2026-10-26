@@ -1,8 +1,8 @@
-// Every file a tool writes from the pro data goes through writeOutput, which decides from one rule
-// where it may land. Private outputs (anything built from the HLTV pack, and anything that names a
-// pro) stay outside the repository entirely, so no flag, path spelling or default can commit them.
-// The one output allowed inside the repository is the shipped pool, app/public/baselines.json, built
-// anonymously on the public CS2RB model.
+// Every file the app's tools write goes through writeOutput, which decides from one rule where it may
+// land. Private outputs (anything built from the HLTV pack, and anything that names or identifies a
+// pro) stay outside the repository entirely, so no flag, path spelling or default can commit them. A
+// public output may land in the repository only at the one path it declares (`inRepo`): the shipped
+// pool app/public/baselines.json, or a generated source file such as src/stats/recoil.ts.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isInside, realPathOf } from "./paths";
@@ -17,6 +17,8 @@ export interface OutputKind {
   private: boolean;
   /** what the file is, for the error */
   what: string;
+  /** for a public output, the one repository path it may take; without it, it must land outside */
+  inRepo?: string;
 }
 
 const same = (a: string, b: string) => {
@@ -26,13 +28,15 @@ const same = (a: string, b: string) => {
 
 /**
  * Throws when `file` may not hold this kind of output, compared on real paths (tools/paths.ts): a
- * private output anywhere in the repository, or an anonymous one in the repository anywhere but the
- * shipped pool's path.
+ * private output anywhere in the repository, or a public one in the repository anywhere but its
+ * declared `inRepo` path.
  */
 export function checkOutput(file: string, kind: OutputKind, repo = REPO_ROOT): void {
   if (!isInside(file, repo)) return;
   if (kind.private) throw new Error(`refusing to write ${kind.what} to ${file}: it is private and must stay outside the repository (${repo})`);
-  if (!same(file, shippedPool(repo))) throw new Error(`refusing to write ${kind.what} to ${file}: the only output allowed in the repository is ${shippedPool(repo)}`);
+  if (!kind.inRepo || !same(file, kind.inRepo)) {
+    throw new Error(`refusing to write ${kind.what} to ${file}: ${kind.inRepo ? `its only place in the repository is ${kind.inRepo}` : "it has no place in the repository"}`);
+  }
 }
 
 /** Checks where `file` may go, then writes it, making its folder. */
