@@ -178,6 +178,19 @@ describe("spray card, restored parts", () => {
     expect(host.querySelector(".spray-key")!.textContent).not.toContain("Pro median");
   });
 
+  it("keeps a sprayed gun the recoil reference has no pro path for, drawn without a pro comparison", () => {
+    // fails if the gun list drops guns without a pro path, or such a gun shows a Pro path toggle or a pro line
+    scoped = summary({ path: { cz75a: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="cz75a"]')!;
+    expect(btn).not.toBeNull();
+    act(() => btn.click());
+    expect(host.querySelector(".spray__title")!.textContent).toBe("Your CZ75-Auto spray");
+    expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
+    expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
+    expect(host.querySelector(".spray__note")!.textContent).toContain("no pro path");
+  });
+
   it("marks where the target's head was for each bullet, with its legend entry", () => {
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);

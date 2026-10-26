@@ -51,15 +51,16 @@ const S = 26, W = 330, TOP = 24, MIN_H = 160;
  * `relative`: the path is measured against the target, not as absolute view angles (plugin recordings
  * until the plugin stores view angles), so it cannot be set against the pro path: the chart draws your
  * path only, says why in one sentence, and shows no band, no pro line and no distance bars.
+ * `reference` null: the recoil reference has no pro path for the gun, so only your path draws.
  * `pro` false hides the pro band and line (the Pro path toggle); `spread` draws each bullet's spread as
  * a one-standard-deviation ellipse and `heads` where the target's head was for each bullet, both in the
  * absolute frame, so neither draws on a relative path.
  */
 export function SprayPath({ gun, reference, path, relative = false, pro = true, spread = null, heads = null }: {
-  gun: string; reference: RecoilRef; path: PlayerPath | null; relative?: boolean; pro?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null;
+  gun: string; reference: RecoilRef | null; path: PlayerPath | null; relative?: boolean; pro?: boolean; spread?: SpraySpread | null; heads?: BulletSums | null;
 }) {
   const pts = path ? meanPath(path) : [];
-  const ref = relative || !pro ? [] : reference.path;
+  const ref = relative || !pro || !reference ? [] : reference.path;
   const until = Math.min(ref.length, Math.max(pts.length, 12));
   const X = (yaw: number) => W / 2 + yaw * S, Y = (pitch: number) => TOP + pitch * S;
   // spreadOf's i is the bullet's index from 0, so bullet i + 1; its mean is that bullet's point on the path
@@ -71,7 +72,7 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
   const deepest = Math.max(0, ...ref.slice(0, until).map((b) => b[3]), ...pts.map((p) => p.pitch), ...ells.map((e) => e.y + e.ry), ...eyes.map((h) => h.pitch));
   const H = Math.max(MIN_H, Math.ceil(Y(deepest) + 24));
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
-  const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
+  const finding = relative ? `Your ${gun} spray, relative to the target` : !reference ? `Your ${gun} spray` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
   return (
     <figure className="spray">
       <figcaption className="spray__title">{finding}</figcaption>
@@ -93,7 +94,7 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : null}
+      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : !reference ? <p className="spray__note">There is no pro path for this gun in the recoil reference.</p> : null}
     </figure>
   );
 }
