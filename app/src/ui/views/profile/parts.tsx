@@ -419,10 +419,10 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const style = styleIds();
   const you = style.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
   const labels = style.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
-  const sideLabel = side === "both" ? "Both sides" : `${side} side`;
+  const sideLabel = side === "both" ? "both sides" : `${side} side`;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel.toLowerCase()}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
+      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
             <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer"
