@@ -10,7 +10,7 @@ import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
-import { clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
+import { clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
@@ -78,7 +78,7 @@ export function HomeView() {
               <RecentMatches list={list} />
               <div className="home__side">
                 <Highlights list={list} last={last} t={t} />
-                <WorkOn t={t} />
+                <WorkOn t={t} latest={last?.file ?? null} />
               </div>
             </div>
           </>
@@ -379,35 +379,55 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 
 // ---------------------------------------------------------------- work on
 
+/** Profile's hero card stats: a Work on item for one of them opens the card. */
+const CARD_STATS = new Set(["kpr", "dpr", "adr", "kast", "mk", "swing"]);
+/** Metrics the latest match's Utility tab shows (views/match/Utility.tsx). */
+const UTILITY_TAB = new Set(["enemiesPerFlash", "blindPerFlash", "teamFlashPR", "utilDmgPR", "fireDmgPR"]);
+
 /**
- * The two performance metrics where you sit lowest among pros, each with its percentile. Style
- * attributes are left out: they describe how you play, not how well (design/identity.md). A metric
- * the engine could not compare (Percentile.reason) is skipped, never ranked as the lowest.
+ * Where a Work on item opens: the place that shows the metric. Aim metrics are Career aim's; Firepower's
+ * metrics are its card; How good's rows, the hero card's stats and opening duel success have their
+ * Profile sections; headshot kills are Weapons' per-gun column; the flash and utility-damage figures
+ * are the latest match's Utility tab. Null for a metric nothing shows, which Work on never recommends.
  */
-function WorkOn({ t }: { t: Totals | null }) {
+export function workOnHref(m: { id: string; group: string }, latest: string | null): string | null {
+  if (m.group === "aim") return pageHref("aim");
+  if (m.group === "firepower") return sectionHref("profile", "firepower");
+  if (HOW_GOOD.includes(m.id)) return sectionHref("profile", "howgood");
+  if (CARD_STATS.has(m.id)) return sectionHref("profile", "card");
+  if (m.id === "openingSuccess") return sectionHref("profile", "openings");
+  if (m.id === "hs") return pageHref("weapons");
+  if (UTILITY_TAB.has(m.id) && latest) return matchHref(latest, "utility");
+  return null;
+}
+
+/**
+ * The two performance metrics where you sit lowest among pros, each with its percentile and the pool it
+ * was ranked in. Style attributes are left out: they describe how you play, not how well
+ * (design/identity.md). A metric the engine could not compare (Percentile.reason) is skipped, never
+ * ranked as the lowest, and so is one with no place to open (workOnHref).
+ */
+function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   const { baselines } = useData();
   const r = useCall("compare", t && baselines ? [t.q, {}] : null).data;
   const weak = useMemo(() => {
     if (!r) return [];
-    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null)
-      .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value }))
+    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m, latest) !== null)
+      .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value, href: workOnHref(m, latest)!, population: proPopulation(r.p[m.id].pool) }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
-  }, [r]);
-  /** Where a weak metric lives: its Profile section, or Career aim for aim metrics. */
-  const workOnHref = (m: { id: string; group: string }) => (m.group === "aim" ? pageHref("aim")
-    : sectionHref("profile", m.group === "firepower" ? "firepower" : HOW_GOOD.includes(m.id) ? "howgood" : "performance"));
+  }, [r, latest]);
   const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
       {weak.length === 0 ? <p className="meta">Not enough rounds to compare with pros.</p> : (
         <div className="workon">
-          {weak.map(({ m, pct, value }) => (
-            <a key={m.id} className="workon__item" href={workOnHref(m)} data-tip={m.def}>
+          {weak.map(({ m, pct, value, href, population }) => (
+            <a key={m.id} className="workon__item" href={href} data-tip={m.def}>
               <AttrIcon id={icon(m.group)} size={20} className="workon__ico" />
               <div className="workon__body">
                 <div className="workon__top"><b>{m.label}</b><b className="num" style={{ color: scoreText((pct - 50) / 50) }} data-tip="Percentile against pros: the share of pros below you">{rankText(pct)}</b></div>
                 <div className="hbar"><i style={{ width: `${pct}%`, background: "var(--poor)" }} /></div>
-                <div className="meta">You <b className="num" style={{ color: "var(--ink)" }}>{fmtMetric(m.id, value)}</b>, higher than {Math.round(pct)}% of {r?.role === "awper" ? "pro AWPers" : "pro riflers"}</div>
+                <div className="meta">You <b className="num" style={{ color: "var(--ink)" }}>{fmtMetric(m.id, value)}</b>, higher than {Math.round(pct)}% of {population}</div>
               </div>
             </a>
           ))}

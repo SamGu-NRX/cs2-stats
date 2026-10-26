@@ -240,6 +240,8 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
 export const isOwn = (e: MatchEntry) => sourceOf(e).id !== "pro";
 /** Played to its end. An abandoned match opens normally but is in no W-L and no career total. */
 export const isFinished = (e: MatchEntry) => e.match.complete;
+/** At least one round was won (the score is not 0:0). A match without one has nothing to show and counts nowhere, finished or not. */
+export const hasPlayedRound = (e: MatchEntry) => e.score.us + e.score.them > 0;
 /** The kill-by-kill log covers at least half the rounds (the coverage rule; see coverEntry). */
 export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
 
@@ -249,10 +251,10 @@ export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
  * half their rounds. Pro demos, unfinished matches and thin logs neither appear in a career list nor
  * move an average, so the sidebar, the Rating 3.0 tile and Form's pooled line agree.
  */
-export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s));
+export const careerEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && hasPlayedRound(s) && isLogged(s));
 
 /** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
-export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s));
+export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasPlayedRound(s));
 
 /** Why a match is left out of the career, for its row's tooltip; null when it counts. */
 export function notCountedText(e: MatchEntry): string | null {
