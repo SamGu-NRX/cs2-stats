@@ -212,16 +212,19 @@ where that is said.
 ## Spray patterns: `pnpm recoil <weapons_out>`
 
 The in-game spray pattern is each bullet's direction (fire_bullets) minus the view at weapon_fire, the
-median over every unscoped shot at that whole recoil index (`recoil-build.ts`). The kick at one index
-is nearly fixed: over 489 pro maps its middle half is at most 0.15 degrees wide for every gun with a
-pattern. The ideal pull is minus the kick. The check: how far the pros' median view movement over
-steady sprays from a reset sits from the ideal pull, per bullet (2026-10-25):
+median over every pro shot with its gun's normal recoil (`shot-state.ts`: unscoped, the M4A1-S
+silenced, unrecorded states left out) at that whole recoil index (`recoil-build.ts`). No user shot
+enters it. The kick at one index
+is nearly fixed: over 489 pro maps its middle half is at most 0.16 degrees wide for every gun in the
+table below, and up to 0.30 for the short patterns (UMP-45 0.30, CZ75-Auto 0.26, MP5-SD 0.17, AUG 0.14). The ideal pull is minus the kick. The check: how far the pros' median view movement over
+steady sprays from a reset sits from the ideal pull, per bullet (2026-10-25, rebuilt from pro demos
+only after review of #34):
 
 | Gun | Pattern bullets | Pro band bullets (sprays) | Mean residual, bullets 2 on | Largest |
 |---|---|---|---|---|
 | AK-47 | 30 | 29 (33,184) | 0.58 deg | 2.27 at bullet 29 |
 | M4A4 | 30 | 29 (8,005) | 0.42 | 0.99 at 10 |
-| M4A1-S | 20 | 20 (13,757) | 0.40 | 0.89 at 10 |
+| M4A1-S (silenced) | 20 | 20 (13,756) | 0.40 | 0.89 at 10 |
 | FAMAS | 25 | 15 (1,088) | 0.73 | 1.88 at 15 |
 | Galil AR | 35 | 25 (4,654) | 0.59 | 1.48 at 22 |
 | MAC-10 | 30 | 12 (458) | 0.49 | 0.83 at 8 |
@@ -230,9 +233,10 @@ steady sprays from a reset sits from the ideal pull, per bullet (2026-10-25):
 
 AK-47 bullets 2 to 9 sit within 0.6 degrees of the ideal pull in both axes, and the largest residual is
 on the last bullets, where few sprays remain and the target has usually moved. The residual also holds
-whatever the pros' view did besides fighting recoil. AUG (7 bullets), MP5-SD (8), UMP-45 (6) and
-CZ75-Auto (7) have short patterns, and SG 553, P90, PP-Bizon, M249 and Negev have none: the demos
-hold too few unscoped shots of them. No game cfg sets `weapon_recoil_scale`, and no demo checked
+whatever the pros' view did besides fighting recoil. AUG (7 bullets), MP5-SD (7), UMP-45 (6) and
+CZ75-Auto (7) have short patterns and no pro band, and SG 553, P90, PP-Bizon, M249 and Negev have none: pro demos
+hold too few normal-recoil shots of them, and the user's own shots are never used to fill a
+reference. No game cfg sets `weapon_recoil_scale`, and no demo checked
 changes it in `server_cvar`, so the kick is at the game's default scale.
 
 ## Baselines: `pnpm baselines`
