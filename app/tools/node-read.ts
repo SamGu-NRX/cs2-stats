@@ -26,6 +26,11 @@ export function dirReader(dir: string): ReadFile {
 const PACK = process.env.CS2_WINPROB_PACK ?? (process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs", "winprob-hltv.json") : "");
 export const WINPROB = winProbSource(PACK && existsSync(PACK) ? JSON.parse(readFileSync(PACK, "utf-8")) : null);
 
+/** Rounds a pro needs, over all maps, to count in the baselines' player pools; per side, half of it. */
+export const MIN_ROUNDS = 40;
+/** Rounds a pro needs on one map to count in that map's pool (and as a player-map in pnpm metric-evidence). */
+export const MAP_MIN_ROUNDS = 16;
+
 export { mapTablesDir, type MapTables } from "./map-dir";
 
 export const loadDir = (dir: string, optional?: readonly TableName[]): Promise<MatchTables> => loadTables(dirReader(dir), optional);
