@@ -1,6 +1,7 @@
-// Loads what the 2D replay reads from an extracted match folder: the engine's tables with positions
-// and grenade events (load.ts), plus grenade_paths, which only the replay uses and so is not in the
-// engine's SCHEMA (tables.ts). A folder without grenade_paths.parquet replays without grenade flights.
+// Loads what the 2D replay reads from an extracted match folder: the engine's tables with positions,
+// grenade events and the smoke and fire lifetimes (load.ts), plus grenade_paths, which only the replay
+// uses and so is not in the engine's SCHEMA (tables.ts). A folder without grenade_paths.parquet
+// replays without grenade flights.
 import { parquetMetadata, parquetRead, parquetSchema } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
 import { loadTables, TableError, type ReadFile } from "./load";
@@ -41,7 +42,7 @@ export interface ReplayTables { tables: MatchTables; paths: GrenadePaths | null 
 
 /** One extracted match's tables for the replay; `read` resolves a table file's bytes, or null when absent. */
 export async function loadReplayTables(read: ReadFile): Promise<ReplayTables> {
-  const tables = await loadTables(read, ["positions", "grenade_events"]);
+  const tables = await loadTables(read, ["positions", "grenade_events", "smokes", "infernos"]);
   const bytes = await read("grenade_paths.parquet");
   return { tables, paths: bytes ? await readGrenadePaths(bytes) : null };
 }

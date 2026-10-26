@@ -78,7 +78,10 @@ export interface RoundTimeline {
   tickRate: number;
   /** the tick t = 0 stands for */
   zeroTick: number;
-  /** seconds the replay runs: to the round end plus END_TAIL_S, held to the recorded samples */
+  /**
+   * Seconds the replay runs: to the round end plus END_TAIL_S, cut at the official end. Players hold
+   * their last sample after it, so an event between the last sample and the end is still reached.
+   */
   duration: number;
   /** when the round ended (its winner was decided) */
   endT: number;
@@ -107,6 +110,17 @@ export const END_TAIL_S = 3;
  */
 export const FIRE_LINK_TICKS = 2;
 export const FIRE_LINK_UNITS = 32;
+
+/**
+ * The longest a smoke or a fire lasts, seconds: an effect whose end the tables do not give stops here
+ * rather than running to the round's end. Measured over the two dev pro demos and the six Valve
+ * matches: 295 of 296 smokes with an end lasted exactly 22.0625 s (the other, 761 s, ended in a later
+ * round), and 277 fires lasted 0.77 to 7.03 s (median 5.5 s).
+ */
+export const SMOKE_MAX_S = 22.0625;
+export const FIRE_MAX_S = 7.03125;
+/** A stop event that names no entity ends the open effect of its kind within this many units of it. */
+export const STOP_LINK_UNITS = 32;
 
 /** The extractor's grenade_paths table: one row per projectile per tick it moved (extractor/SCHEMA-v1.md). */
 export interface GrenadePaths {
@@ -227,26 +241,50 @@ export function buildRoundTimeline(t: MatchTables, paths: GrenadePaths | null, r
   const sideFor = (id: string | null) => (id === null ? null : sideById.get(id) ?? null);
   const stopT = sec(stopTick);
 
-  // effects from the detonation events; a lasting one ends at its stop event, else at the window's end
+  // Effects from the detonation events. A smoke or fire ends at, in order: its stop event (by entity,
+  // or for a stop naming none, the open effect of its kind nearest it), its row in the smokes or
+  // infernos lifetime table, or SMOKE_MAX_S / FIRE_MAX_S after it started; never past the window.
   const E = t.grenade_events;
   const effects: ReplayEffect[] = [];
   const startOf = new Map<number, ReplayEffect>();
   const fires: { tick: number; at: Vec3; thrower: string | null }[] = [];
+  const lasting: { e: ReplayEffect; entity: number | null; tick: number; ended: boolean }[] = [];
   if (E) {
     const idx = [...Array(E.n).keys()].filter((i) => E.round[i] === round).sort((a, b) => E.tick[a] - E.tick[b]);
     for (const i of idx) {
       const kind = START[E.event[i]];
       const where = vec(E.x[i], E.y[i], E.z[i]);
       if (kind && where && inWindow(E.tick[i])) {
-        const e: ReplayEffect = { kind, thrower: E.steamid[i], side: sideFor(E.steamid[i]), t: sec(E.tick[i]), until: kind === "smoke" || kind === "molotov" ? stopT : sec(E.tick[i]), at: where };
+        const e: ReplayEffect = { kind, thrower: E.steamid[i], side: sideFor(E.steamid[i]), t: sec(E.tick[i]), until: sec(E.tick[i]), at: where };
         effects.push(e);
         if (E.entity_id[i] !== null) startOf.set(E.entity_id[i]!, e);
+        if (kind === "smoke" || kind === "molotov") lasting.push({ e, entity: E.entity_id[i], tick: E.tick[i], ended: false });
         if (kind === "molotov") fires.push({ tick: E.tick[i], at: e.at, thrower: E.steamid[i] });
       }
       const stop = STOP[E.event[i]];
-      const open = E.entity_id[i] === null ? undefined : startOf.get(E.entity_id[i]!);
-      if (stop && open && open.kind === stop && open.until === stopT) open.until = Math.min(stopT, Math.max(open.t, sec(E.tick[i])));
+      if (!stop) continue;
+      const open = lasting.filter((l) => !l.ended && l.e.kind === stop && l.tick <= E.tick[i]);
+      const stopAt = vec(E.x[i], E.y[i], E.z[i]);
+      const match = E.entity_id[i] !== null
+        ? open.find((l) => l.entity === E.entity_id[i])
+        : stopAt ? open.filter((l) => Math.hypot(l.e.at[0] - stopAt[0], l.e.at[1] - stopAt[1]) <= STOP_LINK_UNITS)
+          .sort((a, b) => Math.hypot(a.e.at[0] - stopAt[0], a.e.at[1] - stopAt[1]) - Math.hypot(b.e.at[0] - stopAt[0], b.e.at[1] - stopAt[1]))[0] : undefined;
+      if (match) { match.ended = true; match.e.until = sec(E.tick[i]); }
     }
+  }
+  const lifetime = (table: MatchTables["smokes"] | MatchTables["infernos"], l: (typeof lasting)[number]): number | null => {
+    if (!table) return null;
+    for (let i = 0; i < table.n; i++) {
+      // the tables' start_tick is the detonation's tick (equal on every smoke and fire of the Inferno pro demo and Valve Dust II)
+      if (table.round[i] !== round || table.end_tick[i] === null || table.start_tick[i] !== l.tick) continue;
+      if (l.entity !== null && table.entity_id[i] !== null ? table.entity_id[i] === l.entity : Math.hypot(table.x[i] - l.e.at[0], table.y[i] - l.e.at[1]) <= STOP_LINK_UNITS) return sec(table.end_tick[i]!);
+    }
+    return null;
+  };
+  for (const l of lasting) {
+    const max = l.e.t + (l.e.kind === "smoke" ? SMOKE_MAX_S : FIRE_MAX_S);
+    const end = l.ended ? l.e.until : lifetime(l.e.kind === "smoke" ? t.smokes : t.infernos, l) ?? max;
+    l.e.until = Math.min(stopT, max, Math.max(l.e.t, end));
   }
 
   // throws from the projectile paths; the thrower comes from the path row, else from its detonation
@@ -301,7 +339,7 @@ export function buildRoundTimeline(t: MatchTables, paths: GrenadePaths | null, r
   bomb.sort((a, b) => a.t - b.t);
 
   return {
-    round, tickRate: rate, zeroTick: zero, duration: Math.max(0, sec(Math.min(stopTick, ticks[ticks.length - 1]))), endT: sec(endTick),
+    round, tickRate: rate, zeroTick: zero, duration: Math.max(0, stopT), endT: sec(endTick),
     winner: sideOf(R.winner_side[ri]), reason: R.reason[ri], players, frames, kills, hits, throws, effects, bomb,
   };
 }

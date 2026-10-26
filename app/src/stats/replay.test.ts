@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildRoundTimeline, weaponId, type GrenadePaths, type RoundTimeline } from "./replay";
-import { frameIndex, lerpYaw, playersAt } from "./replay-interp";
+import { buildRoundTimeline, FIRE_MAX_S, SMOKE_MAX_S, weaponId, type GrenadePaths, type RoundTimeline } from "./replay";
+import { deathsOf, frameIndex, lerpYaw, playersAt } from "./replay-interp";
 import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "./tables";
-import { FREEZE_END, ROUND_END, oneRoundTables } from "./testing/match";
+import { FREEZE_END, ROUND_END, oneRoundTables, type OneRound } from "./testing/match";
 import { pushRow } from "./testing/tables";
 
 type Row = Record<string, unknown>;
@@ -17,11 +17,11 @@ const pos = (tick: number, steamid: string, side: string, x: number, y: number, 
 
 // a: CT, b: T. Samples every 16 ticks from freeze end (640) to 672, plus one of a's in freeze time;
 // b has no sample at 672. a kills b at tick 664; b was hit to 60 HP at tick 648.
-function tables(roundRow: Row = {}): MatchTables {
+function tables(roundRow: Row = {}, moreKills: NonNullable<OneRound["kills"]> = []): MatchTables {
   const t = oneRoundTables({
     players: { a: "CT", b: "T" },
     roundRow,
-    kills: [{ tick: 664, killer: "a", victim: "b", at: { a_x: 24, a_y: 8, a_z: 0, v_x: 100, v_y: 0, v_z: 0, headshot: true } }],
+    kills: [{ tick: 664, killer: "a", victim: "b", at: { a_x: 24, a_y: 8, a_z: 0, v_x: 100, v_y: 0, v_z: 0, headshot: true } }, ...moreKills],
     damages: [{ tick: 648, attacker_steamid: "a", victim_steamid: "b", dmg_health_capped: 40, health_after: 60 }],
     positions: [
       pos(600, "a", "CT", -999, -999, 0, "USP-S"),
@@ -66,11 +66,24 @@ const s = (tick: number) => (tick - FREEZE_END) / 64;
 describe("buildRoundTimeline", () => {
   const tl = buildRoundTimeline(tables(), PATHS, 1);
 
-  it("starts at freeze end", () => {
+  it("starts at freeze end and runs to the window's end, past the last sample", () => {
     expect(tl.zeroTick).toBe(FREEZE_END);
     expect(tl.frames.map((f) => f.t)).toEqual([0, 0.25, 0.5]);
-    expect(tl.duration).toBe(0.5);
+    // no official end: the window is round end + END_TAIL_S, cut at the official end (here round end itself)
+    expect(tl.duration).toBe(s(ROUND_END));
     expect(tl.endT).toBe(s(ROUND_END));
+  });
+
+  it("reaches an event after the last sample, with players holding their last sample", () => {
+    // a second kill at 1200, well after the last sample (672)
+    const t = tables({ end_tick: 1280, official_end_tick: 1600 }, [{ tick: 1200, killer: "b", victim: "a", at: { v_x: 60, v_y: 40, v_z: 0 } }]);
+    const tl2 = buildRoundTimeline(t, null, 1);
+    // end 1280 + 3 s = 1472, before the official end 1600
+    expect(tl2.duration).toBe(s(1472));
+    expect(tl2.kills.map((k) => k.t)).toEqual([0.375, s(1200)]);
+    const p = Object.fromEntries(playersAt(tl2, s(1100), true).map((x) => [x.id, { ...x }]));
+    expect(p.a).toMatchObject({ alive: true, x: 48, y: 32 });
+    expect(Object.fromEntries(playersAt(tl2, s(1200), true).map((x) => [x.id, { ...x }])).a).toMatchObject({ alive: false, x: 60, y: 40 });
   });
 
   it("keeps the last sample before freeze end when none falls on it", () => {
@@ -130,14 +143,49 @@ describe("buildRoundTimeline", () => {
     expect(() => buildRoundTimeline({ ...t, positions: null }, null, 1)).toThrow("no position samples");
   });
 
-  it("ends a smoke that never expired at the window's end", () => {
+  it("cuts an effect at the window's end", () => {
     const t = tables();
-    const short = { ...t, rounds: { ...t.rounds, end_tick: [800], official_end_tick: [900] } };
-    const tl2 = buildRoundTimeline(short, null, 1);
-    // window: end 800 + 3 s (992) cut to the official end, 900; the smoke's expiry at 900 is its end
-    expect(tl2.effects[0].until).toBe(s(900));
-    const noExpiry = { ...short, grenade_events: table("grenade_events", [{ tick: 700, round: 1, event: "smoke_detonate", entity_id: 7, steamid: "a", x: 0, y: 0, z: 0 }]) };
-    expect(buildRoundTimeline(noExpiry, null, 1).effects[0].until).toBe(s(900));
+    const short = { ...t, rounds: { ...t.rounds, end_tick: [800], official_end_tick: [880] } };
+    // window: end 800 + 3 s (992) cut to the official end, 880; the smoke expires at 900
+    expect(buildRoundTimeline(short, null, 1).effects[0].until).toBe(s(880));
+  });
+
+  describe("effects without an end in the events", () => {
+    const events = (rows: Row[]) => ({ ...tables(), grenade_events: table("grenade_events", rows.map((r) => ({ round: 1, steamid: "a", z: 0, ...r }))) });
+    const smoke = { tick: 700, event: "smoke_detonate", entity_id: 7, x: 500, y: 500 };
+    const fire = { tick: 701, event: "inferno_start", entity_id: 99, x: 200, y: 200 };
+
+    it("never run to the window's end: a smoke lasts SMOKE_MAX_S, a fire FIRE_MAX_S", () => {
+      const tl2 = buildRoundTimeline(events([smoke, fire]), null, 1);
+      expect(tl2.effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(701) + FIRE_MAX_S]);
+    });
+
+    it("take a stop event that names no entity from the open effect of its kind beside it", () => {
+      const tl2 = buildRoundTimeline(events([
+        smoke, { ...smoke, tick: 705, entity_id: 8, x: 900, y: 900 },
+        { tick: 900, event: "smoke_expired", entity_id: null, x: 905, y: 900 },
+        // a stop far from every open smoke ends none of them
+        { tick: 950, event: "smoke_expired", entity_id: null, x: 0, y: 0 },
+      ]), null, 1);
+      expect(tl2.effects.map((e) => e.until)).toEqual([s(700) + SMOKE_MAX_S, s(900)]);
+    });
+
+    it("read their end from the smokes and infernos lifetime tables", () => {
+      const t = events([smoke, fire]);
+      const tl2 = buildRoundTimeline({
+        ...t,
+        smokes: table("smokes", [{ entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 1000, x: 500, y: 500, z: 0 }]),
+        // no entity id: matched on its start tick and place
+        infernos: table("infernos", [{ entity_id: null, steamid: "a", round: 1, start_tick: 701, end_tick: 900, x: 210, y: 200, z: 0 }]),
+      }, null, 1);
+      expect(tl2.effects.map((e) => e.until)).toEqual([s(1000), s(900)]);
+    });
+
+    it("cap a lifetime longer than the longest seen", () => {
+      const t = events([smoke]);
+      const tl2 = buildRoundTimeline({ ...t, smokes: table("smokes", [{ entity_id: 7, steamid: "a", round: 1, start_tick: 700, end_tick: 700 + 64 * 700, x: 500, y: 500, z: 0 }]) }, null, 1);
+      expect(tl2.effects[0].until).toBe(s(700) + SMOKE_MAX_S);
+    });
   });
 });
 
@@ -190,6 +238,39 @@ describe("interpolation", () => {
   it("kills at the kill's tick, at the victim's position", () => {
     expect(at(0.374).b.alive).toBe(true);
     expect(at(0.375).b).toMatchObject({ alive: false, hp: 0, x: 100, y: 0 });
+  });
+
+  it("never moves a corpse: without a kill position it lies at the last living sample", () => {
+    // b dies at 664 with no victim position; later samples drift (as a ragdoll would)
+    const t = oneRoundTables({
+      players: { a: "CT", b: "T" },
+      kills: [{ tick: 664, killer: "a", victim: "b" }],
+      positions: [
+        pos(640, "a", "CT", 0, 0, 0, "AK-47"), pos(640, "b", "T", 100, 0, 0, "AK-47"),
+        pos(656, "a", "CT", 0, 0, 0, "AK-47"), pos(656, "b", "T", 110, 0, 0, "AK-47"),
+        pos(672, "a", "CT", 0, 0, 0, "AK-47"), pos(672, "b", "T", 130, 5, 0, "AK-47", { is_alive: false, health: 0 }),
+        pos(688, "a", "CT", 0, 0, 0, "AK-47"), pos(688, "b", "T", 150, 9, 0, "AK-47", { is_alive: false, health: 0 }),
+      ],
+    });
+    const tl2 = buildRoundTimeline(t, null, 1);
+    expect(deathsOf(tl2)[0]).toEqual({ t: s(664), at: [110, 0, 0] });
+    for (const when of [s(664), s(672), s(688), 10]) {
+      expect(playersAt(tl2, when, true).find((p) => p.id === "b")).toMatchObject({ alive: false, x: 110, y: 0 });
+    }
+  });
+
+  it("lays a player marked dead without a kill row at his last living sample", () => {
+    const t = oneRoundTables({
+      players: { a: "CT", b: "T" },
+      positions: [
+        pos(640, "a", "CT", 0, 0, 0, "AK-47"), pos(640, "b", "T", 100, 0, 0, "AK-47"),
+        pos(656, "a", "CT", 0, 0, 0, "AK-47"), pos(656, "b", "T", 140, 0, 0, "AK-47", { is_alive: false, health: 0 }),
+        pos(672, "a", "CT", 0, 0, 0, "AK-47"), pos(672, "b", "T", 170, 0, 0, "AK-47", { is_alive: false, health: 0 }),
+      ],
+    });
+    const tl2 = buildRoundTimeline(t, null, 1);
+    expect(deathsOf(tl2)).toEqual([{ t: 0.25, at: [100, 0, 0] }, null]);
+    expect(playersAt(tl2, 0.5, true).find((p) => p.id === "b")).toMatchObject({ alive: false, x: 100 });
   });
 
   it("clamps before the first frame and after the last", () => {
