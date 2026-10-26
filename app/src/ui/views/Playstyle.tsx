@@ -268,14 +268,14 @@ export function Ranks({ q }: { q: Query }) {
           {RANKS.map((g) => (
             <section key={g.tag} className="ranks__group">
               <h3 className="caps">{g.tag}</h3>
-              <MetricList label={g.tag}>
+              <MetricList label={g.tag} rank>
                 {g.ids.map((id) => {
                   const m = metric(id);
                   const style = m.kind === "identity";
                   const x = (style ? botP : proP)[id];
                   return (
                     <MetricRow key={id} label={m.label} value={x.value === null ? null : fmtMetric(id, x.value)} pct={x.pct} kind={style ? "style" : "performance"}
-                      population={style && careers ? botPopulation(careers, { n: n.bots, role: "all" }).text : `${n.pros} pros`} tip={tipOf(id)} reason={x.reason} approx={m.status === "approx"} />
+                      population={style && careers ? botPopulation(careers, { n: n.bots, role: "all" }).text : `${n.pros} pros`} tip={tipOf(id)} reason={x.reason} approx={m.status === "approx"} rank />
                   );
                 })}
               </MetricList>

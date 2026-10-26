@@ -46,7 +46,7 @@ export function Card({ title, tip, aside, children, id, collapsible, defaultOpen
   return (
     <section className={`card ${className ?? ""}`} aria-labelledby={title ? `${bodyId}-h` : undefined}>
       {title && (collapsible ? (
-        <div className="card__head" style={{ padding: 0 }}>
+        <div className="card__head card__head--toggle">
           <H style={{ display: "contents" }}>
             <button className="card__toggle" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-tip={tip}>
               {icon}
@@ -54,7 +54,7 @@ export function Card({ title, tip, aside, children, id, collapsible, defaultOpen
               <ChevronIcon className="chev" size={16} />
             </button>
           </H>
-          {aside && <div className="card__aside" style={{ paddingRight: "var(--pad-panel)" }}>{aside}</div>}
+          {aside && <div className="card__aside card__aside--pad">{aside}</div>}
         </div>
       ) : (
         <div className="card__head">

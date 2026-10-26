@@ -1,13 +1,11 @@
 // Profile panels that read the metrics-v2 engine fields (#31): where round swing comes from, how
 // aggressively you take fights, and how you buy. These are research metrics, so each row renders only
 // when the engine returns a value, and a panel with none does not render: no reserved empty space.
-import type { ReactNode } from "react";
 import type { Percentile as Pct } from "../../../stats/compare";
 import type { SwingSources } from "../../../stats/swing";
 import type { Query, Rolled } from "../../../worker/protocol";
-import { Num } from "../../components/bits";
 import { Card } from "../../components/Card";
-import { percentilePhrase } from "../../components/Percentile";
+import { MetricList, MetricRow, Track } from "../../components/MetricRow";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
 import { metric } from "../../data/meta";
@@ -18,19 +16,12 @@ import { scoreFill, scoreText, toScore } from "../../lib/scale";
 // ---------------------------------------------------------------- dot track
 
 /**
- * A dotted track with a tick in the middle and a dot at `at` (0 to 100); `ghost` adds a hollow second
- * marker (Plays like's pro). Where the middle is depends on the caller: the pro median for a
- * percentile, the pro mean for the aggression score.
+ * A labelled dotted track (components/MetricRow.tsx Track): the tick in the middle, a dot at `at`
+ * (0 to 100) and, with `ghost`, a hollow second marker (Plays like's pro). Where the middle is depends
+ * on the caller: the pro median for a percentile, the pro mean for the aggression score.
  */
-export function DotTrack({ at, ghost, tone, label }: { at: number | null; ghost?: number | null; tone?: string; label: string }) {
-  const pos = (x: number) => `${Math.max(0, Math.min(100, x))}%`;
-  return (
-    <span className="dtrack" role="img" aria-label={label}>
-      <span className="dtrack__mid" aria-hidden />
-      {ghost != null && <i className="dtrack__ghost" style={{ left: pos(ghost) }} aria-hidden />}
-      {at !== null && <i className="dtrack__dot" style={{ left: pos(at), background: tone }} aria-hidden />}
-    </span>
-  );
+export function DotTrack({ at, ghost, tone, label }: { at: number | null; ghost?: number | null; tone?: "cream"; label: string }) {
+  return <Track at={at} ghost={ghost} tone={tone} label={label} />;
 }
 
 // ---------------------------------------------------------------- swing by source
@@ -90,14 +81,11 @@ export function SwingSourcesChart({ you, bots }: { you: SwingSources; bots: Swin
 
 // ---------------------------------------------------------------- value rows
 
-/** A metric's row: label with the engine's tooltip, an optional track, and the value. */
-function Row({ id, value, track }: { id: string; value: number; track?: ReactNode }) {
+/** A metric's row: the engine's label and tooltip, its value, and its percentile against `population` when there is one. */
+function Row({ id, value, p, population = "" }: { id: string; value: number; p?: Pct | null; population?: string }) {
   return (
-    <li className="mrow">
-      <span className="mrow__l" data-tip={tipOf(id)} tabIndex={0}>{metric(id).label}</span>
-      {track ?? <span />}
-      <b className="num"><Num v={fmtMetric(id, value)} /></b>
-    </li>
+    <MetricRow label={metric(id).label} value={fmtMetric(id, value)} pct={p?.pct ?? null} reason={p?.reason ?? null} kind="style"
+      population={population} tip={tipOf(id)} approx={metric(id).status === "approx"} />
   );
 }
 
@@ -125,14 +113,14 @@ export function AggressionCard({ s }: { s: Rolled }) {
     <Card title="Aggression" tip="How you take fights, against the pros' average." className="aggro">
       <div className="aggro__scale">
         <span className="caps">Passive</span>
-        <DotTrack at={at} tone="var(--cream)" label={score === null ? "No aggression score" : `Aggression ${score.toFixed(2)} pro standard deviations from the pros' average`} />
+        <DotTrack at={at} tone="cream" label={score === null ? "No aggression score" : `Aggression ${score.toFixed(2)} pro standard deviations from the pros' average`} />
         <span className="caps">Aggressive</span>
       </div>
       <p className="aggro__score">
         <b className="num">{score === null ? "–" : `${score > 0 ? "+" : score < 0 ? "−" : ""}${Math.abs(score).toFixed(2)}`}</b>
         <span className="meta" data-tip={tipOf("aggressionScore")} tabIndex={0}>pro SDs from the pros' average</span>
       </p>
-      <ul className="mvals">{parts.map((p) => (p.v === null ? null : <Row key={p.id} id={p.id} value={p.v} />))}</ul>
+      <MetricList label="Aggression parts">{parts.map((p) => (p.v === null ? null : <Row key={p.id} id={p.id} value={p.v} />))}</MetricList>
     </Card>
   );
 }
@@ -151,13 +139,9 @@ export function EconomyCard({ q, s, side }: { q: Query; s: Rolled; side: "both" 
   if (rows.every((r) => r.v === null)) return null;
   return (
     <Card title="Economy" tip="How you spend, against the bots in your matches." className="econ" aside={<span className="meta">Mid tick: bots</span>}>
-      <ul className="mvals">
-        {rows.map((r) => (r.v === null ? null : (
-          <Row key={r.id} id={r.id} value={r.v}
-            track={r.p && r.p.pct !== null ? <span data-tip={`${percentilePhrase(r.p.pct, "style")} against the bots in your matches.`} tabIndex={0}><DotTrack at={r.p.pct} tone="var(--ink)" label={`${Math.round(r.p.pct)} of 100 against bots`} /></span>
-              : r.p?.reason ? <span className="meta mrow__why" data-tip={r.p.reason} tabIndex={0}>No percentile yet</span> : undefined} />
-        )))}
-      </ul>
+      <MetricList label="Economy">
+        {rows.map((r) => (r.v === null ? null : <Row key={r.id} id={r.id} value={r.v} p={r.p} population="the bots in your matches" />))}
+      </MetricList>
     </Card>
   );
 }

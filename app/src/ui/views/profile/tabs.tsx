@@ -41,24 +41,28 @@ export function useRanks(q: Query, side: PoolSide): Ranks | null {
   }, [pro, style, m]);
 }
 
-/** A share's count, "6 of 39", from the metric's numerator and denominator measures; else its sample count. */
-function sampleOf(id: string, p: Pct, m: Measures | null): string | null {
+/**
+ * A share's count, "6 of 39", from the metric's numerator and denominator measures; else its sample
+ * count. `n` is the events the value rests on (the denominator, or the sample count), for thin rows.
+ */
+export function sampleOf(id: string, p: Pct, m: Measures | null): { text: string | null; n: number | null } {
   const meta = metric(id);
-  if (meta.of && m && p.value !== null) return `${m[meta.of[0]]} of ${m[meta.of[1]]}`;
-  if (meta.sample && p.n !== null) return plural(p.n, meta.sample.unit.replace(/s$/, ""), meta.sample.unit);
-  return null;
+  if (meta.of && m && p.value !== null) return { text: `${m[meta.of[0]]} of ${m[meta.of[1]]}`, n: m[meta.of[1]] };
+  if (meta.sample && p.n !== null) return { text: plural(p.n, meta.sample.unit.replace(/s$/, ""), meta.sample.unit), n: p.n };
+  return { text: null, n: null };
 }
 
-/** One engine metric as a MetricRow. */
-export function Stat({ id, r, label }: { id: string; r: Ranks; label?: string }) {
+/** One engine metric as a MetricRow; `rank` adds its rank as text (the list must be a ranked MetricList). */
+export function Stat({ id, r, label, rank }: { id: string; r: Ranks; label?: string; rank?: boolean }) {
   if (!hasMetric(id)) return null;
   const meta = metric(id);
   const p = r.p[id];
   if (!p || meta.status === "unavailable") return null;
   const kind = meta.kind === "performance" ? "performance" : "style";
+  const s = sampleOf(id, p, r.m);
   return (
-    <MetricRow label={label ?? meta.label} value={p.value === null ? null : fmtMetric(id, p.value)} sample={sampleOf(id, p, r.m)} pct={p.pct} kind={kind}
-      population={kind === "performance" ? proPopulation(p.pool) : r.bots} tip={tipOf(id)} reason={p.reason} approx={meta.status === "approx"} />
+    <MetricRow label={label ?? meta.label} value={p.value === null ? null : fmtMetric(id, p.value)} sample={s.text} n={s.n} pct={p.pct} kind={kind}
+      population={kind === "performance" ? proPopulation(p.pool) : r.bots} tip={tipOf(id)} reason={p.reason} approx={meta.status === "approx"} rank={rank} />
   );
 }
 
