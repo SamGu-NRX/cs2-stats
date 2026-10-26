@@ -80,6 +80,7 @@ beforeEach(() => {
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   rollupOf = null;
+  radarArt = "blob:radar"; // the pack has radars unless a test says otherwise
 });
 afterEach(() => {
   act(() => root.unmount());
