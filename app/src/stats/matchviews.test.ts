@@ -7,12 +7,43 @@ import { rating3Of } from "./rating3";
 import { emptySummary, rollup } from "./rollup";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 import { derive } from "./derive";
-import { CS2RB } from "./model-params";
+import { CS2RB, PARAMS } from "./model-params";
 
 const t = (s: number) => FREEZE_END + 64 * s;
 const equip = { equip_value_game: 4000 };
 
 describe("rating by round", () => {
+  /** six rounds of player a, CT for the first three and T for the last three, with each round's measures */
+  const sixRounds = (m: (ri: number) => Record<string, number>) => {
+    const f0 = oneRound({ players: { a: "CT", c: "T" } });
+    const rounds = Array.from({ length: 6 }, (_, ri) => ({ ...f0.rounds[0], ri, number: ri + 1, winner: (ri < 3 ? "CT" : "T") as "CT" | "T" }));
+    const pr = rounds.map((r) => ({ ...f0.pr.find((x) => x.pi === 0)!, ri: r.ri, side: (r.ri < 3 ? "CT" : "T") as "CT" | "T", won: true, m: { rounds: 1, ...m(r.ri) } }));
+    return { ...f0, match: { ...f0.match, nRounds: 6, roundsPlayed: 6 }, rounds, pr };
+  };
+  /** one round's rated measures: k eco kills, d eco damage, survived, KAST, swing s (a fraction) */
+  const rated = (k: number, d: number, s: number) => ({ swingRounds: 1, ecoRounds: 1, ratedRounds: 1, vEcoKills: k, vEcoDmg: d, vEcoDeaths: 0, vEcoKast: 1, vMultiKillRounds: 0, vSwing: s, swing: s });
+
+  it("marks the rounds the match rating is made of, which average to it", () => {
+    // fails if a round on a side rating3Of leaves out counts: CT has 1 of 3 rounds rated (under half,
+    // so CT is not rated) and T 3 of 3; the match rating is T's alone, and only T's rounds count
+    const f = sixRounds((ri) => (ri === 0 ? rated(0, 20, -0.05) : ri >= 3 ? rated(2, 150, 0.1) : {}));
+    const rows = roundRatings(f, "a", null);
+    expect(rows.map((r) => r.counts)).toEqual([false, false, false, true, true, true]);
+    expect(rows[0].rating).not.toBeNull();
+    const counted = rows.filter((r) => r.counts);
+    expect(counted.reduce((a, r) => a + r.rating!, 0) / counted.length).toBeCloseTo(rating3Of(rollup([f], { player: "a" })).value!, 12);
+  });
+
+  it("splits a round's rating into each input's coefficient times its value", () => {
+    // fails if an input is read on the wrong scale: 2 eco kills, 150 eco damage, no death, KAST and no
+    // multi-kill as 100 and 0, and swing 0.1 as 10 points, each times params.json's coefficient
+    const f = sixRounds(() => rated(2, 150, 0.1));
+    const c = PARAMS.rating.coefficients;
+    expect(roundRatings(f, "a", null)[0].terms).toEqual({
+      kpr_eco: c.eKPR * 2, adr_eco: c.eADR * 150, dpr_eco: c.eDPR * 0, kast_eco: c.eKAST * 100, mk: c.MK * 0, swing: c.Swing * 10,
+    });
+  });
+
   it("gives each rated round the rating of that round alone, split by input", () => {
     // fails if a term, the intercept or the per-round scale (KAST and multi-kill as 0 or 100, swing in
     // points) is wrong: one rated round's rating equals Rating 3.0 over that round, and its terms sum to it
