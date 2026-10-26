@@ -36,7 +36,9 @@
 .fl-ray line { stroke: var(--cream); stroke-width: 2.5; stroke-opacity: 0.85; }
 .fl-ray.is-team line { stroke: var(--poor-text); stroke-dasharray: 8 6; }
 .fl-ray.is-short line { stroke-opacity: 0.35; }
-.fl-ray__t, .fl-ray__ct { stroke: var(--bg0); stroke-width: 3; }
+.fl-ray__t, .fl-ray__ct, .fl-ray__unknown { stroke: var(--bg0); stroke-width: 3; }
+/* a blinded player with no row in the round has no known side: neither side's colour */
+.fl-ray__unknown { fill: var(--ink2); }
 .fl-ray__t { fill: var(--t); }
 .fl-ray__ct { fill: var(--ct); }
 .fl-ray text { fill: var(--ink); font: 600 22px/1 var(--f); paint-order: stroke; stroke: var(--bg0); stroke-width: 6px; stroke-linejoin: round; }

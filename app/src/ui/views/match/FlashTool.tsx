@@ -72,7 +72,8 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
   const title = "Your flashes";
   if (call.error && !call.stale) return <Card title={title}><LoadFailed what="Your flashes" error={call.error} /></Card>;
   if (!tool) return <Card title={title}><div className="skel" style={{ height: 320 }} /></Card>;
-  if (!all.length) return <Card title={title} icon={<NadeIcon type="flash" size={16} beside />}><Empty text={notes.length ? notes.join(" ") : "You threw no flashbangs this match."} /></Card>;
+  // "threw none" only when the throw log says so; otherwise the engine's notes say what the file lacks
+  if (!all.length) return <Card title={title} icon={<NadeIcon type="flash" size={16} beside />}><Empty text={[tool.thrown === 0 ? "You threw no flashbangs this match." : null, ...notes].filter(Boolean).join(" ")} /></Card>;
 
   const focus = picked ?? hover;
   // the map's own overview transform only: a frame fitted around the points would place them over nothing
@@ -161,7 +162,7 @@ function FlashRays({ v, f, to }: { v: TabProps["v"]; f: FlashRow; to: Frame["to"
         return (
           <g key={b.pi} className={`fl-ray ${b.team ? "is-team" : ""} ${b.flashed ? "" : "is-short"}`}>
             <line x1={x} y1={y} x2={bx} y2={by} />
-            <circle cx={bx} cy={by} r="8" className={side === "T" ? "fl-ray__t" : "fl-ray__ct"} />
+            <circle cx={bx} cy={by} r="8" className={side === "T" ? "fl-ray__t" : side === "CT" ? "fl-ray__ct" : "fl-ray__unknown"} />
             <text x={bx + 13} y={by + 7}>{b.secs.toFixed(1)}s</text>
           </g>
         );

@@ -47,7 +47,8 @@ export interface FlashTool {
   flashes: FlashRow[];
   /**
    * the player's flashbang throws in the throw log (grenade_throws), in rounds the player has a row;
-   * null when the file has no throw log (Valve and plugin files before 1.0.0 log detonations only)
+   * null when the file logs no throws. A table with no row for anyone is no log: the Valve imports and
+   * one of the two pro demos write an empty table although their players threw flashbangs.
    */
   thrown: number | null;
   /** what the file does not record, in a sentence each; empty when nothing is missing */
@@ -59,10 +60,13 @@ export const NO_GRENADE_EVENTS = "This file records no grenade or flash events."
 const DETONATE = "flash_detonate";
 
 /**
- * The player's flashes. A blind belongs to the detonation its flash_entity_id names in the same
- * round (the extractor's and the plugin's link; in every file seen so far the blind lands on the
- * detonation's tick). A blind without that link is left out and counted in the notes, never placed by
- * guess. A flash led to a kill when either holds:
+ * The player's flashes. A blind belongs to a detonation its flash_entity_id names in the same round
+ * (the extractor's and the plugin's link; in every file seen so far the blind lands on the
+ * detonation's tick): its recorded attacker's latest such detonation at or before it, or with no
+ * attacker recorded, the latest by anyone, which makes it this player's only when that one is theirs.
+ * A blind without that link is left out and counted in the notes, never placed by guess. Repeated rows
+ * (a detonation, a throw, or one player's blind under one flash) count once. A flash led to a kill
+ * when either holds:
  * - assist: the kill carries a flash assist for the thrower, and this flash is the thrower's latest
  *   one to have blinded the victim before the kill;
  * - while blind: an enemy this flash blinded for over FLASHED_MIN_S died to the thrower's side before
@@ -78,58 +82,101 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const ev = t.grenade_events;
   const B = t.blinds;
 
-  const g = t.grenade_throws;
-  if (!(ev && ev.n) && !B.n && !(g && g.n)) return { flashes: [], thrown: null, notes: [NO_GRENADE_EVENTS] };
-  let thrown: number | null = null;
-  if (g) {
-    thrown = 0;
-    for (let i = 0; i < g.n; i++) {
-      const ri = riOf.get(g.round[i]);
-      if (g.weapon[i] === "flashbang" && g.steamid[i] === player && ri !== undefined && sideOf.has(ri * 1024 + me)) thrown++;
-    }
-  }
+  // a throw table with no row for any player is no log (FlashTool.thrown): it cannot say anyone threw none
+  const g = t.grenade_throws && t.grenade_throws.n ? t.grenade_throws : null;
+  if (!(ev && ev.n) && !B.n && !g) return { flashes: [], thrown: null, notes: [NO_GRENADE_EVENTS] };
+  const mine = (round: number) => { const ri = riOf.get(round); return ri !== undefined && sideOf.has(ri * 1024 + me) ? ri : undefined; };
 
-  interface Work { row: FlashRow; ri: number; tick: number; ticks: number[]; credited: Map<KillFact, FlashKill> }
+  // Every flashbang detonation in the match, every player's: a blind is linked against all of them, so
+  // a reused entity id cannot hand another player's blind to this one. A row repeating a detonation
+  // (same round, thrower, entity id and tick) is the same detonation recorded twice and counts once;
+  // the same entity id at another tick is another flashbang, as the game reuses entity ids.
+  interface Det { round: number; tick: number; by: string | null; entity: number | null; work: Work | null }
+  interface Work { row: FlashRow; ri: number; tick: number; entity: number | null; ticks: number[]; credited: Map<KillFact, FlashKill> }
   const work: Work[] = [];
-  const byEntity = new Map<string, Work[]>();
+  const dets: Det[] = [];
+  const seen = new Set<string>();
   if (ev) for (let i = 0; i < ev.n; i++) {
-    if (ev.event[i] !== DETONATE || ev.steamid[i] !== player) continue;
-    const ri = riOf.get(ev.round[i]);
-    const side = ri === undefined ? undefined : sideOf.get(ri * 1024 + me);
-    if (ri === undefined || !side) continue;
+    if (ev.event[i] !== DETONATE) continue;
+    const key = `${ev.round[i]}|${ev.steamid[i]}|${ev.entity_id[i]}|${ev.tick[i]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const d: Det = { round: ev.round[i], tick: ev.tick[i], by: ev.steamid[i], entity: ev.entity_id[i], work: null };
+    dets.push(d);
+    const ri = d.by === player ? mine(d.round) : undefined;
+    if (ri === undefined) continue;
     const fe = f.rounds[ri].freezeEndTick;
     const x = ev.x[i];
     const y = ev.y[i];
-    const w: Work = {
-      row: { round: ev.round[i], side, t: fe === null ? null : (ev.tick[i] - fe) / tr, at: x === null || y === null ? null : [x, y], blinded: [], kills: [] },
-      ri, tick: ev.tick[i], ticks: [], credited: new Map(),
+    d.work = {
+      row: { round: d.round, side: sideOf.get(ri * 1024 + me)!, t: fe === null ? null : (d.tick - fe) / tr, at: x === null || y === null ? null : [x, y], blinded: [], kills: [] },
+      ri, tick: d.tick, entity: d.entity, ticks: [], credited: new Map(),
     };
-    work.push(w);
-    if (ev.entity_id[i] !== null) {
-      const k = `${ev.round[i]}|${ev.entity_id[i]}`;
-      const same = byEntity.get(k);
-      if (same) same.push(w); else byEntity.set(k, [w]);
+    work.push(d.work);
+  }
+  const byEntity = new Map<string, Det[]>();
+  for (const d of dets) {
+    if (d.entity === null) continue;
+    const k = `${d.round}|${d.entity}`;
+    const l = byEntity.get(k);
+    if (l) l.push(d); else byEntity.set(k, [d]);
+  }
+
+  // Throws: the player's flashbangs in the throw log, each paired with one of their detonations, by
+  // entity id where the throw has one, else the first unpaired detonation of the round at or after it
+  let thrown: number | null = null;
+  let undetonated = 0;
+  if (g) {
+    const throws: { round: number; tick: number; entity: number | null }[] = [];
+    const logged = new Set<string>();
+    for (let i = 0; i < g.n; i++) {
+      if (g.weapon[i] !== "flashbang" || g.steamid[i] !== player || mine(g.round[i]) === undefined) continue;
+      // a row repeating a throw (same round, tick and entity id) is the same throw
+      const key = `${g.round[i]}|${g.tick[i]}|${g.entity_id[i]}`;
+      if (logged.has(key)) continue;
+      logged.add(key);
+      throws.push({ round: g.round[i], tick: g.tick[i], entity: g.entity_id[i] });
+    }
+    thrown = throws.length;
+    const paired = new Set<Work>();
+    const pair = (pick: (w: Work) => boolean, tick: number) => {
+      const w = work.filter((x) => !paired.has(x) && pick(x) && x.tick >= tick).sort((a, b) => a.tick - b.tick)[0];
+      if (w) paired.add(w);
+      return !!w;
+    };
+    throws.sort((a, b) => Number(a.entity === null) - Number(b.entity === null) || a.tick - b.tick);
+    for (const th of throws) {
+      const ok = th.entity !== null ? pair((w) => w.row.round === th.round && w.entity === th.entity, th.tick) : pair((w) => w.row.round === th.round, th.tick);
+      if (!ok) undetonated++;
     }
   }
 
   const near = positionsNear(t, tr);
   let unlinked = 0;
   for (let i = 0; i < B.n; i++) {
-    // another thrower's blind never joins this player's flash, even when its entity id matches one of
-    // theirs (the game reuses entity ids); a blind whose attacker is unknown can still be theirs
+    // A blind with a recorded attacker belongs to that attacker's latest detonation of its entity at or
+    // before it. One with no attacker belongs to the latest detonation of that entity by anyone, and is
+    // this player's only when that detonation is theirs.
     const by = B.attacker_steamid[i];
     if (by !== null && by !== player) continue;
     const id = B.flash_entity_id[i];
-    const cands = id === null ? undefined : byEntity.get(`${B.round[i]}|${id}`);
-    // an entity id can come back later in a round: the latest detonation at or before the blind
-    const w = cands?.filter((c) => c.tick <= B.tick[i]).sort((a, b) => b.tick - a.tick)[0];
+    const d = (id === null ? [] : byEntity.get(`${B.round[i]}|${id}`) ?? [])
+      .filter((x) => x.tick <= B.tick[i] && (by === null || x.by === by))
+      .sort((a, b) => b.tick - a.tick)[0];
+    const w = d?.work ?? null;
     if (!w) {
       if (by === player && !B.is_self[i]) unlinked++;
       continue;
     }
     const v = piOf.get(B.victim_steamid[i]);
     if (v === undefined || v === me || B.is_self[i]) continue;
+    // one flash blinds a player once: a repeated blind row keeps the longest
     const secs = B.duration[i];
+    const j = w.row.blinded.findIndex((b) => b.pi === v);
+    if (j >= 0) {
+      if (secs > w.row.blinded[j].secs) { w.row.blinded[j] = { ...w.row.blinded[j], secs, flashed: secs > FLASHED_MIN_S }; w.ticks[j] = B.tick[i]; }
+      continue;
+    }
     w.row.blinded.push({ pi: v, secs, team: B.is_team_flash[i], flashed: secs > FLASHED_MIN_S, at: near(B.round[i], B.victim_steamid[i], B.tick[i]) });
     w.ticks.push(B.tick[i]);
   }
@@ -170,16 +217,15 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const flashes = work.map((w) => w.row);
 
   const notes: string[] = [];
-  if (thrown !== null && thrown > flashes.length) {
-    const lost = thrown - flashes.length;
-    notes.push(`${lost} of the ${thrown} flashbangs you threw ${lost === 1 ? "has" : "have"} no detonation in this file, so ${lost === 1 ? "it is" : "they are"} not listed.`);
-  }
+  if (undetonated) notes.push(`${undetonated} of the ${thrown} flashbangs you threw ${undetonated === 1 ? "has" : "have"} no detonation in this file, so ${undetonated === 1 ? "it is" : "they are"} not listed.`);
+  // without a throw log and without a detonation of theirs, the file cannot say whether they threw one
+  if (thrown === null && !flashes.length) notes.push("None of your flashbangs has a recorded detonation in this file, and it logs no throws.");
   const unplaced = flashes.filter((x) => !x.at).length;
   if (unplaced) notes.push(`${unplaced} of ${flashes.length} flashes have no detonation point in this file, so they are not on the map.`);
-  // a placed flash draws a line to each player it blinded; without a position sample near the blind there is none
-  const onMap = flashes.filter((x) => x.at).flatMap((x) => x.blinded);
-  const unseen = onMap.filter((b) => !b.at).length;
-  if (unseen) notes.push(`${unseen} of the ${onMap.length} players these flashes blinded on the map have no position sample near the blind, so no line is drawn to them.`);
+  // a line runs to a blinded player only from a placed flash to a position sample near the blind
+  const blinded = flashes.flatMap((x) => x.blinded);
+  const unseen = blinded.filter((b) => !b.at).length;
+  if (unseen) notes.push(`${unseen} of the ${blinded.length} players these flashes blinded have no position sample near the blind, so no line can be drawn to them.`);
   if (unlinked) notes.push(`${unlinked} ${unlinked === 1 ? "blind names" : "blinds name"} no detonation in this file, so ${unlinked === 1 ? "it is" : "they are"} left out.`);
   return { flashes, thrown, notes };
 }

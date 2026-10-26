@@ -1040,6 +1040,17 @@ describe("parity round 2: flashes, clutches and highlights", () => {
     expect(Array.from(host.querySelectorAll(".empty")).map(text)).toContain("This file records no grenade or flash events.");
   });
 
+  it("says a player threw no flashbangs only when the throw log records none", () => {
+    // fails if a file without a throw log claims the player threw nothing
+    answers = { flashes: { flashes: [], thrown: 0, notes: [] } };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    expect(Array.from(host.querySelectorAll(".empty")).map(text)).toContain("You threw no flashbangs this match.");
+    const note = "None of your flashbangs has a recorded detonation in this file, and it logs no throws.";
+    answers = { flashes: { flashes: [], thrown: null, notes: [note] } };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    expect(Array.from(host.querySelectorAll(".empty")).map(text).filter((x) => x.includes("flashbang"))).toEqual([note]);
+  });
+
   it("lists every clutch with its save, kills and time left, the clock's absence explained", () => {
     // fails if a save reads as a loss, the clock shows a number it does not have, or a row links
     // anywhere but its round
