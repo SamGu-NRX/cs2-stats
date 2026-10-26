@@ -78,6 +78,15 @@ const M: Metric[] = [
   { id: "swing", label: "Round swing", hltv: "Round swing", kind: "performance", group: "rating", unit: "pct", status: "approx",
     def: "Average change per round in your team's win probability credited to you (swing.ts).",
     needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.swing) / s.m.swingRounds : null) },
+  // exactly k kills in a round; the scoreboard's k3Rounds and up count k or more
+  { id: "rounds2k", label: "2-kill rounds", kind: "performance", group: "multikill", unit: "pct", status: "exact",
+    def: "Rounds where you got exactly two kills.", value: (s) => pct(s.m.multiKillRounds - s.m.k3Rounds, s.m.rounds) },
+  { id: "rounds3k", label: "3-kill rounds", kind: "performance", group: "multikill", unit: "pct", status: "exact",
+    def: "Rounds where you got exactly three kills.", value: (s) => pct(s.m.k3Rounds - s.m.k4Rounds, s.m.rounds) },
+  { id: "rounds4k", label: "4-kill rounds", kind: "performance", group: "multikill", unit: "pct", status: "exact",
+    def: "Rounds where you got exactly four kills.", value: (s) => pct(s.m.k4Rounds - s.m.k5Rounds, s.m.rounds) },
+  { id: "rounds5k", label: "5-kill rounds", kind: "performance", group: "multikill", unit: "pct", status: "exact",
+    def: "Rounds where you got five kills.", value: (s) => pct(s.m.k5Rounds, s.m.rounds) },
   { id: "hs", label: "Headshot kills", kind: "performance", group: "rating", unit: "pct", status: "exact", def: "Headshot kills as a share of kills.", value: (s) => pct(s.m.hsKills, s.m.kills) },
 
   // ---- Firepower (performance, HLTV's attribute)
