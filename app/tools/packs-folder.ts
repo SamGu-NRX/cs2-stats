@@ -1,7 +1,9 @@
 // The optional packs folder (%APPDATA%\BotMatchStats\packs: pro scores, agent art, the CS2 icon pack,
 // the win-probability pack and a local pro pool), served to `vite dev` as GET /__packs/file?f=<rel>,
 // the way the desktop app's read_pack command serves it. Only the dev server gets this route: a
-// `vite preview` of a production build must not serve private files.
+// `vite preview` of a production build must not serve private files. The dev server can listen beyond
+// this machine (TAURI_DEV_HOST=0.0.0.0, for a phone on the LAN), so the route answers loopback
+// clients only.
 import { existsSync, promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Connect, Plugin } from "vite";
@@ -25,12 +27,19 @@ export async function packFile(root: string | null, rel: string | null): Promise
   // The file can change between these checks and the read (a time-of-check race). That is
   // accepted: swapping it needs a process already running as the user with write access to the packs
   // folder, which can read anything this route could reach, so no privilege boundary is crossed;
-  // and the dev server listens on localhost only.
+  // and the route answers loopback clients only (packsFolder).
   const real = realpathSync.native(abs);
   if (!existsSync(root) || !isInside(real, realpathSync.native(root))) return { status: 400 };
   if (!(await fs.stat(real)).isFile()) return { status: 400 };
   const type = rel.endsWith(".png") ? "image/png" : rel.endsWith(".svg") ? "image/svg+xml" : "application/json";
   return { status: 200, type, bytes: await fs.readFile(real) };
+}
+
+/** A loopback client: 127.0.0.0/8, ::1, or 127.x mapped into IPv6. Anything else, or no address, is not. */
+export function isLoopback(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const v4 = addr.startsWith("::ffff:") ? addr.slice(7) : addr;
+  return addr === "::1" || /^127(\.\d{1,3}){3}$/.test(v4);
 }
 
 /** The dev server's /__packs route; there is no configurePreviewServer on purpose. */
@@ -39,6 +48,8 @@ export function packsFolder(root: string | null = process.env.APPDATA ? path.joi
     const url = requestUrl(req);
     if (!url) { res.statusCode = 400; return res.end(); }
     if (url.pathname !== "/__packs/file") return next();
+    // the packs are the user's private files: never to another machine, whatever host the server binds
+    if (!isLoopback(req.socket.remoteAddress)) { res.statusCode = 403; return res.end(); }
     const a = await packFile(root, fileParam(url.search, "f"));
     res.statusCode = a.status;
     if (a.status !== 200) return res.end();

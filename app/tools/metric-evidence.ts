@@ -14,7 +14,6 @@
 //   cross-validated AUC) and src/stats/aggression-scale.json (the pros' mean and spread of each
 //   aggression part, over players with MIN_ROUNDS+ rounds). Both hold no names or ids.
 // The report (no names or ids either) goes to <data>/derived/metric-evidence-v2.json by default.
-import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { aggroParts, AGGRO_PARTS, rawScoreOf, scoreOf, type AggroScale } from "../src/stats/aggro-scale";
 import type { SightFact } from "../src/stats/aim";
@@ -24,10 +23,19 @@ import { METRIC } from "../src/stats/metrics";
 import { addMatch, emptySummary, rollup, type Summary } from "../src/stats/rollup";
 import { auc, fitXDuel, XDUEL_FEATURES, xduelP, type XDuelParams } from "../src/stats/xduel";
 import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, mapLabel, proMaps, WINPROB } from "./node-read";
+import { checkOutput, writeOutput, type OutputKind } from "./outputs";
 
 const arg = (name: string, dflt: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
 const FIT = process.argv.includes("--fit");
 const OUT = path.resolve(arg("--out", path.join(DATA_DIR, "derived", "metric-evidence-v2.json")));
+// The report's overlaps include swing and Rating 3.0, which are pack-derived when the HLTV pack is
+// loaded, so it is private then. The fitted files read neither (the duel features and the aggression
+// parts are positions, speeds, health and timings), so they are public and live in the repository.
+const REPORT: OutputKind = { private: WINPROB.kind !== "cs2rb", what: `the metric evidence report built on the ${WINPROB.label}` };
+const STATS = path.resolve(import.meta.dirname, "../src/stats");
+const XDUEL = path.join(STATS, "xduel-params.json"), AGGRO = path.join(STATS, "aggression-scale.json");
+const fitKind = (file: string): OutputKind => ({ private: false, what: path.basename(file), inRepo: file });
+checkOutput(OUT, REPORT);
 /** The coordinator's bar for usable reliability, and for overlap with existing stats. */
 const RELIABLE = 0.4, OVERLAP = 0.5;
 const BINS = [10, 20, 40, 80, 160, 320, 640];
@@ -243,12 +251,10 @@ const gates = {
 };
 
 const report = { built: new Date().toISOString().slice(0, 10), maps, playerMaps: mapPlayers.length, bar: { reliable: RELIABLE, overlap: OVERLAP }, xduel: { n: xparams.n, auc: xparams.auc, brier: xparams.brier }, aggressionScale: scale, results, gates };
-mkdirSync(path.dirname(OUT), { recursive: true });
-writeFileSync(OUT, JSON.stringify(report, null, 2));
+writeOutput(OUT, JSON.stringify(report, null, 2), REPORT);
 if (FIT) {
-  const here = path.resolve(import.meta.dirname, "../src/stats");
-  writeFileSync(path.join(here, "xduel-params.json"), `${JSON.stringify(xparams, null, 2)}\n`);
-  writeFileSync(path.join(here, "aggression-scale.json"), `${JSON.stringify(scale, null, 2)}\n`);
+  writeOutput(XDUEL, `${JSON.stringify(xparams, null, 2)}\n`, fitKind(XDUEL));
+  writeOutput(AGGRO, `${JSON.stringify(scale, null, 2)}\n`, fitKind(AGGRO));
 }
 
 console.log(`xduel: ${xparams.n} duels, cross-validated AUC ${xparams.auc}, Brier ${xparams.brier}`);

@@ -153,20 +153,27 @@ async fn import_match(name: String, data: Vec<u8>) -> Result<String, String> {
 /// pack".
 #[tauri::command]
 async fn read_pack(name: String) -> Result<tauri::ipc::Response, String> {
+    // the name first, so a bad one says so whatever the environment
+    check_pack_name(&name)?;
     let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
     let root = PathBuf::from(appdata).join("BotMatchStats").join("packs");
     read_pack_in(&root, &name).map(tauri::ipc::Response::new)
 }
 
+/// A pack file name: relative, plain path segments only, ending in .json, .png or .svg.
+fn check_pack_name(name: &str) -> Result<(), String> {
+    let ok_ext = name.ends_with(".json") || name.ends_with(".png") || name.ends_with(".svg");
+    if !ok_ext || Path::new(name).components().any(|c| !matches!(c, Component::Normal(_))) {
+        return Err(format!("{name}: not a pack file path"));
+    }
+    Ok(())
+}
+
 /// One file from the packs folder `root`: empty when it does not exist, an error when the name is not
 /// a pack file path or the file resolves outside the folder (links and junctions included).
 fn read_pack_in(root: &Path, name: &str) -> Result<Vec<u8>, String> {
-    let rel = Path::new(name);
-    let ok_ext = name.ends_with(".json") || name.ends_with(".png") || name.ends_with(".svg");
-    if !ok_ext || rel.components().any(|c| !matches!(c, Component::Normal(_))) {
-        return Err(format!("{name}: not a pack file path"));
-    }
-    let path = root.join(rel);
+    check_pack_name(name)?;
+    let path = root.join(name);
     if !path.is_file() {
         return Ok(Vec::new());
     }
@@ -609,6 +616,11 @@ mod tests {
         for bad in ["../secret.json", "icons/../../secret.json", outside.as_str(), "pros.txt", "./pros.json"] {
             let err = read_pack_in(&root, bad).expect_err(bad);
             assert!(err.contains("not a pack file path"), "{bad}: {err}");
+            // the command checks the name before it reads APPDATA, so a bad name gets the same answer
+            match tauri::async_runtime::block_on(read_pack(bad.to_string())) {
+                Err(e) => assert!(e.contains("not a pack file path"), "{bad}: {e}"),
+                Ok(_) => panic!("{bad}: read_pack accepted it"),
+            }
         }
     }
 

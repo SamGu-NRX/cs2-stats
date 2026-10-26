@@ -15,7 +15,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 
 const NAMED = { private: true, what: "the named pro pack" };
 const PACK_POOL = { private: true, what: "the pro pool built on the HLTV win-probability lookup" };
-const PUBLIC_POOL = { private: false, what: "the pro pool built on the CS2RB round model" };
+const PUBLIC_POOL = { private: false, what: "the pro pool built on the CS2RB round model", inRepo: shippedPool(repo) };
 
 describe("writeOutput", () => {
   it("keeps private outputs out of the whole repository, public/ and elsewhere", () => {
@@ -44,9 +44,24 @@ describe("writeOutput", () => {
     // fails if the shipped CS2RB pool can no longer be built, or another file lands in public/
     writeOutput(shippedPool(repo), "{}", PUBLIC_POOL, repo);
     expect(readFileSync(shippedPool(repo), "utf8")).toBe("{}");
-    expect(() => writeOutput(path.join(repo, "app", "public", "other.json"), "{}", PUBLIC_POOL, repo)).toThrow(/the only output allowed in the repository is/);
+    expect(() => writeOutput(path.join(repo, "app", "public", "other.json"), "{}", PUBLIC_POOL, repo)).toThrow(/its only place in the repository is/);
+    // a public output with no declared place (the metric evidence report) is refused in the repository
+    expect(() => checkOutput(path.join(repo, "app", "public", "evidence.json"), { private: false, what: "the report" }, repo)).toThrow(/it has no place in the repository/);
     expect(() => checkOutput(path.join(outside, "pool.json"), PUBLIC_POOL, repo)).not.toThrow();
   });
+});
+
+describe("pnpm metric-evidence", () => {
+  it("refuses a report inside the repository before reading any map", () => {
+    // fails if --out skips writeOutput again: the report holds swing and rating overlaps, pack-derived with the pack loaded
+    const r = spawnSync(process.execPath, [path.join(REPO_ROOT, "app", "node_modules", "vite-node", "vite-node.mjs"), "tools/metric-evidence.ts", "--out", "public/metric-evidence.json"], {
+      cwd: path.join(REPO_ROOT, "app"), encoding: "utf8", timeout: 60_000,
+      env: { ...process.env, CS2_WINPROB_PACK: "none", CS2_STATS_DATA: path.join(base, "no-data") },
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("refusing to write the metric evidence report");
+    expect(existsSync(path.join(REPO_ROOT, "app", "public", "metric-evidence.json"))).toBe(false);
+  }, 60_000);
 });
 
 describe("pnpm baselines", () => {

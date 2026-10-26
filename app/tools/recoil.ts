@@ -4,7 +4,8 @@
 // from the ideal pull, per bullet.
 // Usage (from app/): pnpm recoil <weapons_out>   (the decoded scripts/weapons.vdata_c, KV3 text)
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { writeOutput } from "./outputs";
 import path from "node:path";
 import { parquetMetadata, parquetRead } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
@@ -124,7 +125,9 @@ for (const w of AUTOMATIC) {
   report.push(`${w.padEnd(14)} kick ${String(p.kick.length).padStart(3)} bullets (largest middle half ${iq} deg), pro band ${String(p.pro.length).padStart(3)} bullets (${acc.sprays[w] ?? 0} sprays); residual mean ${mean === null ? "-" : r4(mean)} deg over bullets 2-${p.pro.length}, max ${len.length ? r4(len[worst]) : "-"} at bullet ${worst + 1}`);
 }
 out += "};\n";
-writeFileSync(path.resolve(import.meta.dirname, "../src/stats/recoil.ts"), out);
+const RECOIL_OUT = path.resolve(import.meta.dirname, "../src/stats/recoil.ts");
+// read from the game's weapon data and the pro demos' shot angles, no swing or rating
+writeOutput(RECOIL_OUT, out, { private: false, what: "recoil.ts", inRepo: RECOIL_OUT });
 console.log(`pro maps read: ${maps}`);
 for (const l of report) console.log(l);
 const ak = patternOf(acc, "ak47", MIN_KICK, MIN_SPRAYS);
