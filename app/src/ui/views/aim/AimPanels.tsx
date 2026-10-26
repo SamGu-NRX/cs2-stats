@@ -3,8 +3,9 @@
 // - The stat strip: accuracy as a ring in the lead, then the headline aim metrics, each with its
 //   percentile against the pros of your role (compare), shown for all guns only: pros are pooled over
 //   every gun.
-// - Spray: one gun at a time, your mean view path with its spread against the ideal pull (the game's recoil mirrored) and the pros'
-//   and where the target's head was (SprayPath), then distance from the pros and from the target.
+// - Spray: one gun at a time, where your bullets landed around bullet 1's point over the game's own
+//   pattern, with the ideal pull and your pull as an overlay (SprayPath), then distance from the ideal
+//   pull and from the target.
 // - Where you hit: gun hits on the agent figure by hit group, then the hitting figures: head accuracy,
 //   headshot kills, accuracy at visible enemies and adjusted, wallbang and smoke kills.
 // - Counter-strafing: first shots by how you stopped; flicks and spray: the finer aim metrics.
@@ -16,7 +17,7 @@
 //   says why for each match file.
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ACCURATE_FRAC, SIGHT_CONE_DEG } from "../../../stats/aim-geometry";
-import { RECOIL } from "../../../stats/recoil-ref";
+import { RECOIL, type RecoilRef } from "../../../stats/recoil-ref";
 import type { SideKey as PoolSide } from "../../../stats/compare";
 import { HIT_GROUPS } from "../../../stats/facts";
 import type { Side } from "../../../stats/tables";
@@ -29,7 +30,7 @@ import { rovingIndex, Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { HitFigure } from "../../components/HitFigure";
 import { ApproxMark, percentilePhrase } from "../../components/Percentile";
-import { MIN_SPRAYS, SprayDistance, SprayOnTarget, SprayPath, type PlayerPath } from "../../components/SprayPath";
+import { findingTitle, meanPath, sprayFinding, SprayDistance, SprayKey, SprayOnTarget, sprayStay, SprayStayBars, SprayWell, type Landing, type PlayerPath, type SprayStay } from "../../components/SprayPath";
 import { StatStrip, type StripItem } from "../../components/StatStrip";
 import { fmtMetric, WEAPON_CLASS_LABEL } from "../../data/engine";
 import { useCall, useScoped } from "../../data/hooks";
@@ -212,6 +213,8 @@ interface SprayGun {
    * silencer state), so it is drawn alone, with no reference, ideal-pull controls or distance bars
    */
   recoilUnknown: boolean;
+  /** where the bullets landed from bullet 1 (AimAgg.land); null for relative and recoil-unknown paths, which have none */
+  land: Landing | null;
   /** every spray of three or more bullets with this gun (AimAgg.sprays) */
   sprays: number;
   /** each spray's mean distance from bullet 1's target, in degrees (AimAgg.sprayDist); empty without a tracked target */
@@ -232,14 +235,29 @@ export function sprayGuns(guns: string[], per: Rolled[] | null): SprayGun[] {
   return guns.flatMap((w, i) => {
     const a = per[i].aim;
     if (!a.sprays) return [];
-    const abs = a.path[w], unk = a.unknownPath?.[w], rel = a.relPath[w];
+    const abs = a.path[w], unk = a.unknownPath?.[w], rel = a.relPath[w], land = a.land?.[w];
     const known = !!abs?.n.length, unknown = !known && !!unk?.n.length;
     const path = known ? abs : unknown ? unk : rel?.n.length ? rel : null;
-    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
+    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, land: known && land?.n.length ? land : null, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
   }).sort((x, y) => y.sprays - x.sprays);
 }
 
 const thinTip = (n: number) => `${plural(n, "spray")}, the pattern settles at ${THIN_SPRAY}.`;
+
+/** What the chart says first, as text (the well's label) and as shown, the distance set in display numerals. */
+function sprayHeadline(gun: SprayGun, name: string, ref: RecoilRef | null, stay: SprayStay | null): { text: string; node: ReactNode } | null {
+  if (stay) {
+    const d = fmtDeg(stay.mean, 2);
+    return { text: `Your ${name} bullets stayed ${d} from bullet 1's point`, node: <>Your {name} bullets stayed <b className="sprf__big disp">{d}</b> from bullet 1's point</> };
+  }
+  const text = gun.land ? `${name}: not enough sprays yet to say where your bullets landed`
+    : gun.relative ? `Your ${name} pull, relative to the target`
+    : ref && gun.path ? findingTitle(name, sprayFinding(ref, meanPath(gun.path)))
+    : gun.path ? `Your ${name} pull`
+    : ref ? `${name}: the game's pattern and its ideal pull`
+    : null;
+  return text ? { text, node: text } : null;
+}
 
 function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; side: SideFilter; guns: string[] }) {
   const scoped = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
@@ -247,8 +265,10 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
   const per = guns.length ? scoped : [];
   const list = useMemo(() => sprayGuns(guns, per ?? null), [guns, per]);
   const [pick, setPick] = useState<string | null>(null);
-  const [showSpread, setShowSpread] = useState(true);
-  const [showPro, setShowPro] = useState(true);
+  // the ideal pull is the comparison the chart exists for, so it starts on; the spread ellipses are
+  // wide over few sprays and would bury the landing points, so they start off
+  const [showIdeal, setShowIdeal] = useState(true);
+  const [showSpread, setShowSpread] = useState(false);
   const group = useRef<HTMLDivElement>(null);
   const cur = list.find((x) => x.w === pick) ?? list[0];
   if (!s || !per) return <Card className="aim-spray" title="Spray"><div className="skel" style={{ height: 320 }} /></Card>;
@@ -262,57 +282,71 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
     group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(list[to].w)}"]`)?.focus();
   };
   const name = weaponLabel(cur.w);
-  const ref = !cur.recoilUnknown && RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
+  // the game's pattern applies only to a path in view angles with the gun's normal recoil
+  const ref = !cur.recoilUnknown && !cur.relative && RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
+  const noPattern = !cur.recoilUnknown && !cur.relative && !ref;
   const a = cur.own.aim;
-  const spread = showSpread && !cur.relative ? a.spread[cur.w] ?? null : null;
+  const spread = cur.relative ? null : a.spread[cur.w] ?? null;
   const heads = cur.relative ? null : a.heads[cur.w] ?? null;
   const onTarget = a.onTarget[cur.w] ?? null;
   const dist = mean(cur.dist);
-  // a chart needs your path or the ideal pull to draw; a plugin gun without angles shows its distance alone
-  const chart = cur.path !== null || (ref !== null && !cur.relative);
+  const stay = cur.land ? sprayStay(cur.land, ref?.kick ?? null) : null;
+  const head = sprayHeadline(cur, name, ref, stay);
+  // a chart needs your path, your landing points or the game's pattern; a plugin gun without angles shows its distance alone
+  const chart = cur.path !== null || cur.land !== null || ref !== null;
+  // with landing points the headline is theirs, so the pull's comparison with the pros moves under the key
+  const finding = cur.land && ref && cur.path && showIdeal ? sprayFinding(ref, meanPath(cur.path)) : null;
   return (
-    <Card className="aim-spray" title={<>Spray<Hint tip="Your average view path from bullet 1, against the pull that cancels recoil." /></>} aside={
+    <Card className="aim-spray" title={<>Spray<Hint tip="Where your bullets landed around bullet 1's point, over the game's own pattern." /></>} aside={
       <span className="meta spray-aside">{plural(cur.sprays, "spray")}{cur.sprays < THIN_SPRAY ? <span className="chip chip--outline" data-tip={thinTip(cur.sprays)} tabIndex={0}>Few sprays</span> : null}</span>
     }>
-      <div className="sprayc">
-        <div ref={group} className="gunlist" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
+      <div className="spr">
+        <div ref={group} className="gunpick" role="radiogroup" aria-label="Gun" onKeyDown={onKey}>
           {list.map((x) => {
             const thin = x.sprays < THIN_SPRAY;
             return (
-              <button key={x.w} data-w={x.w} role="radio" aria-checked={x.w === cur.w} tabIndex={x.w === cur.w ? 0 : -1} className="gunlist__b" data-thin={thin || undefined}
+              <button key={x.w} type="button" data-w={x.w} role="radio" aria-checked={x.w === cur.w} tabIndex={x.w === cur.w ? 0 : -1} className="gunpick__b" data-thin={thin || undefined}
                 data-tip={thin ? thinTip(x.sprays) : undefined} onClick={() => setPick(x.w)}>
                 <GunIcon weapon={x.w} height={13} />
-                <span className="gunlist__n">{weaponLabel(x.w)} <span className="gunlist__c num">{x.sprays}</span></span>
+                <span className="gunpick__n">{weaponLabel(x.w)} <span className="gunpick__c num">{x.sprays}</span></span>
                 <span className="sr-only">, {plural(x.sprays, "spray")}{thin ? `, the pattern settles at ${THIN_SPRAY}` : ""}</span>
               </button>
             );
           })}
         </div>
-        <div className="sprayc__fig">
-          {chart && !cur.relative && !cur.recoilUnknown && (
-            <div className="spray-toggles">
-              <label className="check"><input type="checkbox" checked={showSpread} onChange={(e) => setShowSpread(e.target.checked)} /><span>Spread bands</span></label>
-              {ref && <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Ideal pull</span></label>}
-            </div>
+        <figure className="sprf" data-well={chart || undefined}>
+          {head && (
+            <figcaption className="sprf__head">
+              <span className="sprf__title">{head.node}</span>
+              {stay && <span className="meta">Your average spray over bullets 2–{stay.to}, from {plural(stay.sprays, "spray")}</span>}
+            </figcaption>
           )}
-          {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} recoilUnknown={cur.recoilUnknown} pro={showPro} spread={spread} heads={heads} />}
           {chart && (
-            <div className="legend spray-key" aria-hidden>
-              <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="1.5" /></svg>You</span>
-              {spread && <span><svg width="14" height="10"><ellipse cx="7" cy="5" rx="6" ry="4" className="spray__sd" /></svg>Your spread, one standard deviation</span>}
-              {ref && !cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Ideal pull</span>}
-              {ref && !cur.relative && showPro && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}
-              {heads && <span><svg width="10" height="10"><circle cx="5" cy="5" r="2.5" className="spray__head" /></svg>Where the target's head was</span>}
-              {cur.path && cur.path.n.some((n) => n < MIN_SPRAYS) ? <span className="faint">Faded: under {MIN_SPRAYS} sprays</span> : null}
+            <div className="sprf__well">
+              {(ref || spread) && (
+                <div className="spray-toggles">
+                  {ref && <label className="check"><input type="checkbox" checked={showIdeal} onChange={(e) => setShowIdeal(e.target.checked)} /><span>Ideal pull</span></label>}
+                  {spread && <label className="check"><input type="checkbox" checked={showSpread} onChange={(e) => setShowSpread(e.target.checked)} /><span>Spread</span></label>}
+                </div>
+              )}
+              <SprayWell label={head?.text ?? `${name} spray`} reference={ref} landing={cur.land} path={cur.path} heads={heads} spread={spread} showIdeal={showIdeal} showSpread={showSpread} />
+              <SprayKey reference={ref} landing={cur.land} path={cur.path} heads={!!heads?.n.some((n) => n > 0)} spread={!!spread} showIdeal={showIdeal} showSpread={showSpread} />
+              {finding && finding.kind !== "thin" && <p className="meta spray__finding">{findingTitle(name, finding)}.</p>}
+              {cur.relative ? <p className="meta spray__note">Measured against the target, not view angles, so not set against the game's pattern.</p>
+                : cur.recoilUnknown ? <p className="meta spray__note">Your recordings don't say whether the silencer was on, so this path isn't set against the game's pattern.</p>
+                : noPattern ? <p className="meta spray__note">No in-game pattern for this gun yet: the demos hold too few of its shots.</p> : null}
             </div>
           )}
-          <p className="spray__dist">
-            <span className="caps" data-tip="Mean angle from your target across a spray's bullets." tabIndex={0}>Distance from target</span>
-            {dist === null ? <span className="meta">No tracked target in these sprays</span> : <><b className="num">{fmtDeg(dist, 2)}</b><span className="meta">mean over {plural(cur.dist.length, "spray")}</span></>}
-          </p>
-          {ref && cur.path && !cur.relative ? <SprayDistance reference={ref} path={cur.path} /> : null}
-          {onTarget ? <SprayOnTarget sums={onTarget} /> : null}
-        </div>
+          <div className="sprf__read">
+            {stay && <SprayStayBars stay={stay} />}
+            <p className="spray__dist">
+              <span className="caps" data-tip="Mean angle from your target across a spray's bullets." tabIndex={0}>Distance from target</span>
+              {dist === null ? <span className="meta">No tracked target in these sprays</span> : <><b className="num">{fmtDeg(dist, 2)}</b><span className="meta">mean over {plural(cur.dist.length, "spray")}</span></>}
+            </p>
+            {ref && cur.path ? <SprayDistance reference={ref} path={cur.path} /> : null}
+            {onTarget ? <SprayOnTarget sums={onTarget} /> : null}
+          </div>
+        </figure>
       </div>
     </Card>
   );
