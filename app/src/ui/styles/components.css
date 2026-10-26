@@ -80,8 +80,11 @@
 .btn[disabled], .btn[aria-disabled="true"] { opacity: 0.4; pointer-events: none; }
 
 .seg { position: relative; display: inline-flex; padding: 2px; border-radius: var(--r-ctl); background: var(--bg0); box-shadow: inset 0 0 0 1px var(--line); flex: none; }
-.seg__thumb { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 4px; background: var(--pill); transition: transform 160ms var(--ease-in-out), width 160ms var(--ease-in-out); }
+/* the thumb takes its new width at once and slides there: only transform animates (a width
+   transition re-lays the control every frame) */
+.seg__thumb { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 4px; background: var(--pill); transition: transform 160ms var(--ease-in-out); }
 .seg__thumb.is-instant { transition: none; }
+@media (prefers-reduced-motion: reduce) { .seg__thumb { transition: none; } }
 .seg__item { position: relative; height: 26px; padding: 0 10px; border-radius: 4px; color: var(--ink2); font: 500 12px/1 var(--f); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: color var(--d-color) ease; }
 .seg__item[data-on="true"] { color: var(--cream); }
 .seg__item[data-on="true"][data-side="t"] { color: var(--t); }
