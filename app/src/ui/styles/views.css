@@ -1279,7 +1279,8 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .ms__l { fill: none; stroke: var(--ink3); }
 .ms__wlt { font: 700 9.5px/1 var(--f); fill: var(--ink2); }
 .ms__wlt.is-w { fill: var(--bg0); }
-.ms__hit { cursor: pointer; }
+.ms__hit { cursor: pointer; outline: none; }
+.ms__hit:focus-visible rect { stroke: var(--cream); stroke-width: 2; }
 /* figures beside a chart: caps label, a display number, a meta line */
 .figs { display: grid; grid-template-columns: repeat(2, minmax(104px, max-content)); gap: 16px 32px; align-content: start; margin: 4px 0 0; }
 .figs--wide { grid-template-columns: repeat(auto-fill, minmax(124px, max-content)); flex: 1; min-width: 260px; max-width: 760px; }

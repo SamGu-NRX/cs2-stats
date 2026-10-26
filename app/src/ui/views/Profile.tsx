@@ -33,7 +33,7 @@ import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } fr
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
-import { matchHref, navWasInstant, openMatch, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
+import { matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
@@ -127,9 +127,14 @@ function tabMeta(tab: ProfileTab, p: ProfileData): string {
  * after a keyboard navigation. Only then does views.css animate the cards and the track dots, so a
  * tab switch or a filter change later renders without motion. Each card gets its stagger index.
  */
-function useEnter(ready: boolean) {
+function useEnter(ready: boolean, scope: string) {
   const ref = useRef<HTMLDivElement>(null);
-  const [enter, setEnter] = useState(() => !navWasInstant());
+  const [entered, setEnter] = useState(() => !navWasInstant());
+  // the scope (tab, side, filters, comparison) the page entered with: any change ends the entrance at
+  // once, so cards a tab switch or a filter change mounts inside the window never rise
+  const [first] = useState(scope);
+  if (entered && scope !== first) setEnter(false);
+  const enter = entered && scope === first;
   useLayoutEffect(() => {
     if (!ready || !enter) return;
     ref.current?.querySelectorAll<HTMLElement>(".card").forEach((el, i) => el.style.setProperty("--i", String(Math.min(i, 7))));
@@ -174,7 +179,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
     ratings: rats[0], botRatings: bots.length ? rats[1] ?? null : null, perMatch,
   } : null;
 
-  const [enterRef, enter] = useEnter(!!p);
+  const [enterRef, enter] = useEnter(!!p, `${tab}|${side}|${map}|${n}|${cmp}`);
   const controls = NO_SIDE.has(tab) ? (["map", "matches"] as const) : (["map", "matches", "side"] as const);
   if (!p) {
     return (
@@ -415,7 +420,7 @@ function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
     <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form} tabIndex={0}>{RATING_LABEL}</span><ApproxMark /> by match, oldest first</span>} className="form-rail">
       <div className="series">
         <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1}
-          points={recent.map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, onClick: () => openMatch(matchHref(f.file)) }))} />
+          points={recent.map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, href: matchHref(f.file) }))} />
         <dl className="figs">
           <Fig label="Pooled" value={fmtRating(pooled)} sub={`${plural(p.list.length, "match", "matches")}, ${wins}–${losses}`} />
           <Fig className="fig--last" label="Last match" value={fmtRating(lastR)} href={matchHref(last.file)}
@@ -524,7 +529,7 @@ function FormTrend({ p, side }: { p: ProfileData; side: SideKey }) {
     <Card title="Rating by match" tip={PANEL_TIP.ratingByMatch} collapsible id="profile-form" className="trendcard" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
       <div className="series__scroll">
         <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1} plot={120}
-          points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, onClick: () => openMatch(matchHref(f.file)) }))} />
+          points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, href: matchHref(f.file) }))} />
       </div>
       <RatingLegend />
     </Card>

@@ -20,7 +20,7 @@ import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format
 import { BreakRows, NeedsDemo } from "../shared";
 import { DotTrack, SwingSourcesChart } from "./v2";
 import { MapThumb } from "../../components/bits";
-import { matchHref, openMatch, setQuery } from "../../router";
+import { matchHref, setQuery } from "../../router";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -78,7 +78,7 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
         <>
           <div className="series">
             <MatchLollipops label="Round swing by match" fmt={(x) => fmtSwing(x / 100)} mean={100 * swing}
-              points={per.map((x) => ({ key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), result: x.s.result, onClick: () => openMatch(matchHref(x.s.file)) }))} />
+              points={per.map((x) => ({ key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), result: x.s.result, href: matchHref(x.s.file) }))} />
             <dl className="figs figs--wide">
               <Fig label="Average" value={<Num v={fmtSwing(swing)} />} tone={swing > 0 ? "good" : swing < 0 ? "poor" : undefined} sub={`per round, ${plural(known.length, "match", "matches")}`} />
               <Fig label="Positive matches" value={<>{positive.length}<small> of {known.length}</small></>} sub={`${positive.filter((x) => x.s.result === "W").length} of those won`} />
@@ -380,7 +380,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
       <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel.toLowerCase()}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
-            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens their HLTV page.">
+            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip={careers.provisional ? `${PROVISIONAL_TIP}\nOpens their HLTV page.` : "Opens their HLTV page."}>
               <ProFace pro={pick.item} className="probanner__face" />
               <div className="probanner__body">
                 <ProMarks pro={pick.item} />
