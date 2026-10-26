@@ -144,12 +144,12 @@ describe("spray card, restored parts", () => {
     onTarget,
   });
 
-  it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Pro path", () => {
-    // fails if the toggle is missing, unlabelled, replaces Pro path, or does not hide the ellipses
+  it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Ideal pull", () => {
+    // fails if the toggle is missing, unlabelled, replaces Ideal pull, or does not hide the ellipses
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);
     const boxes = Array.from(host.querySelectorAll<HTMLLabelElement>(".gunpick__bands label"));
-    expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Pro path"]);
+    expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Ideal pull"]);
     expect(host.querySelectorAll("svg.spray ellipse")).toHaveLength(2);
     expect(host.querySelector(".spray-legend")!.textContent).toContain("one standard deviation");
     act(() => boxes[0].querySelector("input")!.click());
