@@ -30,7 +30,7 @@ import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { fmtPct, fmtSwing, signed } from "../lib/format";
-import { go, matchHref, parseHash } from "../router";
+import { go, matchHref, navWasInstant, parseHash, profileHref, PROFILE_TABS } from "../router";
 import { MatchesView } from "./Matches";
 import CareerAim from "./CareerAim";
 import { RoleCard } from "./profile/parts";
@@ -309,6 +309,44 @@ describe("Weapons and Overview tabs", () => {
     expect(multis).toHaveLength(4);
     const two = s.m.multiKillRounds - s.m.k3Rounds;
     expect(text(multis[0].querySelector(".mlist__pct"))).toBe(fmtPct((100 * two) / s.m.rounds, 1));
+  });
+});
+
+describe("Profile tab bar", () => {
+  it("is one tab stop, and the arrow keys, Home and End open the next tab instantly with focus on it", () => {
+    // fails if every tab is a tab stop, an arrow key does nothing, the move animates (not instant), or
+    // focus stays on the old tab
+    use(samples);
+    const at = () => parseHash(location.hash).ptab!;
+    const tabEl = (t: string) => host.querySelector<HTMLElement>(`[role="tab"][data-tab="${t}"]`)!;
+    const press = (key: string) => {
+      act(() => { tabEl(at()).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+      render(<ProfileView tab={at()} />);
+    };
+    try {
+      act(() => go(profileHref("overview")));
+      render(<ProfileView tab="overview" />);
+      expect(Array.from(host.querySelectorAll('[role="tab"]')).map((el) => el.getAttribute("tabindex"))).toEqual(PROFILE_TABS.map((t) => (t === "overview" ? "0" : "-1")));
+      press("ArrowRight");
+      expect(at()).toBe("duels");
+      expect(navWasInstant()).toBe(true);
+      expect(document.activeElement).toBe(tabEl("duels"));
+      expect(tabEl("duels").getAttribute("tabindex")).toBe("0");
+      press("End");
+      expect(at()).toBe(PROFILE_TABS[PROFILE_TABS.length - 1]);
+      press("ArrowRight");
+      expect(at()).toBe("overview");
+      press("ArrowLeft");
+      expect(at()).toBe(PROFILE_TABS[PROFILE_TABS.length - 1]);
+      press("Home");
+      expect(at()).toBe("overview");
+      expect(document.activeElement).toBe(tabEl("overview"));
+      // Up and Down are the page's to scroll, not the tab bar's
+      press("ArrowDown");
+      expect(at()).toBe("overview");
+    } finally {
+      act(() => go("#/"));
+    }
   });
 });
 
