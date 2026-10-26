@@ -350,6 +350,21 @@ describe("Profile tab bar", () => {
   });
 });
 
+describe("tooltips", () => {
+  it("puts every Profile tooltip on an element that takes keyboard focus, on every tab", async () => {
+    // fails if a data-tip sits on a plain span or b, which a keyboard user can never open
+    use(samples);
+    const q = queryOf(samples);
+    answers.compare = await calls.compare(q, { side: "both" });
+    answers.style = await calls.style(q, { side: "both" });
+    for (const tab of PROFILE_TABS) {
+      render(<ProfileView tab={tab} />);
+      const stuck = Array.from(host.querySelectorAll(".profile [data-tip]")).filter((el) => !el.matches("a[href], button, input, select, [tabindex]"));
+      expect(stuck.map((el) => `${el.tagName}.${el.getAttribute("class")}`), tab).toEqual([]);
+    }
+  });
+});
+
 describe("section links", () => {
   it("scrolls a ?sec= link to its section on its Profile tab once it renders", () => {
     // fails if useSection is not wired to the section the link names (the user would stay at the top)

@@ -260,7 +260,8 @@ export const NEEDS_DEMO = "Needs a recorded demo";
 export function NeedsDemo({ detail }: { detail?: string }) {
   return (
     <span className="needs">
-      <span className="needs__t" data-tip={detail}>{NEEDS_DEMO}</span>
+      {/* the reason is the label's tooltip, so the label takes focus when there is one */}
+      <span className="needs__t" data-tip={detail} tabIndex={detail ? 0 : undefined}>{NEEDS_DEMO}</span>
       <a className="needs__link" href={pageHref("settings")} data-tip={detail}>Data & settings</a>
     </span>
   );
