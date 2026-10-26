@@ -3,16 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
-import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/identity";
+import { packerFeatures, type RoleBlend } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { attrsOf, fmtMetric, ratingTerms, signalBar, type SideKey } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
-import { metric, roleSignals, styleIds } from "../../data/meta";
+import { metric, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
 import { PACKS_FOLDER } from "../../../host/host";
@@ -23,6 +23,7 @@ import { DotTrack, SwingSourcesChart } from "./v2";
 import { MapThumb } from "../../components/bits";
 import { matchHref, setQuery } from "../../router";
 import { roleValueDescriptor } from "./role-decision";
+import { RoleEvidence } from "./evidence";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -232,9 +233,10 @@ function MapRoles({ q, side }: { q: Query; side: SideKey }) {
 /**
  * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend,
  * and roles().all weights the two by their rounds into one role over every round (overallRole). The
- * headline is that overall role, the two sides' roles beside it. Below: the evidence over every round,
- * each side's fit, and each map's roles (rolesByMap). With the page on one side (`side`), the headline,
- * the fit and the maps are that side's, and the evidence is over its rounds (`q` carries the side).
+ * headline is that overall role, the two sides' roles beside it. Below: three figures over every round,
+ * each side's fit, the engine's evidence rows for both sides (evidence.tsx), and each map's roles
+ * (rolesByMap). With the page on one side (`side`), the headline, the fit, the evidence and the maps
+ * are that side's, and the three figures are over its rounds (`q` carries the side).
  */
 export function RoleCard({ q, side = "both" }: { q: Query; side?: SideKey }) {
   const r = useCall("roles", [q]);
@@ -270,74 +272,9 @@ export function RoleCard({ q, side = "both" }: { q: Query; side?: SideKey }) {
       </div>}
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
-      <RoleSignals q={q} />
+      <RoleEvidence t={r.data.T} ct={r.data.CT} side={side} />
       <MapRoles q={q} side={side} />
     </Card>
-  );
-}
-
-const UNIT_M = 0.0254; // one Source unit is one inch
-
-/**
- * Each signal's row: what it measures, your value, and one sentence for its "?" (12 words or fewer)
- * naming the threshold, or what is missing when there is no value. Thresholds from identity.ts
- * ROLE_SIGNALS.
- */
-export const SIGNAL_TEXT: Record<RoleSignal["id"], { label: string; value: (v: number) => string; tip: (t: number) => string; missing: string }> = {
-  Entry: {
-    label: "First duels",
-    value: (v) => fmtPct(v, 0),
-    tip: (t) => `Entry players take the first duel in ${t}% of rounds or more.`,
-    missing: "Needs rounds with a kill log.",
-  },
-  Support: {
-    label: "Trades and assists",
-    value: (v) => fmtPct(v, 0),
-    tip: (t) => `Support players have ${t}% or more trades and assists.`,
-    missing: "Needs kills or assists.",
-  },
-  Lurker: {
-    label: "Distance from team on T",
-    value: (v) => `${Math.round(v * UNIT_M)} m`,
-    tip: (t) => `Lurkers stand ${Math.round(t * UNIT_M)} m or more from teammates on T.`,
-    missing: "Needs positions, which converted logs lack.",
-  },
-};
-
-/**
- * Main's role signals under the engine's blend: each signal's metric against its hand-set threshold
- * (identity.ts ROLE_SIGNALS), the bar filled to twice the threshold with the threshold ticked, and
- * "You fit" from the threshold up (engine.ts signalBar). Entry and Support read the query's sides (the
- * page's side), Lurker T alone, since it is a T measure.
- */
-export function RoleSignals({ q }: { q: Query }) {
-  const qs = useMemo(() => [q, { files: q.files, filter: { ...q.filter, sides: ["T" as const] } }], [q]);
-  const r = useRollups(qs).data;
-  if (!r || r.length !== 2) return null;
-  const [both, t] = r;
-  return (
-    <>
-      <h3 className="caps rmaps__h">Signals <span className="help" data-tip="The tick is the threshold, set by hand, not fitted." tabIndex={0} aria-label="What the ticks mean">?</span></h3>
-      <ul className="signals2">
-        {roleSignals().map((sg) => {
-          const v = (sg.side === "T" ? t : both).v[sg.metric];
-          const text = SIGNAL_TEXT[sg.id];
-          const bar = v === null ? null : signalBar(v, sg.threshold);
-          const tip = v === null ? text.missing : text.tip(sg.threshold);
-          return (
-            <li key={sg.id} className={bar?.fits ? "is-on" : bar ? "" : "is-na"} data-signal={sg.id}>
-              <div className="signals2__top">
-                <b>{sg.id}</b><span className="meta">{text.label}</span>
-                <span className="help" data-tip={tip} tabIndex={0} role="note" aria-label={tip}>?</span>
-                {bar?.fits && <span className="chip chip--outline">You fit</span>}
-                <b className="num signals2__v">{v === null ? "–" : <Num v={text.value(v)} />}</b>
-              </div>
-              <div className="signals2__track" aria-hidden><i style={{ width: `${100 * (bar?.fill ?? 0)}%` }} /><em style={{ left: "50%" }} /></div>
-            </li>
-          );
-        })}
-      </ul>
-    </>
   );
 }
 

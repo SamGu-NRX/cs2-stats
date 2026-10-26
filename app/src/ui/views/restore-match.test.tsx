@@ -25,6 +25,7 @@ import { KillFlags } from "../icons/game";
 import { go, matchHref, useRoute } from "../router";
 import { RoundRail } from "./match/RoundRail";
 import Rounds from "./match/Rounds";
+import MatchView from "./match/MatchView";
 import { BarProvider } from "../shell/Bar";
 import Weapons from "./Weapons";
 
@@ -163,7 +164,7 @@ describe("totals-only rounds in the match views", () => {
     const drawer = () => host.querySelector(".drawer");
     expect(text(drawer()?.querySelector(".drawer__title b"))).toBe("Round 5");
     expect(host.querySelector(".rail__col.is-lite")?.classList.contains("is-on")).toBe(true);
-    expect(host.querySelector('.ig__headbtn[aria-label^="Open round 5"]')?.closest(".ig__head")?.classList.contains("is-on")).toBe(true);
+    expect(host.querySelector('.ig__headbtn[aria-label^="Round 5,"]')?.closest(".ig__head")?.classList.contains("is-on")).toBe(true);
     const top = [...s.facts.totalsRounds.find((t) => t.number === 5)!.players].sort((a, b) => b.dmg - a.dmg)[0];
     const first = drawer()?.querySelector(".dtotals li");
     expect([text(first?.querySelector(".kf__p")), text(first?.querySelector("b"))]).toEqual([v.players[top.pi].name, String(top.dmg)]);
@@ -268,5 +269,22 @@ describe("sampled map shape", () => {
     use([alias(conv, "samples/nowhere-log")]);
     render(<MapAtmosphere map="de_nowhere" />);
     expect(host.querySelector(".atmos")).toBeNull();
+  });
+});
+
+describe("the match header's teams", () => {
+  it("names the opponents the file holds: a bot match's bots, a pro match's players", () => {
+    // fails if the header says "5 bots" whatever the file holds, or loses the teammate count
+    const team = () => [".mhero__team:not(.mhero__team--them) .mhero__name", ".mhero__team--them .mhero__name"].map((sel) => host.querySelector(sel)?.textContent?.trim());
+    const bots = samples.find((x) => x.entry.players.filter((p) => !p.bot).length === 1 && x.entry.players.length === 10)!;
+    use([bots]);
+    render(<MatchView file={bots.file} tab="overview" />);
+    expect(team()).toEqual([`${bots.entry.players[bots.entry.you].name} + 4`, "5 bots"]);
+    // a pro match: ten people, no team names in the file
+    const me = bots.entry.players[bots.entry.you];
+    const pro: Sample = { ...bots, file: "samples/pro-like", entry: { ...bots.entry, file: "samples/pro-like", players: bots.entry.players.map((p) => ({ ...p, bot: false, name: p === me ? me.name : `pro${p.id.slice(-3)}` })) } };
+    use([pro]);
+    render(<MatchView file={pro.file} tab="overview" />);
+    expect(team()).toEqual([`${me.name} + 4`, "5 players"]);
   });
 });

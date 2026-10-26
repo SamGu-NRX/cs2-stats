@@ -5,7 +5,9 @@
 // column in view when the drawer narrows it. Arrow keys move between cells, Enter opens the round.
 // Columns come from roundColumns(): a round the file holds only as totals (MatchInfo.totalsOnly) is a
 // hatched column with the game's recorded kills and death per player, and dashes where it holds none.
+// Under the grid, your rating round by round (RatingByRound); the drawer reads the same breakdown.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCall } from "../../data/hooks";
 import { HoverCard } from "../../components/overlay";
 import { roundColumns, roundMatrix, selectedColumn, type MatchModel as MatchView, type RoundCell, type RoundColumn } from "../../data/match";
 import { statLine } from "../../data/engine";
@@ -19,9 +21,12 @@ import { setQuery, useRoute } from "../../router";
 import { PlayerName, RoundCardBody, swingSumTip, TotalsCardBody } from "../shared";
 import type { Line } from "../../../worker/protocol";
 import type { TabProps } from "./MatchView";
+import { RatingByRound } from "./RatingByRound";
 import { RoundDrawer } from "./RoundDrawer";
 
-export default function Rounds({ v, round }: TabProps) {
+export default function Rounds({ v, file, round }: TabProps) {
+  const rating = useCall("ratingBreakdown", [file, v.players[v.human].key, null]);
+  const rb = rating.data;
   const matrix = useMemo(() => roundMatrix(v), [v]);
   const cols = useMemo(() => roundColumns(v), [v]);
   const n = cols.length;
@@ -46,9 +51,10 @@ export default function Rounds({ v, round }: TabProps) {
 
   return (
     <div className="rounds">
-      <RoundDrawer v={v} cols={cols} col={sel} onClose={() => open(null)} onStep={(d) => sel !== null && open(Math.max(0, Math.min(n - 1, sel + d)))}>
+      <RoundDrawer v={v} cols={cols} col={sel} rb={rb} rbError={rating.error} onClose={() => open(null)} onStep={(d) => sel !== null && open(Math.max(0, Math.min(n - 1, sel + d)))}>
         <Inspector v={v} cols={cols} matrix={matrix} sel={sel} onOpen={open} />
         <Legend />
+        <RatingByRound v={v} file={file} rb={rb} error={rating.error} selected={sel === null ? null : cols[sel].number} />
       </RoundDrawer>
     </div>
   );
@@ -174,9 +180,9 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
               if (c.kind === "totals") {
                 return (
                   <HoverCard key={`t${c.number}`} as="div" tabbable={false} prefer="bottom" className={`ig__head is-lite ${c.halfStart ? "is-half" : ""} ${sel === ci ? "is-on" : ""}`} card={() => <TotalsCardBody v={v} col={c} />}>
-                    <button className="ig__headbtn" data-col={ci} data-side="none" onClick={() => onOpen(ci)} aria-label={`Open round ${c.number}, totals only`} tabIndex={-1}>
+                    <span className="ig__headbtn" role="columnheader" data-col={ci} data-side="none" onClick={() => onOpen(ci)} aria-label={`Round ${c.number}, totals only`}>
                       <span className="num">{c.number}</span>
-                    </button>
+                    </span>
                   </HoverCard>
                 );
               }
@@ -184,10 +190,10 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
               const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : "none";
               return (
                 <HoverCard key={r.ri} as="div" tabbable={false} prefer="bottom" className={`ig__head ${c.halfStart ? "is-half" : ""} ${sel === ci ? "is-on" : ""}`} card={() => <RoundCardBody v={v} r={r} />}>
-                  <button className="ig__headbtn" data-col={ci} data-side={side} data-won={r.winner === "us"} onClick={() => onOpen(ci)} aria-label={`Open round ${r.number}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}, ${r.winner === "us" ? "won" : "lost"}`} tabIndex={-1}>
+                  <span className="ig__headbtn" role="columnheader" data-col={ci} data-side={side} data-won={r.winner === "us"} onClick={() => onOpen(ci)} aria-label={`Round ${r.number}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}, ${r.winner === "us" ? "won" : "lost"}`}>
                     <WinIcon how={r.how} size={14} compact />
                     <span className="num">{r.number}</span>
-                  </button>
+                  </span>
                 </HoverCard>
               );
             })}
@@ -199,8 +205,9 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
           {them.map((p) => <PlayerRowView key={p.key} v={v} cols={cols} pi={p.pi} r={order.indexOf(p)} cells={matrix[p.pi]} line={lines[p.pi]} sel={sel} focus={focus} setFocus={setFocus} onOpen={onOpen} />)}
         </div>
       </div>
-      <button className="inspector__more inspector__more--l" tabIndex={-1} aria-label="Previous rounds" onClick={() => page(-1)}><ChevronLeftIcon size={16} /></button>
-      <button className="inspector__more inspector__more--r" tabIndex={-1} aria-label="Next rounds" onClick={() => page(1)}><ChevronRightIcon size={16} /></button>
+      {/* pointer shortcuts only: from the keyboard, the grid's arrow keys bring every round into view */}
+      <button className="inspector__more inspector__more--l" tabIndex={-1} aria-hidden onClick={() => page(-1)}><ChevronLeftIcon size={16} /></button>
+      <button className="inspector__more inspector__more--r" tabIndex={-1} aria-hidden onClick={() => page(1)}><ChevronRightIcon size={16} /></button>
     </div>
   );
 }
