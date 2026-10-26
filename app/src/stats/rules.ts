@@ -63,23 +63,23 @@ export interface Clutch {
   /** enemies alive when the player became the last of their side */
   opponents: number;
   won: boolean;
-  /** the index in `kills` of the death that left the player alone */
+  /** the index in `kills` of the death that left the player alone; -1 when the round started that way */
   from: number;
 }
 
 /**
- * Clutch situations (CS Demo Manager's analyzer, MIT): after each death, the first time a side is
- * down to one player, that player starts a 1vX against the enemies alive. If both sides then reach
- * one player, the other side's last player gets a 1v1 too. `alive` is each side's players at freeze end.
+ * Clutch situations (CS Demo Manager's analyzer, MIT): the first time a side is down to one player,
+ * that player starts a 1vX against the enemies alive. If both sides then reach one player, the other
+ * side's last player gets a 1v1 too. `alive` is each side's players at freeze end. The counts are read
+ * at freeze end as well as after each death, so a side that starts the round with one player (after a
+ * disconnect) is in a clutch before any kill.
  */
 export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number>>, winner: Side | null): Clutch[] {
   if (winner === null) return [];
   const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
   const out: Clutch[] = [];
   let first: Clutch | null = null;
-  for (const [from, k] of kills.entries()) {
-    live.CT.delete(k.victim);
-    live.T.delete(k.victim);
+  const check = (from: number) => {
     const ct = live.CT.size;
     const t = live.T.size;
     if (!first && (ct === 1 || t === 1)) {
@@ -91,6 +91,12 @@ export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number
       const side: Side = first.side === "CT" ? "T" : "CT";
       out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner, from });
     }
-  }
+  };
+  check(-1);
+  kills.forEach((k, i) => {
+    live.CT.delete(k.victim);
+    live.T.delete(k.victim);
+    check(i);
+  });
   return out;
 }
