@@ -3,14 +3,14 @@ import { CS2RB } from "../../stats/model-params";
 import { metaOf } from "../../worker/views";
 import { calloutName } from "../lib/callouts";
 import { metric, setMeta } from "./meta";
-import { AIM_TIP, ATTR_TIP, PANEL_TIP, PROVISIONAL_TIP, TIP } from "./tips";
+import { ATTR_TIP, PANEL_TIP, PROVISIONAL_TIP, tipOf } from "./tips";
 
 const words = (s: string) => s.trim().split(/\s+/).length;
 
 describe("tooltips", () => {
   // fails if a tooltip grows past one plain sentence of 12 words, or brings back a middot or a semicolon
   // (the tell of a method or caveat appended to the sentence)
-  const all = { ...TIP, ...ATTR_TIP, ...PANEL_TIP, ...AIM_TIP, provisional: PROVISIONAL_TIP };
+  const all = { ...ATTR_TIP, ...PANEL_TIP, provisional: PROVISIONAL_TIP };
   it.each(Object.entries(all))("%s is one sentence of 12 words or fewer", (_, tip) => {
     expect(words(tip)).toBeLessThanOrEqual(12);
     expect(tip).not.toMatch(/[·;]/);
@@ -18,10 +18,11 @@ describe("tooltips", () => {
     expect(tip).not.toMatch(/[.!?]\s/);
   });
 
-  it("names only real engine metrics in the aim tooltips", () => {
-    // fails if an aim tooltip is keyed by a metric id the engine does not have
+  it("gives a stat the engine's own tooltip, and none for an id the engine does not have", () => {
+    // fails if a stat's tooltip stops being Metric.tip (a paraphrase here would drift from the engine)
     setMeta(metaOf(CS2RB));
-    for (const id of Object.keys(AIM_TIP)) expect(() => metric(id), id).not.toThrow();
+    expect(tipOf("headAccuracy")).toBe(metric("headAccuracy").tip);
+    expect(tipOf("notAMetric")).toBeUndefined();
   });
 });
 

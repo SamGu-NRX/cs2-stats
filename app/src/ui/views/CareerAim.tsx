@@ -8,7 +8,7 @@ import { careerEntries, fmtMetric } from "../data/engine";
 import { useCall, useRollups, useYourQuery } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
-import { aimTip } from "../data/tips";
+import { tipOf } from "../data/tips";
 import { AimIcon } from "../icons/ui";
 import { fmtMatchDay, plural } from "../lib/format";
 import { pageHref } from "../router";
@@ -31,7 +31,7 @@ const TRENDS: { id: string; bench?: number }[] = [
 /** A per-match slope in the stat's unit: percentages move in points. */
 const slopeIn = (pct: boolean, fmt: (v: number) => string) => (v: number) => (pct ? `${v.toFixed(1)} pts` : fmt(v)) + " a match";
 
-interface TrendCard { key: string; label: string; tip: string; fmt: (v: number) => string; slope: (v: number) => string; lowerIsBetter?: boolean; bench?: number; career: number | null }
+interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number) => string; slope: (v: number) => string; lowerIsBetter?: boolean; bench?: number; career: number | null }
 
 export default function CareerAim() {
   const { matches } = useData();
@@ -48,7 +48,7 @@ export default function CareerAim() {
   const cards: TrendCard[] = TRENDS.map((t) => {
     const m = metric(t.id);
     const fmt = (v: number) => fmtMetric(t.id, v);
-    return { key: t.id, label: m.label, tip: aimTip(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
+    return { key: t.id, label: m.label, tip: tipOf(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
   });
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
@@ -78,8 +78,8 @@ export default function CareerAim() {
                 return (
                   <Card key={t.key} title={<span data-tip={t.tip} tabIndex={0}>{t.label}</span>} aside={
                     <span className="trend-aside">
-                      {!trends ? null : tr === null ? <span className="meta" data-tip="A trend needs three recorded matches with a value" tabIndex={0}>No trend yet</span> : (
-                        <span className="trend-move" data-tip={`Least-squares change per match over ${tr.n} matches`} tabIndex={0}>
+                      {!trends ? null : tr === null ? <span className="meta" data-tip="A trend needs three recorded matches with a value." tabIndex={0}>No trend yet</span> : (
+                        <span className="trend-move" data-tip={`Least-squares change per match over ${tr.n} matches.`} tabIndex={0}>
                           <span className="meta">{tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}</span>
                           <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={t.lowerIsBetter} fmt={t.slope} />
                         </span>
