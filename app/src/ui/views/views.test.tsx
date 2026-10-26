@@ -1077,6 +1077,18 @@ describe("parity round 2: flashes, clutches and highlights", () => {
     expect(host.querySelector(".hlr")!.getAttribute("aria-label")).toMatch(/^4K, round 9 on CT/);
   });
 
+  it("starts the highlights at one page again when the scope changes", () => {
+    // fails if "Show more" carries over to another map, match count or side
+    const f = samples[0].file;
+    answers = { highlights: Array.from({ length: 20 }, (_, i) => hl(f, 30 - i, ["3k"])) };
+    const list = samples.map((x) => x.entry);
+    render(<HighlightsCard q={queryOf(samples)} list={list} />);
+    act(() => host.querySelector<HTMLButtonElement>(".hl-more")!.click());
+    expect(host.querySelectorAll(".hlr")).toHaveLength(20);
+    render(<HighlightsCard q={{ ...queryOf(samples), filter: { ...queryOf(samples).filter, sides: ["T"] } }} list={list} />);
+    expect(host.querySelectorAll(".hlr")).toHaveLength(12);
+  });
+
   it("shows Home's latest highlights and links to the full list", () => {
     // fails if Home shows more than its short list, or its link loses the count or the target
     const f = samples[0].file;

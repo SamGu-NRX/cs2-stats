@@ -11,7 +11,7 @@ import type { MatchEntry } from "../../data/match";
 import { FlagIcon, WeaponIcon } from "../../icons/game";
 import { ChevronRightIcon } from "../../icons/ui";
 import { fmtMatchDay, mapName, plural } from "../../lib/format";
-import { matchHref } from "../../router";
+import { matchHref, scopeQuery, useRoute } from "../../router";
 import type { HighlightKind } from "../../../stats/highlights";
 import type { HighlightKill, HighlightRow, Query } from "../../../worker/protocol";
 import { Empty } from "../shared";
@@ -84,7 +84,11 @@ export function HighlightsCard({ q, list, sectionRef }: { q: Query; list: MatchE
   // the previous scope's rows never show while the new scope's load
   const data = call.stale ? null : call.data;
   const [kind, setKind] = useState<KindFilter>("all");
-  const [shown, setShown] = useState(PAGE);
+  // the page count belongs to one scope and kind (the query, and Profile's map, matches, side and
+  // comparison in the URL): any change starts the list at one page again
+  const scope = `${JSON.stringify(q)}|${JSON.stringify(scopeQuery(useRoute().query))}|${kind}`;
+  const [page, setPage] = useState({ scope, n: PAGE });
+  const shown = page.scope === scope ? page.n : PAGE;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const all = data ?? [];
   const rows = kind === "all" ? all : all.filter((h) => h.kinds.includes(kind));
@@ -98,7 +102,7 @@ export function HighlightsCard({ q, list, sectionRef }: { q: Query; list: MatchE
           <Empty text="No 3K rounds or won clutches in this filter yet." />
         ) : (
           <div className="hl-list">
-            <Segmented label="Kind of highlight" value={kind} onChange={(k) => { setKind(k); setShown(PAGE); }}
+            <Segmented label="Kind of highlight" value={kind} onChange={setKind}
               options={[{ value: "all", label: label("All", all.length) }, ...KINDS.map((k) => ({ value: k, label: label(KIND_LABEL[k], count(k)), disabled: count(k) === 0 }))]} />
             {rows.length ? (
               <ul className="hlrows" aria-label="Highlights, newest first">
@@ -106,7 +110,7 @@ export function HighlightsCard({ q, list, sectionRef }: { q: Query; list: MatchE
               </ul>
             ) : <p className="meta">None of these in this filter.</p>}
             {rows.length > shown && (
-              <button className="btn btn--ghost btn--sm hl-more" onClick={() => setShown((n) => n + PAGE * 2)}>
+              <button className="btn btn--ghost btn--sm hl-more" onClick={() => setPage({ scope, n: shown + PAGE * 2 })}>
                 Show {Math.min(PAGE * 2, rows.length - shown)} more{rows.length - shown > PAGE * 2 && <span className="faint"> of {rows.length - shown}</span>}
               </button>
             )}

@@ -587,7 +587,9 @@ function Clutches({ m, q, side, list }: { m: Measures; q: Query; side: SideKey; 
   const won = rows.reduce((a, r) => a + r.won, 0);
   const played = rows.reduce((a, r) => a + r.played, 0);
   const [open, setOpen] = useState<number | null>(null);
-  const all = useCall("clutches", [q]).data;
+  const clutchCall = useCall("clutches", [q]);
+  // the previous scope's rounds never show while this scope's load
+  const all = clutchCall.stale ? null : clutchCall.data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
   return (
@@ -651,6 +653,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const rows = multiKillRows(m);
   const [open, setOpen] = useState<number | null>(null);
   const rounds = useCall("multiKills", open === null ? null : [q]);
+  const fresh = rounds.stale ? null : rounds.data;
   const ranked = useCall("compare", [q, { side: q.filter.sides?.length === 1 ? q.filter.sides[0] : "both" }]).data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
@@ -672,7 +675,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
             </>
           );
           const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
-          const mine = (rounds.data ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
+          const mine = (fresh ?? []).filter((x) => (r.k >= 5 ? x.kills >= 5 : x.kills === r.k));
           return (
             <li key={r.k}>
               {r.rounds === 0 ? <div className="clist__row lsrow" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
@@ -684,7 +687,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
               )}
               {open === r.k && (
                 <ul id={`${listId}-${r.k}`} className="clutchlist" aria-label={`Your ${label}`}>
-                  {rounds.error ? <li className="meta">{rounds.error}</li> : !rounds.data ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
+                  {rounds.error && !rounds.stale ? <li className="meta">{rounds.error}</li> : !fresh ? <li className="meta">Loading the rounds…</li> : mine.map((x) => {
                     const e = byFile.get(x.file);
                     return (
                       <li key={`${x.file}|${x.round}`}>
