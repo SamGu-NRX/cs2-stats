@@ -25,6 +25,7 @@ import { KillFlags } from "../icons/game";
 import { go, matchHref, useRoute } from "../router";
 import { RoundRail } from "./match/RoundRail";
 import Rounds from "./match/Rounds";
+import Replay from "./match/replay/Replay";
 import MatchView from "./match/MatchView";
 import { BarProvider } from "../shell/Bar";
 import Weapons from "./Weapons";
@@ -285,6 +286,28 @@ describe("sampled map shape", () => {
     use([alias(conv, "samples/nowhere-log")]);
     render(<MapAtmosphere map="de_nowhere" />);
     expect(host.querySelector(".atmos")).toBeNull();
+  });
+});
+
+describe("replay floors", () => {
+  it("draws no backdrop on a lower floor when the icon pack has no radar", () => {
+    // fails if the upper radar layer, which then holds the shape sampled from every floor, stays
+    // visible under players on the lower floor
+    radarArt = null;
+    const d = byName("synthetic");
+    const facts = { ...d.facts, match: { ...d.facts.match, map: "de_nuke" } };
+    const s: Sample = { file: "samples/nuke-demo", facts, entry: { ...d.entry, file: "samples/nuke-demo", match: facts.match } };
+    factsOf.set(s.file, facts);
+    use([s]);
+    render(<Replay v={modelOf(s)} file={s.file} round={0} />);
+    const upperOn = () => host.querySelector(".replay__layer")?.getAttribute("data-on");
+    const floor = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".seg button")].find((b) => text(b) === name)!;
+    expect(upperOn()).toBe("true");
+    act(() => { floor("Lower").dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+    expect(upperOn()).toBe("false");
+    expect(host.querySelectorAll(".replay__layer")).toHaveLength(1); // and no lower radar stands in
+    act(() => { floor("Upper").dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+    expect(upperOn()).toBe("true");
   });
 });
 

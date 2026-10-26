@@ -16,7 +16,7 @@ import { Segmented } from "../../../components/controls";
 import { frameFor, RadarImage } from "../../../components/MapArt";
 import { useGameIcon } from "../../../data/icons";
 import { useData } from "../../../data/provider";
-import { hasLevels, levelRadarIcon, type Level } from "../../../data/radar-levels";
+import { hasLevels, levelRadarIcon, upperLayerOn, type Level } from "../../../data/radar-levels";
 import { feedFor } from "../../../data/rounds";
 import { Svg, type IconProps } from "../../../icons/Icon";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../../icons/ui";
@@ -381,7 +381,7 @@ function ReplayView({ v, file, round }: TabProps) {
           <div className="replay__deck">
             <div className="radar-view replay__well" ref={well} data-level={level}>
               <div className="replay__zoom" data-ready={ready} style={{ transform: `scale(${1024 / box.side}) translate(${(-100 * box.x) / 1024}%, ${(-100 * box.y) / 1024}%)` }}>
-                {frame && <div className="replay__layer" data-on={!lowerUrl || level === "upper"}><RadarImage map={v.map} frame={frame} /></div>}
+                {frame && <div className="replay__layer" data-on={upperLayerOn(v.map, level)}><RadarImage map={v.map} frame={frame} /></div>}
                 {lowerUrl && <img src={lowerUrl} alt="" className="radar-img replay__layer" draggable={false} data-on={level === "lower"} />}
               </div>
               <canvas

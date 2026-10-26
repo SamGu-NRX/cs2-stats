@@ -24,6 +24,14 @@ export function levelOf(map: string, z: number): Level {
   return b !== null && z < b ? "lower" : "upper";
 }
 
+/**
+ * Whether the upper radar layer (the upper floor's image, or the shape sampled from every position on
+ * the map when the pack has no radar) shows while `level` is selected. It never shows on a lower
+ * floor: the sampled shape has no heights, so it would draw the upper floor's walls under players who
+ * are below them. The lower floor shows its own radar from the pack, or no backdrop.
+ */
+export const upperLayerOn = (map: string, level: Level) => !hasLevels(map) || level === "upper";
+
 /** The icon pack id of one floor's radar; null for a lower floor the map does not have, or an unknown map. */
 export function levelRadarIcon(map: string, level: Level): string | null {
   const id = radarIcon(map);
