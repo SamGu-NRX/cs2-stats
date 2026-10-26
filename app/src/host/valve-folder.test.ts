@@ -86,4 +86,7 @@ it("runs the importer with progress into the Valve folder, and says what is miss
   writeFileSync(py, "");
   const run = importerCommand("out", { CS2_EXTRACTOR_DIR: dir, CS2_EXTRACTOR_PYTHON: py, CS2_MAPDATA: dir });
   expect(run).toEqual({ cmd: py, cwd: dir, args: ["-I", path.join(dir, "valve_import.py"), "--progress", "--out", "out", "--mapdata", dir] });
+  // a relative Python is resolved against this process's folder, not the extractor folder it runs in
+  const relative = path.relative(process.cwd(), py);
+  expect(importerCommand("out", { CS2_EXTRACTOR_DIR: dir, CS2_EXTRACTOR_PYTHON: relative })).toMatchObject({ cmd: py });
 });
