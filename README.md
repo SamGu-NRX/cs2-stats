@@ -67,6 +67,10 @@ node scripts/check-public-tree.mjs
 
 Tests that need private data (pro demos, HLTV files, the packs) skip with a message when it is missing.
 
-## Licence
+## Licensing
 
-MIT, in `LICENSE`. `THIRD_PARTY_NOTICES.md` lists the libraries, fonts and datasets the project uses and their licences.
+- The capture plugin, everything under `plugin/`, is under GPL-3.0-only (`plugin/LICENSE`). It compiles against CounterStrikeSharp, which is GPL-3.0-only.
+- Everything else is under the MIT licence (`LICENSE`).
+- Some files hold numbers taken from the game: prices, weapon speeds, fire rates and magazine sizes, and the radar transforms. Neither licence covers those numbers. `THIRD_PARTY_NOTICES.md` lists each file and where its numbers come from.
+
+`THIRD_PARTY_NOTICES.md` also lists the libraries, fonts and datasets the project uses, with their licences.
