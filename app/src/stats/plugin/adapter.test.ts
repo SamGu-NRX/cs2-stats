@@ -232,3 +232,17 @@ it("names the rounds a converted log holds only as totals", () => {
   // fails if a totals-only round's per-player totals are lost, so its grid cells and drawer stay empty
   expect(f.totalsRounds.filter((r) => r.players.length)).toEqual([{ number: 2, winner: "CT", players: [{ pi: 0, kills: 2, deaths: 0, assists: 1, dmg: 180, hsKills: 1 }] }]);
 });
+
+it("carries who was alive at freeze end and who disconnected into the tables and facts", () => {
+  // fails if the adapter drops alive0 or the leaves the situations view reads: the bot starts dead, and
+  // the human disconnects alive at tick 1500
+  const m = pluginMatch([]);
+  m.rounds.alive0 = [[1, 0]];
+  m.leaves = { ri: [0], tick: [1500], pi: [0], alive: [1] };
+  const t = pluginToTables(m);
+  expect(t.player_rounds.alive_at_start).toEqual([true, false]);
+  expect([t.leaves!.n, t.leaves!.steamid[0], t.leaves!.alive[0]]).toEqual([1, HUMAN, true]);
+  const f = derive(t, CS2RB);
+  expect(f.pr.map((r) => r.aliveAtStart)).toEqual([true, false]);
+  expect(f.rounds[0].leaves).toEqual([{ tick: 1500, pi: 0 }]);
+});

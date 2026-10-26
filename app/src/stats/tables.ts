@@ -28,6 +28,8 @@ export const SCHEMA = {
     round: "i", steamid: "id", side: "s", money_start: "i?", money: "i?", cash_spent: "i?",
     equip_value_game: "i?", round_start_equip_value: "i?", armor: "i?", helmet: "b?", defuser: "b?",
     best_primary: "s?", best_secondary: "s?", inventory: "ss",
+    /** alive at freeze end (the round's starting population); plugin files only (SOURCE_COLUMNS) */
+    alive_at_start: "b?",
   },
   kills: {
     tick: "i", round: "i", attacker_steamid: "id?", victim_steamid: "id", assister_steamid: "id?",
@@ -95,6 +97,8 @@ export const SCHEMA = {
     v_shot_fired: "b?", v_spotted_by_a: "b?",
     mesh_visible: "b?", smoke_blocked: "b?",
   },
+  /** a player who disconnected during a round, and whether they were alive then; plugin files only */
+  leaves: { tick: "i", round: "i", steamid: "id", alive: "b" },
 } as const satisfies Record<string, Record<string, Kind>>;
 
 export type TableName = keyof typeof SCHEMA;
@@ -108,6 +112,7 @@ export type TableName = keyof typeof SCHEMA;
  */
 export const SOURCE_COLUMNS: Partial<Record<TableName, readonly string[]>> = {
   shots: ["aim_err_yaw", "aim_err_pitch", "target_steamid", "target_on_screen"],
+  player_rounds: ["alive_at_start"],
 };
 
 type Value<K> =
@@ -139,10 +144,11 @@ export interface MatchTables {
   spotted: Table<"spotted"> | null;
   engagements: Table<"engagements"> | null;
   engagement_ticks: Table<"engagement_ticks"> | null;
+  leaves: Table<"leaves"> | null;
 }
 
 export const REQUIRED_TABLES = ["match", "players", "rounds", "player_rounds", "kills", "damages", "blinds", "bomb"] as const;
-export const OPTIONAL_TABLES = ["grenade_throws", "grenade_events", "smokes", "infernos", "shots", "positions", "spotted", "engagements", "engagement_ticks", "purchases"] as const;
+export const OPTIONAL_TABLES = ["grenade_throws", "grenade_events", "smokes", "infernos", "shots", "positions", "spotted", "engagements", "engagement_ticks", "purchases", "leaves"] as const;
 
 export function kindOf(table: TableName, column: string): Kind {
   return (SCHEMA[table] as Record<string, Kind>)[column];
