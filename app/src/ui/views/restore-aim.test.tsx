@@ -155,6 +155,7 @@ describe("hitting figures, restored", () => {
 describe("spray card, restored parts", () => {
   /** An AK spray summary: 4 sprays to bullet 3, with spread and target sums. */
   const spray = (onTarget: Summary["aim"]["onTarget"] = {}) => summary({
+    sprays: 4,
     path: { ak47: { n: [4, 4], dp: [4, 8], dy: [0, 4] } },
     spread: { ak47: { pp: [8, 20], yy: [0, 8] } },
     heads: { ak47: { n: [4, 4, 4], dp: [0, 0, 0], dy: [4, 4, 4] } },
@@ -180,7 +181,8 @@ describe("spray card, restored parts", () => {
 
   it("keeps a sprayed gun the recoil reference has no pro path for, drawn without a pro comparison", () => {
     // fails if the gun list drops guns without a pro path, or such a gun shows a Pro path toggle or a pro line
-    scoped = summary({ path: { cz75a: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    scoped = summary({ sprays: 5, path: { cz75a: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    scoped.weapons.cz75a = gun({ shots: 15, hits: 3 });
     render(<AimPanels query={QUERY} label="t" visibility />);
     const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="cz75a"]')!;
     expect(btn).not.toBeNull();
@@ -189,6 +191,27 @@ describe("spray card, restored parts", () => {
     expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
     expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
     expect(host.querySelector(".spray__note")!.textContent).toContain("no pro path");
+  });
+
+  it("lists every sprayed gun with its count after the name, fades a thin one with the reason, and draws no mark", () => {
+    // fails if the hollow few-sprays mark comes back, a gun without sprays lists, or a thin gun loses its reason
+    scoped = summary({ sprays: 3, sprayDist: [1.5, 2.5, 2] });
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    const rows = Array.from(host.querySelectorAll<HTMLButtonElement>(".gunlist__b"));
+    // the knife is not a gun; the AK has three sprays without angles (a plugin file) and still lists
+    expect(rows.map((b) => b.getAttribute("data-w"))).toEqual(["ak47"]);
+    expect(rows[0].querySelector(".gunlist__n")!.textContent).toBe("AK-47 3");
+    expect(rows[0].hasAttribute("data-thin")).toBe(true);
+    expect(rows[0].getAttribute("data-tip")).toBe("3 sprays, the pattern settles at 30.");
+    expect(host.querySelector(".gunlist__thin, .gunbtn__thin")).toBeNull();
+    // without per-bullet angles the chart is the pro path alone, and the distance from the target shows
+    expect(host.querySelector(".spray__title")!.textContent).toBe("AK-47: the pro path");
+    expect(host.querySelector(".spray__dist b")!.textContent).toBe("2.00°");
+    expect(host.querySelector(".spray__dist .meta")!.textContent).toBe("mean over 3 sprays");
+    scoped = summary({ sprays: 0 });
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    expect(host.querySelectorAll(".gunlist__b")).toHaveLength(0);
+    expect(host.querySelector(".aim-spray")!.textContent).toContain("No sprays of three bullets or more.");
   });
 
   it("marks where the target's head was for each bullet, with its legend entry", () => {
