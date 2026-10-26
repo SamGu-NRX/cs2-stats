@@ -5,6 +5,7 @@
 // - a SteamID64 (7656119 and ten digits) not in scripts/steamid-allowlist.txt;
 // - an absolute developer path, C:\Users\<name>\ or /Users/<name>/, in either slash style;
 // - "hltv" anywhere under app/public/;
+// - HLTV's image host (img-cdn.hltv.org) in a test or fixture file;
 // - the private marker: a file named *.private.*, a JSON file whose top-level object has "_private",
 //   or a parquet file (extracted tables hold SteamIDs and names and cannot carry a key).
 //   node scripts/check-public-tree.mjs [--root <git work tree>]
@@ -30,6 +31,10 @@ for (const line of readFileSync(listFile, "utf8").split(/\r?\n/)) {
 }
 
 const STEAMID = /7656119\d{10}/g;
+// HLTV's image host may appear in code (the CSP and the pack's origin allowlist), never in test data:
+// a fixture that holds it is usually a copied pro pack row
+const HLTV_IMAGES = /img-cdn\.hltv\.org/i;
+const TEST_FILE = /(^|\/)(fixtures|tests?|__tests__)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
 // a drive letter or a leading slash, then Users, then a name that is not a placeholder (<name>, %VAR%, ${x}, *)
 const DEV_PATH = /(?:\b[A-Za-z]:(?:\\\\|\\|\/)|(?<![\w.])\/)Users(?:\\\\|\\|\/)(?![<%$*{])([^\\/\s"'`<>|:*?]+)(?:\\\\|\\|\/)/gi;
 // the private marker as a JSON key with its value (tools/outputs.ts, extractor/repo_guard.py), any spacing
@@ -101,6 +106,7 @@ for (const file of files) {
   for (const id of ids) if (!allowed.has(id)) report(file, `SteamID64 ${id} is not in scripts/steamid-allowlist.txt`);
   for (const p of paths) report(file, `absolute developer path ${JSON.stringify(p)}`);
   if (file.startsWith("app/public/") && texts.some((t) => /hltv/i.test(t))) report(file, `"hltv" under app/public/`);
+  if (TEST_FILE.test(file) && texts.some((t) => HLTV_IMAGES.test(t))) report(file, "HLTV's image CDN in a test or fixture (use a placeholder host)");
   // the marker as a key and its value, in any text file: a private JSON pasted into a .txt, .md or .ts
   if (texts.some((t) => MARKER.test(t))) report(file, "holds the private marker (the _private key with its do-not-commit value)");
 }

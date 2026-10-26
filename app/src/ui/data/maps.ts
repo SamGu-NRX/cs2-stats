@@ -1,10 +1,9 @@
-// Map identity: radar image, emblem and the radar's world-to-pixel transform. Images load from the
-// web at runtime (raw.githubusercontent.com, MurkyYT/cs2-map-icons, which mirrors Valve's game
-// files; personal local use). Transforms are the game's overview files (data/radar_info/<map>.txt in
-// that repository), fetched 2026-10-25. Offline, views fall back to a backdrop drawn from the
-// recorded position samples (components/MapArt.tsx).
-
-const BASE = "https://raw.githubusercontent.com/MurkyYT/cs2-map-icons/main/images";
+// Map identity: radar image, emblem and the radar's world-to-pixel transform. The images are Valve's
+// art, so they come only from the local icon pack (data/icons.ts) that scripts/extract-icon-pack.cjs
+// builds from the user's own CS2 install. Without the pack, views draw a backdrop from the recorded
+// position samples (components/MapArt.tsx) and emblems show a monogram (components/bits.tsx).
+// Transforms are the numbers in the game's overview files, as copied in data/radar_info/<map>.txt of
+// the MurkyYT/cs2-map-icons repository on 2026-10-25.
 
 export interface MapInfo {
   id: string;
@@ -30,19 +29,24 @@ const MAPS: Record<string, MapInfo> = {
   de_train: { id: "de_train", posX: -2308, posY: 2078, scale: 4.082077, size: 1024, accent: "#9a9a8c" },
 };
 
+/** Every map with a known transform. */
+export const knownMaps = (): string[] => Object.keys(MAPS);
 export const mapInfo = (map: string): MapInfo | null => MAPS[map] ?? null;
 export const mapAccent = (map: string) => MAPS[map]?.accent ?? "#ac957a";
-export const radarUrl = (map: string) => (MAPS[map] ? `${BASE}/radars/${map}_radar_psd.png` : null);
-export const emblemUrl = (map: string) => (MAPS[map] ? `${BASE}/${map}.png` : null);
+/** The icon pack id of the map's radar (its upper floor on a two-floor map); null for an unknown map. */
+export const radarIcon = (map: string) => (MAPS[map] ? `radar_${map}` : null);
+/** The icon pack id of the map's emblem; null for an unknown map. */
+export const emblemIcon = (map: string) => (MAPS[map] ? `map_${map}` : null);
 
 /** World position to radar pixels (0..size). */
 export function toRadar(info: MapInfo, x: number, y: number): [number, number] {
   return [(x - info.posX) / info.scale, (info.posY - y) / info.scale];
 }
 
-/** The only origins remote images load from. The Tauri CSP's img-src lists the same origins
- *  (src-tauri/tauri.conf.json; packs.test.ts fails if the two drift apart). */
-export const REMOTE_IMAGE_ORIGINS = ["https://raw.githubusercontent.com", "https://img-cdn.hltv.org", "https://flagcdn.com"];
+/** The only origins remote images load from: the pro pack's photos, team logos and flags. The Tauri
+ *  CSP's img-src lists the same origins (src-tauri/tauri.conf.json; packs.test.ts fails if the two
+ *  drift apart). */
+export const REMOTE_IMAGE_ORIGINS = ["https://img-cdn.hltv.org", "https://flagcdn.com"];
 
 /** The URL when it is an image on an allowed origin, else null (an invalid URL included). */
 export function allowedImage(url: unknown): string | null {

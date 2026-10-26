@@ -17,6 +17,7 @@ const ID = (tail: string) => `7656119${tail}`;
 const USERS = ["Us", "ers"].join("");
 const BS = "\\";
 const MARK = ["_pri", "vate"].join("");
+const CDN = ["img-cdn", "hltv", "org"].join(".");
 const VALUE = ["do", "not", "commit"].join(" ");
 /** Every character as a JSON-style backslash-u escape of four hex digits. */
 const esc = (t: string) => [...t].map((c) => `${BS}u${c.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
@@ -50,6 +51,8 @@ describe("check-public-tree", () => {
       "docs/x.md": `Paths like C:${BS}${USERS}${BS}<name>${BS} or /${USERS}/<name>/ are placeholders, and https://example.com/${USERS}/x/ is a URL.`,
       "app/tools/outputs.ts": `export const PRIVATE_KEY = "${MARK}";`,
       "app/public/baselines.json": '{"source": "CS2RB"}',
+      // the image host in code: the CSP and the origin allowlist name it
+      "app/src/ui/data/maps.ts": `export const ORIGINS = ["https://${CDN}"];`,
     });
     expect(r).toEqual({ code: 0, out: expect.stringMatching(/nothing private/) });
   });
@@ -82,6 +85,10 @@ describe("check-public-tree", () => {
       [{ "notes/le.txt": Buffer.from(`id ${ID("8000000048")}`, "utf16le") }, `SteamID64 ${ID("8000000048")}`],
       [{ "notes/be.txt": Buffer.from(`id ${ID("8000000049")}`, "utf16le").swap16() }, `SteamID64 ${ID("8000000049")}`],
       [{ "data/players.parquet": Buffer.from("PAR1") }, "a parquet table"],
+      // HLTV's image host in test data
+      [{ "app/src/ui/data/packs.test.ts": `const photo = "https://${CDN}/a.png";` }, "HLTV's image CDN in a test or fixture"],
+      [{ "fixtures/pros.json": `{"photo": "https://${CDN}/a.png"}` }, "HLTV's image CDN in a test or fixture"],
+      [{ "extractor/tests/test_x.py": `PHOTO = "https://${CDN}/a.png"` }, "HLTV's image CDN in a test or fixture"],
     ];
     for (const [files, why] of cases) {
       const r = check(files);

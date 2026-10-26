@@ -431,7 +431,7 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
 
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "DATA_ROOT", tmp_path)
-    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "DOWNLOADS"):
+    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS"):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)

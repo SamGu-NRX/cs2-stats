@@ -79,7 +79,7 @@ An aggregate agreement figure alone can hide timing failures. The game's `spotte
 - **Map updates can outrun the `.tri` files:** show "visibility unavailable" rather than wrong numbers.
 - **Storage:** keep the tables by default (a new engine version can recompute from them); offer a purge that keeps only the facts.
 - **Open source:** the repo ships code, schemas and anonymous aggregate baselines computed by our own engine.
-  - **Not in the repo:** HLTV text, data or images; Valve artwork (agent renders, map art and radars are extracted at runtime from the user's own CS2 install, or come from a CC-licensed source such as nav-mesh SVG radars); and any pro pack.
+  - **Not in the repo:** HLTV text, data or images; Valve artwork (weapon and killfeed icons, map emblems and radars are extracted from the user's own CS2 install by `scripts/extract-icon-pack.cjs` into the local packs folder; agent renders are files the user adds there; a CC-licensed source such as nav-mesh SVG radars could replace the radars); and any pro pack.
   - **The optional named-pro pack** is generated locally on the user's machine. It holds our engine's metrics for named pros, computed from their demos, plus links to public profile pages. The app works without it.
 
 ## Rating labels across the migration

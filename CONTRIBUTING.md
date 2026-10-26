@@ -1,5 +1,9 @@
 # Contributing
 
+## Licence
+
+The repository is under GPL-3.0-only (`LICENSE`), and contributions are accepted under the same licence. By opening a pull request, you agree that your contribution is licensed under GPL-3.0-only. Don't add numbers or art copied from the game unless `THIRD_PARTY_NOTICES.md` lists the file and its source.
+
 ## Private data
 
 This repository is public. Some of what the tools read and write must never be committed:
@@ -23,6 +27,7 @@ When you add a script that writes a file, use these functions and choose the kin
 - a SteamID64 that isn't in `scripts/steamid-allowlist.txt`;
 - an absolute developer path such as `C:\Users\<name>\` or `/Users/<name>/`, in either slash style;
 - `hltv` anywhere under `app/public/`;
+- HLTV's image host, `img-cdn.hltv.org`, in a test or fixture file (code may name it: the CSP and the pro pack's origin allowlist do);
 - a file carrying the private marker, or a parquet table.
 
 It decodes gzip files first. Run it before you push with `node scripts/check-public-tree.mjs`.
@@ -31,9 +36,24 @@ The allowlist holds only IDs that aren't a real person's: bots in the plugin fix
 
 `.gitignore` drops `*.private.*` and `*.local.json`, so a marked file isn't committed by accident in the first place.
 
+## Checks
+
+Each pull request runs these workflows. The job name is the status name on the pull request.
+
+| Workflow | Job | Command |
+|---|---|---|
+| `tests.yml` | App typecheck, vitest and build | in `app/`: `pnpm install --frozen-lockfile`, `pnpm exec tsc -p tsconfig.app.json --noEmit`, `pnpm exec tsc -p tsconfig.node.json --noEmit`, `pnpm test`, `pnpm build` |
+| `tests.yml` | Rust tests (cargo test --lib) | in `app/src-tauri/`: `cargo test --lib --locked`, on Windows |
+| `tests.yml` | Extractor tests (pytest) | in `extractor/`: `python -m pytest -q` |
+| `tests.yml` | Model tests (unittest) | `python -m unittest discover -s model/rating3 -p "test_*.py"` |
+| `tests.yml` | Plugin build and tests (dotnet) | `dotnet build plugin/BotMatchStats.csproj -c Release`, `dotnet test plugin/BotMatchStats.Tests` |
+| `hygiene.yml` | Check the public tree | `node scripts/check-public-tree.mjs` |
+
+A test that needs the private data folder or the packs must skip with a message saying what is missing, because CI has neither. No check is required by a branch rule yet. A green run shows that these suites passed, and nothing more.
+
 ## PR screenshots
 
-Take every screenshot with personal info hidden, so nothing has to be blurred afterwards. The app then shows your name as You, other people in your matches as Teammate 1 or Opponent 3, and SteamIDs and resolved folder paths as `<SteamID>`, `<data folder>` or `<path>`. Bots and players in pro demos keep their names, and every number stays as it is. `app/src/ui/data/privacy.ts` lists the rules.
+Take every screenshot with personal info hidden, so nothing has to be blurred afterwards. The app then shows your name as You, other people in your matches as Teammate 1 or Opponent 3, and SteamIDs, resolved folder paths and match file names as `<SteamID>`, `<data folder>`, `<path>` or `<file>`. Bots and players in pro demos keep their names, and every number stays as it is. `app/src/ui/data/privacy.ts` lists the rules.
 
 Turn it on with the capture switch, which overrides the saved setting for the session:
 
