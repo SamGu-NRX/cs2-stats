@@ -486,7 +486,7 @@ describe("review round 1 (PR #28)", () => {
     for (const h of ["HS kills", "Head share"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
     const rows = Array.from(host.querySelectorAll("tbody tr:not(.is-group)"));
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((tr) => text(tr.querySelector(".guncell__advice")) !== ""), "Advice").toBe(true);
+    expect(rows.every((tr) => text(tr.querySelector(".guncell__advice")) !== "" && !!tr.querySelector(".guncell__advice .help[data-tip]")), "Advice").toBe(true);
     render(<CareerAim />);
     expect(Array.from(host.querySelectorAll(".card__title")).map(text)).toContain("Head accuracy");
   });

@@ -725,7 +725,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .gunhero__figs { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .gunhero__figs span { display: grid; gap: 2px; }
 .gunhero__figs b { font: 800 20px/1 var(--f); }
-.gunhero__advice { font-size: 13px; line-height: 1.45; }
 
 /* packs */
 .packmiss { display: flex; align-items: center; gap: 20px; padding: 8px 0; }
@@ -1389,3 +1388,12 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 /* Role by spawn: side pips, and the quiet spawns as one closing line */
 .spawns .pip { min-width: 26px; }
 .spawns__more td { color: var(--ink2); }
+/* a role signal: name, what it measures, its "?", the fit chip, and the value at the row's end */
+.signals2__top { align-items: center; }
+.signals2__top .help { margin-left: -4px; }
+.signals2__v { margin-left: auto; font: 650 13px/1 var(--f); }
+/* a gun's advice: its line of numbers with the sentence in a "?" right after its last word, so a
+   line that wraps in the narrow gun column keeps its "?" beside it */
+.guncell .guncell__advice { display: block; font-variant-numeric: tabular-nums; }
+.guncell__advice .help { margin-left: 5px; vertical-align: -2px; }
+.gunhero__cap { display: inline-flex; align-items: center; gap: 6px; }
