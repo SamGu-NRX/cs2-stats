@@ -25,6 +25,9 @@ export function metric(id: string): MetricMeta {
   return m;
 }
 
+/** Whether the engine has a metric with this id. */
+export const hasMetric = (id: string) => (need(), byId.has(id));
+
 export const metrics = () => need().metrics;
 export const attributeDefs = () => need().attributes;
 export const ratingInfo = () => need().rating;
