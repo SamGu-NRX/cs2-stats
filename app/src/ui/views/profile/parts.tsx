@@ -7,13 +7,10 @@ import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
-import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { GameIcon } from "../../components/GameIcon";
 import { attrsOf, fmtMetric, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
-import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
 import { metric, roleSignals, styleIds } from "../../data/meta";
 import type { MatchEntry } from "../../data/match";
 import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } from "../../data/packs";
@@ -144,17 +141,14 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   const e = evidenceOf(m);
   return (
     <ul className="rtiles">
-      <li data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : tipOf("roundsWithAwp")}>
-        <span className="rtiles__ico"><GameIcon id="awp" width={34} height={12} fallback={<WeaponIcon name="awp" size={12} />} /></span>
-        <b className="num">{e.awp === null ? "–" : fmtPct(e.awp, 0)}</b><span>AWP rounds</span>
+      <li tabIndex={0} data-tip={e.awp === null ? "No loadout recorded, so the AWP share is unknown." : e.loadoutRounds < e.rounds ? `Rounds you carry an AWP, of ${e.loadoutRounds} with a recorded loadout.` : tipOf("roundsWithAwp")}>
+        <b className="disp disp--m">{e.awp === null ? "–" : <Num v={fmtPct(e.awp, 0)} />}</b><span className="caps">AWP rounds</span>
       </li>
-      <li data-tip={tipOf("openingAttempts")}>
-        <span className="rtiles__ico"><FirstKillIcon size={15} /></span>
-        <b className="num">{e.opening === null ? "–" : fmtPct(e.opening, 0)}</b><span>Opening duels</span>
+      <li tabIndex={0} data-tip={tipOf("openingAttempts")}>
+        <b className="disp disp--m">{e.opening === null ? "–" : <Num v={fmtPct(e.opening, 0)} />}</b><span className="caps">Opening duels</span>
       </li>
-      <li data-tip="Seconds into the round when you usually die.">
-        <span className="rtiles__ico"><GameIcon id="time" width={15} fallback={<TimeIcon size={15} />} /></span>
-        <b className="num">{e.deathTime === null ? "–" : `${Math.round(e.deathTime)} s`}</b><span>Death time</span>
+      <li tabIndex={0} data-tip="Seconds into the round when you usually die.">
+        <b className="disp disp--m">{e.deathTime === null ? "–" : <Num v={`${Math.round(e.deathTime)}s`} />}</b><span className="caps">Death time</span>
       </li>
     </ul>
   );
@@ -285,7 +279,7 @@ export function RoleSignals({ q }: { q: Query }) {
   const [both, t] = r;
   return (
     <>
-      <h3 className="caps rmaps__h">Signals</h3>
+      <h3 className="caps rmaps__h">Signals <span className="help" data-tip="The tick is the threshold, set by hand, not fitted." tabIndex={0} aria-label="What the ticks mean">?</span></h3>
       <ul className="signals2">
         {roleSignals().map((sg) => {
           const v = (sg.side === "T" ? t : both).v[sg.metric];
@@ -300,7 +294,6 @@ export function RoleSignals({ q }: { q: Query }) {
           );
         })}
       </ul>
-      <p className="meta">The tick on each bar is the threshold; the bar fills to twice it. The thresholds are set by hand, not fitted.</p>
     </>
   );
 }
@@ -362,8 +355,6 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const ranked = useMemo(() => (res.data?.ranked ?? []).flatMap((x) => { const item = bySlug.get(x.slug); return item ? [{ item, pct: Math.round(x.similarity) }] : []; }), [res.data, bySlug]);
   const attrs = useMemo(() => (mine.data ? attrsOf(mine.data.scores) : []), [mine.data]);
   const [sel, setSel] = useState<string | null>(initial);
-  // a keyboard pick swaps the radar's shape at once; a click morphs it (components/charts.tsx AttrRadar)
-  const [instant, setInstant] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (initial) ref.current?.scrollIntoView({ block: "start" }); }, [initial]);
   const error = res.error ?? mine.error;
@@ -386,7 +377,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const sideLabel = side === "both" ? "Both sides" : `${side} side`;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">{sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
+      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel.toLowerCase()}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
             <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer" data-tip="Opens their HLTV page.">
@@ -403,7 +394,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>
-                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={(e) => { setInstant(e.detail === 0); setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
+                  <button role="radio" aria-checked={x.item.slug === pick.item.slug} className="prorow" onClick={() => { setSel(x.item.slug); setQuery("pro", x.item.slug); }}>
                     <span className="prorow__face"><ProFace pro={x.item} className="prorow__img" /></span>
                     <span className="prorow__name"><b>{x.item.name}</b><ProMarks pro={x.item} /></span>
                     <b className="num prorow__pct">{x.pct}%</b>
@@ -413,8 +404,6 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
             </ul>
           </div>
           <div className="likes__right">
-            <AttrRadar labels={labels} you={you} other={styleOf(proScores(pick.item, side))} otherLabel={pick.item.name} size={380} instant={instant} provisional={careers.provisional} provisionalTip={PROVISIONAL_TIP} />
-            <div className="legend likes__legend"><span><i className="swatch" style={{ background: "var(--cream)" }} />You, against bot careers</span><span><i className="swatch swatch--dash" />{pick.item.name}, against pros</span></div>
             <VsTable you={you} labels={labels} pro={pick.item} side={side} />
           </div>
         </div>
@@ -432,12 +421,12 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
   const theirs = styleOf(proScores(pro, side));
   return (
     <div className="vs vs--two">
-      <div className="vs__head"><span /><span /><span className="caps" data-tip="Your score against bots in your matches." tabIndex={0}>You</span><span className="vs__pro caps" data-tip="Their score against pros." tabIndex={0}>{pro.name}</span></div>
+      <div className="vs__head"><span /><span className="vs__key meta"><i className="vs__you" />you <i className="vs__them" />{pro.name}</span><span className="caps" data-tip="Your score against bots in your matches." tabIndex={0}>You</span><span className="vs__pro caps" data-tip="Their score against pros." tabIndex={0}>{pro.name}</span></div>
       {styleIds().map((id, i) => (
         <div key={id} className="vs__row">
           <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{labels[i]}</span>
           <DotTrack at={you[i]} ghost={theirs[i]} label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
-          <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
+          <span className="num vs__mine">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
           <span className="num">{theirs[i] ?? "–"}</span>
         </div>
       ))}

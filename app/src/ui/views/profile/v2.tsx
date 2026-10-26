@@ -110,14 +110,14 @@ export function AggressionCard({ s }: { s: Rolled }) {
   if (score === null && parts.every((p) => p.v === null)) return null;
   const at = score === null ? null : 50 + (50 * Math.max(-AGGRO_SD, Math.min(AGGRO_SD, score))) / AGGRO_SD;
   return (
-    <Card title="Aggression" tip="How you take fights, against the pros' average." className="aggro">
+    <Card title="Aggression" tip="How you take fights, against the pros' average." className="aggro" aside={<span className="meta">Mid tick: the pros' average</span>}>
       <div className="aggro__scale">
         <span className="caps">Passive</span>
         <DotTrack at={at} tone="cream" label={score === null ? "No aggression score" : `Aggression ${score.toFixed(2)} pro standard deviations from the pros' average`} />
         <span className="caps">Aggressive</span>
       </div>
       <p className="aggro__score">
-        <b className="num">{score === null ? "–" : `${score > 0 ? "+" : score < 0 ? "−" : ""}${Math.abs(score).toFixed(2)}`}</b>
+        <b className="disp disp--m">{score === null ? "–" : `${score > 0 ? "+" : score < 0 ? "−" : ""}${Math.abs(score).toFixed(2)}`}</b>
         <span className="meta" data-tip={tipOf("aggressionScore")} tabIndex={0}>pro SDs from the pros' average</span>
       </p>
       <MetricList label="Aggression parts">{parts.map((p) => (p.v === null ? null : <Row key={p.id} id={p.id} value={p.v} />))}</MetricList>
