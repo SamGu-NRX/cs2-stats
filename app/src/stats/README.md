@@ -13,7 +13,7 @@ that build the pro baselines. Metric definitions are in `METRICS.md`; the eviden
 | Scoreboard on tables, the HLTV gate | done; 83 of 194 joined maps exact for every player on K, D, KAST and ADR; `hltv-exact.test.ts` pins 24 and checks kills on all |
 | Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done; Rating 3.0 is `params.json`'s six-term linear model (PR #17) |
 | Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
-| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json`, 391 KB, 552 pro players |
+| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json` (CS2RB), 512 KB, 552 pro players |
 | New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation per metric in `VALIDATION.md` |
 | UI and worker on the new API | in progress on this branch |
 
@@ -126,9 +126,16 @@ Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f
 and `m.tradedDeaths`.
 
 ### Baselines
-`pnpm baselines` derives every pro map in the private data folder and writes `public/baselines.json`
-(391 KB, no names or ids; swing from the win-probability source the tools found) and the named pack to `<data>/derived/baselines-named.json`, which
-stays outside the repo. Rebuild after any change to `METRICS` or a definition.
+`pnpm baselines` derives every pro map in the private data folder and writes the anonymous pool (no
+names or ids) and the named pack to `<data>/derived/baselines-named.json`, which stays outside the repo.
+Where the pool goes depends on the win-probability source the tools find:
+- **CS2RB** (no HLTV pack, or `CS2_WINPROB_PACK=none`): `public/baselines.json`, the pool the app ships.
+- **The private HLTV pack**: `%APPDATA%\BotMatchStats\packs\baselines.local.json`, the user's own pool.
+  The app ranks against it instead of the shipped one when it is present and valid
+  (`worker/baselines-pool.ts`), so matches derived with the pack keep their Rating 3.0 and swing ranks.
+  A pack-built pool is never written under `public/`; the tool refuses.
+
+Rebuild after any change to `METRICS` or a definition.
 
 ## API changes for the UI
 

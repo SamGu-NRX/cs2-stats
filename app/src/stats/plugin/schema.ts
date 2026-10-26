@@ -73,7 +73,7 @@ export interface Rounds {
   utilBought?: (UtilCounts | null)[][];
   /** money spent on those grenades */
   utilSpent?: (number | null)[][];
-  // optional, read by this app; written by tools/convert-legacy.ts (see app/README.md)
+  // optional, read by this app; the bundled converted samples carry them (see app/README.md)
   /** per player per round [kills, deaths, assists, damage, headshot kills] from the game's own round stats */
   basic?: (BasicCounts | null)[][];
   /** true for rounds with only totals (no kill-by-kill log); also implied by ri < firstFullRound */

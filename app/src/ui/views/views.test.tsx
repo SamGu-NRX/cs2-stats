@@ -206,6 +206,35 @@ describe("comparison reasons", () => {
   });
 });
 
+describe("a local pro pool on the HLTV model", () => {
+  it("ranks swing and RWS, and lets Rating 3.0 past the model gate, for matches derived with the pack", async () => {
+    // fails if a pack user's model-dependent rows stay "Not compared" with a matching local pool, or if
+    // the shipped CS2RB pool starts ranking them across models
+    use(samples);
+    const q = queryOf(samples);
+    const HLTV = "hltv-0123abcd-pb88f2902";
+    // the user's matches as the pack derives them: the same facts under the pack's model fingerprint
+    const asPack = (pros: Baselines) => rankingCalls({
+      summary: async (x) => ({ ...summary(x), models: [HLTV] }),
+      pros: async () => pros,
+      careers: async (x) => {
+        const careers = new Map<string, Parameters<typeof botPopulation>[0][number]>();
+        const matches: Parameters<typeof botPopulation>[1] = [];
+        for (const f of x.files) addCareerMatch(careers, matches, factsOf.get(f)!, {});
+        return botPopulation([...careers.values()], matches, "test");
+      },
+    });
+    const local = (await asPack({ ...PROS, model: HLTV }).compare(q, { side: "both" })).p;
+    const shipped = (await asPack(PROS).compare(q, { side: "both" })).p;
+    const otherModel = "Not compared: the pro pool was built with another rating or win-probability model";
+    for (const id of ["swing", "rws", "rating3"]) expect(shipped[id].reason, id).toBe(otherModel);
+    // swing and RWS need only the model, so they rank; Rating 3.0 also needs every eco value, which
+    // these converted logs lack, so it passes the model gate and stops at that input instead
+    for (const id of ["swing", "rws"]) expect([local[id].reason, local[id].pct === null], id).toEqual([null, false]);
+    expect(local.rating3.reason).toMatch(/^Not compared: both players' loadout known for /);
+  });
+});
+
 describe("Profile attributes", () => {
   /** HLTV's attribute block is on Overview, under the player card: Firepower wide, the six style attributes in pairs. */
   const renderProfile = async (tab: "overview" | "playstyle" = "overview") => {
