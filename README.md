@@ -37,7 +37,7 @@ Some of what the app can show is third-party material that this repository must 
 
 | Pack | What it adds | How to get it | Without it |
 |---|---|---|---|
-| `icons/` | Weapon, grenade and kill-flag icons, round-end icons, map radars and map emblems, all from the game | Run `node scripts/extract-icon-pack.cjs` from the repository root. It reads your CS2 install with Source2Viewer-CLI from [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat/releases) and writes the pack. `--help` lists its options | Icons show the object's name as text. Radars are drawn from where players stood in your matches. Map emblems show a two-letter monogram |
+| `icons/` | Weapon, grenade and kill-flag icons, round-end icons, map radars and map emblems, all from the game | Run `node scripts/extract-icon-pack.cjs` from the repository root. It finds CS2 through Steam, or takes `--cs2` with the install folder or its `game\csgo\pak01_dir.vpk`. It reads the game files with Source2Viewer-CLI from [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat/releases), expected at `%TEMP%\cs2-icon-packrf\Source2Viewer-CLI.exe` unless `--vrf` gives another path | Icons show the object's name as text. Radars are drawn from where players stood in your matches. Map emblems show a two-letter monogram |
 | `agents/` | Agent renders on the player card: `t-portrait.png`, `t-ghost.png`, `ct-portrait.png`, `ct-ghost.png` | Add the files yourself. The repository has no tool for them | The card draws a silhouette |
 | `pros.json` | "Plays like": your attributes next to named pros, with photo and flag links | The format is in `app/src/ui/data/packs.ts` and `proPack.ts`. The repository has no tool that collects it | "Plays like" stays hidden |
 | `winprob-hltv.json` | A round win-probability lookup fitted to HLTV match pages | `model/rating3/winprob_fit.py` (see `model/rating3/README.md`), from HLTV data you collect yourself | Swing uses the CS2RB model in `model/export/` |
@@ -57,9 +57,9 @@ Some of what the app can show is third-party material that this repository must 
 CI runs all of these on every pull request (`.github/workflows/tests.yml`):
 
 ```sh
-cd app && pnpm exec tsc -p tsconfig.app.json --noEmit && pnpm exec tsc -p tsconfig.node.json --noEmit && pnpm test && pnpm build
-cd app/src-tauri && cargo test --lib
-cd extractor && python -m pytest -q
+(cd app && pnpm exec tsc -p tsconfig.app.json --noEmit && pnpm exec tsc -p tsconfig.node.json --noEmit && pnpm test && pnpm build)
+(cd app/src-tauri && cargo test --lib --locked)
+(cd extractor && python -m pytest -q)
 python -m unittest discover -s model/rating3 -p "test_*.py"
 dotnet test plugin/BotMatchStats.Tests
 node scripts/check-public-tree.mjs
