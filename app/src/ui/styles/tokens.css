@@ -79,6 +79,9 @@
   --r-chip: 4px;
   --r-ctl: 6px;
   --r-card: 8px;
+  /* the one inner padding of every panel (cards, the attributes block, the player card); rows that
+     bleed a hover background to the edge use it as their negative margin */
+  --pad-panel: 16px;
   --r-palette: 10px;
 
   /* type */
