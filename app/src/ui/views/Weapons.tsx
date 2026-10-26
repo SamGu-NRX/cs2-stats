@@ -22,6 +22,7 @@ import { fmtInt, fmtPct, fmtRatio, plural, signed } from "../lib/format";
 import { scoreText, toScore } from "../lib/scale";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
+import { TIP } from "../data/tips";
 import { Empty } from "./shared";
 
 /** A gun, or your other guns pooled, needs this many shots before its accuracy is judged. */
@@ -176,7 +177,7 @@ function GunTable({ guns }: { guns: Judged[] }) {
         columns={[
           { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><WeaponIcon name={g.weapon} size={13} label={undefined} />{weaponLabel(g.weapon)}<small className="faint">{WEAPON_CLASS_LABEL[g.cls]}</small></span>, width: 220 },
           { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
-          { key: "hsk", label: "HS kills", tip: "Kills that were headshots, as a share of the gun's kills", sort: (g) => share(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} /> },
+          { key: "hsk", label: "HS kills", tip: TIP.hs, sort: (g) => share(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} /> },
           { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
           { key: "acc", label: "Accuracy", colored: true, sort: (g) => g.acc, render: (g) => <span style={{ color: g.edge === null ? undefined : scoreText(toScore(g.edge, 0, 8)) }}><Num v={fmtMetric("accuracy", g.acc)} /></span>, tip: `${metric("accuracy").def} Coloured against your accuracy with your other guns.` },
           { key: "first", label: "First bullet", sort: (g) => g.first, render: (g) => <Num v={fmtMetric("firstBulletAccuracy", g.first)} />, tip: metric("firstBulletAccuracy").def },

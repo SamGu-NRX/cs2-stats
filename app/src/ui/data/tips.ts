@@ -12,6 +12,7 @@ export const TIP: Record<string, string> = {
   adr: "Damage you deal to enemies per round.",
   kast: "Rounds with a kill, assist, survival or trade.",
   mk: "Rounds where you kill two or more.",
+  hs: "Kills that were headshots.",
   swing: "Win chance you add each round.",
 
   killsPerWin: "Your kills in each round your team wins.",

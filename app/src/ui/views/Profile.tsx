@@ -640,7 +640,7 @@ function Openings({ s }: { s: Rolled }) {
   const att = c.openingKills + c.openingDeaths;
   const succ = s.v.openingSuccess;
   return (
-    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} />}>
+    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={TIP.openingSuccess}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
       <div className="odial">
         <svg viewBox="0 0 120 12" width="100%" height="12" aria-hidden>
           <rect x="0" y="2" width="120" height="8" rx="2" fill="var(--track)" />

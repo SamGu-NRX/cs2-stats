@@ -10,7 +10,7 @@ import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
 import {
-  careerEntries, entryLine, entryRating, filterEntries, hasPlayedRound, isFinished, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
+  careerEntries, entryLine, entryRating, isFinished, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
 } from "../data/engine";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { startMs, type MatchEntry } from "../data/match";
@@ -47,11 +47,8 @@ export function MatchesView() {
 
   const rows = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return filterEntries(all, map).filter((s) => {
-      // A match that ended before any round was won (0:0) has nothing to show, so it is not listed
-      // (the user: "The 0-0 unfinished one you probably shouldn't include"). Other unfinished
-      // matches stay, labelled.
-      if (!hasPlayedRound(s)) return false;
+    // a recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled
+    return listedEntries(all, map).filter((s) => {
       // an unfinished match is neither a win nor a loss
       if (result !== "all" && (!isFinished(s) || s.result !== result)) return false;
       if (!terms.length) return true;
