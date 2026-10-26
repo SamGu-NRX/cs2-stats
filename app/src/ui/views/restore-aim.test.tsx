@@ -23,7 +23,8 @@ vi.mock("../data/provider", () => ({ useData: (): Pick<Data, "matches" | "you"> 
 vi.mock("../data/packs", () => ({ usePros: () => ({ state: "missing" }), useAgents: () => null }));
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
-  useScoped: (_q: unknown, extra: unknown[]) => (scoped ? extra.map(() => scoped) : null),
+  // as the real hook: null while loading, and null for an empty query list (useRollups asks nothing)
+  useScoped: (_q: unknown, extra: unknown[]) => (scoped && extra.length ? extra.map(() => scoped) : null),
   useRollups: () => ({ data: null, error: null, loading: false }),
   useCall: () => ({ data: null, error: null, loading: false }),
 }));
@@ -212,6 +213,16 @@ describe("spray card, restored parts", () => {
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
     expect(host.querySelectorAll(".gunlist__b")).toHaveLength(0);
     expect(host.querySelector(".aim-spray")!.textContent).toContain("No sprays of three bullets or more.");
+  });
+
+  it("shows the no-sprays state, not a skeleton, when no gun was fired on the side and class in view", () => {
+    // fails if an empty gun set reads as loading (sprays only on T with Side set to CT left a skeleton)
+    scoped = summary({ sprays: 0 });
+    delete scoped.weapons.ak47;
+    render(<AimPanels query={QUERY} label="t" visibility={false} />);
+    const card = host.querySelector(".aim-spray")!;
+    expect(card.querySelector(".skel")).toBeNull();
+    expect(card.textContent).toContain("No sprays of three bullets or more.");
   });
 
   it("marks where the target's head was for each bullet, with its legend entry", () => {
