@@ -16,7 +16,7 @@ import { targetControl } from "../components/charts";
 import { setMeta } from "../data/meta";
 import { BarProvider } from "../shell/Bar";
 import type { Data } from "../data/provider";
-import { AimPanels } from "./aim/AimPanels";
+import { AimPanels, sprayGuns } from "./aim/AimPanels";
 import CareerAim from "./CareerAim";
 
 let scoped: Rolled | null = null;
@@ -352,5 +352,17 @@ describe("empty states", () => {
     render(<BarProvider><CareerAim /></BarProvider>);
     const btn = host.querySelector<HTMLAnchorElement>(".empty a.btn")!;
     expect([btn.textContent, btn.getAttribute("href")]).toEqual(["Open Data & settings", "#/settings"]);
+  });
+});
+
+describe("landings with an unknown silencer state (#39 review)", () => {
+  it("keeps a gun's measured landings when its path cannot be set against the game's pattern", () => {
+    // fails if a recoil-unknown gun drops AimAgg.land: where the bullets landed is measured either way
+    const land = { n: [3, 3], dp: [1, 2], dy: [0, 1], measured: 3, pattern: 0 };
+    const unknownPath = { ak47: { n: [3, 3], dp: [2, 4], dy: [0, 1] } };
+    const [g] = sprayGuns(["ak47"], [summary({ sprays: 3, unknownPath, land: { ak47: land } })]);
+    expect([g.recoilUnknown, g.path, g.land]).toEqual([true, unknownPath.ak47, land]);
+    // and a gun without landings has none to keep
+    expect(sprayGuns(["ak47"], [summary({ sprays: 3, unknownPath })])[0].land).toBeNull();
   });
 });

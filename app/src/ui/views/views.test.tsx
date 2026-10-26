@@ -33,6 +33,8 @@ import { fmtPct, fmtSwing, signed } from "../lib/format";
 import { go, matchHref, navWasInstant, parseHash, profileHref, PROFILE_TABS } from "../router";
 import { MatchesView } from "./Matches";
 import CareerAim from "./CareerAim";
+import { AimPanels } from "./aim/AimPanels";
+import { MatchLine } from "../components/MatchSeries";
 import { RoleCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
 import { fmtRating } from "../lib/format";
@@ -86,6 +88,8 @@ const baselines = { source: PROS.source, built: PROS.built, n: PROS.n };
 let answers: Partial<Record<Method, unknown>> = {};
 /** the arguments of each worker call the views made last, by method */
 const asked: Partial<Record<Method, unknown[]>> = {};
+/** every rollup query the views asked for, in order */
+const rolledQs: Query[] = [];
 const done = <T,>(x: T | null) => ({ data: x, error: null, loading: false });
 
 vi.mock("../data/provider", () => ({
@@ -93,7 +97,7 @@ vi.mock("../data/provider", () => ({
 }));
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
-  useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => rolled(summary(q))) : null),
+  useRollups: (qs: Query[] | null) => { if (qs) rolledQs.push(...qs); return done(qs?.length ? qs.map((q) => rolled(summary(q))) : null); },
   // the real useScoped calls the module's own useRollups, which this mock cannot reach
   useScoped: (q: Query, extra: object[]) => extra.map((e) => rolled(summary({ files: q.files, filter: { ...q.filter, ...e } }))),
   useRatings: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })) : null),
@@ -257,6 +261,20 @@ describe("Profile attributes", () => {
     }
   });
 
+  it("names the pool the scores read when the role's pool fell back to every bot (#39 review)", async () => {
+    // fails if the block names the role's pool ("AWPer bots") while careers.pool says the scores read all bots
+    use(samples);
+    const q = queryOf(samples);
+    const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
+    answers.attributeBlock = { ...block, style: { ...block.style, role: "awper", careers: { ...block.style.careers, pool: "all" } } };
+    answers.attributes = await calls.attributes(q, { side: "both" });
+    render(<ProfileView tab="overview" />);
+    expect(text(host.querySelector(".hblock__note"))).toMatch(/^Style vs \d+ bot (careers|matches)$/);
+    const tips = Array.from(attr("entrying").querySelectorAll(".mrow:not([data-extra])")).map((el) => el.getAttribute("data-tip") ?? "");
+    expect(tips.some((t) => / against all bots\.$/.test(t))).toBe(true);
+    expect(tips.filter((t) => t.includes("AWPer"))).toEqual([]);
+  });
+
   it("names a provisional pool once, in the header pill, and on each score's tooltip", async () => {
     // fails if the pill is missing, repeats per attribute, or a provisional score loses its tooltip
     const { block } = await renderProfile();
@@ -349,6 +367,79 @@ describe("Profile tab bar", () => {
     } finally {
       act(() => go("#/"));
     }
+  });
+});
+
+describe("the page's scope across Profile tabs (#39 review)", () => {
+  const radios = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>(`[role="radiogroup"][aria-label="${label}"] [role="radio"]`));
+  it("keeps the map, matches, side and comparison on every tab link and on an arrow-key switch", () => {
+    // fails if a tab's href or the keyboard switch drops the page's scope, or carries the tab's own
+    // section or attribute into the next tab
+    use(samples);
+    const map = careerEntries(data.matches, null)[0].match.map;
+    const scope = { map, n: "10", side: "t", cmp: "bots" };
+    try {
+      act(() => go(`#/profile/overview?map=${map}&n=10&side=t&cmp=bots&sec=openings&attr=firepower`));
+      render(<ProfileView tab="overview" />);
+      const tabs = Array.from(host.querySelectorAll<HTMLAnchorElement>('[role="tab"][data-tab]'));
+      expect(tabs.map((a) => parseHash(a.getAttribute("href")!).ptab)).toEqual([...PROFILE_TABS]);
+      for (const a of tabs) expect(Object.fromEntries(parseHash(a.getAttribute("href")!).query), a.dataset.tab).toEqual(scope);
+      act(() => { tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+      const r = parseHash(location.hash);
+      expect([r.ptab, Object.fromEntries(r.query)]).toEqual(["duels", scope]);
+    } finally {
+      act(() => go("#/"));
+    }
+  });
+  it("reaches the Weapons tab's guns and the Aim tab's trends and panels from the URL's side", () => {
+    // fails if Weapons or Aim reads both sides while the title bar says T, or Aim draws a second Side
+    // control under the title bar's
+    use(samples);
+    try {
+      act(() => go("#/profile/weapons?side=t"));
+      delete asked.guns;
+      render(<Weapons />);
+      expect((asked.guns?.[0] as Query | undefined)?.filter.sides).toEqual(["T"]);
+      act(() => go("#/profile/aim?side=t"));
+      delete asked.compare;
+      rolledQs.length = 0;
+      render(<CareerAim />);
+      expect(asked.compare?.[1]).toEqual({ side: "T" });
+      expect((asked.compare?.[0] as Query | undefined)?.filter.sides).toEqual(["T"]);
+      // each match's trend value is read from that match's T rounds alone
+      const perMatch = rolledQs.filter((q) => q.files.length === 1);
+      expect(perMatch.length).toBeGreaterThan(0);
+      expect(perMatch.every((q) => q.filter.sides?.join() === "T")).toBe(true);
+      expect(radios("Side")).toHaveLength(0);
+    } finally {
+      act(() => go("#/"));
+    }
+  });
+  it("binds the match Aim tab's own Side control to the URL", () => {
+    // fails if the control keeps a local side the URL (and so a reload or a shared link) does not hold
+    use(samples);
+    try {
+      act(() => go("#/match/x/aim?side=ct"));
+      render(<AimPanels query={queryOf(samples)} label="t" visibility={false} />);
+      expect(radios("Side").map((b) => b.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
+      act(() => radios("Side")[1].click());
+      expect(parseHash(location.hash).query.get("side")).toBe("t");
+      act(() => radios("Side")[0].click());
+      expect(parseHash(location.hash).query.has("side")).toBe(false);
+    } finally {
+      act(() => go("#/"));
+    }
+  });
+});
+
+describe("missing values stay missing (#39 review)", () => {
+  it("breaks the Form line at a match without a value instead of bridging it", () => {
+    // fails if one polyline joins the matches either side of a gap, which draws a value that does not exist
+    const pts = [1.1, 0.9, null, 1.2, 1.0, null, 0.8].map((value, i) => ({ key: `m${i}`, value, label: `Oct ${i + 1}` }));
+    render(<MatchLine points={pts} fmt={(v) => v.toFixed(2)} pooled={null} label="Rating" />);
+    const lines = Array.from(host.querySelectorAll("polyline.ms__line")).map((l) => l.getAttribute("points")!.split(" ").length);
+    // two runs of two; the lone last match is a dot without a line
+    expect(lines).toEqual([2, 2]);
   });
 });
 

@@ -12,7 +12,7 @@ import { Empty } from "./shared";
 
 export default function Weapons() {
   const { matches } = useData();
-  const { map, n } = useScope();
+  const { map, n, side } = useScope();
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
-  return <div className="weapons">{list.length ? <CareerGuns list={list} /> : <Card><Empty text="No gun kills or shots in this filter." /></Card>}</div>;
+  return <div className="weapons">{list.length ? <CareerGuns list={list} side={side} /> : <Card><Empty text="No gun kills or shots in this filter." /></Card>}</div>;
 }

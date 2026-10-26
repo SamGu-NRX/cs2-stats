@@ -45,10 +45,27 @@ export interface Route {
   query: URLSearchParams;
 }
 
-/** Old ?sec= sections of the one-page Profile, by the tab that now holds them (Home's links, bookmarks). */
-const SECTION_TAB: Record<string, ProfileTab> = {
-  card: "overview", identity: "playstyle", style: "playstyle", performance: "overview", firepower: "overview", howgood: "duels", openings: "duels",
+/**
+ * Old ?sec= sections of the one-page Profile (Home's links, bookmarks): the tab that now holds each,
+ * and the section to scroll to there, or null for the tab's top. "identity" was the How you play
+ * heading (Playstyle now), "performance" the How well you play heading, whose first block is the
+ * attribute block on Overview; "style" is that block too, now on Overview.
+ */
+const SECTION_TAB: Record<string, [ProfileTab, string | null]> = {
+  card: ["overview", "card"], identity: ["playstyle", null], style: ["overview", "style"], performance: ["overview", "firepower"],
+  firepower: ["overview", "firepower"], howgood: ["duels", "howgood"], openings: ["duels", "openings"],
 };
+
+/**
+ * The query keys a Profile tab switch carries: the title bar's scope (map, matches, side, gun class,
+ * result) and the player card's comparison. A tab's own keys (sec, attr, pro) stay behind.
+ */
+const SCOPE_KEYS = ["map", "n", "side", "guns", "result", "cmp"] as const;
+export function scopeQuery(q: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of SCOPE_KEYS) { const v = q.get(k); if (v) out[k] = v; }
+  return out;
+}
 
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
@@ -64,9 +81,11 @@ export function parseHash(hash: string): Route {
   const p = parts[0];
   if (p === "profile") {
     const t = parts[1] as ProfileTab;
-    const sec = query.get("sec");
-    const ptab = (PROFILE_TABS as readonly string[]).includes(t) ? t : (sec && SECTION_TAB[sec]) || "overview";
-    return { page: "profile", ptab, query };
+    if ((PROFILE_TABS as readonly string[]).includes(t)) return { page: "profile", ptab: t, query };
+    // an old one-page link: its section's tab, and the section's id there
+    const old = SECTION_TAB[query.get("sec") ?? ""];
+    if (old) { if (old[1]) query.set("sec", old[1]); else query.delete("sec"); }
+    return { page: "profile", ptab: old?.[0] ?? "overview", query };
   }
   // the pages that became Profile tabs
   if (p === "playstyle" || p === "aim" || p === "weapons") return { page: "profile", ptab: p, query };

@@ -32,7 +32,7 @@ import { HitFigure } from "../../components/HitFigure";
 import { ApproxMark, percentilePhrase } from "../../components/Percentile";
 import { findingTitle, meanPath, sprayFinding, SprayDistance, SprayKey, SprayOnTarget, sprayStay, SprayStayBars, SprayWell, type Landing, type PlayerPath, type SprayStay } from "../../components/SprayPath";
 import { StatStrip, type StripItem } from "../../components/StatStrip";
-import { fmtMetric, WEAPON_CLASS_LABEL } from "../../data/engine";
+import { fmtMetric, WEAPON_CLASS_LABEL, type SideKey } from "../../data/engine";
 import { useCall, useScoped } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { metric, metrics } from "../../data/meta";
@@ -42,17 +42,18 @@ import { AimIcon } from "../../icons/ui";
 import { fmtDeg, fmtInt, fmtPct, fmtRatio, plural } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 import { BENCH, verdictOf } from "../../lib/verdict";
+import { setQuery } from "../../router";
+import { useScope } from "../../shell/filters";
 import { Hint } from "../match/glyphs";
 import { Empty, NeedsDemo } from "../shared";
 import { bestAndWorst, ClassIcon, EDGE_TIP, edgeText, edgeTip, GunCell, GunHero, GunIcon, HEAD_TIP, type Judged, MIN_SHOTS, PROF_TIP, SplitCell, useGuns } from "./guns";
 
-type SideFilter = "all" | "t" | "ct";
 const GUN_CLASSES = ["rifle", "sniper", "smg", "heavy", "pistol"] as const;
 type ClassFilter = "all" | (typeof GUN_CLASSES)[number];
 const isGun = (w: string) => (GUN_CLASSES as readonly string[]).includes(weaponClass(w));
 
-const sidesFor = (s: SideFilter): { sides?: Side[] } => (s === "all" ? {} : { sides: [s === "t" ? "T" : "CT"] });
-const poolSide = (s: SideFilter): PoolSide => (s === "all" ? "both" : s === "t" ? "T" : "CT");
+const sidesFor = (s: SideKey): { sides?: Side[] } => (s === "both" ? {} : { sides: [s === "t" ? "T" : "CT"] });
+const poolSide = (s: SideKey): PoolSide => (s === "both" ? "both" : s === "t" ? "T" : "CT");
 const value = (id: string, s: Rolled | null) => (s ? s.v[id] : null);
 const text = (id: string, s: Rolled | null) => fmtMetric(id, value(id, s));
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
@@ -69,7 +70,7 @@ const STRIP = ["firstBulletAccuracy", "timeToKill", "timeToDamage", "crosshairPl
 const FINER = ["flickOvershoot", "microCorrections", "trackingError", "sprayDeviation", "sprayPull"];
 const TRANSFERS = ["sprayTransfers", "transferHits"];
 
-export function AimPanels({ query, label, visibility, gunTable = true, statuses = [] }: {
+export function AimPanels({ query, label, visibility, gunTable = true, sideControl = true, statuses = [] }: {
   query: Query;
   label: string;
   /** some match in scope has mesh visibility */
@@ -78,9 +79,14 @@ export function AimPanels({ query, label, visibility, gunTable = true, statuses 
   statuses?: readonly string[];
   /** the per-gun table: a match's accuracy by gun; false on Profile's Aim tab, whose Weapons tab has every gun */
   gunTable?: boolean;
+  /**
+   * draw a Side control here; false where the page's title bar already has one (Profile). Either way
+   * the side is the URL's (?side=), so it carries to the page's other tabs and survives a reload.
+   */
+  sideControl?: boolean;
 }) {
   const { baselines } = useData();
-  const [side, setSide] = useState<SideFilter>("all");
+  const { side } = useScope();
   const [cls, setCls] = useState<ClassFilter>("all");
   const base = useScoped(query, [sidesFor(side)])?.[0] ?? null;
   const fired = useMemo(() => Object.keys(base?.weapons ?? {}).filter(isGun), [base]);
@@ -94,7 +100,7 @@ export function AimPanels({ query, label, visibility, gunTable = true, statuses 
   return (
     <div className="aimp">
       <div className="toolbar">
-        <Segmented label="Side" value={side} onChange={setSide} options={[{ value: "all", label: "Both sides" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
+        {sideControl && <Segmented label="Side" value={side} onChange={(v) => setQuery("side", v === "both" ? null : v)} options={[{ value: "both" as SideKey, label: "Both sides" }, { value: "t" as SideKey, label: "T", side: "t" }, { value: "ct" as SideKey, label: "CT", side: "ct" }]} />}
         <Segmented label="Weapon class" value={cls} onChange={setCls} options={[{ value: "all" as ClassFilter, label: "All guns" }, ...GUN_CLASSES.map((c) => ({ value: c as ClassFilter, label: WEAPON_CLASS_LABEL[c], disabled: !classes.includes(c) }))]} />
         <span className="toolbar__end meta">{plural(s?.aim.shots ?? 0, "shot")}, {plural(s?.aim.hits ?? 0, "hit")}, {plural(kills, "kill")}, {label}</span>
       </div>
@@ -213,7 +219,10 @@ interface SprayGun {
    * silencer state), so it is drawn alone, with no reference, ideal-pull controls or distance bars
    */
   recoilUnknown: boolean;
-  /** where the bullets landed from bullet 1 (AimAgg.land); null for relative and recoil-unknown paths, which have none */
+  /**
+   * where the bullets landed from bullet 1 (AimAgg.land), kept whenever the engine measured it: a landing
+   * does not depend on the game's pattern, so a recoil-unknown path keeps its landings; null without any
+   */
   land: Landing | null;
   /** every spray of three or more bullets with this gun (AimAgg.sprays) */
   sprays: number;
@@ -238,7 +247,7 @@ export function sprayGuns(guns: string[], per: Rolled[] | null): SprayGun[] {
     const abs = a.path[w], unk = a.unknownPath?.[w], rel = a.relPath[w], land = a.land?.[w];
     const known = !!abs?.n.length, unknown = !known && !!unk?.n.length;
     const path = known ? abs : unknown ? unk : rel?.n.length ? rel : null;
-    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, land: known && land?.n.length ? land : null, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
+    return [{ w, path, relative: !known && !unknown && !!path, recoilUnknown: unknown, land: land?.n.length ? land : null, sprays: a.sprays, dist: a.sprayDist, own: per[i] }];
   }).sort((x, y) => y.sprays - x.sprays);
 }
 
@@ -259,7 +268,7 @@ function sprayHeadline(gun: SprayGun, name: string, ref: RecoilRef | null, stay:
   return text ? { text, node: text } : null;
 }
 
-function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; side: SideFilter; guns: string[] }) {
+function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; side: SideKey; guns: string[] }) {
   const scoped = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
   // no gun on this side and class is an answer, not a load: useScoped gives null for an empty query list
   const per = guns.length ? scoped : [];
@@ -473,7 +482,7 @@ const accBar = (v: number | null, t: string, color?: string) => (
   <span className="cellbar"><span className="hbar"><i style={{ width: `${Math.min(100, 2 * (v ?? 0))}%`, background: "var(--cream)" }} /></span><span style={color ? { color } : undefined}><Num v={t} /></span></span>
 );
 
-function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter; guns: string[]; base: Rolled }) {
+function GunTable({ query, side, guns, base }: { query: Query; side: SideKey; guns: string[]; base: Rolled }) {
   const per = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
   const rows: GunRow[] = guns.map((w, i) => {
     const t = base.weapons[w];
@@ -505,7 +514,7 @@ function GunTable({ query, side, guns, base }: { query: Query; side: SideFilter;
 // ---------------------------------------------------------------- per gun: a career
 
 /** Every gun over every career match, as Weapons judges it, with the aim columns beside it: Profile's Weapons tab. */
-export function CareerGuns({ list, side = "all" }: { list: MatchEntry[]; side?: SideFilter }) {
+export function CareerGuns({ list, side = "both" }: { list: MatchEntry[]; side?: SideKey }) {
   const guns = useGuns(list, sidesFor(side));
   if (!guns) return <div className="skel" style={{ height: 320 }} />;
   if (!guns.length) return null;
