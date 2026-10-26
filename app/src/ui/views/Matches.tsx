@@ -18,12 +18,13 @@ import { startMs, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
-import { fmtAdr, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtDate, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
 import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
+import { LoadFailed } from "./match/LoadFailed";
 import { Empty, SectionAside, swingSumTip } from "./shared";
 
 const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(file)}"]`)?.closest("tr") ?? null;
@@ -41,16 +42,49 @@ function Counted({ s, children }: { s: MatchEntry; children: ReactNode }) {
   return <span className="num has-def" data-tip={`Partial: ${loggedText(s.match)}.`}>{children}</span>;
 }
 
-/** Your play sessions over the career matches on the map scope (sessions), newest first; null while they load. */
-function useSessions(all: MatchEntry[], map: string | null): Session[] | null {
+/**
+ * A session and what its chip may say about when it ran: the clock times for matches with a recorded
+ * start, the day alone for matches the source dated but did not time (`day`, YYYY-MM-DD).
+ */
+export type SessionRow = Session & { day: string | null };
+
+/**
+ * A date-only match starts, in the worker, at its date's UTC midnight (data/match.ts startMs), so
+ * every one on a day starts at the same instant and days lie 24 hours apart. A gap of 12 hours (more
+ * than any match lasts, less than a day) groups them by day and by nothing else.
+ */
+const DAY_GAP_H = 12;
+
+/**
+ * Your play sessions over the career matches on the map scope (sessions), newest first. Matches with a
+ * recorded start time are grouped by the worker's 3-hour gap; matches with only a date, one session per
+ * day; undated matches join none, since there is no time to group them by. `rows` is null while
+ * loading; `error` is the worker's reason when either call failed.
+ */
+function useSessions(all: MatchEntry[], map: string | null): { rows: SessionRow[] | null; error: string | null } {
   const career = useMemo(() => careerEntries(all, map), [all, map]);
-  const q = useYourQuery(career);
-  const r = useCall("sessions", q ? [q] : null).data;
-  return useMemo(() => (r ? [...r].sort((a, b) => b.start - a.start) : q ? null : []), [r, q]);
+  const timed = useMemo(() => career.filter((e) => e.match.startedAt), [career]);
+  const dated = useMemo(() => career.filter((e) => !e.match.startedAt && e.match.date), [career]);
+  const qt = useYourQuery(timed), qd = useYourQuery(dated);
+  const rt = useCall("sessions", qt ? [qt] : null);
+  const rd = useCall("sessions", qd ? [qd, DAY_GAP_H] : null);
+  const dayOf = useMemo(() => new Map(dated.map((e) => [e.file, e.match.date!])), [dated]);
+  return useMemo(() => {
+    const error = rt.error ?? rd.error;
+    if (error) return { rows: null, error };
+    if ((qt && !rt.data) || (qd && !rd.data)) return { rows: null, error: null };
+    const rows: SessionRow[] = [
+      ...(rt.data ?? []).map((x) => ({ ...x, day: null })),
+      ...(rd.data ?? []).map((x) => ({ ...x, day: dayOf.get(x.files[0]) ?? null })),
+    ];
+    // a date-only session sorts at its day's UTC midnight: its day is right, its hour is not shown
+    return { rows: rows.sort((a, b) => b.start - a.start), error: null };
+  }, [rt.data, rt.error, rd.data, rd.error, qt, qd, dayOf]);
 }
 
-/** "Oct 24, 4:49 PM – 10:43 PM": when a session ran, in local time. */
-export function sessionWhen(x: Pick<Session, "start" | "end">): string {
+/** "Oct 24, 4:49 PM – 10:43 PM": when a session ran, in local time; a date-only session's day alone. */
+export function sessionWhen(x: Pick<SessionRow, "start" | "end" | "day">): string {
+  if (x.day) return fmtDate(x.day);
   const iso = (ms: number) => new Date(ms).toISOString();
   const day = fmtMatchDay({ date: null, startedAt: iso(x.start) });
   return x.end > x.start ? `${day}, ${fmtTime(iso(x.start))} – ${fmtTime(iso(x.end))}` : `${day}, ${fmtTime(iso(x.start))}`;
@@ -61,17 +95,17 @@ export function sessionWhen(x: Pick<Session, "start" | "end">): string {
  * SESSION_GAP_H) as a chip with its time, record, Rating 3.0 and K–D, and its best match and most
  * kills. A chip narrows the table to that session's matches (?session=); pressing it again clears it.
  */
-function SessionStrip({ sessions, selected }: { sessions: Session[] | null; selected: Session | null }) {
+function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | null; error: string | null; selected: SessionRow | null }) {
   if (sessions && !sessions.length) return null;
   return (
     <section className="sessions" aria-label="Sessions">
       <div className="sessions__head">
         <h2 className="caps">Sessions</h2>
-        <span className="help" data-tip="Matches with under 3 hours between them make one session. Your finished matches only." tabIndex={0} aria-label="What a session is">?</span>
+        <span className="help" data-tip="Matches with under 3 hours between them make one session; matches with a date but no time, one per day. Your finished matches only." tabIndex={0} aria-label="What a session is">?</span>
         {sessions && <span className="meta">{plural(sessions.length, "session")}</span>}
         {selected && <button className="link sessions__clear" onClick={() => setQuery("session", null)}>Show every match</button>}
       </div>
-      {!sessions ? <div className="skel" style={{ height: 88 }} /> : (
+      {error ? <LoadFailed what="Sessions" error={error} /> : !sessions ? <div className="skel" style={{ height: 88 }} /> : (
         <ul className="sessions__list">
           {sessions.map((x) => {
             const on = selected?.start === x.start;
@@ -108,7 +142,7 @@ export function MatchesView() {
   const { map, result } = useScope();
   const q = r.query.get("q") ?? "";
   const sessionKey = r.query.get("session");
-  const sessions = useSessions(all, map);
+  const { rows: sessions, error: sessionsError } = useSessions(all, map);
   const session = sessionKey && sessions ? sessions.find((x) => String(x.start) === sessionKey) ?? null : null;
 
   const rows = useMemo(() => {
@@ -158,7 +192,7 @@ export function MatchesView() {
           </div>
         </div>
       )}
-      {!empty && <SessionStrip sessions={sessions} selected={session} />}
+      {!empty && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
       {rows.length === 0 ? (
         <div className="matches__empty">
           {empty ? (

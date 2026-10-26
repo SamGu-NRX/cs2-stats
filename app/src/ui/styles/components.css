@@ -20,13 +20,15 @@
 .card__toggle .chev { color: var(--ink3); margin-left: 4px; transition: transform var(--d-expand) var(--ease-in-out); }
 .card__toggle[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 @media (hover: hover) and (pointer: fine) { .card__toggle:hover .chev { color: var(--ink); } }
-.collapse { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--d-expand) var(--ease-in-out); }
+/* An expandable body (Card, the attribute and rating bands). Its height changes at once: animating
+   grid-template-rows is a layout animation, and motion here is transform and opacity only. On a
+   click the opened content fades in; a keyboard toggle (is-instant) shows it at once. */
+.collapse { display: grid; grid-template-rows: 1fr; }
 .collapse[data-open="false"] { grid-template-rows: 0fr; }
 .collapse > .collapse__in { overflow: hidden; min-height: 0; }
-.collapse > .collapse__in > * { transition: opacity calc(var(--d-expand) - 60ms) ease 60ms; }
-.collapse[data-open="false"] > .collapse__in > * { opacity: 0; transition-delay: 0ms; }
-.collapse.is-instant, .collapse.is-instant > .collapse__in > * { transition: none; }
-@media (prefers-reduced-motion: reduce) { .collapse { transition: none; } }
+.collapse > .collapse__in > * { transition: opacity calc(var(--d-expand) - 60ms) ease; }
+.collapse[data-open="false"] > .collapse__in > * { opacity: 0; transition: none; }
+.collapse.is-instant > .collapse__in > * { transition: none; }
 
 /* ---------------------------------------------------------------- tables */
 .tbl-wrap { overflow: auto; scrollbar-gutter: stable; min-width: 0; }
