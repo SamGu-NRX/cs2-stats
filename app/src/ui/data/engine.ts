@@ -323,6 +323,13 @@ export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
  */
 export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
 
+/**
+ * The matches Career aim reads: every one of the user's own matches that holds shots, wingman and
+ * unfinished ones included. Aim does not depend on team size, the round limit, the result or the
+ * kill-by-kill coverage that keep a match out of career totals (careerEntries).
+ */
+export const aimEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && s.hasAim);
+
 /** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
 export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
 
