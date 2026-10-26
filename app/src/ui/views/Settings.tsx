@@ -164,7 +164,7 @@ export default function Settings() {
               <dt>Stats engine</dt>
               <dd className="meta num">Version {DERIVE_VERSION}</dd>
               <dt>Map images</dt>
-              <dd className="meta">Radars and emblems from the cs2-map-icons project on GitHub (MurkyYT), downloaded when a view first shows them.</dd>
+              <dd className="meta">Radars and emblems from the game icons pack below, which scripts/extract-icon-pack.cjs builds from your own CS2 install. Without it, maps are drawn from where players stood.</dd>
             </dl>
           </Card>
         </div>
