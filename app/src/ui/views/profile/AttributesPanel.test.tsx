@@ -11,7 +11,7 @@ it("follows a new ?attr= request and otherwise keeps the user's toggle", () => {
   const a = (open: boolean, score = 50): PanelAttribute => ({ id: "trading", label: "Trading", score, metrics: [], open });
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
-  const chev = () => host.querySelector<HTMLButtonElement>(".apa__chev")!;
+  const chev = () => host.querySelector<HTMLButtonElement>(".hatt__chev")!;
   act(() => root.render(<Attribute a={a(false)} />));
   expect(chev().getAttribute("aria-expanded")).toBe("false");
   act(() => root.render(<Attribute a={a(true)} />));

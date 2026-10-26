@@ -707,7 +707,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .hl__feed { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
 .hl__kill { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
 .hl__kill .ico { color: var(--ink2); }
-.hl__clip { justify-self: start; font: 600 10px/1 var(--f); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); padding: 4px 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--line2); }
 .hl__item--wait { opacity: 0.8; }
 
 /* weapons view */
@@ -976,7 +975,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 
 /* ---------------------------------------------------------------- design pass B4 */
 /* the style scores are not good or bad: neutral numbers to match the neutral bars */
-.apanel .apa__score { color: var(--ink); }
 
 /* Firepower: its score and bar once, in the performance colours, then its eight metrics */
 .fpw__head { display: flex; align-items: center; gap: 14px; }
@@ -1139,27 +1137,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .mrow.is-thin .mrow__lab:not(:has(.approx))::after { content: "≈"; margin-left: 6px; color: var(--ink3); font-weight: 400; }
 
 /* style attributes: each attribute a metric row that opens to the metrics behind it */
-.apanel { padding: 0; }
-.apanel__cmp { gap: 8px; }
-.apanel__msg { margin: 0 var(--pad-panel) 8px; }
-.apanel__grid { display: grid; grid-template-columns: minmax(0, max-content) minmax(64px, 1fr) auto auto 24px; column-gap: 14px; padding: 0 var(--pad-panel) 6px; }
-.apa { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
-.apa + .apa { border-top: 1px solid var(--line); }
-.apa > .collapse { grid-column: 1 / -1; }
-.apa__row { cursor: pointer; }
-.apa__row .mrow__lab { display: flex; align-items: center; gap: 6px; }
-.apa__name { margin: 0; font: 500 13px/1.3 var(--f); }
-.apa__note { font-size: 12px; color: var(--ink3); }
-.apa__peek { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
-.apa__score { font-weight: 650; }
-.apa__score[tabindex] { cursor: help; }
-.apa__chev { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--ink3); }
-.apa__chev::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform var(--d-expand) var(--ease-in-out); }
-.apa__chev.is-instant::before { transition: none; }
-.apa[data-open] .apa__chev::before { transform: translateY(1px) rotate(225deg); }
-@media (hover: hover) and (pointer: fine) { .apa__row:hover .apa__chev { background: var(--hover); color: var(--ink); } }
-@media (prefers-reduced-motion: reduce) { .apa__chev::before { transition: none; } }
-.apa .collapse .mrows { margin: 0 0 8px 6px; padding-left: 14px; border-left: 1px solid var(--line2); }
 .fpw__aside { display: inline-flex; align-items: center; gap: 12px; }
 .fpw__score { white-space: nowrap; }
 
@@ -1410,3 +1387,52 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .dmark--d { box-shadow: inset 0 0 0 2px var(--poor-text); }
 /* a headshot flag after a victim's name */
 .yrounds__kill .gicon, .duel-list .gicon { margin-left: 4px; }
+
+/* ---------------------------------------------------------------- HLTV's attribute block (views/profile/AttributesPanel.tsx) */
+/* Firepower wide on top, the six style attributes in pairs, each a score out of 100 over a filled bar */
+.hblock { padding: 0; overflow: hidden; container-type: inline-size; }
+.hblock__head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.hblock__head .card__title { margin: 0; }
+.hblock__note { white-space: nowrap; }
+.hblock__controls { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.hblock__msg { margin: 0; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+.hblock__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.hblock__grid > .hatt:nth-child(n + 3) { border-top: 1px solid var(--line); }
+.hblock__grid > .hatt:nth-child(odd) { border-right: 1px solid var(--line); }
+@container (max-width: 700px) {
+  .hblock__grid { grid-template-columns: minmax(0, 1fr); }
+  .hblock__grid > .hatt:nth-child(odd) { border-right: 0; }
+  .hblock__grid > .hatt + .hatt { border-top: 1px solid var(--line); }
+}
+.hatt { padding: 14px 18px 16px; min-width: 0; }
+.hatt__head { display: flex; align-items: center; gap: 8px; min-height: 30px; cursor: pointer; }
+.hatt__icon { flex: none; color: var(--tan); }
+.hatt__name { margin: 0; font: 600 15px/1.25 var(--f); white-space: nowrap; }
+.hatt__note { flex: none; font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.hatt__peek { flex: 1; min-width: 0; margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hatt__peek b { color: var(--ink); font-weight: 600; }
+.hatt__score { flex: none; font-family: var(--disp); font-variation-settings: "wdth" 85, "wght" var(--disp-weight, 650); font-size: 26px; line-height: 1; color: var(--ink); }
+.hatt__score small { font-family: var(--f); font-variation-settings: normal; font-size: 12px; font-weight: 500; color: var(--ink3); margin-left: 2px; }
+.hatt__score[tabindex] { cursor: help; }
+.hatt__chev { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--ink3); }
+.hatt__chev::before { content: ""; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform var(--d-expand) var(--ease-in-out); }
+.hatt__chev.is-instant::before { transition: none; }
+.hatt[data-open] .hatt__chev::before { transform: translateY(2px) rotate(225deg); }
+@media (hover: hover) and (pointer: fine) { .hatt__head:hover .hatt__chev { background: var(--hover); color: var(--ink); } }
+@media (prefers-reduced-motion: reduce) { .hatt__chev::before { transition: none; } }
+/* the bar fills to the score; a style score is neutral tan, Firepower takes the performance colour */
+.hatt__bar { position: relative; height: 6px; margin-top: 10px; border-radius: 3px; background: var(--track); }
+.hatt__bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--tan); }
+.hatt__mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink3); }
+/* a provisional score (a still-small bot pool): its bar hatched, not solid */
+.hatt[data-prov] .hatt__bar i { background: repeating-linear-gradient(-45deg, var(--tan) 0 3px, rgba(172, 149, 122, 0.45) 3px 6px); }
+.hatt .collapse .mrows { margin-top: 12px; }
+/* Firepower: wide, the larger score, the hero's warm light behind it */
+.hatt--wide { padding: 18px 20px; background: radial-gradient(700px 200px at 8% 0%, rgba(255, 215, 173, 0.06), transparent 60%); border-bottom: 1px solid var(--line); }
+.hatt--wide .hatt__name { font-size: 17px; font-weight: 650; }
+.hatt--wide .hatt__score { font-size: 40px; }
+.hatt--wide .hatt__bar { height: 8px; margin-top: 14px; border-radius: 4px; }
+.hatt--wide .hatt__bar i { border-radius: 4px; }
+/* Playstyle's pointer back to the block on Overview */
+.ptab__xref { justify-self: start; font-size: 12px; color: var(--ink2); text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; border-radius: var(--r-chip); }
+@media (hover: hover) and (pointer: fine) { .ptab__xref:hover { color: var(--ink); } }

@@ -199,8 +199,8 @@ describe("comparison reasons", () => {
 });
 
 describe("Profile attributes", () => {
-  /** Firepower is on Overview, the style attributes on Playstyle. */
-  const renderProfile = async (tab: "overview" | "playstyle" = "playstyle") => {
+  /** HLTV's attribute block is on Overview, under the player card: Firepower wide, the six style attributes in pairs. */
+  const renderProfile = async (tab: "overview" | "playstyle" = "overview") => {
     use(samples);
     const q = queryOf(samples);
     const block = await calls.attributeBlock(q, { side: "both", pool: "role" });
@@ -210,22 +210,25 @@ describe("Profile attributes", () => {
     render(<ProfileView tab={tab} />);
     return { block, firepower };
   };
-  const attr = (id: string) => host.querySelector(`.apa[data-attr="${id}"]`)!;
+  const attr = (id: string) => host.querySelector(`.hatt[data-attr="${id}"]`)!;
 
-  it("puts Firepower in its own card on Overview and the six style attributes on Playstyle, in HLTV's order", async () => {
-    // fails if Firepower moves back into the style block, the block drops or reorders an attribute, or
-    // the block grows its own Side control (the title bar's is the page's one)
+  it("draws HLTV's block on Overview: Firepower wide on top, then the six style attributes in pairs, in HLTV's order", async () => {
+    // fails if Firepower leaves the block or stops leading it, the block drops or reorders an attribute,
+    // or the block moves off Overview (Playstyle only links to it)
     await renderProfile();
-    const block = host.querySelector(".apanel")!;
-    const ids = Array.from(block.querySelectorAll(".apanel__grid > .apa")).map((el) => el.getAttribute("data-attr"));
+    const block = host.querySelector(".hblock")!;
+    expect(block).not.toBeNull();
+    const kids = Array.from(block.children).filter((el) => el.classList.contains("hatt"));
+    expect(kids.map((el) => el.getAttribute("data-attr"))).toEqual(["firepower"]);
+    expect(kids[0].classList.contains("hatt--wide")).toBe(true);
+    const ids = Array.from(block.querySelectorAll(".hblock__grid > .hatt")).map((el) => el.getAttribute("data-attr"));
     expect(ids).toEqual(["entrying", "trading", "opening", "closing", "sniping", "utility"]);
-    expect(block.querySelector('[role="radiogroup"], .seg')).toBeNull();
-    await renderProfile("overview");
-    expect(host.querySelector(".apanel"), "the style attributes left Overview").toBeNull();
-    const fpCard = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!;
-    expect(fpCard).toBeTruthy();
-    expect(fpCard.querySelector(".apa"), "no repeated Firepower row inside its card").toBeNull();
-    expect(fpCard.querySelector(".fpw__score")).not.toBeNull();
+    // the block sits right under the player card, before Form
+    const order = Array.from(host.querySelectorAll(".profile__top, .hblock, .form-rail")).map((el) => el.className.split(" ").find((c) => ["profile__top", "hblock", "form-rail"].includes(c)));
+    expect(order.slice(0, 3)).toEqual(["profile__top", "hblock", "form-rail"]);
+    await renderProfile("playstyle");
+    expect(host.querySelector(".hblock")).toBeNull();
+    expect(host.querySelector<HTMLAnchorElement>(".ptab__xref")!.getAttribute("href")).toBe("#/profile/overview?sec=style");
   });
 
   it("names each attribute's population: Firepower the pros, Sniping every bot, the rest the chosen bot pool", async () => {
@@ -234,11 +237,9 @@ describe("Profile attributes", () => {
     // each scored row's rank, or the reason it has none, is the line of its tooltip after the definition
     const rankLine = (el: Element) => el.getAttribute("data-tip")!.split("\n").filter((l) => !/^Only \d+, so this may shift\.$/.test(l)).pop()!;
     const rowsIn = (el: Element) => Array.from(el.querySelectorAll(".mrow:not([data-extra])")).map(rankLine);
-    await renderProfile("overview");
-    const fpRows = rowsIn(Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!);
     const { block, firepower } = await renderProfile();
-    const phrases = (id: string) => (id === "firepower" ? fpRows : rowsIn(attr(id).querySelector(".collapse")!));
-    expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
+    const phrases = (id: string) => rowsIn(attr(id).querySelector(".collapse")!);
+    expect(text(attr("sniping").querySelector(".hatt__note"))).toBe("Compared to everyone");
     const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
     const fp = firepower.scores.find((a) => a.id === "firepower")!;
     const checks: [string, RegExp, typeof fp][] = [
@@ -260,11 +261,12 @@ describe("Profile attributes", () => {
     // fails if the pill is missing, repeats per attribute, or a provisional score loses its tooltip
     const { block } = await renderProfile();
     expect(block.style.careers.provisional).toBe(true);
-    const pills = Array.from(host.querySelectorAll(".apanel .vpill"));
-    expect(pills.map(text)).toEqual([expect.stringMatching(/^Provisional, \d+ /)]);
+    const pills = Array.from(host.querySelectorAll(".hblock .vpill"));
+    expect(pills.map(text)).toEqual(["Provisional"]);
     expect(pills[0].getAttribute("data-tip")).toBe("Few bot careers yet, so this may shift.");
-    expect(host.querySelectorAll(".apanel [data-attr] .vpill")).toHaveLength(0);
-    const score = attr("entrying").querySelector(".apa__score")!;
+    expect(text(host.querySelector(".hblock__note"))).toMatch(/^Style vs \d+ /);
+    expect(host.querySelectorAll(".hblock [data-attr] .vpill")).toHaveLength(0);
+    const score = attr("entrying").querySelector(".hatt__score")!;
     expect(attr("entrying").hasAttribute("data-prov")).toBe(true);
     expect(score.getAttribute("data-tip")).toBe("Few bot careers yet, so this may shift.");
     expect(score.getAttribute("tabindex")).toBe("0");
@@ -273,7 +275,7 @@ describe("Profile attributes", () => {
   it("opens an attribute from its chevron, instantly from the keyboard", async () => {
     // fails if the chevron does not toggle its metrics, or a keyboard toggle animates
     await renderProfile();
-    const chev = attr("trading").querySelector<HTMLButtonElement>(".apa__chev")!;
+    const chev = attr("trading").querySelector<HTMLButtonElement>(".hatt__chev")!;
     expect(chev.getAttribute("aria-expanded")).toBe("false");
     act(() => chev.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
     expect(chev.getAttribute("aria-expanded")).toBe("true");
@@ -525,6 +527,7 @@ describe("review round 2 (PR #28)", () => {
     answers.compare = await calls.compare(q, { side: "both" });
     answers.attributes = await calls.attributes(q, { side: "both" });
     answers.style = await calls.style(q, { side: "both" });
+    answers.attributeBlock = await calls.attributeBlock(q, { side: "both", pool: "role" });
     for (const [href, ids] of byPage) {
       const r = parseHash(href);
       const sec = r.query.get("sec");

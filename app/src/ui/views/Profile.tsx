@@ -14,14 +14,14 @@ import { Card } from "../components/Card";
 import { Gauge } from "../components/charts";
 import { Fig, MatchLine } from "../components/MatchSeries";
 import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
-import { MetricList, quintile, ShareTrack, THIN, Track } from "../components/MetricRow";
+import { quintile, ShareTrack, THIN, Track } from "../components/MetricRow";
 import { rovingIndex, Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
   botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
-  rankText, thinPoolText, type BotPool,
+  rankText, thinPoolText,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
@@ -31,13 +31,13 @@ import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
-import { scoreText, toScore, ratingText } from "../lib/scale";
+import { ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
-import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
+import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
-import { AttributesPanel, PanelRow, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { AggressionCard } from "./profile/v2";
 import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RANK_LABELS, RANK_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
@@ -217,20 +217,17 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
           {tab === "overview" && (
             <>
               {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
+              {/* HLTV's block sits under the player card, as on HLTV's player page */}
+              {baselines && <div id="style" ref={styleRef} className="psec"><div id="firepower" ref={firepowerRef}><HltvBlock q={base} side={side} values={p.you.v} m={p.you.m} /></div></div>}
               <div className="profile__cols profile__cols--side">
                 <FormRail p={p} side={side} />
                 <StatCard title="Where you rank" tip={PANEL_TIP.whereYouRank} ids={RANK_ROWS} labels={RANK_LABELS} r={ranks}
                   aside={ranks?.pros ? <span className="meta">vs {ranks.pros}</span> : undefined} />
               </div>
               <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
-              {/* the target's How good card is gone (its rows live on Duels and Utility), so the two
-                  share lists take its place beside Firepower and Maps gets the row to itself */}
               <div className="profile__cols">
-                {baselines && <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} m={p.you.m} /></div>}
-                <div className="profile__stack">
-                  <Multis m={p.you.m} q={sideQ} list={list} />
-                  <Clutches m={p.you.m} q={base} side={side} list={list} />
-                </div>
+                <Multis m={p.you.m} q={sideQ} list={list} />
+                <Clutches m={p.you.m} q={base} side={side} list={list} />
               </div>
               <MapsTable p={p} side={side} />
             </>
@@ -273,10 +270,8 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 <RoleCard q={base} />
                 <WhereYouPlay list={list} side={side} />
               </div>
-              <div className="profile__cols">
-                <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} m={p.you.m} /></div>
-                <AggressionCard s={p.you} />
-              </div>
+              <a className="ptab__xref" href={tabSectionHref("overview", "style")}>Style attributes are on Overview, in HLTV's attribute block</a>
+              <AggressionCard s={p.you} />
               <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
               <div className="profile__cols">
                 <RoleBySpawnCard q={base} />
@@ -463,75 +458,55 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
 }
 
 /**
- * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the
- * page's side. Unlike the style scores it is a quality, so its score takes the performance colours and
- * its rows show their rank. `values` are your metric values on the page's side, for the unscored rows
- * (engine.ts EXTRA_SUBS); `m` the measures behind them, for each row's sample.
+ * HLTV's attribute block (profile/AttributesPanel.tsx), from one attributeBlock call for the page's
+ * side and the chosen style pool: Firepower, the one performance attribute (design/identity.md),
+ * against the pros or against the bots in your matches (StyleResult.firepower), and the six style
+ * attributes against the bot careers in the same matches, Sniping always against every bot. How you
+ * play, not how well, for the six (HLTV: "rating covers performance, attributes cover style").
+ * ?attr=<id> opens one. `values` are your metric values on the page's side, for each attribute's
+ * unscored rows (engine.ts EXTRA_SUBS); `m` the measures behind them, for each row's sample.
  */
-function Firepower({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
-  const [against, setAgainst] = useState<"pros" | "bots">("pros");
-  const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
-  const botScored = useCall("style", against === "bots" ? [q, { side: ratingKey(side) }] : null).data;
-  const fp = against === "pros" ? scored?.scores.find((a) => a.id === "firepower") : botScored?.firepower ?? undefined;
-  const t = fp?.score == null ? 0 : toScore(fp.score, 50, 50);
-  const botPop = botScored ? botPopulation(botScored.careers, { n: botScored.n, role: (botScored.careers.pool ?? botScored.role) as BotPool["role"] }).text : "";
-  const population = against === "pros" ? (scored ? proPoolName(scored.role) : "") : botPop;
-  const waiting = against === "pros" ? !scored : !botScored;
-  return (
-    <Card title="Firepower" tip={PANEL_TIP.firepower} aside={
-      <span className="fpw__aside">
-        {fp && <span className="fpw__score disp disp--s" style={{ color: fp.score === null ? "var(--ink3)" : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>}
-        <span className="meta">{against === "pros" ? (scored ? `vs ${scored.n} ${proPoolName(scored.role)}` : "") : botScored ? `vs ${botPop}` : ""}</span>
-        <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "Pros" }, { value: "bots", label: "Bots" }]} />
-      </span>
-    }>
-      {waiting ? <div className="skel" style={{ height: 200 }} /> : !fp ? <p className="meta"><NeedsDemo detail="Too few bots in these matches to rank Firepower." /></p> : (
-        <MetricList label="Firepower" rank>
-          {panelAttr(fp, "performance", population, m).metrics.map((x) => (against === "bots" ? { ...x, population } : x)).map((x) => <PanelRow key={x.id} m={x} rank />)}
-          {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} rank />)}
-        </MetricList>
-      )}
-    </Card>
-  );
-}
-
-/**
- * The six style attributes, from one attributeBlock call for the page's side and the chosen pool: how
- * you play, not how well (HLTV: "rating covers performance, attributes cover style"), ranked against
- * the bot careers in the same matches; Sniping always against every bot. ?attr=<id> opens one.
- * `values` are your metric values on the page's side, for each attribute's unscored rows.
- */
-function StyleAttributes({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
+function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [pool, setPool] = useState<StylePool>("role");
+  const [against, setAgainst] = useState<"pros" | "bots">("pros");
   const block = useCall("attributeBlock", [q, { side: ratingKey(side), pool }]);
   const b: AttributeBlock | null = block.data;
-  if (!b) return block.error ? <Card title="Style attributes" tip={PANEL_TIP.style}><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 300 }} />;
+  if (!b) return block.error ? <Card title="Attributes"><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 320 }} />;
   const style = b.style;
   const role = pool === "all" ? "all" : style.role;
   const peer = style.role === "awper" ? "AWPer" : "Rifler";
-  const pools: Option<StylePool>[] = [
-    { value: "role", label: `${peer} bots`, tip: `Bots that play your role.` },
-    { value: "all", label: "All bots" },
-  ];
-  const pop = { n: style.n, role } as const;
+  const bots = botPopulation(style.careers, { n: style.n, role }).text;
+  const fpScore = against === "pros" ? b.firepower : style.firepower;
+  const fpPop = against === "pros" ? `${b.proPool} ${proPoolName(style.role)}` : bots;
+  const firepower = fpScore ? { ...panelAttr(fpScore, "performance", fpPop, m, { open: focus === "firepower", extra: extraSubs("firepower", values) }), note: `vs ${fpPop}` } : null;
+  if (firepower && against === "bots") firepower.metrics = firepower.metrics.map((x) => ({ ...x, population: fpPop }));
   const provisional = style.careers.provisional;
   const attrs = style.scores.map((a) => (a.id === "sniping"
     ? panelAttr(a, "style", botPoolName("all"), m, { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
     : panelAttr(a, "style", botPoolName(role), m, { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
   const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${pool === "role" ? " All bots may have more." : ""}`} /> : undefined;
+  const pools: Option<StylePool>[] = [
+    { value: "role", label: `${peer} bots`, tip: `Bots that play your role.` },
+    { value: "all", label: "All bots" },
+  ];
   return (
     <AttributesPanel
-      title="Style attributes"
-      tip={PANEL_TIP.style}
-      pool={pool}
-      pools={pools}
-      onPool={setPool}
-      poolNote={botPopulation(style.careers, pop).text}
-      message={thin}
-      style={attrs}
       provisional={provisional}
+      note={`Style vs ${bots}`}
+      message={thin}
+      firepower={firepower}
+      style={attrs}
+      controls={(
+        <>
+          {/* the page's own side, here too, as HLTV keeps it on the block: one state, the URL's side */}
+          <Segmented label="Side" value={side} onChange={(v) => setQuery("side", v === "both" ? null : v)}
+            options={[{ value: "both", label: "Both" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
+          <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "vs pros" }, { value: "bots", label: "vs bots" }]} />
+          <Select options={pools} value={pool} onChange={setPool} label="Style compared to" prefix="Style vs" />
+        </>
+      )}
     />
   );
 }
