@@ -9,16 +9,20 @@ import { compare, roleOf } from "./compare";
 import type { Measures } from "./facts";
 import { METRIC } from "./metrics";
 import type { Summary } from "./rollup";
+import { ROLE_THRESHOLDS, roleHigh, type RoleMetricId } from "./role-thresholds";
 import model from "./roles-params.json";
 
 export const FEATURES = ["tapd", "oap", "podt", "pokt", "adnt", "adat"] as const;
 export type Feature = (typeof FEATURES)[number];
 
 interface RoleFit { n: number; mean: number[]; sd: number[] }
+export interface CalibrationPoint { x: number; y: number }
+export type RoleCalibration = Partial<Record<RoleName, CalibrationPoint[]>>;
 export interface RoleModel {
   source: string;
   features: string[];
   sides: Record<"T" | "CT", { n: number; roles: Record<string, RoleFit> }>;
+  calibration?: Record<"T" | "CT", RoleCalibration>;
 }
 const MODEL = model as RoleModel;
 
@@ -54,7 +58,10 @@ export type RoleName = "Entry" | "Trader" | "Support" | "Lurker" | "Anchor" | "R
 /** Packer's labels mapped onto observable roles. Half-Lurker is deliberately folded into Lurker. */
 export const ROLE_NAME: Record<string, RoleName | null> = {
   Spacetaker: "Entry", Lurker: "Lurker", "Half-Lurker": "Lurker", Anchor: "Anchor", Rotator: "Rotator", Mixed: null, AWPer: "AWPer",
+  Entry: "Entry", Trader: "Trader", Support: "Support", Aggressor: "Aggressor",
 };
+
+export const mapRoleName = (label: string | undefined): RoleName | null => label ? ROLE_NAME[label] ?? null : null;
 
 export const ROLE_TIPS: Record<RoleName, string> = {
   Entry: "Takes the first fight and creates space for teammates.",
@@ -79,10 +86,14 @@ export interface RoleMetric {
 
 export interface RoleBlend {
   side: "T" | "CT";
-  /** The displayed role, or the two leading roles when neither clears confidence. */
-  primary: string | null;
-  /** Probability of the first role in primary. */
+  /** A single role only when the rounds, probability, and margin gates all pass. */
+  primary: RoleName | null;
+  /** Primary's distribution share, or null when withheld. Only mapped classes have calibration labels. */
   probability: number | null;
+  /** The two leading roles when the single-primary gates do not pass. */
+  top2: [RoleName, RoleName] | null;
+  /** Why a single primary was withheld, including the under-30-rounds case. */
+  reason: string | null;
   /** role name -> probability, with no Mixed or Half-lurker labels */
   distribution: Record<RoleName, number> | null;
   /** Kept as an alias for older clients and rolesBySpawn consumers. */
@@ -99,8 +110,7 @@ export interface RoleBlend {
 const pct = (x: number) => `${Math.round(x)}%`;
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const share = (n: number, d: number) => d > 0 ? n / d : null;
-const high = (v: number | null, low: number, highValue: number) => v === null ? 0.5 : clamp01((v - low) / (highValue - low));
-const low = (v: number | null, lowValue: number, highValue: number) => v === null ? 0.5 : 1 - high(v, lowValue, highValue);
+
 const softmax = (scores: Record<string, number>): Record<string, number> => {
   const max = Math.max(...Object.values(scores));
   const weights = Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, Math.exp((v - max) * 4)]));
@@ -108,14 +118,10 @@ const softmax = (scores: Record<string, number>): Record<string, number> => {
   return Object.fromEntries(Object.entries(weights).map(([k, v]) => [k, v / total]));
 };
 
-const RANGE: Record<string, [number, number]> = {
-  openingAttempts: [10, 35], tradeKills: [10, 40], tradeAssistShare: [30, 60], utilityPR: [0.4, 2.2],
-  teamDistance: [400, 1400], firstContactTime: [30, 52], pushDepth: [25, 75], sitePresence: [15, 70], awpShare: [0, 100],
-};
-const THRESHOLD: Record<string, number> = {
-  openingAttempts: 25, tradeKills: 25, tradeAssistShare: 45, utilityPR: 1.2, teamDistance: 1100,
-  firstContactTime: 40, pushDepth: 50, sitePresence: 50, awpShare: 20,
-};
+// Product acceptance gates, not fitted accuracy thresholds.
+export const ROLE_MIN_ROUNDS = 30;
+export const ROLE_MIN_PROBABILITY = 0.60;
+export const ROLE_MIN_MARGIN = 0.15;
 
 function sitePresence(s: Summary): number | null {
   const places = Object.values(s.presence).flatMap((p) => Object.entries(p.places));
@@ -140,29 +146,55 @@ function roleMetrics(s: Summary, awp: number | null): RoleMetric[] {
     ["openingAttempts", "Opening attempts", pctValue(openingAttempts), "pct", "How often you take part in the round's first fight."],
     ["tradeKills", "Trade kills", pctValue(tradeKills), "pct", "Share of your kills that answer a teammate's death."],
     ["tradeAssistShare", "Trade and assist share", pctValue(tradeAssistShare), "pct", "Share of your fragging that plays off teammates."],
-    ["utilityPR", "Utility before contact", utilityPR, "perRound", "Grenades thrown each round; event order is unavailable in rollups."],
+    ["utilityPR", "Utility per round", utilityPR, "perRound", "Grenades thrown each round; event order is unavailable in rollups."],
     ["teamDistance", "Nearest teammate distance", teamDistance, "units", "Average distance from your nearest teammate during setup."],
     ["firstContactTime", "First contact time", firstContactTime, "secs", "Seconds into the round before your first contact."],
     ["pushDepth", "Early push depth", pctValue(pushDepth), "pct", "Furthest progress toward the enemy before first kill or death."],
     ["sitePresence", "Site presence", pctValue(site), "pct", "Share of recorded alive time spent at a bombsite."],
     ["areaChanges", "Area changes", null, "count", "Rotations need per-round area sequences, unavailable in rollup summaries."],
     ["awpShare", "AWP rounds", awp === null ? null : awp * 100, "pct", "Share of recorded loadout rounds carrying an AWP."],
-  ].map(([id, label, value, unit, tip]) => ({ id: id as string, label: label as string, value: value as number | null, unit: unit as RoleMetric["unit"], proRange: RANGE[id as string] ?? null, threshold: THRESHOLD[id as string] ?? null, tip: tip as string }));
+  ].map(([id, label, value, _unit, tip]) => {
+    const provenance = ROLE_THRESHOLDS[id as RoleMetricId];
+    return { id: id as string, label: label as string, value: value as number | null, unit: provenance.unit, proRange: provenance?.proRange ?? null, threshold: provenance?.threshold ?? null, tip: tip as string };
+  });
 }
 
-function primaryOf(distribution: Record<string, number> | null): { primary: string | null; probability: number | null } {
-  if (!distribution) return { primary: null, probability: null };
-  const top = Object.entries(distribution).sort((a, b) => b[1] - a[1]);
-  if (!top.length) return { primary: null, probability: null };
-  const [first, second] = top;
-  return first[1] >= 0.45 || !second ? { primary: first[0], probability: first[1] } : { primary: `${first[0]} / ${second[0]}`, probability: first[1] };
+function isotonic(points: { x: number; y: number }[], value: number): number {
+  if (!points.length) return value;
+  if (value <= points[0].x) return points[0].y;
+  for (let i = 1; i < points.length; i++) if (value <= points[i].x) {
+    const a = points[i - 1], b = points[i];
+    const t = b.x === a.x ? 1 : (value - a.x) / (b.x - a.x);
+    return a.y + (b.y - a.y) * t;
+  }
+  return points[points.length - 1].y;
 }
 
-function mappedPacker(x: Record<Feature, number>, side: "T" | "CT"): Partial<Record<RoleName, number>> {
-  const raw = roleProbabilities(MODEL.sides[side], x);
+function calibrated(distribution: Record<RoleName, number>, calibration: RoleCalibration | undefined, fixedAwper: number): Record<RoleName, number> {
+  if (!calibration) return distribution;
+  const adjusted = Object.fromEntries(Object.entries(distribution).filter(([role]) => role !== "AWPer").map(([role, value]) => [role, isotonic(calibration[role as RoleName] ?? [], value)])) as Record<RoleName, number>;
+  const total = Object.values(adjusted).reduce((a, b) => a + b, 0);
+  if (!total) return distribution;
+  return { ...Object.fromEntries(Object.entries(adjusted).map(([role, value]) => [role, (value / total) * (1 - fixedAwper)])), AWPer: fixedAwper } as Record<RoleName, number>;
+}
+
+export function roleDecision(distribution: Record<RoleName, number> | null, rounds: number): { primary: RoleName | null; probability: number | null; top2: [RoleName, RoleName] | null; reason: string | null } {
+  if (!distribution) return { primary: null, probability: null, top2: null, reason: "No role evidence is available." };
+  const top = Object.entries(distribution).sort((a, b) => b[1] - a[1]) as [RoleName, number][];
+  if (!top.length) return { primary: null, probability: null, top2: null, reason: "No role evidence is available." };
+  const first = top[0], second = top[1];
+  const top2 = second ? [first[0], second[0]] as [RoleName, RoleName] : null;
+  if (rounds < ROLE_MIN_ROUNDS) return { primary: null, probability: null, top2: null, reason: `Need at least ${ROLE_MIN_ROUNDS} side rounds for a single role.` };
+  const margin = second ? first[1] - second[1] : first[1];
+  if (first[1] >= ROLE_MIN_PROBABILITY && margin >= ROLE_MIN_MARGIN) return { primary: first[0], probability: first[1], top2: null, reason: null };
+  return { primary: null, probability: null, top2, reason: `Top role needs ${ROLE_MIN_PROBABILITY.toFixed(2)} probability and ${ROLE_MIN_MARGIN.toFixed(2)} margin.` };
+}
+
+function mappedPacker(x: Record<Feature, number>, side: "T" | "CT", fitModel: RoleModel): Partial<Record<RoleName, number>> {
+  const raw = roleProbabilities(fitModel.sides[side], x);
   const out: Partial<Record<RoleName, number>> = {};
   for (const [role, probability] of Object.entries(raw)) {
-    const mapped = ROLE_NAME[role];
+    const mapped = mapRoleName(role);
     if (mapped) out[mapped] = (out[mapped] ?? 0) + probability;
   }
   const total = Object.values(out).reduce((a, b) => a + b, 0);
@@ -173,7 +205,7 @@ function mappedPacker(x: Record<Feature, number>, side: "T" | "CT"): Partial<Rec
  * A role blend for one side. Packer supplies the labelled Entry/Lurker and Anchor/Rotator signal;
  * Trader, Support and Aggressor use explicit thresholds over demo-derived features.
  */
-export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
+export function roleBlend(s: Summary, side: "T" | "CT", fitModel: RoleModel = MODEL): RoleBlend {
   const m = s.m;
   const x = packerFeatures(m);
   const awp = m.loadoutRounds ? m.roundsWithAwp / m.loadoutRounds : null;
@@ -182,39 +214,50 @@ export function roleBlend(s: Summary, side: "T" | "CT"): RoleBlend {
   const evidence: string[] = awp === null
     ? (m.rounds ? [`No freeze-end loadout recorded in ${side} rounds, so the AWP share is unknown.`] : [])
     : [m.loadoutRounds < m.rounds ? `Carried an AWP in ${pct(100 * awp)} of the ${m.loadoutRounds} ${side} rounds with a recorded loadout (of ${m.rounds}).` : `Carried an AWP in ${pct(100 * awp)} of ${side} rounds.`];
-  if (!m.rounds || !x) return { side, primary: null, probability: null, distribution: null, blend: null, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
+  if (!m.rounds || !x) return { side, primary: null, probability: null, top2: null, reason: m.rounds < ROLE_MIN_ROUNDS ? `Need at least ${ROLE_MIN_ROUNDS} side rounds for a role.` : "No role evidence is available.", distribution: null, blend: null, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
 
   const opening = value("openingAttempts"), trades = value("tradeKills"), tradeAssist = value("tradeAssistShare");
   const utility = value("utilityPR"), distance = value("teamDistance"), contact = value("firstContactTime");
   const push = value("pushDepth"), site = value("sitePresence");
+  const high = (v: number | null, id: RoleMetricId) => roleHigh(id, v);
+  const low = (v: number | null, id: RoleMetricId) => 1 - roleHigh(id, v);
   const rules: Record<RoleName, number> = side === "T" ? {
-    Entry: (high(opening, 10, 35) + high(push, 25, 75) + low(contact, 30, 52)) / 3,
-    Trader: (high(trades, 10, 40) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
-    Support: (high(utility, 0.4, 2.2) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
-    Lurker: (high(distance, 400, 1400) + high(contact, 30, 52) + low(push, 25, 75)) / 3,
-    AWPer: awp === null ? 0.5 : high(awp, 0.2, 0.65),
+    Entry: (high(opening, "openingAttempts") + high(push, "pushDepth") + low(contact, "firstContactTime")) / 3,
+    Trader: (high(trades, "tradeKills") + high(tradeAssist, "tradeAssistShare") + low(opening, "openingAttempts")) / 3,
+    Support: (high(utility, "utilityPR") + high(tradeAssist, "tradeAssistShare") + low(opening, "openingAttempts")) / 3,
+    Lurker: (high(distance, "teamDistance") + high(contact, "firstContactTime") + low(push, "pushDepth")) / 3,
+    AWPer: 0,
     Anchor: 0, Rotator: 0, Aggressor: 0,
   } : {
-    Anchor: (high(site, 15, 70) + low(push, 25, 75) + high(contact, 30, 52)) / 3,
-    Rotator: (low(site, 15, 70) + high(distance, 400, 1400) + high(tradeAssist, 30, 60)) / 3,
-    Aggressor: (high(opening, 10, 35) + high(push, 25, 75) + low(contact, 30, 52)) / 3,
-    Support: (high(utility, 0.4, 2.2) + high(tradeAssist, 30, 60) + low(opening, 10, 35)) / 3,
-    AWPer: awp === null ? 0.5 : high(awp, 0.2, 0.65),
+    Anchor: (high(site, "sitePresence") + low(push, "pushDepth") + high(contact, "firstContactTime")) / 3,
+    Rotator: (low(site, "sitePresence") + high(distance, "teamDistance") + high(tradeAssist, "tradeAssistShare")) / 3,
+    Aggressor: (high(opening, "openingAttempts") + high(push, "pushDepth") + low(contact, "firstContactTime")) / 3,
+    Support: (high(utility, "utilityPR") + high(tradeAssist, "tradeAssistShare") + low(opening, "openingAttempts")) / 3,
+    AWPer: 0,
     Entry: 0, Trader: 0, Lurker: 0,
   };
-  const packed = mappedPacker(x, side);
-  for (const role of Object.keys(rules) as RoleName[]) if (packed[role] !== undefined) rules[role] = 0.55 * packed[role]! + 0.45 * rules[role];
-  const active = Object.fromEntries(Object.entries(rules).filter(([, score]) => score > 0)) as Record<RoleName, number>;
-  const distribution = softmax(active) as Record<RoleName, number>;
-  const { primary, probability } = primaryOf(distribution);
+  const packed = mappedPacker(x, side, fitModel);
+  for (const role of Object.keys(rules) as RoleName[]) if (role !== "AWPer" && packed[role] !== undefined) rules[role] = 0.55 * packed[role]! + 0.45 * rules[role];
+  const sideRoles: RoleName[] = side === "T" ? ["Entry", "Trader", "Support", "Lurker"] : ["Anchor", "Rotator", "Aggressor", "Support"];
+  const active = Object.fromEntries(sideRoles.map((role) => [role, rules[role]]));
+  const nonAwper = softmax(active) as Record<RoleName, number>;
+  const awpProbability = awp === null ? 0 : clamp01(awp);
+  const distribution = {
+    ...Object.fromEntries(Object.entries(nonAwper).map(([role, share]) => [role, share * (1 - awpProbability)])),
+    AWPer: awpProbability,
+  } as Record<RoleName, number>;
+  const calibratedDistribution = calibrated(distribution, fitModel.calibration?.[side], awpProbability);
+  const decision = roleDecision(calibratedDistribution, m.rounds);
   evidence.push(`In the opening duel in ${pct(value("openingAttempts")!)} of rounds.`, `${pct(value("tradeAssistShare")!)} of fragging came from trades or assists.`);
-  return { side, primary, probability, distribution, blend: distribution, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
+  return { side, ...decision, distribution: calibratedDistribution, blend: calibratedDistribution, metrics, evidence, rounds: m.rounds, awp, loadoutRounds: m.loadoutRounds, tips: ROLE_TIPS };
 }
 
 /** One overall role distribution weighted by the number of rounds on each side. */
 export interface OverallRole {
-  primary: string | null;
+  primary: RoleName | null;
   probability: number | null;
+  top2: [RoleName, RoleName] | null;
+  reason: string | null;
   distribution: Record<string, number> | null;
   blend: Record<string, number> | null;
   rounds: Record<"T" | "CT", number>;
@@ -224,11 +267,11 @@ export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
   const sides = [t, ct].filter((b) => b.distribution && b.rounds > 0);
   const rounds = { T: t.rounds, CT: ct.rounds };
   const total = sides.reduce((a, b) => a + b.rounds, 0);
-  if (!total) return { primary: null, probability: null, distribution: null, blend: null, rounds };
-  const distribution: Record<string, number> = {};
-  for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) distribution[role] = (distribution[role] ?? 0) + (share * b.rounds) / total;
-  const { primary, probability } = primaryOf(distribution);
-  return { primary, probability, distribution, blend: distribution, rounds };
+  if (!total) return { primary: null, probability: null, top2: null, reason: "No role evidence is available.", distribution: null, blend: null, rounds };
+  const distribution: Record<RoleName, number> = {} as Record<RoleName, number>;
+  for (const b of sides) for (const [role, share] of Object.entries(b.distribution!)) distribution[role as RoleName] = (distribution[role as RoleName] ?? 0) + (share * b.rounds) / total;
+  const decision = roleDecision(distribution, total);
+  return { ...decision, distribution, blend: distribution, rounds };
 }
 
 // ---- role signals and the style compass ---------------------------------------------------------
@@ -236,18 +279,14 @@ export function overallRole(t: RoleBlend, ct: RoleBlend): OverallRole {
 /**
  * One measured tendency with a hand-set threshold: the role card's signals and the style compass's
  * lines (main's stats/role.ts). `metric` is read over both sides, or over `side` alone. The thresholds
- * are main's, chosen by hand from typical values; no fit is behind them, and none was rerun on this
- * engine's measures.
+ * remain hand-chosen. role-thresholds.ts records measured reference ranges and the 3D distance check.
  */
 export interface RoleSignal { id: "Entry" | "Support" | "Lurker"; metric: string; threshold: number; side: "T" | null }
 
 export const ROLE_SIGNALS: readonly RoleSignal[] = [
-  // in an opening duel in a quarter of rounds; ten players share two openings, so the average is 20%
-  { id: "Entry", metric: "openingAttempts", threshold: 25, side: null },
-  { id: "Support", metric: "tradeAssistShare", threshold: 45, side: null },
-  // Main measured this in 2D over every T sample before the plant; teamDistance samples in 3D while all
-  // five are alive (positioning.ts). The 1,100 units were not re-checked against the new samples.
-  { id: "Lurker", metric: "teamDistance", threshold: 1100, side: "T" },
+  { id: "Entry", metric: "openingAttempts", threshold: ROLE_THRESHOLDS.openingAttempts.threshold!, side: null },
+  { id: "Support", metric: "tradeAssistShare", threshold: ROLE_THRESHOLDS.tradeAssistShare.threshold!, side: null },
+  { id: "Lurker", metric: "teamDistance", threshold: ROLE_THRESHOLDS.teamDistance.threshold!, side: "T" },
 ];
 
 const signal = (id: RoleSignal["id"]) => ROLE_SIGNALS.find((x) => x.id === id)!;

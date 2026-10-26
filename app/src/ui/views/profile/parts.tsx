@@ -102,13 +102,14 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
 
 /** What each role means, for the role name's tooltip. */
 const ROLE_WHAT: Record<string, string> = {
-  Entry: "Takes space first on T.",
-  Lurker: "Plays away from the team on T.",
-  "Half-lurker": "Starts with the team on T, then splits off.",
-  Anchor: "Holds a bombsite on CT.",
-  Rotator: "Moves between sites on CT.",
-  Mixed: "Neither anchors nor rotates in most CT rounds.",
-  AWPer: "Carries the AWP.",
+  Entry: "Takes the first fight and creates space on T.",
+  Trader: "Follows teammates closely and answers their deaths on T.",
+  Support: "Uses utility and trades to make teammates' fights safer.",
+  Lurker: "Works apart from the main group and attacks late on T.",
+  Anchor: "Stays at one bombsite and delays the hit on CT.",
+  Rotator: "Moves between defensive areas when the round changes on CT.",
+  Aggressor: "Pushes forward early to find information or the first fight on CT.",
+  AWPer: "Carries the AWP often enough to shape the player's identity.",
 };
 
 /** Role shades: categorical, never good or bad; the top role is cream, the rest step down in tan. */
