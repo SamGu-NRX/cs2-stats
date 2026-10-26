@@ -125,7 +125,7 @@ pub fn localconfig(options: &str) -> String {
 pub fn fake_steam_config(s: &Scratch, options: Option<&str>) -> super::steam::SteamConfig {
     let steam = s.0.join("Steam");
     write(&steam.join("steam.exe"), b"");
-    let localconfig_path = steam.join("userdata").join("1178094897").join("config").join("localconfig.vdf");
+    let localconfig_path = steam.join("userdata").join("1000001").join("config").join("localconfig.vdf");
     if let Some(o) = options {
         write(&localconfig_path, localconfig(o).as_bytes());
     }

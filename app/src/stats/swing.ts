@@ -8,7 +8,7 @@
 // the result with HLTV's per-player swing.
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
-import type { KillFact } from "./facts";
+import type { KillFact, Measures } from "./facts";
 import type { Side } from "./tables";
 import { pTWins, type RoundState } from "./winprob";
 
@@ -59,6 +59,10 @@ export function swing(c: Ctx): void {
     const add = (p: number, v: number) => credit.set(p, (credit.get(p) ?? 0) + v);
     const killSwingPlayers = new Set<number>();
     const part = { opening: new Map<number, number>(), clutch: new Map<number, number>(), awp: new Map<number, number>(), flash: new Map<number, number>() };
+    // Each credit's source, one per credit, so the sources sum to the player's swing: the killer's own
+    // share of a kill (a trade kill's apart), a damage share of a teammate's kill, the flash share, the
+    // victim's charge, and the round-end remainder.
+    const source = { kill: new Map<number, number>(), trade: new Map<number, number>(), damage: new Map<number, number>(), death: new Map<number, number>(), end: new Map<number, number>() };
     const addPart = (m: Map<number, number>, p: number, v: number) => m.set(p, (m.get(p) ?? 0) + v);
     // a player's clutch starts when they are the last of their side alive
     const inClutch = new Set<number>();
@@ -90,6 +94,8 @@ export function swing(c: Ctx): void {
       pT = p;
       path.push({ tick: k.tick, event: "kill", pT });
       const credits: [number, number][] = [[k.victim, -delta]];
+      addPart(source.death, k.victim, -delta);
+      const own = k.tradeKill ? source.trade : source.kill;
       // positive credit: damage share of the gaining side's damage on the victim, else the killer
       const ledger = new Map<number, number>();
       for (const i of dmgRows) {
@@ -106,8 +112,8 @@ export function swing(c: Ctx): void {
       const flashers = [...new Set(flashersOf(c, ri, k, gainer))];
       const rest = flashers.length ? gain * (1 - FLASH) : gain;
       for (const f of flashers) { credits.push([f, (gain * FLASH) / flashers.length]); addPart(part.flash, f, (gain * FLASH) / flashers.length); }
-      if (total > 0) for (const [a, d] of ledger) credits.push([a, (rest * d) / total]);
-      else if (k.enemy && k.killer !== null) credits.push([k.killer, rest]);
+      if (total > 0) for (const [a, d] of ledger) { credits.push([a, (rest * d) / total]); addPart(a === k.killer ? own : source.damage, a, (rest * d) / total); }
+      else if (k.enemy && k.killer !== null) { credits.push([k.killer, rest]); addPart(own, k.killer, rest); }
       k.credits = credits;
       const awpDuel = k.weapon === "awp" || k.victimWeapon === "AWP";
       for (const [pl, v] of credits) {
@@ -140,9 +146,9 @@ export function swing(c: Ctx): void {
     // A bomb win after the last T died can leave no eligible winner; then the winners share equally.
     if (weights.size === 0) for (const p of rows) if (p?.side === winner) weights.set(p.pi, 1);
     const wsum = [...weights.values()].reduce((s, v) => s + v, 0);
-    for (const [pl, w] of weights) add(pl, (rest * w) / wsum);
+    for (const [pl, w] of weights) { add(pl, (rest * w) / wsum); addPart(source.end, pl, (rest * w) / wsum); }
     const losers = alive[loser].size ? [...alive[loser]] : rows.filter((p) => p?.side === loser).map((p) => p!.pi);
-    for (const pl of losers) add(pl, -rest / losers.length);
+    for (const pl of losers) { add(pl, -rest / losers.length); addPart(source.end, pl, -rest / losers.length); }
 
     rf.winProb = path;
     // round win shares: in a won round, the player's share of the team's positive swing
@@ -157,6 +163,11 @@ export function swing(c: Ctx): void {
       p.m.clutchSwing += part.clutch.get(p.pi) ?? 0;
       p.m.awpSwing += part.awp.get(p.pi) ?? 0;
       p.m.flashSwing += part.flash.get(p.pi) ?? 0;
+      p.m.swingKills += source.kill.get(p.pi) ?? 0;
+      p.m.swingTrades += source.trade.get(p.pi) ?? 0;
+      p.m.swingDamage += source.damage.get(p.pi) ?? 0;
+      p.m.swingDeaths += source.death.get(p.pi) ?? 0;
+      p.m.swingEnd += source.end.get(p.pi) ?? 0;
       if (p.side === winner) { p.m.rwsRounds++; p.m.rws += teamGain > 0 ? Math.max(0, v) / teamGain : 1 / winners; }
     }
   }
@@ -173,4 +184,16 @@ function flashersOf(c: Ctx, ri: number, k: KillFact, gainer: Side): number[] {
     if (a !== null && a !== k.killer && c.side[ri][a] === gainer) out.push(a);
   }
   return out;
+}
+
+/** Swing by source, each in percent per valued round like the swing metric; null without valued rounds. The six sum to swing. */
+export interface SwingSources { kills: number; trades: number; damage: number; flashes: number; deaths: number; roundEnd: number }
+
+export function swingSources(m: Measures): SwingSources | null {
+  if (!m.swingRounds) return null;
+  const pct = (x: number) => (100 * x) / m.swingRounds;
+  return {
+    kills: pct(m.swingKills), trades: pct(m.swingTrades), damage: pct(m.swingDamage), flashes: pct(m.flashSwing),
+    deaths: pct(m.swingDeaths), roundEnd: pct(m.swingEnd),
+  };
 }

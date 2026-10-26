@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 16;
+export const DERIVE_VERSION = 17;
 
 export interface MatchInfo {
   id: string;
@@ -88,6 +88,13 @@ export const INPUT_COVERAGE = {
    * value give (rating3.ts ecoAdjust).
    */
   eco: ["ecoEventsKnown", "ecoEvents", "both players' loadout", "kills and deaths"],
+  /**
+   * mesh line of sight between the players (the extractor's engagements with visibility_status ok).
+   * Plugin files have none, so a sighting metric there has no value rather than one from radar spotting.
+   */
+  sight: ["sightRounds", "rounds", "line of sight", "rounds"],
+  /** the next round's starting equipment recorded for a save (player_rounds.round_start_equip_value; plugin files have none) */
+  carry: ["saveCarryKnown", "saveEvents", "next round's starting equipment", "saved rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
@@ -194,11 +201,15 @@ export const MEASURES = [
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
-  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents",
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds",
+  // buying (buying.ts): equipment against the side's mean, and what a save carried into the next round
+  "buyDevSum", "buyDevRounds", "saveEvents", "saveCarryKnown", "saveCarrySum",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
   "utilSpent", "purchaseRounds",
   // swing and Rating 3.0 inputs (swing.ts, rating3.ts)
   "swing", "swingRounds", "rws", "rwsRounds", "openingSwing", "clutchSwing", "awpSwing", "flashSwing",
+  // swing by source (swing.ts swingSources); with flashSwing they sum to swing
+  "swingKills", "swingTrades", "swingDamage", "swingDeaths", "swingEnd",
   // eco-adjusted measures over the player-rounds whose every eco value is known (ecoRounds, rating3.ts ecoAdjust)
   "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
   // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds
@@ -226,6 +237,8 @@ export interface PlayerRound {
   primary: string | null;
   /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */
   spawn: string | null;
+  /** the map's place name at the spawn point ("TSpawn"; positions.place), null when the sample has none */
+  spawnPlace: string | null;
   /** the additive measures; a measure that is 0 is left out, which keeps cached facts small */
   m: Partial<Measures>;
 }
@@ -273,8 +286,11 @@ export interface PresenceFact {
   places: Record<string, number>;
 }
 
-/** One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts detectClutches). */
-export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean }
+/**
+ * One clutch: the player became the last of their side alive against `opponents` enemies (rules.ts
+ * detectClutches), and made `kills` enemy kills after that, up to the round's end.
+ */
+export interface ClutchFact { ri: number; pi: number; opponents: number; won: boolean; kills: number }
 
 export interface MatchFacts {
   v: number;

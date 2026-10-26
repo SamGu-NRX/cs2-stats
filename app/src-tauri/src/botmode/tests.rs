@@ -870,7 +870,7 @@ fn a_named_game_folder_must_be_the_install_steam_reports() {
         library: s.0.join("C"),
         csgo: reported.clone(),
         build_id: None,
-        owner: Some(76_561_199_138_360_625),
+        owner: Some(76_561_197_961_265_729),
     };
     let err = super::same_install(&other, Ok(install.clone())).unwrap_err();
     assert!(err.contains(&other.canonicalize().unwrap().display().to_string()), "names the --game folder: {err}");

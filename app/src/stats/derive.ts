@@ -2,7 +2,8 @@
 // it. Deterministic and per event; rollup.ts sums the facts under filters. Each family module fills
 // its own measures (facts.ts MEASURES) from the shared indexes built here.
 import { deriveAggro } from "./aggression";
-import { deriveAim } from "./aim";
+import { deriveAim, markSight } from "./aim";
+import { buying } from "./buying";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
@@ -75,6 +76,8 @@ function matchMeta(t: MatchTables) {
   const raw = extra.date ?? extra.dem_modified_in_archive;
   return {
     date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
+    // CS2's default overtime is six rounds, three a half
+    otMaxRounds: Number(convars.mp_overtime_maxrounds ?? 6),
     pov: typeof extra.pov === "string" ? extra.pov : null,
     roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
     startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
@@ -129,6 +132,8 @@ export interface Ctx {
   byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb" | "purchases") => number[][];
   /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
   posAt: (ri: number, pi: number, tick: number) => [number, number, number] | null;
+  /** the positions row posAt reads, or null */
+  sampleAt: (ri: number, pi: number, tick: number) => number | null;
   /** a player index from a steamid column value */
   idOf: (id: string | null) => number | null;
   /** row index of a round number in the rounds table; undefined for rounds the tables do not cover */
@@ -206,7 +211,7 @@ export function buildCtx(t: MatchTables, wp: WinProbSource): Ctx {
     if (!l) pos.set(key, (l = []));
     l.push(i);
   }
-  const posAt: Ctx["posAt"] = (ri, p, tick) => {
+  const sampleAt: Ctx["sampleAt"] = (ri, p, tick) => {
     const l = P ? pos.get(ri * 1024 + p) : undefined;
     if (!l || !P) return null;
     let lo = 0, hi = l.length - 1;
@@ -214,13 +219,16 @@ export function buildCtx(t: MatchTables, wp: WinProbSource): Ctx {
     let best = lo;
     if (lo > 0 && Math.abs(P.tick[l[lo - 1]] - tick) < Math.abs(P.tick[l[lo]] - tick)) best = lo - 1;
     const i = l[best];
-    if (Math.abs(P.tick[i] - tick) > tickRate / 2 || !P.is_alive[i]) return null;
-    return [P.x[i], P.y[i], P.z[i]];
+    return Math.abs(P.tick[i] - tick) > tickRate / 2 || !P.is_alive[i] ? null : i;
+  };
+  const posAt: Ctx["posAt"] = (ri, p, tick) => {
+    const i = sampleAt(ri, p, tick);
+    return i === null ? null : [P!.x[i], P!.y[i], P!.z[i]];
   };
   const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
 
   return {
-    t, wp, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, idOf, riOf,
+    t, wp, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, sampleAt, idOf, riOf,
   };
 }
 
@@ -301,10 +309,11 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
   });
 }
 
-/** Spawn point key from the round's first position sample. */
-function spawnOf(c: Ctx, ri: number, p: number): string | null {
-  const at = c.posAt(ri, p, c.t.rounds.start_tick[ri] ?? c.rounds[ri].freezeEndTick ?? c.rounds[ri].endTick);
-  return at ? `${Math.round(at[0] / 16) * 16},${Math.round(at[1] / 16) * 16}` : null;
+/** Spawn point key and the map's place name there, from the round's first position sample. */
+function spawnOf(c: Ctx, ri: number, p: number): { spawn: string | null; spawnPlace: string | null } {
+  const i = c.sampleAt(ri, p, c.t.rounds.start_tick[ri] ?? c.rounds[ri].freezeEndTick ?? c.rounds[ri].endTick);
+  const P = c.t.positions!;
+  return i === null ? { spawn: null, spawnPlace: null } : { spawn: `${Math.round(P.x[i] / 16) * 16},${Math.round(P.y[i] / 16) * 16}`, spawnPlace: P.place[i] || null };
 }
 
 function playerRounds(c: Ctx): (WorkRound | null)[][] {
@@ -324,7 +333,7 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
       ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
       ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
-      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], spawn: spawnOf(c, rf.ri, p), m,
+      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ...spawnOf(c, rf.ri, p), m,
     };
   }));
 }
@@ -345,13 +354,14 @@ const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.ent
  */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   const c = buildCtx(t, wp);
-  const { date, maxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
+  const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
   c.rounds = roundFacts(c, maxRounds);
   c.kills = killFacts(c);
   c.pr = playerRounds(c);
 
   scoreboard(c);
   const clutches = closing(c);
+  buying(c, maxRounds, otMaxRounds);
   sniping(c);
   duels(c);
   positioning(c);
@@ -359,6 +369,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   ecoAdjust(c);
   swing(c);
   valuedRounds(c);
+  markSight(c);
   const weapons = guns(c);
 
   const counted: [number, number] = [0, 0];

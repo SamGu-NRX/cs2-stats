@@ -16,7 +16,6 @@ import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
-import { roleBlend } from "../stats/identity";
 import { loadTables, withPov } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
@@ -27,9 +26,9 @@ import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
-import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
+import type { Api, Call, ClutchRow, MultiKillRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addPositions, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle } from "./views";
+import { addClutchRows, addMapRounds, addMultiKillRows, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -241,9 +240,23 @@ function botsOf(q: Query): Promise<BotSet> {
   return p;
 }
 
+/** The query's players' rounds per map that its filter keeps. */
+async function mapRounds(q: Query): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await stream(q.files, (f) => addMapRounds(out, f, q.filter));
+  return out;
+}
+
+/** The spawns of the query's matches, with the rows its filter keeps. */
+async function spawns(q: Query): Promise<SpawnIndex> {
+  const acc = emptySpawns();
+  await stream(q.files, (f) => addSpawns(acc, f, q.filter));
+  return acc;
+}
+
 const careersOf = (q: Query) => botsOf(q).then((b) => b.pop);
 
-const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf });
+const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds, spawns });
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -345,10 +358,8 @@ const api: Impl = {
   attributes: ranking.attributes,
   style: ranking.style,
   attributeBlock: ranking.attributeBlock,
-  async roles(q) {
-    const [t, ct] = await Promise.all([summaryOf(sideQuery(q, "T")), summaryOf(sideQuery(q, "CT"))]);
-    return { T: roleBlend(t, "T"), CT: roleBlend(ct, "CT") };
-  },
+  roles: ranking.roles,
+  rolesByMap: ranking.rolesByMap,
   playsLike: ranking.playsLike,
   async compass(q) {
     const [you, bots] = await Promise.all([summaryOf(sideQuery(q, "both")), botsOf(q)]);
@@ -381,29 +392,19 @@ const api: Impl = {
     });
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
   },
-  async rolesBySpawn(q) {
-    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
-    const spawns: Record<"T" | "CT", Map<string, number>> = { T: new Map(), CT: new Map() };
-    await stream(q.files, (f) => {
-      for (const r of f.pr) if (r.spawn && me.has(f.players[r.pi].id)) spawns[r.side].set(r.spawn, (spawns[r.side].get(r.spawn) ?? 0) + 1);
-    });
-    const side = (s: "T" | "CT") => Promise.all([...spawns[s]].sort((a, b) => b[1] - a[1]).map(async ([spawn, rounds]) =>
-      ({ spawn, rounds, blend: roleBlend(await summaryOf({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [spawn] } }), s) })));
-    const [T, CT] = await Promise.all([side("T"), side("CT")]);
-    return { T, CT };
-  },
+  rolesBySpawn: ranking.rolesBySpawn,
   async clutches(q) {
-    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     const out: ClutchRow[] = [];
     const fileOf = new Map<string, string>();
     for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
-    await stream(q.files, (f) => {
-      for (const c of f.clutches) {
-        if (!me.has(f.players[c.pi].id)) continue;
-        const pr = f.pr.find((r) => r.ri === c.ri && r.pi === c.pi);
-        out.push({ file: fileOf.get(f.match.id) ?? f.match.id, round: f.rounds[c.ri].number, side: pr?.side ?? "T", opponents: c.opponents, won: c.won });
-      }
-    });
+    await stream(q.files, (f) => addClutchRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
+    return out;
+  },
+  async multiKills(q) {
+    const out: MultiKillRow[] = [];
+    const fileOf = new Map<string, string>();
+    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
+    await stream(q.files, (f) => addMultiKillRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
     return out;
   },
   async trends(series) {

@@ -318,7 +318,7 @@ public class CodecTests
         var frames = new FrameSet();
         var r = new Recorder(sink, frames, new PerfCounter(), _ => { });
         r.StartCapture(new MatchMeta { Id = "a1b2c3d4e5f60718293a4b5c6d7e8f90", Map = "de_dust2", StartUtc = "2026-10-24T22:14:29Z", Env = new EnvInfo { Plugin = "1.0.0", Cssharp = "1.0.378", MaxRounds = 24, BotDifficulty = 2 }, GameStart = 1234.5f });
-        int h = r.PlayerIndex("76561199138360625", "me \"quoted\"", false);
+        int h = r.PlayerIndex("76561197961265729", "me \"quoted\"", false);
         int b = r.PlayerIndex("B:Rock", "Rock", true);
         r.SetHuman(h);
         r.AddPriorRound(0, 5);

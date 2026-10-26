@@ -23,3 +23,26 @@ it("gives an eligible flash the flash share of a kill's credit, and the killer t
   const fl = f.pr.find((r) => f.players[r.pi].id === "fl")!.m;
   expect(fl.flashSwing).toBeCloseTo(credit.fl);
 });
+
+it("files every swing credit under one source, so the sources sum to swing", () => {
+  // fails if a credit lands under the wrong source or under none. a hits c for 40, c kills a (c's own
+  // kill, no damage on a: all of it to c), b hits c for 60 and kills him within the trade window: b's
+  // 60% share is a trade, a's 40% is damage. Each victim is charged what his killer's side gained.
+  const f = oneRound({
+    round: 5,
+    players: { a: "CT", b: "CT", c: "T", d: "T" },
+    player_rounds: { a: equip, b: equip, c: equip, d: equip },
+    damages: [
+      { tick: t(1), attacker_steamid: "a", victim_steamid: "c", weapon: "ak47", dmg_health: 40, dmg_health_capped: 40, health_before: 100, health_after: 60, a_side: "CT", v_side: "T" },
+      { tick: t(3), attacker_steamid: "b", victim_steamid: "c", weapon: "ak47", dmg_health: 60, dmg_health_capped: 60, health_before: 60, health_after: 0, a_side: "CT", v_side: "T" },
+    ],
+    kills: [{ tick: t(2), killer: "c", victim: "a" }, { tick: t(3), killer: "b", victim: "c" }],
+  });
+  const m = (id: string) => f.pr.find((r) => f.players[r.pi].id === id)!.m;
+  const sources = ["swingKills", "swingTrades", "swingDamage", "flashSwing", "swingDeaths", "swingEnd"] as const;
+  for (const id of ["a", "b", "c", "d"]) expect(sources.reduce((x, k) => x + (m(id)[k] ?? 0), 0)).toBeCloseTo(m(id).swing ?? 0, 12);
+  expect(m("c").swingKills).toBeCloseTo(-m("a").swingDeaths!, 12);
+  expect(m("b").swingTrades! / m("a").swingDamage!).toBeCloseTo(60 / 40, 12);
+  expect(m("c").swingDeaths).toBeCloseTo(-(m("a").swingDamage! + m("b").swingTrades!), 12);
+  expect([m("b").swingKills ?? 0, m("a").swingTrades ?? 0, m("b").swingDamage ?? 0]).toEqual([0, 0, 0]);
+});
