@@ -35,12 +35,17 @@ it("reads no reload across a gun a dying player dropped within reach, which coul
   expect(rise({ kills: [{ tick: t(4), killer: "b", victim: "d", at: { v_x: 50, v_y: 0, v_active_weapon: "Glock-18", v_best_primary: "AK-47" } }] }).m.reloads).toBe(0);
 });
 
-it("reads no reload across a swap, a gap in the samples or a purchase of the same gun", () => {
-  // fails if the gun is taken for the same copy when it may have left the hand: a deagle shot in
-  // between, a sample at 4 s showing the deagle, no sample from 3 to 4.5 s or from 4 to 5 s (over the
-  // half second one missed sample allows), or a second AK bought at 4 s
-  expect(rise({ shots: [shot(3, 10), shot(4, 7, "deagle"), shot(5, 30)] }).m.reloads).toBe(0);
-  expect(rise({ positions: holding(0, 8).map((p) => (p.tick === t(4) ? { ...p, active_weapon: "Desert Eagle" } : p)) }).m.reloads).toBe(0);
+it("keeps the gun across a switch to another weapon and back", () => {
+  // fails if a switch ends the run: the game drops only the gun in hand, so firing the deagle at 4 s,
+  // or holding the knife then, leaves a with the same AK, and the rise to 30 is still the reload
+  expect(rise({ shots: [shot(3, 10), shot(4, 7, "deagle"), shot(5, 30)] }).m.reloads).toBe(1);
+  expect(rise({ positions: holding(0, 8).map((p) => (p.tick === t(4) ? { ...p, active_weapon: "Karambit" } : p)) }).m.reloads).toBe(1);
+});
+
+it("reads no reload across a gap in the samples or a purchase of the same gun", () => {
+  // fails if a copy that may have reached the player is ignored: no sample from 3 to 4.5 s or from 4 to
+  // 5 s (over the half second one missed sample allows, so the path near a dropped gun is unknown), or
+  // a second AK bought at 4 s
   expect(rise({ positions: holding(0, 8).filter((p) => p.tick <= t(3) || p.tick >= t(4.5)) }).m.reloads).toBe(0);
   expect(rise({ positions: holding(0, 8).filter((p) => p.tick <= t(4) || p.tick >= t(5)) }).m.reloads).toBe(0);
   expect(rise({ purchases: [{ tick: t(4), steamid: "a", item: "AK-47", cost: 2700 }] }).m.reloads).toBe(0);
