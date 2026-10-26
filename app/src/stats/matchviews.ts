@@ -5,8 +5,8 @@
 import { enemyHit, hitDamage } from "./derive";
 import { emptyMeasures, type MatchFacts, type Measures } from "./facts";
 import { METRICS } from "./metrics";
-import { FEATURES, RATING3_INTERCEPT, RATING3_TERMS, type Feature } from "./rating3";
-import { keptRounds, type Filter, type Summary } from "./rollup";
+import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type Feature } from "./rating3";
+import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
 import { swingSources, type SwingSources } from "./swing";
 import type { MatchTables, Side } from "./tables";
 import { FLASHED_MIN_S } from "./utility";
@@ -34,6 +34,12 @@ export interface RoundRating {
   swing: SwingSources | null;
   /** rating minus the reference average (the caller's: the player's own average); null when either is unknown */
   vsAverage: number | null;
+  /**
+   * The round is one the match's Rating 3.0 is made of: rated, on a side the rating counts (rating3Of
+   * rates each side only when half its rounds are rated) and in a match that passes the rating's gates.
+   * The counting rounds' ratings average to the match's Rating 3.0.
+   */
+  counts: boolean;
 }
 
 /** One round's six Rating 3.0 inputs from its measures; null unless the round is rated. */
@@ -48,6 +54,8 @@ function roundInputs(m: Partial<Measures>): Record<Feature, number> | null {
 /** Every round the player played, in order, with its rating, its terms, its swing sources and its gap to `average`. */
 export function roundRatings(f: MatchFacts, player: string, average: number | null): RoundRating[] {
   const pi = playerIndex(f, player);
+  const s = rollup([f], { player });
+  const counted = new Set<Side>(rating3Of(s).value === null ? [] : (["CT", "T"] as const).filter((side) => r3Inputs(s.sides[side]) !== null));
   return f.pr.filter((r) => r.pi === pi).sort((a, b) => a.ri - b.ri).map((r) => {
     const q = roundInputs(r.m);
     const terms = q ? Object.fromEntries(FEATURES.map((x) => [x, RATING3_TERMS.find((t) => t.input === x)!.coefficient * q[x]])) as Record<Feature, number> : null;
@@ -56,6 +64,7 @@ export function roundRatings(f: MatchFacts, player: string, average: number | nu
       number: f.rounds[r.ri].number, side: r.side, won: r.won, rating, terms,
       swing: r.m.swingRounds ? swingSources({ ...emptyMeasures(), ...r.m }) : null,
       vsAverage: rating !== null && average !== null ? rating - average : null,
+      counts: rating !== null && counted.has(r.side),
     };
   });
 }
