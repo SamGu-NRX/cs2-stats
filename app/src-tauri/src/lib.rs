@@ -550,21 +550,21 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
 /// a bubble at the lower left while the pointer is over it. A desktop app has no use for that, and a
 /// match link names the match's file, which the user may have named after a person; with "Hide
 /// personal info" on, the page hides it (src/ui/data/privacy.ts), and the bubble must not show it.
+/// It runs from the page load hook, so it reaches every webview, and again on each navigation, which
+/// changes nothing.
 #[cfg(windows)]
-fn hide_status_bar(app: &tauri::App) {
-    use tauri::Manager;
-    for (label, window) in app.webview_windows() {
-        let done = window.with_webview(move |webview| {
-            // SAFETY: COM calls on the window's own WebView2 controller, which with_webview runs on
-            // the thread that owns it
-            let result = unsafe { webview.controller().CoreWebView2().and_then(|core| core.Settings()).and_then(|settings| settings.SetIsStatusBarEnabled(false)) };
-            if let Err(e) = result {
-                eprintln!("could not turn off the WebView2 status bar: {e}");
-            }
-        });
-        if let Err(e) = done {
-            eprintln!("could not reach the webview of window {label}: {e}");
+fn hide_status_bar(webview: &tauri::Webview) {
+    let label = webview.label().to_string();
+    let done = webview.with_webview(|webview| {
+        // SAFETY: COM calls on the webview's own WebView2 controller, which with_webview runs on the
+        // thread that owns it
+        let result = unsafe { webview.controller().CoreWebView2().and_then(|core| core.Settings()).and_then(|settings| settings.SetIsStatusBarEnabled(false)) };
+        if let Err(e) = result {
+            eprintln!("could not turn off the WebView2 status bar: {e}");
         }
+    });
+    if let Err(e) = done {
+        eprintln!("could not reach webview {label}: {e}");
     }
 }
 
@@ -572,13 +572,20 @@ fn hide_status_bar(app: &tauri::App) {
 pub fn run() {
     tauri::Builder::default()
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
-        .setup(|app| {
+        .setup(|_app| {
             botmode::commands::on_app_start();
-            #[cfg(windows)]
-            hide_status_bar(app);
-            #[cfg(not(windows))]
-            let _ = app;
             Ok(())
+        })
+        // every webview, the first window's and any opened later, as its page starts loading
+        .on_page_load(|webview, payload| {
+            #[cfg(windows)]
+            {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                    hide_status_bar(webview);
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = (webview, payload);
         })
         .invoke_handler(tauri::generate_handler![
             list_matches,

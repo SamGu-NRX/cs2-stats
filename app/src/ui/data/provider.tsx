@@ -16,7 +16,7 @@ import { coverEntry, isOwn } from "./engine";
 import type { MatchEntry } from "./match";
 import { setMeta } from "./meta";
 import { hideData, useHidePersonal } from "./privacy";
-import { knownMatchFiles } from "../router";
+import { knownMatchFiles, refreshMatchRoute } from "../router";
 
 export interface Data {
   status: "starting" | "syncing" | "ready" | "error";
@@ -144,7 +144,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
 export function DataValue({ value, children }: { value: Data; children: ReactNode }) {
   const hide = useHidePersonal();
   const shown = useMemo(() => (hide ? hideData(value) : value), [hide, value]);
-  // an address can name a match by its id (router.ts matchId), which resolves through this list
-  useEffect(() => knownMatchFiles(value.matches.map((m) => m.file)), [value.matches]);
+  // An address can name a match by its id (router.ts matchId), which resolves through this list. The
+  // tables are filled as the list renders, so the views below already read the id's file; the
+  // address is read again once the render is done.
+  useMemo(() => knownMatchFiles(value.matches.map((m) => m.file)), [value.matches]);
+  useEffect(() => refreshMatchRoute(), [value.matches]);
   return <Ctx.Provider value={shown}>{children}</Ctx.Provider>;
 }

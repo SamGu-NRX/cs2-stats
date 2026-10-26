@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { knownMatchFiles, MATCH_TABS, matchHref, matchId, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
+import { knownMatchFiles, MATCH_TABS, matchFile, matchHref, matchId, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
 
 describe("match tab shortcuts", () => {
   it("reaches every match tab with Alt and one digit, 0 being the tenth", () => {
@@ -31,6 +31,24 @@ describe("match ids", () => {
     expect(parseHash(matchHref(files[1], "economy"))).toMatchObject({ page: "match", file: files[1], tab: "economy" });
     // an id no listed match has stays as it is, and the match view says it is not in the folder
     expect(parseHash("#/match/m-zzzz/overview").file).toBe("m-zzzz");
+  });
+  it("never hashes an id again", () => {
+    const id = matchId(files[0]);
+    expect(matchId(id)).toBe(id);
+    expect(matchHref(id, "rounds")).toBe(`#/match/${id}/rounds`);
+    knownMatchFiles([]);
+    // before the list arrives the id is kept, not taken for a file name
+    expect(matchId("m-abc123")).toBe("m-abc123");
+    expect(matchFile("m-abc123")).toBe("m-abc123");
+  });
+  it("gives files whose hashes collide their own ids, in sorted path order, the same every time", () => {
+    const hash = (f: string) => (f.startsWith("c") ? "y" : "x");
+    knownMatchFiles(["b/2.json.gz", "c/3.json.gz", "a/1.json.gz"], hash);
+    expect(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz"].map(matchId)).toEqual(["m-x", "m-x-2", "m-y"]);
+    expect(["m-x", "m-x-2", "m-y"].map(matchFile)).toEqual(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz"]);
+    knownMatchFiles(["a/1.json.gz", "c/3.json.gz", "b/2.json.gz"], hash);
+    expect(matchId("b/2.json.gz")).toBe("m-x-2");
+    knownMatchFiles([]);
   });
 });
 

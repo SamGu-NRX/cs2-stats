@@ -56,6 +56,9 @@ export function setHidePersonal(on: boolean) {
   for (const fn of listeners) fn();
 }
 
+/** Calls `fn` whenever the setting changes; returns the unsubscribe. */
+export const onHidePersonalChange = subscribe;
+
 /** Whether personal info is hidden, re-rendering when the setting changes. */
 export const useHidePersonal = () => useSyncExternalStore(subscribe, hidingPersonal);
 /** The saved setting, for the switch in Data & settings. */

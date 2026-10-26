@@ -8,7 +8,7 @@
 // parse, as Profile on that tab, so old links and bookmarks keep working.
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
-import { hidingPersonal } from "./data/privacy";
+import { hidingPersonal, onHidePersonalChange } from "./data/privacy";
 
 // Luck and Replay come last so Alt 1 to 8 keep the tabs they always had.
 export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "luck", "replay"] as const;
@@ -84,14 +84,8 @@ function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
 
 // ---------------------------------------------------------------- match ids
 
-/**
- * A match's id in an address while personal info is hidden: "m-" and a hash of its file path. A
- * match link shows its target in the browser's status bar on hover, and an imported file's name is
- * the user's choice, often a person's name (data/privacy.ts). The id resolves through the files the
- * app has listed (knownMatchFiles); an address with the file path still opens it.
- */
-export function matchId(file: string): string {
-  // cyrb53: 53 bits, so ids of one user's matches do not collide in practice
+/** cyrb53: a 53-bit hash of a file path in base 36, so ids of one user's matches do not collide in practice. */
+export function pathHash(file: string): string {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < file.length; i++) {
     const c = file.charCodeAt(i);
@@ -100,25 +94,69 @@ export function matchId(file: string): string {
   }
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return `m-${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
-const MATCH_ID = /^m-[0-9a-z]+$/;
+
+/** A match id: "m-", the hash, and "-2", "-3"... for the later paths in sorted order of files whose hashes collide. No match file looks like one. */
+const MATCH_ID = /^m-[0-9a-z]+(?:-\d+)?$/;
+export const isMatchId = (s: string) => MATCH_ID.test(s);
+
+let hashOf = pathHash;
+const idOfFile = new Map<string, string>();
 const fileOfId = new Map<string, string>();
+
+/**
+ * A match's id in an address while personal info is hidden: "m-" and a hash of its file path. A
+ * match link shows its target in the browser's status bar on hover, and an imported file's name is
+ * the user's choice, often a person's name (data/privacy.ts). The id resolves through the files the
+ * app has listed (knownMatchFiles); an address with the file path still opens it. An id is never
+ * hashed again.
+ */
+export function matchId(file: string): string {
+  if (isMatchId(file)) return file;
+  return idOfFile.get(file) ?? `m-${hashOf(file)}`;
+}
+
+/**
+ * The file a match id names, from the files the app has listed; the id itself while it names none
+ * (the list is still loading, or the match is gone). Anything else is a file path already.
+ */
+export const matchFile = (s: string) => (isMatchId(s) ? fileOfId.get(s) ?? s : s);
 
 /** What a page writes in a data-file attribute to find a match's row again: its id while personal info is hidden, else its file. */
 export const matchKey = (file: string) => (hidingPersonal() ? matchId(file) : file);
 
 /**
- * The match files the app lists (data/provider.tsx), so an id in the address resolves to its file.
- * An address read before the list arrived is read again.
+ * The match files the app lists (data/provider.tsx calls it as it renders a new list), so an id in
+ * the address resolves to its file. Files whose hashes collide take "-2", "-3"... after the first in
+ * sorted path order, so each id names one file and the same list always gives the same ids. `hash`
+ * is for tests that force a collision. Only fills the tables; refreshMatchRoute re-reads the address.
  */
-export function knownMatchFiles(files: string[]) {
+export function knownMatchFiles(files: string[], hash: (file: string) => string = pathHash) {
+  hashOf = hash;
+  idOfFile.clear();
   fileOfId.clear();
-  for (const f of files) fileOfId.set(matchId(f), f);
+  const byHash = new Map<string, string[]>();
+  for (const f of new Set(files)) {
+    const h = hash(f);
+    byHash.set(h, [...(byHash.get(h) ?? []), f]);
+  }
+  for (const [h, group] of byHash) {
+    group.sort().forEach((f, i) => {
+      const id = i === 0 ? `m-${h}` : `m-${h}-${i + 1}`;
+      idOfFile.set(f, id);
+      fileOfId.set(id, f);
+    });
+  }
+}
+
+/** Re-reads the address after knownMatchFiles, so an id read before the list arrived names its file. */
+export function refreshMatchRoute() {
   if (typeof location === "undefined") return;
   const next = parseHash(location.hash);
   if (next.page === "match" && next.file !== current.file) {
     current = next;
+    tidyMatchUrl();
     subs.forEach((s) => s());
   }
 }
@@ -133,8 +171,7 @@ export function parseHash(hash: string): Route {
     const last = parts[parts.length - 1] as MatchTab;
     const hasTab = parts.length >= 3 && (MATCH_TABS as readonly string[]).includes(last);
     const path = parts.slice(1, hasTab ? -1 : undefined).join("/");
-    const file = MATCH_ID.test(path) ? fileOfId.get(path) ?? path : path;
-    return { page: "match", file, tab: hasTab ? last : "overview", query };
+    return { page: "match", file: matchFile(path), tab: hasTab ? last : "overview", query };
   }
   const p = parts[0];
   if (p === "profile") {
@@ -184,15 +221,23 @@ function tidyProfileUrl() {
   const canon = profileCanonicalHash(current);
   if (location.hash !== canon) history.replaceState(null, "", canon);
 }
-/** While personal info is hidden, rewrites a match address that names its file to the match's id, without a history entry. */
+/**
+ * Rewrites a match address to the form the setting asks for, without a history entry: the id while
+ * personal info is hidden, the file path otherwise. An id that names no listed file yet is left as it
+ * is, so a bookmark opened before the list loads still resolves when it arrives.
+ */
 function tidyMatchUrl() {
-  if (current.page !== "match" || !current.file || !hidingPersonal()) return;
-  const path = location.hash.split("?")[0].replace(/^#\/match\//, "");
-  if (path.startsWith(matchId(current.file))) return;
+  if (current.page !== "match" || !current.file || isMatchId(current.file)) return;
   const q = current.query.toString();
-  history.replaceState(null, "", matchHref(current.file, current.tab) + (q ? `?${q}` : ""));
+  const canon = matchHref(current.file, current.tab) + (q ? `?${q}` : "");
+  if (location.hash !== canon) history.replaceState(null, "", canon);
 }
-if (typeof location !== "undefined") { tidyProfileUrl(); tidyMatchUrl(); }
+if (typeof location !== "undefined") {
+  tidyProfileUrl();
+  tidyMatchUrl();
+  // turning the setting over rewrites the open match's address to the other form
+  onHidePersonalChange(tidyMatchUrl);
+}
 const subs = new Set<() => void>();
 const publish = () => {
   current = parseHash(location.hash);

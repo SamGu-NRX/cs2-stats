@@ -38,7 +38,7 @@ import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
 import { setHidePersonal } from "../data/privacy";
 import { DataValue, type Data } from "../data/provider";
-import { go, MATCH_TABS, matchHref, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
+import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -312,6 +312,35 @@ describe("Hide personal info", () => {
     expect(location.hash).not.toContain(FILE);
     expect(document.querySelector(".mhero__name")).not.toBeNull();
     expect(document.querySelector(".pane .error-box")).toBeNull();
+  }, 30_000);
+
+  it("opens an id link on a cold start: loading while the list loads, then the match, the address untouched", async () => {
+    hidePersonal(true);
+    knownMatchFiles(all.map((x) => x.file));
+    const id = matchId(imported.file);
+    knownMatchFiles([]);
+    act(() => { location.hash = `#/match/${id}/rounds`; });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    act(() => root.render(<DataValue value={dataWith({ status: "syncing", matches: [], fileErrors: [] })}><BarProvider><Shell /></BarProvider></DataValue>));
+    await settle();
+    expect(document.querySelector(".pane .first-scan")).not.toBeNull();
+    expect(document.querySelector(".pane .error-box")).toBeNull();
+    expect(location.hash).toBe(`#/match/${id}/rounds`);
+    await show(location.hash, dataWith());
+    expect(document.querySelector(".mhero__name")?.textContent).toContain("You");
+    expect(document.querySelector(".pane .error-box")).toBeNull();
+    expect(location.hash).toBe(`#/match/${id}/rounds`);
+  }, 30_000);
+
+  it("rewrites the open match's address to its file path when the setting goes off, and back to the id when it comes on", async () => {
+    hidePersonal(true);
+    await show(matchHref(imported.file, "economy"), dataWith());
+    const id = matchId(imported.file);
+    expect(location.hash).toBe(`#/match/${id}/economy`);
+    hidePersonal(false);
+    expect(location.hash).toBe(`#/match/imported/${encodeURIComponent(`${FILE} vs friends.json.gz`)}/economy`);
+    hidePersonal(true);
+    expect(location.hash).toBe(`#/match/${id}/economy`);
   }, 30_000);
 
   it("hides them in failures too: the failed scan, the Valve folder's error and the importer's", async () => {

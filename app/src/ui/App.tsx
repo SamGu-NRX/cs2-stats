@@ -14,7 +14,7 @@ import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
 import { RefreshIcon, SearchIcon } from "./icons/ui";
-import { go, isTextEntry, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
+import { go, isTextEntry, matchFile, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
 
@@ -51,7 +51,9 @@ export function Shell() {
   const pane = useRef<HTMLElement>(null);
   const rail = useRail();
   const [palette, setPalette] = useState(false);
-  const pageKey = route.page === "match" ? `match:${route.file}` : route.page;
+  // an id in the address read before the match list arrived names its file once the list is here
+  const file = route.page === "match" && route.file ? matchFile(route.file) : null;
+  const pageKey = route.page === "match" ? `match:${file}` : route.page;
   const hide = useHidePersonal();
 
   useEffect(() => {
@@ -105,7 +107,7 @@ export function Shell() {
       }
       if (ctrl || e.altKey) return;
       if ((e.key === "[" || e.key === "]") && r.page === "match" && r.file) {
-        const i = matches.findIndex((s) => s.file === r.file);
+        const i = matches.findIndex((s) => s.file === matchFile(r.file!));
         // matches are newest first: "[" goes to the older match, "]" to the newer one
         const next = matches[e.key === "[" ? i + 1 : i - 1];
         if (next) go(matchHref(next.file, r.tab), { instant: true });
@@ -134,7 +136,7 @@ export function Shell() {
     // the views read metric labels and units the worker sends once at start (data/meta.ts), and
     // would say "no matches yet" while the first scan is still reading them
     view = <FirstScan title={title} progress={meta ? progress : null} />;
-  } else if (route.page === "match" && route.file) view = <MatchView file={route.file} tab={route.tab ?? "overview"} />;
+  } else if (file) view = <MatchView file={file} tab={route.tab ?? "overview"} />;
   else if (route.page === "matches") view = <MatchesView />;
   else if (route.page === "profile") view = <ProfileView tab={route.ptab ?? "overview"} />;
   else if (route.page === "settings") view = <SettingsView />;
