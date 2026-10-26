@@ -4,7 +4,7 @@
 // and the match's facts (kills, sides), like the other per-match views (matchviews.ts).
 import type { KillFact, MatchFacts } from "./facts";
 import type { MatchTables, Side } from "./tables";
-import { blindWindows } from "./blinds";
+import { blindWindows, flashDetonations } from "./blinds";
 import { FLASHED_MIN_S } from "./utility";
 
 /** One player a flash blinded. `at` is where they stood, from the position sample nearest the blind. */
@@ -58,15 +58,14 @@ export interface FlashTool {
 
 export const NO_GRENADE_EVENTS = "This file records no grenade or flash events.";
 
-const DETONATE = "flash_detonate";
-
 /**
  * The player's flashes. A blind belongs to a detonation its flash_entity_id names in the same round
  * (the extractor's and the plugin's link; in every file seen so far the blind lands on the
  * detonation's tick): its recorded attacker's latest such detonation at or before it, or with no
  * attacker recorded, the latest by anyone, which makes it this player's only when that one is theirs.
  * A blind without that link is left out and counted in the notes, never placed by guess. A repeated
- * detonation or throw row counts once, and repeated blind rows are one window (blinds.ts blindWindows). A flash led to a kill
+ * detonation or throw row counts once, and a blind's repeated rows under one detonation are one window
+ * (blinds.ts blindWindows, which every view of blinds reads). A flash led to a kill
  * when either holds:
  * - assist: the kill carries a flash assist for the thrower, and this flash is the thrower's latest
  *   one to have blinded the victim before the kill;
@@ -88,39 +87,21 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   if (!(ev && ev.n) && !B.n && !g) return { flashes: [], thrown: null, notes: [NO_GRENADE_EVENTS] };
   const mine = (round: number) => { const ri = riOf.get(round); return ri !== undefined && sideOf.has(ri * 1024 + me) ? ri : undefined; };
 
-  // Every flashbang detonation in the match, every player's: a blind is linked against all of them, so
-  // a reused entity id cannot hand another player's blind to this one. A row repeating a detonation
-  // (same round, thrower, entity id and tick) is the same detonation recorded twice and counts once;
-  // the same entity id at another tick is another flashbang, as the game reuses entity ids.
-  interface Det { round: number; tick: number; by: string | null; entity: number | null; work: Work | null }
+  // The player's detonations among every player's (blinds.ts flashDetonations, repeated rows left out);
+  // the blind windows name the one each blind is linked to
   interface Work { row: FlashRow; ri: number; tick: number; entity: number | null; ticks: number[]; credited: Map<KillFact, FlashKill> }
   const work: Work[] = [];
-  const dets: Det[] = [];
-  const seen = new Set<string>();
-  if (ev) for (let i = 0; i < ev.n; i++) {
-    if (ev.event[i] !== DETONATE) continue;
-    const key = `${ev.round[i]}|${ev.steamid[i]}|${ev.entity_id[i]}|${ev.tick[i]}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const d: Det = { round: ev.round[i], tick: ev.tick[i], by: ev.steamid[i], entity: ev.entity_id[i], work: null };
-    dets.push(d);
+  const byDet = new Map<string, Work>();
+  for (const d of flashDetonations(t)) {
     const ri = d.by === player ? mine(d.round) : undefined;
     if (ri === undefined) continue;
     const fe = f.rounds[ri].freezeEndTick;
-    const x = ev.x[i];
-    const y = ev.y[i];
-    d.work = {
-      row: { round: d.round, side: sideOf.get(ri * 1024 + me)!, t: fe === null ? null : (d.tick - fe) / tr, at: x === null || y === null ? null : [x, y], blinded: [], kills: [] },
+    const w: Work = {
+      row: { round: d.round, side: sideOf.get(ri * 1024 + me)!, t: fe === null ? null : (d.tick - fe) / tr, at: d.x === null || d.y === null ? null : [d.x, d.y], blinded: [], kills: [] },
       ri, tick: d.tick, entity: d.entity, ticks: [], credited: new Map(),
     };
-    work.push(d.work);
-  }
-  const byEntity = new Map<string, Det[]>();
-  for (const d of dets) {
-    if (d.entity === null) continue;
-    const k = `${d.round}|${d.entity}`;
-    const l = byEntity.get(k);
-    if (l) l.push(d); else byEntity.set(k, [d]);
+    work.push(w);
+    byDet.set(d.key, w);
   }
 
   // Throws: the player's flashbangs in the throw log, each paired with one of their detonations, by
@@ -155,21 +136,19 @@ export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashT
   const near = positionsNear(t, tr);
   let unlinked = 0;
   let orphaned = 0;
-  // repeated blind rows joined into one window, as the utility measures count them (blinds.ts)
+  // each blind linked to its detonation and deduplicated, as the utility measures count them (blinds.ts)
   for (const l of blindWindows(t).values()) for (const b of l) {
-    // A blind with a recorded attacker belongs to that attacker's latest detonation of its entity at or
-    // before it. One with no attacker belongs to the latest detonation of that entity by anyone, and is
-    // this player's only when that detonation is theirs.
     const by = b.attacker;
     if (by !== null && by !== player) continue;
-    const d = (b.entity === null ? [] : byEntity.get(`${b.round}|${b.entity}`) ?? [])
-      .filter((x) => x.tick <= b.tick && (by === null || x.by === by))
-      .sort((x, y) => y.tick - x.tick)[0];
-    const w = d?.work ?? null;
+    // linked to a detonation of someone else's: not this player's (an unknown attacker's blind belongs
+    // to the latest detonation of its entity by anyone)
+    const w = b.det === null ? null : byDet.get(b.det) ?? null;
     if (!w) {
-      if (by === player && !b.self) unlinked++;
-      // no attacker and no detonation to read one from: it may be this player's, and nothing says
-      if (by === null && !d && !b.self) orphaned++;
+      if (b.det === null && !b.self) {
+        if (by === player) unlinked++;
+        // no attacker and no detonation to read one from: it may be this player's, and nothing says
+        else orphaned++;
+      }
       continue;
     }
     const v = piOf.get(b.victim);

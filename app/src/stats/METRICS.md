@@ -120,10 +120,12 @@ Restored from main's unscored rows (E20): shown under the attributes, not part o
 
 Flash rules are Leetify's (`research-data-sources.md`): an enemy counts as flashed above 1.1 s of
 blind, and a flash-to-kill is a flashed enemy dying to the team while still blind. A blind is a
-window of the blinds table with repeated rows joined (`blinds.ts` `blindWindows`: rows with the same
-round, attacker, victim and flash entity id whose windows overlap or touch are one blind, from the
-earliest start to the latest end). The utility measures, swing's flash share, head to head and the
-flash tool all count these windows.
+window of the blinds table (`blinds.ts` `blindWindows`): each row is linked to the detonation its
+flash entity id names in the round (its attacker's latest at or before it, or with no attacker, the
+latest by anyone), and rows linked to the same detonation and victim are one blind, from the earliest
+start to the latest end. A row that links to no detonation joins only an exact duplicate, so two
+flashbangs that reuse an entity id stay two. The utility measures, swing's flash share, head to head
+and the flash tool all count these windows.
 
 | id | Status | Definition |
 |---|---|---|

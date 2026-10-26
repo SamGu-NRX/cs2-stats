@@ -177,6 +177,28 @@ describe("flashTool", () => {
     expect((ac.a === "a" ? ac.flashes[0] : ac.flashes[1]).count).toBe(1);
   });
 
+  it("keeps two flashbangs that reuse an entity id apart in every layer", () => {
+    // fails if blinds are merged by entity id rather than by detonation: a throws two flashbangs, both
+    // entity 7, detonating at 10 s and 11 s, and each blinds c for 2 s. That is two blinds and 4 s in
+    // the flash tool, the utility measures and head to head alike, not one 3 s window
+    const tables = oneRoundTables({ players, grenade_events: [det(10, 7), det(11, 7)], blinds: [blind(10, 7, "c", 2), blind(11, 7, "c", 2)] });
+    const f = derive(tables, CS2RB);
+    const m = rollup([f], { player: "a" }).m;
+    const tool = flashTool(tables, f, "a");
+    expect(tool.flashes.map((x) => x.blinded.map((b) => [b.pi, b.secs]))).toEqual([[[pi.c, 2]], [[pi.c, 2]]]);
+    expect([m.enemiesFlashed, m.enemyBlindSecs]).toEqual([2, 4]);
+    const ac = headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === "a,c")!;
+    expect(ac.a === "a" ? ac.flashes[0] : ac.flashes[1]).toEqual({ count: 2, secs: 4 });
+  });
+
+  it("joins only exact duplicate blind rows when no detonation links them", () => {
+    // fails if blind rows with no detonation to link to are merged because they overlap: a's blinds on
+    // c at 10 s and 10.5 s may be two flashbangs, while a row repeated exactly is one blind
+    const tables = oneRoundTables({ players, blinds: [blind(10, 7, "c", 2), blind(10.5, 7, "c", 2), blind(20, 8, "d", 2), blind(20, 8, "d", 2)] });
+    const m = rollup([derive(tables, CS2RB)], { player: "a" }).m;
+    expect([m.enemiesFlashed, m.enemyBlindSecs]).toEqual([3, 6]);
+  });
+
   it("notes a blind with neither an attacker nor a matching detonation instead of dropping it silently", () => {
     // fails if a blind that may be a's but names no attacker and no known detonation disappears unnoted
     const r = tool({ grenade_events: [det(10, 7)], blinds: [blind(20, 99, "c", 2, { attacker_steamid: null }), blind(21, null, "d", 2, { attacker_steamid: null })] });
