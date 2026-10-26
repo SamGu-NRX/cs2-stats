@@ -16,7 +16,7 @@ Not found in patch notes or Steam Replay. The closest things are Leetify's "Top 
 - **Peeks:** shoulder (about 50 ms exposure, then reversal), jiggle (repeated shoulder peeks), wide (committed). These are informal, so we define the thresholds ourselves.
 - **Utility (Leetify):** an enemy counts as flashed at more than 1.1 s of blind. A flash-to-kill is a flashed enemy dying to the team. Quality is z-scores of flash assists, enemies and friends flashed, blind time and HE damage. Smokes and molotovs have **no published quality definition**: our own design. Use awpy `VisibilityChecker` over `.tri` meshes (about 65 µs per call, static geometry only) plus our own smoke-sphere occlusion. Build the `.tri` files locally with `awpy tri`, because `awpy get` downloads are broken.
 - **Information and spotting:** no public definitions. The inputs are demoparser2's spotted fields and our `spotted` change table.
-- **Movement:** no open-source path-efficiency or bhop metric code exists, and there's no authoritative "best movers" list (donk is cited for counter-strafing and crouches).
+- **Movement:** no open-source path-efficiency or bhop metric code exists, and there's no authoritative "best movers" list (one pro is often cited for counter-strafing and crouches).
 
 ## Ideal spray patterns
 The source is the game's `scripts/weapons.vdata_c` (already decoded once at `%TEMP%\pr220\loc\weapons_out`). The recoil seed-to-pattern algorithm is undocumented. cs2spraylab (GPL-3.0) is not bit-exact. Plan: extract the recoil tables ourselves, then validate against recorded sprays (our plugin records the human's per-shot view angles).

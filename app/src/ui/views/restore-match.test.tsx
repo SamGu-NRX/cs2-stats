@@ -25,6 +25,7 @@ import { KillFlags } from "../icons/game";
 import { go, matchHref, useRoute } from "../router";
 import { RoundRail } from "./match/RoundRail";
 import Rounds from "./match/Rounds";
+import Replay from "./match/replay/Replay";
 import MatchView from "./match/MatchView";
 import { BarProvider } from "../shell/Bar";
 import Weapons from "./Weapons";
@@ -51,6 +52,12 @@ const done = <T,>(x: T | null) => ({ data: x, error: null, loading: false });
 vi.mock("../data/provider", () => ({
   useData: () => ({ ...data, status: "ready", host: null, client: null, baselines: null, baselinesError: null }),
 }));
+/** the icon pack's answer for a radar: an image URL, or null when the pack has none */
+let radarArt: string | null = null;
+vi.mock("../data/icons", async (orig) => {
+  const real = await orig<typeof import("../data/icons")>();
+  return { ...real, useGameIcon: (id: string | null) => (id?.startsWith("radar_") ? radarArt : real.useGameIcon(id)) };
+});
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
   useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => (rollupOf ? rollupOf(q) : rolled(summary(q)))) : null),
@@ -73,6 +80,7 @@ beforeEach(() => {
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
   rollupOf = null;
+  radarArt = "blob:radar"; // the pack has radars unless a test says otherwise
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -247,8 +255,18 @@ describe("sampled map shape", () => {
   const d = byName("synthetic");
   const conv = byName("abe5d91c");
 
+  it("draws the sampled shape without the icon pack", () => {
+    // fails if a radar stays blank when the pack has no radar though the matches hold position samples
+    radarArt = null;
+    use([d]);
+    render(<RadarView map="de_dust2" frame={frameFor("de_dust2")!} label="radar"><circle r={1} /></RadarView>);
+    expect(host.querySelector("img.radar-img")).toBeNull();
+    expect(host.querySelector(".radar-view canvas.radar-img")).not.toBeNull();
+  });
+
   it("draws the sampled shape when the radar image fails to load", () => {
     // fails if a radar whose image fails stays blank though the matches hold position samples
+    radarArt = "blob:radar";
     use([d]);
     render(<RadarView map="de_dust2" frame={frameFor("de_dust2")!} label="radar"><circle r={1} /></RadarView>);
     expect(host.querySelector("canvas")).toBeNull();
@@ -269,6 +287,28 @@ describe("sampled map shape", () => {
     use([alias(conv, "samples/nowhere-log")]);
     render(<MapAtmosphere map="de_nowhere" />);
     expect(host.querySelector(".atmos")).toBeNull();
+  });
+});
+
+describe("replay floors", () => {
+  it("draws no backdrop on a lower floor when the icon pack has no radar", () => {
+    // fails if the upper radar layer, which then holds the shape sampled from every floor, stays
+    // visible under players on the lower floor
+    radarArt = null;
+    const d = byName("synthetic");
+    const facts = { ...d.facts, match: { ...d.facts.match, map: "de_nuke" } };
+    const s: Sample = { file: "samples/nuke-demo", facts, entry: { ...d.entry, file: "samples/nuke-demo", match: facts.match } };
+    factsOf.set(s.file, facts);
+    use([s]);
+    render(<Replay v={modelOf(s)} file={s.file} round={0} />);
+    const upperOn = () => host.querySelector(".replay__layer")?.getAttribute("data-on");
+    const floor = (name: string) => [...host.querySelectorAll<HTMLButtonElement>(".seg button")].find((b) => text(b) === name)!;
+    expect(upperOn()).toBe("true");
+    act(() => { floor("Lower").dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+    expect(upperOn()).toBe("false");
+    expect(host.querySelectorAll(".replay__layer")).toHaveLength(1); // and no lower radar stands in
+    act(() => { floor("Upper").dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
+    expect(upperOn()).toBe("true");
   });
 });
 

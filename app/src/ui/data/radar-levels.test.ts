@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mapInfo, toRadar } from "./maps";
-import { hasLevels, levelOf, levelRadarUrl } from "./radar-levels";
+import { hasLevels, levelOf, levelRadarIcon } from "./radar-levels";
 
 // pos_x, pos_y and scale from each map's overview file (data/radar_info/<map>.txt in the mirror
 // maps.ts names), read 2026-10-25. These are the known answers the radar transform must use.
@@ -66,12 +66,12 @@ describe("radar levels", () => {
   it("keeps one-radar maps on one level", () => {
     expect(hasLevels("de_dust2")).toBe(false);
     expect(levelOf("de_dust2", -100000)).toBe("upper");
-    expect(levelRadarUrl("de_dust2", "lower")).toBe(null);
+    expect(levelRadarIcon("de_dust2", "lower")).toBe(null);
   });
 
-  it("names the lower radar image beside the upper one", () => {
-    expect(levelRadarUrl("de_nuke", "upper")).toMatch(/\/radars\/de_nuke_radar_psd\.png$/);
-    expect(levelRadarUrl("de_nuke", "lower")).toMatch(/\/radars\/de_nuke_lower_radar_psd\.png$/);
-    expect(levelRadarUrl("de_unknown", "upper")).toBe(null);
+  it("names each floor's radar in the icon pack", () => {
+    expect(levelRadarIcon("de_nuke", "upper")).toBe("radar_de_nuke");
+    expect(levelRadarIcon("de_nuke", "lower")).toBe("radar_lower_de_nuke");
+    expect(levelRadarIcon("de_unknown", "upper")).toBe(null);
   });
 });

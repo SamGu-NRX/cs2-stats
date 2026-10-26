@@ -5,6 +5,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DERIVE_VERSION } from "../../stats/facts";
 import { isBundled, PACKS_FOLDER, samplesShown, setSamplesShown, VALVE_FOLDER, type ValveImport } from "../../host/host";
 import type { ImportStatus } from "../../host/import-store";
+import { useIconManifest } from "../data/icons";
+import { knownMaps, radarIcon } from "../data/maps";
 import { useAgents, usePros } from "../data/packs";
 import { SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
@@ -162,7 +164,7 @@ export default function Settings() {
               <dt>Stats engine</dt>
               <dd className="meta num">Version {DERIVE_VERSION}</dd>
               <dt>Map images</dt>
-              <dd className="meta">Radars and emblems from the cs2-map-icons project on GitHub (MurkyYT), downloaded when a view first shows them.</dd>
+              <dd className="meta">Radars and emblems from the game icons pack below, which scripts/extract-icon-pack.cjs builds from your own CS2 install. Without it, maps are drawn from where players stood.</dd>
             </dl>
           </Card>
         </div>
@@ -239,10 +241,15 @@ function ValveSource({ n }: { n: number }) {
   );
 }
 
-/** The optional packs: pro scores for "Plays like" and agent art for the player card. */
+/** The optional packs: pro scores for "Plays like", agent art for the player card, and the game's icons and map art. */
 function Packs() {
   const pros = usePros();
   const agents = useAgents();
+  const icons = useIconManifest();
+  const radars = icons ? knownMaps().filter((m) => icons.icons[radarIcon(m)!]).length : 0;
+  const iconText = icons === undefined ? "Loading"
+    : icons ? `${Object.keys(icons.icons).length} icons, radars for ${radars} of ${knownMaps().length} maps. ${icons.source}`
+    : "Not installed. Weapons and kill flags show their names, and maps are drawn from where players stood.";
   const proText = pros.state === "ready" ? `${pros.pros.length} pros for Plays like. ${pros.source}` : pros.state === "missing" ? "Not installed. Plays like stays hidden until pros.json is in the packs folder." : pros.state === "error" ? pros.message : "Loading";
   const agentText = !agents ? "Loading" : agents.t && agents.ct ? "T and CT renders" : agents.t || agents.ct ? "One side only; the other draws a silhouette." : "Not installed. The player card draws silhouettes.";
   return (
@@ -257,6 +264,8 @@ function Packs() {
         <dd><span className="packline"><span className={`packdot ${pros.state === "ready" ? "is-on" : ""}`} />{proText}</span></dd>
         <dt>Agent art <span className="mono faint">agents/*.png</span></dt>
         <dd><span className="packline"><span className={`packdot ${agents?.t && agents?.ct ? "is-on" : ""}`} />{agentText}</span></dd>
+        <dt>Game icons <span className="mono faint">icons/manifest.json</span></dt>
+        <dd><span className="packline"><span className={`packdot ${icons ? "is-on" : ""}`} />{iconText}</span></dd>
       </dl>
     </Card>
   );

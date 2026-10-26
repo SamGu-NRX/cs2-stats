@@ -85,7 +85,7 @@ export const fmtWhen = (m: { date: string | null; startedAt: string | null }) =>
 /** "3 matches", "1 match" */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** Initials for a name: "m0NESY" → "M0", "Twistzz" → "TW". */
+/** Initials for a name: "x0Ray" → "X0", "Mira Kade" → "MK". */
 export function initials(name: string): string {
   const parts = name.trim().split(/[\s_-]+/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();

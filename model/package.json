@@ -1,6 +1,7 @@
 {
   "name": "cs2-winprob-model",
   "private": true,
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "test": "vitest run",

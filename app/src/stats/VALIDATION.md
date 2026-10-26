@@ -278,10 +278,10 @@ same label policy and evaluator, but measures agreement with the full-data produ
 | firstContactTime (s) | 32.0 / 40.3 / 47.7 | 42.5 / 39.6 |
 | smokeSights (per smoke) | 0.59 / 0.87 / 1.17 | |
 
-Top players: opening attempts bobeksde, insani, doc, flouzer, YEKINDAR; entry attempts bobeksde, flameZ,
-tabseN, YEKINDAR, FL1T; smokes per round Aleksib, kyxsan, ztr, magixx, MisteM; counter-strafed first
-shots m0NESY, afro, MoDo, frontales, gr1ks. Entry players come out early and deep, AWPers late and
-shallow, and the in-game leaders throw the most smokes.
+The five players at the top of each measure (opening attempts, entry attempts, smokes per round,
+counter-strafed first shots) fit their known roles; the research output that names them stays in the
+private data folder. Entry players come out early and deep, AWPers late and shallow, and the in-game
+leaders throw the most smokes.
 
 Aim bounds (architecture.md: reaction 150 to 400 ms): pooled reaction median 203 ms, 60.3% of 15,818
 within the range and 24.0% under; time to first shot median 266 ms, 65.0% of 44,173 within and 11.8%
