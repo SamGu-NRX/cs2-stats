@@ -9,7 +9,7 @@ import type { Measures } from "../../stats/facts";
 import type { Kind, Status } from "../../stats/metrics";
 import type { Side } from "../../stats/tables";
 import type { Careers, Line, Values } from "../../worker/protocol";
-import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs } from "../lib/format";
+import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs, plural } from "../lib/format";
 import type { MatchEntry } from "./match";
 import { sourceOf } from "./sources";
 import { metric, ratingInfo, winProbInfo } from "./meta";
@@ -152,6 +152,23 @@ export const statLine = (l: Line) => lineOf(l, l.rating);
 
 /** A match entry's line for the recording player, both sides. */
 export const entryLine = (e: MatchEntry) => statLine(e.line);
+
+/**
+ * The match header's two teams, from the file's players: how many teammates you had, and the
+ * opponents as bots and players ("5 bots", "5 players", "3 bots, 2 players"). The file names no
+ * teams, so a pro or Valve match counts its players too. A player with no side (a spectator, or one
+ * who never spawned) is on neither team. With no opponent in the file, or a recording player with no
+ * side to tell the teams apart, `opponents` is null and the header says the file does not have them.
+ */
+export function teamsOf(e: Pick<MatchEntry, "players" | "you">): { mates: number; opponents: string | null } {
+  const mine = e.players[e.you]?.team ?? null;
+  if (mine === null) return { mates: 0, opponents: null };
+  const sided = e.players.filter((p, i) => i !== e.you && p.team !== null);
+  const them = sided.filter((p) => p.team !== mine);
+  const bots = them.filter((p) => p.bot).length, people = them.length - bots;
+  const parts = [bots ? plural(bots, "bot") : "", people ? plural(people, "player") : ""].filter(Boolean);
+  return { mates: sided.length - them.length, opponents: parts.length ? parts.join(", ") : null };
+}
 
 // ---------------------------------------------------------------- counts read off the measures
 

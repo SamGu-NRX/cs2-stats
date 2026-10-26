@@ -4,7 +4,7 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { MapThumb, Num, SourceBadge } from "../../components/bits";
 import { MapAtmosphere } from "../../components/MapArt";
-import { entryLine, ratingHeadline } from "../../data/engine";
+import { entryLine, ratingHeadline, teamsOf } from "../../data/engine";
 import { useMatch } from "../../data/hooks";
 import { mapAccent } from "../../data/maps";
 import type { MatchEntry, MatchModel } from "../../data/match";
@@ -106,6 +106,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
   const src = sourceOf(e);
   const line = entryLine(e);
   const usStart = e.usStartSide;
+  const teams = teamsOf(e);
   const halves = (team: "us" | "them") => {
     if (!v) return null;
     const firstSide = team === "us" ? usStart : usStart === "T" ? "CT" : "T";
@@ -127,7 +128,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
       <div className="mhero__in">
         <div className="mhero__team">
           <span className="caps">Your team</span>
-          <b className="mhero__name">{e.players[e.you].name} <span className="faint">+ 4</span></b>
+          <b className="mhero__name">{e.players[e.you].name}{teams.mates > 0 && <span className="faint"> + {teams.mates}</span>}</b>
           {halves("us")}
         </div>
         <div className="mhero__center">
@@ -145,7 +146,7 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
         </div>
         <div className="mhero__team mhero__team--them">
           <span className="caps">Opponents</span>
-          <b className="mhero__name">5 bots</b>
+          <b className="mhero__name">{teams.opponents ?? <span className="faint">Not in this file</span>}</b>
           {halves("them")}
         </div>
       </div>
