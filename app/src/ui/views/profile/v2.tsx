@@ -11,7 +11,7 @@ import { useCall } from "../../data/hooks";
 import { metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
 import { fmtSwing } from "../../lib/format";
-import { scoreFill, scoreText, toScore } from "../../lib/scale";
+import { scoreText, toScore } from "../../lib/scale";
 
 // ---------------------------------------------------------------- dot track
 
@@ -52,7 +52,7 @@ export function SwingSourcesChart({ you, bots }: { you: SwingSources; bots: Swin
   const bar = (from: number, to: number, v: number) => (
     <span className="wfall__track" aria-hidden>
       <span className="wfall__zero" style={{ left: `${x(0)}%` }} />
-      <i style={{ left: `${x(Math.min(from, to))}%`, width: `${Math.max(0.6, x(Math.max(from, to)) - x(Math.min(from, to)))}%`, background: scoreFill(v >= 0 ? 1 : -1) }} />
+      <i style={{ left: `${x(Math.min(from, to))}%`, width: `${Math.max(0.6, x(Math.max(from, to)) - x(Math.min(from, to)))}%`, background: v >= 0 ? "var(--good-text)" : "var(--poor-text)" }} />
     </span>
   );
   const pts = (v: number) => fmtSwing(v / 100);

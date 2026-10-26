@@ -5,9 +5,10 @@ import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/comp
 import type { Measures } from "../../../stats/facts";
 import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/identity";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
-import { Delta, Initials, RemoteImg } from "../../components/bits";
+import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
-import { AttrRadar, FormBars } from "../../components/charts";
+import { AttrRadar } from "../../components/charts";
+import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
 import { GameIcon } from "../../components/GameIcon";
 import { attrsOf, fmtMetric, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
@@ -19,7 +20,6 @@ import { ATTRIBUTE_ORDER, HLTV_ORIGIN, usePros, type AttributeId, type Pro } fro
 import { PACKS_FOLDER } from "../../../host/host";
 import { AttrIcon } from "../../icons/attributes";
 import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format";
-import { swingScore } from "../../lib/scale";
 import { BreakRows, NeedsDemo } from "../shared";
 import { DotTrack, SwingSourcesChart } from "./v2";
 import { MapThumb } from "../../components/bits";
@@ -60,9 +60,10 @@ export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
 const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
 
 /**
- * Round swing. The career number is the hero card's; this panel shows where it comes from (the engine's
- * per-source split, Rolled.swingSources, as a waterfall that ends at the total) beside the matches
- * behind it, the best and worst, and the bots' swing in the same matches.
+ * Round swing. The career number is the hero card's; this panel shows the matches behind it as
+ * lollipops from zero (data decides the width), with the average, the positive matches, the best and
+ * the worst beside them and the bots' swing in the same matches, then where it comes from (the
+ * engine's per-source split, Rolled.swingSources, as a waterfall that ends at the total).
  */
 export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: MatchEntry) => number | null }) {
   const swing = swingOf(you.v);
@@ -71,31 +72,33 @@ export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolle
   const known = per.filter((x) => x.v !== null) as { s: MatchEntry; v: number }[];
   const best = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v > b.v ? x : b), null);
   const worst = known.reduce<typeof known[number] | null>((b, x) => (!b || x.v < b.v ? x : b), null);
-  const positive = known.filter((x) => x.v > 0).length;
+  const positive = known.filter((x) => x.v > 0);
+  const scale = symmetricMax(known.map((x) => 100 * x.v));
+  const dayScore = (e: MatchEntry) => `${fmtMatchDay(e.match)}, ${e.score.us}:${e.score.them}`;
   return (
-    <Card title="Round swing" tip={PANEL_TIP.swing} aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing</span>} className="swingcard">
+    <Card title="Round swing" tip={PANEL_TIP.swing} aside={<span className="meta">{plural(you.m.swingRounds, "round")} with swing{known.length ? `, scale ±${scale}%` : ""}</span>} className="swingcard">
       {swing === null ? <div className="meta"><NeedsDemo detail="Swing needs every player's equipment, which converted logs lack." /></div> : (
-        <div className="swingcard__chart">
-          {you.swingSources && <SwingSourcesChart you={you.swingSources} bots={bots?.swingSources ?? null} />}
-          <div className="swingcard__bymatch">
-          <h3 className="caps swingcard__h">By match</h3>
-          <FormBars height={150} refValue={0} fmt={(x) => fmtSwing(x / 100)} score={(x) => swingScore(x / 100)} bars={per.map((x) => ({
-            key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), sub: x.s.result, result: x.s.result,
-            onClick: () => openMatch(matchHref(x.s.file)), tip: `${mapName(x.s.match.map)} ${x.s.score.us}:${x.s.score.them}: ${fmtSwing(x.v)} per round`,
-          }))} />
-          <div className="swingcard__facts">
-            <span><b className="num">{positive}</b><span className="faint">/{known.length}</span> matches with positive swing</span>
-            {best && <a href={matchHref(best.s.file)}>Best <b className="num good-text">{fmtSwing(best.v)}</b> {fmtMatchDay(best.s.match)}</a>}
-            {worst && <a href={matchHref(worst.s.file)}>Worst <b className="num poor-text">{fmtSwing(worst.v)}</b> {fmtMatchDay(worst.s.match)}</a>}
-            {botSwing !== null && (
-              <span className="swingcard__bots" data-tip="Bots in the same matches.">
-                <span className="meta">Bots</span><b className="num">{fmtSwing(botSwing)}</b>
-                <Delta d={100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} />
-              </span>
-            )}
+        <>
+          <div className="series">
+            <MatchLollipops label="Round swing by match" fmt={(x) => fmtSwing(x / 100)} mean={100 * swing}
+              points={per.map((x) => ({ key: x.s.file, value: x.v === null ? null : 100 * x.v, label: fmtMatchDay(x.s.match), result: x.s.result, onClick: () => openMatch(matchHref(x.s.file)) }))} />
+            <dl className="figs figs--wide">
+              <Fig label="Average" value={<Num v={fmtSwing(swing)} />} tone={swing > 0 ? "good" : swing < 0 ? "poor" : undefined} sub={`per round, ${plural(known.length, "match", "matches")}`} />
+              <Fig label="Positive matches" value={<>{positive.length}<small> of {known.length}</small></>} sub={`${positive.filter((x) => x.s.result === "W").length} of those won`} />
+              {best && <Fig label="Best" tone="good" value={<Num v={fmtSwing(best.v)} />} href={matchHref(best.s.file)} sub={dayScore(best.s)} />}
+              {worst && worst !== best && <Fig label="Worst" tone="poor" value={<Num v={fmtSwing(worst.v)} />} href={matchHref(worst.s.file)} sub={dayScore(worst.s)} />}
+              {botSwing !== null && (
+                <Fig label="Bots" value={<Num v={fmtSwing(botSwing)} />} sub={<span className="swingcard__bots" data-tip="Bots in the same matches." tabIndex={0}><Delta d={100 * (swing - botSwing)} span={3} fmt={(x) => `${x.toFixed(2)} pts`} /> you vs them</span>} />
+              )}
+            </dl>
           </div>
-          </div>
-        </div>
+          {you.swingSources && (
+            <div className="swingcard__src">
+              <h3 className="caps swingcard__h">By source</h3>
+              <SwingSourcesChart you={you.swingSources} bots={bots?.swingSources ?? null} />
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
