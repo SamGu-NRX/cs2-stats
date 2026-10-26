@@ -263,7 +263,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                 return (
                   <li key={p.key}>
                     <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]} tabIndex={0}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
                     <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
                     <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
                   </li>

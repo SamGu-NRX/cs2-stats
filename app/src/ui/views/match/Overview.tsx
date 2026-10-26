@@ -132,8 +132,8 @@ function DecidingRounds({ v, file, side }: { v: MatchModel; file: string; side: 
             return (
               <li key={r.ri}>
                 <HoverCard prefer="right" card={() => <RoundCardBody v={v} r={r} />} as="div" tabbable={false}>
-                  <a href={matchHref(file, "rounds", { round: r.number })} className="keyround" aria-label={`Round ${r.number}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}: ${kills.length} kills${died ? ", died" : ""}, swing ${fmtSwing(sw)}`}>
-                    <span className={side} data-tip={r.how ? WIN_LABEL[r.how] : undefined}><WinIcon how={r.how} size={14} compact /></span>
+                  <a href={matchHref(file, "rounds", { round: r.number })} className="keyround" data-tip={r.how ? WIN_LABEL[r.how] : undefined} aria-label={`Round ${r.number}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}: ${kills.length} kills${died ? ", died" : ""}, swing ${fmtSwing(sw)}`}>
+                    <span className={side}><WinIcon how={r.how} size={14} compact /></span>
                     <b>Round {r.number}</b>
                     <span className="keyround__what">
                       {kills.slice(0, 5).map((k, i) => <WeaponIcon key={i} name={k.weapon} height={12} />)}
