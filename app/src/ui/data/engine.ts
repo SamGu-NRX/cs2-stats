@@ -113,6 +113,21 @@ export function lineOf(l: Pick<Line, "m" | "v">, rating: number | null): StatLin
   };
 }
 
+/**
+ * Rates for several players together (a team total), from their summed measures: the same ratios as
+ * stats/metrics.ts adr, kast, hs and swing, which read only these measures. Swing is a fraction.
+ */
+export function pooledRates(ms: Measures[]): { adr: number | null; kast: number | null; hs: number | null; swing: number | null } {
+  const sum = (k: keyof Measures) => ms.reduce((a, m) => a + ((m[k] as number | undefined) ?? 0), 0);
+  const rounds = sum("rounds"), kills = sum("kills"), swingRounds = sum("swingRounds");
+  return {
+    adr: rounds ? sum("dmg") / rounds : null,
+    kast: rounds ? (100 * sum("kast")) / rounds : null,
+    hs: kills ? (100 * sum("hsKills")) / kills : null,
+    swing: swingRounds ? sum("swing") / swingRounds : null,
+  };
+}
+
 /** A worker line (its rating already under the coverage rule) as a stat line. */
 export const statLine = (l: Line) => lineOf(l, l.rating);
 

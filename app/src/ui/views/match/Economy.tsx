@@ -14,6 +14,7 @@ import { roundColumns } from "../../lib/layout";
 import { scoreText, scoreTint, toScore } from "../../lib/scale";
 import { go, matchHref } from "../../router";
 import { RoundCardBody, SectionAside } from "../shared";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 
 const BUY_DEF: Record<BuyClass, string> = {
@@ -39,7 +40,7 @@ export default function Economy({ v, file }: TabProps) {
         <EquipChart v={v} file={file} />
       </Card>
       <div className="grid-3">
-        <Card title="Win rate by buy" aside={e.unknown ? <span className="meta">{plural(e.unknown, "round")} unclassified</span> : undefined}>
+        <Card title={<>Win rate by buy <Hint tip="The tick is the opponents' rate on the same buy." /></>} aside={e.unknown ? <span className="meta">{plural(e.unknown, "round")} unclassified</span> : undefined}>
           <BuyRates v={v} />
         </Card>
         <Card title="Your buy against theirs" aside={<span className="meta">Won / played</span>}>
@@ -164,7 +165,7 @@ function BuyRates({ v }: { v: MatchView }) {
         const pct = r.us.rounds ? (100 * r.us.wins) / r.us.rounds : null;
         const theirs = r.them.rounds ? (100 * r.them.wins) / r.them.rounds : null;
         return (
-          <li key={r.b} data-tip={`${BUY_DEF[r.b]} Opponents won ${r.them.wins} of ${r.them.rounds} on this buy (${fmtPct(theirs, 0)}).`}>
+          <li key={r.b} data-tip={`Opponents won ${r.them.wins} of ${r.them.rounds} on this buy (${fmtPct(theirs, 0)})`}>
             <BuyIcon buy={r.b} size={16} className="cream" />
             <b>{BUY_CLASS_LABEL[r.b]}</b>
             <span className="hbar">{pct !== null && <i style={{ width: `${pct}%`, background: pct >= 50 ? "var(--good)" : "var(--poor)", opacity: 0.85 }} />}{theirs !== null && <em className="hbar__ref" style={{ left: `${theirs}%` }} />}</span>
@@ -173,7 +174,6 @@ function BuyRates({ v }: { v: MatchView }) {
           </li>
         );
       })}
-      <li className="buyrates__note meta">The tick marks the opponents' rate on the same buy.</li>
     </ul>
   );
 }

@@ -1,13 +1,17 @@
-// Duels: who killed whom (head to head), opening duels and trades per player.
-import { useMemo } from "react";
+// Duels: who killed whom (head to head), opening duels and trades per player, and every clutch.
+import { useEffect, useMemo, useState } from "react";
 import { TRADE_WINDOW_S } from "../../../stats/rules";
-import { Num } from "../../components/bits";
+import { ClutchBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable } from "../../components/DataTable";
-import { FirstKillIcon, TradingGlyph } from "./glyphs";
+import { FirstKillIcon, Hint, TradingGlyph } from "./glyphs";
 import { fmtMetric } from "../../data/engine";
 import { deathOf, killMatrix, killsBy, type MPlayer as PlayerRow } from "../../data/match";
 import { metric as meta } from "../../data/meta";
+import { useData } from "../../data/provider";
+import { DefuseIcon } from "../../icons/game";
+import { matchHref } from "../../router";
+import type { ClutchRow } from "../../../worker/protocol";
 import { fmtDiff } from "../../lib/format";
 import { DeathIcon, SkullIcon } from "../../icons/game";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
@@ -26,7 +30,7 @@ export default function Duels({ v }: TabProps) {
   const fk = (t: "us" | "them") => v.players.filter((p) => p.team === t).reduce((a, p) => a + m(p).openingKills, 0);
   return (
     <div className="tabpad duels">
-      <Card title="Head to head" aside={<SectionAside label="Kills" value={<><span className="cream">{totalUs}</span><span className="faint">–</span>{totalThem}</>} />}>
+      <Card title={<>Head to head <Hint tip="Your player's kills on that opponent, then the opponent's kills back." /></>} aside={<SectionAside label="Kills" value={<><span className="cream">{totalUs}</span><span className="faint">–</span>{totalThem}</>} />}>
         <div className="tbl-wrap">
           <table className="tbl h2h">
             <thead>
@@ -60,7 +64,6 @@ export default function Duels({ v }: TabProps) {
             </tbody>
           </table>
         </div>
-        <p className="meta" style={{ marginTop: 10 }}>Each cell reads your player's kills on that opponent, then the opponent's kills back.</p>
       </Card>
       <YourRounds v={v} />
       <div className="grid-2">
@@ -89,15 +92,61 @@ export default function Duels({ v }: TabProps) {
             rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
             columns={[
               { key: "name", label: "Player", align: "l", sort: (p) => p.name, render: (p) => <span className={`name-cell ${p.team}-text`}><PlayerName v={v} pi={p.pi} /></span> },
-              { key: "tk", label: "Trade kills", tip: `Kills on an enemy who had killed a teammate in the last ${TRADE_WINDOW_S} s`, sort: (p) => m(p).tradeKills, render: (p) => m(p).tradeKills },
+              { key: "tk", label: "Trade kills", tip: `Killed an enemy within ${TRADE_WINDOW_S} s of a teammate's death`, sort: (p) => m(p).tradeKills, render: (p) => m(p).tradeKills },
               { key: "td", label: "Traded", tip: meta("deathsTradedPct").def, sort: (p) => metric(p, "deathsTradedPct"), render: (p) => <span className="num">{m(p).tradedDeaths}<span className="faint">/{m(p).deaths}</span></span> },
-              { key: "saved", label: "Saved", tip: "Times you killed an enemy who had just hit a teammate, while the teammate lived", sort: (p) => m(p).savedTeammate, render: (p) => m(p).savedTeammate },
+              { key: "saved", label: "Saved", tip: "Killed an enemy hurting a teammate, who then lived", sort: (p) => m(p).savedTeammate, render: (p) => m(p).savedTeammate },
               { key: "savedby", label: "Saved by", tip: "Times a teammate did that for you", sort: (p) => m(p).savedByTeammate, render: (p) => m(p).savedByTeammate },
             ]}
           />
         </Card>
       </div>
+      <Clutches v={v} file={v.file} />
     </div>
+  );
+}
+
+type Clutch = ClutchRow & { pi: number };
+
+/** Every clutch in the match from the engine's clutch list (stats/closing.ts), both teams; a row opens
+ *  the round. The engine's rows carry no player, so it is asked once per player. */
+function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
+  const { client, version } = useData();
+  const [rows, setRows] = useState<Clutch[] | null>(null);
+  useEffect(() => {
+    if (!client) return;
+    let alive = true;
+    void Promise.all(v.players.map((p) => client.clutches({ files: [file], filter: { player: p.key } }).then((rs) => rs.map((r) => ({ ...r, pi: p.pi })))))
+      .then((all) => alive && setRows(all.flat().sort((a, b) => a.round - b.round || a.pi - b.pi)), () => alive && setRows([]));
+    return () => { alive = false; };
+  }, [client, version, file, v.players]);
+  const of = (t: "us" | "them") => (rows ?? []).filter((c) => v.players[c.pi].team === t);
+  const score = (t: "us" | "them") => <>{of(t).filter((c) => c.won).length}<span className="faint">/{of(t).length}</span></>;
+  return (
+    <Card title="Clutches" icon={<DefuseIcon size={16} className="cream" />} aside={<><SectionAside label="You" value={score("us")} color="var(--cream)" /><SectionAside label="Them" value={score("them")} /></>}>
+      {rows === null ? <div className="skel" style={{ height: 120 }} /> : (
+        <div className="clutches">
+          {(["us", "them"] as const).map((t) => (
+            <section key={t} aria-label={t === "us" ? "Your team's clutches" : "Opponents' clutches"}>
+              <h3 className="caps clutches__h">{t === "us" ? "Your team" : "Opponents"}</h3>
+              {of(t).length ? (
+                <ul className="clutches__list">
+                  {of(t).map((c) => (
+                    <li key={`${c.round}-${c.pi}`}>
+                      <a className={`clutch-row ${v.players[c.pi].isHuman ? "is-you" : ""}`} href={matchHref(file, "rounds", { round: c.round })} aria-label={`Round ${c.round}: ${v.players[c.pi].name}, 1 against ${c.opponents}, ${c.won ? "won" : "lost"}`}>
+                        <span className="num faint">R{c.round}</span>
+                        <ClutchBadge vs={c.opponents} won={c.won} />
+                        <span className={`clutch-row__name ${c.side === "T" ? "t-text" : "ct-text"}`}>{v.players[c.pi].name}</span>
+                        <span className={c.won ? "cream" : "faint"}>{c.won ? "Won" : "Lost"}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="meta">No clutches.</p>}
+            </section>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -105,7 +154,7 @@ export default function Duels({ v }: TabProps) {
  *  reaction need mesh visibility, which plugin recordings do not carry. */
 function YourRounds({ v }: { v: TabProps["v"] }) {
   const gated = !v.visibility;
-  const gate = `${NEEDS_DEMO}: these need view angles and mesh line of sight, which this match file does not carry.`;
+  const gate = `${NEEDS_DEMO}: this file lacks view angles and line of sight`;
   const human = v.human;
   const rows = useMemo(() => v.rounds.filter((r) => killsBy(r, human).length || deathOf(r, human)).map((r) => ({
     r, kills: killsBy(r, human), death: deathOf(r, human), s: v.b.yourRounds[r.ri],

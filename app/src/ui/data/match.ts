@@ -190,3 +190,25 @@ export function killMatrix(v: MatchModel): number[][] {
   for (const k of v.facts.kills) if (k.enemy && k.killer !== null) km[k.killer][k.victim]++;
   return km;
 }
+
+/**
+ * A map callout as the game names it ("TopofMid", "BombsiteB", "CTSpawn") in plain words ("Top of mid",
+ * "B site", "CT spawn"). Unknown shapes pass through with spaces before capitals.
+ */
+export function placeName(raw: string): string {
+  const s = raw
+    .replace(/^Bombsite([A-Z])$/, "$1 site")
+    .replace(/^(CT|T)Spawn$/, "$1 spawn")
+    .replace(/([a-z])of([A-Z])/g, "$1 of $2")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2");
+  const words = s.split(/\s+/).filter(Boolean);
+  return words.map((w, i) => (w.length <= 2 && w === w.toUpperCase() ? w : i === 0 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase())).join(" ");
+}
+
+/** Seconds per place with the callouts in plain words; places that read the same are added together. */
+export function placesNamed(places: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [p, secs] of Object.entries(places)) { const n = placeName(p); out[n] = (out[n] ?? 0) + secs; }
+  return out;
+}
