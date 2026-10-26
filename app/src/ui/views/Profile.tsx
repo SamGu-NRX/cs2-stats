@@ -127,10 +127,10 @@ function ProfileTabs({ tab, meta, children }: { tab: ProfileTab; meta: string; c
 }
 
 /** The sample each tab rests on, for the tab bar's right side. */
-function tabMeta(tab: ProfileTab, p: ProfileData): string {
+function tabMeta(tab: ProfileTab, p: ProfileData, side: SideKey): string {
   const m = p.you.m;
   if (tab === "duels") return `${plural(m.kills, "kill")}, ${plural(m.deaths, "death")}`;
-  if (tab === "playstyle") return `${plural(p.t.m.rounds, "T round")}, ${plural(p.ct.m.rounds, "CT round")}`;
+  if (tab === "playstyle") return side === "both" ? `${plural(p.t.m.rounds, "T round")}, ${plural(p.ct.m.rounds, "CT round")}` : plural(m.rounds, `${side.toUpperCase()} round`);
   return `${plural(p.list.length, "match", "matches")}, ${plural(m.rounds, "round")}`;
 }
 
@@ -209,7 +209,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
         <div className="profile__top psec" id="card" ref={cardRef}>
           <PlayerCard p={p} side={side} cmp={cmp} />
         </div>
-        <ProfileTabs tab={tab} meta={tabMeta(tab, p)}>
+        <ProfileTabs tab={tab} meta={tabMeta(tab, p, side)}>
           {/* what the player card's verdicts measure against; the card is on every tab, so is this */}
           <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
             options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
