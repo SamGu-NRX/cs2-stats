@@ -21,6 +21,7 @@ import { matchModel, roundColumns, type MatchEntry, type MatchModel } from "../d
 import { setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { KillFlags } from "../icons/game";
+import { GameKillFlags } from "./match/glyphs";
 import { BarProvider } from "../shell/Bar";
 import Weapons from "./Weapons";
 
@@ -88,6 +89,14 @@ describe("kill flags", () => {
     expect(labels()).toEqual(["Headshot", "Airborne"]);
     render(<KillFlags kill={{ ...base, killerBlind: false, killerInAir: null }} />);
     expect(host.querySelector(".kflags")).toBeNull();
+  });
+
+  it("does the same in the killfeed's official icons", () => {
+    // fails if the match killfeed (#30's GameKillFlags) drops the killer's flags or shows a null one
+    render(<GameKillFlags kill={{ ...base, killerBlind: true, killerInAir: null }} size={11} />);
+    expect(labels()).toEqual(["Killer was blind"]);
+    render(<GameKillFlags kill={{ ...base, killerBlind: null, killerInAir: true }} size={11} />);
+    expect(labels()).toEqual(["Airborne"]);
   });
 });
 

@@ -17,7 +17,7 @@ import { derive } from "../stats/derive";
 import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
 import { roleBlend } from "../stats/identity";
-import { loadTables } from "../stats/load";
+import { loadTables, withPov } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
 import { decodeMatch } from "../stats/plugin/decode";
@@ -94,9 +94,14 @@ const lru = new Map<string, { key: string; facts: MatchFacts }>();
 /** An extracted match folder (host.ts: any path not ending in .json.gz), read table by table; else a plugin file. */
 const isFolder = (file: string) => !file.endsWith(".json.gz");
 
+/** The user's SteamID64 for each listed folder that carries one (the user's Valve matches), from the last sync. */
+const povs = new Map<string, string>();
+
 async function folderTables(file: string): Promise<MatchTables> {
   const names = new Set(JSON.parse(new TextDecoder().decode(await bytes(file))) as string[]);
-  return loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)));
+  const t = await loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)));
+  const pov = povs.get(file);
+  return pov ? withPov(t, pov) : t;
 }
 
 async function deriveFile(file: string): Promise<Cached> {
@@ -260,6 +265,8 @@ const api: Impl = {
   async sync(entries) {
     // entries are keyed by the baselines they were shown against
     await baselines().catch(() => undefined);
+    povs.clear();
+    for (const e of entries) if (e.pov) povs.set(e.file, e.pov);
     const errors: { file: string; message: string }[] = [];
     const next = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
     let done = 0;

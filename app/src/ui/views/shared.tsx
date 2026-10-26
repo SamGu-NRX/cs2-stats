@@ -6,7 +6,8 @@ import { HoverCard } from "../components/overlay";
 import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
 import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, type MatchModel, type MRound } from "../data/match";
-import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
+import { BUY_LABEL, BuyIcon, SkullIcon, WIN_LABEL } from "../icons/game";
+import { GameKillFlags, GameWeapon, RoundEndIcon } from "./match/glyphs";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
@@ -130,7 +131,7 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
   return (
     <div className="rcard">
       <div className="rcard__head">
-        <WinIcon how={r.how} size={16} className={side ? `${side}-text` : "faint"} />
+        <span className={side ? `${side}-text` : "faint"}><RoundEndIcon how={r.how} size={16} /></span>
         <b>Round {r.number}</b>
         <span className="meta">{r.how ? WIN_LABEL[r.how] : "Result unknown"}</span>
         {r.scoreAfter && <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>}
@@ -146,8 +147,8 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
             <li key={i}>
               <span className="mono faint">{fmtClock(k.t)}</span>
               <span className={k.killer !== null && v.players[k.killer].team === "us" ? "us-text" : "them-text"}>{k.killer === null ? "World" : v.players[k.killer].name}</span>
-              <WeaponIcon name={k.weapon} size={11} />
-              <KillFlags kill={k} size={11} />
+              <GameWeapon name={k.weapon} height={11} />
+              <GameKillFlags kill={k} size={11} />
               <span className={v.players[k.victim].team === "us" ? "us-text" : "them-text"}>{v.players[k.victim].name}</span>
             </li>
           ))}
@@ -159,19 +160,6 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
         <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
       </div>
-    </div>
-  );
-}
-
-/** The hover card of a round the file holds only as totals (MatchInfo.totalsOnly): only its number is known. */
-export function TotalsCardBody({ number }: { number: number }) {
-  return (
-    <div className="rcard">
-      <div className="rcard__head">
-        <WinIcon how={null} size={16} className="faint" />
-        <b>Round {number}</b>
-      </div>
-      <p className="meta">Totals only for this round.</p>
     </div>
   );
 }

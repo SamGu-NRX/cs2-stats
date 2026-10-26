@@ -1,10 +1,11 @@
-// The round rail: one column per round, the win-type glyph in the winning team's row in that team's
+// The round rail: one column per round, the official round-end icon in the winning team's row in that team's
 // side colour, a gap at each side swap, and a cream playhead on the selected round. Its columns line
 // up with the round inspector's (same cell width and label column), so both read as one cursor.
 import type { MatchModel } from "../../data/match";
 import { HoverCard } from "../../components/overlay";
-import { WinIcon, WIN_LABEL } from "../../icons/game";
+import { WIN_LABEL } from "../../icons/game";
 import { RoundCardBody } from "../shared";
+import { RoundEndIcon } from "./glyphs";
 
 export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; selected: number | null; onPick: (ri: number) => void; compact?: boolean }) {
   if (compact) {
@@ -23,7 +24,7 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
               data-tip={`Round ${r.number}: ${r.winner === "us" ? "won" : "lost"}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}`}
               onClick={() => onPick(r.ri)}
             >
-              <WinIcon how={r.how} size={10} />
+              <RoundEndIcon how={r.how} size={10} />
             </button>
           );
         })}
@@ -51,8 +52,8 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
               card={() => <RoundCardBody v={v} r={r} />}
             >
               <button className="rail__btn" onClick={() => onPick(r.ri)} aria-label={`Round ${r.number}, ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "result unknown"}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}`} aria-pressed={on}>
-                <span className="rail__cell" data-side={r.winner === "us" ? side : "none"}>{r.winner === "us" && <WinIcon how={r.how} size={12} />}</span>
-                <span className="rail__cell" data-side={r.winner === "them" ? side : "none"}>{r.winner === "them" && <WinIcon how={r.how} size={12} />}</span>
+                <span className="rail__cell" data-side={r.winner === "us" ? side : "none"}>{r.winner === "us" && <RoundEndIcon how={r.how} size={12} />}</span>
+                <span className="rail__cell" data-side={r.winner === "them" ? side : "none"}>{r.winner === "them" && <RoundEndIcon how={r.how} size={12} />}</span>
                 <span className="rail__n num">{r.number}</span>
               </button>
             </HoverCard>

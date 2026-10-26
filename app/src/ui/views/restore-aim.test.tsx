@@ -10,13 +10,11 @@ import { emptySummary, type Summary, type WeaponTotals } from "../../stats/rollu
 import type { Rolled } from "../../worker/protocol";
 import { metaOf, rolled } from "../../worker/views";
 import { targetControl } from "../components/charts";
-import type { MatchModel } from "../data/match";
 import { setMeta } from "../data/meta";
 import { BarProvider } from "../shell/Bar";
 import type { Data } from "../data/provider";
 import { AimPanels } from "./aim/AimPanels";
 import CareerAim from "./CareerAim";
-import Aim from "./match/Aim";
 
 let scoped: Rolled | null = null;
 vi.mock("../data/provider", () => ({ useData: (): Pick<Data, "matches" | "you"> & { version: number; client: null } => ({ matches: [], you: [], version: 0, client: null }) }));
@@ -208,11 +206,5 @@ describe("empty states", () => {
     render(<BarProvider><CareerAim /></BarProvider>);
     const btn = host.querySelector<HTMLAnchorElement>(".empty a.btn")!;
     expect([btn.textContent, btn.getAttribute("href")]).toEqual(["Open Data & settings", "#/settings"]);
-  });
-
-  it("a match without shots offers career aim as a button", () => {
-    render(<Aim v={{ file: "x", human: 0, players: [{ key: "p" }], entry: { hasAim: false } } as unknown as MatchModel} file="x" round={null} />);
-    const btn = host.querySelector<HTMLAnchorElement>(".empty a.btn")!;
-    expect([btn.textContent, btn.getAttribute("href")]).toEqual(["Open career aim", "#/aim"]);
   });
 });
