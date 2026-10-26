@@ -92,6 +92,21 @@ function readUser(root: string): { user: string | null; error: string | null } {
 const TABLE = /^[a-z0-9_]+\.parquet$/;
 
 /**
+ * A COMPLETE list: an object from plain table file names to their sizes in bytes. Anything else (valid
+ * JSON such as null or a list, a name that is not a table file, a size that is not a whole number) throws
+ * an error naming what is wrong (review of #29: a COMPLETE holding null hid every Valve match).
+ */
+function parseManifest(text: string): Record<string, number> {
+  const m: unknown = JSON.parse(text);
+  if (m === null || typeof m !== "object" || Array.isArray(m)) throw new Error("COMPLETE is not an object of table names to sizes");
+  for (const [f, n] of Object.entries(m)) {
+    if (!TABLE.test(f)) throw new Error(`COMPLETE lists "${f}", which is not a table file name`);
+    if (!Number.isSafeInteger(n) || (n as number) < 0) throw new Error(`COMPLETE gives "${f}" the size ${JSON.stringify(n)}`);
+  }
+  return m as Record<string, number>;
+}
+
+/**
  * One map folder's current version, validated before each file is opened (review of #29): CURRENT, the
  * version's COMPLETE and every table COMPLETE lists must resolve inside root, and every listed name must
  * be a plain table file name. A version that fails any of it is skipped, and nothing outside root is
@@ -110,12 +125,11 @@ function valveMap(root: string, mapDir: string): { dir: string; sizes: Record<st
   if (!isInside(root, complete)) return { skipped: "its version folder resolves outside the Valve folder" };
   let sizes: Record<string, number>;
   try {
-    sizes = JSON.parse(readFileSync(complete, "utf-8")) as Record<string, number>;
+    sizes = parseManifest(readFileSync(complete, "utf-8"));
   } catch (e) {
-    return { skipped: `${name}/COMPLETE: ${(e as Error).message}` };
+    return { skipped: `${name}/${(e as Error).message}` };
   }
   for (const [f, bytes] of Object.entries(sizes)) {
-    if (!TABLE.test(f)) return { skipped: `${name}/COMPLETE lists "${f}", which is not a table file name` };
     const p = path.join(dir, f);
     if (!existsSync(p)) return { skipped: `${name}/${f} is missing` };
     if (!isInside(root, p)) return { skipped: `${name}/${f} resolves outside the Valve folder` };
@@ -130,14 +144,19 @@ export function listValve(root: string): ValveListing {
   ({ user: out.user, error: out.userError } = readUser(root));
   for (const d of readdirSync(root, { withFileTypes: true })) {
     if (!d.isDirectory() || !isName(d.name)) continue;
-    const r = valveMap(root, path.join(root, d.name));
-    if (!r) continue;
-    if ("skipped" in r) { out.skipped.push({ file: `valve/${d.name}`, why: r.skipped }); continue; }
-    out.files.push({
-      file: `valve/${d.name}/${path.basename(r.dir)}`,
-      size: Object.values(r.sizes).reduce((a, b) => a + b, 0),
-      mtime: Math.round(statSync(path.join(r.dir, "COMPLETE")).mtimeMs),
-    });
+    // whatever goes wrong with one map folder skips that match, never the whole listing
+    try {
+      const r = valveMap(root, path.join(root, d.name));
+      if (!r) continue;
+      if ("skipped" in r) { out.skipped.push({ file: `valve/${d.name}`, why: r.skipped }); continue; }
+      out.files.push({
+        file: `valve/${d.name}/${path.basename(r.dir)}`,
+        size: Object.values(r.sizes).reduce((a, b) => a + b, 0),
+        mtime: Math.round(statSync(path.join(r.dir, "COMPLETE")).mtimeMs),
+      });
+    } catch (e) {
+      out.skipped.push({ file: `valve/${d.name}`, why: (e as Error).message });
+    }
   }
   out.files.sort((a, b) => b.file.localeCompare(a.file));
   return out;
@@ -177,9 +196,12 @@ export function readValve(root: string, rel: string): Buffer {
   const complete = path.join(dir, "COMPLETE");
   if (!existsSync(complete)) throw new Error(`${rel}: this version is gone; rescan`);
   contained(root, complete, rel);
-  const sizes = JSON.parse(readFileSync(complete, "utf-8")) as Record<string, number>;
-  const bad = Object.keys(sizes).find((f) => !TABLE.test(f));
-  if (bad !== undefined) throw new ValvePathError(`${rel}: COMPLETE lists "${bad}", which is not a table file name`);
+  let sizes: Record<string, number>;
+  try {
+    sizes = parseManifest(readFileSync(complete, "utf-8"));
+  } catch (e) {
+    throw new ValvePathError(`${rel}: ${(e as Error).message}`);
+  }
   if (table === undefined) return Buffer.from(JSON.stringify(Object.keys(sizes)));
   if (!(table in sizes)) throw new Error(`${rel}: not one of this version's tables`);
   contained(root, path.join(dir, table), rel);
