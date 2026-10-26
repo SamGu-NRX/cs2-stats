@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
-import { careerEntries, fmtMetric } from "../data/engine";
+import { aimEntries, careerEntries, fmtMetric } from "../data/engine";
 import { useCall, useRollups, useYourQuery } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
@@ -40,7 +40,8 @@ export default function CareerAim() {
   const { matches } = useData();
   const { map, n } = useScope();
   const career = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
-  const list = useMemo(() => { const f = careerEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  // aim reads every own match with shots, wingman and unfinished included (aimEntries)
+  const list = useMemo(() => { const f = aimEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const all = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
   const visibility = list.some((s) => s.match.visibility === "ok");
@@ -64,7 +65,7 @@ export default function CareerAim() {
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"] }} />
+      <BarContent crumbs={[{ label: "Career aim" }]} scope={{ controls: ["map", "matches"], maps: "aim" }} />
       <div className="view__in careeraim">
         {!query ? (
           <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
