@@ -6,7 +6,7 @@
 // log-odds over the same maps (xduel.ts fitXDuel, no ridge). The odd-numbered maps check both: hits
 // against expected hits overall, and per band of predicted chance. Prints numbers only; it writes nothing.
 import { contextOf } from "../src/stats/derive";
-import { calibrated, CALIBRATION, CHANCE_FLOOR, hitChance, HIT_AREA_SCALE, shotChances, TARGET_HALF_WIDTH, type ShotChance } from "../src/stats/luck";
+import { calibrated, CALIBRATION, CHANCE_FLOOR, hitChance, HIT_AREA_SCALE, projectBox, shotChances, type ShotChance } from "../src/stats/luck";
 import { fitXDuel } from "../src/stats/xduel";
 import { proMaps, WINPROB } from "./node-read";
 
@@ -16,12 +16,13 @@ const FIT_EVERY = 5;
 const fit: ShotChance[] = [], check: ShotChance[] = [];
 let maps = 0;
 for await (const { t } of proMaps()) {
-  const shots = shotChances(contextOf(t, WINPROB)) ?? [];
+  const found = shotChances(contextOf(t, WINPROB));
+  const shots = found ? found.shots.filter((x) => found.covered.has(x.ri)) : [];
   (maps % 2 === 0 ? fit : check).push(...shots);
   maps++;
   if (maps % 50 === 0) console.error(`${maps} maps`);
 }
-const chance = (x: ShotChance, k: number) => hitChance(x.inaccuracy, x.spread, x.ox, x.oy, (k * TARGET_HALF_WIDTH) / x.dist, (k * x.halfH) / x.dist);
+const chance = (x: ShotChance, k: number) => { const box = projectBox(x.g, k); return box ? hitChance(x.inaccuracy, x.spread, box) : 0; };
 const sum = (xs: ShotChance[], k: number) => xs.reduce((a, x) => a + chance(x, k), 0);
 const hits = (xs: ShotChance[]) => xs.reduce((a, x) => a + x.hit, 0);
 
