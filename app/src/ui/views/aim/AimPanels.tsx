@@ -14,7 +14,7 @@
 //   visibility coverage either way, with each match file's reason when they are gated.
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ACCURATE_FRAC, SIGHT_CONE_DEG } from "../../../stats/aim-geometry";
-import { RECOIL } from "../../../stats/aim-ref";
+import { RECOIL } from "../../../stats/recoil-ref";
 import { HIT_GROUPS } from "../../../stats/facts";
 import type { Side } from "../../../stats/tables";
 import { weaponClass, weaponLabel } from "../../../stats/weapons";

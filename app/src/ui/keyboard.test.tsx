@@ -10,7 +10,7 @@ import { MenuLayer, openMenu } from "./components/overlay";
 import { navWasInstant, openMatch } from "./router";
 import type { Data } from "./data/provider";
 import { Palette } from "./shell/Palette";
-import { RECOIL } from "../stats/aim-ref";
+import { RECOIL } from "../stats/recoil-ref";
 import { emptySummary } from "../stats/rollup";
 import { CS2RB } from "../stats/model-params";
 import { metaOf, rolled } from "../worker/views";

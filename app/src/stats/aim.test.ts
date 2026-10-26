@@ -167,10 +167,11 @@ describe("deriveAim on a hand-built match", () => {
     expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].dist).toBeNull();
   });
 
-  it("compares a spray with the pros' only while an enemy is on screen", () => {
-    // fails if a spray at nobody (no visible engagement) counts toward the pro-path comparison
+  it("charts a spray at nobody, since recoil control needs no target, but gives it no target path", () => {
+    // fails if a spray with no visible enemy is dropped from the chart (the old rule, which left most
+    // sprays out), or gets a target-eye path without a target
     const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
-    expect(s.map((f) => [f.bullets, f.dp.length])).toEqual([[4, 0]]);
+    expect(s.map((f) => [f.bullets, f.dp.length, f.hp.length])).toEqual([[4, 3, 0]]);
   });
 
   it("times the kill from the sighting, and leaves out time to damage of a second or more", () => {
@@ -266,9 +267,40 @@ describe("the aim panels' restored measures", () => {
     expect(derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].hp).toEqual([]);
   });
 
+  it("keeps a moving spray on the chart, and cuts the path at a scoped shot", () => {
+    // fails if moving or airborne shots end the path (the old steady filter left most sprays out),
+    // or a scoped shot, whose recoil differs, is kept
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i) => { t.shots!.speed_2d[i] = 230; t.shots!.airborne[i] = true; });
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.dp.length)).toEqual([3]);
+    t.shots!.scoped[rows[3]] = true;
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.dp.length)).toEqual([2]);
+  });
+
+  it("lands each bullet where its own direction went, from bullet 1's, crossing 180 degrees", () => {
+    // fails if the landing points come from the view instead of the bullet, lose the yaw unwrap, or
+    // are not marked as measured; a shot without a bullet direction ends them
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i, j) => { t.shots!.bullet_pitch[i] = [0, -0.5, -1, -1.5][j]; t.shots!.bullet_yaw[i] = [179.5, -179.5, -179, 179][j]; });
+    const [s] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect([s.landing, s.lp, s.ly]).toEqual(["measured", [-0.5, -1, -1.5], [1, 1.5, -0.5]]);
+    t.shots!.bullet_yaw[rows[2]] = null;
+    const [cut] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect([cut.lp, cut.ly]).toEqual([[-0.5], [1]]);
+    const a = emptyAim();
+    foldAim(a, s);
+    foldAim(a, { ...s, lp: [0.5], ly: [-1] });
+    expect(a.land.ak47).toEqual({ n: [2, 1, 1], dp: [0, -1, -1.5], dy: [0, 1.5, -0.5] });
+    // every spray puts its gun in the picker, charted or not
+    foldAim(a, { ...s, weapon: "negev", dp: [], dy: [], lp: [], ly: [] });
+    expect(a.sprayGuns).toEqual({ ak47: 2, negev: 1 });
+  });
+
   it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
     // fails if squares, bullet indexes or the null skip go wrong
-    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
+    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], lp: [], ly: [], landing: null, sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
     const a = emptyAim();
     foldAim(a, base);
     foldAim(a, { ...base, dp: [3, 2], dy: [0, -1], hp: [], hy: [] });
