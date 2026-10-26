@@ -9,6 +9,8 @@ import type { Side } from "./tables";
 /** Fills the closing measures and returns the match's clutches, for the clutch list. */
 export function closing(c: Ctx): ClutchFact[] {
   const out: ClutchFact[] = [];
+  const withRows = new Set<number>();
+  for (let i = 0; i < c.t.player_rounds.n; i++) { const ri = c.riOf(c.t.player_rounds.round[i]); if (ri !== undefined) withRows.add(ri); }
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rf = c.rounds[ri];
     const list = c.kills[ri];
@@ -29,7 +31,12 @@ export function closing(c: Ctx): ClutchFact[] {
     }
 
     const valued = list.filter((k) => k.tick <= rf.endTick);
-    for (const cl of detectClutches(valued, alive, rf.winner)) {
+    // The rows are the round-start roster only when the extractor read them at freeze end. A round
+    // without a freeze end (recording started live) has them read one tick before the round's end, after
+    // anyone who joined or left mid-round, and a round without rows takes every player with a team
+    // (derive.ts buildCtx). There a clutch starts only after a death.
+    const atStart = rf.freezeEndTick !== null && withRows.has(ri);
+    for (const cl of detectClutches(valued, alive, rf.winner, atStart)) {
       const kills = valued.filter((k, i) => i > cl.from && k.enemy && k.killer === cl.pi).length;
       out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, kills });
       const m = c.pr[ri][cl.pi]!.m;
