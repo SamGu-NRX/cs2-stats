@@ -2,12 +2,6 @@
    not a skill, so green and red stay out. Cream is luck that went your way, grey luck that went against
    you, tan another player's. */
 
-/* The match tab bar (MatchView.tsx Sticky) marks the open section with aria-current="page" since it
-   became a nav of links; these replace views.css's .mtab[aria-selected] rules, which no longer match.
-   They live here because this slice owns the tab bar and not views.css. */
-.mtab[aria-current="page"] { color: var(--cream); }
-@media (hover: hover) and (pointer: fine) { .mtab:not([aria-current]):hover { color: var(--ink); } }
-
 .luck { container-type: inline-size; }
 
 /* ---------------------------------------------------------------- hero */

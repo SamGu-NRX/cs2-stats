@@ -1,5 +1,6 @@
 // Matches: every match in one sortable table, edge to edge, newest first by start time. The map and
-// result scopes sit in the title bar; the search and the summary sit above the table.
+// result scopes sit in the title bar; the search and the summary sit above the table, and the play
+// sessions above that, each one a filter on the table.
 //
 // Every listed match opens, but not every one counts (data/engine.ts): a pro demo is labelled "Pro
 // demo", an abandoned match "Unfinished", and a converted log with under half its rounds logged shows
@@ -12,12 +13,13 @@ import { copyText, openMenu } from "../components/overlay";
 import {
   careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
 } from "../data/engine";
-import { useRatings, useYourQuery } from "../data/hooks";
+import { useCall, useRatings, useYourQuery } from "../data/hooks";
 import { startMs, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { SearchIcon } from "../icons/ui";
 import { fmtAdr, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
+import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { matchHref, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { BarContent } from "../shell/Bar";
@@ -39,16 +41,82 @@ function Counted({ s, children }: { s: MatchEntry; children: ReactNode }) {
   return <span className="num has-def" data-tip={`Partial: ${loggedText(s.match)}.`}>{children}</span>;
 }
 
+/** Your play sessions over the career matches on the map scope (sessions), newest first; null while they load. */
+function useSessions(all: MatchEntry[], map: string | null): Session[] | null {
+  const career = useMemo(() => careerEntries(all, map), [all, map]);
+  const q = useYourQuery(career);
+  const r = useCall("sessions", q ? [q] : null).data;
+  return useMemo(() => (r ? [...r].sort((a, b) => b.start - a.start) : q ? null : []), [r, q]);
+}
+
+/** "Oct 24, 4:49 PM – 10:43 PM": when a session ran, in local time. */
+export function sessionWhen(x: Pick<Session, "start" | "end">): string {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const day = fmtMatchDay({ date: null, startedAt: iso(x.start) });
+  return x.end > x.start ? `${day}, ${fmtTime(iso(x.start))} – ${fmtTime(iso(x.end))}` : `${day}, ${fmtTime(iso(x.start))}`;
+}
+
+/**
+ * The sessions strip: each session (a run of matches with under 3 hours between them, engine's
+ * SESSION_GAP_H) as a chip with its time, record, Rating 3.0 and K–D, and its best match and most
+ * kills. A chip narrows the table to that session's matches (?session=); pressing it again clears it.
+ */
+function SessionStrip({ sessions, selected }: { sessions: Session[] | null; selected: Session | null }) {
+  if (sessions && !sessions.length) return null;
+  return (
+    <section className="sessions" aria-label="Sessions">
+      <div className="sessions__head">
+        <h2 className="caps">Sessions</h2>
+        <span className="help" data-tip="Matches with under 3 hours between them make one session. Your finished matches only." tabIndex={0} aria-label="What a session is">?</span>
+        {sessions && <span className="meta">{plural(sessions.length, "session")}</span>}
+        {selected && <button className="link sessions__clear" onClick={() => setQuery("session", null)}>Show every match</button>}
+      </div>
+      {!sessions ? <div className="skel" style={{ height: 88 }} /> : (
+        <ul className="sessions__list">
+          {sessions.map((x) => {
+            const on = selected?.start === x.start;
+            const n = x.files.length;
+            return (
+              <li key={x.start}>
+                <button className="sess press" aria-pressed={on} onClick={() => setQuery("session", on ? null : String(x.start))}
+                  aria-label={`${sessionWhen(x)}: ${plural(n, "match", "matches")}, ${x.wins} won, ${x.losses} lost${x.ties ? `, ${x.ties} tied` : ""}, rating ${fmtRating(x.rating)}. ${on ? "Show every match" : "Show only these matches"}`}>
+                  <span className="sess__when">{sessionWhen(x)}</span>
+                  <span className="sess__main">
+                    <b className="num sess__rec">{x.wins}<span className="faint">–</span>{x.losses}{x.ties ? <><span className="faint">–</span>{x.ties}</> : null}</b>
+                    <b className="disp sess__rating" style={{ color: x.rating === null ? undefined : ratingText(x.rating) }}>{fmtRating(x.rating)}</b>
+                  </span>
+                  <span className="meta sess__sub">{plural(n, "match", "matches")} · <span className="num">{x.kills}–{x.deaths}</span> K–D</span>
+                  {n > 1 && (x.awards.bestMatch || x.awards.mostKills) && (
+                    <span className="meta sess__awards">
+                      {x.awards.bestMatch && <span>Best match <b className="num">{fmtRating(x.awards.bestMatch.rating)}</b></span>}
+                      {x.awards.mostKills && <span>Most kills <b className="num">{x.awards.mostKills.kills}</b></span>}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function MatchesView() {
   const { matches: all } = useData();
   const r = useRoute();
   const { map, result } = useScope();
   const q = r.query.get("q") ?? "";
+  const sessionKey = r.query.get("session");
+  const sessions = useSessions(all, map);
+  const session = sessionKey && sessions ? sessions.find((x) => String(x.start) === sessionKey) ?? null : null;
 
   const rows = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     // a recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled
+    const inSession = session ? new Set(session.files) : null;
     return listedEntries(all, map).filter((s) => {
+      if (inSession && !inSession.has(s.file)) return false;
       // an unfinished match is neither a win nor a loss
       if (result !== "all" && (!isFinished(s) || s.result !== result)) return false;
       if (!terms.length) return true;
@@ -59,7 +127,7 @@ export function MatchesView() {
       ].join(" ").toLowerCase();
       return terms.every((t) => hay.includes(t));
     });
-  }, [all, map, q, result]);
+  }, [all, map, q, result, session]);
   const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [rows]);
   const line = (s: MatchEntry) => lines.get(s.file)!;
 
@@ -90,6 +158,7 @@ export function MatchesView() {
           </div>
         </div>
       )}
+      {!empty && <SessionStrip sessions={sessions} selected={session} />}
       {rows.length === 0 ? (
         <div className="matches__empty">
           {empty ? (
@@ -97,7 +166,7 @@ export function MatchesView() {
           ) : q ? (
             <Empty text={`No matches for "${q}".`} action={<button className="btn" onClick={() => setQuery("q", null)}>Clear search</button>} />
           ) : (
-            <Empty text="No matches in this filter." action={<button className="btn" onClick={() => setQuery("map", null, { result: null })}>Clear filters</button>} />
+            <Empty text="No matches in this filter." action={<button className="btn" onClick={() => setQuery("map", null, { result: null, session: null })}>Clear filters</button>} />
           )}
         </div>
       ) : (

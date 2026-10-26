@@ -1,6 +1,7 @@
-// Profile: the player card (design-target-v2), then tabs. Overview: Form, Where you rank, round swing,
-// Firepower, multi-kill rounds, clutches and maps. Duels, Utility and Economy: metric rows. Aim and
-// Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
+// Profile: the player card (design-target-v2), then tabs. Overview: HLTV's attributes, Form, Where you
+// rank (or its change since the period before), Strongest and Records, round swing, multi-kill rounds,
+// clutches, Luck and maps. Duels: metric rows. Utility: Utility rating, then metric rows. Economy:
+// metric rows, buy classes and team-buy tiers. Aim and Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
 // like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
 // whole page: every summary is rolled up over that side's rounds. Performance is compared with that
 // side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
@@ -33,7 +34,7 @@ import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } fr
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
-import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, scopeQuery, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
+import { go, matchHref, navWasPointer, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, scopeQuery, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
@@ -41,7 +42,9 @@ import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profil
 import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { roleValueDescriptor } from "./profile/role-decision";
 import { AggressionCard } from "./profile/v2";
-import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RANK_LABELS, RANK_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import { BuyTiersCard, CareerRatingCard, LuckCard, RecordsCard, TopStatsCard, WhereYouRank } from "./profile/career";
+import { AttrIcon } from "../icons/attributes";
 import CareerAim from "./CareerAim";
 import WeaponsTab from "./Weapons";
 import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
@@ -135,13 +138,14 @@ function tabMeta(tab: ProfileTab, p: ProfileData, side: SideKey): string {
 }
 
 /**
- * The page's entrance: true from the first render with data until the cards have risen in, false
- * after a keyboard navigation. Only then does views.css animate the cards and the track dots, so a
+ * The page's entrance: after a pointer navigation (router.ts navWasPointer), true from the first
+ * render with data until the cards have risen in; false after a keyboard navigation, a deep link or
+ * the first load. Only then does views.css animate the cards and the track dots, so a
  * tab switch or a filter change later renders without motion. Each card gets its stagger index.
  */
 function useEnter(ready: boolean, scope: string) {
   const ref = useRef<HTMLDivElement>(null);
-  const [entered, setEnter] = useState(() => !navWasInstant());
+  const [entered, setEnter] = useState(() => navWasPointer());
   // the scope (tab, side, filters, comparison) the page entered with: any change ends the entrance at
   // once, so cards a tab switch or a filter change mounts inside the window never rise
   const [first] = useState(scope);
@@ -222,14 +226,20 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
               {baselines && <div id="style" ref={styleRef} className="psec"><div id="firepower" ref={firepowerRef}><HltvBlock q={base} side={side} values={p.you.v} m={p.you.m} /></div></div>}
               <div className="profile__cols profile__cols--side">
                 <FormRail p={p} side={side} />
-                <StatCard title="Where you rank" tip={PANEL_TIP.whereYouRank} ids={RANK_ROWS} labels={RANK_LABELS} r={ranks}
-                  aside={ranks?.pros ? <span className="meta">vs {ranks.pros}</span> : undefined} />
+                <WhereYouRank ranks={ranks} q={sideQ} list={list} />
               </div>
+              {baselines && (
+                <div className="profile__cols profile__cols--even">
+                  <RecordsCard q={sideQ} list={list} />
+                  <TopStatsCard q={base} side={rankSide} m={ranks?.m ?? null} />
+                </div>
+              )}
               <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
               <div className="profile__cols">
                 <Multis m={p.you.m} q={sideQ} list={list} />
                 <Clutches m={p.you.m} q={base} side={side} list={list} />
               </div>
+              <LuckCard s={p.you} />
               <MapsTable p={p} side={side} />
             </>
           )}
@@ -251,19 +261,25 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
           {tab === "aim" && <CareerAim />}
           {tab === "weapons" && <WeaponsTab />}
           {tab === "utility" && (
-            <div className="profile__cols">
-              <StatCard title="What you throw" tip="Grenades you throw per round, and what you leave unused." ids={THROW_ROWS} r={ranks} />
-              <div className="profile__stack">
-                <StatCard title="What it does" tip="What your flashes, grenades and fire do to enemies." ids={EFFECT_ROWS} r={ranks} />
-                <StatCard title="What you take" tip="Grenade and fire damage you take." ids={TAKEN_ROWS} r={ranks} />
+            <>
+              {baselines && <CareerRatingCard which="utility" q={base} side={rankSide} values={p.you.v} icon={<AttrIcon id="utility" size={22} />} />}
+              <div className="profile__cols">
+                <StatCard title="What you throw" tip="Grenades you throw per round, and what you leave unused." ids={THROW_ROWS} r={ranks} />
+                <div className="profile__stack">
+                  <StatCard title="What it does" tip="What your flashes, grenades and fire do to enemies." ids={EFFECT_ROWS} r={ranks} />
+                  <StatCard title="What you take" tip="Grenade and fire damage you take." ids={TAKEN_ROWS} r={ranks} />
+                </div>
               </div>
-            </div>
+            </>
           )}
           {tab === "economy" && (
-            <div className="profile__cols">
-              <StatCard title="Buying" tip="How you spend against your team, and what you keep." ids={ECONOMY_ROWS} r={ranks} />
-              <BuySplitsCard q={sideQ} />
-            </div>
+            <>
+              <div className="profile__cols">
+                <StatCard title="Buying" tip="How you spend against your team, and what you keep." ids={ECONOMY_ROWS} r={ranks} />
+                <BuySplitsCard q={sideQ} />
+              </div>
+              <BuyTiersCard q={sideQ} />
+            </>
           )}
           {tab === "playstyle" && (
             <>
