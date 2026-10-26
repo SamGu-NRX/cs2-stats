@@ -1,322 +1,418 @@
-// Everything the match page shows, computed once per match. The result is plain data so the worker
-// can post it to the UI and cache it.
-import { aimAggregate, type AimAgg } from "./aim";
-import { buildCtx, type MatchCtx } from "./context";
-import { countMatch, type Counters, type RoundFacts } from "./counters";
-import { BUY_TYPES, economyView, teamEquip, type BuyType, type EconomyView } from "./economy";
-import { positionsAggregate, type PosAgg } from "./positions";
-import { hsPercent, rating2 } from "./rating";
-import { hltvCounts } from "./hltv";
-import { r3Inputs, rating3, type Rating3 } from "./rating3";
-import { deriveRole, roleCounts, type Role } from "./role";
-import { computeTrades, isEnemyKill, isSave } from "./rules";
-import type { MatchFile, RoundHow, Side, Vec3 } from "./schema";
-import { roundDetailsFromCtx, type RoundDetail, type TeamId } from "./rounds";
-import { computeSwing } from "./swing";
-import { stubModel, type WinModel } from "./winprob";
+// derive(tables) -> facts: the one path from a match's tables to everything the engine knows about
+// it. Deterministic and per event; rollup.ts sums the facts under filters. Each family module fills
+// its own measures (facts.ts MEASURES) from the shared indexes built here.
+import { deriveAggro } from "./aggression";
+import { deriveAim, markSight } from "./aim";
+import { buying } from "./buying";
+import { handling } from "./handling";
+import { luck } from "./luck";
+import { closing } from "./closing";
+import { duels } from "./duels";
+import { buyTier, classifyBuy, isPistolRound, type BuyClass, type BuyTier } from "./economy";
+import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
+import { guns } from "./guns";
+import { deriveInfo } from "./information";
+import { deriveMove } from "./movement";
+import { ecoAdjust, valuedRounds } from "./rating3";
+import { positioning } from "./positioning";
+import { markOpening, markTrades } from "./rules";
+import { scoreboard } from "./scoreboard";
+import { sniping } from "./sniping";
+import { swing } from "./swing";
+import { modelFingerprint, type WinProbSource } from "./model-params";
+import type { MatchTables, Side } from "./tables";
+import { grenadeFacts, markUtility, utility } from "./utility";
+import { derivePresence } from "./positions";
+import { deriveUtilQ } from "./utilq";
 
-/** Bump when a definition changes, so cached summaries are rebuilt. */
-// 7: swing for plugin 1.0.0 files removes the victim's HP after a kill (was unknown for every round).
-export const DERIVE_VERSION = 7;
+const asSide = (s: string | null | undefined): Side | null => (s === "CT" ? "CT" : s === "T" ? "T" : null);
 
-export type { TeamId };
+const ON_SCREEN: readonly OnScreenSource[] = ["los", "spotted", "spotted-los-lost"];
 
-export interface PlayerRow {
-  pi: number;
-  key: string;
-  name: string;
-  isBot: boolean;
-  isHuman: boolean;
-  team: TeamId;
-  c: Counters;
-  /** Rating 2.0 (public approximation) */
-  rating: number;
-  /** Rating 3.0 (approx.), over rounds with the kill log; see rating3.ts */
-  rating3: Rating3;
-  /** AWPer or Rifler with a flavour, from this match alone (role.ts) */
-  role: Role;
-  adr: number;
-  kast: number;
-  hs: number;
-  /** average win-probability swing per round, in points (0.05 = 5 %) or null without round states */
-  swingPerRound: number | null;
+/** match.extra "on_screen": absent for demos; any other value is a source this code does not know. */
+function onScreenOf(v: unknown): OnScreenSource | null {
+  if (v === undefined) return null;
+  if (!ON_SCREEN.includes(v as OnScreenSource)) throw new Error(`derive: match.extra on_screen ${JSON.stringify(v)} is not one of ${ON_SCREEN.join(", ")}`);
+  return v as OnScreenSource;
 }
 
-export interface KillView {
-  tick: number;
-  secs: number | null;
-  killer: number | null;
-  victim: number;
-  assister: number | null;
-  flashAssister: number | null;
-  weapon: string;
-  flags: number;
-  tradeKill: boolean;
-  tradeDeath: boolean;
-  teamKill: boolean;
-  suicide: boolean;
-  /** alive before the kill, from the killer team's view is not assumed: [ctAlive, tAlive] */
-  alive: [number, number] | null;
-  ctWinBefore: number | null;
-  ctWinAfter: number | null;
-  credits: [number, number][];
-  kpos: Vec3 | null;
-  vpos: Vec3 | null;
-}
-
-export interface RoundView {
-  ri: number;
-  /** the kill-by-kill log covers this round */
-  captured: boolean;
-  /** only the game's round totals exist for this round (kills, deaths, assists, damage) */
-  lite: boolean;
-  /** null when the plugin could not read the round result */
-  winSide: Side | null;
-  how: RoundHow | null;
-  winner: TeamId | null;
-  usSide: Side;
-  /** players alive on the winning side at round end, null when the round was not captured */
-  left: number | null;
-  scoreAfter: { us: number; them: number };
-  durSecs: number | null;
-  bombSite: string | null;
-  planter: number | null;
-  defuser: number | null;
-  buy: { us: BuyType | null; them: BuyType | null };
-  equip: { us: number | null; them: number | null };
-  money: { us: number | null; them: number | null };
-  kills: KillView[];
-  /** enemy damage per player this round */
-  dmg: number[];
-  /** swing per player this round; null when unknown (no round states, unknown equipment, or a state the model rejects) */
-  swing: number[] | null;
-  clutches: RoundFacts["clutches"];
-  saves: number[];
-}
-
-export interface EconomySummary {
-  /** rounds and wins for our buy type (row) against theirs (column), BUY_TYPES order */
-  matrix: { rounds: number; wins: number }[][];
-  byOwn: { rounds: number; wins: number }[];
-  /** rounds whose buy type could not be classified (unknown equipment or money) */
-  unknown: number;
-}
-
-export interface MatchView {
-  id: string;
-  file: string;
-  map: string;
-  startUtc: string;
-  endUtc: string;
-  status: MatchFile["status"];
-  env: MatchFile["env"];
-  firstFullRound: number;
-  nRounds: number;
-  /** rounds with the kill-by-kill log */
-  captured: number;
-  /** rounds with any player stats: captured rounds plus lite rounds with the game's totals */
-  statRounds: number;
-  score: { us: number; them: number };
-  result: "W" | "L" | "T";
-  human: number;
-  usStartSide: Side;
-  players: PlayerRow[];
-  rounds: RoundView[];
-  /** kills[killer][victim], enemy kills only */
-  killMatrix: number[][];
-  economy: EconomySummary;
-  model: { kind: WinModel["kind"]; label: string };
-  aim: AimAgg | null;
-  pos: PosAgg;
-  hasAim: boolean;
-  hasPos: boolean;
-  /** the plugin's own check of each round against the game's per-round stats, when recorded */
-  recon: ReconSummary | null;
-  /** per round, per player: the round inspector's data (rounds.ts) */
-  roundDetails: RoundDetail[];
-  /** four-way buy classes, win rates, matchups, money and equipment curves, saves (economy.ts) */
-  econ: EconomyView;
-}
-
-export interface ReconSummary {
-  rounds: number;
-  /** rounds where every expected player was compared with the game */
-  fullyChecked: number;
-  /** "Round 7, Rip: damage 87 here, 88 in game" */
-  mismatches: string[];
-  /** true only when every round was fully checked and nothing differed */
-  matches: boolean;
+/** match.extra "totals_only_rounds": absent means none; anything but a list of round numbers is an error. */
+function totalsOnlyOf(v: unknown): number[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v) || !v.every((x) => Number.isInteger(x) && x > 0)) throw new Error(`derive: match.extra totals_only_rounds ${JSON.stringify(v)} is not a list of round numbers`);
+  return v as number[];
 }
 
 /**
- * The plugin's comparison with the game's own per-round stats. A round counts as checked when the
- * players compared reach the players expected: recon.rounds.checkedPlayers / expectedPlayers when
- * present, else the older checked count against the players on a side that round.
+ * match.extra "totals_rounds": [{ round, winner, players: [[steamid, kills, deaths, assists, damage,
+ * headshot kills], ...] }]; absent means none. A row naming an unknown player or holding a
+ * non-number is an error.
  */
-export function reconSummary(m: MatchFile): ReconSummary | null {
-  const r = m.recon?.rounds;
-  if (!r) return null;
-  const nRounds = m.rounds.winSide.length;
-  let fullyChecked = 0;
-  for (let ri = 0; ri < nRounds; ri++) {
-    const j = r.ri.indexOf(ri);
-    if (j < 0) continue;
-    const present = m.rounds.side[ri]?.filter((s) => s !== null).length ?? 0;
-    const expected = r.expectedPlayers?.[j] ?? present;
-    const raw = r.checkedPlayers?.[j] ?? r.checked?.[j] ?? 0;
-    const checked = typeof raw === "number" ? raw : raw === true ? expected : 0;
-    if (expected > 0 && checked >= expected) fullyChecked++;
-  }
-  const mm = m.recon?.mismatch;
-  const field: Record<string, string> = { k: "kills", d: "deaths", a: "assists", dmg: "damage" };
-  const mismatches = mm ? mm.ri.map((ri, j) => `Round ${ri + 1}, ${m.players.name[mm.pi[j]] ?? "?"}: ${field[mm.field[j]] ?? mm.field[j]} ${mm.ours[j]} here, ${mm.game[j]} in game`) : [];
-  return { rounds: nRounds, fullyChecked, mismatches, matches: fullyChecked === nRounds && mismatches.length === 0 };
+function totalsRoundsOf(v: unknown, pi: Map<string, number>): TotalsRound[] {
+  if (v === undefined) return [];
+  const bad = () => new Error(`derive: match.extra totals_rounds ${JSON.stringify(v).slice(0, 200)} is not a list of round totals`);
+  if (!Array.isArray(v)) throw bad();
+  return v.map((r: { round?: unknown; winner?: unknown; players?: unknown }) => {
+    if (!Number.isInteger(r.round) || !(r.winner === "CT" || r.winner === "T" || r.winner === null) || !Array.isArray(r.players)) throw bad();
+    return {
+      number: r.round as number, winner: r.winner,
+      players: (r.players as unknown[][]).map((row) => {
+        const p = pi.get(row[0] as string);
+        const n = row.slice(1);
+        if (p === undefined || n.length !== 5 || !n.every((x) => typeof x === "number")) throw bad();
+        const [kills, deaths, assists, dmg, hsKills] = n as number[];
+        return { pi: p, kills, deaths, assists, dmg, hsKills };
+      }),
+    };
+  });
 }
 
-function rowFor(ctx: MatchCtx, pi: number, c: Counters): PlayerRow {
-  const m = ctx.m;
+/**
+ * The match date and round limit, from the match row's JSON columns. A demo carries no date: local
+ * and downloaded demos get `date` from whoever extracted them; HLTV archives only record when the
+ * demo file was written (`dem_modified_in_archive`), which is the day of the match or the day after.
+ */
+function matchMeta(t: MatchTables) {
+  const extra = JSON.parse(t.match.extra[0]) as Record<string, unknown>;
+  const convars = JSON.parse(t.match.convars[0]) as Record<string, unknown>;
+  const raw = extra.date ?? extra.dem_modified_in_archive;
   return {
-    pi, key: m.players.key[pi], name: m.players.name[pi], isBot: m.players.isBot[pi], isHuman: pi === m.human,
-    team: ctx.onHumanTeam[pi] ? "us" : "them", c, rating: rating2(c), rating3: rating3(c.r3), role: deriveRole(c), adr: c.rounds ? c.dmg / c.rounds : 0,
-    kast: c.rounds ? (100 * c.kastRounds) / c.rounds : 0, hs: hsPercent(c.hsKills, c.kills),
-    swingPerRound: c.swingRounds ? c.swing / c.swingRounds : null,
+    date: typeof raw === "string" ? raw.slice(0, 10) : null, maxRounds: Number(convars.mp_maxrounds ?? 24),
+    // CS2's default overtime is six rounds, three a half
+    otMaxRounds: Number(convars.mp_overtime_maxrounds ?? 6),
+    pov: typeof extra.pov === "string" ? extra.pov : null,
+    roundsPlayed: typeof extra.rounds_played === "number" ? extra.rounds_played : null,
+    startedAt: typeof extra.started_at === "string" ? extra.started_at : null,
+    durationS: typeof extra.duration_s === "number" ? extra.duration_s : null,
+    finalScore: Array.isArray(extra.final_score) ? (extra.final_score as [number, number]) : null,
+    throws: extra.throws === "rebuilt" ? ("rebuilt" as const) : null,
+    onScreen: onScreenOf(extra.on_screen),
+    totalsOnly: totalsOnlyOf(extra.totals_only_rounds),
+    /** parsed in derive, which knows the players' indices (totalsRoundsOf) */
+    totalsRaw: extra.totals_rounds,
+    status: typeof extra.status === "string" ? extra.status : null,
   };
 }
 
-export function deriveMatch(m: MatchFile, file: string, model: WinModel = stubModel): MatchView {
-  const ctx = buildCtx(m);
-  const trades = computeTrades(ctx);
-  const swingResult = computeSwing(ctx, model);
-  const swing = swingResult.swings;
-  const { counters, rounds: facts } = countMatch(ctx, trades, swingResult);
-  r3Inputs(ctx, trades, swingResult).forEach((x, pi) => (counters[pi].r3 = x));
-  roleCounts(ctx).forEach((x, pi) => (counters[pi].role = x));
-  const roundDetails = roundDetailsFromCtx(ctx, trades, swingResult, model);
-  hltvCounts(ctx, roundDetails).forEach((x, pi) => (counters[pi].hl = x));
-  const players = counters.map((c, pi) => rowFor(ctx, pi, c));
-  const nRounds = m.rounds.winSide.length;
-  const swingByKill = new Map(swing.map((s) => [s.k, s]));
-  const factByRound = new Map(facts.map((f) => [f.ri, f]));
-  const usSide = (ri: number): Side => ctx.side(ri, m.human) ?? m.players.startSide[m.human];
-
-  let us = 0;
-  let them = 0;
-  const rounds: RoundView[] = [];
-  for (let ri = 0; ri < nRounds; ri++) {
-    const s = usSide(ri);
-    const winSide = m.rounds.winSide[ri];
-    const winner: TeamId | null = winSide === null ? null : winSide === s ? "us" : "them";
-    if (winner === "us") us++;
-    if (winner === "them") them++;
-    const f = factByRound.get(ri);
-    const freeze = m.rounds.freezeTick[ri];
-    const kills: KillView[] = [];
-    const dmg = new Array<number>(ctx.nPlayers).fill(0);
-    const sw = new Array<number>(ctx.nPlayers).fill(0);
-    if (f) {
-      ctx.kills.forEach((k, j) => {
-        if (k.ri !== ri) return;
-        const st = m.kills.state[k.i];
-        const swk = swingByKill.get(j);
-        if (swk) for (const [p, v] of swk.credits) sw[p] += v;
-        kills.push({
-          tick: k.tick, secs: freeze !== null ? (k.tick - freeze) / ctx.tickrate : null, killer: k.killer, victim: k.victim,
-          assister: k.assister, flashAssister: k.flashAssister, weapon: k.weapon, flags: k.flags,
-          tradeKill: trades.tradeKill[j], tradeDeath: trades.tradeDeath[j], teamKill: k.teamKill, suicide: k.suicide,
-          alive: st ? [st[0], st[1]] : null, ctWinBefore: swk?.before ?? null, ctWinAfter: swk?.after ?? null,
-          credits: swk?.credits ?? [], kpos: m.kills.kpos[k.i], vpos: m.kills.vpos[k.i],
-        });
-      });
-      for (let j = 0; j < m.damage.ri.length; j++) {
-        const a = m.damage.attacker[j];
-        if (m.damage.ri[j] !== ri || a === null || ctx.side(ri, a) === ctx.side(ri, m.damage.victim[j])) continue;
-        dmg[a] += m.damage.dmg[j];
-      }
-    }
-    const basicRow = !f ? m.rounds.basic?.[ri] ?? null : null;
-    if (basicRow) basicRow.forEach((b, pi) => { if (b) dmg[pi] = b[3]; });
-    const aliveEnd = m.rounds.aliveEnd?.[ri] ?? null;
-    const left = winSide === null ? null
-      : f ? [...f.alive].filter((p) => ctx.side(ri, p) === winSide).length
-      : aliveEnd ? aliveEnd[winSide === 3 ? 0 : 1] : null;
-    const eqUs = teamEquip(ctx, ri, s);
-    const eqThem = teamEquip(ctx, ri, (5 - s) as Side);
-    const dur = m.rounds.durTicks[ri];
-    rounds.push({
-      ri, captured: !!f, lite: !!basicRow, winSide, how: m.rounds.how[ri], winner, usSide: s, left, scoreAfter: { us, them },
-      durSecs: dur !== null ? dur / ctx.tickrate : null, bombSite: m.rounds.bombSite[ri], planter: m.rounds.planter[ri],
-      defuser: m.rounds.defuser[ri],
-      buy: { us: f ? f.buy[s] : null, them: f ? f.buy[(5 - s) as Side] : null },
-      equip: { us: eqUs.equip, them: eqThem.equip }, money: { us: eqUs.money, them: eqThem.money },
-      kills, dmg, swing: f && swingResult.available && !swingResult.unknownRounds.has(ri) ? sw : null, clutches: f?.clutches ?? [],
-      saves: f && winSide !== null ? [...f.alive].filter((p) => isSave(ctx, ri, p, f.alive)) : [],
-    });
+/**
+ * Each player-round's freeze-end loadout (its inventory), or null when the row records none: a row with
+ * an empty inventory and no best primary is unknown, not an empty loadout (the plugin records neither).
+ */
+export function loadouts(c: Ctx): Map<number, string[] | null> {
+  const inv = c.t.player_rounds;
+  const out = new Map<number, string[] | null>();
+  for (let i = 0; i < inv.n; i++) {
+    const ri = c.riOf(inv.round[i]);
+    if (ri === undefined) continue;
+    out.set(ri * 1024 + c.pi.get(inv.steamid[i])!, inv.inventory[i].length || inv.best_primary[i] !== null ? inv.inventory[i] : null);
   }
-
-  const killMatrix = Array.from({ length: ctx.nPlayers }, () => new Array<number>(ctx.nPlayers).fill(0));
-  for (const k of ctx.kills) if (isEnemyKill(k)) killMatrix[k.killer!][k.victim]++;
-
-  const economy: EconomySummary = {
-    matrix: BUY_TYPES.map(() => BUY_TYPES.map(() => ({ rounds: 0, wins: 0 }))),
-    byOwn: BUY_TYPES.map(() => ({ rounds: 0, wins: 0 })),
-    unknown: 0,
-  };
-  for (const r of rounds) {
-    if (!r.captured) continue;
-    if (!r.buy.us || !r.buy.them) { economy.unknown++; continue; }
-    const a = BUY_TYPES.indexOf(r.buy.us);
-    const b = BUY_TYPES.indexOf(r.buy.them);
-    const won = r.winner === "us" ? 1 : 0;
-    economy.matrix[a][b].rounds++;
-    economy.matrix[a][b].wins += won;
-    economy.byOwn[a].rounds++;
-    economy.byOwn[a].wins += won;
-  }
-
-  const aim = aimAggregate(m);
-  return {
-    id: m.id, file, map: m.map, startUtc: m.startUtc, endUtc: m.endUtc, status: m.status, env: m.env,
-    firstFullRound: m.firstFullRound, nRounds, captured: ctx.rounds.length, statRounds: players[m.human].c.rounds, score: { us, them },
-    result: us > them ? "W" : us < them ? "L" : "T", human: m.human, usStartSide: usSide(0), players, rounds,
-    killMatrix, economy, model: { kind: model.kind, label: model.label }, aim,
-    pos: positionsAggregate(m), hasAim: m.aim.shots.ri.length > 0 || m.aim.engagements.ri.length > 0,
-    hasPos: m.pos.ri.length > 0, recon: reconSummary(m), roundDetails, econ: economyView(roundDetails),
-  };
+  return out;
 }
 
-/** What the match list and the profile need from one match. Small enough to cache 1,000 of them. */
-export interface MatchSummary {
-  v: number;
-  file: string;
-  id: string;
-  map: string;
-  startUtc: string;
-  status: MatchFile["status"];
+/** A player-round while the families fill it: every measure present. */
+export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
+
+/** Indexes shared by the families. */
+export interface Ctx {
+  t: MatchTables;
+  /** the round win-probability source (model-params.ts) */
+  wp: WinProbSource;
+  tickRate: number;
   nRounds: number;
-  /** rounds with the kill-by-kill log */
-  captured: number;
-  /** rounds with any player stats: captured rounds plus lite rounds with the game's totals */
-  statRounds: number;
-  score: { us: number; them: number };
-  result: MatchView["result"];
-  usStartSide: Side;
-  human: { key: string; name: string; c: Counters; rating: number; rating3: number | null };
-  /** bot careers: one entry per bot in the match, either team */
-  bots: { key: string; name: string; c: Counters }[];
-  aim: AimAgg | null;
-  /** the human has position samples (positions themselves are cached separately) */
-  hasPos: boolean;
-  pos: PosAgg;
+  map: string;
+  pi: Map<string, number>;
+  players: PlayerInfo[];
+  /** side[ri][pi], null when the player did not play the round */
+  side: (Side | null)[][];
+  ctTeam: (0 | 1)[];
+  rounds: RoundFact[];
+  /** kills[ri], tick order, post-round suicides removed */
+  kills: KillFact[][];
+  /** pr[ri][pi], null when the player did not play the round; every measure present while deriving */
+  pr: (WorkRound | null)[][];
+  /** row indexes of a table by round (0-based) */
+  byRound: (table: "damages" | "blinds" | "grenade_throws" | "shots" | "bomb" | "purchases") => number[][];
+  /** a player's position sample nearest a tick (within half a second), [x, y, z]; null without positions */
+  posAt: (ri: number, pi: number, tick: number) => [number, number, number] | null;
+  /** the positions row posAt reads, or null */
+  sampleAt: (ri: number, pi: number, tick: number) => number | null;
+  /** a player index from a steamid column value */
+  idOf: (id: string | null) => number | null;
+  /** row index of a round number in the rounds table; undefined for rounds the tables do not cover */
+  riOf: (round: number) => number | undefined;
 }
 
-export function summarize(v: MatchView): MatchSummary {
-  const h = v.players[v.human];
+export function buildCtx(t: MatchTables, wp: WinProbSource): Ctx {
+  const tickRate = t.match.tick_rate[0];
+  const nRounds = t.rounds.n;
+  // Rounds are addressed by row. Demos cover every round, but a source may cover only some (the
+  // plugin adapter leaves out rounds it has only totals for), so round numbers can skip.
+  const rowOf = new Map<number, number>();
+  for (let i = 0; i < nRounds; i++) rowOf.set(t.rounds.round[i], i);
+  const riOf = (round: number) => rowOf.get(round);
+  const teams = [t.match.team_ct_start[0], t.match.team_t_start[0]];
+  const pi = new Map<string, number>();
+  const players: PlayerInfo[] = [];
+  const add = (id: string, name: string, team: string | null, bot: boolean) => {
+    if (pi.has(id)) return;
+    pi.set(id, players.length);
+    const ti = team === null ? -1 : teams.indexOf(team);
+    players.push({ id, name, team: ti === 0 ? 0 : ti === 1 ? 1 : null, bot });
+  };
+  for (let i = 0; i < t.players.n; i++) add(t.players.steamid[i], t.players.name[i], t.players.team[i], t.players.is_bot[i]);
+  for (let i = 0; i < t.player_rounds.n; i++) add(t.player_rounds.steamid[i], t.player_rounds.steamid[i], null, false);
+
+  const side: (Side | null)[][] = Array.from({ length: nRounds }, () => new Array<Side | null>(players.length).fill(null));
+  for (let i = 0; i < t.player_rounds.n; i++) {
+    const ri = riOf(t.player_rounds.round[i]);
+    if (ri !== undefined) side[ri][pi.get(t.player_rounds.steamid[i])!] = asSide(t.player_rounds.side[i]);
+  }
+  // The team on CT each round: by name when the tables carry team names, else the CT players' teams.
+  const ctTeam = Array.from({ length: nRounds }, (_, ri): 0 | 1 => {
+    const name = t.rounds.ct_team[ri];
+    if (name !== null && teams.includes(name)) return teams.indexOf(name) as 0 | 1;
+    const votes = [0, 0];
+    side[ri].forEach((s, p) => { const tm = players[p].team; if (s === "CT" && tm !== null) votes[tm]++; });
+    return votes[1] > votes[0] ? 1 : 0;
+  });
+  // A player without a team name takes the team they played CT or T for.
+  for (let p = 0; p < players.length; p++) {
+    for (let ri = 0; ri < nRounds && players[p].team === null; ri++) {
+      const s = side[ri][p];
+      if (s) players[p].team = s === "CT" ? ctTeam[ri] : ((1 - ctTeam[ri]) as 0 | 1);
+    }
+  }
+  // A round with no player_rounds rows at all (a demo whose recording began with round 1 live has no
+  // freeze end to read them at): every player with a team played it, on their team's side.
+  for (let ri = 0; ri < nRounds; ri++) {
+    if (side[ri].some((s) => s !== null)) continue;
+    players.forEach((pl, p) => { if (pl.team !== null) side[ri][p] = pl.team === ctTeam[ri] ? "CT" : "T"; });
+  }
+
+  const cache = new Map<string, number[][]>();
+  const byRound: Ctx["byRound"] = (name) => {
+    let out = cache.get(name);
+    if (out) return out;
+    out = Array.from({ length: nRounds }, () => []);
+    const tab = t[name];
+    if (tab) for (let i = 0; i < tab.n; i++) { const ri = riOf(tab.round[i]); if (ri !== undefined) out[ri].push(i); }
+    cache.set(name, out);
+    return out;
+  };
+
+  // positions by (round, player), tick order
+  const pos = new Map<number, number[]>();
+  const P = t.positions;
+  if (P) for (let i = 0; i < P.n; i++) {
+    const p = pi.get(P.steamid[i]);
+    if (p === undefined) continue;
+    const ri = riOf(P.round[i]);
+    if (ri === undefined) continue;
+    const key = ri * 1024 + p;
+    let l = pos.get(key);
+    if (!l) pos.set(key, (l = []));
+    l.push(i);
+  }
+  const sampleAt: Ctx["sampleAt"] = (ri, p, tick) => {
+    const l = P ? pos.get(ri * 1024 + p) : undefined;
+    if (!l || !P) return null;
+    let lo = 0, hi = l.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (P.tick[l[mid]] < tick) lo = mid + 1; else hi = mid; }
+    let best = lo;
+    if (lo > 0 && Math.abs(P.tick[l[lo - 1]] - tick) < Math.abs(P.tick[l[lo]] - tick)) best = lo - 1;
+    const i = l[best];
+    return Math.abs(P.tick[i] - tick) > tickRate / 2 || !P.is_alive[i] ? null : i;
+  };
+  const posAt: Ctx["posAt"] = (ri, p, tick) => {
+    const i = sampleAt(ri, p, tick);
+    return i === null ? null : [P!.x[i], P!.y[i], P!.z[i]];
+  };
+  const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
+
   return {
-    v: DERIVE_VERSION, file: v.file, id: v.id, map: v.map, startUtc: v.startUtc, status: v.status, nRounds: v.nRounds,
-    captured: v.captured, statRounds: v.statRounds, score: v.score, result: v.result, usStartSide: v.usStartSide,
-    human: { key: h.key, name: h.name, c: h.c, rating: h.rating, rating3: h.rating3.value },
-    bots: v.players.filter((p) => p.isBot).map((p) => ({ key: p.key, name: p.name, c: p.c })),
-    aim: v.aim, hasPos: Object.keys(v.pos.human).length > 0, pos: v.pos,
+    t, wp, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, sampleAt, idOf, riOf,
   };
 }
 
+/**
+ * Damage one hit counts for ADR: the hurt event's damage, capped at the victim's health before it.
+ * This is HLTV's figure. The in-game scoreboard counts health lost instead (dmg_health_capped), which
+ * is one HP more on hits where the event dropped fractional damage (VALIDATION.md, pnpm
+ * scoreboard-variants).
+ */
+export function hitDamage(t: MatchTables, i: number): number {
+  // A hit the extractor rebuilt from a health drop (damages.source = health) has no event damage; the
+  // HP it removed is the only figure there is.
+  const reported = t.damages.dmg_health[i];
+  return reported === null ? t.damages.dmg_health_capped[i] : Math.min(reported, t.damages.health_before[i] ?? 100);
+}
+
+/** True for a damage row that counts as enemy damage (not self, team or world damage). */
+export const enemyHit = (t: MatchTables, i: number) => t.damages.attacker_steamid[i] !== null && !t.damages.is_self[i] && !t.damages.is_team_damage[i];
+
+function killFacts(c: Ctx): KillFact[][] {
+  const k = c.t.kills;
+  const rows: number[][] = Array.from({ length: c.nRounds }, () => []);
+  for (let i = 0; i < k.n; i++) { const ri = c.riOf(k.round[i]); if (ri !== undefined) rows[ri].push(i); }
+  return rows.map((list, ri) => {
+    // A suicide after the round has ended is not a death; a bomb death after the end tick is
+    // (HLTV's counts, VALIDATION.md).
+    const kept = list.filter((i) => !(k.is_suicide[i] && k.tick[i] > c.t.rounds.end_tick[ri]));
+    const out = kept.map((i): KillFact => {
+      const killer = c.idOf(k.attacker_steamid[i]);
+      const victim = c.pi.get(k.victim_steamid[i])!;
+      const killerSide = killer === null ? null : asSide(k.a_side[i]) ?? c.side[ri][killer];
+      const victimSide = asSide(k.v_side[i]) ?? c.side[ri][victim];
+      const fe = c.t.rounds.freeze_end_tick[ri];
+      const xy = (x: number | null, y: number | null): [number, number] | null => (x === null || y === null ? null : [x, y]);
+      return {
+        ri, tick: k.tick[i], t: fe === null ? null : (k.tick[i] - fe) / c.tickRate,
+        killer, victim, assister: c.idOf(k.assister_steamid[i]), flashAssist: k.assistedflash[i] === true,
+        killerSide, victimSide, weapon: k.weapon[i], victimWeapon: k.v_active_weapon[i],
+        headshot: k.headshot[i], wallbang: (k.penetrated[i] ?? 0) > 0, smoke: k.thrusmoke[i] === true, noscope: k.noscope[i] === true,
+        killerBlind: k.attackerblind[i], killerInAir: k.attackerinair[i],
+        kpos: xy(k.a_x[i], k.a_y[i]), vpos: xy(k.v_x[i], k.v_y[i]),
+        enemy: killer !== null && killer !== victim && killerSide !== null && victimSide !== null && killerSide !== victimSide,
+        opening: false, tradeKill: false, traded: false, ecoPoints: null, credits: [],
+      };
+    });
+    out.sort((a, b) => a.tick - b.tick);
+    markOpening(out);
+    markTrades(out, c.tickRate);
+    return out;
+  });
+}
+
+function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
+  const r = c.t.rounds;
+  const pr = c.t.player_rounds;
+  const equip = Array.from({ length: c.nRounds }, () => ({ CT: 0 as number | null, T: 0 as number | null, nCT: 0, nT: 0 }));
+  for (let i = 0; i < pr.n; i++) {
+    const ri = c.riOf(pr.round[i]);
+    const s = asSide(pr.side[i]);
+    if (ri === undefined || !s) continue;
+    const e = pr.equip_value_game[i];
+    const x = equip[ri];
+    x[s] = e === null || x[s] === null ? null : x[s]! + e;
+    if (s === "CT") x.nCT++; else x.nT++;
+  }
+  return Array.from({ length: c.nRounds }, (_, ri): RoundFact => {
+    const x = equip[ri];
+    const pistol = isPistolRound(r.round[ri] - 1, maxRounds);
+    const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
+    const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    const tier = (s: Side): BuyTier | null => (pistol ? "pistol" : team[s] === null ? null : buyTier(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    const fe = r.freeze_end_tick[ri];
+    return {
+      ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
+      durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
+      plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], planter: c.idOf(r.planter_steamid[ri]), defuser: c.idOf(r.defuser_steamid[ri]), defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
+      leaves: leavesOf(c, ri),
+      equip: team, buy: { CT: buy("CT"), T: buy("T") }, tier: { CT: tier("CT"), T: tier("T") }, winProb: null,
+    };
+  });
+}
+
+/** A round's disconnects of players who were alive, in tick order (tables leaves). */
+function leavesOf(c: Ctx, ri: number): { tick: number; pi: number }[] {
+  const L = c.t.leaves;
+  if (!L) return [];
+  const out: { tick: number; pi: number }[] = [];
+  for (let i = 0; i < L.n; i++) {
+    const pi = c.idOf(L.steamid[i]);
+    if (c.riOf(L.round[i]) === ri && L.alive[i] && pi !== null) out.push({ tick: L.tick[i], pi });
+  }
+  return out.sort((a, b) => a.tick - b.tick);
+}
+
+/** Spawn point key and the map's place name there, from the round's first position sample. */
+function spawnOf(c: Ctx, ri: number, p: number): { spawn: string | null; spawnPlace: string | null } {
+  const i = c.sampleAt(ri, p, c.t.rounds.start_tick[ri] ?? c.rounds[ri].freezeEndTick ?? c.rounds[ri].endTick);
+  const P = c.t.positions!;
+  return i === null ? { spawn: null, spawnPlace: null } : { spawn: `${Math.round(P.x[i] / 16) * 16},${Math.round(P.y[i] / 16) * 16}`, spawnPlace: P.place[i] || null };
+}
+
+function playerRounds(c: Ctx): (WorkRound | null)[][] {
+  const t = c.t.player_rounds;
+  const row = new Map<number, number>();
+  for (let i = 0; i < t.n; i++) { const ri = c.riOf(t.round[i]); if (ri !== undefined) row.set(ri * 1024 + c.pi.get(t.steamid[i])!, i); }
+  return c.rounds.map((rf) => c.players.map((_, p) => {
+    const side = c.side[rf.ri][p];
+    if (!side) return null;
+    const i = row.get(rf.ri * 1024 + p);
+    const m = emptyMeasures();
+    m.rounds = 1;
+    const won = rf.winner === null ? null : rf.winner === side;
+    if (won) m.won = 1;
+    if (won === false) m.lostRounds = 1;
+    return {
+      ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
+      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"], ownTier: rf.tier[side], oppTier: rf.tier[side === "CT" ? "T" : "CT"],
+      aliveAtStart: i === undefined ? null : t.alive_at_start[i],
+      equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
+      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ...spawnOf(c, rf.ri, p), m,
+    };
+  }));
+}
+
+/** Seconds from the first round's start (or freeze end) to the last round's end. */
+function ticksSpan(c: Ctx): number | null {
+  const r = c.t.rounds;
+  const first = r.start_tick[0] ?? r.freeze_end_tick[0];
+  return c.nRounds && first !== null ? (r.end_tick[c.nRounds - 1] - first) / c.tickRate : null;
+}
+
+const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));
+
+/**
+ * One match's facts. `wp` is the round win-probability source (model-params.ts winProbSource: HLTV's
+ * lookup when its pack is installed, else CS2RB); swing and the win-probability path depend on it, so
+ * cache facts by it too.
+ */
+/** The shared indexes with the rounds, kills and player-rounds filled, before any family runs: what derive starts from, and what tools that fit a family's parameters read. */
+export function contextOf(t: MatchTables, wp: WinProbSource): Ctx {
+  const c = buildCtx(t, wp);
+  c.rounds = roundFacts(c, matchMeta(t).maxRounds);
+  c.kills = killFacts(c);
+  c.pr = playerRounds(c);
+  return c;
+}
+
+export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
+  const c = contextOf(t, wp);
+  const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
+
+  scoreboard(c);
+  const clutches = closing(c);
+  buying(c, maxRounds, otMaxRounds);
+  sniping(c);
+  duels(c);
+  positioning(c);
+  utility(c);
+  markUtility(c);
+  ecoAdjust(c);
+  swing(c);
+  valuedRounds(c);
+  markSight(c);
+  handling(c);
+  luck(c);
+  const weapons = guns(c);
+
+  const counted: [number, number] = [0, 0];
+  for (const rf of c.rounds) if (rf.winner) counted[rf.winner === "CT" ? rf.ctTeam : 1 - rf.ctTeam]++;
+  const score = finalScore ?? counted;
+  const complete = status !== null ? status === "complete" : Math.max(...score) > maxRounds / 2 || (score[0] === score[1] && 2 * score[0] >= maxRounds);
+  return {
+    v: DERIVE_VERSION,
+    match: {
+      id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
+      teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
+      roundsPlayed: roundsPlayed ?? c.nRounds, totalsOnly, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
+      inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen },
+    },
+    players: c.players, rounds: c.rounds,
+    pr: c.pr.flat().filter((x): x is WorkRound => x !== null).map((r) => ({ ...r, m: sparse(r.m) })),
+    kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c), totalsRounds: totalsRoundsOf(totalsRaw, c.pi),
+    aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
+  };
+}

@@ -10,8 +10,10 @@ function readOpen(id: string | undefined, dflt: boolean): boolean {
   return v === null ? dflt : v === "1";
 }
 
-export function Card({ title, aside, children, id, collapsible, defaultOpen = true, flush, className, foot, icon, headingLevel = 2 }: {
+export function Card({ title, tip, aside, children, id, collapsible, defaultOpen = true, flush, className, foot, icon, headingLevel = 2 }: {
   title?: ReactNode;
+  /** what the card shows, in one sentence: the title's tooltip (data/tips.ts PANEL_TIP) */
+  tip?: string;
   aside?: ReactNode;
   children: ReactNode;
   /** persists the open state when collapsible */
@@ -44,20 +46,20 @@ export function Card({ title, aside, children, id, collapsible, defaultOpen = tr
   return (
     <section className={`card ${className ?? ""}`} aria-labelledby={title ? `${bodyId}-h` : undefined}>
       {title && (collapsible ? (
-        <div className="card__head" style={{ padding: 0 }}>
+        <div className="card__head card__head--toggle">
           <H style={{ display: "contents" }}>
-            <button className="card__toggle" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
+            <button className="card__toggle" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-tip={tip}>
               {icon}
               <span className="card__title" id={`${bodyId}-h`}>{title}</span>
               <ChevronIcon className="chev" size={16} />
             </button>
           </H>
-          {aside && <div className="card__aside" style={{ paddingRight: 16 }}>{aside}</div>}
+          {aside && <div className="card__aside card__aside--pad">{aside}</div>}
         </div>
       ) : (
         <div className="card__head">
           {icon}
-          <H className="card__title" id={`${bodyId}-h`}>{title}</H>
+          <H className="card__title" id={`${bodyId}-h`}>{tip ? <span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span> : title}</H>
           {aside && <div className="card__aside">{aside}</div>}
         </div>
       ))}

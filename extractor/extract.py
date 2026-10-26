@@ -50,6 +50,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import polars as pl  # noqa: E402
 
+from repo_guard import check_output, write_json  # noqa: E402
 from schema_v1 import KEYS, NULLABLE, TYPES  # noqa: E402
 from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z, group_triggers,  # noqa: E402
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
@@ -2318,7 +2319,8 @@ def write_output(tables: dict[str, pd.DataFrame], out_dir: Path, result: dict) -
     version_dir and old_versions_locked. A RETIRED marker on out_dir (a withdrawn map extracted into again)
     is removed only once the new version is published, so a failed write leaves the old tables withdrawn.
     The map's lock is held from creating the staging folder to the prune after publishing."""
-    out_dir = Path(out_dir)
+    # every source's tables hold SteamIDs and player names, so they never land in the repository
+    out_dir = check_output(out_dir, private=True, what="the extracted tables")
     tmp = out_dir / f".tmp-{os.getpid()}"
     with map_lock(out_dir):
         # Created under the lock: a retirement could otherwise delete the folder between its creation and
@@ -2365,12 +2367,15 @@ def main(argv=None) -> int:
     ap.add_argument("--meta", default="{}", help="JSON object stored in match.extra")
     ap.add_argument("--result", type=Path, help="write the result JSON here")
     a = ap.parse_args(argv)
-    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta))
-    txt = json.dumps(res, default=_json_default, indent=1)
+    # both outputs are checked before the demo is parsed; the result names the match's players
+    check_output(a.out_dir, private=True, what="the extracted tables")
     if a.result:
-        a.result.write_text(txt, encoding="utf-8")
+        check_output(a.result, private=True, what="the extraction result")
+    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta))
+    if a.result:
+        write_json(a.result, res, private=True, what="the extraction result", default=_json_default, indent=1)
     else:
-        print(txt)
+        print(json.dumps(res, default=_json_default, indent=1))
     return 0 if res["ok"] else 1
 
 

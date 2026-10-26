@@ -1,123 +1,91 @@
-import { describe, expect, test } from "vitest";
-import { buildCtx } from "./context";
-import { deriveMatch } from "./derive";
-import { computeTrades } from "./rules";
-import {
-  DEFAULT_DUEL, DEFAULT_R3, duelWinProb, ECO_GROUPS, fitDuelStrengths, groupFromEquip, inferGroup, killPoints, r3Inputs, rating3, RATING3_LABEL, weaponGroup,
-  type EcoGroup,
-} from "./rating3";
-import type { Side } from "./schema";
-import { computeSwing } from "./swing";
-import { MatchBuilder } from "./testing/build";
-import { loadPluginMatch, PLUGIN_MATCHES } from "./testing/load";
-import type { WinModel } from "./winprob";
+// Rating 3.0's inputs and its coverage gate, on hand-built summaries and rounds.
+import { expect, it } from "vitest";
+import { compare, type Baselines } from "./compare";
+import { METRIC, METRICS } from "./metrics";
+import { PARAMS } from "./model-params";
+import { RATING3_INTERCEPT, RATING3_TERMS, rating3FromInputs, rating3Of } from "./rating3";
+import { rollup } from "./rollup";
+import { derive } from "./derive";
+import type { WinProbSource } from "./model-params";
+import { at, combine } from "./testing/summary";
+import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 
-describe("economy groups", () => {
-  test("weapons", () => {
-    expect(["awp", "scar20", "ak47", "m4a1_silencer", "galilar", "ssg08", "mac10", "xm1014", "negev", "deagle", "elite", "glock", "usp_silencer", "knife", "hegrenade", "taser"].map(weaponGroup))
-      .toEqual(["sniper", "sniper", "rifle1", "rifle1", "rifle2", "rifle2", "smg", "smg", "smg", "pistolPlus", "pistolPlus", "pistol", "pistol", null, null, null]);
-  });
-  test("equipment bands at their edges", () => {
-    expect([0, 799, 800, 1599, 1600, 2399, 2400, 3399, 3400, 9000].map(groupFromEquip))
-      .toEqual(["pistol", "pistol", "pistolPlus", "pistolPlus", "smg", "smg", "rifle2", "rifle2", "rifle1", "rifle1"]);
-  });
-  test("a seen primary decides; a seen pistol defers to a stronger band", () => {
-    expect(inferGroup("smg", 4500)).toBe("smg");
-    expect(inferGroup("pistol", 3600)).toBe("rifle1");
-    expect(inferGroup("pistolPlus", 200)).toBe("pistolPlus");
-    expect(inferGroup(null, 900)).toBe("pistolPlus");
-    expect(inferGroup(null, null)).toBeNull();
-  });
+const MEAN = { kpr_eco: 0.66, adr_eco: 72, dpr_eco: 0.66, kast_eco: 69, mk: 16, swing: -0.02 };
+
+it("rates only over the rounds swing valued, and not at all when under half are", () => {
+  // fails if the six inputs average over different rounds (swing over valued rounds, the rest over all),
+  // or a summary with swing on few rounds gets a rating with swing counted as 0
+  const players = { a: "CT", b: "T" } as const;
+  const v = oneRound({ players, kills: [{ tick: FREEZE_END + 300, killer: "a", victim: "b" }], player_rounds: { a: { equip_value_game: 4000 }, b: { equip_value_game: 4000 } } });
+  const u = oneRound({ players, kills: [{ tick: FREEZE_END + 300, killer: "b", victim: "a" }] });
+  expect(rollup([u], { player: "a" }).m.swingRounds ?? 0).toBe(0);
+  const one = rating3Of(rollup([v], { player: "a" })).value;
+  expect(one).not.toBeNull();
+  expect(rating3Of(rollup([v, u], { player: "a" })).value).toBeCloseTo(one!, 9);
+  expect(rating3Of(rollup([v, u, u], { player: "a" })).value).toBeNull();
 });
 
-describe("duel table", () => {
-  test("reproduces HLTV's four published anchors", () => {
-    expect(duelWinProb("rifle1", "rifle1", 2)).toBeCloseTo(0.48, 3);
-    expect(duelWinProb("rifle1", "pistol", 2)).toBeCloseTo(0.75, 2);
-    expect(duelWinProb("sniper", "rifle1", 2)).toBeCloseTo(0.56, 2);
-    expect(duelWinProb("sniper", "rifle1", 3)).toBeCloseTo(0.6, 2);
-    // one k cannot hit both published kill values exactly (1.10/0.52 = 2.115, 0.54/0.25 = 2.16)
-    expect(Math.abs(killPoints("rifle1", "rifle1", 2) - 1.1)).toBeLessThan(0.015);
-    expect(Math.abs(killPoints("rifle1", "pistol", 2) - 0.54)).toBeLessThan(0.006);
-  });
-  test("both sides of a duel add to 1 and the groups are ordered", () => {
-    for (const a of ECO_GROUPS) for (const b of ECO_GROUPS) {
-      expect(duelWinProb(a, b, 2) + duelWinProb(b, a, 3)).toBeCloseTo(1, 12);
-    }
-    const s = ECO_GROUPS.map((g) => DEFAULT_DUEL.strength[g]);
-    expect([...s].sort((x, y) => y - x)).toEqual(s);
-  });
-  test("the fit recovers a known strength from exact counts", () => {
-    // rifle2 at 0.8 against tier-1 rifles with no side edge: P = σ(0.8 − 1.179) ≈ 0.406 → 406 of 1000 duels
-    const prior = { ...DEFAULT_DUEL, ctEdge: 0 };
-    const duels: { winner: EcoGroup; loser: EcoGroup; winnerSide: Side }[] = [];
-    for (let i = 0; i < 406; i++) duels.push({ winner: "rifle2", loser: "rifle1", winnerSide: 2 });
-    for (let i = 0; i < 594; i++) duels.push({ winner: "rifle1", loser: "rifle2", winnerSide: 2 });
-    const s = fitDuelStrengths(duels, ["rifle2"], prior, 0, 400, 0.004);
-    expect(s.rifle2).toBeCloseTo(0.8, 2);
-    expect(s.rifle1).toBe(DEFAULT_DUEL.strength.rifle1);
-  });
+it("rates only over rounds whose eco values are known, and gives a reason when too few are", () => {
+  // fails if a kill whose economy groups are unknown counts at its raw value (the old ?? 1), so a
+  // rating is built from unadjusted rounds: the lookup values a round without equipment, the eco
+  // adjustment cannot
+  const byAlive: WinProbSource = {
+    kind: "hltv", label: "test lookup", hash: "t",
+    tables: [{ columns: ["alive_t", "alive_ct"], states: { "1|1": { p_t: 0.5, n: 1 }, "0|1": { p_t: 0, n: 1 } } }],
+  };
+  const players = { a: "CT", b: "T" } as const;
+  const kill = [{ tick: FREEZE_END + 300, killer: "a", victim: "b" }];
+  const known = derive(oneRoundTables({ players, kills: kill, player_rounds: { a: { equip_value_game: 4000 }, b: { equip_value_game: 1000 } } }), byAlive);
+  const unknown = derive(oneRoundTables({ players, kills: kill }), byAlive);
+  expect(rollup([unknown], { player: "a" }).m.swingRounds).toBe(1);
+  const one = rating3Of(rollup([known], { player: "a" })).value;
+  expect(one).not.toBeNull();
+  // half the rounds rated: the rating is the known round's, not a mix with the raw one
+  expect(rating3Of(rollup([known, unknown], { player: "a" })).value).toBeCloseTo(one!, 9);
+  const thin = rating3Of(rollup([known, unknown, unknown], { player: "a" }));
+  const why = "both the round's win probability and every eco value known for 1 of 3 rounds; the rating needs half";
+  expect([thin.value, thin.reason]).toEqual([null, why]);
+  const s = rollup([known, unknown, unknown], { player: "a" });
+  const pool: Baselines = { version: 1, built: "x", source: "test", model: s.models[0], n: {}, pools: {} };
+  expect(compare(s, pool, { pool: "all" }).rating3.reason).toBe(`No value: ${why}`);
 });
 
-describe("Rating 3 inputs on a built round", () => {
-  // CT 0-4, T 5-9, everyone at $4,700 (tier-1 rifle band), all kills with an AK
-  const b = new MatchBuilder();
-  b.kill(0, 10, 5, 0, { state: [5, 5, 500, 500, 23500, 23500, 0, null] });
-  b.damage(0, 11, 2, 5, 45).damage(0, 12, 1, 5, 55);
-  b.kill(0, 12, 1, 5, { flash: 3, state: [4, 5, 400, 500, 23500, 23500, 0, null] });
-  b.kill(0, 14, 1, 6, { state: [4, 4, 400, 400, 23500, 23500, 0, null] });
-  b.kill(0, 15, 7, 1, { state: [4, 3, 400, 300, 23500, 23500, 0, null] });
-  b.kill(0, 16, 7, 2, { state: [3, 3, 300, 300, 23500, 23500, 0, null] });
-  const m = b.build();
-  const ctx = buildCtx(m);
-  const fake: WinModel = { kind: "model", label: "test", winProbability: (s) => 0.5 + 0.1 * (s.ctAlive - s.tAlive) };
-  const x = r3Inputs(ctx, computeTrades(ctx), computeSwing(ctx, fake));
-  const T_KILL = 2.14 * 0.52;
-  const CT_KILL = 2.14 * 0.48;
-
-  test("eco kills, deaths and damage", () => {
-    expect(x[5].ecoKills).toBeCloseTo(T_KILL, 9);
-    expect(x[1].ecoKills).toBeCloseTo(2 * CT_KILL, 9);
-    expect(x[0].ecoDeaths).toBeCloseTo(T_KILL, 9);
-    expect(x[2].ecoDmg).toBeCloseTo(45 * CT_KILL, 9);
-    expect(x[1]).toMatchObject({ kills: 2, mkRounds: 1, ecoMk: 1, rounds: 1 });
-  });
-  test("trade denials, failed trades and 40-damage assists", () => {
-    expect([x[1].tradeDenials, x[7].tradeDenials, x[5].tradeDenials]).toEqual([1, 1, 0]);
-    expect([x[2].failedTrades, x[6].failedTrades, x[5].failedTrades, x[1].failedTrades]).toEqual([1, 1, 0, 0]);
-    expect(x[2].assists40).toBe(1);
-  });
-  test("swing split: final damage, 40+ damage share, flash assist, traded relief", () => {
-    const sw = x.map((p) => +p.swing.toFixed(6));
-    expect(sw.slice(0, 4)).toEqual([-0.075, 0.072, -0.082, 0.01]);
-    expect(sw.slice(5, 8)).toEqual([0.025, -0.075, 0.2]);
-  });
-  test("rating from the default weights", () => {
-    const r = rating3(x[1]);
-    expect(r.label).toBe(RATING3_LABEL);
-    expect(r.calibrated).toBe(false);
-    const f = r.features!;
-    const want = DEFAULT_R3.intercept + DEFAULT_R3.w.kpr * f.kpr + DEFAULT_R3.w.adr * f.adr + DEFAULT_R3.w.dpr * f.dpr + DEFAULT_R3.w.kast * f.kast;
-    expect(r.value).toBeCloseTo(Math.max(0, want), 12);
-  });
+it("gates the rating, its percentile and so Work on through one coverage rule", () => {
+  // fails if a summary covering under half its matches' rounds gets a rating or a rating percentile
+  const s = at(MEAN);
+  s.covered = { nRounds: 10, roundsPlayed: 24 };
+  const flat: Baselines = { version: 1, built: "x", source: "test", model: undefined, n: {}, pools: { rifler: { both: Object.fromEntries(METRICS.map((m) => [m.id, Array(21).fill(0)])) } } };
+  expect(rating3Of(s).value).toBeNull();
+  expect(METRIC.rating3.value(s)).toBeNull();
+  expect(compare(s, flat).rating3.pct).toBeNull();
 });
 
-describe("Rating 3 on the plugin recordings", () => {
-  test("raw inputs equal the match counters and the average kill is worth about 1", async () => {
-    let kills = 0;
-    let points = 0;
-    for (const f of PLUGIN_MATCHES) {
-      const v = deriveMatch(await loadPluginMatch(f), f);
-      for (const p of v.players) {
-        expect([p.c.r3.kills, p.c.r3.deaths, p.c.r3.dmg, p.c.r3.kastRounds], `${f} ${p.name}`).toEqual([p.c.fullKills, p.c.fullDeaths, p.c.dmg, p.c.kastRounds]);
-        expect(p.c.r3.unknownGroups).toBe(0);
-        expect(p.rating3.value).not.toBeNull();
-        kills += p.c.r3.kills;
-        points += p.c.r3.ecoKills;
-      }
-    }
-    // HLTV sets k so an average kill is worth about 1; on these bot matches it comes to:
-    expect(points / kills).toBeGreaterThan(0.9);
-    expect(points / kills).toBeLessThan(1.1);
-  });
+it("takes the total rating from the sides, weighted by their rated rounds", () => {
+  // fails if the total and side ratings disagree: Astra's case, 100 CT rounds with 50 rated at 1.00
+  // and 100 T rounds with 100 rated at 3.00, must total (50 x 1 + 100 x 3) / 150
+  const k = PARAMS.rating.coefficients.eKPR, b = PARAMS.rating.intercept;
+  const side = (side: "CT" | "T", rounds: number, rated: number, rating: number) =>
+    at({ kpr_eco: (rating - b) / k, adr_eco: 0, dpr_eco: 0, kast_eco: 0, mk: 0, swing: 0 }, rated, side, rounds);
+  const CT = side("CT", 100, 50, 1), T = side("T", 100, 100, 3);
+  expect([rating3Of(CT).value, rating3Of(T).value]).toEqual([expect.closeTo(1, 9), expect.closeTo(3, 9)]);
+  const both = rating3Of(combine(CT, T));
+  expect(both.value).toBeCloseTo(350 / 150, 9);
+  expect(rating3FromInputs(both.inputs!)).toBeCloseTo(both.value!, 9);
+  // a side with no rating (CT rated on 40 of 100 rounds) adds nothing: the total is T's 3.00, not a
+  // pooled mix with rounds the CT rating rejected
+  const thin = side("CT", 100, 40, 1);
+  expect(rating3Of(thin).value).toBeNull();
+  expect(rating3Of(combine(thin, T)).value).toBeCloseTo(3, 9);
+  // one rated side covering under half of all rounds is no total
+  const r = rating3Of(combine(thin, side("T", 300, 160, 3)));
+  expect([r.value, r.reason]).toEqual([null, "the sides with half their own rounds rated cover 160 of 400 rounds; the rating needs half"]);
+});
+
+it("gives a breakdown whose terms add up to the rating", () => {
+  // fails if RATING3_TERMS pairs a coefficient with the wrong input, so a shown breakdown would not sum
+  // to the shown rating
+  const q = { kpr_eco: 0.7, adr_eco: 80, dpr_eco: 0.6, kast_eco: 72, mk: 18, swing: 1.5 };
+  const sum = RATING3_TERMS.reduce((a, t) => a + t.coefficient * q[t.input], RATING3_INTERCEPT);
+  expect(sum).toBeCloseTo(rating3FromInputs(q), 12);
+  expect(RATING3_TERMS.map((t) => t.input).sort()).toEqual(["adr_eco", "dpr_eco", "kast_eco", "kpr_eco", "mk", "swing"]);
 });

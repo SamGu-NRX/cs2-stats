@@ -1,147 +1,126 @@
-// Utility usage per player, split by side. CS Demo Manager defines utility damage (grenade-type
-// weapons) and flash assists; the rest follow HLTV's and Leetify's public descriptions:
-// - a flash is "effective" when it blinds at least one enemy for 2.0 s or more;
-// - a flash "leads to a kill" when an enemy it blinded dies to your team while still blind.
-// Plugin 1.0.0 adds links that make this exact: throws (grenades thrown, not just detonated),
-// blinds.flash (which flash blinded whom), damage.nade (which HE did the damage), rounds.utilSpent and
-// kills.vUtil. Older files fall back: detonations stand in for throws, and blinds from one flash are
-// grouped by their shared detonation tick.
-import { sameSide, type MatchCtx } from "./context";
-import { CT, UTIL_ORDER, type Side } from "./schema";
-import { PRICE } from "./weapons";
+// Utility usage: grenades bought, thrown and where they landed, enemies and teammates flashed,
+// flash-to-kills, grenade damage dealt and taken, and grenades a player died holding. Flash definitions are Leetify's (research-data-sources.md): an enemy counts as flashed
+// at more than 1.1 s of blind, and a flash-to-kill is a flashed enemy dying to the team while still
+// blind. Utility quality beyond usage (smokes) is utilq.ts.
+import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
+import type { GrenadeFact } from "./facts";
+import { classFromDisplay, isUtility, PRICE } from "./weapons";
 
-export const EFFECTIVE_FLASH_MS = 2000;
+/** Leetify: blind longer than this counts as flashed. */
+export const FLASHED_MIN_S = 1.1;
 
-export interface UtilSlice {
-  rounds: number;
-  flashes: number;
-  smokes: number;
-  hes: number;
-  molotovs: number;
-  decoys: number;
-  enemiesFlashed: number;
-  enemyBlindMs: number;
-  effectiveFlashes: number;
-  flashKills: number;
-  flashAssists: number;
-  teamFlashed: number;
-  teamBlindMs: number;
-  selfFlashed: number;
-  heDmg: number;
-  heHits: number;
-  heTeamDmg: number;
-  fireDmg: number;
-  utilDmg: number;
-  utilKills: number;
-  /** rounds where utility purchases were recorded, and their total (needs plugin data) */
-  spentRounds: number;
-  spent: number;
-  /** deaths where held utility was recorded, and its value (needs plugin data) */
-  heldDeaths: number;
-  heldValue: number;
-}
-
-export const emptyUtil = (): UtilSlice => ({
-  rounds: 0, flashes: 0, smokes: 0, hes: 0, molotovs: 0, decoys: 0, enemiesFlashed: 0, enemyBlindMs: 0,
-  effectiveFlashes: 0, flashKills: 0, flashAssists: 0, teamFlashed: 0, teamBlindMs: 0, selfFlashed: 0, heDmg: 0,
-  heHits: 0, heTeamDmg: 0, fireDmg: 0, utilDmg: 0, utilKills: 0, spentRounds: 0, spent: 0, heldDeaths: 0, heldValue: 0,
-});
-
-const FIRE = new Set(["inferno", "molotov", "incgrenade"]);
-const GRENADE = new Set(["hegrenade", "flashbang", "smokegrenade", "decoy", ...FIRE]);
-
-/** Adds round ri's utility for every player into out[pi][side]. */
-export function countUtility(ctx: MatchCtx, ri: number, out: { t: UtilSlice; ct: UtilSlice }[]) {
-  const m = ctx.m;
-  const slot = (pi: number): UtilSlice | null => {
-    const s = ctx.side(ri, pi);
-    return s === null ? null : s === CT ? out[pi].ct : out[pi].t;
-  };
-  for (let pi = 0; pi < ctx.nPlayers; pi++) { const u = slot(pi); if (u) u.rounds++; }
-
-  // Thrown grenades: the throws table when present, otherwise detonations.
-  const g = m.throws ?? m.grenades;
-  for (let j = 0; j < g.ri.length; j++) {
-    if (g.ri[j] !== ri || g.thrower[j] === null) continue;
-    const u = slot(g.thrower[j]!);
-    if (!u) continue;
-    const type = g.type[j];
-    if (type === "flash") u.flashes++;
-    else if (type === "smoke") u.smokes++;
-    else if (type === "he") u.hes++;
-    else if (type === "molotov" || type === "incgrenade") u.molotovs++;
-    else if (type === "decoy") u.decoys++;
-  }
-
-  // Money spent on grenades (plugin 1.0.0).
-  const spent = m.rounds.utilSpent?.[ri];
-  if (spent) for (let pi = 0; pi < ctx.nPlayers; pi++) {
-    const u = slot(pi);
-    if (u && spent[pi] !== null) { u.spentRounds++; u.spent += spent[pi]!; }
-  }
-
-  const kills = ctx.killsByRound.get(ri) ?? [];
-  const b = m.blinds;
-  const flashEffective = new Set<string>();
-  for (let j = 0; j < b.ri.length; j++) {
-    const a = b.attacker[j];
-    if (b.ri[j] !== ri || a === null || b.ms[j] <= 0) continue;
-    const u = slot(a);
-    if (!u) continue;
-    const v = b.victim[j];
-    const sa = ctx.side(ri, a);
-    if (v === a) { u.selfFlashed++; continue; }
-    if (ctx.side(ri, v) === sa) { u.teamFlashed++; u.teamBlindMs += b.ms[j]; continue; }
-    u.enemiesFlashed++;
-    u.enemyBlindMs += b.ms[j];
-    // per flash: the linked detonation row when present, else the shared detonation tick
-    const flashKey = b.flash?.[j] != null ? `f${b.flash[j]}` : `t${b.tick[j]}`;
-    if (b.ms[j] >= EFFECTIVE_FLASH_MS) flashEffective.add(`${a}:${flashKey}`);
-    const until = b.tick[j] + (b.ms[j] / 1000) * ctx.tickrate;
-    const k = kills.find((x) => x.victim === v && x.tick >= b.tick[j] && x.tick <= until && x.killer !== null && ctx.side(ri, x.killer) === sa);
-    if (k) u.flashKills++;
-  }
-  for (const key of flashEffective) slot(+key.split(":")[0])!.effectiveFlashes++;
-
-  const vUtil = m.kills.vUtil;
-  for (const k of kills) {
-    if (k.flashAssister !== null && !sameSide(k)) { const u = slot(k.flashAssister); if (u) u.flashAssists++; }
-    if (k.killer !== null && !sameSide(k) && !k.killerBot && GRENADE.has(k.weapon)) { const u = slot(k.killer); if (u) u.utilKills++; }
-    // grenades still held at death (plugin 1.0.0)
-    const held = vUtil?.[k.i];
-    if (held) {
-      const u = slot(k.victim);
-      if (u) { u.heldDeaths++; u.heldValue += held.reduce((a, n, t) => a + n * PRICE[UTIL_ORDER[t]], 0); }
-    }
-  }
-
-  const d = m.damage;
-  const heHit = new Set<string>();
-  for (let j = 0; j < d.ri.length; j++) {
-    const a = d.attacker[j];
-    if (d.ri[j] !== ri || a === null) continue;
-    const w = m.weapons[d.weapon[j]] ?? "";
-    if (!GRENADE.has(w)) continue;
-    const u = slot(a);
-    const v = d.victim[j];
-    if (!u || v === a) continue;
-    const enemy = ctx.side(ri, v) !== ctx.side(ri, a);
-    if (w === "hegrenade") {
-      // one HE: the linked detonation row when present, else the damage tick
-      const nade = d.nade?.[j] != null ? `n${d.nade[j]}` : `t${d.tick[j]}`;
-      if (enemy) { u.heDmg += d.dmg[j]; heHit.add(`${a}:${nade}:${v}`); } else u.heTeamDmg += d.dmg[j];
-    }
-    if (!enemy) continue;
-    if (FIRE.has(w)) u.fireDmg += d.dmg[j];
-    u.utilDmg += d.dmg[j];
-  }
-  for (const key of heHit) slot(+key.split(":")[0])!.heHits++;
-}
-
-export const sideSlices = (u: { t: UtilSlice; ct: UtilSlice }, side: Side | "both"): UtilSlice => {
-  if (side === 2) return u.t;
-  if (side === 3) return u.ct;
-  const s = emptyUtil();
-  for (const k of Object.keys(s) as (keyof UtilSlice)[]) s[k] = u.t[k] + u.ct[k];
-  return s;
+const THROWN: Record<string, "smokes" | "flashes" | "hes" | "molotovs" | null> = {
+  smokegrenade: "smokes", flashbang: "flashes", hegrenade: "hes", molotov: "molotovs", incgrenade: "molotovs", decoy: null,
 };
+
+/** Damage rows from fire name the grenade or the fire itself. */
+const FIRE = new Set(["molotov", "incgrenade", "inferno"]);
+
+/**
+ * Counts every player-round of a round whose source recorded its grenades and flashes in
+ * utilityRounds, the `utility` input's known rows (facts.ts INPUT_COVERAGE). The tables carry no flag
+ * for it, so it is read from what they hold: any throw, detonation or blind in the round. A round
+ * where nobody threw a grenade reads as unrecorded, which errs toward leaving a value out.
+ */
+export function markUtility(c: Ctx): void {
+  const recorded = new Set<number>();
+  for (const name of ["grenade_throws", "blinds"] as const) c.byRound(name).forEach((rows, ri) => { if (rows.length) recorded.add(ri); });
+  const ev = c.t.grenade_events;
+  if (ev) for (let i = 0; i < ev.n; i++) { const ri = c.riOf(ev.round[i]); if (ri !== undefined) recorded.add(ri); }
+  for (const ri of recorded) for (const p of c.pr[ri]) if (p) p.m.utilityRounds = 1;
+}
+
+export function utility(c: Ctx): void {
+  const g = c.t.grenade_throws;
+  const b = c.t.blinds;
+  const d = c.t.damages;
+  // grenades held at freeze end, null where the row records no loadout
+  const held = new Map([...loadouts(c)].map(([k, items]) => [k, items && items.map(classFromDisplay).filter((x) => x in THROWN)]));
+
+  for (let ri = 0; ri < c.nRounds; ri++) {
+    const rows = c.pr[ri];
+    const row = (id: string | null) => { const p = c.idOf(id); return p === null ? null : rows[p]; };
+    const throws: [number, number, string][] = []; // [player, tick, class]
+    if (g) for (const i of c.byRound("grenade_throws")[ri]) {
+      const p = row(g.steamid[i]);
+      if (!p || !(g.weapon[i] in THROWN)) continue;
+      const kind = THROWN[g.weapon[i]];
+      if (kind) p.m[kind]++;
+      throws.push([p.pi, g.tick[i], g.weapon[i]]);
+    }
+
+    for (const i of c.byRound("blinds")[ri]) {
+      const p = row(b.attacker_steamid[i]);
+      if (!p || b.duration[i] <= FLASHED_MIN_S || b.is_self[i]) continue;
+      if (b.is_team_flash[i]) { p.m.teamFlashed++; p.m.teamBlindSecs += b.duration[i]; continue; }
+      p.m.enemiesFlashed++;
+      p.m.enemyBlindSecs += b.duration[i];
+      const v = c.pi.get(b.victim_steamid[i])!;
+      const until = b.tick[i] + b.duration[i] * c.tickRate;
+      if (c.kills[ri].some((k) => k.enemy && k.victim === v && k.killerSide === p.side && k.tick >= b.tick[i] && k.tick <= until)) p.m.flashKills++;
+    }
+
+    const burned = new Set<string>();
+    for (const i of c.byRound("damages")[ri]) {
+      const w = d.weapon[i] ?? "";
+      if (!isUtility(w) || !enemyHit(c.t, i)) continue;
+      const x = hitDamage(c.t, i);
+      const v = row(d.victim_steamid[i]);
+      if (v) v.m.utilDmgTaken += x;
+      const a = row(d.attacker_steamid[i]);
+      if (!a) continue;
+      a.m.utilDmg += x;
+      if (w === "hegrenade") a.m.heDmg += x;
+      if (FIRE.has(w)) {
+        a.m.fireDmg += x;
+        // each enemy a molotov burned counts once for that molotov
+        const burn = `${d.grenade_entity_id[i] ?? "?"}:${d.victim_steamid[i]}`;
+        if (!burned.has(burn)) { burned.add(burn); a.m.molotovHits++; }
+      }
+    }
+
+    // grenades bought, less those refunded in the buy zone
+    const buys = c.t.purchases;
+    if (buys) {
+      for (const p of rows) if (p) p.m.purchaseRounds = 1;
+      for (const i of c.byRound("purchases")[ri]) {
+        const p = row(buys.steamid[i]);
+        if (p && !buys.was_sold[i] && isUtility(classFromDisplay(buys.item[i]))) p.m.utilSpent += buys.cost[i];
+      }
+    }
+
+    // grenades held: the freeze-end inventory, less those thrown before death; a row without a recorded
+    // loadout leaves this unmeasured, not $0
+    for (const p of rows) {
+      if (!p) continue;
+      const death = c.kills[ri].find((k) => k.victim === p.pi);
+      const had = held.get(ri * 1024 + p.pi);
+      if (!death || !had) continue;
+      const left = [...had];
+      for (const [pl, tick, cls] of throws) {
+        if (pl !== p.pi || tick > death.tick) continue;
+        const j = left.indexOf(cls);
+        if (j >= 0) left.splice(j, 1);
+      }
+      p.m.utilUnused += left.reduce((s, x) => s + PRICE[x], 0);
+      p.m.utilDeaths++;
+    }
+  }
+}
+
+/** Every grenade thrown by a player who played the round, with where it was thrown from and landed. */
+export function grenadeFacts(c: Ctx): GrenadeFact[] {
+  const g = c.t.grenade_throws;
+  if (!g) return [];
+  const xy = (x: number | null, y: number | null): [number, number] | null => (x === null || y === null ? null : [Math.round(x), Math.round(y)]);
+  const out: GrenadeFact[] = [];
+  for (let ri = 0; ri < c.nRounds; ri++) {
+    const fe = c.rounds[ri].freezeEndTick;
+    for (const i of c.byRound("grenade_throws")[ri]) {
+      const p = c.idOf(g.steamid[i]);
+      if (p === null || !c.pr[ri][p] || !(g.weapon[i] in THROWN)) continue;
+      out.push({ ri, pi: p, weapon: g.weapon[i], t: fe === null ? null : (g.tick[i] - fe) / c.tickRate, from: xy(g.x[i], g.y[i]), land: xy(g.land_x[i], g.land_y[i]) });
+    }
+  }
+  return out;
+}

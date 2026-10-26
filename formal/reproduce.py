@@ -25,7 +25,8 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
-FIXED_REPO = Path(r"C:\Users\<user>\Programming Projects\cs2-stats-publish")
+# A checkout of the fixed source at FIXED_COMMIT (CS2_FIXED_REPO); main() refuses to run without it.
+FIXED_REPO = Path(os.environ["CS2_FIXED_REPO"]) if os.environ.get("CS2_FIXED_REPO") else None
 FIXED_COMMIT = "5423886465055063ab9a73bdc2c61631483cf8b6"
 WORK = ROOT / "states" / "reproduce"
 
@@ -199,6 +200,8 @@ def make_tmp(directory):
 
 
 def main():
+    if FIXED_REPO is None:
+        raise SystemExit("set CS2_FIXED_REPO to a checkout of the fixed source at " + FIXED_COMMIT)
     actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=FIXED_REPO,
                             check=True, capture_output=True, text=True).stdout.strip()
     if actual != FIXED_COMMIT:

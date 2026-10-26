@@ -1,12 +1,16 @@
-// Where a match came from, and what that source can and cannot support. Three sources exist:
+// Where a match came from, and what that source can and cannot support. Four sources exist:
 // - recorded: written by the capture plugin (aim, movement positions, economy, utility purchases);
-// - converted: an older console log converted by tools/convert-legacy.ts (no aim, no movement,
-//   early rounds may have totals only);
-// - synthetic: the generated demo match (?demo=synthetic).
-import type { MatchView } from "../../stats/derive";
-import type { LightSummary } from "../../worker/protocol";
+// - converted: an older console log converted to the plugin format (no aim, no movement;
+//   rounds held as totals only are left out);
+// - pro: a pro match demo, extracted to tables. Today these arrive only as "dev/<folder>" paths, which
+//   `vite dev` serves when CS2_DEV_MATCHES is set (host.ts). They open from Matches like any match but
+//   are never part of the user's career (data/engine.ts isOwn);
+// - synthetic: the generated demo match (?demo=synthetic);
+// - valve: one of the user's Valve matchmaking demos, extracted by extractor/valve_import.py
+//   (match.source "valve").
+import type { MatchEntry } from "./match";
 
-export type SourceId = "recorded" | "converted" | "synthetic";
+export type SourceId = "recorded" | "converted" | "pro" | "synthetic" | "valve";
 
 export interface SourceInfo {
   id: SourceId;
@@ -15,57 +19,46 @@ export interface SourceInfo {
   missing: string[];
 }
 
-const MISSING: Record<SourceId, string[]> = {
-  recorded: [],
-  converted: ["aim", "movement"],
-  synthetic: [],
-};
+export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic", valve: "Valve" };
 
-export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", synthetic: "Synthetic" };
-
-/** From the match file itself (env.plugin), when the full view is loaded. */
-export function sourceOfView(v: Pick<MatchView, "env" | "hasAim" | "hasPos">): SourceInfo {
-  const p = v.env.plugin ?? "";
-  const id: SourceId = p === "legacy-convert" ? "converted" : p === "synthetic-demo" ? "synthetic" : "recorded";
-  const missing = [...MISSING[id]];
-  if (id === "recorded") {
-    if (!v.hasAim) missing.push("aim");
-    if (!v.hasPos) missing.push("movement");
-  }
+/** From the file's path (a pro demo), the match's source (a Valve demo), the plugin's own label for the file (env.plugin), and whether it holds shots and positions. */
+export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "hasPos" | "match">): SourceInfo {
+  if (e.file.startsWith("dev/")) return { id: "pro", label: SOURCE_LABEL.pro, missing: [] };
+  const id: SourceId = e.match.source === "valve" ? "valve" : e.origin === "legacy-convert" ? "converted" : e.origin === "synthetic-demo" ? "synthetic" : "recorded";
+  if (id === "converted") return { id, label: SOURCE_LABEL[id], missing: ["aim", "movement"] };
+  const missing: string[] = [];
+  if (!e.hasAim) missing.push("aim");
+  if (!e.hasPos) missing.push("movement");
   return { id, label: SOURCE_LABEL[id], missing };
 }
 
-/**
- * From a cached summary. Summaries do not carry env.plugin, so this reads the file name (the demo)
- * and whether aim or positions were recorded. Interim: the engine is asked to add env.plugin to
- * MatchSummary, which makes this exact.
- */
-export function sourceOfSummary(s: Pick<LightSummary, "file" | "aim" | "hasPos">): SourceInfo {
-  if (/synthetic-demo/.test(s.file)) return { id: "synthetic", label: SOURCE_LABEL.synthetic, missing: [] };
-  if (s.aim || s.hasPos) {
-    const missing: string[] = [];
-    if (!s.aim) missing.push("aim");
-    if (!s.hasPos) missing.push("movement");
-    return { id: "recorded", label: SOURCE_LABEL.recorded, missing };
-  }
-  return { id: "converted", label: SOURCE_LABEL.converted, missing: [...MISSING.converted] };
-}
-
-/** Which stats each source supports, for the Data page. */
-export const SUPPORT: { stat: string; recorded: boolean; converted: boolean | "partial" }[] = [
-  { stat: "Scoreboard: K, D, A, ADR, KAST, rating", recorded: true, converted: true },
-  { stat: "Round swing", recorded: true, converted: "partial" },
-  { stat: "Kill-by-kill rounds", recorded: true, converted: "partial" },
-  { stat: "Economy and buy types", recorded: true, converted: true },
-  { stat: "Utility thrown and flashes", recorded: true, converted: true },
-  { stat: "Utility bought and held at death", recorded: true, converted: false },
-  { stat: "Kill and death positions", recorded: true, converted: true },
-  { stat: "Movement heatmap", recorded: true, converted: false },
-  { stat: "Accuracy, spray, hit map", recorded: true, converted: false },
-  { stat: "Time to damage, reaction, crosshair", recorded: true, converted: false },
+/** Which stats each source supports, for Data & settings. A string is a partial yes, and says what is missing. */
+export const SUPPORT: { stat: string; recorded: boolean | string; converted: boolean | string; pro: boolean | string }[] = [
+  { stat: "Scoreboard: kills, deaths, assists, ADR, KAST, rating", recorded: true, converted: true, pro: true },
+  { stat: "Round swing", recorded: true, converted: "Only rounds where every player's equipment is known", pro: true },
+  { stat: "Kill-by-kill rounds", recorded: true, converted: "Rounds the log holds only as the game's totals are left out of every number", pro: true },
+  { stat: "Economy and buy types", recorded: true, converted: true, pro: true },
+  { stat: "Utility thrown and flashes", recorded: true, converted: true, pro: true },
+  { stat: "Kill and death positions", recorded: true, converted: true, pro: true },
+  { stat: "Accuracy and first bullet", recorded: true, converted: false, pro: true },
+  // plugin files carry no view angles or mesh line of sight, which these timings need
+  { stat: "Time to damage, reaction and crosshair placement", recorded: false, converted: false, pro: true },
 ];
 
+/** Notes on rows, shown as footnotes under the support table. */
 export const SUPPORT_NOTE: Record<string, string> = {
-  "Round swing": "Converted logs have swing where every player's equipment is known.",
-  "Kill-by-kill rounds": "Converted logs may hold only the game's round totals for the first rounds.",
+  "Time to damage, reaction and crosshair placement": "These need view angles and the map's line of sight, which recorded and converted files do not carry.",
 };
+
+/**
+ * A failed scan in plain words, with what to do; the raw error stays available for a details
+ * disclosure. Reads Node's and Rust's error codes for the common causes.
+ */
+export function scanErrorText(raw: string): string {
+  const path = /'([^']+)'/.exec(raw)?.[1] ?? /"([^"]+)"/.exec(raw)?.[1] ?? null;
+  const at = path ? `: ${path}` : "";
+  if (/ENOTDIR|not a directory/i.test(raw)) return `The match folder is a file, not a folder${at}. Move or rename that file, then try again.`;
+  if (/ENOENT|cannot find the path|no such file/i.test(raw)) return `The match folder does not exist${at}. It appears after your first recorded match; or import match files from Data & settings.`;
+  if (/EACCES|EPERM|access is denied|permission denied/i.test(raw)) return `The app is not allowed to read the match folder${at}. Check the folder's permissions, then try again.`;
+  return "The match folder could not be read. Try again; if it keeps failing, the details below say why.";
+}

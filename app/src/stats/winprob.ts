@@ -1,75 +1,69 @@
-// Round win probability. The trained model is the model agent's model/export/winprob.ts, which
-// exports winProbabilityCT(state: RoundState, map): P(CT wins). The worker imports it at build
-// time when it exists (see app/README.md); this file adapts it and keeps a placeholder otherwise.
+// Round win probability from the source model-params.ts chose: HLTV's lookup (tables run from most to
+// least specific; the first one holding the state's key answers, SPEC.md "Win probability"), or the
+// CS2RB round model (model/export/winprob.ts), which needs health, equipment and time.
+import { winProbabilityCT } from "../../../model/export/winprob";
+import type { BuyClass } from "./economy";
+import type { LookupTable, WinProbSource } from "./model-params";
 
-/** The model's input, as defined in model/export/winprob.ts. */
 export interface RoundState {
-  ctAlive: number;
-  tAlive: number;
-  /** summed HP of living players */
-  ctHp: number;
-  tHp: number;
-  /** team equipment value at freeze end, summed over the whole team and fixed for the round */
-  ctEquip: number;
-  tEquip: number;
-  planted: 0 | 1;
+  /** de_ancient; the lookup keys use HLTV's name (Ancient) */
+  map: string;
+  aliveT: number;
+  aliveCT: number;
+  /** summed health of the living players on each side */
+  hpT: number;
+  hpCT: number;
+  /** team equipment at freeze end; null when unknown */
+  equipT: number | null;
+  equipCT: number | null;
+  planted: boolean;
   /** null when not planted */
   secondsSincePlant: number | null;
-  secondsSinceFreezeEnd: number;
+  /** null when the round has no freeze end */
+  secondsSinceFreezeEnd: number | null;
+  buyT: BuyClass | null;
+  buyCT: BuyClass | null;
+  /** side of the last killer this round, or none */
+  lastKillSide: "t" | "ct" | "none";
 }
 
-export type WinProbability = (state: RoundState, map: string) => number;
-
-export interface WinModel {
-  kind: "stub" | "model";
-  label: string;
-  /** null when the model cannot value the state (it rejects invalid input) */
-  winProbability: (state: RoundState, map: string) => number | null;
-}
-
-/**
- * Placeholder: P(CT wins) = ct² / (ct² + t²) by players alive, ignoring HP, equipment and the
- * bomb. There is no evidence behind these numbers; they only keep the swing pipeline working
- * until the trained model lands.
- */
-export const STUB_TABLE: number[][] = Array.from({ length: 6 }, (_, ct) =>
-  Array.from({ length: 6 }, (_, t) => (ct === 0 && t === 0 ? 0.5 : (ct * ct) / (ct * ct + t * t))),
-);
-
-const clamp5 = (n: number) => Math.max(0, Math.min(5, Math.round(n)));
-const stubP = (s: Pick<RoundState, "ctAlive" | "tAlive">) => STUB_TABLE[clamp5(s.ctAlive)][clamp5(s.tAlive)];
-
-export const stubModel: WinModel = {
-  kind: "stub",
-  label: "Placeholder model (alive counts only)",
-  winProbability: stubP,
+const hltvMap = (map: string) => {
+  const s = map.replace(/^de_/, "");
+  return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
-/** One state every model must answer: full teams, full HP, rifles, no bomb, 20 s in. */
-const PROBE: RoundState = { ctAlive: 5, tAlive: 5, ctHp: 500, tHp: 500, ctEquip: 22000, tEquip: 20000, planted: 0, secondsSincePlant: null, secondsSinceFreezeEnd: 20 };
+function field(s: RoundState, col: string): string | null {
+  switch (col) {
+    case "map": return hltvMap(s.map);
+    case "alive_t": return String(s.aliveT);
+    case "alive_ct": return String(s.aliveCT);
+    case "planted": return s.planted ? "1" : "0";
+    case "buy_t": return s.buyT ? s.buyT.toUpperCase() : null;
+    case "buy_ct": return s.buyCT ? s.buyCT.toUpperCase() : null;
+    case "last_kill_side": return s.lastKillSide;
+  }
+  throw new Error(`winprob: the HLTV pack names an unknown column "${col}"`);
+}
+
+function lookup(tables: LookupTable[], s: RoundState): number | null {
+  for (const t of tables) {
+    const parts = t.columns.map((c) => field(s, c));
+    if (parts.includes(null)) continue;
+    const hit = t.states[parts.join("|")];
+    if (hit) return hit.p_t;
+  }
+  return null;
+}
 
 /**
- * Wraps the model agent's winProbabilityCT. Checks that it is a function and answers the probe
- * state with a probability; throws with the reason otherwise, so the app can show it and keep the
- * placeholder. A state the model rejects (RangeError on invalid input) has no answer (null).
+ * P(T wins) for a state, or null when the source cannot value it: no lookup entry, or for CS2RB unknown
+ * equipment or time, or more than five players on a side (a sixth player joining), outside its model.
  */
-export function modelFromModule(fn: unknown): WinModel {
-  if (typeof fn !== "function") throw new Error("model/export/winprob.ts does not export a function named winProbabilityCT");
-  const f = fn as WinProbability;
-  const p = f(PROBE, "de_dust2");
-  if (typeof p !== "number" || !Number.isFinite(p) || p < 0 || p > 1) {
-    throw new Error(`winProbabilityCT returned ${JSON.stringify(p)} for a 5v5 start; expected a probability between 0 and 1`);
-  }
-  return {
-    kind: "model",
-    label: "Trained model (CS2RB)",
-    winProbability: (s, map) => {
-      try {
-        const v = f(s, map);
-        return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
-      } catch {
-        return null;
-      }
-    },
-  };
+export function pTWins(src: WinProbSource, s: RoundState): number | null {
+  if (src.kind === "hltv") return lookup(src.tables, s);
+  if (s.aliveT > 5 || s.aliveCT > 5 || s.equipT === null || s.equipCT === null || s.secondsSinceFreezeEnd === null || (s.planted && s.secondsSincePlant === null)) return null;
+  return 1 - winProbabilityCT({
+    ctAlive: s.aliveCT, tAlive: s.aliveT, ctHp: s.hpCT, tHp: s.hpT, ctEquip: s.equipCT, tEquip: s.equipT,
+    planted: s.planted ? 1 : 0, secondsSincePlant: s.planted ? s.secondsSincePlant : null, secondsSinceFreezeEnd: s.secondsSinceFreezeEnd,
+  }, s.map);
 }

@@ -1,121 +1,165 @@
-// Overview: both scoreboards with HLTV's columns (one sort and one side switch for both), swing per
-// player, the rounds that decided the match, and you against the other nine players. Team facts
-// live on the Advanced tab.
+// Overview: both scoreboards with HLTV's columns (one sort and one side switch for both) and a team
+// total under each, swing per player, this match against your recent ones (YourMatch), your rounds
+// that decided the match, and you against the other nine players. Team facts live on the Advanced tab.
 import { useMemo, useState } from "react";
-import type { PlayerRow } from "../../../stats/derive";
-import { MultiBadge, Num } from "../../components/bits";
+import { ClutchBadge, DeathMark, FirstPip, MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { HoverCard } from "../../components/overlay";
-import { multiKillCounts, RATING_POOLED, ratingLabel, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
-import { WinIcon, WIN_LABEL } from "../../icons/game";
+import { multiKillRows, pooledRates, RATING_LABEL, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
+import { decidingRounds } from "../../data/rounds";
+import { useCall } from "../../data/hooks";
+import { deathOf, killsBy, roundSwing, type MatchModel, type MRound, type Team } from "../../data/match";
+import { WeaponIcon, WIN_LABEL, WinIcon } from "../../icons/game";
 import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
 import { matchHref } from "../../router";
-import { PlayerName, RoundCardBody } from "../shared";
-import { useRawMatch } from "../../data/hooks";
-import { sideInputs } from "../../data/sideRating";
+import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip } from "../shared";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
+import { YourMatch } from "./YourMatch";
+
+type Multi = Record<2 | 3 | 4 | 5, number>;
+/** A scoreboard row: a player, or the team total under the five players (pi null). */
+interface Row { key: string; pi: number | null; team: Team; isHuman: boolean; l: StatLine; multi: Multi | null; rated: boolean }
+
+/** The team total: counts summed over the five rows shown; rates from the team's rollup (both sides) or pooled from the rows (one side). */
+function teamRow(v: MatchModel, t: Team, rows: Row[], side: SideKey): Row {
+  const sum = (f: (r: Row) => number) => rows.reduce((a, r) => a + f(r), 0);
+  const m = { ...rows[0].l.m };
+  for (const k of ["kills", "deaths", "assists", "flashAssists", "tradedDeaths", "openingKills", "openingDeaths"] as const) m[k] = sum((r) => r.l.m[k]);
+  const team = side === "both" ? statLine(v.b.teams[t]) : null;
+  // one side: the team's rates pooled from the five players' summed measures
+  const pooled = team ? null : pooledRates(rows.map((r) => r.l.m));
+  const l: StatLine = {
+    ...(team ?? rows[0].l), m, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
+    ...(team ? { adr: team.adr, kast: team.kast, hs: team.hs, swing: team.swing } : pooled!), rating: null,
+  };
+  const multi = rows.every((r) => r.multi) ? ([2, 3, 4, 5] as const).reduce((o, k) => ({ ...o, [k]: sum((r) => r.multi![k]) }), {} as Multi) : null;
+  return { key: `total-${t}`, pi: null, team: t, isHuman: false, l, multi, rated: false };
+}
 
 export default function Overview({ v, file }: TabProps) {
   const [side, setSide] = useState<SideKey>("both");
   const [sort, setSort] = useState<SortState | null>({ key: "rating", dir: "desc" });
-  const raw = useRawMatch(side === "both" ? null : file).data;
-  const sides = useMemo(() => (raw ? sideInputs(raw) : null), [raw]);
-  const lines = useMemo(() => v.players.map((p) => statLine(v, p.pi, side, sides)), [v, side, sides]);
-  const multi = useMemo(() => v.players.map((p) => multiKillCounts(v, p.pi)), [v]);
-  const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
+  const lines = useMemo(() => v.b.lines[side].map(statLine), [v, side]);
+  const multi = useMemo(() => v.b.lines.both.map((l) => Object.fromEntries(multiKillRows(l.m).map((r) => [r.k, r.rounds])) as Multi), [v]);
+  const rowsOf = (t: Team): Row[] => v.players.filter((p) => p.team === t).map((p) => ({ key: p.key, pi: p.pi, team: t, isHuman: p.isHuman, l: lines[p.pi], multi: multi[p.pi], rated: true }));
   const usSideFirst = v.usStartSide;
-  const multiScore = (pi: number) => multi[pi][2] + 2 * multi[pi][3] + 4 * multi[pi][4] + 8 * multi[pi][5];
+  const multiScore = (c: Multi | null) => (c ? c[2] + 2 * c[3] + 4 * c[4] + 8 * c[5] : 0);
+  const paren = (n: number) => <small className="faint"> ({n})</small>;
 
   const columns = [
-    { key: "name", label: "Player", align: "l" as const, sticky: true, sort: (p: PlayerRow) => p.name, render: (p: PlayerRow) => <span className="name-cell"><PlayerName v={v} pi={p.pi} />{p.isHuman && <small>You</small>}</span>, width: 180 },
-    { key: "k", label: "K", tip: "Kills", sort: (p: PlayerRow) => lines[p.pi].kills, render: (p: PlayerRow) => lines[p.pi].kills },
-    { key: "d", label: "D", tip: "Deaths", sort: (p: PlayerRow) => lines[p.pi].deaths, firstDir: "asc" as const, render: (p: PlayerRow) => lines[p.pi].deaths },
-    { key: "a", label: "A", tip: "Assists, flash assists included", sort: (p: PlayerRow) => lines[p.pi].assists, render: (p: PlayerRow) => lines[p.pi].assists },
-    { key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths", sort: (p: PlayerRow) => lines[p.pi].diff, render: (p: PlayerRow) => <span style={{ color: scoreText(diffScore(lines[p.pi].diff)) }}>{fmtDiff(lines[p.pi].diff)}</span> },
-    { key: "adr", label: "ADR", tip: "Damage to enemies per round", sort: (p: PlayerRow) => lines[p.pi].adr, render: (p: PlayerRow) => fmtAdr(lines[p.pi].adr) },
-    { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (p: PlayerRow) => lines[p.pi].kast, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].kast)} /> },
-    { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (p: PlayerRow) => lines[p.pi].hs, render: (p: PlayerRow) => <Num v={fmtPct(lines[p.pi].hs)} /> },
+    { key: "name", label: "Player", align: "l" as const, sticky: true, sort: (r: Row) => (r.pi === null ? "" : v.players[r.pi].name), render: (r: Row) => (r.pi === null ? <span className="name-cell faint">Team total</span> : <span className="name-cell"><PlayerName v={v} pi={r.pi} />{r.isHuman && <small>You</small>}</span>), width: 180 },
+    { key: "k", label: "K", tip: "Kills", sort: (r: Row) => r.l.kills, render: (r: Row) => r.l.kills },
+    { key: "d", label: <>D <span className="th-lc">(t)</span></>, tip: "Deaths; traded deaths in brackets", sort: (r: Row) => r.l.deaths, firstDir: "asc" as const, render: (r: Row) => <span className="num">{r.l.deaths}{paren(r.l.m.tradedDeaths)}</span> },
+    { key: "a", label: <>A <span className="th-lc">(f)</span></>, tip: "Assists; flash assists in brackets", sort: (r: Row) => r.l.assists, render: (r: Row) => <span className="num">{r.l.assists}{paren(r.l.m.flashAssists)}</span> },
+    { key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths", sort: (r: Row) => r.l.diff, render: (r: Row) => <span style={{ color: scoreText(diffScore(r.l.diff)) }}>{fmtDiff(r.l.diff)}</span> },
+    { key: "adr", label: "ADR", tip: "Damage to enemies per round", sort: (r: Row) => r.l.adr, render: (r: Row) => fmtAdr(r.l.adr) },
+    { key: "kast", label: "KAST", tip: "Rounds with a kill, assist, survival or traded death", sort: (r: Row) => r.l.kast, render: (r: Row) => <Num v={fmtPct(r.l.kast)} /> },
+    { key: "hs", label: "HS%", tip: "Share of kills that were headshots", sort: (r: Row) => r.l.hs, render: (r: Row) => <Num v={fmtPct(r.l.hs)} /> },
     ...(side === "both" ? [
-      { key: "open", label: "FK–FD", tip: "Opening kills and opening deaths: the first kill of a round", sort: (p: PlayerRow) => p.c.openingKills - p.c.openingDeaths, render: (p: PlayerRow) => <span className="num">{p.c.openingKills}<span className="faint">–</span>{p.c.openingDeaths}</span> },
-      { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (p: PlayerRow) => multiScore(p.pi), render: (p: PlayerRow) => <MultiChips c={multi[p.pi]} />, width: 170 },
+      { key: "open", label: "FK–FD", tip: "Opening kills and deaths: each round's first kill", sort: (r: Row) => r.l.m.openingKills - r.l.m.openingDeaths, render: (r: Row) => <span className="num">{r.l.m.openingKills}<span className="faint">–</span>{r.l.m.openingDeaths}</span> },
+      { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (r: Row) => multiScore(r.multi), render: (r: Row) => (r.multi ? <MultiChips c={r.multi} /> : null), width: 170 },
     ] : []),
-    { key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win probability per round, from your kills (split by damage) and deaths", sort: (p: PlayerRow) => lines[p.pi].swing, render: (p: PlayerRow) => { const x = lines[p.pi].swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }}><Num v={fmtSwing(x)} /></span>; } },
-    { key: "rating", label: ratingLabel(v), tip: RATING_POOLED, colored: true, sort: (p: PlayerRow) => lines[p.pi].rating, render: (p: PlayerRow) => { const x = lines[p.pi].rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
+    { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win chance per round", sort: (r: Row) => r.l.swing, render: (r: Row) => { const x = r.l.swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }} data-tip={r.pi === null ? undefined : swingSumTip(r.l.m)} tabIndex={r.pi === null ? undefined : 0}><Num v={fmtSwing(x)} /></span>; } },
+    { key: "rating", label: RATING_LABEL, tip: "Rated per side over the rounds it can value", colored: true, sort: (r: Row) => r.l.rating, render: (r: Row) => { if (!r.rated) return null; const x = r.l.rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
   ];
 
-  const board = (t: "us" | "them") => {
-    const first = t === "us" ? usSideFirst : ((5 - usSideFirst) as 2 | 3);
+  const board = (t: Team) => {
+    const first = t === "us" ? usSideFirst : usSideFirst === "T" ? "CT" : "T";
+    const rows = rowsOf(t);
     return (
       <Card
-        title={<>{t === "us" ? "Your team" : "Opponents"} <span className={`chip ${first === 2 ? "chip--t" : "chip--ct"}`}>{first === 2 ? "T" : "CT"} first</span></>}
-        aside={<span className="board-score num" data-team={t}>{t === "us" ? v.score.us : v.score.them}</span>}
+        title={<>{t === "us" ? "Your team" : "Opponents"} <span className={`chip ${first === "T" ? "chip--t" : "chip--ct"}`}>{first} first</span></>}
+        aside={<span className="board-score num" data-team={t}>{t === "us" ? v.entry.score.us : v.entry.score.them}</span>}
         flush
         className="board"
       >
-        <DataTable label={t === "us" ? "Your team scoreboard" : "Opponents scoreboard"} rows={team(t)} rowKey={(p) => p.key} columns={columns} sortKey={sort} onSort={setSort} rowClass={(p) => (p.isHuman ? "is-you" : undefined)} />
+        <DataTable label={t === "us" ? "Your team scoreboard" : "Opponents scoreboard"} rows={rows} foot={[teamRow(v, t, rows, side)]} rowKey={(r) => r.key} columns={columns} sortKey={sort} onSort={setSort} rowClass={(r) => (r.isHuman ? "is-you" : undefined)} />
       </Card>
     );
   };
-
-  // decisive rounds: the largest swing summed over your team
-  const key = v.rounds.filter((r) => r.swing).map((r) => {
-    const us = v.players.filter((p) => p.team === "us").reduce((a, p) => a + r.swing![p.pi], 0);
-    return { r, us };
-  }).sort((a, b) => Math.abs(b.us) - Math.abs(a.us)).slice(0, 4);
 
   return (
     <div className="tabpad overview">
       <div className="overview__bar toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={SIDE_OPTIONS.map((o) => ({ ...o, label: o.value === "both" ? "Both sides" : o.label, side: o.value === "both" ? undefined : o.value }))} />
-        <span className="meta">{side === "both" ? `${v.statRounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
+        <span className="meta">{side === "both" ? `${lines[v.human].rounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
       </div>
       <div className="boards">
         {board("us")}
         {board("them")}
       </div>
       <div className="overview__cols">
-        <Card title="Swing by player" aside={<span className="meta">Average per round</span>}>
-          <DivergingBars
-            cap={0.06}
-            rows={[...v.players].sort((a, b) => (a.team === b.team ? (lines[b.pi].swing ?? 0) - (lines[a.pi].swing ?? 0) : a.team === "us" ? -1 : 1)).map((p) => {
-              const x = lines[p.pi].swing;
-              return { key: p.key, label: <span className={p.team === "us" ? "us-text" : "them-text"}><PlayerName v={v} pi={p.pi} /></span>, value: x, text: x === null ? "–" : fmtSwing(x), highlight: p.isHuman };
-            })}
-          />
-        </Card>
+        <div className="overview__side">
+          <Card title="Swing by player" aside={<span className="meta">Average per round</span>}>
+            <DivergingBars
+              cap={0.06}
+              rows={[...v.players].sort((a, b) => (a.team === b.team ? (lines[b.pi].swing ?? 0) - (lines[a.pi].swing ?? 0) : a.team === "us" ? -1 : 1)).map((p) => {
+                const x = lines[p.pi].swing;
+                return { key: p.key, label: <span className={p.team === "us" ? "us-text" : "them-text"}><PlayerName v={v} pi={p.pi} /></span>, value: x, text: x === null ? "–" : fmtSwing(x), highlight: p.isHuman };
+              })}
+            />
+          </Card>
+          <YourMatch v={v} file={file} />
+        </div>
         <div className="overview__side">
           <Lobby lines={lines} human={v.human} />
-          <Card title="Rounds that decided it" aside={<span className="meta">Largest team swing</span>}>
-            {key.length ? (
-              <ul className="keyrounds">
-                {key.map(({ r, us }) => (
-                  <li key={r.ri}>
-                    <HoverCard prefer="right" card={() => <RoundCardBody v={v} r={r} />} as="div" tabbable={false}>
-                      <a href={matchHref(file, "rounds", { round: r.ri + 1 })} className="keyround">
-                        <WinIcon how={r.how} size={14} className={r.winSide === 2 ? "t-text" : "ct-text"} />
-                        <b>Round {r.ri + 1}</b>
-                        <span className="meta">{r.how ? WIN_LABEL[r.how] : ""}</span>
-                        <span className="num faint">{r.scoreAfter.us}:{r.scoreAfter.them}</span>
-                        <b className="num" style={{ color: scoreText(roundSwingScore(us / 2)) }}>{fmtSwing(us)}</b>
-                      </a>
-                    </HoverCard>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="meta">No round has swing data in this match.</p>}
-          </Card>
+          <DecidingRounds v={v} file={file} side={side} />
         </div>
       </div>
     </div>
   );
 }
 
-function MultiChips({ c }: { c: Record<2 | 3 | 4 | 5, number> }) {
+const DECIDING = 5;
+
+/** Your rounds with the largest swing either way, each with what you did in it; a row opens the round. */
+function DecidingRounds({ v, file, side }: { v: MatchModel; file: string; side: SideKey }) {
+  const human = v.human;
+  const clutches = useCall("clutches", [{ files: [file], filter: { player: v.players[human].key } }]).data;
+  const rows = useMemo(() => decidingRounds(v.rounds, (r: MRound) => roundSwing(r.pr[human]), side, DECIDING), [v, human, side]);
+  return (
+    <Card title="Rounds that decided it" aside={<span className="meta">Your largest swings</span>}>
+      {rows.length ? (
+        <ul className="keyrounds">
+          {rows.map(({ r, sw }) => {
+            const kills = killsBy(r, human);
+            const died = deathOf(r, human) !== null;
+            const opened = r.kills.find((k) => k.opening)?.killer === human;
+            const clutch = clutches?.find((c) => c.round === r.number) ?? null;
+            const side = r.winSide === "T" ? "t-text" : r.winSide === "CT" ? "ct-text" : "faint";
+            return (
+              <li key={r.ri}>
+                <HoverCard prefer="right" card={() => <RoundCardBody v={v} r={r} />} as="div" tabbable={false}>
+                  <a href={matchHref(file, "rounds", { round: r.number })} className="keyround" data-tip={r.how ? WIN_LABEL[r.how] : undefined} aria-label={`Round ${r.number}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}: ${kills.length} kills${died ? ", died" : ""}, swing ${fmtSwing(sw)}`}>
+                    <span className={side}><WinIcon how={r.how} size={14} compact /></span>
+                    <b>Round {r.number}</b>
+                    <span className="keyround__what">
+                      {kills.slice(0, 5).map((k, i) => <WeaponIcon key={i} name={k.weapon} height={12} />)}
+                      {kills.length > 1 && <MultiBadge k={kills.length} />}
+                      {clutch && <ClutchBadge vs={clutch.opponents} won={clutch.won} />}
+                      {opened && <FirstPip label="First kill of the round" />}
+                      {died && <DeathMark label="Died" className="faint" />}
+                    </span>
+                    <span className="num faint">{r.scoreAfter ? `${r.scoreAfter.us}:${r.scoreAfter.them}` : ""}</span>
+                    <b className="num" style={{ color: scoreText(roundSwingScore(sw)) }}>{fmtSwing(sw)}</b>
+                  </a>
+                </HoverCard>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="meta"><NeedsDemo detail="No round has swing: equipment is unknown in this log." /></p>}
+    </Card>
+  );
+}
+
+function MultiChips({ c }: { c: Multi }) {
   const any = c[2] + c[3] + c[4] + c[5];
   if (!any) return <span className="faint">–</span>;
   return (
@@ -136,7 +180,7 @@ function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
     { label: "Deaths per round", get: (l) => l.dpr, fmt: (x) => (x === null ? "–" : x.toFixed(2)), lower: true },
   ];
   return (
-    <Card title="You against the lobby" aside={<span className="meta">All ten players</span>}>
+    <Card title={<>You against the lobby <Hint tip="Bar spans the lobby's lowest to highest; the tick is the average." /></>} aside={<span className="meta">All ten players</span>}>
       <ul className="lobby">
         {rows.map((r) => {
           const vals = lines.map(r.get).filter((x): x is number => x !== null);
@@ -149,7 +193,7 @@ function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
           const rank = [...vals].sort((a, b) => (r.lower ? a - b : b - a)).indexOf(you) + 1;
           const t = toScore(you, avg, Math.max(1e-6, (hi - lo) / 2), r.lower);
           return (
-            <li key={r.label} data-tip={`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`}>
+            <li key={r.label} data-tip={`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`} tabIndex={0}>
               <span className="lobby__l">{r.label}</span>
               <span className="lobby__track">
                 <i className="lobby__avg" style={{ left: `${pos(avg)}%` }} />
@@ -161,7 +205,6 @@ function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
           );
         })}
       </ul>
-      <p className="meta lobby__note">The bar runs from the lobby's lowest to highest; the white tick is the average.</p>
     </Card>
   );
 }

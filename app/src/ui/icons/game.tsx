@@ -1,200 +1,92 @@
-// Game glyphs: kill and death marks, round win types, team buy types, grenades and weapons.
-import type { BuyClass, BuyType } from "../../stats/economy";
-import type { RoundHow } from "../../stats/schema";
-import { weaponClass, weaponLabel } from "../../stats/weapons";
-import { Svg, type IconProps } from "./Icon";
+// Game objects: weapons, grenades, kill flags, round ends, the bomb and buys, each drawn by the CS2
+// icon pack through GameIcon (components/GameIcon.tsx) with the pack ids from design-target-v2/SYSTEM.md's
+// icon table, and named in words. Nothing here is drawn by hand: without the pack an object shows its
+// name. The first-kill pip and the death mark are text, not icons (components/bits.tsx).
+//
+// `beside`: the object's name is already in the text beside it or in its element's tooltip, so the icon
+// is silent and needs no text without the pack. `compact`: the cell is too small for the name, so the
+// no-pack fallback is one letter (round rails, the economy chart); the cell's own label names it.
+import type { BuyClass } from "../../stats/economy";
+import type { KillFact } from "../../stats/facts";
+import { weaponLabel } from "../../stats/weapons";
+import { GameIcon } from "../components/GameIcon";
+import type { RoundHow } from "../data/match";
 
-// ---------------------------------------------------------------- kills and deaths (16 grid, filled)
-
-const SKULL = "M8 1.25C4.6 1.25 2.25 3.6 2.25 6.75c0 1.95.9 3.4 2.25 4.25v2.1c0 .55.45 1 1 1h5c.55 0 1-.45 1-1V11c1.35-.85 2.25-2.3 2.25-4.25C13.75 3.6 11.4 1.25 8 1.25z";
-const EYES = "M5.9 5.7a1.55 1.55 0 1 1 0 3.1 1.55 1.55 0 0 1 0-3.1zM10.1 5.7a1.55 1.55 0 1 1 0 3.1 1.55 1.55 0 0 1 0-3.1zM8 9.3l.85 1.5h-1.7z";
-const TEETH = "M6.65 12.4h.8v1.7h-.8zM8.55 12.4h.8v1.7h-.8z";
-
-/** A kill. The headshot variant has a bullet hole in the forehead; colour comes from CSS. */
-export const SkullIcon = ({ hs, ...p }: IconProps & { hs?: boolean }) => (
-  <Svg {...p} grid={16} solid>
-    <path fillRule="evenodd" d={`${SKULL}${EYES}${TEETH}${hs ? "M8 2.6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" : ""}`} />
-  </Svg>
-);
-
-/** A death. */
-export const DeathIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M4 4l8 8M12 4l-8 8" strokeWidth="2" /></Svg>
-);
-
-// ---------------------------------------------------------------- win types (16 grid, stroke)
-
-function star(cx: number, cy: number, ro: number, ri: number, n: number): string {
-  const pts: string[] = [];
-  for (let i = 0; i < n * 2; i++) {
-    const a = (Math.PI * i) / n - Math.PI / 2;
-    const r = i % 2 ? ri : ro;
-    pts.push(`${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`);
-  }
-  return `M${pts.join("L")}Z`;
-}
-const BURST = star(8, 8, 6.75, 3.1, 8);
-
-/** Elimination: a filled crosshair diamond (filled so it holds at 12 px). */
-export const ElimIcon = (p: IconProps) => (
-  <Svg {...p} grid={16} solid>
-    <path fillRule="evenodd" d="M8 1.5L14.5 8 8 14.5 1.5 8zM8 5.6L5.6 8 8 10.4 10.4 8z" />
-    <path d="M7.4 0h1.2v3.4H7.4zM7.4 12.6h1.2V16H7.4zM0 7.4h3.4v1.2H0zM12.6 7.4H16v1.2h-3.4z" />
-  </Svg>
-);
-export const BombIcon = (p: IconProps) => <Svg {...p} grid={16}><path d={BURST} /></Svg>;
-export const DefuseIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M5.75 1.5l1.6 5.1M10.25 1.5l-1.6 5.1" /><circle cx="8" cy="7.75" r="1.3" /><path d="M7.2 9l-2.6 5.5M8.8 9l2.6 5.5" /></Svg>
-);
-/** Time: a clock reading 1:55, the length of a CS2 round. */
-export const TimeIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><circle cx="8" cy="8" r="6.25" /><path d="M8 8l-2-3.45M8 8l2.35-1.5" /></Svg>
-);
-export const UnknownIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><circle cx="8" cy="8" r="6" strokeDasharray="2 2" /></Svg>
-);
+// ---------------------------------------------------------------- round ends
 
 export const WIN_LABEL: Record<RoundHow, string> = { elim: "Elimination", bomb: "Bomb exploded", defuse: "Bomb defused", time: "Time ran out" };
+const WIN_ID: Record<RoundHow, string> = { elim: "elimination", bomb: "bomb_exploded", defuse: "bomb_defused", time: "time" };
+const WIN_SHORT: Record<RoundHow, string> = { elim: "E", bomb: "B", defuse: "D", time: "T" };
 
-export function WinIcon({ how, ...p }: IconProps & { how: RoundHow | null }) {
-  if (how === "elim") return <ElimIcon {...p} />;
-  if (how === "bomb") return <BombIcon {...p} />;
-  if (how === "defuse") return <DefuseIcon {...p} />;
-  if (how === "time") return <TimeIcon {...p} />;
-  return <UnknownIcon {...p} />;
+/** How a round ended; an unknown end is the pack's plain round win. Colour comes from the parent. */
+export function WinIcon({ how, size, beside, compact }: { how: RoundHow | null; size: number; beside?: boolean; compact?: boolean }) {
+  return <GameIcon id={how ? WIN_ID[how] : "round_win"} name={how ? WIN_LABEL[how] : "Round won"} width={size} beside={beside || compact} text={compact ? (how ? WIN_SHORT[how] : "W") : undefined} />;
 }
 
-// ---------------------------------------------------------------- buy types (16 grid, filled)
-// Ascending bars: eco one, force (or half) buy two, full buy three. CS Demo Manager's five-way
-// "force-buy" (spending the last money after a loss) draws all three bars hollow. Pistol rounds show
-// a pistol.
+// ---------------------------------------------------------------- buys
 
-export type AnyBuy = BuyType | BuyClass;
-export const BUY_LABEL: Record<AnyBuy, string> = { pistol: "Pistol", eco: "Eco", semi: "Half buy", "force-buy": "Force buy", force: "Force buy", full: "Full buy" };
+export const BUY_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", half: "Half buy", full: "Full buy" };
+/** SYSTEM.md: money for a full buy, eco_request for an eco, buyzone for a pistol round. A half buy is
+ * also money; the text label beside it tells the two apart. */
+const BUY_ID: Record<BuyClass, string> = { pistol: "buyzone", eco: "eco_request", half: "money", full: "money" };
+const BUY_SHORT: Record<BuyClass, string> = { pistol: "P", eco: "E", half: "H", full: "F" };
 
-const BARS = ["M2.5 10h3v4h-3z", "M6.5 6.5h3V14h-3z", "M10.5 2.5h3V14h-3z"];
-
-export function BuyIcon({ buy, ...p }: IconProps & { buy: AnyBuy | null }) {
-  if (buy === "pistol") return <Svg {...p} grid={16} solid><path d="M1.75 4.75h11.5v2.6h-1.1l-.9.9H8.7l-1.35 4.5H4.55l1.15-4.5H4.4l-.35-.9H1.75z" /></Svg>;
-  if (buy === "force-buy") return <Svg {...p} grid={16}>{BARS.map((d) => <path key={d} d={d} strokeWidth="1.25" />)}</Svg>;
-  const n = buy === "eco" ? 1 : buy === "semi" || buy === "force" ? 2 : buy === "full" ? 3 : 0;
-  if (!n) return <UnknownIcon {...p} />;
-  return (
-    <Svg {...p} grid={16} solid>
-      {BARS.map((d, i) => <path key={d} d={d} opacity={i < n ? 1 : 0.25} />)}
-    </Svg>
-  );
+/** A team's or a player's buy; nothing for an unknown buy, whose text says so. */
+export function BuyIcon({ buy, size, beside, compact, className }: { buy: BuyClass | null; size: number; beside?: boolean; compact?: boolean; className?: string }) {
+  if (!buy) return null;
+  return <GameIcon id={BUY_ID[buy]} name={BUY_LABEL[buy]} width={size} beside={beside || compact} text={compact ? BUY_SHORT[buy] : undefined} className={className} />;
 }
 
-// ---------------------------------------------------------------- grenades (16 grid)
+// ---------------------------------------------------------------- grenades
 
 export type Nade = "he" | "flash" | "smoke" | "molotov" | "decoy";
 export const NADE_LABEL: Record<Nade, string> = { he: "HE grenade", flash: "Flashbang", smoke: "Smoke", molotov: "Molotov", decoy: "Decoy" };
+const NADE_ID: Record<Nade, string> = { he: "hegrenade", flash: "flashbang", smoke: "smokegrenade", molotov: "molotov", decoy: "decoy" };
 
-export function NadeIcon({ type, ...p }: IconProps & { type: Nade }) {
-  switch (type) {
-    case "he":
-      return <Svg {...p} grid={16}><circle cx="7.5" cy="10" r="4.5" /><path d="M6 5.6V3.75h3V5.6M9 4.25h2.4l1.6 2.5" /></Svg>;
-    case "flash":
-      return <Svg {...p} grid={16}><rect x="4" y="4.5" width="5" height="10" rx="1.5" /><path d="M5.5 4.5V2.5h2v2M11.5 6l2.25-1.5M12 9.5h2.5M11.5 13l2.25 1.5" /></Svg>;
-    case "smoke":
-      return <Svg {...p} grid={16}><rect x="5" y="7" width="6" height="8" rx="1.25" /><path d="M5 10.5h6" /><path d="M4.75 5.25a1.6 1.6 0 0 1 1.9-2.15 1.9 1.9 0 0 1 3.3.3 1.5 1.5 0 0 1 1.3 1.85" /></Svg>;
-    case "molotov":
-      return <Svg {...p} grid={16}><path d="M7 5.5h2v2l1.5 1.75v5a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-5L7 7.5z" /><path d="M8 .9c1.1 1.1 1.2 2.1.1 3.1-1.1-1-1-2 0-3.1z" fill="currentColor" stroke="none" /></Svg>;
-    case "decoy":
-      return <Svg {...p} grid={16}><rect x="3" y="5" width="5" height="9" rx="1.5" /><path d="M4.5 5V3h2v2M10.5 7.5a2.5 2.5 0 0 1 0 4M12.5 5.75a5 5 0 0 1 0 7.5" /></Svg>;
-  }
+/** A grenade; CT's fire grenade is the incendiary. */
+export function NadeIcon({ type, size, side, beside }: { type: Nade; size: number; side?: "T" | "CT"; beside?: boolean }) {
+  const id = type === "molotov" && side === "CT" ? "incgrenade" : NADE_ID[type];
+  return <GameIcon id={id} name={type === "molotov" && side === "CT" ? "Incendiary" : NADE_LABEL[type]} width={size} beside={beside} />;
 }
 
-// ---------------------------------------------------------------- weapons (64×20 grid, filled)
+// ---------------------------------------------------------------- weapons
 
-const W = {
-  rifle: "M2 7.2L13.5 6.2 15.5 5h24.5l1 1.5h14.5v-1h2v1h4.5v2H41l-1 1.5h-6.8l-2 7-4-.5 1.4-6.5h-6l-1.6 5h-3.5l1.5-5h-4.5L3 13.2 2 12.2z",
-  sniper: "M2 8.4L12 7.2l2 .8h26v1h22v1.6H40l-2 1.5H24.5l-2.2 4h-3.6l1-4h-5.4L4 14 2 13zM19.5 3.4h3.2v1h11.8v-1h3.2v4h-3.2v-1H22.7v1h-3.2zM24 7.4h2v.8h-2zM31 7.4h2v.8h-2z",
-  smg: "M3.5 7h4.5v1.6H3.5zM8 6h26v1h10v2H34l-1 2h-6l-1 6h-4l1-6h-7l-2 4h-3l1.5-4H8z",
-  pistol: "M18 6h26v3.5h-4l-2 1.5H29l-2.4 6.5h-5.2l2.2-6.5L21.8 9.5H18z",
-  shotgun: "M2 8.2L13 7.2l2-.7h21v.5h24v2H36l-1 1.5H22l-1.5 4H17l1-4h-4L3 13 2 12zM39.5 9.5h12.5V12H39.5z",
-  mg: "M2 8.2L12 7.2 14 5h26v1.5h20v2H40l-1 2.5h-9v5h-7v-5h-3l-1.5 4h-3l1-4H14L3 13 2 12zM47.5 8.5h1.4l-2.6 7.5h-1.4zM50.5 8.5h1.4l2.6 7.5h-1.4z",
-  knife: "M6 9.2L20 8.4l2-1.2 2 .9v3.4l-2 1-2-1.1L6 10.8zM24 8.2h25l9 1.3-9 2H24z",
-  zeus: "M18 6.5h20v3h-3l-1 1.5h-6l-2 6h-5l2-6-2-1.5h-3zM40 5.5l4-2-1.5 3.5 4.5-.5-6 5 1.5-3.5z",
-  c4: "M18 5h28v11H18zM21 7.5h10v3H21zM34 7.5h2v2h-2zM38 7.5h2v2h-2zM42 7.5h2v2h-2zM34 11h2v2h-2zM38 11h2v2h-2zM42 11h2v2h-2z",
-  world: "M30 3h4v9h4.5L32 18l-6.5-6H30z",
-} as const;
-type Silhouette = keyof typeof W;
+/** The pack id for an engine weapon name: the bomb and the world are equipment, the rest are their own names. */
+const weaponId = (name: string) => (name === "trigger_hurt" || name === "" ? "world" : name);
 
-const SHOTGUNS = new Set(["nova", "xm1014", "sawedoff", "mag7"]);
-const NADE_OF: Record<string, Nade> = { hegrenade: "he", flashbang: "flash", smokegrenade: "smoke", molotov: "molotov", incgrenade: "molotov", inferno: "molotov", decoy: "decoy" };
-
-function silhouetteOf(name: string): Silhouette | null {
-  if (name === "taser") return "zeus";
-  if (name === "planted_c4" || name === "c4") return "c4";
-  if (name === "world" || name === "trigger_hurt" || name === "") return "world";
-  const c = weaponClass(name);
-  if (c === "heavy") return SHOTGUNS.has(name) ? "shotgun" : "mg";
-  if (c === "rifle" || c === "sniper" || c === "smg" || c === "pistol" || c === "knife") return c;
-  return null;
+/** A gun, knife, grenade or the bomb, at a fixed height; guns are wide, so their box is about three times as wide. */
+export function WeaponIcon({ name, height = 14, beside, className }: { name: string; height?: number; beside?: boolean; className?: string }) {
+  const square = /grenade|flashbang|molotov|decoy|inferno|c4|world/.test(name);
+  return <GameIcon id={weaponId(name)} name={weaponLabel(name)} width={square ? height : Math.round(height * 2.9)} height={height} beside={beside} className={`gicon--gun ${className ?? ""}`} />;
 }
 
-/** A weapon as a silhouette (grenades as their 16-unit glyph). Height sets the size. */
-export function WeaponIcon({ name, size = 14, ...p }: IconProps & { name: string }) {
-  const nade = NADE_OF[name];
-  if (nade) return <NadeIcon {...p} type={nade} size={size} label={p.label ?? weaponLabel(name)} />;
-  const s = silhouetteOf(name) ?? "rifle";
-  return (
-    <Svg {...p} size={size} grid={[64, 20]} solid label={p.label ?? weaponLabel(name)}>
-      <path d={W[s]} fillRule="evenodd" />
-    </Svg>
-  );
+/** A weapon class as the class's representative weapon (SYSTEM.md): ak47, awp, mp9, nova, glock, knife, hegrenade, taser. */
+const CLASS_GUN: Record<string, string> = { rifle: "ak47", sniper: "awp", smg: "mp9", heavy: "nova", pistol: "glock", knife: "knife", grenade: "hegrenade", other: "taser" };
+export function WeaponClassIcon({ cls, height = 12 }: { cls: string; height?: number }) {
+  return <WeaponIcon name={CLASS_GUN[cls] ?? "ak47"} height={height} beside />;
 }
 
-/** Class silhouettes for tables grouped by weapon class. */
-export function WeaponClassIcon({ cls, ...p }: IconProps & { cls: string }) {
-  const name = { rifle: "ak47", sniper: "awp", smg: "mp9", heavy: "nova", pistol: "glock", knife: "knife", grenade: "hegrenade", other: "taser" }[cls] ?? "ak47";
-  return <WeaponIcon name={name} label={undefined} {...p} />;
-}
+// ---------------------------------------------------------------- kill flags
 
-// ---------------------------------------------------------------- killfeed flags (16 grid)
-// The game's kill flags (SCHEMA.md kills.flags): 1 headshot, 2 wallbang, 4 through smoke, 8 blind
-// killer, 16 no-scope, 32 airborne killer.
-
-export const HeadshotIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><circle cx="8" cy="6.5" r="4" /><path d="M3.5 15c.6-2.6 2.3-3.9 4.5-3.9s3.9 1.3 4.5 3.9" /><circle cx="8" cy="6.5" r="1.1" fill="currentColor" stroke="none" /></Svg>
-);
-export const WallbangIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M6.5 2v12M9.5 2v12" /><path d="M1 8h14" strokeDasharray="2 1.5" /><path d="M12.5 5.5L15 8l-2.5 2.5" /></Svg>
-);
-export const SmokeKillIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.6-.9A3.2 3.2 0 0 1 11.8 12.5z" /></Svg>
-);
-export const NoscopeIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><circle cx="8" cy="8" r="5.5" /><path d="M8 2.5v3M8 10.5v3M2.5 8h3M10.5 8h3" /><path d="M2.5 13.5l11-11" /></Svg>
-);
-export const BlindIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="1.8" /><path d="M2.5 14L13.5 2" /></Svg>
-);
-export const AirIcon = (p: IconProps) => (
-  <Svg {...p} grid={16}><path d="M8 13V3M4.5 6.5L8 3l3.5 3.5" /><path d="M4 14.5h8" /></Svg>
-);
-
-export const KILL_FLAGS: { bit: number; label: string; Icon: (p: IconProps) => JSX.Element }[] = [
-  { bit: 1, label: "Headshot", Icon: HeadshotIcon },
-  { bit: 2, label: "Wallbang", Icon: WallbangIcon },
-  { bit: 4, label: "Through smoke", Icon: SmokeKillIcon },
-  { bit: 16, label: "No-scope", Icon: NoscopeIcon },
-  { bit: 8, label: "Killer was blind", Icon: BlindIcon },
-  { bit: 32, label: "Airborne", Icon: AirIcon },
+type Flag = "headshot" | "wallbang" | "smoke" | "noscope" | "killerBlind" | "killerInAir";
+/** The kill's flags as the engine's KillFact carries them, with the pack's killfeed icon for each. */
+export const KILL_FLAGS: { flag: Flag; id: string; label: string }[] = [
+  { flag: "headshot", id: "headshot", label: "Headshot" },
+  { flag: "wallbang", id: "wallbang", label: "Wallbang" },
+  { flag: "smoke", id: "smoke", label: "Through smoke" },
+  { flag: "noscope", id: "noscope", label: "No-scope" },
+  { flag: "killerBlind", id: "blind", label: "Killer was blind" },
+  { flag: "killerInAir", id: "inair", label: "Airborne" },
 ];
 
-/** The flags set on a kill, as icons. */
-export function KillFlags({ flags, size = 13 }: { flags: number; size?: number }) {
-  const on = KILL_FLAGS.filter((f) => flags & f.bit);
-  if (!on.length) return null;
-  return <span className="kflags">{on.map(({ bit, label, Icon }) => <Icon key={bit} size={size} label={label} />)}</span>;
+/** One killfeed flag by its pack id. */
+export function FlagIcon({ id, label, size }: { id: string; label: string; size: number }) {
+  return <GameIcon id={id} name={label} width={size} />;
 }
 
-/** First kill of the round (a drop) or first death (a hollow drop). */
-export const FirstKillIcon = ({ death, ...p }: IconProps & { death?: boolean }) => (
-  <Svg {...p} grid={16} solid={!death}>
-    <path d="M8 2.2c2.3 2.9 3.6 5 3.6 6.9a3.6 3.6 0 0 1-7.2 0c0-1.9 1.3-4 3.6-6.9z" />
-  </Svg>
-);
+/** The flags set on a kill. killerBlind and killerInAir are null when the source did not record them, which shows nothing. */
+export function KillFlags({ kill, size = 13 }: { kill: Pick<KillFact, Flag>; size?: number }) {
+  const on = KILL_FLAGS.filter((f) => kill[f.flag] === true);
+  if (!on.length) return null;
+  return <span className="kflags">{on.map(({ flag, id, label }) => <FlagIcon key={flag} id={id} label={label} size={size} />)}</span>;
+}

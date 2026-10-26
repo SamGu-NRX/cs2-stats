@@ -5,6 +5,8 @@ The user's definition is HLTV's (news 45755, "HLTV Attributes receive an overhau
 ## Performance (how well)
 Rating 3.0 (approx.) and its six sub-ratings: Kills, Damage, Survival, KAST, Multi-Kill, Round Swing. Plus the "how good" tables: Trade Kill Success %, Traded Death Success %, Opening Swing, Clutch Swing, AWP Swing, AWP Duel Win %, Flash Swing, 1v1 win rate. **Firepower** sits on the performance side.
 
+**Profile's attributes panel (decided 2026-10-25, approved by the lead):** HLTV's block sits under the card with one Side control and one "Compared to" control governing the whole panel. So Firepower's score out of 100 ranks against the chosen population (for the user, the bot pools: Riflers, AWPers or everyone), the same as the six style attributes beside it. Each performance metric inside Firepower's expansion still shows its percentile against pros, and the "how good" tables stay against pros.
+
 ## Identity (how you play): HLTV's six style attributes
 **Entrying, Trading, Opening, Closing, Sniping, Utility**, built from stylistic metrics that **separate intent from outcome**:
 - tradeable deaths, not traded deaths;

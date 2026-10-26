@@ -11,25 +11,31 @@ export function halfOf(ri: number, maxrounds: number): number {
   return 2 + Math.floor((ri - maxrounds) / OT_HALF);
 }
 
-/** True when round ri starts a new half (and is not the first round). */
-export const startsHalf = (ri: number, maxrounds: number) => ri > 0 && halfOf(ri, maxrounds) !== halfOf(ri - 1, maxrounds);
+/**
+ * For each round, by its number in the match (1-based), whether a side swap falls just before it.
+ * A converted log can start at round 7, so a round's place in the list is not its number.
+ */
+export function halfStarts(numbers: readonly number[], maxrounds: number): boolean[] {
+  return numbers.map((n, i) => i > 0 && halfOf(n - 1, maxrounds) !== halfOf(numbers[i - 1] - 1, maxrounds));
+}
 
 export interface Column { ri: number; x: number; half: number; gapBefore: boolean }
 
 /**
- * x position of every round column. `cell` is the column width, `gap` the space between columns
- * and `halfGap` the extra space at a side swap. Returns the columns and the total width.
+ * x position of every round column, from the rounds' numbers. `cell` is the column width, `gap` the
+ * space between columns and `halfGap` the extra space at a side swap. Returns the columns (ri is the
+ * column's index) and the total width.
  */
-export function roundColumns(nRounds: number, maxrounds: number, cell: number, gap: number, halfGap: number): { cols: Column[]; width: number } {
+export function roundColumns(numbers: readonly number[], maxrounds: number, cell: number, gap: number, halfGap: number): { cols: Column[]; width: number } {
+  const starts = halfStarts(numbers, maxrounds);
   const cols: Column[] = [];
   let x = 0;
-  for (let ri = 0; ri < nRounds; ri++) {
-    const gapBefore = startsHalf(ri, maxrounds);
-    if (ri > 0) x += gap + (gapBefore ? halfGap : 0);
-    cols.push({ ri, x, half: halfOf(ri, maxrounds), gapBefore });
+  numbers.forEach((n, ri) => {
+    if (ri > 0) x += gap + (starts[ri] ? halfGap : 0);
+    cols.push({ ri, x, half: halfOf(n - 1, maxrounds), gapBefore: starts[ri] });
     x += cell;
-  }
-  return { cols, width: nRounds ? x : 0 };
+  });
+  return { cols, width: numbers.length ? x : 0 };
 }
 
 /**

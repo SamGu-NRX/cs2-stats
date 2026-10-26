@@ -30,11 +30,13 @@ export interface Group<T> { label: ReactNode; rows: T[]; key: string }
 const VIRTUAL_FROM = 200;
 const ROW_H = 36;
 
-export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpen, rowClass, label, caption, sortKey, onSort, maxHeight, fixed, activeKey, onRowContext }: {
+export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort, onOpen, rowClass, label, caption, sortKey, onSort, maxHeight, fixed, activeKey, onRowContext }: {
   columns: Column<T>[];
   rows?: T[];
   /** grouped rows: each group sorts within itself under a full-width label row */
   groups?: Group<T>[];
+  /** rows under the body, such as a team total: drawn with the same columns, never sorted or opened */
+  foot?: T[];
   rowKey: (row: T) => string;
   defaultSort?: SortState | null;
   onOpen?: (row: T) => void;
@@ -155,7 +157,7 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
   const style: CSSProperties | undefined = maxHeight ? { maxHeight } : undefined;
   return (
     <div className="tbl-wrap" ref={wrap} style={style}>
-      <table className={fixed || virtual ? "tbl tbl--fixed" : "tbl"} aria-label={label} aria-rowcount={flat.length + 1}>
+      <table className={fixed || virtual ? "tbl tbl--fixed" : "tbl"} aria-label={label} aria-rowcount={flat.length + 1 + (foot?.length ?? 0)}>
         {caption && <caption className="sr-only">{caption}</caption>}
         <colgroup>{columns.map((c) => <col key={c.key} style={c.width ? { width: c.width } : undefined} />)}</colgroup>
         <thead>
@@ -169,7 +171,7 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
                   {c.sort ? (
                     <button className="th" data-tip={c.tip} onClick={() => setSort(nextSort(sort, c.key, c.firstDir ?? (c.align === "l" ? "asc" : "desc")))}>
                       <span>{c.label}</span>
-                      <SortIcon dir={on ? sort!.dir : null} size={10} />
+                      <SortIcon dir={on ? sort!.dir : null} size={12} />
                     </button>
                   ) : (
                     <span className="th" data-tip={c.tip} tabIndex={c.tip ? 0 : undefined}>{c.label}</span>
@@ -195,6 +197,15 @@ export function DataTable<T>({ columns, rows, groups, rowKey, defaultSort, onOpe
           })}
           {window && window.end < flat.length && <tr aria-hidden style={{ height: (flat.length - window.end) * ROW_H }} />}
         </tbody>
+        {foot?.length ? (
+          <tfoot>
+            {foot.map((r, i) => (
+              <tr key={rowKey(r)} className="is-total">
+                {columns.map((c) => <td key={c.key} className={[c.align === "l" ? "l" : c.align === "c" ? "c" : "", c.sticky ? "sticky-col" : "", c.colored ? "colored" : "", c.className ?? ""].join(" ")}>{c.render(r, i)}</td>)}
+              </tr>
+            ))}
+          </tfoot>
+        ) : null}
       </table>
     </div>
   );

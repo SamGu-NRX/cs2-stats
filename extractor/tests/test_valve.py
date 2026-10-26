@@ -2,6 +2,7 @@
 lookups. Everything here is synthetic; no real SteamID, name or demo."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -268,6 +269,25 @@ def test_the_replays_folder_is_found_in_the_library_that_holds_cs2(tmp_path):
     assert vi.replays_dir(steam) == other / vi.REPLAYS
 
 
+def test_the_user_file_is_replaced_whole_and_only_when_it_changes(tmp_path, monkeypatch):
+    # The app reads it while it lists matches: a write cut short must leave the old file whole, and a
+    # rerun for the same user must not touch it (review of #29)
+    out = tmp_path / "out"
+    vi.resolve_user(out, None, U1)
+    f = out / vi.USER_FILE
+    first = (f.read_text(encoding="utf-8"), f.stat().st_mtime_ns)
+    vi.resolve_user(out, None, U1)
+    assert (f.read_text(encoding="utf-8"), f.stat().st_mtime_ns) == first
+
+    def cut(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(vi.os, "replace", cut)
+    with pytest.raises(OSError):
+        vi.resolve_user(out, None, U2)
+    assert f.read_text(encoding="utf-8") == first[0]
+    assert [p.name for p in out.iterdir()] == [vi.USER_FILE]  # no staged copy left behind
+
+
 def test_a_saved_user_survives_a_later_steam_login_and_an_explicit_one_replaces_it(tmp_path):
     steam = tmp_path / "Steam"
     (steam / "config").mkdir(parents=True)
@@ -295,8 +315,8 @@ def _fake_extractor(calls: list, failing: set):
             with ex.map_lock(Path(out_dir)):
                 tmp = Path(out_dir) / ".tmp-test"
                 tmp.mkdir(parents=True)
-                pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION]}) \
-                    .write_parquet(tmp / "match.parquet")
+                pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION],
+                              "extra": [json.dumps(meta_extra)]}).write_parquet(tmp / "match.parquet")
                 pl.DataFrame({"steamid": pl.Series([U1], dtype=pl.UInt64)}).write_parquet(tmp / "players.parquet")
                 ex.publish_version(tmp, Path(out_dir), ex.EXTRACTOR_VERSION, ["match.parquet", "players.parquet"])
         return dict(ok=ok, errors=[] if ok else ["ValidationFailed: deaths"], validation={})
@@ -325,6 +345,53 @@ def test_a_rerun_extracts_only_what_failed_or_changed_and_the_exit_code_says_whe
     assert _run([a, b], out)[0] == 0 and calls == ["a.dem"]  # same name, different file
     calls.clear()
     assert _run([a, b, "--force"], out)[0] == 0 and calls == ["a.dem", "b.dem"]
+    calls.clear()
+    monkeypatch.setattr(vi, "IMPORTER_VERSION", vi.IMPORTER_VERSION + 1)  # match.extra is written differently now
+    assert _run([a, b], out)[0] == 0 and calls == ["a.dem", "b.dem"]
+
+
+def _pb_varint(v: int) -> bytes:
+    out = b""
+    while True:
+        out += bytes([(v & 0x7F) | (0x80 if v > 0x7F else 0)])
+        v >>= 7
+        if not v:
+            return out
+
+
+def test_a_demos_date_is_its_dem_info_match_time_else_its_file_time(tmp_path, monkeypatch):
+    # Demos carry no date, and the app sorts and groups matches by one. Steam's .dem.info is a MatchInfo
+    # protobuf: field 1 the match id, field 2 the match time (Unix seconds), then nested messages.
+    extras, fake = [], _fake_extractor([], set())
+
+    def capture(dem, out_dir, source, mapdata=None, archive="", meta_extra=None):
+        extras.append(meta_extra)
+        return fake(dem, out_dir, source, mapdata, archive, meta_extra)
+    monkeypatch.setattr(vi.extract, "extract_demo", capture)
+    a, b = tmp_path / "a.dem", tmp_path / "b.dem"
+    a.write_bytes(b"demo a")
+    b.write_bytes(b"demo b")
+    t = 1784431150  # 2026-07-19T03:19:10Z
+    (tmp_path / "a.dem.info").write_bytes(bytes([0x08]) + _pb_varint(123456789012345) + bytes([0x1A, 0x02, 0x08, 0x01])
+                                          + bytes([0x10]) + _pb_varint(t))
+    (tmp_path / "b.dem.info").write_bytes(bytes([0x10, 0xFF]))  # cut off inside its varint
+    os.utime(b, (1790000000, 1790000000))
+    _run([a, b], tmp_path / "out")
+    # started_at is what the app turns into the local day: from date alone, Chicago saw July 19 for July 18
+    assert [e["started_at"] for e in extras] == [e["date"] for e in extras]
+    assert [(e["date"], e["date_source"]) for e in extras] == [("2026-07-19T03:19:10+00:00", "dem.info"),
+                                                             ("2026-09-21T14:13:20+00:00", "file time")]
+
+
+def test_progress_reports_each_demo_as_it_starts_and_ends(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], {"b.dem"}))
+    a, b = tmp_path / "a.dem", tmp_path / "b.dem"
+    a.write_bytes(b"demo a")
+    b.write_bytes(b"demo b")
+    vi.main([str(a), str(b), "--out", str(tmp_path / "out"), "--user", str(U1), "--progress"])
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [(e["event"], e["i"], e["n"], e.get("ok")) for e in events] == [
+        ("start", 1, 2, None), ("done", 1, 2, True), ("start", 2, 2, None), ("done", 2, 2, False)]
 
 
 def test_the_importer_refuses_to_write_the_users_id_inside_a_repository(tmp_path, monkeypatch):
@@ -336,7 +403,10 @@ def test_the_importer_refuses_to_write_the_users_id_inside_a_repository(tmp_path
     with pytest.raises(SystemExit) as e:
         vi.main([str(dem), "--out", str(out), "--user", str(U1)])
     assert e.value.code == 2 and not (out / vi.USER_FILE).exists()
-    assert vi.main([str(dem), "--out", str(out), "--user", str(U1), "--allow-in-repo"]) == 0
+    # there is no flag to allow it any more
+    with pytest.raises(SystemExit) as e:
+        vi.main([str(dem), "--out", str(out), "--user", str(U1), "--allow-in-repo"])
+    assert e.value.code == 2 and not (out / vi.USER_FILE).exists()
 
 
 def test_an_empty_replays_folder_is_an_error_not_a_successful_import(tmp_path):

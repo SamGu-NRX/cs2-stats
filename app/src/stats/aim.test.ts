@@ -1,119 +1,322 @@
-import { describe, expect, test } from "vitest";
-import {
-  aimAggregate, angleBetweenDeg, combinedAngleDeg, crosshairAngleDeg, engFor, histMedian, isCounterStrafed, segmentBursts,
-  shotsFor, sprayControl,
-} from "./aim";
-import { MatchBuilder, TR } from "./testing/build";
+// Aim measures on a hand-built match at 64 ticks/s, where every expected value is worked out by hand.
+import { CS2RB } from "./model-params";
+import { describe, expect, it } from "vitest";
+import { aimAngle, aimError } from "./aim-geometry";
+import { emptyAim, foldAim, type ShotFact, type SightFact, type SprayFact } from "./aim";
+import { METRIC } from "./metrics";
+import type { Summary } from "./rollup";
+import { derive } from "./derive";
+import { emptyTable, kindOf, SCHEMA, type MatchTables, type TableName } from "./tables";
+import { pushRow } from "./testing/tables";
 
-describe("burst segmentation", () => {
-  test("a gap of 0.3 s or more, a weapon change or a new round starts a new burst", () => {
-    const gap = 0.3 * TR; // 19.2 ticks
-    const shots = [
-      { ri: 0, tick: 0, weapon: 1 }, { ri: 0, tick: 6, weapon: 1 }, { ri: 0, tick: 25, weapon: 1 }, // 19 ticks: same burst
-      { ri: 0, tick: 25 + Math.ceil(gap), weapon: 1 }, // 20 ticks: new burst
-      { ri: 0, tick: 50, weapon: 2 }, // weapon change
-      { ri: 1, tick: 52, weapon: 2 }, // new round
-    ];
-    expect(segmentBursts(shots, TR)).toEqual({ burst: [0, 0, 0, 1, 2, 3], idx: [1, 2, 3, 1, 1, 1] });
+/** Appends a row, filling unnamed columns with null (nullable) or a zero value. */
+function add<N extends TableName>(t: MatchTables[N] & object, name: N, row: Record<string, unknown>): void {
+  const full: Record<string, unknown> = {};
+  for (const col of Object.keys(SCHEMA[name])) {
+    const k = kindOf(name, col);
+    full[col] = col in row ? row[col] : k.endsWith("?") ? null : k === "ss" ? [] : k === "b" ? false : k === "s" || k === "id" ? "" : 0;
+  }
+  pushRow(t as never, full as never);
+}
+
+const RATE = 64;
+// Attacker A stands at the origin; victim V stands 1,000 units along +x, so his eye is at yaw 0.
+const ENG = { start: 100, end: 400, onset: 120 };
+/** A's yaw per tick: still at 10 until 130, a 2-degree-per-tick flick that ends 2 degrees past V at 136, then two small corrections. */
+function yawAt(tick: number): number {
+  if (tick <= 130) return 10;
+  if (tick <= 136) return 10 - 2 * (tick - 130);
+  return ({ 137: -1.5, 138: -1.5, 139: -1, 140: -1 } as Record<number, number>)[tick] ?? -0.5;
+}
+/** A's velocity before each counter-strafe test shot (ticks 145, 200, 260, 320). */
+function velAt(tick: number): [number, number] {
+  if (tick >= 184 && tick < 200) return [200, 0];
+  if (tick >= 244 && tick < 260) return [200, 0];
+  if (tick >= 304 && tick < 320) return [60, 0];
+  return [0, 0];
+}
+
+/** hideAt: V leaves sight from this tick; sprayVisible: whether V is on screen during the round-2 spray. */
+function match({ hideAt, sprayVisible = true }: { hideAt?: number; sprayVisible?: boolean } = {}): MatchTables {
+  const t = {
+    match: emptyTable("match"), players: emptyTable("players"), rounds: emptyTable("rounds"), player_rounds: emptyTable("player_rounds"),
+    kills: emptyTable("kills"), damages: emptyTable("damages"), blinds: emptyTable("blinds"), bomb: emptyTable("bomb"),
+    grenade_throws: null, grenade_events: null, smokes: null, infernos: null, positions: null, spotted: null,
+    shots: emptyTable("shots"), engagements: emptyTable("engagements"), engagement_ticks: emptyTable("engagement_ticks"), purchases: null, leaves: null,
+  } satisfies MatchTables;
+  add(t.match, "match", { match_id: "m", source: "local", map: "de_test", tick_rate: RATE, team_ct_start: "A", team_t_start: "B", schema_version: 1, convars: "{}", extra: "{}", visibility_status: "ok" });
+  add(t.players, "players", { steamid: "1", name: "a", team: "A" });
+  add(t.players, "players", { steamid: "2", name: "v", team: "B" });
+  for (const r of [1, 2]) {
+    add(t.rounds, "rounds", { round: r, start_tick: (r - 1) * 1000, freeze_end_tick: (r - 1) * 1000 + 50, end_tick: r * 1000, winner_side: "CT" });
+    add(t.player_rounds, "player_rounds", { round: r, steamid: "1", side: "CT" });
+    add(t.player_rounds, "player_rounds", { round: r, steamid: "2", side: "T" });
+  }
+  add(t.damages, "damages", { tick: 145, round: 1, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", dmg_health: 27, dmg_health_capped: 27, health_before: 100, health_after: 73 });
+  add(t.engagements, "engagements", {
+    engagement_id: 0, round: 1, attacker_steamid: "1", victim_steamid: "2", start_tick: ENG.start, end_tick: ENG.end,
+    first_visible_tick: ENG.onset, first_shot_tick: 145, first_damage_tick: 145, hits: 1, damage: 27, outcome: "damage-only", truncated: false,
+  });
+  const shotTicks = [145, 200, 260, 320];
+  for (let tick = ENG.start; tick <= ENG.end; tick++) {
+    const [vx, vy] = velAt(tick);
+    add(t.engagement_ticks, "engagement_ticks", {
+      engagement_id: 0, tick, a_x: 0, a_y: 0, a_z: 0, a_eye_z: 64, a_pitch: 0, a_yaw: yawAt(tick), a_vel_x: vx, a_vel_y: vy, a_duck: 0,
+      a_shot_fired: shotTicks.includes(tick), v_x: 1000, v_y: 0, v_z: 0, v_eye_z: 64, v_pitch: 0, v_yaw: 180, v_vel_x: 0, v_vel_y: 0, v_duck: 0,
+      mesh_visible: tick >= ENG.onset && (hideAt === undefined || tick < hideAt), smoke_blocked: false,
+    });
+  }
+  // Round 2: V in front of A for the whole spray (or hidden, with sprayVisible false).
+  add(t.engagements, "engagements", {
+    engagement_id: 1, round: 2, attacker_steamid: "1", victim_steamid: "2", start_tick: 1090, end_tick: 1140,
+    first_visible_tick: sprayVisible ? 1090 : null, first_shot_tick: 1100, first_damage_tick: null, hits: 0, damage: 0, outcome: "sight-only", truncated: false,
+  });
+  for (let tick = 1090; tick <= 1140; tick++) {
+    add(t.engagement_ticks, "engagement_ticks", {
+      engagement_id: 1, tick, a_x: 0, a_y: 0, a_z: 0, a_eye_z: 64, a_pitch: 0, a_yaw: 180, a_vel_x: 0, a_vel_y: 0, a_duck: 0,
+      a_shot_fired: false, v_x: -1000, v_y: 0, v_z: 0, v_eye_z: 64, v_pitch: 0, v_yaw: 0, v_vel_x: 0, v_vel_y: 0, v_duck: 0,
+      mesh_visible: sprayVisible, smoke_blocked: false,
+    });
+  }
+  // Counter-strafe shots: [tick, velocity at the shot]. 73.1 u/s is 34% of the AK's 215.
+  const strafes: [number, [number, number]][] = [[145, [73, 0]], [200, [80, 0]], [260, [-80, 0]], [320, [80, 0]]];
+  for (const [tick, [vx, vy]] of strafes) {
+    add(t.shots, "shots", {
+      tick, round: 1, steamid: "1", weapon: "ak47", pitch: 0, yaw: yawAt(tick), recoil_index: 0, ammo_clip: 30, airborne: false, scoped: false,
+      flash_duration: 0, vel_x: vx, vel_y: vy, speed_2d: Math.hypot(vx, vy),
+    });
+  }
+  // Round 2 sprays: four bullets 6-7 ticks apart (the AK's 0.1 s cycle), yaw crossing +-180, then a
+  // 10-tick gap that breaks the run, then two more bullets that cannot start a spray (recoil not reset).
+  const spray: [number, number, number, number][] = [[1100, 0, 179, 0], [1106, 0.5, -179.5, 1], [1113, 1.5, -179, 2], [1119, 3, -178.5, 3], [1129, 3.5, -178, 4], [1135, 4, -178, 5]];
+  spray.forEach(([tick, pitch, yaw, ri], j) => add(t.shots, "shots", {
+    tick, round: 2, steamid: "1", weapon: "ak47", pitch, yaw, recoil_index: ri, ammo_clip: 30 - j, airborne: false, scoped: false,
+    flash_duration: 0, vel_x: 0, vel_y: 0, speed_2d: 0,
+  }));
+  return t;
+}
+
+describe("aim geometry", () => {
+  it("measures the angle and the turn needed to reach a target", () => {
+    // fails if pitch sign, yaw wrap or the 3-D angle is wrong
+    const eye: [number, number, number] = [0, 0, 64];
+    expect(aimAngle(0, 0, eye, [100, 100, 64])).toBeCloseTo(45, 9);
+    expect(aimError(0, 0, eye, [100, 0, 164])).toEqual([0, -45].map((x) => expect.closeTo(x, 9)));
+    expect(aimError(0, 170, eye, [-100, -100 * Math.tan((10 * Math.PI) / 180), 64])[0]).toBeCloseTo(20, 9);
   });
 });
 
-describe("counter-strafe", () => {
-  test("speed at most 34 % of max speed", () => {
-    expect(isCounterStrafed(85, 250)).toBe(true); // exactly 34 %
-    expect(isCounterStrafed(85.01, 250)).toBe(false);
-    expect(isCounterStrafed(0, 215)).toBe(true);
-    expect(isCounterStrafed(null, 215)).toBeNull();
-    expect(isCounterStrafed(10, null)).toBeNull();
+describe("deriveAim on a hand-built match", () => {
+  const facts = derive(match(), CS2RB).aim;
+
+  it("times and measures a sighting", () => {
+    // fails if the onset, the reaction tick, the flick's overshoot or the correction count moves
+    const s = facts.filter((f): f is SightFact => f.k === "sight");
+    expect(s).toHaveLength(1);
+    const f = s[0];
+    expect(f.place).toBeCloseTo(10, 6);
+    expect(f.react).toBe((131 - 120) / RATE);
+    expect(f.shot).toBe((145 - 120) / RATE);
+    expect(f.ttd).toBe((145 - 120) / RATE);
+    // the view turned from yaw 10 at the onset to -0.5 at the damage tick
+    expect(f.moved).toBeCloseTo(10.5, 3);
+    expect(f.ttk).toBeNull();
+    expect(f.over).toBeCloseTo(2, 6);
+    expect(f.micro).toBe(2);
+    expect(f.weapon).toBe("ak47");
+  });
+
+  it("classifies first shots by counter-strafe and links hits by tick", () => {
+    // fails if the 34% boundary, the reversal or deceleration test, or the hit link changes
+    const s = facts.filter((f): f is ShotFact => f.k === "shots" && f.ri === 0);
+    expect(s).toHaveLength(1);
+    expect(s[0].cs).toEqual([1, 1, 1, 1, 0]);
+    expect([s[0].shots, s[0].hits, s[0].first, s[0].firstHits]).toEqual([4, 1, 4, 1]);
+  });
+
+  it("cuts sprays by the gun's cycle time and reset and unwraps yaw", () => {
+    // fails if a run is stitched across a gap, starts without a reset, or yaw is not unwrapped
+    const s = facts.filter((f): f is SprayFact => f.k === "spray");
+    expect(s).toHaveLength(1);
+    expect(s[0].bullets).toBe(4);
+    expect(s[0].dp).toEqual([0.5, 1.5, 3]);
+    expect(s[0].dy.map((x) => +x.toFixed(9))).toEqual([1.5, 2, 2.5]);
+  });
+
+  it("measures each spray's distance from the enemy bullet 1 aimed at", () => {
+    // fails if the distance reads the wrong target, view or bullets. V sits at yaw 180, pitch 0; the
+    // four bullets are off by (0, 1), (0.5, 0.5), (1.5, 1) and (3, 1.5) degrees of pitch and yaw, so
+    // about 1, 0.707, 1.803 and 3.354 degrees; with V hidden there is no target
+    const s = facts.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.SQRT1_2 + Math.hypot(1.5, 1) + Math.hypot(3, 1.5)) / 4, 2);
+    const hidden = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(hidden[0].dist).toBeNull();
+  });
+
+  it("skips a spray bullet whose tick lacks finite coordinates, and gives no distance when none is left", () => {
+    // fails if a null or NaN coordinate mid-spray turns the distance into NaN: with bullet 2's tick
+    // missing V's x and bullet 3's holding a NaN, the distance is the mean of bullets 1 and 4
+    const t = match();
+    const T = t.engagement_ticks!;
+    const rowAt = (tick: number) => T.tick.findIndex((x, i) => x === tick && T.engagement_id[i] === 1);
+    T.v_x[rowAt(1106)] = null;
+    T.a_x[rowAt(1113)] = Number.NaN;
+    const s = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s[0].dist).toBeCloseTo((1 + Math.hypot(3, 1.5)) / 2, 2);
+    for (const tick of [1100, 1106, 1113, 1119]) T.v_eye_z[rowAt(tick)] = Number.NaN;
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].dist).toBeNull();
+  });
+
+  it("charts a spray at nobody, since recoil control needs no target, but gives it no target path", () => {
+    // fails if a spray with no visible enemy is dropped from the chart (the old rule, which left most
+    // sprays out), or gets a target-eye path without a target
+    const s = derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s.map((f) => [f.bullets, f.dp.length, f.hp.length])).toEqual([[4, 3, 0]]);
+  });
+
+  it("times the kill from the sighting, and leaves out time to damage of a second or more", () => {
+    // fails if a kill while visible is not timed, or a 1 s+ time to damage counts as a reaction
+    const t = match();
+    add(t.kills, "kills", { tick: 150, round: 1, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", headshot: true, a_side: "CT", v_side: "T" });
+    expect(derive(t, CS2RB).aim.find((x): x is SightFact => x.k === "sight")!.ttk).toBe((150 - 120) / RATE);
+    const late = match();
+    late.engagements!.first_damage_tick[0] = 120 + RATE;
+    late.damages.tick[0] = 120 + RATE;
+    const agg = emptyAim();
+    for (const f of derive(late, CS2RB).aim) foldAim(agg, f);
+    expect(agg.ttd).toEqual([1]);
+    expect(METRIC.timeToDamage.value({ aim: agg } as Summary)).toBeNull();
+  });
+
+  it("times a sighting only within the stretch the enemy stays visible", () => {
+    // fails if damage or a shot after the enemy left sight is timed from this onset
+    const f = derive(match({ hideAt: 140 }), CS2RB).aim.find((x): x is SightFact => x.k === "sight")!;
+    expect([f.ttd, f.shot]).toEqual([null, null]);
+    expect(f.react).toBe((131 - 120) / RATE);
   });
 });
 
-describe("crosshair angle", () => {
-  test("straight ahead, sideways and below", () => {
-    expect(crosshairAngleDeg(0, 0, [0, 0, 0], [100, 0, 0])).toBeCloseTo(0, 9);
-    expect(crosshairAngleDeg(0, 0, [0, 0, 0], [0, 100, 0])).toBeCloseTo(90, 9);
-    expect(crosshairAngleDeg(90, 0, [0, 0, 0], [0, 100, 0])).toBeCloseTo(0, 9);
-    // Source pitch is positive looking down: a target 45° below is on the crosshair at pitch 45
-    expect(crosshairAngleDeg(0, 0, [0, 0, 64], [100, 0, -36])).toBeCloseTo(45, 9);
-    expect(crosshairAngleDeg(0, 45, [0, 0, 64], [100, 0, -36])).toBeCloseTo(0, 9);
-  });
-  test("yaw and pitch offsets combine on the sphere, not as a flat sum", () => {
-    expect(combinedAngleDeg(10, 0)).toBeCloseTo(10, 9);
-    expect(combinedAngleDeg(0, -10)).toBeCloseTo(10, 9);
-    const c = combinedAngleDeg(3, 4);
-    expect(c).toBeCloseTo((Math.acos(Math.cos((3 * Math.PI) / 180) * Math.cos((4 * Math.PI) / 180)) * 180) / Math.PI, 9);
-    expect(angleBetweenDeg([2, 0], [-1, 0])).toBeCloseTo(3, 9);
-  });
-});
+describe("the aim panels' restored measures", () => {
+  const agg = (t: MatchTables) => { const a = emptyAim(); for (const f of derive(t, CS2RB).aim) foldAim(a, f); return a; };
+  /** The hand-built match with A killing V at tick 320 (the last counter-strafe shot), with these kill flags. */
+  const withKill = (penetrated: number | null, thrusmoke: boolean | null) => {
+    const t = match();
+    add(t.kills, "kills", { tick: 320, round: 1, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", headshot: false, penetrated, thrusmoke, a_side: "CT", v_side: "T" });
+    return t;
+  };
 
-describe("aim aggregate", () => {
-  test("accuracy family, counter-strafe and head hits", () => {
-    const b = new MatchBuilder();
-    // burst A: 5 bullets, first counter-strafed and a head hit, bullets 4-5 spray (one hit)
-    b.shot(0, 100, { speed: 20, hit: 1, impact: [0, 0] }).shot(0, 106, { hit: 2 }).shot(0, 112).shot(0, 118, { hit: 2 }).shot(0, 124);
-    // burst B: first bullet while running, missed
-    b.shot(0, 300, { speed: 200 });
-    // burst C: first bullet with no target: not spotted
-    b.shot(0, 600, { target: null, hit: null });
-    const s = shotsFor(aimAggregate(b.build())!, "all", "all");
-    expect([s.shots, s.hits, s.headHits]).toEqual([7, 3, 1]);
-    expect([s.spotted, s.spottedHits]).toEqual([6, 3]);
-    expect([s.first, s.firstStrafeKnown, s.firstStrafed]).toEqual([3, 3, 2]); // B ran at 200 > 0.34 × 215
-    expect([s.firstOnTarget, s.firstHits]).toEqual([2, 1]);
-    expect([s.sprayOnTarget, s.sprayHits]).toEqual([2, 1]);
-    // without the smoke and pen fields, adjusted accuracy and wallbang hits stay unknown
-    expect([s.smokeKnown, s.penKnown]).toEqual([0, 0]);
+  it("leaves wallbang kill shots out of adjusted accuracy, and sets aside a kill shot whose penetration is unknown", () => {
+    // fails if a wallbang or unrecorded-penetration kill shot counts, or a clear kill shot is dropped
+    // ten shots at V while visible (four in round 1, six in round 2), the one at 145 hits; the kill is
+    // on the shot at 320
+    expect([agg(withKill(0, false)).adj, agg(withKill(0, false)).adjHits]).toEqual([10, 1]);
+    const wall = agg(withKill(1, false));
+    expect([wall.adj, wall.adjHits]).toEqual([9, 1]);
+    expect(METRIC.adjustedAccuracy.value({ aim: wall } as Summary)).toBeCloseTo(100 / 9, 9);
+    expect(agg(withKill(null, false)).adj).toBe(9);
   });
-  test("adjusted accuracy drops smoke shots and wallbang kill shots; wallbangs come from pen", () => {
-    const b = new MatchBuilder();
-    b.shot(0, 100, { hit: 2 }).shot(0, 200, { hit: 2 }).shot(0, 300, { hit: null });
-    b.m.aim.shots.smoke = [true, false, false];
-    b.m.aim.shots.pen = [0, 1, 0];
-    const s = shotsFor(aimAggregate(b.build())!, "all", "all");
-    expect([s.smokeShots, s.adjusted, s.adjustedHits]).toEqual([1, 1, 0]);
-    expect(s.wallbangHits).toBe(1);
+
+  it("counts gun kills through walls and smoke only where the source records the flag", () => {
+    // fails if an unrecorded flag reads as a plain kill, or the flags are swapped
+    const a = agg(withKill(1, true));
+    expect([a.killsWbKnown, a.killsWb, a.killsSmokeKnown, a.killsSmoke]).toEqual([1, 1, 1, 1]);
+    const b = agg(withKill(null, null));
+    expect([b.killsWbKnown, b.killsWb, b.killsSmokeKnown, b.killsSmoke]).toEqual([0, 0, 0, 0]);
   });
-  test("splits by side and weapon class; grenades are not shots", () => {
-    const b = new MatchBuilder(13);
-    b.round(12, 3, "elim", { side: [2, 2, 2, 2, 2, 3, 3, 3, 3, 3] });
-    b.shot(0, 100, { weapon: "ak47" }).shot(0, 400, { weapon: "awp" }).shot(12, b.t(12, 5), { weapon: "glock" }).shot(0, 900, { weapon: "hegrenade" });
-    const a = aimAggregate(b.build())!;
-    expect(shotsFor(a, "ct", "all").shots).toBe(2);
-    expect(shotsFor(a, "t", "pistol").shots).toBe(1);
-    expect(shotsFor(a, "all", "sniper").shots).toBe(1);
-    expect(shotsFor(a, "all", "all").shots).toBe(3);
+
+  it("counts a shot through smoke when the only enemy near it is behind one, and none on a map without mesh visibility", () => {
+    // fails if a smoke-blocked enemy still counts as visible, an unknown smoke state is guessed, or a map
+    // without visibility reports a share
+    const at260 = (blocked: boolean | null) => {
+      const t = match();
+      t.engagement_ticks!.smoke_blocked[t.engagement_ticks!.tick.indexOf(260)] = blocked;
+      return agg(t);
+    };
+    // ten gun shots, all with V on screen: four in round 1, six in round 2
+    const smoked = at260(true);
+    expect([smoked.smokeShotsKnown, smoked.smokeShots, smoked.sight]).toEqual([10, 1, 9]);
+    expect(METRIC.shotsThroughSmoke.value({ aim: smoked } as Summary)).toBe(10);
+    expect([at260(null).smokeShotsKnown, at260(null).smokeShots]).toEqual([9, 0]);
+    const blind = match();
+    blind.match.visibility_status[0] = "no_mesh";
+    expect(METRIC.shotsThroughSmoke.value({ aim: agg(blind) } as Summary)).toBeNull();
   });
-  test("spray control: mean angle between bullet and target over bullets 4+", () => {
-    const b = new MatchBuilder();
-    for (let i = 0; i < 5; i++) b.shot(0, 100 + i * 6, { impact: [0, -100 * i] });
-    // aim error stays at the crosshair, so bullet i lands i degrees off
-    b.m.aim.shots.aimErr = b.m.aim.shots.aimErr.map(() => [0, 0]);
-    const s = shotsFor(aimAggregate(b.build())!, "all", "all");
-    expect(sprayControl(s)).toBeCloseTo((3 + 4) / 2, 9);
+
+  it("counts spray accuracy over bullets 4 and later fired at a visible enemy", () => {
+    // fails if bullets 1 to 3 count, or a bullet-4 hit is not linked
+    const t = match();
+    add(t.damages, "damages", { tick: 1119, round: 2, attacker_steamid: "1", victim_steamid: "2", weapon: "ak47", dmg_health: 27, dmg_health_capped: 27, health_before: 100, health_after: 73 });
+    const s = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(s.map((f) => [f.deep, f.deepHits])).toEqual([[1, 1]]);
+    expect(derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.deep)).toEqual([0]);
   });
-  test("kill-based: headshot, wallbang and smoke kills", () => {
-    const b = new MatchBuilder().shot(0, 10);
-    b.kill(0, 5, 0, 5, { hs: true }).kill(0, 6, 0, 6);
-    b.m.kills.flags[1] = 2 | 4;
-    const s = shotsFor(aimAggregate(b.build())!, "all", "all");
-    expect([s.kills, s.hsKills, s.wallbangKills, s.smokeKills]).toEqual([2, 1, 1, 1]);
+
+  it("places the target's eye from the view at bullet 1, and from each bullet's direction when the shot has one", () => {
+    // V stands still 1,000 units away at yaw 180 while A's view drifts from 179 to -178.5: the eye stays
+    // 1 degree left of the first view, so a yaw slip or a missing unwrap moves it
+    const [plain] = derive(match(), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(plain.hp).toEqual([0, 0, 0, 0]);
+    expect(plain.hy.map((x) => +x!.toFixed(6))).toEqual([1, 1, 1, 1]);
+    expect([plain.tp, plain.ty]).toEqual([[], []]);
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i, j) => { t.shots!.bullet_pitch[i] = [0, -0.5, -1, -1.5][j]; t.shots!.bullet_yaw[i] = [180, 180, 180, 181][j]; });
+    const [aimed] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect(aimed.tp).toEqual([0, 0.5, 1, 1.5]);
+    expect(aimed.ty.map((x) => +x!.toFixed(6))).toEqual([0, 0, 0, -1]);
+    expect(derive(match({ sprayVisible: false }), CS2RB).aim.filter((f): f is SprayFact => f.k === "spray")[0].hp).toEqual([]);
   });
-  test("engagement timings go to millisecond histograms; validation flag comes from env", () => {
-    const b = new MatchBuilder();
-    const e = b.m.aim.engagements;
-    e.ri.push(0); e.enemy.push(5); e.tVis.push(1000); e.angVis.push(350); e.angVisYaw.push(300); e.angVisPitch.push(180);
-    e.dist.push(900); e.tAimStart.push(1016); e.tFirstShot.push(1020); e.tFirstDmg.push(1032); e.tEnd.push(1100); e.outcome.push("kill");
-    const a = aimAggregate(b.build())!;
-    const g = engFor(a, "all");
-    expect(g.ttd.sum).toBe(500); // 32 ticks
-    expect(g.react.sum).toBe(250); // 16 ticks
-    expect(g.xhair.sum).toBe(3.5);
-    expect(histMedian(g.xhair)).toBe(3.5); // bin 3..4
-    expect(a.validated).toBe(false);
-    b.m.env.visibilityValidated = true;
-    expect(aimAggregate(b.build())!.validated).toBe(true);
+
+  it("keeps a moving spray on the chart, and cuts the path at a scoped shot", () => {
+    // fails if moving or airborne shots end the path (the old steady filter left most sprays out),
+    // or a scoped shot, whose recoil differs, is kept
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i) => { t.shots!.speed_2d[i] = 230; t.shots!.airborne[i] = true; });
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.dp.length)).toEqual([3]);
+    t.shots!.scoped[rows[3]] = true;
+    expect(derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray").map((f) => f.dp.length)).toEqual([2]);
   });
-  test("no aim data gives null", () => {
-    expect(aimAggregate(new MatchBuilder().build())).toBeNull();
+
+  it("lands each bullet where its own direction went, from bullet 1's, crossing 180 degrees", () => {
+    // fails if the landing points come from the view instead of the bullet, lose the yaw unwrap, or
+    // are not marked as measured; a shot without a bullet direction ends them
+    const t = match();
+    const rows = t.shots!.round.flatMap((r, i) => (r === 2 ? [i] : [])).slice(0, 4);
+    rows.forEach((i, j) => { t.shots!.bullet_pitch[i] = [0, -0.5, -1, -1.5][j]; t.shots!.bullet_yaw[i] = [179.5, -179.5, -179, 179][j]; });
+    const [s] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect([s.landing, s.lp, s.ly]).toEqual(["measured", [-0.5, -1, -1.5], [1, 1.5, -0.5]]);
+    t.shots!.bullet_yaw[rows[2]] = null;
+    const [cut] = derive(t, CS2RB).aim.filter((f): f is SprayFact => f.k === "spray");
+    expect([cut.lp, cut.ly]).toEqual([[-0.5], [1]]);
+    const a = emptyAim();
+    foldAim(a, s);
+    foldAim(a, { ...s, lp: [0.5], ly: [-1], landing: "pattern" });
+    // fails if the land sums lose which points were measured and which were inferred from the pattern
+    expect(a.land.ak47).toEqual({ n: [2, 1, 1], dp: [0, -1, -1.5], dy: [0, 1.5, -0.5], measured: 1, pattern: 1 });
+    // a spray of unknown recoil state goes to unknownPath, compared with nothing
+    const before = [a.cmp, a.path.ak47.n.slice()];
+    foldAim(a, { ...s, weapon: "m4a1_silencer", recoilKnown: false, lp: [], ly: [], landing: null });
+    expect([a.unknownPath.m4a1_silencer, a.path.m4a1_silencer, a.cmp, a.path.ak47.n]).toEqual([{ n: [1, 1, 1], dp: s.dp, dy: s.dy }, undefined, ...before]);
+    // every spray puts its gun in the picker, charted or not
+    foldAim(a, { ...s, weapon: "negev", dp: [], dy: [], lp: [], ly: [] });
+    expect(a.sprayGuns).toEqual({ ak47: 2, m4a1_silencer: 1, negev: 1 });
+  });
+
+  it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
+    // fails if squares, bullet indexes or the null skip go wrong
+    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], lp: [], ly: [], landing: null, recoilKnown: true, sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
+    const a = emptyAim();
+    foldAim(a, base);
+    foldAim(a, { ...base, dp: [3, 2], dy: [0, -1], hp: [], hy: [] });
+    expect(a.spread.ak47).toEqual({ pp: [10, 8], yy: [0, 2] });
+    expect(a.heads.ak47).toEqual({ n: [1, 1], dp: [0, 1], dy: [1, 1] });
+    expect(a.onTarget.ak47).toBeUndefined();
+  });
+
+  it("measures head accuracy over gun hits only", () => {
+    // fails if a knife or grenade hit counts, or the denominator is the body-part sum rather than hits
+    const w = (head: number, hits: number) => ({ groups: [head, 0, 0, 0, 0, 0, 0, 0], hits });
+    expect(METRIC.headAccuracy.value({ weapons: { ak47: w(3, 10), knife: w(5, 5), hegrenade: w(0, 4) } } as unknown as Summary)).toBe(30);
   });
 });

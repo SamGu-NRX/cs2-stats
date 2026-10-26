@@ -52,3 +52,21 @@ export function weaponLabel(name: string): string {
   if (name.startsWith("knife") || name === "bayonet") return "Knife";
   return LABEL[name] ?? name;
 }
+
+/**
+ * The game's display names (the extractor's inventory, best_primary and active_weapon columns) to
+ * class names. Same pairs as the extractor's DISPLAY_TO_CLASS (extract.py).
+ */
+const DISPLAY: Record<string, string> = {
+  "AK-47": "ak47", "AWP": "awp", "Decoy Grenade": "decoy", "Desert Eagle": "deagle", "Dual Berettas": "elite",
+  "FAMAS": "famas", "Five-SeveN": "fiveseven", "Flashbang": "flashbang", "Galil AR": "galilar", "Glock-18": "glock",
+  "High Explosive Grenade": "hegrenade", "Incendiary Grenade": "incgrenade", "M4A1-S": "m4a1_silencer", "M4A4": "m4a1",
+  "MAC-10": "mac10", "MP7": "mp7", "MP9": "mp9", "Molotov": "molotov", "P250": "p250", "SSG 08": "ssg08",
+  "Smoke Grenade": "smokegrenade", "Tec-9": "tec9", "USP-S": "usp_silencer", "Zeus x27": "taser", "P2000": "hkp2000",
+  "CZ75-Auto": "cz75a", "R8 Revolver": "revolver", "MP5-SD": "mp5sd", "UMP-45": "ump45", "P90": "p90", "PP-Bizon": "bizon",
+  "Nova": "nova", "XM1014": "xm1014", "MAG-7": "mag7", "Sawed-Off": "sawedoff", "M249": "m249", "Negev": "negev",
+  "SG 553": "sg556", "AUG": "aug", "G3SG1": "g3sg1", "SCAR-20": "scar20", "C4 Explosive": "c4",
+};
+
+/** Class name for a display name; knives and unknown names come back unchanged, lower-cased. */
+export const classFromDisplay = (name: string): string => DISPLAY[name] ?? name.toLowerCase();

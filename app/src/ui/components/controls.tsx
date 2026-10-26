@@ -6,6 +6,26 @@ import { CheckIcon, ChevronIcon } from "../icons/ui";
 
 export interface Option<T extends string> { value: T; label: ReactNode; disabled?: boolean; tip?: string; side?: "t" | "ct" }
 
+/**
+ * Where an arrow key moves in a group with one tab stop (WAI-ARIA radio group or tablist): the arrows
+ * step and wrap, Home and End jump to the ends. Up and Down step too in a radio group, not in a
+ * tablist. Null for any other key. `i` is the current index, -1 when none is selected.
+ */
+export function rovingIndex(key: string, i: number, n: number, upDown: boolean): number | null {
+  if (!n) return null;
+  const next = (i + 1) % n;
+  const prev = i < 0 ? n - 1 : (i - 1 + n) % n;
+  switch (key) {
+    case "ArrowRight": return next;
+    case "ArrowLeft": return prev;
+    case "ArrowDown": return upDown ? next : null;
+    case "ArrowUp": return upDown ? prev : null;
+    case "Home": return 0;
+    case "End": return n - 1;
+    default: return null;
+  }
+}
+
 export function Segmented<T extends string>({ options, value, onChange, label, kind = "radio", panelId }: {
   options: Option<T>[];
   value: T;
@@ -29,10 +49,8 @@ export function Segmented<T extends string>({ options, value, onChange, label, k
   const enabled = options.filter((o) => !o.disabled);
   const pick = (v: T, keyboard: boolean) => { setInstant(keyboard); onChange(v); };
   const onKey = (e: KeyboardEvent) => {
-    const i = enabled.findIndex((o) => o.value === value);
-    const n = enabled.length;
-    const to = ({ ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 } as Record<string, number>)[e.key];
-    if (to === undefined || !n) return;
+    const to = rovingIndex(e.key, enabled.findIndex((o) => o.value === value), enabled.length, kind === "radio");
+    if (to === null) return;
     e.preventDefault();
     pick(enabled[to].value, true);
     root.current?.querySelector<HTMLElement>(`[data-v="${CSS.escape(enabled[to].value)}"]`)?.focus();
@@ -68,13 +86,15 @@ export function Segmented<T extends string>({ options, value, onChange, label, k
 }
 
 /** Button that opens a listbox. Arrow keys move, Enter or Space picks, Escape closes. */
-export function Select<T extends string>({ options, value, onChange, label, prefix }: {
+export function Select<T extends string>({ options, value, onChange, label, prefix, disabled }: {
   options: Option<T>[];
   value: T;
   onChange: (v: T) => void;
   label: string;
   /** small muted text before the value, e.g. "Map" */
   prefix?: string;
+  /** why the select does not apply here; set, it stays visible but cannot open, and the reason is its tooltip */
+  disabled?: string;
 }) {
   const btn = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -130,8 +150,10 @@ export function Select<T extends string>({ options, value, onChange, label, pref
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label}: ${typeof current?.label === "string" ? current.label : value}`}
-        onClick={() => (open ? hide() : show())}
-        onKeyDown={(e) => { if (e.key === "ArrowDown" && !open) { e.preventDefault(); show(); } }}
+        aria-disabled={disabled ? true : undefined}
+        data-tip={disabled}
+        onClick={() => { if (disabled) return; if (open) hide(); else show(); }}
+        onKeyDown={(e) => { if (e.key === "ArrowDown" && !open && !disabled) { e.preventDefault(); show(); } }}
       >
         {prefix && <span className="lbl">{prefix}</span>}
         <span>{current?.label ?? value}</span>

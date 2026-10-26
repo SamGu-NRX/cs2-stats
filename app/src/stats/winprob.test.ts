@@ -1,41 +1,37 @@
-import { describe, expect, test } from "vitest";
-import { buildCtx } from "./context";
-import { roundStateBefore } from "./swing";
-import { MatchBuilder } from "./testing/build";
-import { modelFromModule, stubModel, type RoundState } from "./winprob";
+// The round win-probability source: HLTV's lookup when its pack is installed, else CS2RB.
+import { expect, it } from "vitest";
+import { CS2RB, winProbSource } from "./model-params";
+import { pTWins, type RoundState } from "./winprob";
 
-const state = (ct: number, t: number): RoundState => ({ ctAlive: ct, tAlive: t, ctHp: 100 * ct, tHp: 100 * t, ctEquip: 20000, tEquip: 20000, planted: 0, secondsSincePlant: null, secondsSinceFreezeEnd: 30 });
+const state: RoundState = {
+  map: "de_ancient", aliveT: 4, aliveCT: 5, hpT: 400, hpCT: 500, equipT: 20000, equipCT: 22000, planted: false,
+  secondsSincePlant: null, secondsSinceFreezeEnd: 20, buyT: "full", buyCT: "full", lastKillSide: "ct",
+};
 
-describe("model adapter (model/export/winprob.ts → winProbabilityCT(state, map))", () => {
-  test("accepts a function that answers with a probability", () => {
-    const m = modelFromModule((s: RoundState) => (s.ctAlive >= s.tAlive ? 0.6 : 0.4));
-    expect(m.kind).toBe("model");
-    expect(m.winProbability(state(5, 4), "de_dust2")).toBe(0.6);
+it("reads HLTV's lookup from the most specific table that holds the state, and refuses a malformed pack", () => {
+  // fails if a broken pack silently falls back to CS2RB, or a general table answers before a specific one
+  expect(winProbSource(null)).toBe(CS2RB);
+  expect(() => winProbSource({ target: "x" })).toThrow(/winprob-hltv.json/);
+  const pack = winProbSource({
+    source_maps: 2,
+    tables: [
+      { columns: ["map", "alive_t", "alive_ct", "last_kill_side"], states: { "Ancient|4|5|ct": { p_t: 0.31, n: 9 } } },
+      { columns: ["alive_t", "alive_ct"], states: { "4|5": { p_t: 0.35, n: 90 }, "3|5": { p_t: 0.2, n: 50 } } },
+    ],
   });
-  test("rejects a missing export or a non-probability answer, naming the reason", () => {
-    expect(() => modelFromModule(undefined)).toThrow(/does not export a function named winProbabilityCT/);
-    expect(() => modelFromModule(() => 1.5)).toThrow(/expected a probability between 0 and 1/);
-    expect(() => modelFromModule(() => "0.5")).toThrow(/expected a probability/);
-  });
-  test("a state the model rejects has no answer (its round's swing becomes unknown)", () => {
-    const m = modelFromModule((s: RoundState) => { if (s.ctAlive === 0) throw new RangeError("ctAlive"); return 0.5; });
-    expect(m.winProbability(state(0, 3), "de_dust2")).toBeNull();
-  });
-  test("the placeholder is labelled as such", () => {
-    expect(stubModel.kind).toBe("stub");
-    expect(stubModel.label).toMatch(/Placeholder/);
-  });
+  expect(pTWins(pack, state)).toBe(0.31);
+  expect(pTWins(pack, { ...state, aliveT: 3, hpT: 300 })).toBe(0.2);
+  expect(pTWins(pack, { ...state, aliveT: 2, hpT: 200 })).toBeNull();
 });
 
-describe("round state for the model", () => {
-  test("whole-team freeze-end equipment, seconds since freeze end and since plant", () => {
-    const b = new MatchBuilder();
-    const ctx = buildCtx(b.build());
-    const s = roundStateBefore(ctx, 0, b.t(0, 50), [4, 5, 380, 500, 18800, 23500, 1, 640]);
-    expect(s).toEqual({ ctAlive: 4, tAlive: 5, ctHp: 380, tHp: 500, ctEquip: 5 * 4700, tEquip: 5 * 4700, planted: 1, secondsSincePlant: 10, secondsSinceFreezeEnd: 50 });
-  });
-  test("unknown equipment means no state for the model", () => {
-    const b = new MatchBuilder().round(0, 3, "elim", { equip: [null, ...new Array(9).fill(4700)] });
-    expect(roundStateBefore(buildCtx(b.build()), 0, b.t(0, 5), [5, 5, 500, 500, null, null, 0, null])).toBeNull();
-  });
+it("values CS2RB states only with equipment and time, and answers decided rounds by the rules", () => {
+  // fails if CS2RB guesses a round whose equipment is unknown, throws on a sixth player, or a round with
+  // no CT alive is not a T win
+  expect(pTWins(CS2RB, { ...state, equipT: null })).toBeNull();
+  expect(pTWins(CS2RB, { ...state, secondsSinceFreezeEnd: null })).toBeNull();
+  expect(pTWins(CS2RB, { ...state, aliveCT: 6, hpCT: 600 })).toBeNull();
+  expect(pTWins(CS2RB, { ...state, aliveCT: 0, hpCT: 0 })).toBe(1);
+  const p = pTWins(CS2RB, state)!;
+  expect(p).toBeGreaterThan(0);
+  expect(p).toBeLessThan(0.5);
 });

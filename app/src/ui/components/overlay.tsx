@@ -46,7 +46,8 @@ export function TooltipLayer() {
       target.setAttribute("aria-describedby", "app-tip");
       tip.textContent = target.getAttribute("data-tip");
       tip.classList.toggle("is-instant", instant);
-      place(target.getBoundingClientRect(), tip);
+      // data-tip-place="right" opens beside the anchor (the sidebar, whose tooltips would cover the item above)
+      place(target.getBoundingClientRect(), tip, target.getAttribute("data-tip-place") === "right" ? "right" : "top");
       tip.classList.add("is-on");
       anyOpen = true;
     };
@@ -75,12 +76,19 @@ export function TooltipLayer() {
     };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") hide(); };
     const scroll = () => hide();
+    // Tab scrolls the focused element into view, which closes its tooltip above; once the scroll ends,
+    // the focused element's tooltip opens again, so a keyboard user can still read it.
+    const scrollEnd = () => {
+      const target = document.activeElement?.closest("[data-tip]");
+      if (target && target !== current && target.getAttribute("data-tip")) show(target, true);
+    };
     document.addEventListener("pointerover", enter);
     document.addEventListener("pointerout", leave);
     document.addEventListener("focusin", enter);
     document.addEventListener("focusout", leave);
     document.addEventListener("keydown", key);
     addEventListener("scroll", scroll, true);
+    addEventListener("scrollend", scrollEnd, true);
     return () => {
       document.removeEventListener("pointerover", enter);
       document.removeEventListener("pointerout", leave);
@@ -88,9 +96,11 @@ export function TooltipLayer() {
       document.removeEventListener("focusout", leave);
       document.removeEventListener("keydown", key);
       removeEventListener("scroll", scroll, true);
+      removeEventListener("scrollend", scrollEnd, true);
     };
   }, []);
-  return <div ref={el} id="app-tip" className="tip" role="tooltip" />;
+  // portalled to <body>: no ancestor's grid or flex rules can reach the layer and split its text
+  return createPortal(<div ref={el} id="app-tip" className="tip" role="tooltip" />, document.body);
 }
 
 /**

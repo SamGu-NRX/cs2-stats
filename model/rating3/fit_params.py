@@ -24,6 +24,11 @@ from sklearn.model_selection import GroupKFold
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eco_fit import fit_model as fit_duel_model
 from swing_fit import fit_block as fit_swing_block
+sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
+from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
+
+# the one place params.json may take in the repository (the app reads it from here)
+PARAMS_PATH = Path(__file__).resolve().parent / "params.json"
 
 
 FEATURES = ("kpr_eco", "adr_eco", "dpr_eco", "kast_eco", "mk", "swing")
@@ -293,8 +298,8 @@ def public_parameters(
         "ecoAdjustment": eco_adjustment,
         "winProbabilitySource": win_probability_source_block(),
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    # aggregate coefficients with no names, ids or rows: public, and in the repository only at its own path
+    write_json(output_path, result, private=False, what="params.json", in_repo=PARAMS_PATH, indent=2)
     return result
 
 
@@ -306,6 +311,7 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--date", default=date.today().isoformat(), help="Fit date stored in metadata (YYYY-MM-DD)")
     args = parser.parse_args()
+    check_output(args.out, private=False, what="params.json", in_repo=PARAMS_PATH)
 
     rows = map_rows(args.hltv)
     if not rows:

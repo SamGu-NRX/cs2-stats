@@ -1,135 +1,174 @@
 # Stats engine
 
-Everything here is pure TypeScript with no UI dependency. The worker calls `deriveMatch` once per match file and `buildProfile` over cached summaries; the UI reads the plain objects they return. Match files are described in `SCHEMA.md` at the repo root.
+Pure TypeScript, no UI dependency. Its only input is one match's tables, schema v1
+(`extractor/SCHEMA-v1.md` on `feat/extractor-v1`). The same code runs in the app and in the Node tools
+that build the pro baselines. Metric definitions are in `METRICS.md`; the evidence behind them is in
+`VALIDATION.md`.
 
-## Entry points
+## Progress
 
-| Call | Returns | Use |
-|---|---|---|
-| `decodeMatch(bytes, name)` (`decode.ts`) | `MatchFile` | gzip or plain JSON to a validated file |
-| `deriveMatch(m, file, model?)` (`derive.ts`) | `MatchView` | the match page, cached by the worker |
-| `summarize(view)` | `MatchSummary` | the match list and profile cache |
-| `buildProfile(summaries, filter?)` (`profile.ts`) | `ProfileView` | the profile page |
-
-`model` is the win-probability model (`winprob.ts`): `modelFromModule(winProbabilityCT)` when the trained model is bundled, else `stubModel`. Swing, the win-probability path and Rating 3.0's swing input need it.
-
-## What `MatchView` holds
-
-Existing fields are unchanged. New ones:
-
-| Field | Type | Module |
-|---|---|---|
-| `players[pi].rating3` | `Rating3` | `rating3.ts` |
-| `players[pi].role` | `Role` (this match only) | `role.ts` |
-| `players[pi].c.r3`, `.c.role`, `.c.hl` | additive inputs for the three above and the sub-stats | |
-| `roundDetails` | `RoundDetail[]`, one per round | `rounds.ts` |
-| `econ` | `EconomyView` | `economy.ts` |
-| `aim.visibility` | `VisibilityEvidence \| null` | `visibility.ts` |
-
-`ProfileView` gains `rating3` and `role` (from summed counters), and each `FormPoint` gains `rating3`. `MatchSummary.human.rating3` is the match's value.
-
-## Round inspector: `RoundDetail` (`rounds.ts`)
-
-One entry per round, including rounds without the kill log (`captured: false`); those carry the game's totals when the file has them (`lite: true`) and nulls otherwise.
-
-- **Round:** `winSide`, `how` (win type: `elim`, `defuse`, `time`, `bomb`), `winner` (`us`/`them`), `scoreBefore`, `scoreAfter`, `durSecs`, `bomb` (`site`, `plantSecs`, `planter`, `defuser`, `defused`, `exploded`).
-- **`teams.t` / `teams.ct`:** `team`, `players`, `equip` and `money` (sums at freeze end), `spent`, `buy` (`BuyClass`), `won`, `aliveEnd`, `saves` (players who kept a primary in a lost round).
-- **`players[pi]`** (`PlayerRound`, null when the player had no side):
-  - `k`, `d`, `a`, `hsKills`, `flashAssists`.
-  - `kills`: `KillEvent[]` with `weapon`, `headshot`, `wallbang`, `throughSmoke`, `noscope`, `inAir`, `killerBlind`, `tradeKill` and `opening`. `death` is the `KillEvent` that killed the player, with `killer`, `weapon` and `traded`.
-  - `dmg`, `dmgTaken`, `teamDmg`, `utilDmg`, and `swing` (win-probability points; null when unknown).
-  - `equip`, `equipEnd`, `money`, `spent`, `utilSpent` and `buy`.
-  - `utilThrown` (`he`, `flash`, `smoke`, `molotov`, `decoy`), `enemiesFlashed`, `enemyBlindSecs` and `teamFlashSecs`.
-  - `survived`, `traded`, `kast`, `saved` and `clutch`.
-- **`winProb`:** `WinProbPoint[]`, P(CT wins) at the start, after each kill (with `before`), at the plant, and at the end (0 or 1). Kill points reuse the swing's own values. Null without the kill log or when the model cannot value a state.
-- **`human`** (plugin files only): `shots`, `hits`, `headHits`, `accuracy`, `firstOnTarget`, `firstHits`, `firstAccuracy`, the `ttdMs`, `reactMs` and `xhairDeg` samples, and `spray` (bursts of 2+ bullets with impact and aim error per bullet, in degrees). The three timing arrays are gated like `aim.validated`; see Visibility.
-
-`spent` is an estimate: freeze-end equipment minus what the player carried in (last round's `equipEnd`, or the $200 starting pistol after a death or at a half start). A weapon dropped for a teammate moves value between players, so team totals are firmer than per-player values. It is null for files without `equipEnd` (before plugin 1.0.0).
-
-Per-round values sum to the match counters (kills, deaths, assists, damage, headshots, KAST, utility damage, flash assists, saves, swing) on all six fixtures; `rounds.test.ts` checks this.
-
-## Economy (`economy.ts`)
-
-- `BUY_CLASSES = ["pistol", "eco", "force", "full"]`. `classifyBuy(perPlayer, pistolRound)`: the first round of each regulation half is `pistol`; otherwise $1,000 or less per player is `eco`, $4,000 or more is `full`, and anything between is `force`. These follow the bands of HLTV's match economy tab as I recall them ($5k and $20k for a team of five). They have not been checked against HLTV.
-- `teamBuyClass(ctx, ri, side)`, `isPistolRound(ri, maxrounds)`.
-- `economyView(details)` returns `EconomyView`:
-  - `rounds`: per round, `us` and `them` with `buy`, `equip`, `money`, `spent`, `saves` and `savedValue`. These are the money and equipment curves.
-  - `winRate.us` and `winRate.them`: rounds and wins by own buy class.
-  - `matchup[ours][theirs]`: rounds and our wins.
-  - `saves` per team, and `unknown` (rounds with an unclassified buy).
-- CS Demo Manager's five-way `BUY_TYPES` and `MatchView.economy` are unchanged.
-
-## Visibility (`visibility.ts`)
-
-The plugin stores the victim's spotted mask at every hit by the human (`aim.hitMask`). A bullet hit means the human could see the victim, so the right bit should be set on almost every row. Hits per candidate bit over the three plugin recordings (93 bullet hits of 104 rows; 11 were grenade or fire damage):
-
-| Candidate | Hits called visible |
-|---|---:|
-| human's slot, word 0 (what the plugin reads) | 53 |
-| controller entity index (= slot + 1) | 0 |
-| slot − 1 | 0 |
-| pawn entity index (303, outside the 64-bit mask) | 0 |
-| slot in word 1 | 0 |
-| any bit set (`m_bSpotted`) | 57 |
-
-Every set bit in all 104 rows is the slot of a player on the human's team (`foreignBits` 0), so the slot mapping is right. The mask itself is not line of sight: it is off for 40 of 93 hits, for 21 of those 40 the victim never shows as spotted to the human that round, and in 24 of 61 engagements the human was already shooting at the enemy (10 of 61: already damaging) before the engagement started. Time to damage, reaction time and crosshair placement would start late and miss encounters, so they stay gated.
-
-- `visibilityVerdict(evidence)` opens the gate when the slot bit and the engagements each cover at least `VISIBILITY_MIN_COVERAGE` (90%) of bullet hits. Files without hit masks fall back to the plugin's `env.visibilityValidated` flag.
-- `aimVisibility(aim)` returns `{ validated, hitCoverage, engagementCoverage, reason }`. Use `reason` as the "Validating" tooltip.
-- A fix needs the plugin: a ray trace from the human's eye to the enemy instead of the spotted mask. The hit test will then report the new coverage.
-
-## Rating 3.0 (approx.) (`rating3.ts`)
-
-Show it as `RATING3_LABEL` ("Rating 3.0 (approx.)"). Rating 2.0 (`rating.ts`, `PlayerRow.rating`) is unchanged.
-
-- `rating3(inputs, params?)` returns `{ label, value, calibrated, source, features }`, where `features` holds the six inputs actually used (`kpr`, `adr`, `dpr`, `kast` %, `mk` %, `swing` % per round). Inputs cover rounds with the kill log only.
-- **Uncalibrated for now.** `R3_PARAMS` is `FITTED_R3` from `rating3-params.ts` when the fit has run, else `DEFAULT_R3`. The default restates Rating 2.0's approximation weights on these inputs, with multi-kill and swing at 0. Show `calibrated: false` and `source` to the user.
-- **Economy groups:** `weaponGroup(name)`, `groupFromEquip(net)` and `inferGroup(seen, equipNet)` give one of `ECO_GROUPS` (sniper, tier-1 rifle, tier-2 rifle, SMG/shotgun, upgraded pistol, starter pistol). A primary the player was seen using that round decides. Otherwise the stronger of a seen pistol and the freeze-end equipment band (grenades removed when logged) decides. Armor alone lifts a starter pistol to "upgraded pistol".
-- **Duel table:** `duelWinProb(killerGroup, victimGroup, killerSide)` and `duelTable()`. This is a Bradley–Terry table that reproduces HLTV's four published anchors: T rifle vs CT rifle 48%, rifle vs starter pistol 75%, AWP vs rifle 56% as T and 60% as CT.
-  - Tier-2 rifle (0.83) and upgraded pistol (0.29) were fitted with `fitDuelStrengths` on our 8 matches (875 kills).
-  - The same fit put SMG at 1.20, above tier-1 rifles, from 132 bot duels. That breaks the group order, so SMG is the midpoint of its neighbours (0.56).
-  - The CS2RB training data is no longer on disk.
-- **Kill points:** `killPoints(a, b, side)` = 2.14 × (1 − P(killer wins)). A death is charged the same value, and damage is weighted the same way. On the plugin recordings the average kill is worth between 0.9 and 1.1.
-- **Eco KAST and eco multi-kill:** a KAST round counts the value of the event that earned it, at most 1. Survival and traded deaths count 1. A multi-kill round counts its mean kill value, at most 1. These two are my definitions; HLTV has not published its own.
-- **Swing:** each kill's change in win probability goes 50% to the final damage and 10% to a flash assister. The rest is shared by damage among the killer and players with 40+ damage. A traded death is charged 75%. `DEFAULT_SPLIT` holds these numbers; there is no evidence for them yet.
-- `R3Inputs` also counts `assists40`, `tradeDenials` (a kill less than 5 s after the same player's previous kill) and `failedTrades` (dying less than 5 s after a teammate, to the same killer).
-
-### Fitting
-
-```
-cd model
-python -I fit_rating3.py --self-test                # recovers known weights from synthetic players
-python -I fit_rating3.py hltv_players.csv           # report: R², adj. R², MAE, RMSE, 10-fold CV MAE, weights ± SE
-python -I fit_rating3.py hltv_players.csv --write   # also writes app/src/stats/rating3-params.ts
-```
-
-The CSV needs `rating, kpr, adr, dpr, kast, mk, swing`. The eco-adjusted columns `kpr_eco, adr_eco, dpr_eco, kast_eco, mk_eco` are optional. `kast`, `mk` and `swing` are in percent. The script fits both feature sets and keeps the one with the lower cross-validated MAE.
-
-## Role (`role.ts`)
-
-`deriveRole(counters)` returns `{ primary, flavour, label, provisional, evidence, flavours }`. Every threshold is an exported constant, chosen by hand with no fit behind it:
-
-| Role | Rule |
+| Phase | State |
 |---|---|
-| AWPer | sniper kills ≥ 35% of kills (`AWPER_MIN_SNIPER_SHARE`) |
-| Entry | opening attempts ≥ 25% of rounds (the average is 20%) |
-| Support | (trade kills + assists) / (kills + assists) ≥ 45% |
-| Lurker | mean distance to the nearest living T teammate before the plant ≥ 1,100 units |
-| Anchor | on A or B with at most one teammate, 15 s after freeze end, in ≥ 50% of CT rounds |
+| Loader (`load.ts`, hyparquet) | done; reads v1 folders and pre-v1 folders |
+| Scoreboard on tables, the HLTV gate | done; 83 of 194 joined maps exact for every player on K, D, KAST and ADR; `hltv-exact.test.ts` pins 24 and checks kills on all |
+| Ported families: rounds and economy, utility, roles, attributes, aim, swing, Rating 3.0 | done; Rating 3.0 is `params.json`'s six-term linear model (PR #17) |
+| Plugin JSON path | deleted; `plugin/adapter.ts` is the only plugin code left |
+| Baselines CLI (`tools/baselines.ts`) | done; `public/baselines.json` (CS2RB), 512 KB, 552 pro players |
+| New families: aim, movement, aggression, information, utility quality, identity, gun proficiency, opponents, trends | done; validation per metric in `VALIDATION.md` |
+| UI and worker on the new API | in progress on this branch |
 
-A Rifler gets the qualifying flavour with the highest value / threshold. `flavours` lists every score, and a score is null when its data is missing; Lurker and Anchor need positions from plugin files on de_dust2. The role is `provisional` under 20 rounds.
+## Pipeline
 
-## Sub-stats under HLTV's names (`hltv.ts`)
+```
+read(name) -> loadTables -> MatchTables -> derive -> MatchFacts -> rollup(facts[], filter) -> Summary
+                                                                       compare(summary, baselines) -> percentiles
+```
 
-`SUBSTATS` lists every sub-stat with `{ id, name, status, def, fmt, value(counters) }`. `status` is one of:
+Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginToTables(file)`.
 
-- **exact:** a direct count with a clear definition.
-- **approx:** our reading of HLTV's description, or a window or distance we chose. `def` says which.
-- **unavailable:** the files lack the data.
+## API
 
-New counts (`HltvCounts`, from `hltvCounts`): Round win shares (share of the winners' positive swing), Perfect kills (the victim had not hurt the killer), First duel rank and time, Tradeable deaths and Trade opportunities (a teammate within `TRADE_DISTANCE`, 1,000 units; positions needed), and Weapon attacks (gun hits per round; misses are only recorded for the human). Trade denials, Failed trades, Bait assists and kills, Clutches per 24, the eco-adjusted KPR and ADR, and HLTV's attribute sub-stats are in the same list. Utility success is marked unavailable.
+### Input
+| Call | Returns | Notes |
+|---|---|---|
+| `loadTables(read)` (`load.ts`) | `MatchTables` | `read(fileName)` returns the file's bytes or null. A missing required table or column, or a null in a non-nullable column, throws `TableError` naming it. Pre-v1 folders (no `match.parquet`) are read through the legacy mapping in `load.ts`. |
+| `decodeMatch(bytes, name)`, `pluginToTables(file)` (`plugin/`) | `MatchTables` | Transitional; see the header of `plugin/adapter.ts` for when it goes. |
 
-## Changes to existing outputs
+### Facts
+| Call | Returns | Notes |
+|---|---|---|
+| `derive(tables, winProb)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`), which changes whenever a definition does, and by `modelFingerprint(winProb)` (`model-params.ts`: the rating parameters and win-probability source by content), which facts record as `match.model`. `match.inputs.throws` says whether throws are logged or rebuilt. Inputs some metrics need are counted per row (`INPUT_COVERAGE`: loadouts per round, the weapon in hand per death, both loadouts per kill, grenade and flash events per round), so a metric over partly known rows is computed over the known ones and its comparison says how many were known. |
+| `winProbSource(pack)`, `CS2RB` (`model-params.ts`) | `WinProbSource` | The one loader for the rating model and the win-probability source: HLTV's lookup from the private pack `%APPDATA%\BotMatchStats\packs\winprob-hltv.json` (pass its parsed JSON), or the CS2RB round model in `model/export` when the pack is missing (pass null). A pack that is present but malformed throws. `facts.match.winProb` records which one a match used. |
 
-- **Swing on plugin 1.0.0 files** (`swing.ts`, `DERIVE_VERSION` 7). The plugin writes the victim into `kills.state` with its HP before the fatal hit; the converter and the synthetic generator write 0. The app used to leave HP unchanged after a kill, so every after-kill state held more HP than the living players could, the model rejected it, and swing was unknown for all 48 plugin rounds. The victim's HP now comes off its side for plugin files (`VICTIM_AT_ZERO_HP_WRITERS` lists the writers that already zero it). Converted and synthetic files give the same numbers as before. `plugin.test.ts` covers this.
-- **`aim.validated`** now comes from the hit test whenever a file has hit masks, rather than from `env.visibilityValidated`. For the current plugin files both are false, so nothing shown changes.
+`MatchFacts` holds:
+
+- `match`: id, source, map, date, `startedAt` (clock time, when the source has one), `durationS`,
+  teams, score, `pov` (the recording player), and `roundsPlayed` next to `nRounds`, the rounds the
+  facts cover (a converted log may cover few).
+- `players`: index `pi` -> steamid, name, team 0/1, bot.
+- `rounds`: per round, winner, reason, buy classes, team equipment, plant, `planter` and `defuser`
+  (`pi`), and `winProb`, the win-probability path.
+- `pr`: one row per player per round, with equipment, money before (`moneyStart`) and after (`money`)
+  buying, spend, and `m`, the additive measures.
+- `kills`: per kill, trade, opening, eco points, swing credits, positions.
+- `weapons`: per player, round and gun, with hits by body part in `groups` (`HIT_GROUPS` order).
+- `grenades`: every throw, with where it was thrown from and landed.
+- `presence`: per player and side, seconds alive per 128-unit grid cell and per place name (not per
+  round: that made cached facts too large; `roundPlaces(tables, round, steamid)` reads one round's
+  places from the tables).
+- The event facts of `aim`, `movement`, `aggression`, `information` and `utilq`.
+
+Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round number.
+
+### Summaries and metrics
+| Call | Returns | Notes |
+|---|---|---|
+| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` days (the day of `startedAt` in `timeZone`, the runtime's own zone by default; a source with only a date keeps it; `rollup.ts` `matchDay`), `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places; it honours player, side and match filters and is empty under a round-level filter. |
+| `emptySummary()`, `addMatch(summary, facts, filter)` | | The same sum one match at a time, so a caller can stream facts from storage instead of holding them all. |
+| `grenadesOf(facts, filter)` | grenades with their map | The landing map's points. |
+| `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. A save's value is the saver's equipment at freeze end, so grenades thrown since still count. |
+| `visibilityCoverage(summary.aim)` (`aim.ts`) | 0-1 or null | Share of gun hits fired with an enemy mesh-visible near the view: the visibility coverage meter. |
+| `METRICS`, `METRIC[id]` (`metrics.ts`) | `Metric` | Every metric once: `label`, `hltv` name, `kind` (performance or identity), `group`, `unit`, `status` (exact, approx, unavailable), `def`, `value(summary)`. |
+| `ATTRIBUTES` (`metrics.ts`) | groups | HLTV's Firepower (performance) and six style attributes (identity), with their metric ids. |
+| `rating3Of(summary)`, `rating3BySide(facts, filter)` (`rating3.ts`) | `Rating3` | Rating 3.0 (approx.): `params.json` `rating.intercept` plus `rating.coefficients` times eKPR, eADR, eDPR, eKAST, MK and swing, all six averaged over the rated rounds, those swing valued whose every eco value is known (a kill, assist, death or hit whose economy groups are unknown leaves its round out, never counted at its raw value); no rating when under half are rated, with `reason` saying why (compare() reports it), or when the kept matches cover under half their rounds (`coverage.ts`, the one gate every rating, the rating metric and its percentile pass). Each side is rated over its own rounds (`Summary.sides`), and the total, the one definition the rating metric, its percentile, `inputs` and every view use, is the side inputs weighted by each side's rated rounds (`rounds`): a side under half its rounds rated adds nothing, and the total needs the rated sides to cover half of all rounds. With both sides rated it equals the pooled rating, since the model is linear. Label it `RATING3_LABEL`; `status` is params.json's word for the model ("approximation"). |
+
+### Comparisons
+| Call | Returns | Notes |
+|---|---|---|
+| `compare(summary, baselines, opt)` (`compare.ts`) | percentile per metric | Pool: the player's role (Rifler, or AWPer above 0.20 AWP kills per round) by default, `pool: "all"`, or `map`. Sniping always compares with everyone. `side`: both, CT or T. Load the pro `baselines` from `public/baselines.json`; they rank performance ("how good", "Work on"). Each `Percentile` has `reason` when it is withheld: a metric's `needs` (an input not known on every row it uses, with the known count, or a model other than the baselines' `model`), or a `sample` under its minimum (`n` is the count). Show the value and the reason, never a rank. |
+| `careerBaselines(careers, built)` | `{ baselines, provisional, careers }` | The user's own population for identity (`design/identity.md`): baselines from the bot careers in the user's matches (each `{ both, CT, T }` summaries; careers under 150 rounds are left out). Style attributes and "plays like" rank the user against these, never against pros. `provisional` is true until 15 careers qualify; say so beside the scores. |
+| `buildPools(units)` | quantiles per pool and side | What both baselines are built from; `tools/baselines.ts` uses it for the pros. |
+| `attributes(summary, baselines, opt)` | `AttributeScore[]` | Each attribute's score is the mean percentile of its metrics. |
+| `roleBlend(summary, side)` (`identity.ts`) | `RoleBlend` | Returns a distribution with in-fold isotonic adjustment for mapped classes. Mapped values are calibrated probability; rule-only values are fit; AWPer is measured AWP rounds. A single primary requires 30 side rounds, a top share of at least 0.60 and a 0.15 top-two margin. Otherwise returns `top2` plus a reason; under 30 rounds both primary and top2 are null. T uses Entry, Trader, Support, Lurker and AWPer; CT uses Anchor, Rotator, Aggressor, Support and AWPer. Packer's Half-Lurker and Lurker fit one Lurker class; Mixed and IGL are excluded. Known AWP share is preserved exactly, with the remainder distributed over non-AWPer roles. |
+| `supportTendency(summary, baselines, opt)` | score and evidence | Legacy support percentile helper; roleBlend now includes Support from explicit utility and trading thresholds. |
+| `mostSimilar(mine, pack, "style" or "performance")` | ranked names | Cosine similarity of profile shape over both sides: "plays like" over the six style attributes on T and on CT, "performs like" over the rating inputs on T and on CT. `mine` is `{ T, CT }`, each built with `styleScores(attributes(sideSummary, b, { side }))` or `performanceScores(...)`. The pack is optional and private (see Baselines). |
+| `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
+| `gunProficiency(all, perMatch)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. `all` is the rollup over the kept matches, `perMatch` each match's `Summary.weapons`. |
+| `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
+| `cellOf`, `cellCentre`, `GRID`, `CELL` (`positions.ts`) | | The presence grid: 128-unit cells over ±4096 world units. Roll up every player's ids for a map's walkable backdrop. |
+
+### Worker calls (`worker/protocol.ts` `Api`)
+
+Every metric in `meta().metrics` has `tip`, a tooltip of 12 words or fewer, beside the longer `def`.
+Views read engine numbers through the stats worker. Besides `rollup` (every metric's value in `v`, the event
+count behind each metric that declares one in `n`, and round swing by source in `swingSources`), `ratings`,
+`compare` (each `Percentile` carries that count as `n`), `attributes`, `style` (`firepower` is Firepower against
+the same bot pool; `careers.pool` names the pool the scores came from, "all" when the AWPer bot pool was too thin),
+`playsLike`, `guns`, `positions`, `match`, `rounds` and `places`:
+
+| Call | Returns |
+|---|---|
+| `attributeBlock(q, opt)` | Firepower against the pros and the six style attributes against the bots, each with its metrics' values, percentiles and reasons, for one side and pool |
+| `buySplits(q)` | The query by own and opponent buy class: aggression by economy, pistol and eco splits |
+| `opponents(q)` | Every metric against the opponents of the same matches, with a rank for performance metrics |
+| `winCorrelation(q, ids)` | Each metric's per-match correlation with winning |
+| `roles(q)` | The role blend on T and on CT, and `all`: the two weighted by their rounds (`identity.ts` `overallRole`) |
+| `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |
+| `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`); each blend covers that spawn's rounds on its own map under every query filter |
+| `clutches(q)` | Every clutch by round, with the player's steamid (`player`) and their enemy kills after the clutch started (`kills`) |
+| `careerRatings(q, opt)` | Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100: weighted means of pro percentiles (`career.ts` COMPOSITES), each with its parts and the inputs that are missing |
+| `topStats(q, opt)` | The five performance metrics with the highest pro percentile |
+| `focusAreas(q, opt)` | Performance metrics under the pros' 50th percentile that have a tip, ranked by how far under, each with its tip |
+| `periodCompare(q, current, previous)` | Every metric over one date range against another: value, previous value, delta and direction |
+| `personalBests(q)` | The best single-match value of each count and performance metric, with its file, from matches that recorded its inputs in full (a match with a round that holds no grenade or flash event has no enemies-flashed best) |
+| `sessions(q, gapHours)` | The matches with rounds the filter keeps, grouped into sessions (a gap of 3 hours or more between one match's end and the next one's start), each with its record, totals, Rating 3.0 and awards (best match, most kills) |
+| `buyTiers(q)` | The query split by the team's buy tier: pistol, eco, semi-eco, force, full |
+| `ratingBreakdown(file, player, reference)` | Each round's Rating 3.0 alone (intercept plus each input's coefficient times the round's value), its six terms, its swing sources, its gap to the rating of `reference` (the player's own matches; the match's rating when null), and `counts`: whether the round is one the match rating is made of. Unrated rounds have null. |
+| `headToHead(file)` | Every pair of enemies: kills, damage, kills by weapon class, flashes over 1.1 s and opening kills, each way |
+| `mapZones(file, player)` | The player's kills and deaths per zone (the map's place names) and side, with K/D and positions, and the match's zone list |
+| `yourMatch(file, player, n)` | Every metric in this match against the player's `n` most recent earlier matches (pooled): delta and direction (better or worse for performance metrics, higher or lower for identity ones) |
+| `openingDuels(file, player)` | Each round's opening kill (killer, victim, weapon, time, traded, whether the killer's side won), the player's best opening weapon, and rounds won after their opening kills and deaths |
+| `situations(q)` | Every alive-count state ("5v4") the player's side passed through, with rounds and rounds won, over the query's rounds |
+| `bombsites(file, player)` | `sites`: take, hold, retake and post-plant attempts and successes per bombsite letter, take and hold null without positions, freeze times or site names; `takeHold`: the rounds they could be read on and the missing inputs |
+| `multiKills(q)` | Every round with two or more kills: file, round, side, player, kills and the round's result |
+
+Scoreboard lines (`match` bundle `lines`) carry `eco` (eK, eD, eADR, eKAST); A(f) and D(t) are `m.flashAssists`
+and `m.tradedDeaths`.
+
+### Baselines
+`pnpm baselines` derives every pro map in the private data folder and writes the anonymous pool (no
+names or ids) and the named pack to `<data>/derived/baselines-named.json`, which stays outside the repo.
+Where the pool goes depends on the win-probability source the tools find:
+- **CS2RB** (no HLTV pack, or `CS2_WINPROB_PACK=none`): `public/baselines.json`, the pool the app ships.
+- **The private HLTV pack**: `%APPDATA%\BotMatchStats\packs\baselines.local.json`, the user's own pool.
+  The app ranks against it instead of the shipped one when it is present and valid
+  (`worker/baselines-pool.ts`), so matches derived with the pack keep their Rating 3.0 and swing ranks.
+  A pack-built pool is never written under `public/`; the tool refuses.
+
+Rebuild after any change to `METRICS` or a definition.
+
+## API changes for the UI
+
+The old API (`deriveMatch`, `MatchView`, `summarize`, `buildProfile`, `Counters`, `RoundDetail`,
+`AimAgg`, `PosAgg`, `scoreAttributes`, `SUBSTATS`, `stats/schema`) is gone. Where each piece now
+comes from:
+
+| Old | New |
+|---|---|
+| `decodeMatch` then `deriveMatch(m, file, model)` | `pluginToTables(await decodeMatch(bytes, name))` or `await loadTables(read)`, then `derive(tables, winProbSource(pack))`. |
+| `MatchView.players[pi]` and `.c` (`Counters`) | `rollup([facts], { player: id }).m` (`Measures`); metric values through `METRIC[id].value(summary)` |
+| `PlayerRow.rating3`, the UI's `sideRating.ts` | `rating3BySide(facts, { player: id })`; keep main's coverage rule with `facts.match.nRounds` against `roundsPlayed` |
+| `MatchView.roundDetails`, `RoundDetail.players[pi]` | `facts.rounds[ri]` and `facts.pr` rows for `ri`; kills from `facts.kills` filtered by `ri` |
+| `MatchView.econ`, buy classes | `facts.rounds[ri].buy` and `.equip` (HLTV's four classes, renamed: force is now half) |
+| `KillView` swing and win probability | `facts.kills[i].credits`, `facts.rounds[ri].winProb` |
+| `MatchSummary` and `buildProfile(summaries, filter)` | cache `MatchFacts`; `rollup(allFacts, filter)` |
+| `scoreAttributes(counters, careers)` | `attributes(summary, baselines)` |
+| `SUBSTATS`, `METRICS` from `metrics.ts` and `hltv.ts` | `METRICS` (one list; `hltv` holds HLTV's name) |
+| `deriveRole(counters)` | `roleBlend(summary, side)` |
+| `AimAgg`, `aimVisibility` | `summary.aim` and the aim metrics; visibility is per match: `facts.match.visibility === "ok"`; the coverage meter is `visibilityCoverage(summary.aim)` |
+| `PosAgg` heatmaps | `rollup(...).presence[map]`; "where you spent the round" is `roundPlaces(tables, round, steamid)`; kill and death spots from `facts.kills` (`kpos`, `vpos`) |
+| The interim hit map | `Summary.weapons[gun].groups` by `HIT_GROUPS` |
+| `MatchView.econ` saves, win rates, matchups | `economyOf(facts, team)` |
+| `roundSlice` in the round drawer | `rollup([facts], { player, rounds: [n] })` |
+| KAST split (kill, survived, traded) | `killRounds`, `kastA`, `kastS`, `kastT` partition `kast` |
+| `MatchView.human` | `facts.match.pov` (the recording player's steamid) |
+
+## Gaps in the inputs
+
+- Demos recorded from round 1 already live have no round 1 rows in `player_rounds`. Derive then takes
+  round 1 sides from team names. HLTV's ADR differs on those ten demos, so they stay out of the gate.
+- `params.json` has no equipment bands for the duel groups of players without a primary; `rating3.ts`
+  keeps them with their derivation until it does.
+- The extractor ships no nav mesh, so path efficiency is unavailable.
+- Plugin recordings carry no purchases, so utility bought (`utilSpentPR`) is measured on extracted
+  demos only; its denominator counts only rounds with the purchases table.

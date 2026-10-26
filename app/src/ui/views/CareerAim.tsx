@@ -1,86 +1,116 @@
-// Career aim: how your aim moves across recorded matches, then every recorded shot together.
+// Profile's Aim tab (formerly the Career aim page): the Aim rating and your reloading, how your aim
+// moves across recorded matches, then every recorded shot together. Every gun you have used is the Weapons tab's.
 import { useMemo } from "react";
-import { aimVisibility, emptyAim, mergeAim, shotsFor, sprayControl, type AimAgg } from "../../stats/aim";
-import type { LightSummary } from "../../worker/protocol";
+import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
-import { filterSummaries } from "../data/engine";
-import { emptyHitMap, hitMap, mergeHitMaps, mergeTallies, weaponTallies, type WeaponTally } from "../data/interim";
-import { useRawMatches } from "../data/hooks";
+import { aimEntries, fmtMetric, ratingKey, sidesOf } from "../data/engine";
+import { useCall, useRollups, useYourQuery } from "../data/hooks";
+import { metric } from "../data/meta";
 import { useData } from "../data/provider";
+import { tipOf } from "../data/tips";
 import { AimIcon } from "../icons/ui";
-import { fmtDate, fmtDeg, fmtPct, plural } from "../lib/format";
-import { BENCH } from "../lib/verdict";
+import { fmtDeg, fmtMatchDay, plural } from "../lib/format";
 import { pageHref } from "../router";
-import { BarContent } from "../shell/Bar";
-import { MapFilter, TimeFilter, useFilters } from "../shell/filters";
+import { BENCH } from "../lib/verdict";
+import { useScope } from "../shell/filters";
 import { AimPanels } from "./aim/AimPanels";
-import { Delta, Empty, SectionAside } from "./shared";
+import { CareerRatingCard, ReloadCard } from "./profile/career";
+import { Hint } from "./match/glyphs";
+import { Empty, NeedsDemo, SectionAside } from "./shared";
 
-interface Trend { id: string; label: string; def: string; value: (a: AimAgg) => number | null; fmt: (v: number) => string; bench?: number; lowerIsBetter?: boolean }
-
-const TRENDS: Trend[] = [
-  { id: "acc", label: "Accuracy", def: "Hits divided by shots, all guns.", value: (a) => { const s = shotsFor(a, "all", "all"); return s.shots ? (100 * s.hits) / s.shots : null; }, fmt: (v) => fmtPct(v), bench: BENCH.acc.ref },
-  { id: "head", label: "Head accuracy", def: "Hits on the head as a share of all hits.", value: (a) => { const s = shotsFor(a, "all", "all"); return s.hits ? (100 * s.headHits) / s.hits : null; }, fmt: (v) => fmtPct(v) },
-  { id: "first", label: "First-bullet accuracy", def: "First bullets of a burst with an enemy within 10° of your aim that hit.", value: (a) => { const s = shotsFor(a, "all", "all"); return s.firstOnTarget ? (100 * s.firstHits) / s.firstOnTarget : null; }, fmt: (v) => fmtPct(v) },
-  { id: "control", label: "Spray control", def: "Mean distance from the target for bullets 4 and later; lower is better.", value: (a) => sprayControl(shotsFor(a, "all", "all")), fmt: (v) => fmtDeg(v, 2), lowerIsBetter: true },
-  { id: "strafe", label: "Counter-strafing", def: "First bullets fired at no more than 34% of the weapon's top speed.", value: (a) => { const s = shotsFor(a, "all", "all"); return s.firstStrafeKnown ? (100 * s.firstStrafed) / s.firstStrafeKnown : null; }, fmt: (v) => fmtPct(v) },
+/** Aim metrics drawn per match; bench is a reference line on the chart. */
+const TRENDS: { id: string; bench?: number }[] = [
+  { id: "accuracy", bench: BENCH.acc.ref },
+  { id: "firstBulletAccuracy" },
+  { id: "counterStrafe" },
+  // main's "Head accuracy" trend: the engine's headAccuracy, gun hits on the head of all gun hits
+  { id: "headAccuracy" },
 ];
 
+/** A per-match slope in the stat's unit: percentages move in points. */
+const slopeIn = (pct: boolean, fmt: (v: number) => string) => (v: number) => (pct ? `${v.toFixed(1)} pts` : fmt(v)) + " a match";
+
+/** Mean of a summary's per-spray distances from the target (AimAgg.sprayDist), in degrees; null without one. */
+const sprayControl = (r: { aim: { sprayDist: number[] } } | null | undefined) => (r?.aim.sprayDist.length ? r.aim.sprayDist.reduce((a, b) => a + b, 0) / r.aim.sprayDist.length : null);
+
+interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number) => string; slope: (v: number) => string; lowerIsBetter?: boolean; bench?: number; career: number | null }
+
 export default function CareerAim() {
-  const { summaries } = useData();
-  const { map, n } = useFilters();
-  const list: LightSummary[] = useMemo(() => { const f = filterSummaries(summaries, map).filter((s) => s.aim); return n ? f.slice(0, n) : f; }, [summaries, map, n]);
-  const agg = useMemo(() => list.reduce<AimAgg | null>((a, s) => mergeAim(a ?? emptyAim(), s.aim!), null), [list]);
-  const raws = useRawMatches(list.slice(0, 20).map((s) => s.file)).data;
-  const hits = useMemo(() => (raws ? raws.reduce((h, m) => { const x = hitMap(m); return x ? mergeHitMaps(h, x) : h; }, emptyHitMap()) : null), [raws]);
-  const guns = useMemo(() => (raws ? [...raws.reduce((t, m) => mergeTallies(t, weaponTallies(m)), new Map<string, WeaponTally>()).values()] : null), [raws]);
-  const oldestFirst = [...list].reverse();
-  const gate = agg ? aimVisibility(agg) : null;
+  const { matches, baselines } = useData();
+  const { map, n, side } = useScope();
+  // aim reads every own match with shots, wingman and unfinished included (aimEntries)
+  const list = useMemo(() => { const f = aimEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  // the title bar's side reaches every figure here: the trends, the career values and the panels below
+  const query = useYourQuery(list, sidesOf(side));
+  const all = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
+  const visibility = list.some((s) => s.match.visibility === "ok");
+  const shots = side === "both" ? list.reduce((t, s) => t + s.shots, 0) : all?.aim.shots ?? null;
+  const oldestFirst = useMemo(() => [...list].reverse(), [list]);
+  // each metric's value per match comes with the match list; the slope over them is the engine's trend()
+  // main's "Spray control" trend: each match's mean spray distance from the target, read from its own
+  // rollup, since the engine keeps the distances (AimAgg.sprayDist) but no metric over them
+  const perMatch = useRollups(useMemo(() => (query ? oldestFirst.map((s) => ({ files: [s.file], filter: query.filter })) : null), [query, oldestFirst])).data;
+  const spraySeries = useMemo(() => (perMatch?.length === oldestFirst.length ? perMatch.map(sprayControl) : oldestFirst.map(() => null)), [perMatch, oldestFirst]);
+  // both sides: each match's own line; one side: that side's rollup of each match
+  const sided = side !== "both";
+  const series = useMemo(() => [...TRENDS.map((t) => oldestFirst.map((s, i) => (sided ? (perMatch?.length === oldestFirst.length ? perMatch[i].v[t.id] : null) : s.line.v[t.id]))), spraySeries], [oldestFirst, spraySeries, perMatch, sided]);
+  const degFmt = (v: number) => fmtDeg(v, 2);
+  const cards: TrendCard[] = [
+    ...TRENDS.map((t) => {
+      const m = metric(t.id);
+      const fmt = (v: number) => fmtMetric(t.id, v);
+      return { key: t.id, label: m.label, tip: tipOf(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
+    }),
+    { key: "sprayControl", label: "Spray control", tip: "Mean angle from your target across a spray's bullets.", fmt: degFmt, slope: slopeIn(false, degFmt), lowerIsBetter: true, career: sprayControl(all) },
+  ];
+  const trends = useCall("trends", list.length ? [series] : null).data;
   return (
-    <div className="view view--capped">
-      <BarContent crumbs={[{ label: "Career aim" }]} tools={<><MapFilter /><TimeFilter /></>} />
-      <div className="view__in careeraim">
-        {!agg ? (
-          <Card><Empty icon={<AimIcon size={40} />} text="No recorded matches yet. Aim comes from matches recorded with the capture plugin; converted logs have no shots." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+    <div className="careeraim">
+        {!query ? (
+          <Card><Empty icon={<AimIcon size={40} />} text={<NeedsDemo detail="Aim comes from recorded shots; converted logs have none." />} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="aim-head">
               <div>
-                <h1 className="section-title">Your aim over {plural(list.length, "recorded match", "recorded matches")}</h1>
-                <p className="meta">{plural(shotsFor(agg, "all", "all").shots, "shot")} with guns. Converted logs are left out because they have no shots.</p>
+                <h1 className="section-title">Your aim over {plural(list.length, "recorded match", "recorded matches")}<Hint tip="Converted logs have no shots, so they are left out." /></h1>
+                <p className="meta">{shots === null ? "" : `${plural(shots, "gun shot")}${sided ? ` on ${side.toUpperCase()}` : ""}`}</p>
               </div>
               <div className="toolbar__end">
-                <SectionAside label="Accuracy" value={TRENDS[0].fmt(TRENDS[0].value(agg) ?? 0)} color="var(--cream)" />
-                <SectionAside label="Visibility" value={gate?.validated ? "Validated" : "Gated"} color={gate?.validated ? "var(--good-text)" : "var(--ink2)"} />
+                <SectionAside label="Accuracy" value={fmtMetric("accuracy", all ? all.v.accuracy : null)} color="var(--cream)" />
+                <SectionAside label="Visibility" value={visibility ? "Measured" : "Not in these files"} color={visibility ? "var(--good-text)" : "var(--ink2)"} />
               </div>
             </div>
+            <div className="profile__cols profile__cols--side aim-rating">
+              {baselines ? <CareerRatingCard which="aim" q={query} side={ratingKey(side)} values={all?.v ?? null} icon={<AimIcon size={22} />} /> : <div />}
+              <ReloadCard s={all} />
+            </div>
             <div className="trends">
-              {TRENDS.map((t) => {
-                const pts = oldestFirst.map((s) => ({ key: s.file, value: t.value(s.aim!), label: fmtDate(s.startUtc) }));
-                const cur = t.value(agg);
-                // improvement: the newer half of your recorded matches against the older half
-                const vals = pts.map((p) => p.value).filter((x): x is number => x !== null);
-                const half = Math.floor(vals.length / 2);
-                const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length;
-                const change = half >= 1 ? mean(vals.slice(vals.length - half)) - mean(vals.slice(0, half)) : null;
+              {cards.map((t, k) => {
+                const pts = oldestFirst.map((s, i) => ({ key: s.file, value: series[k][i], label: fmtMatchDay(s.match) }));
+                const tr = trends?.[k] ?? null;
+                const fmt = t.fmt;
+                const better = tr && (t.lowerIsBetter ? tr.slope < 0 : tr.slope > 0);
                 return (
-                  <Card key={t.id} title={t.label} aside={
+                  <Card key={t.key} title={<span data-tip={t.tip} tabIndex={0}>{t.label}</span>} aside={
                     <span className="trend-aside">
-                      {change !== null && <Delta d={change} span={Math.abs(change) || 1} lowerIsBetter={t.lowerIsBetter} fmt={(x) => t.fmt(x)} title={`Your newer ${half} recorded matches against your older ${half}`} />}
-                      <b className="num cream" data-tip={t.def}>{cur === null ? "–" : t.fmt(cur)}</b>
+                      {!trends ? null : tr === null ? <span className="meta" data-tip="A trend needs three recorded matches with a value." tabIndex={0}>No trend yet</span> : (
+                        <span className="trend-move" data-tip={`Least-squares change per match over ${tr.n} matches.`} tabIndex={0}>
+                          <span className="meta">{tr.slope === 0 ? "Steady" : better ? "Improving" : "Slipping"}</span>
+                          <Delta d={tr.slope} span={Math.abs(tr.slope) || 1} lowerIsBetter={t.lowerIsBetter} fmt={t.slope} />
+                        </span>
+                      )}
+                      <b className="num cream">{t.career === null ? "–" : fmt(t.career)}</b>
                     </span>
                   }>
-                    <TrendLine points={pts} fmt={t.fmt} height={120} bench={t.bench} benchLabel="ref" lowerIsBetter={t.lowerIsBetter} />
-                    <p className="meta trend-note">{change === null ? "Two recorded matches are needed to show a change." : `${(t.lowerIsBetter ? change < 0 : change > 0) ? "Improving" : change === 0 ? "Steady" : "Slipping"}: newer ${half} against older ${half} matches.`}</p>
+                    <TrendLine points={pts} fmt={fmt} height={120} bench={t.bench} benchLabel="ref" lowerIsBetter={t.lowerIsBetter} />
                   </Card>
                 );
               })}
             </div>
-            <AimPanels a={agg} hits={hits} guns={guns} scope={plural(list.length, "match", "matches")} />
+            <AimPanels query={query} label={plural(list.length, "match", "matches")} visibility={visibility} statuses={list.map((s) => s.match.visibility)} gunTable={false} sideControl={false} />
           </>
         )}
-      </div>
     </div>
   );
 }

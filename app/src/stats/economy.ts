@@ -1,171 +1,144 @@
-// Team buy types: CS Demo Manager's five (computeTeamEconomyType, pkg/api/economy.go) for the existing
-// tables, a four-way pistol/eco/force/full class for the round inspector, and the economy views.
-import type { MatchCtx } from "./context";
-import type { RoundDetail, TeamId, TeamRound } from "./rounds";
-import { CT, type Side } from "./schema";
-
-export const BUY_TYPES = ["pistol", "eco", "semi", "force-buy", "full"] as const;
-export type BuyType = (typeof BUY_TYPES)[number];
-
-/**
- * - pistol: first round of either regulation half
- * - eco: team equipment ≤ $1,000 per player
- * - full: ≥ $4,500 per player on CT, ≥ $4,000 on T
- * - force-buy: lost the previous round and the team holds < $400 per player
- * - semi: everything else
- * CS Demo Manager counts only human players in "per player"; in a bot match that leaves one or
- * zero, so here every player on the side counts. Equipment and money are read at freeze end
- * (CS Demo Manager reads them 7 s later). Returns null when a teammate's value is unknown.
- */
-export function teamBuyType(ctx: MatchCtx, ri: number, side: Side): BuyType | null {
-  const m = ctx.m;
-  const maxrounds = m.env.maxrounds ?? 24;
-  const half = maxrounds / 2;
-  if (ri < maxrounds && ri % half === 0) return "pistol";
-  let n = 0;
-  let equip = 0;
-  let money = 0;
-  let moneyKnown = true;
-  for (let pi = 0; pi < ctx.nPlayers; pi++) {
-    if (ctx.side(ri, pi) !== side) continue;
-    n++;
-    const e = m.rounds.equip[ri][pi];
-    if (e === null) return null;
-    equip += e;
-    const mo = m.rounds.money[ri][pi];
-    if (mo === null) moneyKnown = false;
-    else money += mo;
-  }
-  if (n === 0) return null;
-  if (equip <= 1000 * n) return "eco";
-  if (equip >= (side === CT ? 4500 : 4000) * n) return "full";
-  if (ri > 0 && m.rounds.winSide[ri - 1] !== side) {
-    if (!moneyKnown) return null;
-    if (money < 400 * n) return m.rounds.winSide[ri - 1] === null ? null : "force-buy";
-  }
-  return "semi";
-}
-
-export function teamEquip(ctx: MatchCtx, ri: number, side: Side): { equip: number | null; money: number | null } {
-  let equip: number | null = 0;
-  let money: number | null = 0;
-  for (let pi = 0; pi < ctx.nPlayers; pi++) {
-    if (ctx.side(ri, pi) !== side) continue;
-    const e = ctx.m.rounds.equip[ri][pi];
-    const mo = ctx.m.rounds.money[ri][pi];
-    equip = e === null || equip === null ? null : equip + e;
-    money = mo === null || money === null ? null : money + mo;
-  }
-  return { equip, money };
-}
-
-// ---- Four-way buy classes for the round inspector and economy views ----------------------------
-// CS Demo Manager's five types above stay what the existing tables show. These four follow the
-// bands of HLTV's match economy tab as I recall them (team equipment under $5,000 is an eco, $20,000
-// and up a full buy, for five players); they have not been checked against HLTV. "force" merges
-// HLTV's semi-eco and semi-buy bands. Amounts are per player so short-handed teams classify the same.
-
-export const BUY_CLASSES = ["pistol", "eco", "force", "full"] as const;
+// Round buy classes, HLTV's four: PISTOL, ECO, HALF, FULL; and a match's economy team against team.
+import type { MatchFacts, PlayerRound } from "./facts";
+import type { Side } from "./tables";
+//
+// HLTV labels each team's round with its equipment value and class: ECO below $5,000, HALF from
+// $5,000, FULL from $16,250, and PISTOL on the first round of each half (bands read from HLTV's labels
+// over every HLTV map, VALIDATION.md, pnpm scoreboard-variants). For five players that is $1,000 and
+// $3,250 per player, which is how the engine classifies, so a short-handed team classifies the same.
+// The extractor no longer writes buy types (#24); the engine classifies from equipment value alone.
+export const BUY_CLASSES = ["pistol", "eco", "half", "full"] as const;
 export type BuyClass = (typeof BUY_CLASSES)[number];
 
-/** Average equipment per player at or below which a buy is an eco. */
-export const ECO_MAX_PER_PLAYER = 1000;
-/** Average equipment per player at or above which a buy is a full buy. */
-export const FULL_MIN_PER_PLAYER = 4000;
+/** Team equipment per player below which a round is an eco. */
+export const ECO_BELOW_PER_PLAYER = 1000;
+/** Team equipment per player from which a round is a full buy. */
+export const FULL_FROM_PER_PLAYER = 3250;
 
-/** First round of either regulation half. Overtime rounds start with money for a full buy and are never pistol rounds. */
-export function isPistolRound(ri: number, maxrounds: number | null): boolean {
-  const max = maxrounds ?? 24;
-  return ri < max && ri % (max / 2) === 0;
+/** First round of either regulation half (ri is 0-based). Overtime starts with full-buy money and has no pistol rounds. */
+export function isPistolRound(ri: number, maxRounds: number): boolean {
+  return ri === 0 || ri === maxRounds / 2;
 }
 
-/** Buy class from equipment per player at freeze end. */
-export function classifyBuy(perPlayer: number, pistolRound: boolean): BuyClass {
-  if (pistolRound) return "pistol";
-  if (perPlayer <= ECO_MAX_PER_PLAYER) return "eco";
-  if (perPlayer >= FULL_MIN_PER_PLAYER) return "full";
-  return "force";
+/**
+ * Finer tiers for the buy splits: HLTV's half buy split at FORCE_FROM_PER_PLAYER into a semi-eco and a
+ * force. Leetify shows semi-eco and force splits without publishing its bands; these are ours.
+ */
+export const BUY_TIERS = ["pistol", "eco", "semiEco", "force", "full"] as const;
+export type BuyTier = (typeof BUY_TIERS)[number];
+/** Team equipment per player from which a half buy is a force rather than a semi-eco. Ours, no fit: the middle of HLTV's half band in round dollars. */
+export const FORCE_FROM_PER_PLAYER = 2000;
+
+export function buyTier(teamEquip: number, players: number, pistol: boolean): BuyTier {
+  const c = classifyBuy(teamEquip, players, pistol);
+  if (c !== "half") return c;
+  return teamEquip / Math.max(1, players) >= FORCE_FROM_PER_PLAYER ? "force" : "semiEco";
 }
 
-/** A team's buy class in round ri: null when the side has no players or anyone's equipment is unknown. */
-export function teamBuyClass(ctx: MatchCtx, ri: number, side: Side): BuyClass | null {
-  const { equip } = teamEquip(ctx, ri, side);
-  let n = 0;
-  for (let pi = 0; pi < ctx.nPlayers; pi++) if (ctx.side(ri, pi) === side) n++;
-  if (n === 0) return null;
-  const pistol = isPistolRound(ri, ctx.m.env.maxrounds);
+export function classifyBuy(teamEquip: number, players: number, pistol: boolean): BuyClass {
   if (pistol) return "pistol";
-  return equip === null ? null : classifyBuy(equip / n, false);
+  const per = teamEquip / Math.max(1, players);
+  if (per < ECO_BELOW_PER_PLAYER) return "eco";
+  if (per >= FULL_FROM_PER_PLAYER) return "full";
+  return "half";
 }
 
-// ---- Economy views ------------------------------------------------------------------------------
+// ---- a match's economy, team against team ------------------------------------------------------
+
+export interface WinTally { rounds: number; wins: number }
 
 export interface TeamEcon {
   side: Side;
   buy: BuyClass | null;
+  /** team equipment at freeze end, money left after buying, and money spent; null when a player's is unknown */
   equip: number | null;
   money: number | null;
-  /** estimated money spent (rounds.ts estimateSpent), null when any player's estimate is missing */
   spent: number | null;
-  /** players who saved a weapon in a lost round, and the equipment they kept (null without round-end equipment) */
+  /** players alive at the end of a lost round, and their equipment at freeze end (grenades thrown since still count) */
   saves: number;
-  savedValue: number | null;
+  savedEquip: number;
 }
 
 export interface EconRound {
   ri: number;
-  winner: TeamId | null;
+  number: number;
+  winner: "us" | "them" | null;
   us: TeamEcon;
   them: TeamEcon;
 }
 
-export interface WinTally { rounds: number; wins: number }
+export type Teams<T> = Record<"us" | "them", T>;
 
 export interface EconomyView {
-  /** every round in order: buy classes, money and equipment curves, spend and saves per team */
   rounds: EconRound[];
-  /** rounds and wins by a team's own buy class, BUY_CLASSES order */
-  winRate: Record<TeamId, WinTally[]>;
+  /** rounds and wins by the team's own buy class, BUY_CLASSES order */
+  winRate: Teams<WinTally[]>;
   /** our buy class (row) against theirs (column); wins are ours */
   matchup: WinTally[][];
   /** rounds with a result but an unclassified buy on either side */
   unknown: number;
-  saves: Record<TeamId, { players: number; value: number }>;
+  /** rounds where the team made the round's first kill, and how many of those it won */
+  afterOpening: Teams<WinTally>;
+  /** the team's bomb plants (as T) and how they ended */
+  plants: Teams<{ planted: number; exploded: number; defused: number }>;
+  /** mean team equipment over rounds where both teams' is known */
+  avgEquip: Teams<number | null>;
+  saves: Teams<{ players: number; equip: number }>;
 }
 
 const tally = (): WinTally => ({ rounds: 0, wins: 0 });
+const sumOrNull = (xs: (number | null)[]) => (xs.some((x) => x === null) ? null : xs.reduce<number>((a, x) => a + x!, 0));
 
-/** Economy tables from the round details. Rounds without a result count in the curves only. */
-export function economyView(details: RoundDetail[]): EconomyView {
-  const view: EconomyView = {
-    rounds: [], winRate: { us: BUY_CLASSES.map(tally), them: BUY_CLASSES.map(tally) },
-    matchup: BUY_CLASSES.map(() => BUY_CLASSES.map(tally)), unknown: 0,
-    saves: { us: { players: 0, value: 0 }, them: { players: 0, value: 0 } },
+/** One match's economy from the side of `team` (0 = started CT, 1 = started T). Rounds without a result count in the curves only. */
+export function economyOf(f: MatchFacts, team: 0 | 1): EconomyView {
+  const v: EconomyView = {
+    rounds: [], winRate: { us: BUY_CLASSES.map(tally), them: BUY_CLASSES.map(tally) }, matchup: BUY_CLASSES.map(() => BUY_CLASSES.map(tally)), unknown: 0,
+    afterOpening: { us: tally(), them: tally() }, plants: { us: { planted: 0, exploded: 0, defused: 0 }, them: { planted: 0, exploded: 0, defused: 0 } },
+    avgEquip: { us: null, them: null }, saves: { us: { players: 0, equip: 0 }, them: { players: 0, equip: 0 } },
   };
-  for (const r of details) {
-    const econ = (tr: TeamRound): TeamEcon => {
-      const saved = tr.saves.map((pi) => r.players[pi]?.equipEnd ?? null);
+  const prOf = new Map<number, PlayerRound[]>();
+  for (const r of f.pr) { const l = prOf.get(r.ri); if (l) l.push(r); else prOf.set(r.ri, [r]); }
+  const openingSide = new Map<number, Side | null>();
+  for (const k of f.kills) if (k.opening) openingSide.set(k.ri, k.killerSide);
+  const known: Teams<number[]> = { us: [], them: [] };
+  for (const rf of f.rounds) {
+    const usSide: Side = rf.ctTeam === team ? "CT" : "T";
+    const econ = (side: Side): TeamEcon => {
+      const rows = (prOf.get(rf.ri) ?? []).filter((r) => r.side === side);
+      const savers = rows.filter((r) => r.m.saves);
       return {
-        side: tr.side, buy: tr.buy, equip: tr.equip, money: tr.money, spent: tr.spent, saves: tr.saves.length,
-        savedValue: saved.some((v) => v === null) ? null : saved.reduce<number>((a, v) => a + v!, 0),
+        side, buy: rf.buy[side], equip: rf.equip[side], money: sumOrNull(rows.map((r) => r.money)), spent: sumOrNull(rows.map((r) => r.spent)),
+        saves: savers.length, savedEquip: savers.reduce((a, r) => a + (r.equip ?? 0), 0),
       };
     };
-    const usT = r.usSide === 2;
-    const us = econ(usT ? r.teams.t : r.teams.ct);
-    const them = econ(usT ? r.teams.ct : r.teams.t);
-    view.rounds.push({ ri: r.ri, winner: r.winner, us, them });
-    view.saves.us.players += us.saves;
-    view.saves.them.players += them.saves;
-    view.saves.us.value += us.savedValue ?? 0;
-    view.saves.them.value += them.savedValue ?? 0;
-    if (r.winner === null) continue;
-    if (!us.buy || !them.buy) { view.unknown++; continue; }
-    const a = BUY_CLASSES.indexOf(us.buy);
-    const b = BUY_CLASSES.indexOf(them.buy);
-    const won = r.winner === "us" ? 1 : 0;
-    view.winRate.us[a].rounds++; view.winRate.us[a].wins += won;
-    view.winRate.them[b].rounds++; view.winRate.them[b].wins += 1 - won;
-    view.matchup[a][b].rounds++; view.matchup[a][b].wins += won;
+    const us = econ(usSide), them = econ(usSide === "CT" ? "T" : "CT");
+    const winner = rf.winner === null ? null : rf.winner === usSide ? "us" : "them";
+    v.rounds.push({ ri: rf.ri, number: rf.number, winner, us, them });
+    for (const [k, t] of [["us", us], ["them", them]] as const) {
+      v.saves[k].players += t.saves;
+      v.saves[k].equip += t.savedEquip;
+      if (t.side === "T" && rf.plantTick !== null) {
+        v.plants[k].planted++;
+        if (rf.exploded) v.plants[k].exploded++;
+        if (rf.defused) v.plants[k].defused++;
+      }
+    }
+    if (us.equip !== null && them.equip !== null) { known.us.push(us.equip); known.them.push(them.equip); }
+    if (winner === null) continue;
+    const opener = openingSide.get(rf.ri);
+    if (opener) {
+      const k = opener === usSide ? "us" : "them";
+      v.afterOpening[k].rounds++;
+      if (winner === k) v.afterOpening[k].wins++;
+    }
+    if (!us.buy || !them.buy) { v.unknown++; continue; }
+    const a = BUY_CLASSES.indexOf(us.buy), b = BUY_CLASSES.indexOf(them.buy);
+    const won = winner === "us" ? 1 : 0;
+    v.winRate.us[a].rounds++; v.winRate.us[a].wins += won;
+    v.winRate.them[b].rounds++; v.winRate.them[b].wins += 1 - won;
+    v.matchup[a][b].rounds++; v.matchup[a][b].wins += won;
   }
-  return view;
+  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : null);
+  v.avgEquip = { us: mean(known.us), them: mean(known.them) };
+  return v;
 }

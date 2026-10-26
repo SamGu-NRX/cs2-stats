@@ -85,6 +85,8 @@ export function SourceBadge({ s, compact }: { s: SourceInfo; compact?: boolean }
   const tip = s.id === "converted"
     ? "Converted from the game's console log. No aim or movement data; early rounds may have totals only."
     : s.id === "synthetic" ? "Generated demo data, not a real match."
+    : s.id === "pro" ? "A pro match demo. It opens like any match but never counts toward your career."
+    : s.id === "valve" ? "Your Valve matchmaking demo, extracted from the game's replays folder."
     : s.missing.length ? `Recorded by the capture plugin, without ${s.missing.join(" or ")} data.` : "Recorded by the capture plugin: aim, movement, economy and utility.";
   return (
     <span className="src" data-src={s.id} data-tip={tip} tabIndex={0}>
@@ -131,6 +133,19 @@ export function MapThumb({ map, size = 28 }: { map: string; size?: number }) {
 export function MultiBadge({ k }: { k: number }) {
   if (k < 2) return null;
   return <span className="mk" data-k={Math.min(5, k)}>{k >= 5 ? "ACE" : `${k}K`}</span>;
+}
+
+/**
+ * The round's first kill (filled) or first death (outlined) as a "1st" pip, text rather than an icon
+ * (SYSTEM.md). `label` names it for assistive tech where no text beside it says which.
+ */
+export function FirstPip({ death, label }: { death?: boolean; label?: string }) {
+  return <span className={`pip ${death ? "pip--o" : "pip--hi"}`} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>1st</span>;
+}
+
+/** A death in a round grid or list: "×" as text (SYSTEM.md). */
+export function DeathMark({ label, className }: { label?: string; className?: string }) {
+  return <span className={`xmark ${className ?? ""}`} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}>×</span>;
 }
 
 /** "1v3" clutch badge, filled when won. */

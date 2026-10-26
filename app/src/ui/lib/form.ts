@@ -20,15 +20,12 @@ export function insideFences(values: number[]): Set<number> {
   return keep;
 }
 
-/** Files that were the first match of their local calendar day. */
-export function firstOfDay(list: { file: string; startUtc: string }[]): Set<string> {
-  const firstByDay = new Map<string, { file: string; t: number }>();
-  for (const m of list) {
-    const d = new Date(m.startUtc);
-    const day = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    const t = d.getTime();
-    const cur = firstByDay.get(day);
-    if (!cur || t < cur.t) firstByDay.set(day, { file: m.file, t });
-  }
-  return new Set([...firstByDay.values()].map((x) => x.file));
+/**
+ * Files that were the first match of their day, from a newest-first list. Match facts carry the
+ * day but no start time, so the order within a day is the list's (data/match.ts byNewest).
+ */
+export function firstOfDay(newestFirst: { file: string; date: string | null }[]): Set<string> {
+  const first = new Map<string, string>();
+  for (const m of newestFirst) if (m.date) first.set(m.date, m.file);
+  return new Set(first.values());
 }

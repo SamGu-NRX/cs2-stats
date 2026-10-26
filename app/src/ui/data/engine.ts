@@ -1,57 +1,93 @@
-// The UI's only view of the stats engine. Every component reads match and profile numbers through
-// these functions, so engine changes land here and the views do not change.
-//
-// Engine v2 (app/src/stats/README.md) supplies Rating 3.0 (approx., uncalibrated), per-round player
-// data (roundDetails), the four-way economy (econ), roles and HLTV-named sub-stats. The engine
-// does not split Rating 3.0 by side yet; data/sideRating.ts does it in the meantime.
-import { scoreAttributes, type GroupScore } from "../../stats/attributes";
-import { addCounters, emptyCounters, type Counters } from "../../stats/counters";
-import type { KillView, MatchView, PlayerRow, RoundView } from "../../stats/derive";
+// The UI's view of the stats engine: labels, the side switch, stat lines read off the worker's
+// lines, the attribute adapter, number formats by metric unit, and the rating coverage rule. Nothing
+// here defines a metric, and nothing here loads the engine: the numbers arrive from the worker and
+// the descriptions from data/meta.ts.
+import { coveredEnough } from "../../stats/coverage";
 import { BUY_CLASSES, type BuyClass } from "../../stats/economy";
-import { SUBSTAT_BY_ID, type SubStat, type SubStatStatus } from "../../stats/hltv";
-import { formatMetric, METRICS } from "../../stats/metrics";
-import type { ProfileView } from "../../stats/profile";
-import { rating2, type RatingInputs } from "../../stats/rating";
-import { rating3, type R3Inputs } from "../../stats/rating3";
-import type { SideInputs } from "./sideRating";
-import { deriveRole, type Role } from "../../stats/role";
-import type { KillEvent, PlayerRound, RoundDetail } from "../../stats/rounds";
-import { CT, T, type Side } from "../../stats/schema";
-import type { LightSummary } from "../../worker/protocol";
-import { ATTRIBUTE_ORDER, type AttributeId } from "./proPack";
+import type { AttributeScore } from "../../stats/compare";
+import type { Measures } from "../../stats/facts";
+import type { Kind, Status } from "../../stats/metrics";
+import type { Side } from "../../stats/tables";
+import type { Careers, Line, Values } from "../../worker/protocol";
+import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs, plural } from "../lib/format";
+import type { MatchEntry } from "./match";
+import { sourceOf } from "./sources";
+import { metric, ratingInfo, winProbInfo } from "./meta";
+import type { AttributeId } from "./proPack";
 
 // ---------------------------------------------------------------- rating
-// One rating everywhere: Rating 3.0 (approx.), pooled over rounds. The six inputs are summed over
-// every round with the kill log before the formula is applied, as HLTV does for careers, so a
-// profile's rating is not the mean of its match ratings. Rating 2.0 appears only in tooltips
-// (design/architecture.md, "Rating labels across the migration").
 
 export const RATING_LABEL = "Rating 3.0";
-export const RATING_HEADLINE = "Rating 3.0 (approx.)";
-export const RATING3_NOTE = "Rating 3.0 (approx.) is uncalibrated: it restates Rating 2.0's weights on HLTV 3.0's inputs until it is fitted to HLTV ratings.";
-export const RATING_POOLED = "Pooled over rounds: kills, damage, deaths, KAST, multi-kills and swing are summed over every round with the kill log, then the formula runs once, as HLTV does for careers.";
+/** The engine's own label for the rating, "Rating 3.0 (approx.)". */
+export const ratingHeadline = () => ratingInfo().label;
+/** Where round win probability (and so swing) comes from, as Settings states it. */
+export const winProbText = () => {
+  const w = winProbInfo();
+  return w.kind === "hltv"
+    ? `${w.label}, from winprob-hltv.json in the packs folder. It values each round's swing.`
+    : `${w.label}. It values each round's swing; add winprob-hltv.json to the packs folder to use HLTV's table instead.`;
+};
+export const rating3Note = () => {
+  const r = ratingInfo();
+  return `Rating 3.0 (approx.): HLTV Rating 3.02 as reconstructed in model/rating3 (${r.status}).`;
+};
+export const RATING_POOLED = "Rated per side over the rounds it can value; a side with under half its rounds valued is left out. The total averages the side ratings, weighted by those rounds.";
 
 /**
- * Rating 3.0 counts only rounds with the kill log. A converted match whose first 15 of 16 rounds
- * hold totals only would get a rating from one round, so below half coverage there is no rating.
+ * A match whose kill-by-kill log covers under half its rounds (a converted log that holds the first
+ * rounds as totals only) gets no rating of its own, on either side: the rating of its few covered
+ * rounds is not the match's rating. Such a match is also left out of career views (careerEntries).
  */
-export const R3_MIN_COVERAGE = 0.5;
-const covered = (logRounds: number, rounds: number) => logRounds > 0 && logRounds >= R3_MIN_COVERAGE * rounds;
-export const r3Usable = (c: Counters) => covered(c.r3.rounds, c.rounds);
-export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log.";
+export const NO_RATING_TIP = "No Rating 3.0: fewer than half of this match's rounds have the kill-by-kill log, so it is left out of career views.";
+export const ratedMatch = coveredEnough;
 
-export const playerRating = (p: PlayerRow): number | null => (r3Usable(p.c) ? p.rating3.value : null);
-/** Pooled Rating 3.0 over any counters total (the inputs are additive). */
-export const countersRating = (c: Counters): number | null => (r3Usable(c) ? rating3(c.r3).value : null);
-export const countersRating3 = (c: Counters) => rating3(c.r3);
-export const summaryRating = (s: LightSummary): number | null => (r3Usable(s.human.c) ? s.human.rating3 : null);
-/** Rating 2.0 for any additive slice, for tooltips only. */
-export const sliceRating = (x: RatingInputs) => rating2(x);
-/** Rating 3.0 from one side's inputs (data/sideRating.ts), under the same coverage rule: `rounds`
- *  is every round played on that side, with or without the kill log. */
-export const r3Value = (x: R3Inputs | null | undefined, rounds: number) => (x && covered(x.rounds, rounds) ? rating3(x).value : null);
+/** "1 of 16 rounds logged": how much of a match the kill-by-kill log covers. */
+export const loggedText = (m: { nRounds: number; roundsPlayed: number }) => `${m.nRounds} of ${m.roundsPlayed} rounds logged`;
 
-export const ratingLabel = (_v?: unknown) => RATING_LABEL;
+/**
+ * The coverage rule, applied once where the match list arrives (data/provider.tsx), so every view
+ * reads it: a match whose kill-by-kill log covers under half its rounds keeps its counts (the logged
+ * rounds' kills and deaths) but none of its per-round values (ADR, KAST, HS%, swing, rating, the eco
+ * scoreboard). Those values describe the few logged rounds, not the match, and would read as the
+ * match's result in Matches, the Home hero and the match header.
+ */
+export function coverEntry(e: MatchEntry): MatchEntry {
+  if (ratedMatch(e.match)) return e;
+  const v: Values = {};
+  for (const k of Object.keys(e.line.v)) v[k] = null;
+  return { ...e, line: { ...e.line, v, eco: null, rating: null } };
+}
+/** A match entry's own rating, null under the coverage rule. */
+export const entryRating = (e: MatchEntry) => e.line.rating;
+
+/** Rating 3.0's six inputs, as the breakdown card lists them. */
+export const R3_INPUT_LABEL: Record<string, { label: string; fmt: (v: number) => string }> = {
+  kpr_eco: { label: "Eco-adjusted kills per round", fmt: (v) => v.toFixed(2) },
+  adr_eco: { label: "Eco-adjusted damage per round", fmt: (v) => v.toFixed(1) },
+  dpr_eco: { label: "Eco-adjusted deaths per round", fmt: (v) => v.toFixed(2) },
+  kast_eco: { label: "Eco-adjusted KAST", fmt: (v) => `${v.toFixed(1)}%` },
+  mk: { label: "Multi-kill rounds", fmt: (v) => `${v.toFixed(1)}%` },
+  swing: { label: "Round swing", fmt: (v) => `${v.toFixed(2)}%` },
+};
+
+/** One term of Rating 3.0 for a breakdown: the input's value, its coefficient, and coefficient × value. */
+export interface RatingTerm { label: string; input: string; coefficient: number; contribution: number }
+
+/**
+ * Rating 3.0's terms over a rating's own inputs (Rating3.inputs from rating3Of), in params.json's
+ * order, then the constant: the intercept plus every contribution is the rating's value.
+ */
+export function ratingTerms(inputs: Record<string, number>): { terms: RatingTerm[]; intercept: number } {
+  const r = ratingInfo();
+  return {
+    terms: r.terms.map((t) => {
+      const l = R3_INPUT_LABEL[t.input];
+      if (!l || inputs[t.input] === undefined) throw new Error(`Rating 3.0 term ${t.name} reads input "${t.input}", which the breakdown does not have`);
+      return { label: l.label, input: l.fmt(inputs[t.input]), coefficient: t.coefficient, contribution: t.coefficient * inputs[t.input] };
+    }),
+    intercept: r.intercept,
+  };
+}
 
 // ---------------------------------------------------------------- sides
 
@@ -59,14 +95,17 @@ export type SideKey = "both" | "t" | "ct";
 export const SIDE_OPTIONS: { value: SideKey; label: string }[] = [
   { value: "both", label: "Both" }, { value: "t", label: "T" }, { value: "ct", label: "CT" },
 ];
-export const sideOfKey = (k: SideKey): Side | null => (k === "t" ? T : k === "ct" ? CT : null);
+export const sideOfKey = (k: SideKey): Side | null => (k === "t" ? "T" : k === "ct" ? "CT" : null);
+/** The engine's side filter for a side key; both sides is no filter. */
+export const sidesOf = (k: SideKey): { sides?: Side[] } => (k === "both" ? {} : { sides: [sideOfKey(k)!] });
+/** The key rating3BySide and compare use. */
+export const ratingKey = (k: SideKey) => (k === "both" ? "both" : sideOfKey(k)!);
 
-/** The side a player was on in a round, from their team and the round's side for "us". */
-export function playerSide(v: MatchView, r: RoundView, pi: number): Side {
-  return v.players[pi].team === "us" ? r.usSide : ((5 - r.usSide) as Side);
-}
+// ---------------------------------------------------------------- stat lines
 
 export interface StatLine {
+  m: Measures;
+  v: Values;
   rounds: number;
   kills: number;
   deaths: number;
@@ -77,279 +116,262 @@ export interface StatLine {
   hs: number | null;
   kpr: number | null;
   dpr: number | null;
-  /** average swing per round, a fraction */
+  /** multi-kill rounds, percent */
+  mk: number | null;
+  /** round swing as a win-probability fraction, the unit fmtSwing takes (the swing metric is in percent) */
   swing: number | null;
-  /** Rating 3.0; null without enough kill-log rounds, or for one side until its inputs load */
   rating: number | null;
-  /** Rating 2.0 over the same rounds, for tooltips */
-  rating2: number | null;
 }
 
-const per = (a: number, b: number) => (b > 0 ? a / b : null);
+export function lineOf(l: Pick<Line, "m" | "v">, rating: number | null): StatLine {
+  const { m, v } = l;
+  return {
+    m, v, rounds: m.rounds, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
+    adr: v.adr, kast: v.kast, hs: v.hs, kpr: v.kpr, dpr: v.dpr, mk: v.mk,
+    swing: v.swing === null ? null : v.swing / 100, rating,
+  };
+}
 
 /**
- * A player's line for one side or both. Both sides read the engine's counters. One side sums the
- * per-round details (HS, swing); its Rating 3.0 comes from the side inputs when given.
+ * Rates for several players together (a team total), from their summed measures: the same ratios as
+ * stats/metrics.ts adr, kast, hs and swing, which read only these measures. Swing is a fraction.
  */
-export function statLine(v: MatchView, pi: number, side: SideKey, sides?: SideInputs[] | null): StatLine {
-  const p = v.players[pi];
-  const c = p.c;
-  if (side === "both") {
-    return {
-      rounds: c.rounds, kills: c.kills, deaths: c.deaths, assists: c.assists, diff: c.kills - c.deaths,
-      adr: per(c.dmg, c.rounds), kast: c.rounds ? (100 * c.kastRounds) / c.rounds : null,
-      hs: c.kills ? (100 * c.hsKills) / c.kills : null, kpr: per(c.kills, c.rounds), dpr: per(c.deaths, c.rounds),
-      swing: p.swingPerRound, rating: playerRating(p), rating2: c.rounds ? p.rating : null,
-    };
-  }
-  const want = sideOfKey(side);
-  const sl: RatingInputs = side === "t" ? c.sideT : c.sideCT;
-  let hs = 0;
-  let swing = 0;
-  let swingRounds = 0;
-  for (const r of v.roundDetails) {
-    const pr = r.players[pi];
-    if (!pr || pr.side !== want) continue;
-    hs += pr.hsKills;
-    if (pr.swing !== null) { swing += pr.swing; swingRounds++; }
-  }
-  const r2 = sl.rounds ? sliceRating(sl) : null;
+export function pooledRates(ms: Measures[]): { adr: number | null; kast: number | null; hs: number | null; swing: number | null } {
+  const sum = (k: keyof Measures) => ms.reduce((a, m) => a + ((m[k] as number | undefined) ?? 0), 0);
+  const rounds = sum("rounds"), kills = sum("kills"), swingRounds = sum("swingRounds");
   return {
-    rounds: sl.rounds, kills: sl.kills, deaths: sl.deaths, assists: sl.assists, diff: sl.kills - sl.deaths,
-    adr: per(sl.dmg, sl.rounds), kast: sl.rounds ? (100 * sl.kastRounds) / sl.rounds : null,
-    hs: sl.kills ? (100 * hs) / sl.kills : null, kpr: per(sl.kills, sl.rounds), dpr: per(sl.deaths, sl.rounds),
-    swing: swingRounds ? swing / swingRounds : null, rating: sides ? r3Value(sides[pi][side], sl.rounds) : null, rating2: r2,
+    adr: rounds ? sum("dmg") / rounds : null,
+    kast: rounds ? (100 * sum("kast")) / rounds : null,
+    hs: kills ? (100 * sum("hsKills")) / kills : null,
+    swing: swingRounds ? sum("swing") / swingRounds : null,
   };
 }
 
-/** The same line from profile or summary counters. One side has no HS% or swing (not split); its
- *  Rating 3.0 needs the side's inputs. */
-export function counterLine(c: Counters, side: SideKey, sideR3?: R3Inputs | null): StatLine {
-  const sl: RatingInputs = side === "both" ? c : side === "t" ? c.sideT : c.sideCT;
-  const both = side === "both";
-  const r2 = sl.rounds ? sliceRating(sl) : null;
-  return {
-    rounds: sl.rounds, kills: sl.kills, deaths: sl.deaths, assists: sl.assists, diff: sl.kills - sl.deaths,
-    adr: per(sl.dmg, sl.rounds), kast: sl.rounds ? (100 * sl.kastRounds) / sl.rounds : null,
-    hs: both && c.kills ? (100 * c.hsKills) / c.kills : null,
-    kpr: per(sl.kills, sl.rounds), dpr: per(sl.deaths, sl.rounds),
-    swing: both && c.swingRounds ? c.swing / c.swingRounds : null,
-    rating: both ? countersRating(c) : r3Value(sideR3, sl.rounds), rating2: r2,
-  };
+/** A worker line (its rating already under the coverage rule) as a stat line. */
+export const statLine = (l: Line) => lineOf(l, l.rating);
+
+/** A match entry's line for the recording player, both sides. */
+export const entryLine = (e: MatchEntry) => statLine(e.line);
+
+/**
+ * The match header's two teams, from the file's players: how many teammates you had, and the
+ * opponents as bots and players ("5 bots", "5 players", "3 bots, 2 players"). The file names no
+ * teams, so a pro or Valve match counts its players too. A player with no side (a spectator, or one
+ * who never spawned) is on neither team. With no opponent in the file, or a recording player with no
+ * side to tell the teams apart, `opponents` is null and the header says the file does not have them.
+ */
+export function teamsOf(e: Pick<MatchEntry, "players" | "you">): { mates: number; opponents: string | null } {
+  const mine = e.players[e.you]?.team ?? null;
+  if (mine === null) return { mates: 0, opponents: null };
+  const sided = e.players.filter((p, i) => i !== e.you && p.team !== null);
+  const them = sided.filter((p) => p.team !== mine);
+  const bots = them.filter((p) => p.bot).length, people = them.length - bots;
+  const parts = [bots ? plural(bots, "bot") : "", people ? plural(people, "player") : ""].filter(Boolean);
+  return { mates: sided.length - them.length, opponents: parts.length ? parts.join(", ") : null };
 }
 
-/** Multi-kill rounds as a percent of rounds (both sides; not split by side). */
-export const multiKillPct = (c: Counters) => (c.rounds ? (100 * c.multiKillRounds) / c.rounds : null);
+// ---------------------------------------------------------------- counts read off the measures
 
-// ---------------------------------------------------------------- rounds × players
+/**
+ * Rounds with exactly 2, 3 and 4 kills, and with 5, from the engine's 2+, 3+, 4+ and 5 counts, each
+ * with its percent of all rounds (null without rounds).
+ */
+export const multiKillRows = (m: Measures) => ([
+  { k: 2 as const, rounds: m.multiKillRounds - m.k3Rounds },
+  { k: 3 as const, rounds: m.k3Rounds - m.k4Rounds },
+  { k: 4 as const, rounds: m.k4Rounds - m.k5Rounds },
+  { k: 5 as const, rounds: m.k5Rounds },
+]).map((r) => ({ ...r, pct: m.rounds ? (100 * r.rounds) / m.rounds : null }));
 
-export interface CellKill { victim: number | null; weapon: string; hs: boolean; secs: number | null; trade: boolean; opening: boolean; event: KillEvent | null }
-export interface RoundCell {
-  ri: number;
-  side: Side;
-  kills: CellKill[];
-  died: boolean;
-  death: KillEvent | null;
-  dmg: number;
-  swing: number | null;
-  /** only the game's round totals exist (no victims or weapons) */
-  lite: boolean;
-  /** no stats for this player this round */
-  empty: boolean;
-  clutch: PlayerRound["clutch"];
-  pr: PlayerRound | null;
-}
+/** 1v1 to 1v5 clutches played and won. */
+export const clutchRows = (m: Measures) => ([1, 2, 3, 4, 5] as const).map((vs) => ({ vs, played: m[`clutch${vs}`], won: m[`clutchWon${vs}`] }));
 
-/** The round inspector's matrix, [pi][ri], from the engine's per-round details. */
-export function roundMatrix(v: MatchView): RoundCell[][] {
-  return v.players.map((p, pi) => v.roundDetails.map((r) => {
-    const pr = r.players[pi];
-    const side: Side = pr?.side ?? (p.team === "us" ? r.usSide : ((5 - r.usSide) as Side));
-    if (!pr) return { ri: r.ri, side, kills: [], died: false, death: null, dmg: 0, swing: null, lite: r.lite, empty: true, clutch: null, pr: null };
-    const kills: CellKill[] = pr.kills.length
-      ? pr.kills.map((k) => ({ victim: k.victim, weapon: k.weapon, hs: k.headshot, secs: k.secs, trade: k.tradeKill, opening: k.opening, event: k }))
-      : Array.from({ length: pr.k }, (_, i) => ({ victim: null, weapon: "", hs: i < pr.hsKills, secs: null, trade: false, opening: false, event: null }));
-    return {
-      ri: r.ri, side, kills, died: pr.d > 0, death: pr.death, dmg: pr.dmg, swing: pr.swing,
-      lite: !r.captured, empty: !r.captured && !r.lite, clutch: pr.clutch, pr,
-    };
-  }));
-}
-
-/** Rounds with 2, 3, 4 and 5+ kills for one player in a match, from the per-round details. */
-export function multiKillCounts(v: MatchView, pi: number): Record<2 | 3 | 4 | 5, number> {
-  const out = { 2: 0, 3: 0, 4: 0, 5: 0 };
-  for (const r of v.roundDetails) { const k = r.players[pi]?.k ?? 0; if (k >= 2) out[Math.min(5, k) as 2 | 3 | 4 | 5]++; }
-  return out;
-}
-
-/** Swing summed over the match per player (fraction points), null without any swing rounds. */
-export function matchSwingTotal(v: MatchView, pi: number): number | null {
-  let s = 0;
-  let n = 0;
-  for (const r of v.roundDetails) { const x = r.players[pi]?.swing; if (x !== null && x !== undefined) { s += x; n++; } }
-  return n ? s : null;
-}
-
-/** A kill's swing for its killer: the kill's win-probability change from the round's path. */
-export function killSwingOf(r: RoundDetail, k: KillEvent, killerTeamIsUs: boolean, usSide: Side): number | null {
-  const pt = r.winProb?.find((p) => p.event === "kill" && p.k === k.k);
-  if (!pt || pt.before === null) return null;
-  const dCT = pt.pCT - pt.before;
-  const killerSide = killerTeamIsUs ? usSide : ((5 - usSide) as Side);
-  return killerSide === CT ? dCT : -dCT;
-}
-
-/** Swing a kill credited to one player (the killer's share, split by damage), null without swing. */
-export function killSwing(k: KillView, pi: number | null): number | null {
-  if (pi === null || k.ctWinBefore === null) return null;
-  return k.credits.find(([p]) => p === pi)?.[1] ?? 0;
-}
-
-/** The round where a player's swing was highest, with their kills that round. */
-export function bestRound(v: MatchView, pi: number): { ri: number; swing: number | null; kills: number; hs: number } | null {
-  let best: { ri: number; swing: number | null; kills: number; hs: number } | null = null;
-  const score = (x: { swing: number | null; kills: number }) => (x.swing ?? 0) * 100 + x.kills * 0.01;
-  for (const r of v.roundDetails) {
-    const pr = r.players[pi];
-    if (!pr || !r.captured) continue;
-    const cand = { ri: r.ri, swing: pr.swing, kills: pr.k, hs: pr.hsKills };
-    if (!best || score(cand) > score(best)) best = cand;
-  }
-  return best;
-}
-
-export const BUY_CLASS_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", force: "Force buy", full: "Full buy" };
+export const BUY_CLASS_LABEL: Record<BuyClass, string> = { pistol: "Pistol", eco: "Eco", half: "Half buy", full: "Full buy" };
 export { BUY_CLASSES };
 
-// ---------------------------------------------------------------- attributes and roles
+// ---------------------------------------------------------------- formats
 
-/** HLTV's names. The engine calls the closing group "clutching". */
-const GROUP_TO_ATTR: Record<string, AttributeId> = {
-  firepower: "firepower", entrying: "entrying", trading: "trading", opening: "opening",
-  clutching: "closing", sniping: "sniping", utility: "utility",
-};
-export const ATTR_LABEL: Record<AttributeId, string> = {
-  firepower: "Firepower", entrying: "Entrying", trading: "Trading", opening: "Opening",
-  closing: "Closing", sniping: "Sniping", utility: "Utility",
-};
-export const ATTR_DEF: Record<AttributeId, string> = {
-  firepower: "Kills and damage per round, multi-kills and rating.",
-  entrying: "Taking first contact for the team: deaths that get traded, being saved, support rounds.",
-  trading: "Punishing enemies who just got a kill, and saving teammates under fire.",
-  opening: "Winning the first duel of the round, and how often you take it.",
-  closing: "Late-round play: clutches, last alive, time alive and saves.",
-  sniping: "Kills, rounds and opening kills with sniper rifles.",
-  utility: "Grenade damage, flashes thrown, flash assists and enemy blind time.",
-};
-
-/** HLTV-named sub-stats shown under each attribute beyond the scored ones (value only, no score). */
-const EXTRA_SUBS: Record<AttributeId, string[]> = {
-  firepower: ["rws", "perfectKills", "tradeDenials", "multiKill", "ecoKpr"],
-  entrying: ["tradeableDeaths", "baitAssists", "failedTrades"],
-  trading: ["tradeOpps", "tradeOppsTaken", "baitKills"],
-  opening: ["firstDuelRank", "firstDuelTime", "weaponAttacks"],
-  closing: ["clutchesPer24"],
-  sniping: [],
-  utility: ["utilSuccess"],
-};
-
-export interface Sub { id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: SubStatStatus | null }
-export interface Attr { id: AttributeId; label: string; score: number | null; subs: Sub[]; extra: Sub[] }
-
-const subFmt = (s: SubStat, v: number | null) => {
-  if (v === null || !Number.isFinite(v)) return "–";
-  switch (s.fmt) {
-    case "dec2": return v.toFixed(2);
-    case "dec1": return v.toFixed(1);
-    case "pct": return `${v.toFixed(1)}%`;
-    case "secs": return `${v.toFixed(1)} s`;
-    case "int0": return String(Math.round(v));
+/** A metric's value in its unit's format. */
+export function fmtMetric(id: string, v: number | null): string {
+  switch (metric(id).unit) {
+    case "rating": return fmtRating(v);
+    case "pct": return fmtPct(v);
+    case "secs": return fmtSecs(v);
+    case "ms": return fmtMs(v);
+    case "deg": return fmtDeg(v, 2);
+    case "money": return fmtMoney(v);
+    case "dmg": return fmtAdr(v);
+    case "units": case "speed": return fmtInt(v);
+    case "perRound": case "count": case "rank": return fmtDec(v);
   }
-};
-
-export function attributes(groups: GroupScore[], total?: Counters): Attr[] {
-  const byId = new Map(groups.map((g) => [GROUP_TO_ATTR[g.id], g]));
-  return ATTRIBUTE_ORDER.map((id) => {
-    const g = byId.get(id);
-    return {
-      id, label: ATTR_LABEL[id], score: g?.score ?? null,
-      subs: (g?.subs ?? []).map((s) => {
-        const m = METRICS[s.id];
-        const hl = SUBSTAT_BY_ID[s.id];
-        return { id: s.id, label: hl?.name ?? m?.label ?? s.id, def: hl?.def ?? m?.def ?? "", value: s.value, text: m ? formatMetric(m, s.value) : String(s.value ?? "–"), score: s.score, status: hl?.status ?? null };
-      }),
-      extra: total ? EXTRA_SUBS[id].map((sid) => SUBSTAT_BY_ID[sid]).filter(Boolean).map((s) => {
-        const value = s.value(total);
-        return { id: s.id, label: s.name, def: s.def, value, text: subFmt(s, value), score: null, status: s.status };
-      }) : [],
-    };
-  });
 }
 
-export const attrVector = (a: Attr[]) => a.map((x) => x.score);
+/** Where a percentile sits, for performance metrics (higher is always better after compare()). */
+export const rankText = (pct: number | null) => (pct === null ? "–" : pct >= 50 ? `Top ${Math.max(1, Math.round(100 - pct))}%` : `Bottom ${Math.max(1, Math.round(pct))}%`);
 
-/** The two weakest scored attributes, with their weakest sub-stat. */
-export function weakest(a: Attr[], n = 2) {
-  return a.filter((x) => x.score !== null).sort((x, y) => x.score! - y.score!).slice(0, n).map((x) => ({
-    ...x, worst: [...x.subs].filter((s) => s.score !== null).sort((p, q) => p.score! - q.score!)[0] ?? null,
-  }));
+// ---------------------------------------------------------------- attributes
+
+export interface Sub {
+  id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: Status;
+  /** why the value has no percentile (compare.ts Percentile.reason); null when it has one or has no value */
+  reason: string | null;
 }
+export interface Attr { id: AttributeId; label: string; kind: Kind; score: number | null; subs: Sub[] }
 
-/** The engine's role for any counters total. */
-export const roleFor = (c: Counters): Role => deriveRole(c);
+/** The engine's attribute scores (percentiles in the pool the worker ranked them against) with each metric's label and format. */
+export const attrsOf = (scores: AttributeScore[]): Attr[] => scores.map((a) => ({
+  id: a.id as AttributeId, label: a.label, kind: a.kind, score: a.score,
+  subs: a.metrics.map((p) => {
+    const m = metric(p.id);
+    return { id: p.id, label: m.label, def: m.def, value: p.value, text: fmtMetric(p.id, p.value), score: p.pct, status: m.status, reason: p.reason };
+  }),
+}));
 
 /**
- * Role signals as a blend: each flavour's evidence as a share of its threshold, normalised to 100 %.
- * Flavours without data (positions are plugin-only) are listed as missing, not as zero.
+ * Metrics shown under an attribute after its scored ones, value only (main's unscored rows). Main's
+ * other extras (RWS, trade denials, multi-kill, tradeable deaths, bait assists, trade opportunities,
+ * first duel rank and time, weapon attacks, clutches per 24) are scored metrics of the same attribute
+ * here, so they already show. Main's "Trade success" is tradeKillSuccess.
  */
-export function roleBlend(r: Role): { label: string; share: number | null; score: number | null; value: number | null; threshold: number }[] {
-  const scored = r.flavours.filter((f) => f.score !== null);
-  const total = scored.reduce((a, f) => a + Math.max(0, f.score!), 0);
-  return r.flavours.map((f) => ({ label: f.flavour, share: f.score === null || !total ? null : Math.max(0, f.score) / total, score: f.score, value: f.value, threshold: f.threshold }));
-}
+export const EXTRA_SUBS: Partial<Record<AttributeId, string[]>> = {
+  firepower: ["perfectKillsPct", "ecoKpr"],
+  entrying: ["failedTradesPR"],
+  trading: ["tradeKillSuccess", "baitKillsPR"],
+};
 
-// ---------------------------------------------------------------- profile helpers
+/** An attribute's extra rows over the same rounds as its scores (the caller's metric values on that side). */
+export const extraSubs = (id: AttributeId, v: Values): Sub[] => (EXTRA_SUBS[id] ?? []).map((mid) => {
+  const m = metric(mid);
+  return { id: mid, label: m.label, def: m.def, value: v[mid], text: fmtMetric(mid, v[mid]), score: null, status: m.status, reason: null };
+});
 
-/** Sum of every bot career in the given matches: ratios over it are bot averages. */
-export function botAverage(summaries: LightSummary[]): Counters | null {
-  if (!summaries.some((s) => s.bots.length)) return null;
-  const c = emptyCounters();
-  for (const s of summaries) for (const b of s.bots) addCounters(c, b.c);
-  return c;
-}
-
-/** Attributes for any counters total, scored against the bot careers in the same matches. */
-export function attributesFor(total: Counters, summaries: LightSummary[]): Attr[] {
-  const careers = new Map<string, Counters>();
-  for (const s of summaries) for (const b of s.bots) {
-    let c = careers.get(b.key);
-    if (!c) careers.set(b.key, (c = emptyCounters()));
-    addCounters(c, b.c);
-  }
-  return attributes(scoreAttributes(total, [...careers.values()]).groups, total);
-}
-
-export const profileAttributes = (p: ProfileView) => attributes(p.attributes.groups, p.total);
-
-/** Clutches 1v1..1v5 from counters. */
-export const clutchRows = (c: Counters) => c.clutchN.map((n, i) => ({ vs: i + 1, played: n, won: c.clutchW[i] }));
-
-/** Rounds with 2, 3, 4 and 5 kills. */
-export const multiKillRows = (c: Counters) => [2, 3, 4, 5].map((k) => ({ k, rounds: c.kc[k] ?? 0 }));
 
 export const WEAPON_CLASS_LABEL: Record<string, string> = {
   rifle: "Rifles", sniper: "Snipers", smg: "SMGs", heavy: "Heavy", pistol: "Pistols", grenade: "Grenades", knife: "Knife", other: "Other",
 };
 
-/** Matches in the filter, newest first. */
-export function filterSummaries(all: LightSummary[], map: string | null): LightSummary[] {
-  return map ? all.filter((s) => s.map === map) : all;
+// ---------------------------------------------------------------- populations
+// Performance ranks against the pros, the user's style against the bot careers in their own matches
+// (design/identity.md, worker/ranking.ts). Every percentile on screen names one of the two.
+
+/** The words a percentile phrase names its population with: "pro riflers", "pros". */
+export const proPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "pros" : role === "awper" ? "pro AWPers" : "pro riflers");
+/**
+ * The population a pro percentile was read in, from its pool (compare.ts Percentile.pool): the role
+ * pools, everyone ("all": sniping metrics always compare with every pro), or one map's player-maps.
+ */
+export const proPopulation = (pool: string) => (pool === "awper" ? "pro AWPers" : pool === "rifler" ? "pro riflers" : pool.startsWith("map:") ? "pros on this map" : "pros");
+/** The same for the bot pools the user's style ranks against: "rifler bots", "all bots". */
+export const botPoolName = (role: "awper" | "rifler" | "all") => (role === "all" ? "all bots" : role === "awper" ? "AWPer bots" : "rifler bots");
+
+
+/**
+ * The bot population the user's style ranks against, as one count with one noun. Every place that
+ * names the population (the attributes panel, the provisional chip, a card aside) reads it here, so a
+ * screen never says "63 bot matches" in one spot and "62 bot careers" in the next.
+ *
+ * - The noun follows what one sample is (Careers.unit): a bot career, or one bot in one match while
+ *   too few careers qualify.
+ * - The count is the pool the scores read when the caller has it (StyleResult.n with its role), else
+ *   the whole population: every bot match, or every qualifying career.
+ *
+ *   const pop = botPopulation(style.careers, { n: style.n, role: cmp === "all" ? "all" : style.role });
+ *   pop.text  // "62 rifler bot matches"
+ */
+export interface BotPool { n: number; role: "awper" | "rifler" | "all" }
+export interface BotPopulation { count: number; noun: string; text: string }
+export function botPopulation(c: Careers, pool?: BotPool): BotPopulation {
+  const count = pool ? pool.n : c.unit === "matches" ? c.botMatches : c.qualified;
+  const role = !pool || pool.role === "all" ? "" : pool.role === "awper" ? "AWPer " : "rifler ";
+  const noun = c.unit === "matches" ? (count === 1 ? "bot match" : "bot matches") : count === 1 ? "bot career" : "bot careers";
+  return { count, noun, text: `${count} ${role}${noun}` };
 }
 
+/** A bot pool's name and size, for a card's aside: "Percentile against 62 rifler bot matches". */
+export const botPoolText = (c: Careers, pool?: BotPool) => `Percentile against ${botPopulation(c, pool).text}`;
+
+/** The sentence behind the "Provisional" chip the style scores carry until enough bot careers qualify. */
+export const provisionalText = (c: Careers, pool?: BotPool) => (c.unit === "matches"
+  ? `Provisional: against ${botPopulation(c, pool).text}; career scores need ${c.minPool} bot careers with ${c.minRounds}+ rounds`
+  : `Provisional: ${c.qualified} of ${c.needed} bot careers with ${c.minRounds}+ rounds`);
+
+export const BOTS_TIP = "Style is ranked against the bots in your own matches: each bot name is one career, summed over the same matches as you. Pros are ranked against pros.";
+
+/** Why a style pool shows no scores (the detail behind "Needs a recorded demo"): fewer samples in it than the engine needs to write its quantiles. */
+export const thinPoolText = (c: Careers, n: number) => `This pool has ${botPopulation(c, { n, role: "all" }).text}${c.unit === "careers" ? ` with ${c.minRounds}+ rounds` : ""}, and a style score needs ${c.minPool}.`;
+
+// ---------------------------------------------------------------- lists
+
+/** Matches in the filter, newest first. */
+export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry[] {
+  return map ? all.filter((s) => s.match.map === map) : all;
+}
+
+// Which matches count. Matches lists every match; each rule below is shared by every view.
+
+/** The user's own match: anything but a pro demo (data/sources.ts). Pro demos open from Matches, labelled, and count nowhere. */
+export const isOwn = (e: MatchEntry) => sourceOf(e).id !== "pro";
+/** Played to its end. An abandoned match opens normally but is in no W-L and no career total. */
+export const isFinished = (e: MatchEntry) => e.match.complete;
+/**
+ * Whether a match is a match at all: it has activity, a completed round, a kill or a damage event
+ * (MatchEntry.activity). A recording stopped before anything happened is left out of Matches and every
+ * career number; a winnerless one with kills or damage is listed and labelled unfinished. (The rule and
+ * names #29 uses.)
+ */
+export const isListed = (s: MatchEntry) => s.activity;
+
+/** What Matches lists: the matches in the filter that isListed keeps. */
+export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter(isListed);
+
+/** The result is known: some round has a winner. A 0:0 with unknown winners is no draw, so it stays out of W-L. */
+export const hasKnownResult = (e: MatchEntry) => e.score.us + e.score.them > 0;
+/** The kill-by-kill log covers at least half the rounds (the coverage rule; see coverEntry). */
+export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
+
+/**
+ * The one match set every career number reads (the sidebar, Home, Profile, Career aim, and the
+ * Matches summary's rating): the user's own finished matches whose kill-by-kill log covers at least
+ * half their rounds, wingman left out (isWingman). Pro demos, unfinished matches, wingman and thin logs
+ * neither appear in a career list nor move an average, so the sidebar, the Rating 3.0 tile and Form's
+ * pooled line agree.
+ */
+export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
+
+/**
+ * The matches Career aim reads: every one of the user's own matches that holds shots, wingman and
+ * unfinished ones included. Aim does not depend on team size, the round limit, the result or the
+ * kill-by-kill coverage that keep a match out of career totals (careerEntries).
+ */
+export const aimEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && s.hasAim);
+
+/** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
+export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
+
+/** Why a match is left out of the career, for its row's tooltip; null when it counts. */
+export function notCountedText(e: MatchEntry): string | null {
+  if (!isOwn(e)) return "Pro demo: not part of your career.";
+  if (isWingman(e)) return WINGMAN_TIP;
+  if (!isFinished(e)) return `Unfinished: abandoned after ${e.match.nRounds} ${e.match.nRounds === 1 ? "round" : "rounds"}. It opens normally, but is left out of W–L and career totals.`;
+  if (!isLogged(e)) return `${loggedText(e.match)}: too few for a rating, so it is left out of career totals.`;
+  return null;
+}
+
+
+/**
+ * A wingman match: a 16-round limit (MR8) with at most two players a side, as Valve's wingman demos are.
+ * The rating and win-probability models and the pro baselines are all 5v5, so career views leave it out.
+ */
+export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
+
+export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Weapons), whose models and baselines are 5v5. Career aim counts it: aim does not depend on team size.";
+
 /** Maps present in the data, most played first. */
-export function mapsIn(all: LightSummary[]): string[] {
+export function mapsIn(all: MatchEntry[]): string[] {
   const n = new Map<string, number>();
-  for (const s of all) n.set(s.map, (n.get(s.map) ?? 0) + 1);
+  for (const s of all) n.set(s.match.map, (n.get(s.match.map) ?? 0) + 1);
   return [...n].sort((a, b) => b[1] - a[1]).map(([m]) => m);
 }
+
+/** Bots in a list of matches, by steamid: the "bots you played" comparison. */
+export const botIds = (list: MatchEntry[]) => [...new Set(list.flatMap((e) => e.players.filter((p) => p.bot).map((p) => p.id)))];

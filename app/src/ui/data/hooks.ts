@@ -1,18 +1,17 @@
-// Loading hooks over the worker and the host. Each returns { data, error } and refetches when a sync
-// changes the file list (data.version).
+// Loading hooks over the worker. Each returns { data, error, loading } and refetches when a sync
+// changes the file list (data.version). Calls made in one render go to the worker together
+// (worker/client.ts), so a page's career questions share one pass over the stored matches.
 import { useEffect, useMemo, useState } from "react";
-import { emptyR3 } from "../../stats/rating3";
-import { addR3, sideInputs, type SideInputs } from "./sideRating";
-import { decodeMatch } from "../../stats/decode";
-import type { MatchView } from "../../stats/derive";
-import type { PosAgg } from "../../stats/positions";
-import type { ProfileFilter, ProfileView } from "../../stats/profile";
-import type { MatchFile } from "../../stats/schema";
+import type { Filter } from "../../stats/rollup";
+import type { Client } from "../../worker/client";
+import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
+import { careerEntries } from "./engine";
+import { matchModel, type MatchEntry, type MatchModel } from "./match";
 import { useData } from "./provider";
 
 export interface Loaded<T> { data: T | null; error: string | null; loading: boolean }
 
-function useAsync<T>(key: string | null, run: () => Promise<T>, deps: unknown[]): Loaded<T> {
+function useAsync<T>(key: string | null, run: () => Promise<T>): Loaded<T> {
   const [st, setSt] = useState<Loaded<T>>({ data: null, error: null, loading: !!key });
   useEffect(() => {
     if (!key) { setSt({ data: null, error: null, loading: false }); return; }
@@ -23,87 +22,70 @@ function useAsync<T>(key: string | null, run: () => Promise<T>, deps: unknown[])
       (e: Error) => alive && setSt({ data: null, error: e.message, loading: false }),
     );
     return () => { alive = false; };
-  }, [key, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return st;
 }
 
-export function useMatchView(file: string | null): Loaded<MatchView> {
+/** One worker call; null args skip it. Refetches after a sync. */
+export function useCall<K extends Method>(method: K, args: Parameters<Api[K]> | null): Loaded<Result<K>> {
   const { client, version } = useData();
-  return useAsync(client && file ? `m:${file}` : null, () => client!.match(file!), [version, client]);
+  const key = client && args ? `${version}|${method}|${JSON.stringify(args)}` : null;
+  return useAsync(key, () => (client![method] as (...a: unknown[]) => Promise<Result<K>>)(...args!));
 }
 
-export function useProfile(filter: ProfileFilter): Loaded<ProfileView | null> {
-  const { client, version } = useData();
-  return useAsync(client ? `p:${filter.map ?? ""}:${filter.lastN ?? ""}` : null, () => client!.profile(filter), [version, client]);
+// The open match's bundle, shared by every view that shows it (the Home hero and highlights ask for
+// the same match). At most BUNDLES are kept; the worker holds the facts themselves.
+const BUNDLES = 3;
+const bundles = new Map<string, Promise<MatchBundle>>();
+export function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
+  const k = `${version}|${file}`;
+  let p = bundles.get(k);
+  if (p) { bundles.delete(k); bundles.set(k, p); return p; }
+  p = client.match(file);
+  p.catch(() => bundles.delete(k));
+  bundles.set(k, p);
+  while (bundles.size > BUNDLES) bundles.delete(bundles.keys().next().value!);
+  return p;
 }
 
-// Raw match files, for the interim per-round numbers (data/interim.ts). Two are kept: the match
-// open now and the one before it.
-const rawCache = new Map<string, Promise<MatchFile>>();
-export function useRawMatch(file: string | null): Loaded<MatchFile> {
-  const { host, version } = useData();
-  return useAsync(host && file ? `r:${file}` : null, () => {
-    let p = rawCache.get(file!);
-    if (!p) {
-      p = host!.read(file!).then((b) => decodeMatch(b, file!));
-      rawCache.set(file!, p);
-      p.catch(() => rawCache.delete(file!));
-      while (rawCache.size > 2) rawCache.delete(rawCache.keys().next().value!);
-    }
-    return p;
-  }, [version, host]);
+/** One match shaped for the match views. The entry must be in the match list. */
+export function useMatch(file: string | null): Loaded<MatchModel> {
+  const { client, version, matches } = useData();
+  const entry = file ? matches.find((m) => m.file === file) ?? null : null;
+  return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}` : null, async () => {
+    if (!entry) throw new Error(`${file} is not in the match folder`);
+    return matchModel(entry, await bundleOf(client!, version, file!));
+  });
 }
 
-// Position samples merged over every match on a map: the walkable shape used for map art and the
-// radar backdrop. Cached per map for the session.
-const posCache = new Map<string, Promise<PosAgg>>();
-export function useMapPositions(map: string | null): Loaded<PosAgg> {
-  const { client, version } = useData();
-  return useAsync(client && map ? `pos:${map}:${version}` : null, () => {
-    const key = `${map}:${version}`;
-    let p = posCache.get(key);
-    if (!p) { p = client!.profilePositions(map!); posCache.set(key, p); }
-    return p;
-  }, [version, client]);
+export const useRollups = (qs: Query[] | null) => useCall("rollup", qs?.length ? [qs] : null);
+export const useRatings = (qs: Query[] | null) => useCall("ratings", qs?.length ? [qs] : null);
+
+/** The query for the recording player over a list of matches. */
+export function useYourQuery(list: MatchEntry[], extra: Omit<Filter, "player"> = {}): Query | null {
+  const { you } = useData();
+  const k = JSON.stringify(extra);
+  return useMemo(() => (list.length && you.length ? { files: list.map((m) => m.file), filter: { ...extra, player: you } } : null),
+    [list, you, k]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
-/** Several raw match files, decoded in order. A file that fails is skipped (Data & settings lists it). */
-export function useRawMatches(files: string[]): Loaded<MatchFile[]> {
-  const { host, version } = useData();
-  return useAsync(host && files.length ? `rs:${files.join("|")}` : null, async () => {
-    const out: MatchFile[] = [];
-    for (const f of files) {
-      try { out.push(await host!.read(f).then((b) => decodeMatch(b, f))); } catch { /* listed in Data & settings */ }
-    }
-    return out;
-  }, [version, host]);
+/** Summaries for a query narrowed by each extra filter, in order; null while they load. */
+export function useScoped(q: Query, extra: Omit<Filter, "player">[]) {
+  const k = JSON.stringify(extra);
+  const qs = useMemo(() => extra.map((e) => ({ files: q.files, filter: { ...q.filter, ...e } })), [q, k]); // eslint-disable-line react-hooks/exhaustive-deps
+  return useRollups(qs).data;
 }
 
-export interface SideTotals {
-  /** your Rating 3.0 inputs per side, pooled over the matches */
-  you: SideInputs;
-  /** every bot in the same matches, per side */
-  bots: SideInputs;
-  byMap: Map<string, SideInputs>;
-}
-
-/** Rating 3.0 inputs per side over a list of matches (data/sideRating.ts), decoded from the raw files. */
-export function useSideTotals(files: string[]): SideTotals | null {
-  const raws = useRawMatches(files).data;
+/**
+ * The career matches under the title bar's Map and Matches controls (shell/filters.tsx useScope):
+ * the user's own finished, logged matches (engine.ts careerEntries), newest first, cut to the last N.
+ * Every block on a career view reads this one list, so a filter reaches all of them. `all` is the
+ * same set before the last-N cut (what "All 8" counts).
+ */
+export function useCareer(scope: { map: string | null; n: number | null }): { list: MatchEntry[]; all: MatchEntry[] } {
+  const { matches } = useData();
   return useMemo(() => {
-    if (!raws) return null;
-    const you: SideInputs = { t: emptyR3(), ct: emptyR3() };
-    const bots: SideInputs = { t: emptyR3(), ct: emptyR3() };
-    const byMap = new Map<string, SideInputs>();
-    for (const m of raws) {
-      const s = sideInputs(m);
-      const mine = s[m.human];
-      you.t = addR3(you.t, mine.t);
-      you.ct = addR3(you.ct, mine.ct);
-      const mp = byMap.get(m.map) ?? { t: emptyR3(), ct: emptyR3() };
-      byMap.set(m.map, { t: addR3(mp.t, mine.t), ct: addR3(mp.ct, mine.ct) });
-      s.forEach((x, pi) => { if (m.players.isBot[pi]) { bots.t = addR3(bots.t, x.t); bots.ct = addR3(bots.ct, x.ct); } });
-    }
-    return { you, bots, byMap };
-  }, [raws]);
+    const all = careerEntries(matches, scope.map);
+    return { all, list: scope.n ? all.slice(0, scope.n) : all };
+  }, [matches, scope.map, scope.n]);
 }

@@ -2,30 +2,40 @@
 // It always docks beside the grid and never covers it (the user found the overlay hid the rounds);
 // the grid scrolls sideways instead. It opens with the drawer spring (320 ms) and only then narrows
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { aimVisibility, angleBetweenDeg } from "../../../stats/aim";
-import type { MatchView } from "../../../stats/derive";
-import type { HumanRoundAim } from "../../../stats/rounds";
+// It steps over the inspector's columns (roundColumns), so a round the file holds only as totals
+// opens too: the game's recorded totals per player, and a dash for what the file does not hold.
+// A round's "Your rating" section splits your Rating 3.0 for the round into its terms and its swing
+// into sources (worker ratingBreakdown, which Rounds reads once for the grid's chart and this pane).
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Measure } from "../../../stats/facts";
+import type { RatingBreakdown } from "../../../worker/protocol";
 import { Num } from "../../components/bits";
-import { playerSide } from "../../data/engine";
-import { NADE_TYPES } from "../../data/interim";
-import { BUY_LABEL, BuyIcon, FirstKillIcon, KillFlags, NadeIcon, NADE_LABEL, WeaponIcon, WIN_LABEL, WinIcon } from "../../icons/game";
+import { fmtMetric } from "../../data/engine";
+import { useCall } from "../../data/hooks";
+import { placesNamed, roundSecs, sideOf, totalsWinner, usSideAt, type MatchModel as MatchView, type RoundColumn } from "../../data/match";
+import { metric } from "../../data/meta";
+import { feedFor } from "../../data/rounds";
+import { BUY_LABEL, BuyIcon, NADE_LABEL, NadeIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
-import { fmtClock, fmtDeg, fmtMoney, fmtMs, fmtPct, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
-import { roundSwingScore, scoreText } from "../../lib/scale";
-import { killSwing, PlayerName } from "../shared";
+import { fmtClock, fmtMoney, fmtRating, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
+import { NeedsDemo, PlaceList, PlayerName } from "../shared";
+import { Killfeed } from "./Killfeed";
+import { SwingSourcesChart } from "../profile/v2";
+import { RatingWaterfall, roundSteps } from "./RatingByRound";
+import { signedIn } from "./parity";
+import { LoadFailed } from "./LoadFailed";
 
 const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
 const MAX = 640;
 
-export function RoundDrawer({ v, ri, onClose, onStep, children }: {
-  v: MatchView; ri: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
+/** col: the open column of `cols` (Rounds' roundColumns), or null when the drawer is closed; rb: your rating by round, null while it loads. */
+export function RoundDrawer({ v, cols, col: ri, rb, rbError, onClose, onStep, children }: {
+  v: MatchView; cols: RoundColumn[]; col: number | null; rb: RatingBreakdown | null; rbError: string | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
 }) {
   const [w, setW] = useState(() => Math.max(MIN, Math.min(MAX, Number(localStorage.getItem(W_KEY)) || 420)));
   const [shown, setShown] = useState<number | null>(ri);
   const [phase, setPhase] = useState<"closed" | "opening" | "open" | "closing">(ri === null ? "closed" : "open");
-  const firstOpen = useRef(true);
   const opener = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -42,7 +52,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
       setPhase("closing");
       // back to the cell or round header that opened the drawer
       if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
-      const t = window.setTimeout(() => { setPhase("closed"); setShown(null); firstOpen.current = false; }, reduce ? 120 : 200);
+      const t = window.setTimeout(() => { setPhase("closed"); setShown(null); }, reduce ? 120 : 200);
       return () => clearTimeout(t);
     }
   }, [ri]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -75,7 +85,7 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
           className={`drawer drawer--${phase}`}
           style={{ width: w }}
           role="dialog"
-          aria-label={`Round ${shown + 1}`}
+          aria-label={`Round ${cols[shown].number}`}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
         >
           <div
@@ -93,7 +103,13 @@ export function RoundDrawer({ v, ri, onClose, onStep, children }: {
               if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setW((x) => save(Math.max(MIN, x - 20))); }
             }}
           />
-          <RoundDetail v={v} ri={shown} onClose={onClose} onStep={onStep} stagger={firstOpen.current && phase === "opening"} />
+          {(() => {
+            const c = cols[shown];
+            const ends = { first: shown === 0, last: shown === cols.length - 1 };
+            return c.kind === "round"
+              ? <RoundDetail key="round" v={v} ri={c.r.ri} rb={rb} rbError={rbError} {...ends} onClose={onClose} onStep={onStep} />
+              : <TotalsDetail key="totals" v={v} col={c} {...ends} onClose={onClose} onStep={onStep} />;
+          })()}
         </aside>
       )}
     </div>
@@ -109,107 +125,136 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
   );
 }
 
-function median(xs: number[]): number | null {
-  if (!xs.length) return null;
-  const a = [...xs].sort((x, y) => x - y);
-  const h = a.length >> 1;
-  return a.length % 2 ? a[h] : (a[h - 1] + a[h]) / 2;
-}
+/** Grenades a player threw, by the measure that counts them. */
+const NADES: [Nade, Measure][] = [["flash", "flashes"], ["smoke", "smokes"], ["he", "hes"], ["molotov", "molotovs"]];
 
-/** Mean angle between bullet and target for bullets 4+ over the round's bursts, degrees. */
-function sprayError(bursts: HumanRoundAim["spray"]): number | null {
-  let n = 0;
-  let sum = 0;
-  for (const b of bursts) for (const p of b.points) {
-    if (p.idx < 4 || !p.impact || !p.aimErr) continue;
-    n++;
-    sum += angleBetweenDeg(p.impact, p.aimErr);
-  }
-  return n ? sum / n : null;
-}
-
-function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: number; onClose: () => void; onStep: (d: number) => void; stagger: boolean }) {
-  const r = v.rounds[ri];
-  const rd = v.roundDetails[ri];
+/**
+ * A round held only as totals: its number and winner when the totals name a side, the killfeed's
+ * "totals only" line, and each player's recorded kills, deaths, assists and damage; a dash for a
+ * player the file holds no totals for.
+ */
+function TotalsDetail({ v, col, first, last, onClose, onStep }: {
+  v: MatchView; col: Extract<RoundColumn, { kind: "totals" }>; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void;
+}) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
-  const side = r.winSide === 2 ? "t" : r.winSide === 3 ? "ct" : null;
-  const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
-  const opening = r.kills.find((k) => !k.teamKill && !k.suicide);
-  const pr = (pi: number) => rd.players[pi];
-  const dmgMax = Math.max(1, ...v.players.map((p) => pr(p.pi)?.dmg ?? 0));
-  const sideOf = (pi: number) => ((pr(pi)?.side ?? playerSide(v, r, pi)) === 2 ? "t" : "ct");
-  const teamOf = (t: "us" | "them") => (rd.teams.t.team === t ? rd.teams.t : rd.teams.ct);
-  const aim = rd.human;
-  const gate = v.aim ? aimVisibility(v.aim) : null;
-  const anyNades = v.players.some((p) => { const x = pr(p.pi); return x && NADE_TYPES.some((n) => x.utilThrown[n] > 0); });
+  const w = totalsWinner(v, col);
+  const us = usSideAt(v, col.number);
+  const sideCls = (pi: number) => (us === null ? "" : (v.players[pi].team === "us") === (us === "T") ? "t" : "ct");
+  const byPi = new Map((col.totals?.players ?? []).map((t) => [t.pi, t]));
+  const max = Math.max(1, ...[...byPi.values()].map((t) => t.dmg));
+  const rows = [...v.players].sort((a, b) => (byPi.get(b.pi)?.dmg ?? -1) - (byPi.get(a.pi)?.dmg ?? -1));
   return (
     <div className="drawer__in">
       <header className="drawer__head">
-        <WinIcon how={r.how} size={18} className={side ? `${side}-text` : "faint"} />
+        <span className="faint" />
         <div className="drawer__title">
-          <b>Round {ri + 1}</b>
-          <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{rd.bomb.site ? `, site ${rd.bomb.site}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
+          <b>Round {col.number}</b>
+          <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}, totals only</span>
         </div>
-        <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={ri === 0} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={ri === v.nRounds - 1} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip={first ? undefined : "Previous round  ←"}><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip={last ? undefined : "Next round  →"}><ChevronRightIcon size={16} /></button>
+        <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
+      </header>
+      <div className="drawer__body">
+        <Section title="Killfeed"><p className="meta">Only the game's round totals exist for this round.</p></Section>
+        <Section title="Players" aside="Game totals: K–D, assists, damage">
+          <ul className="ddmg dtotals">
+            {rows.map((p) => {
+              const t = byPi.get(p.pi) ?? null;
+              const s = sideCls(p.pi);
+              return (
+                <li key={p.key} className={p.isHuman ? "is-you" : undefined}>
+                  <span className={`kf__p ${s}`}>{p.name}</span>
+                  <span className="num">{t ? `${t.kills}–${t.deaths}` : "–"}</span>
+                  <span className="num">{t ? t.assists : "–"}</span>
+                  <span className="hbar"><i style={{ width: `${t ? (t.dmg / max) * 100 : 0}%`, background: s === "t" ? "var(--t)" : s === "ct" ? "var(--ct)" : "var(--ink3)", opacity: 0.8 }} /></span>
+                  <b className="num">{t ? t.dmg : "–"}</b>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: MatchView; ri: number; rb: RatingBreakdown | null; rbError: string | null; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void }) {
+  const r = v.rounds[ri];
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
+  // every round's numbers per player, rolled up once in the worker when the drawer first opens, so
+  // stepping rounds swaps the content without waiting
+  const all = useCall("rounds", [v.file]).data;
+  const rd = all?.[ri] ?? null;
+  const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
+  const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
+  const feed = useMemo(() => feedFor(v.facts, ri, v.human), [v, ri]);
+  const m = (pi: number) => rd?.players[pi]?.m ?? null;
+  const dmgMax = Math.max(1, ...v.players.map((p) => m(p.pi)?.dmg ?? 0));
+  const sideCls = (pi: number) => (sideOf(v, r, pi) === "T" ? "t" : "ct");
+  const thrown = (pi: number) => NADES.filter(([, k]) => (m(pi)?.[k] ?? 0) > 0);
+  const anyNades = v.players.some((p) => thrown(p.pi).length > 0);
+  const econ = v.b.economy.rounds[ri];
+  const you = rd?.players[v.human] ?? null;
+  // one round's places come from the match's tables, which the worker reads again for the open match
+  const raw = useCall("places", v.entry.hasPos ? [v.file] : null).data?.[r.number];
+  const spent = useMemo(() => placesNamed(raw ?? {}), [raw]);
+  const f = r.fact;
+  const name = (pi: number | null) => (pi === null ? "someone" : v.players[pi].name);
+  return (
+    <div className="drawer__in">
+      <header className="drawer__head">
+        <span className={side ? `${side}-text` : "faint"}><WinIcon how={r.how} size={18} /></span>
+        <div className="drawer__title">
+          <b>Round {r.number}</b>
+          <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
+        </div>
+        {r.scoreAfter && <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>}
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip={first ? undefined : "Previous round  ←"}><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip={last ? undefined : "Next round  →"}><ChevronRightIcon size={16} /></button>
         <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
       </header>
       <div className="drawer__body">
         <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
-          {r.kills.length ? (
-            <ol className="kf">
-              {r.kills.map((k, i) => {
-                const sw = killSwing(k, k.killer);
-                const anim = stagger && i < 12;
-                return (
-                  <li key={i} className={anim ? "kf__in" : undefined} style={anim ? { animationDelay: `${i * 20}ms` } : undefined}>
-                    <span className="mono faint kf__t">{fmtClock(k.secs)}</span>
-                    <span className={`kf__p ${k.killer !== null ? sideOf(k.killer) : ""}`}>{k.killer === null ? "World" : <PlayerName v={v} pi={k.killer} />}</span>
-                    <span className="kf__w">
-                      {opening === k && <FirstKillIcon size={11} className="cream" label="Opening kill" />}
-                      <WeaponIcon name={k.weapon} size={13} />
-                      <KillFlags flags={k.flags} size={12} />
-                    </span>
-                    <span className={`kf__p ${sideOf(k.victim)}`}><PlayerName v={v} pi={k.victim} /></span>
-                    <span className="kf__tags">{k.tradeKill && <span className="chip chip--outline" data-tip="Killed an enemy who had made a kill less than 5 s earlier">trade</span>}</span>
-                    <b className="kf__sw num" style={{ color: sw === null ? "var(--ink3)" : scoreText(roundSwingScore(sw)) }} data-tip="Swing credited to the killer">{sw === null ? "" : fmtSwing(sw)}</b>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : <p className="meta">{rd.lite ? "Only the game's round totals exist for this round." : "No kills."}</p>}
+          <Killfeed kills={feed} name={(pi, name) => <PlayerName v={v} pi={pi}>{name}</PlayerName>} />
+          {f.plantTick !== null && (
+            <p className="meta" data-tip="Round clock: time since freeze time ended" tabIndex={0}>
+              Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
+              {f.defused ? `; defused by ${name(f.defuser)} at ${fmtClock(roundSecs(v, r, f.endTick))}` : f.exploded ? `; exploded at ${fmtClock(roundSecs(v, r, f.endTick))}` : ""}.
+            </p>
+          )}
         </Section>
 
         <Section title="Economy">
           <div className="deco">
             {(["us", "them"] as const).map((t) => {
-              const tr = teamOf(t);
+              const tr = econ[t];
               return (
                 <div key={t} className="deco__team">
                   <div className="deco__head">
-                    <BuyIcon buy={tr.buy} size={16} className={t === "us" ? "cream" : "muted"} />
+                    <BuyIcon buy={tr.buy} size={16} beside className={t === "us" ? "cream" : "muted"} />
                     <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
-                    <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
+                    <span className="num faint" data-tip="Team equipment value at freeze end" tabIndex={0}>{fmtMoney(tr.equip)}</span>
                   </div>
                   <ul className="deco__players">
                     {team(t).map((p) => {
-                      const x = pr(p.pi);
+                      const x = r.pr[p.pi];
                       return (
                         <li key={p.key}>
-                          <span className={`kf__p ${sideOf(p.pi)}`}>{p.name}</span>
-                          <span className="deco__buy">{x?.buy && <BuyIcon buy={x.buy} size={11} />}</span>
-                          <span className="num" data-tip="Equipment value at freeze end">{fmtMoney(x?.equip)}</span>
-                          <span className="num faint" data-tip="Money left after buying">{fmtMoney(x?.money)}</span>
+                          <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                          <span className="deco__buy">{x?.ownBuy && <BuyIcon buy={x.ownBuy} size={11} />}</span>
+                          <span className="num" data-tip="Equipment value at freeze end" tabIndex={0}>{fmtMoney(x?.equip)}</span>
+                          <span className="num faint" data-tip="Money left after buying" tabIndex={0}>{fmtMoney(x?.money)}</span>
                         </li>
                       );
                     })}
                   </ul>
                   <div className="deco__foot meta">
                     <span>Bank {fmtMoney(tr.money)}</span>
-                    {tr.spent !== null && <span data-tip="Estimated: freeze-end equipment minus what was carried in">Spent {fmtMoney(tr.spent)}</span>}
-                    {tr.saves.length > 0 && <span>{tr.saves.length} saved</span>}
+                    {tr.spent !== null && <span data-tip="Money the team spent in the buy time" tabIndex={0}>Spent {fmtMoney(tr.spent)}</span>}
+                    {tr.saves > 0 && <span>{tr.saves} saved</span>}
                   </div>
                 </div>
               );
@@ -218,61 +263,106 @@ function RoundDetail({ v, ri, onClose, onStep, stagger }: { v: MatchView; ri: nu
         </Section>
 
         <Section title="Utility thrown">
-          <ul className="dutil">
-            {v.players.filter((p) => { const x = pr(p.pi); return x && (NADE_TYPES.some((n) => x.utilThrown[n] > 0) || x.utilDmg > 0); }).map((p) => {
-              const x = pr(p.pi)!;
-              return (
-                <li key={p.key}>
-                  <span className={`kf__p ${sideOf(p.pi)}`}>{p.name}</span>
-                  <span className="dutil__icons">{NADE_TYPES.map((n) => x.utilThrown[n] > 0 && <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x.utilThrown[n] > 1 && <small>{x.utilThrown[n]}</small>}</span>)}</span>
-                  <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
-                  <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
-                </li>
-              );
-            })}
-            {!anyNades && <li className="meta">No grenades thrown this round.</li>}
-          </ul>
+          {!rd ? <SkeletonLines n={3} /> : (
+            <ul className="dutil">
+              {v.players.filter((p) => thrown(p.pi).length > 0 || (m(p.pi)?.utilDmg ?? 0) > 0).map((p) => {
+                const x = m(p.pi)!;
+                return (
+                  <li key={p.key}>
+                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]} tabIndex={0}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                    <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
+                    <span className="num" data-tip="Grenade and fire damage to enemies" tabIndex={0}>{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
+                  </li>
+                );
+              })}
+              {!anyNades && <li className="meta">No grenades thrown this round.</li>}
+            </ul>
+          )}
         </Section>
 
         <Section title="Damage" aside="To enemies">
-          <ul className="ddmg">
-            {[...v.players].sort((a, b) => (pr(b.pi)?.dmg ?? 0) - (pr(a.pi)?.dmg ?? 0)).map((p) => {
-              const d = pr(p.pi)?.dmg ?? 0;
-              return (
-                <li key={p.key} className={p.isHuman ? "is-you" : undefined}>
-                  <span className={`kf__p ${sideOf(p.pi)}`}>{p.name}</span>
-                  <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideOf(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
-                  <b className="num">{d}</b>
-                </li>
-              );
-            })}
-          </ul>
+          {!rd ? <SkeletonLines n={5} /> : (
+            <ul className="ddmg">
+              {[...v.players].sort((a, b) => (m(b.pi)?.dmg ?? 0) - (m(a.pi)?.dmg ?? 0)).map((p) => {
+                const d = m(p.pi)?.dmg ?? 0;
+                const own = m(p.pi)?.teamDmg ?? 0;
+                const rm = m(p.pi);
+                const sw = rm && rm.swingRounds ? rm.swing : null;
+                return (
+                  <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`} tabIndex={0}>
+                    <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
+                    <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
+                    <b className="num">{d}{own > 0 && <small className="poor-text"> +{own} team</small>}</b>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Section>
 
+        <YourRating rb={rb} error={rbError} number={r.number} />
+
+        {Object.keys(spent).length > 0 && (
+          <Section title="Where you spent the round" aside="Seconds alive">
+            <PlaceList places={spent} n={5} />
+          </Section>
+        )}
+
         <Section title="Your aim this round">
-          {aim ? (
+          {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
             <>
               <div className="daim">
-                <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{aim.shots}</span></div>
-                <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{aim.hits}</span><span className="stat__s">{aim.headHits} head</span></div>
-                <div className="stat"><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={aim.accuracy === null ? "–" : fmtPct(100 * aim.accuracy)} /></span></div>
-                <div className="stat"><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(aim.headHits, aim.hits)} /></span></div>
-                <div className="stat" data-tip="First bullets of a burst with an enemy within 10° of your aim that hit"><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={aim.firstAccuracy === null ? "–" : fmtPct(100 * aim.firstAccuracy)} /></span><span className="stat__s">{aim.firstHits}/{aim.firstOnTarget}</span></div>
-                <div className="stat" data-tip="Mean distance from the target for bullets 4 and later"><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtDeg(sprayError(aim.spray), 2)} /></span></div>
+                <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
+                <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{you.aim.hits}</span><span className="stat__s">{you.headHits} head</span></div>
+                <div className="stat" data-tip={metric("accuracy").def} tabIndex={0}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
+                <div className="stat" data-tip="Share of your gun hits that landed on the head" tabIndex={0}><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
+                <div className="stat" data-tip={metric("firstBulletAccuracy").def} tabIndex={0}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
+                <div className="stat" data-tip={metric("sprayDeviation").def} tabIndex={0}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
               </div>
-              {gate && !gate.validated ? (
-                <p className="gate"><span className="chip chip--outline">Gated</span> Time to damage, reaction and crosshair placement are hidden. {gate.reason}</p>
+              {!v.visibility ? (
+                <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="This file lacks view angles and line of sight." /></p>
               ) : (
                 <div className="daim">
-                  <div className="stat"><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMs(median(aim.ttdMs))} /></span></div>
-                  <div className="stat"><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMs(median(aim.reactMs))} /></span></div>
-                  <div className="stat"><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtDeg(median(aim.xhairDeg))} /></span></div>
+                  <div className="stat" data-tip={metric("timeToDamage").def} tabIndex={0}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
+                  <div className="stat" data-tip={metric("reactionTime").def} tabIndex={0}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
+                  <div className="stat" data-tip={metric("crosshairPlacement").def} tabIndex={0}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
                 </div>
               )}
             </>
-          ) : <p className="meta">Aim needs a recorded match; this one has no shot data.</p>}
+          )}
         </Section>
       </div>
     </div>
   );
+}
+
+/**
+ * Your Rating 3.0 for this round split into its terms, and its swing into sources; one line when you
+ * did not play the round or it is not rated.
+ */
+function YourRating({ rb, error, number }: { rb: RatingBreakdown | null; error: string | null; number: number }) {
+  const row = rb?.rows.find((x) => x.number === number) ?? null;
+  const steps = row ? roundSteps(row) : null;
+  const avg = rb?.match.value ?? null;
+  return (
+    <Section title="Your rating" aside={row && row.rating !== null && avg !== null && row.counts ? `${signedIn(fmtRating, row.rating - avg)} against your match ${fmtRating(avg)}` : undefined}>
+      {error ? <LoadFailed what="Your rating" error={error} /> : !rb ? <SkeletonLines n={4} /> : !row ? <p className="meta">You have no stats this round.</p> : !steps ? <p className="meta">Not rated: this round's swing or eco value is unknown.</p> : (
+        <>
+          <RatingWaterfall {...steps} />
+          {row.swing && (
+            <div className="rbr__swing">
+              <h4 className="caps">Swing by source</h4>
+              <SwingSourcesChart you={row.swing} bots={null} />
+            </div>
+          )}
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** Placeholder rows while the worker rolls the rounds up, shaped like the list they stand in for. */
+function SkeletonLines({ n }: { n: number }) {
+  return <div className="skel-rows" aria-hidden>{Array.from({ length: n }, (_, i) => <div key={i} className="skel" style={{ height: 14, opacity: 1 - i * 0.12 }} />)}</div>;
 }

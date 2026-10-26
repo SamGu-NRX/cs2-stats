@@ -1,21 +1,31 @@
 // Pieces several views share: stat tiles, hover cards for players and rounds, empty states and
 // skeletons shaped like the content they stand in for.
 import type { ReactNode } from "react";
-import type { MatchView, RoundView } from "../../stats/derive";
 import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
-import { killSwing, playerSide, ratingLabel, statLine } from "../data/engine";
-import { BUY_LABEL, BuyIcon, KillFlags, SkullIcon, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
-import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSwing } from "../lib/format";
+import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
+import type { Careers } from "../../worker/protocol";
+import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
+import { BUY_LABEL, BuyIcon, KillFlags, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
+import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
+import { pageHref } from "../router";
 
 // ---------------------------------------------------------------- stat tile
 
+/**
+ * A tile draws its sparkline only from this many matches with a value: two points make a line that
+ * reads as a trend. The review asked for three (PR #20 round 1); no data run picked it.
+ */
+const SPARK_MIN_POINTS = 3;
+
+/** A pooled headline stat; `delta` is the last match against it (Home's tiles). */
 export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
   label: string;
   value: string;
   sub?: ReactNode;
+  /** the last match against the average, beside the sparkline */
   delta?: ReactNode;
   spark?: (number | null)[];
   bench?: BenchId;
@@ -25,6 +35,7 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
   color?: string;
 }) {
   const v = bench ? verdictOf(raw, BENCH[bench]) : "na";
+  const points = spark?.filter((x) => x !== null && Number.isFinite(x)).length ?? 0;
   const body = (
     <>
       <div className="tile__top">
@@ -32,10 +43,12 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
         {bench && <VerdictLabel v={v} />}
       </div>
       <div className="tile__v num" style={color ? { color } : undefined}><Num v={value} /></div>
-      <div className="tile__foot">
-        <span className="tile__delta">{delta}</span>
-        {spark && <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />}
-      </div>
+      {(delta || (spark && points >= SPARK_MIN_POINTS)) && (
+        <div className="tile__foot">
+          {delta && <span className="tile__delta">{delta}</span>}
+          {spark && points >= SPARK_MIN_POINTS && <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />}
+        </div>
+      )}
       {sub && <div className="tile__sub">{sub}</div>}
     </>
   );
@@ -70,18 +83,16 @@ export function BreakRows({ rows }: { rows: { label: ReactNode; value: ReactNode
 
 // ---------------------------------------------------------------- player hover card
 
-export function PlayerCardBody({ v, pi }: { v: MatchView; pi: number }) {
+export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
   const p = v.players[pi];
-  const both = statLine(v, pi, "both");
-  const t = statLine(v, pi, "t");
-  const ct = statLine(v, pi, "ct");
+  const [both, t, ct] = (["both", "t", "ct"] as const).map((k) => statLine(v.b.lines[k][pi]));
   return (
     <div className="pcard">
       <div className="pcard__head">
         <span className={`pcard__dot ${p.team === "us" ? "us" : "them"}`} />
         <div>
           <b>{p.name}</b>
-          <div className="meta">{p.isHuman ? "You" : p.team === "us" ? "Teammate, bot" : "Opponent, bot"}</div>
+          <div className="meta">{p.isHuman ? "You" : `${p.team === "us" ? "Teammate" : "Opponent"}${p.bot ? ", bot" : ""}`}</div>
         </div>
         <span className="pcard__rating num" style={{ color: ratingText(both.rating ?? 1) }}>{fmtRating(both.rating)}</span>
       </div>
@@ -95,12 +106,12 @@ export function PlayerCardBody({ v, pi }: { v: MatchView; pi: number }) {
         <div><span className="t-text caps">T</span><b className="num">{fmtRating(t.rating)}</b><small className="meta">{t.kills}–{t.deaths}</small></div>
         <div><span className="ct-text caps">CT</span><b className="num">{fmtRating(ct.rating)}</b><small className="meta">{ct.kills}–{ct.deaths}</small></div>
       </div>
-      <div className="meta">{ratingLabel(v)}</div>
+      <div className="meta">{ratingHeadline()}</div>
     </div>
   );
 }
 
-export function PlayerName({ v, pi, children }: { v: MatchView; pi: number; children?: ReactNode }) {
+export function PlayerName({ v, pi, children }: { v: MatchModel; pi: number; children?: ReactNode }) {
   return (
     <HoverCard prefer="right" card={() => <PlayerCardBody v={v} pi={pi} />} className="pname">
       {children ?? v.players[pi].name}
@@ -110,53 +121,83 @@ export function PlayerName({ v, pi, children }: { v: MatchView; pi: number; chil
 
 // ---------------------------------------------------------------- round hover card
 
-export function RoundCardBody({ v, r }: { v: MatchView; r: RoundView }) {
-  const side = r.winSide === 2 ? "t" : r.winSide === 3 ? "ct" : null;
+export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
+  const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const human = v.human;
-  const hSide = playerSide(v, r, human);
-  const top = r.swing ? r.swing.map((s, pi) => ({ s, pi })).sort((a, b) => b.s - a.s)[0] : null;
+  const hSide = sideOf(v, r, human);
+  const you = roundSwing(r.pr[human]);
+  const top = r.pr.map((row, pi) => ({ s: roundSwing(row), pi })).filter((x): x is { s: number; pi: number } => x.s !== null).sort((a, b) => b.s - a.s)[0] ?? null;
   return (
     <div className="rcard">
       <div className="rcard__head">
-        <WinIcon how={r.how} size={16} className={side ? `${side}-text` : "faint"} />
-        <b>Round {r.ri + 1}</b>
+        <span className={side ? `${side}-text` : "faint"}><WinIcon how={r.how} size={16} beside /></span>
+        <b>Round {r.number}</b>
         <span className="meta">{r.how ? WIN_LABEL[r.how] : "Result unknown"}</span>
-        <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>
+        {r.scoreAfter && <span className="rcard__score num">{r.scoreAfter.us}<span className="faint">:</span>{r.scoreAfter.them}</span>}
       </div>
       <div className="rcard__eco">
-        <span><BuyIcon buy={r.buy.us} size={14} /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
+        <span><BuyIcon buy={r.buy.us} size={14} beside /> {r.buy.us ? BUY_LABEL[r.buy.us] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.us)}</span></span>
         <span className="faint">vs</span>
-        <span><BuyIcon buy={r.buy.them} size={14} /> {r.buy.them ? BUY_LABEL[r.buy.them] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.them)}</span></span>
+        <span><BuyIcon buy={r.buy.them} size={14} beside /> {r.buy.them ? BUY_LABEL[r.buy.them] : "Buy unknown"} <span className="faint">{fmtMoney(r.equip.them)}</span></span>
       </div>
       {r.kills.length > 0 ? (
         <ol className="kf kf--compact">
           {r.kills.slice(0, 10).map((k, i) => (
             <li key={i}>
-              <span className="mono faint">{fmtClock(k.secs)}</span>
+              <span className="mono faint">{fmtClock(k.t)}</span>
               <span className={k.killer !== null && v.players[k.killer].team === "us" ? "us-text" : "them-text"}>{k.killer === null ? "World" : v.players[k.killer].name}</span>
-              <WeaponIcon name={k.weapon} size={11} />
-              <KillFlags flags={k.flags} size={11} />
+              <WeaponIcon name={k.weapon} height={11} />
+              <KillFlags kill={k} size={11} />
               <span className={v.players[k.victim].team === "us" ? "us-text" : "them-text"}>{v.players[k.victim].name}</span>
             </li>
           ))}
           {r.kills.length > 10 && <li className="faint">{r.kills.length - 10} more</li>}
         </ol>
-      ) : <p className="meta">{r.lite ? "Totals only for this round." : "No kills recorded."}</p>}
+      ) : <p className="meta">No kills recorded.</p>}
       <div className="rcard__foot">
-        {r.swing && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(r.swing[human])) }}>{fmtSwing(r.swing[human])}</b></span>}
+        {you !== null && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(you)) }}>{fmtSwing(you)}</b></span>}
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
-        <span className={hSide === 2 ? "t-text" : "ct-text"}>You on {hSide === 2 ? "T" : "CT"}</span>
+        <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
       </div>
     </div>
   );
 }
 
-/** Kill icons for one player's round, headshots marked. */
-export function Skulls({ kills, size = 10 }: { kills: { hs: boolean }[]; size?: number }) {
-  return <span className="skulls">{kills.map((k, i) => <SkullIcon key={i} hs={k.hs} size={size} className={k.hs ? "skull skull--hs" : "skull"} />)}</span>;
+/**
+ * The hover card of a round the file holds only as totals (MatchInfo.totalsOnly): its number, the
+ * winner when the totals name a side, and your recorded kills and deaths; a dash where the file
+ * holds nothing.
+ */
+export function TotalsCardBody({ v, col }: { v: MatchModel; col: Extract<RoundColumn, { kind: "totals" }> }) {
+  const w = totalsWinner(v, col);
+  const you = col.totals?.players.find((p) => p.pi === v.human) ?? null;
+  return (
+    <div className="rcard">
+      <div className="rcard__head">
+        <b>Round {col.number}</b>
+        <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}</span>
+      </div>
+      <p className="meta">Totals only for this round.</p>
+      <div className="rcard__foot">
+        <span>You <b className="num">{you ? `${you.kills}–${you.deaths}` : "–"}</b></span>
+        <span>Damage <b className="num">{you ? you.dmg : "–"}</b></span>
+      </div>
+    </div>
+  );
 }
 
-export { killSwing };
+// ---------------------------------------------------------------- places
+
+/** Seconds alive by place name, sorted, the top `n`. */
+export function PlaceList({ places, n = 10 }: { places: Record<string, number>; n?: number }) {
+  const rows = Object.entries(places).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const max = rows[0]?.[1] ?? 1;
+  return (
+    <ul className="places">
+      {rows.map(([p, secs]) => <li key={p}><span>{p}</span><span className="hbar"><i style={{ width: `${(secs / max) * 100}%` }} /></span><b className="num">{fmtSecs(secs, 0)}</b></li>)}
+    </ul>
+  );
+}
 
 // ---------------------------------------------------------------- states
 
@@ -185,3 +226,53 @@ export function SectionAside({ label, value, color }: { label: string; value: Re
 
 export const deltaOf = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
 export { Delta };
+
+/**
+ * The label the user's style scores carry while fewer bot careers qualify than the engine's minimum
+ * (compare.ts BOT_CAREERS_MIN): the scores still show, under a "Provisional" chip whose tooltip holds
+ * the count. Focusable, so the tooltip opens from the keyboard too.
+ */
+export function Provisional({ c }: { c: Careers }) {
+  if (!c.provisional) return null;
+  return (
+    <span className="chip chip--prov" tabIndex={0} data-tip={`${provisionalText(c)}. ${BOTS_TIP} Until ${c.needed} bot careers have ${c.minRounds} or more rounds, the population is small and the scores can move as you play more.`}>
+      Provisional
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------- missing data
+
+/** The one phrasing for a number the user's matches cannot give yet. */
+export const NEEDS_DEMO = "Needs a recorded demo";
+
+/**
+ * NEEDS_DEMO with a link to Data & settings, whose first card is the recording source. `detail` (the
+ * specific gap, such as how many bot careers a pool has) is the tooltip of the phrase and of the link,
+ * so focusing the link opens it and describes the link to a screen reader.
+ */
+export function NeedsDemo({ detail }: { detail?: string }) {
+  return (
+    <span className="needs">
+      {/* the reason is the label's tooltip, so the label takes focus when there is one */}
+      <span className="needs__t" data-tip={detail} tabIndex={detail ? 0 : undefined}>{NEEDS_DEMO}</span>
+      <a className="needs__link" href={pageHref("settings")} data-tip={detail}>Data & settings</a>
+    </span>
+  );
+}
+
+/**
+ * A value with no percentile, and why (compare.ts Percentile.reason): a kept match lacks an input the
+ * metric needs, or the pro pool was built under another model. Stands where the rank would be.
+ */
+export function NotCompared({ reason }: { reason: string }) {
+  return <span className="nocmp" tabIndex={0} data-tip={reason}>Not compared</span>;
+}
+
+// The approx marker lives with the percentile display, which every metric surface uses.
+export { ApproxMark } from "../components/Percentile";
+
+/** A match's swing is shown per round; its sum over the valued rounds goes in the tooltip. */
+export function swingSumTip(m: { swing: number; swingRounds: number }): string | undefined {
+  return m.swingRounds ? `${fmtSwing(m.swing)} summed over ${m.swingRounds} ${m.swingRounds === 1 ? "round" : "rounds"} with swing` : undefined;
+}
