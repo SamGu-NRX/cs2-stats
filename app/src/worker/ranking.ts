@@ -13,12 +13,12 @@ import {
   type Baselines, type CompareOptions, type Percentile, type PoolUnit, type SideKey,
 } from "../stats/compare";
 import type { MatchFacts } from "../stats/facts";
-import { mostSimilar, overallRole, roleBlend, STYLE, styleScores, type PackPlayer, type RoleBlend } from "../stats/identity";
+import { mostSimilar, overallRole, roleBlend, STYLE, stylePoint, styleScores, type PackPlayer, type RoleBlend, type StylePoint } from "../stats/identity";
 import { METRIC, type Kind } from "../stats/metrics";
 import { addMatch, emptySummary, type Filter, type Summary } from "../stats/rollup";
 import type { Side } from "../stats/tables";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, Roles, SpawnRow, StyleResult } from "./protocol";
+import type { AttributeBlock, AttributesResult, Careers, CompareResult, CompassResult, PackPro, PlaysLikeResult, Query, Roles, SpawnRow, StyleResult } from "./protocol";
 import { spawnRows, type SpawnIndex } from "./views";
 
 /**
@@ -63,9 +63,9 @@ const sided = (): Sided => ({ both: emptySummary(), CT: emptySummary(), T: empty
 /**
  * Adds one match to every bot career in it, and each bot's match on its own to `matches`. A career is
  * one bot id over the matches (the grouping ui/data/engine.ts botIds uses), summed on both sides and
- * on each.
+ * on each. `names`, when given, gets the bot's name for each entry added to `matches`, in step.
  */
-export function addCareerMatch(careers: Map<string, Sided>, matches: Sided[], f: MatchFacts, scope: Omit<Filter, "player">): void {
+export function addCareerMatch(careers: Map<string, Sided>, matches: Sided[], f: MatchFacts, scope: Omit<Filter, "player">, names?: string[]): void {
   for (const p of f.players) {
     if (!p.bot) continue;
     let c = careers.get(p.id);
@@ -76,7 +76,7 @@ export function addCareerMatch(careers: Map<string, Sided>, matches: Sided[], f:
       addMatch(s.CT, f, { ...scope, player: p.id, sides: ["CT"] });
       addMatch(s.T, f, { ...scope, player: p.id, sides: ["T"] });
     }
-    if (one.both.m.rounds) matches.push(one);
+    if (one.both.m.rounds) { matches.push(one); names?.push(p.name); }
   }
 }
 
@@ -116,6 +116,19 @@ export function botPopulation(careers: Sided[], matches: Sided[], built: string)
   }
   if (c.baselines.model !== byMatch.model && units.length && c.careers) baselines.model = "mixed";
   return { baselines, unit, from, counts: { qualified: c.careers, needed: BOT_CAREERS_MIN, minRounds: CAREER_MIN_ROUNDS, minPool: MIN_UNITS, botMatches: matches.length } };
+}
+
+/**
+ * The style compass (main's Playstyle): you, and the bots your style ranks against in the "all" pool on
+ * both sides, each at opening attempts and trade/assist share over both sides. That population is the
+ * bot careers with CAREER_MIN_ROUNDS or more rounds, or while too few qualify, each bot's single
+ * matches (botPopulation); `careers.unit` says which the dots are. A bot without a point is left out.
+ */
+export function compassOf(you: Summary, careers: { name: string; s: Summary }[], matches: { name: string; s: Summary }[], p: BotPopulation): CompassResult {
+  const pop = careersFor(p, "all", "both");
+  const samples = pop.unit === "careers" ? careers.filter((c) => c.s.m.rounds >= CAREER_MIN_ROUNDS) : matches;
+  const bots = samples.map((c) => stylePoint(c.name, c.s)).filter((x): x is StylePoint => x !== null);
+  return { you: stylePoint("You", you), bots, careers: pop };
 }
 
 // ---------------------------------------------------------------- the calls

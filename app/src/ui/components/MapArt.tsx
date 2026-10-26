@@ -1,8 +1,13 @@
 // Map imagery. The radar comes from the web (data/maps.ts) with the game's overview transform. For a
-// map without a known transform, marks are framed in a box fitted around them; when the image does
-// not load, the marks draw on the plain card.
-import { useState, type ReactNode } from "react";
+// map without a known transform, marks are framed in a box fitted around them. When the image does
+// not load, or the map has no known transform, the walkable shape is drawn instead from where the
+// players of your matches on that map stood alive (Summary.presence cells), in the same radar
+// coordinates, so marks land in the same place either way.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CELL, cellCentre, GRID, type Presence } from "../../stats/positions";
+import { useRollups } from "../data/hooks";
 import { mapInfo, radarUrl, toRadar } from "../data/maps";
+import { useData } from "../data/provider";
 
 /** Margin around fitted marks, world units. */
 const FIT_PAD = 256;
@@ -23,12 +28,68 @@ export function frameFor(map: string, points: [number, number][] = []): Frame | 
   return { size: 1024, to: (x, y) => [(x - cx) * s + 512, (cy - y) * s + 512] };
 }
 
-/** The radar image for a map; nothing when it does not load. */
-export function RadarImage({ map }: { map: string }) {
+/**
+ * Where every player of your matches on the map stood alive, both sides; null while it loads or
+ * when those matches hold no position samples there.
+ */
+function useMapPresence(map: string): Presence | null {
+  const { matches } = useData();
+  const qs = useMemo(() => {
+    const on = matches.filter((m) => m.match.map === map);
+    const ids = [...new Set(on.flatMap((m) => m.players.map((p) => p.id)))];
+    return on.length && ids.length ? [{ files: on.map((m) => m.file), filter: { player: ids, maps: [map] } }] : null;
+  }, [matches, map]);
+  const p = useRollups(qs).data?.[0]?.presence[map] ?? null;
+  return p && Object.keys(p.cells).length ? p : null;
+}
+
+/** Draws the sampled cells into a canvas: a soft fill, plus an outline where a cell has no sampled neighbour. */
+function drawSamples(cv: HTMLCanvasElement, cells: number[], frame: Frame) {
+  cv.width = frame.size;
+  cv.height = frame.size;
+  const g = cv.getContext("2d");
+  if (!g) return;
+  g.clearRect(0, 0, frame.size, frame.size);
+  // one cell's side in radar pixels, from the frame itself, so fitted frames draw cells to scale too
+  const cs = Math.abs(frame.to(CELL, 0)[0] - frame.to(0, 0)[0]);
+  const h = cs / 2;
+  const set = new Set(cells);
+  const at = cells.map((c) => frame.to(...cellCentre(c)));
+  g.fillStyle = "rgba(172,149,122,0.22)";
+  for (const [x, y] of at) g.fillRect(x - h, y - h, cs + 0.6, cs + 0.6);
+  g.strokeStyle = "rgba(255,215,173,0.5)";
+  g.lineWidth = 1.5;
+  g.beginPath();
+  cells.forEach((c, i) => {
+    const [x, y] = at[i];
+    // the next cell up in world y (c + GRID) is up on the radar, whose y runs downward
+    if (!set.has(c - 1)) { g.moveTo(x - h, y - h); g.lineTo(x - h, y + h); }
+    if (!set.has(c + 1)) { g.moveTo(x + h, y - h); g.lineTo(x + h, y + h); }
+    if (!set.has(c + GRID)) { g.moveTo(x - h, y - h); g.lineTo(x + h, y - h); }
+    if (!set.has(c - GRID)) { g.moveTo(x - h, y + h); g.lineTo(x + h, y + h); }
+  });
+  g.stroke();
+}
+
+function SampledCanvas({ presence, frame }: { presence: Presence; frame: Frame }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (ref.current) drawSamples(ref.current, Object.keys(presence.cells).map(Number), frame);
+  }, [presence, frame]);
+  return <canvas ref={ref} className="radar-img" aria-hidden />;
+}
+
+function SampledShape({ map, frame }: { map: string; frame: Frame }) {
+  const presence = useMapPresence(map);
+  return presence ? <SampledCanvas presence={presence} frame={frame} /> : null;
+}
+
+/** The radar image for a map, or the sampled shape when the image does not load. */
+export function RadarImage({ map, frame }: { map: string; frame: Frame }) {
   const url = radarUrl(map);
   const [failed, setFailed] = useState(!url);
   const [loaded, setLoaded] = useState(false);
-  if (failed) return null;
+  if (failed) return <SampledShape map={map} frame={frame} />;
   return (
     <img
       src={url!}
@@ -42,15 +103,30 @@ export function RadarImage({ map }: { map: string }) {
   );
 }
 
-/**
- * The match hero's atmosphere: the map's radar, desaturated and faint, pinned top-right and masked
- * to transparent. Crossfades when the match changes.
- */
-export function MapAtmosphere({ map }: { map: string }) {
-  if (!mapInfo(map)) return null;
+/** An unknown map's atmosphere: the sampled shape in a frame fitted around its cells. */
+function SampledAtmosphere({ map }: { map: string }) {
+  const presence = useMapPresence(map);
+  const frame = useMemo(() => (presence ? frameFor(map, Object.keys(presence.cells).map((c) => cellCentre(Number(c)))) : null), [map, presence]);
+  if (!presence || !frame) return null;
   return (
     <div className="atmos atmos--map" key={map} aria-hidden>
-      <RadarImage map={map} />
+      <SampledCanvas presence={presence} frame={frame} />
+    </div>
+  );
+}
+
+/**
+ * The match hero's atmosphere: the map's radar, desaturated and faint, pinned top-right and masked
+ * to transparent. Crossfades when the match changes. A map with no known transform shows its
+ * sampled shape instead; with no samples either, nothing.
+ */
+export function MapAtmosphere({ map }: { map: string }) {
+  // frameFor with no points is the map's overview transform, or null for an unknown map
+  const frame = useMemo(() => frameFor(map), [map]);
+  if (!frame) return <SampledAtmosphere key={map} map={map} />;
+  return (
+    <div className="atmos atmos--map" key={map} aria-hidden>
+      <RadarImage map={map} frame={frame} />
     </div>
   );
 }
@@ -64,7 +140,7 @@ export interface RadarMark { key: string; x: number; y: number; node: ReactNode 
 export function RadarView({ map, frame, children, label }: { map: string; frame: Frame; children: ReactNode; label: string }) {
   return (
     <div className="radar-view">
-      <RadarImage map={map} />
+      <RadarImage map={map} frame={frame} />
       <svg viewBox={`0 0 ${frame.size} ${frame.size}`} className="radar-marks" role="img" aria-label={label}>
         {children}
       </svg>

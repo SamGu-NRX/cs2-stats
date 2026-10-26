@@ -16,6 +16,9 @@ export interface RatingParams {
     features: string[];
     intercept: number;
     coefficients: Record<string, number>;
+    /** what the coefficients were fitted on */
+    dataset: { maps: number; player_maps: number; date: string };
+    fit: { method: string; held_out_mae: number };
   };
   swing: {
     trade_window_seconds: number;

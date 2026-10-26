@@ -27,7 +27,7 @@ import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, ClutchRow, MultiKillRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
-import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
+import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { addClutchRows, addMapRounds, addMultiKillRows, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -207,21 +207,33 @@ function summaryOf(q: Query): Promise<Summary> {
   return p;
 }
 
-const careerSets = new Map<string, Promise<BotPopulation>>();
+/** The style population of a query's matches, and its samples over both sides with their names (the compass plots them). */
+interface BotSet { pop: BotPopulation; careers: { name: string; s: Summary }[]; matches: { name: string; s: Summary }[] }
+
+const careerSets = new Map<string, Promise<BotSet>>();
 
 /**
  * The bot careers in a query's matches, as the user's style population (ranking.ts). One pass sums
  * every bot of every match on both sides and on each; the result is kept per file set and scope.
  */
-function careersOf(q: Query): Promise<BotPopulation> {
+function botsOf(q: Query): Promise<BotSet> {
   const scope = careerScope(q.filter);
   const k = `${gen}|${JSON.stringify([q.files, scope])}`;
   const hit = careerSets.get(k);
   if (hit) { careerSets.delete(k); careerSets.set(k, hit); return hit; }
   const careers = new Map<string, Record<SideKey, Summary>>();
   const matches: Record<SideKey, Summary>[] = [];
-  const p = stream(q.files, (f) => addCareerMatch(careers, matches, f, scope))
-    .then(() => botPopulation([...careers.values()], matches, new Date().toISOString().slice(0, 10)));
+  // a bot career is one id (addCareerMatch); it is labelled with the name it last played under
+  const names = new Map<string, string>();
+  const matchNames: string[] = [];
+  const p = stream(q.files, (f) => {
+    addCareerMatch(careers, matches, f, scope, matchNames);
+    for (const pl of f.players) if (pl.bot) names.set(pl.id, pl.name);
+  }).then((): BotSet => ({
+    pop: botPopulation([...careers.values()], matches, new Date().toISOString().slice(0, 10)),
+    careers: [...careers].map(([id, c]) => ({ name: names.get(id) ?? id, s: c.both })),
+    matches: matches.map((m, i) => ({ name: matchNames[i], s: m.both })),
+  }));
   p.catch(() => careerSets.delete(k));
   careerSets.set(k, p);
   while (careerSets.size > CAREER_CACHE) careerSets.delete(careerSets.keys().next().value!);
@@ -241,6 +253,8 @@ async function spawns(q: Query): Promise<SpawnIndex> {
   await stream(q.files, (f) => addSpawns(acc, f, q.filter));
   return acc;
 }
+
+const careersOf = (q: Query) => botsOf(q).then((b) => b.pop);
 
 const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds, spawns });
 
@@ -347,6 +361,10 @@ const api: Impl = {
   roles: ranking.roles,
   rolesByMap: ranking.rolesByMap,
   playsLike: ranking.playsLike,
+  async compass(q) {
+    const [you, bots] = await Promise.all([summaryOf(sideQuery(q, "both")), botsOf(q)]);
+    return compassOf(you, bots.careers, bots.matches, bots.pop);
+  },
   async buySplits(q) {
     const split = (key: "ownBuy" | "oppBuy") => Promise.all(BUY_CLASSES.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, [key]: [b] } }))] as const))
       .then((xs) => Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0)));

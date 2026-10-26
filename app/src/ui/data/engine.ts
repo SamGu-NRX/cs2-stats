@@ -70,6 +70,25 @@ export const R3_INPUT_LABEL: Record<string, { label: string; fmt: (v: number) =>
   swing: { label: "Round swing", fmt: (v) => `${v.toFixed(2)}%` },
 };
 
+/** One term of Rating 3.0 for a breakdown: the input's value, its coefficient, and coefficient × value. */
+export interface RatingTerm { label: string; input: string; coefficient: number; contribution: number }
+
+/**
+ * Rating 3.0's terms over a rating's own inputs (Rating3.inputs from rating3Of), in params.json's
+ * order, then the constant: the intercept plus every contribution is the rating's value.
+ */
+export function ratingTerms(inputs: Record<string, number>): { terms: RatingTerm[]; intercept: number } {
+  const r = ratingInfo();
+  return {
+    terms: r.terms.map((t) => {
+      const l = R3_INPUT_LABEL[t.input];
+      if (!l || inputs[t.input] === undefined) throw new Error(`Rating 3.0 term ${t.name} reads input "${t.input}", which the breakdown does not have`);
+      return { label: l.label, input: l.fmt(inputs[t.input]), coefficient: t.coefficient, contribution: t.coefficient * inputs[t.input] };
+    }),
+    intercept: r.intercept,
+  };
+}
+
 // ---------------------------------------------------------------- sides
 
 export type SideKey = "both" | "t" | "ct";
@@ -136,13 +155,16 @@ export const entryLine = (e: MatchEntry) => statLine(e.line);
 
 // ---------------------------------------------------------------- counts read off the measures
 
-/** Rounds with exactly 2, 3 and 4 kills, and with 5, from the engine's 2+, 3+, 4+ and 5 counts. */
-export const multiKillRows = (m: Measures) => [
+/**
+ * Rounds with exactly 2, 3 and 4 kills, and with 5, from the engine's 2+, 3+, 4+ and 5 counts, each
+ * with its percent of all rounds (null without rounds).
+ */
+export const multiKillRows = (m: Measures) => ([
   { k: 2 as const, rounds: m.multiKillRounds - m.k3Rounds },
   { k: 3 as const, rounds: m.k3Rounds - m.k4Rounds },
   { k: 4 as const, rounds: m.k4Rounds - m.k5Rounds },
   { k: 5 as const, rounds: m.k5Rounds },
-];
+]).map((r) => ({ ...r, pct: m.rounds ? (100 * r.rounds) / m.rounds : null }));
 
 /** 1v1 to 1v5 clutches played and won. */
 export const clutchRows = (m: Measures) => ([1, 2, 3, 4, 5] as const).map((vs) => ({ vs, played: m[`clutch${vs}`], won: m[`clutchWon${vs}`] }));
@@ -187,6 +209,27 @@ export const attrsOf = (scores: AttributeScore[]): Attr[] => scores.map((a) => (
     return { id: p.id, label: m.label, def: m.def, value: p.value, text: fmtMetric(p.id, p.value), score: p.pct, status: m.status, reason: p.reason };
   }),
 }));
+
+/**
+ * Metrics shown under an attribute after its scored ones, value only (main's unscored rows). Main's
+ * other extras (RWS, trade denials, multi-kill, tradeable deaths, bait assists, trade opportunities,
+ * first duel rank and time, weapon attacks, clutches per 24) are scored metrics of the same attribute
+ * here, so they already show. Main's "Trade success" is tradeKillSuccess.
+ */
+export const EXTRA_SUBS: Partial<Record<AttributeId, string[]>> = {
+  firepower: ["perfectKillsPct", "ecoKpr"],
+  entrying: ["failedTradesPR"],
+  trading: ["tradeKillSuccess", "baitKillsPR"],
+};
+
+/** An attribute's extra rows over the same rounds as its scores (the caller's metric values on that side). */
+export const extraSubs = (id: AttributeId, v: Values): Sub[] => (EXTRA_SUBS[id] ?? []).map((mid) => {
+  const m = metric(mid);
+  return { id: mid, label: m.label, def: m.def, value: v[mid], text: fmtMetric(mid, v[mid]), score: null, status: m.status, reason: null };
+});
+
+/** A role signal's bar (main's role card): filled to twice the threshold, and whether the value reaches it. */
+export const signalBar = (value: number, threshold: number) => ({ fill: Math.max(0, Math.min(1, value / (2 * threshold))), fits: value >= threshold });
 
 export const WEAPON_CLASS_LABEL: Record<string, string> = {
   rifle: "Rifles", sniper: "Snipers", smg: "SMGs", heavy: "Heavy", pistol: "Pistols", grenade: "Grenades", knife: "Knife", other: "Other",

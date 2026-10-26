@@ -10,22 +10,22 @@ import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
-import { clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, R3_INPUT_LABEL, rankText, ratingHeadline } from "../data/engine";
+import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
-import { seriesOf, tileValue, TILES } from "../data/series";
+import { seriesOf, tileDelta, tileValue, TILES } from "../data/series";
 import { ATTR_ICON, AttrIcon } from "../icons/attributes";
 import { FirstKillIcon, SkullIcon, WeaponIcon, WinIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
 import { ChevronRightIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
-import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
+import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, openMatch, pageHref, sectionHref } from "../router";
-import { HOW_GOOD } from "./profile/parts";
+import { HOW_GOOD, RatingTerms } from "./profile/parts";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
@@ -99,8 +99,8 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
   const verdict = verdictOf(line.rating, BENCH.rating);
   const half = (side: "T" | "CT") => (v ? v.rounds.filter((r) => r.usSide === side && r.winner === "us").length : null);
   const other = s.usStartSide === "T" ? "CT" : "T";
-  // The hero is the one place a delta shows: this match against your average over the filtered
-  // matches, the average named beside it ("vs your 99.0").
+  // This match against your average over the filtered matches, the average named beside it ("vs your
+  // 99.0"). The tiles below carry the same comparison as a bare delta.
   const stat = (label: string, value: string, mine: number | null, avgV: number | null | undefined, fmtAvg: (x: number) => string, span: number, fmtD: (x: number) => string, color?: string, tip?: string) => (
     <div className="hero-stat">
       <span className="stat__l">{label}</span>
@@ -206,9 +206,11 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
         const value = tileValue(m, t?.both.v ?? null, t?.rating.value ?? null);
         const series = seriesOf(m, list.slice(0, 10));
         const noAim = !!m.aim && !aimMatches;
+        // the last match against the value over the filter, as the hero compares them; none when either is missing
+        const d = noAim ? null : tileDelta(m, list[0] ?? null, value);
         const breakdown = m.id === "rating3" ? () => {
           const x = t?.rating.inputs;
-          return x ? <BreakRows rows={Object.entries(x).map(([k, val]) => ({ label: R3_INPUT_LABEL[k]?.label ?? k, value: R3_INPUT_LABEL[k]?.fmt(val) ?? String(val) }))} /> : null;
+          return x ? <RatingTerms inputs={x} /> : null;
         } : m.id === "kast" ? () => (t ? <KastSplit s={t.both} /> : null) : m.id === "adr" || m.id === "kpr" ? () => {
           if (!t) return null;
           const f = (s: Rolled) => fmtMetric(m.id, s.v[m.id]);
@@ -223,6 +225,7 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
               bench={m.bench}
               def={metric(m.id).def}
               spark={series.map((x) => x.v)}
+              delta={d === null ? undefined : <><span className="sr-only">Last match against your average: {d > 0 ? "up" : d < 0 ? "down" : "level"} </span><Delta d={d} span={m.deltaSpan} lowerIsBetter={m.lowerIsBetter} fmt={m.fmtDelta} title="Last match against your average" /></>}
               sub={noAim ? <NeedsDemo detail={`${m.label} needs shots, which converted logs do not record.`} /> : undefined}
               breakdown={breakdown}
             />
@@ -257,9 +260,11 @@ function KastSplit({ s }: { s: Rolled }) {
         { label: "With an assist, no kill", ...part(m.kastA), color: "var(--tan)" },
         { label: "Survived, no kill or assist", ...part(m.kastS), color: "var(--ink2)" },
         { label: "Death traded, nothing else", ...part(m.kastT), color: "var(--ink3)" },
+        { label: "Rounds survived", ...part(m.survived), color: "var(--tan)" },
+        { label: "Deaths traded", value: fmtMetric("deathsTradedPct", s.v.deathsTradedPct), share: s.v.deathsTradedPct === null ? 0 : s.v.deathsTradedPct / 100, color: "var(--ink2)" },
         { label: "Assists per round", value: fmtDec(m.assists / m.rounds) },
       ]} />
-      <p className="meta">Each KAST round counts once, in that order, so the first four add up to KAST.</p>
+      <p className="meta">Each KAST round counts once, in that order, so the first four add up to KAST. Deaths traded is a share of your deaths, not of rounds.</p>
     </>
   );
 }
@@ -382,7 +387,7 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 /** Profile's hero card stats: a Work on item for one of them opens the card. */
 const CARD_STATS = new Set(["kpr", "dpr", "adr", "kast", "mk", "swing"]);
 /** The aim metrics Career aim renders (CareerAim.tsx trends, views/aim/AimPanels.tsx); other aim metrics have no place yet. */
-const CAREER_AIM = new Set(["accuracy", "firstBulletAccuracy", "counterStrafe", "sightAccuracy", "crosshairPlacement", "flickOvershoot", "microCorrections", "reactionTime", "timeToDamage", "timeToShot", "trackingError", "transferHits"]);
+const CAREER_AIM = new Set(["accuracy", "firstBulletAccuracy", "headAccuracy", "adjustedAccuracy", "sprayAccuracy", "counterStrafe", "sightAccuracy", "crosshairPlacement", "flickOvershoot", "microCorrections", "reactionTime", "timeToDamage", "timeToShot", "trackingError", "transferHits"]);
 /** Metrics the latest match's Utility tab shows (views/match/Utility.tsx). */
 const UTILITY_TAB = new Set(["enemiesPerFlash", "blindPerFlash", "teamFlashPR", "utilDmgPR", "fireDmgPR"]);
 
@@ -404,14 +409,23 @@ export function workOnHref(m: { id: string; group: string }, latest: string | nu
 }
 
 /**
- * The two performance metrics where you sit lowest among pros, each with its percentile and the pool it
- * was ranked in. Style attributes are left out: they describe how you play, not how well
- * (design/identity.md). A metric the engine could not compare (Percentile.reason) is skipped, never
- * ranked as the lowest, and so is one with no place to open (workOnHref).
+ * Firepower, the one performance attribute, as main showed its weakest attributes: the score out of 100
+ * against pros and its lowest-ranked metric. Then the two performance metrics where you sit lowest among
+ * pros, each with its percentile and the pool it was ranked in. Style attributes are left out: they
+ * describe how you play, not how well (design/identity.md). A metric the engine could not compare
+ * (Percentile.reason) is skipped, never ranked as the lowest, and so is one with no place to open
+ * (workOnHref).
  */
 function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   const { baselines } = useData();
   const r = useCall("compare", t && baselines ? [t.q, {}] : null).data;
+  const scored = useCall("attributes", t && baselines ? [t.q, {}] : null).data;
+  const fire = useMemo(() => {
+    const a = scored ? attrsOf(scored.scores).find((x) => x.id === "firepower") : undefined;
+    if (!a || a.score === null) return null;
+    const worst = a.subs.filter((x) => x.score !== null && !x.reason).sort((x, y) => x.score! - y.score!)[0] ?? null;
+    return { label: a.label, score: a.score, worst };
+  }, [scored]);
   const weak = useMemo(() => {
     if (!r) return [];
     return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m, latest) !== null)
@@ -421,8 +435,19 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
   return (
     <Card title="Work on" aside={<a className="link" href={pageHref("profile")}>Profile <ChevronRightIcon size={12} /></a>}>
-      {weak.length === 0 ? <p className="meta">Not enough rounds to compare with pros.</p> : (
+      {weak.length === 0 && !fire ? <p className="meta">Not enough rounds to compare with pros.</p> : (
         <div className="workon">
+          {fire && (
+            <a className="workon__item" href={sectionHref("profile", "firepower")} data-tip="Firepower against pros: the mean of its metrics' percentiles. Below it, its lowest-ranked metric.">
+              <AttrIcon id="firepower" size={20} className="workon__ico" />
+              <div className="workon__body">
+                <div className="workon__top"><b>{fire.label}</b><span className="num"><b style={{ color: scoreText(toScore(fire.score, 50, 50)) }}>{Math.round(fire.score)}</b><span className="faint">/100</span></span></div>
+                {/* coloured as Profile's Firepower card colours it: unlike main's weakest attributes, Firepower shows here when strong too */}
+                <div className="hbar"><i style={{ width: `${fire.score}%`, background: scoreFill(toScore(fire.score, 50, 50)) }} /></div>
+                {fire.worst && <div className="meta">{fire.worst.label} <b className="num" style={{ color: "var(--ink)" }}>{fire.worst.text}</b></div>}
+              </div>
+            </a>
+          )}
           {weak.map(({ m, pct, value, href, population }) => (
             <a key={m.id} className="workon__item" href={href} data-tip={m.def}>
               <AttrIcon id={icon(m.group)} size={20} className="workon__ico" />
