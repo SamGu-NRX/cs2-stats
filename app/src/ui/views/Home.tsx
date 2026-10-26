@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
-import { ClutchBadge, Delta, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
+import { ClutchBadge, Delta, FirstPip, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
 import { Card } from "../components/Card";
 import { FormBars } from "../components/charts";
 import { DataTable } from "../components/DataTable";
@@ -18,7 +18,7 @@ import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { seriesOf, tileDelta, tileValue, TILES } from "../data/series";
 import { ATTR_ICON, AttrIcon } from "../icons/attributes";
-import { FirstKillIcon, SkullIcon, WeaponIcon, WinIcon } from "../icons/game";
+import { FlagIcon, WeaponIcon } from "../icons/game";
 import { firstOfDay, insideFences } from "../lib/form";
 import { ChevronRightIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
@@ -67,7 +67,7 @@ export function HomeView() {
       <BarContent crumbs={[{ label: "Home" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in home">
         {!last ? (
-          <Card><Empty icon={<WinIcon how="elim" size={40} />} text="No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+          <Card><Empty text="No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="home__top">
@@ -339,8 +339,8 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
               <span className="hl__feed">
                 {best.kills.map((k, i) => (
                   <span key={i} className="hl__kill">
-                    <WeaponIcon name={k.weapon} size={11} label={undefined} />
-                    <SkullIcon hs={k.headshot} size={11} className={k.headshot ? "skull skull--hs" : "skull"} />
+                    <WeaponIcon name={k.weapon} height={11} />
+                    {k.headshot && <FlagIcon id="headshot" label="Headshot" size={11} />}
                     <span>{v.players[k.victim].name}</span>
                   </span>
                 ))}
@@ -353,7 +353,7 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
           <a className="hl__item" href={matchHref(last.file, "rounds", { round: bigKill.n })}>
             <span className="caps">Biggest kill, last match</span>
             <span className="hl__row">
-              <WeaponIcon name={bigKill.weapon} size={13} label={undefined} />
+              <WeaponIcon name={bigKill.weapon} height={13} />
               <span>{bigKill.victim}</span>
               <span className="meta">round {bigKill.n}{bigKill.hs ? ", headshot" : ""}</span>
               <b className="num good-text">{fmtSwing(bigKill.swing)}</b>
@@ -373,8 +373,8 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
         <div className="hl__item">
           <span className="caps">Opening duels</span>
           <span className="hl__row">
-            <span className="hl__chip"><FirstKillIcon size={13} className="good-text" /><span className="num">{m?.openingKills ?? 0}</span><span className="meta">won</span></span>
-            <span className="hl__chip"><FirstKillIcon death size={13} className="poor-text" /><span className="num">{m?.openingDeaths ?? 0}</span><span className="meta">lost</span></span>
+            <span className="hl__chip"><FirstPip label="First kills" /><span className="num">{m?.openingKills ?? 0}</span><span className="meta">won</span></span>
+            <span className="hl__chip"><FirstPip death label="First deaths" /><span className="num">{m?.openingDeaths ?? 0}</span><span className="meta">lost</span></span>
             <b className="num">{fmtPct(open)}</b>
           </span>
         </div>

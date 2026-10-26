@@ -9,7 +9,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import { HoverCard } from "../../components/overlay";
 import { roundColumns, roundMatrix, selectedColumn, type MatchModel as MatchView, type RoundCell, type RoundColumn } from "../../data/match";
 import { statLine } from "../../data/engine";
-import { DeathIcon, WIN_LABEL } from "../../icons/game";
+import { WIN_LABEL, WinIcon } from "../../icons/game";
+import { DeathMark } from "../../components/bits";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
 import { moveIndex } from "../../lib/layout";
 import { fmtSwing } from "../../lib/format";
@@ -17,7 +18,6 @@ import { scoreText, swingScore } from "../../lib/scale";
 import { setQuery, useRoute } from "../../router";
 import { PlayerName, RoundCardBody, swingSumTip, TotalsCardBody } from "../shared";
 import type { Line } from "../../../worker/protocol";
-import { RoundEndIcon } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { RoundDrawer } from "./RoundDrawer";
 
@@ -58,8 +58,8 @@ function Legend() {
   return (
     <div className="legend inspector__legend">
       <span><b className="num">2</b> Kills</span>
-      <span><DeathIcon size={11} className="ig__death" /> Died</span>
-      {(["elim", "bomb", "defuse", "time"] as const).map((h) => <span key={h}><RoundEndIcon how={h} size={13} /> {WIN_LABEL[h]}</span>)}
+      <span><DeathMark className="ig__death" /> Died</span>
+      {(["elim", "bomb", "defuse", "time"] as const).map((h) => <span key={h}><WinIcon how={h} size={13} beside /> {WIN_LABEL[h]}</span>)}
     </div>
   );
 }
@@ -185,7 +185,7 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
               return (
                 <HoverCard key={r.ri} as="div" tabbable={false} prefer="bottom" className={`ig__head ${c.halfStart ? "is-half" : ""} ${sel === ci ? "is-on" : ""}`} card={() => <RoundCardBody v={v} r={r} />}>
                   <button className="ig__headbtn" data-col={ci} data-side={side} data-won={r.winner === "us"} onClick={() => onOpen(ci)} aria-label={`Open round ${r.number}${r.how ? `, ${WIN_LABEL[r.how]}` : ""}, ${r.winner === "us" ? "won" : "lost"}`} tabIndex={-1}>
-                    <RoundEndIcon how={r.how} size={14} />
+                    <WinIcon how={r.how} size={14} compact />
                     <span className="num">{r.number}</span>
                   </button>
                 </HoverCard>
@@ -242,7 +242,7 @@ function PlayerRowView({ v, cols, pi, r, cells, line, sel, focus, setFocus, onOp
               {t ? (
                 <>
                   {t.kills > 0 && <b className="ig__k num">{t.kills}</b>}
-                  {t.deaths > 0 && <DeathIcon size={10} className="ig__death" />}
+                  {t.deaths > 0 && <DeathMark className="ig__death" />}
                 </>
               ) : <span className="faint">–</span>}
             </div>
@@ -271,7 +271,7 @@ function PlayerRowView({ v, cols, pi, r, cells, line, sel, focus, setFocus, onOp
             data-tip={c.empty ? undefined : label}
           >
             {c.kills.length > 0 && <b className="ig__k num">{c.kills.length}</b>}
-            {c.died && <DeathIcon size={10} className="ig__death" />}
+            {c.died && <DeathMark className="ig__death" />}
           </div>
         );
       })}

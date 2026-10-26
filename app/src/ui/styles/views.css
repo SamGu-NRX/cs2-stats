@@ -13,9 +13,6 @@
 .aside-metric b { font: 700 14px/1 var(--f); color: var(--ink); }
 .delta { display: inline-flex; align-items: center; gap: 3px; font: 600 12px/1 var(--f); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .spark { display: block; overflow: visible; }
-.skulls { display: inline-flex; gap: 2px; align-items: center; }
-.skull { color: var(--ink2); }
-.skull--hs { color: var(--cream); }
 .kflags { display: inline-flex; gap: 2px; color: var(--ink2); }
 .hc-trigger { border-radius: var(--r-chip); }
 .pname { cursor: default; border-radius: 2px; }
@@ -1402,3 +1399,14 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .guncell .guncell__advice { display: block; font-variant-numeric: tabular-nums; }
 .guncell__advice .help { margin-left: 5px; vertical-align: -2px; }
 .gunhero__cap { display: inline-flex; align-items: center; gap: 6px; }
+/* ---------------------------------------------------------------- game objects as text (icons/game.tsx, components/bits.tsx) */
+/* a game object without the icon pack: its name in small caps text, never a drawn stand-in */
+.gicon-text { display: inline-block; font: 600 10px/1.2 var(--f); letter-spacing: 0.04em; text-transform: uppercase; color: currentColor; opacity: 0.8; white-space: nowrap; vertical-align: middle; }
+/* a death in a round grid or list */
+.xmark { display: inline-block; font: 600 13px/1 var(--f); color: var(--ink2); }
+/* your kills and deaths in a list, the same dots the radar draws: kills filled, deaths ringed */
+.dmark { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 50%; }
+.dmark--k { background: var(--good-text); }
+.dmark--d { box-shadow: inset 0 0 0 2px var(--poor-text); }
+/* a headshot flag after a victim's name */
+.yrounds__kill .gicon, .duel-list .gicon { margin-left: 4px; }
