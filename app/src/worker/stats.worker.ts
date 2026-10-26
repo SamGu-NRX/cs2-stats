@@ -26,9 +26,9 @@ import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
-import type { Api, Call, ClutchRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
+import type { Api, Call, ClutchRow, MultiKillRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
-import { addClutchRows, addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
+import { addClutchRows, addMapRounds, addMultiKillRows, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (m: FromWorker, transfer: Transferable[] = []) => self.postMessage(m, transfer);
@@ -373,6 +373,13 @@ const api: Impl = {
     const fileOf = new Map<string, string>();
     for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
     await stream(q.files, (f) => addClutchRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
+    return out;
+  },
+  async multiKills(q) {
+    const out: MultiKillRow[] = [];
+    const fileOf = new Map<string, string>();
+    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
+    await stream(q.files, (f) => addMultiKillRows(out, fileOf.get(f.match.id) ?? f.match.id, f, q.filter));
     return out;
   },
   async trends(series) {
