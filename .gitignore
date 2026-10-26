@@ -14,3 +14,7 @@ __pycache__/
 model/data/
 # The importer writes the user's SteamID64 here (extractor/valve_import.py)
 valve-user.local.json
+
+# Private outputs carry a marker (CONTRIBUTING.md, Private data): never commit them
+*.private.*
+*.local.json

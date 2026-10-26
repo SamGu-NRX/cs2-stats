@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { checkOutput, REPO_ROOT, shippedPool, writeOutput } from "../../tools/outputs";
+import { checkOutput, marked, PRIVATE_KEY, PRIVATE_VALUE, REPO_ROOT, shippedPool, writeOutput } from "../../tools/outputs";
 
 const base = mkdtempSync(path.join(tmpdir(), "cs2-outputs-"));
 const repo = path.join(base, "repo");
@@ -34,10 +34,19 @@ describe("writeOutput", () => {
     if (process.platform === "win32") expect(() => checkOutput(path.join(base, "REPO", "APP", "PUBLIC", "x.json"), NAMED, repo)).toThrow(/is private/);
   });
 
-  it("writes private outputs outside the repository", () => {
+  it("writes private outputs outside the repository, each carrying the private marker", () => {
+    // fails if a private output can go out unmarked, which scripts/check-public-tree could not find
     const file = path.join(outside, "baselines-named.json");
     writeOutput(file, '{"players":[]}', NAMED, repo);
-    expect(readFileSync(file, "utf8")).toBe('{"players":[]}');
+    expect(readFileSync(file, "utf8")).toBe(`{"${PRIVATE_KEY}":"${PRIVATE_VALUE}","players":[]}`);
+    // indentation and the final newline are kept
+    writeOutput(file, '{\n  "a": 1\n}\n', NAMED, repo);
+    expect(readFileSync(file, "utf8")).toBe(`{\n  "${PRIVATE_KEY}": "${PRIVATE_VALUE}",\n  "a": 1\n}\n`);
+    // a file named *.private.* carries the marker in its name, so its text is left alone
+    writeOutput(path.join(outside, "cache.private.bin"), "raw", NAMED, repo);
+    expect(readFileSync(path.join(outside, "cache.private.bin"), "utf8")).toBe("raw");
+    expect(() => writeOutput(path.join(outside, "cache.bin"), "raw", NAMED, repo)).toThrow(/must be a JSON object or be named \*\.private\.\*/);
+    expect(() => marked("x.json", "[1, 2]")).toThrow(/must be a JSON object/);
   });
 
   it("lets the public pool into the repository at the shipped path only", () => {
