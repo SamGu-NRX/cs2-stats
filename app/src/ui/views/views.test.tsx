@@ -400,7 +400,7 @@ describe("the page's scope across Profile tabs (#39 review)", () => {
     // fails if #/aim?guns=rifle&result=W keeps keys in the address bar that Profile never applies
     try {
       act(() => go("#/aim?guns=rifle&result=W&side=t"));
-      expect(location.hash).toBe("#/aim?side=t");
+      expect(location.hash).toBe("#/profile/aim?side=t");
     } finally {
       act(() => go("#/"));
     }

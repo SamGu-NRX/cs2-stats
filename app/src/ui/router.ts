@@ -110,12 +110,21 @@ export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, str
 // The current route is a small store, so navigation can render synchronously (flushSync) inside a
 // View Transition: the new view must be in the DOM when the transition snapshots it.
 let current: Route = typeof location === "undefined" ? parseHash("") : parseHash(location.hash);
-/** A Profile URL with keys Profile does not read: the same path with the query parseHash kept. */
+/**
+ * The canonical address of a Profile route: its tab in the path and only the keys parseHash kept. A
+ * legacy link (#/profile?sec=identity, #/aim) resolves its tab from keys or a path that the tidy
+ * query drops, so the address has to name the tab or a reload and Back would land on Overview.
+ */
+export const profileCanonicalHash = (r: Route) => {
+  if (r.page !== "profile") throw new Error(`profileCanonicalHash: not a Profile route (${r.page})`);
+  const kept = r.query.toString();
+  return `#/profile/${r.ptab ?? "overview"}${kept ? `?${kept}` : ""}`;
+};
+/** Rewrites a Profile address to its canonical form without a history entry. */
 function tidyProfileUrl() {
   if (current.page !== "profile") return;
-  const [path, q = ""] = location.hash.split("?");
-  const kept = current.query.toString();
-  if (kept !== q) history.replaceState(null, "", `${path}${kept ? `?${kept}` : ""}`);
+  const canon = profileCanonicalHash(current);
+  if (location.hash !== canon) history.replaceState(null, "", canon);
 }
 if (typeof location !== "undefined") tidyProfileUrl();
 const subs = new Set<() => void>();
