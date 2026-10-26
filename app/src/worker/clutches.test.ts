@@ -1,6 +1,7 @@
 // Clutch rows through the worker's row builder (views.ts addClutchRows), on hand-built rounds: CT
 // a and b against T c and d unless a test says otherwise.
 import { expect, it } from "vitest";
+import { addSituations, type Situations } from "../stats/matchviews";
 import { rollup } from "../stats/rollup";
 import { FREEZE_END, oneRound } from "../stats/testing/match";
 import type { ClutchRow } from "./protocol";
@@ -115,4 +116,19 @@ it("leaves a player who disconnected at or before freeze end out of the populati
     expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.saved, r.t])).toEqual([["a", 2, false, false, 0]]);
     expect(rollup([f], { player: "b" }).m.saves).toBe(0);
   }
+});
+
+it("agrees with the man-advantage states on who is in the round", () => {
+  // fails if the two views read different populations: b disconnected at freeze end with no
+  // alive-at-start flag, so CT starts with a alone. The clutch list has a in a 1v2 from the start, and
+  // the man-advantage states have a's side at 1v2 and nothing else (counting b, they would add 2v2)
+  const f = oneRound({
+    players: { a: "CT", b: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
+    leaves: [{ tick: FREEZE_END, steamid: "b", alive: true }],
+    kills: [{ tick: t(10), killer: "c", victim: "a" }],
+  });
+  expect(rows(f, ["a"]).map((r) => [r.player, r.opponents, r.t])).toEqual([["a", 2, 0]]);
+  const states: Situations = {};
+  addSituations(states, f, { player: "a" });
+  expect(states).toEqual({ "1v2": { rounds: 1, won: 0 } });
 });

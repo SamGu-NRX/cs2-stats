@@ -7,6 +7,7 @@ import { enemyHit, hitDamage } from "./derive";
 import { emptyMeasures, type MatchFacts, type Measures } from "./facts";
 import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type Feature } from "./rating3";
 import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
+import { roundPopulation } from "./rules";
 import { swingSources, type SwingSources } from "./swing";
 import type { MatchTables, Side } from "./tables";
 import { FLASHED_MIN_S } from "./utility";
@@ -274,19 +275,18 @@ export function addSituations(out: Situations, f: MatchFacts, filter: Filter): v
   for (const p of keptRounds(f, filter)) {
     const rf = f.rounds[p.ri];
     if (rf.winner === null) continue;
-    const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-    for (const r of f.pr) if (r.ri === p.ri && r.aliveAtStart !== false) alive[r.side].add(r.pi);
+    // the players alive at freeze end and the live round's disconnects, as clutches read them (rules.ts roundPopulation)
+    const { alive, leaves } = roundPopulation(rf, f.pr.filter((r) => r.ri === p.ri));
     const enemy: Side = p.side === "CT" ? "T" : "CT";
     const seen = new Set<string>();
     const note = () => { if (alive[p.side].size && alive[enemy].size) seen.add(`${alive[p.side].size}v${alive[enemy].size}`); };
     note();
-    // deaths and disconnects of living players, in tick order (a death before a disconnect on one tick).
-    // Only those in the live round: one before freeze end would take a player from a count that, without
-    // the source's alive-at-start flags, never left him out, making a man advantage that never was
+    // deaths in the live round and disconnects after freeze end, in tick order (a death before a
+    // disconnect on one tick); a player who left at or before freeze end was never in the counts
     const live = (tick: number) => (rf.freezeEndTick === null || tick >= rf.freezeEndTick) && tick <= rf.endTick;
     const gone: { tick: number; pi: number }[] = [
       ...f.kills.filter((k) => k.ri === p.ri && live(k.tick)).map((k) => ({ tick: k.tick, pi: k.victim })),
-      ...rf.leaves.filter((l) => live(l.tick)),
+      ...leaves,
     ];
     for (const e of gone.sort((x, y) => x.tick - y.tick)) if (alive.CT.delete(e.pi) || alive.T.delete(e.pi)) note();
     for (const s of seen) {

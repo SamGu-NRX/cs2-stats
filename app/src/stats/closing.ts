@@ -3,7 +3,7 @@
 // rounds; it publishes no formulas, so each definition is ours and says so in METRICS.md.
 import type { Ctx } from "./derive";
 import type { ClutchFact } from "./facts";
-import { detectClutches } from "./rules";
+import { detectClutches, roundPopulation } from "./rules";
 import type { Side } from "./tables";
 
 /** A convar's value as a number; null when the match row does not carry it or it is not a number. */
@@ -46,14 +46,8 @@ export function closing(c: Ctx): ClutchFact[] {
     const rf = c.rounds[ri];
     const list = c.kills[ri];
     const rows = c.pr[ri];
-    const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-    // The round's population: the players alive at freeze end. Not one the source marks dead then
-    // (player_rounds.alive_at_start, plugin files; README.md "Fields the app reads"), and not one who
-    // disconnected at or before it, whatever that flag says (it is null in files without it).
-    const fe = rf.freezeEndTick;
-    const leftEarly = new Set(fe === null ? [] : rf.leaves.filter((l) => l.tick <= fe).map((l) => l.pi));
-    const inPopulation = (pi: number) => rows[pi] !== null && rows[pi]!.aliveAtStart !== false && !leftEarly.has(pi);
-    rows.forEach((p) => { if (p && inPopulation(p.pi)) alive[p.side].add(p.pi); });
+    // the players alive at freeze end, and the live round's disconnects (rules.ts roundPopulation)
+    const { alive, inRound, leaves } = roundPopulation(rf, rows);
 
     // The rows are the round-start roster only when the extractor read them at freeze end. A round
     // without a freeze end (recording started live) has them read one tick before the round's end, after
@@ -62,13 +56,10 @@ export function closing(c: Ctx): ClutchFact[] {
     // clutch both start with a death.
     const atStart = rf.freezeEndTick !== null && withRows.has(ri);
 
-    // living players who disconnected in the live round, after freeze end, leave the counts as a death
-    // does; one who left at or before freeze end was never in them
-    const leaves = rf.leaves.filter((l) => (fe === null || l.tick > fe) && l.tick <= rf.endTick);
     const valued = list.filter((k) => k.tick <= rf.endTick);
     // alive at the round's end: in the round's population, not killed by its end and not disconnected
     // (a death after the end does not count, HLTV's rule). Saves and clutch saves both read this.
-    const aliveAtEnd = (pi: number) => inPopulation(pi) && !valued.some((k) => k.victim === pi) && !leaves.some((l) => l.pi === pi);
+    const aliveAtEnd = (pi: number) => inRound(pi) && !valued.some((k) => k.victim === pi) && !leaves.some((l) => l.pi === pi);
 
     // last alive: at some moment the player was the only one of their side alive (counted once)
     const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };

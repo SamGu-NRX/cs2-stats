@@ -1,6 +1,6 @@
 // Event rules shared by several families: trades, the opening duel, KAST and clutches. Each one is
 // checked against HLTV's per-map scoreboards (hltv-exact.test.ts, VALIDATION.md).
-import type { KillFact } from "./facts";
+import type { KillFact, RoundFact } from "./facts";
 import type { Side } from "./tables";
 
 /**
@@ -67,6 +67,26 @@ export interface Clutch {
   from: number;
   /** the tick of the death or disconnect that left the player alone; null when the round started that way */
   tick: number | null;
+}
+
+/**
+ * A round's population: the players alive at its freeze end, by side, and the disconnects of living
+ * players during the live round, after freeze end and up to its end. A player is left out when the
+ * source marks them dead at freeze end (player_rounds.alive_at_start, plugin files; README.md "Fields
+ * the app reads") or when they disconnected at or before freeze end, whatever that flag says (it is
+ * null in files without it). Clutches, saves and last alive (closing.ts) and the man-advantage states
+ * (matchviews.ts addSituations) all read this, so no view counts a player another leaves out.
+ */
+export function roundPopulation(
+  rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">,
+  rows: Iterable<{ pi: number; side: Side; aliveAtStart: boolean | null } | null>,
+): { alive: Record<Side, Set<number>>; inRound: (pi: number) => boolean; leaves: { tick: number; pi: number }[] } {
+  const fe = rf.freezeEndTick;
+  const leftEarly = new Set(fe === null ? [] : rf.leaves.filter((l) => l.tick <= fe).map((l) => l.pi));
+  const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
+  for (const r of rows) if (r && r.aliveAtStart !== false && !leftEarly.has(r.pi)) alive[r.side].add(r.pi);
+  const members = new Set([...alive.CT, ...alive.T]);
+  return { alive, inRound: (pi) => members.has(pi), leaves: rf.leaves.filter((l) => (fe === null || l.tick > fe) && l.tick <= rf.endTick) };
 }
 
 /**

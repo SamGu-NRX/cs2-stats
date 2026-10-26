@@ -178,18 +178,18 @@ describe("situations", () => {
     expect(out).toEqual({ "2v2": { rounds: 1, won: 1 }, "2v1": { rounds: 1, won: 1 }, "1v1": { rounds: 1, won: 1 } });
   });
 
-  it("counts only the deaths and disconnects between freeze end and the round's end", () => {
-    // fails if an event before freeze end changes the counts: with no alive-at-start flags, d's
-    // disconnect at 5 s before freeze end (or a death of d then) is not a 2v1. The round runs 2v2 until
-    // c kills a at 2 s, then 1v2, and CT wins
+  it("ignores a death before freeze end, and leaves out a player who disconnected at or before it", () => {
+    // fails if a death before freeze end changes the counts, or a disconnect then keeps the player in
+    // the round. With no alive-at-start flags, d's death at 5 s before freeze end is not a 2v1: the
+    // round runs 2v2 until c kills a at 2 s, then 1v2, and CT wins. d's disconnect at that time, as
+    // clutches read it (rules.ts roundPopulation), means d was never in the round: 2v1, then 1v1
     const of = (m: Partial<Parameters<typeof oneRound>[0]>) => {
       const out: Situations = {};
       addSituations(out, oneRound({ players: { a: "CT", b: "CT", c: "T", d: "T" }, ...m, kills: [...(m.kills ?? []), { tick: t(2), killer: "c", victim: "a" }] }), { player: "b" });
       return out;
     };
-    const want = { "2v2": { rounds: 1, won: 1 }, "1v2": { rounds: 1, won: 1 } };
-    expect(of({ leaves: [{ tick: t(-5), steamid: "d", alive: true }] })).toEqual(want);
-    expect(of({ kills: [{ tick: t(-5), killer: "c", victim: "d" }] })).toEqual(want);
+    expect(of({ kills: [{ tick: t(-5), killer: "c", victim: "d" }] })).toEqual({ "2v2": { rounds: 1, won: 1 }, "1v2": { rounds: 1, won: 1 } });
+    expect(of({ leaves: [{ tick: t(-5), steamid: "d", alive: true }] })).toEqual({ "2v1": { rounds: 1, won: 1 }, "1v1": { rounds: 1, won: 1 } });
   });
 });
 
