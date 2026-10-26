@@ -184,8 +184,11 @@ export type Outcome =
 export interface SessionStatus {
   runId: string;
   mode: "launch" | "adopt";
-  /** cannotSee: the process list cannot be read; show the message ("close CS2 now") */
-  state: "starting" | "waiting" | "running" | "cannotSee" | "done" | "failed";
+  /**
+   * ready: the supervisor holds the lease and is about to ask Steam; cannotSee: the process list
+   * cannot be read; closing: Bot Mode could not be turned off yet. Show the message for both.
+   */
+  state: "starting" | "ready" | "waiting" | "running" | "cannotSee" | "closing" | "done" | "failed";
   message: string;
   verdicts: Checked[];
   errors: string[];
@@ -213,29 +216,54 @@ export const UNPROTECTED_NOTICE =
 
 export interface AppSettings { launchOptions: string }
 
+/** The installed BotRandomizer's cosmetic_catalog.json, as botmode_catalog reads it. */
+export interface Catalog {
+  /** the ids br_player_music_kit accepts; a name only when the build ships musicKitNames */
+  musicKits: { id: number; name: string | null }[];
+  /** item definition indexes of the knives a dropped knife can get a finish on */
+  knives: number[];
+  /** the finish weights br_dropped_knife_premium squares */
+  knifeFinishes: { finish: string; weight: number }[];
+}
+
 /** Overrides Steam detection with a game\csgo folder. */
 export interface Target { game?: string }
 
-export const botmode = {
-  status: (t: Target = {}) => invoke<Status>("botmode_status", { ...t }),
-  releases: () => invoke<GithubRelease[]>("botmode_releases"),
-  /** Downloads and verifies a release into the app folder; does not touch the game. */
-  download: (tag: string, asset?: string, t: Target = {}) => invoke<ReleaseIndex>("botmode_download", { ...t, tag, asset }),
-  install: (tag: string, asset?: string, t: Target = {}) => invoke<InstallReport>("botmode_install", { ...t, tag, asset }),
-  /** Applies %APPDATA%\BotMatchStats\botmode\overlay.json, or `manifest`. */
-  overlay: (manifest?: string, t: Target = {}) => invoke<OverlayReport>("botmode_overlay", { ...t, manifest }),
-  /** Undoes the newest change; `id` must name that change when given. */
-  rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
-  backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
-  /**
-   * Starts a session supervisor process, which turns Bot Mode on, starts CS2 through Steam,
-   * watches it until it exits (ending any CS2 of this install without -insecure) and turns
-   * Bot Mode off. Resolves once Steam has been asked; closing the app does not end the session.
-   */
-  launch: (t: Target = {}) => invoke<SessionView>("botmode_launch", { ...t }),
-  session: (t: Target = {}) => invoke<SessionView>("botmode_session", { ...t }),
-  setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
-  /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
-  setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),
-  setLaunchOptions: (options: string, t: Target = {}) => invoke<AppSettings>("botmode_set_launch_options", { ...t, options }),
-};
+/** How a call reaches the backend: Tauri's invoke, or a stand-in (mock.ts). */
+export type Call = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
+/** The Bot Mode commands over `call`. */
+export function botmodeOver(call: Call) {
+  return {
+    status: (t: Target = {}) => call<Status>("botmode_status", { ...t }),
+    releases: () => call<GithubRelease[]>("botmode_releases"),
+    /** Downloads and verifies a release into the app folder; does not touch the game. */
+    download: (tag: string, asset?: string, t: Target = {}) => call<ReleaseIndex>("botmode_download", { ...t, tag, asset }),
+    install: (tag: string, asset?: string, t: Target = {}) => call<InstallReport>("botmode_install", { ...t, tag, asset }),
+    /** Applies %APPDATA%\BotMatchStats\botmode\overlay.json, or `manifest`. */
+    overlay: (manifest?: string, t: Target = {}) => call<OverlayReport>("botmode_overlay", { ...t, manifest }),
+    /** Undoes the newest change; `id` must name that change when given. */
+    rollback: (id?: string, t: Target = {}) => call<RollbackReport>("botmode_rollback", { ...t, id }),
+    backups: (t: Target = {}) => call<Change[]>("botmode_backups", { ...t }),
+    /**
+     * Starts a session supervisor process, which turns Bot Mode on, starts CS2 through Steam,
+     * watches it until it exits (ending any CS2 of this install without -insecure) and turns
+     * Bot Mode off. Resolves once Steam has been asked; closing the app does not end the session.
+     */
+    launch: (t: Target = {}) => call<SessionView>("botmode_launch", { ...t }),
+    session: (t: Target = {}) => call<SessionView>("botmode_session", { ...t }),
+    setDifficulty: (level: Difficulty, t: Target = {}) => call<Change>("botmode_set_difficulty", { ...t, level }),
+    /**
+     * Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line.
+     * With `seen`, the values this caller read, it writes nothing when the cfg no longer holds them.
+     */
+    setCosmetics: (cosmetics: Cosmetics, seen?: Cosmetics, t: Target = {}) => call<Change>("botmode_set_cosmetics", { ...t, cosmetics, seen }),
+    setLaunchOptions: (options: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options }),
+    /** null when BotRandomizer has no catalog in the game folder. */
+    catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
+  };
+}
+
+export type BotModeApi = ReturnType<typeof botmodeOver>;
+
+export const botmode: BotModeApi = botmodeOver(invoke);

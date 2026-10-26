@@ -1,0 +1,171 @@
+/* ================================================================ Bot Mode (views/BotMode.tsx) */
+/* A hero with the state word and the exact launch command, then the user's setup beside the install
+   and the last session. Motion: the dialog and the kit list scale in from 97% (their trigger, for the
+   list); the knife strip lights up left to right when dropped-knife finishes are turned on (colour
+   only, 12 ms apart); a live session's dot breathes. With reduced motion only opacity and colour
+   change (--mo), and the breathing stops. */
+
+/* Prose sets its punctuation proportionally (body's tabular figures widen commas and full stops);
+   numbers that line up stay tabular. */
+.bm { font-variant-numeric: normal; }
+.bm .num, .bm .disp, .bm-odds td { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- hero */
+/* .hero is also the match header's class, with its own height; this hero sizes to its content */
+.card.bm-hero { display: grid; align-content: start; gap: 10px; min-height: 0; padding: 16px 20px 18px; }
+.bm-hero > * { position: relative; z-index: 1; }
+.bm-hero__head { display: flex; align-items: center; gap: 10px; }
+.bm-hero__check { margin-left: auto; }
+.bm-hero__state { margin: 0; }
+.bm-dot { position: relative; width: 9px; height: 9px; border-radius: 50%; flex: none; background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.bm-hero[data-tone="ready"] .bm-dot { background: var(--cream); box-shadow: 0 0 0 4px rgba(255, 215, 173, 0.12); }
+.bm-hero[data-tone="poor"] .bm-dot { background: var(--poor-text); box-shadow: none; }
+.bm-hero[data-tone="live"] .bm-dot { background: var(--cream); box-shadow: none; }
+/* a ring that grows and fades from the dot while a session runs: transform and opacity only */
+.bm-hero[data-tone="live"] .bm-dot::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--cream); opacity: 0; animation: bm-breathe 1.8s var(--ease-out) infinite; }
+@keyframes bm-breathe { 0% { opacity: 0.6; transform: scale(0.6); } 100% { opacity: 0; transform: scale(1.4); } }
+@media (prefers-reduced-motion: reduce) { .bm-hero[data-tone="live"] .bm-dot::after { animation: none; opacity: 0.35; } }
+.bm-hero__sub { max-width: 76ch; font-size: 13px; line-height: 1.45; color: var(--ink2); }
+.bm-hero__facts { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.bm-hero__facts b { font-weight: 500; color: var(--ink); }
+.bm-hero__act { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 12px; margin-top: 4px; }
+.bm-launch { height: auto; min-height: 38px; padding: 0 16px; }
+.bm-hero__why { margin-top: -4px; }
+.bm-hero__notice { color: var(--ink3); }
+
+/* the command a launch runs, in a well: -insecure is the one cream token */
+.bm-line {
+  flex: 1 1 420px; min-width: 0; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 9px 12px;
+  border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+  font-size: 12px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere;
+}
+.bm-flag { font-weight: 500; color: var(--cream); }
+.bm-line__steam { color: var(--ink2); }
+
+.bm-notes { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink2); }
+.bm-notes li { position: relative; padding-left: 14px; }
+.bm-notes li::before { content: ""; position: absolute; left: 2px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--ink3); }
+.bm-notes li[data-tone="poor"]::before { background: var(--poor-text); }
+
+/* ---------------------------------------------------------------- layout */
+.bm-cols { display: grid; grid-template-columns: minmax(0, 1fr) 376px; gap: 12px; align-items: start; }
+.bm-side { display: grid; gap: 12px; min-width: 0; }
+@media (max-width: 1240px) { .bm-cols { grid-template-columns: minmax(0, 1fr); } }
+
+.bm-note { padding: 8px 12px; border-radius: var(--r-ctl); background: var(--s2); box-shadow: inset 2px 0 0 var(--tan); font-size: 12px; line-height: 1.45; color: var(--ink); }
+.bm-problem { display: grid; gap: 8px; justify-items: start; padding: 8px 12px; border-radius: var(--r-ctl); background: var(--poor-soft); box-shadow: inset 2px 0 0 var(--poor); font-size: 12px; line-height: 1.45; color: var(--ink); }
+
+.chip[data-tone="new"], .chip[data-tone="live"] { background: rgba(255, 215, 173, 0.14); color: var(--cream); }
+.chip[data-tone="poor"] { background: var(--poor-soft); color: var(--poor-text); }
+
+/* ---------------------------------------------------------------- your setup */
+.bm-rows { display: grid; }
+.bm-rows > .bm-note, .bm-rows > .bm-problem { margin-bottom: 12px; }
+.bm-row { display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: 6px 20px; padding: 14px 0; }
+.bm-row ~ .bm-row { border-top: 1px solid var(--line); }
+.bm-rows > .bm-row:first-of-type { padding-top: 2px; }
+.bm-row__label { display: grid; align-content: start; gap: 3px; padding-top: 6px; font: 500 13px/1.3 var(--f); color: var(--ink); }
+.bm-row__label .mono { font-size: 11px; }
+.bm-row__ctl { display: grid; justify-items: start; gap: 8px; min-width: 0; }
+.bm-row__ctl > .meta { max-width: 68ch; line-height: 1.45; }
+.bm-check { padding: 6px 0 2px; font-size: 13px; color: var(--ink); }
+.bm-input { width: min(100%, 440px); font-family: var(--f-mono); font-size: 12px; }
+.bm-setup .card__foot { align-items: center; }
+.bm-foot__btns { display: flex; gap: 8px; margin-left: auto; }
+@media (max-width: 900px) { .bm-row { grid-template-columns: minmax(0, 1fr); } .bm-row__label { padding-top: 0; } }
+
+/* the music kit: the picked kit's title over its artist; the list filters as you type */
+.bm-kit {
+  display: flex; align-items: center; gap: 12px; width: min(380px, 100%); padding: 8px 10px 8px 12px; border-radius: var(--r-ctl);
+  background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); text-align: left;
+  transition: background-color var(--d-hover) ease, transform var(--d-press) var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) { .bm-kit:hover { background: var(--s3); } }
+.bm-kit[aria-expanded="true"] { background: var(--s3); }
+.bm-kit__text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.bm-kit__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 14px/1.25 var(--f); color: var(--ink); }
+.bm-kit__artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink2); }
+.bm-kit__chev { flex: none; color: var(--ink3); }
+.bm-kitpop { display: flex; flex-direction: column; max-height: 380px; padding: 0; overflow: hidden; }
+.bm-kitpop__search { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; flex: none; border-bottom: 1px solid var(--line); }
+.bm-kitpop__search:focus-within { box-shadow: inset 0 -2px 0 var(--cream); }
+.bm-kitpop__search .ico { color: var(--ink3); }
+.bm-kitpop__input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 400 13px/1 var(--f); }
+.bm-kitpop__input:focus-visible { outline: none; }
+.bm-kitpop__input::placeholder { color: var(--ink3); }
+.bm-kitpop__list { margin: 0; padding: 4px; overflow: auto; list-style: none; }
+.bm-kitopt { height: auto; min-height: 40px; padding: 6px 10px; white-space: normal; cursor: pointer; }
+.bm-kitopt__text { display: grid; gap: 1px; min-width: 0; }
+.bm-kitopt__text small { margin-left: 0; font-size: 12px; color: var(--ink2); }
+.bm-kitpop__none { padding: 12px; font-size: 13px; color: var(--ink2); }
+
+/* the knives a dropped knife can be, as the game draws them: lit when finishes are on */
+.bm-knives {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 12px 8px; width: 100%; margin: 2px 0 0; padding: 12px;
+  list-style: none; border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.bm-knives li { display: grid; place-items: center; height: 22px; color: var(--ink3); transition: color var(--d-color) ease; }
+.bm-knives[data-on="true"] li { color: var(--ink); transition-delay: calc(var(--i, 0) * 12ms); }
+.bm-knives .gicon-text { font-size: 11px; text-align: center; }
+
+/* finish weights: the column in effect is the bright one */
+.bm-odds { display: grid; justify-items: start; gap: 2px; }
+.bm-odds table { border-collapse: collapse; font-size: 12px; }
+.bm-odds th { padding: 0 0 4px 20px; text-align: right; }
+.bm-odds td { padding: 3px 0 3px 20px; text-align: right; color: var(--ink3); transition: color var(--d-color) ease; }
+.bm-odds th:first-child, .bm-odds td:first-child { padding-left: 0; text-align: left; color: var(--ink); }
+.bm-odds[data-premium="false"] td:nth-child(2), .bm-odds[data-premium="true"] td:nth-child(3) { color: var(--cream); }
+
+/* ---------------------------------------------------------------- install */
+.bm-install .card__body { display: grid; gap: 10px; }
+.bm-ver { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.bm-match { display: grid; gap: 6px; }
+.bm-match .hbar { height: 4px; }
+.bm-match .hbar i { background: var(--tan); }
+.bm-comps { display: grid; margin: 0; padding: 0; list-style: none; }
+.bm-comps li { display: grid; grid-template-columns: 7px auto minmax(0, 1fr); align-items: baseline; gap: 0 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.bm-comps li.bm-comps__rest { display: block; }
+.bm-comps__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tan); transform: translateY(-1px); }
+.bm-comps [data-state="overlay"] .bm-comps__dot { background: var(--cream); }
+.bm-comps [data-state="modified"] .bm-comps__dot, .bm-comps [data-state="missing"] .bm-comps__dot { background: var(--poor-text); }
+.bm-comps [data-state="notInRelease"] .bm-comps__dot, .bm-comps [data-state="unknown"] .bm-comps__dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.bm-comps__name { font-weight: 500; color: var(--ink); white-space: nowrap; }
+.bm-comps__what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--ink2); }
+.bm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 2px; }
+.bm-folder { display: flex; gap: 8px; min-width: 0; }
+.bm-folder .mono { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- session */
+.bm-sess { display: grid; gap: 10px; font-size: 13px; line-height: 1.45; }
+.bm-checks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.bm-checks li { display: grid; grid-template-columns: 7px minmax(0, 1fr); align-items: baseline; gap: 2px 10px; font-size: 12px; }
+.bm-checks li b { font-weight: 600; color: var(--ink); }
+.bm-checks li[data-tone="good"] .bm-comps__dot { background: var(--good-text); }
+.bm-checks li[data-tone="poor"] .bm-comps__dot { background: var(--poor-text); }
+.bm-checks__detail { grid-column: 2; font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- confirmation dialog */
+/* a modal stays centred (no trigger origin); it opens at 97% and full opacity in 180 ms, and closes
+   at once. Opened from the keyboard it appears without motion. */
+.bm-dialog {
+  width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 96px); padding: 20px; overflow: auto; overscroll-behavior: contain;
+  border: 0; border-radius: var(--r-card); background: var(--s2); color: var(--ink); box-shadow: var(--shadow-float);
+}
+.bm-dialog[open] { display: grid; gap: 14px; animation: bm-dialog-in 180ms var(--ease-out) both; }
+.bm-dialog::backdrop { background: rgba(10, 9, 8, 0.6); }
+.bm-dialog[open]::backdrop { animation: fade-in 180ms var(--ease-out) both; }
+.bm-dialog.is-instant, .bm-dialog.is-instant::backdrop { animation: none; }
+@keyframes bm-dialog-in { from { opacity: 0; transform: scale(calc(1 - 0.03 * var(--mo))); } }
+.bm-dialog__title { margin: 0; font: 700 20px/1.2 var(--f); letter-spacing: -0.012em; }
+.bm-dialog__body { display: grid; gap: 14px; }
+.bm-dialog__lead { font-size: 13px; line-height: 1.5; }
+.bm-dialog .bm-line { flex: none; }
+.bm-dialog__foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.bm-dialog__busy { margin-right: auto; }
+.bm-facts { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px 16px; margin: 0; font-size: 13px; }
+.bm-facts dt { font: 600 11px/1.7 var(--f); letter-spacing: 0.08em; text-transform: uppercase; color: var(--tan); }
+.bm-facts dt.poor-text { color: var(--poor-text); }
+.bm-facts dd { margin: 0; line-height: 1.45; }
+.bm-sha { font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
+/* a flag or file name never breaks at its own hyphen or dot */
+.bm-flag, .bm-facts dd .mono, .bm-row__ctl .meta .mono, .bm-hero__sub .mono { white-space: nowrap; }
