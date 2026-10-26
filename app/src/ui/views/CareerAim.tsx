@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { Delta } from "../components/bits";
 import { Card } from "../components/Card";
 import { TrendLine } from "../components/charts";
-import { careerEntries, fmtMetric } from "../data/engine";
+import { aimEntries, fmtMetric } from "../data/engine";
 import { useCall, useRollups, useYourQuery } from "../data/hooks";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
@@ -38,7 +38,8 @@ interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number)
 export default function CareerAim() {
   const { matches } = useData();
   const { map, n } = useScope();
-  const list = useMemo(() => { const f = careerEntries(matches, map).filter((s) => s.hasAim); return n ? f.slice(0, n) : f; }, [matches, map, n]);
+  // aim reads every own match with shots, wingman and unfinished included (aimEntries)
+  const list = useMemo(() => { const f = aimEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const query = useYourQuery(list);
   const all = useRollups(useMemo(() => (query ? [query] : null), [query])).data?.[0] ?? null;
   const visibility = list.some((s) => s.match.visibility === "ok");

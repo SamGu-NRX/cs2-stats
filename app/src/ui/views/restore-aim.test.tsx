@@ -145,11 +145,11 @@ describe("hitting figures, restored", () => {
     expect(host.querySelector(".aim-strafe")!.textContent).not.toContain("first shot");
   });
 
-  it("gives no verdict colour to spray path vs pros, which the engine defines as a comparison", () => {
+  it("gives no verdict colour to spray vs the ideal pull, which the engine defines as a comparison", () => {
     scoped = summary({ cmp: 4, dev: 12 });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(rowValue("Spray path vs pros")).not.toBe("–");
-    expect(value("Spray path vs pros")!.style.color).toBe("");
+    expect(rowValue("Spray vs the ideal pull")).not.toBe("–");
+    expect(value("Spray vs the ideal pull")!.style.color).toBe("");
   });
 });
 
@@ -163,12 +163,12 @@ describe("spray card, restored parts", () => {
     onTarget,
   });
 
-  it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Pro path", () => {
+  it("draws one spread ellipse per bullet past the first behind a Spread bands toggle beside Ideal pull", () => {
     // fails if either toggle is missing or unlabelled, or a toggle does not hide what it names
     scoped = spray();
     render(<AimPanels query={QUERY} label="t" visibility />);
     const boxes = Array.from(host.querySelectorAll<HTMLLabelElement>(".spray-toggles label"));
-    expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Pro path"]);
+    expect(boxes.map((l) => l.textContent)).toEqual(["Spread bands", "Ideal pull"]);
     expect(host.querySelectorAll("svg.spray__plot ellipse")).toHaveLength(2);
     expect(host.querySelector(".spray-key")!.textContent).toContain("one standard deviation");
     act(() => boxes[0].querySelector("input")!.click());
@@ -180,18 +180,34 @@ describe("spray card, restored parts", () => {
     expect(host.querySelector(".spray-key")!.textContent).not.toContain("Pro median");
   });
 
-  it("keeps a sprayed gun the recoil reference has no pro path for, drawn without a pro comparison", () => {
-    // fails if the gun list drops guns without a pro path, or such a gun shows a Pro path toggle or a pro line
-    scoped = summary({ sprays: 5, path: { cz75a: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
-    scoped.weapons.cz75a = gun({ shots: 15, hits: 3 });
+  it("draws a plugin M4A1-S path with no reference, controls, key or distance bars when its silencer state is unknown", () => {
+    // fails if a spray whose recoil state the plugin did not record is drawn against the silenced
+    // pattern: the ideal pull, its toggle and key, or "Distance from the ideal pull"
+    scoped = summary({ sprays: 5, unknownPath: { m4a1_silencer: { n: [5, 5, 5], dp: [1, 2, 3], dy: [0, 0.5, 1] } } });
+    scoped.weapons.m4a1_silencer = gun({ shots: 15, hits: 3 });
     render(<AimPanels query={QUERY} label="t" visibility />);
-    const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="cz75a"]')!;
+    act(() => host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="m4a1_silencer"]')!.click());
+    expect(host.querySelector(".spray__title")!.textContent).toBe("Your M4A1-S spray");
+    expect(host.querySelector("svg.spray__plot .spray__mine")).not.toBeNull();
+    expect([host.querySelector("svg.spray__plot .spray__pro"), host.querySelector("svg.spray__plot .spray__band"), host.querySelector(".spray-toggles")]).toEqual([null, null, null]);
+    expect(host.querySelector(".spray-key")!.textContent).not.toContain("Ideal pull");
+    expect(host.textContent).not.toContain("Distance from the ideal pull");
+    expect(host.querySelector(".spray__note")!.textContent).toContain("silencer");
+  });
+
+  it("keeps a sprayed gun the game's pattern is not known for, drawn without a reference", () => {
+    // fails if the gun list drops a gun without a pattern (the Negev: no demo shots yet), or such a gun
+    // shows an Ideal pull toggle or a reference line
+    scoped = summary({ sprays: 5, path: { negev: { n: [5, 5], dp: [3, 6], dy: [1, 2] } } });
+    scoped.weapons.negev = gun({ shots: 15, hits: 3 });
+    render(<AimPanels query={QUERY} label="t" visibility />);
+    const btn = host.querySelector<HTMLButtonElement>('.gunlist__b[data-w="negev"]')!;
     expect(btn).not.toBeNull();
     act(() => btn.click());
-    expect(host.querySelector(".spray__title")!.textContent).toBe("Your CZ75-Auto spray");
+    expect(host.querySelector(".spray__title")!.textContent).toBe("Your Negev spray");
     expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
     expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
-    expect(host.querySelector(".spray__note")!.getAttribute("data-tip")).toContain("no pro path");
+    expect(host.querySelector(".spray__note")!.textContent).toContain("No in-game pattern");
   });
 
   it("lists every sprayed gun with its count after the name, fades a thin one with the reason, and draws no mark", () => {
@@ -205,8 +221,8 @@ describe("spray card, restored parts", () => {
     expect(rows[0].hasAttribute("data-thin")).toBe(true);
     expect(rows[0].getAttribute("data-tip")).toBe("3 sprays, the pattern settles at 30.");
     expect(host.querySelector(".gunlist__thin, .gunbtn__thin")).toBeNull();
-    // without per-bullet angles the chart is the pro path alone, and the distance from the target shows
-    expect(host.querySelector(".spray__title")!.textContent).toBe("AK-47: the pro path");
+    // without per-bullet angles the chart is the ideal pull alone, and the distance from the target shows
+    expect(host.querySelector(".spray__title")!.textContent).toBe("AK-47: the ideal pull");
     expect(host.querySelector(".spray__dist b")!.textContent).toBe("2.00°");
     expect(host.querySelector(".spray__dist .meta")!.textContent).toBe("mean over 3 sprays");
     scoped = summary({ sprays: 0 });
