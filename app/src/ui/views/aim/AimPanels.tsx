@@ -206,9 +206,13 @@ const PRO_GUNS = Object.keys(RECOIL).filter((w) => RECOIL[w].path.length > 0);
 
 interface SprayGun { w: string; path: PlayerPath | null; relative: boolean; sprays: number; deep: number }
 
-/** Each pro-path gun with the path to draw: absolute view angles when there are any, else the target-relative path (plugin files). Most sprayed first. */
+/**
+ * Each pro-path gun, and each other gun you sprayed, with the path to draw: absolute view angles when
+ * there are any, else the target-relative path (plugin files). Most sprayed first.
+ */
 export function sprayGuns(s: Rolled | null): SprayGun[] {
-  return PRO_GUNS.map((w) => {
+  const sprayed = Object.keys({ ...s?.aim.path, ...s?.aim.relPath }).filter((w) => !PRO_GUNS.includes(w) && ((s?.aim.path[w] ?? s?.aim.relPath[w])?.n[0] ?? 0) > 0);
+  return [...PRO_GUNS, ...sprayed].map((w) => {
     const abs = s?.aim.path[w], rel = s?.aim.relPath[w];
     const path = abs?.n.length ? abs : rel?.n.length ? rel : null;
     return { w, path, relative: !abs?.n.length && !!path, sprays: path?.n[0] ?? 0, deep: path?.n[2] ?? 0 };
@@ -231,6 +235,7 @@ function SprayCard({ s }: { s: Rolled | null }) {
     group.current?.querySelector<HTMLElement>(`[data-w="${CSS.escape(list[to].w)}"]`)?.focus();
   };
   const name = weaponLabel(cur.w);
+  const ref = RECOIL[cur.w]?.path.length ? RECOIL[cur.w] : null;
   const spread = showSpread && !cur.relative ? s?.aim.spread[cur.w] ?? null : null;
   const heads = cur.relative ? null : s?.aim.heads[cur.w] ?? null;
   const onTarget = s?.aim.onTarget[cur.w] ?? null;
@@ -252,19 +257,19 @@ function SprayCard({ s }: { s: Rolled | null }) {
           {!cur.relative && (
             <div className="spray-toggles">
               <label className="check"><input type="checkbox" checked={showSpread} onChange={(e) => setShowSpread(e.target.checked)} /><span>Spread bands</span></label>
-              <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Pro path</span></label>
+              {ref && <label className="check"><input type="checkbox" checked={showPro} onChange={(e) => setShowPro(e.target.checked)} /><span>Pro path</span></label>}
             </div>
           )}
-          <SprayPath gun={name} reference={RECOIL[cur.w]} path={cur.path} relative={cur.relative} pro={showPro} spread={spread} heads={heads} />
+          <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} pro={showPro} spread={spread} heads={heads} />
           <div className="legend spray-key" aria-hidden>
             <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="2" /></svg>You</span>
             {spread && <span><svg width="14" height="10"><ellipse cx="7" cy="5" rx="6" ry="4" className="spray__sd" /></svg>Your spread, one standard deviation</span>}
-            {!cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Pro median</span>}
-            {!cur.relative && showPro && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}
+            {ref && !cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Pro median</span>}
+            {ref && !cur.relative && showPro && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}
             {heads && <span><svg width="10" height="10"><circle cx="5" cy="5" r="2.5" className="spray__head" /></svg>Where the target's head was</span>}
             {cur.path && cur.path.n.some((n) => n < MIN_SPRAYS) ? <span className="faint">Faded: under {MIN_SPRAYS} sprays</span> : null}
           </div>
-          {cur.path && !cur.relative ? <SprayDistance reference={RECOIL[cur.w]} path={cur.path} /> : null}
+          {ref && cur.path && !cur.relative ? <SprayDistance reference={ref} path={cur.path} /> : null}
           {onTarget ? <SprayOnTarget sums={onTarget} /> : null}
         </div>
       </div>
