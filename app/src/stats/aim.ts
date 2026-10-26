@@ -830,7 +830,7 @@ function strafeClass(c: Ctx, view: View | null, i: number, pi: number): number {
 /**
  * Whether a shot's view movement belongs to a spray path. Recoil control does not depend on moving,
  * jumping or being flashed: those add the game's random inaccuracy around the bullet's direction, not
- * kick (on 489 pro maps the kick at one recoil index varies by under 0.15 degrees over every shot,
+ * kick (on 489 pro maps the middle half of the kick at one recoil index is at most 0.16 degrees wide for the guns with a pro band,
  * moving or not; pnpm recoil prints it). A shot known to fire with other recoil (shot-state.ts
  * normalRecoil: scoped, an M4A1-S without its silencer) ends the path. On a demo so does an
  * unrecorded state, a missing view angle, or a view straight up or down (|pitch| 85 or more, where yaw
