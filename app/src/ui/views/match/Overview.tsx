@@ -1,6 +1,6 @@
 // Overview: both scoreboards with HLTV's columns (one sort and one side switch for both) and a team
-// total under each, swing per player, your rounds that decided the match, and you against the other
-// nine players. Team facts live on the Advanced tab.
+// total under each, swing per player, this match against your recent ones (YourMatch), your rounds
+// that decided the match, and you against the other nine players. Team facts live on the Advanced tab.
 import { useMemo, useState } from "react";
 import { ClutchBadge, DeathMark, FirstPip, MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
@@ -20,6 +20,7 @@ import { matchHref } from "../../router";
 import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip } from "../shared";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
+import { YourMatch } from "./YourMatch";
 
 type Multi = Record<2 | 3 | 4 | 5, number>;
 /** A scoreboard row: a player, or the team total under the five players (pi null). */
@@ -64,7 +65,7 @@ export default function Overview({ v, file }: TabProps) {
       { key: "open", label: "FK–FD", tip: "Opening kills and deaths: each round's first kill", sort: (r: Row) => r.l.m.openingKills - r.l.m.openingDeaths, render: (r: Row) => <span className="num">{r.l.m.openingKills}<span className="faint">–</span>{r.l.m.openingDeaths}</span> },
       { key: "mk", label: "Multi-kills", align: "l" as const, tip: "Rounds with 2, 3, 4 or 5 kills", sort: (r: Row) => multiScore(r.multi), render: (r: Row) => (r.multi ? <MultiChips c={r.multi} /> : null), width: 170 },
     ] : []),
-    { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win chance per round", sort: (r: Row) => r.l.swing, render: (r: Row) => { const x = r.l.swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }} data-tip={r.pi === null ? undefined : swingSumTip(r.l.m)}><Num v={fmtSwing(x)} /></span>; } },
+    { key: "swing", label: "Swing", colored: true, tip: "Average change in round-win chance per round", sort: (r: Row) => r.l.swing, render: (r: Row) => { const x = r.l.swing; return <span style={{ color: x === null ? "var(--ink3)" : scoreText(swingScore(x)) }} data-tip={r.pi === null ? undefined : swingSumTip(r.l.m)} tabIndex={r.pi === null ? undefined : 0}><Num v={fmtSwing(x)} /></span>; } },
     { key: "rating", label: RATING_LABEL, tip: "Rated per side over the rounds it can value", colored: true, sort: (r: Row) => r.l.rating, render: (r: Row) => { if (!r.rated) return null; const x = r.l.rating; return <b style={{ color: x === null ? undefined : ratingText(x) }}>{fmtRating(x)}</b>; } },
   ];
 
@@ -94,15 +95,18 @@ export default function Overview({ v, file }: TabProps) {
         {board("them")}
       </div>
       <div className="overview__cols">
-        <Card title="Swing by player" aside={<span className="meta">Average per round</span>}>
-          <DivergingBars
-            cap={0.06}
-            rows={[...v.players].sort((a, b) => (a.team === b.team ? (lines[b.pi].swing ?? 0) - (lines[a.pi].swing ?? 0) : a.team === "us" ? -1 : 1)).map((p) => {
-              const x = lines[p.pi].swing;
-              return { key: p.key, label: <span className={p.team === "us" ? "us-text" : "them-text"}><PlayerName v={v} pi={p.pi} /></span>, value: x, text: x === null ? "–" : fmtSwing(x), highlight: p.isHuman };
-            })}
-          />
-        </Card>
+        <div className="overview__side">
+          <Card title="Swing by player" aside={<span className="meta">Average per round</span>}>
+            <DivergingBars
+              cap={0.06}
+              rows={[...v.players].sort((a, b) => (a.team === b.team ? (lines[b.pi].swing ?? 0) - (lines[a.pi].swing ?? 0) : a.team === "us" ? -1 : 1)).map((p) => {
+                const x = lines[p.pi].swing;
+                return { key: p.key, label: <span className={p.team === "us" ? "us-text" : "them-text"}><PlayerName v={v} pi={p.pi} /></span>, value: x, text: x === null ? "–" : fmtSwing(x), highlight: p.isHuman };
+              })}
+            />
+          </Card>
+          <YourMatch v={v} file={file} />
+        </div>
         <div className="overview__side">
           <Lobby lines={lines} human={v.human} />
           <DecidingRounds v={v} file={file} side={side} />
@@ -189,7 +193,7 @@ function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
           const rank = [...vals].sort((a, b) => (r.lower ? a - b : b - a)).indexOf(you) + 1;
           const t = toScore(you, avg, Math.max(1e-6, (hi - lo) / 2), r.lower);
           return (
-            <li key={r.label} data-tip={`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`}>
+            <li key={r.label} data-tip={`Lobby average ${r.fmt(avg)}, range ${r.fmt(lo)} to ${r.fmt(hi)}`} tabIndex={0}>
               <span className="lobby__l">{r.label}</span>
               <span className="lobby__track">
                 <i className="lobby__avg" style={{ left: `${pos(avg)}%` }} />
