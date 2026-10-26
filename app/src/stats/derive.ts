@@ -305,9 +305,22 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
       ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
       durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
       plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], planter: c.idOf(r.planter_steamid[ri]), defuser: c.idOf(r.defuser_steamid[ri]), defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
+      leaves: leavesOf(c, ri),
       equip: team, buy: { CT: buy("CT"), T: buy("T") }, winProb: null,
     };
   });
+}
+
+/** A round's disconnects of players who were alive, in tick order (tables leaves). */
+function leavesOf(c: Ctx, ri: number): { tick: number; pi: number }[] {
+  const L = c.t.leaves;
+  if (!L) return [];
+  const out: { tick: number; pi: number }[] = [];
+  for (let i = 0; i < L.n; i++) {
+    const pi = c.idOf(L.steamid[i]);
+    if (c.riOf(L.round[i]) === ri && L.alive[i] && pi !== null) out.push({ tick: L.tick[i], pi });
+  }
+  return out.sort((a, b) => a.tick - b.tick);
 }
 
 /** Spawn point key and the map's place name there, from the round's first position sample. */
@@ -332,7 +345,7 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
     if (won === false) m.lostRounds = 1;
     return {
       ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
-      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"],
+      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"], aliveAtStart: i === undefined ? null : t.alive_at_start[i],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
       money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ...spawnOf(c, rf.ri, p), m,
     };

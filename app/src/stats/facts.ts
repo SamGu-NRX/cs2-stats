@@ -9,7 +9,7 @@ import type { UtilQFact } from "./utilq";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 19;
+export const DERIVE_VERSION = 21;
 
 export interface MatchInfo {
   id: string;
@@ -142,6 +142,8 @@ export interface RoundFact {
   /** team equipment at freeze end and HLTV's buy class, per side */
   equip: Record<Side, number | null>;
   buy: Record<Side, BuyClass | null>;
+  /** players who disconnected during the round while alive, with the tick (tables leaves; plugin files only) */
+  leaves: { tick: number; pi: number }[];
   /** P(T wins) after each event, from the win-probability lookup (winprob.ts); null when unknown */
   winProb: { tick: number; event: "start" | "kill" | "plant"; pT: number }[] | null;
 }
@@ -253,6 +255,8 @@ export interface PlayerRound {
   /** money left after buying */
   money: number | null;
   spent: number | null;
+  /** alive at freeze end (player_rounds.alive_at_start); null when the source does not say, which demos do not */
+  aliveAtStart: boolean | null;
   /** the primary in hand at freeze end */
   primary: string | null;
   /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */
