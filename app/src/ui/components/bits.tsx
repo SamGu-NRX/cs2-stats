@@ -4,7 +4,8 @@ import { scoreText } from "../lib/scale";
 import { initials } from "../lib/format";
 import { meterGeometry, verdictOf, VERDICT_LABEL, type Bench, type Verdict } from "../lib/verdict";
 import type { SourceInfo } from "../data/sources";
-import { emblemUrl, mapAccent } from "../data/maps";
+import { useGameIcon } from "../data/icons";
+import { emblemIcon, mapAccent } from "../data/maps";
 import { mapName } from "../lib/format";
 
 /** A formatted number with its unit set smaller and muted: "71.0%" → 71.0 + small "%". */
@@ -97,7 +98,7 @@ export function SourceBadge({ s, compact }: { s: SourceInfo; compact?: boolean }
   );
 }
 
-/** An image from the web with a fallback when it does not load (offline, blocked). */
+/** An image with a fallback when it does not load (offline, blocked, missing from a pack). */
 export function RemoteImg({ src, alt, fallback, className, style }: { src: string | null; alt: string; fallback: ReactNode; className?: string; style?: CSSProperties }) {
   const [state, setState] = useState<"loading" | "ok" | "failed">(src ? "loading" : "failed");
   if (!src || state === "failed") return <>{fallback}</>;
@@ -119,12 +120,16 @@ export function Initials({ name, className }: { name: string; className?: string
   return <span className={`initials ${className ?? ""}`} aria-hidden>{initials(name)}</span>;
 }
 
-/** Map emblem thumbnail; offline it falls back to a monogram on the map's accent. */
+/**
+ * Map emblem thumbnail from the icon pack; without the pack's emblem it falls back to a monogram on
+ * the map's accent. While the pack is read the thumbnail stays empty, so the monogram never flashes.
+ */
 export function MapThumb({ map, size = 28 }: { map: string; size?: number }) {
   const accent = mapAccent(map);
+  const src = useGameIcon(emblemIcon(map));
   return (
     <span className="map-thumb" style={{ width: size, height: size, ["--accent" as string]: accent }}>
-      <RemoteImg src={emblemUrl(map)} alt="" fallback={<span className="map-thumb__mono">{mapName(map).replace(/[^A-Z0-9]/g, "").slice(0, 2) || mapName(map).slice(0, 2)}</span>} />
+      {src !== undefined && <RemoteImg key={src ?? ""} src={src} alt="" fallback={<span className="map-thumb__mono">{mapName(map).replace(/[^A-Z0-9]/g, "").slice(0, 2) || mapName(map).slice(0, 2)}</span>} />}
     </span>
   );
 }

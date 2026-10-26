@@ -1,12 +1,13 @@
-// Map imagery. The radar comes from the web (data/maps.ts) with the game's overview transform. For a
-// map without a known transform, marks are framed in a box fitted around them. When the image does
-// not load, or the map has no known transform, the walkable shape is drawn instead from where the
-// players of your matches on that map stood alive (Summary.presence cells), in the same radar
-// coordinates, so marks land in the same place either way.
+// Map imagery. The radar comes from the local icon pack (data/maps.ts) with the game's overview
+// transform. For a map without a known transform, marks are framed in a box fitted around them. When
+// the pack has no radar for the map, or the map has no known transform, the walkable shape is drawn
+// instead from where the players of your matches on that map stood alive (Summary.presence cells), in
+// the same radar coordinates, so marks land in the same place either way.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CELL, cellCentre, GRID, type Presence } from "../../stats/positions";
 import { useRollups } from "../data/hooks";
-import { mapInfo, radarUrl, toRadar } from "../data/maps";
+import { useGameIcon } from "../data/icons";
+import { mapInfo, radarIcon, toRadar } from "../data/maps";
 import { useData } from "../data/provider";
 
 /** Margin around fitted marks, world units. */
@@ -84,15 +85,19 @@ function SampledShape({ map, frame }: { map: string; frame: Frame }) {
   return presence ? <SampledCanvas presence={presence} frame={frame} /> : null;
 }
 
-/** The radar image for a map, or the sampled shape when the image does not load. */
+/**
+ * The radar image for a map from the icon pack, or the sampled shape when the pack has no radar for
+ * it or the image does not load. Nothing draws while the pack is being read.
+ */
 export function RadarImage({ map, frame }: { map: string; frame: Frame }) {
-  const url = radarUrl(map);
-  const [failed, setFailed] = useState(!url);
+  const url = useGameIcon(radarIcon(map));
+  const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  if (failed) return <SampledShape map={map} frame={frame} />;
+  if (url === undefined) return null;
+  if (url === null || failed) return <SampledShape map={map} frame={frame} />;
   return (
     <img
-      src={url!}
+      src={url}
       alt=""
       className="radar-img"
       draggable={false}

@@ -14,8 +14,9 @@ import { weaponLabel } from "../../../../stats/weapons";
 import { replayClient } from "../../../../worker/replay-client";
 import { Segmented } from "../../../components/controls";
 import { frameFor, RadarImage } from "../../../components/MapArt";
+import { useGameIcon } from "../../../data/icons";
 import { useData } from "../../../data/provider";
-import { hasLevels, levelRadarUrl, type Level } from "../../../data/radar-levels";
+import { hasLevels, levelRadarIcon, type Level } from "../../../data/radar-levels";
 import { feedFor } from "../../../data/rounds";
 import { Svg, type IconProps } from "../../../icons/Icon";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../../icons/ui";
@@ -124,8 +125,14 @@ function ReplayView({ v, file, round }: TabProps) {
 
   // the map's overview transform (replayUnavailable guarantees the map has one)
   const frame = useMemo(() => frameFor(v.map), [v.map]);
-  // the view zooms to the radar's drawn area (both floors), read from the images once they load
-  const { box, ready } = useRadarBox([levelRadarUrl(v.map, "upper"), levelRadarUrl(v.map, "lower")]);
+  // the radars from the icon pack: undefined while the pack is read, null without one
+  const upperUrl = useGameIcon(levelRadarIcon(v.map, "upper"));
+  const lowerUrl = useGameIcon(levels ? levelRadarIcon(v.map, "lower") : null);
+  // the view zooms to the radar's drawn area (both floors), read from the images once they load;
+  // it waits for the pack too, so the zoom does not jump when the radars arrive
+  const radarBox = useRadarBox([upperUrl ?? null, lowerUrl ?? null]);
+  const box = radarBox.box;
+  const ready = radarBox.ready && upperUrl !== undefined && lowerUrl !== undefined;
 
   // the clock and frame loop (playback.ts); between rounds the canvas is blank
   const pb = useMemo(() => new Playback(
@@ -365,7 +372,6 @@ function ReplayView({ v, file, round }: TabProps) {
   };
   const onCanvasLeave = () => { st.current.pointer = null; pb.invalidate(); };
 
-  const lowerUrl = levels ? levelRadarUrl(v.map, "lower") : null;
   const winText = r.winSide ? (r.winSide === "T" ? "t-text" : "ct-text") : "faint";
 
   return (

@@ -51,6 +51,12 @@ const done = <T,>(x: T | null) => ({ data: x, error: null, loading: false });
 vi.mock("../data/provider", () => ({
   useData: () => ({ ...data, status: "ready", host: null, client: null, baselines: null, baselinesError: null }),
 }));
+/** the icon pack's answer for a radar: an image URL, or null when the pack has none */
+let radarArt: string | null = null;
+vi.mock("../data/icons", async (orig) => {
+  const real = await orig<typeof import("../data/icons")>();
+  return { ...real, useGameIcon: (id: string | null) => (id?.startsWith("radar_") ? radarArt : real.useGameIcon(id)) };
+});
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
   useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => (rollupOf ? rollupOf(q) : rolled(summary(q)))) : null),
@@ -247,8 +253,18 @@ describe("sampled map shape", () => {
   const d = byName("synthetic");
   const conv = byName("abe5d91c");
 
+  it("draws the sampled shape without the icon pack", () => {
+    // fails if a radar stays blank when the pack has no radar though the matches hold position samples
+    radarArt = null;
+    use([d]);
+    render(<RadarView map="de_dust2" frame={frameFor("de_dust2")!} label="radar"><circle r={1} /></RadarView>);
+    expect(host.querySelector("img.radar-img")).toBeNull();
+    expect(host.querySelector(".radar-view canvas.radar-img")).not.toBeNull();
+  });
+
   it("draws the sampled shape when the radar image fails to load", () => {
     // fails if a radar whose image fails stays blank though the matches hold position samples
+    radarArt = "blob:radar";
     use([d]);
     render(<RadarView map="de_dust2" frame={frameFor("de_dust2")!} label="radar"><circle r={1} /></RadarView>);
     expect(host.querySelector("canvas")).toBeNull();
