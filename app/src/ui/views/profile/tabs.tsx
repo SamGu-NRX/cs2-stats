@@ -8,7 +8,7 @@ import type { Query, Rolled } from "../../../worker/protocol";
 import { Card } from "../../components/Card";
 import { MetricList, MetricRow } from "../../components/MetricRow";
 import { APPROX_TIP } from "../../components/Percentile";
-import { botPopulation, fmtMetric, proPoolName, proPopulation, type BotPool } from "../../data/engine";
+import { botPopulation, fmtMetric, proPoolName, proPopulation, type BotPool, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { hasMetric, metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
@@ -152,11 +152,11 @@ export function BuySplitsCard({ q }: { q: Query }) {
 /**
  * Your likeliest role by where you spawned (rolesBySpawn), one row per side, place and position with
  * the rounds summed and the role weighted by rounds (spawns.ts groupSpawns). The quiet spawns close
- * the table as one line.
+ * the table as one line. With the page on one side, that side's spawns alone.
  */
-export function RoleBySpawnCard({ q }: { q: Query }) {
+export function RoleBySpawnCard({ q, side = "both" }: { q: Query; side?: SideKey }) {
   const r = useCall("rolesBySpawn", [q]);
-  const g = useMemo(() => (r.data ? groupSpawns([...r.data.T, ...r.data.CT]) : null), [r.data]);
+  const g = useMemo(() => (r.data ? groupSpawns([...(side === "ct" ? [] : r.data.T), ...(side === "t" ? [] : r.data.CT)]) : null), [r.data, side]);
   if (g && !g.shown.length && !g.more.groups) return null;
   return (
     <Card title="Role by spawn" tip="Your likeliest role from each spawn you start at." flush>

@@ -87,7 +87,12 @@ export function MatchLine({ points, fmt, pooled, refValue, refLabel, plot = 84, 
   const worst = Math.min(...vals);
   let lastAt = -1;
   points.forEach((p, i) => { if (p.value !== null) lastAt = i; });
-  const path = points.flatMap((p, i) => (p.value === null ? [] : [`${x(i)},${Y(p.value)}`])).join(" ");
+  // one polyline per run of rated matches, so a match without a value is a gap, not a bridge
+  const runs: string[][] = [[]];
+  points.forEach((p, i) => {
+    if (p.value === null) { if (runs[runs.length - 1].length) runs.push([]); }
+    else runs[runs.length - 1].push(`${x(i)},${Y(p.value)}`);
+  });
   return (
     <svg className="ms" width={w} height={h} role="img" aria-label={`${label}, oldest first: ${points.map((p) => `${p.label} ${p.value === null ? "none" : fmt(p.value)}`).join(", ")}`}>
       {refValue !== undefined && (
@@ -102,7 +107,7 @@ export function MatchLine({ points, fmt, pooled, refValue, refLabel, plot = 84, 
           <text x={end + 6} y={Y(pooled) + 4} className="ax ms__meanl">{fmt(pooled)}</text>
         </g>
       )}
-      <polyline points={path} className="ms__line" />
+      {runs.filter((r) => r.length > 1).map((r) => <polyline key={r[0]} points={r.join(" ")} className="ms__line" />)}
       {points.map((p, i) => {
         if (p.value === null) return null;
         const ext = vals.length > 1 && (p.value === best || p.value === worst);
