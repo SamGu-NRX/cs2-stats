@@ -16,6 +16,7 @@ import { tipOf } from "../../data/tips";
 import { WeaponIcon } from "../../icons/game";
 import { matchHref, navWasPointer } from "../../router";
 import { SectionAside } from "../shared";
+import { useRoving } from "./roving";
 import type { TabProps } from "./MatchView";
 import {
   CLOSE_CALL_HP, fmtLuck, inputOf, LOW_HP, lobbyLuck, LUCK_GROUPS, luckHeadline, luckMoments, missingInputs,
@@ -164,9 +165,11 @@ const PLOT = 92;
 /**
  * Each round's luck as a vertical lollipop from a dotted zero (SYSTEM.md, diverging values), one fixed
  * pitch per round so the width follows the match; the luckiest and unluckiest rounds are labelled.
- * Every round is a link to it on the Rounds tab.
+ * Every round is a link to it on the Rounds tab; the strip is one tab stop, the arrow keys, Home and
+ * End move between rounds (roving.ts).
  */
 function RoundStrip({ rounds, file }: { rounds: RoundLuck[]; file: string }) {
+  const roving = useRoving(rounds.length);
   const vals = rounds.flatMap((r) => (r.value === null ? [] : [r.value]));
   const max = symmetricMax(vals);
   const top = 12, bottom = PLOT - 8, zero = (top + bottom) / 2;
@@ -179,7 +182,7 @@ function RoundStrip({ rounds, file }: { rounds: RoundLuck[]; file: string }) {
   const h = PLOT + 18;
   const tick = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${Math.abs(x)}`;
   return (
-    <svg className="lk-rs" width={end + 8} height={h} role="group" aria-label={`Luck by round, scale ±${max} hits`}>
+    <svg className="lk-rs" width={end + 8} height={h} role="group" aria-label={`Luck by round, scale ±${max} hits; arrow keys move between rounds`} onKeyDown={roving.onKeyDown}>
       <g aria-hidden>
         <text x={left - 8} y={top + 4} textAnchor="end" className="ax">{tick(max)}</text>
         <text x={left - 8} y={zero + 4} textAnchor="end" className="ax">0</text>
@@ -196,7 +199,7 @@ function RoundStrip({ rounds, file }: { rounds: RoundLuck[]; file: string }) {
         const neg = r.value !== null && r.value < 0;
         const y = r.value === null ? zero : Y(r.value);
         return (
-          <a key={r.ri} href={matchHref(file, "rounds", { round: r.round })} className="lk-rs__r" aria-label={name} data-tip={name}>
+          <a key={r.ri} href={matchHref(file, "rounds", { round: r.round })} className="lk-rs__r" aria-label={name} data-tip={name} {...roving.item(i)}>
             <rect x={x - PITCH / 2 + 1} y={2} width={PITCH - 2} height={h - 4} rx={4} className="lk-rs__hit" />
             {r.value === null
               ? <circle cx={x} cy={zero} r={1.5} className="lk-rs__none" />

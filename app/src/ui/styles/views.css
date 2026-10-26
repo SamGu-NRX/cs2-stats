@@ -790,6 +790,9 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* match pages: the "?" after a panel title holds the panel's explanation */
 .hint { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-left: 6px; vertical-align: 2px; border-radius: 50%; font: 700 10px/1 var(--f); color: var(--ink3); box-shadow: inset 0 0 0 1px var(--line2); cursor: help; }
 .hint:focus-visible { outline: 2px solid var(--cream); outline-offset: 1px; }
+/* the glyph stays 16 px; the pointer target is 24 px (WCAG 2.5.8), the same for .help below */
+.hint { position: relative; }
+.hint::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; }
 @media (hover: hover) and (pointer: fine) { .hint:hover { color: var(--ink); } }
 /* scoreboard: "(t)" and "(f)" stay lower case as HLTV writes them */
 .tbl th .th-lc { text-transform: none; }
@@ -814,6 +817,8 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* ---------------------------------------------------------------- attributes panel: see "Profile v2 system" at the end */
 .help { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--ink3); color: var(--ink3); font: 700 9px/1 var(--f); cursor: help; }
 @media (hover: hover) and (pointer: fine) { .help:hover { border-color: var(--ink2); color: var(--ink); } }
+.help { position: relative; }
+.help::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
 .chip--warn { background: rgba(255, 215, 173, 0.08); color: var(--cream); border: 1px solid rgba(255, 215, 173, 0.25); }
 
 /* ---------------------------------------------------------------- aim (views/aim/AimPanels.tsx) */

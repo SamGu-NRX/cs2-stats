@@ -41,9 +41,10 @@
 .ymr__l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .ymr__v, .ymr__avg, .ymr__d { text-align: right; white-space: nowrap; }
 .ymr__v { font-weight: 650; }
-.ymr__avg { color: var(--ink3); font-size: 12px; }
+/* --ink2: --ink3 on a card is 3.1:1, under AA for text this small */
+.ymr__avg { color: var(--ink2); font-size: 12px; }
 .ymr__d { font-size: 12px; font-weight: 600; }
-.ymr__scale { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.04em; color: var(--ink3); }
+.ymr__scale { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.04em; color: var(--ink2); }
 .ymr__trk .trk__mid { background: var(--ink2); }
 .ymr__stem { position: absolute; top: 7px; height: 2px; background: var(--c, var(--tan)); opacity: 0.6; }
 /* a narrow card keeps the change and drops the usual column (it stays in the row's tooltip) */

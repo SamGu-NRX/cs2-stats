@@ -66,4 +66,3 @@ export function RoleEvidence({ t, ct, side = "both" }: { t: RoleBlend; ct: RoleB
     </>
   );
 }
-

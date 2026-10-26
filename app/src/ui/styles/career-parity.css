@@ -30,7 +30,9 @@
 .rec__where > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recs__more { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 10px; padding: 8px 0 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink2); border-radius: var(--r-chip); }
 @media (hover: hover) and (pointer: fine) { .recs__more:hover { color: var(--ink); } }
-.recs__more[aria-expanded="true"] .clist__chev { transform: rotate(180deg); }
+/* the list rows' chevron (views.css button.clist__row), drawn here too: it pointed nowhere before */
+.recs__more .clist__chev::before { content: ""; display: block; width: 6px; height: 6px; border-right: 1.5px solid var(--ink3); border-bottom: 1.5px solid var(--ink3); transform: translateY(-2px) rotate(45deg); }
+.recs__more[aria-expanded="true"] .clist__chev::before { transform: translateY(1px) rotate(225deg); }
 .recs__all { display: grid; margin-top: 4px; }
 .recs__row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) 64px; align-items: center; gap: 12px; min-height: 32px; font-size: 13px; border-top: 1px solid var(--line); border-radius: var(--r-chip); }
 .recs__row b { text-align: right; }
@@ -135,8 +137,8 @@
    from the middle as every percentile dot does (views.css trk-in) */
 @keyframes luck-dot-in { from { transform: translateX(calc(var(--from, 0) * 1cqw)); } }
 @keyframes luck-stem-in { from { transform: scaleX(0); } }
-html.anim .profile[data-enter] .luck__dot { animation: luck-dot-in 320ms var(--ease-out) both; }
-html.anim .profile[data-enter] .luck__stem { animation: luck-stem-in 320ms var(--ease-out) both; }
+html.anim .profile[data-enter] .luck__dot { animation: luck-dot-in 280ms var(--ease-out) both; }
+html.anim .profile[data-enter] .luck__stem { animation: luck-stem-in 280ms var(--ease-out) both; }
 html.anim .profile[data-enter] .evtrk__dot { animation: trk-in 280ms var(--ease-out) both; }
 @media (prefers-reduced-motion: reduce) {
   html.anim .profile[data-enter] :is(.luck__dot, .luck__stem, .evtrk__dot) { animation-name: fade-in; }
