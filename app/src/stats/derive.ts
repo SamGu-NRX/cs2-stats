@@ -21,7 +21,7 @@ import { sniping } from "./sniping";
 import { swing } from "./swing";
 import { modelFingerprint, type WinProbSource } from "./model-params";
 import type { MatchTables, Side } from "./tables";
-import { grenadeFacts, utility } from "./utility";
+import { grenadeFacts, markUtility, utility } from "./utility";
 import { derivePresence } from "./positions";
 import { deriveUtilQ } from "./utilq";
 
@@ -375,6 +375,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   duels(c);
   positioning(c);
   utility(c);
+  markUtility(c);
   ecoAdjust(c);
   swing(c);
   valuedRounds(c);

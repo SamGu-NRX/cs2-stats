@@ -57,3 +57,12 @@ it("counts each enemy a molotov burned once for that molotov", () => {
   const s = rollup([f], { player: "a" });
   expect([s.m.molotovHits, METRIC.molotovEnemiesHit.value(s), METRIC.molotovDmg.value(s)]).toEqual([2, 2, 24]);
 });
+
+it("marks a match's rounds as recording utility only when it holds a throw, detonation or blind", () => {
+  // fails if a source with no grenade or flash events (some plugin files) reads as one that recorded
+  // a round without utility: no events gives 0 known rounds; one blind, or one throw, gives both rounds
+  const known = (m: Parameters<typeof oneRound>[0]) => rollup([oneRound(m)], { player: ["a", "c"] }).m.utilityRounds;
+  expect(known({ players: { a: "CT", c: "T" } })).toBe(0);
+  expect(known({ players: { a: "CT", c: "T" }, blinds: [{ tick: FREEZE_END + 300, attacker_steamid: "a", victim_steamid: "c", duration: 2 }] })).toBe(2);
+  expect(known({ players: { a: "CT", c: "T" }, grenade_throws: [{ tick: FREEZE_END + 300, steamid: "c", weapon: "smokegrenade" }] })).toBe(2);
+});

@@ -2,7 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { addBests, awardsOf, careerRatings, compositeOf, focusAreas, groupSessions, metricDeltas, topStats, type Best } from "./career";
 import type { Percentile } from "./compare";
+import { rating3Of } from "./rating3";
 import { emptySummary } from "./rollup";
+import { at } from "./testing/summary";
 
 const pctOf = (xs: Record<string, number | null>): Record<string, Percentile> =>
   Object.fromEntries(Object.entries(xs).map(([id, pct]) => [id, { id, value: 1, pct, pool: "all", reason: null, n: null }]));
@@ -48,6 +50,29 @@ describe("personal bests", () => {
     addBests(acc, "m3", summary({ rounds: 5, kills: 10, deaths: 1 }));
     expect([acc.kills, acc.dpr].map((b) => [b.file, b.value])).toEqual([["m2", 27], ["m1", 10 / 24]]);
     expect(acc.kpr.file).toBe("m2");
+  });
+
+  it("sets no best from a match that did not record the count's or the metric's input", () => {
+    // fails if a missing input reads as zero or as a value over some rows: m1 recorded no grenades or
+    // flashes (a plugin file without them), so its 0 enemies flashed is no best; its AWP duels are 1
+    // of 1 won, but the weapon in hand is known for neither of its 2 deaths, so its 100% is no best.
+    // m2 recorded both: 3 enemies flashed, 1 of 2 AWP duels won (50%)
+    const acc: Record<string, Best> = {};
+    addBests(acc, "m1", summary({ rounds: 12, enemiesFlashed: 0, awpDuels: 1, awpDuelWins: 1, deathsHandKnown: 0, deathsHandTotal: 2 }));
+    expect([acc.enemiesFlashed, acc.utilDmg, acc.awpDuelWin, acc.kills.value]).toEqual([undefined, undefined, undefined, 0]);
+    addBests(acc, "m2", summary({ rounds: 12, utilityRounds: 12, enemiesFlashed: 3, awpDuels: 2, awpDuelWins: 1, deathsHandKnown: 2, deathsHandTotal: 2 }));
+    expect([acc.enemiesFlashed, acc.awpDuelWin].map((b) => [b.file, b.value])).toEqual([["m2", 3], ["m2", 50]]);
+  });
+
+  it("keeps the rating's best when only its percentile input, the duel loadouts, is short", () => {
+    // fails if the eco input, which gates only the percentile, blocks a best: none of the match's 4
+    // kills and deaths has both loadouts, yet its rating stands
+    const s = at({ kpr_eco: 0.8, adr_eco: 80, dpr_eco: 0.6, kast_eco: 75, mk: 15, swing: 2 }, 12);
+    Object.assign(s.m, { ecoEvents: 4, ecoEventsKnown: 0 });
+    const acc: Record<string, Best> = {};
+    addBests(acc, "m1", s);
+    expect(acc.rating3).toEqual({ id: "rating3", value: rating3Of(s).value, file: "m1" });
+    expect(rating3Of(s).value).not.toBeNull();
   });
 });
 
