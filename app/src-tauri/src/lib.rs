@@ -232,6 +232,12 @@ fn valve_user(root: &Path) -> Result<Option<String>, String> {
 
 /// Whether `p`, with every junction and symbolic link resolved, lies inside `root`'s own resolved path. A
 /// version folder or table that is a link to elsewhere is refused (review of #29: a junction read outside).
+///
+/// A link swapped between this check and the open that follows is not defended against, and does not
+/// need to be: the Valve folder is in the user's own %APPDATA%, so anything that can swap a link there
+/// already runs as the user and can read the files directly. The checks keep the folder's own contents, a
+/// stray junction or a crafted COMPLETE list, from pointing the app elsewhere. The launcher works under the
+/// same threat model.
 fn inside(root: &Path, p: &Path) -> bool {
     match (root.canonicalize(), p.canonicalize()) {
         (Ok(r), Ok(q)) => q != r && q.starts_with(&r),
@@ -239,13 +245,38 @@ fn inside(root: &Path, p: &Path) -> bool {
     }
 }
 
-/// The version folder's COMPLETE list (file name to bytes), when every file is there at its size.
-fn complete_tables(dir: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
-    let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| "no COMPLETE file yet".to_string())?;
+/// A plain table file name: lowercase letters, digits and '_', then ".parquet". Nothing that can name a
+/// folder or step out of one.
+fn table_name(t: &str) -> bool {
+    t.len() > 8 && t.ends_with(".parquet") && t[..t.len() - 8].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// The version folder's COMPLETE list (file name to bytes), when it lies inside `root`, every name it lists
+/// is a plain table name, and every table resolves inside `root` at its listed size. Each check comes
+/// before the open it guards, so nothing outside `root` is read.
+fn complete_tables(root: &Path, dir: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
+    let complete = dir.join("COMPLETE");
+    if !complete.exists() {
+        return Err("no COMPLETE file yet".into());
+    }
+    if !inside(root, &complete) {
+        return Err("its version folder resolves outside the Valve folder".into());
+    }
+    let text = fs::read_to_string(&complete).map_err(|e| format!("COMPLETE: {e}"))?;
     let sizes: std::collections::BTreeMap<String, u64> =
         serde_json::from_str(&text).map_err(|e| format!("COMPLETE: {e}"))?;
     for (f, n) in &sizes {
-        if fs::metadata(dir.join(f)).map(|m| m.len()).ok() != Some(*n) {
+        if !table_name(f) {
+            return Err(format!("COMPLETE lists \"{f}\", which is not a table file name"));
+        }
+        let p = dir.join(f);
+        if !p.exists() {
+            return Err(format!("{f} is missing"));
+        }
+        if !inside(root, &p) {
+            return Err(format!("{f} resolves outside the Valve folder"));
+        }
+        if fs::metadata(&p).map(|m| m.len()).ok() != Some(*n) {
             return Err(format!("{f} is not at its listed {n} bytes"));
         }
     }
@@ -299,17 +330,17 @@ fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
             out.skipped.push(skip("retired".into()));
             continue;
         }
+        if !inside(root, &map.join("CURRENT")) {
+            out.skipped.push(skip("CURRENT resolves outside the Valve folder".into()));
+            continue;
+        }
         let current = fs::read_to_string(map.join("CURRENT")).unwrap_or_default().trim().to_string();
         if !version_dir(&current) {
             out.skipped.push(skip(format!("CURRENT names \"{current}\", which is not a version folder")));
             continue;
         }
         let dir = map.join(&current);
-        if dir.join("COMPLETE").exists() && !inside(root, &dir.join("COMPLETE")) {
-            out.skipped.push(skip("its version folder resolves outside the Valve folder".into()));
-            continue;
-        }
-        match complete_tables(&dir) {
+        match complete_tables(root, &dir) {
             Ok(sizes) => {
                 let mtime = fs::metadata(dir.join("COMPLETE"))
                     .and_then(|m| m.modified())
@@ -334,8 +365,7 @@ async fn list_valve() -> Result<ValveListing, String> {
 /// returns that table, only if the version's COMPLETE list names it at its size.
 fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     let parts: Vec<&str> = path.split('/').collect();
-    let table_ok = |t: &str| t.ends_with(".parquet") && t.len() > 8 && t[..t.len() - 8].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    let ok = matches!(parts.len(), 2 | 3) && plain_name(parts[0]) && version_dir(parts[1]) && parts.get(2).is_none_or(|t| table_ok(t));
+    let ok = matches!(parts.len(), 2 | 3) && plain_name(parts[0]) && version_dir(parts[1]) && parts.get(2).is_none_or(|t| table_name(t));
     if !ok {
         return Err(format!("{path}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])"));
     }
@@ -349,8 +379,11 @@ fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     }
     let text = fs::read_to_string(dir.join("COMPLETE")).map_err(|_| format!("{path}: this version is gone; rescan"))?;
     let sizes: std::collections::BTreeMap<String, u64> = serde_json::from_str(&text).map_err(|e| format!("{path}: COMPLETE: {e}"))?;
+    if let Some(bad) = sizes.keys().find(|f| !table_name(f)) {
+        return Err(format!("{path}: COMPLETE lists \"{bad}\", which is not a table file name"));
+    }
     let Some(table) = parts.get(2) else {
-        let names: Vec<&String> = sizes.keys().filter(|f| f.ends_with(".parquet")).collect();
+        let names: Vec<&String> = sizes.keys().collect();
         return serde_json::to_vec(&names).map_err(|e| e.to_string());
     };
     let want = *sizes.get(*table).ok_or_else(|| format!("{path}: not one of this version's tables"))?;
@@ -595,6 +628,21 @@ mod tests {
             let err = read_valve_in(&root, &p).unwrap_err();
             assert!(err.contains("outside the Valve folder"), "{err}");
         }
+    }
+
+    #[test]
+    fn a_complete_list_naming_a_file_outside_keeps_its_match_from_being_listed_or_read() {
+        // fails if a crafted COMPLETE points the listing or a read at a file beside the folder (review of #29)
+        let s = Scratch::new("valve-escape");
+        let root = s.0.join("valve");
+        valve_map(&root, "match730_e", V1, &[("match.parquet", b"abc")], None);
+        fs::write(s.0.join("stolen.parquet"), b"abc").unwrap();
+        let complete = root.join("match730_e").join(V1).join("COMPLETE");
+        fs::write(&complete, "{\"match.parquet\": 3, \"../../../stolen.parquet\": 3}").unwrap();
+        let l = list_valve_in(&root).unwrap();
+        assert!(l.files.is_empty());
+        assert!(l.skipped[0].why.contains("not a table file name"), "{}", l.skipped[0].why);
+        assert!(read_valve_in(&root, &format!("match730_e/{V1}")).is_err());
     }
 
     #[test]

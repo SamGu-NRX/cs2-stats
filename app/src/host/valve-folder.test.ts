@@ -76,6 +76,29 @@ it("never lists or reads a version that resolves outside the folder", () => {
   expect(() => readValve(root, `match730_j/${V1}/match.parquet`)).toThrow(/outside the Valve folder/);
 });
 
+it("validates every name and path before opening it, and never reads a COMPLETE from outside", () => {
+  // fails if the listing parses a COMPLETE behind a junction (review of #29: the reason was its JSON error),
+  // or lists or serves a match whose COMPLETE names a table outside the folder
+  const root = fresh();
+  const outside = path.join(path.dirname(root), `elsewhere-${n}`, V1);
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(path.join(outside, "COMPLETE"), "not json, and never to be read");
+  mkdirSync(path.join(root, "match730_j"));
+  writeFileSync(path.join(root, "match730_j", "CURRENT"), `${V1}\n`);
+  symlinkSync(outside, path.join(root, "match730_j", V1), "junction");
+  writeFileSync(path.join(path.dirname(root), `stolen-${n}.parquet`), "abc");
+  map(root, "match730_e", { "match.parquet": "abc" });
+  const complete = path.join(root, "match730_e", V1, "COMPLETE");
+  writeFileSync(complete, JSON.stringify({ "match.parquet": 3, [`../../../stolen-${n}.parquet`]: 3 }));
+  const l = listValve(root);
+  expect(l.files).toEqual([]);
+  expect(Object.fromEntries(l.skipped.map((s) => [s.file, s.why]))).toEqual({
+    "valve/match730_j": "its version folder resolves outside the Valve folder",
+    "valve/match730_e": `${V1}/COMPLETE lists "../../../stolen-${n}.parquet", which is not a table file name`,
+  });
+  expect(() => readValve(root, `match730_e/${V1}`)).toThrow(ValvePathError);
+});
+
 it("runs the importer with progress into the Valve folder, and says what is missing when it cannot", () => {
   // fails if the importer runs without --progress (the app shows nothing), writes elsewhere, or fails silently
   const dir = fresh();
