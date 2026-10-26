@@ -63,6 +63,9 @@ export function closing(c: Ctx): ClutchFact[] {
     // matchviews.ts addSituations)
     const leaves = rf.leaves.filter((l) => (rf.freezeEndTick === null || l.tick >= rf.freezeEndTick) && l.tick <= rf.endTick);
     const valued = list.filter((k) => k.tick <= rf.endTick);
+    // alive at the round's end: in the round's population, not killed by its end and not disconnected
+    // (a death after the end does not count, HLTV's rule). Saves and clutch saves both read this.
+    const aliveAtEnd = (pi: number) => rows[pi]?.aliveAtStart !== false && !valued.some((k) => k.victim === pi) && !leaves.some((l) => l.pi === pi);
 
     // last alive: at some moment the player was the only one of their side alive (counted once)
     const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
@@ -86,8 +89,7 @@ export function closing(c: Ctx): ClutchFact[] {
       const afterPlant = sincePlant !== null;
       const left = afterPlant ? clockLeft(clock.bomb, sincePlant) : clockLeft(clock.round, t);
       // a save, as closing counts saves below: the round lost and the player alive at its end
-      // (a clutch player who disconnected was not alive at the end either)
-      const saved = !cl.won && !list.some((k) => k.victim === cl.pi && k.tick <= rf.endTick) && !leaves.some((l) => l.pi === cl.pi);
+      const saved = !cl.won && aliveAtEnd(cl.pi);
       out.push({ ri, pi: cl.pi, opponents: cl.opponents, won: cl.won, saved, kills, t, afterPlant, left });
       const m = c.pr[ri][cl.pi]!.m;
       const n = Math.min(5, cl.opponents) as 1 | 2 | 3 | 4 | 5;
@@ -109,7 +111,7 @@ export function closing(c: Ctx): ClutchFact[] {
         if (!death || death.tick > rf.plantTick) m.aliveAtPlant = 1;
       }
       // a save: alive at the end of a lost round
-      if (p.won === false && (!death || death.tick > rf.endTick)) m.saves = 1;
+      if (p.won === false && aliveAtEnd(p.pi)) m.saves = 1;
     }
   }
   return out;

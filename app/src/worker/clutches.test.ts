@@ -86,3 +86,17 @@ it("leaves a player dead at freeze end out of the clutch population", () => {
   });
   expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.kills, r.t])).toEqual([["a", 2, true, 2, 0], ["d", 1, false, 0, 10]]);
 });
+
+it("agrees with the saves count: a clutch player who disconnects in a lost round saved nothing", () => {
+  // fails if the clutch row and the saves measure disagree about a disconnect. c kills b at 5 s,
+  // leaving a in a 1v2; a disconnects alive at 20 s and T wins. a was not alive at the end: no clutch
+  // save and no save. e, whom the source marks dead at freeze end, saved nothing either
+  const f = oneRound({
+    players: { a: "CT", b: "CT", e: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" },
+    player_rounds: { e: { alive_at_start: false } },
+    leaves: [{ tick: t(20), steamid: "a", alive: true }],
+    kills: [{ tick: t(5), killer: "c", victim: "b" }],
+  });
+  expect(rows(f, ["a"]).map((r) => [r.player, r.opponents, r.won, r.saved])).toEqual([["a", 2, false, false]]);
+  expect(["a", "e"].map((p) => rollup([f], { player: p }).m.saves)).toEqual([0, 0]);
+});
