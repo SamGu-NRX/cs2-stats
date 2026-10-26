@@ -345,7 +345,6 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
                   </span>
                 ))}
               </span>
-              <span className="hl__clip" data-tip="Clips of your best moments arrive with the clipping service">Clip coming</span>
             </>
           ) : <span className="meta">No kill-by-kill rounds</span>}
         </a>

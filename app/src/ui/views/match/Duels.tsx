@@ -51,7 +51,7 @@ export default function Duels({ v }: TabProps) {
                       const d = km[q.pi][p.pi];
                       const t = k + d ? toScore(k - d, 0, 4) : 0;
                       return (
-                        <td key={q.key} style={{ background: k + d ? scoreTint(t, 0.4) : undefined }} data-tip={`${p.name} killed ${q.name} ${k} ${k === 1 ? "time" : "times"}; ${q.name} killed ${p.name} ${d}`}>
+                        <td key={q.key} style={{ background: k + d ? scoreTint(t, 0.4) : undefined }} data-tip={`${p.name} killed ${q.name} ${k} ${k === 1 ? "time" : "times"}; ${q.name} killed ${p.name} ${d}`} tabIndex={0}>
                           <span className="num"><b>{k}</b><span className="faint">–</span>{d}</span>
                         </td>
                       );
@@ -167,9 +167,9 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
             <th className="l"><span className="th">Round</span></th>
             <th className="l"><span className="th">Killed</span></th>
             <th className="l"><span className="th">Died to</span></th>
-            <th><span className="th" data-tip={meta("accuracy").def}>Accuracy</span></th>
-            <th><span className="th" data-tip={meta("timeToDamage").def}>TTD</span></th>
-            <th><span className="th" data-tip={meta("reactionTime").def}>Reaction</span></th>
+            <th><span className="th" data-tip={meta("accuracy").def} tabIndex={0}>Accuracy</span></th>
+            <th><span className="th" data-tip={meta("timeToDamage").def} tabIndex={0}>TTD</span></th>
+            <th><span className="th" data-tip={meta("reactionTime").def} tabIndex={0}>Reaction</span></th>
           </tr></thead>
           <tbody>
             {rows.map(({ r, kills, death, s }) => {
@@ -180,8 +180,8 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
                   <td className="l"><span className="yrounds__names">{kills.map((k, i) => <span key={i} className="yrounds__kill">{v.players[k.victim].name}{k.headshot && <FlagIcon id="headshot" label="Headshot" size={11} />}</span>)}{!kills.length && <span className="faint">–</span>}</span></td>
                   <td className="l">{death ? <span className="yrounds__kill">{death.killer === null ? "World" : v.players[death.killer].name}{death.traded && <span className="chip chip--outline">traded</span>}</span> : <span className="faint">Survived</span>}</td>
                   <td><Num v={v.entry.hasAim ? metric(s, "accuracy") : "–"} /></td>
-                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "timeToDamage")} />}</td>
-                  <td>{gated ? <span className="faint" data-tip={gate}>–</span> : <Num v={metric(s, "reactionTime")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate} tabIndex={0}>–</span> : <Num v={metric(s, "timeToDamage")} />}</td>
+                  <td>{gated ? <span className="faint" data-tip={gate} tabIndex={0}>–</span> : <Num v={metric(s, "reactionTime")} />}</td>
                 </tr>
               );
             })}

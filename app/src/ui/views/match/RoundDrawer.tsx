@@ -229,7 +229,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                   <div className="deco__head">
                     <BuyIcon buy={tr.buy} size={16} beside className={t === "us" ? "cream" : "muted"} />
                     <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
-                    <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
+                    <span className="num faint" data-tip="Team equipment value at freeze end" tabIndex={0}>{fmtMoney(tr.equip)}</span>
                   </div>
                   <ul className="deco__players">
                     {team(t).map((p) => {
@@ -238,15 +238,15 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                         <li key={p.key}>
                           <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
                           <span className="deco__buy">{x?.ownBuy && <BuyIcon buy={x.ownBuy} size={11} />}</span>
-                          <span className="num" data-tip="Equipment value at freeze end">{fmtMoney(x?.equip)}</span>
-                          <span className="num faint" data-tip="Money left after buying">{fmtMoney(x?.money)}</span>
+                          <span className="num" data-tip="Equipment value at freeze end" tabIndex={0}>{fmtMoney(x?.equip)}</span>
+                          <span className="num faint" data-tip="Money left after buying" tabIndex={0}>{fmtMoney(x?.money)}</span>
                         </li>
                       );
                     })}
                   </ul>
                   <div className="deco__foot meta">
                     <span>Bank {fmtMoney(tr.money)}</span>
-                    {tr.spent !== null && <span data-tip="Money the team spent in the buy time">Spent {fmtMoney(tr.spent)}</span>}
+                    {tr.spent !== null && <span data-tip="Money the team spent in the buy time" tabIndex={0}>Spent {fmtMoney(tr.spent)}</span>}
                     {tr.saves > 0 && <span>{tr.saves} saved</span>}
                   </div>
                 </div>
@@ -265,7 +265,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                     <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
                     <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]} tabIndex={0}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
                     <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
-                    <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
+                    <span className="num" data-tip="Grenade and fire damage to enemies" tabIndex={0}>{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
                   </li>
                 );
               })}
@@ -283,7 +283,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                 const rm = m(p.pi);
                 const sw = rm && rm.swingRounds ? rm.swing : null;
                 return (
-                  <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`}>
+                  <li key={p.key} className={p.isHuman ? "is-you" : undefined} data-tip={`${p.name}: swing ${fmtSwing(sw)} this round${own ? `, ${own} damage to teammates` : ""}`} tabIndex={0}>
                     <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
                     <span className="hbar"><i style={{ width: `${(d / dmgMax) * 100}%`, background: sideCls(p.pi) === "t" ? "var(--t)" : "var(--ct)", opacity: 0.8 }} /></span>
                     <b className="num">{d}{own > 0 && <small className="poor-text"> +{own} team</small>}</b>
@@ -306,10 +306,10 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
               <div className="daim">
                 <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
                 <div className="stat"><span className="stat__l">Hits</span><span className="stat__v num">{you.aim.hits}</span><span className="stat__s">{you.headHits} head</span></div>
-                <div className="stat" data-tip={metric("accuracy").def}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
-                <div className="stat" data-tip="Share of your gun hits that landed on the head"><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
-                <div className="stat" data-tip={metric("firstBulletAccuracy").def}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
-                <div className="stat" data-tip={metric("sprayDeviation").def}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
+                <div className="stat" data-tip={metric("accuracy").def} tabIndex={0}><span className="stat__l">Accuracy</span><span className="stat__v num"><Num v={fmtMetric("accuracy", you.v.accuracy)} /></span></div>
+                <div className="stat" data-tip="Share of your gun hits that landed on the head" tabIndex={0}><span className="stat__l">HS hits</span><span className="stat__v num"><Num v={fmtRatio(you.headHits, you.aim.hits)} /></span></div>
+                <div className="stat" data-tip={metric("firstBulletAccuracy").def} tabIndex={0}><span className="stat__l">First bullet</span><span className="stat__v num"><Num v={fmtMetric("firstBulletAccuracy", you.v.firstBulletAccuracy)} /></span><span className="stat__s">{you.aim.firstHits}/{you.aim.first}</span></div>
+                <div className="stat" data-tip={metric("sprayDeviation").def} tabIndex={0}><span className="stat__l">Spray</span><span className="stat__v num"><Num v={fmtMetric("sprayDeviation", you.v.sprayDeviation)} /></span></div>
               </div>
               {!v.visibility ? (
                 <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="This file lacks view angles and line of sight." /></p>
