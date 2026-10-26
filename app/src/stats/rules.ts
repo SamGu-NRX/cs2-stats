@@ -63,6 +63,8 @@ export interface Clutch {
   /** enemies alive when the player became the last of their side */
   opponents: number;
   won: boolean;
+  /** the index in `kills` of the death that left the player alone */
+  from: number;
 }
 
 /**
@@ -75,19 +77,19 @@ export function detectClutches(kills: KillFact[], alive: Record<Side, Set<number
   const live: Record<Side, Set<number>> = { CT: new Set(alive.CT), T: new Set(alive.T) };
   const out: Clutch[] = [];
   let first: Clutch | null = null;
-  for (const k of kills) {
+  for (const [from, k] of kills.entries()) {
     live.CT.delete(k.victim);
     live.T.delete(k.victim);
     const ct = live.CT.size;
     const t = live.T.size;
     if (!first && (ct === 1 || t === 1)) {
       const side: Side = ct === 1 ? "CT" : "T";
-      first = { pi: [...live[side]][0], side, opponents: side === "CT" ? t : ct, won: side === winner };
+      first = { pi: [...live[side]][0], side, opponents: side === "CT" ? t : ct, won: side === winner, from };
       if (first.opponents > 0) out.push(first);
     }
     if (first && ct === 1 && t === 1 && out.length < 2) {
       const side: Side = first.side === "CT" ? "T" : "CT";
-      out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner });
+      out.push({ pi: [...live[side]][0], side, opponents: 1, won: side === winner, from });
     }
   }
   return out;

@@ -15,7 +15,7 @@ import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
 import type { MatchEntry } from "../ui/data/match";
 import type {
-  Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
+  ClutchRow, Line, MatchBundle, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
 
 export function metaOf(wp: WinProbSource): Meta {
@@ -170,4 +170,13 @@ export function spawnRows(acc: SpawnIndex): Record<Side, SpawnRow[]> {
 export function addMapRounds(acc: Record<string, number>, f: MatchFacts, filter: Filter): void {
   const n = keptRounds(f, filter).length;
   if (n) acc[f.match.map] = (acc[f.match.map] ?? 0) + n;
+}
+
+/** Adds the clutches of one match (its `file`) whose player-round `filter` keeps. */
+export function addClutchRows(out: ClutchRow[], file: string, f: MatchFacts, filter: Filter): void {
+  const kept = new Map(keptRounds(f, filter).map((r) => [r.ri * 1024 + r.pi, r]));
+  for (const c of f.clutches) {
+    const r = kept.get(c.ri * 1024 + c.pi);
+    if (r) out.push({ file, round: f.rounds[c.ri].number, side: r.side, player: f.players[c.pi].id, opponents: c.opponents, won: c.won, kills: c.kills });
+  }
 }
