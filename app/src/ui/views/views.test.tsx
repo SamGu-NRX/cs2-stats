@@ -20,7 +20,8 @@ import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { rollup } from "../../stats/rollup";
 import { weaponLabel } from "../../stats/weapons";
-import type { ClutchRow, Method, Query } from "../../worker/protocol";
+import type { ClutchRow, HighlightRow, Method, Query } from "../../worker/protocol";
+import type { FlashRow, FlashTool } from "../../stats/flashes";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
 import { botPopulation as botPopulationText, careerEntries, listedEntries, provisionalText, recordEntries, statLine } from "../data/engine";
@@ -47,6 +48,9 @@ import { Provisional } from "./shared";
 import Overview from "./match/Overview";
 import Rounds from "./match/Rounds";
 import Utility from "./match/Utility";
+import { ClutchList } from "./match/ClutchList";
+import { NO_MAP_FLASHES } from "./match/FlashTool";
+import { HighlightsCard, HighlightsShort } from "./profile/Highlights";
 import Weapons from "./Weapons";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -963,5 +967,123 @@ describe("Weapons", () => {
     }
     const few = guns.find((w) => total[w].shots > 0 && total[w].shots < 40)!;
     expect(text(col(rowOf(few), EDGE)), few).toBe("–");
+  });
+});
+
+describe("parity round 2: flashes, clutches and highlights", () => {
+  const s = converted.find((x) => x.facts.kills.length > 0)!;
+  const v = modelOf(s);
+  const ct = v.players.filter((p) => p.team === "them")[0].pi;
+  const mate = v.players.find((p) => p.team === "us" && !p.isHuman)!.pi;
+  const flash = (round: number, side: "T" | "CT", at: [number, number] | null, more: Partial<FlashRow> = {}): FlashRow => ({ round, side, t: 12, at, blinded: [], kills: [], ...more });
+  const tool: FlashTool = {
+    flashes: [
+      flash(3, "T", [100, 200], { blinded: [{ pi: ct, secs: 2.4, team: false, flashed: true, at: [300, 300] }, { pi: mate, secs: 1.5, team: true, flashed: true, at: null }], kills: [{ victim: ct, killer: mate, t: 13, weapon: "ak47", headshot: true, assist: true, whileBlind: true }] }),
+      flash(4, "T", null),
+      flash(15, "CT", [0, 0]),
+    ],
+    notes: ["1 of 3 flashes have no detonation point in this file, so they are not on the map."],
+  };
+  const onMap = (map: string): MatchModel => ({ ...v, map });
+
+  it("lists each flash with whom it blinded and the kill it led to, opens it, and links its round", () => {
+    // fails if a row loses its counts, the detail its victims or kill, the round link its round, or
+    // the engine's note on what the file lacks is hidden
+    answers = { flashes: tool };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    const rows = Array.from(host.querySelectorAll(".fl-row"));
+    expect(rows.map((r) => text(r.querySelector(".pip")))).toEqual(["3", "4", "15"]);
+    expect(text(rows[0].querySelector(".fl-row__en b"))).toBe("1");
+    expect(text(rows[0].querySelector(".fl-row__tm"))).toBe("1");
+    expect(rows[0].querySelector(".fl-row__go")!.getAttribute("href")).toBe(matchHref(v.file, "rounds", { round: 3 }));
+    expect(text(rows[1].querySelector(".fl-row__np"))).toBe("No point");
+    expect(text(host.querySelector(".fl__notes"))).toContain("1 of 3 flashes have no detonation point");
+    // the two flashes with a point are on the radar
+    expect(host.querySelectorAll(".fl-dot")).toHaveLength(2);
+    act(() => rows[0].querySelector<HTMLButtonElement>(".fl-row__btn")!.click());
+    const detail = host.querySelector(".fl-detail")!;
+    expect(Array.from(detail.querySelectorAll(".fl-blind__s")).map(text)).toEqual(["2.4 s", "1.5 s"]);
+    expect(detail.querySelector(".fl-kill")?.getAttribute("data-tip")).toBe("Your flash assist, Killed while blind");
+    // the picked flash draws its ray over the dimmed rest: one, to the victim whose position is known
+    expect(host.querySelector(".fl-dots.is-dim")).not.toBeNull();
+    expect(host.querySelectorAll(".fl-ray")).toHaveLength(1);
+  });
+
+  it("filters by side, and moves between flashes with the arrow keys", () => {
+    // fails if the side filter keeps the other side's flashes, or the arrows skip or trap the focus
+    answers = { flashes: tool };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    const btns = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".fl-row__btn"));
+    btns()[0].focus();
+    act(() => { btns()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(btns()[1]);
+    const ctBtn = Array.from(host.querySelectorAll<HTMLButtonElement>(".fl__bar .seg__item")).find((b) => text(b) === "CT")!;
+    act(() => ctBtn.click());
+    expect(Array.from(host.querySelectorAll(".fl-row .pip")).map(text)).toEqual(["15"]);
+  });
+
+  it("shows the replay's unavailable state for a map without radar calibration, and keeps the list", () => {
+    // fails if an uncalibrated map gets a frame fitted around the points, or loses the list with the map
+    answers = { flashes: tool };
+    render(<Utility v={onMap("de_unknown")} file={v.file} round={null} />);
+    expect(text(host.querySelector(".fl__nomap"))).toBe(NO_MAP_FLASHES);
+    expect(host.querySelectorAll(".fl-dot")).toHaveLength(0);
+    expect(host.querySelectorAll(".fl-row")).toHaveLength(3);
+  });
+
+  it("says why a file has no flashes rather than showing zeros", () => {
+    // fails if a file without grenade events shows the figures (zeros) instead of the engine's reason
+    answers = { flashes: { flashes: [], notes: ["This file records no grenade or flash events."] } };
+    render(<Utility v={onMap("de_dust2")} file={v.file} round={null} />);
+    expect(host.querySelector(".fl__figs")).toBeNull();
+    expect(Array.from(host.querySelectorAll(".empty")).map(text)).toContain("This file records no grenade or flash events.");
+  });
+
+  it("lists every clutch with its save, kills and time left, the clock's absence explained", () => {
+    // fails if a save reads as a loss, the clock shows a number it does not have, or a row links
+    // anywhere but its round
+    const you = v.players[v.human];
+    const row = (round: number, more: Partial<ClutchRow>): ClutchRow => ({ file: v.file, round, side: "T", player: you.key, opponents: 2, won: false, kills: 0, saved: false, t: 50, afterPlant: false, left: null, ...more });
+    answers = { clutches: [row(5, { saved: true, kills: 1, left: 40, afterPlant: true }), row(9, { won: true, kills: 2, left: 65 }), row(12, {})] };
+    render(<ClutchList v={v} file={v.file} />);
+    const rows = Array.from(host.querySelectorAll(".clutchtbl tbody tr"));
+    expect(rows.map((r) => text(r.querySelector(".clutchtbl__res")))).toEqual(["Saved", "Won", "Lost"]);
+    expect(rows.map((r) => text(r.children[4]))).toEqual(["1", "2", "0"]);
+    expect(rows.map((r) => text(r.children[5]))).toEqual(["0:40", "1:05", "–"]);
+    expect(rows[0].children[5].querySelector("[data-tip]")?.getAttribute("data-tip")).toMatch(/after the plant/);
+    expect(rows[2].children[5].querySelector("[data-tip]")?.getAttribute("data-tip")).toMatch(/no round timer/);
+    expect(rows[0].querySelector("a")!.getAttribute("href")).toBe(matchHref(v.file, "rounds", { round: 5 }));
+  });
+
+  const hl = (file: string, round: number, kinds: HighlightRow["kinds"], kills = 3): HighlightRow => ({
+    file, round, start: 0, side: "CT", player: "x", kinds, kills, clutch: kinds.includes("clutch") ? { opponents: 2, kills: 2 } : null, won: true,
+    feed: Array.from({ length: kills }, () => ({ weapon: "ak47", headshot: true, wallbang: false, smoke: false, noscope: false, blind: null, inAir: null })),
+  });
+
+  it("filters highlights by kind, links each to its round, and pages a long list", () => {
+    // fails if a kind filter keeps other kinds, a row links anywhere but its round in the drawer, a kind
+    // with none is offered, or the list shows everything at once
+    const f = samples[0].file;
+    const rows = [hl(f, 9, ["4k"], 4), hl(f, 7, ["3k", "clutch"]), ...Array.from({ length: 14 }, (_, i) => hl(f, 30 - i, ["3k"]))];
+    answers = { highlights: rows };
+    render(<HighlightsCard q={queryOf(samples)} list={samples.map((x) => x.entry)} />);
+    expect(host.querySelectorAll(".hlr")).toHaveLength(12);
+    expect(host.querySelector(".hl-more")).not.toBeNull();
+    const seg = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>(".hl-list .seg__item")).find((b) => text(b).startsWith(label))!;
+    expect(seg("Ace").disabled).toBe(true);
+    act(() => seg("1vN won").click());
+    expect(Array.from(host.querySelectorAll(".hlr")).map((a) => a.getAttribute("href"))).toEqual([matchHref(f, "rounds", { round: 7 })]);
+    act(() => seg("4K").click());
+    expect(host.querySelector(".hlr")!.getAttribute("aria-label")).toMatch(/^4K, round 9 on CT/);
+  });
+
+  it("shows Home's latest highlights and links to the full list", () => {
+    // fails if Home shows more than its short list, or its link loses the count or the target
+    const f = samples[0].file;
+    answers = { highlights: [hl(f, 9, ["ace"], 5), hl(f, 7, ["3k"]), hl(f, 5, ["3k"]), hl(f, 3, ["3k"]), hl(f, 1, ["3k"])] };
+    render(<HighlightsShort q={queryOf(samples)} list={samples.map((x) => x.entry)} href="#/profile/overview?sec=highlights" />);
+    expect(host.querySelectorAll(".hlr")).toHaveLength(4);
+    expect(text(host.querySelector(".hl__head a"))).toBe("All 5");
+    expect(host.querySelector(".hl__head a")!.getAttribute("href")).toBe("#/profile/overview?sec=highlights");
   });
 });

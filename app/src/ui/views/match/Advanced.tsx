@@ -1,6 +1,7 @@
 // Advanced: team-level facts for both teams side by side. Rates come from the worker's rollup of each
 // team's five players and its economy view (economyOf); round counts come from the round facts. Then
-// your side's man-advantage states and bombsite outcomes (Situations.tsx, worker situations and bombsites).
+// every clutch of the match (ClutchList.tsx), your side's man-advantage states and bombsite outcomes
+// (Situations.tsx, worker situations and bombsites).
 import { useMemo, type ReactNode } from "react";
 import { ClutchBadge, FirstPip } from "../../components/bits";
 import { Card } from "../../components/Card";
@@ -14,6 +15,7 @@ import { scoreText, toScore } from "../../lib/scale";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { BombsitesCard, SituationsCard } from "./Situations";
+import { ClutchList } from "./ClutchList";
 
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 const other = (t: Team): Team => (t === "us" ? "them" : "us");
@@ -117,6 +119,7 @@ export default function Advanced({ v, file }: TabProps) {
             ))}
           </ul>
         </Card>
+        <ClutchList v={v} file={file} />
         <SituationsCard v={v} file={file} />
         <BombsitesCard v={v} file={file} />
       </div>

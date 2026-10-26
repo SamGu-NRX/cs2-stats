@@ -1,5 +1,6 @@
 // Home: the last match as the hero, form, headline stats with trends, recent matches, highlights
-// from the data, and what to work on: Firepower, the focus areas with their tips, the weakest numbers.
+// from the data (the latest from profile/Highlights.tsx, linking to Profile's full list), and what
+// to work on: Firepower, the focus areas with their tips, the weakest numbers.
 import { useMemo, useState } from "react";
 import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
@@ -25,8 +26,9 @@ import { AimIcon, ChevronRightIcon, TrendIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
-import { matchHref, openMatch, pageHref, profileHref, tabSectionHref } from "../router";
+import { matchHref, openMatch, pageHref, profileHref, scopeQuery, tabSectionHref, useRoute } from "../router";
 import { RatingTerms } from "./profile/parts";
+import { HighlightsShort } from "./profile/Highlights";
 import { TAB_METRICS } from "./profile/tabs";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
@@ -304,6 +306,8 @@ function RecentMatches({ list }: { list: MatchEntry[] }) {
 
 function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t: Totals | null }) {
   const v = useMatch(last.file).data;
+  // Home's map and match count carry over to Profile's full list
+  const scope = scopeQuery(useRoute().query);
   // the round where your swing was highest, kills breaking ties
   const best = useMemo(() => {
     if (!v) return null;
@@ -349,6 +353,7 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
             </>
           ) : <span className="meta">No kill-by-kill rounds</span>}
         </a>
+        <HighlightsShort q={t?.q ?? null} list={list} href={tabSectionHref("overview", "highlights", scope)} />
         {bigKill && (
           <a className="hl__item" href={matchHref(last.file, "rounds", { round: bigKill.n })}>
             <span className="caps">Biggest kill, last match</span>
