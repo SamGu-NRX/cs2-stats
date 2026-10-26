@@ -13,7 +13,7 @@ import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
 import { RefreshIcon, SearchIcon } from "./icons/ui";
-import { go, isTextEntry, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, useRoute, currentRoute } from "./router";
+import { go, isTextEntry, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, scopeQuery, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
 
@@ -90,7 +90,7 @@ function Body() {
       // Profile's tabs, as the match tabs: Alt+1 to Alt+7
       if (e.altKey && /^[1-7]$/.test(e.key) && r.page === "profile") {
         e.preventDefault();
-        go(profileHref(PROFILE_TABS[Number(e.key) - 1]), { instant: true });
+        go(profileHref(PROFILE_TABS[Number(e.key) - 1], scopeQuery(r.query)), { instant: true });
         return;
       }
       if (ctrl || e.altKey) return;

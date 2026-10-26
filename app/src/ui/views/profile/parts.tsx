@@ -9,7 +9,7 @@ import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { attrsOf, fmtMetric, ratingTerms, signalBar } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, signalBar, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { metric, roleSignals, styleIds } from "../../data/meta";
@@ -200,20 +200,28 @@ function RoleCell({ b }: { b: Decided | undefined }) {
   return <span className="rmaps__cell"><span data-tip={d.narrow ? d.reason ?? "The top two roles are close." : ROLE_WHAT[d.role!]} tabIndex={0}>{d.label}</span><b className="num">{d.share === null ? "" : fmtPct(100 * d.share, 0)}</b></span>;
 }
 
-/** Each map's role over all its rounds and on each side, from one rolesByMap call (most rounds first). */
-function MapRoles({ q }: { q: Query }) {
+/**
+ * Each map's role from one rolesByMap call (most rounds first): over all its rounds and on each side,
+ * or with the page on one side, that side's role alone.
+ */
+function MapRoles({ q, side }: { q: Query; side: SideKey }) {
   const r = useCall("rolesByMap", [q]).data;
   if (!r?.length) return null;
+  const one = side === "t" ? "T" : side === "ct" ? "CT" : null;
   return (
     <>
       <h3 className="caps rmaps__h">By map</h3>
-      <ul className="rmaps rmaps--all">
+      <ul className={`rmaps ${one ? "rmaps--one" : "rmaps--all"}`}>
         {r.map((m) => (
           <li key={m.map}>
             <span className="rmaps__map"><MapThumb map={m.map} size={18} />{mapName(m.map)}</span>
-            <RoleCell b={m.all} />
-            <span className="t-text rmaps__side">T</span><RoleCell b={m.T} />
-            <span className="ct-text rmaps__side">CT</span><RoleCell b={m.CT} />
+            {one ? <><span className={`${one === "T" ? "t" : "ct"}-text rmaps__side`}>{one}</span><RoleCell b={m[one]} /></> : (
+              <>
+                <RoleCell b={m.all} />
+                <span className="t-text rmaps__side">T</span><RoleCell b={m.T} />
+                <span className="ct-text rmaps__side">CT</span><RoleCell b={m.CT} />
+              </>
+            )}
           </li>
         ))}
       </ul>
@@ -225,26 +233,30 @@ function MapRoles({ q }: { q: Query }) {
  * The engine's role blend (identity.ts): a model fitted on labelled pros gives each side its own blend,
  * and roles().all weights the two by their rounds into one role over every round (overallRole). The
  * headline is that overall role, the two sides' roles beside it. Below: the evidence over every round,
- * each side's fit, and each map's roles (rolesByMap).
+ * each side's fit, and each map's roles (rolesByMap). With the page on one side (`side`), the headline,
+ * the fit and the maps are that side's, and the evidence is over its rounds (`q` carries the side).
  */
-export function RoleCard({ q }: { q: Query }) {
+export function RoleCard({ q, side = "both" }: { q: Query; side?: SideKey }) {
   const r = useCall("roles", [q]);
   const all = useRollups(useMemo(() => [q], [q])).data?.[0];
   if (!r.data) {
     return <Card title="Role" tip={PANEL_TIP.role} className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
-  const sides = [r.data.T, r.data.CT];
-  const overall = decide(r.data.all);
+  const one = side === "t" ? r.data.T : side === "ct" ? r.data.CT : null;
+  const sides = one ? [one] : [r.data.T, r.data.CT];
+  const overall = decide(one ?? r.data.all);
   return (
-    <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
+    <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides.map((b) => `${b.rounds} ${b.side} rounds`).join(", ")}</span>} className="rolecard">
       {overall.label ? (
         <p className="role__overall">
           <b className="role__name" data-tip={overall.narrow ? overall.reason ?? "The top two roles are close." : ROLE_WHAT[overall.role!]} tabIndex={0}>{overall.label}</b>
           {overall.narrow ? <span className="vpill vpill--plain" data-tip={overall.reason ?? "The top two roles are close."} tabIndex={0}>Narrow lead</span>
-            : overall.share !== null && <span className="meta" data-tip="Each side's role weighted by its rounds." tabIndex={0}>{shareText(overall)} over all rounds</span>}
+            : overall.share !== null && (one
+              ? <span className="meta">{shareText(overall)} on {one.side}</span>
+              : <span className="meta" data-tip="Each side's role weighted by its rounds." tabIndex={0}>{shareText(overall)} over all rounds</span>)}
         </p>
       ) : <p className="meta role__overall">{overall.reason}</p>}
-      <div className="role__head">
+      {!one && <div className="role__head">
         {sides.map((b) => {
           const d = decide(b);
           return (
@@ -255,11 +267,11 @@ export function RoleCard({ q }: { q: Query }) {
             </span>
           );
         })}
-      </div>
+      </div>}
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>
       <RoleSignals q={q} />
-      <MapRoles q={q} />
+      <MapRoles q={q} side={side} />
     </Card>
   );
 }
@@ -295,13 +307,11 @@ export const SIGNAL_TEXT: Record<RoleSignal["id"], { label: string; value: (v: n
 /**
  * Main's role signals under the engine's blend: each signal's metric against its hand-set threshold
  * (identity.ts ROLE_SIGNALS), the bar filled to twice the threshold with the threshold ticked, and
- * "You fit" from the threshold up (engine.ts signalBar). Entry and Support read both sides, Lurker T.
+ * "You fit" from the threshold up (engine.ts signalBar). Entry and Support read the query's sides (the
+ * page's side), Lurker T alone, since it is a T measure.
  */
 export function RoleSignals({ q }: { q: Query }) {
-  const qs = useMemo(() => {
-    const { sides: _sides, ...rest } = q.filter;
-    return [{ files: q.files, filter: rest }, { files: q.files, filter: { ...rest, sides: ["T" as const] } }];
-  }, [q]);
+  const qs = useMemo(() => [q, { files: q.files, filter: { ...q.filter, sides: ["T" as const] } }], [q]);
   const r = useRollups(qs).data;
   if (!r || r.length !== 2) return null;
   const [both, t] = r;
@@ -409,10 +419,10 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
   const style = styleIds();
   const you = style.map((id) => attrs.find((a) => a.id === id)?.score ?? null);
   const labels = style.map((id) => attrs.find((a) => a.id === id)?.label ?? id);
-  const sideLabel = side === "both" ? "Both sides" : `${side} side`;
+  const sideLabel = side === "both" ? "both sides" : `${side} side`;
   return (
     <div ref={ref} id="similar">
-      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel.toLowerCase()}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
+      <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
             <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer"

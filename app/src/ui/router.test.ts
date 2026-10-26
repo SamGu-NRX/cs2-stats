@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATCH_TABS, matchHref, matchTabKey, matchTabOfKey, pageHref, parseHash } from "./router";
+import { MATCH_TABS, matchHref, matchTabKey, matchTabOfKey, pageHref, parseHash, scopeQuery } from "./router";
 
 describe("match tab shortcuts", () => {
   it("reaches every match tab with Alt and one digit, 0 being the tenth", () => {
@@ -52,12 +52,24 @@ describe("Profile tabs", () => {
     expect(parseHash("#/aim").ptab).toBe("aim");
     expect(parseHash("#/weapons").ptab).toBe("weapons");
   });
-  it("opens an old ?sec= section link on the tab that now holds it", () => {
-    // fails if a bookmark to the one-page Profile lands on the wrong tab
-    const r = parseHash("#/profile?sec=identity");
-    expect([r.ptab, r.query.get("sec")]).toEqual(["playstyle", "identity"]);
-    expect(parseHash("#/profile?sec=howgood").ptab).toBe("duels");
-    expect(parseHash("#/profile?sec=firepower").ptab).toBe("overview");
+  it("opens an old ?sec= section link on the tab that now holds it, at the section it became", () => {
+    // fails if a bookmark to the one-page Profile lands on the wrong tab, or keeps a section id the tab
+    // does not have ("identity" was Playstyle's heading, "performance" the attribute block's)
+    const at = (h: string) => { const r = parseHash(h); return [r.ptab, r.query.get("sec"), r.query.get("map")]; };
+    expect(at("#/profile?sec=identity&map=de_dust2")).toEqual(["playstyle", null, "de_dust2"]);
+    expect(at("#/profile?sec=performance")).toEqual(["overview", "firepower", null]);
+    expect(at("#/profile?sec=style")).toEqual(["overview", "style", null]);
+    expect(at("#/profile?sec=howgood")).toEqual(["duels", "howgood", null]);
+    expect(at("#/profile?sec=firepower")).toEqual(["overview", "firepower", null]);
+    // a section on a named tab is that tab's own
+    expect(at("#/profile/duels?sec=openings")).toEqual(["duels", "openings", null]);
+  });
+  it("carries the scope keys a tab switch keeps, and none of a tab's own", () => {
+    // fails if a tab switch drops the map, matches, side, gun class, result or comparison, or carries a
+    // section, attribute or pro into a tab that has none of them
+    const q = parseHash("#/profile/overview?map=de_dust2&n=10&side=t&guns=rifle&result=W&cmp=bots&sec=card&attr=firepower&pro=s1mple").query;
+    expect(scopeQuery(q)).toEqual({ map: "de_dust2", n: "10", side: "t", guns: "rifle", result: "W", cmp: "bots" });
+    expect(scopeQuery(parseHash("#/profile").query)).toEqual({});
   });
 });
 

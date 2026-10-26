@@ -6,6 +6,7 @@
 // - Ranks by topic: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
 //   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { SideKey as PoolSide } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { MatchEntry } from "../data/match";
 import { CELL, cellCentre } from "../../stats/positions";
@@ -59,7 +60,8 @@ const zoneOf = (d: { x: number; y: number }) => ZONES[d.y >= SUPPORT_Y ? (d.x >=
 export function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
   const bots = useMemo(() => botIds(list), [list]);
   const names = useMemo(() => new Map(list.flatMap((e) => e.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const))), [list]);
-  const qs = useMemo(() => [q, ...bots.map((id) => ({ files: q.files, filter: { player: [id] } }))], [q, bots]);
+  // the bots on the same side as you (q's side filter)
+  const qs = useMemo(() => [q, ...bots.map((id) => ({ files: q.files, filter: { ...q.filter, player: [id] } }))], [q, bots]);
   const sums = useRollups(qs).data;
   const dots = useMemo((): Dot[] => {
     if (!sums) return [];
@@ -233,15 +235,15 @@ const RANKS: { tag: string; ids: string[] }[] = [
   { tag: "Utility", ids: ["utilDmgPR", "flashAssistsPR", "flashesPR", "assistsPerFlash", "dmgPerHe"] },
 ];
 
-export function Ranks({ q }: { q: Query }) {
+export function Ranks({ q, side = "both" }: { q: Query; side?: PoolSide }) {
   const { baselines, baselinesError } = useData();
-  const pros = useCall("compare", baselines ? [q, { pool: "all" }] : null);
-  const bots = useCall("style", [q, { pool: "all" }]);
+  const pros = useCall("compare", baselines ? [q, { pool: "all", side }] : null);
+  const bots = useCall("style", [q, { pool: "all", side }]);
   const proP = pros.data?.p ?? null;
   const botP = bots.data?.p ?? null;
   const careers = bots.data?.careers ?? null;
   const error = pros.error ?? bots.error ?? (baselines ? null : baselinesError);
-  const n = { pros: baselines?.n.all?.both ?? 0, bots: bots.data?.n ?? 0 };
+  const n = { pros: baselines?.n.all?.[side] ?? 0, bots: bots.data?.n ?? 0 };
   return (
     <Card title="Ranks by topic" tip={PANEL_TIP.ranksByTopic} aside={
       <span className="card__aside-row">
