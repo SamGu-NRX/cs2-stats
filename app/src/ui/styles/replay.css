@@ -1,0 +1,83 @@
+/* The match's 2D replay (views/match/replay). The map is sized by the window's height so the radar and
+   its transport fit under the sticky round rail without scrolling; the killfeed takes the rest. */
+
+/* The map's side: what the window's height leaves under the title bar, the match hero, the sticky
+   rail and tabs and the transport (412 px), and what the tab's width leaves beside a 320 px killfeed
+   (356 px with the gap and the stage's padding). */
+.replay { container-type: inline-size; }
+.replay__grid { --map: clamp(320px, min(calc(100vh - 412px), calc(100cqw - 356px)), 760px); }
+.replay__grid { display: grid; grid-template-columns: auto minmax(320px, 440px); gap: 12px; align-items: start; justify-content: start; }
+.replay__stage { padding: 12px; }
+.replay__deck { width: var(--map); display: grid; gap: 10px; }
+
+/* the side panel's head: round stepper and result, then floor and names */
+.replay__head { display: grid; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.replay__round { display: flex; align-items: center; gap: 4px; min-width: 0; margin-left: -6px; }
+.replay__title { font: 600 15px/1 var(--f); letter-spacing: -0.01em; color: var(--ink); padding: 0 4px; white-space: nowrap; }
+.replay__title .num { display: inline-block; min-width: 2ch; font-variant-numeric: tabular-nums; }
+.replay__result { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font: 600 12px/1 var(--f); white-space: nowrap; }
+.replay__opts { display: flex; align-items: center; gap: 12px; min-height: 30px; }
+
+/* the well: radar layers, the canvas over them, the hover card over that */
+.replay__well { width: var(--map); background: var(--well, #151312); box-shadow: inset 0 0 0 1px var(--line), inset 0 1px 2px rgba(0, 0, 0, 0.4); }
+/* the radar layers zoomed to the drawn area (radar-box.ts); hidden until the zoom is known */
+.replay__zoom { position: absolute; inset: 0; transform-origin: 0 0; }
+.replay__zoom[data-ready="false"] { visibility: hidden; }
+.replay__layer { position: absolute; inset: 0; transition: opacity var(--d-color) ease; }
+.replay__layer[data-on="false"] { opacity: 0; }
+.replay__canvas { position: absolute; inset: 0; display: block; touch-action: none; }
+.replay__veil { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(21, 19, 18, 0.55); }
+
+.replay__tip {
+  position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2;
+  display: grid; gap: 2px; padding: 6px 8px; border-radius: var(--r-ctl); background: var(--bg-side); box-shadow: var(--shadow-float);
+  translate: -50% calc(-100% - 20px); white-space: nowrap; font-size: 12px; line-height: 1.2;
+}
+.replay__tip[data-below="true"] { translate: -50% 20px; }
+.replay__tip[hidden] { display: none; }
+.replay__tipname { font-weight: 600; }
+.replay__tip[data-side="t"] .replay__tipname { color: var(--t); }
+.replay__tip[data-side="ct"] .replay__tipname { color: var(--ct); }
+.replay__tipmeta { color: var(--ink2); font-variant-numeric: tabular-nums; }
+
+/* transport: play, clock, scrubber, length, speed */
+.replay__transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-height: 36px; }
+.replay__transport > .seg { margin-left: auto; }
+.replay__play { width: 36px; height: 36px; border-radius: 50%; background: var(--cream); color: var(--bg0); flex: none; }
+@media (hover: hover) and (pointer: fine) { .replay__play:hover { background: #ffe2c4; } }
+.replay__time { min-width: 4ch; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.replay__time--total { color: var(--ink3); text-align: right; }
+
+.replay__scrub { position: relative; flex: 1; min-width: 120px; height: 28px; cursor: pointer; touch-action: none; border-radius: var(--r-chip); }
+.replay__scrub[aria-disabled="true"] { pointer-events: none; opacity: 0.5; }
+.replay__scrub:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.replay__track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; }
+.replay__fill { position: absolute; inset: 0; background: rgba(255, 215, 173, 0.45); transform-origin: left center; transform: scaleX(0); }
+.replay__marks { position: absolute; inset: 0; pointer-events: none; }
+.replay__kill { position: absolute; top: 6px; width: 2px; height: 16px; margin-left: -1px; border-radius: 1px; background: var(--ink3); }
+.replay__kill.is-t { background: var(--t); }
+.replay__kill.is-ct { background: var(--ct); }
+.replay__plant { position: absolute; top: 9px; width: 8px; height: 8px; margin-left: -4px; background: var(--t); box-shadow: 0 0 0 2px var(--bg1); transform: rotate(45deg); border-radius: 1px; }
+.replay__end { position: absolute; top: 4px; bottom: 4px; width: 1px; background: var(--ink3); }
+.replay__thumb { position: absolute; left: -6px; top: 8px; width: 12px; height: 12px; border-radius: 50%; background: var(--cream); box-shadow: 0 0 0 2px var(--bg1); pointer-events: none; }
+
+/* the killfeed beside the map: kills ahead are dim; passed ones lit; the latest held for a moment */
+.replay__side { padding: 12px var(--pad-panel) 14px; display: grid; gap: 10px; align-content: start; max-height: calc(var(--map) + 70px); }
+.replay__sidehead { display: flex; align-items: baseline; justify-content: space-between; min-height: 22px; }
+.replay__feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; overflow-y: auto; min-height: 0; }
+.replay__feed > li { border-radius: 4px; transition: background-color var(--d-color) ease, opacity var(--d-color) ease; }
+.replay__feed > li[data-state="next"] { opacity: 0.38; }
+/* the "you" bar on your own kills (.kfeed[data-mine]) keeps its meaning; the current kill is a raised row */
+.replay__feed > li[data-state="now"] { background: var(--pill); }
+.replay__feedbtn { display: block; width: 100%; padding: 0 6px; text-align: left; border-radius: 4px; }
+.replay__feedbtn .kfeed { margin: 0; padding: 0; }
+@media (hover: hover) and (pointer: fine) { .replay__feedbtn:hover { background: var(--hover); } }
+.replay__nokills { padding: 8px 0; }
+.replay__keys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.replay__keys > span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* too narrow for both: the killfeed drops under the map, which takes the width */
+@container (max-width: 680px) {
+  .replay__grid { --map: min(calc(100cqw - 24px), 760px); grid-template-columns: minmax(0, 1fr); }
+  .replay__side { max-height: none; }
+}
