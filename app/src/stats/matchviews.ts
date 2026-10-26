@@ -86,7 +86,7 @@ export interface HeadToHead {
   openings: [number, number];
 }
 
-/** Every pair of players on opposite teams, with what each did to the other. */
+/** Every pair of players on opposite teams, with what each did to the other; a pair with no interaction is all zeros. */
 export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
   const pairs = new Map<string, HeadToHead>();
   const slot = (x: number, y: number): [HeadToHead, 0 | 1] | null => {
@@ -98,6 +98,8 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
     if (!h) pairs.set(k, (h = { a: f.players[lo].id, b: f.players[hi].id, kills: [0, 0], damage: [0, 0], weapons: [{}, {}], flashes: [{ count: 0, secs: 0 }, { count: 0, secs: 0 }], openings: [0, 0] }));
     return [h, x === lo ? 0 : 1];
   };
+  // every opposing pair, interactions or not
+  for (let x = 0; x < f.players.length; x++) for (let y = x + 1; y < f.players.length; y++) slot(x, y);
   for (const k of f.kills) {
     if (!k.enemy || k.killer === null) continue;
     const s = slot(k.killer, k.victim);

@@ -82,6 +82,16 @@ describe("head to head", () => {
   });
 });
 
+describe("head to head, quiet pairs", () => {
+  it("lists every opposing pair, including pairs that never met", () => {
+    // fails if a pair with no kills, damage or flashes is left out: two against two with no events is four pairs of zeros
+    const tables = oneRoundTables({ players: { a: "CT", b: "CT", c: "T", d: "T" } });
+    const pairs = headToHead(tables, derive(tables, CS2RB));
+    expect(pairs.map((p) => [p.a, p.b].sort().join()).sort()).toEqual(["a,c", "a,d", "b,c", "b,d"]);
+    expect(pairs.every((p) => p.kills.join() === "0,0" && p.damage.join() === "0,0" && p.openings.join() === "0,0")).toBe(true);
+  });
+});
+
 describe("map zones", () => {
   it("places kills and deaths by the kill's place, else your nearest position sample", () => {
     // fails if a zone is read from the wrong player or the fallback is lost: a kills c standing in Long A;
