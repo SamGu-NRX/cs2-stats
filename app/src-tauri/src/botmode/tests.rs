@@ -1454,3 +1454,59 @@ fn run_ids_never_repeat() {
     let ids: std::collections::HashSet<String> = (0..1000).map(|_| session::new_run_id()).collect();
     assert_eq!(ids.len(), 1000);
 }
+
+// --- final review -------------------------------------------------------------------------
+
+#[test]
+fn a_launch_that_fails_after_bot_mode_is_on_keeps_the_lease_until_it_is_off() {
+    let s = Scratch::new("after-on");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    // Steam cannot be asked, and the first write turning Bot Mode off again is refused
+    // (a transient failure, here CS2 seeming to run at that one check).
+    let begins = std::sync::atomic::AtomicUsize::new(0);
+    let probe = Scripted(move |p| p == Phase::ChangeBegin && begins.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1);
+    let sys = FakeSystem::new();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (seen2, layout2) = (seen.clone(), layout.clone());
+    *sys.on_sleep.borrow_mut() = Some(Box::new(move |_| seen2.borrow_mut().push((bot_mode_on(&layout2), session_held(&layout2.csgo).unwrap()))));
+    let st = session::supervise_session(&layout, &probe, &sys, Some(&steam), RunMode::Launch, "r", &|_| Err("steam.exe: not found".into()));
+    assert_eq!(st.state, "failed");
+    assert!(st.message.contains("steam.exe: not found") && st.message.contains("turned off again"), "{}", st.message);
+    assert!(!bot_mode_on(&layout), "confirmed off before the supervisor returned");
+    assert!(seen.borrow().iter().any(|&(on, held)| on && held), "it retried with Bot Mode on and the lease held: {:?}", seen.borrow());
+}
+
+#[test]
+fn a_launch_whose_supervisor_never_got_ready_is_cleaned_up_at_once() {
+    let s = Scratch::new("start-fail");
+    let (layout, _) = session_game(&s);
+    // A supervisor turned Bot Mode on, then died before its handshake reached the starter.
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let err = session::start_launch(&layout, &CLOSED, &sys, &|| Err("the Bot Mode supervisor exited early (exit code 1)".into()), NO_ADOPTER).unwrap_err();
+    assert!(err.contains("exited early") && err.contains("it's now off"), "{err}");
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn following_does_not_accept_progress_from_a_dead_supervisor() {
+    let s = Scratch::new("follow-stale");
+    let (layout, _) = session_game(&s);
+    // Progress past "ready" in the file, but no supervisor holds the lease.
+    status_file(&layout, "r3", "waiting");
+    let st = session::follow(&layout, &FakeSystem::new(), "r3", &|s| s.state != "ready", &|_| {}).unwrap();
+    assert_eq!(st.state, "failed", "stale progress is not taken as a launch");
+}
+
+#[test]
+fn manual_rollback_waits_while_a_session_holds_the_lease() {
+    let s = Scratch::new("rollback-lease");
+    let (layout, _) = session_game(&s);
+    let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+    let before = snapshot(&layout.csgo);
+    let err = changes::rollback(&layout, &CLOSED, None).unwrap_err();
+    assert!(err.contains("session is running"), "{err}");
+    assert_eq!(snapshot(&layout.csgo), before);
+}

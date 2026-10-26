@@ -281,23 +281,31 @@ pub fn supervise_session(
         s.state = "ready".into();
         s.message = "the Bot Mode supervisor is running".into();
     });
+    let mut launch_error = None;
     let watch_mode = match mode {
         RunMode::Launch => {
             let Some(steam) = steam else { return fail("no Steam configuration to launch with".into()) };
             match start_cs2(layout, probe, sys, steam, spawn) {
                 Ok((since, meta)) => {
                     r.update(|s| s.bot_mode_on = meta);
-                    Mode::Launched { since }
+                    Some(Mode::Launched { since })
                 }
-                Err(e) => return fail(e),
+                // Nothing was turned on: nothing to undo.
+                Err(StartError::BeforeOn(e)) => return fail(e),
+                // Bot Mode may be on: go through the same turn-off loop as a finished session.
+                Err(StartError::AfterOn(e)) => {
+                    r.update(|s| s.errors.push(e.clone()));
+                    launch_error = Some(e);
+                    None
+                }
             }
         }
-        RunMode::Adopt => Mode::Adopt,
+        RunMode::Adopt => Some(Mode::Adopt),
     };
     // 5. Watch until the last CS2 of this install exits.
     let limit = (mode == RunMode::Launch).then_some(START_LIMIT);
     let watch = |mode: Mode, limit: Option<Duration>| monitor::supervise_with_tick(sys, &image, mode, limit, &|| Control::Go, &|e| r.event(e), &|| r.tick());
-    let mut checked = checked_of(&watch(watch_mode, limit));
+    let mut checked = watch_mode.map(|m| checked_of(&watch(m, limit))).unwrap_or_default();
     let mut outcome = None;
     // 6. Turn Bot Mode off, and leave only once it is confirmed off: a CS2 that started again
     // is watched until it exits, and a failure is retried, with the lease kept throughout.
@@ -332,8 +340,16 @@ pub fn supervise_session(
         _ => Outcome::Exited { checked },
     };
     r.update(|s| {
-        s.state = "done".into();
-        s.message = monitor::describe(&outcome);
+        match &launch_error {
+            Some(e) => {
+                s.state = "failed".into();
+                s.message = format!("{e}; Bot Mode was turned off again");
+            }
+            None => {
+                s.state = "done".into();
+                s.message = monitor::describe(&outcome);
+            }
+        }
         s.outcome = Some(outcome);
         s.left_on = None;
     });
@@ -348,28 +364,31 @@ fn checked_of(o: &Outcome) -> Vec<Checked> {
     }
 }
 
+/// Why [`start_cs2`] failed, by whether Bot Mode may already be on.
+enum StartError {
+    BeforeOn(String),
+    /// The supervisor turns Bot Mode off with the loop it uses after every session.
+    AfterOn(String),
+}
+
 /// Steps 2 to 4: under the operation lock, prepare, record the start time, turn Bot Mode on,
-/// and ask Steam to start CS2. If Steam cannot be asked, Bot Mode is turned off again.
+/// and ask Steam to start CS2. Any failure from the "on" write onward is `AfterOn`: the caller
+/// keeps the lease and retries turning Bot Mode off until it is confirmed off.
 fn start_cs2(
     layout: &Layout,
     probe: &dyn ProcessProbe,
     sys: &dyn System,
     steam: &SteamConfig,
     spawn: &dyn Fn(&LaunchPlan) -> Result<(), String>,
-) -> Result<(u64, Option<Meta>), String> {
-    let lock = OpLock::acquire(layout)?;
-    let plan = launch::prepare(layout, probe, steam, &lock)?;
-    launch::check_start(&plan, layout, probe, steam)?;
+) -> Result<(u64, Option<Meta>), StartError> {
+    let lock = OpLock::acquire(layout).map_err(StartError::BeforeOn)?;
+    let plan = launch::prepare(layout, probe, steam, &lock).map_err(StartError::BeforeOn)?;
+    launch::check_start(&plan, layout, probe, steam).map_err(StartError::BeforeOn)?;
     // Taken before Bot Mode is on, so no CS2 that could have loaded the mod is older.
     let since = sys.file_time();
-    changes::supersede_unfinished_sessions(layout)?;
-    let meta = set_bot_mode(layout, probe, &lock, true)?;
-    if let Err(e) = spawn(&plan) {
-        return Err(match set_bot_mode(layout, probe, &lock, false) {
-            Ok(_) => format!("{e}; Bot Mode was turned off again"),
-            Err(e2) => format!("{e}; turning Bot Mode off again also failed ({e2})"),
-        });
-    }
+    changes::supersede_unfinished_sessions(layout).map_err(StartError::BeforeOn)?;
+    let meta = set_bot_mode(layout, probe, &lock, true).map_err(StartError::AfterOn)?;
+    spawn(&plan).map_err(StartError::AfterOn)?;
     Ok((since, meta))
 }
 
@@ -581,6 +600,21 @@ pub fn start_and_wait(layout: &Layout, sys: &dyn System, mode: RunMode) -> Resul
     Ok(run_id)
 }
 
+/// Starts a launch with `start` (normally [`start_and_wait`]). If it fails, a supervisor may
+/// have turned Bot Mode on before dying, so cleanup runs at once and its message is added.
+pub fn start_launch(
+    layout: &Layout,
+    probe: &dyn ProcessProbe,
+    sys: &dyn System,
+    start: &dyn Fn() -> Result<String, String>,
+    start_adopter: &dyn Fn() -> Result<(), String>,
+) -> Result<String, String> {
+    start().map_err(|e| match cleanup_message(&cleanup(layout, probe, sys, start_adopter)) {
+        Some(c) => format!("{e}. {c}"),
+        None => e,
+    })
+}
+
 /// A run id that differs for every start, even two in the same second from one process.
 pub fn new_run_id() -> String {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -607,15 +641,18 @@ pub fn follow(
                 last_message = s.message.clone();
                 on_change(&s);
             }
-            let ended = matches!(s.state.as_str(), "done" | "failed");
-            if ended || until(&s) {
+            if matches!(s.state.as_str(), "done" | "failed") {
                 return Ok(s);
             }
+            // Liveness before `until`: progress in the file means nothing once the lease is free.
             if !session_held(&layout.csgo).unwrap_or(true) {
                 let mut died = s.clone();
                 died.state = "failed".into();
                 died.message = "the Bot Mode supervisor stopped unexpectedly; the next Bot Mode command or app start turns Bot Mode off once CS2 has exited".into();
                 return Ok(died);
+            }
+            if until(&s) {
+                return Ok(s);
             }
         } else if sys.elapsed().saturating_sub(started) > Duration::from_secs(30) {
             return Err("the Bot Mode supervisor did not start (no status after 30 seconds)".into());

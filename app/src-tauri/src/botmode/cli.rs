@@ -247,7 +247,13 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let run_id = session::start_and_wait(layout, &monitor::Windows, session::RunMode::Launch)?;
+            let run_id = session::start_launch(
+                layout,
+                &probe,
+                &monitor::Windows,
+                &|| session::start_and_wait(layout, &monitor::Windows, session::RunMode::Launch),
+                &|| start_adopter(layout),
+            )?;
             if !a.json {
                 println!("Bot Mode is on only for this session: a supervisor turns it on, starts CS2 through Steam, watches CS2 until it exits, and turns Bot Mode off.");
                 println!("Closing this window or pressing Ctrl+C stops only this view; the session keeps running.");

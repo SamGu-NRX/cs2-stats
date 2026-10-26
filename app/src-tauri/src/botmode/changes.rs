@@ -592,6 +592,10 @@ pub struct RollbackReport {
 pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> Result<RollbackReport, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let _lock = OpLock::acquire(layout)?;
+    // Under the operation lock, like every change's write boundary: never while a session runs.
+    if super::process::session_held(&layout.csgo)? {
+        return Err("a Bot Mode session is running; wait until CS2 has exited".into());
+    }
     let root_canon = layout.csgo.canonicalize().map_err(|e| format!("{}: {e}", layout.csgo.display()))?;
     let all = list(layout)?;
     if let Some(m) = id.and_then(|id| all.iter().find(|m| m.id == id)).filter(|m| m.kind == Kind::Session) {
