@@ -7,6 +7,18 @@ import react from "@vitejs/plugin-react";
 import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
 
 
+/**
+ * The request's URL, or null when it does not parse: a path such as "//" reads as a URL with no host,
+ * and new URL throws on it (ERR_INVALID_URL), which took the dev server down mid-request.
+ */
+function requestUrl(req: Connect.IncomingMessage): URL | null {
+  try {
+    return new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
 // Tauri expects a fixed dev port and must not watch the Rust sources.
 const host = process.env.TAURI_DEV_HOST;
 
@@ -20,7 +32,8 @@ function matchFolder(): Plugin {
   const root = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "matches") : null;
   const packs = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs") : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (url.pathname === "/__packs/file") {
       // the optional packs folder: pro scores, agent art and the CS2 icon pack, kept out of the repository
       const rel = url.searchParams.get("f") ?? "";
@@ -88,7 +101,8 @@ function valveFolder(): Plugin {
   let running = false;
   let at: unknown = null, last: unknown = null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (!url.pathname.startsWith("/__valve/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
@@ -170,7 +184,8 @@ function valveFolder(): Plugin {
 function devMatches(): Plugin {
   const root = process.env.CS2_DEV_MATCHES ? path.resolve(process.env.CS2_DEV_MATCHES) : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (!url.pathname.startsWith("/__dev-matches/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
