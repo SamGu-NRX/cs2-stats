@@ -34,7 +34,7 @@ fn set_notice(n: Option<String>) {
 }
 
 fn start_adopter(layout: &Layout) -> Result<(), String> {
-    session::start_supervisor(layout, session::RunMode::Adopt, &session::new_run_id())
+    session::start_and_wait(layout, &monitor::Windows, session::RunMode::Adopt).map(|_| ())
 }
 
 /// The one wrapper for commands that change anything: session cleanup first (refusing while a
@@ -126,10 +126,11 @@ fn view(layout: &Layout) -> SessionView {
 #[tauri::command]
 pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String> {
     mutating(game, |ctx| {
-        let run_id = session::new_run_id();
-        session::start_supervisor(&ctx.layout, session::RunMode::Launch, &run_id)?;
-        let status = session::follow(&ctx.layout, &monitor::Windows, &run_id, &|s| s.state != "starting", &|_| {})?;
+        let run_id = session::start_and_wait(&ctx.layout, &monitor::Windows, session::RunMode::Launch)?;
+        // Past "ready" means Steam has been asked (or the launch failed).
+        let status = session::follow(&ctx.layout, &monitor::Windows, &run_id, &|s| s.state != "ready", &|_| {})?;
         if status.state == "failed" {
+            set_notice(session::cleanup_message(&session::cleanup(&ctx.layout, &SystemProbe, &monitor::Windows, &|| start_adopter(&ctx.layout))));
             return Err(status.message);
         }
         Ok(view(&ctx.layout))

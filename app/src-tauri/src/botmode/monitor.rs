@@ -311,7 +311,9 @@ pub fn supervise_with_tick(
                     }
                 }
                 let running = tracked.values().any(|t| !matches!(t, Track::OtherInstall));
-                if started && !running {
+                // Adopting, a list with no CS2 of this install means the session is over even if
+                // this watcher never saw one: there is nothing left to wait for.
+                if (started || mode == Mode::Adopt) && !running {
                     return Outcome::Exited { checked };
                 }
             }

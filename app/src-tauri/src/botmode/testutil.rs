@@ -195,6 +195,9 @@ pub struct FakeSystem {
     polls: std::cell::Cell<usize>,
     /// Called whenever the code under test reads the time, to observe what was true then.
     pub on_file_time: std::cell::RefCell<Option<Box<dyn Fn()>>>,
+    /// Called on every sleep with the number of sleeps so far, to stage something happening
+    /// while the code under test waits.
+    pub on_sleep: std::cell::RefCell<Option<Box<dyn Fn(usize)>>>,
 }
 
 impl FakeSystem {
@@ -206,6 +209,7 @@ impl FakeSystem {
             sleeps: Default::default(),
             polls: Default::default(),
             on_file_time: Default::default(),
+            on_sleep: Default::default(),
         }
     }
     pub fn script(&self, lists: Vec<Vec<(u32, u64)>>) {
@@ -275,6 +279,9 @@ impl super::monitor::System for FakeSystem {
     }
     fn sleep(&self, d: std::time::Duration) {
         self.sleeps.borrow_mut().push(d);
+        if let Some(f) = self.on_sleep.borrow().as_ref() {
+            f(self.sleeps.borrow().len());
+        }
         self.clock.set(self.clock.get() + d);
         // Every watch, supervisor and follow loop sleeps through here, so this cap turns a loop
         // that never ends (a broken exit condition) into a failing test instead of a hang.

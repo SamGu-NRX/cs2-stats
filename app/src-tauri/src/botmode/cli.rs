@@ -96,7 +96,7 @@ fn meta_line(m: &changes::Meta) -> String {
 
 /// Starts a supervisor that adopts a CS2 running with Bot Mode on (see `session::cleanup`).
 fn start_adopter(layout: &super::paths::Layout) -> Result<(), String> {
-    session::start_supervisor(layout, session::RunMode::Adopt, &session::new_run_id())
+    session::start_and_wait(layout, &monitor::Windows, session::RunMode::Adopt).map(|_| ())
 }
 
 /// The hidden `supervise-session` command: the supervisor process itself. It has no console;
@@ -247,8 +247,7 @@ fn run(a: Args) -> Result<(), String> {
             });
         }
         ["launch"] => {
-            let run_id = session::new_run_id();
-            session::start_supervisor(layout, session::RunMode::Launch, &run_id)?;
+            let run_id = session::start_and_wait(layout, &monitor::Windows, session::RunMode::Launch)?;
             if !a.json {
                 println!("Bot Mode is on only for this session: a supervisor turns it on, starts CS2 through Steam, watches CS2 until it exits, and turns Bot Mode off.");
                 println!("Closing this window or pressing Ctrl+C stops only this view; the session keeps running.");
@@ -259,6 +258,12 @@ fn run(a: Args) -> Result<(), String> {
                     eprintln!("{}", s.message);
                 }
             })?;
+            if status.state == "failed" {
+                // A supervisor that died is cleaned up at once.
+                if let Some(notice) = session::cleanup_message(&session::cleanup(layout, &probe, &monitor::Windows, &|| start_adopter(layout))) {
+                    eprintln!("{notice}");
+                }
+            }
             if a.json {
                 print(true, &status, |_| String::new());
             }

@@ -20,7 +20,12 @@ Bot Mode is on only while a session runs. Launching from the app or with `cs2-st
 
 If Bot Mode is found on with no supervisor running, the next app start or Bot Mode command turns it off once CS2 has exited, and starts a supervisor to watch a CS2 that is still running. That includes Bot Mode left on by the mod's own Panel.
 
-**Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.** The case Bot Mode cannot cover: the supervisor dies during a session, and CS2 is then started from Steam before the app or a Bot Mode command runs again.
+**Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.** What Bot Mode cannot cover:
+
+- The supervisor is killed (a crash, a reboot) between turning Bot Mode on and turning it off, and CS2 is then started from Steam before the app or a Bot Mode command runs again.
+- A Steam launch of CS2 that was already queued when the session turned Bot Mode on. It is watched, but it runs with whatever options Steam had.
+- A CS2 that starts in the moment between the supervisor's last check and its turning Bot Mode off.
+- Another tool, such as the mod's Panel, turning Bot Mode on later. The next app start or Bot Mode command turns it off again and says so.
 
 ## Win-probability model interface
 
