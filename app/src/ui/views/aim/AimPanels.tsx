@@ -236,8 +236,10 @@ export function sprayGuns(guns: string[], per: Rolled[] | null): SprayGun[] {
 const thinTip = (n: number) => `${plural(n, "spray")}, the pattern settles at ${THIN_SPRAY}.`;
 
 function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; side: SideFilter; guns: string[] }) {
-  const per = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
-  const list = useMemo(() => sprayGuns(guns, per), [guns, per]);
+  const scoped = useScoped(query, guns.map((w) => ({ ...sidesFor(side), weapons: [w] })));
+  // no gun on this side and class is an answer, not a load: useScoped gives null for an empty query list
+  const per = guns.length ? scoped : [];
+  const list = useMemo(() => sprayGuns(guns, per ?? null), [guns, per]);
   const [pick, setPick] = useState<string | null>(null);
   const [showSpread, setShowSpread] = useState(true);
   const [showPro, setShowPro] = useState(true);

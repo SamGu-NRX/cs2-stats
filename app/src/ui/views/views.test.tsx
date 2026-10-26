@@ -38,7 +38,7 @@ import { fmtRating } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView, workOnHref } from "./Home";
 import ProfileView from "./Profile";
-import { StatCard, TAB_METRICS, useRanks } from "./profile/tabs";
+import { StatCard, useRanks } from "./profile/tabs";
 import { Provisional } from "./shared";
 import Overview from "./match/Overview";
 import Rounds from "./match/Rounds";
