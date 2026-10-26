@@ -26,8 +26,8 @@ export interface MatchEntry {
   /** the file has shots (aim) and position samples (movement) */
   hasAim: boolean;
   hasPos: boolean;
-  /** kill events of every player in the match: with no round won either, nothing was recorded (engine.ts isListed) */
-  kills: number;
+  /** a round won, a kill or any damage in the recording; without one it is a stub (engine.ts isListed) */
+  activity: boolean;
   /** gun shots by the recording player */
   shots: number;
   /** the recording player over the whole match, both sides; its rating is under the coverage rule */

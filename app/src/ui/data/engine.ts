@@ -190,11 +190,11 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
 }
 
 /**
- * Whether a match is a match at all: it has a round won or a kill. A recording stopped before anything
- * happened (0–0, no kill) is left out of Matches and every career number; a winnerless one with real
- * kills is listed and labelled unfinished.
+ * Whether a match is a match at all: anything happened in it (MatchEntry.activity: a round won, a kill or
+ * any damage). A recording stopped before anything happened is left out of Matches and every career
+ * number; a winnerless one with kills or damage is listed and labelled unfinished.
  */
-export const isListed = (s: MatchEntry) => s.score.us + s.score.them > 0 || s.kills > 0;
+export const isListed = (s: MatchEntry) => s.activity;
 
 /** What Matches lists: the matches in the filter that isListed keeps. */
 export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter(isListed);

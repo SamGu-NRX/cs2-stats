@@ -56,6 +56,16 @@ function pov(file: string, f: MatchFacts): { you: number; usTeam: 0 | 1 } {
 
 const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them ? "W" : us < them ? "L" : "T");
 
+/**
+ * Whether anything happened in the recording: a round won, a kill, or any damage (dealt, taken, or to a
+ * teammate). A recording with none is a stub that Matches and the career views leave out (engine.ts
+ * isListed); one with only damage, such as a round abandoned before anyone died, is kept (review of #29).
+ */
+function activityOf(f: MatchFacts): boolean {
+  return f.match.score[0] + f.match.score[1] > 0 || f.kills.length > 0
+    || f.pr.some((r) => (r.m.dmg ?? 0) > 0 || (r.m.dmgTaken ?? 0) > 0 || (r.m.teamDmg ?? 0) > 0);
+}
+
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
   const { you, usTeam } = pov(file, f);
   const id = f.players[you].id;
@@ -66,7 +76,7 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, kills: f.kills.length, line: lineOf(s),
+    shots: s.aim.shots, activity: activityOf(f), line: lineOf(s),
   };
 }
 
