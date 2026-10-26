@@ -1,17 +1,21 @@
 // Positions: where kills and deaths happened on the radar, yours or everyone's, by side, with an
-// optional line from killer to victim; where you moved (seconds alive per grid cell); and your top
-// places by name (recorded matches).
+// optional line from killer to victim; where you moved (seconds alive per grid cell); your kills and
+// deaths by zone (worker mapZones), a picked zone drawn over the rest; and your top places by name.
 import { useMemo, useState } from "react";
 import { CELL, cellCentre } from "../../../stats/positions";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { frameFor, RadarView } from "../../components/MapArt";
-import { placesNamed, sideOf } from "../../data/match";
+import { placeName, placesNamed, sideOf } from "../../data/match";
 import { FlagIcon } from "../../icons/game";
+import { CloseIcon } from "../../icons/ui";
 import { plural } from "../../lib/format";
 import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
+import { useCall } from "../../data/hooks";
+import { zonesFor, type Zone } from "./parity";
+import { ZonesCard } from "./Zones";
 
 type Who = "you" | "team" | "all";
 
@@ -20,6 +24,11 @@ export default function Positions({ v }: TabProps) {
   const [side, setSide] = useState<"both" | "t" | "ct">("both");
   const [lines, setLines] = useState(true);
   const [heat, setHeat] = useState(true);
+  const [zone, setZone] = useState<string | null>(null);
+  const mzCall = useCall("mapZones", [v.file, v.players[v.human].key]);
+  const mz = mzCall.data;
+  const zones = useMemo(() => (mz ? zonesFor(mz.rows, side) : null), [mz, side]);
+  const picked = zones?.find((z) => z.zone === zone) ?? null;
 
   const events = useMemo(() => {
     const out: { kx: number; ky: number; vx: number; vy: number; killer: number | null; victim: number; ri: number; n: number; hs: boolean; side: "t" | "ct" }[] = [];
@@ -57,7 +66,8 @@ export default function Positions({ v }: TabProps) {
       </div>
       <div className="positions__grid">
         <div className="positions__map card">
-          <RadarView map={v.map} frame={frame} label={`${killsSided.length} kills and ${deaths.length} deaths on the radar`}>
+          <RadarView map={v.map} frame={frame} label={picked ? `${placeName(picked.zone)}: your ${plural(picked.kills, "kill")} and ${plural(picked.deaths, "death")} over the rest` : `${killsSided.length} kills and ${deaths.length} deaths on the radar`}>
+            <g className={`pz-base ${picked ? "is-dim" : ""}`}>
             {heat && who === "you" && cells.map(({ c, secs, at }) => {
               const [x, y] = frame.to(...at);
               return <rect key={c} x={x - cellPx / 2} y={y - cellPx / 2} width={cellPx} height={cellPx} fill="var(--cream)" opacity={0.04 + 0.26 * Math.sqrt(secs / maxCell)} />;
@@ -87,6 +97,8 @@ export default function Positions({ v }: TabProps) {
                 </g>
               );
             })}
+            </g>
+            {picked && <ZoneMarks zone={picked} to={frame.to} />}
           </RadarView>
           <div className="legend positions__legend">
             <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="5" fill="var(--t)" /></svg>Kill on T</span>
@@ -95,9 +107,11 @@ export default function Positions({ v }: TabProps) {
             <span><svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--poor-text)" strokeWidth="2" /></svg>Death</span>
             {cells.length > 0 && <span><i className="swatch" style={{ background: "rgba(255,215,173,.4)" }} />Where you moved</span>}
             <span>Kills sit where the killer stood</span>
+            {picked && <button className="chip pz-chip press" onClick={() => setZone(null)} aria-label={`Stop showing ${placeName(picked.zone)}`}>{placeName(picked.zone)}<CloseIcon size={12} /></button>}
           </div>
         </div>
         <div className="positions__side">
+          <ZonesCard zones={zones} error={mzCall.error} total={mz?.zones.length ?? 0} picked={picked?.zone ?? null} onPick={setZone} />
           <PlacesCard v={v} />
           <Card title="Your duels" aside={<span className="meta">{plural(events.filter((e) => e.killer === human || e.victim === human).length, "duel")}</span>}>
             <ul className="duel-list">
@@ -114,6 +128,16 @@ export default function Positions({ v }: TabProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** A picked zone's deaths (ringed) and kills (filled, where you stood), drawn over the dimmed marks; a kill inside a death's ring stays visible. */
+function ZoneMarks({ zone, to }: { zone: Zone; to: (x: number, y: number) => [number, number] }) {
+  return (
+    <g className="pz-marks" aria-hidden>
+      {zone.deathsAt.map(([wx, wy], i) => { const [x, y] = to(wx, wy); return <g key={`d${i}`}><circle cx={x} cy={y} r="11" fill="none" stroke="var(--bg0)" strokeWidth="6" /><circle cx={x} cy={y} r="11" fill="none" stroke="var(--poor-text)" strokeWidth="3" /></g>; })}
+      {zone.killsAt.map(([wx, wy], i) => { const [x, y] = to(wx, wy); return <circle key={`k${i}`} cx={x} cy={y} r="7.5" fill="var(--cream)" stroke="var(--bg0)" strokeWidth="3" />; })}
+    </g>
   );
 }
 
