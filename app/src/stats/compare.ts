@@ -154,9 +154,14 @@ export const modelOf = (units: PoolUnit[]) => {
   return ms.size === 1 ? [...ms][0] : "mixed";
 };
 
-/** Quantiles of every metric per pool and side; a metric with fewer than MIN_UNITS values in a pool is null there. */
+/**
+ * Quantiles of every metric per pool and side; a metric with fewer than MIN_UNITS values in a pool is
+ * null there. A unit under a metric's sample minimum (Metric.sample.min) has no value for that metric
+ * here, so the pool holds only samples big enough to rank against.
+ */
 export function buildPools(units: PoolUnit[]): Pick<Baselines, "n" | "pools"> {
-  const vals = units.map((u) => ({ ...u, v: Object.fromEntries(METRICS.map((m) => [m.id, m.value(u.s)])) }));
+  const valueIn = (m: Metric, s: Summary) => (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min ? null : m.value(s));
+  const vals = units.map((u) => ({ ...u, v: Object.fromEntries(METRICS.map((m) => [m.id, valueIn(m, u.s)])) }));
   const out: Pick<Baselines, "n" | "pools"> = { n: {}, pools: {} };
   for (const pool of new Set(units.flatMap((u) => u.pools))) {
     out.pools[pool] = {};
