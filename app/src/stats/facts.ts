@@ -109,8 +109,11 @@ export const INPUT_COVERAGE = {
   /** all four kill flags recorded: blind, in the air, no-scope, through smoke (nullable since #27) */
   flags: ["flagsKnown", "kills", "the kill flags", "kills"],
   deathFlags: ["flagDeathsKnown", "enemyDeaths", "the kill flags", "deaths"],
-  /** each gun shot's clip count (shots.ammo_clip): extractor demos have it, plugin files do not */
-  ammo: ["ammoRounds", "rounds", "the clip count per shot", "rounds"],
+  /**
+   * each gun shot's clip count (shots.ammo_clip) and the weapon in hand between shots (positions):
+   * extractor demos have both, plugin files have no clip counts
+   */
+  ammo: ["ammoRounds", "rounds", "the clip count per shot and the weapon in hand", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
