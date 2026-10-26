@@ -28,8 +28,9 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
   const call = useCall("clutches", [{ files: [file], filter: { player: ids } }]);
   const rows: Row[] = useMemo(() => {
     const pi = new Map(v.players.map((p) => [p.key, p.pi]));
-    return (call.data ?? []).flatMap((c) => (c.player !== undefined && pi.has(c.player) ? [{ ...c, pi: pi.get(c.player)! }] : []));
-  }, [call.data, v.players]);
+    // another match's clutches never show, not even while this match's load
+    return (call.stale ? [] : call.data ?? []).flatMap((c) => (c.player !== undefined && pi.has(c.player) ? [{ ...c, pi: pi.get(c.player)! }] : []));
+  }, [call.data, call.stale, v.players]);
   const of = (t: "us" | "them") => rows.filter((c) => v.players[c.pi].team === t);
   const mine = rows.filter((c) => c.pi === v.human);
   const open = (c: Row) => go(matchHref(file, "rounds", { round: c.round }));
@@ -43,7 +44,7 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
       key: "left", label: "Left", tip: "The clock when the clutch began: the round timer, or the bomb's after a plant", width: 76, sort: (c) => c.left,
       render: (c) => (c.left === null
         ? <span className="faint" data-tip={noClock(c)} tabIndex={0}>–</span>
-        : <span className="clutchtbl__left" data-tip={`Began ${fmtClock(c.t)} into the round${c.afterPlant ? ", after the plant" : ""}`}>{c.afterPlant && <WeaponIcon name="c4" height={12} />}<span className="num">{fmtClock(c.left)}</span></span>),
+        : <span className="clutchtbl__left" tabIndex={0} data-tip={`Began ${fmtClock(c.t)} into the round${c.afterPlant ? ", after the plant" : ""}`}>{c.afterPlant && <WeaponIcon name="c4" height={12} />}<span className="num">{fmtClock(c.left)}</span></span>),
     },
   ];
   return (
@@ -52,7 +53,7 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
         <SectionAside label="You won" value={<>{mine.filter((c) => c.won).length}<span className="faint">/{mine.length}</span></>} color="var(--cream)" />
         <SectionAside label="Saved" value={mine.filter((c) => c.saved).length} />
       </>}>
-      {call.error ? <div className="tabpad"><LoadFailed what="The clutches" error={call.error} /></div> : !call.data ? <div className="skel" style={{ height: 160, margin: 12 }} /> : !rows.length ? (
+      {call.error && !call.stale ? <div className="tabpad"><LoadFailed what="The clutches" error={call.error} /></div> : !call.data || call.stale ? <div className="skel" style={{ height: 160, margin: 12 }} /> : !rows.length ? (
         <p className="meta clutchtbl__none">Nobody was left alone against the other side this match.</p>
       ) : (
         <div className="clutchtbl__cols">

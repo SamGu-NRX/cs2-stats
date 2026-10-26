@@ -1,5 +1,5 @@
 /* Parity round 2: the flash tool (match Utility), every clutch (match Advanced) and the highlight rows
-   (Profile Overview, Home). They extend the v2 instruments: rows are 34 px with hairlines, hover and
+   (Profile Overview, Home). They extend the v2 instruments: rows are 36 px with hairlines, hover and
    focus change colour at once (hover gated to fine pointers), and nothing moves. Picking a flash steps
    the other dots back without a fade, because the pick is as often from the keyboard as the pointer. */
 
@@ -58,7 +58,7 @@
 .fl-head__cols { padding: 0 8px; }
 .fl__list { display: grid; max-height: min(560px, 72vh); overflow-y: auto; scrollbar-gutter: stable; }
 .fl-row + .fl-row { border-top: 1px solid var(--line); }
-.fl-row__btn { height: 34px; padding: 0 8px; border-radius: var(--r-chip); text-align: left; color: inherit; font-size: 13px; }
+.fl-row__btn { height: 36px; padding: 0 8px; border-radius: var(--r-chip); text-align: left; color: inherit; font-size: 13px; }
 .fl-row__btn:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; }
 .fl-row.is-lit .fl-row__btn { background: var(--hover); }
 .fl-row.is-open .fl-row__btn { background: var(--s3); box-shadow: inset 2px 0 0 var(--cream); }
@@ -67,7 +67,9 @@
 .fl-row__en { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
 .fl-row__k { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--ink); }
 .fl-row__np { height: 18px; font-size: 10px; }
-.fl-row__go { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--ink3); }
+.fl-row__go { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-ctl); color: var(--ink3); position: relative; }
+/* the link draws 28 px but takes the row's full height and the gap beside it */
+.fl-row__go::after { content: ""; position: absolute; inset: -4px -4px -4px -6px; }
 .fl-row__go:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; color: var(--ink); }
 @media (hover: hover) and (pointer: fine) { .fl-row__go:hover { color: var(--ink); background: var(--hover); } }
 .fl-detail { padding: 4px 8px 10px 52px; }
@@ -129,5 +131,5 @@
 /* a narrow pane keeps the map's thumbnail and drops its name (the row's label still says it) */
 @media (max-width: 1100px) {
   .hlr:not(.hlr--compact) { grid-template-columns: 76px minmax(0, 1fr) 18px 56px 56px; }
-  .hlr__map > span { display: none; }
+  .hlr__mapname { display: none; }
 }

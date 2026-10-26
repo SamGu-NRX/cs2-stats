@@ -69,7 +69,7 @@ export function HighlightLink({ h, e, compact }: { h: HighlightRow; e: MatchEntr
         </span>
       ) : (
         <>
-          <span className="hlr__map" aria-hidden>{e && <><MapThumb map={e.match.map} size={18} /><span>{mapName(e.match.map)}</span></>}</span>
+          <span className="hlr__map" aria-hidden>{e && <><MapThumb map={e.match.map} size={18} /><span className="hlr__mapname">{mapName(e.match.map)}</span></>}</span>
           <span className="hlr__when meta" aria-hidden>{e ? fmtMatchDay(e.match) : ""}</span>
           <span className="hlr__r num" aria-hidden><span className={h.side === "T" ? "t-text" : "ct-text"}>{h.side}</span> R{h.round}</span>
         </>
@@ -81,18 +81,20 @@ export function HighlightLink({ h, e, compact }: { h: HighlightRow; e: MatchEntr
 /** Profile: every highlight in the scope, newest first, filtered by kind, a page at a time. */
 export function HighlightsCard({ q, list, sectionRef }: { q: Query; list: MatchEntry[]; sectionRef?: (el: HTMLElement | null) => void }) {
   const call = useCall("highlights", q ? [q] : null);
+  // the previous scope's rows never show while the new scope's load
+  const data = call.stale ? null : call.data;
   const [kind, setKind] = useState<KindFilter>("all");
   const [shown, setShown] = useState(PAGE);
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
-  const all = call.data ?? [];
+  const all = data ?? [];
   const rows = kind === "all" ? all : all.filter((h) => h.kinds.includes(kind));
   const count = (k: HighlightKind) => all.filter((h) => h.kinds.includes(k)).length;
   const label = (text: string, n: number): ReactNode => <>{text} <span className="hl-seg__n num">{n}</span></>;
   return (
     <div id="highlights" ref={sectionRef} className="psec">
       <Card title="Highlights" id="profile-highlights" collapsible className="hlcard"
-        aside={<span className="meta">{call.data ? plural(all.length, "round") : ""}</span>}>
-        {call.error ? <LoadFailed what="Highlights" error={call.error} /> : !call.data ? <div className="skel" style={{ height: 220 }} /> : !all.length ? (
+        aside={<span className="meta">{data ? plural(all.length, "round") : ""}</span>}>
+        {call.error && !call.stale ? <LoadFailed what="Highlights" error={call.error} /> : !data ? <div className="skel" style={{ height: 220 }} /> : !all.length ? (
           <Empty text="No 3K rounds or won clutches in this filter yet." />
         ) : (
           <div className="hl-list">
@@ -118,15 +120,17 @@ export function HighlightsCard({ q, list, sectionRef }: { q: Query; list: MatchE
 /** Home: the latest few highlights, and a link to Profile's full list. */
 export function HighlightsShort({ q, list, href, n = 4 }: { q: Query | null; list: MatchEntry[]; href: string; n?: number }) {
   const call = useCall("highlights", q ? [q] : null);
+  // the previous scope's rows never show while the new scope's load
+  const data = call.stale ? null : call.data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
-  const all = call.data ?? [];
+  const all = data ?? [];
   return (
     <div className="hl__item hl__item--list">
       <span className="hl__head">
         <span className="caps">Latest highlights</span>
         {all.length > 0 && <a className="link" href={href}>All {all.length} <ChevronRightIcon size={12} /></a>}
       </span>
-      {call.error ? <LoadFailed what="Highlights" error={call.error} /> : !call.data ? <div className="skel" style={{ height: 96 }} /> : !all.length ? (
+      {call.error && !call.stale ? <LoadFailed what="Highlights" error={call.error} /> : !data ? <div className="skel" style={{ height: 96 }} /> : !all.length ? (
         <span className="meta">No 3K rounds or won clutches yet</span>
       ) : (
         <ul className="hlrows hlrows--compact" aria-label="Latest highlights">

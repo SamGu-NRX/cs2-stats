@@ -33,12 +33,14 @@ const outcome = (f: FlashRow) => (f.kills.length ? "kill" : enemiesOf(f).length 
 
 export function FlashCard({ v }: { v: TabProps["v"] }) {
   const call = useCall("flashes", [v.file, v.players[v.human].key]);
+  // an answer for another match never shows, not even while this one loads
+  const tool = call.stale ? null : call.data;
   const [side, setSide] = useState<SideKey>("both");
   const [round, setRound] = useState("all");
   const [picked, setPicked] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const list = useRef<HTMLOListElement>(null);
-  const all = call.data?.flashes ?? [];
+  const all = tool?.flashes ?? [];
   const shown = useMemo(() => all.map((f, i) => ({ f, i })).filter(({ f }) => (side === "both" || f.side.toLowerCase() === side) && (round === "all" || f.round === Number(round))), [all, side, round]);
   const rounds = useMemo((): Option<string>[] => {
     const n = new Map<number, number>();
@@ -50,7 +52,7 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
   const enemySecs = shown.reduce((a, { f }) => a + enemiesOf(f).reduce((s, b) => s + b.secs, 0), 0);
   const mates = shown.reduce((a, { f }) => a + matesOf(f).length, 0);
   const led = shown.filter(({ f }) => f.kills.length).length;
-  const notes = call.data?.notes ?? [];
+  const notes = tool?.notes ?? [];
 
   const pick = (i: number | null) => setPicked((p) => (p === i ? null : i));
   /** a radar dot opens its row and brings it into view, as a click on the row would */
@@ -68,8 +70,8 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
   };
 
   const title = "Your flashes";
-  if (call.error) return <Card title={title}><LoadFailed what="Your flashes" error={call.error} /></Card>;
-  if (!call.data) return <Card title={title}><div className="skel" style={{ height: 320 }} /></Card>;
+  if (call.error && !call.stale) return <Card title={title}><LoadFailed what="Your flashes" error={call.error} /></Card>;
+  if (!tool) return <Card title={title}><div className="skel" style={{ height: 320 }} /></Card>;
   if (!all.length) return <Card title={title} icon={<NadeIcon type="flash" size={16} beside />}><Empty text={notes[0] ?? "You threw no flashbangs this match."} /></Card>;
 
   const focus = picked ?? hover;
@@ -80,9 +82,9 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
       aside={<span className="meta">{shown.length === all.length ? plural(all.length, "flash", "flashes") : `${shown.length} of ${all.length} flashes`}</span>}>
       <div className="fl">
         <div className="fl__bar">
-          <Segmented label="Side" value={side} onChange={(s) => { setSide(s); setRound("all"); setPicked(null); }}
+          <Segmented label="Side" value={side} onChange={(s) => { setSide(s); setRound("all"); setPicked(null); setHover(null); }}
             options={[{ value: "both", label: "Both sides" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
-          <Select label="Round" value={round} onChange={(r) => { setRound(r); setPicked(null); }} options={rounds} />
+          <Select label="Round" value={round} onChange={(r) => { setRound(r); setPicked(null); setHover(null); }} options={rounds} />
         </div>
         <dl className="fl__figs" aria-label="Your flashes, as filtered">
           <div><dt className="caps">Thrown</dt><dd className="num">{shown.length}</dd></div>
@@ -186,7 +188,7 @@ function FlashItem({ v, f, i, open, lit, onToggle, onHover }: {
           <span className="fl-row__en">{en.length ? <><b className="num cream">{en.length}</b><span className="meta num">{fmtSecs(secs)}</span></> : <span className="faint">–</span>}</span>
           <span className="fl-row__tm">{mates.length ? <b className="num poor-text">{mates.length}</b> : <span className="faint">–</span>}</span>
           <span className="fl-row__k">{f.kills.length ? f.kills.map((k, j) => <WeaponIcon key={j} name={k.weapon} height={12} />) : <span className="faint">–</span>}</span>
-          {!f.at && <span className="chip chip--approx fl-row__np" data-tip="No detonation point in this file">No point</span>}
+          {!f.at && <span className="chip chip--approx fl-row__np">No point</span>}
         </button>
         <a className="fl-row__go" href={matchHref(v.file, "rounds", { round: f.round })} aria-label={`Open round ${f.round}`} data-tip={`Round ${f.round}`}><ChevronRightIcon size={14} /></a>
       </div>
@@ -200,10 +202,10 @@ function FlashItem({ v, f, i, open, lit, onToggle, onHover }: {
                   <li key={b.pi} className={`fl-blind ${b.flashed ? "" : "is-short"}`}>
                     <span className={`fl-blind__who ${b.team ? "poor-text" : ""}`}><PlayerName v={v} pi={b.pi} /></span>
                     <span className="fl-blind__bar" aria-hidden><i style={{ transform: `scaleX(${Math.min(1, b.secs / BAR_S)})` }} className={b.team ? "is-team" : ""} /></span>
-                    <span className="num fl-blind__s" data-tip={b.flashed ? undefined : `Under ${FLASHED_MIN_S} s: not counted as blinded`}>{fmtSecs(b.secs)}</span>
+                    <span className="num fl-blind__s" {...(b.flashed ? {} : { "data-tip": `Under ${FLASHED_MIN_S} s: not counted as blinded`, tabIndex: 0 })}>{fmtSecs(b.secs)}</span>
                     <span className="fl-blind__k">
                       {kill && (
-                        <span className="fl-kill" data-tip={[kill.assist && "Your flash assist", kill.whileBlind && "Killed while blind"].filter(Boolean).join(", ")}>
+                        <span className="fl-kill" tabIndex={0} data-tip={[kill.assist && "Your flash assist", kill.whileBlind && "Killed while blind"].filter(Boolean).join(", ")}>
                           <WeaponIcon name={kill.weapon} height={12} />
                           <span className="meta">{kill.killer === null ? "World" : kill.killer === v.human ? "you" : v.players[kill.killer].name}, {fmtClock(kill.t)}</span>
                         </span>
