@@ -321,6 +321,59 @@ round on those rounds (`ecoKills`) are the eco-aggression candidates. Neither is
 on the engine's numbers both fall under 0.4, so neither ships. The per-buy-class breakdown of the existing
 metrics (`buySplits`) still answers "aggressive on ecos".
 
+## Luck (for fun, never ranked)
+
+How much the dice favoured a player (`luck.ts`). None of these is a skill measure, so none has a pro
+percentile: `compared: false` makes compare() say "for fun, with no pro percentile" and keeps them out of
+every pool. Positive luck means the dice favoured you.
+
+**Spread luck.** Every gun shot (shotguns aside, since each pellet has its own spread) fired while an
+enemy was mesh-visible and unsmoked within 30 degrees of the aim counts once, against the enemy whose body
+centre was nearest the aim direction. Its chance of hitting comes from three things:
+
+- **The cone.** The game's own aim angles, inaccuracy and spread for that bullet (`fire_bullets`, which the
+  extractor writes to `shots`). The bullet leaves the aim by inaccuracy x u0 at a uniform angle plus
+  spread x u1 at another, u0 and u1 uniform on [0, 1]. That is CS:GO's published formula, and CS2 is read
+  the same way.
+- **The target.** An upright box facing the shooter, 13 units to each side and from the feet to 6 units
+  above the eye. Both sizes are scaled by HIT_AREA_SCALE.
+- **Calibration.** A logistic map of the geometric chance's log-odds (CALIBRATION), because the box and
+  cone alone are too sure at both ends.
+
+A shot hit if the shooter damaged that enemy with a gun on the shot's tick. Luck is hits minus the summed
+chances, for your shots (luckHits) and for the enemies' shots at you (luckAgainst). The luck score is the
+first minus the second. All three are per 24 rounds over the rounds with the inputs, so a regulation match
+reads as its own total.
+
+`pnpm fit-luck` fitted both constants on the even-numbered pro maps and checked them on the odd-numbered
+ones (159,100 shots): HIT_AREA_SCALE 0.868 makes the geometric chances
+sum to the hits on the fitting maps. On its own that chance is too sure: on the checking maps, shots
+given 0.4% hit 8.9% of the time, and shots given 95% hit 82%. CALIBRATION (a = -0.123, b = 0.371)
+corrects it. Every band of the calibrated chance is within 0.08 of its hit rate, the widest being 0.257
+against 0.180 and 0.681 against 0.758, and hits are 1.006 of the expected overall. The remaining error is
+what a box, a cone and a nearest-enemy target leave out: limbs, partial cover, and target movement within
+the tick.
+
+| id | Needs | Definition and thresholds |
+|---|---|---|
+| luckHits, luckAgainst, luckScore | spread | As above. Plugin files have no cone and no line of sight, so they give no value. |
+| runAndGunKills, runAndGunDeaths | killShot, deathShot | Gun kills whose killing shot (the killer's gun shot on the kill's tick) was fired above 34% of the gun's max speed, scoped speed when scoped, over the kills with that shot's speed known. Plugin files record only the recording player's shots, so deaths to bots there are unknown. |
+| luckyHeadshots, luckyHeadshotDeaths | hsShot, hsDeathShot | Headshot kills whose killing shot had an inaccuracy cone of 0.05 or more (about 2.9 degrees; ours, no fit). Moving, jumping and spraying all widen the cone, so one threshold covers them. Needs the cone, so demos only. |
+| blindKills, airKills, noscopeKills, smokeKills | flags | Share of your kills with the game's blind, in-the-air, no-scope or through-smoke flag, over kills with all four flags recorded (they are nullable since #27) |
+| flagDeaths | deathFlags | Share of your deaths to an enemy kill with any of those flags |
+| closeCalls | | Rounds you survived on 5 health or less at the round's end, per 24 rounds. Health is 100 less the round's damage taken from every source (`health_after` where the source records it). |
+| lowHpKills, lowHpDeaths | | Enemy kills made, and deaths to an enemy, on 20 health or less (ours, no fit), per 24 rounds |
+
+What each source gives:
+
+| Input | Pro and Valve demos (extractor) | Plugin files |
+|---|---|---|
+| Cone, aim angles and eye per bullet | yes, every gun shot | no (the plugin would need each shot's inaccuracy, spread, aim angles and eye position, for every player) |
+| Line of sight to the target | yes (engagements) | no (it would need line of sight, or at least the target's position at each shot, for every shooter) |
+| Killing shot's speed | every player | the recording player only |
+| Kill flags | yes | yes |
+| Health from damage | yes | yes |
+
 ## Information (identity)
 
 Source: the radar `spotted` table, clipped to freeze end, round end and both players' deaths. It lags
