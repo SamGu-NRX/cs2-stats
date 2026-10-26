@@ -13,7 +13,7 @@ import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
 import { KeyChips, Palette } from "./shell/Palette";
 import { NAV, Sidebar, useRail } from "./shell/Sidebar";
 import { RefreshIcon, SearchIcon } from "./icons/ui";
-import { go, isTextEntry, matchHref, matchTabOfKey, navWasInstant, pageHref, profileHref, PROFILE_TABS, useRoute, currentRoute } from "./router";
+import { go, isTextEntry, matchHref, matchTabOfKey, navWasPointer, pageHref, profileHref, PROFILE_TABS, useRoute, currentRoute } from "./router";
 import { HomeView } from "./views/Home";
 import { MatchesView } from "./views/Matches";
 
@@ -137,7 +137,7 @@ function Body() {
         <AppBar onPalette={() => setPalette(true)} />
         <main ref={pane} className="pane" tabIndex={-1} aria-label={TITLES[route.page]}>
           <Suspense fallback={<FirstScan title={title} progress={null} />}>
-            <div key={pageKey} className={navWasInstant() ? undefined : "view-in"}>{view}</div>
+            <div key={pageKey} className={navWasPointer() ? "view-in" : undefined}>{view}</div>
           </Suspense>
         </main>
       </div>
