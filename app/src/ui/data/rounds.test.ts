@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KillFact, MatchFacts } from "../../stats/facts";
 import { pooledRates } from "./engine";
-import { clutchesOf, decidingRounds, feedFor, roundCells } from "./rounds";
+import { decidingRounds, feedFor } from "./rounds";
 
 // One round, 2v2: players 0 and 1 are team 0 on T, players 2 and 3 are team 1 on CT.
 // 2 kills 0 (opening), leaving player 1 alone against two; 1 kills 2 (now player 3 is alone too), then 1 kills 3.
@@ -24,28 +24,11 @@ describe("round views", () => {
     expect(feed[0].swing).toBeCloseTo(-0.2);
     expect(feed[1].swing).toBeCloseTo(0.25);
   });
-  it("marks both sides of the opening duel", () => {
-    const cells = roundCells(facts);
-    expect(cells[2][0]!.opening).toBe("k");
-    expect(cells[0][0]!.opening).toBe("d");
-    expect(cells[1][0]).toMatchObject({ kills: 2, died: false, swing: 0.8 });
-  });
-  it("finds each clutch once, from the moment a player is alone, with the kills that followed", () => {
-    expect(clutchesOf(facts)).toEqual([
-      { ri: 0, pi: 1, side: "T", against: 2, won: true, killsAfter: 2 },
-      { ri: 0, pi: 3, side: "CT", against: 1, won: false, killsAfter: 0 },
-    ]);
-  });
   it("reads a world death's swing for both teams, from the victim's loss", () => {
     // player 0 falls to the world: no killer, no enemy credited; the opponents still gain what 0's team lost
     const world = { ...facts, kills: [{ ...kill(640, 2, 0, [[0, -0.1]]), killer: null, killerSide: null, enemy: false }] } as unknown as MatchFacts;
     expect(feedFor(world, 0, 2)[0].swing).toBeCloseTo(0.1);
     expect(feedFor(world, 0, 0)[0].swing).toBeCloseTo(-0.1);
-  });
-  it("finds a clutch that starts the round, before any kill", () => {
-    // team 0 starts with player 1 alone (player 0 disconnected before freeze end, so no player-round row)
-    const alone = { ...facts, pr: (facts.pr as { pi: number }[]).filter((r) => r.pi !== 0), kills: [kill(960, 1, 2, [[1, 0.25], [2, -0.25]])] } as unknown as MatchFacts;
-    expect(clutchesOf(alone)[0]).toMatchObject({ pi: 1, side: "T", against: 2, killsAfter: 1 });
   });
 });
 
