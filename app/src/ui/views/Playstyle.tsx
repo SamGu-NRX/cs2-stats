@@ -7,7 +7,7 @@
 // - Where you rank: one ranked list of percentiles, grouped by topic. Performance rows rank against pro
 //   players; style (identity) rows against the bot careers in the same matches (worker/ranking.ts).
 // - Rotations and first contact wait for analysis that has not been built; the page says so.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Measures } from "../../stats/facts";
 import type { MatchEntry } from "../data/match";
 import { CELL, cellCentre } from "../../stats/positions";
@@ -105,9 +105,30 @@ function StyleCompass({ list, q }: { list: MatchEntry[]; q: Query }) {
   );
 }
 
+/** A bot's hover card text, also its name for assistive tech. */
+const dotText = (d: Dot) => `${d.name}: ${zoneOf(d).label}, ${d.rounds} rounds. Opening duels in ${Math.round(100 * d.x)}% of rounds, ${Math.round(100 * d.y)}% trades and assists.`;
+
+/**
+ * The bots are one tab stop: Tab lands on the focused bot, the arrow keys (and Home and End) move
+ * between bots left to right, and the focused bot shows the same card a pointer hover does.
+ */
 function Compass({ dots }: { dots: Dot[] }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<Dot | null>(null);
+  const bots = useMemo(() => dots.filter((d) => !d.you).sort((a, b) => a.x - b.x || a.y - b.y), [dots]);
+  const [cursor, setCursor] = useState(0);
+  const at = Math.min(cursor, Math.max(0, bots.length - 1));
+  const dotRefs = useRef<(SVGGElement | null)[]>([]);
+  const move = (e: KeyboardEvent<SVGGElement>) => {
+    const n = bots.length;
+    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? (at + 1) % n
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? (at - 1 + n) % n
+      : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : null;
+    if (next === null || !n) return;
+    e.preventDefault();
+    setCursor(next);
+    dotRefs.current[next]?.focus();
+  };
   const h = 340;
   const pad = { l: 16, r: 16, t: 16, b: 40 };
   const xmax = Math.max(0.5, ...dots.map((d) => d.x)) * 1.08;
@@ -125,32 +146,42 @@ function Compass({ dots }: { dots: Dot[] }) {
   ];
   return (
     <div ref={ref} className="chart compass">
-      <svg width={w} height={h} role="img" aria-label={`Style compass: you ${me ? `at ${Math.round(100 * me.x)}% opening duels and ${Math.round(100 * me.y)}% trades and assists, ${zoneOf(me).label}` : "not placed"}`}>
+      <svg width={w} height={h} role="group" aria-label={`Style compass: you ${me ? `at ${Math.round(100 * me.x)}% opening duels and ${Math.round(100 * me.y)}% trades and assists, ${zoneOf(me).label}` : "not placed"}; ${plural(bots.length, "bot career")}, arrow keys move between them`}>
         {ZONES.map((z, i) => (
-          <g key={z.id}>
+          <g key={z.id} aria-hidden>
             <rect x={rects[i].x} y={rects[i].y} width={Math.max(0, rects[i].w)} height={Math.max(0, rects[i].h)} fill={rects[i].fill} />
             <text x={rects[i].x + 10} y={rects[i].y + 20} className="compass__zone">{z.label}</text>
             <text x={rects[i].x + 10} y={rects[i].y + 34} className="ax">{z.sub}</text>
           </g>
         ))}
-        <line x1={ex} x2={ex} y1={pad.t} y2={h - pad.b} stroke="var(--line2)" strokeDasharray="3 3" />
-        <line x1={pad.l} x2={w - pad.r} y1={sy} y2={sy} stroke="var(--line2)" strokeDasharray="3 3" />
-        <text x={ex + 4} y={h - pad.b - 6} className="ax">{Math.round(ENTRY_X * 100)}%</text>
-        <text x={w - pad.r - 4} y={sy - 6} textAnchor="end" className="ax">{Math.round(SUPPORT_Y * 100)}%</text>
-        <text x={pad.l} y={h - 14} className="ax ax--label">Takes the first duel of the round more often →</text>
-        <text x={w - pad.r} y={h - 14} textAnchor="end" className="ax">↑ more trades and assists</text>
-        {dots.filter((d) => !d.you).map((d) => (
-          <circle key={d.key} cx={X(d.x)} cy={Y(d.y)} r="4.5" fill="var(--ink3)" opacity={hover?.key === d.key ? 1 : 0.55} onPointerEnter={() => setHover(d)} onPointerLeave={() => setHover(null)} />
-        ))}
+        <g aria-hidden>
+          <line x1={ex} x2={ex} y1={pad.t} y2={h - pad.b} stroke="var(--line2)" strokeDasharray="3 3" />
+          <line x1={pad.l} x2={w - pad.r} y1={sy} y2={sy} stroke="var(--line2)" strokeDasharray="3 3" />
+          <text x={ex + 4} y={h - pad.b - 6} className="ax">{Math.round(ENTRY_X * 100)}%</text>
+          <text x={w - pad.r - 4} y={sy - 6} textAnchor="end" className="ax">{Math.round(SUPPORT_Y * 100)}%</text>
+          <text x={pad.l} y={h - 14} className="ax ax--label">Takes the first duel of the round more often →</text>
+          <text x={w - pad.r} y={h - 14} textAnchor="end" className="ax">↑ more trades and assists</text>
+        </g>
+        <g onKeyDown={move}>
+          {bots.map((d, i) => (
+            <g key={d.key} ref={(el) => { dotRefs.current[i] = el; }} className="compass__dot" transform={`translate(${X(d.x)} ${Y(d.y)})`}
+              tabIndex={i === at ? 0 : -1} aria-label={dotText(d)}
+              onPointerEnter={() => setHover(d)} onPointerLeave={() => setHover(null)}
+              onFocus={() => { setCursor(i); setHover(d); }} onBlur={() => setHover(null)}>
+              <circle r="10" fill="transparent" />
+              <circle className="compass__mark" r="4.5" fill="var(--ink3)" opacity={hover?.key === d.key ? 1 : 0.55} />
+            </g>
+          ))}
+        </g>
         {me && (
-          <g transform={`translate(${X(me.x)} ${Y(me.y)})`}>
+          <g transform={`translate(${X(me.x)} ${Y(me.y)})`} aria-hidden>
             <circle r="16" fill="rgba(255,215,173,.14)" />
             <circle r="7" fill="var(--cream)" />
             <text x="14" y="-12" className="compass__you">You, {zoneOf(me).label}</text>
           </g>
         )}
         {hover && (
-          <g transform={`translate(${Math.min(w - 180, X(hover.x) + 12)} ${Math.max(pad.t, Y(hover.y) - 46)})`} pointerEvents="none">
+          <g transform={`translate(${Math.min(w - 180, X(hover.x) + 12)} ${Math.max(pad.t, Y(hover.y) - 46)})`} pointerEvents="none" aria-hidden>
             <rect width="170" height="40" rx="6" fill="var(--bg0)" stroke="var(--line2)" />
             <text x="10" y="16" className="ax ax--strong" style={{ fill: "var(--ink)" }}>{hover.name}</text>
             <text x="10" y="31" className="ax">{zoneOf(hover).label}, {hover.rounds} rounds</text>
@@ -239,8 +270,8 @@ export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey
 const RANKS: { tag: string; ids: string[] }[] = [
   { tag: "Aim and damage", ids: ["kpr", "adr", "perfectKpr"] },
   { tag: "Style", ids: ["openingAttempts", "openingSuccess", "tradeKillsPct", "rws"] },
-  { tag: "Positioning", ids: ["timeAlive", "firstDuelTime", "clutches24"] },
-  { tag: "Utility", ids: ["flashesPR", "assistsPerFlash", "dmgPerHe"] },
+  { tag: "Positioning", ids: ["timeAlive", "firstDuelTime", "clutchPointsPR", "clutches24"] },
+  { tag: "Utility", ids: ["utilDmgPR", "flashAssistsPR", "flashesPR", "assistsPerFlash", "dmgPerHe"] },
 ];
 
 function Ranks({ q }: { q: Query }) {

@@ -6,10 +6,12 @@
 // (a still-small bot pool) draws its bar hatched.
 import { useId, useState, type MouseEvent, type ReactNode } from "react";
 import { Select, type Option } from "../../components/controls";
-import { Percentile, type PercentileKind } from "../../components/Percentile";
+import { ApproxMark, Percentile, type PercentileKind } from "../../components/Percentile";
+import type { Sub } from "../../data/engine";
 import { ATTR_TIP, PROVISIONAL_TIP } from "../../data/tips";
 import { AttrIcon } from "../../icons/attributes";
 import type { AttributeId } from "../../data/proPack";
+import { splitUnit } from "./parts";
 
 export interface PanelMetric {
   id: string; label: string; value: string | null; unit?: string; pct: number | null; kind: PercentileKind; population: string; def?: string;
@@ -28,6 +30,22 @@ export interface PanelAttribute {
   open?: boolean;
   /** the score ranks against a still-small bot pool */
   provisional?: boolean;
+  /** rows after the scored metrics with a value only: not part of the score (engine.ts EXTRA_SUBS) */
+  extra?: Sub[];
+}
+
+/**
+ * A metric with its value only, under an attribute's scored metrics (main's unscored rows). The label
+ * carries the definition, as the scored rows' labels do; there is no bar because nothing ranks it.
+ */
+export function ValueRow({ s }: { s: Sub }) {
+  const v = splitUnit(s.text);
+  return (
+    <div className="vrow" data-metric={s.id}>
+      <span className="vrow__label" data-tip={s.def} tabIndex={0}>{s.label}{s.status === "approx" ? <ApproxMark /> : null}</span>
+      <span className="vrow__val num">{v.value}{v.unit ? <small>{v.unit}</small> : null}</span>
+    </div>
+  );
 }
 
 /** The metric ranked highest, shown beside a closed attribute so its row says what drives the score. */
@@ -71,6 +89,7 @@ export function Attribute({ a, wide = false }: { a: PanelAttribute; wide?: boole
               <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def}
                 approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
             ))}
+            {a.extra?.map((s) => <ValueRow key={s.id} s={s} />)}
           </div>
         </div>
       </div>
