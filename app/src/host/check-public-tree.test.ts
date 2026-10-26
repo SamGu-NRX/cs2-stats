@@ -17,6 +17,9 @@ const ID = (tail: string) => `7656119${tail}`;
 const USERS = ["Us", "ers"].join("");
 const BS = "\\";
 const MARK = ["_pri", "vate"].join("");
+const VALUE = ["do", "not", "commit"].join(" ");
+/** Every character as a JSON-style backslash-u escape of four hex digits. */
+const esc = (t: string) => [...t].map((c) => `${BS}u${c.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
 
 let n = 0;
 /** A scratch git tree with the real allowlist and these files tracked; the checker's exit and output. */
@@ -64,6 +67,13 @@ describe("check-public-tree", () => {
       [{ "app/public/samples/x.json.gz": gzipSync('{"model": "hltv-530cdd3e"}') }, '"hltv" under app/public/'],
       [{ "data/baselines.local.json": `{"${MARK}": "do not commit", "pools": {}}` }, "carries the private marker"],
       [{ "data/report.private.txt": "anything" }, "named *.private.*"],
+      // an id written as backslash-u escapes, in a text file and inside JSON strings
+      [{ "notes/a.txt": `id ${esc(ID("8000000044"))}` }, `SteamID64 ${ID("8000000044")}`],
+      [{ "fixtures/e.json": `{"name": "x${esc(ID("8000000045"))}"}` }, `SteamID64 ${ID("8000000045")}`],
+      [{ "fixtures/e2.json.gz": gzipSync(`{"n": ["${esc(ID("8000000046"))}"]}`) }, `SteamID64 ${ID("8000000046")}`],
+      // the marker pasted into files that are not JSON
+      [{ "notes/leak.txt": `copied: {"${MARK}": "${VALUE}", "a": 1}` }, "holds the private marker"],
+      [{ "app/src/leak.ts": `const x = {"${MARK}" :  "${VALUE}"};` }, "holds the private marker"],
       [{ "data/players.parquet": Buffer.from("PAR1") }, "a parquet table"],
     ];
     for (const [files, why] of cases) {
