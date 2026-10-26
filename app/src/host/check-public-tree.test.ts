@@ -74,6 +74,13 @@ describe("check-public-tree", () => {
       // the marker pasted into files that are not JSON
       [{ "notes/leak.txt": `copied: {"${MARK}": "${VALUE}", "a": 1}` }, "holds the private marker"],
       [{ "app/src/leak.ts": `const x = {"${MARK}" :  "${VALUE}"};` }, "holds the private marker"],
+      // the marker inside a JSON document embedded in a string literal, its quotes escaped
+      [{ "app/src/embed.ts": `const x = "{${BS}"${MARK}${BS}": ${BS}"${VALUE}${BS}", ${BS}"a${BS}": 1}";` }, "holds the private marker"],
+      // UTF-16 text, as Windows PowerShell 5's > writes it (LE with a byte order mark), and LE and BE without one
+      [{ "notes/ps.txt": Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`{"${MARK}": "${VALUE}"}`, "utf16le")]) }, "holds the private marker"],
+      [{ "notes/ps-id.txt": Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`id ${ID("8000000047")}`, "utf16le")]) }, `SteamID64 ${ID("8000000047")}`],
+      [{ "notes/le.txt": Buffer.from(`id ${ID("8000000048")}`, "utf16le") }, `SteamID64 ${ID("8000000048")}`],
+      [{ "notes/be.txt": Buffer.from(`id ${ID("8000000049")}`, "utf16le").swap16() }, `SteamID64 ${ID("8000000049")}`],
       [{ "data/players.parquet": Buffer.from("PAR1") }, "a parquet table"],
     ];
     for (const [files, why] of cases) {
