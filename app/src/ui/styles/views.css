@@ -885,18 +885,23 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .profcell { cursor: help; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
 
 /* ---------------------------------------------------------------- spray chart (components/SprayPath.tsx) */
-.spray { margin: 0; }
+/* SYSTEM.md's spray chart: a well with a 1° grid, the pro path dashed grey, your path a 1.5 px cream line
+   with dots numbered at 1 and every fifth bullet, the first bullet a hollow cream ring */
+.spray { margin: 0; display: grid; grid-template-columns: auto 1fr; align-items: start; column-gap: 8px; }
+.spray > :not(.spray__title):not(.spray__note) { grid-column: 1 / -1; }
 .spray__title { margin: 0 0 10px; font: 600 15px/1.35 var(--f); letter-spacing: -0.01em; text-wrap: balance; max-width: 40ch; color: var(--ink); }
+.spray__note { margin-top: 2px; }
 .spray__plot { display: block; width: 100%; max-width: 520px; }
+.well { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-chip); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4); }
+.spray__grid line { stroke: var(--line); stroke-width: 1; }
 .spray__band { fill: rgba(163, 167, 164, 0.16); }
 .spray__tick { stroke: rgba(163, 167, 164, 0.35); stroke-width: 6; stroke-linecap: round; }
 .spray__pro { fill: none; stroke: var(--ink2); stroke-width: 1.5; stroke-dasharray: 4 3; }
-.spray__mine { fill: none; stroke: var(--cream); stroke-width: 2; }
+.spray__mine { fill: none; stroke: var(--cream); stroke-width: 1.5; stroke-linejoin: round; }
 .spray__dot { fill: var(--cream); stroke: var(--cream); stroke-width: 1.5; }
 .spray__origin { fill: none; stroke: var(--cream); stroke-width: 1.5; }
 .spray__n { font: 500 11px var(--f-mono); fill: var(--ink); }
 .spray__scale line { stroke: var(--ink); stroke-width: 1.5; } .spray__scale text { font: 400 11px var(--f); fill: var(--ink2); }
-.spray__note { margin-top: 8px; max-width: 60ch; font-size: 12px; color: var(--ink2); }
 .sprayd { margin-top: 6px; }
 .sprayd .caps { margin-bottom: 8px; }
 .sprayd__plot { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; align-items: end; height: 70px; border-bottom: 1px solid var(--line); }

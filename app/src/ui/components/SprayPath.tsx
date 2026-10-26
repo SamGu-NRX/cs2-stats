@@ -73,10 +73,20 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
   const H = Math.max(MIN_H, Math.ceil(Y(deepest) + 24));
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
   const finding = relative ? `Your ${gun} spray, relative to the target` : !reference ? `Your ${gun} spray` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
+  // why there is no pro path, as the title's "?" rather than a sentence under the chart
+  const note = relative ? "Measured against the target, not view angles, so not compared with pros." : !reference ? "There is no pro path for this gun in the recoil reference." : null;
+  // the 1° grid (SYSTEM.md spray chart): lines every degree from the first bullet, which sits at (W / 2, TOP)
+  const cols = Array.from({ length: Math.floor(W / 2 / S) * 2 + 1 }, (_, i) => W / 2 + (i - Math.floor(W / 2 / S)) * S);
+  const rows = Array.from({ length: Math.floor((H - TOP) / S) + 1 }, (_, i) => TOP + i * S);
   return (
     <figure className="spray">
       <figcaption className="spray__title">{finding}</figcaption>
-      <svg viewBox={`0 0 ${W} ${H + 30}`} className="spray__plot" role="img" aria-label={finding}>
+      {note && <span className="help spray__note" data-tip={note} tabIndex={0} role="note" aria-label={note}>?</span>}
+      <svg viewBox={`0 0 ${W} ${H + 30}`} className="spray__plot well" role="img" aria-label={finding}>
+        <g className="spray__grid" aria-hidden>
+          {cols.map((x) => <line key={`x${x}`} x1={x} x2={x} y1={0} y2={H} />)}
+          {rows.map((y) => <line key={`y${y}`} x1={0} x2={W} y1={y} y2={y} />)}
+        </g>
         {ref.length ? <polygon points={band} className="spray__band" /> : null}
         {ells.map((e) => <ellipse key={`e${e.bullet}`} cx={X(e.x)} cy={Y(e.y)} rx={Math.max(2, e.rx * S)} ry={Math.max(2, e.ry * S)} className="spray__sd" />)}
         {ref.slice(1, until).map((b, i) => <line key={i} x1={X(b[1])} x2={X(b[1])} y1={Y(b[2])} y2={Y(b[3])} className="spray__tick" />)}
@@ -85,8 +95,8 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
         {eyes.map((h) => <circle key={`h${h.i}`} cx={X(h.yaw)} cy={Y(h.pitch)} r="2.5" className="spray__head" />)}
         {pts.map((p, i) => (
           <g key={p.bullet} opacity={p.n >= MIN_SPRAYS ? 1 : 0.4}>
-            <circle cx={X(p.yaw)} cy={Y(p.pitch)} r={p.bullet === 1 ? 5 : 4} className={p.bullet === 1 ? "spray__origin" : "spray__dot"} />
-            <text x={X(p.yaw) + (i % 2 ? 9 : -9)} y={Y(p.pitch) + 4} textAnchor={i % 2 ? "start" : "end"} className="spray__n">{p.bullet}</text>
+            <circle cx={X(p.yaw)} cy={Y(p.pitch)} r={p.bullet === 1 ? 5 : 3.5} className={p.bullet === 1 ? "spray__origin" : "spray__dot"} />
+            {(p.bullet === 1 || p.bullet % 5 === 0) && <text x={X(p.yaw) + (i % 2 ? 9 : -9)} y={Y(p.pitch) + 4} textAnchor={i % 2 ? "start" : "end"} className="spray__n">{p.bullet}</text>}
           </g>
         ))}
         <g transform={`translate(16,${H + 10})`} className="spray__scale">
@@ -94,7 +104,6 @@ export function SprayPath({ gun, reference, path, relative = false, pro = true, 
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">Measured against the target, not view angles, so not compared with pros.</p> : !reference ? <p className="spray__note">There is no pro path for this gun in the recoil reference.</p> : null}
     </figure>
   );
 }

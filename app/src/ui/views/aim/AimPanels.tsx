@@ -292,7 +292,7 @@ function SprayCard({ s, query, side, guns }: { s: Rolled | null; query: Query; s
           {chart && <SprayPath gun={name} reference={ref} path={cur.path} relative={cur.relative} pro={showPro} spread={spread} heads={heads} />}
           {chart && (
             <div className="legend spray-key" aria-hidden>
-              <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="2" /></svg>You</span>
+              <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--cream)" strokeWidth="1.5" /></svg>You</span>
               {spread && <span><svg width="14" height="10"><ellipse cx="7" cy="5" rx="6" ry="4" className="spray__sd" /></svg>Your spread, one standard deviation</span>}
               {ref && !cur.relative && showPro && <span><svg width="16" height="8"><line x1="0" x2="16" y1="4" y2="4" stroke="var(--ink2)" strokeWidth="1.5" strokeDasharray="4 3" /></svg>Pro median</span>}
               {ref && !cur.relative && showPro && <span><svg width="12" height="10"><rect width="12" height="10" rx="2" fill="rgba(163, 167, 164, 0.16)" /></svg>Pros' middle half</span>}

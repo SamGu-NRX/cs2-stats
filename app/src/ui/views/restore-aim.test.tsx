@@ -191,7 +191,7 @@ describe("spray card, restored parts", () => {
     expect(host.querySelector(".spray__title")!.textContent).toBe("Your CZ75-Auto spray");
     expect(host.querySelector("svg.spray__plot .spray__pro")).toBeNull();
     expect(Array.from(host.querySelectorAll(".spray-toggles label")).map((l) => l.textContent)).toEqual(["Spread bands"]);
-    expect(host.querySelector(".spray__note")!.textContent).toContain("no pro path");
+    expect(host.querySelector(".spray__note")!.getAttribute("data-tip")).toContain("no pro path");
   });
 
   it("lists every sprayed gun with its count after the name, fades a thin one with the reason, and draws no mark", () => {
