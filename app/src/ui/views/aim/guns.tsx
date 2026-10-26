@@ -14,7 +14,7 @@ import { useCall, useRollups, useYourQuery } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { sourceOf } from "../../data/sources";
 import { WeaponIcon } from "../../icons/game";
-import { fmtPct, plural, signed } from "../../lib/format";
+import { fmtPct, signed } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 
 /** A gun, or your other guns pooled, needs this many shots before its accuracy is judged. */
@@ -127,20 +127,35 @@ export function SplitCell({ s, what }: { s: Split; what: string }) {
   return <span className="convcell" tabIndex={0} data-tip={`${s.converted} of ${s.n} ${what} from converted logs, which record no shots.`}>{s.n}</span>;
 }
 
+/** A gun's advice: a short line of numbers under its name, and one sentence for its "?" tooltip. */
+export interface Advice { line: string; tip: string }
+
 /**
  * Advice read off the gun's own numbers, against your other guns (main's Weapons advice, with "your
- * other guns" in place of the class average the old data model kept): accuracy, then the first bullet,
- * then how many hits land on the head.
+ * other guns" in place of the class average the old data model kept). The tip is the one thing most
+ * worth changing: a slow first bullet, then a low head share, then the edge itself, in one sentence
+ * of 12 words or fewer; the line names the same thing in numbers.
  */
-export function advice(g: Judged): string {
-  if (g.shots < MIN_SHOTS) return g.kills.n ? `${plural(g.kills.n, "kill")} so far; ${MIN_SHOTS} recorded shots are needed to judge your aim with it.` : "Fire it in a recorded match to see how you shoot with it.";
-  const lines: string[] = [];
-  if (g.edge !== null) lines.push(g.edge >= 0 ? `You hit ${g.edge.toFixed(1)} points more often than with your other guns.` : `You hit ${Math.abs(g.edge).toFixed(1)} points less often than with your other guns.`);
-  if (g.first !== null && g.othersFirst !== null && g.firstShots >= 10 && g.first < g.othersFirst - 5) lines.push(`Your first bullet lands ${(g.othersFirst - g.first).toFixed(0)} points less often than with your other guns: stop moving before you fire.`);
+export function advice(g: Judged): Advice {
+  if (g.shots < MIN_SHOTS) {
+    return g.shots
+      ? { line: `${g.shots} of ${MIN_SHOTS} shots`, tip: `It takes ${MIN_SHOTS} recorded shots to judge your aim with it.` }
+      : { line: "No recorded shots", tip: "Fire it in a recorded match to judge your aim." };
+  }
   const head = share(g.head, g.hits);
-  if (head !== null && g.hits >= 15 && head < 15 && g.cls !== "sniper") lines.push(`Only ${head.toFixed(0)}% of hits are on the head: keep the crosshair at head height.`);
-  if (!lines.length) lines.push("In line with your other guns; keep using it.");
-  return lines.join(" ");
+  if (g.first !== null && g.othersFirst !== null && g.firstShots >= 10 && g.first < g.othersFirst - 5) {
+    const gap = (g.othersFirst - g.first).toFixed(0);
+    return { line: `First bullet ${signed(-Number(gap), 0)} pts`, tip: `First bullets land ${gap} points less often, so stop before firing.` };
+  }
+  if (head !== null && g.hits >= 15 && head < 15 && g.cls !== "sniper") return { line: `Head share ${head.toFixed(0)}%`, tip: `Only ${head.toFixed(0)}% of hits are on the head, so aim higher.` };
+  if (g.edge === null) return { line: "No other guns to compare", tip: `Your other guns need ${MIN_SHOTS} recorded shots to compare.` };
+  const line = `${edgeText(g.edge)} vs other guns`;
+  return { line, tip: g.edge >= 0 ? `You hit ${g.edge.toFixed(1)} points more often than with other guns.` : `You hit ${Math.abs(g.edge).toFixed(1)} points less often than with other guns.` };
+}
+
+/** The advice's "?": its one sentence on hover and focus. */
+function AdviceHelp({ a }: { a: Advice }) {
+  return <span className="help" data-tip={a.tip} tabIndex={0} role="note" aria-label={a.tip}>?</span>;
 }
 
 export const HEAD_TIP = "Share of your hits on the head, not of your shots.";
@@ -161,16 +176,17 @@ export function GunIcon({ weapon, height = 14, label }: { weapon: string; height
 
 /**
  * The gun table's first cell: the gun's icon and name (and its class on Weapons, which has no class
- * rows), with the advice under the name. The advice sits in this cell rather than a column of its own:
- * a twelfth column pushed the gun tables past the card's edge at 1440 px.
+ * rows), with the advice's line and its "?" under the name. The advice sits in this cell rather than a
+ * column of its own: a twelfth column pushed the gun tables past the card's edge at 1440 px.
  */
 export function GunCell({ g, cls }: { g: Judged; cls?: string }) {
+  const a = advice(g);
   return (
     <span className="guncell guncell--advice">
       <GunIcon weapon={g.weapon} />
       <span className="guncell__txt">
         <span>{weaponLabel(g.weapon)}{cls ? <small className="faint">{cls}</small> : null}</span>
-        <span className="guncell__advice">{advice(g)}</span>
+        <span className="guncell__advice">{a.line}<AdviceHelp a={a} /></span>
       </span>
     </span>
   );
@@ -182,20 +198,19 @@ export function ClassIcon({ cls, height = 12 }: { cls: string; height?: number }
   return <GunIcon weapon={CLASS_GUN[cls] ?? "ak47"} height={height} />;
 }
 
-/** The best or the weakest gun: the official icon, its accuracy, its edge over your other guns, its kills and the advice. */
+/** The best or the weakest gun: the official icon, its accuracy, its edge over your other guns, its kills, and the advice in its "?". */
 export function GunHero({ g, tone }: { g: Judged; tone: "best" | "worst" }) {
   return (
     <section className={`gunhero card gunhero--${tone}`} aria-label={tone === "best" ? "Best gun" : "Weakest gun"}>
       <span className="gunhero__art"><GunIcon weapon={g.weapon} height={52} /></span>
       <div className="gunhero__body">
-        <span className="caps">{tone === "best" ? "Your best gun" : "Needs work"}</span>
+        <span className="caps gunhero__cap">{tone === "best" ? "Your best gun" : "Needs work"}<AdviceHelp a={advice(g)} /></span>
         <b className="gunhero__name">{weaponLabel(g.weapon)}</b>
         <div className="gunhero__figs">
           <span><b className="num">{fmtPct(g.acc)}</b><small className="meta">accuracy</small></span>
           <span data-tip={edgeTip(g)} tabIndex={0}><b className="num" style={{ color: scoreText(toScore(g.edge ?? 0, 0, 8)) }}>{g.edge === null ? "–" : edgeText(g.edge)}</b><small className="meta">vs your other guns</small></span>
           <span><b className="num">{g.kills.n}</b><small className="meta">kills</small></span>
         </div>
-        <p className="gunhero__advice">{advice(g)}</p>
       </div>
     </section>
   );

@@ -31,7 +31,7 @@ import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
 import ProfileView from "./Profile";
-import { RatingTerms, RoleSignals } from "./profile/parts";
+import { RatingTerms, RoleSignals, SIGNAL_TEXT } from "./profile/parts";
 import { StatCard, useRanks } from "./profile/tabs";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -226,18 +226,24 @@ it("measures each role signal on its own side and says you fit from the threshol
       const v = (sg.side === "T" ? t : both)[sg.metric];
       expect(!!li.querySelector(".chip"), sg.id).toBe(v !== null && v >= sg.threshold);
       expect((li.querySelector(".signals2__track i") as HTMLElement).style.width, sg.id).toBe(`${v === null ? 0 : 100 * Math.min(1, v / (2 * sg.threshold))}%`);
-      return { id: sg.id, v, both: both[sg.metric], you: text(li.querySelector(".signals2__you")) };
+      // the row's value is visible; the threshold, or what is missing, is its "?" sentence
+      const tip = li.querySelector(".help[data-tip]")!.getAttribute("data-tip")!;
+      expect(tip, sg.id).toBe(v === null ? SIGNAL_TEXT[sg.id].missing : SIGNAL_TEXT[sg.id].tip(sg.threshold));
+      expect(tip.split(/\s+/).length, sg.id).toBeLessThanOrEqual(12);
+      expect(li.querySelector("p"), sg.id).toBeNull();
+      return { id: sg.id, v, both: both[sg.metric], shown: text(li.querySelector(".signals2__v")), tip };
     });
   };
   const q = queryOf(samples);
   const mine = check(q);
   const support = mine.find((x) => x.id === "Support")!;
-  expect(support.you.startsWith(`${fmtPct(support.v, 0)} of your kills and assists are trades or assists.`)).toBe(true);
+  expect(support.shown).toBe(fmtPct(support.v, 0));
+  expect(support.tip).toBe(`Support players have ${ROLE_SIGNALS.find((sg) => sg.id === "Support")!.threshold}% or more trades and assists.`);
   // the T-side distance differs from both sides' here, so reading the wrong side shows
   const lurker = mine.find((x) => x.id === "Lurker")!;
   expect(lurker.v).not.toBeNull();
   expect(lurker.v).not.toBe(lurker.both);
-  expect(lurker.you).toContain(`You stand ${Math.round(lurker.v!).toLocaleString("en")} units`);
+  expect(lurker.shown).toBe(`${Math.round(lurker.v! * 0.0254)} m`);
   // a sample player who reaches a threshold, for the "You fit" side of the gate
   const fitter = samples.flatMap((s) => s.facts.players.map((p) => p.id)).find((id) => {
     const v = rolled(summary({ files: q.files, filter: { player: [id] } })).v;

@@ -1,6 +1,6 @@
 // Profile sections: the round-swing card, the role blend in plain words, and the "plays like" view
 // against the pro pack.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
 import { packerFeatures, type RoleBlend, type RoleSignal } from "../../../stats/identity";
@@ -243,25 +243,29 @@ export function RoleCard({ q }: { q: Query }) {
 
 const UNIT_M = 0.0254; // one Source unit is one inch
 
-/** Main's sentences for each signal (stats/role.ts on main), with the thresholds from identity.ts ROLE_SIGNALS. */
-const SIGNAL_TEXT: Record<RoleSignal["id"], { what: string; you: (v: number) => string; bar: (t: number) => string; missing: ReactNode }> = {
+/**
+ * Each signal's row: what it measures, your value, and one sentence for its "?" (12 words or fewer)
+ * naming the threshold, or what is missing when there is no value. Thresholds from identity.ts
+ * ROLE_SIGNALS.
+ */
+export const SIGNAL_TEXT: Record<RoleSignal["id"], { label: string; value: (v: number) => string; tip: (t: number) => string; missing: string }> = {
   Entry: {
-    what: "Takes the first duel of the round.",
-    you: (v) => `You are in the first duel of ${fmtPct(v, 0)} of rounds.`,
-    bar: (t) => `Entry players: ${t}% or more (the average is 20%).`,
+    label: "First duels",
+    value: (v) => fmtPct(v, 0),
+    tip: (t) => `Entry players take the first duel in ${t}% of rounds or more.`,
     missing: "Needs rounds with a kill log.",
   },
   Support: {
-    what: "Plays off teammates: trades and assists rather than first kills.",
-    you: (v) => `${fmtPct(v, 0)} of your kills and assists are trades or assists.`,
-    bar: (t) => `Support players: ${t}% or more.`,
+    label: "Trades and assists",
+    value: (v) => fmtPct(v, 0),
+    tip: (t) => `Support players have ${t}% or more trades and assists.`,
     missing: "Needs kills or assists.",
   },
   Lurker: {
-    what: "Plays away from the team on T, before the bomb is planted.",
-    you: (v) => `You stand ${Math.round(v).toLocaleString("en")} units (about ${Math.round(v * UNIT_M)} m) from your nearest teammate.`,
-    bar: (t) => `Lurkers: ${t.toLocaleString("en")} units (about ${Math.round(t * UNIT_M)} m) or more.`,
-    missing: <NeedsDemo detail="The distance comes from position samples taken while all five T players are alive; converted logs have no positions." />,
+    label: "Distance from team on T",
+    value: (v) => `${Math.round(v * UNIT_M)} m`,
+    tip: (t) => `Lurkers stand ${Math.round(t * UNIT_M)} m or more from teammates on T.`,
+    missing: "Needs positions, which converted logs lack.",
   },
 };
 
@@ -286,11 +290,16 @@ export function RoleSignals({ q }: { q: Query }) {
           const v = (sg.side === "T" ? t : both).v[sg.metric];
           const text = SIGNAL_TEXT[sg.id];
           const bar = v === null ? null : signalBar(v, sg.threshold);
+          const tip = v === null ? text.missing : text.tip(sg.threshold);
           return (
             <li key={sg.id} className={bar?.fits ? "is-on" : bar ? "" : "is-na"} data-signal={sg.id}>
-              <div className="signals2__top"><b>{sg.id}</b><span className="meta">{text.what}</span>{bar?.fits && <span className="chip chip--outline">You fit</span>}</div>
+              <div className="signals2__top">
+                <b>{sg.id}</b><span className="meta">{text.label}</span>
+                <span className="help" data-tip={tip} tabIndex={0} role="note" aria-label={tip}>?</span>
+                {bar?.fits && <span className="chip chip--outline">You fit</span>}
+                <b className="num signals2__v">{v === null ? "–" : <Num v={text.value(v)} />}</b>
+              </div>
               <div className="signals2__track" aria-hidden><i style={{ width: `${100 * (bar?.fill ?? 0)}%` }} /><em style={{ left: "50%" }} /></div>
-              <p className="signals2__you">{v === null ? text.missing : text.you(v)} <span className="faint">{text.bar(sg.threshold)}</span></p>
             </li>
           );
         })}
