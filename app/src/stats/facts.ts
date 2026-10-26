@@ -39,6 +39,12 @@ export interface MatchInfo {
    * covered share of a match is not that match's rating.
    */
   roundsPlayed: number;
+  /**
+   * round numbers the source holds only as totals (a converted log's first rounds, rounds the plugin
+   * marked partial), from match.extra "totals_only_rounds": played, but absent from rounds and every
+   * rate. Empty for demos.
+   */
+  totalsOnly: number[];
   /** when the match began, an ISO timestamp from match.extra "started_at"; null when the source has no clock time */
   startedAt: string | null;
   /** seconds from the first round's start to the last round's end (match.extra "duration_s" when the source knows it) */
@@ -189,6 +195,8 @@ export const MEASURES = [
   "posRounds", "deathsPos", "tradeableDeaths", "tradedAttempts", "tradeableTraded", "tradeOpps", "tradeAttempts", "tradeOppsTaken",
   // team spacing, Packer's features (positioning.ts)
   "spacingSamples", "adntRank", "adatRank", "deathTimeSum",
+  // the summed distance to the nearest teammate over the same samples (positioning.ts), the Lurker signal's input
+  "nearestDistSum",
   // utility (utility.ts)
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
@@ -302,6 +310,19 @@ export interface MatchFacts {
   aggression: AggroFact[];
   information: InfoFact[];
   utilq: UtilQFact[];
+  /** the rounds in match.totalsOnly that the source gave totals for, in round order */
+  totalsRounds: TotalsRound[];
+}
+
+/**
+ * A round the source holds only as the game's own per-player totals (a plugin file's rounds.basic):
+ * shown in the round grid and drawer, never folded into any rate.
+ */
+export interface TotalsRound {
+  number: number;
+  winner: "CT" | "T" | null;
+  /** players with a totals row, by players index */
+  players: { pi: number; kills: number; deaths: number; assists: number; dmg: number; hsKills: number }[];
 }
 
 export const emptyMeasures = (): Measures => Object.fromEntries(MEASURES.map((k) => [k, 0])) as Measures;

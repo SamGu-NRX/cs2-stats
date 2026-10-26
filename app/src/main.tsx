@@ -7,6 +7,9 @@ import "./ui/styles/base.css";
 import "./ui/styles/shell.css";
 import "./ui/styles/components.css";
 import "./ui/styles/views.css";
+import "./ui/styles/restore-aim.css";
+import "./ui/styles/restore-profile.css";
+import "./ui/styles/restore-match.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

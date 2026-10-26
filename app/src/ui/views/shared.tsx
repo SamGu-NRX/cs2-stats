@@ -21,11 +21,13 @@ import { pageHref } from "../router";
  */
 const SPARK_MIN_POINTS = 3;
 
-/** A pooled headline stat. It carries no delta: the last-match hero is the one place deltas show. */
-export function StatTile({ label, value, sub, spark, bench, raw, breakdown, def, color }: {
+/** A pooled headline stat; `delta` is the last match against it (Home's tiles). */
+export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
   label: string;
   value: string;
   sub?: ReactNode;
+  /** the last match against the average, beside the sparkline */
+  delta?: ReactNode;
   spark?: (number | null)[];
   bench?: BenchId;
   raw?: number | null;
@@ -42,9 +44,10 @@ export function StatTile({ label, value, sub, spark, bench, raw, breakdown, def,
         {bench && <VerdictLabel v={v} />}
       </div>
       <div className="tile__v num" style={color ? { color } : undefined}><Num v={value} /></div>
-      {spark && points >= SPARK_MIN_POINTS && (
+      {(delta || (spark && points >= SPARK_MIN_POINTS)) && (
         <div className="tile__foot">
-          <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />
+          {delta && <span className="tile__delta">{delta}</span>}
+          {spark && points >= SPARK_MIN_POINTS && <Spark values={spark} w={120} h={28} refLine={bench ? BENCH[bench].ref : undefined} />}
         </div>
       )}
       {sub && <div className="tile__sub">{sub}</div>}

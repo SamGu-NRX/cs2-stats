@@ -15,7 +15,7 @@ import { rating3Of } from "./rating3";
 import { UTILQ_METRICS } from "./utilq";
 import { DUEL_METRICS } from "./xduel";
 import { FLASHED_MIN_S } from "./utility";
-import type { Input } from "./facts";
+import type { Input, Measure } from "./facts";
 import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
@@ -53,6 +53,11 @@ export interface Metric {
    * (METRICS.md gives the evidence per metric).
    */
   sample?: Sample;
+  /**
+   * For a share of one count in another: the numerator and denominator measures, so a view can show
+   * "12 of 30" beside the rate. value is 100 × m[of[0]] / m[of[1]]; restore-profile-engine.test.ts pins the pairing.
+   */
+  of?: [Measure, Measure];
 }
 
 export interface Sample { n: (s: Summary) => number; unit: string; min?: number }
@@ -171,7 +176,7 @@ const M: Metric[] = [
 
   // ---- HLTV's "how good" metrics (performance)
   { id: "tradeKillSuccess", label: "Trade kill success", hltv: "Trade Kill Success %", kind: "performance", group: "trading", unit: "pct", status: "approx",
-    tip: "How often you avenge a teammate who died near you.", def: `Trade opportunities where you killed the killer within ${WINDOW}.`, value: (s) => pct(s.m.tradeOppsTaken, s.m.tradeOpps) },
+    tip: "How often you avenge a teammate who died near you.", def: `Trade opportunities where you killed the killer within ${WINDOW}.`, of: ["tradeOppsTaken", "tradeOpps"], value: (s) => pct(s.m.tradeOppsTaken, s.m.tradeOpps) },
   { id: "tradeAttemptPct", label: "Trade attempts", kind: "performance", group: "trading", unit: "pct", status: "approx",
     tip: "How often you shoot at the killer of a nearby teammate.", def: `Trade opportunities (a teammate died within 1,000 units of you) where you hit the killer within ${WINDOW}. With Trade kill success and opportunities, Leetify's opportunity, attempt, success triple.`,
     value: (s) => pct(s.m.tradeAttempts, s.m.tradeOpps) },
@@ -181,7 +186,7 @@ const M: Metric[] = [
     tip: "How often a nearby teammate shoots back after you die.", def: `Tradeable deaths (a teammate within 1,000 units) where a teammate hit your killer within ${WINDOW}; Traded death success is how many of them were traded.`,
     value: (s) => pct(s.m.tradedAttempts, s.m.tradeableDeaths) },
   { id: "tradedDeathSuccess", label: "Traded death success", hltv: "Traded Death Success %", kind: "performance", group: "entrying", unit: "pct", status: "approx",
-    tip: "How often a nearby teammate avenges your death.", def: "Tradeable deaths (a living teammate within 1,000 units) that a teammate traded.", value: (s) => pct(s.m.tradeableTraded, s.m.tradeableDeaths) },
+    tip: "How often a nearby teammate avenges your death.", def: "Tradeable deaths (a living teammate within 1,000 units) that a teammate traded.", of: ["tradeableTraded", "tradeableDeaths"], value: (s) => pct(s.m.tradeableTraded, s.m.tradeableDeaths) },
   { id: "openingSwing", label: "Opening swing", hltv: "Opening Swing", kind: "performance", group: "opening", unit: "pct", status: "approx",
     tip: "Win-chance change from first kills and first deaths, per round.", def: "Swing from opening kills and deaths, per round.", needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.openingSwing) / s.m.swingRounds : null) },
   { id: "clutchSwing", label: "Clutch swing", hltv: "Clutch Swing", kind: "performance", group: "closing", unit: "pct", status: "approx",
@@ -189,7 +194,7 @@ const M: Metric[] = [
   { id: "awpSwing", label: "AWP swing", hltv: "AWP Swing", kind: "performance", group: "sniping", unit: "pct", status: "approx",
     tip: "Win-chance change from your AWP kills and AWP deaths.", def: "Swing from your AWP kills and your deaths holding the AWP, per round.", needs: ["model", "activeWeapon"], value: (s) => (s.m.swingRounds ? (100 * s.m.awpSwing) / s.m.swingRounds : null) },
   { id: "awpDuelWin", label: "AWP duel win", hltv: "AWP Duel Win %", kind: "performance", group: "sniping", unit: "pct", status: "approx",
-    tip: "Fights won while holding the AWP.", def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", needs: ["activeWeapon"], value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels),
+    tip: "Fights won while holding the AWP.", def: "Duels with the AWP in hand (your AWP kills plus your deaths holding it) that you won.", needs: ["activeWeapon"], of: ["awpDuelWins", "awpDuels"], value: (s) => pct(s.m.awpDuelWins, s.m.awpDuels),
     sample: { n: (s) => s.m.awpDuels, unit: "AWP duels" } },
   { id: "flashSwing", label: "Flash swing", hltv: "Flash Swing", kind: "performance", group: "utility", unit: "pct", status: "approx",
     tip: "Win-chance change earned by your flashes on enemies who died.", def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), split equally when several flashes were, per round.",
@@ -201,7 +206,7 @@ const M: Metric[] = [
   { id: "dmgPerHe", label: "Damage per HE thrown", hltv: "Damage per HE Thrown", kind: "performance", group: "utility", unit: "dmg", status: "exact",
     tip: "Enemy damage per HE grenade you throw.", def: "Enemy damage from your HE grenades per HE thrown.", value: (s) => per(s.m.heDmg, s.m.hes) },
   { id: "oneVsOne", label: "1v1 win rate", kind: "performance", group: "closing", unit: "pct", status: "exact",
-    tip: "Share of your one-on-one clutches that you won.", def: "1v1 clutches won.", value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
+    tip: "Share of your one-on-one clutches that you won.", def: "1v1 clutches won.", of: ["clutchWon1", "clutch1"], value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
 
   // ---- utility quality (performance; Leetify's flash definitions)
   { id: "flashKillsPerFlash", label: "Flash-to-kills per flash", kind: "performance", group: "utility", unit: "perRound", status: "exact",
@@ -238,6 +243,35 @@ const M: Metric[] = [
   { id: "savesPerLoss", label: "Saves per lost round", kind: "identity", group: "closing", unit: "perRound", status: "exact", tip: "Lost rounds you survived, per lost round.", def: "Rounds lost where you were alive at the end, per lost round.", value: (s) => per(s.m.saves, s.m.lostRounds) },
   { id: "openingSuccess", label: "Opening duel success", kind: "performance", group: "opening", unit: "pct", status: "exact",
     tip: "Share of the round's first fights that you won.", def: "Opening duels won.", value: (s) => pct(s.m.openingKills, s.m.openingKills + s.m.openingDeaths) },
+
+  // ---- values main's Profile and Playstyle showed (REMOVALS.md, E20), defined over the measures that
+  // already exist. None has pro quantiles until public/baselines.json is rebuilt, so the performance
+  // ones show without a pro percentile; the identity ones rank against the bot careers like the rest.
+  { id: "openingWinPct", label: "Rounds won after an opening kill", kind: "performance", group: "opening", unit: "pct", status: "exact",
+    tip: "Rounds your team won after you got the first kill.", def: "Rounds your team won, of the rounds where you made the opening kill.", of: ["openingWins", "openingKills"], value: (s) => pct(s.m.openingWins, s.m.openingKills) },
+  { id: "perfectKillsPct", label: "Perfect kills", kind: "performance", group: "firepower", unit: "pct", status: "approx",
+    tip: "Share of your kills where the enemy never damaged you first.", def: "Share of your kills where the victim had not damaged you earlier in the round.", of: ["perfectKills", "kills"], value: (s) => pct(s.m.perfectKills, s.m.kills) },
+  // Rating 3.0's own eco-adjusted KPR input (rating3Of), so the breakdown and this row cannot disagree.
+  { id: "ecoKpr", label: "Kills per round (eco-adjusted)", kind: "performance", group: "firepower", unit: "perRound", status: "approx",
+    tip: "Kills per round, weighted by how fair each fight's economy was.", def: "Kills weighted by the duel's economy (rating3.ts kill points), per round Rating 3.0 rated: the rating's eco-adjusted KPR input.",
+    needs: ["model", "eco"], value: (s) => rating3Of(s).inputs?.kpr_eco ?? null, why: (s) => rating3Of(s).reason },
+  { id: "failedTradesPR", label: "Failed trades per round", kind: "identity", group: "entrying", unit: "perRound", status: "approx",
+    tip: "Times you died trying to avenge a teammate, per round.", def: "Deaths less than 5 s after a teammate's death to the same enemy, per round.", value: (s) => per(s.m.failedTrades, s.m.rounds) },
+  { id: "baitKillsPR", label: "Bait kills per round", kind: "identity", group: "trading", unit: "perRound", status: "approx",
+    tip: "Kills soon after a teammate died, per round.", def: "Kills less than 5 s after a teammate died, on any enemy, per round. HLTV's rule is unpublished; this one is ours.", value: (s) => per(s.m.baitKills, s.m.rounds) },
+  // Identity, like utilDmgPR beside it: no run has tested its link to winning rounds.
+  { id: "flashAssistsPR", label: "Flash assists per round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
+    tip: "Kills your flashes set up for teammates, per round.", def: "Flash assists (the game's) per round.", value: (s) => per(s.m.flashAssists, s.m.rounds) },
+  { id: "clutchPointsPR", label: "Clutch points per round", kind: "identity", group: "closing", unit: "perRound", status: "approx",
+    tip: "Clutches won, bigger ones counting more, per round.", def: "Won 1vX clutches weighted by X (1v1 = 1, 1v3 = 3), per round. The weighting is ours.",
+    value: (s) => per(s.m.clutchWon1 + 2 * s.m.clutchWon2 + 3 * s.m.clutchWon3 + 4 * s.m.clutchWon4 + 5 * s.m.clutchWon5, s.m.rounds) },
+  // The role signals (identity.ts ROLE_SIGNALS) and the style compass read these two with openingAttempts.
+  { id: "tradeAssistShare", label: "Trades and assists", kind: "identity", group: "trading", unit: "pct", status: "exact",
+    tip: "How much of your fragging comes from trades and assists.", def: "Trade kills plus assists (flash assists included), as a share of kills plus assists: how much of your fragging plays off teammates.",
+    value: (s) => pct(s.m.tradeKills + s.m.assists, s.m.kills + s.m.assists) },
+  { id: "teamDistance", label: "Distance to nearest teammate", kind: "identity", group: "spacing", unit: "units", status: "exact",
+    tip: "How far you usually stand from your nearest teammate.", def: "Mean distance to your nearest teammate, sampled every 3 s from 10 s after freeze end until the plant while all five of your side are alive (positioning.ts).",
+    value: (s) => per(s.m.nearestDistSum, s.m.spacingSamples) },
 ];
 
 export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...AGGRO_SCALE_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
