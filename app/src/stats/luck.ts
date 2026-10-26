@@ -4,15 +4,18 @@
 // Spread luck compares each shot's result with its chance. A gun shot fired at a visible enemy has a
 // hit chance given the cone it was fired with and the enemy's size at that distance; luck is hits minus
 // those chances, summed. The cone is CS:GO's published spread formula, which the CS2 community reads the
-// same way: the bullet leaves the aim direction by r0 = inaccuracy x u0 at a uniform angle, plus r1 =
-// spread x u1 at another uniform angle, u0 and u1 uniform on [0, 1], in tangent units. The aim direction
-// and both cone sizes are the game's own, per bullet (fire_bullets: angles, inaccuracy, spread, which the
-// extractor writes to shots). The enemy is an upright box facing the shooter: TARGET_HALF_WIDTH to each
-// side, from the feet to HEAD_ABOVE_EYE above the eye.
-import { ACCURATE_FRAC, lookAt, SIGHT_CONE_DEG, wrap180 } from "./aim-geometry";
+// same way: the bullet's direction is forward + x right + y up, where (x, y) is inaccuracy x u0 at a
+// uniform angle plus spread x u1 at another, u0 and u1 uniform on [0, 1]. So (x, y) is a point on the
+// plane one unit ahead of the eye, in the basis of the aim direction. The aim direction and both cone
+// sizes are the game's own, per bullet (fire_bullets: angles, inaccuracy, spread, which the extractor
+// writes to shots). The enemy is an upright box facing the shooter, TARGET_HALF_WIDTH to each side and
+// from the feet to HEAD_ABOVE_EYE above the eye; its corners are projected onto that same plane (each
+// divided by its depth along the aim), and a bullet hits when its point falls inside the projection.
+import { forward, SIGHT_CONE_DEG } from "./aim-geometry";
 import { MAX_SPEED } from "./aim-ref";
 import type { Ctx } from "./derive";
 import type { Metric } from "./metrics";
+import { accurateSpeed } from "./speed";
 
 /** Half the width of a player's box (units). Ours: the shoulders' hitboxes span about 26 units. */
 export const TARGET_HALF_WIDTH = 13;
@@ -63,30 +66,65 @@ const grid = (nr: number, nt: number): [number, number][] => {
 const INACC = grid(12, 24);
 const SPREAD = grid(3, 6);
 
+/** Whether point (x, y) is inside the convex polygon `poly` (corners in order, either direction). */
+function inside(poly: readonly (readonly [number, number])[], x: number, y: number): boolean {
+  let sign = 0;
+  for (let j = 0; j < poly.length; j++) {
+    const [x0, y0] = poly[j], [x1, y1] = poly[(j + 1) % poly.length];
+    const cross = (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0);
+    if (cross === 0) continue;
+    if (sign === 0) sign = Math.sign(cross);
+    else if (Math.sign(cross) !== sign) return false;
+  }
+  return true;
+}
+
 /**
- * The chance a bullet lands in a box of half-sizes (halfW, halfH) whose centre sits (ox, oy) off the aim
- * direction, all in tangent units (radians at small angles), for the given inaccuracy and spread.
+ * The chance a bullet with this inaccuracy and spread lands inside `poly`, a convex polygon on the plane
+ * one unit ahead of the eye, in the aim direction's right and up coordinates (projectBox).
  */
-export function hitChance(inaccuracy: number, spread: number, ox: number, oy: number, halfW: number, halfH: number): number {
+export function hitChance(inaccuracy: number, spread: number, poly: readonly (readonly [number, number])[]): number {
   let hits = 0;
   for (const [a, b] of INACC) {
-    for (const [c, d] of SPREAD) {
-      const x = inaccuracy * a + spread * c, y = inaccuracy * b + spread * d;
-      if (Math.abs(x - ox) <= halfW && Math.abs(y - oy) <= halfH) hits++;
-    }
+    for (const [c, d] of SPREAD) if (inside(poly, inaccuracy * a + spread * c, inaccuracy * b + spread * d)) hits++;
   }
   return hits / (INACC.length * SPREAD.length);
 }
 
+type Vec3 = [number, number, number];
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** The aim direction's basis: forward (aim-geometry forward), right (horizontal, to the right) and up (right x forward). */
+export function aimBasis(pitch: number, yaw: number): { f: Vec3; r: Vec3; u: Vec3 } {
+  const f = forward(pitch, yaw);
+  const r: Vec3 = [Math.sin(yaw * RAD), -Math.cos(yaw * RAD), 0];
+  const u: Vec3 = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+  return { f, r, u };
+}
+
+/** One shot's geometry: the aim basis, the target box's centre from the eye, its across direction and half-height. */
+export interface ShotGeom { f: Vec3; r: Vec3; u: Vec3; c: Vec3; w: Vec3; halfH: number }
+
+/** A point from the eye, on the plane one unit ahead in the aim's right and up coordinates; null behind the eye. */
+function project(g: ShotGeom, p: Vec3): [number, number] | null {
+  const depth = dot(p, g.f);
+  return depth > 0 ? [dot(p, g.r) / depth, dot(p, g.u) / depth] : null;
+}
+
+/** The target box, its half-sizes scaled by `k`, projected corner by corner; null when a corner is behind the eye. */
+export function projectBox(g: ShotGeom, k: number): [number, number][] | null {
+  const out: [number, number][] = [];
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const hw = sx * k * TARGET_HALF_WIDTH, hh = sy * k * g.halfH;
+    const q = project(g, [g.c[0] + hw * g.w[0], g.c[1] + hw * g.w[1], g.c[2] + hh]);
+    if (!q) return null;
+    out.push(q);
+  }
+  return out;
+}
+
 const RAD = Math.PI / 180;
 const finite = (...xs: (number | null | undefined)[]) => xs.every((x) => x !== null && x !== undefined && Number.isFinite(x));
-
-/** The gun's speed above which a shot is inaccurate: ACCURATE_FRAC of its max speed (scoped speed when scoped). Null for an unknown gun. */
-function accurateSpeed(weapon: string, scoped: boolean | null): number | null {
-  const max = MAX_SPEED[weapon];
-  if (!max) return null;
-  return ACCURATE_FRAC * (scoped && max.length > 1 ? max[1] : max[0]);
-}
 
 /**
  * Fills the luck measures (facts.ts MEASURES, "luck"). Runs after scoreboard(): it reads the per-round
@@ -175,36 +213,47 @@ export function luck(c: Ctx): void {
     if (vm) { vm.flagDeathsKnown++; if (blind || air || noscope || smoke) vm.flagDeaths++; }
   }
 
-  // ---- spread luck: shots at a visible enemy, for the shooter and against the target
-  const shots = shotChances(c);
-  if (shots === null) return;
-  for (const row of c.pr) for (const p of row) if (p) p.m.spreadRounds = 1;
-  for (const x of shots) {
-    const p = calibrated(hitChance(x.inaccuracy, x.spread, x.ox, x.oy, (HIT_AREA_SCALE * TARGET_HALF_WIDTH) / x.dist, (HIT_AREA_SCALE * x.halfH) / x.dist));
+  // ---- spread luck: shots at a visible enemy, for the shooter and against the target, over the
+  // rounds whose every gun shot has its inputs (a round with one missing stays unknown, not 0)
+  const found = shotChances(c);
+  if (found === null) return;
+  for (const ri of found.covered) for (const p of c.pr[ri]) if (p) p.m.spreadRounds = 1;
+  for (const x of found.shots) {
+    if (!found.covered.has(x.ri)) continue;
+    const box = projectBox(x.g, HIT_AREA_SCALE);
+    if (!box) continue;
+    const p = calibrated(hitChance(x.inaccuracy, x.spread, box));
     const shooter = m(x.ri, x.shooter), target = m(x.ri, x.target);
     if (shooter) { shooter.luckShots++; shooter.luckHits += x.hit; shooter.luckExp += p; }
     if (target) { target.luckAgShots++; target.luckAgHits += x.hit; target.luckAgExp += p; }
   }
 }
 
-/** One gun shot at a visible enemy: its cone, where the target sat from the aim (radians), how far, and whether it hit him. */
-export interface ShotChance {
-  ri: number; shooter: number; target: number;
-  inaccuracy: number; spread: number; ox: number; oy: number;
-  /** distance from the eye to the target's centre, and the target's half-height (units) */
-  dist: number; halfH: number;
-  hit: 0 | 1;
-}
+/** One gun shot at a visible enemy: its cone, its geometry, and whether it hit him. */
+export interface ShotChance { ri: number; shooter: number; target: number; inaccuracy: number; spread: number; g: ShotGeom; hit: 0 | 1 }
+
+/** Whether a shots row has every input spread luck reads: the cone, both aim angles and the eye. */
+const complete = (S: NonNullable<Ctx["t"]["shots"]>, i: number) =>
+  finite(S.inaccuracy[i], S.spread[i], S.bullet_pitch[i], S.bullet_yaw[i], S.eye_x[i], S.eye_y[i], S.eye_z[i]);
 
 /**
- * Every gun shot (shotguns aside) with its cone and aim angles known, fired while an enemy was
- * mesh-visible and unsmoked within SIGHT_CONE_DEG of the aim: the target is the one whose body centre is
- * nearest the aim direction. Null when the match lacks the inputs (no engagements, no mesh visibility,
- * or shots without fire_bullets' cone).
+ * Every gun shot (shotguns aside) fired while an enemy was mesh-visible and unsmoked within
+ * SIGHT_CONE_DEG of the aim; the target is the one whose box centre projects nearest the aim point.
+ * `covered` holds the rounds whose every gun shot has its inputs; a shot in another round is listed
+ * but must not be scored. Each hit on the target on a shot's tick is given to one shot of that tick,
+ * in shot order, so two shot rows on one tick do not count one hit twice. Null when the match has no
+ * mesh visibility, no engagements or no shots.
  */
-export function shotChances(c: Ctx): ShotChance[] | null {
+export function shotChances(c: Ctx): { shots: ShotChance[]; covered: Set<number> } | null {
   const S = c.t.shots, E = c.t.engagements, T = c.t.engagement_ticks, D = c.t.damages;
-  if (!S || !E || !T || c.t.match.visibility_status[0] !== "ok" || !S.inaccuracy.some((x) => x !== null)) return null;
+  if (!S || !E || !T || c.t.match.visibility_status[0] !== "ok") return null;
+  const gun = (i: number) => MAX_SPEED[S.weapon[i]] !== undefined && !PELLET_GUNS.has(S.weapon[i]);
+  const covered = new Set<number>();
+  for (let ri = 0; ri < c.nRounds; ri++) covered.add(ri);
+  for (let i = 0; i < S.n; i++) {
+    const ri = c.riOf(S.round[i]);
+    if (ri !== undefined && gun(i) && !complete(S, i)) covered.delete(ri);
+  }
   const death = new Map<number, number>();
   c.kills.forEach((ks, ri) => { for (const k of ks) death.set(ri * 1024 + k.victim, k.tick); });
   const eng = new Map<number, number>();
@@ -222,37 +271,41 @@ export function shotChances(c: Ctx): ShotChance[] | null {
     const k = T.tick[i] * 256 + a;
     (seen.get(k) ?? seen.set(k, []).get(k)!).push(i);
   }
-  // enemy gun hits by (tick, attacker): the victims hit on that tick
-  const hitOn = new Map<number, Set<number>>();
+  // enemy gun hits by (tick, attacker, victim): how many, to be given out one per shot of that tick
+  const hitsLeft = new Map<string, number>();
   for (let i = 0; i < D.n; i++) {
     if (D.attacker_steamid[i] === null || D.is_self[i] || D.is_team_damage[i] || !D.weapon[i] || !MAX_SPEED[D.weapon[i]!]) continue;
-    const k = D.tick[i] * 256 + c.idOf(D.attacker_steamid[i])!;
-    (hitOn.get(k) ?? hitOn.set(k, new Set()).get(k)!).add(c.pi.get(D.victim_steamid[i])!);
+    const k = `${D.tick[i]}:${c.idOf(D.attacker_steamid[i])}:${c.pi.get(D.victim_steamid[i])}`;
+    hitsLeft.set(k, (hitsLeft.get(k) ?? 0) + 1);
   }
-  const out: ShotChance[] = [];
-  for (let i = 0; i < S.n; i++) {
+  const gate = Math.tan(SIGHT_CONE_DEG * RAD);
+  const shots: ShotChance[] = [];
+  const order = [...Array(S.n).keys()].sort((x, y) => S.tick[x] - S.tick[y]);
+  for (const i of order) {
     const pi = c.idOf(S.steamid[i]), ri = c.riOf(S.round[i]);
-    if (pi === null || ri === undefined || !MAX_SPEED[S.weapon[i]] || PELLET_GUNS.has(S.weapon[i])) continue;
-    const pitch = S.bullet_pitch[i], yaw = S.bullet_yaw[i], inacc = S.inaccuracy[i], spread = S.spread[i];
-    const eye: [number, number, number] = [S.eye_x[i]!, S.eye_y[i]!, S.eye_z[i]!];
-    if (!finite(pitch, yaw, inacc, spread, ...eye)) continue;
-    let best: { v: number; off: number; ox: number; oy: number; dist: number; halfH: number } | null = null;
-    for (const r of seen.get(S.tick[i] * 256 + pi) ?? []) {
-      const halfH = (T.v_eye_z[r]! + HEAD_ABOVE_EYE - T.v_z[r]!) / 2;
-      const centre: [number, number, number] = [T.v_x[r]!, T.v_y[r]!, T.v_z[r]! + halfH];
-      const want = lookAt(eye, centre);
-      const ox = wrap180(want.yaw - yaw!), oy = want.pitch - pitch!, off = Math.hypot(ox, oy);
-      if (off > SIGHT_CONE_DEG || (best && off >= best.off)) continue;
-      const dist = Math.hypot(centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]);
-      best = { v: c.idOf(E.victim_steamid[eng.get(T.engagement_id[r])!])!, off, ox: ox * RAD, oy: oy * RAD, dist, halfH };
+    if (pi === null || ri === undefined || !gun(i) || !complete(S, i)) continue;
+    const { f, r, u } = aimBasis(S.bullet_pitch[i]!, S.bullet_yaw[i]!);
+    const eye: Vec3 = [S.eye_x[i]!, S.eye_y[i]!, S.eye_z[i]!];
+    let best: { v: number; off: number; g: ShotGeom } | null = null;
+    for (const row of seen.get(S.tick[i] * 256 + pi) ?? []) {
+      const halfH = (T.v_eye_z[row]! + HEAD_ABOVE_EYE - T.v_z[row]!) / 2;
+      const cc: Vec3 = [T.v_x[row]! - eye[0], T.v_y[row]! - eye[1], T.v_z[row]! + halfH - eye[2]];
+      const flat = Math.hypot(cc[0], cc[1]);
+      if (!flat) continue;
+      const g: ShotGeom = { f, r, u, c: cc, w: [-cc[1] / flat, cc[0] / flat, 0], halfH };
+      const at = project(g, cc);
+      if (!at) continue;
+      const off = Math.hypot(at[0], at[1]);
+      if (off > gate || (best && off >= best.off)) continue;
+      best = { v: c.idOf(E.victim_steamid[eng.get(T.engagement_id[row])!])!, off, g };
     }
-    if (!best || best.dist <= 0) continue;
-    out.push({
-      ri, shooter: pi, target: best.v, inaccuracy: inacc!, spread: spread!, ox: best.ox, oy: best.oy, dist: best.dist, halfH: best.halfH,
-      hit: hitOn.get(S.tick[i] * 256 + pi)?.has(best.v) ? 1 : 0,
-    });
+    if (!best) continue;
+    const k = `${S.tick[i]}:${pi}:${best.v}`;
+    const left = hitsLeft.get(k) ?? 0;
+    if (left > 0) hitsLeft.set(k, left - 1);
+    shots.push({ ri, shooter: pi, target: best.v, inaccuracy: S.inaccuracy[i]!, spread: S.spread[i]!, g: best.g, hit: left > 0 ? 1 : 0 });
   }
-  return out;
+  return { shots, covered };
 }
 
 // ---- metrics
