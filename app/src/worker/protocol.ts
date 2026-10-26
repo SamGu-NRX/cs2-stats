@@ -12,6 +12,7 @@ import type { OverallRole, RoleBlend, RoleSignal, StylePoint } from "../stats/id
 import type { Kind, Status, Unit } from "../stats/metrics";
 import type { Presence } from "../stats/positions";
 import type { Rating3 } from "../stats/rating3";
+import type { Best, careerRatings, FocusArea, MetricDelta, SessionAwards } from "../stats/career";
 import type { BuyClass, BuyTier } from "../stats/economy";
 import type { VsOpponents } from "../stats/opponents";
 import type { Filter, Summary } from "../stats/rollup";
@@ -202,6 +203,29 @@ export interface PositionsResult {
   presence: Presence | null;
 }
 
+/** A date range, inclusive YYYY-MM-DD bounds, as Filter.from and to read them. */
+export interface Period { from: string; to: string }
+
+/** Aim Rating, Utility Rating and the utility sub-ratings, 0-100 (career.ts careerRatings). */
+export type CareerRatings = ReturnType<typeof careerRatings>;
+
+/** One play session: its matches in order, when it ran, its record and totals, and its awards. */
+export interface Session {
+  files: string[];
+  /** start of the first match and end of the last, ms since the epoch */
+  start: number;
+  end: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  rounds: number;
+  kills: number;
+  deaths: number;
+  /** Rating 3.0 over the session's rounds; null under the rating's gate */
+  rating: number | null;
+  awards: SessionAwards;
+}
+
 export interface Api {
   /** Starts the engine: `winprobPack` is the bytes of packs/winprob-hltv.json, null when it is not installed. */
   meta(winprobPack: ArrayBuffer | null): Meta;
@@ -244,6 +268,18 @@ export interface Api {
   winCorrelation(q: Query, metricIds: string[]): Record<string, { r: number; n: number } | null>;
   /** the role blend per side and per spawn the player used (the spawns filter), each spawn with its map, place name and position (SpawnRow) */
   rolesBySpawn(q: Query): Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>;
+  /** Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100, as weighted pro percentiles */
+  careerRatings(q: Query, opt: CompareOptions): CareerRatings;
+  /** the five performance metrics with the highest pro percentile */
+  topStats(q: Query, opt: CompareOptions): Percentile[];
+  /** the weakest skills under the pros' 50th percentile, ranked by the gap, each with a tip */
+  focusAreas(q: Query, opt: CompareOptions): FocusArea[];
+  /** every metric over the current period against the previous one */
+  periodCompare(q: Query, current: Period, previous: Period): MetricDelta[];
+  /** the best single-match value of every count and performance metric, with the match it came from */
+  personalBests(q: Query): Best[];
+  /** the query's matches grouped into sessions split by a gap of `gapHours` (3 by default) between one match's end and the next one's start */
+  sessions(q: Query, gapHours?: number): Session[];
   /** every clutch of the player in the query's matches, by round */
   clutches(q: Query): ClutchRow[];
   /** every round of the player's with two or more kills in the query's matches (the rows its filter keeps) */

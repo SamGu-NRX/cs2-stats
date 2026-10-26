@@ -15,6 +15,8 @@ import { botPopulation, careersFor, rankingCalls } from "./ranking";
 import { addSpawns, emptySpawns } from "./views";
 
 const SAMPLE = path.resolve(import.meta.dirname, "../../public/samples/synthetic-demo.json.gz");
+/** The synthetic sample's facts, decoded once. */
+const sampleFacts = decodeMatch(readFileSync(SAMPLE), "synthetic-demo.json.gz").then((m) => derive(pluginToTables(m), CS2RB));
 
 /** Baselines whose every quantile is `q`: a real value sits at 0 against a huge q and at 100 against a tiny one. */
 const flat = (q: number): Baselines => {
@@ -150,4 +152,18 @@ it("blends each spawn's role over that spawn's rounds on its own map", async () 
   expect(rows.length).toBeGreaterThan(0);
   expect(new Set(rows.map((x) => x.map))).toEqual(new Set([facts.match.map, "de_other"]));
   for (const row of rows) expect(row.blend.rounds, `${row.map} ${row.spawn}`).toBe(row.rounds);
+});
+
+it("compares the current period with the previous one, each over its own matches", async () => {
+  // fails if a period's dates are ignored or swapped: the earlier match plays every round, the later one
+  // only the first five, so each period's KPR is its own match's
+  const m = await sampleFacts;
+  const before = { ...m, match: { ...m.match, date: "2026-10-01" } };
+  const now = { ...m, match: { ...m.match, date: "2026-10-10" }, pr: m.pr.filter((r) => r.ri < 5), kills: m.kills.filter((k) => k.ri < 5) };
+  const calls = rankingCalls({ summary: async (q) => rollup([before, now], q.filter), pros: async () => flat(0), careers: async () => { throw new Error("not used"); } });
+  const player = m.match.pov!;
+  const rows = await calls.periodCompare({ files: ["x"], filter: { player } }, { from: "2026-10-05", to: "2026-10-31" }, { from: "2026-10-01", to: "2026-10-04" });
+  const kpr = rows.find((r) => r.id === "kpr")!;
+  expect([kpr.value, kpr.before]).toEqual([METRIC.kpr.value(rollup([now], { player })), METRIC.kpr.value(rollup([before], { player }))]);
+  expect(kpr.value).not.toEqual(kpr.before);
 });

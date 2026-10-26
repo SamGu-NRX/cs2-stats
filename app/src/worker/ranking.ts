@@ -13,12 +13,13 @@ import {
   type Baselines, type CompareOptions, type Percentile, type PoolUnit, type SideKey,
 } from "../stats/compare";
 import type { MatchFacts } from "../stats/facts";
+import { careerRatings, focusAreas, metricDeltas, topStats, type FocusArea, type MetricDelta } from "../stats/career";
 import { mostSimilar, overallRole, roleBlend, STYLE, stylePoint, styleScores, type PackPlayer, type RoleBlend, type StylePoint } from "../stats/identity";
 import { METRIC, type Kind } from "../stats/metrics";
 import { addMatch, emptySummary, type Filter, type Summary } from "../stats/rollup";
 import type { Side } from "../stats/tables";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import type { AttributeBlock, AttributesResult, Careers, CompareResult, CompassResult, PackPro, PlaysLikeResult, Query, Roles, SpawnRow, StyleResult } from "./protocol";
+import type { AttributeBlock, AttributesResult, Careers, CompareResult, CompassResult, PackPro, PlaysLikeResult, Query, Roles, SpawnRow, StyleResult, CareerRatings, Period } from "./protocol";
 import { spawnRows, type SpawnIndex } from "./views";
 
 /**
@@ -186,6 +187,27 @@ export function rankingCalls(src: Sources) {
       const pool = (x: Summary) => roleOf(x);
       const sides = [careersFor(c, pool(t), "T"), careersFor(c, pool(ct), "CT")];
       return { ranked, careers: sides.find((x) => x.unit === "matches") ?? sides[0] };
+    },
+    /** Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100, against the pros (career.ts careerRatings). */
+    async careerRatings(q: Query, opt: CompareOptions): Promise<CareerRatings> {
+      const [s, b] = await Promise.all([src.summary(sideQuery(q, opt.side ?? "both")), src.pros()]);
+      return careerRatings(compare(s, b, opt));
+    },
+    /** The five performance metrics with the highest percentile against the pros. */
+    async topStats(q: Query, opt: CompareOptions): Promise<Percentile[]> {
+      const [s, b] = await Promise.all([src.summary(sideQuery(q, opt.side ?? "both")), src.pros()]);
+      return topStats(compare(s, b, opt));
+    },
+    /** The weakest skills against the pros, each with a tip (career.ts focusAreas). */
+    async focusAreas(q: Query, opt: CompareOptions): Promise<FocusArea[]> {
+      const [s, b] = await Promise.all([src.summary(sideQuery(q, opt.side ?? "both")), src.pros()]);
+      return focusAreas(compare(s, b, opt));
+    },
+    /** Every metric over one period of the query against another (each a from/to date range; career.ts metricDeltas). */
+    async periodCompare(q: Query, current: Period, previous: Period): Promise<MetricDelta[]> {
+      const at = (p: Period) => src.summary({ files: q.files, filter: { ...q.filter, from: p.from, to: p.to } });
+      const [now, before] = await Promise.all([at(current), at(previous)]);
+      return metricDeltas(now, before);
     },
     /** The role blend on each side and over all rounds (the query's side filter is replaced). */
     async roles(q: Query): Promise<Roles> {

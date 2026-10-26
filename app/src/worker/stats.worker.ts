@@ -8,6 +8,8 @@
 // match at a time: the calls the UI sends together (worker/client.ts batches them) share one pass
 // over the files, and each sums its own matches with addMatch as the pass goes by.
 import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
+import { rating3Of } from "../stats/rating3";
+import { addBests, awardsOf, groupSessions, SESSION_GAP_H, type Best } from "../stats/career";
 import { METRIC } from "../stats/metrics";
 import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
@@ -24,7 +26,7 @@ import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
 import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import type { MatchTables } from "../stats/tables";
-import { byNewest, type MatchEntry } from "../ui/data/match";
+import { byNewest, startMs, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
 import type { Api, Call, ClutchRow, MultiKillRow, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
@@ -374,6 +376,39 @@ const api: Impl = {
   async buyTiers(q) {
     const xs = await Promise.all(BUY_TIERS.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, ownTier: [b] } }))] as const));
     return Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0));
+  },
+  careerRatings: ranking.careerRatings,
+  topStats: ranking.topStats,
+  focusAreas: ranking.focusAreas,
+  periodCompare: ranking.periodCompare,
+  async personalBests(q) {
+    const acc: Record<string, Best> = {};
+    const fileOf = new Map<string, string>();
+    for (const file of q.files) { const e = index.get(file)?.entry; if (e) fileOf.set(e.match.id, file); }
+    await stream(q.files, (f) => addBests(acc, fileOf.get(f.match.id) ?? f.match.id, rollup([f], q.filter)));
+    return Object.values(acc);
+  },
+  async sessions(q, gapHours = SESSION_GAP_H) {
+    const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
+    const entries = q.files.map((file) => index.get(file)?.entry).filter((e): e is MatchEntry => e !== undefined);
+    const span = (e: MatchEntry) => { const start = startMs(e.match); return { file: e.file, start, end: start + 1000 * (e.match.durationS ?? 0) }; };
+    const groups = groupSessions(entries.map(span), gapHours);
+    const per = new Map<string, { rating: number | null; kills: number; won: boolean | null }>();
+    await stream(q.files, (f) => {
+      const s = rollup([f], q.filter);
+      if (s.m.rounds) per.set(f.match.id, { rating: rating3Of(s).value, kills: s.m.kills, won: matchWon(f, me) });
+    });
+    const byFile = new Map(entries.map((e) => [e.file, e]));
+    return Promise.all(groups.map(async (files) => {
+      const s = await summaryOf({ files, filter: q.filter });
+      const rows = files.map((file) => ({ file, ...(per.get(byFile.get(file)!.match.id) ?? { rating: null, kills: 0, won: null }) }));
+      const spans = files.map((file) => span(byFile.get(file)!));
+      return {
+        files, start: Math.min(...spans.map((x) => x.start)), end: Math.max(...spans.map((x) => x.end)),
+        wins: rows.filter((r) => r.won === true).length, losses: rows.filter((r) => r.won === false).length, ties: rows.filter((r) => r.won === null).length,
+        rounds: s.m.rounds, kills: s.m.kills, deaths: s.m.deaths, rating: rating3Of(s).value, awards: awardsOf(rows),
+      };
+    }));
   },
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
