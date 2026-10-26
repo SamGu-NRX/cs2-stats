@@ -3,7 +3,8 @@
 // off (reduced motion) a player holds the last sample until the next one.
 //
 // A kill ends a life at its exact tick, between samples: from then on the player is dead at the
-// kill's victim position. HP drops at each hit's tick for the same reason.
+// kill's victim position, or where his last living sample put him when the kill has none. A corpse
+// never moves, whatever later samples say. HP drops at each hit's tick for the same reason.
 import type { RoundTimeline, Vec3 } from "./replay";
 import type { Side } from "./tables";
 
@@ -40,16 +41,32 @@ export function lerpYaw(a: number, b: number, f: number): number {
   return w === -180 ? 180 : w;
 }
 
-/** Each victim's death in the round: the first kill naming them. Cached per timeline. */
-const deaths = new WeakMap<RoundTimeline, Map<string, { t: number; at: Vec3 | null }>>();
-function deathsOf(tl: RoundTimeline) {
-  let m = deaths.get(tl);
-  if (!m) {
-    m = new Map();
-    for (const k of tl.kills) if (!m.has(k.victim)) m.set(k.victim, { t: k.t, at: k.vpos });
-    deaths.set(tl, m);
-  }
-  return m;
+/**
+ * Each player's death in the round, by roster index: when (the first kill naming him, else his first
+ * sample marked dead) and where the body lies (the kill's victim position, else his last living
+ * sample at or before it). Null for a player who lives through the round. Cached per timeline.
+ */
+const deaths = new WeakMap<RoundTimeline, ({ t: number; at: Vec3 } | null)[]>();
+export function deathsOf(tl: RoundTimeline): ({ t: number; at: Vec3 } | null)[] {
+  let out = deaths.get(tl);
+  if (out) return out;
+  const killed = new Map<string, { t: number; at: Vec3 | null }>();
+  for (const k of tl.kills) if (!killed.has(k.victim)) killed.set(k.victim, { t: k.t, at: k.vpos });
+  out = tl.players.map((p, i) => {
+    const kill = killed.get(p.id);
+    const firstDead = tl.frames.find((f) => !f.players[i].alive);
+    const t = kill ? kill.t : firstDead ? firstDead.t : null;
+    if (t === null) return null;
+    if (kill?.at) return { t, at: kill.at };
+    let s = tl.frames[0].players[i];
+    for (const f of tl.frames) {
+      if (f.t > t) break;
+      if (f.players[i].alive) s = f.players[i];
+    }
+    return { t, at: [s.x, s.y, s.z] };
+  });
+  deaths.set(tl, out);
+  return out;
 }
 
 /**
@@ -70,15 +87,16 @@ export function playersAt(tl: RoundTimeline, t: number, smooth: boolean, out: Pl
     const a = fa.players[i];
     const b = fb?.players[i];
     const s = (out[i] ??= { id: "", side: "T", x: 0, y: 0, z: 0, yaw: 0, alive: true, hp: null, weapon: null });
-    const death = died.get(a.id);
+    const death = died[i];
     s.id = a.id;
     s.side = a.side;
     s.weapon = a.weapon;
     if ((death && t >= death.t) || !a.alive) {
-      const at = death && t >= death.t ? death.at : null;
-      s.x = at ? at[0] : a.x;
-      s.y = at ? at[1] : a.y;
-      s.z = at ? at[2] : a.z;
+      // a sample marked dead before the death time (a kill row later than the sample) still lies at the body
+      const at = death ? death.at : [a.x, a.y, a.z];
+      s.x = at[0];
+      s.y = at[1];
+      s.z = at[2];
       s.yaw = a.yaw;
       s.alive = false;
       s.hp = 0;

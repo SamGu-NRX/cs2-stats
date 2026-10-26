@@ -1,11 +1,11 @@
 // The match's 2D replay: one round at a time on the radar, with a transport (play, speed, a scrubber
 // marked with the round's kills) and the round's killfeed beside the map, lit as the kills pass.
 //
-// Playback runs outside React. A requestAnimationFrame loop advances the clock, interpolates the
-// players (stats/replay-interp.ts) and draws the canvas (draw.ts); the scrubber, the clock text, the
-// killfeed's state and the hover card are written to the DOM directly. React renders only on user
-// actions: play, speed, floor, names, round. Keyboard: Space plays and pauses, the arrows change the
-// round, L switches the floor, N shows every name. Reduced motion turns interpolation off.
+// Playback runs outside React. A requestAnimationFrame loop (playback.ts) advances the clock; each
+// frame interpolates the players (stats/replay-interp.ts) and draws the canvas (draw.ts), and the
+// scrubber, the clock text, the killfeed's state and the hover card are written to the DOM directly.
+// React renders only on user actions: play, speed, floor, names, round. Shortcuts are in keys.ts.
+// Reduced motion turns interpolation off.
 import "../../../styles/replay.css";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { RoundTimeline } from "../../../../stats/replay";
@@ -14,7 +14,6 @@ import { weaponLabel } from "../../../../stats/weapons";
 import { replayClient } from "../../../../worker/replay-client";
 import { Segmented } from "../../../components/controls";
 import { frameFor, RadarImage } from "../../../components/MapArt";
-import { mapInfo } from "../../../data/maps";
 import { useData } from "../../../data/provider";
 import { hasLevels, levelRadarUrl, type Level } from "../../../data/radar-levels";
 import { feedFor } from "../../../data/rounds";
@@ -28,7 +27,9 @@ import type { TabProps } from "../MatchView";
 import { drawScene, type Palette, type Scene } from "./draw";
 import { FULL, useRadarBox, type Box } from "./radar-box";
 import { SpriteLoaders, Sprites } from "./sprites";
-import { canReplay, NO_REPLAY } from "./support";
+import { keyAction } from "./keys";
+import { Playback } from "./playback";
+import { replayUnavailable } from "./support";
 
 const SPEEDS = ["0.5", "1", "2", "4"] as const;
 type Speed = (typeof SPEEDS)[number];
@@ -36,8 +37,6 @@ type Speed = (typeof SPEEDS)[number];
 const RECENT_S = 3;
 /** Clicking a kill starts this many seconds before it, so the approach is seen. */
 const LEAD_IN_S = 2;
-/** Longest step of the clock per animation frame, so a hidden window does not jump the round on return. */
-const MAX_STEP_S = 0.25;
 /** Pointer distance (CSS pixels) within which a player is hovered. */
 const HOVER_PX = 14;
 /** Room the hover card needs from the well's edges, CSS pixels: its height plus the gap over the dot. */
@@ -56,7 +55,8 @@ function describe(players: PlayerState[], nameOf: Map<string, string>, t: number
 const clock = (s: number) => { const v = Math.max(0, Math.floor(s)); return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`; };
 
 export default function Replay(props: TabProps) {
-  if (!canReplay(props.file)) return <div className="tabpad"><div className="card"><Empty text={NO_REPLAY} /></div></div>;
+  const why = replayUnavailable(props.file, props.v.map);
+  if (why) return <div className="tabpad"><div className="card"><Empty text={why} /></div></div>;
   return <ReplayView {...props} />;
 }
 
@@ -79,6 +79,8 @@ function useRoundTimeline(file: string, round: number, neighbours: number[]): { 
     );
     return () => { alive = false; };
   }, [host, file, round, near]);
+  // closing the tab stops the worker and drops its decoded match; reopening starts a new one
+  useEffect(() => () => { if (host) replayClient(host).dispose(); }, [host]);
   return st;
 }
 
@@ -97,6 +99,7 @@ function ReplayView({ v, file, round }: TabProps) {
   const { tl, error: lastError, round: loadedRound } = useRoundTimeline(file, number, neighbours);
   const loading = loadedRound !== number;
   const error = loading ? null : lastError;
+  const current = tl && !loading ? tl : null;
 
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<Speed>("1");
@@ -119,23 +122,28 @@ function ReplayView({ v, file, round }: TabProps) {
   const feedKills = useMemo(() => feedFor(v.facts, ri, v.human), [v, ri]);
   const killTicks = useMemo(() => v.facts.kills.filter((k) => k.ri === ri).map((k) => k.tick), [v, ri]);
 
-  // the frame: the map's overview transform, or one fitted around the round's samples on an unknown map
-  const frame = useMemo(() => {
-    if (mapInfo(v.map)) return frameFor(v.map);
-    if (!tl) return null;
-    return frameFor(v.map, tl.frames.flatMap((f) => f.players.map((p): [number, number] => [p.x, p.y])));
-  }, [v.map, tl]);
-
+  // the map's overview transform (replayUnavailable guarantees the map has one)
+  const frame = useMemo(() => frameFor(v.map), [v.map]);
   // the view zooms to the radar's drawn area (both floors), read from the images once they load
-  const known = !!mapInfo(v.map);
-  const { box, ready } = useRadarBox(known ? [levelRadarUrl(v.map, "upper"), levelRadarUrl(v.map, "lower")] : []);
+  const { box, ready } = useRadarBox([levelRadarUrl(v.map, "upper"), levelRadarUrl(v.map, "lower")]);
 
-  // everything the draw loop reads, kept off React state
+  // the clock and frame loop (playback.ts); between rounds the canvas is blank
+  const pb = useMemo(() => new Playback(
+    { request: (cb) => requestAnimationFrame(cb), cancel: (id) => cancelAnimationFrame(id) },
+    () => {
+      const cv = canvas.current;
+      const g = cv?.getContext("2d");
+      if (cv && g) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); }
+      if (tip.current) tip.current.hidden = true;
+    },
+    setPlaying,
+  ), []);
+
+  // what the draw loop reads besides the clock, kept off React state
   const st = useRef({
-    tl: null as RoundTimeline | null, t: 0, playing: false, speed: 1, last: 0, raf: 0,
     hover: null as string | null, pointer: null as [number, number] | null, level: "upper" as Level, names: false,
     reduce: false, size: 0, dpr: 1, palette: null as Palette | null, frame: null as typeof frame,
-    shownSecond: -1, feedKey: "", buf: [] as PlayerState[], dragging: false, tipKey: "",
+    shownSecond: -1, feedKey: "", buf: [] as PlayerState[], tipKey: "",
     nameOf: new Map<string, string>(), scrubW: 0, box: FULL as Box, ready: false, described: "",
   });
 
@@ -143,9 +151,9 @@ function ReplayView({ v, file, round }: TabProps) {
     const s = st.current;
     const cv = canvas.current;
     const g = cv?.getContext("2d");
-    if (!cv || !g || !s.tl || !s.frame || !s.size || !s.palette || !s.ready) return;
-    const tl = s.tl;
-    const players = playersAt(tl, s.t, !s.reduce, s.buf);
+    const tl = pb.tl;
+    if (!cv || !g || !tl || !s.frame || !s.size || !s.palette || !s.ready) return;
+    const players = playersAt(tl, pb.t, !s.reduce, s.buf);
     const fr = s.frame;
     // world → radar pixels → the zoomed view, still in 0..1024 units so sizes keep one scale
     const z = 1024 / s.box.side;
@@ -170,27 +178,27 @@ function ReplayView({ v, file, round }: TabProps) {
       map: v.map, to, unit, size: s.size, dpr: s.dpr, level: levels ? s.level : null, you, hover: s.hover, names: s.names,
       reduce: s.reduce, palette: s.palette, sprites, nameOf: s.nameOf,
     };
-    drawScene(g, tl, s.t, players, scene);
+    drawScene(g, tl, pb.t, players, scene);
 
     // transport: fill and thumb by transform, the clock text when its second changes
-    const f = tl.duration > 0 ? Math.min(1, Math.max(0, s.t / tl.duration)) : 0;
+    const f = tl.duration > 0 ? Math.min(1, Math.max(0, pb.t / tl.duration)) : 0;
     if (fill.current) fill.current.style.transform = `scaleX(${f})`;
     if (thumb.current) thumb.current.style.transform = `translateX(${f * s.scrubW}px)`;
-    const sec = Math.floor(Math.max(0, s.t));
+    const sec = Math.floor(Math.max(0, pb.t));
     if (sec !== s.shownSecond) {
       s.shownSecond = sec;
-      if (timeText.current) timeText.current.textContent = clock(s.t);
+      if (timeText.current) timeText.current.textContent = clock(pb.t);
       scrub.current?.setAttribute("aria-valuenow", String(sec));
-      scrub.current?.setAttribute("aria-valuetext", `${clock(s.t)} of ${clock(tl.duration)}`);
+      scrub.current?.setAttribute("aria-valuetext", `${clock(pb.t)} of ${clock(tl.duration)}`);
     }
 
     // killfeed: kills ahead are dim, passed ones lit, the latest within RECENT_S marked
     const rows = feed.current?.children;
     if (rows) {
       let passed = 0;
-      for (const tick of killTicks) if ((tick - tl.zeroTick) / tl.tickRate <= s.t) passed++;
+      for (const tick of killTicks) if ((tick - tl.zeroTick) / tl.tickRate <= pb.t) passed++;
       const lastT = passed ? (killTicks[passed - 1] - tl.zeroTick) / tl.tickRate : -Infinity;
-      const recent = s.t - lastT <= RECENT_S ? passed - 1 : -1;
+      const recent = pb.t - lastT <= RECENT_S ? passed - 1 : -1;
       const key = `${passed}|${recent}`;
       if (key !== s.feedKey) {
         s.feedKey = key;
@@ -200,8 +208,8 @@ function ReplayView({ v, file, round }: TabProps) {
 
     // paused, the canvas's label reads out every player as the hover card would; not while playing,
     // where it would change four times a second
-    if (!s.playing) {
-      const said = describe(players, s.nameOf, s.t);
+    if (!pb.playing) {
+      const said = describe(players, s.nameOf, pb.t);
       if (said !== s.described) { s.described = said; cv.setAttribute("aria-label", said); }
     }
 
@@ -226,79 +234,43 @@ function ReplayView({ v, file, round }: TabProps) {
         if (el.hidden) el.hidden = false;
       }
     }
-  }, [v.map, levels, you, sprites, killTicks]);
+  }, [pb, v.map, levels, you, sprites, killTicks]);
 
-  // the loop is created once and reads the latest paint, so a frame already queued when the round
-  // (and with it paint's kill ticks) changes draws with the new round's
-  const paintRef = useRef(paint);
-  useLayoutEffect(() => { paintRef.current = paint; }, [paint]);
-  const loop = useCallback(function loop(now: number) {
-    const s = st.current;
-    s.raf = 0;
-    if (s.playing && s.tl && !s.dragging) {
-      const dt = s.last ? Math.min(MAX_STEP_S, (now - s.last) / 1000) : 0;
-      s.t = Math.min(s.tl.duration, s.t + dt * s.speed);
-      s.last = now;
-      if (s.t >= s.tl.duration) { s.playing = false; setPlaying(false); }
-    }
-    paintRef.current();
-    if (s.playing) s.raf = requestAnimationFrame(loop);
-  }, []);
-
-  const invalidate = useCallback(() => {
-    const s = st.current;
-    if (!s.raf) s.raf = requestAnimationFrame(loop);
-  }, [loop]);
-
-  useEffect(() => () => { const s = st.current; s.playing = false; cancelAnimationFrame(s.raf); s.raf = 0; }, []);
+  // the loop draws with the latest paint, so a frame queued as the round changes uses the new kill ticks
+  useLayoutEffect(() => { pb.paint = paint; }, [pb, paint]);
+  useEffect(() => () => pb.dispose(), [pb]);
   useEffect(() => {
-    sprites.onLoad = invalidate;
+    sprites.onLoad = () => pb.invalidate();
     return () => { sprites.onLoad = () => {}; };
-  }, [sprites, invalidate]);
+  }, [sprites, pb]);
 
   const play = useCallback((on: boolean) => {
-    const s = st.current;
-    if (!s.tl) return;
-    if (on && s.t >= s.tl.duration) s.t = 0;
-    s.playing = on;
-    s.last = 0;
+    if (!pb.tl) return;
     // the paused description (paint) would go stale while playing
-    if (on) { s.described = ""; canvas.current?.setAttribute("aria-label", `Round ${s.tl.round} on the radar, playing`); }
-    setPlaying(on);
-    invalidate();
-  }, [invalidate]);
+    if (on) { st.current.described = ""; canvas.current?.setAttribute("aria-label", `Round ${pb.tl.round} on the radar, playing`); }
+    pb.play(on);
+  }, [pb]);
 
-  const seek = useCallback((t: number) => {
-    const s = st.current;
-    if (!s.tl) return;
-    s.t = Math.min(s.tl.duration, Math.max(0, t));
-    s.last = 0;
-    invalidate();
-  }, [invalidate]);
-
-  // a new round starts at its freeze end; playback carries on if it was playing. Until it arrives
-  // (or when it fails) no timeline is active, so nothing plays or seeks under the new round's title.
-  const current = tl && loadedRound === number ? tl : null;
+  // a round's timeline starts at its freeze end; while the next one loads nothing plays or draws, and
+  // playback resumes when it arrives if it was playing (playback.ts)
   useEffect(() => {
-    const s = st.current;
-    s.tl = current;
-    if (!current) return;
-    const tl = current;
-    s.nameOf = new Map(tl.players.map((p) => [p.id, p.name]));
-    s.t = 0;
-    s.last = 0;
-    s.shownSecond = -1;
-    s.feedKey = "";
-    s.tipKey = "";
-    s.described = "";
-    invalidate();
-  }, [current, invalidate]);
+    if (current) {
+      const s = st.current;
+      s.nameOf = new Map(current.players.map((p) => [p.id, p.name]));
+      s.shownSecond = -1;
+      s.feedKey = "";
+      s.tipKey = "";
+      s.described = "";
+      pb.load(current);
+    } else if (error) pb.fail();
+    else pb.unload();
+  }, [current, error, pb]);
 
-  useEffect(() => { const s = st.current; s.frame = frame; invalidate(); }, [frame, invalidate]);
-  useEffect(() => { const s = st.current; s.box = box; s.ready = ready; invalidate(); }, [box, ready, invalidate]);
-  useEffect(() => { st.current.speed = Number(speed); }, [speed]);
-  useEffect(() => { st.current.level = level; invalidate(); }, [level, invalidate]);
-  useEffect(() => { st.current.names = names; invalidate(); }, [names, invalidate]);
+  useEffect(() => { st.current.frame = frame; pb.invalidate(); }, [frame, pb]);
+  useEffect(() => { const s = st.current; s.box = box; s.ready = ready; pb.invalidate(); }, [box, ready, pb]);
+  useEffect(() => { pb.speed = Number(speed); }, [speed, pb]);
+  useEffect(() => { st.current.level = level; pb.invalidate(); }, [level, pb]);
+  useEffect(() => { st.current.names = names; pb.invalidate(); }, [names, pb]);
 
   // the canvas follows its box at the device's pixel density
   useEffect(() => {
@@ -318,9 +290,9 @@ function ReplayView({ v, file, round }: TabProps) {
       cv.height = Math.round(size * dpr);
       cv.style.width = `${size}px`;
       cv.style.height = `${size}px`;
-      invalidate();
+      pb.invalidate();
     };
-    const fitScrub = () => { s.scrubW = scrub.current?.clientWidth ?? 0; invalidate(); };
+    const fitScrub = () => { s.scrubW = scrub.current?.clientWidth ?? 0; pb.invalidate(); };
     fit();
     fitScrub();
     const ro = new ResizeObserver(fit);
@@ -328,99 +300,70 @@ function ReplayView({ v, file, round }: TabProps) {
     const rs = new ResizeObserver(fitScrub);
     if (scrub.current) rs.observe(scrub.current);
     return () => { ro.disconnect(); rs.disconnect(); };
-  }, [sprites, invalidate]);
+  }, [sprites, pb]);
 
   // reduced motion, live
   useEffect(() => {
     const mq = matchMedia("(prefers-reduced-motion: reduce)");
-    const on = () => { st.current.reduce = mq.matches; invalidate(); };
+    const on = () => { st.current.reduce = mq.matches; pb.invalidate(); };
     on();
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
-  }, [invalidate]);
+  }, [pb]);
 
   const goRound = useCallback((step: -1 | 1) => {
     const next = rounds[ri + step];
     if (next) setQuery("round", String(next.number));
   }, [rounds, ri]);
 
-  // keyboard: Space, the arrows, L and N, unless a control that owns those keys has focus. A button
-  // or link reached by Tab keeps Space as its own key; one that holds focus only because it was
-  // clicked does not, so Space after clicking Next round plays rather than skipping another round.
+  // keyboard shortcuts (keys.ts): inside the replay, or with nothing focused
   useEffect(() => {
-    let keyboard = false;
-    let byKey = false;
-    let ownSpace = false;
-    const onPointer = () => { keyboard = false; };
-    const onFocus = () => { byKey = keyboard; };
     const onKey = (e: KeyboardEvent) => {
-      keyboard = true;
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      const el = e.target instanceof Element ? e.target : document.body;
-      if (el.closest("input, textarea, select, [contenteditable='true'], [role=dialog], [role=listbox]")) return;
-      if (e.key === " ") {
-        ownSpace = false;
-        if (byKey && el.closest("button, a[href], [role=radio], [role=tab]")) return;
+      const a = keyAction(e, e.target instanceof Element ? e.target : null, root.current, levels);
+      if (!a) return;
+      if (a === "floor") setLevel((x) => (x === "upper" ? "lower" : "upper"));
+      else if (a === "names") setNames((x) => !x);
+      else {
         e.preventDefault();
-        ownSpace = true;
-        play(!st.current.playing);
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        if (el.closest("[role=radiogroup], [role=tablist], [role=slider], tbody[tabindex]")) return;
-        e.preventDefault();
-        goRound(e.key === "ArrowLeft" ? -1 : 1);
-      } else if ((e.key === "l" || e.key === "L") && levels) {
-        setLevel((x) => (x === "upper" ? "lower" : "upper"));
-      } else if (e.key === "n" || e.key === "N") {
-        setNames((x) => !x);
+        if (a === "toggle") play(!pb.playing);
+        else goRound(a === "prev" ? -1 : 1);
       }
     };
-    // a mouse-focused button clicks on Space's keyup; when the replay took the Space, stop that too
-    const onUp = (e: KeyboardEvent) => { if (e.key === " " && ownSpace) { e.preventDefault(); ownSpace = false; } };
-    addEventListener("pointerdown", onPointer, true);
-    addEventListener("focusin", onFocus);
     addEventListener("keydown", onKey);
-    addEventListener("keyup", onUp);
-    return () => {
-      removeEventListener("pointerdown", onPointer, true);
-      removeEventListener("focusin", onFocus);
-      removeEventListener("keydown", onKey);
-      removeEventListener("keyup", onUp);
-    };
-  }, [play, goRound, levels]);
+    return () => removeEventListener("keydown", onKey);
+  }, [play, goRound, levels, pb]);
 
   // scrubber: drag to seek; arrows step 5 s, Home and End jump
   const fromPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
     const box = scrub.current!.getBoundingClientRect();
-    const tlNow = st.current.tl;
-    if (!tlNow) return;
-    seek(((e.clientX - box.left) / box.width) * tlNow.duration);
+    if (pb.tl) pb.seek(((e.clientX - box.left) / box.width) * pb.tl.duration);
   };
   const onScrubDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    st.current.dragging = true;
+    pb.dragging = true;
     fromPointer(e);
   };
-  const onScrubMove = (e: ReactPointerEvent<HTMLDivElement>) => { if (st.current.dragging) fromPointer(e); };
-  const onScrubUp = () => { st.current.dragging = false; st.current.last = 0; invalidate(); };
+  const onScrubMove = (e: ReactPointerEvent<HTMLDivElement>) => { if (pb.dragging) fromPointer(e); };
+  const onScrubUp = () => { pb.dragging = false; pb.seek(pb.t); };
   const onScrubKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const s = st.current;
-    if (!s.tl) return;
+    const tl = pb.tl;
+    if (!tl) return;
     const step = e.shiftKey ? 1 : 5;
-    const to = e.key === "ArrowLeft" || e.key === "ArrowDown" ? s.t - step : e.key === "ArrowRight" || e.key === "ArrowUp" ? s.t + step
-      : e.key === "PageDown" ? s.t - 15 : e.key === "PageUp" ? s.t + 15 : e.key === "Home" ? 0 : e.key === "End" ? s.tl.duration : null;
+    const to = e.key === "ArrowLeft" || e.key === "ArrowDown" ? pb.t - step : e.key === "ArrowRight" || e.key === "ArrowUp" ? pb.t + step
+      : e.key === "PageDown" ? pb.t - 15 : e.key === "PageUp" ? pb.t + 15 : e.key === "Home" ? 0 : e.key === "End" ? tl.duration : null;
     if (to === null) return;
     e.preventDefault();
-    seek(to);
+    pb.seek(to);
   };
 
   // canvas hover
   const onCanvasMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
     st.current.pointer = [e.clientX - box.left, e.clientY - box.top];
-    invalidate();
+    pb.invalidate();
   };
-  const onCanvasLeave = () => { st.current.pointer = null; invalidate(); };
+  const onCanvasLeave = () => { st.current.pointer = null; pb.invalidate(); };
 
   const lowerUrl = levels ? levelRadarUrl(v.map, "lower") : null;
   const winText = r.winSide ? (r.winSide === "T" ? "t-text" : "ct-text") : "faint";
@@ -522,7 +465,7 @@ function ReplayView({ v, file, round }: TabProps) {
                 <li key={i} data-state="next">
                   <button
                     className="replay__feedbtn"
-                    onClick={() => { const s = st.current; if (s.tl) seek((killTicks[i] - s.tl.zeroTick) / s.tl.tickRate - LEAD_IN_S); }}
+                    onClick={() => { const tl = pb.tl; if (tl) pb.seek((killTicks[i] - tl.zeroTick) / tl.tickRate - LEAD_IN_S); }}
                     aria-label={`Watch from ${LEAD_IN_S} s before ${k.killer ? k.killer.name : "the world"} killed ${k.victim.name}`}
                   >
                     <KillRow k={k} />

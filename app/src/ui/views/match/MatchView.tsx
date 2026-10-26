@@ -18,7 +18,7 @@ import { BarContent } from "../../shell/Bar";
 import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
 import Overview from "./Overview";
-import { canReplay } from "./replay/support";
+import { replayUnavailable } from "./replay/support";
 
 const Rounds = lazy(() => import("./Rounds"));
 const Economy = lazy(() => import("./Economy"));
@@ -178,8 +178,9 @@ function Sticky({ v, file, tab, selected }: { v: MatchModel | null; file: string
       <div className="mtabs" role="tablist" aria-label="Match sections" ref={tabs}>
         {ul && <i className={`mtabs__ul ${ul.instant ? "is-instant" : ""}`} style={{ width: ul.w, transform: `translateX(${ul.x}px)` }} aria-hidden />}
         {MATCH_TABS.map((t, n) => {
-          const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)) || (t === "replay" && !canReplay(file)));
-          const why = t === "aim" ? NEEDS_DEMO : t === "replay" ? "Recorded matches have no replay" : "No positions in this match";
+          const noReplay = t === "replay" && v ? replayUnavailable(file, v.map) : null;
+          const disabled = !!v && ((t === "aim" && !v.entry.hasAim) || (t === "positions" && !v.facts.kills.some((k) => k.kpos)) || noReplay !== null);
+          const why = t === "aim" ? NEEDS_DEMO : noReplay ?? "No positions in this match";
           return (
             <a
               key={t}
