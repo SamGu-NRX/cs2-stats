@@ -10,7 +10,8 @@ import type { Measures } from "../../stats/facts";
 import type { MatchEntry } from "../data/match";
 import { CELL, cellCentre } from "../../stats/positions";
 import { Card } from "../components/Card";
-import { MetricList, MetricRow } from "../components/MetricRow";
+import { MetricList, MetricRow, ShareTrack } from "../components/MetricRow";
+import { Num } from "../components/bits";
 import { Select } from "../components/controls";
 import { useWidth } from "../components/charts";
 import { frameFor, RadarView } from "../components/MapArt";
@@ -185,7 +186,8 @@ export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey
   const frame = useMemo(() => (pos ? frameFor(map, [...pos.kills, ...pos.deaths, ...cells.map((c) => c.at)]) : null), [map, pos, cells]);
   const recorded = onMap.filter((s) => s.hasPos).length;
   const maxCell = Math.max(1, ...cells.map((c) => c.secs));
-  const places = Object.entries(pos?.presence?.places ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const allPlaces = Object.entries(pos?.presence?.places ?? {}).sort((a, b) => b[1] - a[1]);
+  const places = allPlaces.slice(0, 8);
   const total = Object.values(pos?.presence?.places ?? {}).reduce((a, s) => a + s, 0) || 1;
   // deaths are marked with the game's skull from the icon pack, tinted; without the pack, a cross
   const skull = useGameIcon("elimination");
@@ -220,17 +222,18 @@ export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey
               <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="4" fill="var(--good-text)" /></svg>Your kills</span>
               <span><span className="poor-text"><GameIcon id="elimination" width={11} fallback={<DeathIcon size={11} />} /></span>Your deaths</span>
               <span><i className="swatch" style={{ background: "rgba(255,215,173,.4)" }} />Where you moved</span>
+              <span className="help" data-tip="Kills sit where you stood, deaths where you fell." tabIndex={0} aria-label="Where the marks sit">?</span>
             </div>
           </div>
           <div className="wyp__side">
             <div className="wyp__count"><b className="num">{onMap.length}</b><span className="meta">{plural(onMap.length, "match", "matches")} on {mapName(map)}, {recorded} with movement</span></div>
             <div className="wyp__count"><b className="num good-text">{pos.kills.length}</b><span className="meta">kills placed</span><b className="num poor-text">{pos.deaths.length}</b><span className="meta">deaths placed</span></div>
             {places.length ? (
-              <ul className="places" aria-label="Where you spend your time alive">
-                {places.map(([p, secs]) => <li key={p}><span>{calloutName(p)}</span><span className="hbar"><i style={{ width: `${(100 * secs) / places[0][1]}%` }} /></span><b className="num">{fmtPct((100 * secs) / total, 0)}</b></li>)}
+              <ul className="places lslist" aria-label="Where you spend your time alive">
+                {places.map(([p, secs]) => <li key={p}><span className="places__l">{calloutName(p)}</span><ShareTrack value={secs} max={places[0][1]} /><b className="num"><Num v={fmtPct((100 * secs) / total, 0)} /></b></li>)}
+                {allPlaces.length > places.length && <li className="places__more meta">and {plural(allPlaces.length - places.length, "more place", "more places")}</li>}
               </ul>
             ) : <p className="meta"><NeedsDemo detail="Time spent per place needs movement, which converted logs lack." /></p>}
-            <p className="meta">Kills sit where you stood, deaths where you fell.</p>
           </div>
         </div>
       )}
