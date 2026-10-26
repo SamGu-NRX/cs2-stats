@@ -66,7 +66,8 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, line: lineOf(s),
+    shots: s.aim.shots, kills: f.kills.length, line: lineOf(s),
+    activity: f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0),
   };
 }
 

@@ -1,7 +1,7 @@
 // Hand-drawn SVG charts. Every chart labels its extremes, marks your average and, where one exists,
 // a reference line (rating 1.00, a benchmark). Charts never replay an entrance on tab switch,
 // filter or refresh.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ratingScore, scoreFill, scoreText } from "../lib/scale";
 
 // ---------------------------------------------------------------- shared
@@ -88,12 +88,16 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
   const lo = lo0 - pad;
   const hi = hi0 + pad;
   const left = 8;
-  const right = 8;
+  const avg = avgValue ?? vals.reduce((a, v) => a + v, 0) / vals.length;
+  // A gutter on the right holds the reference labels, so they never sit on the data. It is as wide as
+  // the longer label (about 6.2 px a character in the 11 px axis font, an estimate, not a measurement),
+  // at least 84 px: a fixed 84 cut "average player 1.00" off at the card's edge.
+  const longest = Math.max(`${avgLabel} ${fmt(avg)}`.length, bench === undefined ? 0 : `${benchLabel} ${fmt(bench)}`.length);
+  const right = Math.max(84, Math.ceil(10 + 6.2 * longest));
   const top = 18;
   const bottom = 20;
   const X = (i: number) => left + (points.length === 1 ? (w - left - right) / 2 : (i / (points.length - 1)) * (w - left - right));
   const Y = (v: number) => top + ((hi - v) / (hi - lo)) * (height - top - bottom);
-  const avg = avgValue ?? vals.reduce((a, v) => a + v, 0) / vals.length;
   const best = lowerIsBetter ? Math.min(...vals) : Math.max(...vals);
   const worst = lowerIsBetter ? Math.max(...vals) : Math.min(...vals);
   const path = points.map((p, i) => (p.value === null ? null : `${X(i)},${Y(p.value)}`)).filter(Boolean).join(" ");
@@ -102,12 +106,12 @@ export function TrendLine({ points, fmt, height = 140, bench, benchLabel = "ref"
       <svg width={w} height={height} role="img" aria-label={`Trend: ${points.map((p) => `${p.label} ${p.value === null ? "none" : fmt(p.value)}`).join(", ")}`}>
         {bench !== undefined && (
           <g>
-            <line x1="0" x2={w} y1={Y(bench)} y2={Y(bench)} stroke="var(--ink3)" strokeDasharray="3 3" />
-            <text x={w - 2} y={Y(bench) + 12} textAnchor="end" className="ax">{benchLabel} {fmt(bench)}</text>
+            <line x1="0" x2={w - right} y1={Y(bench)} y2={Y(bench)} stroke="var(--ink3)" strokeDasharray="3 3" />
+            <text x={w - right + 6} y={Y(bench) + 4 + (Math.abs(Y(bench) - Y(avg)) < 12 ? 12 : 0)} className="ax">{benchLabel} {fmt(bench)}</text>
           </g>
         )}
-        <line x1="0" x2={w} y1={Y(avg)} y2={Y(avg)} stroke="var(--cream)" strokeDasharray="2 4" opacity="0.45" />
-        <text x="2" y={Y(avg) - 4} className="ax ax--cream">{avgLabel} {fmt(avg)}</text>
+        <line x1="0" x2={w - right} y1={Y(avg)} y2={Y(avg)} stroke="var(--cream)" strokeDasharray="2 4" opacity="0.45" />
+        <text x={w - right + 6} y={Y(avg) + 4} className="ax ax--cream">{avgLabel} {fmt(avg)}</text>
         <polyline points={path} fill="none" stroke={color} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" />
         {points.map((p, i) => {
           if (p.value === null) return null;
@@ -161,44 +165,46 @@ export function DivergingBars({ rows, cap }: { rows: DivRow[]; cap: number }) {
  * Seven-axis radar: you (cream, filled) and a comparison (dashed). When the comparison changes, its
  * polygon lerps from where it is now (320 ms, ease-in-out); with reduced motion it jumps.
  */
-export function AttrRadar({ labels, you, other, otherLabel, size = 260 }: { labels: string[]; you: (number | null)[]; other: (number | null)[] | null; otherLabel?: string; size?: number }) {
+/**
+ * Your six style scores against another player's, on one radar. Picking another player morphs their
+ * shape: a CSS transition on the path's `d` (--d-expand, --ease-out in tokens.css), which retargets from
+ * the shape on screen when a new pick interrupts it. A keyboard pick (`instant`) and reduced motion swap
+ * the shape at once. A provisional score of yours draws its shape with a hatched fill.
+ */
+export function AttrRadar({ labels, you, other, otherLabel, size = 260, instant = false, provisional = false, provisionalTip }: {
+  labels: string[]; you: (number | null)[]; other: (number | null)[] | null; otherLabel?: string; size?: number;
+  /** swap the other shape without the morph (keyboard selection) */
+  instant?: boolean;
+  /** your scores rank against a still-small bot pool */
+  provisional?: boolean;
+  /** the tooltip a provisional shape opens on hover and focus */
+  provisionalTip?: string;
+}) {
   const n = labels.length;
   const c = size / 2;
   const R = c - 62;
+  const hatch = `hatch${useId().replace(/:/g, "")}`;
   const pt = (i: number, v: number) => {
     const a = (Math.PI * 2 * i) / n - Math.PI / 2;
     return [c + Math.cos(a) * R * (v / 100), c + Math.sin(a) * R * (v / 100)] as const;
   };
-  const target = (other ?? []).map((v) => v ?? 0);
-  const [shown, setShown] = useState<number[]>(target);
-  const cur = useRef<number[]>(target);
-  useEffect(() => {
-    if (!other) return;
-    const from = cur.current.length === target.length ? [...cur.current] : target.map(() => 0);
-    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) { cur.current = target; setShown(target); return; }
-    const t0 = performance.now();
-    const D = 320;
-    const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-    let raf = 0;
-    const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / D);
-      const e = ease(t);
-      const next = target.map((v, i) => from[i] + (v - from[i]) * e);
-      cur.current = next;
-      setShown(next);
-      if (t < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [other?.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const poly = (vals: number[]) => vals.map((v, i) => pt(i, v).join(",")).join(" ");
+  // one M and n-1 L commands, so every shape has the same structure and `d` interpolates between them
+  const path = (vals: number[]) => `M${vals.map((v, i) => pt(i, v).map((x) => x.toFixed(2)).join(" ")).join("L")}Z`;
+  const otherD = other ? path(other.map((v) => v ?? 0)) : null;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Attribute shape: ${labels.map((l, i) => `${l} you ${you[i] === null ? "none" : Math.round(you[i]!)}${other ? `, ${otherLabel} ${other[i] ?? "none"}` : ""}`).join("; ")}`} className="radar">
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Attribute shape: ${labels.map((l, i) => `${l} you ${you[i] === null ? "none" : Math.round(you[i]!)}${other ? `, ${otherLabel} ${other[i] ?? "none"}` : ""}`).join("; ")}`} className="radar" {...(provisional && provisionalTip ? { "data-tip": provisionalTip, tabIndex: 0 } : {})}>
+      {provisional && (
+        <defs>
+          <pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="rgba(255,215,173,.06)" /><line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,215,173,.35)" strokeWidth="2" />
+          </pattern>
+        </defs>
+      )}
       {[25, 50, 75, 100].map((r) => <polygon key={r} points={poly(labels.map(() => r))} fill="none" stroke="var(--line)" />)}
       {labels.map((_, i) => { const [x, y] = pt(i, 100); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="var(--line)" />; })}
-      {other && <polygon points={poly(shown)} fill="rgba(163,167,164,.08)" stroke="var(--ink2)" strokeDasharray="4 3" strokeWidth="1.5" />}
-      <polygon points={poly(you.map((v) => v ?? 0))} fill="rgba(255,215,173,.14)" stroke="var(--cream)" strokeWidth="1.75" strokeLinejoin="round" />
+      {otherD && <path className={`radar__other ${instant ? "is-instant" : ""}`} d={otherD} style={{ d: `path("${otherD}")` } as CSSProperties} fill="rgba(163,167,164,.08)" stroke="var(--ink2)" strokeDasharray="4 3" strokeWidth="1.5" />}
+      <polygon points={poly(you.map((v) => v ?? 0))} fill={provisional ? `url(#${hatch})` : "rgba(255,215,173,.14)"} stroke="var(--cream)" strokeWidth="1.75" strokeLinejoin="round" />
       {you.map((v, i) => { const [x, y] = pt(i, v ?? 0); return <circle key={i} cx={x} cy={y} r="2.5" fill="var(--cream)" />; })}
       {labels.map((l, i) => {
         const [x, y] = pt(i, 116);
