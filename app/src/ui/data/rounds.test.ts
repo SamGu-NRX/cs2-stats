@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { KillFact, MatchFacts } from "../../stats/facts";
-import { clutchesOf, feedFor, roundCells } from "./rounds";
+import { pooledRates } from "./engine";
+import { clutchesOf, decidingRounds, feedFor, roundCells } from "./rounds";
 
 // One round, 2v2: players 0 and 1 are team 0 on T, players 2 and 3 are team 1 on CT.
 // 2 kills 0 (opening), leaving player 1 alone against two; 1 kills 2 (now player 3 is alone too), then 1 kills 3.
@@ -34,5 +35,31 @@ describe("round views", () => {
       { ri: 0, pi: 1, side: "T", against: 2, won: true, killsAfter: 2 },
       { ri: 0, pi: 3, side: "CT", against: 1, won: false, killsAfter: 0 },
     ]);
+  });
+  it("reads a world death's swing for both teams, from the victim's loss", () => {
+    // player 0 falls to the world: no killer, no enemy credited; the opponents still gain what 0's team lost
+    const world = { ...facts, kills: [{ ...kill(640, 2, 0, [[0, -0.1]]), killer: null, killerSide: null, enemy: false }] } as unknown as MatchFacts;
+    expect(feedFor(world, 0, 2)[0].swing).toBeCloseTo(0.1);
+    expect(feedFor(world, 0, 0)[0].swing).toBeCloseTo(-0.1);
+  });
+  it("finds a clutch that starts the round, before any kill", () => {
+    // team 0 starts with player 1 alone (player 0 disconnected before freeze end, so no player-round row)
+    const alone = { ...facts, pr: (facts.pr as { pi: number }[]).filter((r) => r.pi !== 0), kills: [kill(960, 1, 2, [[1, 0.25], [2, -0.25]])] } as unknown as MatchFacts;
+    expect(clutchesOf(alone)[0]).toMatchObject({ pi: 1, side: "T", against: 2, killsAfter: 1 });
+  });
+});
+
+describe("match overview helpers", () => {
+  it("ranks deciding rounds on the chosen side only", () => {
+    const rounds = [{ usSide: "T" as const, sw: 0.4 }, { usSide: "CT" as const, sw: -0.3 }, { usSide: "CT" as const, sw: 0.1 }];
+    expect(decidingRounds(rounds, (r) => r.sw, "ct", 5).map((x) => x.sw)).toEqual([-0.3, 0.1]);
+    expect(decidingRounds(rounds, (r) => r.sw, "both", 1).map((x) => x.sw)).toEqual([0.4]);
+  });
+  it("pools a team's rates from summed measures, not the mean of player rates", () => {
+    const r = pooledRates([{ rounds: 10, dmg: 1000, kast: 8, kills: 10, hsKills: 5, swing: 0.2, swingRounds: 10 }, { rounds: 2, dmg: 0, kast: 0, kills: 0, hsKills: 0, swing: 0, swingRounds: 2 }] as never);
+    expect(r.adr).toBeCloseTo(1000 / 12);
+    expect(r.kast).toBeCloseTo((100 * 8) / 12);
+    expect(r.hs).toBeCloseTo(50);
+    expect(r.swing).toBeCloseTo(0.2 / 12);
   });
 });

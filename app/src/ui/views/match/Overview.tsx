@@ -8,7 +8,8 @@ import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { HoverCard } from "../../components/overlay";
-import { multiKillRows, RATING_LABEL, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
+import { multiKillRows, pooledRates, RATING_LABEL, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
+import { decidingRounds } from "../../data/rounds";
 import { useCall } from "../../data/hooks";
 import { deathOf, killsBy, roundSwing, type MatchModel, type MRound, type Team } from "../../data/match";
 import { DeathIcon, WIN_LABEL } from "../../icons/game";
@@ -24,15 +25,17 @@ type Multi = Record<2 | 3 | 4 | 5, number>;
 /** A scoreboard row: a player, or the team total under the five players (pi null). */
 interface Row { key: string; pi: number | null; team: Team; isHuman: boolean; l: StatLine; multi: Multi | null; rated: boolean }
 
-/** The team total: counts summed over the five rows shown; rates from the team's rollup, both sides only. */
+/** The team total: counts summed over the five rows shown; rates from the team's rollup (both sides) or pooled from the rows (one side). */
 function teamRow(v: MatchModel, t: Team, rows: Row[], side: SideKey): Row {
   const sum = (f: (r: Row) => number) => rows.reduce((a, r) => a + f(r), 0);
   const m = { ...rows[0].l.m };
   for (const k of ["kills", "deaths", "assists", "flashAssists", "tradedDeaths", "openingKills", "openingDeaths"] as const) m[k] = sum((r) => r.l.m[k]);
   const team = side === "both" ? statLine(v.b.teams[t]) : null;
+  // one side: the team's rates pooled from the five players' summed measures
+  const pooled = team ? null : pooledRates(rows.map((r) => r.l.m));
   const l: StatLine = {
     ...(team ?? rows[0].l), m, kills: m.kills, deaths: m.deaths, assists: m.assists, diff: m.kills - m.deaths,
-    adr: team?.adr ?? null, kast: team?.kast ?? null, hs: team?.hs ?? null, swing: team?.swing ?? null, rating: null,
+    ...(team ? { adr: team.adr, kast: team.kast, hs: team.hs, swing: team.swing } : pooled!), rating: null,
   };
   const multi = rows.every((r) => r.multi) ? ([2, 3, 4, 5] as const).reduce((o, k) => ({ ...o, [k]: sum((r) => r.multi![k]) }), {} as Multi) : null;
   return { key: `total-${t}`, pi: null, team: t, isHuman: false, l, multi, rated: false };
@@ -102,7 +105,7 @@ export default function Overview({ v, file }: TabProps) {
         </Card>
         <div className="overview__side">
           <Lobby lines={lines} human={v.human} />
-          <DecidingRounds v={v} file={file} />
+          <DecidingRounds v={v} file={file} side={side} />
         </div>
       </div>
     </div>
@@ -112,14 +115,10 @@ export default function Overview({ v, file }: TabProps) {
 const DECIDING = 5;
 
 /** Your rounds with the largest swing either way, each with what you did in it; a row opens the round. */
-function DecidingRounds({ v, file }: { v: MatchModel; file: string }) {
+function DecidingRounds({ v, file, side }: { v: MatchModel; file: string; side: SideKey }) {
   const human = v.human;
   const clutches = useCall("clutches", [{ files: [file], filter: { player: v.players[human].key } }]).data;
-  const rows = useMemo(() => v.rounds
-    .map((r) => ({ r, sw: roundSwing(r.pr[human]) }))
-    .filter((x): x is { r: MRound; sw: number } => x.sw !== null && x.sw !== 0)
-    .sort((a, b) => Math.abs(b.sw) - Math.abs(a.sw))
-    .slice(0, DECIDING), [v, human]);
+  const rows = useMemo(() => decidingRounds(v.rounds, (r: MRound) => roundSwing(r.pr[human]), side, DECIDING), [v, human, side]);
   return (
     <Card title="Rounds that decided it" aside={<span className="meta">Your largest swings</span>}>
       {rows.length ? (

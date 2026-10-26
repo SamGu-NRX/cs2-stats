@@ -13,7 +13,7 @@ import { feedFor } from "../../data/rounds";
 import { BUY_LABEL, BuyIcon, NADE_LABEL, WIN_LABEL, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
 import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
-import { NeedsDemo, PlaceList } from "../shared";
+import { NeedsDemo, PlaceList, PlayerName } from "../shared";
 import { GameNade, RoundEndIcon } from "./glyphs";
 import { Killfeed } from "./Killfeed";
 
@@ -151,7 +151,7 @@ function RoundDetail({ v, ri, onClose, onStep }: { v: MatchView; ri: number; onC
       </header>
       <div className="drawer__body">
         <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
-          <Killfeed kills={feed} />
+          <Killfeed kills={feed} name={(pi, name) => <PlayerName v={v} pi={pi}>{name}</PlayerName>} />
           {f.plantTick !== null && (
             <p className="meta" data-tip="Round clock: time since freeze time ended">
               Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
