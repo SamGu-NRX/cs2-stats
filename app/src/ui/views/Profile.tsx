@@ -4,7 +4,7 @@
 // app bar drives the whole page: every summary is rolled up over that side's rounds. Performance is
 // compared with that side's pros; style with the bot careers in the same matches on that side
 // (worker/ranking.ts).
-import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
@@ -15,7 +15,7 @@ import { Gauge } from "../components/charts";
 import { Fig, MatchLine } from "../components/MatchSeries";
 import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
 import { MetricList, quintile, ShareTrack, THIN, Track } from "../components/MetricRow";
-import { Segmented, Select, type Option } from "../components/controls";
+import { rovingIndex, Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
@@ -33,7 +33,7 @@ import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } fr
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
-import { matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
+import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
@@ -92,16 +92,25 @@ function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: Mat
 }
 
 /**
- * The tab bar: links to #/profile/<tab>, one tab stop each, Alt+1 to Alt+7 (App.tsx), and on its right
- * the tab's sample and the controls that govern the whole page. The cream underline jumps: tabs are
- * switched many times a day, so a tab switch has no motion.
+ * The tab bar: links to #/profile/<tab>, Alt+1 to Alt+7 (App.tsx), and on its right the tab's sample and
+ * the controls that govern the whole page. As WAI-ARIA tabs: one tab stop (the selected tab), Left and
+ * Right move to the next tab and open it, Home and End jump to the ends (controls.tsx rovingIndex). The
+ * cream underline jumps: tabs are switched many times a day, so a tab switch has no motion.
  */
 function ProfileTabs({ tab, meta, children }: { tab: ProfileTab; meta: string; children?: ReactNode }) {
+  const list = useRef<HTMLElement>(null);
+  const onKey = (e: KeyboardEvent) => {
+    const to = rovingIndex(e.key, PROFILE_TABS.indexOf(tab), PROFILE_TABS.length, false);
+    if (to === null || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    go(profileHref(PROFILE_TABS[to]), { instant: true });
+    list.current?.querySelector<HTMLElement>(`[data-tab="${PROFILE_TABS[to]}"]`)?.focus();
+  };
   return (
     <div className="ptabs">
-      <nav className="ptabs__list" role="tablist" aria-label="Profile sections">
+      <nav ref={list} className="ptabs__list" role="tablist" aria-label="Profile sections" onKeyDown={onKey}>
         {PROFILE_TABS.map((t, n) => (
-          <a key={t} data-tab={t} role="tab" aria-selected={t === tab} aria-controls="profile-panel" href={profileHref(t)} className="ptabs__tab" data-tip={`Alt ${n + 1}`}>
+          <a key={t} data-tab={t} role="tab" aria-selected={t === tab} tabIndex={t === tab ? 0 : -1} aria-controls="profile-panel" href={profileHref(t)} className="ptabs__tab" data-tip={`Alt ${n + 1}`}>
             {PROFILE_TAB_LABEL[t]}
           </a>
         ))}
