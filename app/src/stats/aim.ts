@@ -92,7 +92,7 @@ export const PEEK_TRAVEL_S = 0.25;
 export const DUEL_WINDOW_S = 3;
 /** The stop buffer looks this far back from the first shot for the last tick you were moving (the research's window). */
 export const STOP_LOOKBACK_S = 0.5;
-/** A position sample older than this does not give a player's health at a tick (the research's rule). */
+/** A position sample older than this does not give a player's health at a sighting's onset (the research's rule; the sample must also be strictly before the onset). */
 export const HEALTH_MAX_AGE_S = 0.3;
 
 // ---- facts
@@ -583,12 +583,14 @@ function sighting(c: Ctx, view: View, e: number): Sighting | null {
   let xf: number[] | null = null;
   const fe = c.rounds[ri].freezeEndTick;
   if (duel && fe !== null) {
+    // Health from the latest living sample strictly before the onset: a sample on or after it can
+    // already hold the duel's outcome (the victim at 0), which is what the model predicts.
     const health = (p: number) => {
       const P = c.t.positions!;
       let h: number | null = null;
       for (const i of view.track.get(ri * 1024 + p) ?? []) {
-        if (P.tick[i] > t0) break;
-        h = t0 - P.tick[i] <= HEALTH_MAX_AGE_S * rate ? P.health[i] : null;
+        if (P.tick[i] >= t0) break;
+        if (P.is_alive[i]) h = t0 - P.tick[i] <= HEALTH_MAX_AGE_S * rate ? P.health[i] : null;
       }
       return h;
     };
