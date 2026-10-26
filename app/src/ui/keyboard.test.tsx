@@ -10,7 +10,6 @@ import { MenuLayer, openMenu } from "./components/overlay";
 import { navWasInstant, openMatch } from "./router";
 import type { Data } from "./data/provider";
 import { Palette } from "./shell/Palette";
-import { RECOIL } from "../stats/recoil-ref";
 import { emptySummary } from "../stats/rollup";
 import { CS2RB } from "../stats/model-params";
 import { metaOf, rolled } from "../worker/views";
@@ -24,8 +23,13 @@ import { AimPanels } from "./views/aim/AimPanels";
 vi.mock("./data/provider", () => ({ useData: (): Pick<Data, "matches"> => ({ matches: [] }) }));
 vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }), useAgents: () => null }));
 // AimPanels' summaries: the worker's answer, set per test (no plugin file records sprays yet).
+// One summary for every query, except a query for one gun alone, which gets that gun's own (perGun).
 let scoped: Rolled | null = null;
-vi.mock("./data/hooks", async (orig) => ({ ...(await orig<object>()), useScoped: () => (scoped ? [scoped] : null) }));
+let perGun: Record<string, Rolled> = {};
+vi.mock("./data/hooks", async (orig) => ({
+  ...(await orig<object>()),
+  useScoped: (_q: unknown, extra: { weapons?: string[] }[]) => (scoped ? extra.map((e) => (e.weapons?.length === 1 ? perGun[e.weapons[0]] ?? scoped! : scoped!)) : null),
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollIntoView = () => {}; // not in jsdom
@@ -164,30 +168,40 @@ describe("opening a match", () => {
 });
 
 describe("spray gun picker", () => {
-  it("is one tab stop; arrows, Home and End pick a gun and move focus with it", () => {
+  it("lists every sprayed gun, most sprayed first, as one tab stop; arrows, Home and End pick and move focus", () => {
     setMeta(metaOf(CS2RB));
+    // four guns fired; the deagle never sprayed, so it gets no button; the cz75a has no pro path and still lists
+    const fired = ["ak47", "famas", "galilar", "cz75a", "deagle"];
+    const sprays: Record<string, number> = { galilar: 60, famas: 50, ak47: 40, cz75a: 5, deagle: 0 };
     const s = rolled(emptySummary());
-    // sprays on six guns: five get buttons, the sixth goes to the More menu
-    const guns = Object.keys(RECOIL).slice(0, 6);
-    s.aim.path = Object.fromEntries(guns.map((w, i) => [w, { n: [60 - i, 50 - i, 40 - i], dp: [1, 2, 3], dy: [0, 0.5, 1] }]));
+    for (const w of fired) s.weapons[w] = { rounds: 1, shots: 10, hits: 1, groups: [0, 0, 0, 0, 0, 0, 0, 0], dmg: 0, kills: 0, hsKills: 0, deaths: 0 };
     scoped = s;
+    perGun = Object.fromEntries(fired.map((w) => {
+      const g = rolled(emptySummary());
+      g.aim.sprays = sprays[w];
+      g.aim.path = sprays[w] ? { [w]: { n: [sprays[w], sprays[w] - 1, sprays[w] - 2], dp: [1, 2, 3], dy: [0, 0.5, 1] } } : {};
+      return [w, g];
+    }));
     render(<AimPanels query={{ files: [], filter: { player: "x" } }} label="test" visibility={false} />);
     const radios = () => Array.from(host.querySelectorAll<HTMLElement>('[aria-label="Gun"] [role=radio]'));
     const picked = () => radios().find((b) => b.getAttribute("aria-checked") === "true")?.dataset.w;
-    expect(radios().map((b) => b.dataset.w)).toEqual(guns.slice(0, 5));
-    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    const order = ["galilar", "famas", "ak47", "cz75a"];
+    expect(radios().map((b) => b.dataset.w)).toEqual(order);
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([order[0]]);
     act(() => radios()[0].focus());
     key(document.activeElement!, "ArrowRight");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[1], guns[1]]);
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([order[1], order[1]]);
     key(document.activeElement!, "End");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[4], guns[4]]);
+    const last = order[order.length - 1];
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([last, last]);
     key(document.activeElement!, "ArrowDown");
-    expect(picked()).toBe(guns[0]);
+    expect(picked()).toBe(order[0]);
     key(document.activeElement!, "ArrowUp");
-    expect(picked()).toBe(guns[4]);
+    expect(picked()).toBe(last);
     key(document.activeElement!, "Home");
-    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([guns[0], guns[0]]);
-    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([guns[0]]);
+    expect([picked(), (document.activeElement as HTMLElement).dataset.w]).toEqual([order[0], order[0]]);
+    expect(radios().filter((b) => b.tabIndex === 0).map((b) => b.dataset.w)).toEqual([order[0]]);
     scoped = null;
+    perGun = {};
   });
 });

@@ -94,6 +94,8 @@ vi.mock("../data/provider", () => ({
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
   useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => rolled(summary(q))) : null),
+  // the real useScoped calls the module's own useRollups, which this mock cannot reach
+  useScoped: (q: Query, extra: object[]) => extra.map((e) => rolled(summary({ files: q.files, filter: { ...q.filter, ...e } }))),
   useRatings: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })) : null),
   useCall: (method: Method, args: unknown[] | null) => { if (args) asked[method] = args; return done(args ? answers[method] ?? null : null); },
   useMatch: () => done(null),
@@ -424,11 +426,14 @@ describe("review round 1 (PR #28)", () => {
   });
 
   it("brings back main's Weapons columns and advice, and Career aim's head accuracy trend", () => {
-    // fails if HS kills, head share or the advice column, or the head accuracy card, goes missing again
+    // fails if HS kills, head share or each gun's advice, or the head accuracy card, goes missing again
     use(samples);
     render(<Weapons />);
     const heads = Array.from(host.querySelectorAll("thead th")).map(text);
-    for (const h of ["HS kills", "Head share", "Advice"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
+    for (const h of ["HS kills", "Head share"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
+    const rows = Array.from(host.querySelectorAll("tbody tr"));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((tr) => text(tr.querySelector(".guncell__advice")) !== ""), "Advice").toBe(true);
     render(<CareerAim />);
     expect(Array.from(host.querySelectorAll(".card__title")).map(text)).toContain("Head accuracy");
   });
@@ -659,7 +664,7 @@ it("plots a rebuilt file's detonations as approximate landing points, and a logg
 
 describe("Weapons", () => {
   const all = queryOf(samples);
-  const rowOf = (gun: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell")?.childNodes[1]?.textContent === weaponLabel(gun)) ?? null;
+  const rowOf = (gun: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell__txt > span")?.firstChild?.textContent === weaponLabel(gun)) ?? null;
   const col = (tr: Element | null, label: string) => tr?.querySelectorAll("td")[at(label)] ?? null;
   // Every gun's columns, found by their header so a new column does not shift what a test reads
   const at = (label: string) => Array.from(host.querySelectorAll("thead th")).findIndex((th) => text(th).startsWith(label));

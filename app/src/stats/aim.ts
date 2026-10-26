@@ -329,7 +329,7 @@ export interface AimAgg {
   xN: number;
   xWins: number;
   xExp: number;
-  /** bullets compared with the pro path, and sums of the residual's length and pitch part */
+  /** bullets compared with the ideal pull, and sums of the residual's length and pitch part */
   cmp: number;
   dev: number;
   pull: number;
