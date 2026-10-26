@@ -20,9 +20,21 @@
 //! when no CS2 runs, and otherwise starts a supervisor in adopt mode, which watches the running
 //! CS2 (ending it if unsafe) and turns Bot Mode off when it exits.
 //!
-//! What this cannot cover: the supervisor dies mid-session and the user then starts CS2 from
-//! Steam before the app or a Bot Mode command runs again. Bot Mode is still on in
-//! `gameinfo.gi` and nothing is watching. [`UNPROTECTED`] is the notice the app shows about it.
+//! What this cannot cover, by its nature:
+//! - The supervisor is killed (a crash, a reboot, Task Manager) between the write that turns
+//!   Bot Mode on and the one that turns it off. Bot Mode stays on with nothing watching until
+//!   the app or a Bot Mode command runs again; a CS2 started from Steam before then is
+//!   unprotected. [`UNPROTECTED`] is the notice the app shows about it.
+//! - A Steam launch of CS2 that was already queued (say, from the Steam client) when the
+//!   supervisor turned Bot Mode on. It is watched like any other CS2 of this install, but it
+//!   was not started by Bot Mode, so its options are whatever Steam had.
+//! - A CS2 that starts between the supervisor's last process-list poll and its write that
+//!   turns Bot Mode off. It may load the mod with nothing left watching it.
+//! - Another tool (the mod's Panel, a copy made by hand) turning Bot Mode on later. The next app
+//!   start or Bot Mode command turns it off again and says so.
+//! - Valve's updater rewriting `gameinfo.gi` at the same instant as a toggle: the toggle compares
+//!   the file's hash before writing and again just before renaming its new content into place
+//!   (`ChangeSet::put_bytes_if_unchanged`), which narrows the window but cannot close it.
 
 use super::changes::{self, Kind, Meta, Status};
 use super::gameinfo;
@@ -87,7 +99,7 @@ fn set_bot_mode(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, on: bo
         if new == text {
             return Ok(None);
         }
-        let result = changes::run_kind(layout, probe, lock, op, Kind::Session, |cs| cs.put_bytes_if("gameinfo.gi", new.as_bytes(), &read_hash));
+        let result = changes::run_kind(layout, probe, lock, op, Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), &read_hash));
         match result {
             Ok((_, meta)) => return Ok(Some(meta)),
             Err(e) if e.contains(changes::CHANGED_SINCE_READ) => last = e,
@@ -216,7 +228,8 @@ impl Reporter<'_> {
 }
 
 /// The supervisor's whole life; see the module notes. `spawn` asks Steam to start CS2 (only in
-/// launch mode). Returns the final status, also left in the status file.
+/// launch mode). Returns the final status, also left in the status file. It returns only once
+/// Bot Mode is confirmed off, or when it could not start at all (with nothing turned on).
 pub fn supervise_session(
     layout: &Layout,
     probe: &dyn ProcessProbe,
@@ -239,6 +252,17 @@ pub fn supervise_session(
         bot_mode_off: None,
         left_on: None,
     };
+    // 1. The lease comes before anything is written. A supervisor that loses the race to
+    // another one writes nothing, so it never overwrites the status of the one that runs.
+    let _lease = match NamedLock::acquire(LockKind::Session, &layout.csgo) {
+        Ok(l) => l,
+        Err(e) => {
+            let mut s = initial;
+            s.state = "failed".into();
+            s.message = e;
+            return s;
+        }
+    };
     let r = Reporter { layout, status: std::cell::RefCell::new(initial), last_write: std::cell::Cell::new(0) };
     let fail = |why: String| {
         r.update(|s| {
@@ -248,16 +272,15 @@ pub fn supervise_session(
         });
         r.status.borrow().clone()
     };
-    r.write();
-    // 1. The lease, held until this function returns.
-    let _lease = match NamedLock::acquire(LockKind::Session, &layout.csgo) {
-        Ok(l) => l,
-        Err(e) => return fail(e),
-    };
     let image = match monitor::cs2_image(&layout.csgo) {
         Ok(i) => i,
         Err(e) => return fail(e),
     };
+    // The handshake the starter waits for: lease held, watcher ready.
+    r.update(|s| {
+        s.state = "ready".into();
+        s.message = "the Bot Mode supervisor is running".into();
+    });
     let watch_mode = match mode {
         RunMode::Launch => {
             let Some(steam) = steam else { return fail("no Steam configuration to launch with".into()) };
@@ -273,21 +296,56 @@ pub fn supervise_session(
     };
     // 5. Watch until the last CS2 of this install exits.
     let limit = (mode == RunMode::Launch).then_some(START_LIMIT);
-    let outcome = monitor::supervise_with_tick(sys, &image, watch_mode, limit, &|| Control::Go, &|e| r.event(e), &|| r.tick());
-    // 6. Turn Bot Mode off.
-    let (off, left_on) = end(layout, probe, sys, &image);
+    let watch = |mode: Mode, limit: Option<Duration>| monitor::supervise_with_tick(sys, &image, mode, limit, &|| Control::Go, &|e| r.event(e), &|| r.tick());
+    let mut checked = checked_of(&watch(watch_mode, limit));
+    let mut outcome = None;
+    // 6. Turn Bot Mode off, and leave only once it is confirmed off: a CS2 that started again
+    // is watched until it exits, and a failure is retried, with the lease kept throughout.
+    loop {
+        match end(layout, probe, sys, &image) {
+            End::Off(meta) => {
+                r.update(|s| s.bot_mode_off = meta);
+                break;
+            }
+            End::StillRunning => {
+                r.update(|s| s.message = "a CS2 of this install is running; watching it until it exits".into());
+                let more = watch(Mode::Adopt, None);
+                checked.extend(checked_of(&more));
+                outcome = Some(more);
+            }
+            End::Failed(why) => {
+                r.update(|s| {
+                    s.state = "closing".into();
+                    s.message = format!("Bot Mode is still on ({why}); close CS2 now. Bot Mode keeps trying to turn it off.");
+                    s.left_on = Some(why.clone());
+                    if s.errors.last() != Some(&why) {
+                        s.errors.push(why.clone());
+                    }
+                });
+                sys.sleep(Duration::from_secs(5));
+            }
+        }
+    }
+    let outcome = match outcome {
+        // CS2 never started and nothing appeared after: say so.
+        None if checked.is_empty() && mode == RunMode::Launch => Outcome::NoStart { last_error: None },
+        _ => Outcome::Exited { checked },
+    };
     r.update(|s| {
         s.state = "done".into();
         s.message = monitor::describe(&outcome);
-        if let Some(why) = &left_on {
-            s.message.push_str(&format!(" Bot Mode is still on ({why}); the next Bot Mode command or app start turns it off once CS2 has exited."));
-        }
         s.outcome = Some(outcome);
-        s.bot_mode_off = off;
-        s.left_on = left_on;
+        s.left_on = None;
     });
     let done = r.status.borrow().clone();
     done
+}
+
+fn checked_of(o: &Outcome) -> Vec<Checked> {
+    match o {
+        Outcome::Exited { checked } | Outcome::Stopped { checked, .. } => checked.clone(),
+        Outcome::NoStart { .. } => Vec::new(),
+    }
 }
 
 /// Steps 2 to 4: under the operation lock, prepare, record the start time, turn Bot Mode on,
@@ -315,29 +373,33 @@ fn start_cs2(
     Ok((since, meta))
 }
 
-/// Turns Bot Mode off once no CS2 of this install runs. If one still runs, or whether one runs
-/// cannot be told, Bot Mode is left on and the reason returned.
-fn end(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, image: &std::path::Path) -> (Option<Meta>, Option<String>) {
+enum End {
+    /// Bot Mode is confirmed off (the change that turned it off, unless it already was).
+    Off(Option<Meta>),
+    /// A CS2 of this install runs, so Bot Mode cannot be turned off yet.
+    StillRunning,
+    /// Turning it off failed this time (CS2 could not be seen, the lock was busy, the write
+    /// failed); the reason.
+    Failed(String),
+}
+
+/// One attempt to turn Bot Mode off once no CS2 of this install runs, confirmed by reading
+/// `gameinfo.gi` back.
+fn end(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, image: &std::path::Path) -> End {
     match monitor::sweep(sys, image) {
         Ok((_, false)) => {}
-        Ok((_, true)) => return (None, Some("a CS2 of this install is still running".into())),
-        Err(e) => return (None, Some(format!("whether CS2 still runs could not be checked ({e})"))),
+        Ok((_, true)) => return End::StillRunning,
+        Err(e) => return End::Failed(format!("whether CS2 still runs could not be checked ({e})")),
     }
-    let mut last = String::new();
-    // Another operation may be finishing; turning Bot Mode off must not give up on that.
-    for _ in 0..40 {
-        match OpLock::acquire(layout) {
-            Ok(lock) => {
-                return match turn_off(layout, probe, &lock) {
-                    Ok(m) => (m, None),
-                    Err(e) => (None, Some(e)),
-                }
-            }
-            Err(e) => last = e,
-        }
-        sys.sleep(Duration::from_millis(500));
+    let lock = match OpLock::acquire(layout) {
+        Ok(l) => l,
+        Err(e) => return End::Failed(e),
+    };
+    match turn_off(layout, probe, &lock) {
+        Ok(meta) if bot_mode(layout) == BotMode::Off => End::Off(meta),
+        Ok(_) => End::Failed("gameinfo.gi does not read back as off".into()),
+        Err(e) => End::Failed(e),
     }
-    (None, Some(last))
 }
 
 /// What [`cleanup`] found and did.
@@ -376,6 +438,12 @@ pub fn cleanup(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, star
         Ok(l) => l,
         Err(e) => return Cleanup::Problem { why: e },
     };
+    // Again under the operation lock: a supervisor may have taken the lease since.
+    match session_held(&layout.csgo) {
+        Ok(true) => return Cleanup::Supervised,
+        Ok(false) => {}
+        Err(e) => return Cleanup::Problem { why: e },
+    }
     let unfinished = changes::list(layout).map(|l| l.iter().any(|m| m.kind == Kind::Session && matches!(m.status, Status::InProgress | Status::RollbackPending)));
     let unfinished = match unfinished {
         Ok(u) => u,
@@ -433,9 +501,22 @@ pub fn guard(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, start_
     }
 }
 
-/// Starts a supervisor process detached from the caller: closing the app or the terminal does
-/// not end it. It runs this same program with the hidden `supervise-session` command.
-pub fn start_supervisor(layout: &Layout, mode: RunMode, run_id: &str) -> Result<(), String> {
+/// What starting a supervisor with `CREATE_BREAKAWAY_FROM_JOB` returned, as the caller's
+/// answer. Windows refuses that flag (access denied) when the caller runs in a job that does
+/// not allow breaking away. Starting without it would put the supervisor in the caller's job,
+/// where closing the app or the terminal could end it mid-session, so the launch is refused
+/// instead, before anything is turned on.
+pub fn spawn_result(r: std::io::Result<std::process::Child>) -> Result<std::process::Child, String> {
+    r.map_err(|e| match e.raw_os_error() {
+        Some(5) => "Windows would not start the Bot Mode supervisor outside this program's job (CREATE_BREAKAWAY_FROM_JOB was refused), so it could be ended together with this program; Bot Mode was not turned on. Start the app or the terminal normally, not from a tool that confines its children, and try again.".into(),
+        _ => format!("starting the Bot Mode supervisor: {e}"),
+    })
+}
+
+/// Starts a supervisor process detached from the caller and outside its job: closing the app
+/// or the terminal does not end it. It runs this same program with the hidden
+/// `supervise-session` command.
+pub fn start_supervisor(layout: &Layout, mode: RunMode, run_id: &str) -> Result<std::process::Child, String> {
     let exe = std::env::current_exe().map_err(|e| format!("finding this program: {e}"))?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(["botmode", "supervise-session", "--mode", mode.name(), "--run", run_id])
@@ -453,31 +534,64 @@ pub fn start_supervisor(layout: &Layout, mode: RunMode, run_id: &str) -> Result<
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
-        if let Err(e) = cmd.spawn() {
-            // A job that does not allow breaking away refuses that flag; start without it.
-            if e.raw_os_error() != Some(5) {
-                return Err(format!("starting the Bot Mode supervisor: {e}"));
-            }
-            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-            cmd.spawn().map_err(|e| format!("starting the Bot Mode supervisor: {e}"))?;
-        }
-        Ok(())
     }
-    #[cfg(not(windows))]
-    {
-        cmd.spawn().map(|_| ()).map_err(|e| format!("starting the Bot Mode supervisor: {e}"))
+    spawn_result(cmd.spawn())
+}
+
+/// How long a starter waits for a new supervisor to say it is ready.
+pub const READY_WAIT: Duration = Duration::from_secs(10);
+
+/// Waits for the supervisor of `run_id` to hold the lease and report ready (or to have already
+/// finished). `exited` reports the child's exit code once it has exited; an early exit is a
+/// failure, never taken as a launch or an adoption.
+pub fn await_ready(layout: &Layout, sys: &dyn System, run_id: &str, exited: &mut dyn FnMut() -> Option<i32>) -> Result<SessionStatus, String> {
+    let started = sys.elapsed();
+    loop {
+        let status = read_status(layout).filter(|s| s.run_id == run_id);
+        if let Some(s) = &status {
+            match s.state.as_str() {
+                "failed" => return Err(s.message.clone()),
+                "done" => return Ok(s.clone()),
+                _ if session_held(&layout.csgo).unwrap_or(false) => return Ok(s.clone()),
+                _ => {}
+            }
+        }
+        if let Some(code) = exited() {
+            // It may have finished in between; its own final status says so.
+            if let Some(s) = read_status(layout).filter(|s| s.run_id == run_id && s.state == "done") {
+                return Ok(s);
+            }
+            return Err(format!(
+                "the Bot Mode supervisor exited early (exit code {code}){}",
+                status.map(|s| format!(": {}", s.message)).unwrap_or_default()
+            ));
+        }
+        if sys.elapsed().saturating_sub(started) >= READY_WAIT {
+            return Err(format!("the Bot Mode supervisor did not report ready within {} seconds", READY_WAIT.as_secs()));
+        }
+        sys.sleep(Duration::from_millis(100));
     }
 }
 
-/// A run id unique enough to tell this start's status from an older one.
+/// Starts a supervisor and waits for its handshake. Returns its run id.
+pub fn start_and_wait(layout: &Layout, sys: &dyn System, mode: RunMode) -> Result<String, String> {
+    let run_id = new_run_id();
+    let mut child = start_supervisor(layout, mode, &run_id)?;
+    await_ready(layout, sys, &run_id, &mut || child.try_wait().ok().flatten().map(|s| s.code().unwrap_or(-1)))?;
+    Ok(run_id)
+}
+
+/// A run id that differs for every start, even two in the same second from one process.
 pub fn new_run_id() -> String {
-    format!("{}-{}", std::process::id(), changes::now_utc().0)
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("{}-{nanos}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
 }
 
 /// Follows a supervisor's status file until `until` says to stop, or the supervisor has ended:
-/// its status is final, or its lease is free while its status is not (it died). `on_change` gets
-/// each new message. Returns the last status seen, or an error if the supervisor never wrote
-/// one for `run_id`.
+/// its status is final, or its lease is free while its status is not (it died, in any phase,
+/// starting included: the lease is taken before the first status is written). `on_change` gets
+/// each new message. An error if no status for `run_id` appears within 30 seconds.
 pub fn follow(
     layout: &Layout,
     sys: &dyn System,
@@ -487,7 +601,6 @@ pub fn follow(
 ) -> Result<SessionStatus, String> {
     let started = sys.elapsed();
     let mut last_message = String::new();
-    let mut last: Option<SessionStatus> = None;
     loop {
         if let Some(s) = read_status(layout).filter(|s| s.run_id == run_id) {
             if s.message != last_message {
@@ -498,17 +611,15 @@ pub fn follow(
             if ended || until(&s) {
                 return Ok(s);
             }
-            if !session_held(&layout.csgo).unwrap_or(true) && s.state != "starting" {
+            if !session_held(&layout.csgo).unwrap_or(true) {
                 let mut died = s.clone();
                 died.state = "failed".into();
                 died.message = "the Bot Mode supervisor stopped unexpectedly; the next Bot Mode command or app start turns Bot Mode off once CS2 has exited".into();
                 return Ok(died);
             }
-            last = Some(s);
         } else if sys.elapsed().saturating_sub(started) > Duration::from_secs(30) {
             return Err("the Bot Mode supervisor did not start (no status after 30 seconds)".into());
         }
-        let _ = &last;
         sys.sleep(Duration::from_millis(500));
     }
 }

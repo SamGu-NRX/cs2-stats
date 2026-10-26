@@ -1079,6 +1079,7 @@ fn a_second_supervisor_for_the_same_game_changes_nothing() {
     assert_eq!(st.state, "failed");
     assert!(st.message.contains("already running"), "{}", st.message);
     assert_eq!(snapshot(&layout.csgo), before);
+    assert!(session::read_status(&layout).is_none(), "the losing supervisor wrote no status");
 }
 
 #[test]
@@ -1226,7 +1227,7 @@ fn a_compare_and_swap_never_overwrites_a_newer_gameinfo() {
     // The primitive: a stale read is refused and nothing is written.
     let lock = OpLock::acquire(&layout).unwrap();
     let before = read(&layout, "gameinfo.gi");
-    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| cs.put_bytes_if("gameinfo.gi", b"x", &"0".repeat(64))).unwrap_err();
+    let err = changes::run(&layout, &CLOSED, &lock, "test", |cs| cs.put_bytes_if_unchanged("gameinfo.gi", b"x", &"0".repeat(64))).unwrap_err();
     assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
     assert_eq!(read(&layout, "gameinfo.gi"), before);
     drop(lock);
@@ -1309,4 +1310,147 @@ fn file_identity_sees_the_same_file_through_another_spelling() {
     let other_spelling = s.0.join("GAME").join(".").join("CS2.EXE");
     assert_eq!(super::process::file_id(&a).unwrap(), super::process::file_id(&other_spelling).unwrap());
     assert_ne!(super::process::file_id(&a).unwrap(), super::process::file_id(&b).unwrap(), "same content, different file");
+}
+
+// --- round 7 review ------------------------------------------------------------------------
+
+#[test]
+fn a_failed_session_off_is_never_undone_back_to_on() {
+    let s = Scratch::new("off-fault");
+    let (layout, _) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let lock = OpLock::acquire(&layout).unwrap();
+    // The off write replaces gameinfo.gi, then recording the finished change fails.
+    let err = changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-off", changes::Kind::Session, |cs| {
+        cs.put_bytes("gameinfo.gi", gameinfo::ONLINE_SAMPLE.as_bytes())?;
+        fs::create_dir_all(cs.dir().join("meta.json.botmode-tmp")).unwrap();
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(err.contains("not undone"), "{err}");
+    assert!(!bot_mode_on(&layout), "the off write stays; the before-image (on) is not restored");
+}
+
+#[test]
+fn the_supervisor_watches_a_cs2_that_appears_at_the_end_before_turning_off() {
+    let s = Scratch::new("end-cs2");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, image) = session_game(&s);
+    let sys = FakeSystem::new();
+    // The session's CS2 exits; the final sweep finds another; that one is watched until it exits.
+    sys.script(vec![vec![(10, 2000)], vec![], vec![(11, 3000)], vec![(11, 3000)], vec![]]);
+    sys.proc_at(10, 2000, &image, Some(SAFE_LINE));
+    sys.proc_at(11, 3000, &image, Some(SAFE_LINE));
+    let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "r", &|_| Ok(()));
+    assert_eq!(st.state, "done");
+    assert!(st.verdicts.iter().any(|c| matches!(c, super::monitor::Checked::Safe { pid: 11, .. })), "{:?}", st.verdicts);
+    assert!(!bot_mode_on(&layout) && st.left_on.is_none());
+}
+
+#[test]
+fn the_supervisor_keeps_its_lease_and_retries_until_bot_mode_is_off() {
+    let s = Scratch::new("end-retry");
+    let (layout, _) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    // The process list fails at the end for a while, and another operation holds the lock.
+    sys.script_results(vec![Err("snapshot failed".into()), Err("snapshot failed".into()), Ok(vec![])]);
+    let held = std::rc::Rc::new(std::cell::RefCell::new(Some(OpLock::acquire(&layout).unwrap())));
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (held2, seen2, layout2) = (held.clone(), seen.clone(), layout.clone());
+    *sys.on_sleep.borrow_mut() = Some(Box::new(move |n| {
+        if let Some(st) = session::read_status(&layout2) {
+            seen2.borrow_mut().push((st.state.clone(), st.message.clone(), session_held(&layout2.csgo).unwrap()));
+        }
+        if n >= 4 {
+            held2.borrow_mut().take();
+        }
+    }));
+    let st = session::supervise_session(&layout, &CLOSED, &sys, None, RunMode::Adopt, "r", &|_| Ok(()));
+    assert_eq!(st.state, "done");
+    assert!(!bot_mode_on(&layout) && st.left_on.is_none(), "only leaves with Bot Mode confirmed off");
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|(state, msg, lease)| state == "closing" && msg.contains("close CS2 now") && *lease), "{seen:?}");
+}
+
+#[test]
+fn a_refused_breakaway_refuses_the_launch() {
+    let refused = session::spawn_result(Err(std::io::Error::from_raw_os_error(5))).unwrap_err();
+    assert!(refused.contains("CREATE_BREAKAWAY_FROM_JOB") && refused.contains("not turned on"), "{refused}");
+    assert!(!session::spawn_result(Err(std::io::Error::from_raw_os_error(2))).unwrap_err().contains("BREAKAWAY"));
+}
+
+fn status_file(layout: &Layout, run: &str, state: &str) {
+    let status = serde_json::json!({
+        "runId": run, "mode": "launch", "state": state, "message": format!("{state} message"), "verdicts": [],
+        "errors": [], "heartbeat": 0, "outcome": null, "botModeOn": null, "botModeOff": null, "leftOn": null
+    });
+    write(&session::status_path(layout), status.to_string().as_bytes());
+}
+
+#[test]
+fn a_starter_waits_for_its_own_supervisors_ready_handshake() {
+    let s = Scratch::new("handshake");
+    let (layout, _) = session_game(&s);
+    let sys = FakeSystem::new();
+    // The child exited before it said anything: a failure, never an adoption.
+    let err = session::await_ready(&layout, &sys, "r1", &mut || Some(3)).unwrap_err();
+    assert!(err.contains("exited early (exit code 3)"), "{err}");
+    // Its own "ready" does not count while the lease is free, and the wait is bounded.
+    status_file(&layout, "r1", "ready");
+    let err = session::await_ready(&layout, &sys, "r1", &mut || None).unwrap_err();
+    assert!(err.contains("did not report ready"), "{err}");
+    assert!(sys.clock() >= session::READY_WAIT && sys.clock() < session::READY_WAIT + std::time::Duration::from_secs(1));
+    // With the lease held, another run's "ready" still does not count; its own does.
+    let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+    status_file(&layout, "other", "ready");
+    assert!(session::await_ready(&layout, &FakeSystem::new(), "r1", &mut || None).is_err(), "another run's handshake");
+    status_file(&layout, "r1", "ready");
+    assert_eq!(session::await_ready(&layout, &FakeSystem::new(), "r1", &mut || None).unwrap().state, "ready");
+    status_file(&layout, "r1", "failed");
+    assert_eq!(session::await_ready(&layout, &FakeSystem::new(), "r1", &mut || None).unwrap_err(), "failed message");
+}
+
+#[test]
+fn no_change_runs_while_a_session_holds_the_lease() {
+    let s = Scratch::new("lease-write");
+    let (layout, _) = session_game(&s);
+    let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo).unwrap();
+    let before = snapshot(&layout.csgo);
+    // Without the guard in front, the change itself refuses at its write boundary.
+    let err = settings::set_cosmetics(&layout, &CLOSED, Cosmetics::default()).unwrap_err();
+    assert!(err.contains("session is running"), "{err}");
+    assert_eq!(snapshot(&layout.csgo), before);
+}
+
+#[test]
+fn adopting_with_no_cs2_left_turns_bot_mode_off_at_once() {
+    let s = Scratch::new("adopt-empty");
+    let (layout, _) = session_game(&s);
+    turn_on_by_hand(&layout);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, None, RunMode::Adopt, "r", &|_| Ok(()));
+    assert_eq!(st.state, "done");
+    assert!(!bot_mode_on(&layout));
+    assert!(sys.clock() < std::time::Duration::from_secs(5), "no waiting for a CS2 that is not there");
+}
+
+#[test]
+fn following_a_supervisor_that_died_while_starting_reports_it() {
+    let s = Scratch::new("follow-starting");
+    let (layout, _) = session_game(&s);
+    for state in ["starting", "ready"] {
+        status_file(&layout, "r2", state);
+        let sys = FakeSystem::new();
+        let st = session::follow(&layout, &sys, "r2", &|_| false, &|_| {}).unwrap();
+        assert_eq!(st.state, "failed", "{state}");
+        assert!(sys.clock() < std::time::Duration::from_secs(1), "{state}: reported at once");
+    }
+}
+
+#[test]
+fn run_ids_never_repeat() {
+    let ids: std::collections::HashSet<String> = (0..1000).map(|_| session::new_run_id()).collect();
+    assert_eq!(ids.len(), 1000);
 }

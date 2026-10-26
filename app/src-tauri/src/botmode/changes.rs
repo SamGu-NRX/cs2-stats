@@ -154,6 +154,8 @@ pub struct ChangeSet<'p> {
     entries: Vec<Entry>,
     log: File,
     flusher: Flusher,
+    /// Set by `put_bytes_if_unchanged` for the length of its write.
+    guard_hash: Option<String>,
 }
 
 impl<'p> ChangeSet<'p> {
@@ -170,6 +172,11 @@ impl<'p> ChangeSet<'p> {
         // gameinfo.gi, which installs leave alone. Interrupted session toggles must be
         // superseded first.
         let blocks = |m: &&Meta| m.status.unfinished() && (kind == Kind::Normal || m.kind == Kind::Session);
+        // Checked again here, under the operation lock, at the write boundary: no install,
+        // overlay, setting or rollback runs while a session supervisor holds the lease.
+        if kind == Kind::Normal && super::process::session_held(&layout.csgo)? {
+            return Err("a Bot Mode session is running; wait until CS2 has exited".into());
+        }
         if let Some(m) = existing.iter().find(blocks) {
             return Err(format!(
                 "change {} ({}) is unfinished, so the game folder may be half-written; run `botmode rollback` first",
@@ -221,7 +228,7 @@ impl<'p> ChangeSet<'p> {
                 return Err(format!("starting the change failed: {e}"));
             }
         };
-        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher })
+        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher, guard_hash: None })
     }
 
     pub fn id(&self) -> &str {
@@ -249,15 +256,25 @@ impl<'p> ChangeSet<'p> {
         self.put_inner(rel, expected, fill)
     }
 
-    /// [`put_bytes`](Self::put_bytes) as a compare-and-swap: refused, with nothing written, unless the
-    /// file still hashes to `read_hash`, the content the caller computed `data` from.
-    pub fn put_bytes_if(&mut self, rel: &str, data: &[u8], read_hash: &str) -> Result<bool, String> {
-        let path = paths::confined(&self.layout.csgo, &self.root_canon, &paths::rel(rel)?, false)?;
-        let now = hash::file_if_exists(&path)?;
-        if now.as_deref() != Some(read_hash) {
+    /// [`put_bytes`](Self::put_bytes), refused unless the file still hashes to `read_hash`, the
+    /// content the caller computed `data` from. The hash is compared when the write starts and
+    /// again immediately before the new content is renamed into place. That narrows the window
+    /// in which another program (Valve's updater) could write the file in between, but does not
+    /// close it: Windows offers no atomic compare-and-swap of a file against an unrelated writer.
+    pub fn put_bytes_if_unchanged(&mut self, rel: &str, data: &[u8], read_hash: &str) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != Some(read_hash) {
             return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
         }
-        self.put_bytes(rel, data)
+        if paths::protection(&rel) != Protection::None {
+            return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
+        }
+        let expected = hash::bytes(data);
+        self.guard_hash = Some(read_hash.to_string());
+        let r = self.put_inner(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()));
+        self.guard_hash = None;
+        r
     }
 
     pub fn put_bytes(&mut self, rel: &str, data: &[u8]) -> Result<bool, String> {
@@ -346,6 +363,12 @@ impl<'p> ChangeSet<'p> {
             let _ = fs::remove_file(&tmp);
             return Err(e);
         }
+        if let Some(guard) = &self.guard_hash {
+            if hash::file_if_exists(&target)?.as_deref() != Some(guard.as_str()) {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+            }
+        }
         fs::rename(&tmp, &target).map_err(|e| {
             let _ = fs::remove_file(&tmp);
             format!("{rel}: {e}")
@@ -388,6 +411,15 @@ impl<'p> ChangeSet<'p> {
     fn abort(mut self, error: String) -> String {
         self.meta.files = self.entries.len();
         self.meta.error = Some(error.clone());
+        // A failed session "off" is never undone: restoring its before-image would turn Bot Mode
+        // back on. Whatever it managed to write stays, and the change is closed; the supervisor
+        // or the next cleanup turns Bot Mode off from there. A failed "on" is undone as usual,
+        // which is the off direction.
+        if self.meta.kind == Kind::Session && self.meta.operation == "bot-mode-off" {
+            self.meta.status = Status::Superseded;
+            let _ = write_meta(&self.dir, &self.meta);
+            return format!("{error}. Turning Bot Mode off was not undone; it is retried until Bot Mode is off.");
+        }
         let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, Some((self.probe, Phase::AutomaticRollback)), &mut self.flusher)
             .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
         self.meta.warnings = self.flusher.warnings();
