@@ -141,7 +141,8 @@ export function roundPopulation(
   return {
     alive, inRound: (pi) => members.has(pi),
     deaths: kills.filter((k) => afterFreezeEnd(rf, k.tick) && k.tick <= rf.endTick).sort((a, b) => a.tick - b.tick),
-    leaves: liveLeaves(rf),
+    // roster.ts drops an off-roster player's disconnects; this keeps the contract for any input
+    leaves: liveLeaves(rf).filter((l) => members.has(l.pi)),
   };
 }
 

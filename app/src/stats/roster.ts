@@ -79,8 +79,10 @@ function select<N extends TableName>(tab: Table<N>, keep: (i: number) => boolean
  * The match's tables without any event of a player off their round's roster: kills by or of them,
  * damage, blinds and spotted changes by or on them, their grenades, shots and position samples, and
  * engagements either way. An assist of theirs is cleared from a kill that otherwise stays. Their
- * player_rounds rows, disconnects and purchases stay (the roster is read from the first two), and so do
- * the bomb's events and the round's plant and defuse, which decide the round whoever the source names.
+ * disconnects go too, uncounted: a disconnect acts on no one, and one kept would take a player who is
+ * in no population out of it (rules.ts roundPopulation). Their player_rounds rows and purchases stay,
+ * and so do the bomb's events and the round's plant and defuse, which decide the round whoever the
+ * source names.
  *
  * The tally counts only what shows the player in the live round, after freeze end (alive, for position
  * samples): a player marked dead at freeze end has dead samples, and one who left during freeze time
@@ -115,6 +117,8 @@ export function rosterTables(t: MatchTables): RosterTables {
     damages: drop(D, (i) => D.round[i], (i) => [D.attacker_steamid[i], D.victim_steamid[i]], (i) => D.tick[i], "damages"),
     blinds: drop(B, (i) => B.round[i], (i) => [B.attacker_steamid[i], B.victim_steamid[i]], (i) => B.tick[i], "blinds"),
   };
+  const L = t.leaves;
+  if (L) out.leaves = select(L, (i) => !isOff(L.round[i], L.steamid[i]))[0];
   const G = t.grenade_throws, E = t.grenade_events, S = t.smokes, F = t.infernos, SH = t.shots, P = t.positions, SP = t.spotted, EN = t.engagements;
   if (G) out.grenade_throws = drop(G, (i) => G.round[i], (i) => [G.steamid[i]], (i) => G.tick[i], "grenades");
   if (E) out.grenade_events = drop(E, (i) => E.round[i], (i) => [E.steamid[i]], (i) => E.tick[i], "grenades");

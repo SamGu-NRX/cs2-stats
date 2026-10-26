@@ -12,6 +12,7 @@ import { CS2RB } from "./model-params";
 import { rollup } from "./rollup";
 import { FREEZE_END, oneRound, oneRoundTables, type OneRound } from "./testing/match";
 import { opponentsIn } from "./opponents";
+import { roundPopulation } from "./rules";
 import { roundPlaces } from "./positions";
 import { buildRoundTimeline } from "./replay";
 import { rosterPaths } from "./replay-load";
@@ -124,8 +125,9 @@ describe("who took part in a round", () => {
   it("leaves every event of a player off the roster out of every number and view, and counts what it left out", () => {
     // fails if any consumer still shows an event of b, whom the source marks dead at freeze end, or the
     // header's tally misses a kind. In the live round b throws a flash (logged and detonated) that blinds
-    // d for 2.5 s, fires a shot, hits d for 40, kills c at 5 s and assists a's kill on d at 8 s, and has
-    // position samples at freeze end and at 4 s and 8 s. Only a's kill on d remains, without the assist
+    // d for 2.5 s, fires a shot, hits d for 40, kills c at 5 s, assists a's kill on d at 8 s and
+    // disconnects alive at 9 s, and has position samples at freeze end and at 4 s and 8 s. Only a's kill on
+    // d remains, without the assist; the disconnect goes uncounted
     const at = (place: string) => ({ a_place: place, v_place: place });
     const tables = oneRoundTables({
       players: { a: "CT", b: "CT", c: "T", d: "T" },
@@ -138,6 +140,7 @@ describe("who took part in a round", () => {
       damages: [{ tick: t(3), attacker_steamid: "b", victim_steamid: "d", weapon: "ak47", dmg_health: 40, dmg_health_capped: 40, health_before: 100 }],
       kills: [{ tick: t(5), killer: "b", victim: "c", at: { ...at("Mid"), a_x: 1, a_y: 1, v_x: 2, v_y: 2 } }, { tick: t(8), killer: "a", victim: "d", assister: "b", at: { ...at("Long"), a_x: 3, a_y: 3, v_x: 4, v_y: 4 } }],
       positions: ["a", "b", "c", "d"].flatMap((p) => [FREEZE_END, t(4), t(8)].map((tick) => ({ tick, steamid: p, x: 0, y: 0, place: "Mid" }))),
+      leaves: [{ tick: t(9), steamid: "b", alive: true }],
     });
     const f = derive(tables, CS2RB);
     const rt = rosterTables(tables);
@@ -162,6 +165,10 @@ describe("who took part in a round", () => {
     expect(vsB.map((h) => [h.kills, h.damage, h.flashes.map((x) => x.count)])).toEqual([[[0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0]]]);
     // Swing: only a's kill moves the round
     expect(f.rounds[0].winProb?.map((e) => e.event)).toEqual(["start", "kill"]);
+    // b's disconnect is gone with the rest, and the population never lists a disconnect of a non-member
+    expect(f.rounds[0].leaves).toEqual([]);
+    const rows = f.pr.filter((r) => r.ri === 0);
+    expect(roundPopulation({ ...f.rounds[0], leaves: [{ tick: t(9), pi: 1 }] }, rows, f.kills).leaves).toEqual([]);
     // the replay: no dot, kill, effect or flight of b
     const tl = buildRoundTimeline(rt, null, 1);
     expect(tl.players.map((p) => p.id)).toEqual(["c", "d", "a"]);
