@@ -3,8 +3,8 @@
 // play sessions. Our definitions over schema v1 data; Leetify's pages were the checklist, and its
 // weights are unpublished, so every weight here is ours.
 import type { Percentile } from "./compare";
-import type { Measures } from "./facts";
-import { METRICS } from "./metrics";
+import { inputKnown, type Input, type Measures } from "./facts";
+import { METRICS, type Need } from "./metrics";
 import type { Summary } from "./rollup";
 
 // ---------------------------------------------------------------- 0-100 ratings
@@ -82,8 +82,8 @@ export function metricDeltas(now: Summary, before: Summary): MetricDelta[] {
 /** A match must have this many rounds for its rates to stand as a personal best. Ours, no fit. */
 export const BEST_MIN_ROUNDS = 10;
 
-/** Per-match counts with a best: the most in one match. */
-export const BEST_COUNTS: { id: string; label: string; of: (m: Measures) => number }[] = [
+/** Per-match counts with a best: the most in one match, from a match that recorded the inputs in `needs`. */
+export const BEST_COUNTS: { id: string; label: string; needs?: Input[]; of: (m: Measures) => number }[] = [
   { id: "kills", label: "Kills", of: (m) => m.kills },
   { id: "assists", label: "Assists", of: (m) => m.assists },
   { id: "hsKills", label: "Headshot kills", of: (m) => m.hsKills },
@@ -92,26 +92,34 @@ export const BEST_COUNTS: { id: string; label: string; of: (m: Measures) => numb
   { id: "openingKills", label: "Opening kills", of: (m) => m.openingKills },
   { id: "tradeKills", label: "Trade kills", of: (m) => m.tradeKills },
   { id: "clutchesWon", label: "Clutches won", of: (m) => m.clutchWon1 + m.clutchWon2 + m.clutchWon3 + m.clutchWon4 + m.clutchWon5 },
-  { id: "enemiesFlashed", label: "Enemies flashed", of: (m) => m.enemiesFlashed },
-  { id: "utilDmg", label: "Utility damage", of: (m) => m.utilDmg },
+  { id: "enemiesFlashed", label: "Enemies flashed", needs: ["utility"], of: (m) => m.enemiesFlashed },
+  { id: "utilDmg", label: "Utility damage", needs: ["utility"], of: (m) => m.utilDmg },
 ];
 
 export interface Best { id: string; value: number; file: string }
 
 /**
+ * The match recorded every input in `needs` in full. "model" chooses the pro pool and "eco" gates only
+ * the percentile (facts.ts INPUT_COVERAGE), so neither says anything about one match's value.
+ */
+const recordedIn = (s: Summary, needs: readonly Need[] = []) => needs.every((n) => n === "model" || n === "eco" || inputKnown(n, s.m));
+
+/**
  * Adds one match's values to the bests: every count in BEST_COUNTS, and every performance metric with
  * a value (its best is the highest, or the lowest where lower is better) when the match has
- * BEST_MIN_ROUNDS rounds and the metric's sample minimum. A tie keeps the earlier match.
+ * BEST_MIN_ROUNDS rounds and the metric's sample minimum. A count or metric whose inputs the match did
+ * not record in full has no best from it, rather than a zero or a value over some of its rows. A tie
+ * keeps the earlier match.
  */
 export function addBests(acc: Record<string, Best>, file: string, s: Summary): void {
   const keep = (id: string, value: number, better: (a: number, b: number) => boolean) => {
     const cur = acc[id];
     if (!cur || better(value, cur.value)) acc[id] = { id, value, file };
   };
-  for (const c of BEST_COUNTS) if (s.m.rounds) keep(c.id, c.of(s.m), (a, b) => a > b);
+  for (const c of BEST_COUNTS) if (s.m.rounds && recordedIn(s, c.needs)) keep(c.id, c.of(s.m), (a, b) => a > b);
   if (s.m.rounds < BEST_MIN_ROUNDS) return;
   for (const m of METRICS) {
-    if (m.kind !== "performance" || (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min)) continue;
+    if (m.kind !== "performance" || !recordedIn(s, m.needs) || (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min)) continue;
     const v = m.value(s);
     if (v !== null && Number.isFinite(v)) keep(m.id, v, m.lowerIsBetter ? (a, b) => a < b : (a, b) => a > b);
   }

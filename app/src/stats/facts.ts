@@ -114,8 +114,13 @@ export const INPUT_COVERAGE = {
    * extractor demos have both, plugin files have no clip counts
    */
   ammo: ["ammoRounds", "rounds", "the clip count per shot and the weapon in hand", "rounds"],
+  /** the source recorded the match's grenades and flashes (utility.ts markUtility); some plugin files hold none */
+  utility: ["utilityRounds", "rounds", "grenade and flash events", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
+
+/** Every one of the measures' rows has `need` recorded. */
+export const inputKnown = (need: Input, m: Measures): boolean => m[INPUT_COVERAGE[need][0]] >= m[INPUT_COVERAGE[need][1]];
 
 export interface PlayerInfo {
   id: string;
@@ -222,7 +227,7 @@ export const MEASURES = [
   "smokes", "flashes", "hes", "molotovs", "flashKills", "heDmg", "utilDmgTaken", "utilUnused", "utilDeaths",
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
-  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds",
+  "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds", "utilityRounds",
   // buying (buying.ts): equipment against the side's mean, and what a save carried into the next round
   "buyDevSum", "buyDevRounds", "saveEvents", "saveCarryKnown", "saveCarrySum",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
