@@ -7,7 +7,7 @@ without case on Windows, so no flag, path spelling, link or junction can put one
 output may land in the repository only at the one path it declares (`in_repo`), as
 model/rating3/params.json does.
 
-Private JSON gets a top-level "_private": "do not commit" key, and any other private file a
+Private JSON gets PRIVATE_KEY set to PRIVATE_VALUE as its first key, and any other private file a
 `.private.` name, so scripts/check-public-tree finds one that was committed anyway.
 """
 
@@ -58,6 +58,25 @@ def check_output(path: Path | str, *, private: bool, what: str, in_repo: Path | 
     if in_repo is None or os.path.normcase(str(real_path(path))) != os.path.normcase(str(real_path(in_repo))):
         where = f"its only place in the repository is {in_repo}" if in_repo is not None else "it has no place in the repository"
         raise OutputRefused(f"refusing to write {what} to {path}: {where}")
+    return path
+
+
+def check_text_output(path: Path | str, *, private: bool, what: str, in_repo: Path | str | None = None,
+                      repo: Path | str = REPO_ROOT) -> Path:
+    """check_output for a file that cannot hold the JSON marker: a private one must also be named
+    *.private.*, so the name carries the marker instead."""
+    path = check_output(path, private=private, what=what, in_repo=in_repo, repo=repo)
+    if private and ".private." not in Path(path).name:
+        raise OutputRefused(f"refusing to write {what} to {path}: a private file that is not JSON must be named *.private.*")
+    return path
+
+
+def write_text(path: Path | str, text: str, *, private: bool, what: str, in_repo: Path | str | None = None,
+               repo: Path | str = REPO_ROOT) -> Path:
+    """Checks where path may go (check_text_output), then writes text."""
+    path = check_text_output(path, private=private, what=what, in_repo=in_repo, repo=repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
     return path
 
 

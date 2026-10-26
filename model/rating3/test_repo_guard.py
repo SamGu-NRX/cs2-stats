@@ -81,5 +81,26 @@ class PublicParams(unittest.TestCase):
             self.assertNotIn("refusing to write", r.stderr)
 
 
+class FitRating3(unittest.TestCase):
+    """model/fit_rating3.py: the fixed rating3-params.ts is public, a fit written anywhere else private."""
+
+    def fit(self, *args):
+        return subprocess.run([sys.executable, "-I", str(REPO / "model" / "fit_rating3.py"), NOWHERE, "--write", *args],
+                              capture_output=True, text=True, timeout=120, cwd=tempfile.gettempdir())
+
+    def test_its_fixed_output_gets_past_the_guard_and_nothing_else_in_the_repository_does(self):
+        # fails if --out can put a fit from the private players CSV in the tree (it wrote directly before)
+        self.assertNotIn("refusing to write", self.fit().stderr)
+        for out in (REPO / "app" / "src" / "stats" / "rating3-params.copy.ts", REPO / "model" / "fit.private.ts"):
+            r = self.fit("--out", str(out))
+            self.assertIn("is private and must stay outside the repository", r.stderr)
+            self.assertFalse(out.exists())
+
+    def test_outside_the_repository_a_private_fit_must_carry_the_marker_in_its_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIn("must be named *.private.*", self.fit("--out", str(Path(tmp) / "fit.ts")).stderr)
+            self.assertNotIn("refusing to write", self.fit("--out", str(Path(tmp) / "fit.private.ts")).stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

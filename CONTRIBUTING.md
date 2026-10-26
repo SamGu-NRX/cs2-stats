@@ -14,7 +14,7 @@ Two layers keep them out.
 
 - A private output is refused anywhere in the repository. Paths are compared as real paths, so a different case on Windows, a `..` detour, a link or a junction doesn't get through.
 - A public output may land in the repository only at the one path it declares, such as `app/public/baselines.json` or `model/rating3/params.json`.
-- A private output carries a marker. In a JSON object that is a first key, `"_private": "do not commit"`. Any other file is named `*.private.*`. Parquet can't take a key, and tracked `.parquet` files are refused outright.
+- A private output carries a marker. In a JSON object that is a first key `_private` whose value is `do not commit`. Any other file is named `*.private.*`. Parquet can't take a key, and tracked `.parquet` files are refused outright.
 
 When you add a script that writes a file, use these functions and choose the kind of output. Don't call `writeFileSync` or `open(..., "w")` on a path the user supplies.
 

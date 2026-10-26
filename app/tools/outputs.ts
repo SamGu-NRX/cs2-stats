@@ -44,7 +44,7 @@ export const PRIVATE_KEY = "_private";
 export const PRIVATE_VALUE = "do not commit";
 
 /**
- * A private output's text with the marker: a JSON object gets "_private": "do not commit" as its first
+ * A private output's text with the marker: a JSON object gets PRIVATE_KEY set to PRIVATE_VALUE as its first
  * key, keeping the indentation and final newline it had; a file named *.private.* carries the marker in
  * its name. Anything else is refused, so no private output goes out unmarked.
  */
