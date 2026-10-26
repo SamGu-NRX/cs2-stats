@@ -181,9 +181,20 @@ const VALVE_USER_FILE: &str = "valve-user.local.json";
 /// SteamID64 of account 0 in the public universe; every real SteamID64 is above it.
 const STEAMID64_MIN: u64 = 76561197960265728;
 
+/// A path from the environment made absolute against the current folder: the importer runs in the
+/// extractor folder, so a relative --out or script path would mean something else there (review of #29).
+fn absolute(p: PathBuf) -> Result<PathBuf, String> {
+    std::path::absolute(&p).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// An environment variable naming a path, made absolute; None when unset.
+fn env_path(name: &str) -> Result<Option<PathBuf>, String> {
+    std::env::var_os(name).map(|v| absolute(PathBuf::from(v))).transpose()
+}
+
 fn valve_dir() -> Result<PathBuf, String> {
-    if let Some(d) = std::env::var_os("CS2_VALVE_MATCHES") {
-        return Ok(PathBuf::from(d));
+    if let Some(d) = env_path("CS2_VALVE_MATCHES")? {
+        return Ok(d);
     }
     let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not set")?;
     Ok(PathBuf::from(appdata).join("BotMatchStats").join("valve"))
@@ -425,16 +436,15 @@ fn valve_import_state() -> ImportState {
 async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
     use std::io::BufRead;
     use tauri::Emitter;
-    let dir = std::env::var_os("CS2_EXTRACTOR_DIR")
-        .map(PathBuf::from)
+    let dir = env_path("CS2_EXTRACTOR_DIR")?
         .ok_or("The importer is not installed: set CS2_EXTRACTOR_DIR to the extractor folder (extractor/README.md)")?;
     let script = dir.join("valve_import.py");
     if !script.is_file() {
         return Err(format!("no importer at {}", script.display()));
     }
-    let python = std::env::var_os("CS2_EXTRACTOR_PYTHON")
-        .map(PathBuf::from)
+    let python = env_path("CS2_EXTRACTOR_PYTHON")?
         .unwrap_or_else(|| dir.join(".venv").join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" }));
+    let mapdata = env_path("CS2_MAPDATA")?;
     if !python.is_file() {
         return Err(format!("no Python at {}; create the extractor's .venv or set CS2_EXTRACTOR_PYTHON", python.display()));
     }
@@ -443,7 +453,7 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(&python);
         cmd.arg("-I").arg(&script).arg("--progress").arg("--out").arg(&out).current_dir(&dir);
-        if let Some(m) = std::env::var_os("CS2_MAPDATA") {
+        if let Some(m) = &mapdata {
             cmd.arg("--mapdata").arg(m);
         }
         let mut child = cmd
@@ -614,6 +624,16 @@ mod tests {
         assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/rounds.parquet")).is_err());
         fs::write(s.0.join("match730_a").join(V1).join("match.parquet"), b"abcd").unwrap();
         assert!(read_valve_in(&s.0, &format!("match730_a/{V1}/match.parquet")).is_err());
+    }
+
+    #[test]
+    fn a_relative_path_from_the_environment_is_made_absolute_against_the_current_folder() {
+        // fails if a relative CS2_VALVE_MATCHES or CS2_EXTRACTOR_DIR reaches the importer, which runs in
+        // another folder and would read and write somewhere else (review of #29)
+        std::env::set_var("CS2_TEST_RELATIVE_PATH", PathBuf::from("data").join("valve"));
+        let p = env_path("CS2_TEST_RELATIVE_PATH").unwrap().unwrap();
+        assert_eq!(p, std::env::current_dir().unwrap().join("data").join("valve"));
+        assert!(env_path("CS2_TEST_UNSET_PATH").unwrap().is_none());
     }
 
     #[test]
