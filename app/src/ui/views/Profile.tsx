@@ -22,7 +22,7 @@ import { AgentImg } from "../components/Agent";
 import {
   botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText,
-  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type SideKey,
+  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
@@ -33,7 +33,7 @@ import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } fr
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
 import { ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
-import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
+import { go, matchHref, navWasInstant, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, scopeQuery, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
@@ -100,18 +100,20 @@ function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: Mat
  */
 function ProfileTabs({ tab, meta, children }: { tab: ProfileTab; meta: string; children?: ReactNode }) {
   const list = useRef<HTMLElement>(null);
+  // a tab switch keeps the page's scope (map, matches, side, comparison), by mouse or by keyboard
+  const scope = scopeQuery(useRoute().query);
   const onKey = (e: KeyboardEvent) => {
     const to = rovingIndex(e.key, PROFILE_TABS.indexOf(tab), PROFILE_TABS.length, false);
     if (to === null || e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
-    go(profileHref(PROFILE_TABS[to]), { instant: true });
+    go(profileHref(PROFILE_TABS[to], scope), { instant: true });
     list.current?.querySelector<HTMLElement>(`[data-tab="${PROFILE_TABS[to]}"]`)?.focus();
   };
   return (
     <div className="ptabs">
       <nav ref={list} className="ptabs__list" role="tablist" aria-label="Profile sections" onKeyDown={onKey}>
         {PROFILE_TABS.map((t, n) => (
-          <a key={t} data-tab={t} role="tab" aria-selected={t === tab} tabIndex={t === tab ? 0 : -1} aria-controls="profile-panel" href={profileHref(t)} className="ptabs__tab" data-tip={`Alt ${n + 1}`}>
+          <a key={t} data-tab={t} role="tab" aria-selected={t === tab} tabIndex={t === tab ? 0 : -1} aria-controls="profile-panel" href={profileHref(t, scope)} className="ptabs__tab" data-tip={`Alt ${n + 1}`}>
             {PROFILE_TAB_LABEL[t]}
           </a>
         ))}
@@ -155,9 +157,6 @@ function useEnter(ready: boolean, scope: string) {
   return [ref, enter] as const;
 }
 
-/** The tabs without the side control: their panels have their own side filter or none. */
-const NO_SIDE = new Set<ProfileTab>(["aim", "weapons", "playstyle"]);
-
 export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) {
   const { matches, you: ids, baselines, baselinesError } = useData();
   const { map, n, side } = useScope();
@@ -190,7 +189,8 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   } : null;
 
   const [enterRef, enter] = useEnter(!!p, `${tab}|${side}|${map}|${n}|${cmp}`);
-  const controls = NO_SIDE.has(tab) ? (["map", "matches"] as const) : (["map", "matches", "side"] as const);
+  // every tab reads the side: Aim's panels, Weapons' guns and Playstyle's role, compass and ranks too
+  const controls = ["map", "matches", "side"] as const;
   if (!p) {
     return (
       <div className="view view--capped">
@@ -268,17 +268,17 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
           {tab === "playstyle" && (
             <>
               <div className="identity">
-                <RoleCard q={base} />
+                <RoleCard q={sideQ} side={side} />
                 <WhereYouPlay list={list} side={side} />
               </div>
               <a className="ptab__xref" href={tabSectionHref("overview", "style")}>Style attributes are on Overview, in HLTV's attribute block</a>
               <AggressionCard s={p.you} />
               <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
               <div className="profile__cols">
-                <RoleBySpawnCard q={base} />
-                <StyleCompass list={list} q={base} />
+                <RoleBySpawnCard q={base} side={side} />
+                <StyleCompass list={list} q={sideQ} />
               </div>
-              <Ranks q={base} />
+              <Ranks q={base} side={rankSide} />
             </>
           )}
         </div>
@@ -473,6 +473,9 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
  * ?attr=<id> opens one. `values` are your metric values on the page's side, for each attribute's
  * unscored rows (engine.ts EXTRA_SUBS); `m` the measures behind them, for each row's sample.
  */
+/** A careers pool name as a bot pool's role; null for a name the UI does not know. */
+const botRole = (p: string | undefined): BotPool["role"] | null => (p === "awper" || p === "rifler" || p === "all" ? p : null);
+
 function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const r = useRoute();
   const focus = r.query.get("attr");
@@ -482,7 +485,8 @@ function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Va
   const b: AttributeBlock | null = block.data;
   if (!b) return block.error ? <Card title="Attributes"><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 320 }} />;
   const style = b.style;
-  const role = pool === "all" ? "all" : style.role;
+  // the pool the scores read: the one asked for, or all bots when the role's pool was too thin (careers.pool)
+  const role = botRole(style.careers.pool) ?? (pool === "all" ? "all" : style.role);
   const peer = style.role === "awper" ? "AWPer" : "Rifler";
   const bots = botPopulation(style.careers, { n: style.n, role }).text;
   const fpScore = against === "pros" ? b.firepower : style.firepower;
@@ -493,7 +497,7 @@ function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Va
   const attrs = style.scores.map((a) => (a.id === "sniping"
     ? panelAttr(a, "style", botPoolName("all"), m, { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
     : panelAttr(a, "style", botPoolName(role), m, { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
-  const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${pool === "role" ? " All bots may have more." : ""}`} /> : undefined;
+  const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${role !== "all" ? " All bots may have more." : ""}`} /> : undefined;
   const pools: Option<StylePool>[] = [
     { value: "role", label: `${peer} bots`, tip: `Bots that play your role.` },
     { value: "all", label: "All bots" },
@@ -631,12 +635,11 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
   const ranked = useCall("compare", [q, { side: q.filter.sides?.length === 1 ? q.filter.sides[0] : "both" }]).data;
   const byFile = useMemo(() => new Map(list.map((e) => [e.file, e])), [list]);
   const listId = useId();
-  // each row's percent of rounds is multiKillRows' own pct, null without rounds
-  const share = (r: (typeof rows)[number]) => r.pct ?? 0;
-  const most = Math.max(1, ...rows.map(share));
+  // each row's percent of rounds is multiKillRows' own pct, null without rounds: no value, no track
+  const most = Math.max(1, ...rows.map((r) => r.pct ?? 0));
   return (
     <Card title="Multi-kill rounds" tip={PANEL_TIP.multis} collapsible id="profile-multis" aside={<span className="meta">{m.multiKillRounds} of {plural(m.rounds, "round")}</span>}>
-      <ul className="mlist lslist">
+      {!m.rounds ? <Empty text="No rounds in this filter, so no share of rounds." /> : <ul className="mlist lslist">
         {rows.map((r) => {
           const label = r.k >= 5 ? "Aces" : `${r.k}-kill rounds`;
           const pro = ranked?.p[`rounds${Math.min(5, r.k)}k`] ?? null;
@@ -644,9 +647,9 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
           const body = (
             <>
               <MultiBadge k={r.k} />
-              <ShareTrack value={share(r)} max={most} hollow={r.rounds < THIN} />
+              {r.pct === null ? <span aria-hidden /> : <ShareTrack value={r.pct} max={most} hollow={r.rounds < THIN} />}
               <span className="lsrow__n">{r.rounds}</span>
-              <b className="num lsrow__v mlist__pct"><Num v={fmtPct(share(r), 1)} /></b>
+              <b className="num lsrow__v mlist__pct"><Num v={fmtPct(r.pct, 1)} /></b>
             </>
           );
           const proText = rank === null ? sentence(pro?.reason ?? "No pro comparison for this.") : `${percentilePhrase(rank, "performance")} of ${proPopulation(pro!.pool)}.`;
@@ -655,7 +658,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
             <li key={r.k}>
               {r.rounds === 0 ? <div className="clist__row lsrow" tabIndex={0} data-tip={proText}>{body}<span className="clist__chev" aria-hidden /></div> : (
                 <button className="clist__row lsrow" aria-expanded={open === r.k} aria-controls={`${listId}-${r.k}`} data-tip={proText}
-                  aria-label={`${label}: ${r.rounds}, ${fmtPct(share(r), 1)} of rounds, ${proText} ${open === r.k ? "Hide" : "Show"} the rounds`}
+                  aria-label={`${label}: ${r.rounds}${r.pct === null ? "" : `, ${fmtPct(r.pct, 1)} of rounds`}, ${proText} ${open === r.k ? "Hide" : "Show"} the rounds`}
                   onClick={() => setOpen((o) => (o === r.k ? null : r.k))}>
                   {body}<span className="clist__chev" aria-hidden />
                 </button>
@@ -680,7 +683,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
             </li>
           );
         })}
-      </ul>
+      </ul>}
     </Card>
   );
 }

@@ -1041,6 +1041,8 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .role__overall { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
 .role__name { font: 800 28px/1 var(--f); letter-spacing: -0.02em; color: var(--cream); cursor: help; }
 .rmaps--all li { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr); }
+/* the page on one side: the map, then that side's role */
+.rmaps--one li { grid-template-columns: minmax(0, 1.1fr) 22px minmax(0, 1fr); }
 
 .aggro__scale { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .aggro__score { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 6px; }
