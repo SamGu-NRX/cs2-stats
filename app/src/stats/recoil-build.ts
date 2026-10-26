@@ -10,6 +10,7 @@
 // is the same on every spray up to the random spread the game adds after it; the median over pro
 // sprays is the pattern.
 import { wrap180 } from "./aim-geometry";
+import { normalRecoil } from "./shot-state";
 
 /** One shot as the builder reads it from a shots table. */
 export interface PatternShot {
@@ -21,9 +22,11 @@ export interface PatternShot {
   yaw: number | null;
   bulletPitch: number | null;
   bulletYaw: number | null;
-  /** zoomed in (AUG, SG 553); a scoped shot is left out of the kick, so each pattern is the unscoped one */
-  scoped: boolean;
-  /** at or under the accurate-speed limit, unscoped and on the ground: a shot whose view movement is a spray's */
+  /** zoomed in; null when not recorded */
+  scoped: boolean | null;
+  /** the M4A1-S's silencer on; null when not recorded */
+  silenced: boolean | null;
+  /** at or under the accurate-speed limit and on the ground: a shot whose view movement is a spray's */
   steady: boolean;
 }
 
@@ -46,8 +49,9 @@ const whole = (x: number | null): number | null => {
 };
 
 /**
- * Adds one map's shots. Kick: every unscoped shot of a weapon in `weapons` at a whole recoil index
- * with both angles. View path: runs of one player's shots of one weapon whose indices go 0, 1, 2, ... in tick
+ * Adds one map's shots. Only shots known to have their gun's normal recoil count (shot-state.ts
+ * normalRecoil: unscoped, the M4A1-S silenced; an unrecorded state is left out). Kick: every such
+ * shot of a weapon in `weapons` at a whole recoil index with both angles. View path: runs of one player's shots of one weapon whose indices go 0, 1, 2, ... in tick
  * order, every shot steady; each bullet's view change from bullet 1 (pitch, and yaw summed shot to
  * shot so a turn through 180 degrees stays continuous). A run needs `minBullets` bullets.
  */
@@ -62,7 +66,8 @@ export function addShots(acc: PatternSamples, shots: PatternShot[], weapons: Rea
   for (const s of shots) {
     if (!weapons.has(s.weapon)) continue;
     const j = whole(s.recoilIndex);
-    if (j !== null && !s.scoped && s.pitch !== null && s.yaw !== null && s.bulletPitch !== null && s.bulletYaw !== null) {
+    const normal = normalRecoil(s.weapon, s.scoped, s.silenced) === true;
+    if (j !== null && normal && s.pitch !== null && s.yaw !== null && s.bulletPitch !== null && s.bulletYaw !== null) {
       push(acc.kick, s.weapon, j, s.bulletPitch - s.pitch, wrap180(s.bulletYaw - s.yaw));
     }
     const l = byPlayer.get(s.steamid);
@@ -85,7 +90,7 @@ export function addShots(acc: PatternSamples, shots: PatternShot[], weapons: Rea
     };
     for (const s of list) {
       const j = whole(s.recoilIndex);
-      const ok = j !== null && s.steady && s.pitch !== null && s.yaw !== null;
+      const ok = j !== null && s.steady && normalRecoil(s.weapon, s.scoped, s.silenced) === true && s.pitch !== null && s.yaw !== null;
       const next = ok && run.length > 0 && s.weapon === run[0].weapon && j === run.length;
       if (next) { run.push(s); continue; }
       flush();

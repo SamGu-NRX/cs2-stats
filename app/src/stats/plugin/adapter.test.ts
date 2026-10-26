@@ -147,6 +147,18 @@ describe("plugin sprays", () => {
     expect(spray.lp.length).toBe(4);
   });
 
+  it("compares no plugin M4A1-S spray, whose silencer state the plugin does not record", () => {
+    // fails if a plugin M4A1-S spray is set against the silenced pattern without knowing the silencer
+    // was on, or gets landing points inferred from that pattern
+    const angles: [number, number][] = [[0, 10], [0.5, 9.9], [1.2, 9.8], [2, 9.8], [2.6, 9.7]];
+    const m = pluginMatch(SPRAYS.slice(0, 5), { angles });
+    m.weapons = ["m4a1_silencer"];
+    const f = derive(pluginToTables(m), CS2RB);
+    const [spray] = f.aim.filter((x): x is SprayFact => x.k === "spray");
+    expect([spray.weapon, spray.recoilKnown, spray.dp.length, spray.landing, spray.lp]).toEqual(["m4a1_silencer", false, 4, null, []]);
+    expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(0);
+  });
+
   it("keeps a plugin spray relative to the target when a bullet has no angles", () => {
     // fails if a file before 1.2.0, or a spray with one missing angle, is compared with the pros
     const angles: [number, number][] = [[0, 10], [0.5, 9.9], [NaN, NaN], [2, 9.8], [2.6, 9.7]];

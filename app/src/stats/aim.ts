@@ -11,6 +11,7 @@
 import { ACCURATE_FRAC, aimAngle, aimError, forward, lookAt, SIGHT_CONE_DEG, wrap180 } from "./aim-geometry";
 import { MAX_SPEED } from "./aim-ref";
 import { RECOIL } from "./recoil-ref";
+import { normalRecoil } from "./shot-state";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
@@ -46,9 +47,9 @@ export const TTD_MAX_S = 1;
 export const PEAK_MIN_DPS = 60;
 /** The movement starts at the first tick of the run whose speed toward the head stays at or above this fraction of the peak. Ours, no fit. */
 export const ONSET_FRAC = 0.1;
-/** A shot this soon after the attacker's previous shot continues firing, so it is not a reaction (the recoil asset's reset spacing). */
+/** A shot this soon after the attacker's previous shot continues firing, so it is not a reaction, nor bullet 1 of a spray. Ours, kept from the earlier recoil asset's reset spacing; no fit. */
 export const RESET_GAP_S = 0.3;
-/** recoil_index at or below this is a reset weapon (the recoil asset's segmentation rule). */
+/** recoil_index at or below this is a reset weapon: bullet 1 of a spray. Ours, no fit; recoil.ts (pnpm recoil) builds its pattern from whole indices. */
 export const RESET_RECOIL = 0.01;
 /** Micro-corrections: separate view movements of at least this speed (deg/s) between the flick and the shot. Ours. */
 export const MICRO_DPS = 20;
@@ -72,11 +73,11 @@ export const CS_DECEL_FRAC = 0.9;
 export const TRANSFER_CONE_DEG = 5;
 /** A new target counts as a switch once this many consecutive bullets aim at it. Ours. */
 export const TRANSFER_HOLD = 2;
-/** Sprays shorter than this are bursts (the recoil asset keeps runs of three or more). */
+/** Sprays shorter than this are bursts. Ours; pnpm recoil builds the pros' band from the same three-bullet minimum. */
 export const SPRAY_MIN = 3;
 /**
  * A shot continues a spray when it comes within this many ticks of the weapon's cycle time after the
- * previous one (the recoil asset's segmentation). Ticks quantise the cycle: the AK's 0.1 s is 6.4 ticks
+ * previous one (cycle times from the game's weapons vdata, in recoil.ts; pnpm recoil). Ticks quantise the cycle: the AK's 0.1 s is 6.4 ticks
  * at 64/s, so its shots land 6 or 7 ticks apart. On the user's three plugin recordings of 2026-10-25,
  * every gap between two shots of one automatic gun was within one tick of its cycle or 11 ticks or more.
  */
@@ -196,8 +197,8 @@ export interface KillAimFact {
 }
 
 /**
- * One spray: three or more shots of one automatic gun in a continuous run from a reset (the recoil
- * asset's rule). Shots without a recoil index or ammo count (plugin recordings) are cut by timing alone:
+ * One spray: three or more shots of one automatic gun in a continuous run from a reset, cut by the
+ * gun's cycle time and magazine from recoil.ts (pnpm recoil). Shots without a recoil index or ammo count (plugin recordings) are cut by timing alone:
  * the run starts at a shot RESET_GAP_S after the player's previous one and continues while each shot
  * of the same gun comes within CYCLE_TOL_TICKS of its cycle time.
  */
@@ -233,6 +234,12 @@ export interface SprayFact {
   lp: number[];
   ly: number[];
   landing: "measured" | "pattern" | null;
+  /**
+   * Every bullet of the path is known to have its gun's normal recoil (shot-state.ts). False for a
+   * plugin M4A1-S spray, whose silencer state the plugin does not record: shown, but compared with no
+   * reference and given no pattern landing points.
+   */
+  recoilKnown: boolean;
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
   sw: number;
   swHits: number;
@@ -341,8 +348,13 @@ export interface AimAgg {
   sprayDist: number[];
   /** per weapon, indexed as path: sums of the squared view change, pitch and yaw, for the spread per bullet */
   spread: Record<string, { pp: number[]; yy: number[] }>;
-  /** per weapon and bullet (index 0 is bullet 2, as path): bullets, and sums of SprayFact.lp and ly, where bullets landed from bullet 1 */
-  land: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
+  /**
+   * per weapon and bullet (index 0 is bullet 2, as path): bullets, and sums of SprayFact.lp and ly,
+   * where bullets landed from bullet 1; and how many sprays gave measured points (a demo's bullet
+   * direction) and how many points inferred from the game's pattern (plugin 1.2.0), so a chart can
+   * label the inferred ones
+   */
+  land: Record<string, { n: number[]; dp: number[]; dy: number[]; measured: number; pattern: number }>;
   /** per weapon and bullet of path's sprays (index 0 is bullet 1): bullets with a value, and sums of SprayFact.hp and hy */
   heads: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for SprayFact.tp and ty: where the target's eye sat from each bullet's direction */
@@ -426,10 +438,15 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     const ref = RECOIL[f.weapon].path;
     const w = (a.path[f.weapon] ??= { n: [], dp: [], dy: [] });
     const sq = (a.spread[f.weapon] ??= { pp: [], yy: [] });
-    if (f.lp.length) addBullets((a.land[f.weapon] ??= { n: [], dp: [], dy: [] }), f.lp, f.ly);
+    if (f.lp.length) {
+      const l = (a.land[f.weapon] ??= { n: [], dp: [], dy: [], measured: 0, pattern: 0 });
+      addBullets(l, f.lp, f.ly);
+      if (f.landing === "measured") l.measured++; else l.pattern++;
+    }
     f.dp.forEach((dp, j) => {
-      // compared with the ideal pull only for the bullets the in-game pattern covers
-      if (ref[j + 1]) {
+      // compared with the ideal pull only for the bullets the in-game pattern covers, and only when the
+      // spray's recoil state is known
+      if (ref[j + 1] && f.recoilKnown) {
         const rp = dp - ref[j + 1][0], ry = f.dy[j] - ref[j + 1][1];
         a.cmp++; a.dev += Math.hypot(rp, ry); a.pull += rp;
       }
@@ -814,17 +831,18 @@ function strafeClass(c: Ctx, view: View | null, i: number, pi: number): number {
  * Whether a shot's view movement belongs to a spray path. Recoil control does not depend on moving,
  * jumping or being flashed: those add the game's random inaccuracy around the bullet's direction, not
  * kick (on 489 pro maps the kick at one recoil index varies by under 0.15 degrees over every shot,
- * moving or not; tools/recoil.ts prints it). So a shot counts unless it is scoped (zoomed sensitivity
- * and AUG/SG 553 scope recoil differ), an M4A1-S fired without its silencer (another recoil), or, on a
- * demo, lacks a view angle or looks straight up or down (|pitch| 85 or more, where yaw is unstable).
- * Plugin shots record no silencer state.
+ * moving or not; pnpm recoil prints it). A shot known to fire with other recoil (shot-state.ts
+ * normalRecoil: scoped, an M4A1-S without its silencer) ends the path. On a demo so does an
+ * unrecorded state, a missing view angle, or a view straight up or down (|pitch| 85 or more, where yaw
+ * is unstable). Plugin files record no silencer state, so a plugin M4A1-S spray keeps its path but is
+ * marked recoil-unknown (SprayFact.recoilKnown) and compared with nothing.
  */
 function sprayEligible(c: Ctx, i: number, plugin: boolean): boolean {
   const S = c.t.shots!;
-  const w = S.weapon[i];
-  if (S.scoped[i] !== false) return false;
+  const normal = normalRecoil(S.weapon[i], S.scoped[i], S.silenced[i]);
+  if (normal === false) return false;
   if (plugin) return true;
-  return S.pitch[i] !== null && S.yaw[i] !== null && Math.abs(S.pitch[i]!) < 85 && (w !== "m4a1_silencer" || S.silenced[i] === true);
+  return normal === true && S.pitch[i] !== null && S.yaw[i] !== null && Math.abs(S.pitch[i]!) < 85;
 }
 
 /** The plugin's per-shot aim data, or null when no shot carries it (every source but the plugin). */
@@ -920,7 +938,8 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
           const cls = weaponClass(w);
           if (reset && (cls === "rifle" || cls === "sniper") && S.airborne[i] === false && S.speed_2d[i] !== null) f.cs[strafeClass(c, view, i, pi)]++;
         }
-        // Spray runs, as recoil_patterns.json methodology.segmentation describes them. Shots without a
+        // Spray runs: one gun's shots each one cycle (recoil.ts) after the last, with the recoil index and the
+        // ammo count stepping by one. Shots without a
         // recoil index or ammo count (plugin recordings) are cut by timing alone, and a run starts at a
         // spaced shot: a shot after a shorter pause fires with recoil not yet reset, so it cannot be bullet 1.
         const ref = RECOIL[w];
@@ -944,10 +963,9 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
   const S = c.t.shots!;
   const weapon = S.weapon[run[0]];
   const ref = RECOIL[weapon];
-  // The reference part: the run's prefix whose every shot passes the asset's filters and was fired with
-  // an enemy on screen, so the path is a spray at someone, comparable with the pros'. On screen: in one
-  // of the shooter's engagements, mesh-visible and not behind a smoke; for plugin shots, bullet 1's
-  // target on screen by the plugin's own test (an aim error to another enemy is not a path).
+  // On screen, for the target-relative parts (a relative plugin path, the target's eye): in one of the
+  // shooter's engagements, mesh-visible and not behind a smoke; for plugin shots, bullet 1's target on
+  // screen by the plugin's own test (an aim error to another enemy is not a path).
   const target0 = ps?.target[run[0]] ?? null;
   const atVisible = ps
     ? (i: number) => ps.onScreen[i] && ps.err[i] !== null && ps.target[i] === target0
@@ -955,6 +973,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
   // eligible prefix: the bullets whose view movement is recoil control (any target, or none)
   let m = 0;
   while (m < run.length && sprayEligible(c, run[m], ps !== null)) m++;
+  const recoilKnown = run.slice(0, Math.max(m, 1)).every((i) => normalRecoil(S.weapon[i], S.scoped[i], S.silenced[i]) === true);
   // a relative plugin path also needs bullet 1's target on screen at every bullet
   let n = 0;
   while (n < m && atVisible(run[n])) n++;
@@ -989,7 +1008,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
         ly.push(r3(byaw));
       }
       if (lp.length) landing = "measured";
-    } else if (ps) {
+    } else if (ps && recoilKnown) {
       for (let j = 1; j <= Math.min(dp.length, ref.kick.length - 1); j++) {
         lp.push(r3(dp[j - 1] + ref.kick[j][0]));
         ly.push(r3(dy[j - 1] + ref.kick[j][1]));
@@ -1041,7 +1060,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     if (hitOn.has(key(S.tick[run[j]], pi))) deepHits++;
   }
   const { hp, hy, tp, ty } = relative || !dp.length ? { hp: [], hy: [], tp: [], ty: [] } : targetPath(c, view, ps, pi, run.slice(0, dp.length + 1), dy);
-  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, lp, ly, landing, sw, swHits, dist, deep, deepHits, hp, hy, tp, ty };
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, lp, ly, landing, recoilKnown, sw, swHits, dist, deep, deepHits, hp, hy, tp, ty };
 }
 
 /**
@@ -1141,7 +1160,7 @@ export const AIM_METRICS: Metric[] = [
     tip: "Share of your shots fired at enemies hidden by smoke.", def: `Gun shots fired while every enemy mesh-visible within ${SIGHT_CONE_DEG} degrees of the shot stood behind a smoke (the extractor's smoke spheres, an approximation), of your gun shots on maps with mesh visibility.`,
     value: (s) => pct(s.aim.smokeShots, s.aim.smokeShotsKnown) },
   { id: "sprayAccuracy", label: "Spray accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
-    tip: "How often your later spray bullets hit a visible enemy.", def: `Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within ${SIGHT_CONE_DEG} degrees. A spray is ${SPRAY_MIN} or more shots of one automatic gun in a continuous run from a reset (the recoil asset's rule).`,
+    tip: "How often your later spray bullets hit a visible enemy.", def: `Hits per bullet 4 and later of a spray fired at an enemy mesh-visible within ${SIGHT_CONE_DEG} degrees. A spray is ${SPRAY_MIN} or more shots of one automatic gun in a continuous run from a reset, cut by the gun's cycle time (recoil.ts).`,
     value: (s) => pct(s.aim.deepHits, s.aim.deep) },
   { id: "firstBulletAccuracy", label: "First-bullet accuracy", kind: "performance", group: "aim", unit: "pct", status: "approx",
     tip: "Share of your first bullets at a visible enemy that hit.", def: `Hits per first bullet (recoil index reset, ${RESET_GAP_S} s since your previous shot) fired at a visible enemy within ${SIGHT_CONE_DEG} degrees.`,

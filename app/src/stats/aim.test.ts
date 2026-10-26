@@ -134,7 +134,7 @@ describe("deriveAim on a hand-built match", () => {
     expect([s[0].shots, s[0].hits, s[0].first, s[0].firstHits]).toEqual([4, 1, 4, 1]);
   });
 
-  it("cuts sprays by the recoil asset's rule and unwraps yaw", () => {
+  it("cuts sprays by the gun's cycle time and reset and unwraps yaw", () => {
     // fails if a run is stitched across a gap, starts without a reset, or yaw is not unwrapped
     const s = facts.filter((f): f is SprayFact => f.k === "spray");
     expect(s).toHaveLength(1);
@@ -291,8 +291,9 @@ describe("the aim panels' restored measures", () => {
     expect([cut.lp, cut.ly]).toEqual([[-0.5], [1]]);
     const a = emptyAim();
     foldAim(a, s);
-    foldAim(a, { ...s, lp: [0.5], ly: [-1] });
-    expect(a.land.ak47).toEqual({ n: [2, 1, 1], dp: [0, -1, -1.5], dy: [0, 1.5, -0.5] });
+    foldAim(a, { ...s, lp: [0.5], ly: [-1], landing: "pattern" });
+    // fails if the land sums lose which points were measured and which were inferred from the pattern
+    expect(a.land.ak47).toEqual({ n: [2, 1, 1], dp: [0, -1, -1.5], dy: [0, 1.5, -0.5], measured: 1, pattern: 1 });
     // every spray puts its gun in the picker, charted or not
     foldAim(a, { ...s, weapon: "negev", dp: [], dy: [], lp: [], ly: [] });
     expect(a.sprayGuns).toEqual({ ak47: 2, negev: 1 });
@@ -300,7 +301,7 @@ describe("the aim panels' restored measures", () => {
 
   it("sums the spread and the target's eye per bullet, skipping bullets without a value", () => {
     // fails if squares, bullet indexes or the null skip go wrong
-    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], lp: [], ly: [], landing: null, sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
+    const base: SprayFact = { k: "spray", ri: 0, pi: 0, weapon: "ak47", bullets: 3, relative: false, dp: [1, 2], dy: [0, 1], lp: [], ly: [], landing: null, recoilKnown: true, sw: 0, swHits: 0, dist: null, deep: 0, deepHits: 0, hp: [0, 1, null], hy: [1, 1, null], tp: [], ty: [] };
     const a = emptyAim();
     foldAim(a, base);
     foldAim(a, { ...base, dp: [3, 2], dy: [0, -1], hp: [], hy: [] });
