@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { FEATURES, roleBlend, roleProbabilities, type RoleModel } from "./identity";
-import { evaluateRoleRows, evaluationLabel, fitIsotonic, fitRoleSide, parseRoleCsv, reliabilityTable, trainRoleModel, type RoleRow, type RoleSummaries } from "./role-training";
+import { evaluateRoleRows, evaluationLabel, fitIsotonic, fitRoleSide, fitRoleThresholds, parseRoleCsv, reliabilityTable, trainRoleModel, type RoleRow, type RoleSummaries } from "./role-training";
 import { teamGroupedSplit } from "./role-validation";
 import { emptySummary } from "./rollup";
 
@@ -31,6 +31,20 @@ it("pools duplicate scores and preserves both endpoints of isotonic blocks", () 
   expect(fitIsotonic([{ x: 0.1, y: 0 }, { x: 0.2, y: 1 }, { x: 0.3, y: 0 }, { x: 0.4, y: 1 }])).toEqual([{ x: 0.1, y: 0 }, { x: 0.2, y: 0.5 }, { x: 0.3, y: 0.5 }, { x: 0.4, y: 1 }]);
   expect(fitIsotonic([{ x: 0.2, y: 1 }, { x: 0.2, y: 0 }])).toEqual([{ x: 0.2, y: 0.5 }]);
   expect(() => fitIsotonic([{ x: NaN, y: 1 }])).toThrow("finite probabilities");
+});
+
+it("fits threshold ranges from the rows in the current fold only", () => {
+  const rows = training.slice(0, 6);
+  const summaries = summariesFor(training);
+  rows.forEach((r, i) => {
+    const s = summaries.get(r.steamid)!.T!;
+    s.m.openingKills = 10 + i * 10;
+  });
+  summaries.get(training[6].steamid)!.T!.m.openingKills = 1000;
+  const local = fitRoleThresholds(rows, summaries);
+  const withHeld = fitRoleThresholds([...rows, training[6]], summaries);
+  expect(local.openingAttempts.proRange).not.toEqual(withHeld.openingAttempts.proRange);
+  expect(local.openingAttempts.n).toBe(12);
 });
 
 it("never passes outer held players to Gaussian or calibration fitting", () => {

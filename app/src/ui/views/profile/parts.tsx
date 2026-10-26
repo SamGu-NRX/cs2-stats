@@ -24,6 +24,7 @@ import { BreakRows, NeedsDemo } from "../shared";
 import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
+import { roleDecisionLabel } from "./role-decision";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -117,6 +118,21 @@ const SHADES = ["var(--cream)", "var(--tan)", "rgba(196, 160, 118, 0.6)", "rgba(
 
 const rankedRoles = (b: RoleBlend | undefined) => (b?.blend ? Object.entries(b.blend).sort((x, y) => y[1] - x[1]) : []);
 
+function decisionLabel(b: RoleBlend): string {
+  return roleDecisionLabel(b) ?? "Not enough role data.";
+}
+
+function roleValueDescriptor(b: RoleBlend, role: string): string {
+  const status = b.calibrationStatus[role as keyof typeof b.calibrationStatus];
+  if (status === "measured") return "AWP rounds";
+  if (status === "calibrated") return "calibrated probability";
+  return "fit";
+}
+
+function roleValueTip(b: RoleBlend, role: string, value: number): string {
+  return `${role} ${fmtPct(100 * value, 0)} ${roleValueDescriptor(b, role)}.`;
+}
+
 /**
  * The evidence behind the role as three numbers over every round: how often you carried an AWP, how
  * often you were in the opening duel, and when you died. They are the role model's own inputs
@@ -155,22 +171,22 @@ function RoleTiles({ m }: { m: Measures | undefined }) {
   );
 }
 
-/** One side's blend: the top role and its fit on one line, every role as a segment of one bar. */
+/** One side's blend: the engine's decision and every role as a segment of one bar. */
 function SideFit({ b }: { b: RoleBlend }) {
   const roles = rankedRoles(b);
-  const top = roles[0];
+  const headline = b.primary || b.top2?.join(" / ");
   return (
     <div className="rfit">
       <span className={`rfit__side ${b.side === "T" ? "t-text" : "ct-text"}`}>{b.side}</span>
-      {top ? (
+      {headline ? (
         <>
-          <span className="rfit__role" data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span>
-          <b className="num rfit__pct">{fmtPct(100 * top[1], 0)}</b>
+          <span className="rfit__role" data-tip={b.primary ? ROLE_WHAT[b.primary] : b.reason ?? undefined} tabIndex={0}>{headline}</span>
+          {b.primary && b.probability !== null && <b className="num rfit__pct">{fmtPct(100 * b.probability, 0)} {roleValueDescriptor(b, b.primary)}</b>}
           <span className="rfit__bar" role="group" aria-label={`${b.side} role fit`}>
-            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={`${r} ${fmtPct(100 * v, 0)}`} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${r} ${fmtPct(100 * v, 0)}. ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
+            {roles.map(([r, v], i) => <i key={r} tabIndex={0} aria-label={roleValueTip(b, r, v)} style={{ width: `${100 * v}%`, background: SHADES[Math.min(i, SHADES.length - 1)] }} data-tip={`${roleValueTip(b, r, v)} ${ROLE_WHAT[r] ?? ""}`.trim()} />)}
           </span>
         </>
-      ) : <span className="meta rfit__none"><NeedsDemo detail="The role needs positions, which converted logs lack." /></span>}
+      ) : <span className="meta rfit__none">{b.reason ?? "Not enough role data."}</span>}
     </div>
   );
 }
@@ -180,8 +196,10 @@ function MapRoles({ q, map }: { q: Query; map: string }) {
   const mq = useMemo(() => ({ ...q, filter: { ...q.filter, maps: [map] } }), [q, map]);
   const r = useCall("roles", [mq]).data;
   const cell = (b: RoleBlend | undefined) => {
-    const top = rankedRoles(b)[0];
-    return top ? <span className="rmaps__cell"><span data-tip={ROLE_WHAT[top[0]]} tabIndex={0}>{top[0]}</span><b className="num">{fmtPct(100 * top[1], 0)}</b></span> : <span className="faint">–</span>;
+    if (!b) return <span className="faint">–</span>;
+    const label = decisionLabel(b);
+    const role = b.primary ?? b.top2?.[0];
+    return <span className="rmaps__cell"><span data-tip={role ? ROLE_WHAT[role] : b.reason ?? undefined} tabIndex={0}>{label}</span></span>;
   };
   return (
     <li>
@@ -205,16 +223,18 @@ export function RoleCard({ q, maps = [] }: { q: Query; maps?: string[] }) {
     return <Card title="Role" tip={PANEL_TIP.role} className="rolecard">{r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 220 }} />}</Card>;
   }
   const sides = [r.data.T, r.data.CT];
-  const tops = sides.map((b) => rankedRoles(b)[0]?.[0] ?? null);
   return (
     <Card title="Role" tip={PANEL_TIP.role} aside={<span className="meta">{sides[0].rounds} T rounds, {sides[1].rounds} CT rounds</span>} className="rolecard">
       <div className="role__head">
-        {sides.map((b, i) => (
-          <span key={b.side} className="role__headpart">
-            <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
-            <b className="role__label" {...(tops[i] ? { "data-tip": ROLE_WHAT[tops[i]!], tabIndex: 0 } : {})}>{tops[i] ?? "Not enough data"}</b>
-          </span>
-        ))}
+        {sides.map((b) => {
+          const role = b.primary ?? b.top2?.[0];
+          return (
+            <span key={b.side} className="role__headpart">
+              <span className={b.side === "T" ? "t-text" : "ct-text"}>{b.side}</span>
+              <b className="role__label" {...(role ? { "data-tip": ROLE_WHAT[role], tabIndex: 0 } : {})}>{decisionLabel(b)}</b>
+            </span>
+          );
+        })}
       </div>
       <RoleTiles m={all?.m} />
       <div className="rfits">{sides.map((b) => <SideFit key={b.side} b={b} />)}</div>

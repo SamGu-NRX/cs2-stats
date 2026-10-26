@@ -53,5 +53,6 @@ it("documents the confidence contract and distinguishes AWP pools from identity"
   expect(identity).toContain("Mixed labels are excluded");
   expect(identity).toContain("`top2: [a,b]`");
   expect(metrics).toContain("AWPer comparison pool");
-  expect(metrics).toContain("AWPer identity probability");
+  expect(metrics).toContain("AWPer identity share");
+  expect(metrics).toContain("measured AWP rounds");
 });

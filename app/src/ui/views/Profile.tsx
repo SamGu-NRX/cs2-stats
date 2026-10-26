@@ -41,6 +41,7 @@ import { Empty, NeedsDemo, SectionAside } from "./shared";
 import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { HowGood, pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SectionHead, SwingCard } from "./profile/parts";
 import { WhereYouPlay } from "./Playstyle";
+import { roleDecisionLabel } from "./profile/role-decision";
 
 type Compare = "bench" | "bots";
 
@@ -178,10 +179,9 @@ export default function ProfileView() {
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
 interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string; unit?: string }
 
-/** The two most likely roles on one side, in words: "Entry 46%, Lurker 31%". */
+/** The engine's decision for one side, including abstention and its reason. */
 function topRoles(b: RoleBlend | undefined) {
-  if (!b?.blend) return null;
-  return Object.entries(b.blend).sort((x, y) => y[1] - x[1]).slice(0, 2).map(([r, v]) => `${r} ${fmtPct(100 * v, 0)}`).join(", ");
+  return b ? roleDecisionLabel(b) : null;
 }
 
 function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; cmp: Compare; compare: ReactNode }) {
@@ -219,7 +219,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   };
   const roleT = topRoles(roles?.T);
   const roleCT = topRoles(roles?.CT);
-  const role = side === "t" ? roleT : side === "ct" ? roleCT : roleT && roleCT ? `${roleT.split(" ")[0]} on T, ${roleCT.split(" ")[0]} on CT` : null;
+  const role = side === "t" ? roleT : side === "ct" ? roleCT : roleT && roleCT ? `${roleT} on T, ${roleCT} on CT` : roleT ?? roleCT;
   const wins = p.list.filter((e) => e.result === "W").length;
   const losses = p.list.filter((e) => e.result === "L").length;
   return (

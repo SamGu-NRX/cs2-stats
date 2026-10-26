@@ -33,6 +33,9 @@ it("returns the complete side taxonomy and shared evidence contract", () => {
     }
     for (const tip of Object.values(r.tips)) expect(tip.split(/\s+/).length).toBeLessThanOrEqual(12);
     expect(Object.values(r.distribution!).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    expect(r.calibrationStatus).toEqual(side === "T"
+      ? { Entry: "calibrated", Trader: "fit", Support: "fit", Lurker: "calibrated", AWPer: "measured" }
+      : { Anchor: "calibrated", Rotator: "calibrated", Aggressor: "fit", Support: "fit", AWPer: "measured" });
   }
 });
 

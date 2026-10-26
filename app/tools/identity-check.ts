@@ -37,7 +37,7 @@ for (const side of ["T", "CT"] as const) {
     const decision = b.primary ?? (b.top2 ? `top2:${b.top2.join("/")}` : b.reason!);
     lines.push(`${(row.player_name ?? row.steamid).padEnd(12)} ${want.padEnd(11)} ours ${decision} ${Object.entries(b.distribution ?? {}).map(([r, v]) => `${r} ${Math.round(100 * v)}%`).join(", ")}`);
   }
-  const result = evaluateRoleRows(side, rows, summaries, () => model as RoleModel);
+  const result = evaluateRoleRows(side, rows, summaries, () => model as unknown as RoleModel);
   console.log(`\n${side}: ${ours.tapd?.length ?? 0} labelled players with features and ${ROLE_MIN_ROUNDS}+ side rounds; Mixed excluded`);
   for (const f of FEATURES) if (ours[f]) console.log(`  ${f.padEnd(5)} r ${pearson(ours[f], theirs[f]).toFixed(2)}  mean ours ${(ours[f].reduce((s, v) => s + v, 0) / ours[f].length).toFixed(2)} Packer ${(theirs[f].reduce((s, v) => s + v, 0) / theirs[f].length).toFixed(2)}`);
   console.log(`  top-one matches ${result.top1Correct}/${result.total}; single-primary matches ${result.singleCorrect}/${result.single}; returned-set matches ${result.setCorrect}/${result.total}; top2 ${result.topTwo}; insufficient ${result.insufficient}; missing ${result.missingSummary}; excluded labels ${result.excludedLabels}`);

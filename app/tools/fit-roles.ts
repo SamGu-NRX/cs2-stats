@@ -8,7 +8,8 @@ import { DERIVE_VERSION } from "../src/stats/facts";
 import { roleBlend, type RoleModel } from "../src/stats/identity";
 import { addMatch, emptySummary, rollup, type Summary } from "../src/stats/rollup";
 import { seededStratifiedSplit, teamGroupedSplit } from "../src/stats/role-validation";
-import { evaluateRoleRows, evaluationLabel, parseRoleCsv, reliabilityTable, trainRoleModel, type RoleEvaluation, type RoleRow, type RoleSide, type RoleSummaries } from "../src/stats/role-training";
+import { evaluateRoleRows, evaluationLabel, fitRoleThresholds, parseRoleCsv, reliabilityTable, trainRoleModel, type RoleEvaluation, type RoleRow, type RoleSide, type RoleSummaries } from "../src/stats/role-training";
+import { ROLE_THRESHOLDS } from "../src/stats/role-thresholds";
 import { WINPROB, proMaps } from "./node-read";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
@@ -91,26 +92,27 @@ const results: Record<string, unknown> = {};
 // Each outer fold excludes the player from both Gaussian training and inner-LOO isotonic fitting.
 const looModels = new Map<string, RoleModel>();
 for (const row of rows) if (sides.some((side) => evaluationLabel(row, side) && summaries.get(row.steamid)?.[side]?.m.rounds)) {
-  looModels.set(row.steamid, trainRoleModel(rows.filter((r) => r.steamid !== row.steamid), summaries));
+  const foldRows = rows.filter((r) => r.steamid !== row.steamid);
+  looModels.set(row.steamid, trainRoleModel(foldRows, summaries, undefined, fitRoleThresholds(foldRows, summaries)));
 }
-const finalModel = trainRoleModel(rows, summaries);
+const finalModel = trainRoleModel(rows, summaries, undefined, ROLE_THRESHOLDS);
 for (const side of sides) {
   const eligible = rows.filter((row) => evaluationLabel(row, side) && summaries.get(row.steamid)?.[side]?.m.rounds);
   const loo = evaluateRoleRows(side, rows, summaries, (row) => looModels.get(row.steamid)!);
   const strat = seededStratifiedSplit(eligible, (row) => evaluationLabel(row, side), 0x5EED);
   const stratIds = new Set(strat.holdout.map((row) => row.steamid));
   const stratTrain = rows.filter((row) => !stratIds.has(row.steamid));
-  const stratModel = trainRoleModel(stratTrain, summaries);
+  const stratModel = trainRoleModel(stratTrain, summaries, undefined, fitRoleThresholds(stratTrain, summaries));
   const team = teamGroupedSplit(eligible, (row) => evaluationLabel(row, side), 0xC0DE);
   const teamNames = new Set(team.holdout.map((row) => row.team_clan_name));
   const teamTrain = rows.filter((row) => !teamNames.has(row.team_clan_name));
-  const teamModel = trainRoleModel(teamTrain, summaries);
+  const teamModel = trainRoleModel(teamTrain, summaries, undefined, fitRoleThresholds(teamTrain, summaries));
   // Retain the old tail split as a covariate-shift diagnostic, never the headline holdout.
   const legacy = rows.filter((row) => evaluationLabel(row, side) && evaluationLabel(row, side) !== "AWPer");
   const nTail = Math.floor(legacy.length * 0.2), tail = legacy.slice(-nTail);
   const tailIds = new Set(tail.map((row) => row.steamid));
   const tailTrain = rows.filter((row) => !tailIds.has(row.steamid));
-  const tailModel = trainRoleModel(tailTrain, summaries);
+  const tailModel = trainRoleModel(tailTrain, summaries, undefined, fitRoleThresholds(tailTrain, summaries));
   results[side] = {
     loo: {
       ...report(side, "LOO training pool", loo, rows, eligible),
