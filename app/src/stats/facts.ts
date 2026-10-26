@@ -95,6 +95,20 @@ export const INPUT_COVERAGE = {
   sight: ["sightRounds", "rounds", "line of sight", "rounds"],
   /** the next round's starting equipment recorded for a save (player_rounds.round_start_equip_value; plugin files have none) */
   carry: ["saveCarryKnown", "saveEvents", "next round's starting equipment", "saved rounds"],
+  /**
+   * each shot's inaccuracy, spread and aim angles (fire_bullets) with mesh line of sight: extractor demos
+   * have them; plugin files have neither, so spread luck there has no value
+   */
+  spread: ["spreadRounds", "rounds", "shot spread and line of sight", "rounds"],
+  /** the killing shot's speed for a gun kill (plugin files record only the recording player's shots) */
+  killShot: ["rgKnown", "gunKills", "the killing shot's speed", "gun kills"],
+  deathShot: ["rgDeathsKnown", "gunDeaths", "the killing shot's speed", "gun deaths"],
+  /** the killing shot's inaccuracy for a headshot kill (fire_bullets; extractor demos only) */
+  hsShot: ["lhKnown", "hsGunKills", "the killing shot's inaccuracy", "headshot kills"],
+  hsDeathShot: ["lhDeathsKnown", "hsGunDeaths", "the killing shot's inaccuracy", "headshot deaths"],
+  /** all four kill flags recorded: blind, in the air, no-scope, through smoke (nullable since #27) */
+  flags: ["flagsKnown", "kills", "the kill flags", "kills"],
+  deathFlags: ["flagDeathsKnown", "enemyDeaths", "the kill flags", "deaths"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
@@ -214,6 +228,12 @@ export const MEASURES = [
   "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
   // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds
   "ratedRounds", "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "vSwing",
+  // luck (luck.ts): close calls and low-health duels; kills and deaths by gun and by headshot, with the
+  // killing shot's speed and inaccuracy where known; the kill flags; spread luck for and against
+  "closeCalls", "lowHpKills", "lowHpDeaths", "enemyDeaths", "gunKills", "gunDeaths", "rgKnown", "rgKills", "rgDeathsKnown", "rgDeaths",
+  "hsGunKills", "hsGunDeaths", "lhKnown", "lhKills", "lhDeathsKnown", "lhDeaths",
+  "flagsKnown", "blindKills", "airKills", "noscopeKills", "smokeKills", "flagDeathsKnown", "flagDeaths",
+  "spreadRounds", "luckShots", "luckHits", "luckExp", "luckAgShots", "luckAgHits", "luckAgExp",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;

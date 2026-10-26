@@ -9,6 +9,7 @@ import { AGGRESSION_METRICS } from "./aggression";
 import { AGGRO_SCALE_METRICS } from "./aggro-scale";
 import { AIM_METRICS, CONTACT_METRICS } from "./aim";
 import { BUYING_METRICS } from "./buying";
+import { LUCK_METRICS } from "./luck";
 import { INFORMATION_METRICS } from "./information";
 import { MOVEMENT_METRICS } from "./movement";
 import { rating3Of } from "./rating3";
@@ -53,6 +54,8 @@ export interface Metric {
    * (METRICS.md gives the evidence per metric).
    */
   sample?: Sample;
+  /** false for a metric with no meaningful pro percentile (the luck metrics): compare() gives none, and the pools leave it out */
+  compared?: false;
   /**
    * For a share of one count in another: the numerator and denominator measures, so a view can show
    * "12 of 30" beside the rate. value is 100 × m[of[0]] / m[of[1]]; restore-profile-engine.test.ts pins the pairing.
@@ -274,7 +277,7 @@ const M: Metric[] = [
     value: (s) => per(s.m.nearestDistSum, s.m.spacingSamples) },
 ];
 
-export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...AGGRO_SCALE_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS];
+export const METRICS: Metric[] = [...M, ...AIM_METRICS, ...MOVEMENT_METRICS, ...AGGRESSION_METRICS, ...CONTACT_METRICS, ...AGGRO_SCALE_METRICS, ...DUEL_METRICS, ...BUYING_METRICS, ...INFORMATION_METRICS, ...UTILQ_METRICS, ...LUCK_METRICS];
 export const METRIC: Record<string, Metric> = Object.fromEntries(METRICS.map((m) => [m.id, m]));
 
 /**

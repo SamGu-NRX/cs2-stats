@@ -20,7 +20,8 @@
     "utility-outcomes": "vite-node tools/utility-outcomes.ts",
     "metric-evidence": "vite-node tools/metric-evidence.ts",
     "recoil": "vite-node tools/recoil.ts",
-    "spray-counts": "vite-node tools/spray-counts.ts"
+    "spray-counts": "vite-node tools/spray-counts.ts",
+    "fit-luck": "vite-node tools/fit-luck.ts"
   },
   "dependencies": {
     "@fontsource-variable/schibsted-grotesk": "^5.3.0",
