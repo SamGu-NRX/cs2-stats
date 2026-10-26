@@ -10,7 +10,7 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, recordEntries } from "./engine";
+import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, recordEntries, teamsOf } from "./engine";
 import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type MatchModel } from "./match";
 import { sourceOf } from "./sources";
 
@@ -124,4 +124,27 @@ it("names the bot population with one count and the noun of what a sample is", (
   expect(botPopulation(c).text).toBe("63 bot matches");
   expect(botPopulation(c, { n: 62, role: "rifler" }).text).toBe("62 rifler bot matches");
   expect(botPopulation({ ...c, unit: "careers", qualified: 9 }).text).toBe("9 bot careers");
+});
+
+describe("the match header's teams", () => {
+  // fails if the header names teams the file does not hold: the old line said "5 bots" for every match
+  const p = (name: string, team: 0 | 1 | null, bot: boolean) => ({ id: name, name, team, bot });
+  it("counts a bot match's opponents from the file", async () => {
+    const m = await decodeMatch(readFileSync(path.join(SAMPLES, "20261024T214921Z_de_dust2_b2a5666c.json.gz")), "x");
+    const e = entryOf("x", m.env.plugin ?? "", derive(pluginToTables(m), CS2RB));
+    expect(e.players.filter((x) => !x.bot)).toHaveLength(1);
+    expect(teamsOf(e)).toEqual({ mates: 4, opponents: "5 bots" });
+  });
+  it("counts a pro match's opponents as players, since the file names no teams", () => {
+    const pro = [p("frozen", 0, false), p("ropz", 0, false), p("rain", 0, false), p("Twistzz", 0, false), p("broky", 0, false),
+      p("adamS", 1, false), p("puuha", 1, false), p("Joey", 1, false), p("R4DYX", 1, false), p("bnox", 1, false), p("caster", null, false)];
+    expect(teamsOf({ players: pro, you: 0 })).toEqual({ mates: 4, opponents: "5 players" });
+  });
+  it("says a mixed team is mixed, and leaves out what the file does not hold", () => {
+    const mixed = [p("You", 0, false), p("Rip", 0, true), p("Ana", 1, false), p("Sam", 1, false), p("Bot1", 1, true), p("Bot2", 1, true), p("Bot3", 1, true)];
+    expect(teamsOf({ players: mixed, you: 0 })).toEqual({ mates: 1, opponents: "3 bots, 2 players" });
+    expect(teamsOf({ players: [p("You", 0, false), p("Solo", 1, true)], you: 0 }).opponents).toBe("1 bot");
+    expect(teamsOf({ players: [p("You", 0, false)], you: 0 })).toEqual({ mates: 0, opponents: null });
+    expect(teamsOf({ players: [p("You", null, false), p("Bot", 1, true)], you: 0 })).toEqual({ mates: 0, opponents: null });
+  });
 });
