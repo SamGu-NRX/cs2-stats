@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { knownMatchFiles, MATCH_TABS, matchFile, matchHref, matchId, matchTabKey, matchTabOfKey, pageHref, parseHash, profileCanonicalHash, scopeQuery } from "./router";
 
 describe("match tab shortcuts", () => {
@@ -57,6 +57,22 @@ describe("match ids", () => {
     knownMatchFiles(["b/2.json.gz", "d/4.json.gz"], hash);
     expect(matchId("b/2.json.gz")).toBe("m-beef");
     expect(matchFile("m-beef-aaaa2222")).toBe("b/2.json.gz");
+    knownMatchFiles([]);
+  });
+  it("give files that share both hashes no working id, without throwing, and keep every other file", () => {
+    // A and B share both hashes; C shares only the plain one; D shares neither
+    const hash = (f: string, seed = 0) => (seed === 0 ? (f === "d/4.json.gz" ? "dddd" : "beef") : f === "c/3.json.gz" ? "cccc" : "aaaa");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => knownMatchFiles(["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"], hash)).not.toThrow();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0][0])).toMatch(/^2 match files/);
+    expect(String(error.mock.calls[0][0])).not.toMatch(/json\.gz/);
+    error.mockRestore();
+    const [a, b, c, d] = ["a/1.json.gz", "b/2.json.gz", "c/3.json.gz", "d/4.json.gz"].map(matchId);
+    expect(a).toBe(b);
+    expect(matchFile(a)).toBe(a);
+    expect(matchFile("m-beef")).toBe("m-beef");
+    expect([matchFile(c), matchFile(d)]).toEqual(["c/3.json.gz", "d/4.json.gz"]);
     knownMatchFiles([]);
   });
   it("are 64 bits of the path, the same for a path whatever else is listed", () => {

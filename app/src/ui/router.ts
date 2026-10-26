@@ -109,6 +109,8 @@ export const isMatchId = (s: string) => MATCH_ID.test(s);
 let hashOf = pathHash;
 /** listed files by their plain hash; a list of more than one is a collision */
 const filesOfHash = new Map<string, string[]>();
+/** listed files that share both hashes with another, which no id can tell apart: their ids open nothing */
+const unaddressable = new Set<string>();
 
 /**
  * A match's id in an address while personal info is hidden: "m-" and a 64-bit hash of its file path.
@@ -134,7 +136,10 @@ export function matchId(file: string): string {
 export function matchFile(s: string): string {
   const m = MATCH_ID.exec(s);
   if (!m) return s;
-  const found = (filesOfHash.get(m[1]) ?? []).filter((f) => m[2] === undefined || hashOf(f, SALT) === m[2]);
+  const group = filesOfHash.get(m[1]) ?? [];
+  // a plain id opens its file only while no other listed file shares the hash, colliding ones included
+  if (m[2] === undefined) return group.length === 1 ? group[0] : s;
+  const found = group.filter((f) => !unaddressable.has(f) && hashOf(f, SALT) === m[2]);
   return found.length === 1 ? found[0] : s;
 }
 
@@ -149,15 +154,21 @@ export const matchKey = (file: string) => (hidingPersonal() ? matchId(file) : fi
 export function knownMatchFiles(files: string[], hash: (file: string, seed?: number) => string = pathHash) {
   hashOf = hash;
   filesOfHash.clear();
+  unaddressable.clear();
   for (const f of new Set(files)) {
     const h = hash(f, 0);
     filesOfHash.set(h, [...(filesOfHash.get(h) ?? []), f]);
   }
+  // Files that share both hashes get no working id: their links open "not in the match folder" while
+  // every other match works. It runs while the app renders, so it reports rather than throws, and
+  // names no path, which could be a person's name.
   for (const group of filesOfHash.values()) {
     if (group.length < 2) continue;
-    const seconds = new Set(group.map((f) => hash(f, SALT)));
-    if (seconds.size < group.length) throw new Error(`Two match files share both 64-bit hashes, so no id tells them apart: ${group.join(", ")}`);
+    const bySecond = new Map<string, string[]>();
+    for (const f of group) bySecond.set(hash(f, SALT), [...(bySecond.get(hash(f, SALT)) ?? []), f]);
+    for (const same of bySecond.values()) if (same.length > 1) for (const f of same) unaddressable.add(f);
   }
+  if (unaddressable.size) console.error(`${unaddressable.size} match files share both 64-bit hashes with another; their match links open nothing while personal info is hidden`);
 }
 
 /** Re-reads the address after knownMatchFiles, so an id read before the list arrived names its file. */
