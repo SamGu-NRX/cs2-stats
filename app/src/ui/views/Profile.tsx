@@ -271,7 +271,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 <RoleCard q={sideQ} side={side} />
                 <WhereYouPlay list={list} side={side} />
               </div>
-              <a className="ptab__xref" href={tabSectionHref("overview", "style")}>Style attributes are on Overview, in HLTV's attribute block</a>
+              <a className="ptab__xref" href={tabSectionHref("overview", "style", scopeQuery(r.query))}>Style attributes are on Overview, in HLTV's attribute block</a>
               <AggressionCard s={p.you} />
               <PlaysLike q={base} side={rankSide} initial={r.query.get("pro")} />
               <div className="profile__cols">

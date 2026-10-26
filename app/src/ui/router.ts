@@ -46,14 +46,26 @@ const SECTION_TAB: Record<string, [ProfileTab, string | null]> = {
 };
 
 /**
- * The query keys a Profile tab switch carries: the title bar's scope (map, matches, side, gun class,
- * result) and the player card's comparison. A tab's own keys (sec, attr, pro) stay behind.
+ * The query keys a Profile tab switch carries: the scope Profile's title bar sets (map, matches,
+ * side) and the player card's comparison. A tab's own keys (sec, attr, pro) stay behind. Profile has
+ * no gun class or result control, so those keys are not carried.
  */
-const SCOPE_KEYS = ["map", "n", "side", "guns", "result", "cmp"] as const;
+const SCOPE_KEYS = ["map", "n", "side", "cmp"] as const;
 export function scopeQuery(q: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of SCOPE_KEYS) { const v = q.get(k); if (v) out[k] = v; }
   return out;
+}
+
+/**
+ * Every query key Profile reads: its scope and a tab's own section, attribute and pro. A Profile link
+ * loses any other key (a legacy #/aim?guns=rifle&result=W), so the URL never claims a filter the
+ * page does not apply; publish() writes the trimmed query back.
+ */
+const PROFILE_KEYS = new Set<string>([...SCOPE_KEYS, "sec", "attr", "pro"]);
+function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
+  for (const k of [...query.keys()]) if (!PROFILE_KEYS.has(k)) query.delete(k);
+  return { page: "profile", ptab, query };
 }
 
 export function parseHash(hash: string): Route {
@@ -70,14 +82,14 @@ export function parseHash(hash: string): Route {
   const p = parts[0];
   if (p === "profile") {
     const t = parts[1] as ProfileTab;
-    if ((PROFILE_TABS as readonly string[]).includes(t)) return { page: "profile", ptab: t, query };
+    if ((PROFILE_TABS as readonly string[]).includes(t)) return profileRoute(t, query);
     // an old one-page link: its section's tab, and the section's id there
     const old = SECTION_TAB[query.get("sec") ?? ""];
     if (old) { if (old[1]) query.set("sec", old[1]); else query.delete("sec"); }
-    return { page: "profile", ptab: old?.[0] ?? "overview", query };
+    return profileRoute(old?.[0] ?? "overview", query);
   }
   // the pages that became Profile tabs
-  if (p === "playstyle" || p === "aim" || p === "weapons") return { page: "profile", ptab: p, query };
+  if (p === "playstyle" || p === "aim" || p === "weapons") return profileRoute(p, query);
   if (p === "matches" || p === "settings") return { page: p, query };
   return { page: "home", query };
 }
@@ -98,9 +110,18 @@ export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, str
 // The current route is a small store, so navigation can render synchronously (flushSync) inside a
 // View Transition: the new view must be in the DOM when the transition snapshots it.
 let current: Route = typeof location === "undefined" ? parseHash("") : parseHash(location.hash);
+/** A Profile URL with keys Profile does not read: the same path with the query parseHash kept. */
+function tidyProfileUrl() {
+  if (current.page !== "profile") return;
+  const [path, q = ""] = location.hash.split("?");
+  const kept = current.query.toString();
+  if (kept !== q) history.replaceState(null, "", `${path}${kept ? `?${kept}` : ""}`);
+}
+if (typeof location !== "undefined") tidyProfileUrl();
 const subs = new Set<() => void>();
 const publish = () => {
   current = parseHash(location.hash);
+  tidyProfileUrl();
   subs.forEach((s) => s());
 };
 /** The section scroll useSection has done for this visit; cleared on navigation, kept on scope changes. */
