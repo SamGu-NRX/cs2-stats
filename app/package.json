@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "capture": "vite --mode capture",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",

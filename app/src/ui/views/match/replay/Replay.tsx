@@ -15,6 +15,7 @@ import { replayClient } from "../../../../worker/replay-client";
 import { Segmented } from "../../../components/controls";
 import { frameFor, RadarImage } from "../../../components/MapArt";
 import { useGameIcon } from "../../../data/icons";
+import { hideTextAndFiles, useHidePersonal } from "../../../data/privacy";
 import { useData } from "../../../data/provider";
 import { hasLevels, levelRadarIcon, upperLayerOn, type Level } from "../../../data/radar-levels";
 import { feedFor } from "../../../data/rounds";
@@ -25,7 +26,7 @@ import { Empty } from "../../shared";
 import { WinIcon } from "../../../icons/game";
 import { KillRow } from "../Killfeed";
 import type { TabProps } from "../MatchView";
-import { drawScene, type Palette, type Scene } from "./draw";
+import { drawScene, UNKNOWN, type Palette, type Scene } from "./draw";
 import { FULL, useRadarBox, type Box } from "./radar-box";
 import { SpriteLoaders, Sprites } from "./sprites";
 import { keyAction } from "./keys";
@@ -48,7 +49,7 @@ const PauseIcon = (p: IconProps) => <Svg {...p} solid><rect x="6" y="4" width="4
 
 /** The players at a moment in words: side, name, then HP and weapon or "dead". */
 function describe(players: PlayerState[], nameOf: Map<string, string>, t: number): string {
-  const one = (p: PlayerState) => `${nameOf.get(p.id) ?? p.id}, ${p.alive ? `${p.hp ?? "unknown"} HP${p.weapon ? `, ${weaponLabel(p.weapon)}` : ""}` : "dead"}`;
+  const one = (p: PlayerState) => `${nameOf.get(p.id) ?? UNKNOWN}, ${p.alive ? `${p.hp ?? "unknown"} HP${p.weapon ? `, ${weaponLabel(p.weapon)}` : ""}` : "dead"}`;
   const side = (s: "T" | "CT") => `${s}: ${players.filter((p) => p.side === s).map(one).join("; ")}`;
   return `At ${clock(t)}. ${side("T")}. ${side("CT")}.`;
 }
@@ -82,7 +83,9 @@ function useRoundTimeline(file: string, round: number, neighbours: number[]): { 
   }, [host, file, round, near]);
   // closing the tab stops the worker and drops its decoded match; reopening starts a new one
   useEffect(() => () => { if (host) replayClient(host).dispose(); }, [host]);
-  return st;
+  // the reason a round could not load can name the file's path (data/privacy.ts)
+  const hide = useHidePersonal();
+  return hide && st.error ? { ...st, error: hideTextAndFiles(st.error, [file]) } : st;
 }
 
 function readPalette(el: Element): Palette {
@@ -226,7 +229,7 @@ function ReplayView({ v, file, round }: TabProps) {
       const p = s.hover ? players.find((x) => x.id === s.hover) : null;
       if (!p) { if (!el.hidden) el.hidden = true; s.tipKey = ""; }
       else {
-        const name = s.nameOf.get(p.id) ?? p.id;
+        const name = s.nameOf.get(p.id) ?? UNKNOWN;
         const key = `${p.id}|${p.alive}|${p.hp}|${p.weapon}`;
         if (key !== s.tipKey) {
           s.tipKey = key;
@@ -258,12 +261,24 @@ function ReplayView({ v, file, round }: TabProps) {
     pb.play(on);
   }, [pb]);
 
+  // Names come from the match, which hides personal info as every tab does (data/privacy.ts), not from
+  // the timeline's roster, which holds the file's. Declared before the load below, so a new round
+  // draws with them; turning the setting over redraws without reloading the round.
+  useEffect(() => {
+    if (!current) return;
+    const s = st.current;
+    const named = new Map(v.players.map((p) => [p.key, p.name]));
+    s.nameOf = new Map(current.players.map((p) => [p.id, named.get(p.id) ?? UNKNOWN]));
+    s.feedKey = "";
+    s.tipKey = "";
+    s.described = "";
+    pb.invalidate();
+  }, [current, v.players, pb]);
   // a round's timeline starts at its freeze end; while the next one loads nothing plays or draws, and
   // playback resumes when it arrives if it was playing (playback.ts)
   useEffect(() => {
     if (current) {
       const s = st.current;
-      s.nameOf = new Map(current.players.map((p) => [p.id, p.name]));
       s.shownSecond = -1;
       s.feedKey = "";
       s.tipKey = "";

@@ -6,6 +6,7 @@ import { HoverCard } from "../components/overlay";
 import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
 import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
+import { YOU } from "../data/privacy";
 import { BUY_LABEL, BuyIcon, KillFlags, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
 import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
@@ -109,6 +110,12 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
       <div className="meta">{ratingHeadline()}</div>
     </div>
   );
+}
+
+/** "You" after the user's name, unless the name already reads You (personal info hidden, data/privacy.ts). */
+export function YouTag({ v, pi, className }: { v: MatchModel; pi: number; className?: string }) {
+  const p = v.players[pi];
+  return p.isHuman && p.name !== YOU ? <small className={className}>You</small> : null;
 }
 
 export function PlayerName({ v, pi, children }: { v: MatchModel; pi: number; children?: ReactNode }) {

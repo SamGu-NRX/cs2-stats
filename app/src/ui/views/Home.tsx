@@ -10,6 +10,7 @@ import { FormBars } from "../components/charts";
 import { DataTable } from "../components/DataTable";
 import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
+import { hideFile } from "../data/privacy";
 import { AgentImg } from "../components/Agent";
 import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
@@ -25,7 +26,7 @@ import { AimIcon, ChevronRightIcon, TrendIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
-import { matchHref, openMatch, pageHref, profileHref, tabSectionHref } from "../router";
+import { matchHref, matchKey, openMatch, pageHref, profileHref, tabSectionHref } from "../router";
 import { RatingTerms } from "./profile/parts";
 import { TAB_METRICS } from "./profile/tabs";
 import { BarContent } from "../shell/Bar";
@@ -284,10 +285,10 @@ function RecentMatches({ list }: { list: MatchEntry[] }) {
         rows={rows}
         rowKey={(s) => s.file}
         defaultSort={null}
-        onOpen={(s) => openMatch(matchHref(s.file), document.querySelector(`[data-file="${CSS.escape(s.file)}"]`)?.closest("tr"))}
-        onRowContext={(s, at) => openMenu(at, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied") }])}
+        onOpen={(s) => openMatch(matchHref(s.file), document.querySelector(`[data-file="${CSS.escape(matchKey(s.file))}"]`)?.closest("tr"))}
+        onRowContext={(s, at) => openMenu(at, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied", hideFile(s.file)) }])}
         columns={[
-          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={s.file}><MapThumb map={s.match.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
+          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={matchKey(s.file)}><MapThumb map={s.match.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
           { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span> },
           { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num">{line(s).kills}–{line(s).deaths}</span> },
           { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },

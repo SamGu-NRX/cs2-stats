@@ -8,6 +8,7 @@
 // parse, as Profile on that tab, so old links and bookmarks keep working.
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
+import { hidingPersonal, onHidePersonalChange } from "./data/privacy";
 
 // Luck and Replay come last so Alt 1 to 8 keep the tabs they always had.
 export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "luck", "replay"] as const;
@@ -33,7 +34,9 @@ export const PROFILE_TAB_LABEL: Record<ProfileTab, string> = {
   overview: "Overview", duels: "Duels", aim: "Aim", weapons: "Weapons", utility: "Utility", economy: "Economy", playstyle: "Playstyle",
 };
 
-export type Page = "home" | "matches" | "match" | "profile" | "settings";
+/** Every page; App.tsx titles each, and the privacy test renders each. */
+export const PAGES = ["home", "matches", "match", "profile", "settings"] as const;
+export type Page = (typeof PAGES)[number];
 
 export interface Route {
   page: Page;
@@ -79,6 +82,106 @@ function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
   return { page: "profile", ptab, query };
 }
 
+// ---------------------------------------------------------------- match ids
+
+/**
+ * A 64-bit hash of a file path as 16 hex digits: two 32-bit cyrb53-style lanes. `seed` gives an
+ * independent hash of the same path, which tells apart files whose plain hashes collide.
+ */
+export function pathHash(file: string, seed = 0): string {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < file.length; i++) {
+    const c = file.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+/** The seed of the second hash, for files whose plain hashes collide. */
+const SALT = 0x9e3779b9;
+
+/** A match id: "m-" and the path's hash, then "-" and its second hash when another listed file shares the first. No match file looks like one. */
+const MATCH_ID = /^m-([0-9a-z]+)(?:-([0-9a-z]+))?$/;
+export const isMatchId = (s: string) => MATCH_ID.test(s);
+
+let hashOf = pathHash;
+/** listed files by their plain hash; a list of more than one is a collision */
+const filesOfHash = new Map<string, string[]>();
+/** listed files that share both hashes with another, which no id can tell apart: their ids open nothing */
+const unaddressable = new Set<string>();
+
+/**
+ * A match's id in an address while personal info is hidden: "m-" and a 64-bit hash of its file path.
+ * A match link shows its target in the browser's status bar on hover, and an imported file's name is
+ * the user's choice, often a person's name (data/privacy.ts). The id resolves through the files the
+ * app has listed (knownMatchFiles); an address with the file path still opens it.
+ *
+ * An id depends on its own path only. When another listed file has the same hash, both ids add the
+ * path's second hash ("m-<hash>-<second>"), which no other file changes; matchFile resolves either
+ * form while it names one file. An id is never hashed again.
+ */
+export function matchId(file: string): string {
+  if (isMatchId(file)) return file;
+  const h = hashOf(file, 0);
+  return (filesOfHash.get(h)?.length ?? 0) > 1 ? `m-${h}-${hashOf(file, SALT)}` : `m-${h}`;
+}
+
+/**
+ * The file a match id names, from the files the app has listed; the id itself while it names none
+ * (the list is still loading, the match is gone, or a plain id now names two colliding files).
+ * Anything else is a file path already.
+ */
+export function matchFile(s: string): string {
+  const m = MATCH_ID.exec(s);
+  if (!m) return s;
+  const group = filesOfHash.get(m[1]) ?? [];
+  // a plain id opens its file only while no other listed file shares the hash, colliding ones included
+  if (m[2] === undefined) return group.length === 1 ? group[0] : s;
+  const found = group.filter((f) => !unaddressable.has(f) && hashOf(f, SALT) === m[2]);
+  return found.length === 1 ? found[0] : s;
+}
+
+/** What a page writes in a data-file attribute to find a match's row again: its id while personal info is hidden, else its file. */
+export const matchKey = (file: string) => (hidingPersonal() ? matchId(file) : file);
+
+/**
+ * The match files the app lists (data/provider.tsx calls it as it renders a new list), so an id in
+ * the address resolves to its file. `hash` is for tests that force a collision. Only fills the
+ * table; refreshMatchRoute re-reads the address.
+ */
+export function knownMatchFiles(files: string[], hash: (file: string, seed?: number) => string = pathHash) {
+  hashOf = hash;
+  filesOfHash.clear();
+  unaddressable.clear();
+  for (const f of new Set(files)) {
+    const h = hash(f, 0);
+    filesOfHash.set(h, [...(filesOfHash.get(h) ?? []), f]);
+  }
+  // Files that share both hashes get no working id: their links open "not in the match folder" while
+  // every other match works. It runs while the app renders, so it reports rather than throws, and
+  // names no path, which could be a person's name.
+  for (const group of filesOfHash.values()) {
+    if (group.length < 2) continue;
+    const bySecond = new Map<string, string[]>();
+    for (const f of group) bySecond.set(hash(f, SALT), [...(bySecond.get(hash(f, SALT)) ?? []), f]);
+    for (const same of bySecond.values()) if (same.length > 1) for (const f of same) unaddressable.add(f);
+  }
+  if (unaddressable.size) console.error(`${unaddressable.size} match files share both 64-bit hashes with another; their match links open nothing while personal info is hidden`);
+}
+
+/** Re-reads the address after knownMatchFiles, so an id read before the list arrived names its file. */
+export function refreshMatchRoute() {
+  if (typeof location === "undefined") return;
+  const next = parseHash(location.hash);
+  if (next.page === "match" && next.file !== current.file) {
+    current = next;
+    tidyMatchUrl();
+    subs.forEach((s) => s());
+  }
+}
+
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathPart, qs = ""] = raw.split("?");
@@ -88,7 +191,8 @@ export function parseHash(hash: string): Route {
     // the file path may contain slashes; the last part is the tab when it names one
     const last = parts[parts.length - 1] as MatchTab;
     const hasTab = parts.length >= 3 && (MATCH_TABS as readonly string[]).includes(last);
-    return { page: "match", file: parts.slice(1, hasTab ? -1 : undefined).join("/"), tab: hasTab ? last : "overview", query };
+    const path = parts.slice(1, hasTab ? -1 : undefined).join("/");
+    return { page: "match", file: matchFile(path), tab: hasTab ? last : "overview", query };
   }
   const p = parts[0];
   if (p === "profile") {
@@ -113,8 +217,9 @@ const qs = (q?: Record<string, string | number | null | undefined>) => {
   return s ? `?${s}` : "";
 };
 
+/** A match's address: its file path, or its id while personal info is hidden (matchId). */
 export const matchHref = (file: string, tab: MatchTab = "overview", q?: Record<string, string | number | null | undefined>) =>
-  `#/match/${file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
+  `#/match/${hidingPersonal() ? matchId(file) : file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
 export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string | number | null | undefined>) => `#/${page === "home" ? "" : page}${qs(q)}`;
 export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, string | number | null | undefined>) => `#/profile/${tab}${qs(q)}`;
 
@@ -137,11 +242,28 @@ function tidyProfileUrl() {
   const canon = profileCanonicalHash(current);
   if (location.hash !== canon) history.replaceState(null, "", canon);
 }
-if (typeof location !== "undefined") tidyProfileUrl();
+/**
+ * Rewrites a match address to the form the setting asks for, without a history entry: the id while
+ * personal info is hidden, the file path otherwise. An id that names no listed file yet is left as it
+ * is, so a bookmark opened before the list loads still resolves when it arrives.
+ */
+function tidyMatchUrl() {
+  if (current.page !== "match" || !current.file || isMatchId(current.file)) return;
+  const q = current.query.toString();
+  const canon = matchHref(current.file, current.tab) + (q ? `?${q}` : "");
+  if (location.hash !== canon) history.replaceState(null, "", canon);
+}
+if (typeof location !== "undefined") {
+  tidyProfileUrl();
+  tidyMatchUrl();
+  // turning the setting over rewrites the open match's address to the other form
+  onHidePersonalChange(tidyMatchUrl);
+}
 const subs = new Set<() => void>();
 const publish = () => {
   current = parseHash(location.hash);
   tidyProfileUrl();
+  tidyMatchUrl();
   subs.forEach((s) => s());
 };
 /** The section scroll useSection has done for this visit; cleared on navigation, kept on scope changes. */

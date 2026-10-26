@@ -7,11 +7,13 @@ import type { Client } from "../../worker/client";
 import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
 import { careerEntries } from "./engine";
 import { matchModel, type MatchEntry, type MatchModel } from "./match";
+import { hideBundle, hideTextAndFiles, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
 export interface Loaded<T> { data: T | null; error: string | null; loading: boolean }
 
-function useAsync<T>(key: string | null, run: () => Promise<T>): Loaded<T> {
+/** `file`: a match file the call is about, hidden in its error with the listed ones (privacy.ts). */
+function useAsync<T>(key: string | null, run: () => Promise<T>, file?: string | null): Loaded<T> {
   const [st, setSt] = useState<Loaded<T>>({ data: null, error: null, loading: !!key });
   useEffect(() => {
     if (!key) { setSt({ data: null, error: null, loading: false }); return; }
@@ -23,7 +25,10 @@ function useAsync<T>(key: string | null, run: () => Promise<T>): Loaded<T> {
     );
     return () => { alive = false; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return st;
+  // a worker's error can name a match file, a path or a SteamID (privacy.ts)
+  const hide = useHidePersonal();
+  const { matches } = useData();
+  return hide && st.error ? { ...st, error: hideTextAndFiles(st.error, [...matches.map((m) => m.file), ...(file ? [file] : [])]) } : st;
 }
 
 /** One worker call; null args skip it. Refetches after a sync. */
@@ -48,14 +53,20 @@ export function bundleOf(client: Client, version: number, file: string): Promise
   return p;
 }
 
-/** One match shaped for the match views. The entry must be in the match list. */
+/**
+ * One match shaped for the match views. The entry must be in the match list. Its players are named as
+ * the match list names them, so with personal info hidden every view of the match uses the same
+ * placeholders (privacy.ts).
+ */
 export function useMatch(file: string | null): Loaded<MatchModel> {
   const { client, version, matches } = useData();
+  const hide = useHidePersonal();
   const entry = file ? matches.find((m) => m.file === file) ?? null : null;
-  return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}` : null, async () => {
+  return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}` : null, async () => {
     if (!entry) throw new Error(`${file} is not in the match folder`);
-    return matchModel(entry, await bundleOf(client!, version, file!));
-  });
+    const b = await bundleOf(client!, version, file!);
+    return matchModel(entry, hide ? hideBundle(b, entry) : b);
+  }, file);
 }
 
 export const useRollups = (qs: Query[] | null) => useCall("rollup", qs?.length ? [qs] : null);
