@@ -35,6 +35,8 @@ export interface OneRound {
   blinds?: Row[];
   purchases?: Row[];
   grenade_throws?: Row[];
+  /** disconnects: tick, steamid and whether the player was alive */
+  leaves?: Row[];
   /** columns of the rounds row to override, such as plant_tick */
   roundRow?: Row;
   /** the round's number (default 1, a pistol round) */
@@ -64,6 +66,7 @@ export function oneRoundTables(m: OneRound): MatchTables {
     engagements: m.engagements ? table("engagements", m.engagements.map((e) => ({ round, hits: 0, damage: 0, outcome: "sight-only", truncated: false, ...e }))) : null,
     engagement_ticks: m.engagement_ticks ? table("engagement_ticks", m.engagement_ticks) : null,
     purchases: m.purchases ? table("purchases", m.purchases.map((p) => ({ round, was_sold: false, ...p }))) : null,
+    leaves: m.leaves ? table("leaves", m.leaves.map((x) => ({ round, ...x }))) : null,
   };
   return t;
 }

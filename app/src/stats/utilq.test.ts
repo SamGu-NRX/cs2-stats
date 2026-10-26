@@ -33,7 +33,7 @@ function facts(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba",
     grenade_throws: null, grenade_events: null, shots: null, positions: null, spotted: null, infernos: null,
     smokes: table("smokes", smokes),
     engagements: table("engagements", dirs.map((d, id) => eng(id, d[0] as "a" | "b", d[1] as "a" | "b"))),
-    engagement_ticks: table("engagement_ticks", dirs.flatMap((d, id) => Array.from({ length: ticks }, (_, k) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b", k)))), purchases: null,
+    engagement_ticks: table("engagement_ticks", dirs.flatMap((d, id) => Array.from({ length: ticks }, (_, k) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b", k)))), purchases: null, leaves: null,
   };
   return deriveUtilQ(buildCtx(t, CS2RB));
 }
