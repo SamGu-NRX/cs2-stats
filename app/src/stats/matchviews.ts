@@ -143,19 +143,22 @@ export interface ZoneRow {
 
 /**
  * Your kills and deaths per zone and side. A kill's zone is the kills table's place for you (a_place for a
- * kill, v_place for a death), else the place of your position sample nearest the tick (plugin files carry
- * no kill places). A kill with neither has no zone and is left out. `zones` is the map's zone list: every
+ * kill, v_place for a death), else the place of your position sample in the same round nearest the tick,
+ * within half a second (plugin files carry no kill places). A kill with neither has no zone and is left out. `zones` is the map's zone list: every
  * place a position sample of this match names, sorted.
  */
 export function mapZones(t: MatchTables, player: string): { zones: string[]; rows: ZoneRow[] } {
   const P = t.positions, K = t.kills;
   const zones = new Set<string>();
   if (P) for (let i = 0; i < P.n; i++) if (P.place[i]) zones.add(P.place[i]!);
-  const placeAt = (steamid: string, tick: number): string | null => {
+  // the player's position sample in the same round within half a second of the tick (derive.ts posAt's
+  // reach); farther or in another round, the zone is unknown
+  const near = t.match.tick_rate[0] / 2;
+  const placeAt = (steamid: string, round: number, tick: number): string | null => {
     if (!P) return null;
     let best = -1;
     for (let i = 0; i < P.n; i++) {
-      if (P.steamid[i] !== steamid || !P.place[i]) continue;
+      if (P.steamid[i] !== steamid || P.round[i] !== round || !P.place[i] || Math.abs(P.tick[i] - tick) > near) continue;
       if (best < 0 || Math.abs(P.tick[i] - tick) < Math.abs(P.tick[best] - tick)) best = i;
     }
     return best < 0 ? null : P.place[best];
@@ -170,11 +173,11 @@ export function mapZones(t: MatchTables, player: string): { zones: string[]; row
   for (let i = 0; i < K.n; i++) {
     if (K.is_suicide[i] || K.is_teamkill[i] || K.attacker_steamid[i] === null) continue;
     if (K.attacker_steamid[i] === player && K.a_side[i]) {
-      const zone = K.a_place[i] ?? placeAt(player, K.tick[i]);
+      const zone = K.a_place[i] ?? placeAt(player, K.round[i], K.tick[i]);
       if (zone) { const r = row(zone, K.a_side[i] as Side); r.kills++; if (K.a_x[i] !== null && K.a_y[i] !== null) r.killsAt.push([K.a_x[i]!, K.a_y[i]!]); }
     }
     if (K.victim_steamid[i] === player && K.v_side[i]) {
-      const zone = K.v_place[i] ?? placeAt(player, K.tick[i]);
+      const zone = K.v_place[i] ?? placeAt(player, K.round[i], K.tick[i]);
       if (zone) { const r = row(zone, K.v_side[i] as Side); r.deaths++; if (K.v_x[i] !== null && K.v_y[i] !== null) r.deathsAt.push([K.v_x[i]!, K.v_y[i]!]); }
     }
   }
