@@ -10,7 +10,7 @@ import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import { tipOf } from "../data/tips";
 import { AimIcon } from "../icons/ui";
-import { fmtMatchDay, plural } from "../lib/format";
+import { fmtDeg, fmtMatchDay, plural } from "../lib/format";
 import { pageHref } from "../router";
 import { BENCH } from "../lib/verdict";
 import { BarContent } from "../shell/Bar";
@@ -31,6 +31,9 @@ const TRENDS: { id: string; bench?: number }[] = [
 /** A per-match slope in the stat's unit: percentages move in points. */
 const slopeIn = (pct: boolean, fmt: (v: number) => string) => (v: number) => (pct ? `${v.toFixed(1)} pts` : fmt(v)) + " a match";
 
+/** Mean of a summary's per-spray distances from the target (AimAgg.sprayDist), in degrees; null without one. */
+const sprayControl = (r: { aim: { sprayDist: number[] } } | null | undefined) => (r?.aim.sprayDist.length ? r.aim.sprayDist.reduce((a, b) => a + b, 0) / r.aim.sprayDist.length : null);
+
 interface TrendCard { key: string; label: string; tip?: string; fmt: (v: number) => string; slope: (v: number) => string; lowerIsBetter?: boolean; bench?: number; career: number | null }
 
 export default function CareerAim() {
@@ -44,12 +47,20 @@ export default function CareerAim() {
   const shots = list.reduce((t, s) => t + s.shots, 0);
   const oldestFirst = useMemo(() => [...list].reverse(), [list]);
   // each metric's value per match comes with the match list; the slope over them is the engine's trend()
-  const series = useMemo(() => TRENDS.map((t) => oldestFirst.map((s) => s.line.v[t.id])), [oldestFirst]);
-  const cards: TrendCard[] = TRENDS.map((t) => {
-    const m = metric(t.id);
-    const fmt = (v: number) => fmtMetric(t.id, v);
-    return { key: t.id, label: m.label, tip: tipOf(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
-  });
+  // main's "Spray control" trend: each match's mean spray distance from the target, read from its own
+  // rollup, since the engine keeps the distances (AimAgg.sprayDist) but no metric over them
+  const perMatch = useRollups(useMemo(() => (query ? oldestFirst.map((s) => ({ files: [s.file], filter: query.filter })) : null), [query, oldestFirst])).data;
+  const spraySeries = useMemo(() => (perMatch?.length === oldestFirst.length ? perMatch.map(sprayControl) : oldestFirst.map(() => null)), [perMatch, oldestFirst]);
+  const series = useMemo(() => [...TRENDS.map((t) => oldestFirst.map((s) => s.line.v[t.id])), spraySeries], [oldestFirst, spraySeries]);
+  const degFmt = (v: number) => fmtDeg(v, 2);
+  const cards: TrendCard[] = [
+    ...TRENDS.map((t) => {
+      const m = metric(t.id);
+      const fmt = (v: number) => fmtMetric(t.id, v);
+      return { key: t.id, label: m.label, tip: tipOf(t.id), fmt, slope: slopeIn(m.unit === "pct", fmt), lowerIsBetter: m.lowerIsBetter, bench: t.bench, career: all ? all.v[t.id] : null };
+    }),
+    { key: "sprayControl", label: "Spray control", tip: "Mean angle from your target across a spray's bullets.", fmt: degFmt, slope: slopeIn(false, degFmt), lowerIsBetter: true, career: sprayControl(all) },
+  ];
   const trends = useCall("trends", list.length ? [series] : null).data;
   return (
     <div className="view view--capped">
