@@ -7,7 +7,7 @@ const W = new Set(["ak47"]);
 function spray(id: string, t0: number, view: [number, number][], kick: [number, number][], steady = true): PatternShot[] {
   return view.map(([p, y], j) => ({
     steamid: id, tick: t0 + 7 * j, weapon: "ak47", recoilIndex: j, pitch: p, yaw: y,
-    bulletPitch: p + kick[j][0], bulletYaw: y + kick[j][1], scoped: false, steady,
+    bulletPitch: p + kick[j][0], bulletYaw: y + kick[j][1], scoped: false, silenced: null, steady,
   }));
 }
 const KICK: [number, number][] = [[0, 0], [-0.2, -0.1], [-1.3, 0], [-2.9, -0.15]];
@@ -48,4 +48,30 @@ it("leaves out partly recovered indices, scoped kicks, moving shots from the vie
 
 it("interpolates quantiles between order statistics", () => {
   expect([quantile([1, 2, 3, 4], 0.5), quantile([1, 2, 3, 4], 0.25), quantile([5], 0.75)]).toEqual([2.5, 1.75, 5]);
+});
+
+it("builds the M4A1-S pattern from silenced shots only, and a scoped gun's from shots known to be unscoped", () => {
+  // fails if an unsilenced or unrecorded-silencer M4A1-S shot, or an AUG shot with no scope state,
+  // enters the kick; a gun without a scope needs no scope state
+  const acc = emptySamples();
+  const one = (weapon: string, scoped: boolean | null, silenced: boolean | null, id: string): PatternShot =>
+    ({ steamid: id, tick: 0, weapon, recoilIndex: 1, pitch: 0, yaw: 0, bulletPitch: -1, bulletYaw: 0, scoped, silenced, steady: false });
+  addShots(acc, [one("m4a1_silencer", false, true, "a"), one("m4a1_silencer", false, false, "b"), one("m4a1_silencer", false, null, "c"),
+    one("aug", false, null, "d"), one("aug", null, null, "e"), one("aug", true, null, "f"), one("ak47", null, null, "g")], new Set(["m4a1_silencer", "aug", "ak47"]), 3);
+  expect([acc.kick.m4a1_silencer[1].p.length, acc.kick.aug[1].p.length, acc.kick.ak47[1].p.length]).toEqual([1, 1, 1]);
+});
+
+it("unwraps yaw across 180 degrees in the kick and the view path", () => {
+  // fails if a bullet at yaw -179.9 with the view at 179.9 reads as a 359.8 degree kick, or the view
+  // path jumps by 360 when the view crosses 180
+  const acc = emptySamples();
+  const yaws = [179.8, 179.9, -179.9];
+  const shots: PatternShot[] = yaws.map((y, j) => ({
+    steamid: "a", tick: 7 * j, weapon: "ak47", recoilIndex: j, pitch: 0, yaw: y, bulletPitch: 0,
+    bulletYaw: [179.8, -179.9, -179.6][j], scoped: false, silenced: null, steady: true,
+  }));
+  addShots(acc, shots, W, 3);
+  const pat = patternOf(acc, "ak47", 1, 1);
+  expect(pat.kick.map(([, y]) => y)).toEqual([0, 0.2, 0.3]);
+  expect(pat.pro.map((r) => r[1])).toEqual([0, 0.1, 0.3]);
 });
