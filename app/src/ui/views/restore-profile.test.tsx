@@ -148,10 +148,10 @@ it("shows the counts behind a share's row, from the rounds it ranked", async () 
   function Rows() { return <StatCard title="Rows" tip="Rows." ids={["tradeKillSuccess", "openingSwing"]} r={useRanks(q, "T")} />; }
   render(<Rows />);
   const m = summary(sideQuery(q, "T")).m;
-  const rowOf = (id: string) => Array.from(host.querySelectorAll(".mrow2")).find((el) => el.querySelector(".mrow2__l")?.firstChild?.textContent === metric(id).label)!;
+  const rowOf = (id: string) => Array.from(host.querySelectorAll(".mrow")).find((el) => el.querySelector(".mrow__lab")?.firstChild?.textContent === metric(id).label)!;
   expect(m.tradeOpps).toBeGreaterThan(0);
-  expect(text(rowOf("tradeKillSuccess").querySelector(".mrow2__n"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
-  expect(text(rowOf("openingSwing").querySelector(".mrow2__n"))).toBe("");
+  expect(text(rowOf("tradeKillSuccess").querySelector(".mrow__smp"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
+  expect(text(rowOf("openingSwing").querySelector(".mrow__smp"))).toBe("");
 });
 
 it("shows Firepower's score and its lowest-ranked metric in Work on", async () => {

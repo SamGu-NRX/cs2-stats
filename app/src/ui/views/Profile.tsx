@@ -12,7 +12,8 @@ import type { Rating3 } from "../../stats/rating3";
 import { ClutchBadge, MapThumb, Meter, MultiBadge, Num, VerdictLabel } from "../components/bits";
 import { Card } from "../components/Card";
 import { Gauge, TrendLine } from "../components/charts";
-import { ApproxMark, Percentile, percentilePhrase, sentence } from "../components/Percentile";
+import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
+import { MetricList } from "../components/MetricRow";
 import { Segmented, Select, type Option } from "../components/controls";
 import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
@@ -29,16 +30,16 @@ import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { FirstKillIcon } from "../icons/game";
 import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
-import { scoreFill, scoreText, toScore, ratingText } from "../lib/scale";
+import { scoreText, toScore, ratingText } from "../lib/scale";
 import { BENCH, benchAround, verdictOf, type Bench } from "../lib/verdict";
 import { matchHref, openMatch, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, setQuery, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { Empty, NeedsDemo, SectionAside } from "./shared";
-import { AttributesPanel, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { AttributesPanel, PanelRow, ValueRow, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
 import { pctProps, PlaysLike, RatingLegend, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { AggressionCard, DotTrack } from "./profile/v2";
-import { AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
+import { sampleOf, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import CareerAim from "./CareerAim";
 import WeaponsTab from "./Weapons";
 import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
@@ -165,10 +166,10 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
             <>
               {!baselines && <Card><Empty text={baselinesError ?? "Loading the pro baselines."} /></Card>}
               <div className="profile__cols">
-                {baselines && <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} /></div>}
+                {baselines && <div id="firepower" ref={firepowerRef} className="psec"><Firepower q={base} side={side} values={p.you.v} m={p.you.m} /></div>}
                 <FormRail p={p} side={side} />
               </div>
-              <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} /></div>
+              <div id="style" ref={styleRef} className="psec"><StyleAttributes q={base} side={side} values={p.you.v} m={p.you.m} /></div>
               <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
               <div className="profile__trend">
                 <FormTrend p={p} side={side} />
@@ -365,22 +366,23 @@ function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
 
 type StylePool = "role" | "all";
 
-/** One metric of the block as the panel's percentile row. */
-/** One metric of an attribute as a percentile row; a pro percentile names the pool it was read in. */
-function panelMetric(p: Pct, kind: "performance" | "style", population: string): PanelMetric {
-  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population: kind === "performance" ? proPopulation(p.pool) : population };
+/** One metric of an attribute as a metric row; a pro percentile names the pool it was read in, and `m` gives its sample. */
+function panelMetric(p: Pct, kind: "performance" | "style", population: string, m: Measures | null): PanelMetric {
+  const s = sampleOf(p.id, p, m);
+  return { id: p.id, ...pctProps(p.id, p, p.value), kind, population: kind === "performance" ? proPopulation(p.pool) : population, sample: s.text, n: s.n };
 }
 
-function panelAttr(a: AttributeScore, kind: "performance" | "style", population: string, extra: Partial<PanelAttribute> = {}): PanelAttribute {
-  return { id: a.id as PanelAttribute["id"], label: a.label, score: a.score, metrics: a.metrics.map((p) => panelMetric(p, kind, population)), ...extra };
+function panelAttr(a: AttributeScore, kind: "performance" | "style", population: string, m: Measures | null, extra: Partial<PanelAttribute> = {}): PanelAttribute {
+  return { id: a.id as PanelAttribute["id"], label: a.label, score: a.score, metrics: a.metrics.map((p) => panelMetric(p, kind, population, m)), ...extra };
 }
 
 /**
  * Firepower, the one attribute on the performance side (design/identity.md), ranked against pros on the
- * page's side. Unlike the style scores it is a quality, so its score and bar take the performance
- * colours. `values` are your metric values on the page's side, for the unscored rows (engine.ts EXTRA_SUBS).
+ * page's side. Unlike the style scores it is a quality, so its score takes the performance colours and
+ * its rows show their rank. `values` are your metric values on the page's side, for the unscored rows
+ * (engine.ts EXTRA_SUBS); `m` the measures behind them, for each row's sample.
  */
-function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
+function Firepower({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const [against, setAgainst] = useState<"pros" | "bots">("pros");
   const scored = useCall("attributes", [q, { side: ratingKey(side) }]).data;
   const botScored = useCall("style", against === "bots" ? [q, { side: ratingKey(side) }] : null).data;
@@ -392,23 +394,16 @@ function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Value
   return (
     <Card title="Firepower" tip={PANEL_TIP.firepower} aside={
       <span className="fpw__aside">
+        {fp && <span className="fpw__score disp disp--s" style={{ color: fp.score === null ? "var(--ink3)" : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>}
+        <span className="meta">{against === "pros" ? (scored ? `vs ${scored.n} ${proPoolName(scored.role)}` : "") : botScored ? `vs ${botPop}` : ""}</span>
         <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "Pros" }, { value: "bots", label: "Bots" }]} />
-        <span className="meta">{against === "pros" ? (scored ? `Against ${scored.n} ${proPoolName(scored.role)}` : "") : botScored ? `Against ${botPop}` : ""}</span>
       </span>
     }>
       {waiting ? <div className="skel" style={{ height: 200 }} /> : !fp ? <p className="meta"><NeedsDemo detail="Too few bots in these matches to rank Firepower." /></p> : (
-        <div className="fpw">
-          <div className="fpw__head">
-            <span className="fpw__score num" style={{ color: fp.score === null ? undefined : scoreText(t) }}>{fp.score === null ? "–" : Math.round(fp.score)}<small>/100</small></span>
-            <span className="fpw__bar" aria-hidden><i style={{ width: `${fp.score ?? 0}%`, background: fp.score === null ? "transparent" : scoreFill(t) }} /></span>
-          </div>
-          <div className="fpw__more">
-            {panelAttr(fp, "performance", population).metrics.map((m) => (against === "bots" ? { ...m, population } : m)).map((m) => (
-              <Percentile key={m.id} label={m.label} value={m.value} unit={m.unit} pct={m.pct} kind={m.kind} population={m.population} def={m.def} approx={m.approx} reason={m.reason} unavailable={m.unavailable} />
-            ))}
-            {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} />)}
-          </div>
-        </div>
+        <MetricList label="Firepower" rank>
+          {panelAttr(fp, "performance", population, m).metrics.map((x) => (against === "bots" ? { ...x, population } : x)).map((x) => <PanelRow key={x.id} m={x} rank />)}
+          {extraSubs("firepower", values).map((s) => <ValueRow key={s.id} s={s} rank />)}
+        </MetricList>
       )}
     </Card>
   );
@@ -420,7 +415,7 @@ function Firepower({ q, side, values }: { q: Query; side: SideKey; values: Value
  * the bot careers in the same matches; Sniping always against every bot. ?attr=<id> opens one.
  * `values` are your metric values on the page's side, for each attribute's unscored rows.
  */
-function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values: Values }) {
+function StyleAttributes({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [pool, setPool] = useState<StylePool>("role");
@@ -437,8 +432,8 @@ function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values:
   const pop = { n: style.n, role } as const;
   const provisional = style.careers.provisional;
   const attrs = style.scores.map((a) => (a.id === "sniping"
-    ? panelAttr(a, "style", botPoolName("all"), { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
-    : panelAttr(a, "style", botPoolName(role), { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
+    ? panelAttr(a, "style", botPoolName("all"), m, { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
+    : panelAttr(a, "style", botPoolName(role), m, { open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })));
   const thin = style.n < style.careers.minPool ? <NeedsDemo detail={`${thinPoolText(style.careers, style.n)}${pool === "role" ? " All bots may have more." : ""}`} /> : undefined;
   return (
     <AttributesPanel
@@ -447,9 +442,10 @@ function StyleAttributes({ q, side, values }: { q: Query; side: SideKey; values:
       pool={pool}
       pools={pools}
       onPool={setPool}
-      poolNote={`Against ${botPopulation(style.careers, pop).text}`}
+      poolNote={botPopulation(style.careers, pop).text}
       message={thin}
       style={attrs}
+      provisional={provisional}
     />
   );
 }
@@ -592,7 +588,7 @@ function Multis({ m, q, list }: { m: Measures; q: Query; list: MatchEntry[] }) {
               <span className="hbar"><i style={{ width: `${(100 * share(r)) / most}%` }} /></span>
               <span className="num mlist__pct">{fmtPct(share(r), 1)}</span>
               <span className="mlist__pro">
-                <DotTrack at={rank} tone={rank === null ? undefined : scoreFill(rank >= 50 ? 1 : -1)} label={rank === null ? "Not compared with pros" : `${percentilePhrase(rank, "performance")} of pros`} />
+                <DotTrack at={rank} label={rank === null ? "Not compared with pros" : `${percentilePhrase(rank, "performance")} of pros`} />
               </span>
               <b className="num">{r.rounds}</b>
             </>

@@ -433,7 +433,7 @@ function VsTable({ you, labels, pro, side }: { you: (number | null)[]; labels: s
       {styleIds().map((id, i) => (
         <div key={id} className="vs__row">
           <span className="vs__lbl"><AttrIcon id={id as AttributeId} size={13} />{labels[i]}</span>
-          <DotTrack at={you[i]} ghost={theirs[i]} tone="var(--cream)" label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
+          <DotTrack at={you[i]} ghost={theirs[i]} label={`${labels[i]}: you ${you[i] === null ? "no score" : Math.round(you[i]!)}, ${pro.name} ${theirs[i] ?? "no score"}`} />
           <span className="num cream">{you[i] === null ? "–" : Math.round(you[i]!)}</span>
           <span className="num">{theirs[i] ?? "–"}</span>
         </div>

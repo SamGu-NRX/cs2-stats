@@ -743,8 +743,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .wyp__count b { font: 800 22px/1 var(--f); color: var(--cream); }
 .ranks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; }
 .ranks__group { display: grid; gap: 8px; align-content: start; }
-.ranks__group ul { display: grid; gap: 2px; }
-.ranks__group li { display: grid; grid-template-columns: minmax(0, 1fr) 64px 140px 92px; gap: 12px; align-items: center; height: 32px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .ranks__v { text-align: right; font-weight: 700; }
 .ranks__track { position: relative; height: 6px; border-radius: 3px; background: linear-gradient(90deg, rgba(232,49,40,.35), var(--track) 35%, var(--track) 65%, rgba(17,150,14,.4)); }
 .ranks__track i { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 2px var(--bg1); }
@@ -879,49 +877,9 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 @media (max-width: 1180px) { .clutches { grid-template-columns: minmax(0, 1fr); } }
 .tbl th .th .gicon { margin-right: 3px; }
 
-/* ---------------------------------------------------------------- attributes panel (views/profile/AttributesPanel.tsx) */
-.apanel { padding: 0; overflow: hidden; container-type: inline-size; }
-.apanel__head { display: flex; align-items: center; gap: 8px 12px; min-height: 48px; padding: 8px var(--pad-panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.apanel__title { margin: 0 8px 0 0; }
-.apanel__lbl { font-size: 12px; color: var(--ink2); }
-.apanel__cmp { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.apanel__msg { margin: 0; padding: 10px var(--pad-panel); border-bottom: 1px solid var(--line); }
-/* the six style attributes in pairs, in HLTV's order */
-.apanel__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.apanel__grid > .apa:nth-child(n + 3) { border-top: 1px solid var(--line); }
-.apanel__grid > .apa:nth-child(odd) { border-right: 1px solid var(--line); }
-@container (max-width: 640px) {
-  .apanel__grid { grid-template-columns: minmax(0, 1fr); }
-  .apanel__grid > .apa:nth-child(odd) { border-right: 0; }
-  .apanel__grid > .apa + .apa { border-top: 1px solid var(--line); }
-}
-/* Firepower alone in its card: the card's body is its padding */
-.card__body > .apa--wide { padding: 0; }
-.apa { padding: 12px var(--pad-panel); min-width: 0; }
-.apa__row { display: flex; align-items: center; gap: 10px; min-height: 28px; cursor: pointer; }
-.apa__icon { color: var(--tan); flex: none; }
-.apa__name { margin: 0; font: 600 15px/1.3 var(--f); white-space: nowrap; }
-/* the note names a population other than the panel's; it never truncates, the peek gives way first */
-.apa__note { flex: none; font-size: 12px; color: var(--ink2); white-space: nowrap; }
-.apa__peek { margin-left: 8px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.apa__peek b { color: var(--ink); font-weight: 600; }
-.apa__score { margin-left: auto; padding-left: 12px; font: 800 20px/1 var(--f); letter-spacing: -0.02em; color: var(--cream); white-space: nowrap; }
-.apa__score small { font-size: 12px; font-weight: 600; color: var(--ink3); margin-left: 1px; }
-.apa__chev { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--ink2); flex: none; }
-.apa__chev::before { content: ""; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform var(--d-expand) var(--ease-in-out); }
-.apa__chev.is-instant::before { transition: none; }
-.apa[data-open] .apa__chev::before { transform: translateY(2px) rotate(225deg); }
-@media (hover: hover) and (pointer: fine) { .apa__row:hover .apa__chev { background: var(--hover); color: var(--ink); } }
-@media (prefers-reduced-motion: reduce) { .apa__chev::before { transition: none; } }
-.apa__bar { position: relative; height: 6px; margin-top: 10px; border-radius: 3px; background: var(--track); }
-.apa__bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--ink2); }
-.apa__bar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink2); }
-.apa__more { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line2); }
-.apa--wide .apa__more { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; }
-/* a provisional score: its bar is hatched instead of solid, and the score's tooltip says why */
-.apa[data-prov] .apa__bar i { background: repeating-linear-gradient(-45deg, var(--ink2) 0 3px, rgba(163, 167, 164, 0.55) 3px 6px); }
-.apa__score[tabindex] { cursor: help; }
-.help { width: 16px; height: 16px; flex: none; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--line2); color: var(--ink3); font: 600 10px/1 var(--f); cursor: help; }
+/* ---------------------------------------------------------------- attributes panel: see "Profile v2 system" at the end */
+.help { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--ink3); color: var(--ink3); font: 700 9px/1 var(--f); cursor: help; }
+@media (hover: hover) and (pointer: fine) { .help:hover { border-color: var(--ink2); color: var(--ink); } }
 .chip--warn { background: rgba(255, 215, 173, 0.08); color: var(--cream); border: 1px solid rgba(255, 215, 173, 0.25); }
 
 /* ---------------------------------------------------------------- aim (views/aim/AimPanels.tsx) */
@@ -1152,15 +1110,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 @media (max-width: 1240px) { .wyp { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------------------------------------------------------------- Profile v2 (views/profile/v2.tsx) */
-/* a dotted track: the tick in the middle, your dot, and a hollow second marker for the pro */
-.dtrack { position: relative; display: block; height: 12px; min-width: 56px; }
-.dtrack::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dotted var(--line2); transform: translateY(-1px); }
-.dtrack__mid { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px; background: var(--ink3); }
-.dtrack__dot, .dtrack__ghost { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
-.dtrack__dot { background: var(--ink2); }
-.dtrack__ghost { background: var(--bg1); box-shadow: inset 0 0 0 1.5px var(--ink2); }
-[data-tip] > .dtrack, .mlist__pro { cursor: help; }
-
 /* swing by source: label, waterfall bar, your points, the bots' */
 .wfall { display: grid; gap: 2px; min-width: 0; }
 .wfall__head, .wfall__row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 64px; gap: 12px; align-items: center; }
@@ -1193,37 +1142,110 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .profile__pair:empty { display: none; }
 @media (max-width: 1100px) { .profile__pair { grid-template-columns: minmax(0, 1fr); } }
 .aggro__scale { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
-.aggro__scale .dtrack { height: 16px; }
-.aggro__scale .dtrack__dot { width: 12px; height: 12px; background: var(--cream); }
 .aggro__score { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 6px; }
 .aggro__score b { font: 800 22px/1 var(--f); color: var(--cream); }
 .aggro__score [data-tip] { cursor: help; }
-.mvals { display: grid; }
-.mrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 140px) 84px; gap: 12px; align-items: center; min-height: 30px; font-size: 13px; border-bottom: 1px solid var(--line); }
-.mrow:last-child { border-bottom: 0; }
-.mrow__l { color: var(--ink2); cursor: help; }
-.mrow > b { text-align: right; }
-.mrow__why { cursor: help; text-align: right; }
-.mrow > b { font-weight: 700; }
 .fpw__aside { display: inline-flex; align-items: center; gap: 12px; }
 
-/* ---------------------------------------------------------------- Profile tabs (views/Profile.tsx, profile/tabs.tsx) */
-/* the tab bar under the player card: the match view's tabs, without its underline motion */
-.ptabs { padding: 0; margin: 4px 0 2px; border-bottom: 1px solid var(--line); }
-.ptab { display: grid; gap: 12px; }
-.profile__stack { display: grid; gap: 12px; align-content: start; }
-/* one metric row everywhere: label, sample, a dotted track with its dot, value */
-.mrows { display: grid; }
-.mrow2 { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(72px, 128px) 72px; gap: 12px; align-items: center; min-height: 32px; font-size: 13px; border-bottom: 1px solid var(--line); border-radius: var(--r-chip); cursor: help; }
-.mrow2:last-child { border-bottom: 0; }
-.mrow2__l { min-width: 0; color: var(--ink); }
-.mrow2__n { font-size: 12px; color: var(--ink3); white-space: nowrap; }
-.mrow2__t { position: relative; height: 12px; }
-.mrow2__t::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dotted var(--line2); transform: translateY(-1px); }
-.mrow2__mid { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px; background: var(--ink3); }
-.mrow2__t i { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--bg1); }
-.mrow2__v { text-align: right; font: 700 14px/1 var(--f); }
-.mrow2[data-na] .mrow2__v { color: var(--ink3); }
-.mrow2:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+
+/* ================================================================ Profile v2 system (design-target-v2/SYSTEM.md) */
+/* Profile's cards: the system's card header (.ch) and an 18 px side padding */
+.profile { --pad-panel: 18px; }
+.ptab { display: grid; gap: 16px; }
+.profile__stack { display: grid; gap: 16px; align-content: start; }
+.profile .card__head { min-height: 22px; padding: 16px var(--pad-panel) 0; margin-bottom: 12px; gap: 4px 12px; }
+.profile .card__head--toggle { padding: 16px var(--pad-panel) 0; }
+.profile .card__toggle { min-height: 22px; padding: 0; border-radius: var(--r-chip); }
+.profile .card__aside--pad { padding-right: 0; }
+.profile .card__title { font: 650 15px/1.25 var(--f); letter-spacing: -0.01em; }
+.profile .card__body { padding: 16px var(--pad-panel); }
+.profile .card__head + .card__body, .profile .card__head + .collapse .card__body { padding-top: 0; }
+.profile .card__body--flush { padding: 0; }
 .approx-legend { cursor: help; }
 .card-pad { padding: var(--pad-panel); margin: 0; }
+
+/* verdict pill: a soft pill with a 5 px dot, never a solid block; plain has no dot */
+.vpill { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px 0 6px; border-radius: 999px; font: 700 10px/1 var(--f); letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap; background: var(--s3); color: var(--ink2); }
+.vpill::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.vpill--good { background: var(--good-soft); color: var(--good-text); }
+.vpill--poor { background: var(--poor-soft); color: var(--poor-text); }
+.vpill--plain::before { display: none; }
+.vpill[data-tip] { cursor: help; }
+
+/* side pip: T or CT as text in a tinted box */
+.pip { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 5px; border-radius: 4px; font: 700 11px/1 var(--f); white-space: nowrap; background: var(--s3); color: var(--ink); }
+.pip--t { background: var(--t-soft); color: var(--t); }
+.pip--ct { background: var(--ct-soft); color: var(--ct); }
+.pip--hi { background: var(--cream); color: var(--bg0); }
+.pip--o { background: transparent; box-shadow: inset 0 0 0 1px var(--line2); color: var(--ink2); }
+
+/* the dotted track: the tick at 50, you as a dot ringed in the card colour. Only the dot moves; the
+   track never fills. The track is a size container so the dot's entrance can be measured in cqw. */
+.trk { position: relative; display: block; height: 16px; min-width: 56px; container-type: inline-size; }
+.trk::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: radial-gradient(circle at 1px 1px, var(--track) 1px, transparent 1.4px) 0 0 / 6px 2px repeat-x; }
+.trk__mid { position: absolute; left: 50%; top: 2px; width: 1px; height: 12px; background: var(--ink3); }
+.trk__dot { position: absolute; top: 3.5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--c, var(--tan)); box-shadow: 0 0 0 2px var(--s1); }
+.trk__dot.is-hollow { background: var(--s1); box-shadow: inset 0 0 0 1.5px var(--c, var(--tan)), 0 0 0 2px var(--s1); }
+.trk__ref { position: absolute; top: 4.5px; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: var(--s1); box-shadow: inset 0 0 0 1.5px var(--ink2); }
+.trk.q5, .trk.q4 { --c: var(--good-text); }
+.trk.q3 { --c: var(--tan); }
+.trk.q2, .trk.q1 { --c: var(--poor-text); }
+.trk.cream { --c: var(--cream); }
+[role="img"].trk { cursor: help; }
+
+/* metric rows: label, track, sample, value, and an optional rank. The list is the grid and each row
+   a subgrid, so every column lines up down a card and sizes to its widest cell. */
+.mrows { display: grid; grid-template-columns: minmax(0, max-content) minmax(64px, 1fr) auto auto; column-gap: 14px; }
+.mrows--rank { grid-template-columns: minmax(0, max-content) minmax(64px, 1fr) auto auto minmax(64px, auto); }
+.mrow { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 36px; font-size: 13px; border-radius: var(--r-chip); cursor: help; }
+.mrows > .mrow + .mrow { border-top: 1px solid var(--line); }
+.mrow__lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--ink); }
+.mrow__lab .approx { margin-left: 5px; color: var(--ink3); }
+.mrow__smp { text-align: right; font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.mrow__val { text-align: right; font-weight: 650; white-space: nowrap; }
+.mrow__rank { text-align: right; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--ink2); }
+.mrow__rank.q5, .mrow__rank.q4 { color: var(--good-text); }
+.mrow__rank.q2, .mrow__rank.q1 { color: var(--poor-text); }
+.mrow__rank.is-style { color: var(--tan); }
+.mrow[data-na] .mrow__val { color: var(--ink3); }
+.mrow[data-extra] .mrow__lab { color: var(--ink2); font-weight: 400; }
+/* a thin sample: hollow dot, quieter value, a ≈ after the label (unless the metric's own ≈ is there) */
+.mrow.is-thin .mrow__val { color: var(--ink2); }
+.mrow.is-thin .mrow__lab:not(:has(.approx))::after { content: "≈"; margin-left: 6px; color: var(--ink3); font-weight: 400; }
+
+/* style attributes: each attribute a metric row that opens to the metrics behind it */
+.apanel { padding: 0; }
+.apanel__cmp { gap: 8px; }
+.apanel__msg { margin: 0 var(--pad-panel) 8px; }
+.apanel__grid { display: grid; grid-template-columns: minmax(0, max-content) minmax(64px, 1fr) auto auto 24px; column-gap: 14px; padding: 0 var(--pad-panel) 6px; }
+.apa { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+.apa + .apa { border-top: 1px solid var(--line); }
+.apa > .collapse { grid-column: 1 / -1; }
+.apa__row { cursor: pointer; }
+.apa__row .mrow__lab { display: flex; align-items: center; gap: 6px; }
+.apa__name { margin: 0; font: 500 13px/1.3 var(--f); }
+.apa__note { font-size: 12px; color: var(--ink3); }
+.apa__peek { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.apa__score { font-weight: 650; }
+.apa__score[tabindex] { cursor: help; }
+.apa__chev { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--r-ctl); color: var(--ink3); }
+.apa__chev::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform var(--d-expand) var(--ease-in-out); }
+.apa__chev.is-instant::before { transition: none; }
+.apa[data-open] .apa__chev::before { transform: translateY(1px) rotate(225deg); }
+@media (hover: hover) and (pointer: fine) { .apa__row:hover .apa__chev { background: var(--hover); color: var(--ink); } }
+@media (prefers-reduced-motion: reduce) { .apa__chev::before { transition: none; } }
+.apa .collapse .mrows { margin: 0 0 8px 6px; padding-left: 14px; border-left: 1px solid var(--line2); }
+.fpw__aside { display: inline-flex; align-items: center; gap: 12px; }
+.fpw__score { white-space: nowrap; }
+
+/* page enter, opt-in through html.anim (main.tsx) so tests and static renders see the end state: on
+   the page's first render (Profile sets data-enter) the cards fade and rise 6 px, 30 ms apart, and
+   each dot slides in from the track's middle. Only transform and opacity move. A tab switch, a
+   filter change or a keyboard navigation renders without data-enter, so nothing moves. */
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes trk-in { from { transform: translateX(calc((50 - var(--p, 50)) * 1cqw)); } }
+html.anim .profile[data-enter] .card { animation: rise 240ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
+html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation: trk-in 320ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 30ms); }
+@media (prefers-reduced-motion: reduce) {
+  html.anim .profile[data-enter] .card, html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__ref { animation-name: fade-in; }
+}

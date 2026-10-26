@@ -24,6 +24,7 @@ import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../wo
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
 import { botPopulation as botPopulationText, careerEntries, listedEntries, provisionalText, recordEntries, statLine } from "../data/engine";
 import { tipOf } from "../data/tips";
+import { sentence } from "../components/Percentile";
 import { matchModel, type MatchEntry, type MatchModel } from "../data/match";
 import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
@@ -130,7 +131,7 @@ function Rows({ q, side, ids }: { q: Query; side: "both" | "T" | "CT"; ids: stri
 }
 /** How good's metrics, now rows on the Duels and Utility tabs. */
 const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
-const rowOfId = (id: string) => Array.from(host.querySelectorAll<HTMLElement>(".mrow2")).find((el) => el.querySelector(".mrow2__l")?.firstChild?.textContent === metric(id).label);
+const rowOfId = (id: string) => Array.from(host.querySelectorAll<HTMLElement>(".mrow")).find((el) => el.querySelector(".mrow__lab")?.firstChild?.textContent === metric(id).label);
 const byLabel = (sel: string, label: string, name: string) => Array.from(host.querySelectorAll(sel)).find((el) => text(el.querySelector(label)) === name) ?? null;
 
 describe("comparison reasons", () => {
@@ -147,14 +148,14 @@ describe("comparison reasons", () => {
     for (const x of reasoned) {
       const el = rowOfId(x.id)!;
       expect(el.getAttribute("data-tip"), x.id).toContain(x.reason!);
-      expect(el.querySelector(".mrow2__t"), x.id).toBeNull();
+      expect(el.querySelector(".trk"), x.id).toBeNull();
       expect(text(el), x.id).not.toMatch(/Top \d|Bottom \d/);
     }
     const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rowOfId(x.id))!;
     const el = rowOfId(ranked.id)!;
     expect(el.getAttribute("data-tip")).toMatch(/\n(Top|Bottom) \d+% of pro (riflers|AWPers)\.$/);
     expect(el.getAttribute("tabindex")).toBe("0");
-    expect(el.querySelector(".mrow2__t i")).not.toBeNull();
+    expect(el.querySelector(".trk__dot")).not.toBeNull();
     expect(text(el)).not.toMatch(/Top \d|Bottom \d/);
   });
 
@@ -164,12 +165,12 @@ describe("comparison reasons", () => {
     answers.compare = await calls.compare(q, { side: "both" });
     answers.style = await calls.style(q, { side: "both" });
     render(<Rows q={q} side="both" ids={HOW_GOOD} />);
-    const rows = Array.from(host.querySelectorAll(".mrow2"));
+    const rows = Array.from(host.querySelectorAll(".mrow"));
     expect(rows.length).toBeGreaterThan(0);
     expect(host.querySelectorAll(".approx-legend[data-tip]")).toHaveLength(1);
     const statuses = new Set<string>();
     for (const el of rows) {
-      const m = metrics().find((x) => x.label === el.querySelector(".mrow2__l")?.firstChild?.textContent)!;
+      const m = metrics().find((x) => x.label === el.querySelector(".mrow__lab")?.firstChild?.textContent)!;
       statuses.add(m.status);
       expect(!!el.querySelector(".approx"), m.id).toBe(m.status === "approx");
     }
@@ -185,14 +186,14 @@ describe("comparison reasons", () => {
     answers.style = await calls.style(q, { pool: "all" });
     render(<ProfileView tab="playstyle" />);
     const p = { ...(answers.compare as { p: object }).p, ...(answers.style as { p: object }).p } as Record<string, { reason: string | null }>;
-    const rows = Array.from(host.querySelectorAll(".ranks__group .mrow2"));
-    const idOf = (li: Element) => metrics().find((x) => li.querySelector(".mrow2__l")?.firstChild?.textContent === x.label)!.id;
+    const rows = Array.from(host.querySelectorAll(".ranks__group .mrow"));
+    const idOf = (li: Element) => metrics().find((x) => li.querySelector(".mrow__lab")?.firstChild?.textContent === x.label)!.id;
     const reasoned = rows.filter((li) => p[idOf(li)].reason);
     expect(reasoned.length).toBeGreaterThan(0);
     for (const li of reasoned) {
       // the reason stands in the row's tooltip, and no track draws without a dot
       expect(li.getAttribute("data-tip"), idOf(li)).toContain(p[idOf(li)].reason!);
-      expect(li.querySelector(".mrow2__t"), idOf(li)).toBeNull();
+      expect(li.querySelector(".trk"), idOf(li)).toBeNull();
     }
   });
 });
@@ -229,30 +230,35 @@ describe("Profile attributes", () => {
     // population, or a rank shows where the engine gave a reason
     const { block, firepower } = await renderProfile();
     const fpCard = () => Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Firepower")!;
-    const phrases = (id: string) => Array.from((id === "firepower" ? fpCard() : attr(id)).querySelectorAll(".pctl")).map((el) => text(el.querySelector(".pctl__phrase")));
+    // each scored row's rank, or the reason it has none, is the line of its tooltip after the definition
+    const rankLine = (el: Element) => el.getAttribute("data-tip")!.split("\n").filter((l) => !/^Only \d+, so this may shift\.$/.test(l)).pop()!;
+    const phrases = (id: string) => Array.from((id === "firepower" ? fpCard() : attr(id).querySelector(".collapse")!).querySelectorAll(".mrow:not([data-extra])")).map(rankLine);
     expect(text(attr("sniping").querySelector(".apa__note"))).toBe("Compared to everyone");
     const own = block.style.role === "awper" ? "AWPer bots" : "rifler bots";
     const fp = firepower.scores.find((a) => a.id === "firepower")!;
     const checks: [string, RegExp, typeof fp][] = [
-      ["firepower", / of pro (riflers|AWPers)$/, fp],
-      ["sniping", / against all bots$/, block.style.scores.find((a) => a.id === "sniping")!],
-      ["entrying", new RegExp(` against ${own}$`), block.style.scores.find((a) => a.id === "entrying")!],
+      ["firepower", / of pro (riflers|AWPers)\.$/, fp],
+      ["sniping", / against all bots\.$/, block.style.scores.find((a) => a.id === "sniping")!],
+      ["entrying", new RegExp(` against ${own}\\.$`), block.style.scores.find((a) => a.id === "entrying")!],
     ];
     for (const [id, pop, score] of checks) {
       const rows = phrases(id);
       expect(rows.length, id).toBe(score.metrics.length);
       score.metrics.forEach((p, i) => {
-        if (p.reason) expect(rows[i], `${id} ${p.id}`).toBe(p.reason);
+        if (p.reason) expect(rows[i], `${id} ${p.id}`).toBe(sentence(p.reason));
         else if (p.pct !== null) expect(rows[i], `${id} ${p.id}`).toMatch(pop);
       });
     }
   });
 
-  it("shows a provisional score by its hatched bar and tooltip, never by a chip or label", async () => {
-    // fails if "Provisional" comes back as words on the page, or a provisional score loses its mark
+  it("names a provisional pool once, in the header pill, and on each score's tooltip", async () => {
+    // fails if the pill is missing, repeats per attribute, or a provisional score loses its tooltip
     const { block } = await renderProfile();
     expect(block.style.careers.provisional).toBe(true);
-    expect(host.textContent).not.toMatch(/provisional/i);
+    const pills = Array.from(host.querySelectorAll(".apanel .vpill"));
+    expect(pills.map(text)).toEqual([expect.stringMatching(/^Provisional, \d+ /)]);
+    expect(pills[0].getAttribute("data-tip")).toBe("Few bot careers yet, so this may shift.");
+    expect(host.querySelectorAll(".apanel [data-attr] .vpill")).toHaveLength(0);
     const score = attr("entrying").querySelector(".apa__score")!;
     expect(attr("entrying").hasAttribute("data-prov")).toBe(true);
     expect(score.getAttribute("data-tip")).toBe("Few bot careers yet, so this may shift.");

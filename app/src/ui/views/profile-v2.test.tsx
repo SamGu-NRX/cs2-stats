@@ -94,12 +94,12 @@ describe("aggression", () => {
   it("places the score on the track at 50% plus a quarter per pro SD, capped at two SDs", () => {
     // fails if the pros' mean is not the track's middle, or a score past 2 SDs runs off the track
     render(<AggressionCard s={withValues({ aggressionScore: 1, peekTravel: 300, duelExposure: null, firedFirst: 55, engageDistance: 700 })} />);
-    expect(host.querySelector<HTMLElement>(".aggro__scale .dtrack__dot")!.style.left).toBe("75%");
+    expect(host.querySelector<HTMLElement>(".aggro__scale .trk__dot")!.style.left).toBe("75%");
     expect(text(host.querySelector(".aggro__score b"))).toBe("+1.00");
     // duelExposure has no value, so three parts show
     expect(host.querySelectorAll(".mrow")).toHaveLength(3);
     render(<AggressionCard s={withValues({ aggressionScore: -3, peekTravel: null, duelExposure: null, firedFirst: null, engageDistance: null })} />);
-    expect(host.querySelector<HTMLElement>(".aggro__scale .dtrack__dot")!.style.left).toBe("0%");
+    expect(host.querySelector<HTMLElement>(".aggro__scale .trk__dot")!.style.left).toBe("0%");
   });
 
   it("does not render without any value, as on files without line of sight", () => {
@@ -114,9 +114,9 @@ describe("economy", () => {
     answers.style = { p: { buyDeviation: { id: "buyDeviation", value: 410, pct: 80, pool: "all", reason: null, n: null }, saveConversion: { id: "saveConversion", value: 2000, pct: null, pool: "all", reason: "1 of the 10 saved rounds a percentile needs", n: 1 } } };
     render(<EconomyCard q={Q} s={withValues({ buyDeviation: 410, saveConversion: 2000 })} side="both" />);
     const rows = Array.from(host.querySelectorAll(".mrow"));
-    expect(rows[0].querySelector<HTMLElement>(".dtrack__dot")!.style.left).toBe("80%");
-    expect(rows[1].querySelector(".dtrack")).toBeNull();
-    expect(rows[1].querySelector(".mrow__why")!.getAttribute("data-tip")).toBe("1 of the 10 saved rounds a percentile needs");
+    expect(rows[0].querySelector<HTMLElement>(".trk__dot")!.style.left).toBe("80%");
+    expect(rows[1].querySelector(".trk")).toBeNull();
+    expect(rows[1].getAttribute("data-tip")).toContain("1 of the 10 saved rounds a percentile needs.");
     // a research metric without a value takes no row
     render(<EconomyCard q={Q} s={withValues({ buyDeviation: 410, saveConversion: null })} side="both" />);
     expect(host.querySelectorAll(".mrow")).toHaveLength(1);
@@ -128,9 +128,9 @@ describe("economy", () => {
 describe("dot track", () => {
   it("draws your marker and a hollow second marker, clamped to the track", () => {
     render(<DotTrack at={120} ghost={-5} label="x" />);
-    expect(host.querySelector<HTMLElement>(".dtrack__dot")!.style.left).toBe("100%");
-    expect(host.querySelector<HTMLElement>(".dtrack__ghost")!.style.left).toBe("0%");
+    expect(host.querySelector<HTMLElement>(".trk__dot")!.style.left).toBe("100%");
+    expect(host.querySelector<HTMLElement>(".trk__ref")!.style.left).toBe("0%");
     render(<DotTrack at={null} label="x" />);
-    expect(host.querySelector(".dtrack__dot")).toBeNull();
+    expect(host.querySelector(".trk__dot")).toBeNull();
   });
 });
