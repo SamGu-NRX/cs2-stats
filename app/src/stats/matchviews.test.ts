@@ -106,6 +106,16 @@ describe("map zones", () => {
     expect(z.rows.map((r) => [r.zone, r.side, r.kills, r.deaths, r.kd])).toEqual([["LongA", "CT", 1, 0, null], ["Pit", "CT", 0, 1, 0]]);
     expect(z.rows[0].killsAt).toEqual([[10, 20]]);
   });
+
+  it("leaves a death's zone unknown when your nearest sample is over half a second away", () => {
+    // fails if a far sample names the zone: a's only sample is 40 ticks (0.6 s) before his death
+    const tables = oneRoundTables({
+      players: { a: "CT", d: "T" },
+      kills: [{ tick: t(2), killer: "d", victim: "a", at: { v_place: null } }],
+      positions: [{ steamid: "a", tick: t(2) - 40, x: 0, y: 0, place: "Pit" }],
+    });
+    expect(mapZones(tables, "a").rows).toEqual([]);
+  });
 });
 
 describe("your match", () => {
