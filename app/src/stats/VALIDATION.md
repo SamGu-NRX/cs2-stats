@@ -209,6 +209,32 @@ more weakly; the molotov metrics show no link to winning once grenades thrown ar
 stay because the user asked for smoke and molotov usefulness by name; their link is weak, and this is
 where that is said.
 
+## Spray patterns: `pnpm recoil <weapons_out>`
+
+The in-game spray pattern is each bullet's direction (fire_bullets) minus the view at weapon_fire, the
+median over every unscoped shot at that whole recoil index (`recoil-build.ts`). The kick at one index
+is nearly fixed: over 489 pro maps its middle half is at most 0.15 degrees wide for every gun with a
+pattern. The ideal pull is minus the kick. The check: how far the pros' median view movement over
+steady sprays from a reset sits from the ideal pull, per bullet (2026-10-25):
+
+| Gun | Pattern bullets | Pro band bullets (sprays) | Mean residual, bullets 2 on | Largest |
+|---|---|---|---|---|
+| AK-47 | 30 | 29 (33,184) | 0.58 deg | 2.27 at bullet 29 |
+| M4A4 | 30 | 29 (8,005) | 0.42 | 0.99 at 10 |
+| M4A1-S | 20 | 20 (13,757) | 0.40 | 0.89 at 10 |
+| FAMAS | 25 | 15 (1,088) | 0.73 | 1.88 at 15 |
+| Galil AR | 35 | 25 (4,654) | 0.59 | 1.48 at 22 |
+| MAC-10 | 30 | 12 (458) | 0.49 | 0.83 at 8 |
+| MP9 | 30 | 14 (1,125) | 0.94 | 2.44 at 12 |
+| MP7 | 24 | 9 (180) | 0.86 | 1.82 at 9 |
+
+AK-47 bullets 2 to 9 sit within 0.6 degrees of the ideal pull in both axes, and the largest residual is
+on the last bullets, where few sprays remain and the target has usually moved. The residual also holds
+whatever the pros' view did besides fighting recoil. AUG (7 bullets), MP5-SD (8), UMP-45 (6) and
+CZ75-Auto (7) have short patterns, and SG 553, P90, PP-Bizon, M249 and Negev have none: the demos
+hold too few unscoped shots of them. No game cfg sets `weapon_recoil_scale`, and no demo checked
+changes it in `server_cvar`, so the kick is at the game's default scale.
+
 ## Baselines: `pnpm baselines`
 
 `public/baselines.json` is 391 KB: 21 quantiles of every metric for each pool and side, with no names or
