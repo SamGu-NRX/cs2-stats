@@ -830,31 +830,10 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 }
 .spray-aside { display: inline-flex; align-items: center; gap: 8px; }
 
-/* spray: the gun list beside the chart; the chart under the list when the card is narrow */
-.sprayc { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 20px; align-items: start; container-type: inline-size; }
-.sprayc__fig { display: grid; gap: 10px; min-width: 0; }
-.sprayc__fig .spray__plot { max-width: 330px; }
-.gunlist { display: grid; gap: 2px; align-content: start; }
-.gunlist__b { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 8px; border-radius: var(--r-ctl); color: var(--ink2); font: 500 12px/1 var(--f); text-align: left; transition: background-color var(--d-hover) ease, color var(--d-hover) ease; }
-.gunlist__b[aria-checked="true"] { background: var(--raise); color: var(--cream); box-shadow: inset 2px 0 0 var(--cream); }
-.gunlist__b:focus-visible { outline: 2px solid var(--cream); outline-offset: -2px; }
-@media (hover: hover) and (pointer: fine) { .gunlist__b[aria-checked="false"]:hover { background: var(--hover); color: var(--ink); } }
-.gunlist__n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gunlist__c { font: 500 11px/1 var(--f-mono); color: var(--ink3); }
-.gunlist__b[aria-checked="true"] .gunlist__c { color: var(--ink2); }
-/* a gun under THIN_SPRAY sprays fades; its tooltip says why. No mark of its own: the count beside the name says it */
-.gunlist__b[data-thin] { opacity: 0.55; }
-.gunlist__b[data-thin][aria-checked="true"] { opacity: 0.8; }
-.gunlist__c { margin-left: 4px; }
-/* the picked gun's spray distance from its target, under the chart */
+/* the picked gun's spray distance from its target, beside the chart (layout in restore-aim.css) */
 .spray__dist { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 0; }
 .spray__dist [data-tip] { cursor: help; }
 .spray__dist b { font: 700 15px/1 var(--f); color: var(--cream); }
-.spray-key { gap: 4px 14px; font-size: 11px; }
-@container (max-width: 520px) {
-  .sprayc { grid-template-columns: minmax(0, 1fr); }
-  .gunlist { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-}
 
 /* counter-strafing and the finer metrics: label, count or percentile phrase, value */
 .strafe { display: grid; gap: 14px; }
@@ -881,12 +860,11 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .profcell { cursor: help; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
 
 /* ---------------------------------------------------------------- spray chart (components/SprayPath.tsx) */
-/* SYSTEM.md's spray chart: a well with a 1° grid, the pro path dashed grey, your path a 1.5 px cream line
-   with dots numbered at 1 and every fifth bullet, the first bullet a hollow cream ring */
+/* SYSTEM.md's spray chart: a well with a 1° grid, the ideal pull dashed grey, your bullets on a 1.5 px
+   cream line, bullet 1's point a hollow cream ring; the rest of the chart's styles are in restore-aim.css.
+   .spray itself is only charts.tsx SprayPattern's, which nothing imports. */
 .spray { margin: 0; display: grid; grid-template-columns: auto 1fr; align-items: start; column-gap: 8px; }
 .spray > :not(.spray__title):not(.spray__note) { grid-column: 1 / -1; }
-.spray__title { margin: 0 0 10px; font: 600 15px/1.35 var(--f); letter-spacing: -0.01em; text-wrap: balance; max-width: 40ch; color: var(--ink); }
-.spray__note { margin-top: 2px; }
 .spray__plot { display: block; width: 100%; max-width: 520px; }
 .well { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-chip); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4); }
 .spray__grid line { stroke: var(--line); stroke-width: 1; }
@@ -897,7 +875,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .spray__dot { fill: var(--cream); stroke: var(--cream); stroke-width: 1.5; }
 .spray__origin { fill: none; stroke: var(--cream); stroke-width: 1.5; }
 .spray__n { font: 500 11px var(--f-mono); fill: var(--ink); }
-.spray__scale line { stroke: var(--ink); stroke-width: 1.5; } .spray__scale text { font: 400 11px var(--f); fill: var(--ink2); }
 .sprayd { margin-top: 6px; }
 .sprayd .caps { margin-bottom: 8px; }
 .sprayd__plot { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; align-items: end; height: 70px; border-bottom: 1px solid var(--line); }
