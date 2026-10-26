@@ -128,10 +128,10 @@ describe("aim hero, restored figures", () => {
     expect(host.querySelector(".disclose__p")!.textContent).not.toContain("known speed");
   });
 
-  it("gives no verdict colour to spray path vs pros, which the engine defines as a comparison", () => {
+  it("gives no verdict colour to spray vs the ideal pull, which the engine defines as a comparison", () => {
     scoped = summary({ cmp: 4, dev: 12 });
     render(<AimPanels query={QUERY} label="t" visibility={false} />);
-    expect(fig("Spray path vs pros")!.querySelector<HTMLElement>(".fig__v")!.style.color).toBe("");
+    expect(fig("Spray vs the ideal pull")!.querySelector<HTMLElement>(".fig__v")!.style.color).toBe("");
   });
 });
 

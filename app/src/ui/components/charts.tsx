@@ -328,7 +328,7 @@ function placeLabels(items: { i: number; x: number; y: number }[], dots: readonl
 
 /** A spray's view movement per bullet, from the engine's Summary.aim.path (index 0 is bullet 2). */
 export interface SprayPath { n: number[]; dp: number[]; dy: number[] }
-/** The pro reference per bullet (aim-ref.ts RECOIL path, index 0 is bullet 1): [pitch, yaw, pitchQ25, pitchQ75, yawQ25, yawQ75]. */
+/** The reference per bullet (recoil-ref.ts RECOIL path, index 0 is bullet 1): [idealPitch, idealYaw, then the pros' pitchQ25, pitchQ75, yawQ25, yawQ75]. */
 export type ProPath = readonly (readonly number[])[];
 
 /** Your mean view movement from bullet 1, bullet by bullet (bullet 1 at the origin); bullets nobody reached are left out. */

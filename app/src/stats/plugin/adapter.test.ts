@@ -4,6 +4,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { CS2RB } from "../model-params";
+import { RECOIL } from "../recoil-ref";
 import { describe, expect, it } from "vitest";
 import type { SprayFact } from "../aim";
 import { ON_SCREEN_NOTE } from "../facts";
@@ -137,6 +138,13 @@ describe("plugin sprays", () => {
     [0.5, 1.2, 2, 2.6].forEach((x, j) => expect(spray.dp[j]).toBeCloseTo(x, 9));
     [-0.1, -0.2, -0.2, -0.3].forEach((x, j) => expect(spray.dy[j]).toBeCloseTo(x, 9));
     expect(rollup([f], { player: HUMAN }).aim.cmp).toBe(4);
+    // the file records the view but not the bullet: each bullet lands at the view change plus the
+    // game's kick for that bullet (recoil-ref.ts), marked as taken from the pattern
+    const kick = RECOIL.ak47.kick;
+    expect(spray.landing).toBe("pattern");
+    spray.lp.forEach((x, j) => expect(x).toBeCloseTo(spray.dp[j] + kick[j + 1][0], 2));
+    spray.ly.forEach((x, j) => expect(x).toBeCloseTo(spray.dy[j] + kick[j + 1][1], 2));
+    expect(spray.lp.length).toBe(4);
   });
 
   it("keeps a plugin spray relative to the target when a bullet has no angles", () => {

@@ -1,9 +1,8 @@
-// A spray compared with the pro path. The reference is stats/aim-ref.ts RECOIL: per bullet the median
-// pro view compensation from the first shot and its quartiles, pitch positive down (provisional, an
-// empirical median of pro sprays, not the game's recoil table; scoring is off, architecture.md). So the
-// chart compares and never grades: no red or green. The player's path is stats/aim.ts AimAgg.path,
+// A spray compared with the ideal pull. The reference is stats/recoil-ref.ts RECOIL path: per bullet
+// the ideal pull (minus the game's own recoil kick, measured on demos), with the pros' middle half of
+// view movement as the band, pitch positive down. The chart compares and never grades: no red or green. The player's path is stats/aim.ts AimAgg.path,
 // per bullet sums of the view movement from the first bullet.
-import type { RecoilRef } from "../../stats/aim-ref";
+import type { RecoilRef } from "../../stats/recoil-ref";
 
 export interface PlayerPath { n: number[]; dp: number[]; dy: number[] }
 export interface PathPoint { bullet: number; pitch: number; yaw: number; n: number }

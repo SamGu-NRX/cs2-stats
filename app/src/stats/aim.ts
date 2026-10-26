@@ -9,7 +9,8 @@
 //   (PluginShots, from the shots columns plugin rows fill).
 // Radar `spotted` lags real visibility, so nothing here reads it (architecture.md).
 import { ACCURATE_FRAC, aimAngle, aimError, forward, lookAt, SIGHT_CONE_DEG, wrap180 } from "./aim-geometry";
-import { MAX_SPEED, RECOIL } from "./aim-ref";
+import { MAX_SPEED } from "./aim-ref";
+import { RECOIL } from "./recoil-ref";
 import { enemyHit, type Ctx } from "./derive";
 import { isGun } from "./guns";
 import type { Metric } from "./metrics";
@@ -213,14 +214,25 @@ export interface SprayFact {
    */
   relative: boolean;
   /**
-   * View change from the first bullet, pitch and unwrapped yaw, for bullets 2.. while every shot met
-   * the asset's filters and the asset has a reference; empty otherwise. Demos and plugin 1.2.0 files
-   * give the view angles; on a relative spray it is the view's change relative to the line to the
-   * target (aim error at bullet 1 minus aim error at this bullet), which equals the view change when
-   * shooter and target hold still.
+   * View change from the first bullet, pitch and unwrapped yaw, for bullets 2.. while every shot was
+   * eligible (sprayEligible: unscoped, an M4A1-S silenced, view angles known); empty otherwise. Any
+   * spray counts, moving or standing, at an enemy or not: recoil control depends on neither. Demos and plugin
+   * 1.2.0 files give the view angles; on a relative spray it is the view's change relative to the line
+   * to the target (aim error at bullet 1 minus aim error at this bullet), for the bullets with that
+   * target on screen, which equals the view change when shooter and target hold still.
    */
   dp: number[];
   dy: number[];
+  /**
+   * Where each bullet went relative to bullet 1, for the bullets dp covers: the bullet's direction
+   * change from bullet 1's, pitch and unwrapped yaw (view change plus the recoil kick). Measured from
+   * fire_bullets' direction on demos ("measured"); on plugin 1.2.0 files, which record the view but
+   * not the bullet, the view change plus the game's kick for that bullet (recoil-ref.ts, "pattern"),
+   * for the bullets the pattern covers. Empty on relative sprays.
+   */
+  lp: number[];
+  ly: number[];
+  landing: "measured" | "pattern" | null;
   /** target switches (TRANSFER_HOLD bullets on a new visible enemy), and those that hit the new target */
   sw: number;
   swHits: number;
@@ -293,6 +305,12 @@ export interface AimAgg {
   bursts: number;
   movingShare: number;
   sprays: number;
+  /**
+   * per weapon, every spray of 3+ bullets, charted or not: a gun's place in the spray picker. A spray
+   * with no path (a plugin file before 1.2.0 with its target off screen records nothing of the view)
+   * still counts here.
+   */
+  sprayGuns: Record<string, number>;
   /** sprays with at least one target switch, switches, and switches that hit the new target */
   swSprays: number;
   switches: number;
@@ -323,6 +341,8 @@ export interface AimAgg {
   sprayDist: number[];
   /** per weapon, indexed as path: sums of the squared view change, pitch and yaw, for the spread per bullet */
   spread: Record<string, { pp: number[]; yy: number[] }>;
+  /** per weapon and bullet (index 0 is bullet 2, as path): bullets, and sums of SprayFact.lp and ly, where bullets landed from bullet 1 */
+  land: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** per weapon and bullet of path's sprays (index 0 is bullet 1): bullets with a value, and sums of SprayFact.hp and hy */
   heads: Record<string, { n: number[]; dp: number[]; dy: number[] }>;
   /** the same for SprayFact.tp and ty: where the target's eye sat from each bullet's direction */
@@ -345,7 +365,7 @@ export interface AimAgg {
 export const emptyAim = (): AimAgg => ({
   sightings: 0, preAimed: 0, place: [], ttd: [], ttk: [], moved: [], react: [], shot: [], over: [], micro: 0, trackN: 0, trackSum: 0,
   shots: 0, hits: 0, sight: 0, sightHits: 0, first: 0, firstHits: 0, cs: [0, 0, 0, 0, 0], bursts: 0, movingShare: 0,
-  sprays: 0, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, sprayDist: [], spread: {}, heads: {}, onTarget: {},
+  sprays: 0, sprayGuns: {}, swSprays: 0, switches: 0, switchHits: 0, cmp: 0, dev: 0, pull: 0, path: {}, relPath: {}, land: {}, sprayDist: [], spread: {}, heads: {}, onTarget: {},
   adj: 0, adjHits: 0, smokeShotsKnown: 0, smokeShots: 0, killsWbKnown: 0, killsWb: 0, killsSmokeKnown: 0, killsSmoke: 0, deep: 0, deepHits: 0,
   dist: [], travel: [], shotSpeed: [], shotErr: [], stopBuf: [], duelS: [], ffN: 0, ff: 0, xN: 0, xWins: 0, xExp: 0,
 });
@@ -390,6 +410,7 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     a.killsWbKnown += f.wbKnown; a.killsWb += f.wb; a.killsSmokeKnown += f.smokeKnown; a.killsSmoke += f.smoke;
   } else {
     a.sprays++;
+    a.sprayGuns[f.weapon] = (a.sprayGuns[f.weapon] ?? 0) + 1;
     if (f.dist !== null) a.sprayDist.push(f.dist);
     if (f.sw > 0) a.swSprays++;
     a.switches += f.sw;
@@ -405,9 +426,13 @@ export function foldAim(a: AimAgg, f: AimFact): void {
     const ref = RECOIL[f.weapon].path;
     const w = (a.path[f.weapon] ??= { n: [], dp: [], dy: [] });
     const sq = (a.spread[f.weapon] ??= { pp: [], yy: [] });
+    if (f.lp.length) addBullets((a.land[f.weapon] ??= { n: [], dp: [], dy: [] }), f.lp, f.ly);
     f.dp.forEach((dp, j) => {
-      const rp = dp - ref[j + 1][0], ry = f.dy[j] - ref[j + 1][1];
-      a.cmp++; a.dev += Math.hypot(rp, ry); a.pull += rp;
+      // compared with the ideal pull only for the bullets the in-game pattern covers
+      if (ref[j + 1]) {
+        const rp = dp - ref[j + 1][0], ry = f.dy[j] - ref[j + 1][1];
+        a.cmp++; a.dev += Math.hypot(rp, ry); a.pull += rp;
+      }
       w.n[j] = (w.n[j] ?? 0) + 1; w.dp[j] = (w.dp[j] ?? 0) + dp; w.dy[j] = (w.dy[j] ?? 0) + f.dy[j];
       sq.pp[j] = (sq.pp[j] ?? 0) + dp * dp; sq.yy[j] = (sq.yy[j] ?? 0) + f.dy[j] * f.dy[j];
     });
@@ -786,18 +811,20 @@ function strafeClass(c: Ctx, view: View | null, i: number, pi: number): number {
 }
 
 /**
- * The recoil asset's per-shot filter for reference sprays (recoil_patterns.json methodology.filtering).
- * Plugin shots record only speed and scope, so for them the airborne, flash, pitch and silencer tests
- * are skipped.
+ * Whether a shot's view movement belongs to a spray path. Recoil control does not depend on moving,
+ * jumping or being flashed: those add the game's random inaccuracy around the bullet's direction, not
+ * kick (on 489 pro maps the kick at one recoil index varies by under 0.15 degrees over every shot,
+ * moving or not; tools/recoil.ts prints it). So a shot counts unless it is scoped (zoomed sensitivity
+ * and AUG/SG 553 scope recoil differ), an M4A1-S fired without its silencer (another recoil), or, on a
+ * demo, lacks a view angle or looks straight up or down (|pitch| 85 or more, where yaw is unstable).
+ * Plugin shots record no silencer state.
  */
-function refEligible(c: Ctx, i: number, plugin: boolean): boolean {
+function sprayEligible(c: Ctx, i: number, plugin: boolean): boolean {
   const S = c.t.shots!;
   const w = S.weapon[i];
-  const steady = S.speed_2d[i] !== null && S.scoped[i] === false && S.speed_2d[i]! <= ACCURATE_FRAC * MAX_SPEED[w][0];
-  if (plugin) return steady;
-  return steady && S.pitch[i] !== null && S.yaw[i] !== null && S.airborne[i] === false
-    && S.flash_duration[i] !== null && S.flash_duration[i]! <= 0 && Math.abs(S.pitch[i]!) < 85
-    && (w !== "m4a1_silencer" || S.silenced[i] === true);
+  if (S.scoped[i] !== false) return false;
+  if (plugin) return true;
+  return S.pitch[i] !== null && S.yaw[i] !== null && Math.abs(S.pitch[i]!) < 85 && (w !== "m4a1_silencer" || S.silenced[i] === true);
 }
 
 /** The plugin's per-shot aim data, or null when no shot carries it (every source but the plugin). */
@@ -916,7 +943,7 @@ function shotFacts(c: Ctx, view: View | null, out: AimFact[]): void {
 function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi: number, run: number[], hitOn: Map<number, Set<number>>): SprayFact {
   const S = c.t.shots!;
   const weapon = S.weapon[run[0]];
-  const ref = RECOIL[weapon].path;
+  const ref = RECOIL[weapon];
   // The reference part: the run's prefix whose every shot passes the asset's filters and was fired with
   // an enemy on screen, so the path is a spray at someone, comparable with the pros'. On screen: in one
   // of the shooter's engagements, mesh-visible and not behind a smoke; for plugin shots, bullet 1's
@@ -925,25 +952,49 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
   const atVisible = ps
     ? (i: number) => ps.onScreen[i] && ps.err[i] !== null && ps.target[i] === target0
     : (i: number) => !!view?.visible && (view.atTick.get(key(S.tick[i], pi)) ?? []).some((row) => seen(c, row));
+  // eligible prefix: the bullets whose view movement is recoil control (any target, or none)
+  let m = 0;
+  while (m < run.length && sprayEligible(c, run[m], ps !== null)) m++;
+  // a relative plugin path also needs bullet 1's target on screen at every bullet
   let n = 0;
-  while (n < run.length && refEligible(c, run[n], ps !== null) && atVisible(run[n])) n++;
-  const dp: number[] = [], dy: number[] = [];
+  while (n < m && atVisible(run[n])) n++;
+  const dp: number[] = [], dy: number[] = [], lp: number[] = [], ly: number[] = [];
+  let landing: SprayFact["landing"] = null;
   // plugin shots give an absolute path only when every bullet carries view angles (plugin 1.2.0); else
-  // the path is relative to the target and is not compared with the pros'
-  const relative = ps !== null && run.slice(0, Math.max(n, 1)).some((i) => S.pitch[i] === null || S.yaw[i] === null);
-  if (n >= SPRAY_MIN && relative) {
+  // the path is relative to the target and is not compared with anything
+  const relative = ps !== null && run.slice(0, Math.max(m, 1)).some((i) => S.pitch[i] === null || S.yaw[i] === null);
+  if (relative && n >= SPRAY_MIN) {
     const e0 = ps.err[run[0]]!;
-    for (let j = 1; j < Math.min(n, ref.length); j++) {
+    for (let j = 1; j < n; j++) {
       const e = ps.err[run[j]]!;
       dp.push(r3(e0[1] - e[1]));
       dy.push(r3(wrap180(e0[0] - e[0])));
     }
-  } else if (n >= SPRAY_MIN) {
+  } else if (!relative && m >= SPRAY_MIN) {
     let yaw = 0;
-    for (let j = 1; j < Math.min(n, ref.length); j++) {
+    for (let j = 1; j < m; j++) {
       yaw += wrap180(S.yaw[run[j]]! - S.yaw[run[j - 1]]!);
       dp.push(r3(S.pitch[run[j]]! - S.pitch[run[0]]!));
       dy.push(r3(yaw));
+    }
+    // landing points: the bullet's own direction on demos, else the view plus the game's kick
+    const b0p = S.bullet_pitch[run[0]], b0y = S.bullet_yaw[run[0]];
+    if (!ps && b0p !== null && b0y !== null) {
+      let byaw = 0;
+      for (let j = 1; j <= dp.length; j++) {
+        const bp = S.bullet_pitch[run[j]], by = S.bullet_yaw[run[j]], pp = S.bullet_yaw[run[j - 1]];
+        if (bp === null || by === null || pp === null) break;
+        byaw += wrap180(by - pp);
+        lp.push(r3(bp - b0p));
+        ly.push(r3(byaw));
+      }
+      if (lp.length) landing = "measured";
+    } else if (ps) {
+      for (let j = 1; j <= Math.min(dp.length, ref.kick.length - 1); j++) {
+        lp.push(r3(dp[j - 1] + ref.kick[j][0]));
+        ly.push(r3(dy[j - 1] + ref.kick[j][1]));
+      }
+      if (lp.length) landing = "pattern";
     }
   }
   // Target switches: the aimed-at enemy changes and the new one holds for TRANSFER_HOLD bullets.
@@ -990,7 +1041,7 @@ function spray(c: Ctx, view: View | null, ps: PluginShots | null, ri: number, pi
     if (hitOn.has(key(S.tick[run[j]], pi))) deepHits++;
   }
   const { hp, hy, tp, ty } = relative || !dp.length ? { hp: [], hy: [], tp: [], ty: [] } : targetPath(c, view, ps, pi, run.slice(0, dp.length + 1), dy);
-  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, sw, swHits, dist, deep, deepHits, hp, hy, tp, ty };
+  return { k: "spray", ri, pi, weapon, bullets: run.length, relative, dp, dy, lp, ly, landing, sw, swHits, dist, deep, deepHits, hp, hy, tp, ty };
 }
 
 /**
@@ -1041,7 +1092,7 @@ const per = (a: number, b: number) => (b > 0 ? a / b : null);
 const csKnown = (s: { aim: AimAgg }) => s.aim.cs[1] + s.aim.cs[2] + s.aim.cs[3];
 /** How sprays differ on plugin recordings, which have no recoil index or ammo count (and before plugin 1.2.0 no view angles). */
 const PLUGIN_SPRAYS = `On plugin recordings a spray is cut by timing alone (shots of one gun each within one tick of its cycle time, from a shot ${RESET_GAP_S} s after the previous one), and only speed and scope filter its bullets.`;
-const PLUGIN_PATH = "Plugin 1.2.0 records view angles, so its sprays use them as a demo's do. On earlier plugin files the path is the change in aim error to bullet 1's target (the alive enemy nearest the view within 10 degrees, on screen by the plugin's line of sight, else the game's spotted flags), which includes the target's own movement: those sprays are shown relative to the target and are not compared with the pros.";
+const PLUGIN_PATH = "Plugin 1.2.0 records view angles, so its sprays use them as a demo's do, and each bullet lands at the view change plus the game's kick for it. On earlier plugin files the path is the change in aim error to bullet 1's target (the alive enemy nearest the view within 10 degrees, on screen by the plugin's line of sight, else the game's spotted flags), which includes the target's own movement: those sprays are shown relative to the target and are compared with nothing.";
 
 export const AIM_METRICS: Metric[] = [
   { id: "timeToDamage", label: "Time to damage", kind: "performance", group: "aim", unit: "ms", status: "approx", lowerIsBetter: true,
@@ -1107,11 +1158,11 @@ export const AIM_METRICS: Metric[] = [
   { id: "csNoStop", label: "No counter-strafe", kind: "identity", group: "aim", unit: "pct", status: "approx",
     tip: "Bad first shots fired without trying to stop.", def: `Of first bullets fired too fast with the last ${CS_HISTORY_S} s of velocity known: no stop attempted (speed above ${CS_DECEL_FRAC * 100}% of the recent peak, or rising).`,
     value: (s) => pct(s.aim.cs[3], csKnown(s)) },
-  { id: "sprayDeviation", label: "Spray path vs pros", kind: "identity", group: "aim", unit: "deg", status: "approx",
-    tip: "How far your spray control differs from pros' for that gun.", def: `Mean distance per bullet between your view path in a spray (relative to the first bullet) and the median pro compensation path for that gun and bullet (recoil_patterns.json, provisional). Relative to pro compensation, not a grade: target movement changes the path too. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
+  { id: "sprayDeviation", label: "Spray vs the ideal pull", kind: "identity", group: "aim", unit: "deg", status: "approx",
+    tip: "How far your mouse strays from the pull that cancels recoil.", def: `Mean distance per bullet between your view movement in a spray (from the first bullet) and the ideal pull for that gun and bullet: minus the game's own recoil kick, measured on the demos as each bullet's direction less the view (recoil-ref.ts). Any steady spray counts, at an enemy or not. Not a grade: following a moving target changes the path too. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
     value: (s) => per(s.aim.dev, s.aim.cmp) },
-  { id: "sprayPull", label: "Spray pull-down vs pros", kind: "identity", group: "aim", unit: "deg", status: "approx",
-    tip: "Whether you pull your spray down more or less than pros.", def: `Mean pitch difference per bullet from the median pro compensation path: positive pulls down more than pros, negative less. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
+  { id: "sprayPull", label: "Spray pull-down vs the ideal", kind: "identity", group: "aim", unit: "deg", status: "approx",
+    tip: "Whether you pull down more or less than recoil needs.", def: `Mean pitch difference per bullet from the ideal pull: positive pulls down more than the game's kick needs, negative less. ${PLUGIN_SPRAYS} ${PLUGIN_PATH}`,
     value: (s) => per(s.aim.pull, s.aim.cmp) },
   { id: "sprayTransfers", label: "Spray transfers", kind: "identity", group: "aim", unit: "pct", status: "approx",
     tip: "Sprays where you moved onto a second enemy.", def: `Sprays (${SPRAY_MIN}+ bullets) where you switched targets: the enemy nearest your view (within ${TRANSFER_CONE_DEG} degrees, visible) changed and the new one stayed nearest for ${TRANSFER_HOLD} bullets. ${PLUGIN_SPRAYS} The nearest enemy there is the plugin's shot target, when on screen.`,
