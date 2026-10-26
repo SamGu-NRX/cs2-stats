@@ -7,6 +7,3 @@
 .ig__head.is-lite .ig__headbtn { color: var(--ink3); }
 /* the totals drawer's player rows: name, K–D, assists, damage bar, damage */
 .ddmg.dtotals li { grid-template-columns: 110px 40px 24px minmax(0, 1fr) 36px; }
-
-/* Advice is prose: td sets tabular figures (base.css), which widen the period in this face. */
-.tbl td .advice { font-variant-numeric: normal; }
