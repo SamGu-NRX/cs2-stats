@@ -741,7 +741,12 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .swingcard__big { display: grid; gap: 6px; align-content: start; }
 .swingcard__big > b { font: 800 44px/1 var(--f); letter-spacing: -0.03em; }
 .swingcard__say { font-size: 14px; line-height: 1.45; color: var(--ink); }
-.swingcard__chart { display: grid; gap: 8px; min-width: 0; }
+/* where the swing comes from beside the matches behind it; stacked below 1240 px */
+.swingcard__chart { display: grid; grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.15fr); gap: 12px 32px; align-items: start; min-width: 0; }
+.swingcard__chart > :only-child { grid-column: 1 / -1; }
+.swingcard__bymatch { display: grid; gap: 8px; min-width: 0; }
+.swingcard__h { margin: 0; }
+@media (max-width: 1240px) { .swingcard__chart { grid-template-columns: minmax(0, 1fr); } }
 .swingcard__facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--ink2); }
 .swingcard__facts a { border-radius: var(--r-chip); }
 @media (hover: hover) and (pointer: fine) { .swingcard__facts a:hover { color: var(--ink); } }
@@ -1087,7 +1092,8 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .mlist__row { min-height: 40px; height: auto; }
 
 /* Multi-kills: badge, share of rounds, count; a row with rounds behind it opens them */
-.mlist__row { grid-template-columns: 40px minmax(0, 1fr) 48px 28px 16px; }
+/* badge, share bar, share, where the share sits among pros, count, chevron */
+.mlist__row { grid-template-columns: 40px minmax(0, 1fr) 48px 56px 28px 16px; }
 .mlist__pct { text-align: right; font-size: 12px; color: var(--ink2); }
 .mlist__row b { font: 800 15px/1 var(--f); text-align: right; }
 
@@ -1117,3 +1123,59 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* Where you play: the radar keeps main's size (560 px) with the places list beside it, instead of filling a full-width card */
 .wyp { grid-template-columns: minmax(0, 560px) minmax(240px, 1fr); }
 @media (max-width: 1240px) { .wyp { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- Profile v2 (views/profile/v2.tsx) */
+/* a dotted track: the tick in the middle, your dot, and a hollow second marker for the pro */
+.dtrack { position: relative; display: block; height: 12px; min-width: 56px; }
+.dtrack::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dotted var(--line2); transform: translateY(-1px); }
+.dtrack__mid { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px; background: var(--ink3); }
+.dtrack__dot, .dtrack__ghost { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%; transform: translate(-50%, -50%); }
+.dtrack__dot { background: var(--ink2); }
+.dtrack__ghost { background: var(--bg1); box-shadow: inset 0 0 0 1.5px var(--ink2); }
+[data-tip] > .dtrack, .mlist__pro { cursor: help; }
+
+/* swing by source: label, waterfall bar, your points, the bots' */
+.wfall { display: grid; gap: 2px; min-width: 0; }
+.wfall__head, .wfall__row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 64px; gap: 12px; align-items: center; }
+.wfall__head:has(> :nth-child(4)), .wfall__row[data-bots] { grid-template-columns: 96px minmax(0, 1fr) 64px 56px; }
+.wfall__head { height: 24px; }
+.wfall__head > :nth-child(n + 3) { text-align: right; }
+.wfall ul { display: grid; }
+.wfall__row { height: 28px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.wfall__row > .num { text-align: right; font-weight: 700; }
+.wfall__row--total { border-bottom: 0; border-top: 1px solid var(--line2); }
+.wfall__row--total .wfall__l { color: var(--ink); font-weight: 600; }
+.wfall__l { color: var(--ink2); cursor: help; }
+.wfall__row--total .wfall__l { cursor: default; }
+.wfall__track { position: relative; height: 10px; }
+.wfall__track i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.wfall__zero { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--ink3); }
+
+/* plays like: label, one track with both markers, your score, theirs */
+.vs--two .vs__head, .vs--two .vs__row { grid-template-columns: minmax(96px, auto) minmax(80px, 1fr) 40px 72px; }
+.vs--two .vs__head > :nth-child(n + 3) { grid-column: auto; text-align: right; }
+.vs--two .vs__head .vs__pro { overflow: hidden; text-overflow: ellipsis; }
+
+/* the overall role, the sides' roles under it */
+.role__overall { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
+.role__name { font: 800 28px/1 var(--f); letter-spacing: -0.02em; color: var(--cream); cursor: help; }
+.rmaps--all li { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 22px minmax(0, 1fr) 22px minmax(0, 1fr); }
+
+/* Aggression and Economy side by side; one alone keeps its half, so two short rows do not stretch across the page */
+.profile__pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.profile__pair:empty { display: none; }
+@media (max-width: 1100px) { .profile__pair { grid-template-columns: minmax(0, 1fr); } }
+.aggro__scale { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.aggro__scale .dtrack { height: 16px; }
+.aggro__scale .dtrack__dot { width: 12px; height: 12px; background: var(--cream); }
+.aggro__score { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 6px; }
+.aggro__score b { font: 800 22px/1 var(--f); color: var(--cream); }
+.aggro__score [data-tip] { cursor: help; }
+.mvals { display: grid; }
+.mrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 140px) 84px; gap: 12px; align-items: center; min-height: 30px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.mrow:last-child { border-bottom: 0; }
+.mrow__l { color: var(--ink2); cursor: help; }
+.mrow > b { text-align: right; }
+.mrow__why { cursor: help; text-align: right; }
+.mrow > b { font-weight: 700; }
+.fpw__aside { display: inline-flex; align-items: center; gap: 12px; }
