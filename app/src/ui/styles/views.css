@@ -1022,13 +1022,9 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .guns__bar i { display: block; height: 100%; border-radius: 2px; background: var(--tan); }
 .guns .guns__cls th { height: 24px; padding: 8px 0 2px; text-align: left; font: 600 10px/1 var(--f); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3); border-bottom: 1px solid var(--line); }
 .guns tbody tr:first-child.guns__cls th { padding-top: 0; }
-.mlist__row { min-height: 40px; height: auto; }
 
 /* Multi-kills: badge, share of rounds, count; a row with rounds behind it opens them */
 /* badge, share bar, share, where the share sits among pros, count, chevron */
-.mlist__row { grid-template-columns: 40px minmax(0, 1fr) 48px 56px 28px 16px; }
-.mlist__pct { text-align: right; font-size: 12px; color: var(--ink2); }
-.mlist__row b { font: 800 15px/1 var(--f); text-align: right; }
 
 /* Role: both sides' roles as the headline, the evidence, each side's fit, then each map */
 .role__head { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0 0 14px; }
@@ -1313,3 +1309,32 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 .wfall__track { height: 6px; }
 .wfall__track i { opacity: 0.7; border-radius: 1px; }
 .profile__cols, .profile__trend, .profile__pair, .identity { gap: 16px; }
+
+/* ranked share lists (Clutches, Multi-kills, places): a pip, a lollipop from zero, the count, the share */
+.ls { position: relative; display: block; height: 16px; min-width: 48px; }
+.ls::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 1px; background: var(--line); }
+.ls__stem { position: absolute; left: 0; top: 7px; height: 2px; background: var(--c, var(--tan)); opacity: 0.6; }
+.ls__dot { position: absolute; top: 3.5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--c, var(--tan)); box-shadow: 0 0 0 2px var(--s1); }
+.ls__dot.is-hollow { background: var(--s1); box-shadow: inset 0 0 0 1.5px var(--c, var(--tan)), 0 0 0 2px var(--s1); }
+.lslist { gap: 0; }
+.lslist > li + li { border-top: 1px solid var(--line); }
+.lsrow.clist__row { grid-template-columns: 40px minmax(0, 1fr) 56px 52px 16px; gap: 14px; height: 36px; }
+.lsrow .pip, .lsrow .mk { justify-self: start; }
+.lsrow__n { text-align: right; font-size: 12px; color: var(--ink3); white-space: nowrap; }
+.lsrow__v { text-align: right; font-weight: 650; white-space: nowrap; }
+
+/* opening duels: the big figure and its bar, then three figures with tracks */
+.open { display: grid; gap: 18px; }
+.open__big { display: grid; gap: 8px; }
+.open__head { display: flex; align-items: center; gap: 12px; }
+.open__head .disp { border-radius: var(--r-chip); }
+.open__bar { position: relative; display: block; height: 8px; border-radius: 4px; background: var(--s3); overflow: hidden; }
+.open__bar i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--cream); }
+.open__legend { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink2); }
+.open__legend b { color: var(--ink); font-weight: 650; margin-right: 3px; }
+.open__tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.otile { display: grid; grid-template-rows: auto auto auto 1fr; gap: 6px; min-width: 0; border-radius: var(--r-chip); cursor: help; }
+.otile__v { color: var(--ink); }
+.otile__v.is-thin { color: var(--ink2); }
+.otile__none { display: block; height: 16px; }
+.otile .meta { line-height: 1.35; }
