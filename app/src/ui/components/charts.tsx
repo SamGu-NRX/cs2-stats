@@ -392,7 +392,7 @@ export function SprayPattern({ path, pro, size = 320, bands = true, spread = nul
   const grid: number[] = [];
   for (let g = -Math.floor(ext); g <= Math.floor(ext); g++) grid.push(g);
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ells.length ? ", with the spread per bullet" : ""}${ref.length ? ", with the pro path" : ""}${eyes.length ? ", with where the target's head was" : ""}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ells.length ? ", with the spread per bullet" : ""}${ref.length ? ", with the ideal pull" : ""}${eyes.length ? ", with where the target's head was" : ""}`}>
       {grid.map((g) => (
         <g key={g}>
           <line x1={X(g)} x2={X(g)} y1="0" y2={size} stroke={g === 0 ? "var(--line2)" : "var(--line)"} />

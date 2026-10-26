@@ -45,8 +45,8 @@ const S = 26, W = 330, H = 360, TOP = 24;
 
 /**
  * `relative`: the path is measured against the target, not as absolute view angles (plugin recordings
- * until the plugin stores view angles), so it cannot be set against the pro path: the chart draws your
- * path only, says why in one sentence, and shows no band, no pro line and no distance bars.
+ * until the plugin stores view angles), so it cannot be set against the ideal pull: the chart draws your
+ * path only, says why in one sentence, and shows no band, no reference line and no distance bars.
  */
 export function SprayPath({ gun, reference, path, relative = false }: { gun: string; reference: RecoilRef; path: PlayerPath | null; relative?: boolean }) {
   const pts = path ? meanPath(path) : [];
@@ -54,7 +54,7 @@ export function SprayPath({ gun, reference, path, relative = false }: { gun: str
   const until = relative ? 0 : Math.min(ref.length, Math.max(pts.length, 12));
   const X = (yaw: number) => W / 2 + yaw * S, Y = (pitch: number) => TOP + pitch * S;
   const band = [...ref.slice(0, until).map((b) => `${X(b[4])},${Y(b[0])}`), ...ref.slice(0, until).reverse().map((b) => `${X(b[5])},${Y(b[0])}`)].join(" ");
-  const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the pro path`;
+  const finding = relative ? `Your ${gun} spray, relative to the target` : path ? findingTitle(gun, sprayFinding(reference, pts)) : `${gun}: the ideal pull`;
   return (
     <figure className="spray">
       <figcaption className="spray__title">{finding}</figcaption>
@@ -74,7 +74,7 @@ export function SprayPath({ gun, reference, path, relative = false }: { gun: str
           <text x={S + 8} y="4">1°</text>
         </g>
       </svg>
-      {relative ? <p className="spray__note">This recording measures your aim against the target rather than your absolute view angles, so it isn't compared with the pro path.</p> : null}
+      {relative ? <p className="spray__note">This recording measures your aim against the target rather than your absolute view angles, so it isn't compared with the ideal pull.</p> : null}
     </figure>
   );
 }
@@ -90,7 +90,7 @@ export function SprayDistance({ reference, path }: { reference: RecoilRef; path:
   const max = Math.max(2, ...rows.map((r) => r.d)), edge = rows.reduce((s, r) => s + r.half, 0) / rows.length;
   return (
     <div className="sprayd">
-      <div className="caps">Distance from the pro path, bullet by bullet</div>
+      <div className="caps">Distance from the ideal pull, bullet by bullet</div>
       <div className="sprayd__plot">
         {rows.map((r) => <i key={r.b} data-thin={r.n < MIN_SPRAYS || undefined} style={{ height: `${(100 * r.d) / max}%` }} title={`Bullet ${r.b}: ${r.d.toFixed(2)}° from the pro median, ${r.n} sprays`} />)}
         <span className="sprayd__edge" style={{ bottom: `${(100 * edge) / max}%` }}><span>edge of the pros' middle half</span></span>

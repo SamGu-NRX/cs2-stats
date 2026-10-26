@@ -5,8 +5,8 @@
 //   counter-strafing carry verdict colours; spray path vs pros does not, because the engine defines it
 //   as a comparison, not a grade.
 // - Spray: pick a gun (the five most sprayed as buttons, every gun in a menu, thin samples marked),
-//   see your mean view path with its spread, the pro path and where the target's head was, then two
-//   per-bullet charts: distance from the target's head, and distance from the pro path.
+//   see your mean view path with its spread, the ideal pull (the game's recoil, mirrored) and where the
+//   target's head was, then two per-bullet charts: distance from the target's head, and from the ideal pull.
 // - Where you hit: gun hits by body part.
 // - Accuracy by gun rolls up each gun on its own; head share and headshot kills come from its totals.
 // - Time to damage, reaction, first shot and crosshair placement need view angles and mesh line of
@@ -256,7 +256,7 @@ function SprayCard({ s }: { s: Rolled | null }) {
         )}
         <div className="gunpick__bands">
           <label className="check"><input type="checkbox" checked={spread} onChange={(e) => setSpread(e.target.checked)} /><span>Spread bands</span></label>
-          {pro && <label className="check"><input type="checkbox" checked={bands} onChange={(e) => setBands(e.target.checked)} /><span>Pro path</span></label>}
+          {pro && <label className="check"><input type="checkbox" checked={bands} onChange={(e) => setBands(e.target.checked)} /><span>Ideal pull</span></label>}
         </div>
       </div>
       <SprayBody path={path[w]} pro={pro} bands={bands} spread={spread ? s?.aim.spread[w] ?? null : null} heads={s?.aim.heads[w] ?? null} onTarget={s?.aim.onTarget[w] ?? null} />
@@ -279,10 +279,10 @@ function SprayBody({ path, pro, bands, spread, heads, onTarget }: { path: SprayP
         <div className="legend spray-legend">
           <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="var(--cream)" /></svg>Your average view movement from the first bullet, bullet by bullet</span>
           {spread && <span><svg width="14" height="10" aria-hidden><ellipse cx="7" cy="5" rx="6" ry="4" fill="rgba(255,215,173,.14)" stroke="rgba(255,215,173,.55)" /></svg>That bullet's spread, one standard deviation of your view movement each way</span>}
-          {pro && bands && <span><svg width="14" height="10" aria-hidden><rect x="1" y="1" width="12" height="8" rx="2" fill="rgba(43,163,224,.07)" stroke="rgba(43,163,224,.4)" /></svg>The median pro path; boxes hold the middle half of pros</span>}
+          {pro && bands && <span><svg width="14" height="10" aria-hidden><rect x="1" y="1" width="12" height="8" rx="2" fill="rgba(43,163,224,.07)" stroke="rgba(43,163,224,.4)" /></svg>The ideal pull, the game's recoil mirrored; boxes hold the middle half of pros</span>}
           {heads && <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="2.5" fill="var(--ct)" /></svg>Where the target's head was, from your view at bullet 1</span>}
           <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="4" fill="var(--bg1)" stroke="var(--cream)" strokeWidth="1.5" /></svg>Bullet 1; numbers mark every fifth bullet</span>
-          {!pro && <span className="faint">There is no pro path for this gun in the recoil reference.</span>}
+          {!pro && <span className="faint">No in-game pattern for this gun yet: the demos hold too few of its shots.</span>}
         </div>
       </div>
       {onTarget && <TargetControl sums={onTarget} />}
@@ -346,8 +346,8 @@ function BulletControl({ path, pro }: { path: SprayPath; pro: ProPath }) {
   const Y = (d: number) => h - 18 - (d / max) * (h - 30);
   return (
     <div className="bctl" ref={ref}>
-      <div className="bctl__head"><span className="caps">Bullet by bullet</span><b className="num">{held ? `Inside the pro range through bullet ${held + 1}` : "Outside the pro range from bullet 2"}</b></div>
-      <svg width={w} height={h} role="img" aria-label={`Distance from the pro path by bullet: ${rows.map((r) => `${r.i + 1}: ${r.dev.toFixed(1)} degrees${r.inside ? ", inside" : ""}`).join(", ")}`}>
+      <div className="bctl__head"><span className="caps">Bullet by bullet</span><b className="num">{held ? `Inside the pros' middle half through bullet ${held + 1}` : "Outside the pros' middle half from bullet 2"}</b></div>
+      <svg width={w} height={h} role="img" aria-label={`Distance from the ideal pull by bullet: ${rows.map((r) => `${r.i + 1}: ${r.dev.toFixed(1)} degrees${r.inside ? ", inside" : ""}`).join(", ")}`}>
         {rows.map((r, j) => {
           const x = 12 + j * (bw + 4);
           const t = r.inside ? 0.6 : -toScore(r.dev, 0, max) * 0.8 - 0.2;
@@ -359,7 +359,7 @@ function BulletControl({ path, pro }: { path: SprayPath; pro: ProPath }) {
           );
         })}
       </svg>
-      <p className="meta">Each bar is how far your average view movement for that bullet sat from the median pro's. Green bars fall inside the middle half of pros. Target movement changes the ideal path, so this compares with pros rather than grading you.</p>
+      <p className="meta">Each bar is how far your average view movement for that bullet sat from the ideal pull, the mouse movement that cancels the game's recoil. Green bars fall inside the middle half of pros. Following a moving target moves your view too, so this compares rather than grades.</p>
     </div>
   );
 }
