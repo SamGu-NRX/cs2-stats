@@ -37,7 +37,7 @@ Plugin recordings take one extra step first: `decodeMatch(bytes)` then `pluginTo
 ### Facts
 | Call | Returns | Notes |
 |---|---|---|
-| `derive(tables, winProb)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`), which changes whenever a definition does, and by `modelFingerprint(winProb)` (`model-params.ts`: the rating parameters and win-probability source by content), which facts record as `match.model`. `match.inputs.throws` says whether throws are logged or rebuilt. Inputs some metrics need are counted per row (`INPUT_COVERAGE`: loadouts per round, the weapon in hand per death, both loadouts per kill), so a metric over partly known rows is computed over the known ones and its comparison says how many were known. |
+| `derive(tables, winProb)` (`derive.ts`) | `MatchFacts` | Plain JSON, safe to cache. Cache by `DERIVE_VERSION` (`facts.ts`), which changes whenever a definition does, and by `modelFingerprint(winProb)` (`model-params.ts`: the rating parameters and win-probability source by content), which facts record as `match.model`. `match.inputs.throws` says whether throws are logged or rebuilt. Inputs some metrics need are counted per row (`INPUT_COVERAGE`: loadouts per round, the weapon in hand per death, both loadouts per kill, grenade and flash events per round), so a metric over partly known rows is computed over the known ones and its comparison says how many were known. |
 | `winProbSource(pack)`, `CS2RB` (`model-params.ts`) | `WinProbSource` | The one loader for the rating model and the win-probability source: HLTV's lookup from the private pack `%APPDATA%\BotMatchStats\packs\winprob-hltv.json` (pass its parsed JSON), or the CS2RB round model in `model/export` when the pack is missing (pass null). A pack that is present but malformed throws. `facts.match.winProb` records which one a match used. |
 
 `MatchFacts` holds:
@@ -63,7 +63,7 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 ### Summaries and metrics
 | Call | Returns | Notes |
 |---|---|---|
-| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` dates, `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places; it honours player, side and match filters and is empty under a round-level filter. |
+| `rollup(facts, filter)` (`rollup.ts`) | `Summary` | One player (or several ids) over the rounds a filter keeps: `sides`, `ownBuy`, `oppBuy` (HLTV's pistol, eco, half, full), `maps`, `from`/`to` days (the day of `startedAt` in `timeZone`, the runtime's own zone by default; a source with only a date keeps it; `rollup.ts` `matchDay`), `opponents` (team names), `spawns`, `weapons`, `rounds` (round numbers, for one match's round drawer). `Summary.presence[map]` is the heatmap and top places; it honours player, side and match filters and is empty under a round-level filter. |
 | `emptySummary()`, `addMatch(summary, facts, filter)` | | The same sum one match at a time, so a caller can stream facts from storage instead of holding them all. |
 | `grenadesOf(facts, filter)` | grenades with their map | The landing map's points. |
 | `economyOf(facts, team)` (`economy.ts`) | `EconomyView` | One match from one team's side: per round buy, equipment, money left, spend and saves for both teams; win rate per buy class; buy against buy; rounds won after making the opening kill; plants and how they ended; average equipment. A save's value is the saver's equipment at freeze end, so grenades thrown since still count. |
@@ -106,6 +106,13 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 | `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |
 | `rolesBySpawn(q)` | The role blend per side and per spawn used, each spawn with its map, the map's place name there and its position in the side's spawn area facing the enemy ("front left", `positions.ts` `spawnPosition`); each blend covers that spawn's rounds on its own map under every query filter |
 | `clutches(q)` | Every clutch by round, with the player's steamid (`player`) and their enemy kills after the clutch started (`kills`) |
+| `careerRatings(q, opt)` | Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100: weighted means of pro percentiles (`career.ts` COMPOSITES), each with its parts and the inputs that are missing |
+| `topStats(q, opt)` | The five performance metrics with the highest pro percentile |
+| `focusAreas(q, opt)` | Performance metrics under the pros' 50th percentile that have a tip, ranked by how far under, each with its tip |
+| `periodCompare(q, current, previous)` | Every metric over one date range against another: value, previous value, delta and direction |
+| `personalBests(q)` | The best single-match value of each count and performance metric, with its file, from matches that recorded its inputs in full (a match with a round that holds no grenade or flash event has no enemies-flashed best) |
+| `sessions(q, gapHours)` | The matches with rounds the filter keeps, grouped into sessions (a gap of 3 hours or more between one match's end and the next one's start), each with its record, totals, Rating 3.0 and awards (best match, most kills) |
+| `buyTiers(q)` | The query split by the team's buy tier: pistol, eco, semi-eco, force, full |
 | `ratingBreakdown(file, player, reference)` | Each round's Rating 3.0 alone (intercept plus each input's coefficient times the round's value), its six terms, its swing sources, its gap to the rating of `reference` (the player's own matches; the match's rating when null), and `counts`: whether the round is one the match rating is made of. Unrated rounds have null. |
 | `headToHead(file)` | Every pair of enemies: kills, damage, kills by weapon class, flashes over 1.1 s and opening kills, each way |
 | `mapZones(file, player)` | The player's kills and deaths per zone (the map's place names) and side, with K/D and positions, and the match's zone list |

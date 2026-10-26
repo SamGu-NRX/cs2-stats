@@ -20,6 +20,21 @@ export function isPistolRound(ri: number, maxRounds: number): boolean {
   return ri === 0 || ri === maxRounds / 2;
 }
 
+/**
+ * Finer tiers for the buy splits: HLTV's half buy split at FORCE_FROM_PER_PLAYER into a semi-eco and a
+ * force. Leetify shows semi-eco and force splits without publishing its bands; these are ours.
+ */
+export const BUY_TIERS = ["pistol", "eco", "semiEco", "force", "full"] as const;
+export type BuyTier = (typeof BUY_TIERS)[number];
+/** Team equipment per player from which a half buy is a force rather than a semi-eco. Ours, no fit: the middle of HLTV's half band in round dollars. */
+export const FORCE_FROM_PER_PLAYER = 2000;
+
+export function buyTier(teamEquip: number, players: number, pistol: boolean): BuyTier {
+  const c = classifyBuy(teamEquip, players, pistol);
+  if (c !== "half") return c;
+  return teamEquip / Math.max(1, players) >= FORCE_FROM_PER_PLAYER ? "force" : "semiEco";
+}
+
 export function classifyBuy(teamEquip: number, players: number, pistol: boolean): BuyClass {
   if (pistol) return "pistol";
   const per = teamEquip / Math.max(1, players);

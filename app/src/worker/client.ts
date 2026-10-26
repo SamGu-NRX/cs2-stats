@@ -12,7 +12,7 @@ export type Client = { [K in Method]: (...a: Parameters<Api[K]>) => Promise<Resu
 
 /** Every Api method once; the Record type fails to compile when the Api gains or loses one. */
 const METHODS = Object.keys({
-  meta: 1, baselines: 1, sync: 1, match: 1, rounds: 1, places: 1, rollup: 1, ratings: 1, guns: 1, positions: 1, compare: 1, attributes: 1, style: 1, attributeBlock: 1, buySplits: 1, opponents: 1, winCorrelation: 1, rolesBySpawn: 1, clutches: 1, roles: 1, rolesByMap: 1, multiKills: 1, ratingBreakdown: 1, headToHead: 1, mapZones: 1, yourMatch: 1, openingDuels: 1, situations: 1, bombsites: 1, playsLike: 1, compass: 1, trends: 1,
+  meta: 1, baselines: 1, sync: 1, match: 1, rounds: 1, places: 1, rollup: 1, ratings: 1, guns: 1, positions: 1, compare: 1, attributes: 1, style: 1, attributeBlock: 1, buySplits: 1, buyTiers: 1, careerRatings: 1, topStats: 1, focusAreas: 1, periodCompare: 1, personalBests: 1, sessions: 1, opponents: 1, winCorrelation: 1, rolesBySpawn: 1, clutches: 1, roles: 1, rolesByMap: 1, multiKills: 1, ratingBreakdown: 1, headToHead: 1, mapZones: 1, yourMatch: 1, openingDuels: 1, situations: 1, bombsites: 1, playsLike: 1, compass: 1, trends: 1,
 } satisfies Record<Method, 1>) as Method[];
 
 export function createClient(host: Host): Client {

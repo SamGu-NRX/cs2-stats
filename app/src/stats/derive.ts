@@ -4,10 +4,11 @@
 import { deriveAggro } from "./aggression";
 import { deriveAim, markSight } from "./aim";
 import { buying } from "./buying";
+import { handling } from "./handling";
 import { luck } from "./luck";
 import { closing } from "./closing";
 import { duels } from "./duels";
-import { classifyBuy, isPistolRound, type BuyClass } from "./economy";
+import { buyTier, classifyBuy, isPistolRound, type BuyClass, type BuyTier } from "./economy";
 import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
@@ -20,7 +21,7 @@ import { sniping } from "./sniping";
 import { swing } from "./swing";
 import { modelFingerprint, type WinProbSource } from "./model-params";
 import type { MatchTables, Side } from "./tables";
-import { grenadeFacts, utility } from "./utility";
+import { grenadeFacts, markUtility, utility } from "./utility";
 import { derivePresence } from "./positions";
 import { deriveUtilQ } from "./utilq";
 
@@ -300,13 +301,14 @@ function roundFacts(c: Ctx, maxRounds: number): RoundFact[] {
     const pistol = isPistolRound(r.round[ri] - 1, maxRounds);
     const team = { CT: x.nCT ? x.CT : null, T: x.nT ? x.T : null };
     const buy = (s: Side): BuyClass | null => (pistol ? "pistol" : team[s] === null ? null : classifyBuy(team[s]!, s === "CT" ? x.nCT : x.nT, false));
+    const tier = (s: Side): BuyTier | null => (pistol ? "pistol" : team[s] === null ? null : buyTier(team[s]!, s === "CT" ? x.nCT : x.nT, false));
     const fe = r.freeze_end_tick[ri];
     return {
       ri, number: r.round[ri], ctTeam: c.ctTeam[ri], winner: asSide(r.winner_side[ri]), reason: r.reason[ri],
       durationS: fe === null ? null : (r.end_tick[ri] - fe) / c.tickRate, freezeEndTick: fe, endTick: r.end_tick[ri],
       plantTick: r.plant_tick[ri], plantSite: r.plant_site[ri], planter: c.idOf(r.planter_steamid[ri]), defuser: c.idOf(r.defuser_steamid[ri]), defused: r.defuse_tick[ri] !== null, exploded: r.explode_tick[ri] !== null,
       leaves: leavesOf(c, ri),
-      equip: team, buy: { CT: buy("CT"), T: buy("T") }, winProb: null,
+      equip: team, buy: { CT: buy("CT"), T: buy("T") }, tier: { CT: tier("CT"), T: tier("T") }, winProb: null,
     };
   });
 }
@@ -345,7 +347,8 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
     if (won === false) m.lostRounds = 1;
     return {
       ri: rf.ri, pi: p, side, team: side === "CT" ? rf.ctTeam : ((1 - rf.ctTeam) as 0 | 1), won,
-      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"], aliveAtStart: i === undefined ? null : t.alive_at_start[i],
+      ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"], ownTier: rf.tier[side], oppTier: rf.tier[side === "CT" ? "T" : "CT"],
+      aliveAtStart: i === undefined ? null : t.alive_at_start[i],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
       money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ...spawnOf(c, rf.ri, p), m,
     };
@@ -386,10 +389,12 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   duels(c);
   positioning(c);
   utility(c);
+  markUtility(c);
   ecoAdjust(c);
   swing(c);
   valuedRounds(c);
   markSight(c);
+  handling(c);
   luck(c);
   const weapons = guns(c);
 
