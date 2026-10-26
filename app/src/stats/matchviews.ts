@@ -272,23 +272,27 @@ export type Situations = Record<string, { rounds: number; won: number }>;
 
 /**
  * Adds one match's man-advantage situations for the rows `filter` keeps: each state your side passed
- * through (the alive counts at freeze end and after every death, up to the round's end) counts once per
- * round, with the round's result. States with a side at 0 are the round's end and are left out.
+ * through (the alive counts at freeze end and after every death or disconnect of a living player, in
+ * tick order, up to the round's end) counts once per round, with the round's result. A player the
+ * source marks dead at freeze end (PlayerRound.aliveAtStart false) is not counted. States with a side
+ * at 0 are the round's end and are left out.
  */
 export function addSituations(out: Situations, f: MatchFacts, filter: Filter): void {
   for (const p of keptRounds(f, filter)) {
     const rf = f.rounds[p.ri];
     if (rf.winner === null) continue;
     const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-    for (const r of f.pr) if (r.ri === p.ri) alive[r.side].add(r.pi);
+    for (const r of f.pr) if (r.ri === p.ri && r.aliveAtStart !== false) alive[r.side].add(r.pi);
     const enemy: Side = p.side === "CT" ? "T" : "CT";
     const seen = new Set<string>();
     const note = () => { if (alive[p.side].size && alive[enemy].size) seen.add(`${alive[p.side].size}v${alive[enemy].size}`); };
     note();
-    for (const k of f.kills) {
-      if (k.ri !== p.ri || k.tick > rf.endTick) continue;
-      if (alive.CT.delete(k.victim) || alive.T.delete(k.victim)) note();
-    }
+    // deaths and disconnects of living players, in tick order (a death before a disconnect on one tick)
+    const gone: { tick: number; pi: number }[] = [
+      ...f.kills.filter((k) => k.ri === p.ri && k.tick <= rf.endTick).map((k) => ({ tick: k.tick, pi: k.victim })),
+      ...rf.leaves.filter((l) => l.tick <= rf.endTick),
+    ];
+    for (const e of gone.sort((x, y) => x.tick - y.tick)) if (alive.CT.delete(e.pi) || alive.T.delete(e.pi)) note();
     for (const s of seen) {
       const x = (out[s] ??= { rounds: 0, won: 0 });
       x.rounds++;
