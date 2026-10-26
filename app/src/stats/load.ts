@@ -140,6 +140,16 @@ function convert(kind: string, v: unknown, table: string, col: string): unknown 
   throw new TableError(`${table}.${col}: unknown kind ${kind}`);
 }
 
+/**
+ * The tables with match.extra's "pov" set to `pov`: whose match it is. An extracted demo does not say which
+ * player recorded it; for the user's imported Valve matches it is the SteamID64 in valve-user.local.json,
+ * which the host passes with each entry (host.ts FileEntry.pov).
+ */
+export function withPov(t: MatchTables, pov: string): MatchTables {
+  const extra = { ...(JSON.parse(t.match.extra[0]) as Record<string, unknown>), pov };
+  return { ...t, match: { ...t.match, extra: [JSON.stringify(extra)] } };
+}
+
 /** Raw decoded columns (hyparquet values), plus the row count. */
 async function readRaw(bytes: ArrayBuffer, table: string, columns: string[], sourceOnly: readonly string[] = []): Promise<Record<string, unknown[]> & { __n: number }> {
   const metadata = parquetMetadata(bytes);

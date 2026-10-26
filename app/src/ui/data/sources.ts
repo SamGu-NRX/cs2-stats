@@ -5,10 +5,12 @@
 // - pro: a pro match demo, extracted to tables. Today these arrive only as "dev/<folder>" paths, which
 //   `vite dev` serves when CS2_DEV_MATCHES is set (host.ts). They open from Matches like any match but
 //   are never part of the user's career (data/engine.ts isOwn);
-// - synthetic: the generated demo match (?demo=synthetic).
+// - synthetic: the generated demo match (?demo=synthetic);
+// - valve: one of the user's Valve matchmaking demos, extracted by extractor/valve_import.py
+//   (match.source "valve").
 import type { MatchEntry } from "./match";
 
-export type SourceId = "recorded" | "converted" | "pro" | "synthetic";
+export type SourceId = "recorded" | "converted" | "pro" | "synthetic" | "valve";
 
 export interface SourceInfo {
   id: SourceId;
@@ -17,12 +19,12 @@ export interface SourceInfo {
   missing: string[];
 }
 
-export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic" };
+export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic", valve: "Valve" };
 
-/** From the file's path, the plugin's own label for the file (env.plugin) and whether it holds shots and positions. */
-export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "hasPos">): SourceInfo {
+/** From the file's path (a pro demo), the match's source (a Valve demo), the plugin's own label for the file (env.plugin), and whether it holds shots and positions. */
+export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "hasPos" | "match">): SourceInfo {
   if (e.file.startsWith("dev/")) return { id: "pro", label: SOURCE_LABEL.pro, missing: [] };
-  const id: SourceId = e.origin === "legacy-convert" ? "converted" : e.origin === "synthetic-demo" ? "synthetic" : "recorded";
+  const id: SourceId = e.match.source === "valve" ? "valve" : e.origin === "legacy-convert" ? "converted" : e.origin === "synthetic-demo" ? "synthetic" : "recorded";
   if (id === "converted") return { id, label: SOURCE_LABEL[id], missing: ["aim", "movement"] };
   const missing: string[] = [];
   if (!e.hasAim) missing.push("aim");
