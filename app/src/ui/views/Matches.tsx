@@ -46,7 +46,26 @@ function Counted({ s, children }: { s: MatchEntry; children: ReactNode }) {
  * A session and what its chip may say about when it ran: the clock times for matches with a recorded
  * start, the day alone for matches the source dated but did not time (`day`, YYYY-MM-DD).
  */
-export type SessionRow = Session & { day: string | null };
+export type SessionRow = Session & {
+  day: string | null;
+  /**
+   * The session's identity in the URL (?session=), its key and its pressed state: "t:<start ms>" for
+   * timed matches, "d:<YYYY-MM-DD>" for a date-only day. The start alone is not unique: a timed
+   * session starting at a UTC midnight shares it with that date's date-only session.
+   */
+  id: string;
+};
+
+/**
+ * The session a ?session= value names: by its id, or for a link from before ids (the start in ms), the
+ * timed session starting then, else the date-only one.
+ */
+export function sessionFor(rows: SessionRow[], key: string): SessionRow | null {
+  const exact = rows.find((x) => x.id === key);
+  if (exact || !/^\d+$/.test(key)) return exact ?? null;
+  const at = rows.filter((x) => String(x.start) === key);
+  return at.find((x) => x.day === null) ?? at[0] ?? null;
+}
 
 /**
  * A date-only match starts, in the worker, at its date's UTC midnight (data/match.ts startMs), so
@@ -74,8 +93,11 @@ function useSessions(all: MatchEntry[], map: string | null): { rows: SessionRow[
     if (error) return { rows: null, error };
     if ((qt && !rt.data) || (qd && !rd.data)) return { rows: null, error: null };
     const rows: SessionRow[] = [
-      ...(rt.data ?? []).map((x) => ({ ...x, day: null })),
-      ...(rd.data ?? []).map((x) => ({ ...x, day: dayOf.get(x.files[0]) ?? null })),
+      ...(rt.data ?? []).map((x) => ({ ...x, day: null, id: `t:${x.start}` })),
+      ...(rd.data ?? []).map((x) => {
+        const day = dayOf.get(x.files[0]) ?? null;
+        return { ...x, day, id: day ? `d:${day}` : `d:${x.start}` };
+      }),
     ];
     // a date-only session sorts at its day's UTC midnight: its day is right, its hour is not shown
     return { rows: rows.sort((a, b) => b.start - a.start), error: null };
@@ -108,11 +130,11 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
       {error ? <LoadFailed what="Sessions" error={error} /> : !sessions ? <div className="skel" style={{ height: 88 }} /> : (
         <ul className="sessions__list">
           {sessions.map((x) => {
-            const on = selected?.start === x.start;
+            const on = selected?.id === x.id;
             const n = x.files.length;
             return (
-              <li key={x.start}>
-                <button className="sess press" aria-pressed={on} onClick={() => setQuery("session", on ? null : String(x.start))}
+              <li key={x.id}>
+                <button className="sess press" aria-pressed={on} onClick={() => setQuery("session", on ? null : x.id)}
                   aria-label={`${sessionWhen(x)}: ${plural(n, "match", "matches")}, ${x.wins} won, ${x.losses} lost${x.ties ? `, ${x.ties} tied` : ""}, rating ${fmtRating(x.rating)}. ${on ? "Show every match" : "Show only these matches"}`}>
                   <span className="sess__when">{sessionWhen(x)}</span>
                   <span className="sess__main">
@@ -143,7 +165,7 @@ export function MatchesView() {
   const q = r.query.get("q") ?? "";
   const sessionKey = r.query.get("session");
   const { rows: sessions, error: sessionsError } = useSessions(all, map);
-  const session = sessionKey && sessions ? sessions.find((x) => String(x.start) === sessionKey) ?? null : null;
+  const session = sessionKey && sessions ? sessionFor(sessions, sessionKey) : null;
 
   const rows = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
