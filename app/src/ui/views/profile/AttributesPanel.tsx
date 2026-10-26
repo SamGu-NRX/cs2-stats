@@ -1,16 +1,17 @@
-// HLTV's style attributes as metric rows (components/MetricRow.tsx). The block holds the six style
-// attributes in HLTV's order under one "Compared to" control; the page's Side control (title bar) sets
-// the side. Each attribute is a row: its score out of 100 (the mean of its metrics' percentiles in its
-// population) on a tan track, since a style score has no better or worse, with the metric that ranks
-// highest beside it; the row opens to the metrics behind it. A provisional score (a still-small bot
-// pool) is named once, in the card's header pill.
+// HLTV's attribute block, as HLTV draws it on a player's page and the user asked to keep: Firepower
+// wide across the top with its score out of 100 over a filled bar in the performance colours, then
+// the six style attributes in pairs, each with its icon, its score out of 100 and a filled bar in the
+// neutral style colour (hatched while the bot pool behind it is still small). Every attribute opens
+// to the metrics behind it, as dotted-track metric rows (components/MetricRow.tsx). The block's header
+// carries what the scores rank against: the side, Firepower's pros or bots, and the style pool.
 import { useId, useState, type MouseEvent, type ReactNode } from "react";
-import { Select, type Option } from "../../components/controls";
-import { MetricList, MetricRow, Track } from "../../components/MetricRow";
+import { MetricList, MetricRow } from "../../components/MetricRow";
 import type { PercentileKind } from "../../components/Percentile";
 import type { Sub } from "../../data/engine";
-import { ATTR_TIP, PROVISIONAL_TIP } from "../../data/tips";
 import type { AttributeId } from "../../data/proPack";
+import { ATTR_TIP, PROVISIONAL_TIP } from "../../data/tips";
+import { AttrIcon } from "../../icons/attributes";
+import { scoreFill, scoreText, toScore } from "../../lib/scale";
 
 export interface PanelMetric {
   id: string; label: string; value: string | null; unit?: string; pct: number | null; kind: PercentileKind; population: string; def?: string;
@@ -26,7 +27,7 @@ export interface PanelMetric {
 }
 export interface PanelAttribute {
   id: AttributeId; label: string; score: number | null; metrics: PanelMetric[];
-  /** the population when it is not the panel's, e.g. "Compared to everyone" */
+  /** the population when it is not the block's, e.g. "Compared to everyone" */
   note?: string;
   /** starts expanded */
   open?: boolean;
@@ -49,10 +50,16 @@ export function ValueRow({ s, rank }: { s: Sub; rank?: boolean }) {
   return <MetricRow label={s.label} value={s.value === null ? null : s.text} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra />;
 }
 
-/** The metric ranked highest, shown beside the attribute so its row says what drives the score. */
+/** The metric ranked highest, shown beside a closed attribute so its row says what drives the score. */
 const peekOf = (a: PanelAttribute) => a.metrics.filter((m) => m.pct !== null && m.value !== null && !m.reason).sort((x, y) => y.pct! - x.pct!)[0];
 
-export function Attribute({ a }: { a: PanelAttribute }) {
+/**
+ * One attribute: icon, name, its (?), the score out of 100 and a filled bar, opening to its metrics.
+ * `performance` (Firepower) colours the score and the bar by how good it is; a style attribute stays
+ * neutral, since a style has no better or worse. The whole head opens it for a pointer; the chevron
+ * is its keyboard control, and a keyboard toggle (detail 0) opens instantly where a click animates.
+ */
+export function Attribute({ a, performance = false, wide = false, rank = false }: { a: PanelAttribute; performance?: boolean; wide?: boolean; rank?: boolean }) {
   const [open, setOpen] = useState(!!a.open);
   // ?attr= or the data can ask for another attribute to open: follow that change, keep the user's toggles otherwise
   const [asked, setAsked] = useState(!!a.open);
@@ -62,33 +69,35 @@ export function Attribute({ a }: { a: PanelAttribute }) {
   }
   const [instant, setInstant] = useState(true);
   const id = useId();
-  const peek = peekOf(a);
-  // The whole row opens the attribute for a pointer; the chevron button is its keyboard control, and
-  // a keyboard toggle (detail 0) changes instantly where a click animates. The (?) and a provisional
-  // score keep their own tooltips.
+  const peek = open ? undefined : peekOf(a);
+  const t = a.score === null ? 0 : toScore(a.score, 50, 50);
   const toggle = (e: MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".help, .apa__score[tabindex]")) return;
+    if ((e.target as HTMLElement).closest(".help, .hatt__score[tabindex]")) return;
     setInstant(e.detail === 0);
     setOpen((o) => !o);
   };
   return (
-    <div className="apa" data-open={open || undefined} data-attr={a.id} data-prov={a.provisional || undefined}>
-      <div className="mrow apa__row" onClick={toggle}>
-        <span className="mrow__lab">
-          <h3 className="apa__name">{a.label}</h3>
-          <span className="help" data-tip={ATTR_TIP[a.id]} tabIndex={0} aria-label={`What ${a.label} means`}>?</span>
-          {a.note ? <span className="apa__note">{a.note}</span> : null}
+    <div className={`hatt ${wide ? "hatt--wide" : ""} ${performance ? "hatt--perf" : ""}`} data-open={open || undefined} data-attr={a.id} data-prov={a.provisional || undefined}>
+      <div className="hatt__head" onClick={toggle}>
+        <AttrIcon id={a.id} size={wide ? 22 : 18} className="hatt__icon" />
+        <h3 className="hatt__name">{a.label}</h3>
+        <span className="help" data-tip={ATTR_TIP[a.id]} tabIndex={0} aria-label={`What ${a.label} means`}>?</span>
+        {a.note ? <span className="hatt__note">{a.note}</span> : null}
+        {peek ? <span className="hatt__peek meta">{peek.label} <b className="num">{peek.value}{peek.unit}</b></span> : <span className="hatt__peek" />}
+        <span className="hatt__score disp" style={performance && a.score !== null ? { color: scoreText(t) } : undefined} {...(a.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0 } : {})}>
+          {a.score === null ? "–" : Math.round(a.score)}<small>/100</small>
         </span>
-        {a.score === null ? <span /> : <Track at={a.score} />}
-        <span className="mrow__smp apa__peek">{peek ? `${peek.label} ${peek.value}${peek.unit ?? ""}` : ""}</span>
-        <b className="mrow__val apa__score num" {...(a.provisional ? { "data-tip": PROVISIONAL_TIP, tabIndex: 0 } : {})}>{a.score === null ? "–" : Math.round(a.score)}<small className="unit">/100</small></b>
-        <button className={`apa__chev ${instant ? "is-instant" : ""}`} aria-expanded={open} aria-controls={id} aria-label={`${open ? "Hide" : "Show"} the metrics behind ${a.label}`} />
+        <button className={`hatt__chev ${instant ? "is-instant" : ""}`} aria-expanded={open} aria-controls={id} aria-label={`${open ? "Hide" : "Show"} the metrics behind ${a.label}`} />
+      </div>
+      <div className="hatt__bar" aria-hidden>
+        <i style={{ width: `${a.score ?? 0}%`, ...(performance && a.score !== null ? { background: scoreFill(t) } : {}) }} />
+        {performance && <span className="hatt__mid" />}
       </div>
       <div id={id} className={`collapse ${instant ? "is-instant" : ""}`} data-open={open} {...(open ? {} : { inert: "" })}>
         <div className="collapse__in">
-          <MetricList label={`${a.label} metrics`}>
-            {a.metrics.map((m) => <PanelRow key={m.id} m={m} />)}
-            {a.extra?.map((s) => <ValueRow key={s.id} s={s} />)}
+          <MetricList label={`${a.label} metrics`} rank={rank}>
+            {a.metrics.map((m) => <PanelRow key={m.id} m={m} rank={rank} />)}
+            {a.extra?.map((s) => <ValueRow key={s.id} s={s} rank={rank} />)}
           </MetricList>
         </div>
       </div>
@@ -96,35 +105,34 @@ export function Attribute({ a }: { a: PanelAttribute }) {
   );
 }
 
-export function AttributesPanel<P extends string>({ title, tip, pool, pools, onPool, poolNote, message, style, provisional }: {
-  title: string;
-  /** the title's tooltip */
-  tip: string;
-  pool: P;
-  pools: Option<P>[];
-  onPool: (p: P) => void;
-  /** the chosen pool's size in words, e.g. "62 rifler bot matches" */
-  poolNote?: string;
-  /** one line under the controls, e.g. why the chosen pool gives no scores */
+/**
+ * The block: a header with its controls, Firepower wide, the six style attributes in two columns.
+ * `firepower` is null while it loads or when the pool cannot rank it; `message` is one line under the
+ * header (why the chosen pool gives no scores).
+ */
+export function AttributesPanel({ controls, note, message, firepower, style, provisional }: {
+  /** the header's controls: side, Firepower's population, the style pool */
+  controls: ReactNode;
+  /** who the scores rank against, in words */
+  note?: ReactNode;
   message?: ReactNode;
+  firepower: PanelAttribute | null;
   /** entrying, trading, opening, closing, sniping, utility, in that order */
   style: PanelAttribute[];
-  /** the scores rank against a still-small bot pool: the header says so once, in a pill */
+  /** the style scores rank against a still-small bot pool: said once, in the header */
   provisional?: boolean;
 }) {
   return (
-    <section className="card apanel" aria-label={title}>
-      <div className="card__head apanel__head">
-        <h2 className="card__title apanel__title"><span className="card__tipped" data-tip={tip} tabIndex={0}>{title}</span></h2>
-        <div className="card__aside apanel__cmp">
-          {provisional
-            ? <span className="vpill vpill--plain" data-tip={PROVISIONAL_TIP} tabIndex={0}>Provisional{poolNote ? `, ${poolNote}` : ""}</span>
-            : poolNote ? <span className="meta">{poolNote}</span> : null}
-          <Select options={pools} value={pool} onChange={onPool} label="Compared to" prefix="vs" />
-        </div>
+    <section className="card hblock" aria-label="Attributes">
+      <div className="hblock__head">
+        <h2 className="card__title">Attributes</h2>
+        {provisional && <span className="vpill vpill--plain" data-tip={PROVISIONAL_TIP} tabIndex={0}>Provisional</span>}
+        {note ? <span className="meta hblock__note">{note}</span> : null}
+        <div className="hblock__controls">{controls}</div>
       </div>
-      {message ? <p className="apanel__msg meta">{message}</p> : null}
-      <div className="apanel__grid">{style.map((a) => <Attribute key={a.id} a={a} />)}</div>
+      {message ? <p className="hblock__msg meta">{message}</p> : null}
+      {firepower && <Attribute a={firepower} performance wide rank />}
+      <div className="hblock__grid">{style.map((a) => <Attribute key={a.id} a={a} />)}</div>
     </section>
   );
 }
