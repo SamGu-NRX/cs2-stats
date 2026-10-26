@@ -3,6 +3,7 @@
 // fairest "how did I do" line for a single match.
 import type { MatchFacts } from "./facts";
 import { METRICS } from "./metrics";
+import { playedMatch } from "./roster";
 import { rollup, type Filter, type Summary } from "./rollup";
 
 export interface VsOpponents {
@@ -15,16 +16,19 @@ export interface VsOpponents {
   of: number;
 }
 
+/**
+ * The players `me` faced in one match: on the other team, and each played a round of it (roster.ts
+ * playedMatch). None when `me` played no round of it.
+ */
+export function opponentsIn(f: MatchFacts, me: ReadonlySet<string>): string[] {
+  const mine = f.players.find((p) => me.has(p.id) && playedMatch(f, p.id));
+  return mine ? f.players.filter((p) => p.team !== null && p.team !== mine.team && playedMatch(f, p.id)).map((p) => p.id) : [];
+}
+
 /** For one player: each metric against the opponents over the same matches and filter. */
 export function vsOpponents(facts: MatchFacts[], filter: Filter): VsOpponents[] {
   const me = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
-  const opp = new Set<string>();
-  for (const f of facts) {
-    const mine = f.players.findIndex((p) => me.has(p.id));
-    if (mine < 0) continue;
-    const myTeam = f.players[mine].team;
-    for (const p of f.players) if (p.team !== null && p.team !== myTeam) opp.add(p.id);
-  }
+  const opp = new Set(facts.flatMap((f) => opponentsIn(f, me)));
   return vsOpponentsOf(rollup(facts, filter), [...opp].map((id) => rollup(facts, { ...filter, player: id })));
 }
 

@@ -4,6 +4,7 @@
 // and the match's facts (kills, sides), like the other per-match views (matchviews.ts).
 import type { KillFact, MatchFacts } from "./facts";
 import type { MatchTables, Side } from "./tables";
+import type { RosterTables } from "./roster";
 import { blindWindows, flashDetonations } from "./blinds";
 import { FLASHED_MIN_S } from "./utility";
 
@@ -72,7 +73,7 @@ export const NO_GRENADE_EVENTS = "This file records no grenade or flash events."
  * - while blind: an enemy this flash blinded for over FLASHED_MIN_S died to the thrower's side before
  *   the blind ran out, Leetify's flash-to-kill (utility.ts flashKills counts the same kills).
  */
-export function flashTool(t: MatchTables, f: MatchFacts, player: string): FlashTool {
+export function flashTool(t: RosterTables, f: MatchFacts, player: string): FlashTool {
   const me = f.players.findIndex((p) => p.id === player);
   if (me < 0) throw new Error(`flashTool: ${player} is not among the match's players`);
   const tr = f.match.tickRate;

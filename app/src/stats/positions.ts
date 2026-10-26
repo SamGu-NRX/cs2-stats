@@ -5,6 +5,7 @@
 import type { Ctx } from "./derive";
 import type { PresenceFact } from "./facts";
 import type { MatchTables, Side } from "./tables";
+import type { RosterTables } from "./roster";
 
 /**
  * World units per grid cell: four player widths (a player model is 32 units wide). Ours, no fit; the
@@ -60,7 +61,7 @@ export function derivePresence(c: Ctx): PresenceFact[] {
 }
 
 /** Seconds a player spent alive per place name in one round (by round number): "where you spent the round". */
-export function roundPlaces(t: MatchTables, round: number, steamid: string): Record<string, number> {
+export function roundPlaces(t: RosterTables, round: number, steamid: string): Record<string, number> {
   const p = t.positions;
   const secs = sampleSecs(t);
   const out: Record<string, number> = {};

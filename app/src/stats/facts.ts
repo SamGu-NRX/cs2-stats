@@ -6,10 +6,11 @@ import type { BuyClass, BuyTier } from "./economy";
 import type { InfoFact } from "./information";
 import type { MoveFact } from "./movement";
 import type { UtilQFact } from "./utilq";
+import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 30;
+export const DERIVE_VERSION = 31;
 
 export interface MatchInfo {
   id: string;
@@ -63,11 +64,11 @@ export interface MatchInfo {
      */
     onScreen: OnScreenSource | null;
     /**
-     * kills and enemy damage involving a player off their round's roster (rules.ts onRoster): the
-     * source marks them dead at freeze end or gone before it, yet records them in that round. They are
-     * in none of that player's numbers; the match view says how many there are.
+     * events of players off their round's roster that roster.ts removed from the tables, by kind: the
+     * source marks the player dead at freeze end or gone before it, yet records them in that round's live
+     * part. They are in no number or view; the match view says what was left out.
      */
-    offRoster: number;
+    offRoster: OffRoster;
   };
 }
 

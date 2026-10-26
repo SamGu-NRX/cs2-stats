@@ -1,13 +1,21 @@
-// Who took part in a round (rules.ts onRoster, roundPopulation, liveKill): the scoreboard, KAST, time
-// alive, saves, openings, trades, clutches and the man-advantage states, on hand-built rounds. CT a and
+// Who took part in a round (rules.ts onRoster, roundPopulation, liveKill; roster.ts rosterTables): the
+// scoreboard, KAST, time alive, saves, openings, trades, clutches, the man-advantage states and every
+// view of the match's events, on hand-built rounds. CT a and
 // b against T c and d unless a test says otherwise; round 1 freezes until FREEZE_END.
 import { describe, expect, it } from "vitest";
-import { entryOf } from "../worker/views";
+import type { PositionsResult } from "../worker/protocol";
+import { addPositions, entryOf, recentFiles, roundBundle } from "../worker/views";
 import { derive } from "./derive";
-import { addSituations, headToHead, type Situations } from "./matchviews";
+import { flashTool } from "./flashes";
+import { addSituations, headToHead, mapZones, type Situations } from "./matchviews";
 import { CS2RB } from "./model-params";
 import { rollup } from "./rollup";
 import { FREEZE_END, oneRound, oneRoundTables, type OneRound } from "./testing/match";
+import { opponentsIn } from "./opponents";
+import { roundPlaces } from "./positions";
+import { buildRoundTimeline } from "./replay";
+import { rosterPaths } from "./replay-load";
+import { playedMatch, rosterTables } from "./roster";
 
 const t = (s: number) => FREEZE_END + 64 * s;
 const m = (f: ReturnType<typeof oneRound>, p: string) => rollup([f], { player: p }).m;
@@ -89,8 +97,8 @@ describe("who took part in a round", () => {
     // without a kill or assist, so 0 both ways, where counting the disconnect as survival would give 1
     expect(ids.map((p) => (m(f, p).ecoKast > 0 ? 1 : 0))).toEqual(ids.map((p) => m(f, p).kast));
     expect(m(f, "b").ecoKast).toBe(0);
-    // "your match" picks matches by rounds played: e has none here
-    expect(entryOf("m", "test", { ...f, match: { ...f.match, pov: "a" } }).played).toEqual({ a: 1, b: 1, c: 1, d: 1 });
+    // "your match" and opponents count the players who played a round: e played none here
+    expect(entryOf("m", "test", { ...f, match: { ...f.match, pov: "a" } }).played).toEqual(["a", "b", "c", "d"]);
   });
 
   it("counts team equipment over the players on the roster only", () => {
@@ -113,20 +121,68 @@ describe("who took part in a round", () => {
     expect(f.clutches.map((c) => [f.players[c.pi].id, c.opponents, c.t])).toEqual([["a", 2, 0], ["d", 1, 10]]);
   });
 
-  it("counts a flagged player's kill and hit as off-roster events, which head to head and the opening leave out too", () => {
-    // fails if an event by a player off the roster vanishes unnoted, or a raw view still shows it: b is
-    // marked dead at freeze end yet hits c at 3 s and kills c at 5 s. The match counts 2 off-roster
-    // events, head to head has no b-c kill or damage, and the opening is a's kill on d at 8 s
+  it("leaves every event of a player off the roster out of every number and view, and counts what it left out", () => {
+    // fails if any consumer still shows an event of b, whom the source marks dead at freeze end, or the
+    // header's tally misses a kind. In the live round b throws a flash (logged and detonated) that blinds
+    // d for 2.5 s, fires a shot, hits d for 40, kills c at 5 s and assists a's kill on d at 8 s, and has
+    // position samples at freeze end and at 4 s and 8 s. Only a's kill on d remains, without the assist
+    const at = (place: string) => ({ a_place: place, v_place: place });
     const tables = oneRoundTables({
-      players: { a: "CT", b: "CT", c: "T", d: "T" }, player_rounds: { b: { alive_at_start: false } },
-      damages: [{ tick: t(3), attacker_steamid: "b", victim_steamid: "c", dmg_health: 40, dmg_health_capped: 40, health_before: 100 }],
-      kills: [{ tick: t(5), killer: "b", victim: "c" }, { tick: t(8), killer: "a", victim: "d" }],
+      players: { a: "CT", b: "CT", c: "T", d: "T" },
+      // equipment lets the win-probability model value the round (swing)
+      player_rounds: Object.fromEntries(["a", "b", "c", "d"].map((p) => [p, { equip_value_game: 4000, ...(p === "b" ? { alive_at_start: false } : {}) }])),
+      grenade_throws: [{ tick: t(1), steamid: "b", weapon: "flashbang", entity_id: 9, x: 0, y: 0 }],
+      grenade_events: [{ tick: t(2), event: "flash_detonate", entity_id: 9, steamid: "b", x: 100, y: 200 }],
+      blinds: [{ tick: t(2), attacker_steamid: "b", victim_steamid: "d", duration: 2.5, flash_entity_id: 9 }],
+      shots: [{ tick: t(3), steamid: "b" }],
+      damages: [{ tick: t(3), attacker_steamid: "b", victim_steamid: "d", weapon: "ak47", dmg_health: 40, dmg_health_capped: 40, health_before: 100 }],
+      kills: [{ tick: t(5), killer: "b", victim: "c", at: { ...at("Mid"), a_x: 1, a_y: 1, v_x: 2, v_y: 2 } }, { tick: t(8), killer: "a", victim: "d", assister: "b", at: { ...at("Long"), a_x: 3, a_y: 3, v_x: 4, v_y: 4 } }],
+      positions: ["a", "b", "c", "d"].flatMap((p) => [FREEZE_END, t(4), t(8)].map((tick) => ({ tick, steamid: p, x: 0, y: 0, place: "Mid" }))),
     });
     const f = derive(tables, CS2RB);
-    expect(f.match.inputs.offRoster).toBe(2);
-    const bc = headToHead(tables, f).find((h) => [h.a, h.b].sort().join() === "b,c")!;
-    expect([bc.kills, bc.damage]).toEqual([[0, 0], [0, 0]]);
-    expect(f.kills.map((k) => [f.players[k.killer!].id, k.opening])).toEqual([["b", false], ["a", true]]);
+    const rt = rosterTables(tables);
+    const ids = ["a", "b", "c", "d"];
+    // the header's tally: b's sample at freeze end is not in the live round, so 2 of 3 count
+    expect(f.match.inputs.offRoster).toEqual({ kills: 1, assists: 1, damages: 1, blinds: 1, grenades: 2, shots: 1, positions: 2, spotted: 0, engagements: 0 });
+    // the scoreboard and the round's rows
+    expect(ids.map((p) => pick(f, p, ["rounds", "kills", "deaths", "assists"]))).toEqual([[1, 1, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0], [1, 0, 1, 0]]);
+    expect(roundBundle(f, 1).players.map((p) => p !== null)).toEqual([true, false, true, true]);
+    expect(f.kills.map((k) => [f.players[k.killer!].id, f.players[k.victim].id, k.assister, k.opening])).toEqual([["a", "d", null, true]]);
+    // Positions (kill and death spots), the map-zone K/D and round places
+    const spots = (p: string) => { const out: PositionsResult = { kills: [], deaths: [], presence: null }; addPositions(out, f, { player: p }); return out; };
+    expect([spots("b").kills, spots("c").deaths]).toEqual([[], []]);
+    expect([mapZones(rt, "b").rows, mapZones(rt, "c").rows]).toEqual([[], []]);
+    expect(roundPlaces(rt, 1, "b")).toEqual({});
+    // Utility and the Flash Tool
+    expect(f.grenades.map((g) => f.players[g.pi].id)).toEqual([]);
+    expect(ids.map((p) => m(f, p).enemiesFlashed)).toEqual([0, 0, 0, 0]);
+    expect(flashTool(rt, f, "b").flashes).toEqual([]);
+    // head to head
+    const vsB = headToHead(rt, f).filter((h) => h.a === "b" || h.b === "b");
+    expect(vsB.map((h) => [h.kills, h.damage, h.flashes.map((x) => x.count)])).toEqual([[[0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0]]]);
+    // Swing: only a's kill moves the round
+    expect(f.rounds[0].winProb?.map((e) => e.event)).toEqual(["start", "kill"]);
+    // the replay: no dot, kill, effect or flight of b
+    const tl = buildRoundTimeline(rt, null, 1);
+    expect(tl.players.map((p) => p.id)).toEqual(["c", "d", "a"]);
+    expect(tl.frames.every((fr) => fr.players.every((p) => p.id !== "b"))).toBe(true);
+    expect(tl.kills.map((k) => k.killer)).toEqual(["a"]);
+    expect(tl.effects).toEqual([]);
+    expect(rosterPaths({ n: 1, projectile: [1], entity_id: [9], round: [1], tick: [t(1)], type: ["flashbang"], steamid: ["b"], x: [0], y: [0], z: [0] }, rt).n).toBe(0);
+  });
+
+  it("skips a match the player played no round of, for recent matches and for opponents", () => {
+    // fails if a listed player with no player-round counts as having played: b is marked dead at freeze
+    // end in the only round of m1 and plays m0, so "your match" for b in m2 takes m0, b has no opponents
+    // in m1, and c's opponents there are a alone
+    const off = round({ player_rounds: { b: { alive_at_start: false } }, kills: [{ tick: t(8), killer: "a", victim: "d" }] });
+    const on = round({ kills: [{ tick: t(8), killer: "a", victim: "d" }] });
+    expect([playedMatch(off, "b"), playedMatch(on, "b")]).toEqual([false, true]);
+    const entry = (file: string, f: typeof on, startedAt: string) => ({ file, match: { startedAt, date: null }, played: entryOf(file, "test", { ...f, match: { ...f.match, pov: "a" } }).played });
+    const entries = [entry("m0", on, "2026-10-01T10:00:00Z"), entry("m1", off, "2026-10-02T10:00:00Z"), entry("m2", on, "2026-10-03T10:00:00Z")];
+    expect(entries[1].played).toEqual(["a", "c", "d"]);
+    expect(recentFiles(entries, "m2", "b", 1)).toEqual(["m0"]);
+    expect([opponentsIn(off, new Set(["b"])), opponentsIn(off, new Set(["c"])), opponentsIn(on, new Set(["c"]))]).toEqual([[], ["a"], ["a", "b"]]);
   });
 
   it("makes no opening of a kill after the round's end, but lets it trade, as HLTV counts it", () => {

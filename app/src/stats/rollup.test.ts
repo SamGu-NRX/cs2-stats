@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { rollup } from "./rollup";
 import { roundPlaces } from "./positions";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
+import { rosterTables } from "./roster";
 
 it("keeps only the rounds a round filter names, by round number", () => {
   // fails if the filter matches row indexes instead of round numbers (a match whose tables start at round 7)
@@ -35,7 +36,7 @@ it("reads one round's places from the tables", () => {
       { tick: 9000, round: 2, steamid: "a", x: 0, y: 0, place: "Long" }, { tick: 1000, steamid: "b", x: 0, y: 0, place: "Long" },
     ],
   });
-  expect(roundPlaces(t, 1, "a")).toEqual({ Mid: 0.25 });
+  expect(roundPlaces(rosterTables(t), 1, "a")).toEqual({ Mid: 0.25 });
 });
 
 it("reads from and to as days in the user's time zone, and a date-only source as its date", () => {

@@ -6,6 +6,7 @@ import { buildCtx } from "./derive";
 import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "./tables";
 import { pushRow } from "./testing/tables";
 import { deriveUtilQ } from "./utilq";
+import { rosterTables } from "./roster";
 
 /** A table from partial rows; columns the module does not read are null. */
 function table<N extends TableName>(name: N, rows: Record<string, unknown>[]): Table<N> {
@@ -35,7 +36,7 @@ function facts(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba",
     engagements: table("engagements", dirs.map((d, id) => eng(id, d[0] as "a" | "b", d[1] as "a" | "b"))),
     engagement_ticks: table("engagement_ticks", dirs.flatMap((d, id) => Array.from({ length: ticks }, (_, k) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b", k)))), purchases: null, leaves: null,
   };
-  return deriveUtilQ(buildCtx(t, CS2RB));
+  return deriveUtilQ(buildCtx(rosterTables(t), CS2RB));
 }
 const sights = (smokes: Record<string, unknown>[], dirs?: ("ab" | "ba")[]) => facts(smokes, dirs).map((f) => f.sights);
 

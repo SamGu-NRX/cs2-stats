@@ -18,13 +18,13 @@ export const TRADE_WINDOW_S = 5.4;
  * death, the earliest of those, which matches HLTV better than crediting every such death (CS Demo
  * Manager's rule; VALIDATION.md).
  */
-export function markTrades(kills: KillFact[], tickRate: number, rf: Pick<RoundFact, "freezeEndTick">, rostered: (k: KillFact) => boolean): void {
+export function markTrades(kills: KillFact[], tickRate: number, rf: Pick<RoundFact, "freezeEndTick">): void {
   const window = TRADE_WINDOW_S * tickRate;
-  // A kill before freeze end, or by or of a player off the roster, is no trade and cannot be traded
-  // (see onRoster). A kill after the round's end still trades, as HLTV counts it: bounding trades at
-  // the round's end moves the engine away from HLTV on the 371 joined pro maps (pnpm hltv-check:
-  // traded deaths exact on 3,354 player-maps instead of 3,401, KAST on 3,443 instead of 3,460).
-  const counts = (k: KillFact) => k.enemy && afterFreezeEnd(rf, k.tick) && rostered(k);
+  // A kill before freeze end is no trade and cannot be traded (see onRoster). A kill after the round's
+  // end still trades, as HLTV counts it: bounding trades at the round's end moves the engine away from
+  // HLTV on the 371 joined pro maps (pnpm hltv-check: traded deaths exact on 3,354 player-maps instead
+  // of 3,401, KAST on 3,443 instead of 3,460).
+  const counts = (k: KillFact) => k.enemy && afterFreezeEnd(rf, k.tick);
   for (let b = 0; b < kills.length; b++) {
     const later = kills[b];
     if (!counts(later)) continue;
@@ -41,12 +41,12 @@ export function markTrades(kills: KillFact[], tickRate: number, rf: Pick<RoundFa
 }
 
 /**
- * The opening duel: the live round's first enemy kill between two players on the roster. A kill before
- * freeze end or after the round's end (an exit frag) is none (see onRoster); on the pro maps no round's
- * first enemy kill comes after its end, so HLTV's Op.K-D does not tell either way.
+ * The opening duel: the live round's first enemy kill. A kill before freeze end or after the round's
+ * end (an exit frag) is none (see onRoster); on the pro maps no round's first enemy kill comes after
+ * its end, so HLTV's Op.K-D does not tell either way.
  */
-export function markOpening(kills: KillFact[], rf: Pick<RoundFact, "freezeEndTick" | "endTick">, rostered: (k: KillFact) => boolean): void {
-  const first = kills.find((k) => k.enemy && liveKill(k, rf) && rostered(k));
+export function markOpening(kills: KillFact[], rf: Pick<RoundFact, "freezeEndTick" | "endTick">): void {
+  const first = kills.find((k) => k.enemy && liveKill(k, rf));
   if (first) first.opening = true;
 }
 
@@ -98,9 +98,9 @@ export interface Clutch {
 //   assists, as the game and HLTV count them, and so in KAST's kill and assist.
 //   A disconnect in the live round ends the player's round alive but not surviving it: no survival,
 //   no KAST by survival, and their time alive stops there.
-// - events of a player off the roster: a kill or damage by or on them in that round makes no opening
-//   and no trade, and head to head leaves it out; derive counts them in the match's
-//   MatchInfo.inputs.offRoster so the views can say so.
+// - events of a player off the roster: roster.ts rosterTables removes every one of them from the
+//   match's tables before derive or any view reads them, and counts what it removed by kind in
+//   MatchInfo.inputs.offRoster, which the match view shows.
 // A round without a freeze end has no such cut: all of its kills and disconnects are live.
 
 /** A tick in the live round's span from freeze end on (any tick for a round without a freeze end). */
@@ -123,19 +123,20 @@ export function onRoster(rf: Pick<RoundFact, "freezeEndTick" | "leaves">, pi: nu
 export const liveLeaves = (rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">) => rf.leaves.filter((l) => afterFreezeEnd(rf, l.tick) && l.tick <= rf.endTick);
 
 /**
- * A round's population: the players in the live round, by side (on the roster and not killed at or
- * before freeze end), with the live round's deaths, up to its end, and disconnects. Clutches, saves and
- * last alive (closing.ts) and the man-advantage states (matchviews.ts addSituations) all read this, so
- * no view counts a player, or a death, that another leaves out.
+ * A round's population: the players in the live round, by side (the round's player-rounds, which exist
+ * only for players on the roster, less those killed at or before freeze end), with the live round's
+ * deaths, up to its end, and disconnects. Clutches, saves and last alive (closing.ts), swing and the
+ * man-advantage states (matchviews.ts addSituations) all read this, so no view counts a player, or a
+ * death, that another leaves out.
  */
 export function roundPopulation(
   rf: Pick<RoundFact, "freezeEndTick" | "endTick" | "leaves">,
-  rows: Iterable<{ pi: number; side: Side; aliveAtStart: boolean | null } | null>,
+  rows: Iterable<{ pi: number; side: Side } | null>,
   kills: readonly KillFact[],
 ): { alive: Record<Side, Set<number>>; inRound: (pi: number) => boolean; deaths: KillFact[]; leaves: { tick: number; pi: number }[] } {
   const killedEarly = new Set(kills.filter((k) => !afterFreezeEnd(rf, k.tick)).map((k) => k.victim));
   const alive: Record<Side, Set<number>> = { CT: new Set(), T: new Set() };
-  for (const r of rows) if (r && onRoster(rf, r.pi, r.aliveAtStart, kills) && !killedEarly.has(r.pi)) alive[r.side].add(r.pi);
+  for (const r of rows) if (r && !killedEarly.has(r.pi)) alive[r.side].add(r.pi);
   const members = new Set([...alive.CT, ...alive.T]);
   return {
     alive, inRound: (pi) => members.has(pi),

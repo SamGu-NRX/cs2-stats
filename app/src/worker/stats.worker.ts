@@ -11,7 +11,7 @@ import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
 import { addSituations, bombsites, headToHead, mapZones, openingDuels, roundRatings, yourMatch, type Situations } from "../stats/matchviews";
 import { rating3Of } from "../stats/rating3";
 import { METRIC } from "../stats/metrics";
-import { vsOpponentsOf } from "../stats/opponents";
+import { opponentsIn, vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
 import { matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
@@ -27,6 +27,7 @@ import { decodeMatch } from "../stats/plugin/decode";
 import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
 import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
+import { rosterTables, type RosterTables } from "../stats/roster";
 import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
@@ -126,15 +127,17 @@ async function deriveFile(file: string): Promise<Cached> {
 
 /**
  * The open match's tables, for what facts do not keep (one round's places). Decoded again on demand;
- * only one match's tables are held, and they are dropped when another match opens.
+ * only one match's tables are held, and they are dropped when another match opens. The roster is
+ * applied to them as derive applies it to the tables it reads (roster.ts), so a view of them shows the
+ * same events as the facts.
  */
-let openTables: { file: string; key: string; tables: MatchTables } | null = null;
-async function tablesOf(file: string): Promise<MatchTables> {
+let openTables: { file: string; key: string; tables: RosterTables } | null = null;
+async function tablesOf(file: string): Promise<RosterTables> {
   const ix = index.get(file);
   if (!ix) throw new Error(`${file} is not in the match folder; rescan it`);
   if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
   openTables = null;
-  const tables = isFolder(file) ? await folderTables(file) : pluginToTables(await decodeMatch(await bytes(file), file));
+  const tables = rosterTables(isFolder(file) ? await folderTables(file) : pluginToTables(await decodeMatch(await bytes(file), file)));
   openTables = { file, key: ix.key, tables };
   return tables;
 }
@@ -398,10 +401,7 @@ const api: Impl = {
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     const opp = new Set<string>();
-    await stream(q.files, (f) => {
-      const mine = f.players.find((p) => me.has(p.id));
-      if (mine) for (const p of f.players) if (p.team !== null && p.team !== mine.team) opp.add(p.id);
-    });
+    await stream(q.files, (f) => { for (const id of opponentsIn(f, me)) opp.add(id); });
     const [mine, ...theirs] = await Promise.all([summaryOf(q), ...[...opp].map((id) => summaryOf({ files: q.files, filter: { ...q.filter, player: id } }))]);
     return vsOpponentsOf(mine, theirs);
   },

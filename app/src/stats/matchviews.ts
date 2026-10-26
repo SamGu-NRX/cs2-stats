@@ -10,7 +10,8 @@ import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type F
 import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
 import { roundPopulation } from "./rules";
 import { swingSources, type SwingSources } from "./swing";
-import type { MatchTables, Side } from "./tables";
+import type { Side } from "./tables";
+import type { RosterTables } from "./roster";
 import { FLASHED_MIN_S } from "./utility";
 import { weaponClass, type WeaponClass } from "./weapons";
 
@@ -89,7 +90,7 @@ export interface HeadToHead {
 }
 
 /** Every pair of players on opposite teams, with what each did to the other; a pair with no interaction is all zeros. */
-export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
+export function headToHead(t: RosterTables, f: MatchFacts): HeadToHead[] {
   const pairs = new Map<string, HeadToHead>();
   const slot = (x: number, y: number): [HeadToHead, 0 | 1] | null => {
     const px = f.players[x], py = f.players[y];
@@ -102,16 +103,8 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
   };
   // every opposing pair, interactions or not
   for (let x = 0; x < f.players.length; x++) for (let y = x + 1; y < f.players.length; y++) slot(x, y);
-  // only what passed between two players on the round's roster (rules.ts onRoster), as every other
-  // number of theirs counts it; the rest is MatchInfo.inputs.offRoster
-  const onRow = new Set(f.pr.map((r) => r.ri * 1024 + r.pi));
-  const riOf = new Map(f.rounds.map((r) => [r.number, r.ri]));
-  const both = (round: number, x: number | undefined, y: number | undefined) => {
-    const ri = riOf.get(round);
-    return ri !== undefined && x !== undefined && y !== undefined && onRow.has(ri * 1024 + x) && onRow.has(ri * 1024 + y);
-  };
   for (const k of f.kills) {
-    if (!k.enemy || k.killer === null || !onRow.has(k.ri * 1024 + k.killer) || !onRow.has(k.ri * 1024 + k.victim)) continue;
+    if (!k.enemy || k.killer === null) continue;
     const s = slot(k.killer, k.victim);
     if (!s) continue;
     const [h, i] = s;
@@ -124,17 +117,13 @@ export function headToHead(t: MatchTables, f: MatchFacts): HeadToHead[] {
   const D = t.damages;
   for (let i = 0; i < D.n; i++) {
     if (!enemyHit(t, i)) continue;
-    const a = id.get(D.attacker_steamid[i]!), v = id.get(D.victim_steamid[i]);
-    if (!both(D.round[i], a, v)) continue;
-    const s = slot(a!, v!);
+    const s = slot(id.get(D.attacker_steamid[i]!) ?? -1, id.get(D.victim_steamid[i]) ?? -1);
     if (s) s[0].damage[s[1]] += hitDamage(t, i);
   }
   // repeated blind rows joined, as the utility measures count them (blinds.ts)
   for (const l of blindWindows(t).values()) for (const b of l) {
     if (b.self || b.team || b.attacker === null || b.secs <= FLASHED_MIN_S) continue;
-    const a = id.get(b.attacker), v = id.get(b.victim);
-    if (!both(b.round, a, v)) continue;
-    const s = slot(a!, v!);
+    const s = slot(id.get(b.attacker) ?? -1, id.get(b.victim) ?? -1);
     if (s) { s[0].flashes[s[1]].count++; s[0].flashes[s[1]].secs += b.secs; }
   }
   return [...pairs.values()];
@@ -161,7 +150,7 @@ export interface ZoneRow {
  * within half a second (plugin files carry no kill places). A kill with neither has no zone and is left out. `zones` is the map's zone list: every
  * place a position sample of this match names, sorted.
  */
-export function mapZones(t: MatchTables, player: string): { zones: string[]; rows: ZoneRow[] } {
+export function mapZones(t: RosterTables, player: string): { zones: string[]; rows: ZoneRow[] } {
   const P = t.positions, K = t.kills;
   const zones = new Set<string>();
   if (P) for (let i = 0; i < P.n; i++) if (P.place[i]) zones.add(P.place[i]!);
@@ -341,7 +330,7 @@ const siteOf = (place: string | null) => (place ? /^Bombsite([A-Z])$/.exec(place
  * table's (letter "A", "B"). Retake and post-plant come from plants alone; take and hold need the
  * positions, the freeze end and the site names, and are null when no round had them.
  */
-export function bombsites(t: MatchTables, f: MatchFacts, player: string): Bombsites {
+export function bombsites(t: RosterTables, f: MatchFacts, player: string): Bombsites {
   const pi = playerIndex(f, player);
   const sites: Record<string, SiteOutcomes> = {};
   const tally = () => ({ attempts: 0, success: 0 });

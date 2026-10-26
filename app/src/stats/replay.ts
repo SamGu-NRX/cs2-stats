@@ -7,6 +7,7 @@
 // radar levels can split players by height.
 import { classFromDisplay, weaponClass } from "./weapons";
 import type { MatchTables, Side } from "./tables";
+import type { RosterTables } from "./roster";
 
 /** One player in one frame, as the extractor sampled it. `weapon` is an icon id (ak47, knife, …). */
 export interface FramePlayer {
@@ -157,7 +158,7 @@ const vec = (x: number | null, y: number | null, z: number | null): Vec3 | null 
  * Round `round` (1-based, rounds.round) as a timeline. Throws when the round is not in the tables or
  * has no position samples: a replay cannot be drawn without them.
  */
-export function buildRoundTimeline(t: MatchTables, paths: GrenadePaths | null, round: number): RoundTimeline {
+export function buildRoundTimeline(t: RosterTables, paths: GrenadePaths | null, round: number): RoundTimeline {
   const R = t.rounds;
   const ri = R.round.indexOf(round);
   if (ri < 0) throw new Error(`round ${round} is not in this match`);
