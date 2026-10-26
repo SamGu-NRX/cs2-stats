@@ -323,6 +323,13 @@ export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
  */
 export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
 
+/**
+ * The matches Career aim reads: every one of the user's own matches that holds shots, wingman and
+ * unfinished ones included. Aim does not depend on team size, the round limit, the result or the
+ * kill-by-kill coverage that keep a match out of career totals (careerEntries).
+ */
+export const aimEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && s.hasAim);
+
 /** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
 export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
 
@@ -342,7 +349,7 @@ export function notCountedText(e: MatchEntry): string | null {
  */
 export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
 
-export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Career aim, Weapons), whose models and baselines are 5v5.";
+export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Weapons), whose models and baselines are 5v5. Career aim counts it: aim does not depend on team size.";
 
 /** Maps present in the data, most played first. */
 export function mapsIn(all: MatchEntry[]): string[] {
