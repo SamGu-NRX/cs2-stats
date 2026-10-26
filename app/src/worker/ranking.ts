@@ -13,12 +13,13 @@ import {
   type Baselines, type CompareOptions, type Percentile, type PoolUnit, type SideKey,
 } from "../stats/compare";
 import type { MatchFacts } from "../stats/facts";
-import { mostSimilar, overallRole, roleBlend, STYLE, styleScores, type PackPlayer } from "../stats/identity";
+import { mostSimilar, overallRole, roleBlend, STYLE, styleScores, type PackPlayer, type RoleBlend } from "../stats/identity";
 import { METRIC, type Kind } from "../stats/metrics";
 import { addMatch, emptySummary, type Filter, type Summary } from "../stats/rollup";
 import type { Side } from "../stats/tables";
 import { ATTRIBUTE_ORDER } from "../ui/data/proPack";
-import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, Roles, StyleResult } from "./protocol";
+import type { AttributeBlock, AttributesResult, Careers, CompareResult, PackPro, PlaysLikeResult, Query, Roles, SpawnRow, StyleResult } from "./protocol";
+import { spawnRows, type SpawnIndex } from "./views";
 
 /**
  * The population the user's style ranks against. Each pool (role) and side is ranked against bot
@@ -124,8 +125,10 @@ export interface Sources {
   summary(q: Query): Promise<Summary>;
   pros(): Promise<Baselines>;
   careers(q: Query): Promise<BotPopulation>;
-  /** the query's players' rounds per map, over the query's matches and map filter; rolesByMap needs it */
+  /** the query's players' rounds per map that its filter keeps (views.ts addMapRounds); rolesByMap needs it */
   mapRounds?(q: Query): Promise<Record<string, number>>;
+  /** the spawns of the query's matches, with the queried players' rows its filter keeps (views.ts addSpawns); rolesBySpawn needs it */
+  spawns?(q: Query): Promise<SpawnIndex>;
 }
 
 /** The pool compare() reads for a summary (its role unless "all" is asked for), and that pool's size on the side. */
@@ -182,6 +185,15 @@ export function rankingCalls(src: Sources) {
       if (!src.mapRounds) throw new Error("rolesByMap: the ranking sources have no mapRounds");
       const maps = Object.entries(await src.mapRounds(q)).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
       return Promise.all(maps.map(async ([map]) => ({ map, ...(await calls.roles({ files: q.files, filter: { ...q.filter, maps: [map] } })) })));
+    },
+    /** The role blend per side and per spawn used, each over that spawn's rounds on its own map under the query's filters. */
+    async rolesBySpawn(q: Query): Promise<Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>> {
+      if (!src.spawns) throw new Error("rolesBySpawn: the ranking sources have no spawns");
+      const rows = spawnRows(await src.spawns(q));
+      const side = (s: "T" | "CT") => Promise.all(rows[s].map(async (row) =>
+        ({ ...row, blend: roleBlend(await src.summary({ files: q.files, filter: { ...q.filter, sides: [s], spawns: [row.spawn], maps: [row.map] } }), s) })));
+      const [T, CT] = await Promise.all([side("T"), side("CT")]);
+      return { T, CT };
     },
   };
   return calls;
