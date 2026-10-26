@@ -114,7 +114,7 @@ export const INPUT_COVERAGE = {
    * extractor demos have both, plugin files have no clip counts
    */
   ammo: ["ammoRounds", "rounds", "the clip count per shot and the player's path", "rounds"],
-  /** the source recorded the match's grenades and flashes (utility.ts markUtility); some plugin files hold none */
+  /** the source recorded the round's grenades and flashes (utility.ts markUtility); some plugin files hold none */
   utility: ["utilityRounds", "rounds", "grenade and flash events", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
