@@ -182,8 +182,14 @@ afterAll(() => act(() => root.unmount()));
 const hidePersonal = (on: boolean) => act(() => setHidePersonal(on));
 afterEach(() => hidePersonal(false));
 
-// The views the app loads lazily, loaded once here so each route draws its view within a few turns.
-await Promise.all(["../App", "./match/MatchView", "./Profile", "./Settings", "./match/Rounds", "./match/Economy", "./match/Duels", "./match/Utility", "./match/Aim", "./match/Positions", "./match/Advanced", "./match/Luck", "./match/replay/Replay"].map((m) => import(m)));
+// Every view the app loads lazily, found by its lazy(() => import(...)) anywhere under src/ui and
+// loaded once here, so each route draws its own view within a few turns.
+const UI = path.resolve(import.meta.dirname, "..");
+const lazyViews = readdirSync(UI, { recursive: true, encoding: "utf8" })
+  .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
+  .flatMap((f) => [...readFileSync(path.join(UI, f), "utf8").matchAll(/lazy\(\(\) => import\("([^"]+)"\)\)/g)]
+    .map((m) => `./${path.relative(import.meta.dirname, path.resolve(UI, path.dirname(f), m[1])).split(path.sep).join("/")}`));
+await Promise.all(lazyViews.map((m) => import(m)));
 
 /** Lets lazy views load and worker answers arrive: until the page has not changed for a while. */
 async function settle() {
@@ -200,12 +206,18 @@ async function show(href: string, data: Data) {
   act(() => go(href, { instant: true }));
   act(() => root.render(<DataValue value={data}><BarProvider><Shell /></BarProvider></DataValue>));
   await settle();
+  // the page drew its own view, not the loading state of a page or tab (App.tsx FirstScan, MatchView.tsx TabSkeleton)
+  expect(document.querySelector(".pane .first-scan, .pane [aria-busy='true']"), href).toBeNull();
   return { html: document.documentElement.outerHTML, title: document.title };
 }
 
 const found = (text: string) => SENTINELS.filter((s) => text.includes(s));
 
 describe("Hide personal info", () => {
+  it("finds the lazily loaded views to load", () => {
+    expect(lazyViews.length).toBeGreaterThanOrEqual(12);
+  });
+
   it("leaves no name, SteamID or path of the user or of strangers on any page, tab or window title", async () => {
     hidePersonal(true);
     const leaks: string[] = [];

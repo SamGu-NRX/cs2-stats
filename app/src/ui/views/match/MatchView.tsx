@@ -88,10 +88,11 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
   );
 }
 
+/** A tab that is still loading: its match, or its code (the tabs load lazily). */
 function TabSkeleton({ tab }: { tab: MatchTab }) {
-  if (tab === "rounds") return <div className="tabpad"><div className="skel" style={{ height: 420 }} /></div>;
+  if (tab === "rounds") return <div className="tabpad" aria-busy="true"><div className="skel" style={{ height: 420 }} /></div>;
   return (
-    <div className="tabpad grid-2">
+    <div className="tabpad grid-2" aria-busy="true">
       <div className="skel" style={{ height: 260 }} />
       <div className="skel" style={{ height: 260 }} />
     </div>

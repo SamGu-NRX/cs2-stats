@@ -46,6 +46,13 @@ describe("hideText", () => {
     [`the recording player (match pov ${ID}) is not among the players`, "the recording player (match pov <SteamID>) is not among the players"],
     ["STEAM_1:0:12345 and [U:1:24691]", "<SteamID> and <SteamID>"],
     [`see https://steamcommunity.com/profiles/${ID}/ for more`, "see <Steam profile> for more"],
+    [`see https://www.steamcommunity.com/profiles/${ID} or http://www.steamcommunity.com/id/annlee/`, "see <Steam profile> or <Steam profile>"],
+    ["www.steamcommunity.com/id/annlee", "<Steam profile>"],
+    // folder names with spaces, quoted and not, in both path styles
+    ["cannot open /home/ann/My Demos/x.dem, retrying", "cannot open <path>, retrying"],
+    ["cannot open '/home/ann/My Demos/x.dem'", "cannot open '<path>'"],
+    [`cannot open ${["C:", "Users", "Ann Lee", "My Demos", "x.dem"].join("\\")}, retrying`, "cannot open <path>, retrying"],
+    [`cannot open "${["C:", "Users", "Ann Lee", "My Demos", "x.dem"].join("\\")}"`, `cannot open "<path>"`],
   ])("hides %s", (raw, hidden) => {
     expect(hideText(raw)).toBe(hidden);
   });

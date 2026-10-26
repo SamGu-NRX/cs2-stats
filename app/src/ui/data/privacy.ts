@@ -101,19 +101,20 @@ export const STEAMID_HIDDEN = "<SteamID>";
 export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>" } as const;
 
 // A path ends at a quote, a bracket or a character no file name can hold. Folder names may contain
-// spaces, so a Windows path runs to its last separator on the line, then to the end of its last name;
-// when that takes in a few words after the path, more is hidden than needed, never less.
+// spaces, so a path runs to its last separator on the line, then to the end of its last name, which
+// stops at a space. When that takes in a few words after the path, more is hidden than needed; a
+// file name with a space in it ("My demo.dem") keeps the words after the space, which name no one.
 const NAME_END = String.raw`[^\\/\s<>|"'?*:,;)]*`;
 const SEGMENTS = String.raw`(?:[^\\/\r\n<>|"'?*:]*[\\/])*`;
 const RULES: [RegExp, string][] = [
-  [/\b(?:https?:\/\/)?steamcommunity\.com\/(?:profiles|id)\/[^\s'"<>)]+/gi, "<Steam profile>"],
+  [/(?:\bhttps?:\/\/)?(?:\bwww\.)?\bsteamcommunity\.com\/(?:profiles|id)\/[^\s'"<>)]+/gi, "<Steam profile>"],
   [/\b7656119\d{10}\b/g, STEAMID_HIDDEN],
   [/\bSTEAM_[0-5]:[01]:\d+\b|\[U:1:\d+\]/g, STEAMID_HIDDEN],
   // C:\... or C:/..., then \\server\share\...
   [new RegExp(String.raw`\b[A-Za-z]:[\\/]${SEGMENTS}${NAME_END}`, "g"), PATH_HIDDEN],
   [new RegExp(String.raw`\\\\[^\\/\s<>|"'?*:]+[\\/]${SEGMENTS}${NAME_END}`, "g"), PATH_HIDDEN],
   // /home/name/..., two names at least; not a URL's path, a relative path such as 2026/x.json.gz, or "and/or"
-  [/(?<![\w.:/\\~%-])\/(?:[^\s/\\'"<>|:]+\/)+[^\s/\\'"<>|:,;)]*/g, PATH_HIDDEN],
+  [new RegExp(String.raw`(?<![\w.:/\\~%-])\/(?:[^\\/\r\n<>|"'?*:]+\/)+${NAME_END}`, "g"), PATH_HIDDEN],
 ];
 
 /** Text with every absolute path, SteamID and Steam profile link replaced by a placeholder. */
