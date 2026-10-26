@@ -9,10 +9,11 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
-export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced"] as const;
+// Replay is last so Alt 1 to 8 keep their tabs (App.tsx reads Alt with one digit, 1 to 8).
+export const MATCH_TABS = ["overview", "rounds", "economy", "duels", "utility", "aim", "positions", "advanced", "replay"] as const;
 export type MatchTab = (typeof MATCH_TABS)[number];
 export const MATCH_TAB_LABEL: Record<MatchTab, string> = {
-  overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced",
+  overview: "Overview", rounds: "Rounds", economy: "Economy", duels: "Duels", utility: "Utility", aim: "Aim", positions: "Positions", advanced: "Advanced", replay: "Replay",
 };
 
 export const PROFILE_TABS = ["overview", "duels", "aim", "weapons", "utility", "economy", "playstyle"] as const;
