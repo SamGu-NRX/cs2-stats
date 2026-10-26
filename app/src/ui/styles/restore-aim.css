@@ -1,10 +1,36 @@
-/* Styles for elements restored from main (REMOVALS.md, E20), aim slice. */
+/* Styles for elements restored from main (REMOVALS.md, E20), aim slice, in Career aim's layout
+   (views/aim/AimPanels.tsx, components/SprayPath.tsx). */
 
-/* The spray card's two toggles, Spread bands and Pro path, sit together at the end of the gun row. */
-.gunpick__bands { display: inline-flex; flex-wrap: wrap; gap: 6px 16px; }
+/* The stat strip's lead: the accuracy ring beside its label, value and percentile (column sizes in views.css .aimp .strip). */
+.strip__lead { grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px; }
+.strip__leadtext { display: grid; gap: 3px; min-width: 0; }
+.strip__lead .strip__val { font-size: 24px; }
 
-/* The spray card stacks two bullet-by-bullet charts: on target, then against pros. */
-.spray-body .bctl + .bctl { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* Spray: the two toggles above the chart, each bullet's spread and the target's head on it. */
+.spray-toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.spray__sd { fill: rgba(255, 215, 173, 0.07); stroke: rgba(255, 215, 173, 0.4); stroke-width: 1; }
+.spray__head { fill: var(--ct); opacity: 0.85; }
 
-/* A disclosure that holds a paragraph above its rows. */
-.disclose__p + .drow { margin-top: 6px; }
+/* On target, bullet by bullet: the distance chart's frame, bars off target faded. */
+.sprayt { margin-top: 14px; }
+.sprayt__head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.sprayd .sprayt__head .caps { margin: 0; cursor: help; }
+.sprayt__head b { font: 700 12px/1 var(--f); color: var(--cream); }
+.sprayd__plot i[data-off] { opacity: 0.4; }
+
+/* Where you hit: the hitting figures under the body, a chip after a label. */
+.hitting { margin-top: 14px; border-top: 1px solid var(--line); }
+.amrow__l > span[data-tip] { cursor: help; }
+.amrow__chip { margin-left: 8px; height: 18px; padding: 0 6px; font-size: 10px; vertical-align: 1px; }
+
+/* When an enemy appears, gated: why, per match file. */
+.gated__why { display: grid; gap: 4px; }
+.gated__why p { margin: 0; }
+.gated__reason { cursor: help; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
+
+/* The gun tables' first cell: the name, then Weapons' advice under it, wrapping in the cell. Advice is
+   prose: td sets tabular figures (base.css), which widen the period in this face. */
+.guncell--advice { align-items: flex-start; padding: 8px 0; }
+.guncell--advice .gicon, .guncell--advice .ico { margin-top: 2px; }
+.guncell__txt { display: grid; gap: 3px; min-width: 0; white-space: normal; }
+.guncell__advice { font: 400 12px/1.35 var(--f); font-variant-numeric: normal; color: var(--ink2); text-wrap: pretty; }

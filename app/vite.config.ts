@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Connect, Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { fileParam, requestUrl } from "./tools/request-param";
 import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
 
 
@@ -20,10 +21,12 @@ function matchFolder(): Plugin {
   const root = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "matches") : null;
   const packs = process.env.APPDATA ? path.join(process.env.APPDATA, "BotMatchStats", "packs") : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (url.pathname === "/__packs/file") {
       // the optional packs folder: pro scores, agent art and the CS2 icon pack, kept out of the repository
-      const rel = url.searchParams.get("f") ?? "";
+      const rel = fileParam(url.search, "f");
+      if (rel === null) { res.statusCode = 400; return res.end(); }
       const abs = packs ? path.resolve(packs, rel) : "";
       if (!packs || !/\.(json|png|svg)$/.test(rel) || !abs.startsWith(path.resolve(packs) + path.sep)) { res.statusCode = 400; return res.end(); }
       if (!existsSync(abs)) { res.statusCode = 404; return res.end(); }
@@ -59,9 +62,11 @@ function matchFolder(): Plugin {
         return send(200, JSON.stringify({ folder: root, files }));
       }
       if (url.pathname === "/__matches/file") {
-        const rel = url.searchParams.get("f") ?? "";
+        const rel = fileParam(url.search, "f");
+        if (rel === null) return send(400, JSON.stringify({ error: "malformed file name" }));
         const abs = path.resolve(root, rel);
         if (!rel.endsWith(".json.gz") || !abs.startsWith(path.resolve(root) + path.sep)) return send(400, JSON.stringify({ error: "not a match file inside the folder" }));
+        if (!existsSync(abs)) return send(404, JSON.stringify({ error: "no such match file" }));
         return send(200, await fs.readFile(abs), "application/octet-stream");
       }
       return send(404, JSON.stringify({ error: "unknown endpoint" }));
@@ -88,7 +93,8 @@ function valveFolder(): Plugin {
   let running = false;
   let at: unknown = null, last: unknown = null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (!url.pathname.startsWith("/__valve/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
@@ -101,7 +107,8 @@ function valveFolder(): Plugin {
     try {
       if (url.pathname === "/__valve/list") return send(200, JSON.stringify(listValve(root)));
       if (url.pathname === "/__valve/file") {
-        const rel = url.searchParams.get("f") ?? "";
+        const rel = fileParam(url.search, "f");
+        if (rel === null) return send(400, JSON.stringify({ error: "malformed file name" }));
         const body = readValve(root, rel);
         return send(200, body, rel.endsWith(".parquet") ? "application/octet-stream" : "application/json");
       }
@@ -170,7 +177,8 @@ function valveFolder(): Plugin {
 function devMatches(): Plugin {
   const root = process.env.CS2_DEV_MATCHES ? path.resolve(process.env.CS2_DEV_MATCHES) : null;
   const handler: Connect.NextHandleFunction = async (req, res, next) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
     if (!url.pathname.startsWith("/__dev-matches/")) return next();
     const send = (code: number, body: string | Buffer, type = "application/json") => {
       res.statusCode = code;
@@ -192,9 +200,11 @@ function devMatches(): Plugin {
         return send(200, JSON.stringify({ folder: root, files }));
       }
       if (url.pathname === "/__dev-matches/file") {
-        const rel = url.searchParams.get("f") ?? "";
+        const rel = fileParam(url.search, "f");
+        if (rel === null) return send(400, JSON.stringify({ error: "malformed file name" }));
         const abs = path.resolve(root, rel);
         if (!abs.startsWith(root + path.sep)) return send(400, JSON.stringify({ error: "not inside the dev match folder" }));
+        if (!existsSync(abs)) return send(404, JSON.stringify({ error: "no such file in the dev match folder" }));
         if (rel.endsWith(".parquet")) return send(200, await fs.readFile(abs), "application/octet-stream");
         return send(200, JSON.stringify((await fs.readdir(abs)).filter((f) => f.endsWith(".parquet"))));
       }

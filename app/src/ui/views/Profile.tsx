@@ -27,7 +27,7 @@ import {
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
-import { PANEL_TIP, TIP, tipOf } from "../data/tips";
+import { PANEL_TIP, tipOf } from "../data/tips";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
 import { FirstKillIcon, HeadshotIcon, WeaponIcon } from "../icons/game";
@@ -221,7 +221,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
   const cellTip = (c: CellDef) => {
     const pct = pros?.p[c.metric];
     const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}. ` : "";
-    return `${rank}${TIP[c.metric] ?? ""}`.trim();
+    return `${rank}${tipOf(c.metric) ?? ""}`.trim();
   };
   const roleT = topRoles(roles?.T);
   const roleCT = topRoles(roles?.CT);
@@ -256,7 +256,7 @@ function PlayerCard({ p, side, cmp, compare }: { p: ProfileData; side: SideKey; 
           <HoverCard as="div" className="gauge-wrap" card={() => (
             <div className="bd">
               <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
-              <p className="bd__def">{TIP.rating3}</p>
+              <p className="bd__def">{tipOf("rating3")}</p>
               {r3.inputs && <RatingTerms inputs={r3.inputs} />}
             </div>
           )}>
@@ -440,7 +440,7 @@ function MapsTable({ p, side }: { p: ProfileData; side: SideKey }) {
           { key: "kast", label: "KAST", sort: (m) => m.s.v.kast, render: (m) => <Num v={fmtPct(m.s.v.kast)} /> },
           { key: "t", label: "T", tip: "Your rating on T.", colored: true, sort: (m) => m.r.T.value, render: (m) => <span className="t-text">{fmtRating(m.r.T.value)}</span> },
           { key: "ct", label: "CT", tip: "Your rating on CT.", colored: true, sort: (m) => m.r.CT.value, render: (m) => <span className="ct-text">{fmtRating(m.r.CT.value)}</span> },
-          { key: "rating", label: RATING_LABEL, tip: TIP.rating3, colored: true, sort: (m) => m.r[key].value, render: (m) => { const x = m.r[key].value; return <b style={{ color: ratingText(x) }}>{fmtRating(x)}</b>; } },
+          { key: "rating", label: RATING_LABEL, tip: tipOf("rating3"), colored: true, sort: (m) => m.r[key].value, render: (m) => { const x = m.r[key].value; return <b style={{ color: ratingText(x) }}>{fmtRating(x)}</b>; } },
         ]}
       />
     </Card>
@@ -629,7 +629,7 @@ function Openings({ s }: { s: Rolled }) {
   const att = c.openingKills + c.openingDeaths;
   const succ = s.v.openingSuccess;
   return (
-    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={TIP.openingSuccess}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
+    <Card title="Opening duels" tip={PANEL_TIP.openings} collapsible id="profile-openings" icon={<FirstKillIcon size={15} className="cream" />} aside={<span data-tip={tipOf("openingSuccess")}><SectionAside label="Won" value={fmtPct(succ, 0)} color={succ === null ? undefined : scoreText(toScore(succ, 50, 30))} /></span>}>
       <div className="odial">
         <svg viewBox="0 0 120 12" width="100%" height="12" aria-hidden>
           <rect x="0" y="2" width="120" height="8" rx="2" fill="var(--track)" />
