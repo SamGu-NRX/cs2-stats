@@ -389,7 +389,7 @@ describe("review round 1 (PR #28)", () => {
       const first = career[0];
       const q = { files: [first.file], filter: { player: ids } };
       const t = ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) }).T.value;
-      const cell = host.querySelector(".form-rail tbody tr:first-child td:last-child");
+      const cell = host.querySelector(".form-rail .fig--last .fig__v");
       expect(text(cell)).toBe(t === null ? "–" : fmtRating(t));
     } finally {
       act(() => go("#/"));

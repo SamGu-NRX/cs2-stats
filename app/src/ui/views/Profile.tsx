@@ -9,9 +9,10 @@ import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
-import { ClutchBadge, MapThumb, MultiBadge, Num } from "../components/bits";
+import { ClutchBadge, Delta, MapThumb, MultiBadge, Num } from "../components/bits";
 import { Card } from "../components/Card";
-import { Gauge, TrendLine } from "../components/charts";
+import { Gauge } from "../components/charts";
+import { Fig, MatchLine } from "../components/MatchSeries";
 import { ApproxMark, percentilePhrase, sentence } from "../components/Percentile";
 import { MetricList, quintile, Track } from "../components/MetricRow";
 import { Segmented, Select, type Option } from "../components/controls";
@@ -383,25 +384,46 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   );
 }
 
+/** The rated match with the highest (or lowest) rating among `list`, or null without one. */
+function extremeMatch(p: ProfileData, list: MatchEntry[], sign: 1 | -1) {
+  let out: { e: MatchEntry; r: number } | null = null;
+  for (const e of list) {
+    const r = p.perMatch(e).rating;
+    if (r !== null && (!out || sign * (r - out.r) > 0)) out = { e, r };
+  }
+  return out;
+}
+
+/** "Oct 24, 13:8": a match's day and score, under a figure. */
+const dayScore = (e: MatchEntry) => `${fmtMatchDay(e.match)}, ${e.score.us}:${e.score.them}`;
+
+/**
+ * Form: the last ten matches' ratings on the page's side as a line plus dots, oldest first, with the
+ * pooled rating dashed; beside it the pooled rating, the last match against it, and the best and
+ * worst, each a link to its match.
+ */
 function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
-  const rows = p.list.slice(0, 7);
+  const pooled = p.ratings[ratingKey(side)].value;
+  const recent = p.list.slice(0, 10).reverse();
+  const last = p.list[0];
+  const lastR = p.perMatch(last).rating;
+  const best = extremeMatch(p, recent, 1);
+  const worst = extremeMatch(p, recent, -1);
+  const wins = p.list.filter((e) => e.result === "W").length;
+  const losses = p.list.filter((e) => e.result === "L").length;
   return (
-    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form} tabIndex={0}>{RATING_LABEL}</span><ApproxMark /></span>} flush className="form-rail">
-      <TrendLine height={110} points={[...p.list].reverse().slice(-10).map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} avgValue={p.ratings[ratingKey(side)].value} avgLabel="pooled" />
-      <table className="tbl tbl--compact">
-        <tbody>
-          {rows.map((f) => {
-            const r = p.perMatch(f).rating;
-            return (
-              <tr key={f.file} data-link="" onClick={() => openMatch(matchHref(f.file))}>
-                <td className="l"><span className="two"><b>{mapName(f.match.map)}</b><small>{fmtMatchDay(f.match)}</small></span></td>
-                <td><span className={`wl wl--${f.result}`}>{f.result}</span> <span className="num">{f.score.us}:{f.score.them}</span></td>
-                <td>{r === null ? <span className="faint" data-tip="Not rated: too little kill data in this match." tabIndex={0}>–</span> : <b className="num" style={{ color: ratingText(r) }}>{fmtRating(r)}</b>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <Card title="Form" aside={<span className="meta form-rail__label"><span data-tip={PANEL_TIP.form} tabIndex={0}>{RATING_LABEL}</span><ApproxMark /> by match, oldest first</span>} className="form-rail">
+      <div className="series">
+        <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1}
+          points={recent.map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, onClick: () => openMatch(matchHref(f.file)) }))} />
+        <dl className="figs">
+          <Fig label="Pooled" value={fmtRating(pooled)} sub={`${plural(p.list.length, "match", "matches")}, ${wins}–${losses}`} />
+          <Fig className="fig--last" label="Last match" value={fmtRating(lastR)} href={matchHref(last.file)}
+            sub={lastR !== null && pooled !== null ? <><Delta d={lastR - pooled} span={0.3} fmt={(x) => x.toFixed(2)} /> vs pooled</> : dayScore(last)} />
+          {best && <Fig label="Best" tone="good" value={fmtRating(best.r)} href={matchHref(best.e.file)} sub={dayScore(best.e)} />}
+          {worst && worst.e !== best?.e && <Fig label="Worst" tone="poor" value={fmtRating(worst.r)} href={matchHref(worst.e.file)} sub={dayScore(worst.e)} />}
+        </dl>
+      </div>
     </Card>
   );
 }
@@ -500,7 +522,10 @@ function FormTrend({ p, side }: { p: ProfileData; side: SideKey }) {
   const pooled = p.ratings[ratingKey(side)].value;
   return (
     <Card title="Rating by match" tip={PANEL_TIP.ratingByMatch} collapsible id="profile-form" className="trendcard" aside={<SectionAside label="Overall" value={fmtRating(pooled)} color={ratingText(pooled)} />}>
-      <TrendLine height={170} points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match) }))} fmt={(v) => v.toFixed(2)} bench={1} benchLabel="average player" avgValue={pooled} avgLabel="pooled" />
+      <div className="series__scroll">
+        <MatchLine label="Rating by match" fmt={(v) => v.toFixed(2)} pooled={pooled} refValue={1} plot={120}
+          points={[...p.list].reverse().map((f) => ({ key: f.file, value: p.perMatch(f).rating, label: fmtMatchDay(f.match), result: f.result, onClick: () => openMatch(matchHref(f.file)) }))} />
+      </div>
       <RatingLegend />
     </Card>
   );

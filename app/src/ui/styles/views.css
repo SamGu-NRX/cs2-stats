@@ -1266,3 +1266,50 @@ html.anim .profile[data-enter] .trk__dot, html.anim .profile[data-enter] .trk__r
 @media (hover: hover) and (pointer: fine) { .ptabs__tab[aria-selected="false"]:hover { color: var(--ink); } }
 .ptabs__end { margin-left: auto; display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 @media (max-width: 1240px) { .ptabs__end > .meta { display: none; } }
+
+/* ---------------------------------------------------------------- per-match series (components/MatchSeries.tsx) */
+.series { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 32px; min-width: 0; }
+.series > .ms { flex: none; }
+.series__scroll { overflow-x: auto; margin-bottom: 8px; }
+.ms { display: block; overflow: visible; }
+.ms__line { fill: none; stroke: var(--cream2); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.ms__dot { fill: var(--cream2); stroke: var(--s1); stroke-width: 1.5; }
+.ms__dot.is-good { fill: var(--good-text); }
+.ms__dot.is-poor { fill: var(--poor-text); }
+.ms__last { fill: var(--s1); stroke: var(--cream); stroke-width: 1.5; }
+.ms__mean { stroke: var(--cream); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.8; }
+.ms__meanl { fill: var(--cream); font-weight: 600; }
+.ms__ref { stroke: var(--ink3); stroke-width: 1; stroke-dasharray: 2 3; }
+.ms__grid { stroke: var(--line); stroke-width: 1; }
+.ms__zero { stroke: var(--ink3); stroke-width: 1; stroke-dasharray: 1.5 3; }
+.ms__ext { font-weight: 600; }
+.ms__ext.is-good, .is-good > .ms__ext { fill: var(--good-text); }
+.ms__ext.is-poor, .is-poor > .ms__ext { fill: var(--poor-text); }
+.ms__stem { stroke-width: 2; stroke-linecap: round; opacity: 0.55; }
+.is-good > .ms__stem { stroke: var(--good-text); }
+.is-poor > .ms__stem { stroke: var(--poor-text); }
+.is-good > .ms__pop { fill: var(--good-text); }
+.is-poor > .ms__pop { fill: var(--poor-text); }
+.ms__pop { stroke: var(--s1); stroke-width: 2; }
+.ms__w { fill: var(--cream); }
+.ms__l { fill: none; stroke: var(--ink3); }
+.ms__wlt { font: 700 9.5px/1 var(--f); fill: var(--ink2); }
+.ms__wlt.is-w { fill: var(--bg0); }
+.ms__hit { cursor: pointer; }
+/* figures beside a chart: caps label, a display number, a meta line */
+.figs { display: grid; grid-template-columns: repeat(2, minmax(104px, max-content)); gap: 16px 32px; align-content: start; margin: 4px 0 0; }
+.figs--wide { grid-template-columns: repeat(auto-fill, minmax(124px, max-content)); flex: 1; min-width: 260px; max-width: 760px; }
+.series > .figs:not(.figs--wide) { min-width: 240px; }
+.fig { display: grid; gap: 6px; min-width: 0; }
+.fig dd { display: grid; gap: 4px; margin: 0; }
+.fig__v small { font-size: 55%; }
+.fig__a { justify-self: start; border-radius: var(--r-chip); }
+@media (hover: hover) and (pointer: fine) { .fig__a:hover .fig__v { text-decoration: underline; text-decoration-color: var(--ink3); text-underline-offset: 4px; text-decoration-thickness: 1px; } }
+.fig__s { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.form-rail__label { display: inline-flex; align-items: baseline; gap: 4px; }
+
+/* round swing: the matches, then where the swing comes from */
+.swingcard__src { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); max-width: 720px; display: grid; gap: 8px; }
+.wfall__track { height: 6px; }
+.wfall__track i { opacity: 0.7; border-radius: 1px; }
+.profile__cols, .profile__trend, .profile__pair, .identity { gap: 16px; }
