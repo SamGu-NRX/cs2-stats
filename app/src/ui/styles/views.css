@@ -764,7 +764,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 /* weapons view */
 .navgun { display: inline-grid; place-items: center; }
 .guncell small { margin-left: 6px; font-weight: 400; font-size: 11px; }
-.advice { display: block; white-space: normal; font-size: 12px; line-height: 1.4; color: var(--ink2); padding: 6px 0; min-width: 300px; }
 .gunhero { position: relative; overflow: hidden; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: center; padding: 18px 20px; background: var(--bg2); }
 .gunhero__art { display: grid; place-items: center start; color: var(--tan); opacity: 0.9; }
 .gunhero--best { box-shadow: inset 2px 0 0 var(--good); }
@@ -927,9 +926,13 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .aim-spray { grid-area: spray; } .aim-hits { grid-area: hits; } .aim-strafe { grid-area: strafe; } .aim-finer { grid-area: finer; }
 @media (max-width: 1240px) { .aim-body { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "spray spray" "hits strafe" "finer finer"; } }
 @media (max-width: 900px) { .aim-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "spray" "hits" "strafe" "finer"; } }
-/* the strip keeps nine stats on one line at 1440, and two even rows below 1300 px */
-.aimp .strip { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
-@media (max-width: 1300px) { .aimp .strip { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+/* the accuracy ring leads in a fixed first column and the strip keeps its eleven cells on one line at
+   1440; below 1300 px the ring takes the first row and the stats two even rows under it */
+.aimp .strip { grid-template-columns: 200px repeat(auto-fit, minmax(92px, 1fr)); }
+@media (max-width: 1300px) {
+  .aimp .strip { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .aimp .strip__lead { grid-column: 1 / -1; }
+}
 .spray-aside { display: inline-flex; align-items: center; gap: 8px; }
 
 /* spray: the gun list beside the chart; the chart under the list when the card is narrow */

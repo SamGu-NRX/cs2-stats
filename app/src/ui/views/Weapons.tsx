@@ -12,7 +12,7 @@ import { fmtInt, fmtRatio } from "../lib/format";
 import { scoreText, toScore } from "../lib/scale";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
-import { advice, bestAndWorst, edgeText, edgeTip, EDGE_TIP, GunHero, GunIcon, HEAD_TIP, MIN_SHOTS, PROF_TIP, share, SplitCell, useGuns, type Judged } from "./aim/guns";
+import { bestAndWorst, EDGE_TIP, edgeText, edgeTip, GunCell, GunHero, HEAD_TIP, type Judged, MIN_SHOTS, PROF_TIP, share, SplitCell, useGuns } from "./aim/guns";
 import { Empty } from "./shared";
 
 export default function Weapons() {
@@ -48,7 +48,7 @@ function GunTable({ guns }: { guns: Judged[] }) {
         rowKey={(g) => g.weapon}
         defaultSort={{ key: "kills", dir: "desc" }}
         columns={[
-          { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <span className="guncell"><GunIcon weapon={g.weapon} />{weaponLabel(g.weapon)}<small className="faint">{WEAPON_CLASS_LABEL[g.cls]}</small></span>, width: 220 },
+          { key: "gun", label: "Gun", align: "l", sort: (g) => weaponLabel(g.weapon), render: (g) => <GunCell g={g} cls={WEAPON_CLASS_LABEL[g.cls]} />, width: 260 },
           { key: "kills", label: "Kills", sort: (g) => g.kills.n, render: (g) => <SplitCell s={g.kills} what="kills" /> },
           { key: "hsk", label: "HS kills", tip: tipOf("hs"), sort: (g) => share(g.hsKills, g.kills.n), render: (g) => <Num v={fmtRatio(g.hsKills, g.kills.n)} /> },
           { key: "shots", label: "Shots", sort: (g) => g.shots, render: (g) => g.shots || <span className="faint">–</span> },
@@ -61,7 +61,6 @@ function GunTable({ guns }: { guns: Judged[] }) {
             key: "edge", label: "Vs your other guns", colored: true, sort: (g) => g.edge, tip: EDGE_TIP,
             render: (g) => (g.edge === null ? <span className="faint">–</span> : <span className="num" style={{ color: scoreText(toScore(g.edge, 0, 8)) }} data-tip={edgeTip(g)} tabIndex={0}>{edgeText(g.edge)}</span>),
           },
-          { key: "advice", label: "Advice", align: "l", render: (g) => <span className="advice">{advice(g)}</span>, width: 360 },
         ]}
       />
     </Card>

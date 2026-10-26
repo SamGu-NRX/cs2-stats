@@ -1,8 +1,8 @@
 /* Styles for elements restored from main (REMOVALS.md, E20), aim slice, in Career aim's layout
    (views/aim/AimPanels.tsx, components/SprayPath.tsx). */
 
-/* The stat strip's lead: the accuracy ring beside its label, value and percentile, two columns wide. */
-.strip__lead { grid-column: span 2; grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px; }
+/* The stat strip's lead: the accuracy ring beside its label, value and percentile (column sizes in views.css .aimp .strip). */
+.strip__lead { grid-template-columns: 52px minmax(0, 1fr); align-items: center; column-gap: 12px; }
 .strip__leadtext { display: grid; gap: 3px; min-width: 0; }
 .strip__lead .strip__val { font-size: 24px; }
 
@@ -27,3 +27,10 @@
 .gated__why { display: grid; gap: 4px; }
 .gated__why p { margin: 0; }
 .gated__reason { cursor: help; text-decoration: underline dotted var(--ink3); text-underline-offset: 3px; }
+
+/* The gun tables' first cell: the name, then Weapons' advice under it, wrapping in the cell. Advice is
+   prose: td sets tabular figures (base.css), which widen the period in this face. */
+.guncell--advice { align-items: flex-start; padding: 8px 0; }
+.guncell--advice .gicon, .guncell--advice .ico { margin-top: 2px; }
+.guncell__txt { display: grid; gap: 3px; min-width: 0; white-space: normal; }
+.guncell__advice { font: 400 12px/1.35 var(--f); font-variant-numeric: normal; color: var(--ink2); text-wrap: pretty; }

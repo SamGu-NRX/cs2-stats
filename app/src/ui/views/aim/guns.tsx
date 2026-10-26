@@ -159,6 +159,23 @@ export function GunIcon({ weapon, height = 14, label }: { weapon: string; height
   return <GameIcon id={weapon} width={Math.round(height * 2.9)} height={height} label={label} className="gicon--gun" fallback={<WeaponIcon name={weapon} size={height} label={label} />} />;
 }
 
+/**
+ * The gun table's first cell: the gun's icon and name (and its class on Weapons, which has no class
+ * rows), with the advice under the name. The advice sits in this cell rather than a column of its own:
+ * a twelfth column pushed the gun tables past the card's edge at 1440 px.
+ */
+export function GunCell({ g, cls }: { g: Judged; cls?: string }) {
+  return (
+    <span className="guncell guncell--advice">
+      <GunIcon weapon={g.weapon} />
+      <span className="guncell__txt">
+        <span>{weaponLabel(g.weapon)}{cls ? <small className="faint">{cls}</small> : null}</span>
+        <span className="guncell__advice">{advice(g)}</span>
+      </span>
+    </span>
+  );
+}
+
 /** A weapon class as a typical gun of it, for class group rows. */
 const CLASS_GUN: Record<string, string> = { rifle: "ak47", sniper: "awp", smg: "mp9", heavy: "nova", pistol: "glock" };
 export function ClassIcon({ cls, height = 12 }: { cls: string; height?: number }) {
