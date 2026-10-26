@@ -18,3 +18,12 @@ it("names the clutch player and counts their kills after the clutch started", ()
   expect(rows(f, ["a", "b", "c", "d"]).map((r) => [r.player, r.opponents, r.won, r.kills])).toEqual([["b", 2, true, 2], ["d", 1, false, 0]]);
   expect(rows(f, ["d"]).map((r) => r.player)).toEqual(["d"]);
 });
+
+it("counts a side that starts the round with one player as a clutch before any kill", () => {
+  // fails if the alive counts are read only after a death: a starts alone against c and d. Dying
+  // first is still a lost 1v2; winning it is a won 1v2 with two kills, not a 1v1 that starts later
+  const lost = oneRound({ players: { a: "CT", c: "T", d: "T" }, roundRow: { winner_side: "T" }, kills: [{ tick: t(1), killer: "c", victim: "a" }] });
+  expect(rows(lost, ["a"]).map((r) => [r.player, r.opponents, r.won, r.kills])).toEqual([["a", 2, false, 0]]);
+  const won = oneRound({ players: { a: "CT", c: "T", d: "T" }, kills: [{ tick: t(1), killer: "a", victim: "c" }, { tick: t(2), killer: "a", victim: "d" }] });
+  expect(rows(won, ["a"]).map((r) => [r.player, r.opponents, r.won, r.kills])).toEqual([["a", 2, true, 2]]);
+});
