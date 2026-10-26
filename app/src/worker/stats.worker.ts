@@ -7,7 +7,7 @@
 // matches, the ones the match views have open. A career question streams facts from IndexedDB one
 // match at a time: the calls the UI sends together (worker/client.ts batches them) share one pass
 // over the files, and each sums its own matches with addMatch as the pass goes by.
-import { BUY_CLASSES } from "../stats/economy";
+import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
 import { METRIC } from "../stats/metrics";
 import { vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
@@ -370,6 +370,10 @@ const api: Impl = {
       .then((xs) => Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0)));
     const [own, opp] = await Promise.all([split("ownBuy"), split("oppBuy")]);
     return { own, opp };
+  },
+  async buyTiers(q) {
+    const xs = await Promise.all(BUY_TIERS.map(async (b) => [b, rolled(await summaryOf({ files: q.files, filter: { ...q.filter, ownTier: [b] } }))] as const));
+    return Object.fromEntries(xs.filter(([, s]) => s.m.rounds > 0));
   },
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
