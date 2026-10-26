@@ -17,7 +17,7 @@ function summary(overrides: Record<string, number> = {}) {
 }
 const fit = { n: 10, mean: [50, 20, 25, 20, 0.5, 0.5], sd: [10, 10, 10, 10, 0.2, 0.2] };
 const MODEL: RoleModel = { source: "equal-class synthetic fixture", features: [...FEATURES], sides: { T: { n: 20, roles: { Entry: fit, Lurker: fit } }, CT: { n: 20, roles: { Anchor: fit, Rotator: fit } } } };
-const distribution = (entries: Partial<Record<RoleName, number>>) => entries as Record<RoleName, number>;
+const distribution = (entries: Partial<Record<RoleName, number>>) => entries as Record<RoleName, number | null>;
 
 it("returns the complete side taxonomy and shared evidence contract", () => {
   for (const side of ["T", "CT"] as const) {
@@ -32,7 +32,7 @@ it("returns the complete side taxonomy and shared evidence contract", () => {
       expect(metric.unit).toBe(source.unit);
     }
     for (const tip of Object.values(r.tips)) expect(tip.split(/\s+/).length).toBeLessThanOrEqual(12);
-    expect(Object.values(r.distribution!).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    expect(Object.values(r.distribution!).filter((value): value is number => value !== null).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
     expect(r.calibrationStatus).toEqual(side === "T"
       ? { Entry: "calibrated", Trader: "fit", Support: "fit", Lurker: "calibrated", AWPer: "measured" }
       : { Anchor: "calibrated", Rotator: "calibrated", Aggressor: "fit", Support: "fit", AWPer: "measured" });
@@ -64,11 +64,13 @@ it("fixes the AWP component at its measured share on both sides, even after cali
     const r = roleBlend(summary({ roundsWithAwp: awp * 50, loadoutRounds: 50 }), side, model);
     expect(r.awp).toBe(awp);
     expect(r.distribution!.AWPer).toBe(awp);
-    expect(Object.entries(r.distribution!).filter(([role]) => role !== "AWPer").reduce((sum, [, value]) => sum + value, 0)).toBeCloseTo(1 - awp);
+    expect(Object.entries(r.distribution!).filter(([role, value]) => role !== "AWPer" && value !== null).reduce((sum, [, value]) => sum + value!, 0)).toBeCloseTo(1 - awp);
     if (awp >= 0.8) expect(r.primary).toBe("AWPer");
   }
   const unknown = roleBlend(summary({ loadoutRounds: 0 }), "T", model);
   expect(unknown.awp).toBeNull();
+  expect(unknown.distribution!.AWPer).toBeNull();
+  expect(Object.entries(unknown.distribution!).filter(([role, value]) => role !== "AWPer" && value !== null).reduce((sum, [, value]) => sum + value!, 0)).toBeCloseTo(1);
   expect(unknown.evidence[0]).toContain("unknown");
 });
 
@@ -106,5 +108,5 @@ it("sums shared overall role names using side-round weights", () => {
   expect(all.primary).toBe("AWPer");
   expect(all.probability).toBeCloseTo(0.7);
   expect(all.top2).toBeNull();
-  expect(all.distribution!.Support).toBeCloseTo(t.distribution!.Support * 0.75 + ct.distribution!.Support * 0.25);
+  expect(all.distribution!.Support).toBeCloseTo(t.distribution!.Support! * 0.75 + ct.distribution!.Support! * 0.25);
 });
