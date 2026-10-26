@@ -1,0 +1,165 @@
+// The Profile tabs' metric panels. Every metric shows as one MetricRow (components/MetricRow.tsx):
+// performance metrics ranked against pros (compare), style metrics against the bots in your matches
+// (style), each with the sample its value rests on. How good is gone: its rows sit in Duels and Utility.
+import { useMemo } from "react";
+import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
+import type { Measures } from "../../../stats/facts";
+import type { Query, Rolled } from "../../../worker/protocol";
+import { Card } from "../../components/Card";
+import { MetricList, MetricRow } from "../../components/MetricRow";
+import { APPROX_TIP } from "../../components/Percentile";
+import { botPopulation, fmtMetric, proPopulation, type BotPool } from "../../data/engine";
+import { useCall, useRollups } from "../../data/hooks";
+import { hasMetric, metric } from "../../data/meta";
+import { tipOf } from "../../data/tips";
+import { fmtAdr, fmtPct, fmtRating, plural } from "../../lib/format";
+import { NeedsDemo } from "../shared";
+
+// ---------------------------------------------------------------- ranks
+
+/** Every metric's value and percentile for one query and side: performance against the pros, style against the bots. */
+export interface Ranks {
+  p: Record<string, Pct>;
+  /** pro population per pool name; the bot population as one text */
+  bots: string;
+  /** the rounds the ranks were read from, for each share's "6 of 39" (Metric.of) */
+  m: Measures | null;
+}
+
+export function useRanks(q: Query, side: PoolSide): Ranks | null {
+  const pro = useCall("compare", [q, { side }]).data;
+  const style = useCall("style", [q, { side }]).data;
+  const scope = useMemo(() => {
+    const { sides: _sides, ...rest } = q.filter;
+    return [{ files: q.files, filter: side === "both" ? rest : { ...rest, sides: [side] } }];
+  }, [q, side]);
+  const m = useRollups(scope).data?.[0]?.m ?? null;
+  return useMemo(() => {
+    if (!pro || !style) return null;
+    const bots = botPopulation(style.careers, { n: style.n, role: (style.careers.pool ?? style.role) as BotPool["role"] }).text;
+    return { p: { ...style.p, ...pro.p }, bots, m };
+  }, [pro, style, m]);
+}
+
+/** A share's count, "6 of 39", from the metric's numerator and denominator measures; else its sample count. */
+function sampleOf(id: string, p: Pct, m: Measures | null): string | null {
+  const meta = metric(id);
+  if (meta.of && m && p.value !== null) return `${m[meta.of[0]]} of ${m[meta.of[1]]}`;
+  if (meta.sample && p.n !== null) return plural(p.n, meta.sample.unit.replace(/s$/, ""), meta.sample.unit);
+  return null;
+}
+
+/** One engine metric as a MetricRow. */
+export function Stat({ id, r, label }: { id: string; r: Ranks; label?: string }) {
+  if (!hasMetric(id)) return null;
+  const meta = metric(id);
+  const p = r.p[id];
+  if (!p || meta.status === "unavailable") return null;
+  const kind = meta.kind === "performance" ? "performance" : "style";
+  return (
+    <MetricRow label={label ?? meta.label} value={p.value === null ? null : fmtMetric(id, p.value)} sample={sampleOf(id, p, r.m)} pct={p.pct} kind={kind}
+      population={kind === "performance" ? proPopulation(p.pool) : r.bots} tip={tipOf(id)} reason={p.reason} approx={meta.status === "approx"} />
+  );
+}
+
+/** The ≈ legend in a panel's aside: the approximation explained once, through its tooltip. */
+export const ApproxLegend = () => <span className="approx-legend meta" data-tip={APPROX_TIP} tabIndex={0}>≈ approximate</span>;
+
+/** A card of metric rows; rows without the metric in the engine drop out. */
+export function StatCard({ title, tip, ids, r, id }: { title: string; tip: string; ids: string[]; r: Ranks | null; id?: string }) {
+  return (
+    <Card title={title} tip={tip} id={id} aside={ids.some((x) => hasMetric(x) && metric(x).status === "approx") ? <ApproxLegend /> : undefined}>
+      {!r ? <div className="skel" style={{ height: 30 * ids.length }} /> : <MetricList label={title}>{ids.map((x) => <Stat key={x} id={x} r={r} />)}</MetricList>}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- the tabs' metric groups
+
+/** Duels: opening duels, trades, clutches and AWP duels, each a card of rows. */
+export const OPENING_ROWS = ["openingSuccess", "openingSwing", "openingAttempts", "openingTradedPct"];
+export const TRADE_ROWS = ["tradeKillSuccess", "tradeOpps", "tradeKillsPct", "tradedDeathSuccess", "tradeableDeaths", "deathsTradedPct", "tradeDenials", "baitKillsPct", "baitAssists"];
+export const CLUTCH_ROWS = ["clutchSwing", "oneVsOne", "clutches24", "lastAlive"];
+export const AWP_ROWS = ["awpDuelWin", "awpSwing", "awpKillsPct", "roundsWithAwp", "sniperKillsPct"];
+/** Utility: what you throw, what it does, and what you take. */
+export const THROW_ROWS = ["flashesPR", "hesPR", "molotovsPR", "smokesPR", "utilSpentPR", "utilUnused"];
+export const EFFECT_ROWS = ["assistsPerFlash", "flashAssistsPR", "flashSwing", "enemiesPerFlash", "blindPerFlash", "flashKillsPerFlash", "teamFlashPR", "dmgPerHe", "utilDmgPR", "fireDmgPR", "molotovEnemiesHit", "molotovDmg", "smokeSights", "smokeBlockedSecs"];
+export const TAKEN_ROWS = ["grenadeDmgTaken"];
+/** Economy's metric rows. */
+export const ECONOMY_ROWS = ["buyDeviation", "saveConversion", "lowBuyBuys"];
+
+/** Every metric a tab shows, by tab, for Home's Work on links. */
+export const TAB_METRICS: Record<"duels" | "utility" | "economy", string[]> = {
+  duels: [...OPENING_ROWS, ...TRADE_ROWS, ...CLUTCH_ROWS, ...AWP_ROWS],
+  utility: [...THROW_ROWS, ...EFFECT_ROWS, ...TAKEN_ROWS],
+  economy: ECONOMY_ROWS,
+};
+
+// ---------------------------------------------------------------- economy: by what you bought
+
+const BUY_CLASSES = [["pistol", "Pistol rounds"], ["eco", "Eco"], ["half", "Half buy"], ["full", "Full buy"]] as const;
+
+/**
+ * Your numbers split by what you bought at freeze end (buySplits().own): rounds, Rating 3.0, ADR, KPR
+ * and KAST per buy class. A class without rounds takes no row.
+ */
+export function BuySplitsCard({ q }: { q: Query }) {
+  const r = useCall("buySplits", [q]);
+  const rows = r.data ? BUY_CLASSES.flatMap(([k, label]) => {
+    const s: Rolled | undefined = r.data!.own[k];
+    return s && s.m.rounds ? [{ k, label, s }] : [];
+  }) : null;
+  return (
+    <Card title="By what you bought" tip="Your numbers in each kind of buy round." flush>
+      {!rows ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 160 }} />) : !rows.length ? <p className="meta card-pad"><NeedsDemo detail="Buy classes need every player's equipment." /></p> : (
+        <table className="tbl">
+          <thead><tr><th className="l">Buy</th><th>Rounds</th><th data-tip={tipOf("rating3")} tabIndex={0}>Rating 3.0</th><th data-tip={tipOf("adr")} tabIndex={0}>ADR</th><th data-tip={tipOf("kpr")} tabIndex={0}>KPR</th><th data-tip={tipOf("kast")} tabIndex={0}>KAST</th></tr></thead>
+          <tbody>
+            {rows.map(({ k, label, s }) => (
+              <tr key={k}>
+                <td className="l">{label}</td>
+                <td className="num">{s.m.rounds}</td>
+                <td className="num">{fmtRating(s.v.rating3 ?? null)}</td>
+                <td className="num">{fmtAdr(s.v.adr ?? null)}</td>
+                <td className="num">{fmtMetric("kpr", s.v.kpr ?? null)}</td>
+                <td className="num">{fmtPct(s.v.kast ?? null)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- playstyle: role by spawn
+
+/**
+ * The role blend per spawn you started rounds from (rolesBySpawn): the spawn's place and position in
+ * the spawn area, its rounds, and its top role. A spawn without a blend shows a dash.
+ */
+export function RoleBySpawnCard({ q }: { q: Query }) {
+  const r = useCall("rolesBySpawn", [q]);
+  const rows = r.data ? (["T", "CT"] as const).flatMap((side) => r.data![side].map((x) => ({ ...x, top: x.blend.blend ? Object.entries(x.blend.blend).sort((a, b) => b[1] - a[1])[0] : null }))) : null;
+  if (rows && !rows.length) return null;
+  return (
+    <Card title="Role by spawn" tip="Your likeliest role from each spawn you start at." flush>
+      {!rows ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 160 }} />) : (
+        <table className="tbl">
+          <thead><tr><th className="l">Side</th><th className="l">Spawn</th><th>Rounds</th><th className="l">Role</th><th>Fit</th></tr></thead>
+          <tbody>
+            {rows.map((x) => (
+              <tr key={`${x.side}|${x.spawn}`}>
+                <td className={`l ${x.side === "T" ? "t-text" : "ct-text"}`}>{x.side}</td>
+                <td className="l">{[x.position, x.place].filter(Boolean).join(", ") || x.spawn}</td>
+                <td className="num">{x.rounds}</td>
+                <td className="l">{x.top ? x.top[0] : <span className="faint">–</span>}</td>
+                <td className="num">{x.top ? fmtPct(100 * x.top[1], 0) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}

@@ -1,5 +1,5 @@
-// Profile sections: the round-swing card, the role blend in plain words, the "plays like" view
-// against the pro pack, and the how-good table.
+// Profile sections: the round-swing card, the role blend in plain words, and the "plays like" view
+// against the pro pack.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
@@ -9,7 +9,7 @@ import { Delta, Initials, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar, FormBars } from "../../components/charts";
 import { GameIcon } from "../../components/GameIcon";
-import { attrsOf, fmtMetric, proPoolName, proPopulation, ratingTerms, signalBar } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, signalBar } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { FirstKillIcon, TimeIcon, WeaponIcon } from "../../icons/game";
@@ -22,7 +22,6 @@ import { fmtMatchDay, fmtPct, fmtSwing, mapName, plural } from "../../lib/format
 import { swingScore } from "../../lib/scale";
 import { BreakRows, NeedsDemo } from "../shared";
 import { DotTrack, SwingSourcesChart } from "./v2";
-import { Percentile } from "../../components/Percentile";
 import { MapThumb } from "../../components/bits";
 import { matchHref, openMatch, setQuery } from "../../router";
 
@@ -453,46 +452,6 @@ export function RatingLegend({ children }: { children?: ReactNode }) {
       <span><svg width="8" height="8" aria-hidden><circle cx="4" cy="4" r="3.5" fill="var(--poor-text)" /></svg>Worst</span>
       {children}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- how good
-
-/** HLTV's "how good" metrics, in the order HLTV lists them beside Rating 3.0. */
-export const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
-
-/** The aside's population: the role pool, and every pro for the rows that always compare with everyone (sniping). */
-function howGoodPool(r: { n: number; role: "awper" | "rifler" }, p: Record<string, Pct>) {
-  const own = `Against ${r.n} ${proPoolName(r.role)}`;
-  return HOW_GOOD.some((id) => p[id]?.pool === "all") ? `${own}, AWP rows against all pros` : own;
-}
-
-/** The performance tables HLTV pairs with Rating 3.0, each with its percentile against pros on the page's side. */
-export function HowGood({ q, side }: { q: Query; side: PoolSide }) {
-  const r = useCall("compare", [q, { side }]);
-  const p = r.data?.p ?? null;
-  // the rounds compare() ranked, for the counts behind each share ("12 of 30", Metric.of)
-  const scope = useMemo(() => {
-    const { sides: _sides, ...rest } = q.filter;
-    return [{ files: q.files, filter: side === "both" ? rest : { ...rest, sides: [side] } }];
-  }, [q, side]);
-  const counts = useRollups(scope).data?.[0]?.m ?? null;
-  return (
-    <Card title="How good" tip={PANEL_TIP.howGood} aside={<span className="meta">{r.data ? howGoodPool(r.data, p!) : "Against pros"}</span>}>
-      {!p ? (r.error ? <p className="meta">{r.error}</p> : <div className="skel" style={{ height: 240 }} />) : (
-        <div className="howgood">
-          {HOW_GOOD.filter((id) => metric(id).status !== "unavailable" && p[id]).map((id) => {
-            const props = pctProps(id, p[id], p[id].value);
-            const of = metric(id).of;
-            const count = of && counts && p[id].value !== null ? `${counts[of[0]]} of ${counts[of[1]]}` : null;
-            return (
-              <Percentile key={id} variant="quiet" {...props} label={count ? <>{props.label}<span className="howgood__of num">{count}</span></> : props.label}
-                kind="performance" population={proPopulation(p[id].pool)} />
-            );
-          })}
-        </div>
-      )}
-    </Card>
   );
 }
 

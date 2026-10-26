@@ -30,8 +30,9 @@ import { TILES } from "../data/series";
 import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView } from "./Home";
-import Playstyle from "./Playstyle";
-import { HowGood, RatingTerms, RoleSignals } from "./profile/parts";
+import ProfileView from "./Profile";
+import { RatingTerms, RoleSignals } from "./profile/parts";
+import { StatCard, useRanks } from "./profile/tabs";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const PROS = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "../../../public/baselines.json"), "utf8")) as Baselines;
@@ -139,16 +140,18 @@ it("breaks Rating 3.0 into weighted terms and a constant that add up to the rati
   expect(text(rows[0].querySelector("b"))).toMatch(/^0\.74 → \+0\.\d{3}$/);
 });
 
-it("shows the counts behind How good's shares, from the rounds it ranked", async () => {
+it("shows the counts behind a share's row, from the rounds it ranked", async () => {
   // fails if "x of y" is dropped, or counts another side's rounds than the percentile beside it
   const q = queryOf(samples);
   answers.compare = await calls.compare(q, { side: "T" });
-  render(<HowGood q={q} side="T" />);
+  answers.style = await calls.style(q, { side: "T" });
+  function Rows() { return <StatCard title="Rows" tip="Rows." ids={["tradeKillSuccess", "openingSwing"]} r={useRanks(q, "T")} />; }
+  render(<Rows />);
   const m = summary(sideQuery(q, "T")).m;
-  const rowOf = (id: string) => Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label)!;
+  const rowOf = (id: string) => Array.from(host.querySelectorAll(".mrow2")).find((el) => el.querySelector(".mrow2__l")?.firstChild?.textContent === metric(id).label)!;
   expect(m.tradeOpps).toBeGreaterThan(0);
-  expect(text(rowOf("tradeKillSuccess").querySelector(".howgood__of"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
-  expect(rowOf("openingSwing").querySelector(".howgood__of")).toBeNull();
+  expect(text(rowOf("tradeKillSuccess").querySelector(".mrow2__n"))).toBe(`${m.tradeOppsTaken} of ${m.tradeOpps}`);
+  expect(text(rowOf("openingSwing").querySelector(".mrow2__n"))).toBe("");
 });
 
 it("shows Firepower's score and its lowest-ranked metric in Work on", async () => {
@@ -186,7 +189,7 @@ it("reaches every bot on the style compass from the keyboard, one tab stop for a
   // compass places you or a bot in another zone than the engine's opening attempts and trade/assist share give
   const career = samples.filter((s) => careerEntries([s.entry], null).length);
   use(career);
-  render(<Playstyle />);
+  render(<ProfileView tab="playstyle" />);
   const q = queryOf(career);
   const names = new Map(career.flatMap((s) => s.entry.players.filter((p) => p.bot).map((p) => [p.id, p.name] as const)));
   const zone = (v: Record<string, number | null>) => styleZone(v.openingAttempts!, v.tradeAssistShare!);

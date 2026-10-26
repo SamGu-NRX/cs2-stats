@@ -29,7 +29,7 @@ import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { fmtPct, fmtSwing, signed } from "../lib/format";
-import { go, matchHref } from "../router";
+import { go, matchHref, parseHash } from "../router";
 import { MatchesView } from "./Matches";
 import CareerAim from "./CareerAim";
 import { RoleCard } from "./profile/parts";
@@ -37,9 +37,8 @@ import { WhereYouPlay } from "./Playstyle";
 import { fmtRating } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import { HomeView, workOnHref } from "./Home";
-import Playstyle from "./Playstyle";
 import ProfileView from "./Profile";
-import { HowGood } from "./profile/parts";
+import { StatCard, TAB_METRICS, useRanks } from "./profile/tabs";
 import { Provisional } from "./shared";
 import Overview from "./match/Overview";
 import Rounds from "./match/Rounds";
@@ -125,44 +124,52 @@ const use = (list: Sample[]) => { data = { matches: list.map((s) => s.entry), yo
 const queryOf = (list: Sample[]): Query => ({ files: list.map((s) => s.file), filter: { player: [...new Set(list.map((s) => s.facts.match.pov!))] } });
 const text = (el: Element | null | undefined) => el?.textContent?.trim() ?? "";
 /** The element among `sel` whose `label` child reads exactly `name`. */
+/** The metric rows a Profile tab draws for these ids (profile/tabs.tsx StatCard), ranked as the tab ranks them. */
+function Rows({ q, side, ids }: { q: Query; side: "both" | "T" | "CT"; ids: string[] }) {
+  return <StatCard title="Rows" tip="Rows." ids={ids} r={useRanks(q, side)} />;
+}
+/** How good's metrics, now rows on the Duels and Utility tabs. */
+const HOW_GOOD = ["tradeKillSuccess", "tradedDeathSuccess", "openingSwing", "clutchSwing", "oneVsOne", "awpSwing", "awpDuelWin", "flashSwing", "assistsPerFlash", "dmgPerHe", "grenadeDmgTaken"];
+const rowOfId = (id: string) => Array.from(host.querySelectorAll<HTMLElement>(".mrow2")).find((el) => el.querySelector(".mrow2__l")?.firstChild?.textContent === metric(id).label);
 const byLabel = (sel: string, label: string, name: string) => Array.from(host.querySelectorAll(sel)).find((el) => text(el.querySelector(label)) === name) ?? null;
 
 describe("comparison reasons", () => {
-  it("puts How good's rank, or the reason there is none, in each row's tooltip, never on the row", async () => {
-    // fails if a metric the engine could not compare (Percentile.reason) shows a rank or loses its value,
-    // or a ranked row's "Top x%" moves back onto the row instead of its tooltip
+  it("puts a row's rank, or the reason there is none, in its tooltip, and draws no track without a dot", async () => {
+    // fails if a metric the engine could not compare (Percentile.reason) shows a rank, an empty track or
+    // loses its value, or a ranked row's "Top x%" moves back onto the row instead of its tooltip
     const q = queryOf(samples);
     const r = await calls.compare(q, { side: "both" });
     answers.compare = r;
-    render(<HowGood q={q} side="both" />);
-    const rows = Array.from(host.querySelectorAll<HTMLElement>(".howgood .pctl"));
-    const rowOf = (id: string) => rows.find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric(id).label);
-    const reasoned = Object.values(r.p).filter((x) => x.reason && rowOf(x.id));
+    answers.style = await calls.style(q, { side: "both" });
+    render(<Rows q={q} side="both" ids={HOW_GOOD} />);
+    const reasoned = Object.values(r.p).filter((x) => x.reason && rowOfId(x.id));
     expect(reasoned.length).toBeGreaterThan(0);
     for (const x of reasoned) {
-      const el = rowOf(x.id)!;
+      const el = rowOfId(x.id)!;
       expect(el.getAttribute("data-tip"), x.id).toContain(x.reason!);
-      expect(el.querySelector(".pctl__bar i"), x.id).toBeNull();
+      expect(el.querySelector(".mrow2__t"), x.id).toBeNull();
       expect(text(el), x.id).not.toMatch(/Top \d|Bottom \d/);
     }
-    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rowOf(x.id))!;
-    const el = rowOf(ranked.id)!;
-    expect(el.getAttribute("data-tip")).toMatch(/^(Top|Bottom) \d+% of pro (riflers|AWPers)\./);
+    const ranked = Object.values(r.p).find((x) => !x.reason && x.pct !== null && rowOfId(x.id))!;
+    const el = rowOfId(ranked.id)!;
+    expect(el.getAttribute("data-tip")).toMatch(/\n(Top|Bottom) \d+% of pro (riflers|AWPers)\.$/);
     expect(el.getAttribute("tabindex")).toBe("0");
-    expect(el.querySelector(".pctl__bar i")).not.toBeNull();
+    expect(el.querySelector(".mrow2__t i")).not.toBeNull();
     expect(text(el)).not.toMatch(/Top \d|Bottom \d/);
   });
 
-  it("marks How good's approx metrics, and only those", async () => {
-    // fails if How good drops the ≈ marker from a metric whose status is "approx", or puts it on an exact one
+  it("marks approx metrics, and only those, explaining the mark once in the card's legend", async () => {
+    // fails if a row drops the ≈ marker from a metric whose status is "approx", or puts it on an exact one
     const q = queryOf(samples);
     answers.compare = await calls.compare(q, { side: "both" });
-    render(<HowGood q={q} side="both" />);
-    const rows = Array.from(host.querySelectorAll(".howgood .pctl"));
+    answers.style = await calls.style(q, { side: "both" });
+    render(<Rows q={q} side="both" ids={HOW_GOOD} />);
+    const rows = Array.from(host.querySelectorAll(".mrow2"));
     expect(rows.length).toBeGreaterThan(0);
+    expect(host.querySelectorAll(".approx-legend[data-tip]")).toHaveLength(1);
     const statuses = new Set<string>();
     for (const el of rows) {
-      const m = metrics().find((x) => x.label === el.querySelector(".pctl__label")?.firstChild?.textContent)!;
+      const m = metrics().find((x) => x.label === el.querySelector(".mrow2__l")?.firstChild?.textContent)!;
       statuses.add(m.status);
       expect(!!el.querySelector(".approx"), m.id).toBe(m.status === "approx");
     }
@@ -171,22 +178,21 @@ describe("comparison reasons", () => {
   });
 
   it("shows Where you rank's uncompared values with their reason", async () => {
-    // fails if a Playstyle rank row shows a rank or a dash for a value the engine could not compare
+    // fails if a Playstyle rank row shows a rank, or loses the reason, for a value the engine could not compare
     use(samples);
     const q = queryOf(samples);
     answers.compare = await calls.compare(q, { pool: "all" });
     answers.style = await calls.style(q, { pool: "all" });
-    render(<Playstyle />);
+    render(<ProfileView tab="playstyle" />);
     const p = { ...(answers.compare as { p: object }).p, ...(answers.style as { p: object }).p } as Record<string, { reason: string | null }>;
-    const rows = Array.from(host.querySelectorAll(".ranks__group li"));
-    const reasoned = rows.filter((li) => {
-      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
-      return p[m.id].reason;
-    });
+    const rows = Array.from(host.querySelectorAll(".ranks__group .mrow2"));
+    const idOf = (li: Element) => metrics().find((x) => li.querySelector(".mrow2__l")?.firstChild?.textContent === x.label)!.id;
+    const reasoned = rows.filter((li) => p[idOf(li)].reason);
     expect(reasoned.length).toBeGreaterThan(0);
     for (const li of reasoned) {
-      const m = metrics().find((x) => li.querySelector(".ranks__l")?.firstChild?.textContent === x.label)!;
-      expect(li.querySelector(".ranks__p .nocmp")?.getAttribute("data-tip"), m.id).toBe(p[m.id].reason);
+      // the reason stands in the row's tooltip, and no track draws without a dot
+      expect(li.getAttribute("data-tip"), idOf(li)).toContain(p[idOf(li)].reason!);
+      expect(li.querySelector(".mrow2__t"), idOf(li)).toBeNull();
     }
   });
 });
@@ -265,31 +271,29 @@ describe("Profile attributes", () => {
   });
 });
 
-describe("Profile weapons and multi-kills", () => {
-  it("lists every gun you killed with, grouped by class, most kills first, and each multi-kill as a share of rounds", () => {
-    // fails if the card falls back to class rows, drops a gun, misorders a class, or the shares stop adding up to the counts
+describe("Weapons and Duels tabs", () => {
+  it("lists every gun on the Weapons tab, grouped by class, most kills first, and each multi-kill on Duels as a share of rounds", () => {
+    // fails if the table drops a gun, misorders a class, or the multi-kill shares stop adding up to the counts
     use(samples);
     // the page reads the career matches (careerEntries), not every sample
     const career = new Set(careerEntries(data.matches, null).map((e) => e.file));
     const s = rolled(summary(queryOf(samples.filter((x) => career.has(x.file)))));
-    render(<ProfileView />);
-    const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Weapons")!;
-    const rows = Array.from(card.querySelectorAll(".guns tbody tr:not(.guns__cls)"));
-    const guns = Object.entries(s.weapons).filter(([w, t]) => isGun(w) && t.kills > 0);
-    expect(rows.map((r) => text(r.querySelector(".guns__name")))).toHaveLength(guns.length);
-    const kills = rows.map((r) => Number(text(r.querySelector("td:nth-child(3)"))));
-    const labels = Array.from(card.querySelectorAll(".guns__cls")).map(text);
-    expect(new Set(labels).size).toBe(labels.length);
+    render(<ProfileView tab="weapons" />);
+    const kills = Array.from(host.querySelectorAll(".guntbl thead th")).findIndex((th) => text(th).startsWith("Kills"));
+    const rows = Array.from(host.querySelectorAll(".guntbl tbody tr"));
+    const guns = Object.entries(s.weapons).filter(([w]) => isGun(w));
+    const gunRows = rows.filter((tr) => !tr.classList.contains("is-group"));
+    expect(gunRows).toHaveLength(guns.length);
     // within each class block, kills never rise
     let cls = "";
     let last = Infinity;
-    for (const tr of Array.from(card.querySelectorAll(".guns tbody tr"))) {
-      if (tr.classList.contains("guns__cls")) { cls = text(tr); last = Infinity; continue; }
-      const k = Number(text(tr.querySelector("td:nth-child(3)")));
+    for (const tr of rows) {
+      if (tr.classList.contains("is-group")) { cls = text(tr); last = Infinity; continue; }
+      const k = Number(text(tr.querySelectorAll("td")[kills]).replace(/\D.*$/, ""));
       expect(k, cls).toBeLessThanOrEqual(last);
       last = k;
     }
-    expect(kills.reduce((a, b) => a + b, 0)).toBe(guns.reduce((a, [, t]) => a + t.kills, 0));
+    render(<ProfileView tab="duels" />);
     const multis = Array.from(host.querySelectorAll(".mlist > li"));
     expect(multis).toHaveLength(4);
     const two = s.m.multiKillRounds - s.m.k3Rounds;
@@ -298,7 +302,7 @@ describe("Profile weapons and multi-kills", () => {
 });
 
 describe("section links", () => {
-  it("scrolls a ?sec= link to its Profile section once it renders", () => {
+  it("scrolls a ?sec= link to its section on its Profile tab once it renders", () => {
     // fails if useSection is not wired to the section the link names (the user would stay at the top)
     use(samples);
     const scrolled: Element[] = [];
@@ -307,9 +311,9 @@ describe("section links", () => {
     globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => { cb(0); return 0; }) as typeof requestAnimationFrame;
     Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
     try {
-      act(() => go("#/profile?sec=howgood"));
-      render(<ProfileView />);
-      expect(scrolled.map((el) => el.id)).toEqual(["howgood"]);
+      act(() => go("#/profile/duels?sec=openings"));
+      render(<ProfileView tab="duels" />);
+      expect(scrolled.map((el) => el.id)).toEqual(["openings"]);
     } finally {
       globalThis.requestAnimationFrame = raf;
       Element.prototype.scrollIntoView = into;
@@ -339,7 +343,7 @@ describe("Style compass", () => {
   it("places you and every bot career with 20 or more rounds", () => {
     // fails if the compass drops you, places a thin career, or loses a qualifying one
     use(samples);
-    render(<Playstyle />);
+    render(<ProfileView tab="playstyle" />);
     const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Style compass")!;
     expect(card).toBeTruthy();
     const career = new Set(careerEntries(data.matches, null).map((e) => e.file));
@@ -401,14 +405,14 @@ describe("review round 1 (PR #28)", () => {
     }
   });
 
-  it("names each How good row's population from the pool it was ranked in", async () => {
+  it("names each row's population from the pool it was ranked in", async () => {
     // fails if an AWP row ranked against every pro reads "of pro riflers"
     const q = queryOf(samples);
     const r = await calls.compare(q, { side: "both" });
     answers.compare = { ...r, p: { ...r.p, awpDuelWin: { ...r.p.awpDuelWin, value: 0.5, pct: 80, reason: null, pool: "all" } } };
-    render(<HowGood q={q} side="both" />);
-    const row = Array.from(host.querySelectorAll(".howgood .pctl")).find((el) => el.querySelector(".pctl__label")?.firstChild?.textContent === metric("awpDuelWin").label)!;
-    expect(row.getAttribute("data-tip")).toMatch(/^Top 20% of pros\./);
+    answers.style = await calls.style(q, { side: "both" });
+    render(<Rows q={q} side="both" ids={HOW_GOOD} />);
+    expect(rowOfId("awpDuelWin")!.getAttribute("data-tip")).toMatch(/\nTop 20% of pros\.$/);
   });
 
   it("shows a thin log's recorded kills and deaths, marked partial, and sorts by them", () => {
@@ -431,7 +435,7 @@ describe("review round 1 (PR #28)", () => {
     render(<Weapons />);
     const heads = Array.from(host.querySelectorAll("thead th")).map(text);
     for (const h of ["HS kills", "Head share"]) expect(heads.some((x) => x.startsWith(h)), h).toBe(true);
-    const rows = Array.from(host.querySelectorAll("tbody tr"));
+    const rows = Array.from(host.querySelectorAll("tbody tr:not(.is-group)"));
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((tr) => text(tr.querySelector(".guncell__advice")) !== ""), "Advice").toBe(true);
     render(<CareerAim />);
@@ -447,9 +451,8 @@ describe("review round 2 (PR #28)", () => {
     const career = careerEntries(data.matches, null);
     const q = queryOf(samples.filter((x) => career.some((e) => e.file === x.file)));
     const perf = metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable");
-    const latest = career[0].file;
-    const dest = new Map(perf.map((m) => [m.id, workOnHref(m, latest)]));
-    for (const id of ["tradeAttemptPct", "flashKillsPerFlash", "utilUnused", "timeToKill", "crosshairMoved", "preAim"]) expect(dest.get(id), id).toBeNull();
+    const dest = new Map(perf.map((m) => [m.id, workOnHref(m)]));
+    for (const id of ["tradeAttemptPct", "timeToKill", "crosshairMoved", "preAim"]) expect(dest.get(id), id).toBeNull();
     // a metric is shown where its label is drawn, or where an element's tooltip is its own
     const shows = (root: Element | null, id: string) => !!root && (text(root).includes(metric(id).label)
       || Array.from(root.querySelectorAll("[data-tip]")).some((el) => { const t = el.getAttribute("data-tip") ?? ""; return (!!tipOf(id) && t.includes(tipOf(id)!)) || t.includes(metric(id).def); }));
@@ -457,19 +460,19 @@ describe("review round 2 (PR #28)", () => {
     for (const [id, href] of dest) if (href) byPage.set(href, [...(byPage.get(href) ?? []), id]);
     answers.compare = await calls.compare(q, { side: "both" });
     answers.attributes = await calls.attributes(q, { side: "both" });
+    answers.style = await calls.style(q, { side: "both" });
     for (const [href, ids] of byPage) {
-      const sec = /^#\/profile\?sec=(\w+)$/.exec(href)?.[1];
-      if (sec) render(<ProfileView />);
-      else if (href === "#/aim") {
+      const r = parseHash(href);
+      const sec = r.query.get("sec");
+      if (r.page !== "profile") throw new Error(`no view for ${href}`);
+      if (r.ptab === "aim") {
         // the sighting timings draw once the files carry visibility; without it they are not ranked, so never recommended
         const saved = data;
         data = { ...data, matches: data.matches.map((e) => ({ ...e, match: { ...e.match, visibility: "ok" } })) };
         render(<CareerAim />);
         data = saved;
       }
-      else if (href === "#/weapons") render(<Weapons />);
-      else if (href.endsWith("/utility")) { const v = modelOf(samples.find((x) => x.file === latest)!); render(<Utility v={v} file={v.file} round={null} />); }
-      else throw new Error(`no view for ${href}`);
+      else render(<ProfileView tab={r.ptab} />);
       const root = sec ? host.querySelector(`#${sec}`) : host;
       for (const id of ids) expect(shows(root, id), `${id} on ${href}`).toBe(true);
     }
@@ -496,7 +499,7 @@ describe("review round 2 (PR #28)", () => {
     answers.compare = await calls.compare(q, { pool: "all" });
     const style = await calls.style(q, { pool: "all" });
     answers.style = style;
-    render(<Playstyle />);
+    render(<ProfileView tab="playstyle" />);
     const card = Array.from(host.querySelectorAll(".card")).find((c) => text(c.querySelector(".card__title")) === "Where you rank")!;
     expect(text(card.querySelector(".card__aside"))).toContain(`style against ${botPopulationText(style.careers, { n: style.n, role: "all" }).text}`);
   });
@@ -538,7 +541,7 @@ describe("Profile clutches", () => {
       { file: samples[0].file, round: 3, side: "T", opponents: vs === 5 ? 4 : vs + 1, won: false },
     ];
     answers.clutches = rows;
-    render(<ProfileView />);
+    render(<ProfileView tab="duels" />);
     const btn = Array.from(host.querySelectorAll<HTMLButtonElement>("button.clist__row")).find((b) => b.getAttribute("aria-label")?.startsWith(`1v${vs}:`))!;
     expect(btn).toBeTruthy();
     expect(btn.getAttribute("aria-expanded")).toBe("false");
@@ -670,7 +673,7 @@ describe("Weapons", () => {
   const at = (label: string) => Array.from(host.querySelectorAll("thead th")).findIndex((th) => text(th).startsWith(label));
   const KILLS = "Kills";
   const ROUNDS = "Rounds used";
-  const EDGE = "Vs your other guns";
+  const EDGE = "Vs other guns";
   /** your kills or rounds with one gun in the converted logs, summed one match at a time */
   const fromConverted = (gun: string, k: "kills" | "rounds") => converted.reduce((a, s) => a + (rollup([s.facts], { player: s.facts.match.pov! }).weapons[gun]?.[k] ?? 0), 0);
 

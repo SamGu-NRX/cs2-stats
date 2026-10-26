@@ -24,8 +24,9 @@ import { ChevronRightIcon } from "../icons/ui";
 import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
-import { matchHref, openMatch, pageHref, sectionHref } from "../router";
-import { HOW_GOOD, RatingTerms } from "./profile/parts";
+import { matchHref, openMatch, pageHref, profileHref, tabSectionHref } from "../router";
+import { RatingTerms } from "./profile/parts";
+import { TAB_METRICS } from "./profile/tabs";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
@@ -388,23 +389,21 @@ function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t
 const CARD_STATS = new Set(["kpr", "dpr", "adr", "kast", "mk", "swing"]);
 /** The aim metrics Career aim renders (CareerAim.tsx trends, views/aim/AimPanels.tsx); other aim metrics have no place yet. */
 const CAREER_AIM = new Set(["accuracy", "firstBulletAccuracy", "headAccuracy", "adjustedAccuracy", "sprayAccuracy", "counterStrafe", "sightAccuracy", "crosshairPlacement", "flickOvershoot", "microCorrections", "reactionTime", "timeToDamage", "timeToShot", "trackingError", "transferHits"]);
-/** Metrics the latest match's Utility tab shows (views/match/Utility.tsx). */
-const UTILITY_TAB = new Set(["enemiesPerFlash", "blindPerFlash", "teamFlashPR", "utilDmgPR", "fireDmgPR"]);
 
 /**
- * Where a Work on item opens: the place that shows the metric. The aim metrics Career aim renders are its; Firepower's
- * metrics are its card; How good's rows, the hero card's stats and opening duel success have their
- * Profile sections; headshot kills are Weapons' per-gun column; the flash and utility-damage figures
- * are the latest match's Utility tab. Null for a metric nothing shows, which Work on never recommends.
+ * Where a Work on item opens: the Profile tab that shows the metric. The aim metrics are the Aim
+ * tab's; Firepower's metrics are Overview's Firepower card; the hero card's stats are the card above
+ * the tabs; the duel, utility and economy rows are those tabs' (profile/tabs.tsx TAB_METRICS);
+ * headshot kills are the Weapons tab's per-gun column. Null for a metric nothing shows, which Work on
+ * never recommends.
  */
-export function workOnHref(m: { id: string; group: string }, latest: string | null): string | null {
-  if (CAREER_AIM.has(m.id)) return pageHref("aim");
-  if (m.group === "firepower") return sectionHref("profile", "firepower");
-  if (HOW_GOOD.includes(m.id)) return sectionHref("profile", "howgood");
-  if (CARD_STATS.has(m.id)) return sectionHref("profile", "card");
-  if (m.id === "openingSuccess") return sectionHref("profile", "openings");
-  if (m.id === "hs") return pageHref("weapons");
-  if (UTILITY_TAB.has(m.id) && latest) return matchHref(latest, "utility");
+export function workOnHref(m: { id: string; group: string }): string | null {
+  if (CAREER_AIM.has(m.id)) return profileHref("aim");
+  if (m.group === "firepower") return tabSectionHref("overview", "firepower");
+  if (CARD_STATS.has(m.id)) return tabSectionHref("overview", "card");
+  if (m.id === "openingSuccess") return tabSectionHref("duels", "openings");
+  for (const tab of ["duels", "utility", "economy"] as const) if (TAB_METRICS[tab].includes(m.id)) return profileHref(tab);
+  if (m.id === "hs") return profileHref("weapons");
   return null;
 }
 
@@ -428,8 +427,8 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
   }, [scored]);
   const weak = useMemo(() => {
     if (!r) return [];
-    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m, latest) !== null)
-      .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value, href: workOnHref(m, latest)!, population: proPopulation(r.p[m.id].pool) }))
+    return metrics().filter((m) => m.kind === "performance" && m.status !== "unavailable" && r.p[m.id] && !r.p[m.id].reason && r.p[m.id].pct !== null && workOnHref(m) !== null)
+      .map((m) => ({ m, pct: r.p[m.id].pct!, value: r.p[m.id].value, href: workOnHref(m)!, population: proPopulation(r.p[m.id].pool) }))
       .sort((a, b) => a.pct - b.pct).slice(0, 2);
   }, [r, latest]);
   const icon = (group: string): AttributeId => (group in ATTR_ICON ? (group as AttributeId) : "firepower");
@@ -438,7 +437,7 @@ function WorkOn({ t, latest }: { t: Totals | null; latest: string | null }) {
       {weak.length === 0 && !fire ? <p className="meta">Not enough rounds to compare with pros.</p> : (
         <div className="workon">
           {fire && (
-            <a className="workon__item" href={sectionHref("profile", "firepower")} data-tip="Firepower against pros: the mean of its metrics' percentiles. Below it, its lowest-ranked metric.">
+            <a className="workon__item" href={tabSectionHref("overview", "firepower")} data-tip="Firepower against pros: the mean of its metrics' percentiles. Below it, its lowest-ranked metric.">
               <AttrIcon id="firepower" size={20} className="workon__ico" />
               <div className="workon__body">
                 <div className="workon__top"><b>{fire.label}</b><span className="num"><b style={{ color: scoreText(toScore(fire.score, 50, 50)) }}>{Math.round(fire.score)}</b><span className="faint">/100</span></span></div>
