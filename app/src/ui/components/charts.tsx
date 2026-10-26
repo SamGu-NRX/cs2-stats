@@ -328,7 +328,7 @@ function placeLabels(items: { i: number; x: number; y: number }[], dots: readonl
 
 /** A spray's view movement per bullet, from the engine's Summary.aim.path (index 0 is bullet 2). */
 export interface SprayPath { n: number[]; dp: number[]; dy: number[] }
-/** The pro reference per bullet (aim-ref.ts RECOIL path, index 0 is bullet 1): [pitch, yaw, pitchQ25, pitchQ75, yawQ25, yawQ75]. */
+/** The reference per bullet (recoil-ref.ts RECOIL path, index 0 is bullet 1): [idealPitch, idealYaw, then the pros' pitchQ25, pitchQ75, yawQ25, yawQ75]. */
 export type ProPath = readonly (readonly number[])[];
 
 /** Your mean view movement from bullet 1, bullet by bullet (bullet 1 at the origin); bullets nobody reached are left out. */
@@ -392,7 +392,7 @@ export function SprayPattern({ path, pro, size = 320, bands = true, spread = nul
   const grid: number[] = [];
   for (let g = -Math.floor(ext); g <= Math.floor(ext); g++) grid.push(g);
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ells.length ? ", with the spread per bullet" : ""}${ref.length ? ", with the pro path" : ""}${eyes.length ? ", with where the target's head was" : ""}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="spray" role="img" aria-label={`Spray pattern over ${pts.length} bullets, ±${ext.toFixed(1)} degrees${ells.length ? ", with the spread per bullet" : ""}${ref.length ? ", with the ideal pull" : ""}${eyes.length ? ", with where the target's head was" : ""}`}>
       {grid.map((g) => (
         <g key={g}>
           <line x1={X(g)} x2={X(g)} y1="0" y2={size} stroke={g === 0 ? "var(--line2)" : "var(--line)"} />
