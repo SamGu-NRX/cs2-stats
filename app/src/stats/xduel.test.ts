@@ -41,16 +41,16 @@ describe("duel difficulty", () => {
   };
   const p0 = 1 / (1 + Math.exp(-XDUEL.w[0]));
 
-  it("gives the expected chance from 80 settled duels, and the margin over it from 442", () => {
+  it("gives the expected chance from 80 settled duels, and the margin over it from 444", () => {
     // fails if the fold skips the model, the scale is not percent, or a gate moves
     expect(METRIC.expectedDuel.value(duels(80, 60))).toBeCloseTo(100 * p0, 9);
     expect(METRIC.expectedDuel.value(duels(79, 60))).toBeNull();
-    expect(METRIC.duelsOverExpected.value(duels(441, 300))).toBeNull();
-    expect(METRIC.duelsOverExpected.value(duels(442, 300))).toBeCloseTo(100 * (300 / 442 - p0), 9);
+    expect(METRIC.duelsOverExpected.value(duels(443, 300))).toBeNull();
+    expect(METRIC.duelsOverExpected.value(duels(444, 300))).toBeCloseTo(100 * (300 / 444 - p0), 9);
   });
 
   it("says why there is no value under the gate", () => {
     // fails if a thin sample shows a duel-difficulty value without its reason
-    expect(METRIC.duelsOverExpected.why!(duels(100, 50))).toBe("100 of the 442 settled duels it needs");
+    expect(METRIC.duelsOverExpected.why!(duels(100, 50))).toBe("100 of the 444 settled duels it needs");
   });
 });
