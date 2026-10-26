@@ -40,6 +40,6 @@ export const AGGRO_SCALE: AggroScale = scale;
 
 export const AGGRO_SCALE_METRICS: Metric[] = [
   { id: "aggressionScore", label: "Aggressive to passive", kind: "identity", group: "aggression", unit: "count", status: "approx", needs: ["sight"],
-    def: "How aggressively you take fights, in pro standard deviations.",
+    tip: "How aggressively you take fights compared with pros.", def: "How aggressively you take fights, in pro standard deviations.",
     value: (s) => aggressionScore(s, AGGRO_SCALE) },
 ];

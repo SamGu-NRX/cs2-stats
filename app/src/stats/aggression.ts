@@ -153,18 +153,18 @@ const CONTACT = "Contact is the first engagement tick with mesh line of sight no
 
 export const AGGRESSION_METRICS: Metric[] = [
   { id: "firstContactTime", label: "First contact time", kind: "identity", group: "aggression", unit: "secs", status: "approx",
-    def: `Mean seconds from freeze end to your first contact with an enemy, over rounds with contact. ${CONTACT}`,
+    tip: "Seconds into the round when you first meet an enemy.", def: `Mean seconds from freeze end to your first contact with an enemy, over rounds with contact. ${CONTACT}`,
     value: (s) => per(s.aggression.contactSecs, s.aggression.contactRounds) },
   { id: "firstContactRank", label: "First contact rank in team", kind: "identity", group: "aggression", unit: "rank", status: "approx",
-    def: `Your place (1 = first) among teammates in making first contact, averaged over rounds where you made contact. Teammates who never made contact are not ranked. ${CONTACT}`,
+    tip: "How early, among your team, you first meet an enemy.", def: `Your place (1 = first) among teammates in making first contact, averaged over rounds where you made contact. Teammates who never made contact are not ranked. ${CONTACT}`,
     value: (s) => per(s.aggression.rankSum, s.aggression.contactRounds) },
   { id: "entryAttempts", label: "Entry attempts", kind: "identity", group: "aggression", unit: "pct", status: "approx",
-    def: `Rounds where you made your team's first contact as the attacker, moving at ${PEEK_MIN_SPEED} u/s or more, whether or not it produced the opening kill. ${CONTACT}`,
+    tip: "Rounds where you were first on your team to take a fight.", def: `Rounds where you made your team's first contact as the attacker, moving at ${PEEK_MIN_SPEED} u/s or more, whether or not it produced the opening kill. ${CONTACT}`,
     value: (s) => pct(s.aggression.entries, s.aggression.visRounds) },
   { id: "pushDepth", label: "Push depth", kind: "identity", group: "aggression", unit: "pct", status: "approx",
-    def: "Your furthest point toward the enemy spawn before the round's first kill or your death, as a share of the straight line between the two spawns (0% your spawn, 100% theirs). Each spawn is the mean position of that side's players at freeze end; 4 Hz positions.",
+    tip: "How far toward the enemy spawn you go early in rounds.", def: "Your furthest point toward the enemy spawn before the round's first kill or your death, as a share of the straight line between the two spawns (0% your spawn, 100% theirs). Each spawn is the mean position of that side's players at freeze end; 4 Hz positions.",
     value: (s) => pct(s.aggression.pushSum, s.aggression.pushRounds) },
   { id: "lowBuyBuys", label: "Buys on team saves", kind: "identity", group: "aggression", unit: "pct", status: "exact",
-    def: `Rounds where your team was on an eco or half buy (economy.ts) and you had spent $${ECO_BELOW_PER_PLAYER.toLocaleString("en-US")} or more by freeze end, as a share of your team's eco and half-buy rounds where your spend is known.`,
+    tip: "Rounds you bought while your team saved.", def: `Rounds where your team was on an eco or half buy (economy.ts) and you had spent $${ECO_BELOW_PER_PLAYER.toLocaleString("en-US")} or more by freeze end, as a share of your team's eco and half-buy rounds where your spend is known.`,
     value: (s) => pct(s.aggression.lowBuyBuys, s.aggression.lowBuyRounds) },
 ];
