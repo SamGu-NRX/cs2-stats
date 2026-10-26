@@ -109,6 +109,8 @@ export const INPUT_COVERAGE = {
   /** all four kill flags recorded: blind, in the air, no-scope, through smoke (nullable since #27) */
   flags: ["flagsKnown", "kills", "the kill flags", "kills"],
   deathFlags: ["flagDeathsKnown", "enemyDeaths", "the kill flags", "deaths"],
+  /** each gun shot's clip count (shots.ammo_clip): extractor demos have it, plugin files do not */
+  ammo: ["ammoRounds", "rounds", "the clip count per shot", "rounds"],
 } as const;
 export type Input = keyof typeof INPUT_COVERAGE;
 
@@ -234,6 +236,8 @@ export const MEASURES = [
   "hsGunKills", "hsGunDeaths", "lhKnown", "lhKills", "lhDeathsKnown", "lhDeaths",
   "flagsKnown", "blindKills", "airKills", "noscopeKills", "smokeKills", "flagDeathsKnown", "flagDeaths",
   "spreadRounds", "luckShots", "luckHits", "luckExp", "luckAgShots", "luckAgHits", "luckAgExp",
+  // weapon handling (handling.ts): reloads between shots, the clip share they threw away, rounds with clip counts
+  "reloads", "reloadWaste", "ammoRounds",
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;
