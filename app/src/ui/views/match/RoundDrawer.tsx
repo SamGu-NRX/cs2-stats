@@ -4,8 +4,11 @@
 // the grid, so cells never jump; it closes in 200 ms. Stepping rounds swaps the content instantly.
 // It steps over the inspector's columns (roundColumns), so a round the file holds only as totals
 // opens too: the game's recorded totals per player, and a dash for what the file does not hold.
+// A round's "Your rating" section splits your Rating 3.0 for the round into its terms and its swing
+// into sources (worker ratingBreakdown, which Rounds reads once for the grid's chart and this pane).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Measure } from "../../../stats/facts";
+import type { RatingBreakdown } from "../../../worker/protocol";
 import { Num } from "../../components/bits";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
@@ -14,17 +17,21 @@ import { metric } from "../../data/meta";
 import { feedFor } from "../../data/rounds";
 import { BUY_LABEL, BuyIcon, NADE_LABEL, NadeIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
-import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
+import { fmtClock, fmtMoney, fmtRating, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
 import { NeedsDemo, PlaceList, PlayerName } from "../shared";
 import { Killfeed } from "./Killfeed";
+import { SwingSourcesChart } from "../profile/v2";
+import { RatingWaterfall, roundSteps } from "./RatingByRound";
+import { signedIn } from "./parity";
+import { LoadFailed } from "./LoadFailed";
 
 const W_KEY = "cs2stats.drawerW";
 const MIN = 360;
 const MAX = 640;
 
-/** col: the open column of `cols` (Rounds' roundColumns), or null when the drawer is closed. */
-export function RoundDrawer({ v, cols, col: ri, onClose, onStep, children }: {
-  v: MatchView; cols: RoundColumn[]; col: number | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
+/** col: the open column of `cols` (Rounds' roundColumns), or null when the drawer is closed; rb: your rating by round, null while it loads. */
+export function RoundDrawer({ v, cols, col: ri, rb, rbError, onClose, onStep, children }: {
+  v: MatchView; cols: RoundColumn[]; col: number | null; rb: RatingBreakdown | null; rbError: string | null; onClose: () => void; onStep: (d: number) => void; children: ReactNode;
 }) {
   const [w, setW] = useState(() => Math.max(MIN, Math.min(MAX, Number(localStorage.getItem(W_KEY)) || 420)));
   const [shown, setShown] = useState<number | null>(ri);
@@ -100,7 +107,7 @@ export function RoundDrawer({ v, cols, col: ri, onClose, onStep, children }: {
             const c = cols[shown];
             const ends = { first: shown === 0, last: shown === cols.length - 1 };
             return c.kind === "round"
-              ? <RoundDetail key="round" v={v} ri={c.r.ri} {...ends} onClose={onClose} onStep={onStep} />
+              ? <RoundDetail key="round" v={v} ri={c.r.ri} rb={rb} rbError={rbError} {...ends} onClose={onClose} onStep={onStep} />
               : <TotalsDetail key="totals" v={v} col={c} {...ends} onClose={onClose} onStep={onStep} />;
           })()}
         </aside>
@@ -145,8 +152,8 @@ function TotalsDetail({ v, col, first, last, onClose, onStep }: {
           <b>Round {col.number}</b>
           <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}, totals only</span>
         </div>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip={first ? undefined : "Previous round  ←"}><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip={last ? undefined : "Next round  →"}><ChevronRightIcon size={16} /></button>
         <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
       </header>
       <div className="drawer__body">
@@ -173,7 +180,7 @@ function TotalsDetail({ v, col, first, last, onClose, onStep }: {
   );
 }
 
-function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri: number; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void }) {
+function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: MatchView; ri: number; rb: RatingBreakdown | null; rbError: string | null; first: boolean; last: boolean; onClose: () => void; onStep: (d: number) => void }) {
   const r = v.rounds[ri];
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { close.current?.focus({ preventScroll: true }); }, []);
@@ -205,15 +212,15 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
           <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
         </div>
         {r.scoreAfter && <span className="drawer__score num"><span className={r.winner === "us" ? "cream" : ""}>{r.scoreAfter.us}</span><span className="faint">:</span><span className={r.winner === "them" ? "cream" : ""}>{r.scoreAfter.them}</span></span>}
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip="Previous round  ←"><ChevronLeftIcon size={16} /></button>
-        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip="Next round  →"><ChevronRightIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(-1)} disabled={first} aria-label="Previous round" data-tip={first ? undefined : "Previous round  ←"}><ChevronLeftIcon size={16} /></button>
+        <button className="btn btn--ghost btn--icon btn--sm press" onClick={() => onStep(1)} disabled={last} aria-label="Next round" data-tip={last ? undefined : "Next round  →"}><ChevronRightIcon size={16} /></button>
         <button ref={close} className="btn btn--ghost btn--icon btn--sm press" onClick={onClose} aria-label="Close the round panel" data-tip="Esc"><CloseIcon size={16} /></button>
       </header>
       <div className="drawer__body">
         <Section title="Killfeed" aside={r.kills.length ? `${r.kills.length} kills` : undefined}>
           <Killfeed kills={feed} name={(pi, name) => <PlayerName v={v} pi={pi}>{name}</PlayerName>} />
           {f.plantTick !== null && (
-            <p className="meta" data-tip="Round clock: time since freeze time ended">
+            <p className="meta" data-tip="Round clock: time since freeze time ended" tabIndex={0}>
               Bomb planted{f.plantSite ? ` on ${f.plantSite}` : ""} by {name(f.planter)} at {fmtClock(roundSecs(v, r, f.plantTick))}
               {f.defused ? `; defused by ${name(f.defuser)} at ${fmtClock(roundSecs(v, r, f.endTick))}` : f.exploded ? `; exploded at ${fmtClock(roundSecs(v, r, f.endTick))}` : ""}.
             </p>
@@ -294,6 +301,8 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
           )}
         </Section>
 
+        <YourRating rb={rb} error={rbError} number={r.number} />
+
         {Object.keys(spent).length > 0 && (
           <Section title="Where you spent the round" aside="Seconds alive">
             <PlaceList places={spent} n={5} />
@@ -315,9 +324,9 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                 <p className="gate">Time to damage, reaction, crosshair: <NeedsDemo detail="This file lacks view angles and line of sight." /></p>
               ) : (
                 <div className="daim">
-                  <div className="stat" data-tip={metric("timeToDamage").def}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
-                  <div className="stat" data-tip={metric("reactionTime").def}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
-                  <div className="stat" data-tip={metric("crosshairPlacement").def}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
+                  <div className="stat" data-tip={metric("timeToDamage").def} tabIndex={0}><span className="stat__l">TTD</span><span className="stat__v num"><Num v={fmtMetric("timeToDamage", you.v.timeToDamage)} /></span></div>
+                  <div className="stat" data-tip={metric("reactionTime").def} tabIndex={0}><span className="stat__l">Reaction</span><span className="stat__v num"><Num v={fmtMetric("reactionTime", you.v.reactionTime)} /></span></div>
+                  <div className="stat" data-tip={metric("crosshairPlacement").def} tabIndex={0}><span className="stat__l">Crosshair</span><span className="stat__v num"><Num v={fmtMetric("crosshairPlacement", you.v.crosshairPlacement)} /></span></div>
                 </div>
               )}
             </>
@@ -325,6 +334,31 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
         </Section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Your Rating 3.0 for this round split into its terms, and its swing into sources; one line when you
+ * did not play the round or it is not rated.
+ */
+function YourRating({ rb, error, number }: { rb: RatingBreakdown | null; error: string | null; number: number }) {
+  const row = rb?.rows.find((x) => x.number === number) ?? null;
+  const steps = row ? roundSteps(row) : null;
+  const avg = rb?.match.value ?? null;
+  return (
+    <Section title="Your rating" aside={row && row.rating !== null && avg !== null && row.counts ? `${signedIn(fmtRating, row.rating - avg)} against your match ${fmtRating(avg)}` : undefined}>
+      {error ? <LoadFailed what="Your rating" error={error} /> : !rb ? <SkeletonLines n={4} /> : !row ? <p className="meta">You have no stats this round.</p> : !steps ? <p className="meta">Not rated: this round's swing or eco value is unknown.</p> : (
+        <>
+          <RatingWaterfall {...steps} />
+          {row.swing && (
+            <div className="rbr__swing">
+              <h4 className="caps">Swing by source</h4>
+              <SwingSourcesChart you={row.swing} bots={null} />
+            </div>
+          )}
+        </>
+      )}
+    </Section>
   );
 }
 
