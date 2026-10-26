@@ -20,10 +20,7 @@ import { useCall, useRollups } from "../data/hooks";
 import { metric } from "../data/meta";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../data/tips";
 import { calloutName } from "../lib/callouts";
-import { GameIcon } from "../components/GameIcon";
-import { useGameIcon } from "../data/icons";
 import { useData } from "../data/provider";
-import { DeathIcon } from "../icons/game";
 import { fmtPct, mapName, plural } from "../lib/format";
 import { useScope } from "../shell/filters";
 import type { Query } from "../../worker/protocol";
@@ -189,8 +186,6 @@ export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey
   const allPlaces = Object.entries(pos?.presence?.places ?? {}).sort((a, b) => b[1] - a[1]);
   const places = allPlaces.slice(0, 8);
   const total = Object.values(pos?.presence?.places ?? {}).reduce((a, s) => a + s, 0) || 1;
-  // deaths are marked with the game's skull from the icon pack, tinted; without the pack, a cross
-  const skull = useGameIcon("elimination");
   return (
     <Card title="Where you play" tip={PANEL_TIP.whereYouPlay} aside={scoped ? <span className="meta">{mapName(map)}</span> : <Select label="Map" prefix="Map" value={map} onChange={setPick} options={maps.map((m) => ({ value: m, label: mapName(m) }))} />}>
       {!pos ? <div className="skel" style={{ height: 360 }} /> : !frame ? <Empty text={`No kill, death or movement positions on ${mapName(map)} yet.`} /> : (
@@ -203,24 +198,12 @@ export function WhereYouPlay({ list, side }: { list: MatchEntry[]; side: SideKey
                 return <rect key={c} x={x - s / 2} y={y - s / 2} width={s} height={s} fill="var(--cream)" opacity={0.04 + 0.3 * Math.sqrt(secs / maxCell)} />;
               })}
               {pos.kills.map(([x0, y0], i) => { const [x, y] = frame.to(x0, y0); return <circle key={`k${i}`} cx={x} cy={y} r="7" fill="var(--good-text)" stroke="var(--bg0)" strokeWidth="2.5" opacity="0.9" />; })}
-              {skull && (
-                <defs>
-                  <filter id="wyp-skull" colorInterpolationFilters="sRGB">
-                    <feFlood style={{ floodColor: "var(--poor-text)" }} />
-                    <feComposite in2="SourceAlpha" operator="in" />
-                  </filter>
-                </defs>
-              )}
-              {pos.deaths.map(([x0, y0], i) => {
-                const [x, y] = frame.to(x0, y0);
-                return skull
-                  ? <image key={`d${i}`} href={skull} x={x - 9} y={y - 9} width="18" height="18" filter="url(#wyp-skull)" />
-                  : <path key={`d${i}`} transform={`translate(${x} ${y})`} d="M-7 -7L7 7M7 -7L-7 7" stroke="var(--poor-text)" strokeWidth="3" strokeLinecap="round" />;
-              })}
+              {/* map markers are dots (SYSTEM.md): kills filled, deaths ringed */}
+              {pos.deaths.map(([x0, y0], i) => { const [x, y] = frame.to(x0, y0); return <circle key={`d${i}`} cx={x} cy={y} r="6" fill="none" stroke="var(--poor-text)" strokeWidth="2.5" opacity="0.9" />; })}
             </RadarView>
             <div className="legend">
               <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="4" fill="var(--good-text)" /></svg>Your kills</span>
-              <span><span className="poor-text"><GameIcon id="elimination" width={11} fallback={<DeathIcon size={11} />} /></span>Your deaths</span>
+              <span><svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="none" stroke="var(--poor-text)" strokeWidth="2" /></svg>Your deaths</span>
               <span><i className="swatch" style={{ background: "rgba(255,215,173,.4)" }} />Where you moved</span>
               <span className="help" data-tip="Kills sit where you stood, deaths where you fell." tabIndex={0} aria-label="Where the marks sit">?</span>
             </div>

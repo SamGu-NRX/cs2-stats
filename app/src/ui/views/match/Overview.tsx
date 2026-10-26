@@ -2,7 +2,7 @@
 // total under each, swing per player, your rounds that decided the match, and you against the other
 // nine players. Team facts live on the Advanced tab.
 import { useMemo, useState } from "react";
-import { ClutchBadge, MultiBadge, Num } from "../../components/bits";
+import { ClutchBadge, DeathMark, FirstPip, MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DivergingBars } from "../../components/charts";
 import { Segmented } from "../../components/controls";
@@ -12,13 +12,13 @@ import { multiKillRows, pooledRates, RATING_LABEL, SIDE_OPTIONS, statLine, type 
 import { decidingRounds } from "../../data/rounds";
 import { useCall } from "../../data/hooks";
 import { deathOf, killsBy, roundSwing, type MatchModel, type MRound, type Team } from "../../data/match";
-import { DeathIcon, WIN_LABEL } from "../../icons/game";
+import { WeaponIcon, WIN_LABEL, WinIcon } from "../../icons/game";
 import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
 import { matchHref } from "../../router";
 import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip } from "../shared";
-import { GameWeapon, Hint, RoundEndIcon } from "./glyphs";
+import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 
 type Multi = Record<2 | 3 | 4 | 5, number>;
@@ -133,14 +133,14 @@ function DecidingRounds({ v, file, side }: { v: MatchModel; file: string; side: 
               <li key={r.ri}>
                 <HoverCard prefer="right" card={() => <RoundCardBody v={v} r={r} />} as="div" tabbable={false}>
                   <a href={matchHref(file, "rounds", { round: r.number })} className="keyround" aria-label={`Round ${r.number}${r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}: ${kills.length} kills${died ? ", died" : ""}, swing ${fmtSwing(sw)}`}>
-                    <span className={side} data-tip={r.how ? WIN_LABEL[r.how] : undefined}><RoundEndIcon how={r.how} size={14} /></span>
+                    <span className={side} data-tip={r.how ? WIN_LABEL[r.how] : undefined}><WinIcon how={r.how} size={14} compact /></span>
                     <b>Round {r.number}</b>
                     <span className="keyround__what">
-                      {kills.slice(0, 5).map((k, i) => <GameWeapon key={i} name={k.weapon} height={12} />)}
+                      {kills.slice(0, 5).map((k, i) => <WeaponIcon key={i} name={k.weapon} height={12} />)}
                       {kills.length > 1 && <MultiBadge k={kills.length} />}
                       {clutch && <ClutchBadge vs={clutch.opponents} won={clutch.won} />}
-                      {opened && <span className="kfeed__tag" data-tip="First kill of the round">1ST</span>}
-                      {died && <DeathIcon size={11} className="faint" label="Died" />}
+                      {opened && <FirstPip label="First kill of the round" />}
+                      {died && <DeathMark label="Died" className="faint" />}
                     </span>
                     <span className="num faint">{r.scoreAfter ? `${r.scoreAfter.us}:${r.scoreAfter.them}` : ""}</span>
                     <b className="num" style={{ color: scoreText(roundSwingScore(sw)) }}>{fmtSwing(sw)}</b>

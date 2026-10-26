@@ -12,11 +12,10 @@ import { useCall } from "../../data/hooks";
 import { placesNamed, roundSecs, sideOf, totalsWinner, usSideAt, type MatchModel as MatchView, type RoundColumn } from "../../data/match";
 import { metric } from "../../data/meta";
 import { feedFor } from "../../data/rounds";
-import { BUY_LABEL, BuyIcon, NADE_LABEL, WIN_LABEL, type Nade } from "../../icons/game";
+import { BUY_LABEL, BuyIcon, NADE_LABEL, NadeIcon, WIN_LABEL, WinIcon, type Nade } from "../../icons/game";
 import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../../icons/ui";
 import { fmtClock, fmtMoney, fmtRatio, fmtSecs, fmtSwing } from "../../lib/format";
 import { NeedsDemo, PlaceList, PlayerName } from "../shared";
-import { GameNade, RoundEndIcon } from "./glyphs";
 import { Killfeed } from "./Killfeed";
 
 const W_KEY = "cs2stats.drawerW";
@@ -200,7 +199,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
   return (
     <div className="drawer__in">
       <header className="drawer__head">
-        <span className={side ? `${side}-text` : "faint"}><RoundEndIcon how={r.how} size={18} /></span>
+        <span className={side ? `${side}-text` : "faint"}><WinIcon how={r.how} size={18} /></span>
         <div className="drawer__title">
           <b>Round {r.number}</b>
           <span className="meta">{r.winner === "us" ? "Won" : r.winner === "them" ? "Lost" : "Unknown"}{r.how ? `, ${WIN_LABEL[r.how].toLowerCase()}` : ""}{r.plantSite ? `, site ${r.plantSite}` : ""}{r.durSecs !== null ? `, ${fmtClock(r.durSecs)}` : ""}</span>
@@ -228,7 +227,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
               return (
                 <div key={t} className="deco__team">
                   <div className="deco__head">
-                    <BuyIcon buy={tr.buy} size={16} className={t === "us" ? "cream" : "muted"} />
+                    <BuyIcon buy={tr.buy} size={16} beside className={t === "us" ? "cream" : "muted"} />
                     <b>{tr.buy ? BUY_LABEL[tr.buy] : "Unknown buy"}</b>
                     <span className="num faint" data-tip="Team equipment value at freeze end">{fmtMoney(tr.equip)}</span>
                   </div>
@@ -264,7 +263,7 @@ function RoundDetail({ v, ri, first, last, onClose, onStep }: { v: MatchView; ri
                 return (
                   <li key={p.key}>
                     <span className={`kf__p ${sideCls(p.pi)}`}>{p.name}</span>
-                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><GameNade type={n} size={13} label />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
+                    <span className="dutil__icons">{thrown(p.pi).map(([n, k]) => <span key={n} className="dutil__n" data-tip={NADE_LABEL[n]}><NadeIcon type={n} size={13} />{x[k] > 1 && <small>{x[k]}</small>}</span>)}</span>
                     <span className="meta">{x.enemiesFlashed ? `${x.enemiesFlashed} blinded, ${fmtSecs(x.enemyBlindSecs)}` : ""}</span>
                     <span className="num" data-tip="Grenade and fire damage to enemies">{x.utilDmg ? `${x.utilDmg} dmg` : ""}</span>
                   </li>

@@ -9,11 +9,10 @@ import type { GunProficiency } from "../../../stats/guns";
 import type { Filter } from "../../../stats/rollup";
 import { weaponClass, weaponLabel } from "../../../stats/weapons";
 import type { Query, Rolled } from "../../../worker/protocol";
-import { GameIcon } from "../../components/GameIcon";
 import { useCall, useRollups, useYourQuery } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { sourceOf } from "../../data/sources";
-import { WeaponIcon } from "../../icons/game";
+import { WeaponClassIcon, WeaponIcon } from "../../icons/game";
 import { fmtPct, signed } from "../../lib/format";
 import { scoreText, toScore } from "../../lib/scale";
 
@@ -167,11 +166,11 @@ export const EDGE_TIP = "This gun's accuracy minus your other guns' pooled accur
 export const PROF_TIP = "Familiarity times match-to-match consistency, 0 to 100, not skill.";
 
 /**
- * A gun as the official CS2 kill icon (data/icons.ts weapons/), at a fixed height; the app's glyph
- * when the icon pack or the gun is missing. Unlabelled by default: the gun's name sits beside it.
+ * A gun as the official CS2 kill icon, at a fixed height (icons/game.tsx WeaponIcon). Silent by default:
+ * the gun's name sits beside it; `named` speaks it where it stands alone.
  */
-export function GunIcon({ weapon, height = 14, label }: { weapon: string; height?: number; label?: string }) {
-  return <GameIcon id={weapon} width={Math.round(height * 2.9)} height={height} label={label} className="gicon--gun" fallback={<WeaponIcon name={weapon} size={height} label={label} />} />;
+export function GunIcon({ weapon, height = 14, named }: { weapon: string; height?: number; named?: boolean }) {
+  return <WeaponIcon name={weapon} height={height} beside={!named} />;
 }
 
 /**
@@ -192,10 +191,9 @@ export function GunCell({ g, cls }: { g: Judged; cls?: string }) {
   );
 }
 
-/** A weapon class as a typical gun of it, for class group rows. */
-const CLASS_GUN: Record<string, string> = { rifle: "ak47", sniper: "awp", smg: "mp9", heavy: "nova", pistol: "glock" };
+/** A weapon class as its representative gun (icons/game.tsx WeaponClassIcon), for class group rows. */
 export function ClassIcon({ cls, height = 12 }: { cls: string; height?: number }) {
-  return <GunIcon weapon={CLASS_GUN[cls] ?? "ak47"} height={height} />;
+  return <WeaponClassIcon cls={cls} height={height} />;
 }
 
 /** The best or the weakest gun: the official icon, its accuracy, its edge over your other guns, its kills, and the advice in its "?". */
