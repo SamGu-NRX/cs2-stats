@@ -24,6 +24,7 @@ import logging
 import logging.handlers
 import math
 import os
+import queue
 import re
 import shutil
 import socket
@@ -249,7 +250,7 @@ def is_complete_rar(path: Path, tracker: CompletenessTracker, now: float) -> boo
 class Archive:
     rar: Path
     id: str
-    state: str = "pending"  # pending -> extracting -> parsing -> (done | failed)
+    state: str = "pending"  # (hashing ->) pending -> extracting -> parsing -> (done | failed)
     slug: str | None = None
     work: Path | None = None
     dems: list[Path] = field(default_factory=list)
@@ -270,6 +271,39 @@ class Archive:
     download_started: float = 0.0
     download_finished: float | None = None  # the first poll at its final size, for a download seen in progress
     archive_gb_counted: bool = False
+
+
+class Hasher:
+    """SHA-256 of picked-up archives, one at a time on a daemon thread, so the main loop keeps serving status.
+    Hashed in scan(), each archive kept in failed/ blocked the loop for about 50 s on a --retry-failed restart, and
+    /pending answered {} for minutes. take(path) returns the hex digest, the OSError that stopped it, or None while
+    it is not done."""
+
+    def __init__(self):
+        self._todo: queue.Queue[Path] = queue.Queue()
+        self._done: dict[Path, str | OSError] = {}
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def submit(self, path: Path) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, daemon=True, name="archive-sha256")
+            self._thread.start()
+        self._todo.put(path)
+
+    def _run(self) -> None:
+        while True:
+            path = self._todo.get()
+            try:
+                result: str | OSError = extract.file_sha256(path)
+            except OSError as e:
+                result = e
+            with self._lock:
+                self._done[path] = result
+
+    def take(self, path: Path) -> str | OSError | None:
+        with self._lock:
+            return self._done.pop(path, None)
 
 
 @dataclass
@@ -855,6 +889,7 @@ class Pipeline:
         self.status: dict = {}
         self.ignored: set[Path] = set()
         self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
+        self.hasher = Hasher()
         rows = read_jsonl(MANIFEST)
         peaks, parse_s = manifest_seed(rows)
         self.output_gb: deque[float] = deque(output_seed(rows), maxlen=TIMING_SAMPLES)
@@ -947,15 +982,32 @@ class Pipeline:
             st = f.stat()
             # The download began no later than the file appeared: its creation time, or when this run first saw it.
             created = getattr(st, "st_birthtime", st.st_ctime)
-            sha = extract.file_sha256(f)
             started = min(created, seen) if seen is not None else created
-            if in_failed:  # a retry: the download's own times, from its failure record, if it is the same file
-                rec = self.failure_record(f.parent, sha)
-                if rec:
-                    started, finished = rec.get("download_started") or started, rec.get("download_finished")
-            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=sha,
+            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, state="hashing",
                                          download_started=started, download_finished=finished)
-            log.info("pending archive %s (%.0f MB)", f, f.stat().st_size / 1e6)
+            self.hasher.submit(f)
+            log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
+
+    def poll_hashes(self) -> None:
+        """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
+        record, when that record is of the same file. An archive that could not be read is dropped; a later scan
+        finds it again if it is still there."""
+        for a in [a for a in self.archives.values() if a.state == "hashing"]:
+            sha = self.hasher.take(a.rar)
+            if sha is None:
+                continue
+            if isinstance(sha, OSError):
+                log.warning("could not hash %s (%s); dropped until a later scan", a.rar, sha)
+                del self.archives[a.id]
+                continue
+            a.rar_sha256 = sha
+            if a.rar.parent.parent == FAILED_DIR:
+                rec = self.failure_record(a.rar.parent, sha)
+                if rec:
+                    a.download_started = rec.get("download_started") or a.download_started
+                    a.download_finished = rec.get("download_finished")
+            a.state = "pending"
+            log.info("pending archive %s (%.0f MB)", a.rar, a.rar_bytes / 1e6)
 
     # --- extraction
     def extracted_count(self) -> int:
@@ -1510,7 +1562,7 @@ class Pipeline:
         downloading = sum(1 for p in self.tracker.tracked() if p.exists() and p not in self.ignored)
         statuses = [r.get("status") for r in self.ledger.values()]
         our, capacity = self.budget()
-        pending = st.count("pending")
+        pending = st.count("pending") + st.count("hashing")  # an archive being hashed is downloaded and waiting
         avail = self.available_gb()
         workers_max = self.worker_max()
         want = desired_downloads(workers_max, mean(self.parse_s, DEFAULT_PARSE_S),
@@ -1536,6 +1588,7 @@ class Pipeline:
         now = time.time()
         self.cs2 = cs2_running()
         self.scan(now)
+        self.poll_hashes()
         self.poll_extractions()
         self.start_extractions()
         self.poll_workers()
@@ -1691,6 +1744,8 @@ def main(argv=None) -> int:
     tidy_demos()
     for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
         pipeline.clean_copies(rec)
+    with pipeline.lock:  # the first status, before the first scan
+        pipeline.status = pipeline.snapshot()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")
