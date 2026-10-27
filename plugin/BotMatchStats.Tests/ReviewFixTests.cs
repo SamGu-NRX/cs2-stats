@@ -166,10 +166,10 @@ public class ReviewFixTests
         t.SetMap("de_dust2");
         var names = new[] { "LongDoors", "TSpawn", "BombsiteB", "OutsideTunnel", "Middle", "CTSpawn", "Pit", "TopofMid" };
         var raw = names.Select(n => { var b = new byte[18]; Encoding.UTF8.GetBytes(n).CopyTo(b, 0); return b; }).ToArray();
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var meter = AllocMeter.Start(exact: true);
         foreach (var b in raw) t.Lookup(b);
         foreach (var b in raw) t.Lookup(b);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocMeter.AssertNone(meter.Read());
         Assert.Equal(names, t.ToArray());
         Assert.Equal(CtSetupCounter.A, t.Area(0));
         Assert.Equal(CtSetupCounter.Other, t.Area(1));

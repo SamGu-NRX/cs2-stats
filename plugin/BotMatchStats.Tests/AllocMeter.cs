@@ -58,4 +58,14 @@ internal struct AllocMeter
         }
         return (bytes, paused, exact);
     }
+
+    /// <summary>
+    /// Asserts a span allocated nothing: zero when the reading is exact or no pause touched it, and at most
+    /// <see cref="PausedSlack"/> when a GC pause made it inexact (the pause, not the code, accounts for that).
+    /// </summary>
+    public static void AssertNone((long Bytes, bool Paused, bool Exact) r)
+    {
+        if (r.Exact || !r.Paused) Xunit.Assert.Equal(0, r.Bytes);
+        else Xunit.Assert.InRange(r.Bytes, 0, PausedSlack);
+    }
 }
