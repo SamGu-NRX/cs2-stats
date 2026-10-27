@@ -176,7 +176,8 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
             onUndo={(c, e) => setDialog({ kind: "rollback", change: c, interrupted: false, instant: fromKeyboard(e) })} />
         </div>
       </div>
-      {tag && <ModCommands api={api} tag={tag} />}
+      {/* a new tag starts the card over, so a list loaded for the old one is never shown under the new */}
+      {tag && <ModCommands key={tag} api={api} tag={tag} />}
 
       {dialog?.kind === "install" && (
         <InstallDialog api={api} status={status} dialog={dialog} onClose={close} onDone={(names) => { setReplaced(names); done(); }} />

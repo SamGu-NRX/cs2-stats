@@ -91,7 +91,7 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
       else localStorage.removeItem(PENDING);
     } catch { /* storage blocked: the draft lives for this visit only */ }
   }, [stored]);
-  const base = draftOf(status, server);
+  const base = useMemo(() => draftOf(status, server), [status, server]);
   const edits = stored?.edits ?? {};
   const draft: Draft = { ...base, ...edits };
   const changed = (Object.keys(edits) as (keyof Draft)[]).filter((k) => !same(edits[k], base[k]));
@@ -106,15 +106,21 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
     // each baseline is the state when the first change to it was made; with none of its changes
     // waiting (none yet, or the last ones applied), it is the state as read now
     setStored((s) => {
-      const had = (keys: (keyof Draft)[]) => !!s && keys.some((c) => c in s.edits);
+      // a setting put back to what the files hold is no edit: it is dropped, so it can't later
+      // override a value another tool sets, or keep an old baseline alive
+      const edits: Partial<Draft> = { ...(s?.edits ?? {}), [k]: v };
+      if (same(v, base[k])) delete edits[k];
+      if (!Object.keys(edits).length) return null;
+      // a baseline is kept while changes to it wait, both before this edit and after it
+      const had = (keys: (keyof Draft)[]) => !!s && keys.some((c) => c in s.edits) && keys.some((c) => c in edits);
       return {
-        edits: { ...(s?.edits ?? {}), [k]: v },
+        edits,
         seen: had(CFG_KEYS) ? s!.seen : server,
         profile: had(["difficulty"]) ? s!.profile : { sha256: status.activeProfile },
         launch: had(["launch"]) ? s!.launch : status.launchOptions,
       };
     });
-  }, [server, status.activeProfile, status.launchOptions]);
+  }, [server, status.activeProfile, status.launchOptions, base]);
   const discard = useCallback(() => setStored(null), []);
 
   /** Writes the plan; throws the backend's refusal after reading the state again. */

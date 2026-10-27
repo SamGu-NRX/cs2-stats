@@ -367,6 +367,19 @@ describe("settings", () => {
     expect(text(".bm-hero .bm-line")).toContain("-insecure -novid -tickrate 128 then");
   });
 
+  it("a setting put back to its saved value is no change, and leaves no stale baseline", async () => {
+    await render("installed");
+    await click(button("High"));
+    await click(button("Medium"));
+    expect(text(".bm-foot__state")).toBe("Saved in the game folder");
+    expect(localStorage.getItem("cs2stats.botmode.pending")).toBeNull();
+    // another tool sets High; the page shows it, not an old draft
+    backend.state.status = { ...backend.state.status, difficulty: "high", activeProfile: "f".repeat(64) };
+    await click(button(/Check again/));
+    expect(text(".seg__item[data-on='true'][data-v='high']")).toBe("High");
+    expect(text(".bm-foot__state")).toBe("Saved in the game folder");
+  });
+
   it("the kit picker works from the keyboard: Down opens, arrows move, Escape closes and returns focus", async () => {
     await render("installed");
     const kit = $(".bm-kit")!;
@@ -541,6 +554,22 @@ describe("console commands", () => {
     type($<HTMLInputElement>(".bm-cmds__find input")!, "bot_aim h");
     await click(button("bot_aim head"));
     expect(copied.at(-1)).toBe("bot_aim head");
+  });
+});
+
+describe("console commands after an update", () => {
+  it("starts over for the new tag, and a load that fails ends in an error with a retry", async () => {
+    await render("outdated", { botmode_mod_commands: "https://api.github.com/repos/ed0ard/CS2-Bot-Improver/contents/Commands.txt?ref=v1.4.6: timeout: global" });
+    await click(button("Show the commands"));
+    expect(sent("botmode_mod_commands")).toEqual({ tag: "v1.4.6" });
+    expect(text(".bm-cmds [role=alert]")).toContain("The list didn't load: https://api.github.com/repos/ed0ard/CS2-Bot-Improver/contents/Commands.txt?ref=v1.4.6: timeout: global");
+    expect(button("Try again")).toBeTruthy();
+    await click(button("Update to v1.4.7…"));
+    await click(button("Update to v1.4.7"));
+    // the card for v1.4.7 is a new one: nothing loaded, nothing failed
+    expect(text(".bm-cmds .card__aside")).toBe("The mod's Commands.txt at v1.4.7");
+    expect($(".bm-cmds [role=alert]")).toBeNull();
+    expect(button("Show the commands")).toBeTruthy();
   });
 });
 
