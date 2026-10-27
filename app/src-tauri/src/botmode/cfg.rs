@@ -99,7 +99,16 @@ pub fn line_words(line: &str) -> Option<Vec<&str>> {
 
 /// Every command in `text`, in the order the game runs them, with its words and the line it is on.
 pub fn commands_of(text: &str) -> Vec<(&str, Vec<&str>)> {
-    text.lines().flat_map(|l| commands(l).0.into_iter().map(move |c| (l, words(c)))).filter(|(_, w)| !w.is_empty()).collect()
+    numbered_commands(text).into_iter().map(|(_, l, w)| (l, w)).collect()
+}
+
+/// [`commands_of`] with each command's 1-based line number.
+pub fn numbered_commands(text: &str) -> Vec<(usize, &str, Vec<&str>)> {
+    text.lines()
+        .enumerate()
+        .flat_map(|(i, l)| commands(l).0.into_iter().map(move |c| (i + 1, l, words(c))))
+        .filter(|(_, _, w)| !w.is_empty())
+        .collect()
 }
 
 /// Whether a command's words are `exec <file>`: the name in any case, with or without quotes

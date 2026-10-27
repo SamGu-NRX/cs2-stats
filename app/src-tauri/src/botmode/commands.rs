@@ -8,7 +8,7 @@
 use super::changes::{self, Meta, RollbackReport};
 use super::monitor::Running;
 use super::overlay::OverlayPlan;
-use super::settings::{FileSeen, Preview, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
+use super::settings::{FileSeen, Preview, ReadHashes, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
 use std::time::Duration;
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::monitor;
@@ -273,8 +273,8 @@ pub async fn botmode_server_undo_plan(game: Option<String>, id: String) -> Resul
 /// Undoes settings change `id` as a new change (`settings::undo_server`), refused when a setting
 /// it wrote has changed since.
 #[tauri::command]
-pub async fn botmode_server_undo(game: Option<String>, id: String) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::undo_server(&ctx.layout, &SystemProbe, &id)).await
+pub async fn botmode_server_undo(game: Option<String>, id: String, read: Option<ReadHashes>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::undo_server_checked(&ctx.layout, &SystemProbe, &id, read.as_ref())).await
 }
 
 /// What Repair would write for a missing knife file; reads only.
@@ -289,10 +289,11 @@ pub async fn botmode_knife_repair(game: Option<String>, seen: RepairPlan) -> Res
     mutating(game, move |ctx| settings::repair_knife(&ctx.layout, &SystemProbe, &seen)).await
 }
 
-/// One change to the server cfg; refused, writing nothing, when it no longer holds `seen`.
+/// One change to the server cfg; refused, writing nothing, when it no longer holds `seen`, or,
+/// with `read` (from a preview), when either file's bytes changed since.
 #[tauri::command]
-pub async fn botmode_set_server_cfg(game: Option<String>, patch: ServerPatch, seen: ServerSettings) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::set_server(&ctx.layout, &SystemProbe, patch, seen)).await
+pub async fn botmode_set_server_cfg(game: Option<String>, patch: ServerPatch, seen: ServerSettings, read: Option<ReadHashes>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_server_checked(&ctx.layout, &SystemProbe, patch, seen, read.as_ref())).await
 }
 
 /// Each CS2 of this install running now, with its VAC state from its command line. Reads only.

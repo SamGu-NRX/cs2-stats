@@ -191,6 +191,11 @@
 /* ---------------------------------------------------------------- previews: the files a change writes */
 .bm-files { display: grid; gap: 2px; margin: 6px 0 0; padding: 8px 10px; max-height: 180px; overflow: auto; overscroll-behavior: contain; list-style: none;
   border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
+/* a diff: each changed line marked, the marker kept out of a copied selection */
+.bm-diff li { display: grid; grid-template-columns: 1.4ch 1fr; }
+.bm-diff__op { user-select: none; }
+.bm-diff li[data-op="add"] { color: var(--good-text); }
+.bm-diff li[data-op="del"] { color: var(--poor-text); text-decoration: line-through; text-decoration-color: color-mix(in oklab, var(--poor-text) 50%, transparent); }
 .bm-files-more { margin-top: 6px; }
 .bm-files-more > summary { cursor: pointer; width: max-content; border-radius: var(--r-chip); font-size: 12px; color: var(--ink2); }
 @media (hover: hover) and (pointer: fine) { .bm-files-more > summary:hover { color: var(--ink); } }

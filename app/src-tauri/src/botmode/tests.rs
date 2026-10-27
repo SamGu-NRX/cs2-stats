@@ -617,6 +617,11 @@ fn knife(key: &str) -> settings::ServerPatch {
     settings::ServerPatch { knife_bind: Some(settings::KnifeBind { key: key.into(), knives: vec![500] }), ..Default::default() }
 }
 
+/// A preview's server cfg diff, each line marked + or -.
+fn diff(p: &settings::Preview) -> Vec<String> {
+    p.server_diff.iter().map(|d| format!("{}{}", if d.added { "+" } else { "-" }, d.line)).collect()
+}
+
 fn newest(layout: &Layout) -> String {
     changes::list(layout).unwrap()[0].id.clone()
 }
@@ -790,7 +795,8 @@ fn undo_of_a_stop_unbinding_puts_the_key_back_and_undo_of_an_undo_redoes() {
     // a scalar: head, undone to mixed, and that undo undone back to head
     let head = set_server(&layout, ServerPatch { bot_aim: Some(BotAim::Head), ..Default::default() });
     let plan = settings::undo_plan(&layout, &head.id).unwrap();
-    assert_eq!((plan.preview.server_lines, plan.preview.knife_lines), (vec!["bot_aim mixed".to_string()], None), "no line before, so the plugin's default");
+    assert_eq!(plan.preview.knife_lines, None);
+    assert_eq!(diff(&plan.preview), ["-bot_aim head", "+bot_aim mixed"], "no line before, so the plugin's default");
     settings::undo_server(&layout, &CLOSED, &head.id).unwrap();
     assert_eq!(settings::read_server(&layout).unwrap().bot_aim, Some(BotAim::Mixed));
     let undo = newest(&layout);
@@ -893,7 +899,7 @@ fn the_apps_exec_line_goes_last_and_a_later_line_that_wins_over_the_knife_is_rep
     let user = format!("{USER_SERVER_CFG}exec cs2stats_knife\r\nbind k \"say hi\"\r\n");
     write(&layout.target(cfg), user.as_bytes());
     let now = settings::read_server(&layout).unwrap();
-    assert_eq!(now.knife_file.overrides, ["bind k \"say hi\""], "in game the user's bind wins over the knife key");
+    assert_eq!(now.knife_file.overrides, ["cfg/gamemode_competitive_server.cfg:5: bind k \"say hi\""], "in game the user's bind wins over the knife key");
     set_server(&layout, settings::ServerPatch { knife_bind: Some(settings::KnifeBind { key: "k".into(), knives: vec![500, 507] }), ..Default::default() });
     assert_eq!(read(&layout, cfg), format!("{user}{KNIFE_EXEC_LINE}\r\n"), "the app's line is added last; the user's exec and bind stay");
     let now = settings::read_server(&layout).unwrap();
@@ -903,10 +909,10 @@ fn the_apps_exec_line_goes_last_and_a_later_line_that_wins_over_the_knife_is_rep
     fs::write(layout.target(cfg), format!("{}bind k \"say late\"\r\nunbind \\\r\nbind \\ \"say free\"\r\n", read(&layout, cfg))).unwrap();
     let now = settings::read_server(&layout).unwrap();
     assert!(!now.knife_file.exec_last);
-    assert_eq!(now.knife_file.overrides, ["bind k \"say late\"", "bind \\ \"say free\""], "an unbind of a key the file unbinds anyway is no override");
+    assert_eq!(now.knife_file.overrides, ["cfg/gamemode_competitive_server.cfg:7: bind k \"say late\"", "cfg/gamemode_competitive_server.cfg:9: bind \\ \"say free\""], "an unbind of a key the file unbinds anyway is no override");
     // any write moves the app's line back to the end, past them
     let preview = settings::preview_server(&layout, &ServerPatch { bot_aim: Some(settings::BotAim::Body), ..Default::default() }).unwrap();
-    assert_eq!(preview.server_lines, ["bot_aim body", KNIFE_EXEC_LINE]);
+    assert_eq!(diff(&preview), [format!("-{KNIFE_EXEC_LINE}"), "+bot_aim body".into(), format!("+{KNIFE_EXEC_LINE}")]);
     set_server(&layout, ServerPatch { bot_aim: Some(settings::BotAim::Body), ..Default::default() });
     let text = read(&layout, cfg);
     assert!(text.ends_with(&format!("bind \\ \"say free\"\r\nbot_aim body\r\n{KNIFE_EXEC_LINE}\r\n")), "{text}");
@@ -945,7 +951,7 @@ fn a_rewrite_keeps_the_users_lines_byte_for_byte_unless_the_change_moves_their_k
     set_server(&layout, knife("k"));
     let path = layout.target(settings::KNIFE_CFG);
     let mine = "unbind z // keep this key free for another tool";
-    let alias = "alias +x \"unbind q\"";
+    let alias = "echo \"mine too\"";
     fs::write(&path, format!("{}{mine}\r\n{alias}\r\n", read(&layout, settings::KNIFE_CFG))).unwrap();
     assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "z"]);
     // moving the knife to l leaves z's line and the alias exactly as they are, and says so in the preview
@@ -995,6 +1001,109 @@ fn a_launch_is_refused_while_the_server_cfg_cannot_be_read() {
     let lock = OpLock::acquire(&layout).unwrap();
     let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
     assert!(err.starts_with("The server cfg can't be read (") && err.ends_with("so whether it runs the knife key file is unknown. Launch waits until it reads."), "{err}");
+}
+
+#[test]
+fn the_preview_is_the_write_byte_for_byte_and_a_write_after_a_changed_file_is_refused() {
+    use settings::{BotAim, ServerPatch};
+    let s = Scratch::new("preview-is-write");
+    let layout = fake_game(&s);
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    // the user's own spelling, spacing and comment on the line the change sets
+    let user = format!("{USER_SERVER_CFG}  BOT_AIM    head // user's spacing\r\n");
+    write(&layout.target(cfg), user.as_bytes());
+    let patch = ServerPatch { bot_aim: Some(BotAim::Body), ..Default::default() };
+    let preview = settings::preview_server(&layout, &patch).unwrap();
+    assert_eq!(diff(&preview), ["-  BOT_AIM    head // user's spacing", "+  BOT_AIM body // user's spacing"]);
+    let seen = settings::read_server(&layout).unwrap();
+    settings::set_server_checked(&layout, &CLOSED, patch.clone(), seen, Some(&preview.read)).unwrap();
+    let text = read(&layout, cfg);
+    assert_eq!(text, format!("{USER_SERVER_CFG}  BOT_AIM body // user's spacing\r\n"), "what the preview listed, byte for byte");
+
+    // a preview, then another program edits a line the change doesn't touch: the write is refused
+    let patch = ServerPatch { bot_aim: Some(BotAim::Head), ..Default::default() };
+    let preview = settings::preview_server(&layout, &patch).unwrap();
+    fs::write(layout.target(cfg), text.replace("// mine", "// mine, edited")).unwrap();
+    let seen = settings::read_server(&layout).unwrap();
+    let err = settings::set_server_checked(&layout, &CLOSED, patch, seen, Some(&preview.read)).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ) && err.contains("after the preview"), "{err}");
+    assert!(read(&layout, cfg).contains("BOT_AIM body"), "nothing written");
+}
+
+#[test]
+fn commands_after_the_knife_file_are_followed_into_the_cfgs_they_exec() {
+    use settings::KNIFE_EXEC_LINE;
+    let s = Scratch::new("knife-later");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    // after the app's exec: a cfg that rebinds k (and execs itself, a cycle), an alias call, and an exec of a file that isn't there
+    let tail = "alias go \"bind k say\"\r\nexec user_after\r\ngo\r\nexec not_there.cfg\r\n";
+    write(&layout.target(cfg), format!("{}{tail}", read(&layout, cfg)).as_bytes());
+    write(&layout.target("cfg/user_after.cfg"), b"echo hi\r\nbind k \"say late\"\r\nexec user_after\r\nexec deeper\r\n");
+    write(&layout.target("cfg/deeper.cfg"), b"unbind k\r\n");
+    let f = settings::read_server(&layout).unwrap().knife_file;
+    assert_eq!(f.overrides, ["cfg/user_after.cfg:2: bind k \"say late\"", "cfg/deeper.cfg:1: unbind k"], "with the file and line");
+    assert_eq!(f.uncertain, ["cfg/gamemode_competitive_server.cfg:7: go", "cfg/gamemode_competitive_server.cfg:8: exec not_there.cfg"]);
+    // a cfg exec'd after them that runs the knife file again puts it back on top
+    write(&layout.target(cfg), format!("{}exec cs2stats_knife\r\n", read(&layout, cfg)).as_bytes());
+    let f = settings::read_server(&layout).unwrap().knife_file;
+    assert!(f.overrides.is_empty() && f.uncertain.is_empty(), "{f:?}");
+    assert!(read(&layout, cfg).contains(KNIFE_EXEC_LINE));
+}
+
+#[test]
+fn unbindall_in_the_knife_file_clears_every_key_and_exec_or_alias_there_makes_it_unreadable() {
+    use settings::{KnifeFileStatus, ServerPatch};
+    let s = Scratch::new("knife-unbindall");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    fs::write(&path, format!("{written}unbindall\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind, now.unbound_keys), (None, vec!["\\".to_string(), "k".to_string()]), "k and the mod's \\ are unbound");
+    // an exec in the knife file: Bot Mode can't say what it leaves
+    fs::write(&path, format!("{written}exec more_keys\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!(now.knife_file.status, KnifeFileStatus::Unsupported);
+    assert_eq!(now.knife_file.error.as_deref(), Some("cfg/cs2stats_knife.cfg:6: exec more_keys"));
+    let err = settings::set_server(&layout, &CLOSED, ServerPatch { stop_unbinding: vec!["\\".into()], ..Default::default() }, now.clone()).unwrap_err();
+    assert!(err.contains("has commands Bot Mode can't read"), "{err}");
+    let lock = OpLock::acquire(&layout).unwrap();
+    let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
+    assert!(err.starts_with("The knife key file has commands Bot Mode can't read (cfg/cs2stats_knife.cfg:6: exec more_keys)"), "{err}");
+    drop(lock);
+    // an alias there too; Replace is the way out
+    fs::write(&path, format!("{written}alias x \"unbind k\"\r\n")).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().knife_file.status, KnifeFileStatus::Unsupported);
+    let plan = settings::knife_repair_plan(&layout).unwrap();
+    assert!(plan.replaces.is_some());
+    settings::repair_knife(&layout, &CLOSED, &plan).unwrap();
+    assert_eq!(read(&layout, settings::KNIFE_CFG), written);
+}
+
+#[test]
+fn a_rewrite_keeps_each_lines_ending_a_missing_final_newline_and_a_bom() {
+    let s = Scratch::new("knife-raw-bytes");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    // written by hand: a BOM, mixed line endings, no final newline, no header
+    fs::write(&path, "\u{feff}unbind \\\r\nbind k \"subclass_create 500\"\necho mine\nunbind z").unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind.as_ref().map(|b| b.key.as_str()), now.unbound_keys.clone()), (Some("k"), vec!["\\".to_string(), "z".to_string()]), "the BOM does not hide the first command");
+    set_server(&layout, knife("l"));
+    let text = fs::read_to_string(&path).unwrap();
+    let header = "// Bot Mode's knife key, managed by CS2 Stats. The server cfg runs this file on every map\n// (exec cs2stats_knife). CS2 Stats rewrites it whole when you change the knife key, keeping\n// any line of yours it does not write.\n";
+    assert_eq!(
+        text,
+        format!("\u{feff}{header}unbind \\\r\necho mine\nunbind z\nunbind k\nbind l \"subclass_create 500\""),
+        "the BOM first, each kept line's own ending, new lines with the most common one (\\n), and still no final newline"
+    );
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind.map(|b| b.key), now.unbound_keys), (Some("l".to_string()), vec!["\\".to_string(), "z".to_string(), "k".to_string()]));
 }
 
 #[test]

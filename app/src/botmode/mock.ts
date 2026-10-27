@@ -103,17 +103,16 @@ interface State {
   statusError: string | null;
   /** the server cfg's presets; its cosmetics are status.cosmetics */
   server: { botAim: ServerSettings["botAim"]; botNades: ServerSettings["botNades"] };
-  /** the knife file (settings.rs KNIFE_CFG): null when there is none */
-  knife: Knife | null;
-  /** the knife file's lines of the user's, kept as they are (before the app's) */
-  knifeExtra: string[];
+  /** the knife file's lines after its header (settings.rs KNIFE_CFG); null when there is none */
+  knifeFile: string[] | null;
   /** the knife file is there but can't be read */
   knifeUnreadable: boolean;
   /** whether the server cfg runs the knife file */
   exec: boolean;
-  /** whether the app's exec line is the server cfg's last command, and the lines after it that win over the knife */
+  /** whether the app's exec line is the server cfg's last command; the commands after the knife file that win over it, and those that may */
   execLast: boolean;
   overrides: string[];
+  uncertain: string[];
   running: RunningCs2[];
   /** what each recorded change wrote, by id */
   files: Record<string, string[]>;
@@ -123,8 +122,8 @@ interface State {
   records: Record<string, SettingsRecord>;
 }
 
-/** The knife file's bind and unbound keys (settings.rs Knife). */
-interface Knife { bind: KnifeBind | null; unbound: string[] }
+/** What the knife file leaves the keys as (settings.rs Knife). */
+export interface Knife { bind: KnifeBind | null; unbound: string[] }
 interface SettingsRecord {
   scalars: { name: string; before: string | null; after: string }[];
   knife?: { before: Knife; after: Knife; afterSha256: string; afterText: string };
@@ -138,12 +137,62 @@ const KNIFE_HEADER = [
   "// any line of yours it does not write.",
 ];
 const bindLine = (b: KnifeBind) => `bind ${b.key} "${b.knives.map((k) => `subclass_create ${k}`).join(";")}"`;
-/** The key a user's line binds or unbinds, when it is one such command (settings.rs Knife::rewrite takes these out for a key the change moves). */
-const lineKey = (l: string) => (l.replace(/"[^"]*"/g, "").includes(";") ? null : /^\s*(?:bind|unbind)\s+(\S+)/i.exec(l.split(" //")[0])?.[1] ?? null);
-/** The knife file's lines after the header: the user's own, then the app's. */
-const knifeLines = (k: Knife, extra: string[] = []) => [...extra, ...k.unbound.filter((u) => !extra.some((l) => lineKey(l) === u)).map((u) => `unbind ${u}`), ...(k.bind ? [bindLine(k.bind)] : [])];
-/** The knife file's text. */
-const knifeText = (k: Knife, extra: string[] = []) => [...KNIFE_HEADER, ...knifeLines(k, extra)].map((l) => `${l}\r\n`).join("");
+const sameKey = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/** A line's words, quotes dropped and a comment cut; the mock reads one command per line. */
+const wordsOf = (l: string) => l.split(" //")[0].trim().match(/"[^"]*"|\S+/g)?.map((w) => w.replace(/^"|"$/g, "")) ?? [];
+/** Whether a line holds one command (no `;` outside quotes). */
+const single = (l: string) => !l.split(" //")[0].replace(/"[^"]*"/g, "").includes(";");
+type KeyState = "u" | "o" | KnifeBind;
+/**
+ * settings.rs Knife::read: command by command in file order, the last bind or unbind of each key
+ * winning and unbindall clearing every key (the mod's \ included); keys compared in any case.
+ */
+export function readKnife(lines: string[]): Knife {
+  const keys: [string, KeyState][] = [];
+  let last: string | null = null;
+  const set = (key: string, st: KeyState) => { const e = keys.find(([k]) => sameKey(k, key)); if (e) e[1] = st; else keys.push([key, st]); };
+  for (const l of lines) {
+    const w = wordsOf(l);
+    const c = w[0]?.toLowerCase();
+    if (c === "unbindall" && w.length === 1) {
+      for (const e of keys) e[1] = "u";
+      if (!keys.some(([k]) => k === "\\")) keys.push(["\\", "u"]);
+      last = null;
+    } else if (c === "unbind" && w.length === 2) set(w[1], "u");
+    else if (c === "bind" && w.length >= 3) {
+      const knives = w.length === 3 ? w[2].split(";").map((x) => /^\s*subclass_create (\d+)\s*$/.exec(x)) : [null];
+      const st: KeyState = knives.every(Boolean) ? { key: w[1], knives: knives.map((m) => Number(m![1])) } : "o";
+      if (typeof st === "object") last = w[1];
+      set(w[1], st);
+    }
+  }
+  const lk = last ? keys.find(([k]) => sameKey(k, last!)) : undefined;
+  return { bind: lk && typeof lk[1] === "object" ? lk[1] : null, unbound: keys.filter(([, st]) => st === "u").map(([k]) => k) };
+}
+const stateOf = (k: Knife, key: string) => (k.bind && sameKey(k.bind.key, key) ? JSON.stringify(k.bind) : k.unbound.some((u) => sameKey(u, key)) ? "u" : null);
+/**
+ * settings.rs Knife::rewrite: only the keys the change moves are touched. Their one-command bind or
+ * unbind lines come out; every other line stays where it is; the app's lines for them go at the end.
+ */
+function rewriteKnife(old: string[], now: Knife, next: Knife) {
+  const keys = [...now.unbound, ...next.unbound, ...(now.bind ? [now.bind.key] : []), ...(next.bind ? [next.bind.key] : [])];
+  const moved = keys.filter((k) => stateOf(now, k) !== stateOf(next, k));
+  const hit = (k: string) => moved.some((m) => sameKey(m, k));
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (const l of old) {
+    const w = wordsOf(l);
+    (single(l) && /^(un)?bind$/i.test(w[0] ?? "") && w[1] && hit(w[1]) ? removed : kept).push(l);
+  }
+  return { lines: [...kept, ...next.unbound.filter(hit).map((u) => `unbind ${u}`), ...(next.bind && hit(next.bind.key) ? [bindLine(next.bind)] : [])], removed };
+}
+/** The knife file's text: the header, then its lines. */
+const knifeText = (lines: string[]) => [...KNIFE_HEADER, ...lines].map((l) => `${l}\r\n`).join("");
+/** settings.rs Knife::unreadable_command: an exec or an alias in the knife file. */
+const unsupported = (lines: string[]) => {
+  const i = lines.findIndex((l) => /^(exec|alias)$/i.test(wordsOf(l)[0] ?? ""));
+  return i < 0 ? null : `${KNIFE_CFG}:${i + KNIFE_HEADER.length + 1}: ${lines[i].trim()}`;
+};
 const UNREADABLE_SHA = "9f2c6c1d0e4b8a7f3e5d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f";
 /** A stand-in SHA-256 of a text: FNV-1a with eight seeds, so any edit changes it. */
 const hashText = (t: string) => Array.from({ length: 8 }, (_, seed) => {
@@ -152,7 +201,7 @@ const hashText = (t: string) => Array.from({ length: 8 }, (_, seed) => {
   return (h >>> 0).toString(16).padStart(8, "0");
 }).join("");
 const keyOf = (k: Knife) => k.bind?.key ?? "\\";
-const withKey = (keys: string[], key: string) => (keys.includes(key) ? keys : [...keys, key]);
+const withKey = (keys: string[], key: string) => (keys.some((k) => sameKey(k, key)) ? keys : [...keys, key]);
 /** settings.rs SCALARS: each convar a change can touch, with the value the game uses without a line. */
 const SCALAR_DEFAULTS: Record<string, string> = { br_dropped_knife_skins: "0", br_dropped_knife_premium: "0", br_player_music_kit: "0", bot_aim: "mixed", bot_nades: "normal" };
 
@@ -169,11 +218,11 @@ export const COMMANDS_TXT = [
 ].join("\r\n");
 
 /** The key names the backend accepts (settings.rs check_key). */
-const KEY = /^(?:[a-z0-9\\`[\]\-=,./']|[a-z0-9_]{2,16})$/;
+const KEY = /^(?:[a-zA-Z0-9\\`[\]\-=,./']|[a-z0-9_]{2,16})$/;
 
 function knifeMissingRecord(): SettingsRecord {
   const after: Knife = { bind: { key: "k", knives: [500, 507, 515] }, unbound: ["\\"] };
-  const text = knifeText(after);
+  const text = knifeText(rewriteKnife([], { bind: null, unbound: [] }, after).lines);
   return { scalars: [], knife: { before: { bind: null, unbound: [] }, after, afterSha256: hashText(text), afterText: text } };
 }
 
@@ -233,12 +282,12 @@ function initial(s: Scenario): State {
       ...(s === "knife-missing" ? { [backups[2].id]: knifeMissingRecord() } : {}),
     } : {},
     server: { botAim: null, botNades: installed ? "more" : null },
-    knife: null,
-    knifeExtra: [],
+    knifeFile: null,
     knifeUnreadable: false,
     exec: s === "knife-missing",
     execLast: true,
     overrides: [],
+    uncertain: [],
     statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
       : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
   };
@@ -257,16 +306,20 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     st.files[c.id] = paths;
     return c;
   };
-  const knifeStatus = (): KnifeFileStatus => (st.knifeUnreadable ? "unreadable" : st.knife ? (st.exec ? "ok" : "notRun") : st.exec ? "missing" : "none");
-  const knifeSha = () => (st.knifeUnreadable ? UNREADABLE_SHA : st.knife ? hashText(knifeText(st.knife, st.knifeExtra)) : null);
+  const knifeStatus = (): KnifeFileStatus => (st.knifeUnreadable ? "unreadable" : st.knifeFile ? (unsupported(st.knifeFile) ? "unsupported" : st.exec ? "ok" : "notRun") : st.exec ? "missing" : "none");
+  const knifeSha = () => (st.knifeUnreadable ? UNREADABLE_SHA : st.knifeFile ? hashText(knifeText(st.knifeFile)) : null);
+  const knifeNow = (): Knife => (st.knifeFile ? readKnife(st.knifeFile) : { bind: null, unbound: [] });
+  /** a stand-in hash of the server cfg: the values and exec placement the mock models */
+  const serverSha = () => hashText(JSON.stringify([st.status.cosmetics, st.server, st.exec, st.execLast, st.overrides, st.uncertain]));
   const serverOf = (): ServerSettings => ({
     cosmetics: { droppedKnifeSkins: st.status.cosmetics.droppedKnifeSkins, droppedKnifePremium: st.status.cosmetics.droppedKnifePremium, musicKit: st.status.cosmetics.musicKit },
     ...st.server,
-    knifeBind: st.knife?.bind ?? null,
-    unboundKeys: st.knife?.unbound ?? [],
+    knifeBind: knifeNow().bind,
+    unboundKeys: knifeNow().unbound,
     knifeFile: {
-      path: KNIFE_CFG, status: knifeStatus(), sha256: knifeSha(), error: st.knifeUnreadable ? `${KNIFE_CFG}: stream did not contain valid UTF-8` : null,
-      overrides: knifeStatus() === "ok" ? st.overrides : [], execLast: st.exec && st.execLast,
+      path: KNIFE_CFG, status: knifeStatus(), sha256: knifeSha(),
+      error: st.knifeUnreadable ? `${KNIFE_CFG}: stream did not contain valid UTF-8` : st.knifeFile ? unsupported(st.knifeFile) : null,
+      overrides: knifeStatus() === "ok" ? st.overrides : [], uncertain: knifeStatus() === "ok" ? st.uncertain : [], execLast: st.exec && st.execLast,
     },
   });
   // the five convars, as settings.rs scalar_in reads them
@@ -291,36 +344,46 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
   /** settings.rs plan_settings: what a write does to both files, and its record. */
   const planSettings = (values: [string, string][], knife: Knife | null) => {
     const rec: SettingsRecord = { scalars: [] };
+    const serverDiff: Preview["serverDiff"] = [];
     for (const [name, after] of values) {
       const before = scalar(name);
       if ((before ?? SCALAR_DEFAULTS[name]) !== after) rec.scalars.push({ name, before, after });
+      if (before !== after) {
+        if (before !== null) serverDiff.push({ added: false, line: `${name} ${before}` });
+        serverDiff.push({ added: true, line: `${name} ${after}` });
+      }
     }
-    const was = st.knife ?? { bind: null, unbound: [] };
-    let extra = st.knifeExtra;
+    let file = st.knifeFile;
     let knifeRemoved: string[] = [];
     if (knife) {
-      // the keys whose state changes; the user's lines for them come out
-      const state = (k: Knife, key: string) => (k.bind?.key === key ? JSON.stringify(k.bind) : k.unbound.includes(key) ? "u" : null);
-      const keys = [...was.unbound, ...knife.unbound, ...(was.bind ? [was.bind.key] : []), ...(knife.bind ? [knife.bind.key] : [])];
-      const moved = keys.filter((k) => state(was, k) !== state(knife, k));
-      extra = st.knifeExtra.filter((l) => !moved.includes(lineKey(l) ?? "\u0000"));
-      const next = knifeLines(knife, extra);
-      knifeRemoved = knifeLines(was, st.knifeExtra).filter((l) => !next.includes(l));
-    }
-    const text = knife && knifeText(knife, extra);
-    if (knife && text !== (st.knife && knifeText(st.knife, st.knifeExtra))) {
-      rec.knife = { before: structuredClone(was), after: structuredClone(knife), afterSha256: hashText(text!), afterText: text! };
+      const r = rewriteKnife(st.knifeFile ?? [], knifeNow(), knife);
+      if (knifeText(r.lines) !== (st.knifeFile && knifeText(st.knifeFile))) {
+        file = r.lines;
+        knifeRemoved = r.removed;
+        const text = knifeText(r.lines);
+        rec.knife = { before: knifeNow(), after: structuredClone(knife), afterSha256: hashText(text), afterText: text };
+      }
     }
     const execMoves = (st.exec && !st.execLast) || (!!rec.knife && !st.exec);
-    const preview: Preview = { serverLines: [...values.map(([n, v]) => `${n} ${v}`), ...(execMoves ? [KNIFE_EXEC_LINE] : [])], knifeLines: rec.knife ? knifeLines(knife!, extra) : null, knifeRemoved: rec.knife ? knifeRemoved : [] };
-    return { rec, extra, preview, execMoves };
+    if (execMoves) {
+      if (st.exec) serverDiff.unshift({ added: false, line: KNIFE_EXEC_LINE });
+      serverDiff.push({ added: true, line: KNIFE_EXEC_LINE });
+    }
+    const preview: Preview = { serverDiff, knifeLines: rec.knife ? file : null, knifeRemoved, read: { serverSha256: serverSha(), knifeSha256: knifeSha() } };
+    return { rec, file, preview, execMoves };
+  };
+  /** settings.rs check_read: a write carrying a preview's read is refused once either file changed. */
+  const checkRead = (read: unknown) => {
+    const r = read as Preview["read"] | undefined;
+    if (r && r.serverSha256 !== serverSha()) throw "cfg/gamemode_competitive_server.cfg: changed since it was read (after the preview); nothing was written";
+    if (r && r.knifeSha256 !== knifeSha()) throw `${KNIFE_CFG}: changed since it was read (after the preview); nothing was written`;
   };
   /** settings.rs write_settings: sets the values and the knife file as one change, with its record. */
   const writeSettings = (op: string, values: [string, string][], knife: Knife | null) => {
-    const { rec, extra, execMoves } = planSettings(values, knife);
+    const { rec, file, execMoves } = planSettings(values, knife);
     const paths = [...(rec.scalars.length || execMoves ? ["cfg/gamemode_competitive_server.cfg"] : []), ...(rec.knife ? [KNIFE_CFG] : [])];
     for (const [name, v] of values) setScalar(name, v);
-    if (rec.knife) { st.knife = knife; st.knifeExtra = extra; st.exec = true; }
+    if (rec.knife) { st.knifeFile = file; st.exec = true; }
     if (st.exec) { st.execLast = true; st.overrides = []; }
     const c = record(op, paths.length, paths);
     if (rec.scalars.length || rec.knife) st.records[c.id] = rec;
@@ -332,11 +395,12 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     if (!bind && !patch.stopUnbinding?.length) return null;
     if (knifeStatus() === "missing") throw `${KNIFE_CFG} is missing, so the keys Bot Mode keeps unbound are unknown; repair it first. Nothing was written.`;
     if (knifeStatus() === "unreadable") throw `${KNIFE_CFG}: stream did not contain valid UTF-8; replace it first. Nothing was written.`;
-    const was = st.knife ?? { bind: null, unbound: [] };
+    if (knifeStatus() === "unsupported") throw `${KNIFE_CFG} has commands Bot Mode can't read (${unsupported(st.knifeFile!)}); replace it first. Nothing was written.`;
+    const was = knifeNow();
     let unbound = [...was.unbound];
-    if (bind && keyOf(was) !== bind.key) unbound = withKey(unbound, keyOf(was));
+    if (bind && !sameKey(keyOf(was), bind.key)) unbound = withKey(unbound, keyOf(was));
     const next: Knife = { bind: bind ?? was.bind, unbound };
-    next.unbound = next.unbound.filter((k) => !patch.stopUnbinding?.includes(k) && k !== keyOf(next));
+    next.unbound = next.unbound.filter((k) => !patch.stopUnbinding?.some((x) => sameKey(x, k)) && !sameKey(k, keyOf(next)));
     return next;
   };
   const valuesOf = (p: ServerPatch): [string, string][] => [
@@ -356,26 +420,26 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       const now = scalar(s.name);
       if ((now ?? SCALAR_DEFAULTS[s.name]) !== s.after) changed.push(`${s.name} (now ${now ?? `unset, so ${SCALAR_DEFAULTS[s.name]}`})`);
     }
-    if (rec.knife && knifeSha() !== rec.knife.afterSha256) changed.push(`${KNIFE_CFG} (${st.knife || st.knifeUnreadable ? "edited since" : "now missing"})`);
+    if (rec.knife && knifeSha() !== rec.knife.afterSha256) changed.push(`${KNIFE_CFG} (${st.knifeFile || st.knifeUnreadable ? "edited since" : "now missing"})`);
     const refused = changed.length ? `${changed.join(", ")} changed since this change, so Undo would overwrite ${changed.length === 1 ? "it" : "them"}. Nothing was written.` : null;
     const values: [string, string][] = rec.scalars.map((s) => [s.name, s.before ?? SCALAR_DEFAULTS[s.name]]);
     let knife: Knife | null = null;
     if (rec.knife) {
       const { before, after } = rec.knife;
-      knife = { bind: before.bind ?? { key: "\\", knives: CATALOG.knives }, unbound: withKey(before.unbound, keyOf(after)).filter((k) => k !== keyOf(before)) };
+      knife = { bind: before.bind ?? { key: "\\", knives: CATALOG.knives }, unbound: withKey(before.unbound, keyOf(after)).filter((k) => !sameKey(k, keyOf(before))) };
     }
     return { values, knife, refused };
   };
   /** settings.rs repair_source */
   const repairPlan = (): RepairPlan => {
     const status = knifeStatus();
-    if (status !== "missing" && status !== "unreadable") throw `${KNIFE_CFG} is neither missing nor unreadable; nothing to repair`;
-    const replaces = status === "unreadable" ? UNREADABLE_SHA : null;
+    if (status !== "missing" && status !== "unreadable" && status !== "unsupported") throw `${KNIFE_CFG} is neither missing nor unreadable; nothing to repair`;
+    const replaces = status === "missing" ? null : knifeSha();
     for (const b of st.status.backups) {
       const k = b.status === "complete" ? st.records[b.id]?.knife : undefined;
       if (k) return { from: b.id, lines: k.afterText.split("\r\n").slice(0, -1), replaces };
     }
-    return { from: null, lines: knifeText({ bind: { key: "\\", knives: CATALOG.knives }, unbound: [] }).split("\r\n").slice(0, -1), replaces };
+    return { from: null, lines: knifeText(rewriteKnife([], { bind: null, unbound: [] }, { bind: { key: "\\", knives: CATALOG.knives }, unbound: [] }).lines).split("\r\n").slice(0, -1), replaces };
   };
   /** The backend's refusals for anything that writes the game folder. */
   const writable = () => {
@@ -421,6 +485,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       case "botmode_server_preview": return planSettings(valuesOf(a.patch as ServerPatch), knifeAfter(a.patch as ServerPatch)).preview;
       case "botmode_set_server_cfg": {
         writable();
+        // as set_server_checked: the preview's bytes first, then the values the page read
+        checkRead(a.read);
         const patch = a.patch as ServerPatch;
         const seen = a.seen as ServerSettings;
         if (JSON.stringify(seen) !== JSON.stringify(serverOf())) throw "cfg/gamemode_competitive_server.cfg: the Bot Mode settings changed since it was read; nothing was written";
@@ -442,6 +508,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         writable();
         const u = prepareUndo(a.id as string);
         if (u.refused) throw u.refused;
+        checkRead(a.read);
         return writeSettings("server-cfg-undo", u.values, u.knife);
       }
       case "botmode_knife_repair_plan": return repairPlan();
@@ -449,9 +516,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         writable();
         const plan = repairPlan();
         if (JSON.stringify(plan) !== JSON.stringify(a.seen)) throw `${KNIFE_CFG}: what Repair would write changed since it was read; nothing was written`;
-        const from = plan.from ? st.records[plan.from].knife!.after : { bind: { key: "\\", knives: CATALOG.knives }, unbound: [] };
-        st.knife = structuredClone(from);
-        st.knifeExtra = [];
+        st.knifeFile = plan.lines.slice(KNIFE_HEADER.length);
         st.knifeUnreadable = false;
         return record("knife-repair", 1, [KNIFE_CFG]);
       }

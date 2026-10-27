@@ -269,26 +269,37 @@ export interface KnifeBind { key: string; knives: number[] }
  * mod's own key applies; "ok", run and read; "missing", run but gone, so which keys stay unbound
  * is unknown; "unreadable"; "notRun", there but the server cfg no longer runs it.
  */
-export type KnifeFileStatus = "none" | "ok" | "missing" | "unreadable" | "notRun";
+export type KnifeFileStatus = "none" | "ok" | "missing" | "unreadable" | "unsupported" | "notRun";
 export interface KnifeFile {
   path: string;
   status: KnifeFileStatus;
   sha256: string | null;
+  /** `unreadable`: why; `unsupported`: the command it can't follow (an exec or an alias), as "file:line: text" */
   error: string | null;
-  /** server cfg lines after the knife file that win over it in game: a bind of the knife key or of a key it unbinds, an unbind of the knife key */
+  /**
+   * commands after the knife file that win over it in game, as "file:line: text": in the server cfg
+   * or a cfg it execs afterwards, a bind of the knife key or of a key it unbinds, an unbind of the knife key
+   */
   overrides: string[];
+  /** commands after the knife file whose effect can't be told (an alias call, an exec that can't be followed), as "file:line: text" */
+  uncertain: string[];
   /** whether the app's exec line is the server cfg's last command; any write moves it there */
   execLast: boolean;
 }
 
-/** What a settings write does to both files, line by line (settings.rs Preview). */
+/** The files a preview was worked out from; a write that carries them is refused if either changed. */
+export interface ReadHashes { serverSha256: string | null; knifeSha256: string | null }
+
+/** What a settings write does to both files, worked out by the code that writes them (settings.rs Preview). */
 export interface Preview {
-  /** the server cfg's lines it sets: convars, and the app's exec line when it is added or moved to the end */
-  serverLines: string[];
+  /** the server cfg's lines that change, as written: taken out (added false) or put in */
+  serverDiff: { added: boolean; line: string }[];
   /** the knife file as written, all but its header; null when it is not written */
   knifeLines: string[] | null;
   /** knife file lines it takes out */
   knifeRemoved: string[];
+  /** the bytes it was worked out from; send them back with the write */
+  read: ReadHashes;
 }
 
 /** Everything this app sets for the game (the server cfg's convars and the knife file), from botmode_server_cfg. */
@@ -384,13 +395,14 @@ export function botmodeOver(call: Call) {
     /** What Undo of settings change `id` would write, or why it would refuse. Reads only. */
     serverUndoPlan: (id: string, t: Target = {}) => call<UndoPlan>("botmode_server_undo_plan", { ...t, id }),
     /** Undoes settings change `id` as a new change; refused when a setting it wrote has changed since. */
-    serverUndo: (id: string, t: Target = {}) => call<Change>("botmode_server_undo", { ...t, id }),
+    serverUndo: (id: string, read?: ReadHashes, t: Target = {}) => call<Change>("botmode_server_undo", { ...t, id, read }),
     /** What Repair would write for a missing knife file. Reads only. */
     knifeRepairPlan: (t: Target = {}) => call<RepairPlan>("botmode_knife_repair_plan", { ...t }),
     /** Writes the missing knife file back; refused when it would no longer write `seen`. */
     knifeRepair: (seen: RepairPlan, t: Target = {}) => call<Change>("botmode_knife_repair", { ...t, seen }),
     /** One change to the server cfg; refused, writing nothing, when it no longer holds `seen`. */
-    setServerCfg: (patch: ServerPatch, seen: ServerSettings, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen }),
+    /** `read`, from a preview: also refused if either file's bytes changed since, so the write is what was shown. */
+    setServerCfg: (patch: ServerPatch, seen: ServerSettings, read?: ReadHashes, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen, read }),
     /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */
     running: (t: Target = {}) => call<RunningCs2[]>("botmode_running", { ...t }),
     overlayPlan: (manifest?: string, t: Target = {}) => call<OverlayPlan>("botmode_overlay_plan", { ...t, manifest }),

@@ -10,7 +10,7 @@
 // close, is never overwritten without the user seeing it first.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import type { BotAim, BotModeApi, BotNades, Catalog, Difficulty, KnifeBind, KnifeFile, Preview, ServerPatch, ServerSettings, Status } from "../../../botmode/commands";
+import type { BotAim, BotModeApi, BotNades, Catalog, Difficulty, KnifeBind, KnifeFile, Preview, ReadHashes, ServerPatch, ServerSettings, Status } from "../../../botmode/commands";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { GameIcon } from "../../components/GameIcon";
@@ -56,6 +56,7 @@ export const KNIFE_EXEC_LINE = "exec cs2stats_knife // cs2-stats knife drop";
 export function knifeProblem(f: KnifeFile): string | null {
   if (f.status === "missing") return `Knife key file missing: the server cfg runs ${f.path}, but it is gone, so which keys Bot Mode keeps unbound is unknown. Repair puts it back.`;
   if (f.status === "unreadable") return `The knife key file can't be read (${f.error ?? f.path}), so which keys Bot Mode keeps unbound is unknown.${f.sha256 ? " Replace puts it back." : ""}`;
+  if (f.status === "unsupported") return `The knife key file has commands Bot Mode can't read (${f.error ?? f.path}), so which keys Bot Mode keeps unbound is unknown. Replace puts it back.`;
   return null;
 }
 
@@ -74,14 +75,16 @@ function planOf(changed: (keyof Draft)[], d: Draft): Plan {
 }
 
 /**
- * The backend's line-by-line preview of `patch` against the files as `server` read them; read
- * again when either changes. null without a patch.
+ * The backend's line-by-line preview of `patch`, worked out by the code that writes it on the
+ * files' current bytes; its `read` goes back with the write, which is refused if either file
+ * changed meanwhile. Read afresh each time a confirmation opens (`patch` null in between), and
+ * again when the settings as read change. null without a patch.
  */
 export function useServerPreview(api: BotModeApi, patch: ServerPatch | null, server: ServerSettings | null): Preview | { error: string } | "loading" | null {
   const key = patch ? JSON.stringify([patch, server]) : null;
   const [got, setGot] = useState<{ key: string; v: Preview | { error: string } } | null>(null);
   useEffect(() => {
-    if (!key || !patch) return;
+    if (!key || !patch) { setGot(null); return; }
     let live = true;
     api.serverPreview(patch).then((v) => { if (live) setGot({ key, v }); }, (e) => { if (live) setGot({ key, v: { error: errorText(e) } }); });
     return () => { live = false; };
@@ -164,7 +167,7 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
   const discard = useCallback(() => setStored(null), []);
 
   /** Writes the plan; throws the backend's refusal after reading the state again. */
-  const apply = async () => {
+  const apply = async (read?: ReadHashes) => {
     const seen = stored?.seen ?? server;
     const profile = stored?.profile ?? { sha256: status.activeProfile };
     const launchSeen = stored?.launch ?? status.launchOptions;
@@ -176,7 +179,7 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
     });
     // each part in turn; a refusal stops there, and the message names what was saved and what not
     const parts: { name: string; run: () => Promise<unknown>; keys: (keyof Draft)[] }[] = [];
-    if (plan.patch) parts.push({ name: "Server cfg settings", run: () => api.setServerCfg(plan.patch!, seen), keys: CFG_KEYS });
+    if (plan.patch) parts.push({ name: "Server cfg settings", run: () => api.setServerCfg(plan.patch!, seen, read), keys: CFG_KEYS });
     if (plan.difficulty) parts.push({ name: "Bot difficulty", run: () => api.setDifficulty(plan.difficulty!, profile), keys: ["difficulty"] });
     if (plan.launch !== null) parts.push({ name: "Launch options", run: () => api.setLaunchOptions(plan.launch!, launchSeen), keys: ["launch"] });
     const saved: string[] = [];
@@ -230,12 +233,14 @@ export function KnifeFileLines({ path, lines, removed }: { path: string; lines: 
 /** The server cfg's and the knife file's lines from a backend preview, for a confirmation. */
 export function PreviewLines({ preview }: { preview: Preview }) {
   return <>
-    {preview.serverLines.length > 0 && <>
+    {preview.serverDiff.length > 0 && <>
       <dt>Changes</dt>
       <dd>
-        <span className="mono">cfg/gamemode_competitive_server.cfg</span>, these lines; your other lines stay:
-        <ul className="bm-files mono selectable">{preview.serverLines.map((l) => <li key={l}>{l}</li>)}</ul>
-        {preview.serverLines.includes(KNIFE_EXEC_LINE) && <span className="meta">The exec line goes last, so no line after it wins over the knife key.</span>}
+        <span className="mono">cfg/gamemode_competitive_server.cfg</span>, exactly these lines; your other lines stay:
+        <ul className="bm-files bm-diff mono selectable">
+          {preview.serverDiff.map((d, i) => <li key={i} data-op={d.added ? "add" : "del"}><span className="bm-diff__op" aria-label={d.added ? "added" : "taken out"}>{d.added ? "+" : "−"}</span>{d.line}</li>)}
+        </ul>
+        {preview.serverDiff.some((d) => d.added && d.line === KNIFE_EXEC_LINE) && <span className="meta">The exec line goes last, so no line after it in this file wins over the knife key.</span>}
       </dd>
     </>}
     {preview.knifeLines && <>
@@ -354,9 +359,15 @@ function SetupRows({ cat, catalog, support, pending, blocker, onRepair }: {
           ) : <>
             {pending.knifeFile.overrides.length > 0 && (
               <div className="bm-problem" role="alert">
-                <span>In game, {pending.knifeFile.overrides.length === 1 ? "a later line in the server cfg wins" : "later lines in the server cfg win"} over the knife key:</span>
+                <span>{pending.knifeFile.overrides.length === 1 ? "A command that runs" : "Commands that run"} after the knife file {pending.knifeFile.overrides.length === 1 ? "changes" : "change"} the keys Bot Mode set:</span>
                 <ul className="bm-files mono selectable">{pending.knifeFile.overrides.map((l) => <li key={l}>{l}</li>)}</ul>
-                <span>Applying any setting here moves this app's exec line to the end of the server cfg, after {pending.knifeFile.overrides.length === 1 ? "it" : "them"}.</span>
+                <span>Applying any setting here moves this app's exec line to the end of the server cfg; a line in another cfg it runs stays as it is.</span>
+              </div>
+            )}
+            {pending.knifeFile.uncertain.length > 0 && (
+              <div className="bm-note" role="note">
+                <span>{pending.knifeFile.uncertain.length === 1 ? "A command that runs" : "Commands that run"} after the knife file may change the keys Bot Mode set; Bot Mode can't tell what {pending.knifeFile.uncertain.length === 1 ? "it does" : "they do"}:</span>
+                <ul className="bm-files mono selectable">{pending.knifeFile.uncertain.map((l) => <li key={l}>{l}</li>)}</ul>
               </div>
             )}
             <KnifePicker labelId="bm-knife-l" knives={cat?.knives.length ? cat.knives : KNIFE_IDS} bind={draft.bind}
@@ -414,7 +425,8 @@ function SetupRows({ cat, catalog, support, pending, blocker, onRepair }: {
  */
 function knifeSays(f: KnifeFile, bind: KnifeBind | null, unbound: string[]): string | null {
   if (f.status !== "ok" && f.status !== "notRun") return null;
-  if (bind && f.overrides.length) return `${bind.key} would spawn the lit knives, but a later line in the server cfg wins over it (above). `;
+  if (bind && f.overrides.length) return `Bot Mode binds ${bind.key} to the lit knives, but a command that runs later changes the keys it set (above). `;
+  if (bind && f.uncertain.length) return `Bot Mode binds ${bind.key} to the lit knives; a command that runs later may change that (above). `;
   if (bind) return null;
   return unbound.some((k) => k === MOD_KNIFE_KEY)
     ? `No key spawns knives: the knife file binds none, and it unbinds the mod's own ${MOD_KNIFE_KEY}. Choosing knives or a key binds one. `
@@ -456,7 +468,7 @@ function KnifePicker({ labelId, knives, bind, say, onChange }: { labelId: string
         })}
       </ul>
       <p className="meta" id={`${keyId}-what`}>
-        {say ?? (bind ? `In game, ${key} spawns the lit knives where you stand. ` : `No key of yours yet: the mod's own ${MOD_KNIFE_KEY} spawns every knife. Choosing knives or a key makes yours. `)}
+        {say ?? (bind ? `Bot Mode binds ${key} to the lit knives, which spawn where you stand. ` : `No key of yours yet: the mod's own ${MOD_KNIFE_KEY} spawns every knife. Choosing knives or a key makes yours. `)}
         It runs after the mod's cfgs, so on the same key it replaces the mod's.
       </p>
     </div>

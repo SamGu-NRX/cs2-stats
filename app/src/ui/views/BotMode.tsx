@@ -252,7 +252,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
         <ActionDialog instant={dialog.instant} title={`Apply ${plural(pending.changed.length, "change")}?`} confirm="Apply" busyText="Writing your changes"
           onClose={close} ready={previewReady}
           run={async () => {
-            await pending.apply();
+            await pending.apply(preview && preview !== "loading" && !("error" in preview) ? preview.read : undefined);
             toast("Changes applied", "good");
             setDialog(null);
           }}>
@@ -275,7 +275,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           run={async () => {
             // changes kept while CS2 ran go in first; a refusal stops the launch here
             if (cfgUnread) throw cfgUnread;
-            if (pending?.changed.length) await pending.apply();
+            if (pending?.changed.length) await pending.apply(preview && preview !== "loading" && !("error" in preview) ? preview.read : undefined);
             const s = await api.launch();
             bm.setSession(s);
             toast("Steam is starting CS2 in Bot Mode", "good");
@@ -311,7 +311,7 @@ function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSetting
   const p = usePending(api, status, server ?? EMPTY_SERVER, reload, server !== null);
   return server ? { pending: p, keptUnread: false } : { pending: null, keptUnread: p.kept > 0 };
 }
-const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], execLast: false } };
+const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false } };
 
 // ---------------------------------------------------------------- hero
 
@@ -653,10 +653,10 @@ function ServerUndoDialog({ api, change, instant, onClose, onDone, reload }: {
   const ready = plan && !("error" in plan) && !plan.refused ? plan : null;
   return (
     <ActionDialog instant={instant} title={change.operation === "server-cfg-undo" ? "Redo settings?" : `Undo ${opLabel(change.operation).toLowerCase()}?`} confirm={change.operation === "server-cfg-undo" ? "Redo" : "Undo"} busyText="Setting them back"
-      onClose={onClose} ready={!!ready && (ready.serverLines.length > 0 || !!ready.knifeLines)}
+      onClose={onClose} ready={!!ready && (ready.serverDiff.length > 0 || !!ready.knifeLines)}
       run={async () => {
         try {
-          await api.serverUndo(change.id);
+          await api.serverUndo(change.id, ready!.read);
         } catch (e) {
           // the settings moved after this preview: show why, from the files as they are now
           await reload();

@@ -482,12 +482,24 @@ impl Knife {
     }
 
     /// The knife key a knife file leaves, read as CS2 runs it: command by command in file order,
-    /// each `bind` or `unbind` setting its key, the last one for each key winning. The knife bind is
-    /// the key the last knife bind went to, if nothing after it rebound or unbound that key.
+    /// each `bind` or `unbind` setting its key and `unbindall` clearing every key (the mod's own
+    /// `\` included), the last one for each key winning. The knife bind is the key the last knife
+    /// bind went to, if nothing after it rebound or unbound that key. A BOM at the start is skipped.
     fn read(text: &str) -> Knife {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut keys: Vec<(String, KeyState)> = Vec::new();
         let mut last_knife: Option<String> = None;
         for (_, w) in cfg::commands_of(text) {
+            if matches!(w.as_slice(), [c] if is_cmd(c, "unbindall")) {
+                for entry in keys.iter_mut() {
+                    entry.1 = KeyState::Unbound;
+                }
+                if !keys.iter().any(|(k, _)| k == MOD_KNIFE_KEY) {
+                    keys.push((MOD_KNIFE_KEY.to_string(), KeyState::Unbound));
+                }
+                last_knife = None;
+                continue;
+            }
             let (key, state) = match w.as_slice() {
                 [c, key] if is_cmd(c, "unbind") && check_key(key).is_ok() => (*key, KeyState::Unbound),
                 [c, key, cmds] if is_cmd(c, "bind") => (*key, knife_bind_of(key, cmds).map_or(KeyState::Other, KeyState::Knife)),
@@ -509,23 +521,44 @@ impl Knife {
         Knife { bind, unbound: keys.into_iter().filter(|(_, s)| *s == KeyState::Unbound).map(|(k, _)| k).collect() }
     }
 
+    /// The first command in a knife file that runs commands this reader can't follow (`exec`, or
+    /// an alias), as `file:line: text`; such a file is treated as unreadable.
+    fn unreadable_command(text: &str) -> Option<String> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let cmds = cfg::numbered_commands(text);
+        let aliases: Vec<&str> = cmds.iter().filter_map(|(_, _, w)| match w.as_slice() {
+            [c, name, ..] if is_cmd(c, "alias") => Some(*name),
+            _ => None,
+        }).collect();
+        cmds.iter()
+            .find(|(_, _, w)| is_cmd(w[0], "exec") || is_cmd(w[0], "alias") || aliases.iter().any(|a| a.eq_ignore_ascii_case(w[0])))
+            .map(|(n, line, _)| format!("{KNIFE_CFG}:{n}: {}", line.trim()))
+    }
+
     /// The knife file that takes `old` (the file's text, `None` when there is none; it leaves
-    /// `now`) to this state. Only the keys whose state changes are touched: each line that is one
-    /// `bind` or `unbind` of such a key comes out, and the app's own lines for them go at the end,
-    /// where they run last. Every other line, the user's and the app's, stays byte for byte, and the
-    /// header is written fresh. Returns the text and the lines taken out.
+    /// `now`) to this state, on the file's own bytes. Only the keys whose state changes are
+    /// touched: each line that is one `bind` or `unbind` of such a key comes out, and the app's
+    /// lines for them go at the end, where they run last. Every other line keeps its bytes and its
+    /// own line ending; the header is written fresh; a BOM stays at the very start; a missing final
+    /// newline stays missing; new lines get the file's most common line ending. Returns the text and
+    /// the lines taken out.
     fn rewrite(&self, old: Option<&str>, now: &Knife) -> (String, Vec<String>) {
         let mut keys: Vec<&str> = now.unbound.iter().chain(&self.unbound).map(String::as_str).collect();
         keys.extend(now.bind.iter().chain(&self.bind).map(|b| b.key.as_str()));
         let targeted: Vec<&str> = keys.into_iter().filter(|k| now.state_of(k) != self.state_of(k)).collect();
         let hit = |k: &str| targeted.iter().any(|t| t.eq_ignore_ascii_case(k));
-        let eol = match old {
-            Some(t) if t.contains('\n') && !t.contains("\r\n") => "\n",
-            _ => "\r\n",
+        let raw = old.unwrap_or("");
+        let (bom, body) = match raw.strip_prefix('\u{feff}') {
+            Some(rest) => ("\u{feff}", rest),
+            None => ("", raw),
         };
-        let mut lines: Vec<String> = KNIFE_HEADER.iter().map(|l| l.to_string()).collect();
+        let crlf = body.matches("\r\n").count();
+        let eol = if body.matches('\n').count() - crlf > crlf { "\n" } else { "\r\n" };
+        let final_newline = body.is_empty() || body.ends_with('\n');
+        let mut out: Vec<(String, String)> = KNIFE_HEADER.iter().map(|l| (l.to_string(), eol.to_string())).collect();
         let mut removed = Vec::new();
-        for line in old.unwrap_or("").lines() {
+        for span in body.split_inclusive('\n') {
+            let line = span.strip_suffix("\r\n").or_else(|| span.strip_suffix('\n')).unwrap_or(span);
             if KNIFE_HEADER.contains(&line) {
                 continue;
             }
@@ -533,20 +566,33 @@ impl Knife {
             if moves {
                 removed.push(line.to_string());
             } else {
-                lines.push(line.to_string());
+                out.push((line.to_string(), span[line.len()..].to_string()));
             }
         }
-        lines.extend(self.unbound.iter().filter(|k| hit(k)).map(|k| format!("unbind {k}")));
-        lines.extend(self.bind.iter().filter(|b| hit(&b.key)).map(KnifeBind::line));
-        let mut out = lines.join(eol);
-        out.push_str(eol);
-        (out, removed)
+        let added: Vec<String> = self.unbound.iter().filter(|k| hit(k)).map(|k| format!("unbind {k}")).chain(self.bind.iter().filter(|b| hit(&b.key)).map(KnifeBind::line)).collect();
+        for line in added {
+            if let Some(last) = out.last_mut().filter(|l| l.1.is_empty()) {
+                last.1 = eol.to_string();
+            }
+            out.push((line, eol.to_string()));
+        }
+        if !final_newline {
+            if let Some(last) = out.last_mut() {
+                last.1.clear();
+            }
+        }
+        let mut text = bom.to_string();
+        for (line, end) in out {
+            text.push_str(&line);
+            text.push_str(&end);
+        }
+        (text, removed)
     }
 }
 
 /// The knife file's lines a preview lists: all but the header.
 fn shown_lines(text: &str) -> Vec<String> {
-    text.lines().filter(|l| !KNIFE_HEADER.contains(l)).map(str::to_string).collect()
+    text.strip_prefix('\u{feff}').unwrap_or(text).lines().filter(|l| !KNIFE_HEADER.contains(l)).map(str::to_string).collect()
 }
 
 /// How the knife file stands.
@@ -562,6 +608,9 @@ pub enum KnifeFileStatus {
     Missing,
     /// The file is there but could not be read.
     Unreadable,
+    /// The file runs commands this app can't follow (`exec`, an alias): which keys stay unbound
+    /// is unknown. Treated as unreadable; Replace is the way out.
+    Unsupported,
     /// The file is there, but the server cfg no longer runs it.
     NotRun,
 }
@@ -573,11 +622,17 @@ pub struct KnifeFile {
     pub path: String,
     pub status: KnifeFileStatus,
     pub sha256: Option<String>,
+    /// Why the file can't be read, or the command it can't follow (`file:line: text`).
     pub error: Option<String>,
-    /// Lines of the server cfg that run after the knife file and bind the knife key, bind a key it
-    /// keeps unbound, or unbind the knife key: in game they win over the knife file.
+    /// Commands that run after the knife file and win over it in game, as `file:line: text`: in the
+    /// server cfg, or in a cfg it `exec`s after the knife file (followed through the cfg folder),
+    /// a bind of the knife key or of a key the file unbinds, an unbind of the knife key, `unbindall`.
     #[serde(default)]
     pub overrides: Vec<String>,
+    /// Commands after the knife file whose effect this app can't tell: an alias call, or an `exec`
+    /// it can't follow. Either may rebind the knife key.
+    #[serde(default)]
+    pub uncertain: Vec<String>,
     /// Whether the app's own exec line is the server cfg's last command. A write moves it there.
     #[serde(default)]
     pub exec_last: bool,
@@ -585,31 +640,96 @@ pub struct KnifeFile {
 
 impl Default for KnifeFile {
     fn default() -> KnifeFile {
-        KnifeFile { path: KNIFE_CFG.into(), status: KnifeFileStatus::None, sha256: None, error: None, overrides: Vec::new(), exec_last: false }
+        KnifeFile { path: KNIFE_CFG.into(), status: KnifeFileStatus::None, sha256: None, error: None, overrides: Vec::new(), uncertain: Vec::new(), exec_last: false }
     }
 }
 
-/// The server cfg's lines after the last command that runs the knife file which bind the knife key
-/// or a key the file unbinds, unbind the knife key, or unbind every key.
-fn overrides_in(text: &str, knife: &Knife) -> Vec<String> {
-    let cmds = cfg::commands_of(text);
-    let Some(at) = cmds.iter().rposition(|(_, w)| cfg::is_exec_of(w, KNIFE_EXEC)) else { return Vec::new() };
-    let bound = knife.bind.as_ref().map(|b| b.key.as_str());
-    let is_bound = |k: &str| bound.is_some_and(|b| b.eq_ignore_ascii_case(k));
-    let is_unbound = |k: &str| knife.unbound.iter().any(|u| u.eq_ignore_ascii_case(k));
-    let mut out: Vec<String> = Vec::new();
-    for (line, w) in &cmds[at + 1..] {
-        let wins = match w.as_slice() {
-            [c, k, ..] if is_cmd(c, "bind") => is_bound(k) || is_unbound(k),
-            [c, k] if is_cmd(c, "unbind") => is_bound(k),
+/// How deep [`Later`] follows `exec`s from the server cfg.
+const EXEC_DEPTH: usize = 4;
+
+/// What runs after the knife file: the server cfg's commands after its last exec of the file,
+/// and the cfgs those `exec`, followed through the game's cfg folder. Not a model of CS2: it reads
+/// only direct binds and unbinds, and names what it can't follow.
+struct Later<'a> {
+    layout: &'a Layout,
+    knife: &'a Knife,
+    aliases: Vec<String>,
+    /// The files being read, outermost first, for the cycle guard.
+    open: Vec<String>,
+    overrides: Vec<String>,
+    uncertain: Vec<String>,
+}
+
+impl Later<'_> {
+    fn wins(&self, w: &[&str]) -> bool {
+        let bound = |k: &str| self.knife.bind.as_ref().is_some_and(|b| b.key.eq_ignore_ascii_case(k));
+        let unbound = |k: &str| self.knife.unbound.iter().any(|u| u.eq_ignore_ascii_case(k));
+        match w {
+            [c, k, ..] if is_cmd(c, "bind") => bound(k) || unbound(k),
+            [c, k] if is_cmd(c, "unbind") => bound(k),
             [c] if is_cmd(c, "unbindall") => true,
             _ => false,
-        };
-        if wins && !out.iter().any(|o| o == line.trim()) {
-            out.push(line.trim().to_string());
         }
     }
-    out
+
+    fn walk(&mut self, file: &str, cmds: &[(usize, &str, Vec<&str>)], depth: usize) {
+        for (n, line, w) in cmds {
+            let at = format!("{file}:{n}: {}", line.trim());
+            if cfg::is_exec_of(w, KNIFE_EXEC) {
+                // the knife file runs again, after everything found so far
+                self.overrides.clear();
+                self.uncertain.clear();
+            } else if self.wins(w) {
+                self.overrides.push(at);
+            } else if let [c, name] = w.as_slice() {
+                if is_cmd(c, "exec") {
+                    self.follow(name, at, depth);
+                } else if self.aliases.iter().any(|a| a.eq_ignore_ascii_case(c)) {
+                    self.uncertain.push(at);
+                }
+            } else if !is_cmd(w[0], "alias") && self.aliases.iter().any(|a| a.eq_ignore_ascii_case(w[0])) {
+                self.uncertain.push(at);
+            }
+        }
+    }
+
+    /// Reads the cfg an `exec <name>` runs, or names the line as one it can't follow.
+    fn follow(&mut self, name: &str, at: String, depth: usize) {
+        let rel = if name.to_ascii_lowercase().ends_with(".cfg") { format!("cfg/{name}") } else { format!("cfg/{name}.cfg") };
+        let key = rel.to_ascii_lowercase();
+        if self.open.contains(&key) {
+            return;
+        }
+        let text = (depth < EXEC_DEPTH)
+            .then(|| confined_read(&self.layout.csgo, &rel).ok())
+            .flatten()
+            .and_then(|p| std::fs::read_to_string(p).ok());
+        let Some(text) = text else {
+            self.uncertain.push(at);
+            return;
+        };
+        let cmds = cfg::numbered_commands(&text);
+        self.aliases.extend(aliases_in(&cmds));
+        self.open.push(key);
+        self.walk(&rel, &cmds, depth + 1);
+        self.open.pop();
+    }
+}
+
+fn aliases_in(cmds: &[(usize, &str, Vec<&str>)]) -> Vec<String> {
+    cmds.iter().filter_map(|(_, _, w)| match w.as_slice() {
+        [c, name, ..] if is_cmd(c, "alias") => Some(name.to_string()),
+        _ => None,
+    }).collect()
+}
+
+/// [`Later`] over the server cfg's text: what wins over the knife file, and what may.
+fn later_in(layout: &Layout, text: &str, knife: &Knife) -> (Vec<String>, Vec<String>) {
+    let cmds = cfg::numbered_commands(text);
+    let Some(at) = cmds.iter().rposition(|(_, _, w)| cfg::is_exec_of(w, KNIFE_EXEC)) else { return (Vec::new(), Vec::new()) };
+    let mut later = Later { layout, knife, aliases: aliases_in(&cmds), open: vec![SERVER_CFG.to_ascii_lowercase()], overrides: Vec::new(), uncertain: Vec::new() };
+    later.walk(SERVER_CFG, &cmds[at + 1..], 0);
+    (later.overrides, later.uncertain)
 }
 
 /// Whether the server cfg's last command is the app's own exec line.
@@ -698,6 +818,10 @@ fn read_all(layout: &Layout) -> Result<Read, String> {
             match String::from_utf8(b) {
                 Ok(t) => {
                     file.status = if exec { KnifeFileStatus::Ok } else { KnifeFileStatus::NotRun };
+                    if let Some(at) = Knife::unreadable_command(&t) {
+                        file.status = KnifeFileStatus::Unsupported;
+                        file.error = Some(at);
+                    }
                     knife_text = Some(t);
                 }
                 Err(e) => {
@@ -718,7 +842,7 @@ fn read_all(layout: &Layout) -> Result<Read, String> {
     }
     let knife = knife_text.as_deref().map(Knife::read).unwrap_or_default();
     if file.status == KnifeFileStatus::Ok {
-        file.overrides = overrides_in(&text, &knife);
+        (file.overrides, file.uncertain) = later_in(layout, &text, &knife);
     }
     let now = ServerSettings {
         cosmetics: if hash.is_some() { cosmetics_in(&text) } else { Cosmetics::default() },
@@ -796,18 +920,65 @@ fn record_of(layout: &Layout, id: &str) -> Result<Option<SettingsRecord>, String
     }
 }
 
-/// What a settings write would do to both files, as [`write_settings`] writes it and the previews
-/// list it.
+/// The files a preview was worked out from: a write that carries them is refused unless both still
+/// hash the same, so what was previewed is byte for byte what is written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadHashes {
+    pub server_sha256: Option<String>,
+    pub knife_sha256: Option<String>,
+}
+
+/// One line of a diff: in the new file only (`added`), or in the old file only.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffLine {
+    pub added: bool,
+    pub line: String,
+}
+
+/// The lines that differ between two texts, in file order (a longest-common-subsequence diff, so a
+/// moved line shows as taken out and put back).
+fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i][j] = if a[i] == b[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if i < a.len() && (j == b.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
+            // a line taken out is listed before the line that replaces it
+            out.push(DiffLine { added: false, line: a[i].to_string() });
+            i += 1;
+        } else {
+            out.push(DiffLine { added: true, line: b[j].to_string() });
+            j += 1;
+        }
+    }
+    out
+}
+
+/// What a settings write would do to both files, worked out by the same code that writes them, on
+/// the same bytes: [`write_settings`] writes it and the previews list it.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
-    /// The lines set in the server cfg: its convars, and the app's exec line when it is added or
-    /// moved to the end.
-    pub server_lines: Vec<String>,
+    /// The server cfg's lines that change, as the write leaves them: the user's spelling, spacing
+    /// and comments kept by the merge, and the app's exec line when it is added or moved last.
+    pub server_diff: Vec<DiffLine>,
     /// The knife file as written, all but its header; `None` when it is not written.
     pub knife_lines: Option<Vec<String>>,
     /// The knife file's lines the write takes out.
     pub knife_removed: Vec<String>,
+    /// The bytes it was worked out from; send them back with the write.
+    pub read: ReadHashes,
 }
 
 struct Planned {
@@ -822,7 +993,7 @@ struct Planned {
 fn plan_settings(r: &Read, values: &[(&str, String)], knife: Option<&Knife>) -> Planned {
     let merged = if values.is_empty() { r.text.clone() } else { cfg::merge(&r.text, values) };
     let mut record = SettingsRecord::default();
-    let mut preview = Preview { server_lines: values.iter().map(|(n, v)| format!("{n} {v}")).collect(), ..Preview::default() };
+    let mut preview = Preview { read: ReadHashes { server_sha256: r.hash.clone(), knife_sha256: r.knife_hash.clone() }, ..Preview::default() };
     for (name, after) in values {
         let before = if r.hash.is_some() { scalar_in(&r.text, name) } else { None };
         if before.as_deref().unwrap_or(scalar_default(name)) != after {
@@ -838,10 +1009,22 @@ fn plan_settings(r: &Read, values: &[(&str, String)], knife: Option<&Knife>) -> 
         }
     }
     let server = place_exec(&merged, record.knife.is_some(), r.hash.is_none());
-    if server != merged {
-        preview.server_lines.push(KNIFE_EXEC_LINE.into());
+    let old = if r.hash.is_some() { r.text.as_str() } else { "" };
+    if server != r.text || r.hash.is_none() {
+        preview.server_diff = line_diff(old, &server);
     }
     Planned { server, record, preview }
+}
+
+/// Refuses a write whose preview was worked out from other bytes than the files hold now.
+fn check_read(r: &Read, read: Option<&ReadHashes>) -> Result<(), String> {
+    let Some(read) = read else { return Ok(()) };
+    for (file, then, now) in [(SERVER_CFG, &read.server_sha256, &r.hash), (KNIFE_CFG, &read.knife_sha256, &r.knife_hash)] {
+        if then != now {
+            return Err(format!("{file}: {} (after the preview); nothing was written", changes::CHANGED_SINCE_READ));
+        }
+    }
+    Ok(())
 }
 
 /// Writes a [`plan_settings`] as one change named `op`, each file a compare-and-swap against `r`,
@@ -888,6 +1071,7 @@ fn knife_known(file: &KnifeFile) -> Result<(), String> {
     match file.status {
         KnifeFileStatus::Missing => Err(format!("{KNIFE_CFG} is missing, so the keys Bot Mode keeps unbound are unknown; repair it first. Nothing was written.")),
         KnifeFileStatus::Unreadable => Err(format!("{}; replace it first. Nothing was written.", file.error.as_deref().unwrap_or(KNIFE_CFG))),
+        KnifeFileStatus::Unsupported => Err(format!("{KNIFE_CFG} has commands Bot Mode can't read ({}); replace it first. Nothing was written.", file.error.as_deref().unwrap_or(""))),
         _ => Ok(()),
     }
 }
@@ -904,6 +1088,10 @@ pub fn check_knife_file(layout: &Layout) -> Result<(), String> {
         KnifeFileStatus::Missing => Err(format!(
             "Knife key file missing: the server cfg runs {}, but it is gone, so which keys Bot Mode keeps unbound is unknown. Repair puts it back. Launch waits until then.",
             f.path
+        )),
+        KnifeFileStatus::Unsupported if runs => Err(format!(
+            "The knife key file has commands Bot Mode can't read ({}), so which keys Bot Mode keeps unbound is unknown. Replace puts it back. Launch waits until then.",
+            f.error.as_deref().unwrap_or(&f.path)
         )),
         KnifeFileStatus::Unreadable if runs => Err(format!(
             "The knife key file can't be read ({}), so which keys Bot Mode keeps unbound is unknown. Replace puts it back. Launch waits until then.",
@@ -939,9 +1127,16 @@ pub fn preview_server(layout: &Layout, patch: &ServerPatch) -> Result<Preview, S
 /// no longer holds `seen`, what the caller read. Each write is a compare-and-swap against the file
 /// as read here, as in [`set_cosmetics_from`].
 pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch, seen: ServerSettings) -> Result<Meta, String> {
+    set_server_checked(layout, probe, patch, seen, None)
+}
+
+/// [`set_server`] for a caller that showed a [`Preview`]: also refused unless both files still hold
+/// the bytes it was worked out from (`read`), so the write is byte for byte what was shown.
+pub fn set_server_checked(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch, seen: ServerSettings, read: Option<&ReadHashes>) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let r = read_all(layout)?;
+    check_read(&r, read)?;
     let knife = knife_of(&r, &patch)?;
     if r.now != seen {
         return Err(format!("{SERVER_CFG}: the Bot Mode settings {}; nothing was written", changes::CHANGED_SINCE_READ));
@@ -1023,9 +1218,16 @@ pub fn undo_plan(layout: &Layout, id: &str) -> Result<UndoPlan, String> {
 /// Undoes settings change `id` as a new change forward ("server-cfg-undo"), which keeps its own
 /// record, so it can be undone in turn. Refused, writing nothing, as [`prepare_undo`] says.
 pub fn undo_server(layout: &Layout, probe: &dyn ProcessProbe, id: &str) -> Result<Meta, String> {
+    undo_server_checked(layout, probe, id, None)
+}
+
+/// [`undo_server`], also refused unless both files still hold the bytes its preview was worked out
+/// from (`read`).
+pub fn undo_server_checked(layout: &Layout, probe: &dyn ProcessProbe, id: &str, read: Option<&ReadHashes>) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let u = prepare_undo(layout, id)?;
+    check_read(&u.read, read)?;
     if let Some(why) = u.refused {
         return Err(why);
     }
@@ -1053,11 +1255,11 @@ fn repair_source(layout: &Layout) -> Result<(RepairPlan, String), String> {
     let f = &r.now.knife_file;
     let replaces = match f.status {
         KnifeFileStatus::Missing => None,
-        KnifeFileStatus::Unreadable => match &r.knife_hash {
+        KnifeFileStatus::Unreadable | KnifeFileStatus::Unsupported => match &r.knife_hash {
             Some(h) => Some(h.clone()),
             None => return Err(format!("{}; it can't be read at all, so it can't be replaced either", f.error.as_deref().unwrap_or(KNIFE_CFG))),
         },
-        _ => return Err(format!("{KNIFE_CFG} is neither missing nor unreadable; nothing to repair")),
+        _ => return Err(format!("{KNIFE_CFG} is neither missing nor unreadable; nothing to repair or replace")),
     };
     for m in changes::list(layout)?.into_iter().filter(|m| m.status == changes::Status::Complete) {
         if let Some(k) = record_of(layout, &m.id)?.and_then(|r| r.knife) {
