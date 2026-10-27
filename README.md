@@ -57,7 +57,7 @@ Some of what the app can show is third-party material that this repository must 
 CI runs all of these on every pull request (`.github/workflows/tests.yml`):
 
 ```sh
-(cd app && pnpm exec tsc -p tsconfig.app.json --noEmit && pnpm exec tsc -p tsconfig.node.json --noEmit && pnpm test && pnpm build)
+(cd app && pnpm exec tsc -p tsconfig.app.json --noEmit && pnpm exec tsc -p tsconfig.node.json --noEmit && pnpm test && pnpm build && pnpm bundle-budget)
 (cd app/src-tauri && cargo test --lib --locked)
 (cd extractor && python -m pytest -q)
 python -m unittest discover -s model/rating3 -p "test_*.py"

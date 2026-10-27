@@ -3,7 +3,7 @@
 // J/K or the arrow keys when the table body has focus, Enter opens the active row, and Shift+F10
 // or the menu key opens its row menu. Missing values sort last. Past 200 rows only the visible
 // window renders (fixed 36 px rows).
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { SortIcon } from "../icons/ui";
 import { nextSort, sortRows, type SortDir, type SortState, type SortValue } from "../lib/sort";
 
@@ -124,28 +124,9 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
   };
 
   let index = 0;
-  const renderRow = (r: T, i: number) => {
-    const cls = rowClass?.(r);
-    return (
-      <tr
-        key={rowKey(r)}
-        data-i={i}
-        data-link={onOpen ? "" : undefined}
-        data-active={i === active}
-        className={cls}
-        onClick={onOpen ? () => { setActive(i); onOpen(r); } : () => setActive(i)}
-      >
-        {columns.map((c) => (
-          <td
-            key={c.key}
-            className={[c.align === "l" ? "l" : c.align === "c" ? "c" : "", c.sticky ? "sticky-col" : "", sort?.key === c.key && c.sort ? "is-sorted" : "", c.colored ? "colored" : "", c.className ?? ""].join(" ")}
-          >
-            {c.render(r, i)}
-          </td>
-        ))}
-      </tr>
-    );
-  };
+  const renderRow = (r: T, i: number) => (
+    <Row key={rowKey(r)} r={r} i={i} active={i === active} cls={rowClass?.(r)} columns={columns} sortKey={sort?.key ?? null} onOpen={onOpen} setActive={setActive} />
+  );
 
   let window: { start: number; end: number } | null = null;
   if (virtual) {
@@ -210,3 +191,31 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
     </div>
   );
 }
+
+/**
+ * One body row. Memoized: scrolling a long table re-renders the table on every scroll event, and the
+ * rows still in view keep their props, so only the rows that scroll in are drawn.
+ */
+const Row = memo(function Row<T>({ r, i, active, cls, columns, sortKey, onOpen, setActive }: {
+  r: T; i: number; active: boolean; cls: string | undefined; columns: Column<T>[]; sortKey: string | null;
+  onOpen?: (row: T) => void; setActive: (i: number) => void;
+}) {
+  return (
+    <tr
+      data-i={i}
+      data-link={onOpen ? "" : undefined}
+      data-active={active}
+      className={cls}
+      onClick={onOpen ? () => { setActive(i); onOpen(r); } : () => setActive(i)}
+    >
+      {columns.map((c) => (
+        <td
+          key={c.key}
+          className={[c.align === "l" ? "l" : c.align === "c" ? "c" : "", c.sticky ? "sticky-col" : "", sortKey === c.key && c.sort ? "is-sorted" : "", c.colored ? "colored" : "", c.className ?? ""].join(" ")}
+        >
+          {c.render(r, i)}
+        </td>
+      ))}
+    </tr>
+  );
+}) as <T>(p: { r: T; i: number; active: boolean; cls: string | undefined; columns: Column<T>[]; sortKey: string | null; onOpen?: (row: T) => void; setActive: (i: number) => void; key?: string }) => JSX.Element;

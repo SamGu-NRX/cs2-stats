@@ -6,14 +6,13 @@
 // Packer's dataset does not include inventories. Validation and the holdout result live in VALIDATION.md.
 import type { AttributeScore, Baselines, CompareOptions, SideKey } from "./compare";
 import { compare, roleOf } from "./compare";
-import type { Measures } from "./facts";
 import { METRIC } from "./metrics";
 import type { Summary } from "./rollup";
 import { ROLE_THRESHOLDS, roleHigh, type RoleMetricId, type RoleThresholds } from "./role-thresholds";
 import model from "./roles-params.json";
+import { FEATURES, packerFeatures, type Feature } from "./role-features";
 
-export const FEATURES = ["tapd", "oap", "podt", "pokt", "adnt", "adat"] as const;
-export type Feature = (typeof FEATURES)[number];
+export { FEATURES, packerFeatures, type Feature };
 
 interface RoleFit { n: number; mean: number[]; sd: number[] }
 export interface CalibrationPoint { x: number; y: number }
@@ -26,16 +25,6 @@ export interface RoleModel {
   thresholds?: RoleThresholds;
 }
 const MODEL = model as unknown as RoleModel;
-
-/** Packer's features from summed measures; null when a denominator is zero. */
-export function packerFeatures(m: Measures): Record<Feature, number> | null {
-  if (!m.deaths || !m.rounds || !m.kills || !m.spacingSamples) return null;
-  return {
-    tapd: m.deathTimeSum / m.deaths, oap: (100 * (m.openingKills + m.openingDeaths)) / m.rounds,
-    podt: (100 * m.tradedDeaths) / m.deaths, pokt: (100 * m.tradeKills) / m.kills,
-    adnt: m.adntRank / m.spacingSamples, adat: m.adatRank / m.spacingSamples,
-  };
-}
 
 /** Posterior over one side's roles (equal priors), Gaussian naive Bayes. */
 export function roleProbabilities(fit: RoleModel["sides"]["T"], x: Record<Feature, number>): Record<string, number> {

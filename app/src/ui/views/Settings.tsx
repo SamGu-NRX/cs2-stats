@@ -22,7 +22,7 @@ import { scanErrorText, sourceOf, SUPPORT, SUPPORT_NOTE, SOURCE_LABEL, type Sour
 import { CheckIcon, CloseIcon, CopyIcon, FolderIcon, RefreshIcon, UploadIcon } from "../icons/ui";
 import { fmtWhen, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
-import { poolLabel } from "../../worker/baselines-pool";
+import { poolLabel } from "../../worker/pool-names";
 import { KeyChips, SHORTCUTS } from "../shell/Palette";
 import { LeetifyConnect } from "./leetify/LeetifyConnect";
 

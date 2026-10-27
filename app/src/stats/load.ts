@@ -88,14 +88,26 @@ const LEGACY: Partial<Record<TableName, (read: ReadFile) => Promise<Table<TableN
  */
 export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES): Promise<MatchTables> {
   const out: Record<string, unknown> = {};
-  // A folder is v1 when it has match.parquet (SCHEMA-v1.md, "Versions").
-  const v1 = (await read("match.parquet")) !== null;
+  // A folder is v1 when it has match.parquet (SCHEMA-v1.md, "Versions"); those bytes are the match table's.
+  const matchFile = read("match.parquet");
+  const v1 = (await matchFile) !== null;
+  const names = ([...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]).filter((name) => (REQUIRED_TABLES as readonly string[]).includes(name) || optional.includes(name));
+  // In the app every read is a round trip from the worker to the UI thread and the host, so every
+  // file is asked for at once and decoded in order as it arrives. A failed read is handled where it
+  // is awaited, in order, as before.
+  const files = new Map<TableName, Promise<ArrayBuffer | null>>();
+  for (const name of names) {
+    if (!v1 && LEGACY[name]) continue;
+    const p = name === "match" ? matchFile : read(`${name}.parquet`);
+    p.catch(() => {});
+    files.set(name, p);
+  }
   for (const name of [...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]) {
-    if (!(REQUIRED_TABLES as readonly string[]).includes(name) && !optional.includes(name)) { out[name] = null; continue; }
+    if (!names.includes(name)) { out[name] = null; continue; }
     let t: Table<TableName> | null;
     if (!v1 && LEGACY[name]) t = await LEGACY[name]!(read);
     else {
-      const bytes = await read(`${name}.parquet`);
+      const bytes = await files.get(name)!;
       t = bytes ? await readTable(bytes, name) : null;
     }
     if (!t && (REQUIRED_TABLES as readonly string[]).includes(name)) throw new TableError(`table "${name}" is missing (${name}.parquet)`);

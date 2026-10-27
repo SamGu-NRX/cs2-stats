@@ -117,10 +117,29 @@ export function rollup(facts: Iterable<MatchFacts>, filter: Filter): Summary {
   return s;
 }
 
+/**
+ * An event family's item indices by round row, in item order, built once per facts array. The match
+ * page rolls up every player in every round (worker/views.ts roundBundle), and each of those rollups
+ * scanned every event of the match for one round's rows.
+ */
+const roundIndex = new WeakMap<readonly { ri: number }[], number[][]>();
+function itemsOfRound(xs: readonly { ri: number }[], ri: number): number[] {
+  let ix = roundIndex.get(xs);
+  if (!ix) {
+    ix = [];
+    for (let i = 0; i < xs.length; i++) (ix[xs[i].ri] ??= []).push(i);
+    roundIndex.set(xs, ix);
+  }
+  return ix[ri] ?? [];
+}
+
 /** Adds one match's kept rows to s: rollup one match at a time, so a caller need not hold every match's facts. */
 export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   const rows = keptRounds(f, filter);
   if (!rows.length) return;
+  // rows of a single round: visit that round's events only, still in item order, so every sum is
+  // added in the same order as a full scan
+  const oneRound = rows.every((r) => r.ri === rows[0].ri) ? rows[0].ri : null;
   s.matches++;
   s.covered.nRounds += f.match.nRounds;
   s.covered.roundsPlayed += f.match.roundsPlayed;
@@ -143,6 +162,10 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   }
   for (const [w, r] of roundsWith) s.weapons[w].rounds += r.size;
   const keep = <F extends { ri: number; pi: number }>(xs: F[], fold: (x: F) => void) => {
+    if (oneRound !== null) {
+      for (const i of itemsOfRound(xs, oneRound)) { const x = xs[i]; if (kept.has(x.ri * 1024 + x.pi) && weaponOk(filter, x)) fold(x); }
+      return;
+    }
     for (const x of xs) if (kept.has(x.ri * 1024 + x.pi) && weaponOk(filter, x)) fold(x);
   };
   keep(f.aim, (x) => foldAim(s.aim, x));
