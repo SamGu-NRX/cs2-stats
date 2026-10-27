@@ -569,7 +569,7 @@ def test_no_download_is_requested_when_the_budget_holds_no_whole_archive():
 def test_capacity_is_off_at_the_budget_itself(tmp_path, monkeypatch):
     # Review of PR 55: our + held == MAX_OUR_GB still read as capacity (<=), so the tab kept downloading.
     _isolate(tmp_path, monkeypatch)
-    (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 1000)
+    (dp.FAILED_DIR / "x.rar").write_bytes(b"x" * 1000)
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
     assert dp.Pipeline().budget()[1] is False
 
@@ -587,6 +587,17 @@ def test_a_download_that_just_finished_counts_at_the_next_status_read(tmp_path, 
     snap = p.snapshot()
     # The tab starts one only while downloading + pending + extracting < want: here nothing new.
     assert snap["capacity"] is False and snap["want"] <= snap["downloading"] + snap["pendingActual"] + snap["extracting"]
+
+
+def test_published_tables_are_not_in_the_budget(tmp_path, monkeypatch):
+    # The budget is the pipeline's transient space. Counting demos/, the published product, stopped extraction after
+    # about 1,300 more maps for no reason; the free-space floor bounds the product instead.
+    _isolate(tmp_path, monkeypatch)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke").mkdir(parents=True)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke" / "kills.parquet").write_bytes(b"x" * 5000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 0 and p.budget()[1] is True
 
 
 def test_failed_archives_count_inside_the_budget(tmp_path, monkeypatch):
@@ -756,8 +767,7 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)  # 1000 bytes
     p = dp.Pipeline()
     assert p.budget()[1]
-    (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 2000)
-    p.outputs_changed()  # what finish_job does when a map lands in demos/
+    (dp.WORK_DIR / "x.dem").write_bytes(b"x" * 2000)
     our, ok = p.budget()
     assert not ok and our > 1e-6
     snap = p.snapshot()

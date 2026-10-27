@@ -63,7 +63,9 @@ RAR_MAGIC = b"Rar!\x1a\x07"  # shared prefix of RAR 4 (…\x00) and RAR 5 (…\x
 PARTIAL_SUFFIXES = (".crdownload", ".part", ".partial", ".download", ".tmp")
 STABLE_SECONDS = 10.0
 # Disk budget (set by the user, who has limited disk): no new extraction when free space is
-# below MIN_FREE_GB or when our own data (demos + work + waiting downloads) exceeds MAX_OUR_GB.
+# below MIN_FREE_GB, or when the pipeline's transient data exceeds MAX_OUR_GB: archives waiting and downloading,
+# work/, space held for running extractions, and failed/. demos/, the published tables, is the product and is not
+# in the budget; the free-space floor on every volume bounds it.
 # failed/ has its own cap: each failed archive is kept with its failing .dem files and their validation
 # reports so the failure can be diagnosed, up to MAX_FAILED_GB; beyond that the oldest is logged and deleted.
 MIN_FREE_GB = 45.0
@@ -1190,12 +1192,12 @@ class Pipeline:
         return self.outputs_bytes() + sum(work.values()) + waiting + downloading, held
 
     def outputs_bytes(self) -> int:
-        """Bytes in demos/ and failed/ (MAX_FAILED_GB caps it inside the budget). Walking them took 0.55 s on the live
-        data folder, so the reading is kept for up to BUDGET_CACHE_S; the pipeline's own writes there drop it
-        (outputs_changed). Everything a download changes (waiting and in-progress archives, work/, space held by
-        extractions) is read fresh every time, so a download that just finished counts at once."""
+        """Bytes in failed/ (MAX_FAILED_GB caps it inside the budget). The reading is kept for up to BUDGET_CACHE_S;
+        the pipeline's own writes there drop it (outputs_changed). Everything a download changes (waiting and
+        in-progress archives, work/, space held by extractions) is read fresh every time, so a download that just
+        finished counts at once. demos/ is not in the budget."""
         if self._outputs is None or time.time() - self._outputs[0] > BUDGET_CACHE_S:
-            self._outputs = (time.time(), tree_bytes(DEMOS_DIR) + tree_bytes(FAILED_DIR))
+            self._outputs = (time.time(), tree_bytes(FAILED_DIR))
         return self._outputs[1]
 
     def outputs_changed(self) -> None:
