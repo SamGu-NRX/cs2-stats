@@ -9,7 +9,7 @@
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
 import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
 
-export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery"] as const;
+export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery", "unknown-version"] as const;
 
 /** session.rs's notices (#50), as the backend sends them. */
 export const NOTICES = {
@@ -108,6 +108,8 @@ interface State {
   files: Record<string, string[]>;
   /** overlay.json's hash; a test changes it to stand in for an edit after the preview */
   manifestSha: string;
+  /** the server cfg's settings before each server-cfg change, by change id */
+  serverBefore: Record<string, ServerSettings>;
 }
 
 /** A few entries of the mod's Commands.txt, in its layout (the real list has 40 teams). */
@@ -136,7 +138,9 @@ function initial(s: Scenario): State {
     botMode: s === "session" || s === "managed" || s === "recovery",
     supervised: s === "session",
     notice: s === "managed" ? NOTICES.managed : s === "recovery" ? NOTICES.recovery : NOTICES.unprotected,
-    release: installed
+    // unknown-version: the mod's files are there, but match no release this app downloaded
+    release: s === "unknown-version" ? { installed: null, reference: null, matching: 0, total: 0 }
+      : installed
       ? { installed: { tag: installedTag, asset: "CS2BotImprover.zip", installedAt: "2026-10-25T22:30:12Z", source: link("ed0ard/CS2-Bot-Improver", installedTag, "a1f4c2e9d7b3058e6c1a9f2d4b7e0c3a5f8d1b6e") }, reference: installedTag, matching: 551, total: 562 }
       : { installed: null, reference: null, matching: 0, total: 0 },
     difficulty: installed ? "medium" : null,
@@ -172,6 +176,8 @@ function initial(s: Scenario): State {
     : s === "cs2-running" ? [{ vac: "on", pid: 30112, why: "-insecure is missing" }] : [];
   return {
     status, session, files, running, manifestSha: sha("overlay.json"),
+    // the scripted "cosmetics" change set the music kit from off to Crimson Assault
+    serverBefore: installed ? { [backups[0].id]: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [] } } : {},
     server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null, unboundKeys: [] },
     statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
       : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
@@ -257,7 +263,22 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
           st.server.knifeBind = bind;
         }
         if (patch.stopUnbinding?.length) st.server.unboundKeys = st.server.unboundKeys.filter((k) => !patch.stopUnbinding!.includes(k));
-        return record("server-cfg", 1, ["cfg/gamemode_competitive_server.cfg"]);
+        const c = record("server-cfg", 1, ["cfg/gamemode_competitive_server.cfg"]);
+        st.serverBefore[c.id] = seen;
+        return c;
+      }
+      case "botmode_server_undo": {
+        // as settings.rs undo_patch: each setting back to what the cfg held before the change
+        const was = st.serverBefore[a.id as string];
+        if (!was) throw `change ${a.id as string} did not write cfg/gamemode_competitive_server.cfg`;
+        const now = serverOf();
+        const patch: ServerPatch = {};
+        if (JSON.stringify(was.cosmetics) !== JSON.stringify(now.cosmetics)) patch.cosmetics = was.cosmetics;
+        if ((was.botAim ?? "mixed") !== (now.botAim ?? "mixed")) patch.botAim = was.botAim ?? "mixed";
+        if ((was.botNades ?? "normal") !== (now.botNades ?? "normal")) patch.botNades = was.botNades ?? "normal";
+        const eff = (b: KnifeBind | null): KnifeBind => b ?? { key: "\\", knives: CATALOG.knives };
+        if (JSON.stringify(eff(was.knifeBind)) !== JSON.stringify(eff(now.knifeBind))) patch.knifeBind = eff(was.knifeBind);
+        return patch;
       }
       case "botmode_releases": return RELEASES;
       case "botmode_catalog": return st.status.components.length ? CATALOG : null;

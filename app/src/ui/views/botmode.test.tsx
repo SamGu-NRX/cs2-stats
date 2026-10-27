@@ -97,6 +97,12 @@ function type(input: HTMLInputElement, value: string) {
 }
 const key = (target: Element, k: string) => act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); });
 const dialog = () => $<HTMLDialogElement>("dialog.bm-dialog");
+/** Applies High, so the newest change is a bot profile copy, which Undo rolls back from its backup. */
+async function applyDifficulty() {
+  await click(button("High"));
+  await click(button("Apply changes…"));
+  await click(button("Apply"));
+}
 
 describe("Bot Mode states", () => {
   it("installed and current: ready to launch, with the release check, the settings, the session and the history", async () => {
@@ -570,6 +576,7 @@ describe("actions wait for a confirmation that lists their files", () => {
 
   it("undo and roll back can't be confirmed until the change's file list has loaded", async () => {
     await render("installed", { botmode_change_files: "entries.jsonl: access denied" });
+    await applyDifficulty();
     await click(button("Undo…"));
     expect(text("dialog .bm-facts")).toContain("entries.jsonl: access denied");
     expect(button("Undo").disabled).toBe(true);
@@ -583,10 +590,10 @@ describe("actions wait for a confirmation that lists their files", () => {
     });
     await click(button("Undo…"));
     expect(button("Undo").disabled).toBe(true);
-    await act(async () => { release(["cfg/gamemode_competitive_server.cfg"]); });
+    await act(async () => { release(["overrides/botprofile.vpk"]); });
     await settle();
     expect(button("Undo").disabled).toBe(false);
-    expect(writes()).toEqual([]);
+    expect(writes()).toEqual(["botmode_set_difficulty"]);
   });
 
   it("the change Undo would take off shows even past the first five", async () => {
@@ -608,11 +615,12 @@ describe("actions wait for a confirmation that lists their files", () => {
 
   it("undo: the newest change, one button away, its files listed from its journal", async () => {
     await render("installed");
+    await applyDifficulty();
     const newest = backend.state.status.backups[0];
     await click(button("Undo…"));
-    expect(text(".bm-dialog__title")).toBe("Undo settings?");
-    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["cfg/gamemode_competitive_server.cfg"]);
-    expect(writes()).toEqual([]);
+    expect(text(".bm-dialog__title")).toBe("Undo bot difficulty high?");
+    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["overrides/botprofile.vpk"]);
+    expect(writes()).toEqual(["botmode_set_difficulty"]);
     await click(button("Undo"));
     expect(sent("botmode_rollback")).toMatchObject({ id: newest.id });
     expect(text(".bm-hist li")).toContain("undone");
@@ -712,6 +720,87 @@ describe("Bot Mode another tool turned on, and a session that died (#50)", () =>
     expect(sent("botmode_recover")).toEqual({ action: "leave" });
     expect(text("#bm-state")).toBe("Ready");
     expect(text(".bm-hero__facts")).toContain("Bot Mode is managed by another tool (left as is)");
+  });
+});
+
+describe("re-review at 94ed3ec", () => {
+  it("a failed server-cfg read never counts as file state: the kept edit stays and Launch stays blocked", async () => {
+    // fails if the stand-in for an unread cfg drops a kept edit that happens to equal it
+    await render("cs2-running");
+    // the cfg holds skins on; the user turns them off while CS2 runs, which equals the stand-in's off
+    await click(box("Give dropped knives"));
+    expect(localStorage.getItem("cs2stats.botmode.pending")).toContain("skins");
+    backend.state.status = { ...backend.state.status, cs2Running: false };
+    backend.state.running = [];
+    const fail: Record<string, string> = { botmode_server_cfg: "cfg/gamemode_competitive_server.cfg: access denied" };
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      if (fail[cmd]) return Promise.reject(fail[cmd]);
+      return backend(cmd, args as Record<string, unknown>);
+    });
+    await click(button(/Check again/));
+    await settle();
+    expect(localStorage.getItem("cs2stats.botmode.pending")).toContain("skins");
+    expect(button(/Launch Bot Mode/).disabled).toBe(true);
+    expect(text("#bm-launch-why")).toMatch(/^You have kept changes, but the server cfg could not be read/);
+  });
+
+  it("session polls slower than their interval still land: one runs at a time", async () => {
+    // fails if each poll is overtaken by the next and dropped, so an ended session stays on screen
+    await render("session");
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      const answer = backend(cmd, args as Record<string, unknown>);
+      return cmd === "botmode_session" ? new Promise((r) => setTimeout(() => r(answer), 2600)) : answer;
+    });
+    backend.state.session.status = { ...backend.state.session.status!, message: "cs2.exe (pid 22916) still running" };
+    await act(async () => { await new Promise((r) => setTimeout(r, 5000)); });
+    expect(text(".bm-sess [role=status]")).toBe("cs2.exe (pid 22916) still running");
+    // never two at once
+    expect(calls.filter(([c]) => c === "botmode_session").length).toBeLessThanOrEqual(3);
+  }, 15_000);
+
+  it("undo of a knife change goes forward: the old key comes back and the left key joins the unbound set", async () => {
+    // fails if Undo restores the old cfg bytes, which would leave the newer key bound in CS2
+    await render("installed");
+    type($<HTMLInputElement>(".bm-key")!, "k");
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    type($<HTMLInputElement>(".bm-key")!, "j");
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    await click(button("Undo…"));
+    const all = "subclass_create 500;subclass_create 503;subclass_create 505;subclass_create 506;subclass_create 507;subclass_create 508;subclass_create 509;subclass_create 512;subclass_create 514;subclass_create 515;subclass_create 516;subclass_create 517;subclass_create 518;subclass_create 519;subclass_create 520;subclass_create 521;subclass_create 522;subclass_create 523;subclass_create 525;subclass_create 526";
+    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["unbind \\", "unbind j", `bind k "${all}"`]);
+    await click(button("Undo"));
+    expect(calls.some(([c]) => c === "botmode_rollback")).toBe(false);
+    expect(sent("botmode_set_server_cfg")).toMatchObject({ patch: { knifeBind: { key: "k" } } });
+    expect(Array.from(document.querySelectorAll(".bm-unbound li .kbd"), (k) => k.textContent)).toEqual(["\\", "j"]);
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
+  });
+
+  it("the console commands are the installed version's, and an unknown version is said, not guessed", async () => {
+    // fails if a by-hand install shows the newest release's commands
+    await render("installed");
+    backend.state.status.release = { installed: null, reference: "v1.4.6 (CS2BotImprover.zip)", matching: 540, total: 562 };
+    await click(button(/Check again/));
+    await click(button("Show the commands"));
+    expect(sent("botmode_mod_commands")).toEqual({ tag: "v1.4.6" });
+    backend.state.status.release = { installed: null, reference: null, matching: 0, total: 0 };
+    await click(button(/Check again/));
+    expect(text(".bm-cmds .card__aside")).toBe("Installed version unknown");
+    expect(() => button("Show the commands")).toThrow();
+  });
+
+  it("a refused turn-off with no prompt left closes the dialog, as the startup prompt does", async () => {
+    // fails if the dialog stays open on the old error after another tool turned Bot Mode off
+    await render("recovery");
+    await click(button("Turn off Bot Mode…"));
+    backend.state.session = { ...backend.state.session, recovery: null };
+    backend.state.status = { ...backend.state.status, botMode: false, notice: "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected." };
+    await click(button("Turn off Bot Mode"));
+    expect(dialog()).toBeNull();
+    expect(text("#bm-state")).toBe("Ready");
   });
 });
 

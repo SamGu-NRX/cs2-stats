@@ -601,6 +601,26 @@ fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// What `rel` held before change `id` wrote it, from the change's backup, checked against the
+/// hash its journal recorded; `None` when the change created the file.
+pub fn before_bytes(layout: &Layout, id: &str, rel: &str) -> Result<Option<Vec<u8>>, String> {
+    if !list(layout)?.iter().any(|m| m.id == id) {
+        return Err(format!("{id}: no such change"));
+    }
+    let dir = layout.backups().join(id);
+    let entry = read_entries(&dir)?
+        .into_iter()
+        .find(|e| e.path.eq_ignore_ascii_case(rel))
+        .ok_or_else(|| format!("change {id} did not write {rel}"))?;
+    let Some(before) = entry.before else { return Ok(None) };
+    let saved = backup_path(&dir, &entry.path);
+    let bytes = fs::read(&saved).map_err(|e| format!("{}: {e}", saved.display()))?;
+    if hash::bytes(&bytes) != before {
+        return Err(format!("{}: the backup does not match the hash its change recorded", saved.display()));
+    }
+    Ok(Some(bytes))
+}
+
 /// The game paths a recorded change wrote, as its journal lists them, for the view's rollback
 /// preview. `id` must name a recorded change; reads only.
 pub fn files(layout: &Layout, id: &str) -> Result<Vec<String>, String> {

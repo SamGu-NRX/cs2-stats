@@ -696,6 +696,7 @@ pub fn run() {
             botmode::commands::botmode_catalog,
             botmode::commands::botmode_server_cfg,
             botmode::commands::botmode_set_server_cfg,
+            botmode::commands::botmode_server_undo,
             botmode::commands::botmode_running,
             botmode::commands::botmode_overlay_plan,
             botmode::commands::botmode_change_files,

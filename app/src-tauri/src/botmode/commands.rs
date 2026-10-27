@@ -255,7 +255,14 @@ pub async fn botmode_catalog(game: Option<String>) -> Result<Option<Catalog>, St
 /// What this app sets in the server cfg: cosmetics, the aim and grenade presets, the knife bind.
 #[tauri::command]
 pub async fn botmode_server_cfg(game: Option<String>) -> Result<ServerSettings, String> {
-    reading(game, |ctx| settings::read_server(&ctx.layout.csgo)).await
+    reading(game, |ctx| settings::read_server(&ctx.layout)).await
+}
+
+/// Undoing a server-cfg change, as the change forward that `settings::undo_patch` describes.
+/// Reads only; the view previews the patch and applies it with botmode_set_server_cfg.
+#[tauri::command]
+pub async fn botmode_server_undo(game: Option<String>, id: String) -> Result<ServerPatch, String> {
+    reading(game, move |ctx| settings::undo_patch(&ctx.layout, &id)).await
 }
 
 /// One change to the server cfg; refused, writing nothing, when it no longer holds `seen`.

@@ -9,7 +9,7 @@
 // once when it opens and again after each action; it polls only while a session runs. Paths,
 // command lines and errors pass through the privacy layer (data/privacy.ts).
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { UNREACHABLE, type BotModeApi, type Recovery, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
+import { UNREACHABLE, type BotModeApi, type Recovery, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type ServerPatch, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
 import { Card } from "../components/Card";
 import { onRecoveryAnswered, recoveryAnswered } from "../components/BotModeRecovery";
 import { OutsideLink } from "../components/OutsideLink";
@@ -19,7 +19,7 @@ import { DownloadIcon, PlayIcon, RefreshIcon } from "../icons/ui";
 import { plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { ModCommands } from "./botmode/ModCommands";
-import { PlanList, Setup, usePending, type Pending } from "./botmode/Setup";
+import { patchLines, PlanList, Setup, usePending, type Pending } from "./botmode/Setup";
 import { ActionDialog, clock, day, FileList, fromKeyboard, stamp, useShown } from "./botmode/shared";
 
 // ---------------------------------------------------------------- data
@@ -91,18 +91,24 @@ function useBotMode(api: BotModeApi) {
   // A session reports through its status file; follow it and the running CS2 every two seconds
   // while it runs, and read the whole state again once it ends (Bot Mode off, CS2 closed).
   const supervised = d.session?.supervised ?? false;
+  // One poll at a time: the next is scheduled two seconds after the last one settles, so a slow
+  // read is never overtaken by the next poll and dropped, poll after poll.
   useEffect(() => {
     if (!supervised) return;
-    const t = window.setInterval(() => {
+    let stopped = false;
+    let t = 0;
+    const poll = () => {
       const l = ++live.current;
-      const landed = () => alive.current && l === live.current;
+      const landed = () => alive.current && !stopped && l === live.current;
       Promise.all([api.session(), api.running().catch(() => null)]).then(([s, running]) => {
         if (!landed()) return;
         setD((x) => ({ ...x, session: s, running, pollError: null }));
         if (!s.supervised) void reload();
-      }, (e) => landed() && setD((x) => ({ ...x, pollError: errorText(e) })));
-    }, 2000);
-    return () => clearInterval(t);
+      }, (e) => { if (landed()) setD((x) => ({ ...x, pollError: errorText(e) })); })
+        .finally(() => { if (!stopped) t = window.setTimeout(poll, 2000); });
+    };
+    t = window.setTimeout(poll, 2000);
+    return () => { stopped = true; clearTimeout(t); };
   }, [api, supervised, reload]);
 
   // a launch's own result is the newest observation: reads and polls begun before it are dropped
@@ -116,7 +122,11 @@ type Dialog =
   | { kind: "rollback"; change: Change; interrupted: boolean; instant: boolean }
   | { kind: "apply"; instant: boolean }
   | { kind: "launch"; instant: boolean }
-  | { kind: "recover"; recovery: Recovery; instant: boolean };
+  | { kind: "recover"; recovery: Recovery; instant: boolean }
+  | { kind: "serverUndo"; change: Change; instant: boolean };
+
+/** Changes to the server cfg, which Undo takes back as a change forward (settings.rs undo_patch). */
+const SERVER_OPS = ["server-cfg", "cosmetics"];
 
 /** session.rs MANAGED_BY_OTHER_TOOL: Bot Mode is on, and not by a session of this app's. */
 const MANAGED = "Bot Mode is managed by another tool (left as is)";
@@ -174,7 +184,8 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
   const state = installState(status, releases);
   const supervised = session?.supervised ?? false;
   const blocker = writeBlocker(status, supervised);
-  const tag = state.kind === "current" || state.kind === "behind" ? state.tag : state.latest?.tag_name ?? null;
+  // the version the game folder holds, never a guess: by hand, the downloaded release it matches
+  const tag = state.kind === "current" || state.kind === "behind" ? state.tag : state.kind === "byHand" ? state.reference.split(" (")[0] : null;
   const close = () => setDialog(null);
   const done = () => { setDialog(null); void bm.reload(); };
   // the startup prompt answered elsewhere: read the state again
@@ -213,11 +224,11 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
             onOverlay={(e) => setDialog({ kind: "overlay", instant: fromKeyboard(e) })} />
           <Session session={session} pollError={bm.pollError} />
           <History status={status} blocker={blocker} undoable={undoable ?? null}
-            onUndo={(c, e) => setDialog({ kind: "rollback", change: c, interrupted: false, instant: fromKeyboard(e) })} />
+            onUndo={(c, e) => setDialog(SERVER_OPS.includes(c.operation) ? { kind: "serverUndo", change: c, instant: fromKeyboard(e) } : { kind: "rollback", change: c, interrupted: false, instant: fromKeyboard(e) })} />
         </div>
       </div>
       {/* a new tag starts the card over, so a list loaded for the old one is never shown under the new */}
-      {tag && <ModCommands key={tag} api={api} tag={tag} />}
+      {state.kind !== "missing" && <ModCommands key={tag ?? "unknown"} api={api} tag={tag} />}
 
       {dialog?.kind === "install" && (
         <InstallDialog api={api} status={status} dialog={dialog} onClose={close} onDone={(names) => { setReplaced(names); done(); }} />
@@ -239,9 +250,13 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           <PlanList plan={pending.plan} difficultyFrom={status.difficulty} />
         </ActionDialog>
       )}
+      {dialog?.kind === "serverUndo" && (
+        <ServerUndoDialog api={api} change={dialog.change} server={bm.server} serverError={bm.serverError} instant={dialog.instant} onClose={close} onDone={done} reload={bm.reload} />
+      )}
       {dialog?.kind === "recover" && (
         <TurnOffDialog api={api} recovery={dialog.recovery} instant={dialog.instant} onClose={close}
           onDone={(message) => { recoveryAnswered(self); toast(message, "good"); done(); }}
+          onNothingLeft={(why) => { recoveryAnswered(self); toast(why, "poor", 6000); done(); }}
           onAskAgain={(r) => setDialog({ kind: "recover", recovery: r, instant: true })} />
       )}
       {dialog?.kind === "launch" && (
@@ -282,8 +297,9 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
  * cfg could not be read, so they can be neither shown nor checked; launch waits for them.
  */
 function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSettings | null, reload: () => Promise<void>): { pending: Pending | null; keptUnread: boolean } {
-  // the hook runs on every render; without a read cfg it works on empty settings and is not shown
-  const p = usePending(api, status, server ?? EMPTY_SERVER, reload);
+  // the hook runs on every render; without a read cfg it works on a stand-in that is not shown,
+  // and never compared with the kept edits as if it were the file
+  const p = usePending(api, status, server ?? EMPTY_SERVER, reload, server !== null);
   return server ? { pending: p, keptUnread: false } : { pending: null, keptUnread: p.kept > 0 };
 }
 const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [] };
@@ -575,8 +591,10 @@ function OverlayDialog({ api, instant, onClose, onDone }: { api: BotModeApi; ins
  * takes out, as the prompt read them. Refused once gameinfo.gi differs from that read; the
  * dialog then shows the file as it is now, or closes when there is nothing left to ask.
  */
-function TurnOffDialog({ api, recovery, instant, onClose, onDone, onAskAgain }: {
+function TurnOffDialog({ api, recovery, instant, onClose, onDone, onAskAgain, onNothingLeft }: {
   api: BotModeApi; recovery: Recovery; instant: boolean; onClose: () => void; onDone: (message: string) => void; onAskAgain: (r: Recovery) => void;
+  /** refused, and there is no prompt left (another tool turned Bot Mode off): the dialog closes with `why` */
+  onNothingLeft: (why: string) => void;
 }) {
   const shown = useShown();
   return (
@@ -587,8 +605,11 @@ function TurnOffDialog({ api, recovery, instant, onClose, onDone, onAskAgain }: 
           onDone(r.message);
         } catch (e) {
           const why = errorText(e);
-          const now = await api.session().then((s) => s.recovery, () => undefined);
-          if (now && now.hash !== recovery.hash) { onAskAgain(now); }
+          const now = await api.session().then((s) => s.recovery, (again) => ({ failed: errorText(again) }));
+          if (now && "failed" in now) throw `${why} Reading Bot Mode's state again failed: ${now.failed}`;
+          // nothing left to ask: close, as the startup prompt does
+          if (now === null) { onNothingLeft(why); return; }
+          if (now.hash !== recovery.hash) onAskAgain(now);
           throw why;
         }
       }}>
@@ -598,6 +619,57 @@ function TurnOffDialog({ api, recovery, instant, onClose, onDone, onAskAgain }: 
         <dd><span className="mono selectable">{shown(recovery.file)}</span>, taking out:<ul className="bm-files mono selectable">{recovery.lines.map((l) => <li key={l}>{l.trim()}</li>)}</ul></dd>
         <dt>Keeps</dt>
         <dd>Another tool's Bot Mode setting is lost. To keep it, cancel and choose Leave it on.</dd>
+      </dl>
+    </ActionDialog>
+  );
+}
+
+/**
+ * Undo of a change to the server cfg, as a change forward: each setting back to what the cfg
+ * held before it, through the same knife rules as any edit. CS2 keeps the binds a change made,
+ * so the key the knife key leaves joins the keys Bot Mode keeps unbound rather than being
+ * forgotten. The preview lists the exact lines.
+ */
+function ServerUndoDialog({ api, change, server, serverError, instant, onClose, onDone, reload }: {
+  api: BotModeApi; change: Change; server: ServerSettings | null; serverError: string | null; instant: boolean; onClose: () => void; onDone: () => void; reload: () => Promise<void>;
+}) {
+  const shown = useShown();
+  const [patch, setPatch] = useState<ServerPatch | { error: string } | null>(null);
+  const read = useCallback(() => api.serverUndo(change.id).then(setPatch, (e) => setPatch({ error: errorText(e) })), [api, change.id]);
+  useEffect(() => { void read(); }, [read]);
+  const ready = patch && !("error" in patch) && server ? patch : null;
+  const lines = ready ? patchLines(ready, server!) : [];
+  return (
+    <ActionDialog instant={instant} title={`Undo ${opLabel(change.operation).toLowerCase()}?`} confirm="Undo" busyText="Setting them back"
+      onClose={onClose} ready={!!ready && lines.length > 0}
+      run={async () => {
+        try {
+          await api.setServerCfg(ready!, server!);
+        } catch (e) {
+          const text = errorText(e);
+          if (!text.includes("changed since it was read")) throw e;
+          await reload();
+          await read();
+          throw `The server cfg changed after this preview, so nothing was written. The list now shows what undo would set from the cfg as it is; check it and undo again.`;
+        }
+        toast("Settings set back", "good");
+        onDone();
+      }}>
+      <dl className="bm-facts">
+        <dt>Change</dt>
+        <dd><span className="mono selectable">{change.id}</span>, made {stamp(change.created)}.</dd>
+        <dt>Sets back</dt>
+        <dd>
+          {!server ? <span className="poor-text selectable">The server cfg could not be read: {shown(serverError ?? "")}</span>
+            : patch === null ? "Reading what the cfg held before the change."
+            : "error" in patch ? <span className="poor-text selectable">{shown(patch.error)}</span>
+            : lines.length ? <>As a new change, in <span className="mono">cfg/gamemode_competitive_server.cfg</span>; your other lines stay:<ul className="bm-files mono selectable">{lines.map((l) => <li key={l}>{l}</li>)}</ul></>
+            : "Nothing: every setting is already what it was before this change."}
+        </dd>
+        {ready?.knifeBind && <>
+          <dt>Keys</dt>
+          <dd>CS2 keeps the binds a change made, so a key the knife key leaves joins the keys Bot Mode keeps unbound; only Stop unbinding takes one out.</dd>
+        </>}
       </dl>
     </ActionDialog>
   );

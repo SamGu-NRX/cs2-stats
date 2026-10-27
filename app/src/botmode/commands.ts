@@ -337,6 +337,11 @@ export function botmodeOver(call: Call) {
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
     serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
+    /**
+     * Undoing a server-cfg change as a change forward (settings.rs undo_patch): what to set back,
+     * through the same knife rules as any edit. Apply it with setServerCfg. Reads only.
+     */
+    serverUndo: (id: string, t: Target = {}) => call<ServerPatch>("botmode_server_undo", { ...t, id }),
     /** One change to the server cfg; refused, writing nothing, when it no longer holds `seen`. */
     setServerCfg: (patch: ServerPatch, seen: ServerSettings, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen }),
     /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */

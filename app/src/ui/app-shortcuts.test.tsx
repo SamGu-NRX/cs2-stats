@@ -62,6 +62,10 @@ describe("shortcuts while a confirmation is open", () => {
     const ctrl = (key: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true })); });
     ctrl("1");
     expect(parseHash(location.hash).page).toBe("profile");
+    // Ctrl+R would reload the window under the confirmation: its default is held back
+    const reload = new KeyboardEvent("keydown", { key: "r", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => { document.body.dispatchEvent(reload); });
+    expect(reload.defaultPrevented).toBe(true);
     dialog.remove();
     ctrl("1");
     expect(parseHash(location.hash).page).toBe("home");

@@ -82,9 +82,13 @@ export function Shell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // a confirmation is open (Bot Mode's dialogs): the page behind is inert, and a shortcut must
-      // not navigate away from it, least of all while its action runs
-      if (document.querySelector("dialog[open]")) return;
+      // a confirmation is open (Bot Mode's dialogs): the page behind is inert, and no shortcut may
+      // act on it, least of all while its action runs. Ctrl+R would reload the window itself, so
+      // its default is held back too.
+      if (document.querySelector("dialog[open]")) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") e.preventDefault();
+        return;
+      }
       const el = e.target as HTMLElement;
       const typing = isTextEntry(el);
       const ctrl = e.ctrlKey || e.metaKey;

@@ -13,6 +13,7 @@ use super::changes::{self, write_atomic, Meta};
 use super::hash;
 use super::paths::{confined_read, Layout, SERVER_CFG};
 use super::process::{ensure_cs2_closed, OpLock, Phase, ProcessProbe};
+use super::state;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -420,15 +421,17 @@ impl KnifeBind {
     }
 }
 
-/// An `unbind` line this app wrote when the knife key moved, in exactly that form.
-fn managed_unbind(line: &str) -> bool {
-    let Some(key) = line.trim_end().strip_suffix(KNIFE_MARK).and_then(|c| c.strip_suffix(' ')).and_then(|c| c.strip_prefix("unbind ")) else { return false };
-    check_key(key).is_ok()
+/// The key of an `unbind` line this app wrote: exactly the form it writes, for a key in `ours`,
+/// the record of the unbind lines it wrote (`State::knife_unbinds`). The marker alone proves
+/// nothing, as anyone can type it; a marked line for another key is the user's.
+fn managed_unbind<'a>(line: &'a str, ours: &[String]) -> Option<&'a str> {
+    let key = line.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?.strip_prefix("unbind ")?;
+    (check_key(key).is_ok() && ours.iter().any(|o| o == key)).then_some(key)
 }
 
 /// A line of this app's knife bind: replaced on every change to it.
-fn managed(line: &str) -> bool {
-    KnifeBind::parse(line).is_some() || managed_unbind(line)
+fn managed(line: &str, ours: &[String]) -> bool {
+    KnifeBind::parse(line).is_some() || managed_unbind(line, ours).is_some()
 }
 
 /// Everything this app sets in `cfg\gamemode_competitive_server.cfg`, as the game will read it.
@@ -447,45 +450,46 @@ pub struct ServerSettings {
 }
 
 /// The changes to make; a field left out keeps what the cfg has.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerPatch {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cosmetics: Option<Cosmetics>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_aim: Option<BotAim>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_nades: Option<BotNades>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knife_bind: Option<KnifeBind>,
     /// Keys the user takes out of the set Bot Mode keeps unbound.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_unbinding: Vec<String>,
 }
 
-fn server_in(text: &str) -> ServerSettings {
+fn server_in(text: &str, ours: &[String]) -> ServerSettings {
     ServerSettings {
         cosmetics: cosmetics_in(text),
         bot_aim: cfg::read(text, "bot_aim").and_then(|v| BotAim::parse(&v)),
         bot_nades: cfg::read(text, "bot_nades").and_then(|v| BotNades::parse(&v)),
         knife_bind: text.lines().filter_map(KnifeBind::parse).last(),
-        unbound_keys: unbound_keys(text),
+        unbound_keys: unbound_keys(text, ours),
     }
 }
 
-pub fn read_server(csgo: &Path) -> Result<ServerSettings, String> {
-    let path = confined_read(csgo, SERVER_CFG)?;
+pub fn read_server(layout: &Layout) -> Result<ServerSettings, String> {
+    let ours = state::load(layout)?.knife_unbinds;
+    let path = confined_read(&layout.csgo, SERVER_CFG)?;
     match std::fs::read_to_string(&path) {
-        Ok(t) => Ok(server_in(&t)),
+        Ok(t) => Ok(server_in(&t, &ours)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ServerSettings::default()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
 
 /// The keys this app's `unbind` lines in `text` name, in order, each once.
-fn unbound_keys(text: &str) -> Vec<String> {
+fn unbound_keys(text: &str, ours: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for k in text.lines().filter(|l| managed_unbind(l)).filter_map(|l| l.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?.strip_prefix("unbind ")) {
+    for k in text.lines().filter_map(|l| managed_unbind(l, ours)) {
         if !out.iter().any(|o| o.eq_ignore_ascii_case(k)) {
             out.push(k.to_string());
         }
@@ -495,8 +499,9 @@ fn unbound_keys(text: &str) -> Vec<String> {
 
 /// The cfg's text with `patch` applied: convar lines merged (every other line kept), and this
 /// app's knife-bind lines rewritten: an `unbind` line for every key in the set but the bound one,
-/// then the bind.
-fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String {
+/// then the bind. Also returns the keys of the `unbind` lines it leaves, the new record; `None`
+/// when the knife lines were not touched.
+fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch, ours: &[String]) -> (String, Option<Vec<String>>) {
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
     let mut values: Vec<(&str, String)> = Vec::new();
     if let Some(c) = patch.cosmetics {
@@ -511,6 +516,7 @@ fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String 
         values.push(("bot_nades", n.name().into()));
     }
     let mut out = if values.is_empty() { text.to_string() } else { cfg::merge(text, &values) };
+    let mut record = None;
     if patch.knife_bind.is_some() || !patch.stop_unbinding.is_empty() {
         let mut keys = now.unbound_keys.clone();
         let add = |keys: &mut Vec<String>, k: &str| {
@@ -528,16 +534,55 @@ fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String 
         keys.retain(|k| !patch.stop_unbinding.iter().any(|s| s.eq_ignore_ascii_case(k)));
         let bind = patch.knife_bind.as_ref().or(now.knife_bind.as_ref());
         let eol = if out.contains("\r\n") { "\r\n" } else { "\n" };
-        let mut lines: Vec<String> = out.lines().filter(|l| !managed(l)).map(str::to_string).collect();
+        let mut lines: Vec<String> = out.lines().filter(|l| !managed(l, ours)).map(str::to_string).collect();
         // the bound key gets no unbind line, as its bind claims it; it rejoins when the bind moves off it
         let current = bind.map(|b| b.key.as_str());
-        lines.extend(keys.iter().filter(|k| current.map_or(true, |c| !c.eq_ignore_ascii_case(k))).map(|k| format!("unbind {k} {KNIFE_MARK}")));
+        let emitted: Vec<String> = keys.into_iter().filter(|k| current.map_or(true, |c| !c.eq_ignore_ascii_case(k))).collect();
+        lines.extend(emitted.iter().map(|k| format!("unbind {k} {KNIFE_MARK}")));
         lines.extend(bind.map(KnifeBind::line));
         let mut joined = lines.join(eol);
         joined.push_str(eol);
         out = joined;
+        record = Some(emitted);
     }
-    out
+    (out, record)
+}
+
+/// The bind the knives spawn on: this app's, or the mod's own, which spawns every knife.
+fn effective_bind(b: &Option<KnifeBind>) -> KnifeBind {
+    b.clone().unwrap_or_else(|| KnifeBind { key: MOD_KNIFE_KEY.into(), knives: KNIVES.to_vec() })
+}
+
+/// Undoing a change to the server cfg, as a change forward rather than a restore of the old
+/// bytes: CS2 has already saved the binds the change made, so putting the old file back would
+/// leave the newer knife key bound. The patch sets each setting back to what the cfg held before
+/// change `id`, through the same rules as any edit: the knife key moves back, the key it leaves
+/// joins the keys Bot Mode keeps unbound, and nothing leaves that set. Settings the change did not
+/// touch, or that are already back, are left out. Reads only.
+pub fn undo_patch(layout: &Layout, id: &str) -> Result<ServerPatch, String> {
+    let before = match changes::before_bytes(layout, id, SERVER_CFG)? {
+        Some(b) => String::from_utf8(b).map_err(|e| format!("{SERVER_CFG} before change {id}: {e}"))?,
+        None => String::new(),
+    };
+    let was = server_in(&before, &[]);
+    let now = read_server(layout)?;
+    let mut patch = ServerPatch::default();
+    if was.cosmetics != now.cosmetics {
+        patch.cosmetics = Some(was.cosmetics);
+    }
+    // no line means the plugin's default, so that is what "back" sets
+    let aim = |a: Option<BotAim>| a.unwrap_or(BotAim::Mixed);
+    if aim(was.bot_aim) != aim(now.bot_aim) {
+        patch.bot_aim = Some(aim(was.bot_aim));
+    }
+    let nades = |n: Option<BotNades>| n.unwrap_or(BotNades::Normal);
+    if nades(was.bot_nades) != nades(now.bot_nades) {
+        patch.bot_nades = Some(nades(was.bot_nades));
+    }
+    if effective_bind(&was.knife_bind) != effective_bind(&now.knife_bind) {
+        patch.knife_bind = Some(effective_bind(&was.knife_bind));
+    }
+    Ok(patch)
 }
 
 /// Applies `patch` to the server cfg as one change, refused (writing nothing) when the cfg no
@@ -558,7 +603,8 @@ pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (NEW_CFG_HEADER.to_string(), None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    let now = if read_hash.is_some() { server_in(&text) } else { ServerSettings::default() };
+    let mut st = state::load(layout)?;
+    let now = if read_hash.is_some() { server_in(&text, &st.knife_unbinds) } else { ServerSettings::default() };
     if now != seen {
         return Err(format!("{SERVER_CFG}: the Bot Mode settings {}; nothing was written", changes::CHANGED_SINCE_READ));
     }
@@ -570,9 +616,15 @@ pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch,
     if let Some(k) = patch.stop_unbinding.iter().find(|k| check_key(k).is_err()) {
         return Err(format!("{k:?}: not a key name"));
     }
-    let merged = apply_patch(&text, &now, &patch);
+    let (merged, record) = apply_patch(&text, &now, &patch, &st.knife_unbinds);
     let (_, meta) = changes::run(layout, probe, &lock, "server-cfg", |cs| {
-        cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())
+        cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())?;
+        // the record of the unbind lines this app wrote goes with the cfg: a rollback restores both
+        if let Some(record) = record.filter(|r| *r != st.knife_unbinds) {
+            st.knife_unbinds = record;
+            state::save(layout, &st)?;
+        }
+        Ok(())
     })?;
     Ok(meta)
 }

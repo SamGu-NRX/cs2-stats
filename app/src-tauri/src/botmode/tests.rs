@@ -504,7 +504,7 @@ fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() 
     let s = Scratch::new("server-cfg");
     let layout = fake_game(&s);
     with_catalog(&layout);
-    let seen = settings::read_server(&layout.csgo).unwrap();
+    let seen = settings::read_server(&layout).unwrap();
     assert_eq!((seen.bot_aim, seen.bot_nades, seen.knife_bind.clone()), (None, None, None), "unset: the plugins' defaults apply");
     let bind = KnifeBind { key: "kp_end".into(), knives: vec![507, 515] };
     let patch = ServerPatch { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind.clone()), ..Default::default() };
@@ -515,7 +515,7 @@ fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() 
         format!("{USER_SERVER_CFG}bot_aim head\r\nbot_nades more\r\nunbind \\ {KNIFE_MARK}\r\nbind kp_end \"subclass_create 507;subclass_create 515\" {KNIFE_MARK}\r\n"),
         "the user's lines stay; the new ones are appended, with the mod's own knife key unbound"
     );
-    let now = settings::read_server(&layout.csgo).unwrap();
+    let now = settings::read_server(&layout).unwrap();
     assert_eq!(now, ServerSettings { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind), unbound_keys: vec!["\\".into()], ..seen.clone() });
 
     // A new key: the old one is unbound, the bind moves, and nothing else of the user's changes.
@@ -524,7 +524,7 @@ fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() 
     let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
     assert!(text.ends_with(&format!("bot_aim head\r\nbot_nades more\r\nunbind kp_end {KNIFE_MARK}\r\nbind \\ \"subclass_create 500\" {KNIFE_MARK}\r\n")), "the bound key gets no unbind: {text}");
     assert_eq!(text.matches(KNIFE_MARK).count(), 2);
-    assert_eq!(settings::read_server(&layout.csgo).unwrap().knife_bind, Some(moved));
+    assert_eq!(settings::read_server(&layout).unwrap().knife_bind, Some(moved));
 
     // Sent with a stale read, nothing is written and no change is recorded.
     let changes_before = changes::list(&layout).unwrap().len();
@@ -604,12 +604,12 @@ fn a_music_kit_already_in_the_cfg_does_not_block_another_setting() {
     let layout = fake_game(&s);
     // the cfg holds kit 33, which this catalog no longer lists
     write(&layout.target("addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json"), br#"{"musicKits": [3, 5]}"#);
-    let seen = settings::read_server(&layout.csgo).unwrap();
+    let seen = settings::read_server(&layout).unwrap();
     let off = Cosmetics { dropped_knife_skins: false, ..seen.cosmetics };
     settings::set_server(&layout, &CLOSED, ServerPatch { cosmetics: Some(off), ..Default::default() }, seen.clone()).unwrap();
     assert_eq!(settings::read_cosmetics(&layout.csgo).unwrap().cosmetics, off);
     // setting a kit the catalog lacks is still refused
-    let now = settings::read_server(&layout.csgo).unwrap();
+    let now = settings::read_server(&layout).unwrap();
     let err = settings::set_server(&layout, &CLOSED, ServerPatch { cosmetics: Some(Cosmetics { music_kit: 99, ..off }), ..Default::default() }, now).unwrap_err();
     assert!(err.contains("not in BotRandomizer's catalog"), "{err}");
 }
@@ -620,7 +620,7 @@ fn every_key_the_knife_bind_leaves_stays_unbound_until_the_user_says_otherwise()
     let s = Scratch::new("knife-unbinds");
     let layout = fake_game(&s);
     let patch = |p: ServerPatch| {
-        let seen = settings::read_server(&layout.csgo).unwrap();
+        let seen = settings::read_server(&layout).unwrap();
         settings::set_server(&layout, &CLOSED, p, seen).unwrap();
     };
     let bind = |key: &str| ServerPatch { knife_bind: Some(KnifeBind { key: key.into(), knives: vec![500] }), ..Default::default() };
@@ -632,7 +632,7 @@ fn every_key_the_knife_bind_leaves_stays_unbound_until_the_user_says_otherwise()
     assert_eq!(managed(&layout), ["unbind \\", "bind k"]);
     patch(bind("l"));
     assert_eq!(managed(&layout), ["unbind \\", "unbind k", "bind l"]);
-    assert_eq!(settings::read_server(&layout.csgo).unwrap().unbound_keys, ["\\", "k"]);
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "k"]);
 
     // a failed launch, and a session that ran, change nothing: no key leaves the set by itself
     let lock = OpLock::acquire(&layout).unwrap();
@@ -655,8 +655,8 @@ fn every_key_the_knife_bind_leaves_stays_unbound_until_the_user_says_otherwise()
     // the user takes \ back for something else: only then does it leave the set
     patch(ServerPatch { stop_unbinding: vec!["\\".into()], ..Default::default() });
     assert_eq!(managed(&layout), ["unbind l", "unbind m", "bind k"]);
-    assert_eq!(settings::read_server(&layout.csgo).unwrap().unbound_keys, ["l", "m"]);
-    let seen = settings::read_server(&layout.csgo).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["l", "m"]);
+    let seen = settings::read_server(&layout).unwrap();
     let err = settings::set_server(&layout, &CLOSED, ServerPatch { stop_unbinding: vec!["a;quit".into()], ..Default::default() }, seen).unwrap_err();
     assert!(err.contains("not a key name"), "{err}");
 }
@@ -688,6 +688,58 @@ fn queued_difficulty_launch_options_and_builds_are_refused_once_their_file_chang
 }
 
 #[test]
+fn a_marked_unbind_line_the_user_wrote_stays_the_users() {
+    use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
+    let s = Scratch::new("knife-user-unbind");
+    let layout = fake_game(&s);
+    // the user's own line, in exactly the form this app writes
+    let user = format!("{USER_SERVER_CFG}unbind q {KNIFE_MARK}\r\n");
+    write(&layout.target("cfg/gamemode_competitive_server.cfg"), user.as_bytes());
+    let seen = settings::read_server(&layout).unwrap();
+    assert!(seen.unbound_keys.is_empty(), "not read as one of this app's: {:?}", seen.unbound_keys);
+    let bind = |key: &str| ServerPatch { knife_bind: Some(KnifeBind { key: key.into(), knives: vec![500] }), ..Default::default() };
+    settings::set_server(&layout, &CLOSED, bind("k"), seen).unwrap();
+    settings::set_server(&layout, &CLOSED, bind("l"), settings::read_server(&layout).unwrap()).unwrap();
+    let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
+    assert!(text.contains(&format!("unbind q {KNIFE_MARK}\r\n")), "kept through both changes: {text}");
+    assert_eq!(text.matches("unbind q").count(), 1);
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "k"], "only the keys this app unbound");
+    // and taking a key back can't take the user's line with it
+    let seen = settings::read_server(&layout).unwrap();
+    settings::set_server(&layout, &CLOSED, ServerPatch { stop_unbinding: vec!["q".into(), "k".into()], ..Default::default() }, seen).unwrap();
+    let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
+    assert!(text.contains(&format!("unbind q {KNIFE_MARK}\r\n")) && !text.contains(&format!("unbind k {KNIFE_MARK}")), "{text}");
+    // a rollback puts the record back with the cfg
+    changes::rollback(&layout, &CLOSED, None).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "k"]);
+}
+
+#[test]
+fn undoing_a_knife_change_moves_the_key_back_and_keeps_the_left_key_unbound() {
+    use settings::{BotAim, KnifeBind, ServerPatch, KNIFE_MARK};
+    let s = Scratch::new("knife-undo");
+    let layout = fake_game(&s);
+    let bind = |key: &str| KnifeBind { key: key.into(), knives: vec![500, 507] };
+    let set = |p: ServerPatch| settings::set_server(&layout, &CLOSED, p, settings::read_server(&layout).unwrap()).unwrap();
+    set(ServerPatch { knife_bind: Some(bind("k")), ..Default::default() });
+    let to_j = set(ServerPatch { knife_bind: Some(bind("j")), bot_aim: Some(BotAim::Head), ..Default::default() });
+    // undo k -> j: forward, through the knife rules, not the old bytes
+    let patch = settings::undo_patch(&layout, &to_j.id).unwrap();
+    assert_eq!(patch, ServerPatch { knife_bind: Some(bind("k")), bot_aim: Some(BotAim::Mixed), ..Default::default() });
+    set(patch);
+    let managed: Vec<String> = read(&layout, "cfg/gamemode_competitive_server.cfg").lines().filter(|l| l.ends_with(KNIFE_MARK)).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect();
+    assert_eq!(managed, ["unbind \\", "unbind j", "bind k"], "k is back, and j, which CS2 kept bound, is unbound");
+    // undoing the first change brings the mod's own \ back, every knife on it; k joins the set
+    let first = changes::list(&layout).unwrap().into_iter().filter(|m| m.operation == "server-cfg").last().unwrap();
+    let patch = settings::undo_patch(&layout, &first.id).unwrap();
+    assert_eq!(patch.knife_bind.as_ref().map(|b| (b.key.as_str(), b.knives.len())), Some(("\\", 20)));
+    set(patch);
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["j", "k"]);
+    // nothing left to undo once it is all back
+    assert_eq!(settings::undo_patch(&layout, &first.id).unwrap(), ServerPatch::default());
+}
+
+#[test]
 fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
     use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
     let s = Scratch::new("knife-bind-own");
@@ -695,7 +747,7 @@ fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
     // a user's own line that ends with the marker, and a marked line whose key would inject a command
     let user = format!("bind k \"say hi; quit\" {KNIFE_MARK}\r\nbind a;quit \"subclass_create 500\" {KNIFE_MARK}\r\n");
     write(&layout.target("cfg/gamemode_competitive_server.cfg"), user.as_bytes());
-    let seen = settings::read_server(&layout.csgo).unwrap();
+    let seen = settings::read_server(&layout).unwrap();
     assert_eq!(seen.knife_bind, None, "neither line is read as this app's bind");
     let bind = KnifeBind { key: "kp_end".into(), knives: vec![500] };
     settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(bind), ..Default::default() }, seen).unwrap();
@@ -708,7 +760,7 @@ fn a_knife_bind_that_could_run_other_commands_is_refused() {
     use settings::{KnifeBind, ServerPatch};
     let s = Scratch::new("knife-bind");
     let layout = fake_game(&s);
-    let seen = settings::read_server(&layout.csgo).unwrap();
+    let seen = settings::read_server(&layout).unwrap();
     for (key, knives, why) in [
         ("x\"; quit", vec![500], "a key that closes the quote"),
         ("a;b", vec![500], "a key with a command separator"),

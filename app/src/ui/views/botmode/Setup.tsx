@@ -66,6 +66,22 @@ export function unboundAfter(unbound: string[], d: Draft, base: Draft): string[]
   return keys.filter((k) => !d.stop.some((x) => x.toLowerCase() === k.toLowerCase()) && k.toLowerCase() !== current);
 }
 
+/** The cfg lines a server patch writes, as settings.rs apply_patch writes them, for a preview. */
+export function patchLines(patch: ServerPatch, now: ServerSettings): string[] {
+  const out: string[] = [];
+  if (patch.cosmetics) out.push(`br_dropped_knife_skins ${+patch.cosmetics.droppedKnifeSkins}`, `br_dropped_knife_premium ${+patch.cosmetics.droppedKnifePremium}`, `br_player_music_kit ${patch.cosmetics.musicKit}`);
+  if (patch.botAim) out.push(`bot_aim ${patch.botAim}`);
+  if (patch.botNades) out.push(`bot_nades ${patch.botNades}`);
+  if (patch.knifeBind) {
+    const keys = [...now.unboundKeys];
+    const old = now.knifeBind?.key ?? MOD_KNIFE_KEY;
+    if (old.toLowerCase() !== patch.knifeBind.key.toLowerCase() && !keys.some((k) => k.toLowerCase() === old.toLowerCase())) keys.push(old);
+    for (const k of keys) if (k.toLowerCase() !== patch.knifeBind.key.toLowerCase()) out.push(`unbind ${k}`);
+    out.push(bindLine(patch.knifeBind));
+  }
+  return out;
+}
+
 function planOf(changed: (keyof Draft)[], d: Draft, base: Draft, unbound: string[]): Plan {
   const plan: Plan = { cfg: [], removed: [], patch: null, difficulty: null, launch: null };
   const patch: ServerPatch = {};
@@ -105,8 +121,12 @@ function readStored(): Stored | null {
   } catch { return null; }
 }
 
-/** The draft over what the backend read, kept across visits until it is applied or discarded. */
-export function usePending(api: BotModeApi, status: Status, server: ServerSettings, reload: () => Promise<void>) {
+/**
+ * The draft over what the backend read, kept across visits until it is applied or discarded.
+ * `read`: whether `server` is the cfg as read. A failed read passes a stand-in, which is not file
+ * state: no kept edit is compared with it, so none is dropped as "already applied".
+ */
+export function usePending(api: BotModeApi, status: Status, server: ServerSettings, reload: () => Promise<void>, read = true) {
   const [stored, setStored] = useState<Stored | null>(readStored);
   useEffect(() => {
     try {
@@ -121,13 +141,14 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
   const plan = planOf(changed, draft, base, server.unboundKeys);
   // a kept edit that the files now hold (applied elsewhere, or set by another tool) is no edit
   useEffect(() => {
+    if (!read) return;
     setStored((s) => {
       if (!s) return s;
       const left = Object.fromEntries(Object.entries(s.edits).filter(([k, v]) => !same(v, base[k as keyof Draft])));
       if (Object.keys(left).length === Object.keys(s.edits).length) return s;
       return Object.keys(left).length ? { ...s, edits: left } : null;
     });
-  }, [base]);
+  }, [base, read]);
   // a change the backend would refuse anyway, said before the dialog opens
   const invalid = draft.bind && changed.includes("bind")
     ? !isKeyName(draft.bind.key) ? `"${draft.bind.key}" isn't a key name. Use one character or a name such as mouse4 or kp_end.`

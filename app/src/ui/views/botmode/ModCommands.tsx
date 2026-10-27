@@ -10,11 +10,13 @@ import { CopyIcon, SearchIcon } from "../../icons/ui";
 import { plural } from "../../lib/format";
 import { useShown } from "./shared";
 
-export function ModCommands({ api, tag }: { api: BotModeApi; tag: string }) {
+/** `tag`: the installed release's tag; null when the installed version is unknown. */
+export function ModCommands({ api, tag }: { api: BotModeApi; tag: string | null }) {
   const [state, setState] = useState<null | "loading" | { data: Parsed } | { error: string }>(null);
   const [q, setQ] = useState("");
   const shown = useShown();
   const load = () => {
+    if (!tag) return;
     setState("loading");
     api.modCommands(tag).then((t) => setState({ data: parseModCommands(t) }), (e) => setState({ error: errorText(e) }));
   };
@@ -24,8 +26,10 @@ export function ModCommands({ api, tag }: { api: BotModeApi; tag: string }) {
   const groups = data?.groups.map((g) => ({ ...g, commands: g.commands.filter((c) => hit(c) || hit(g.title)) })).filter((g) => g.commands.length) ?? [];
   const teams = data?.teams.filter((t) => hit(t.name) || hit(t.ct ?? "") || hit(t.t ?? "")) ?? [];
   return (
-    <Card title="Console commands" className="bm-cmds" aside={<span className="meta">The mod's Commands.txt at {tag}</span>}>
-      {state === null || state === "loading" ? (
+    <Card title="Console commands" className="bm-cmds" aside={<span className="meta">{tag ? `The mod's Commands.txt at ${tag}` : "Installed version unknown"}</span>}>
+      {!tag ? (
+        <p className="meta">The installed version of the mod is unknown, so its command list can't be matched to it. Install a release with this app to show its commands.</p>
+      ) : state === null || state === "loading" ? (
         <div className="bm-cmds__load">
           <p className="meta">The mod's own commands and its pro-team bot lineups, to copy into the CS2 console. The list comes from the mod's repository on GitHub.</p>
           <button className="btn press" onClick={load} disabled={state === "loading"} aria-busy={state === "loading" || undefined}>{state === "loading" ? "Loading the list" : "Show the commands"}</button>
