@@ -80,7 +80,11 @@ jobs:
           cache: pip
           cache-dependency-path: extractor/requirements*.txt
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest -q
+      # The pipeline's archive tests run the real 7z and skip without it.
+      - name: Make sure 7-Zip is on PATH
+        run: command -v 7z || { sudo apt-get update && sudo apt-get install -y p7zip-full; }; 7z | head -2
+      # -rs prints why each test skipped (the private-fixture ones always do here).
+      - run: python -m pytest -q -rs
 
   download-copies:
     name: Download-copy deletion guards (pytest, Windows)

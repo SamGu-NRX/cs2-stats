@@ -72,10 +72,13 @@ PARSER_UNREADABLE = "parser_unreadable"
 # HLTV's traded deaths better; nothing the UI shows reads them. awpy 3.1.1 hard-codes 5.25 s.
 TRADE_WINDOW_S = 5.0
 POSITION_STRIDE_TICKS = 16  # 4 Hz at 64 tick.
-# Ticks per parse_ticks call in the every-tick flash/spotted pass. Each call re-reads the demo
-# (about 1-2 s on the Dust2 test demo), and one whole-demo call peaked at 1.79 GB there, so
-# 120k ticks (3 calls on Dust2) trades a few seconds for a bounded peak on long overtime demos.
-ALL_TICK_CHUNK = 120_000
+# Ticks per parse_ticks call in the every-tick flash/spotted pass. Each call re-reads the demo, and the
+# rows it collects set the extraction's peak memory (one whole-demo call peaked at 1.79 GB on the Dust2 test
+# demo). Measured on this pass alone, with the live pipeline running beside it:
+# - a 737 MB, 407k-tick demo, chunks of 120k / 60k / 40k ticks: 47.6 / 41.4 / 49.0 s, peak 1.41 / 1.17 / 1.20 GB;
+# - fixture A, chunks of 120k / 60k / 30k ticks: 12.5 / 9.8 / 11.9 s, peak 0.87 / 0.65 / 0.53 GB.
+# Down to about 60k, collecting fewer rows at once saves more than the extra passes cost.
+ALL_TICK_CHUNK = 60_000
 ZSTD_LEVEL = 9
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1051,13 @@ def snap_guard(events: dict[str, pd.DataFrame]) -> pd.DataFrame:
                                                                             "event": pd.Series([], dtype=object)})
 
 
+def snap_span(ticks, after: bool, rate: float) -> list[int]:
+    """The ticks read_at asks the parser for: each tick and the MAX_SNAP_S after it (after) or before it."""
+    limit = max(1, int(round(MAX_SNAP_S * rate)))
+    span = range(0, limit + 1) if after else range(-limit, 1)
+    return sorted({int(t) + k for t in ticks for k in span})
+
+
 def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, rate: float,
             required: bool = True) -> pd.DataFrame:
     """parser.parse_ticks(props) at each of ticks; a tick the demo skipped is read from the nearest recorded one.
@@ -1062,8 +1072,7 @@ def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, r
     if not want:
         return pd.DataFrame(columns=["tick", "steamid", "name"] + list(props))
     limit = max(1, int(round(MAX_SNAP_S * rate)))
-    span = range(0, limit + 1) if after else range(-limit, 1)
-    df = parser.parse_ticks(props, ticks=sorted({t + k for t in want for k in span}))
+    df = parser.parse_ticks(props, ticks=snap_span(want, after, rate))
     have = np.sort(df.tick.unique()) if len(df) else np.array([], dtype=np.int64)
     parts, lost = [], []
     for t in want:
@@ -1085,6 +1094,36 @@ def read_at(parser, props: list[str], ticks, after: bool, guard: pd.DataFrame, r
     return pd.concat(parts, ignore_index=True) if parts else df.iloc[:0]
 
 
+class TickFrame:
+    """One parser.parse_ticks pass that answers many reads: the position samples, every read_at and round 1's
+    baseline.
+
+    Each parse_ticks call decodes the whole demo, whatever ticks it asks for, and one that asks for damage_total,
+    the scoreboard counters, ducking or ducked runs on one thread (demoparser2's NON_MULTITHREADABLE_PROPS). On a
+    737 MB demo each such call took 15-20 s, for 9 rows. wants: (props, ticks) of every read to answer.
+    parse_ticks(props, ticks) returns what the parser returns for that call: the rows on those ticks, columns tick,
+    steamid, name and the props in name order, a prop no row has a value for left out. A tick or prop that was not
+    fetched raises. One difference stays: an integer or boolean column with a null on a tick of another read comes
+    back float64 or object, where its own call would have kept the type; every reader converts with int(), maps or
+    compares the values, or the writer casts them to schema v1.
+    """
+
+    def __init__(self, parser, wants: list[tuple[list[str], list[int]]]):
+        self.props = sorted({p for props, _ in wants for p in props})
+        self.ticks = sorted({int(t) for _, ticks in wants for t in ticks})
+        self.df = parser.parse_ticks(self.props, ticks=self.ticks) if self.ticks else None
+        self._fetched = set(self.ticks)
+
+    def parse_ticks(self, props: list[str], ticks) -> pd.DataFrame:
+        ticks = [int(t) for t in ticks]
+        missing = (set(props) - set(self.props), set(ticks) - self._fetched)
+        if any(missing):
+            raise ValueError(f"TickFrame was not asked for props {sorted(missing[0])} or ticks {sorted(missing[1])[:5]}")
+        rows = self.df[self.df.tick.isin(ticks)]
+        cols = sorted(["tick", "steamid", "name"] + [p for p in props if p in rows and rows[p].notna().any()])
+        return rows[cols].reset_index(drop=True)
+
+
 # The counters a death can move; damage commits between rounds and team scores at round ends.
 DEATH_COUNTERS = ["kills_total", "deaths_total", "assists_total", "headshot_kills_total"]
 
@@ -1095,6 +1134,31 @@ def settle_tick(t: int, guard: pd.DataFrame, rate: float) -> int:
     limit = max(1, int(round(MAX_SNAP_S * rate)))
     nxt = guard.tick[guard.tick > t]
     return min(t + limit, int(nxt.min()) - 1) if len(nxt) else t + limit
+
+
+def baseline_ticks(rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame, rate: float,
+                   match_start: int = 0) -> dict | None:
+    """The ticks scoreboard_baseline reads, or None for a round 1 recorded already live (no freeze end):
+    fe1 (round 1's freeze end), w0 (where the window before it starts), the death ticks up to fe1, and settled
+    ({settle_tick: death tick})."""
+    fe1 = rounds.freeze_end_tick.iloc[0]
+    if pd.isna(fe1):
+        return None
+    fe1 = int(fe1)
+    ticks = sorted({int(t) for t in deaths.tick[deaths.tick <= fe1]})
+    return dict(fe1=fe1, w0=min(max(int(rounds.start_tick.iloc[0]), match_start + 1), fe1), deaths=ticks,
+                settled={settle_tick(t, guard, rate): t for t in ticks})
+
+
+def baseline_reads(plan: dict | None, rate: float) -> list[tuple[list[str], list[int]]]:
+    """(props, ticks) of every parse_ticks call scoreboard_baseline makes for a baseline_ticks plan."""
+    if plan is None:
+        return []
+    fe1 = [plan["fe1"]]
+    return [(BASELINE_PROPS, snap_span(fe1, False, rate)), (DEATH_COUNTERS, list(range(plan["w0"], plan["fe1"] + 1))),
+            (DEATH_COUNTERS, snap_span(fe1, False, rate)),
+            (DEATH_COUNTERS, snap_span([t - 1 for t in plan["deaths"]], False, rate)),
+            (DEATH_COUNTERS, snap_span(plan["settled"], True, rate))]
 
 
 def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame, rate: float,
@@ -1120,10 +1184,10 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     explain(steamid, {counter: excess}): whether a dropped attempt before round 1 explains a rise no row does
     (its events, by the same rule as the scoreboard's: attribute_attempts); the rise then stays in the baseline.
     """
-    fe1 = rounds.freeze_end_tick.iloc[0]
-    if pd.isna(fe1):
+    plan = baseline_ticks(rounds, deaths, guard, rate, match_start)
+    if plan is None:
         return pd.DataFrame(columns=["tick", "steamid", "name"] + BASELINE_PROPS)
-    fe1 = int(fe1)
+    fe1 = plan["fe1"]
     base = read_at(parser, BASELINE_PROPS, [fe1], after=False, guard=guard, rate=rate)
     base["steamid"] = ids(base)
     base = base[~base.steamid.isin(list(skip))]
@@ -1146,7 +1210,7 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     # A rise no death row explains, before freeze end. Each player is measured from his first recorded tick in
     # the window: what he holds then (a reconnect, a split recording's earlier parts) cannot be from this demo,
     # but everything after it is (review of PR 19: a player who appeared mid-window had a lost death absorbed).
-    w0 = min(max(int(rounds.start_tick.iloc[0]), match_start + 1), fe1)
+    w0 = plan["w0"]
     span = keyed(parser.parse_ticks(DEATH_COUNTERS, ticks=list(range(w0, fe1 + 1)))).reset_index()
     first = span.sort_values("tick", kind="stable").groupby("steamid").first()
     end = keyed(read_at(parser, DEATH_COUNTERS, [fe1], after=False, guard=guard, rate=rate)).droplevel("tick")
@@ -1162,9 +1226,8 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
                                    f"{int(explained[c].get(sid, 0))} rows in the tables to explain it: a death the "
                                    "demo lost, so round 1's baseline cannot be read")
 
-    ticks = sorted({int(t) for t in deaths.tick})
+    ticks, settled = plan["deaths"], plan["settled"]
     if ticks:
-        settled = {settle_tick(t, guard, rate): t for t in ticks}
         before = read_at(parser, DEATH_COUNTERS, [t - 1 for t in ticks], after=False, guard=guard, rate=rate)
         after = read_at(parser, DEATH_COUNTERS, list(settled), after=True, guard=guard, rate=rate)
         after = after.assign(tick=after.tick.map(settled))
@@ -1309,22 +1372,27 @@ THROW_TYPES = {"flashbang": {"flashbang"}, "hegrenade": {"he"}, "smokegrenade": 
 def link_throws(throws: pd.DataFrame, proj: pd.DataFrame, rate: float):
     """Match each grenade_thrown event to a projectile of the same type that appears within 0.5 s,
     choosing the one whose first position is nearest the thrower's eye. Each projectile is used once."""
-    used: set[int] = set()
     ids, dists = [], []
     ps = proj.sort_values("first_tick")
+    # Arrays in that order, and a search for the window: filtering the frame once per throw took 11.6 s of a
+    # 53-round demo. The candidates, their order and the arithmetic are the frame filter's.
+    first, kind, pid_ = ps.first_tick.to_numpy(), ps.type.to_numpy(), ps.projectile.to_numpy()
+    sx, sy, sz = ps.start_x.to_numpy(), ps.start_y.to_numpy(), ps.start_z.to_numpy()
+    free = np.ones(len(ps), dtype=bool)
     for t_, w, x, y, z in zip(throws.tick, throws.weapon, throws.x, throws.y, throws.z):
         types = THROW_TYPES.get(str(w), set())
-        c = ps[(ps.first_tick >= t_) & (ps.first_tick <= t_ + rate / 2) & ps.type.isin(types)
-               & ~ps.projectile.isin(used)]
-        if c.empty or pd.isna(x):
+        lo, hi = np.searchsorted(first, t_, side="left"), np.searchsorted(first, t_ + rate / 2, side="right")
+        c = np.arange(lo, hi)[[kind[k] in types for k in range(lo, hi)]]
+        c = c[free[c]]
+        if not len(c) or pd.isna(x):
             ids.append(None)
             dists.append(None)
             continue
-        d = np.sqrt((c.start_x - x) ** 2 + (c.start_y - y) ** 2 + (c.start_z - (z + EYE_STANDING)) ** 2)
-        i = int(np.argmin(d.to_numpy()))
-        ids.append(int(c.projectile.iloc[i]))
-        dists.append(float(d.iloc[i]))
-        used.add(ids[-1])
+        d = np.sqrt((sx[c] - x) ** 2 + (sy[c] - y) ** 2 + (sz[c] - (z + EYE_STANDING)) ** 2)
+        i = int(np.argmin(d))
+        ids.append(int(pid_[c[i]]))
+        dists.append(float(d[i]))
+        free[c[i]] = False
     return pd.array(ids, dtype="Int32"), pd.array(dists, dtype="Float32")
 
 
@@ -1374,12 +1442,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     with Timer(ctx, "dp_events"):
         E = _events(parser, [e for e in heavy if e in present], STATE_PROPS)
         light = (present | set(SYNTH_EVENTS)) - set(heavy) - NOISE_EVENTS - {"player_blind"}
-        E.update(_events(parser, sorted(light), LIGHT_PROPS))
+        # server_cvar rides along in the same pass (a pass of its own took 1.6-4.5 s) and is not kept as an event.
+        E.update(_events(parser, sorted(light | ({"server_cvar"} & present)), LIGHT_PROPS))
         cvars = {}
-        if "server_cvar" in present:
-            sc = parser.parse_event("server_cvar")
-            for r in sc.itertuples():
-                cvars[str(r.name)] = str(r.value)
+        for r in E.pop("server_cvar", pd.DataFrame(columns=["name", "value"])).itertuples():
+            cvars[str(r.name)] = str(r.value)
     empty = pd.DataFrame({"tick": pd.Series([], dtype="int64")})
     ev = lambda n: E.get(n, empty).copy()
     guard = snap_guard(E)
@@ -1454,25 +1521,40 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         # Side-to-team snapshot per round: freeze end, or one tick before the end for a round without one.
         rounds["team_tick"] = [int(f) if not pd.isna(f) else int(e) - 1
                                for f, e in zip(rounds.freeze_end_tick, rounds.end_tick)]
-        pos = parser.parse_ticks(POSITION_PROPS, ticks=sample)
+        econ_ticks = set(fe_ticks) | set(rounds.team_tick)
+        final_after = not len(win)
+        score_props = ["team_rounds_total", "team_clan_name", "team_num"]
+        starts = [int(t) for t in rounds.start_tick]
+        k0 = stamp(ev("player_death"))
+        r1_deaths = k0[(k0["round"] == 1).to_numpy()]
+        bplan = baseline_ticks(rounds, r1_deaths, guard, rate, match_start)
+        # Speculative supersets: departed reads the disconnects of players missing from the final scoreboard, and
+        # the bomb table the C4 pickups that name nobody; both are known only after this read.
+        dc_ticks = [int(t) for t in ev("player_disconnect").tick if match_start <= t <= final_tick]
+        bp_ = stamp(ev("bomb_pickup"))
+        unnamed = bp_.tick[(bp_["round"] > 0).to_numpy() & to_u64(col(bp_, "user_steamid", None)).isna().to_numpy()]
+        src = TickFrame(parser, [
+            (POSITION_PROPS, sample), (ECON_PROPS, snap_span(econ_ticks, False, rate)),
+            (SCOREBOARD_PROPS, snap_span([final_tick], final_after, rate)),
+            (score_props, snap_span([last_end + 1], True, rate)),
+            (["damage_total"], snap_span(starts[1:], True, rate) + snap_span([final_tick], final_after, rate)),
+            *baseline_reads(bplan, rate), (BASELINE_PROPS, snap_span(dc_ticks, True, rate)),
+            (["inventory", "X", "Y", "Z", "last_place_name"], [int(t) for t in unnamed])])
+        pos = src.parse_ticks(POSITION_PROPS, ticks=sample)
         # Economy and sides as of freeze end (or the tick before a live round's end).
-        econ_raw = read_at(parser, ECON_PROPS, set(fe_ticks) | set(rounds.team_tick), after=False, guard=guard,
-                           rate=rate)
+        econ_raw = read_at(src, ECON_PROPS, econ_ticks, after=False, guard=guard, rate=rate)
         # The win panel shows the scoreboard as of game over; a round start, or the tick after the last round
         # end, is read for the counters committed there.
-        final_after = not len(win)
-        sb = read_at(parser, SCOREBOARD_PROPS, [final_tick], after=final_after, guard=guard, rate=rate)
+        sb = read_at(src, SCOREBOARD_PROPS, [final_tick], after=final_after, guard=guard, rate=rate)
         # Team scores are read one tick after the last round's end, where they already include it. The
         # final tick can be the next round's start, which at halftime swaps team names and scores
         # (seen on a demo cut at round 13).
-        score_at = read_at(parser, ["team_rounds_total", "team_clan_name", "team_num"], [last_end + 1], after=True,
-                           guard=guard, rate=rate)
+        score_at = read_at(src, score_props, [last_end + 1], after=True, guard=guard, rate=rate)
         # The game's damage counter at each round boundary (see game_damage below).
-        starts = [int(t) for t in rounds.start_tick]
         # A round's damage is committed on the next round's start tick (the last round's by the final tick).
         boundary = starts[1:] + [final_tick]
-        dmg_counter = pd.concat([read_at(parser, ["damage_total"], starts[1:], after=True, guard=guard, rate=rate),
-                                 read_at(parser, ["damage_total"], [final_tick], after=final_after, guard=guard,
+        dmg_counter = pd.concat([read_at(src, ["damage_total"], starts[1:], after=True, guard=guard, rate=rate),
+                                 read_at(src, ["damage_total"], [final_tick], after=final_after, guard=guard,
                                          rate=rate)], ignore_index=True).drop_duplicates(["tick", "steamid"])
     # Bots have no SteamID (demoparser2 reports 0); they are keyed by bot_id(user_id, name).
     raw_bots = pos[(pos.steamid == 0) & pos.name.notna() & pos.team_num.isin([2, 3])]
@@ -1530,10 +1612,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         return baseline_rise_explained(sid, excess, [att_events[i].get(sid) if i in pre_round_1 else None
                                                      for i in range(len(voided))])
 
-    k0 = stamp(ev("player_death"))
     r1_deaths = pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user"),
                               "attacker_steamid": pid(k0, "attacker"), "assister_steamid": pid(k0, "assister")})
-    base = scoreboard_baseline(parser, rounds, r1_deaths[(k0["round"] == 1).to_numpy()], guard, rate, match_start,
+    base = scoreboard_baseline(src, rounds, r1_deaths[(k0["round"] == 1).to_numpy()], guard, rate, match_start,
                                ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots), skip=drop_ids,
                                explain=explain_before_round_1)
     baseline = baseline_of(base)
@@ -1655,7 +1736,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # bomb_rows_name_a_player fails the map.
     lost = bomb.index[bomb.steamid.isna() & (bomb.event == "pickup")]
     if len(lost):
-        st = parser.parse_ticks(["inventory", "X", "Y", "Z", "last_place_name"],
+        st = src.parse_ticks(["inventory", "X", "Y", "Z", "last_place_name"],
                                 ticks=sorted({int(t) for t in bomb.tick[lost]}))
         st["steamid"] = resolve_ids(st.steamid, st.name, bots)
         holder = c4_holders(st)
@@ -1832,10 +1913,14 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         def lifetimes(start_ev, end_evs):
             s = gev[gev.event == start_ev].sort_values("tick")
             e = gev[gev.event.isin(end_evs)].sort_values("tick")
+            # The earliest end of the same entity at or after the start, by a search in each entity's sorted end
+            # ticks (filtering the frame per start took 2.4 s of a 53-round demo).
+            ends = {k: np.sort(g.to_numpy()) for k, g in e.dropna(subset=["entity_id"]).groupby("entity_id").tick}
             out = []
             for r in s.itertuples():
-                m = e[(e.entity_id == r.entity_id) & (e.tick >= r.tick)]
-                end = int(m.tick.iloc[0]) if len(m) else None
+                at = None if pd.isna(r.entity_id) else ends.get(r.entity_id)
+                j = int(np.searchsorted(at, r.tick, side="left")) if at is not None else 0
+                end = int(at[j]) if at is not None and j < len(at) else None
                 out.append(dict(entity_id=r.entity_id, steamid=r.steamid, round=r.round, start_tick=r.tick,
                                 end_tick=end, duration_s=None if end is None else (end - r.tick) / rate,
                                 x=r.x, y=r.y, z=r.z))
@@ -1967,8 +2052,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 pid(pb, "attacker")[pb["round"] > 0], col(pb, "blind_duration")[pb["round"] > 0])
 
     # ----- every player's state at every tick, and the map mesh checked against the kills
-    S = player_state(pd.concat(state_parts, ignore_index=True))
+    # The chunks go before player_state copies the frame: with them still held, three copies of every player's
+    # state at every tick were alive at once, the extraction's peak on long demos.
+    S = pd.concat(state_parts, ignore_index=True)
     del state_parts
+    S = player_state(S)
     checker, vis = checked_mesh(S, kills, ctx.mapdata, header.get("map_name"))
 
     # ----- hits the demo's event stream lost, rebuilt from networked health
@@ -2101,7 +2189,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         if not pd.isna(s_) and int(s_) not in on_board and int(s_) not in excluded and match_start <= int(t_) <= final_tick:
             gone_at[int(s_)] = max(gone_at.get(int(s_), 0), int(t_))
     # His counters after the disconnect tick, which carries the death his leaving causes.
-    departed = read_at(parser, BASELINE_PROPS, set(gone_at.values()), after=True, guard=guard, rate=rate,
+    departed = read_at(src, BASELINE_PROPS, set(gone_at.values()), after=True, guard=guard, rate=rate,
                        required=False)
     departed["steamid"] = resolve_ids(departed.steamid, departed.name, bots)
     departed = departed.loc[np.array([not pd.isna(s_) and gone_at.get(int(s_)) == int(t_)
@@ -2647,7 +2735,7 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
         sh = shots[shots["round"] > 0][["round", "tick", "steamid"]].drop_duplicates()
         sa = sh.merge(S, on=key)
         sa = sa[sa.is_alive]
-        cand = sa.merge(S[S.is_alive], on="tick", suffixes=("", "_v"))
+        cand = sa.merge(S[S.is_alive & S.tick.isin(sa.tick.unique())], on="tick", suffixes=("", "_v"))
         cand = cand[cand.team_num != cand.team_num_v]
         a_eye = cand[["X", "Y", "eye_z"]].to_numpy(dtype=float)
         v_eye = cand[["X_v", "Y_v", "eye_z_v"]].to_numpy(dtype=float)
@@ -2663,12 +2751,16 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
     # Per-tick rows
     rows = window_ticks(eng).merge(eng[["engagement_id", "attacker_steamid", "victim_steamid"]], on="engagement_id")
     shot_keys = set(zip(shots.tick.astype(int), shots.steamid.astype("Int64")))
+    # Only the window ticks can match: the merges below factorized every tick of the demo's state and velocity
+    # (5.8 s of a 53-round demo). Dropping rows that cannot match changes no row, order or type of a merge.
+    in_rows = rows.tick.unique()
+    S_rows, vel_rows = S[S.tick.isin(in_rows)], velocity[velocity.tick.isin(in_rows)]
     for p_, who in (("a", "attacker_steamid"), ("v", "victim_steamid")):
-        st = S.drop(columns=["team_num", "is_alive"]).rename(columns={
+        st = S_rows.drop(columns=["team_num", "is_alive"]).rename(columns={
             "steamid": who, "X": f"{p_}_x", "Y": f"{p_}_y", "Z": f"{p_}_z", "eye_z": f"{p_}_eye_z",
             "pitch": f"{p_}_pitch", "yaw": f"{p_}_yaw", "duck_amount": f"{p_}_duck", "mask": f"{p_}_mask"})
         rows = rows.merge(st, on=["tick", who], how="left")
-        vel = velocity.rename(columns={"steamid": who, "vel_x": f"{p_}_vel_x", "vel_y": f"{p_}_vel_y",
+        vel = vel_rows.rename(columns={"steamid": who, "vel_x": f"{p_}_vel_x", "vel_y": f"{p_}_vel_y",
                                        "vel_z": f"{p_}_vel_z"})
         rows = rows.merge(vel, on=["tick", who], how="left")
         rows[f"{p_}_shot_fired"] = [(int(t), int(x)) in shot_keys for t, x in zip(rows.tick, rows[who])]

@@ -417,6 +417,101 @@ def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch
     assert junk in p.ignored and "notrar" not in p.archives
 
 
+def _hashed(p, timeout=30.0):
+    """Step the pipeline's hash pickup until no archive is waiting for its SHA-256."""
+    deadline = time.time() + timeout
+    while any(a.state == "hashing" for a in p.archives.values()):
+        assert time.time() < deadline, "an archive's hash never finished"
+        p.poll_hashes()
+        time.sleep(0.01)
+
+
+def test_status_is_served_while_a_large_archive_is_hashed(tmp_path, monkeypatch):
+    # A --retry-failed restart hashed each kept archive inside scan(), about 50 s apiece at idle priority; the main
+    # loop stopped and /pending answered {} for minutes. A hash that does not finish must not stop a step.
+    _isolate(tmp_path, monkeypatch)
+    release = threading.Event()
+    real = ex.file_sha256
+    monkeypatch.setattr(ex, "file_sha256", lambda path: (release.wait(30), real(path))[1])
+    (dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b").write_bytes(dp.RAR_MAGIC + b"payload")
+    p = dp.Pipeline()
+    p.available_gb = lambda: 20.0
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dp.make_handler(p))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        stepped = threading.Thread(target=lambda: (p.step(), p.step()), daemon=True)
+        f = next(iter(dp.DOWNLOADS.iterdir()))
+        p.tracker.observe(f, f.stat().st_size, time.time() - 100)  # this size since long ago: complete
+        stepped.start()
+        stepped.join(10)
+        assert not stepped.is_alive(), "a step waited for the hash"
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/pending") as r:
+            status = json.loads(r.read())
+        assert status["pendingActual"] == 1 and status["capacity"]
+    finally:
+        release.set()
+        server.shutdown()
+    _hashed(p)
+    assert next(iter(p.archives.values())).state == "pending"
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the SystemExit ends it on purpose
+def test_a_hash_that_raises_fails_its_archive_and_later_archives_are_still_hashed(tmp_path, monkeypatch):
+    # Review of PR 61: only an OSError was caught, so any other error ended the hashing thread with no result, and
+    # its archive sat in "hashing" forever (busy to scan, pending to /pending, the pipeline never idle). The second
+    # error here ends the thread outright; the third archive must still be hashed.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    names = ["a1-runtime", "a2-exit", "a3-fine"]
+    for n in names:
+        (dp.DOWNLOADS / n).write_bytes(dp.RAR_MAGIC + n.encode())
+    real = ex.file_sha256
+
+    def sha(path):
+        if path.name == "a1-runtime":
+            raise RuntimeError("bad read")
+        if path.name == "a2-exit":
+            raise SystemExit("thread ends")
+        return real(path)
+
+    monkeypatch.setattr(ex, "file_sha256", sha)
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(16.0)
+    _hashed(p)
+    assert list(p.archives) == ["a3-fine"] and p.archives["a3-fine"].state == "pending"
+    assert p.archives["a3-fine"].rar_sha256 == hashlib.sha256(dp.RAR_MAGIC + b"a3-fine").hexdigest()
+    failed = {r["id"]: r["reason"] for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert "RuntimeError: bad read" in failed["a1-runtime"] and "SystemExit: thread ends" in failed["a2-exit"]
+    assert (dp.FAILED_DIR / "a1-runtime" / "archive.rar").exists()
+
+
+def test_a_download_held_by_another_program_is_hashed_again_and_failed_only_after_five_tries(tmp_path, monkeypatch):
+    # Review of PR 61: a finished download briefly held by a virus scan or the browser (PermissionError) was failed
+    # on the first try. An OSError is retried by later scans, up to dp.HASH_ATTEMPTS per run, then fails.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    for n in ("held-briefly", "held-always"):
+        (dp.DOWNLOADS / n).write_bytes(dp.RAR_MAGIC + n.encode())
+    real, calls = ex.file_sha256, {}
+
+    def sha(path):
+        calls[path.name] = calls.get(path.name, 0) + 1
+        if path.name == "held-always" or calls[path.name] <= 2:
+            raise PermissionError(13, "in use by another process", str(path))
+        return real(path)
+
+    monkeypatch.setattr(ex, "file_sha256", sha)
+    p = dp.Pipeline()
+    for i in range(20):  # each retry needs a scan to see the file again and one to find it stable
+        p.scan(16.0 * i)
+        _hashed(p)
+    assert p.archives["held-briefly"].rar_sha256 == hashlib.sha256(dp.RAR_MAGIC + b"held-briefly").hexdigest()
+    assert calls == {"held-briefly": 3, "held-always": dp.HASH_ATTEMPTS}
+    reason = {r["id"]: r["reason"] for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert list(reason) == ["held-always"] and "PermissionError" in reason["held-always"]
+
+
 def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
     # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
     # cleanup match those copies exactly.
@@ -428,6 +523,7 @@ def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path,
     p = dp.Pipeline()
     p.scan(0.0)
     p.scan(16.0)
+    _hashed(p)
     a = p.archives[rar.name]
     assert (a.rar_bytes, a.rar_sha256) == (len(data), hashlib.sha256(data).hexdigest())
     assert a.download_started <= rar.stat().st_mtime
@@ -468,6 +564,7 @@ def test_a_retried_failure_keeps_its_downloads_finish_time(tmp_path, monkeypatch
                                     download_started=100.0, download_finished=123.0, finished_utc="2026-10-27T01:00:00"))
     p = dp.Pipeline(retry_failed=True)
     p.scan(0.0)
+    _hashed(p)
     a = p.archives["slug-r1"]
     assert (a.rar_bytes, a.rar_sha256, a.download_started, a.download_finished) == (len(data), sha, 100.0, 123.0)
     assert p.rar_facts(a)["download_finished"] == 123.0
@@ -516,6 +613,7 @@ def test_a_finished_archives_downloads_copy_is_deleted(tmp_path, monkeypatch):
     other.write_bytes(data[:-1] + b"!")
     p.scan(t0 + 2)
     p.scan(t0 + 14)
+    _hashed(p)
     a = p.archives[rar.name]
     a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-0d9f6a51", dp.WORK_DIR / "w"
     a.work.mkdir()
