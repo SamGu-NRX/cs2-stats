@@ -2052,8 +2052,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 pid(pb, "attacker")[pb["round"] > 0], col(pb, "blind_duration")[pb["round"] > 0])
 
     # ----- every player's state at every tick, and the map mesh checked against the kills
-    S = player_state(pd.concat(state_parts, ignore_index=True))
+    # The chunks go before player_state copies the frame: with them still held, three copies of every player's
+    # state at every tick were alive at once, the extraction's peak on long demos.
+    S = pd.concat(state_parts, ignore_index=True)
     del state_parts
+    S = player_state(S)
     checker, vis = checked_mesh(S, kills, ctx.mapdata, header.get("map_name"))
 
     # ----- hits the demo's event stream lost, rebuilt from networked health

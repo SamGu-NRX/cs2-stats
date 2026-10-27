@@ -111,6 +111,21 @@ def test_a_counter_the_game_commits_a_tick_after_the_death_still_comes_off():
     assert ex.scoreboard_baseline(p, rounds, _deaths((488, 1)), guard, 64).deaths_total.tolist() == [0]
 
 
+def test_round_one_baseline_from_one_tick_pass_matches_its_own_reads():
+    # The extraction reads round 1's baseline from one parse_ticks pass (TickFrame) fetched by baseline_reads; a read
+    # scoreboard_baseline makes that the plan left out raises there, and only a real demo would show it. A death
+    # 4 ticks before freeze end, committed a tick late, is read past the window, and one 2 ticks after round 1
+    # starts is read before it.
+    rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
+    guard = _guard(round_start=[65], player_death=[67, 1706])
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 67: {1: dict(deaths_total=1)}, 1707: {1: dict(deaths_total=2)}},
+                       skipped=[1710])
+    deaths = _deaths((67, 1), (1706, 1))
+    src = ex.TickFrame(p, ex.baseline_reads(ex.baseline_ticks(rounds, deaths, guard, 64), 64))
+    pd.testing.assert_frame_equal(ex.scoreboard_baseline(src, rounds, deaths, guard, 64),
+                                  ex.scoreboard_baseline(p, rounds, deaths, guard, 64), check_like=True)
+
+
 def test_a_round_one_death_with_no_player_death_row_fails_the_map():
     # Review of PR 19 (Astra, round 2): the game counted a death the demo has no row for, and the freeze-end
     # baseline absorbed it, so the scoreboard and the tables agreed while both missed that death.
