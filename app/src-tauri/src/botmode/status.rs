@@ -79,7 +79,7 @@ pub struct Status {
     pub bot_mode: Option<bool>,
     /// Whether a live Bot Mode session (the app or the CLI) is watching CS2.
     pub supervised: bool,
-    /// [`session::UNPROTECTED`], for the Bot Mode view.
+    /// The Bot Mode notice shown in the view.
     pub notice: &'static str,
     pub release: ReleaseStatus,
     pub difficulty: Option<settings::Difficulty>,
@@ -228,11 +228,11 @@ pub fn status(
     let steam_tokens = steam_launch_options.as_deref().and_then(|o| super::launch::split(o).ok()).unwrap_or_default();
     let steam_safe = steam_tokens.iter().any(|a| a.eq_ignore_ascii_case("-insecure")) && !steam_tokens.iter().any(|a| is_secure_token(a));
     let supervised = session_held(&layout.csgo).unwrap_or(false);
+    let notice = if bot_mode == Some(true) && !supervised && !session::owns_current_bot_mode(layout) { session::MANAGED_BY_OTHER_TOOL } else { session::UNPROTECTED };
     if bot_mode == Some(true) && !supervised {
         warnings.push(format!(
-            "Bot Mode is on in gameinfo.gi with no session watching CS2{}. The next Bot Mode command or app start turns it off. {}",
-            if steam_safe { "" } else { ", and CS2's launch options in Steam would start it with VAC on" },
-            session::UNPROTECTED
+            "Bot Mode is on in gameinfo.gi with no session watching CS2{}. The next Bot Mode command or app start leaves it alone unless this app owns the current file. {} {}",
+            if steam_safe { "" } else { ", and CS2's launch options in Steam would start it with VAC on" }, notice, session::UNPROTECTED
         ));
     }
     let backups = changes::list(layout)?;
@@ -249,7 +249,7 @@ pub fn status(
         cs2_running,
         bot_mode,
         supervised,
-        notice: session::UNPROTECTED,
+        notice,
         release,
         difficulty: settings::current_difficulty(&layout.csgo)?,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
