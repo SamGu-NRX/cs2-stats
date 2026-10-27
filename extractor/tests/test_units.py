@@ -415,6 +415,63 @@ def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch
     assert junk in p.ignored and "notrar" not in p.archives
 
 
+def _copies_case(tmp_path):
+    """A copies folder holding one exact copy of an archive's bytes and every near miss."""
+    import hashlib
+    import os
+    data = dp.RAR_MAGIC + b"payload" * 100
+    copies = tmp_path / "copies"
+    (copies / "sub").mkdir(parents=True)
+    exact, old = copies / "event-a-vs-b-bo3-x.rar", copies / "event-a-vs-b-bo3-old.rar"
+    other, zipped, nested = copies / "same-size.rar", copies / "event-a-vs-b-bo3-x.zip", copies / "sub" / "x.rar"
+    for f in (exact, old, zipped, nested):
+        f.write_bytes(data)
+    other.write_bytes(dp.RAR_MAGIC + b"PAYLOAD" * 100)  # same size, other bytes
+    os.utime(old, (1000.0, 1000.0))  # saved before the download began
+    return copies, len(data), hashlib.sha256(data).hexdigest(), dict(exact=exact, old=old, other=other,
+                                                                       zipped=zipped, nested=nested)
+
+
+def test_only_an_exact_copy_saved_after_the_download_began_is_deleted(tmp_path):
+    # T3's browser saves a named copy of each finished download in Downloads; 146 took 68 GB. That folder is the
+    # user's: a file goes only if it is a *.rar directly in it with the archive's size and SHA-256, saved later.
+    copies, size, sha, f = _copies_case(tmp_path)
+    assert dp.delete_copies(copies, size, sha, started=5000.0, what="r") == [f["exact"]]
+    assert all(f[k].exists() for k in ("old", "other", "zipped", "nested")) and not f["exact"].exists()
+
+
+def test_a_finished_archive_records_its_hash_and_its_copy_goes(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    copies, size, sha, f = _copies_case(tmp_path)
+    monkeypatch.setattr(dp, "COPIES_DIR", copies)
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(f["exact"].read_bytes())
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(16.0)
+    a = p.archives[rar.name]
+    assert (a.rar_bytes, a.rar_sha256) == (size, sha) and a.download_started <= rar.stat().st_mtime
+    a.download_started = 5000.0  # the copies were written just now, after it
+    a.slug, a.listing = "slug-r", {"x-m1-nuke.dem": {}}
+    p.fail_archive(a, "7z listing failed: test")
+    rec = json.loads(dp.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
+    assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", size, sha)
+    assert not f["exact"].exists() and f["old"].exists() and f["other"].exists()
+
+
+def test_startup_deletes_copies_of_archives_the_ledger_hashed(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    copies, size, sha, f = _copies_case(tmp_path)
+    dp.append_jsonl(dp.LEDGER, dict(id="r", status="done", slug="s", rar_bytes=size, rar_sha256=sha,
+                                    download_started=5000.0))
+    dp.append_jsonl(dp.LEDGER, dict(id="older", status="done", slug="t"))  # recorded before hashes: nothing to match
+    p = dp.Pipeline()
+    monkeypatch.setattr(dp, "COPIES_DIR", None)
+    assert p.clear_copies_from_ledger() == 0 and f["exact"].exists()  # off unless set
+    monkeypatch.setattr(dp, "COPIES_DIR", copies)
+    assert p.clear_copies_from_ledger() == 1 and not f["exact"].exists() and f["other"].exists()
+
+
 def test_assist_on_own_teammate_is_not_credited():
     # A pro demo, tick 31391: a T player (C) hurt his teammate (D) for 38, a CT player (A) killed D, and
     # player_death names C as assister; the scoreboard does not count it (assists 1, not 2).
