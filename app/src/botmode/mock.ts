@@ -159,7 +159,7 @@ function initial(s: Scenario): State {
     : s === "cs2-running" ? [{ vac: "on", pid: 30112, why: "-insecure is missing" }] : [];
   return {
     status, session, files, running, manifestSha: sha("overlay.json"),
-    server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null },
+    server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null, unboundKeys: [] },
     statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
       : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
   };
@@ -219,7 +219,15 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         }
         if (patch.botAim) st.server.botAim = patch.botAim;
         if (patch.botNades) st.server.botNades = patch.botNades;
-        if (bind) st.server.knifeBind = bind;
+        // as settings.rs apply_patch: the key the bind leaves joins the set; only the user takes one out
+        if (bind) {
+          const old = st.server.knifeBind?.key ?? "\\";
+          const keys = [...st.server.unboundKeys];
+          if (old !== bind.key && !keys.includes(old)) keys.push(old);
+          st.server.unboundKeys = keys.filter((k) => k !== bind.key);
+          st.server.knifeBind = bind;
+        }
+        if (patch.stopUnbinding?.length) st.server.unboundKeys = st.server.unboundKeys.filter((k) => !patch.stopUnbinding!.includes(k));
         return record("server-cfg", 1, ["cfg/gamemode_competitive_server.cfg"]);
       }
       case "botmode_releases": return RELEASES;

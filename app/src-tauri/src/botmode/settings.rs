@@ -58,9 +58,20 @@ impl Difficulty {
 /// The active level, found by matching the active bot profile against the three shipped
 /// copies. `None` when the active profile matches none of them, or there is none.
 pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
-    let Some(active) = hash::file_if_exists(&confined_read(csgo, ACTIVE_PROFILE)?)? else { return Ok(None) };
+    Ok(active_profile(csgo)?.0)
+}
+
+/// The active level and the active profile's SHA-256, from one read of the profile, so the
+/// level the view shows and the hash a difficulty change sends back describe the same file.
+pub fn active_profile(csgo: &Path) -> Result<(Option<Difficulty>, Option<String>), String> {
+    let active = hash::file_if_exists(&confined_read(csgo, ACTIVE_PROFILE)?)?;
+    Ok((difficulty_of(csgo, active.as_deref())?, active))
+}
+
+fn difficulty_of(csgo: &Path, active: Option<&str>) -> Result<Option<Difficulty>, String> {
+    let Some(active) = active else { return Ok(None) };
     for d in Difficulty::ALL {
-        if hash::file_if_exists(&confined_read(csgo, d.variant())?)?.as_deref() == Some(active.as_str()) {
+        if hash::file_if_exists(&confined_read(csgo, d.variant())?)?.as_deref() == Some(active) {
             return Ok(Some(d));
         }
     }
@@ -341,8 +352,14 @@ pub const KNIVES: [u32; 20] = [500, 503, 505, 506, 507, 508, 509, 512, 514, 515,
 
 /// This app's knife-drop bind: a key that spawns the chosen knives with `subclass_create`. It
 /// is one line in the server cfg, marked with [`KNIFE_MARK`]; the cfg runs after the mod's cfgs,
-/// so the bind wins over the mod's own one on the same key. When the key changes, the line
-/// before it unbinds the previous key, since CS2 keeps a key's bind in the user's key settings.
+/// so the bind wins over the mod's own one on the same key.
+///
+/// A key the bind moves away from would keep spawning knives: CS2 keeps a key's bind in the
+/// user's key settings, and the mod's own cfg binds [`MOD_KNIFE_KEY`] again on every map. So
+/// every key the bind has left, the mod's included, joins a set of keys Bot Mode keeps unbound:
+/// one marked `unbind <key>` line each, which the cfg runs on every map, for good. Nothing takes
+/// a key out of the set except the user (`ServerPatch::stop_unbinding`); the current key is the
+/// one exception, as the bind line after the `unbind` lines claims it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnifeBind {
@@ -352,6 +369,9 @@ pub struct KnifeBind {
 
 /// Ends every line of the server cfg this app manages for the knife bind.
 pub const KNIFE_MARK: &str = "// cs2-stats knife drop";
+
+/// The key the mod's own cfgs bind to spawn every knife (`my_bot_*_config.cfg`).
+pub const MOD_KNIFE_KEY: &str = "\\";
 
 /// A key name the console accepts unquoted: one character, or a name such as `mouse4` or `kp_end`.
 fn check_key(key: &str) -> Result<(), String> {
@@ -421,6 +441,9 @@ pub struct ServerSettings {
     pub bot_nades: Option<BotNades>,
     /// `None` when the cfg has no knife bind of this app's; the mod's own bind applies.
     pub knife_bind: Option<KnifeBind>,
+    /// The keys Bot Mode keeps unbound (see [`KnifeBind`]), in the order they joined.
+    #[serde(default)]
+    pub unbound_keys: Vec<String>,
 }
 
 /// The changes to make; a field left out keeps what the cfg has.
@@ -435,6 +458,9 @@ pub struct ServerPatch {
     pub bot_nades: Option<BotNades>,
     #[serde(default)]
     pub knife_bind: Option<KnifeBind>,
+    /// Keys the user takes out of the set Bot Mode keeps unbound.
+    #[serde(default)]
+    pub stop_unbinding: Vec<String>,
 }
 
 fn server_in(text: &str) -> ServerSettings {
@@ -443,6 +469,7 @@ fn server_in(text: &str) -> ServerSettings {
         bot_aim: cfg::read(text, "bot_aim").and_then(|v| BotAim::parse(&v)),
         bot_nades: cfg::read(text, "bot_nades").and_then(|v| BotNades::parse(&v)),
         knife_bind: text.lines().filter_map(KnifeBind::parse).last(),
+        unbound_keys: unbound_keys(text),
     }
 }
 
@@ -455,27 +482,21 @@ pub fn read_server(csgo: &Path) -> Result<ServerSettings, String> {
     }
 }
 
-/// The keys this app's `unbind` lines in `text` name, in order.
-fn pending_unbinds(text: &str) -> Vec<String> {
-    text.lines()
-        .filter(|l| managed_unbind(l))
-        .filter_map(|l| l.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?.strip_prefix("unbind ").map(str::to_string))
-        .collect()
-}
-
-/// Whether a Bot Mode session has started since the last change to the server cfg's knife bind,
-/// so the game has run that cfg and its `unbind` lines have done their work. A game started some
-/// other way leaves no record, so its run is not counted and the lines stay.
-fn knife_cfg_applied(layout: &Layout) -> Result<bool, String> {
-    let list = changes::list(layout)?;
-    let Some(last) = list.iter().position(|m| m.operation == "server-cfg" && m.status == changes::Status::Complete) else { return Ok(true) };
-    Ok(list[..last].iter().any(|m| m.kind == changes::Kind::Session && m.operation == "bot-mode-on" && m.status == changes::Status::Complete))
+/// The keys this app's `unbind` lines in `text` name, in order, each once.
+fn unbound_keys(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for k in text.lines().filter(|l| managed_unbind(l)).filter_map(|l| l.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?.strip_prefix("unbind ")) {
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(k)) {
+            out.push(k.to_string());
+        }
+    }
+    out
 }
 
 /// The cfg's text with `patch` applied: convar lines merged (every other line kept), and this
-/// app's knife-bind lines replaced. `keep_unbinds`: the `unbind` lines already there have not
-/// run in a game yet, so they stay, or the key they free would keep spawning knives.
-fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch, keep_unbinds: bool) -> String {
+/// app's knife-bind lines rewritten: an `unbind` line for every key in the set but the bound one,
+/// then the bind.
+fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String {
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
     let mut values: Vec<(&str, String)> = Vec::new();
     if let Some(c) = patch.cosmetics {
@@ -490,21 +511,28 @@ fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch, keep_unbin
         values.push(("bot_nades", n.name().into()));
     }
     let mut out = if values.is_empty() { text.to_string() } else { cfg::merge(text, &values) };
-    if let Some(bind) = &patch.knife_bind {
-        let eol = if out.contains("\r\n") { "\r\n" } else { "\n" };
-        let mut lines: Vec<&str> = out.lines().filter(|l| !managed(l)).collect();
-        let mut keys: Vec<String> = if keep_unbinds { pending_unbinds(text) } else { Vec::new() };
-        keys.extend(now.knife_bind.as_ref().map(|old| old.key.clone()));
-        let mut unbinds: Vec<String> = Vec::new();
-        for k in keys {
-            if !k.eq_ignore_ascii_case(&bind.key) && !unbinds.iter().any(|u| u.eq_ignore_ascii_case(&k)) {
-                unbinds.push(k);
+    if patch.knife_bind.is_some() || !patch.stop_unbinding.is_empty() {
+        let mut keys = now.unbound_keys.clone();
+        let add = |keys: &mut Vec<String>, k: &str| {
+            if !keys.iter().any(|o| o.eq_ignore_ascii_case(k)) {
+                keys.push(k.to_string());
+            }
+        };
+        if let Some(bind) = &patch.knife_bind {
+            // the key the knives spawned on until now: this app's, or else the mod's own
+            let old = now.knife_bind.as_ref().map_or(MOD_KNIFE_KEY, |b| b.key.as_str());
+            if !old.eq_ignore_ascii_case(&bind.key) {
+                add(&mut keys, old);
             }
         }
-        let unbind_lines: Vec<String> = unbinds.iter().map(|k| format!("unbind {k} {KNIFE_MARK}")).collect();
-        let line = bind.line();
-        lines.extend(unbind_lines.iter().map(String::as_str));
-        lines.push(&line);
+        keys.retain(|k| !patch.stop_unbinding.iter().any(|s| s.eq_ignore_ascii_case(k)));
+        let bind = patch.knife_bind.as_ref().or(now.knife_bind.as_ref());
+        let eol = if out.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut lines: Vec<String> = out.lines().filter(|l| !managed(l)).map(str::to_string).collect();
+        // the bound key gets no unbind line, as its bind claims it; it rejoins when the bind moves off it
+        let current = bind.map(|b| b.key.as_str());
+        lines.extend(keys.iter().filter(|k| current.map_or(true, |c| !c.eq_ignore_ascii_case(k))).map(|k| format!("unbind {k} {KNIFE_MARK}")));
+        lines.extend(bind.map(KnifeBind::line));
         let mut joined = lines.join(eol);
         joined.push_str(eol);
         out = joined;
@@ -539,8 +567,10 @@ pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch,
     if let Some(c) = patch.cosmetics.filter(|c| c.music_kit != now.cosmetics.music_kit) {
         check_music_kit(&layout.csgo, c.music_kit)?;
     }
-    let keep_unbinds = !knife_cfg_applied(layout)?;
-    let merged = apply_patch(&text, &now, &patch, keep_unbinds);
+    if let Some(k) = patch.stop_unbinding.iter().find(|k| check_key(k).is_err()) {
+        return Err(format!("{k:?}: not a key name"));
+    }
+    let merged = apply_patch(&text, &now, &patch);
     let (_, meta) = changes::run(layout, probe, &lock, "server-cfg", |cs| {
         cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())
     })?;

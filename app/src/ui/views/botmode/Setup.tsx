@@ -26,13 +26,15 @@ export interface Draft {
   aim: BotAim | null;
   nades: BotNades | null;
   bind: KnifeBind | null;
+  /** keys the user takes out of the set Bot Mode keeps unbound */
+  stop: string[];
   difficulty: Difficulty | null;
   launch: string;
 }
 
 const draftOf = (s: Status, srv: ServerSettings): Draft => ({
   skins: srv.cosmetics.droppedKnifeSkins, premium: srv.cosmetics.droppedKnifePremium, kit: srv.cosmetics.musicKit,
-  aim: srv.botAim, nades: srv.botNades, bind: srv.knifeBind, difficulty: s.difficulty, launch: s.launchOptions,
+  aim: srv.botAim, nades: srv.botNades, bind: srv.knifeBind, stop: [], difficulty: s.difficulty, launch: s.launchOptions,
 });
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -40,6 +42,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 export interface Plan {
   /** the lines set in cfg/gamemode_competitive_server.cfg, as written */
   cfg: string[];
+  /** lines of this app's taken out of that cfg */
+  removed: string[];
   patch: ServerPatch | null;
   difficulty: Difficulty | null;
   launch: string | null;
@@ -47,8 +51,23 @@ export interface Plan {
 
 const bindLine = (b: KnifeBind) => `bind ${b.key} "${b.knives.map((k) => `subclass_create ${k}`).join(";")}"`;
 
-function planOf(changed: (keyof Draft)[], d: Draft, base: Draft): Plan {
-  const plan: Plan = { cfg: [], patch: null, difficulty: null, launch: null };
+/**
+ * The keys Bot Mode keeps unbound after the draft applies, as settings.rs apply_patch computes
+ * them: the set as read, plus the key the bind leaves (the mod's own \ when there was no bind of
+ * the user's), less the keys the user takes back. The bound key gets no unbind line.
+ */
+export function unboundAfter(unbound: string[], d: Draft, base: Draft): string[] {
+  const keys = [...unbound];
+  if (d.bind && !same(d.bind, base.bind)) {
+    const old = base.bind?.key ?? MOD_KNIFE_KEY;
+    if (old.toLowerCase() !== d.bind.key.toLowerCase() && !keys.some((k) => k.toLowerCase() === old.toLowerCase())) keys.push(old);
+  }
+  const current = (d.bind ?? base.bind)?.key.toLowerCase();
+  return keys.filter((k) => !d.stop.some((x) => x.toLowerCase() === k.toLowerCase()) && k.toLowerCase() !== current);
+}
+
+function planOf(changed: (keyof Draft)[], d: Draft, base: Draft, unbound: string[]): Plan {
+  const plan: Plan = { cfg: [], removed: [], patch: null, difficulty: null, launch: null };
   const patch: ServerPatch = {};
   if (changed.some((k) => k === "skins" || k === "premium" || k === "kit")) {
     patch.cosmetics = { droppedKnifeSkins: d.skins, droppedKnifePremium: d.premium, musicKit: d.kit };
@@ -56,10 +75,14 @@ function planOf(changed: (keyof Draft)[], d: Draft, base: Draft): Plan {
   }
   if (changed.includes("aim") && d.aim) { patch.botAim = d.aim; plan.cfg.push(`bot_aim ${d.aim}`); }
   if (changed.includes("nades") && d.nades) { patch.botNades = d.nades; plan.cfg.push(`bot_nades ${d.nades}`); }
-  if (changed.includes("bind") && d.bind) {
-    patch.knifeBind = d.bind;
-    if (base.bind && base.bind.key !== d.bind.key) plan.cfg.push(`unbind ${base.bind.key}`);
-    plan.cfg.push(bindLine(d.bind));
+  if ((changed.includes("bind") && d.bind) || (changed.includes("stop") && d.stop.length)) {
+    if (changed.includes("bind") && d.bind) patch.knifeBind = d.bind;
+    if (changed.includes("stop") && d.stop.length) patch.stopUnbinding = d.stop;
+    // the whole knife block as it will read: an unbind line per key, then the bind
+    for (const k of unboundAfter(unbound, d, base)) plan.cfg.push(`unbind ${k}`);
+    const bind = d.bind ?? base.bind;
+    if (bind) plan.cfg.push(bindLine(bind));
+    for (const k of d.stop) plan.removed.push(`unbind ${k}`);
   }
   if (Object.keys(patch).length) plan.patch = patch;
   if (changed.includes("difficulty") && d.difficulty) plan.difficulty = d.difficulty;
@@ -69,7 +92,7 @@ function planOf(changed: (keyof Draft)[], d: Draft, base: Draft): Plan {
 
 const PENDING = "cs2stats.botmode.pending";
 /** The draft's fields that live in the server cfg. */
-const CFG_KEYS: (keyof Draft)[] = ["skins", "premium", "kit", "aim", "nades", "bind"];
+const CFG_KEYS: (keyof Draft)[] = ["skins", "premium", "kit", "aim", "nades", "bind", "stop"];
 /**
  * The draft, and what each part of it was previewed against: `seen` the server cfg's values,
  * `profile` the active bot profile's hash, `launch` the app's launch options.
@@ -95,7 +118,16 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
   const edits = stored?.edits ?? {};
   const draft: Draft = { ...base, ...edits };
   const changed = (Object.keys(edits) as (keyof Draft)[]).filter((k) => !same(edits[k], base[k]));
-  const plan = planOf(changed, draft, base);
+  const plan = planOf(changed, draft, base, server.unboundKeys);
+  // a kept edit that the files now hold (applied elsewhere, or set by another tool) is no edit
+  useEffect(() => {
+    setStored((s) => {
+      if (!s) return s;
+      const left = Object.fromEntries(Object.entries(s.edits).filter(([k, v]) => !same(v, base[k as keyof Draft])));
+      if (Object.keys(left).length === Object.keys(s.edits).length) return s;
+      return Object.keys(left).length ? { ...s, edits: left } : null;
+    });
+  }, [base]);
   // a change the backend would refuse anyway, said before the dialog opens
   const invalid = draft.bind && changed.includes("bind")
     ? !isKeyName(draft.bind.key) ? `"${draft.bind.key}" isn't a key name. Use one character or a name such as mouse4 or kp_end.`
@@ -134,15 +166,28 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
       for (const k of keys) delete n[k];
       return Object.keys(n).length ? { ...s, edits: n } : null;
     });
+    // each part in turn; a refusal stops there, and the message names what was saved and what not
+    const parts: { name: string; run: () => Promise<unknown>; keys: (keyof Draft)[] }[] = [];
+    if (plan.patch) parts.push({ name: "Server cfg settings", run: () => api.setServerCfg(plan.patch!, seen), keys: CFG_KEYS });
+    if (plan.difficulty) parts.push({ name: "Bot difficulty", run: () => api.setDifficulty(plan.difficulty!, profile), keys: ["difficulty"] });
+    if (plan.launch !== null) parts.push({ name: "Launch options", run: () => api.setLaunchOptions(plan.launch!, launchSeen), keys: ["launch"] });
+    const saved: string[] = [];
+    let at = 0;
     try {
-      if (plan.patch) {
-        await api.setServerCfg(plan.patch, seen);
-        drop(...CFG_KEYS);
+      for (; at < parts.length; at++) {
+        await parts[at].run();
+        drop(...parts[at].keys);
+        saved.push(parts[at].name);
       }
-      if (plan.difficulty) { await api.setDifficulty(plan.difficulty, profile); drop("difficulty"); }
-      if (plan.launch !== null) { await api.setLaunchOptions(plan.launch, launchSeen); drop("launch"); }
     } catch (e) {
       const text = errorText(e);
+      const failed = parts[at].name;
+      const untried = parts.slice(at + 1).map((p) => p.name);
+      const report = [
+        saved.length ? `${saved.join(" and ")} saved.` : "Nothing was saved.",
+        `${failed} refused: ${text}.`,
+        untried.length ? `${untried.join(" and ")} not saved: the apply stopped at the refusal.` : "",
+      ].filter(Boolean).join(" ");
       if (text.includes("changed since it was read")) {
         // the edits stay, previewed again against what the files hold now: the next apply,
         // which the user confirms after seeing them, compares with that
@@ -154,14 +199,14 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
           launch: now ? now.launchOptions : s.launch,
         });
         await reload();
-        throw `Something else changed these settings after you made your changes, so nothing was saved (${text}). The page now shows the current values; apply again to keep your changes.`;
+        throw `${report} Another program changed that file after you made your changes. The page now shows the current values; apply again to keep the rest of your changes.`;
       }
       await reload();
-      throw text;
+      throw report;
     }
     await reload();
   };
-  return { draft, base, changed, plan, invalid, set, discard, apply };
+  return { draft, base, changed, plan, invalid, set, discard, apply, unbound: server.unboundKeys, kept: Object.keys(stored?.edits ?? {}).length };
 }
 export type Pending = ReturnType<typeof usePending>;
 
@@ -175,6 +220,7 @@ export function PlanList({ plan, difficultyFrom }: { plan: Plan; difficultyFrom:
         <dd>
           <span className="mono">cfg/gamemode_competitive_server.cfg</span>, these lines; your other lines stay:
           <ul className="bm-files mono selectable">{plan.cfg.map((l) => <li key={l}>{l}</li>)}</ul>
+          {plan.removed.length > 0 && <>Takes out:<ul className="bm-files mono selectable">{plan.removed.map((l) => <li key={l}>{l}</li>)}</ul></>}
         </dd>
       </>}
       {plan.difficulty && <>
@@ -265,6 +311,7 @@ function SetupRows({ cat, catalog, support, pending }: {
         <div className="bm-row__label"><span id="bm-knife-l">Knife key</span><span className="mono faint">subclass_create</span></div>
         <div className="bm-row__ctl">
           <KnifePicker labelId="bm-knife-l" knives={cat?.knives.length ? cat.knives : KNIFE_IDS} bind={draft.bind} onChange={(b) => set("bind", b)} />
+          <UnboundKeys unbound={pending.unbound} stop={draft.stop} onStop={(k) => set("stop", draft.stop.includes(k) ? draft.stop.filter((x) => x !== k) : [...draft.stop, k])} />
         </div>
       </div>
       <div className="bm-row">
@@ -343,6 +390,36 @@ function KnifePicker({ labelId, knives, bind, onChange }: { labelId: string; kni
         It runs after the mod's cfgs, so on the same key it replaces the mod's.
       </p>
     </div>
+  );
+}
+
+/**
+ * The keys Bot Mode keeps unbound: each key the knife key has moved off, the mod's own \
+ * included. The cfg unbinds them on every map, as CS2 keeps old binds and the mod's cfg binds
+ * \ again each map. Only the user takes one out.
+ */
+function UnboundKeys({ unbound, stop, onStop }: { unbound: string[]; stop: string[]; onStop: (key: string) => void }) {
+  const id = useId();
+  if (!unbound.length) return null;
+  return (
+    <section className="bm-unbound" aria-labelledby={id}>
+      <h3 className="caps" id={id}>Keys Bot Mode keeps unbound</h3>
+      <p className="meta">The knife key used to be on these, so each map starts by unbinding them; otherwise they would keep spawning knives. Stop unbinding a key to use it for something else. On {MOD_KNIFE_KEY}, the mod then binds knives again.</p>
+      <ul>
+        {unbound.map((k) => {
+          const leaving = stop.includes(k);
+          return (
+            <li key={k} data-leaving={leaving}>
+              <span className="kbd bm-unbound__key"><kbd>{k}</kbd></span>
+              <span className="meta">{leaving ? "Unbinding stops when you apply" : "Unbound on every map"}</span>
+              <button className="btn btn--ghost btn--sm press" onClick={() => onStop(k)} aria-label={leaving ? `Keep unbinding ${k}` : `Stop unbinding ${k}`}>
+                {leaving ? "Keep unbinding" : "Stop unbinding"}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

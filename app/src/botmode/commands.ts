@@ -244,10 +244,12 @@ export interface ServerSettings {
   botNades: BotNades | null;
   /** null: no bind of this app's; the mod's own knife bind applies */
   knifeBind: KnifeBind | null;
+  /** keys Bot Mode keeps unbound on every map: each key the knife bind has left (settings.rs KnifeBind) */
+  unboundKeys: string[];
 }
 
 /** One change to the server cfg; a field left out keeps what the cfg has. */
-export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind }
+export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind; /** keys the user takes back */ stopUnbinding?: string[] }
 
 /** A CS2 of this install running now, judged by its command line (monitor.rs Running). */
 export type RunningCs2 =

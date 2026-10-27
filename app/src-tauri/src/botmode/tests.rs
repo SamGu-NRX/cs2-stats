@@ -512,17 +512,17 @@ fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() 
     let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
     assert_eq!(
         text,
-        format!("{USER_SERVER_CFG}bot_aim head\r\nbot_nades more\r\nbind kp_end \"subclass_create 507;subclass_create 515\" {KNIFE_MARK}\r\n"),
-        "the user's lines stay; the new ones are appended"
+        format!("{USER_SERVER_CFG}bot_aim head\r\nbot_nades more\r\nunbind \\ {KNIFE_MARK}\r\nbind kp_end \"subclass_create 507;subclass_create 515\" {KNIFE_MARK}\r\n"),
+        "the user's lines stay; the new ones are appended, with the mod's own knife key unbound"
     );
     let now = settings::read_server(&layout.csgo).unwrap();
-    assert_eq!(now, ServerSettings { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind), ..seen.clone() });
+    assert_eq!(now, ServerSettings { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind), unbound_keys: vec!["\\".into()], ..seen.clone() });
 
     // A new key: the old one is unbound, the bind moves, and nothing else of the user's changes.
     let moved = KnifeBind { key: "\\".into(), knives: vec![500] };
     settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(moved.clone()), ..Default::default() }, now.clone()).unwrap();
     let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
-    assert!(text.ends_with(&format!("bot_aim head\r\nbot_nades more\r\nunbind kp_end {KNIFE_MARK}\r\nbind \\ \"subclass_create 500\" {KNIFE_MARK}\r\n")), "{text}");
+    assert!(text.ends_with(&format!("bot_aim head\r\nbot_nades more\r\nunbind kp_end {KNIFE_MARK}\r\nbind \\ \"subclass_create 500\" {KNIFE_MARK}\r\n")), "the bound key gets no unbind: {text}");
     assert_eq!(text.matches(KNIFE_MARK).count(), 2);
     assert_eq!(settings::read_server(&layout.csgo).unwrap().knife_bind, Some(moved));
 
@@ -560,6 +560,44 @@ fn a_compare_and_swap_that_fails_before_the_rename_leaves_nothing_to_roll_back()
 }
 
 #[test]
+fn every_write_refuses_a_file_another_program_wrote_while_it_ran() {
+    // install and overlay use the plain writes; each still checks its file before the rename
+    let s = Scratch::new("cas-every");
+    let layout = fake_game(&s);
+    let target = layout.target("addons/plugin.dll");
+    write(&target, b"theirs before");
+    let lock = OpLock::acquire(&layout).unwrap();
+    let path = target.clone();
+    let err = changes::run(&layout, &CLOSED, &lock, "install-x", |cs| {
+        cs.put("addons/plugin.dll", &hash::bytes(b"ours"), |f| {
+            fs::write(&path, b"theirs during").unwrap();
+            std::io::Write::write_all(f, b"ours").map_err(|e| e.to_string())
+        })
+    })
+    .unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ) && err.contains("another program wrote it"), "{err}");
+    assert_eq!(fs::read(&target).unwrap(), b"theirs during");
+    assert!(changes::unfinished(&layout).unwrap().is_none(), "closed with nothing written, not left pending");
+
+    // the check itself fails (the file became a folder): the entry still comes out of the journal
+    let path = target.clone();
+    let err = changes::run(&layout, &CLOSED, &lock, "install-y", |cs| {
+        cs.put("addons/plugin.dll", &hash::bytes(b"ours"), |f| {
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+            std::io::Write::write_all(f, b"ours").map_err(|e| e.to_string())
+        })
+    })
+    .unwrap_err();
+    assert!(!err.is_empty());
+    assert!(target.is_dir(), "left as it was");
+    assert!(changes::unfinished(&layout).unwrap().is_none(), "closed with nothing written, not left pending: {err}");
+    fs::remove_dir(&target).unwrap();
+    changes::run(&layout, &CLOSED, &lock, "next", |cs| cs.put_bytes("addons/plugin.dll", b"ours")).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"ours");
+}
+
+#[test]
 fn a_music_kit_already_in_the_cfg_does_not_block_another_setting() {
     use settings::ServerPatch;
     let s = Scratch::new("kit-kept");
@@ -577,33 +615,50 @@ fn a_music_kit_already_in_the_cfg_does_not_block_another_setting() {
 }
 
 #[test]
-fn a_moved_knife_key_keeps_every_unbind_until_a_session_has_run_the_cfg() {
+fn every_key_the_knife_bind_leaves_stays_unbound_until_the_user_says_otherwise() {
     use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
     let s = Scratch::new("knife-unbinds");
     let layout = fake_game(&s);
-    let set = |key: &str| {
+    let patch = |p: ServerPatch| {
         let seen = settings::read_server(&layout.csgo).unwrap();
-        let bind = KnifeBind { key: key.into(), knives: vec![500] };
-        settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(bind), ..Default::default() }, seen).unwrap();
+        settings::set_server(&layout, &CLOSED, p, seen).unwrap();
     };
-    let tail = |layout: &Layout| {
-        let text = read(layout, "cfg/gamemode_competitive_server.cfg");
-        text.lines().filter(|l| l.ends_with(KNIFE_MARK)).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>()
+    let bind = |key: &str| ServerPatch { knife_bind: Some(KnifeBind { key: key.into(), knives: vec![500] }), ..Default::default() };
+    let managed = |layout: &Layout| -> Vec<String> {
+        read(layout, "cfg/gamemode_competitive_server.cfg").lines().filter(|l| l.ends_with(KNIFE_MARK)).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect()
     };
-    // k, then j, then m, with no game run in between: k's unbind has not run yet, so it stays
-    set("k");
-    set("j");
-    set("m");
-    assert_eq!(tail(&layout), ["unbind k", "unbind j", "bind m"]);
-    // moving back to a key drops its own unbind
-    set("k");
-    assert_eq!(tail(&layout), ["unbind j", "unbind m", "bind k"]);
-    // a Bot Mode session runs the cfg; the next move needs only the key it leaves
+    // \ (the mod's) -> k -> l: both keys left behind are unbound, on every map, for good
+    patch(bind("k"));
+    assert_eq!(managed(&layout), ["unbind \\", "bind k"]);
+    patch(bind("l"));
+    assert_eq!(managed(&layout), ["unbind \\", "unbind k", "bind l"]);
+    assert_eq!(settings::read_server(&layout.csgo).unwrap().unbound_keys, ["\\", "k"]);
+
+    // a failed launch, and a session that ran, change nothing: no key leaves the set by itself
     let lock = OpLock::acquire(&layout).unwrap();
+    let failed = changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-on", changes::Kind::Session, |cs| {
+        cs.put_bytes("gameinfo.gi", b"on")?;
+        Err::<(), String>("Steam did not start CS2".into())
+    });
+    assert!(failed.is_err());
     changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-on", changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", b"on")).unwrap();
     drop(lock);
-    set("p");
-    assert_eq!(tail(&layout), ["unbind k", "bind p"]);
+    patch(bind("m"));
+    assert_eq!(managed(&layout), ["unbind \\", "unbind k", "unbind l", "bind m"]);
+    // an edit of another setting leaves the lines as they are
+    patch(ServerPatch { bot_aim: Some(settings::BotAim::Head), ..Default::default() });
+    assert_eq!(managed(&layout), ["unbind \\", "unbind k", "unbind l", "bind m"]);
+
+    // back to k: k is bound again, so it gets no unbind; the others stay
+    patch(bind("k"));
+    assert_eq!(managed(&layout), ["unbind \\", "unbind l", "unbind m", "bind k"]);
+    // the user takes \ back for something else: only then does it leave the set
+    patch(ServerPatch { stop_unbinding: vec!["\\".into()], ..Default::default() });
+    assert_eq!(managed(&layout), ["unbind l", "unbind m", "bind k"]);
+    assert_eq!(settings::read_server(&layout.csgo).unwrap().unbound_keys, ["l", "m"]);
+    let seen = settings::read_server(&layout.csgo).unwrap();
+    let err = settings::set_server(&layout, &CLOSED, ServerPatch { stop_unbinding: vec!["a;quit".into()], ..Default::default() }, seen).unwrap_err();
+    assert!(err.contains("not a key name"), "{err}");
 }
 
 #[test]
@@ -645,7 +700,7 @@ fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
     let bind = KnifeBind { key: "kp_end".into(), knives: vec![500] };
     settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(bind), ..Default::default() }, seen).unwrap();
     let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
-    assert_eq!(text, format!("{user}bind kp_end \"subclass_create 500\" {KNIFE_MARK}\r\n"), "both kept, no unbind of a key that was never ours");
+    assert_eq!(text, format!("{user}unbind \\ {KNIFE_MARK}\r\nbind kp_end \"subclass_create 500\" {KNIFE_MARK}\r\n"), "both kept; only the mod's own key is unbound, not keys that were never a knife key");
 }
 
 #[test]

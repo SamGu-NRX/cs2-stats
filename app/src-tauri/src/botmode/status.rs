@@ -245,6 +245,7 @@ pub fn status(
         }
     }
     let app = settings::load_app(layout)?;
+    let (difficulty, active_profile) = settings::active_profile(&layout.csgo)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),
         steam: install.map(|i| i.steam.display().to_string()),
@@ -254,8 +255,8 @@ pub fn status(
         supervised,
         notice: session::UNPROTECTED,
         release,
-        difficulty: settings::current_difficulty(&layout.csgo)?,
-        active_profile: settings::active_profile_sha(&layout.csgo)?,
+        difficulty,
+        active_profile,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
         steam_launch_options,
         launch_options: app.launch_options,

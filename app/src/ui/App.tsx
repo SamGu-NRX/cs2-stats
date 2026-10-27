@@ -81,6 +81,9 @@ export function Shell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // a confirmation is open (Bot Mode's dialogs): the page behind is inert, and a shortcut must
+      // not navigate away from it, least of all while its action runs
+      if (document.querySelector("dialog[open]")) return;
       const el = e.target as HTMLElement;
       const typing = isTextEntry(el);
       const ctrl = e.ctrlKey || e.metaKey;

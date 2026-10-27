@@ -50,3 +50,20 @@ describe("Alt+1 to Alt+7 on Profile", () => {
     }
   });
 });
+
+describe("shortcuts while a confirmation is open", () => {
+  it("navigate nowhere until the dialog closes", async () => {
+    Element.prototype.scrollTo ??= () => {};
+    // fails if Ctrl+1 can leave Bot Mode with a confirmation open or its action running (#47 review)
+    act(() => go("#/profile/overview"));
+    await act(async () => root.render(<App />));
+    const dialog = document.body.appendChild(document.createElement("dialog"));
+    dialog.setAttribute("open", "");
+    const ctrl = (key: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true })); });
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("profile");
+    dialog.remove();
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("home");
+  });
+});

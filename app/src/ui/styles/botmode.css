@@ -219,3 +219,14 @@
 .bm-team { flex: 1; min-width: 0; color: var(--ink); }
 /* a file list wraps its long lines (a bind line, a deep path) even inside the dialog's unbroken flags rule */
 .bm-facts dd .bm-files { white-space: normal; }
+
+/* ---------------------------------------------------------------- keys kept unbound */
+.bm-unbound { display: grid; gap: 6px; width: 100%; padding-top: 4px; }
+.bm-unbound h3 { margin: 0; }
+.bm-unbound .meta { max-width: 68ch; line-height: 1.45; }
+.bm-unbound ul { display: grid; margin: 0; padding: 0; list-style: none; }
+.bm-unbound li { display: flex; align-items: center; gap: 10px; min-height: 36px; border-top: 1px solid var(--line); }
+.bm-unbound li:first-child { border-top: 0; }
+.bm-unbound li .btn { margin-left: auto; }
+.bm-unbound__key kbd { font-family: var(--f-mono); }
+.bm-unbound li[data-leaving="true"] .bm-unbound__key kbd { text-decoration: line-through; color: var(--ink3); }

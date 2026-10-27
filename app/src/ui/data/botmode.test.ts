@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { GithubRelease, Status } from "../../botmode/commands";
 import { mockCall, RELEASES } from "../../botmode/mock";
-import { installState, isKeyName, kitChoices, kitParts, latestRelease, parseModCommands, splitOptions, vacState, writeBlocker } from "./botmode";
+import { installState, isKeyName, repairable, kitChoices, kitParts, latestRelease, parseModCommands, splitOptions, vacState, writeBlocker } from "./botmode";
 
 const status = (s: Parameters<typeof mockCall>[0]): Status => structuredClone(mockCall(s).state.status);
 const rel = (tag: string, published: string | null, extra: Partial<GithubRelease> = {}): GithubRelease => ({ ...RELEASES[0], tag_name: tag, published_at: published, ...extra });
@@ -71,7 +71,7 @@ describe("vacState", () => {
     expect(vacState(s, null, false).tone).toBe("unknown");
     expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], true).text).toBe("VAC off for this session");
     expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], false).text).toBe("VAC off");
-    expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }, { vac: "unknown", pid: 8, why: "access denied" }], false).text).toBe("VAC state unknown");
+    expect(vacState(s, [{ vac: "unknown", pid: 8, why: "access denied" }], false).text).toBe("VAC state unknown");
     expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }], false).text).toBe("VAC on");
     // nothing runs, but the next start from Steam would not be a plain VAC game
     expect(vacState({ ...s, botMode: true }, [], false)).toMatchObject({ tone: "warn", text: "Bot Mode on in gameinfo.gi" });
@@ -93,6 +93,28 @@ describe("vacState", () => {
     expect(vacState({ ...s, steamLaunchOptions: null }, [], false)).toMatchObject({ tone: "unknown", text: "VAC state unknown" });
     // a running CS2's own command line still decides: it is the game itself
     expect(vacState({ ...s, botMode: null, steamLaunchOptions: null }, [{ vac: "on", pid: 7, why: "-insecure is missing" }], false).text).toBe("VAC on");
+  });
+});
+
+describe("vacState with several CS2 processes", () => {
+  it("is off only when every process was read and has -insecure", () => {
+    const s = status("session");
+    const off = (pid: number) => ({ vac: "off" as const, pid, commandLine: "cs2.exe -insecure" });
+    expect(vacState(s, [off(1), off(2)], true).text).toBe("VAC off for this session");
+    // one without -insecure decides, whichever comes first
+    expect(vacState(s, [off(1), { vac: "on", pid: 2, why: "-insecure is missing" }], true)).toMatchObject({ tone: "on", text: "VAC on" });
+    expect(vacState(s, [{ vac: "unknown", pid: 1, why: "access denied" }, { vac: "on", pid: 2, why: "-insecure is missing" }], true).text).toBe("VAC on");
+    // one unread leaves it unknown, even beside verified ones
+    expect(vacState(s, [off(1), { vac: "unknown", pid: 2, why: "access denied" }], true)).toMatchObject({ tone: "unknown", text: "VAC state unknown" });
+  });
+});
+
+describe("repairable", () => {
+  it("counts a missing mod cfg as damage, but not the user's own values", () => {
+    const s = status("installed");
+    expect(repairable(s).map((c) => c.name)).toEqual([]);
+    s.components = s.components.map((c) => (c.name === "Mod cfgs" ? { ...c, missing: ["cfg/bot_buy.cfg"] } : c));
+    expect(repairable(s).map((c) => c.name)).toEqual(["Mod cfgs"]);
   });
 });
 

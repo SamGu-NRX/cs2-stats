@@ -81,6 +81,13 @@ export function writeBlocker(s: Status, supervised: boolean): string | null {
 /** Components whose files are not all the release's or the user's own builds. */
 export const damaged = (s: Status): Component[] => s.components.filter((c) => c.state === "modified" || c.state === "missing");
 
+/**
+ * What a repair (reinstalling the same release) would fix: every damaged component, but not the
+ * mod's cfgs when all that differs is the user's own values, which the install keeps anyway. A
+ * missing mod cfg is damage.
+ */
+export const repairable = (s: Status): Component[] => damaged(s).filter((c) => c.name !== "Mod cfgs" || c.missing.length > 0 || c.state === "missing");
+
 /** The user's BotRandomizer build reads the three cosmetic convars; the official build does not. */
 export function cosmeticsSupport(s: Status): "yours" | "official" | "missing" | "unknown" {
   const c = s.components.find((x) => x.name === "BotRandomizer");
@@ -156,17 +163,20 @@ const isSecureToken = (t: string) => t.replace(/^[-+]+/, "").toLowerCase().split
 export function vacState(s: Status, running: RunningCs2[] | null, supervised: boolean): { tone: "off" | "on" | "warn" | "unknown"; text: string; detail: string } {
   const UNKNOWN = "VAC state unknown";
   if (running === null) return { tone: "unknown", text: UNKNOWN, detail: "The running CS2 processes could not be read." };
-  const off = running.find((r) => r.vac === "off");
-  if (off) {
-    return supervised
-      ? { tone: "off", text: "VAC off for this session", detail: `CS2 (pid ${off.pid}) runs with -insecure, and Bot Mode is ${s.botMode ? "on" : "off"} in gameinfo.gi. VAC is back on once CS2 exits and starts without Bot Mode.` }
-      : { tone: "off", text: "VAC off", detail: `CS2 (pid ${off.pid}) runs with -insecure outside a Bot Mode session.` };
-  }
+  // Every process counts: one with VAC on decides, one unread leaves it unknown, and VAC is off
+  // only when every CS2 of this install was read and runs with -insecure.
+  const on = running.find((r) => r.vac === "on");
+  if (on) return { tone: "on", text: "VAC on", detail: `CS2 (pid ${on.pid}) runs without -insecure${running.length > 1 ? `, one of ${running.length} CS2 processes` : ""}.` };
   const unknown = running.find((r) => r.vac === "unknown");
   if (unknown && unknown.vac === "unknown") return { tone: "unknown", text: UNKNOWN, detail: `CS2 (pid ${unknown.pid}) could not be checked: ${unknown.why}.` };
-  // a running CS2's own command line is direct evidence; without one, the next start from Steam
-  // is judged from gameinfo.gi and Steam's options, and either one unread leaves it unknown
-  if (running.length) return { tone: "on", text: "VAC on", detail: "CS2 runs without -insecure." };
+  if (running.length) {
+    const pids = running.map((r) => r.pid).join(", ");
+    return supervised
+      ? { tone: "off", text: "VAC off for this session", detail: `Every CS2 running (pid ${pids}) has -insecure, and Bot Mode is ${s.botMode ? "on" : "off"} in gameinfo.gi. VAC is back on once CS2 exits and starts without Bot Mode.` }
+      : { tone: "off", text: "VAC off", detail: `Every CS2 running (pid ${pids}) has -insecure, outside a Bot Mode session.` };
+  }
+  // with no CS2 running, the next start from Steam is judged from gameinfo.gi and Steam's
+  // options, and either one unread leaves it unknown
   if (s.botMode === null) return { tone: "unknown", text: UNKNOWN, detail: "gameinfo.gi could not be read, so whether CS2 started from Steam would load the mod is unknown." };
   if (s.steamLaunchOptions === null) return { tone: "unknown", text: UNKNOWN, detail: "CS2's launch options in Steam could not be read, so whether CS2 started from Steam runs with -insecure is unknown." };
   const tokens = splitOptions(s.steamLaunchOptions);

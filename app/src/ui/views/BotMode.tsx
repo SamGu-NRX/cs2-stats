@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react
 import { UNREACHABLE, type BotModeApi, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
 import { Card } from "../components/Card";
 import { toast } from "../components/overlay";
-import { botModeApi, cosmeticsSupport, damaged, errorText, installState, vacState, writeBlocker, type InstallState } from "../data/botmode";
+import { botModeApi, cosmeticsSupport, errorText, repairable, installState, vacState, writeBlocker, type InstallState } from "../data/botmode";
 import { DownloadIcon, PlayIcon, RefreshIcon } from "../icons/ui";
 import { plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
@@ -49,11 +49,16 @@ function useBotMode(api: BotModeApi) {
   const [releases, setReleases] = useState<{ list: GithubRelease[] } | { error: string } | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  // Each read and each poll takes a generation; one that a newer read, poll or launch result has
+  // replaced is dropped, so an older observation never overwrites a newer one.
+  const generation = useRef(0);
+  const current = (g: number) => alive.current && g === generation.current;
 
   const reload = useCallback(async () => {
+    const g = ++generation.current;
     setD((x) => ({ ...x, checking: true }));
     const [st, se, ca, sv, ru] = await Promise.allSettled([api.status(), api.session(), api.catalog(), api.serverCfg(), api.running()]);
-    if (!alive.current) return;
+    if (!current(g)) return;
     setD({
       status: st.status === "fulfilled" ? st.value : null,
       statusError: st.status === "rejected" ? errorText(st.reason) : null,
@@ -65,7 +70,7 @@ function useBotMode(api: BotModeApi) {
       checking: false,
       pollError: null,
     });
-  }, [api]);
+  }, [api]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadReleases = useCallback((again = false) => {
     setReleases(null);
@@ -80,16 +85,18 @@ function useBotMode(api: BotModeApi) {
   useEffect(() => {
     if (!supervised) return;
     const t = window.setInterval(() => {
+      const g = ++generation.current;
       Promise.all([api.session(), api.running().catch(() => null)]).then(([s, running]) => {
-        if (!alive.current) return;
+        if (!current(g)) return;
         setD((x) => ({ ...x, session: s, running, pollError: null }));
         if (!s.supervised) void reload();
-      }, (e) => alive.current && setD((x) => ({ ...x, pollError: errorText(e) })));
+      }, (e) => current(g) && setD((x) => ({ ...x, pollError: errorText(e) })));
     }, 2000);
     return () => clearInterval(t);
   }, [api, supervised, reload]);
 
-  const setSession = useCallback((s: SessionView) => setD((x) => ({ ...x, session: s })), []);
+  // a launch's own result is the newest observation: reads and polls begun before it are dropped
+  const setSession = useCallback((s: SessionView) => { generation.current++; setD((x) => ({ ...x, session: s })); }, []);
   return { ...d, releases, reload, loadReleases, setSession };
 }
 
@@ -147,7 +154,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
   const [dialog, setDialog] = useState<Dialog | null>(null);
   /** builds the last install replaced, until they are applied again: an install never removes them silently */
   const [replaced, setReplaced] = useState<string[]>([]);
-  const pending = usePendingOrNull(api, status, bm.server, bm.reload);
+  const { pending, keptUnread } = usePendingOrNull(api, status, bm.server, bm.reload);
   const { session } = bm;
   const releases = bm.releases && "list" in bm.releases ? bm.releases.list : null;
   const state = installState(status, releases);
@@ -160,7 +167,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
 
   return (
     <div className="view__in bm">
-      <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} onCheck={() => void bm.reload()}
+      <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} keptUnread={keptUnread} onCheck={() => void bm.reload()}
         onLaunch={(e) => setDialog({ kind: "launch", instant: fromKeyboard(e) })}
         onRollback={(e) => { if (status.unfinished) setDialog({ kind: "rollback", change: status.unfinished, interrupted: true, instant: fromKeyboard(e) }); }} />
       <div className="bm-cols">
@@ -204,6 +211,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           onClose={close}
           run={async () => {
             // changes kept while CS2 ran go in first; a refusal stops the launch here
+            if (keptUnread) throw KEPT_UNREAD;
             if (pending?.changed.length) await pending.apply();
             const s = await api.launch();
             bm.setSession(s);
@@ -229,17 +237,23 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
 }
 
 /** The settings draft, once the server cfg has been read. */
-function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSettings | null, reload: () => Promise<void>): Pending | null {
+/**
+ * The settings draft, once the server cfg has been read. `keptUnread`: changes are kept but the
+ * cfg could not be read, so they can be neither shown nor checked; launch waits for them.
+ */
+function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSettings | null, reload: () => Promise<void>): { pending: Pending | null; keptUnread: boolean } {
   // the hook runs on every render; without a read cfg it works on empty settings and is not shown
   const p = usePending(api, status, server ?? EMPTY_SERVER, reload);
-  return server ? p : null;
+  return server ? { pending: p, keptUnread: false } : { pending: null, keptUnread: p.kept > 0 };
 }
-const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null };
+const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [] };
+/** Why launch waits when kept changes can't be read. */
+const KEPT_UNREAD = "You have kept changes, but the server cfg could not be read, so they can't be checked. Launch waits until it reads; check again.";
 
 // ---------------------------------------------------------------- hero
 
-function Hero({ status, session, running, state, blocker, checking, pending, onCheck, onLaunch, onRollback }: {
-  status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null;
+function Hero({ status, session, running, state, blocker, checking, pending, keptUnread, onCheck, onLaunch, onRollback }: {
+  status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null; keptUnread: boolean;
   onCheck: () => void; onLaunch: (e: MouseEvent) => void; onRollback: (e: MouseEvent) => void;
 }) {
   const shown = useShown();
@@ -248,7 +262,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
   const word = status.unfinished ? "Interrupted" : supervised ? "In session" : unseen ? "Can't check CS2" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
   const tone = status.unfinished ? "poor" : supervised ? "live" : unseen || status.cs2Running || state.kind === "missing" ? "idle" : "ready";
   const version = state.kind === "current" || state.kind === "behind" ? state.tag : state.kind === "byHand" ? state.reference : null;
-  const launchWhy = state.kind === "missing" ? "Install the mod first." : pending?.invalid ?? blocker;
+  const launchWhy = state.kind === "missing" ? "Install the mod first." : keptUnread ? KEPT_UNREAD : pending?.invalid ?? blocker;
   const vac = vacState(status, running, supervised);
   // the interrupted change has its own sentence and button above; its warning would repeat it
   const warnings = status.warnings.filter((w) => !status.unfinished || !w.startsWith(`Change ${status.unfinished.id} `));
@@ -289,7 +303,12 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
           </button>
         </div>
       )}
-      {launchWhy && !status.unfinished && <p className="meta bm-hero__why" id="bm-launch-why">{launchWhy}</p>}
+      {launchWhy && !status.unfinished && (
+        <p className="meta bm-hero__why" id="bm-launch-why">
+          {launchWhy}
+          {keptUnread && <> <button className="link" onClick={onCheck} disabled={checking}>Check again</button></>}
+        </p>
+      )}
       {(session?.notice || warnings.length > 0) && (
         <ul className="bm-notes">
           {session?.notice && <li className="selectable">{shown(session.notice)}</li>}
@@ -327,8 +346,8 @@ function Install({ status, state, releases, replaced, blocker, onRetryReleases, 
 }) {
   const shown = useShown();
   const latest = state.latest;
-  // the mod's cfgs differ by design once the user edits them; reinstalling would not change that
-  const broken = damaged(status).filter((c) => c.name !== "Mod cfgs");
+  // a repair puts back damaged and missing files; the user's own values in the mod's cfgs are not damage
+  const broken = repairable(status);
   const others = status.components.filter((c) => c.state !== "official");
   const official = status.components.length - others.length;
   const r = status.release;
@@ -538,7 +557,9 @@ function opLabel(op: string): string {
 }
 
 function History({ status, blocker, undoable, onUndo }: { status: Status; blocker: string | null; undoable: Change | null; onUndo: (c: Change, e: MouseEvent) => void }) {
-  const changes = status.backups.filter((b) => b.kind === "normal").slice(0, 5);
+  const recent = status.backups.filter((b) => b.kind === "normal").slice(0, 5);
+  // the change Undo takes off always shows, even when undone changes push it past the first five
+  const changes = undoable && !recent.includes(undoable) ? [...recent, undoable] : recent;
   return (
     <Card title="History" className="bm-history" aside={<span className="meta">Every change is backed up</span>}>
       {!changes.length ? <p className="meta">No changes yet. Each install, build and setting you apply shows here, and the newest can be undone.</p> : (

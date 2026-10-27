@@ -385,9 +385,14 @@ impl<'p> ChangeSet<'p> {
                 return Err(format!("{rel}: the backup copy does not match the original"));
             }
         }
+        // What the target must still hold at the rename: what the caller read for a guarded
+        // write, or else what was read and backed up just above. Every write is a
+        // compare-and-swap, so a file another program writes meanwhile (Valve's updater during an
+        // install) is never overwritten.
+        let must_hold = self.guard.clone().unwrap_or_else(|| before.clone());
         let entry = Entry { path: rel.clone(), before, after: expected.to_string() };
         let line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
-        // where this entry starts, so a compare-and-swap that fails before the rename can take it back
+        // where this entry starts, so a write that fails before its rename can take it back
         let journal_len = self.log.metadata().map_err(|e| format!("reading the change journal: {e}"))?.len();
         writeln!(self.log, "{line}")
             .and_then(|_| self.log.sync_data())
@@ -395,47 +400,38 @@ impl<'p> ChangeSet<'p> {
         self.entries.push(entry);
 
         let tmp = tmp_path(&target);
-        self.confine(&rel)?;
-        let written = File::create(&tmp)
-            .map_err(|e| format!("{}: {e}", tmp.display()))
-            .and_then(|mut f| {
-                fill(&mut f)?;
-                f.sync_all().map_err(|e| e.to_string())
-            })
-            .and_then(|_| hash::file(&tmp));
-        match written {
-            Ok(got) if got == expected => {}
-            Ok(got) => {
-                let _ = fs::remove_file(&tmp);
+        let staged = (|| -> Result<(), String> {
+            self.confine(&rel)?;
+            let got = File::create(&tmp)
+                .map_err(|e| format!("{}: {e}", tmp.display()))
+                .and_then(|mut f| {
+                    fill(&mut f)?;
+                    f.sync_all().map_err(|e| e.to_string())
+                })
+                .and_then(|_| hash::file(&tmp))
+                .map_err(|e| format!("{rel}: {e}"))?;
+            if got != expected {
                 return Err(format!("{rel}: new content hashes to {got}, expected {expected}"));
             }
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                return Err(format!("{rel}: {e}"));
+            self.confine(&rel)?;
+            if hash::file_if_exists(&target)? != must_hold {
+                return Err(format!("{rel}: {CHANGED_SINCE_READ}; another program wrote it while Bot Mode was writing, so Bot Mode left it as that program wrote it"));
             }
-        }
-        if let Err(e) = self.confine(&rel) {
+            Ok(())
+        })();
+        if let Err(e) = staged {
             let _ = fs::remove_file(&tmp);
+            // Nothing was written: the entry comes back out of the journal, so the change is
+            // undone as one that wrote nothing, instead of rollback finding another program's
+            // content and refusing, which would leave every later change blocked.
+            self.entries.pop();
+            // the journal handle only appends, which Windows does not let truncate
+            OpenOptions::new()
+                .write(true)
+                .open(self.dir.join(ENTRIES))
+                .and_then(|f| f.set_len(journal_len).and_then(|_| f.sync_data()))
+                .map_err(|j| format!("{e}; and taking it back out of the change journal failed: {j}"))?;
             return Err(e);
-        }
-        if let Some(guard) = self.guard.clone() {
-            let now = hash::file_if_exists(&target).inspect_err(|_| {
-                let _ = fs::remove_file(&tmp);
-            })?;
-            if now != guard {
-                let _ = fs::remove_file(&tmp);
-                // Nothing was written: the entry comes back out of the journal, so the change is
-                // undone as one that wrote nothing, instead of rollback finding the other writer's
-                // content and refusing, which would leave every later change blocked.
-                self.entries.pop();
-                // the journal handle only appends, which Windows does not let truncate
-                OpenOptions::new()
-                    .write(true)
-                    .open(self.dir.join(ENTRIES))
-                    .and_then(|f| f.set_len(journal_len).and_then(|_| f.sync_data()))
-                    .map_err(|e| format!("writing the change journal: {e}"))?;
-                return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
-            }
         }
         fs::rename(&tmp, &target).map_err(|e| {
             let _ = fs::remove_file(&tmp);
