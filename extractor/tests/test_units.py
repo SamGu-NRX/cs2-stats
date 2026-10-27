@@ -437,6 +437,97 @@ def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path,
     assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
+def test_a_download_seen_in_progress_records_when_it_reached_its_final_size(tmp_path, monkeypatch):
+    # The browser's Downloads copy is created within seconds of this moment; a file already whole when first seen
+    # has no such moment, and its copy is never matched.
+    _isolate(tmp_path, monkeypatch)
+    growing, whole = dp.DOWNLOADS / "6b1c0d4e-growing", dp.DOWNLOADS / "6b1c0d4e-whole"
+    growing.write_bytes(dp.RAR_MAGIC)
+    whole.write_bytes(dp.RAR_MAGIC + b"whole")
+    p = dp.Pipeline()
+    p.scan(100.0)
+    growing.write_bytes(dp.RAR_MAGIC + b"rest of the archive")
+    p.scan(102.0)
+    p.scan(114.0)
+    assert p.archives[growing.name].download_finished == 102.0
+    assert p.archives[whole.name].download_finished is None
+
+
+def test_a_retried_failure_keeps_its_downloads_finish_time(tmp_path, monkeypatch):
+    # A retry read the archive from failed/, where no download is seen, so a retry that passed had no finish time
+    # and its copy in Downloads was never cleaned.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    kept = dp.FAILED_DIR / "slug-r1"
+    kept.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 20
+    (kept / "archive.rar").write_bytes(data)
+    (kept / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.0.0")))
+    sha = hashlib.sha256(data).hexdigest()
+    dp.append_jsonl(dp.LEDGER, dict(id="r1", status="failed", kept=str(kept), rar_bytes=len(data), rar_sha256=sha,
+                                    download_started=100.0, download_finished=123.0, finished_utc="2026-10-27T01:00:00"))
+    p = dp.Pipeline(retry_failed=True)
+    p.scan(0.0)
+    a = p.archives["slug-r1"]
+    assert (a.rar_bytes, a.rar_sha256, a.download_started, a.download_finished) == (len(data), sha, 100.0, 123.0)
+    assert p.rar_facts(a)["download_finished"] == 123.0
+    # A record of other bytes (the folder reused for another archive) lends nothing.
+    assert p.failure_record(kept, "0" * 64) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
+def test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"
+    copies.mkdir()
+    copy = copies / "a-vs-b-bo3.rar"
+    copy.write_bytes(dp.RAR_MAGIC + b"payload" * 50)
+    import hashlib
+    rec = dict(id="a1", status="done", rar_bytes=copy.stat().st_size, rar_sha256=hashlib.sha256(copy.read_bytes()).hexdigest(),
+               download_finished=copy.stat().st_birthtime)
+    p = dp.Pipeline(copies_folder=copies)
+    p.clean_copies({**rec, "status": "failed"})  # its copy may be the last one once failed/ is trimmed
+    p.clean_copies({**rec, "download_finished": None})  # whole when first seen: nothing to match on
+    p.clean_copies({k: v for k, v in rec.items() if not k.startswith("rar_")})  # written before hashes existed
+    dp.Pipeline(copies_folder=None).clean_copies(rec)  # mode off, or the folder was refused
+    assert copy.exists() and not dp.COPIES_LOG.exists()
+    p.clean_copies(rec)
+    assert not copy.exists()
+    assert [json.loads(x)["outcome"] for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()] == ["deleting", "deleted"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
+def test_a_finished_archives_downloads_copy_is_deleted(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"  # _isolate made downloads/, the watched folder
+    copies.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 500
+    rar = dp.DOWNLOADS / "0d9f6a51-5d4e-4a8e-9a3e-3a1f0c2b7e11"
+    rar.write_bytes(data[:10])
+    p = dp.Pipeline(copies_folder=copies)
+    t0 = time.time()
+    p.scan(t0)
+    rar.write_bytes(data)
+    copy = copies / "event-team-a-vs-team-b-bo3-Xy12.rar"
+    copy.write_bytes(data)
+    other = copies / "same-size-other-archive.rar"
+    other.write_bytes(data[:-1] + b"!")
+    p.scan(t0 + 2)
+    p.scan(t0 + 14)
+    a = p.archives[rar.name]
+    a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-0d9f6a51", dp.WORK_DIR / "w"
+    a.work.mkdir()
+    a.dems, a.results = [a.work / "x-m1-nuke.dem"], {"x-m1-nuke.dem": {"ok": True, "map": "m1-nuke"}}
+    p.finish_archives()
+    assert p.ledger[rar.name]["download_finished"] == t0 + 2
+    assert not copy.exists() and other.exists()
+    rows = [json.loads(x) for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()]
+    assert sorted((Path(r["path"]).name, r["outcome"]) for r in rows) == [
+        (copy.name, "deleted"), (copy.name, "deleting"), (other.name, "kept")]
+
+
 def test_assist_on_own_teammate_is_not_credited():
     # A pro demo, tick 31391: a T player (C) hurt his teammate (D) for 38, a CT player (A) killed D, and
     # player_death names C as assister; the scoreboard does not count it (assists 1, not 2).
@@ -884,6 +975,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
     monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    monkeypatch.setattr(dp, "COPIES_LOG", dp.LOG_DIR / "download_copies.jsonl")
     # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
     # A test that needs another value sets free_gb itself.
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
