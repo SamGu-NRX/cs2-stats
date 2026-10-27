@@ -162,8 +162,12 @@ def visibility_onsets(checker, eye: np.ndarray, alive: np.ndarray, pairs: list[t
     if T == 0 or not pairs:
         return []
 
+    # Python lists once per round: indexing the arrays per call cost more than the raycasts (5.4 s of 8.1 s on a
+    # 53-round demo, 1.65M calls).
+    eyes, live = eye.tolist(), alive.tolist()
+
     def clear(t, i, j):
-        return bool(alive[t, i] and alive[t, j]) and checker.is_visible(eye[t, i].tolist(), eye[t, j].tolist())
+        return bool(live[t][i] and live[t][j]) and checker.is_visible(eyes[t][i], eyes[t][j])
 
     samples = list(range(0, T, ONSET_STRIDE))
     if samples[-1] != T - 1:
