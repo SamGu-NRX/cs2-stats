@@ -91,7 +91,7 @@ Firepower includes pistol rounds. The pistol-round line is any metric over `roll
 | clutches24 | Clutches per 24 Rounds | exact | 1vX clutches won per 24 rounds (CS Demo Manager's detection, with the alive counts read at freeze end as well as after each death and each mid-round disconnect of a living player, so a side that starts a round with one player is in a clutch before any kill and a disconnect can start one; a player the source marks dead at freeze end, or who disconnected at or before it, is not counted) |
 | roundsWithSniper, roundsWithAwp | Rounds with a Sniper, with an AWP | approx | Rounds you carried one at freeze end or killed with one |
 | sniperKillsPct, awpKillsPct | Sniper Kills %, AWP Kills % | exact | Share of kills |
-| smokesPR, flashesPR, molotovsPR, hesPR | Smokes, Flashbangs, Molotovs, HE Grenades Thrown per Round | exact | Throws per round (molotovs include incendiaries) |
+| smokesPR, flashesPR, molotovsPR, hesPR | Smokes, Flashbangs, Molotovs, HE Grenades Thrown per Round | exact | Throws per round (molotovs include incendiaries), over the rounds of matches with a throw log (`throwRounds`). A source without one, such as the Valve imports, counts no throws, so its rounds stay out; with none in scope the rate has no value. Every ratio per grenade thrown (assists, flash-to-kills, enemies and blind time per flash, damage per HE, the molotov ratios) counts its numerator over those matches too (`THROW_LOGGED`, `metrics.ts` `perThrown`), so a Valve match's blinds and damage never sit over another match's throws. |
 
 Restored from main's unscored rows (E20): shown under the attributes, not part of any score.
 

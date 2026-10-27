@@ -82,9 +82,9 @@ Rounds are addressed by row `ri`; `rounds[ri].number` is the match's round numbe
 | `roleBlend(summary, side)` (`identity.ts`) | `RoleBlend` | Returns a distribution with in-fold isotonic adjustment for mapped classes. Mapped values are calibrated probability; rule-only values are fit; AWPer is measured AWP rounds. A single primary requires 30 side rounds, a top share of at least 0.60 and a 0.15 top-two margin. Otherwise returns `top2` plus a reason; under 30 rounds both primary and top2 are null. T uses Entry, Trader, Support, Lurker and AWPer; CT uses Anchor, Rotator, Aggressor, Support and AWPer. Packer's Half-Lurker and Lurker fit one Lurker class; Mixed and IGL are excluded. Known AWP share is preserved exactly, with the remainder distributed over non-AWPer roles. |
 | `supportTendency(summary, baselines, opt)` | score and evidence | Legacy support percentile helper; roleBlend now includes Support from explicit utility and trading thresholds. |
 | `mostSimilar(mine, pack, "style" or "performance")` | ranked names | Cosine similarity of profile shape over both sides: "plays like" over the six style attributes on T and on CT, "performs like" over the rating inputs on T and on CT. `mine` is `{ T, CT }`, each built with `styleScores(attributes(sideSummary, b, { side }))` or `performanceScores(...)`. The pack is optional and private (see Baselines). |
-| `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the opponents of the same matches. |
+| `vsOpponents(facts, filter)` (`opponents.ts`) | per metric | The player against the players they faced, each opponent rolled up over only the matches they were an opponent in (a bot can be a teammate in another). Performance metrics get a rank and `pct`, the share of opponents beaten with a tie counting half. `opponentScore(rows, ids)` (`opponent-score.ts`) averages those shares into an attribute score. |
 | `gunProficiency(all, perMatch)` (`guns.ts`) | per gun | Familiarity and consistency, not performance. `all` is the rollup over the kept matches, `perMatch` each match's `Summary.weapons`. |
-| `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. |
+| `series`, `trend`, `correlation`, `winCorrelation` (`trends.ts`) | per match | One value per match, a slope over match order, correlations between metrics or with winning. `correlation.ts` holds what a view needs to show one: `WIN_CORRELATION_MIN` decided matches, `noiseBand(n)` (the 5% chance \|r\| from Fisher's z) and `winLossMeans`. |
 | `cellOf`, `cellCentre`, `GRID`, `CELL` (`positions.ts`) | | The presence grid: 128-unit cells over ±4096 world units. Roll up every player's ids for a map's walkable backdrop. |
 
 ### Worker calls (`worker/protocol.ts` `Api`)
@@ -100,7 +100,7 @@ the same bot pool; `careers.pool` names the pool the scores came from, "all" whe
 |---|---|
 | `attributeBlock(q, opt)` | Firepower against the pros and the six style attributes against the bots, each with its metrics' values, percentiles and reasons, for one side and pool |
 | `buySplits(q)` | The query by own and opponent buy class: aggression by economy, pistol and eco splits |
-| `opponents(q)` | Every metric against the opponents of the same matches, with a rank for performance metrics |
+| `opponents(q)` | Every metric against the players faced, each over the matches they were an opponent in, with a rank and share beaten for performance metrics |
 | `winCorrelation(q, ids)` | Each metric's per-match correlation with winning |
 | `roles(q)` | The role blend on T and on CT, and `all`: the two weighted by their rounds (`identity.ts` `overallRole`) |
 | `rolesByMap(q)` | `roles(q)` for each map played, most rounds first; rounds are counted under every query filter |

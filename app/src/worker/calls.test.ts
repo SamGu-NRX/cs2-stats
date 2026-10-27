@@ -26,7 +26,7 @@ it("ranks the player among the opponents with lower-is-better metrics turned aro
 
 it("correlates a metric with winning over decided matches only, and needs three", () => {
   // fails if undecided matches count or two points give an r
-  expect(winCorrelationOf([{ value: 1, won: true }, { value: 0, won: false }, { value: 5, won: null }])).toBeNull();
+  expect(winCorrelationOf([{ value: 1, won: true }, { value: 0, won: false }, { value: 5, won: null }])).toEqual({ r: null, n: 2, reason: "few" });
   expect(winCorrelationOf([{ value: 2, won: true }, { value: 1, won: false }, { value: 3, won: true }])!.r).toBeGreaterThan(0.8);
 });
 

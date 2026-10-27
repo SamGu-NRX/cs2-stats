@@ -19,6 +19,7 @@ import type { Best, careerRatings, FocusArea, MetricDelta, SessionAwards } from 
 import type { Bombsites, HeadToHead, OpeningDetail, RoundRating, Situations, YourMatchRow, ZoneRow } from "../stats/matchviews";
 import type { BuyClass, BuyTier } from "../stats/economy";
 import type { VsOpponents } from "../stats/opponents";
+import type { WinCorrelation } from "../stats/trends";
 import type { Filter, Summary } from "../stats/rollup";
 import type { SwingSources } from "../stats/swing";
 import type { MatchEntry } from "../ui/data/match";
@@ -306,15 +307,17 @@ export interface Api {
   /** you and the bots of your style population on the style compass, over both sides of the query's matches */
   compass(q: Query): CompassResult;
   /** least-squares trend of each series over match order (trends.ts trend) */
-  trends(series: (number | null)[][]): ({ slope: number; r: number; n: number } | null)[];
+  trends(series: (number | null)[][]): ({ slope: number; r: number | null; n: number } | null)[];
   /** the query split by the player's own and the opponents' buy class (pistol, eco, half, full): aggression by economy and round type, pistol and eco splits */
   buySplits(q: Query): BuySplits;
   /** the query split by the team's finer buy tier (pistol, eco, semi-eco, force, full; economy.ts buyTier), tiers with rounds only */
   buyTiers(q: Query): Partial<Record<BuyTier, Rolled>>;
   /** each metric for the player against the opponents of the same matches (stats/opponents.ts) */
   opponents(q: Query): VsOpponents[];
-  /** Pearson r of each metric per match with winning it (stats/trends.ts winCorrelationOf) */
-  winCorrelation(q: Query, metricIds: string[]): Record<string, { r: number; n: number } | null>;
+  /** Pearson r of each metric per match with winning it, or why there is none (stats/trends.ts winCorrelationOf) */
+  winCorrelation(q: Query, metricIds: string[]): Record<string, WinCorrelation>;
+  /** one metric's value in each of the query's matches, by file; null where the filter keeps no round of it (stats/trends.ts matchValues) */
+  matchValues(q: Query, metricId: string): Record<string, number | null>;
   /** the role blend per side and per spawn the player used (the spawns filter), each spawn with its map, place name and position (SpawnRow) */
   rolesBySpawn(q: Query): Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>;
   /** Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100, as weighted pro percentiles */
