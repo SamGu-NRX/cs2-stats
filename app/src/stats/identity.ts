@@ -146,7 +146,8 @@ function roleMetrics(s: Summary, awp: number | null, thresholds: RoleThresholds 
   const openingAttempts = share(m.openingKills + m.openingDeaths, m.rounds);
   const tradeKills = share(m.tradeKills, m.kills);
   const tradeAssistShare = share(m.tradeKills + m.assists, m.kills + m.assists);
-  const utilityPR = share(m.smokes + m.flashes + m.hes + m.molotovs, m.rounds);
+  // over the rounds of matches with a throw log, as metrics.ts flashesPR and the other thrown rates
+  const utilityPR = share(m.smokes + m.flashes + m.hes + m.molotovs, m.throwRounds);
   const teamDistance = share(m.nearestDistSum, m.spacingSamples);
   const firstContactTime = share(s.aggression.contactSecs, s.aggression.contactRounds);
   const pushDepth = share(s.aggression.pushSum, s.aggression.pushRounds);

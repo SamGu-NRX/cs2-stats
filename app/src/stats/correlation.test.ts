@@ -3,15 +3,31 @@
 import { describe, expect, it } from "vitest";
 import { noiseBand, winLossMeans } from "./correlation";
 import { FREEZE_END, oneRound } from "./testing/match";
-import { matchValues, trend, winCorrelationOf } from "./trends";
+import { matchValues, pearson, trend, winCorrelationOf } from "./trends";
 
 describe("winCorrelationOf", () => {
   it("is the point-biserial r of the values with won = 1, lost = 0", () => {
     // fails if r is computed on another coding or ties enter: values 1, 2, 3, 4 with lost, lost, won,
     // won and one tie. Pearson of (1,2,3,4) with (0,0,1,1) is 0.894427 (4 / sqrt(5 * 4))
     const r = winCorrelationOf([{ value: 1, won: false }, { value: 2, won: false }, { value: 3, won: true }, { value: 4, won: true }, { value: 9, won: null }]);
-    expect(r!.n).toBe(4);
-    expect(r!.r).toBeCloseTo(4 / Math.sqrt(20), 9);
+    expect([r.n, r.reason]).toEqual([4, null]);
+    expect(r.r).toBeCloseTo(4 / Math.sqrt(20), 9);
+  });
+
+  it("gives no r, and says why, when winning or the stat never changes", () => {
+    // fails if ten wins in a row or a constant stat read as r = 0: either makes r 0 / 0
+    const wins = Array.from({ length: 10 }, (_, i) => ({ value: i, won: true }));
+    expect(winCorrelationOf(wins)).toEqual({ r: null, n: 10, reason: "allWon" });
+    expect(winCorrelationOf(wins.map((p) => ({ ...p, won: false })))).toEqual({ r: null, n: 10, reason: "allLost" });
+    expect(winCorrelationOf(wins.map((p, i) => ({ value: 1.2, won: i % 2 === 0 })))).toEqual({ r: null, n: 10, reason: "flat" });
+  });
+});
+
+describe("pearson", () => {
+  it("is undefined (null), not 0, when either side has no spread", () => {
+    expect(pearson([1, 1, 1], [1, 2, 3])).toBeNull();
+    expect(pearson([1, 2, 3], [5, 5, 5])).toBeNull();
+    expect(pearson([1, 2, 3], [3, 2, 1])).toBeCloseTo(-1, 12);
   });
 });
 
@@ -39,6 +55,10 @@ describe("trend", () => {
     const r = trend([1, null, 3, 5].map((value, i) => ({ match: String(i), date: null, value, won: null })));
     expect(r!.slope).toBeCloseTo(9 / 7, 9);
     expect(r!.n).toBe(3);
+  });
+
+  it("has a slope of 0 and no r for a stat that never changes", () => {
+    expect(trend([2, 2, 2, 2].map((value, i) => ({ match: String(i), date: null, value, won: null })))).toEqual({ slope: 0, r: null, n: 4 });
   });
 });
 

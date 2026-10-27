@@ -1182,8 +1182,11 @@ describe("engine features bound to the UI", () => {
   afterEach(() => { act(() => go("#/")); });
 
   describe("Moves with winning", () => {
-    const corr = (n: number, extra: Record<string, { r: number; n: number } | null> = {}) =>
-      ({ ...Object.fromEntries(WIN_STATS.map((id) => [id, null])), rating3: { r: 0.8, n }, adr: { r: -0.3, n }, ...extra });
+    type Corr = { r: number | null; n: number; reason: "few" | "allWon" | "allLost" | "flat" | null };
+    const c = (r: number | null, n: number, reason: Corr["reason"] = null): Corr => ({ r, n, reason });
+    /** every stat under the minimum (n 2, too few for an r), but rating3 and adr over n matches */
+    const corr = (n: number, extra: Record<string, Corr> = {}): Record<string, Corr> =>
+      ({ ...Object.fromEntries(WIN_STATS.map((id) => [id, c(null, 2, "few")])), rating3: c(0.8, n), adr: c(-0.3, n), ...extra });
     const tabs = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".wcor__row"));
     /** the worker's matchValues answer for one metric: each match's value under the query's filter */
     const valuesOf = (q: Query, id: string) => Object.fromEntries(q.files.map((f) => [f, matchValues(factsOf.get(f)!, q.filter, [id])?.[id] ?? null]));
@@ -1193,7 +1196,7 @@ describe("engine features bound to the UI", () => {
       // 5% band at n = 12, or a bar inside it is drawn as a relation
       use(samples);
       const q = queryOf(careerSamples());
-      answers = { winCorrelation: corr(12, { kast: { r: 0.9, n: 9 } }), trends: [{ slope: 0.01, r: 0.2, n: 4 }] };
+      answers = { winCorrelation: corr(12, { kast: c(0.9, 9) }), trends: [{ slope: 0.01, r: 0.2, n: 4 }] };
       render(<WinCorrelationCard q={q} list={career()} />);
       expect(asked.winCorrelation).toEqual([q, [...WIN_STATS]]);
       expect(tabs().map((b) => text(b.querySelector(".wcor__lab")))).toEqual(["Rating 3.0", "ADR"]);
@@ -1234,17 +1237,36 @@ describe("engine features bound to the UI", () => {
       expect(parseHash(location.hash).query.get("trend")).toBeNull();
     });
 
-    it("shows nothing but the count toward the minimum while every stat is under it", () => {
-      // fails if a correlation over 8 matches is drawn
+    it("counts toward the minimum by each stat's own matches while every stat is under it", () => {
+      // fails if a correlation under 10 matches is drawn, or the count is the decided matches rather
+      // than each stat's matches with a value: the stats have 6 to 8, so the pips show the fewest
       use(samples);
-      answers = { winCorrelation: corr(8) };
-      const list = career();
-      render(<WinCorrelationCard q={queryOf(careerSamples())} list={list} />);
+      answers = { winCorrelation: Object.fromEntries(WIN_STATS.map((id, i) => [id, c(i === 0 ? 0.4 : 0.1, i === 1 ? 6 : 8)])) };
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={career()} />);
       expect(host.querySelector("[role=tablist]")).toBeNull();
-      const decided = list.filter((e) => e.result !== "T").length;
-      expect(text(host.querySelector(".wcor__empty p"))).toBe(`Shows from 10 matches with a winner. ${decided} so far.`);
-      expect(host.querySelectorAll(".wcor__pips i.is-on")).toHaveLength(decided);
+      expect(text(host.querySelector(".wcor__empty p"))).toBe("Shows each stat from 10 matches with a winner and a value. 6 to 8 so far.");
+      expect(host.querySelectorAll(".wcor__pips i.is-on")).toHaveLength(6);
       expect(host.querySelectorAll(".wcor__pips i")).toHaveLength(10);
+      answers = { winCorrelation: Object.fromEntries(WIN_STATS.map((id) => [id, c(0.2, 8)])) };
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={career()} />);
+      expect(text(host.querySelector(".wcor__empty p"))).toBe("Shows each stat from 10 matches with a winner and a value. 8 so far.");
+    });
+
+    it("says every decided match was a win instead of drawing r = 0, and names the stats it leaves out", () => {
+      // fails if a run of wins, or a stat the same in every match, is drawn as a bar at 0, or a stat
+      // under its own minimum disappears without a word
+      use(samples);
+      answers = { winCorrelation: Object.fromEntries(WIN_STATS.map((id) => [id, c(null, 12, "allWon")])) };
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={career()} />);
+      expect(host.querySelector("[role=tablist]")).toBeNull();
+      expect(text(host.querySelector(".wcor__state"))).toBe("All 12 decided matches were wins, so nothing can move with winning yet.");
+      answers = { winCorrelation: corr(12, { kast: c(0.9, 9), hs: c(null, 12, "flat") }), trends: [{ slope: 0.01, r: 0.2, n: 4 }] };
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={career()} />);
+      expect(tabs().map((b) => text(b.querySelector(".wcor__lab")))).toEqual(["Rating 3.0", "ADR"]);
+      const left = Array.from(host.querySelectorAll(".wcor__left p")).map(text);
+      expect(left[0]).toMatch(/^Not yet, under 10 matches: .*KAST \(9\)\.$/);
+      expect(left[1]).toBe("Left out, the same in every match: Headshot kills.");
+      expect(text(host.querySelector(".wcor-card"))).not.toContain("0.00");
     });
   });
 
@@ -1314,6 +1336,24 @@ describe("engine features bound to the UI", () => {
       const tile = Array.from(host.querySelectorAll(".ptile")).find((el) => text(el.querySelector(".ptile__l")) === "ADR")!;
       expect(tile.getAttribute("data-tip")).toContain("against your opponents.");
       expect(tile.getAttribute("data-tip")).toContain(`${ordinal(adr.rank!)} of ${adr.of}; they average ${fmtMetric("adr", adr.opponents)}.`);
+    });
+
+    it("draws no verdict while the opponents load or for a stat none of them has, never the benchmark's under their name", () => {
+      // fails if the card falls back to the fixed benchmark while saying "against your opponents"
+      use(samples);
+      act(() => go("#/profile/overview?cmp=opponents"));
+      answers = {};
+      render(<ProfileView tab="overview" />);
+      const tipOfTile = (label: string) => Array.from(host.querySelectorAll(".ptile")).find((el) => text(el.querySelector(".ptile__l")) === label)!.getAttribute("data-tip")!;
+      expect(tipOfTile("ADR")).toContain("Loading your opponents.");
+      expect(tipOfTile("ADR")).not.toContain("against your opponents");
+      expect(host.querySelector(".gauge-wrap .vpill")).toBeNull();
+      answers = { opponents: vs().map((x) => (x.id === "adr" ? { ...x, opponents: null, rank: null, pct: null } : x)) };
+      render(<ProfileView tab="overview" />);
+      expect(tipOfTile("ADR")).toContain("None of your opponents has a value for this.");
+      expect(tipOfTile("ADR")).not.toContain("against your opponents");
+      expect(tipOfTile("KAST")).toContain("against your opponents.");
+      expect(host.querySelector(".gauge-wrap .vpill")).not.toBeNull();
     });
 
     it("scores Firepower against your opponents from the shares of them you beat", async () => {

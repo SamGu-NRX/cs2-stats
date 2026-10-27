@@ -67,6 +67,8 @@ export interface Metric {
 export interface Sample { n: (s: Summary) => number; unit: string; min?: number }
 
 const per = (a: number, b: number) => (b > 0 ? a / b : null);
+/** Why a thrown-per-round rate has no value: rounds kept, none from a match with a throw log. */
+const noThrowLog = (s: Summary) => (s.m.rounds > 0 && s.m.throwRounds === 0 ? "none of these matches logs grenade throws" : null);
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 const clutchWins = (s: Summary) => s.m.clutchWon1 + s.m.clutchWon2 + s.m.clutchWon3 + s.m.clutchWon4 + s.m.clutchWon5;
 const WINDOW = "5.4 s, the window that reproduces HLTV's traded deaths best";
@@ -168,15 +170,16 @@ const M: Metric[] = [
   { id: "awpKillsPct", label: "AWP kills", hltv: "AWP Kills %", kind: "identity", group: "sniping", unit: "pct", status: "exact",
     tip: "Share of your kills with the AWP.", def: "Share of your kills made with the AWP.", value: (s) => pct(s.m.awpKills, s.m.kills) },
 
-  // ---- Utility (identity)
+  // ---- Utility (identity). The thrown counts per round divide by the rounds of matches with a throw
+  // log (throwRounds), not every round: a source without one counts no throws at all (stats/utility.ts).
   { id: "smokesPR", label: "Smokes thrown per round", hltv: "Smokes Thrown per Round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
-    tip: "Smokes you throw per round.", def: "Smoke grenades thrown per round.", value: (s) => per(s.m.smokes, s.m.rounds) },
+    tip: "Smokes you throw per round.", def: "Smoke grenades thrown per round.", value: (s) => per(s.m.smokes, s.m.throwRounds), why: noThrowLog },
   { id: "flashesPR", label: "Flashbangs thrown per round", hltv: "Flashbangs Thrown per Round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
-    tip: "Flashbangs you throw per round.", def: "Flashbangs thrown per round.", value: (s) => per(s.m.flashes, s.m.rounds) },
+    tip: "Flashbangs you throw per round.", def: "Flashbangs thrown per round.", value: (s) => per(s.m.flashes, s.m.throwRounds), why: noThrowLog },
   { id: "molotovsPR", label: "Molotovs thrown per round", hltv: "Molotovs Thrown per Round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
-    tip: "Molotovs and incendiaries you throw per round.", def: "Molotovs and incendiaries thrown per round.", value: (s) => per(s.m.molotovs, s.m.rounds) },
+    tip: "Molotovs and incendiaries you throw per round.", def: "Molotovs and incendiaries thrown per round.", value: (s) => per(s.m.molotovs, s.m.throwRounds), why: noThrowLog },
   { id: "hesPR", label: "HE grenades thrown per round", hltv: "HE Grenades Thrown per Round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
-    tip: "HE grenades you throw per round.", def: "HE grenades thrown per round.", value: (s) => per(s.m.hes, s.m.rounds) },
+    tip: "HE grenades you throw per round.", def: "HE grenades thrown per round.", value: (s) => per(s.m.hes, s.m.throwRounds), why: noThrowLog },
 
   // ---- HLTV's "how good" metrics (performance)
   { id: "tradeKillSuccess", label: "Trade kill success", hltv: "Trade Kill Success %", kind: "performance", group: "trading", unit: "pct", status: "approx",

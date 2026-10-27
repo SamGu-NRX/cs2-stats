@@ -86,3 +86,22 @@ it("marks utility coverage round by round, not for the whole match", () => {
   const s = rollup([derive(tables, CS2RB)], { player: ["a", "c"] });
   expect([s.m.utilityRounds, s.m.rounds]).toEqual([2, 4]);
 });
+
+it("rates grenades thrown per round over the rounds of matches with a throw log only", () => {
+  // fails if a match without a throw log (the Valve imports) counts as rounds with no throws: a throws
+  // two flashbangs in a logged one-round match and plays one round of a match with no throw log.
+  // Over both, 2 flashbangs in 1 logged round is 2.00 a round, not 1.00; over the unlogged match alone
+  // there is no rate, and the metric says why
+  const logged = oneRound({ players: { a: "CT", c: "T" }, grenade_throws: [
+    { tick: FREEZE_END + 100, steamid: "a", weapon: "flashbang" }, { tick: FREEZE_END + 300, steamid: "a", weapon: "flashbang" },
+  ] });
+  const unlogged = oneRound({ players: { a: "CT", c: "T" } });
+  const both = rollup([logged, unlogged], { player: "a" });
+  expect([both.m.rounds, both.m.throwRounds, both.m.flashes]).toEqual([2, 1, 2]);
+  expect(METRIC.flashesPR.value(both)).toBe(2);
+  expect(METRIC.smokesPR.value(both)).toBe(0);
+  const none = rollup([unlogged], { player: "a" });
+  expect([METRIC.flashesPR.value(none), METRIC.hesPR.value(none), METRIC.molotovsPR.value(none), METRIC.smokesPR.value(none)]).toEqual([null, null, null, null]);
+  expect(METRIC.flashesPR.why!(none)).toBe("none of these matches logs grenade throws");
+  expect(METRIC.flashesPR.why!(both)).toBeNull();
+});

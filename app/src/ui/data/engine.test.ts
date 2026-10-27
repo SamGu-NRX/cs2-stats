@@ -48,6 +48,17 @@ describe("match model", async () => {
     }
   });
 
+  it("counts every round of a file with throws, logged or rebuilt from detonations, toward the thrown-per-round rates", () => {
+    // fails if the plugin's rebuilt throws (older files) drop out of the rates as the Valve imports do
+    const sources = new Set<string | null>();
+    for (const v of models) {
+      const m = v.b.lines.both[v.human].m;
+      sources.add(v.facts.match.inputs.throws);
+      expect(m.throwRounds, v.file).toBe(v.facts.match.inputs.throws === null ? 0 : m.rounds);
+    }
+    expect(sources.has("rebuilt")).toBe(true);
+  });
+
   it("ends the running score at the match score, or has none when early rounds are missing", () => {
     for (const v of models) {
       const last = v.rounds[v.rounds.length - 1];

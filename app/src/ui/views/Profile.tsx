@@ -325,7 +325,8 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
 // ---------------------------------------------------------------- the card
 
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
-interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string }
+/** One hero stat; `bench` is null when the chosen population has no value for it yet (loading, failed or none), so no verdict is drawn. */
+interface CellDef { id: string; metric: string; label: string; bench: Bench | null; value: number | null; text: string }
 
 /**
  * A side's role for the card's pip (role-decision.ts's rule): the gated primary with its share, else
@@ -352,10 +353,24 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   // the players you faced on the page's side, each over the matches you faced them in (worker opponents)
   const sideQ = useMemo(() => ({ files: p.base.files, filter: { ...p.base.filter, ...sidesOf(side) } }), [p.base, side]);
   const oppCall = useCall("opponents", cmp === "opponents" ? [sideQ] : null);
-  const opp = useMemo(() => new Map((oppCall.stale ? [] : oppCall.data ?? []).map((x) => [x.id, x])), [oppCall.data, oppCall.stale]);
-  /** a verdict's reference for a stat: the bots' value or the opponents' mean, in the metric's units; none against benchmarks */
-  const refOf = (metricId: string, botVal: number | null | undefined) => (cmp === "bots" ? botVal ?? null : cmp === "opponents" ? opp.get(metricId)?.opponents ?? null : null);
-  const bench = (b: Bench, metricId: string, botVal: number | null | undefined) => { const x = refOf(metricId, botVal); return x === null ? b : benchAround(b, x); };
+  const oppReady = !!oppCall.data && !oppCall.stale;
+  const opp = useMemo(() => new Map((oppReady ? oppCall.data! : []).map((x) => [x.id, x])), [oppCall.data, oppReady]);
+  /** a verdict's reference for a stat: the bots' value or the opponents' mean, in the metric's units; null when that population has none (yet) */
+  const refOf = (metricId: string, botVal: number | null | undefined): number | null => (cmp === "bots" ? botVal ?? null : opp.get(metricId)?.opponents ?? null);
+  /**
+   * The bench a verdict reads: the benchmark itself, or the benchmark's bands around the chosen
+   * population's value. Without that value there is no verdict, never one against the benchmark
+   * worded as if it were the population.
+   */
+  const bench = (b: Bench, metricId: string, botVal: number | null | undefined): Bench | null => {
+    if (cmp === "bench") return b;
+    const x = refOf(metricId, botVal);
+    return x === null ? null : benchAround(b, x);
+  };
+  /** why a tile has no verdict against the chosen population */
+  const noRef = cmp === "opponents"
+    ? (oppCall.error && !oppCall.stale ? `Your opponents could not be loaded: ${oppCall.error}` : !oppReady ? "Loading your opponents." : "None of your opponents has a value for this.")
+    : "The bots you played have no value for this.";
   const swingPct = line.swing === null ? null : 100 * line.swing;
   const cells: CellDef[] = [
     { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, "swing", botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, text: fmtSwing(line.swing) },
@@ -372,7 +387,8 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const r3: Rating3 = p.ratings[key];
   const gaugeV = r3.value;
   const botRating = p.botRatings?.[key].value ?? null;
-  const gaugeVerdict = verdictOf(gaugeV, bench(BENCH.rating, "rating3", botRating));
+  const gaugeBench = bench(BENCH.rating, "rating3", botRating);
+  const gaugeVerdict = gaugeBench ? verdictOf(gaugeV, gaugeBench) : "na";
   const roles = useCall("roles", [p.base]).data;
   const { baselines } = useData();
   const pros = useCall("compare", baselines ? [p.base, { side: key }] : null).data;
@@ -381,10 +397,11 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const cellTip = (c: CellDef) => {
     const pct = pros?.p[c.metric];
     const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}.` : null;
-    const v = verdictOf(c.value, c.bench);
+    const v = c.bench ? verdictOf(c.value, c.bench) : "na";
     const o = cmp === "opponents" ? opp.get(c.metric) : undefined;
     const field = o && o.rank !== null && o.opponents !== null ? `${ordinal(o.rank)} of ${o.of}; they average ${o.id === "swing" ? fmtSwing(o.opponents / 100) : fmtMetric(o.id, o.opponents)}.` : null;
-    return [rank, v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`, field, tipOf(c.metric)].filter(Boolean).join("\n");
+    const verdict = !c.bench ? noRef : v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`;
+    return [rank, verdict, field, tipOf(c.metric)].filter(Boolean).join("\n");
   };
   const sides = [{ s: "T", r: topRole(roles?.T), rounds: roles?.T.rounds }, { s: "CT", r: topRole(roles?.CT), rounds: roles?.CT.rounds }] as const;
   const wins = p.list.filter((e) => e.result === "W").length;

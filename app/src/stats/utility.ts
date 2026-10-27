@@ -33,6 +33,10 @@ export function markUtility(c: Ctx): void {
 
 export function utility(c: Ctx): void {
   const g = c.t.grenade_throws;
+  // A throw table with no row for anyone is no log (the Valve imports, flashes.ts FlashTool.thrown):
+  // its rounds cannot say how many grenades anyone threw, so they stay out of throwRounds and of the
+  // thrown-per-round rates.
+  const logged = !!g && g.n > 0;
   const d = c.t.damages;
   // repeated blind rows joined, as every view counts them (blinds.ts)
   const windows = blindWindows(c.t);
@@ -42,6 +46,7 @@ export function utility(c: Ctx): void {
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rows = c.pr[ri];
     const row = (id: string | null) => { const p = c.idOf(id); return p === null ? null : rows[p]; };
+    if (logged) for (const p of rows) if (p) p.m.throwRounds = 1;
     const throws: [number, number, string][] = []; // [player, tick, class]
     if (g) for (const i of c.byRound("grenade_throws")[ri]) {
       const p = row(g.steamid[i]);

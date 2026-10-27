@@ -43,6 +43,12 @@
 .wcor__chance { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--ink3); }
 .wcor__swatch { width: 18px; height: 10px; border-radius: 2px; background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--line2); }
 
+/* the stats left out under the rows, and the card's one-line states */
+.wcor__left { margin-top: 12px; font-size: 12px; }
+.wcor__left p { margin: 0; }
+.wcor__left p + p { margin-top: 4px; }
+.wcor__state { margin: 0; padding: 4px 0; }
+
 .wcor__panel { min-width: 0; }
 .wcor__head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; }
 .wcor__head b { font: 600 14px/1.2 var(--f); color: var(--ink); }
