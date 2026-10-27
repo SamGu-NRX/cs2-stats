@@ -111,6 +111,8 @@ export interface SightFact {
   ttd: number | null;
   /** onset to the attacker's kill of the victim, within the visible stretch */
   ttk: number | null;
+  /** the tick of that kill, so a moment can find it (moments.ts); null without one */
+  killTick: number | null;
   /** degrees the view turned from the onset to the first damage (the angle between the two view directions) */
   moved: number | null;
   /** onset to the start of the movement that brought the crosshair to the head */
@@ -768,7 +770,7 @@ function sighting(c: Ctx, view: View, e: number): Sighting | null {
 
   return {
     f: {
-      k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
+      k: "sight", ri, pi, weapon, place: r3(place), ttd, ttk, killTick: kill ? kill.tick : null, moved, react, shot: !firing && shotK >= 0 ? (tick(shotK) - t0) / rate : null,
       over: over === null ? null : r3(over), micro, trackN, trackSum: r3(trackSum),
       dist: r1(dist), travel: travel === null ? null : r1(travel), shotSpeed: shotSpeed === null ? null : r1(shotSpeed), shotErr, stopBuf, first: null,
       duelS: duel ? (duel.tick - t0) / rate : null, duelWon: duel ? duel.killer === pi : null, xf,

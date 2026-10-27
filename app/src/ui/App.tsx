@@ -21,8 +21,9 @@ import { MatchesView } from "./views/Matches";
 const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
 const SettingsView = lazy(() => import("./views/Settings"));
+const ClipsView = lazy(() => import("./views/Clips"));
 
-const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", settings: "Data & settings" };
+const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", clips: "Clips", settings: "Data & settings" };
 
 function AppBar({ onPalette }: { onPalette: () => void }) {
   const { set } = useBarSlots();
@@ -56,10 +57,16 @@ export function Shell() {
   const pageKey = route.page === "match" ? `match:${file}` : route.page;
   const hide = useHidePersonal();
 
+  const firstPage = useRef(true);
   useEffect(() => {
     document.title = `${TITLES[route.page]} · CS2 Stats`;
     // a link to a section (?sec=) scrolls there itself (router.ts useSection)
     if (!route.query.get("sec")) pane.current?.scrollTo({ top: 0 });
+    // A new page starts keyboard and screen-reader users at its top: focus moves to the pane, which is
+    // labelled with the page's name, unless it is already inside it. The first page keeps the
+    // browser's own start.
+    if (firstPage.current) { firstPage.current = false; return; }
+    if (!pane.current?.contains(document.activeElement)) pane.current?.focus({ preventScroll: true });
   }, [pageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const actions = useMemo(() => [
@@ -87,7 +94,7 @@ export function Shell() {
       if (ctrl && e.key.toLowerCase() === "b") { e.preventDefault(); rail.toggle(false); return; }
       if (ctrl && e.key === ",") { e.preventDefault(); go(pageHref("settings"), { instant: true }); return; }
       if (ctrl && e.key.toLowerCase() === "r") { e.preventDefault(); refresh(); toast("Scanning the match folder"); return; }
-      if (ctrl && /^[1-3]$/.test(e.key)) {
+      if (ctrl && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
         const n = NAV.find((x) => x.key === e.key);
         if (n) go(pageHref(n.page), { instant: true });
@@ -143,6 +150,7 @@ export function Shell() {
   else if (route.page === "matches") view = <MatchesView />;
   else if (route.page === "profile") view = <ProfileView tab={route.ptab ?? "overview"} />;
   else if (route.page === "settings") view = <SettingsView />;
+  else if (route.page === "clips") view = <ClipsView />;
   else view = <HomeView />;
 
   return (

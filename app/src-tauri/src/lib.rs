@@ -2,11 +2,12 @@
 //! `read_match` returns one file's gzip bytes, `import_match` copies a picked file into
 //! `matches\imported\`, and `read_pack` reads the optional packs folder (pro scores, agent art).
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
-//! `import_valve` runs the importer that writes them.
+//! `import_valve` runs the importer that writes them. The clipping service's commands are in `clips`.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
 //! launcher is in `botmode`.
 
 pub mod botmode;
+pub mod clips;
 
 use serde::Serialize;
 use std::fs;
@@ -596,6 +597,12 @@ pub fn run() {
             read_valve,
             import_valve,
             valve_import_state,
+            clips::clips_env,
+            clips::clips_demos,
+            clips::clips_scan,
+            clips::clips_save_job,
+            clips::clips_launch,
+            clips::clips_ffmpeg,
             botmode::commands::botmode_status,
             botmode::commands::botmode_releases,
             botmode::commands::botmode_download,

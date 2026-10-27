@@ -1,5 +1,5 @@
 // The worker calls whose answers name the file they came from: personal bests, sessions, clutches,
-// multi-kill rounds and highlights. Each match is visited together with its own file, so two files
+// multi-kill rounds, highlights and clip moments. Each match is visited together with its own file, so two files
 // holding one match id (two exports of the same match) keep their own answers rather than both
 // pointing at whichever file was seen last.
 import { addBests, awardsOf, groupSessions, SESSION_GAP_H, type Best } from "../stats/career";
@@ -8,8 +8,8 @@ import { rating3Of } from "../stats/rating3";
 import { rollup, type Summary } from "../stats/rollup";
 import { matchWon } from "../stats/trends";
 import { startMs } from "../ui/data/match";
-import type { ClutchRow, HighlightRow, MultiKillRow, Query, Session } from "./protocol";
-import { addClutchRows, addHighlightRows, addMultiKillRows, newestHighlightFirst } from "./views";
+import type { ClutchRow, HighlightRow, MomentRow, MultiKillRow, Query, Session } from "./protocol";
+import { addClutchRows, addHighlightRows, addMomentRows, addMultiKillRows, bestMomentRowFirst, newestHighlightFirst } from "./views";
 
 /** Visits each of `files` once with its facts and its file name (the worker's stream). */
 export type EachMatch = (files: string[], visit: (f: MatchFacts, file: string) => void) => Promise<void>;
@@ -61,6 +61,11 @@ export function matchCalls(each: EachMatch, summary: (q: Query) => Promise<Summa
       const out: HighlightRow[] = [];
       await each(q.files, (f, file) => addHighlightRows(out, file, f, q.filter));
       return out.sort(newestHighlightFirst);
+    },
+    async moments(q: Query): Promise<MomentRow[]> {
+      const out: MomentRow[] = [];
+      await each(q.files, (f, file) => addMomentRows(out, file, f, q.filter));
+      return out.sort(bestMomentRowFirst);
     },
   };
 }

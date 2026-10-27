@@ -72,7 +72,7 @@ An aggregate agreement figure alone can hide timing failures. The game's `spotte
 9. Validate visibility, then retire the plugin.
 
 ## Clipping, later
-`moments = score(facts)` (multi-kills, clutches, high-swing events, aim outliers). Scoring happens at extraction time; demos are kept only for matches above a threshold. A separate renderer drives CS2 playback with HLAE or OBS, and ffmpeg templates overlay the facts. The scorer is engine code; the renderer is the only new subsystem.
+`moments = score(facts)` (multi-kills, clutches, high-swing events, aim outliers). Scoring happens at extraction time; demos are kept only for matches above a threshold. A separate renderer drives CS2 playback with HLAE or OBS, and ffmpeg templates overlay the facts. The scorer is engine code; the renderer is the only new subsystem. The render path chosen (HLAE with an in-game script) and what is verified are in `design/clips.md`.
 
 ## Risks to revisit
 - **The Python sidecar** (size, antivirus, startup): if two of the three bite, move to a Rust extractor behind the same schema.

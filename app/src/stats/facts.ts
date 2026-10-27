@@ -10,7 +10,7 @@ import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 32;
+export const DERIVE_VERSION = 33;
 
 export interface MatchInfo {
   id: string;
@@ -192,6 +192,8 @@ export interface KillFact {
   /** world position of killer and victim, [x, y] */
   kpos: [number, number] | null;
   vpos: [number, number] | null;
+  /** the killer's place name at the kill (kills.a_place, raw: "BombsiteB"); null when the source has none */
+  place: string | null;
   /** an enemy kill: a killer on the other side (not a team kill, suicide or world death) */
   enemy: boolean;
   /** first enemy kill of the round */

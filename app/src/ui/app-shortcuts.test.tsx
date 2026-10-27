@@ -23,6 +23,7 @@ vi.mock("./views/Home", () => ({ HomeView: () => <p data-home /> }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+Element.prototype.scrollTo ??= function () {};
 globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia;
 
 let host: HTMLDivElement;
@@ -48,5 +49,23 @@ describe("Alt+1 to Alt+7 on Profile", () => {
       const r = parseHash(location.hash);
       expect([r.ptab, Object.fromEntries(r.query)], tab).toEqual([tab, scope]);
     }
+  });
+});
+
+describe("a new page", () => {
+  it("moves focus to the pane, named for the page, and leaves focus alone on the first page", async () => {
+    // fails if keyboard and screen-reader users stay on the sidebar link after a page change, or the
+    // first page load takes focus away from where the browser put it
+    const before = document.body.appendChild(document.createElement("button"));
+    before.focus();
+    await act(async () => root.render(<App />));
+    expect(document.activeElement).toBe(before);
+    const side = host.querySelector<HTMLElement>('a[data-page="profile"]')!;
+    side.focus();
+    expect(document.activeElement).toBe(side);
+    await act(async () => { go("#/profile/overview"); });
+    const pane = host.querySelector("main.pane");
+    expect(document.activeElement).toBe(pane);
+    expect(pane?.getAttribute("aria-label")).toBe("Profile");
   });
 });
