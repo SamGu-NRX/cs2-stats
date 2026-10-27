@@ -557,6 +557,15 @@ fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// The game paths a recorded change wrote, as its journal lists them, for the view's rollback
+/// preview. `id` must name a recorded change; reads only.
+pub fn files(layout: &Layout, id: &str) -> Result<Vec<String>, String> {
+    if !list(layout)?.iter().any(|m| m.id == id) {
+        return Err(format!("{id}: no such change"));
+    }
+    Ok(read_entries(&layout.backups().join(id))?.into_iter().map(|e| e.path).collect())
+}
+
 /// Every recorded change, newest first.
 pub fn list(layout: &Layout) -> Result<Vec<Meta>, String> {
     let dir = layout.backups();

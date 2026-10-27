@@ -499,6 +499,122 @@ fn a_cfg_edited_between_the_read_and_the_write_is_kept() {
 }
 
 #[test]
+fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() {
+    use settings::{BotAim, BotNades, KnifeBind, ServerPatch, ServerSettings, KNIFE_MARK};
+    let s = Scratch::new("server-cfg");
+    let layout = fake_game(&s);
+    with_catalog(&layout);
+    let seen = settings::read_server(&layout.csgo).unwrap();
+    assert_eq!((seen.bot_aim, seen.bot_nades, seen.knife_bind.clone()), (None, None, None), "unset: the plugins' defaults apply");
+    let bind = KnifeBind { key: "kp_end".into(), knives: vec![507, 515] };
+    let patch = ServerPatch { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind.clone()), ..Default::default() };
+    settings::set_server(&layout, &CLOSED, patch, seen.clone()).unwrap();
+    let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
+    assert_eq!(
+        text,
+        format!("{USER_SERVER_CFG}bot_aim head\r\nbot_nades more\r\nbind kp_end \"subclass_create 507;subclass_create 515\" {KNIFE_MARK}\r\n"),
+        "the user's lines stay; the new ones are appended"
+    );
+    let now = settings::read_server(&layout.csgo).unwrap();
+    assert_eq!(now, ServerSettings { bot_aim: Some(BotAim::Head), bot_nades: Some(BotNades::More), knife_bind: Some(bind), ..seen.clone() });
+
+    // A new key: the old one is unbound, the bind moves, and nothing else of the user's changes.
+    let moved = KnifeBind { key: "\\".into(), knives: vec![500] };
+    settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(moved.clone()), ..Default::default() }, now.clone()).unwrap();
+    let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
+    assert!(text.ends_with(&format!("bot_aim head\r\nbot_nades more\r\nunbind kp_end {KNIFE_MARK}\r\nbind \\ \"subclass_create 500\" {KNIFE_MARK}\r\n")), "{text}");
+    assert_eq!(text.matches(KNIFE_MARK).count(), 2);
+    assert_eq!(settings::read_server(&layout.csgo).unwrap().knife_bind, Some(moved));
+
+    // Sent with a stale read, nothing is written and no change is recorded.
+    let changes_before = changes::list(&layout).unwrap().len();
+    let err = settings::set_server(&layout, &CLOSED, ServerPatch { bot_aim: Some(BotAim::Body), ..Default::default() }, now).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(read(&layout, "cfg/gamemode_competitive_server.cfg"), text);
+    assert_eq!(changes::list(&layout).unwrap().len(), changes_before);
+}
+
+#[test]
+fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
+    use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
+    let s = Scratch::new("knife-bind-own");
+    let layout = fake_game(&s);
+    // a user's own line that ends with the marker, and a marked line whose key would inject a command
+    let user = format!("bind k \"say hi; quit\" {KNIFE_MARK}\r\nbind a;quit \"subclass_create 500\" {KNIFE_MARK}\r\n");
+    write(&layout.target("cfg/gamemode_competitive_server.cfg"), user.as_bytes());
+    let seen = settings::read_server(&layout.csgo).unwrap();
+    assert_eq!(seen.knife_bind, None, "neither line is read as this app's bind");
+    let bind = KnifeBind { key: "kp_end".into(), knives: vec![500] };
+    settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(bind), ..Default::default() }, seen).unwrap();
+    let text = read(&layout, "cfg/gamemode_competitive_server.cfg");
+    assert_eq!(text, format!("{user}bind kp_end \"subclass_create 500\" {KNIFE_MARK}\r\n"), "both kept, no unbind of a key that was never ours");
+}
+
+#[test]
+fn a_knife_bind_that_could_run_other_commands_is_refused() {
+    use settings::{KnifeBind, ServerPatch};
+    let s = Scratch::new("knife-bind");
+    let layout = fake_game(&s);
+    let seen = settings::read_server(&layout.csgo).unwrap();
+    for (key, knives, why) in [
+        ("x\"; quit", vec![500], "a key that closes the quote"),
+        ("a;b", vec![500], "a key with a command separator"),
+        ("MOUSE4", vec![500], "a name in capitals"),
+        ("", vec![500], "no key"),
+        ("kp_end", vec![], "no knives"),
+        ("kp_end", vec![42], "a knife subclass_create does not spawn"),
+        ("kp_end", vec![500, 500], "a knife twice"),
+    ] {
+        let patch = ServerPatch { knife_bind: Some(KnifeBind { key: key.into(), knives }), ..Default::default() };
+        assert!(settings::set_server(&layout, &CLOSED, patch, seen.clone()).is_err(), "{why}");
+    }
+    assert_eq!(read(&layout, "cfg/gamemode_competitive_server.cfg"), USER_SERVER_CFG);
+}
+
+#[test]
+fn the_vac_check_reads_command_lines_and_never_ends_a_process() {
+    use super::monitor::{self, Running};
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![(1, 10), (2, 20), (3, 30), (4, 40)]]);
+    sys.proc(1, 10, Some(SAFE_LINE));
+    sys.proc(2, 20, Some(&format!("\"{IMAGE}\" -novid")));
+    sys.proc(3, 30, None);
+    sys.proc_at(4, 40, r"D:\Other\cs2.exe", Some("cs2.exe"));
+    let got = monitor::inspect(&sys, std::path::Path::new(IMAGE)).unwrap();
+    assert!(matches!(&got[0], Running::Off { pid: 1, .. }), "{got:?}");
+    assert!(matches!(&got[1], Running::On { pid: 2, .. }), "{got:?}");
+    assert!(matches!(&got[2], Running::Unknown { pid: 3, .. }), "{got:?}");
+    assert_eq!(got.len(), 3, "another install's CS2 is left out");
+    for pid in [1, 2, 3, 4] {
+        assert_eq!(sys.end_attempts(pid), 0, "process {pid} was not touched");
+    }
+    let json = serde_json::to_value(&got[0]).unwrap();
+    assert_eq!(json["vac"], "off");
+    assert_eq!(json["commandLine"], SAFE_LINE);
+}
+
+#[test]
+fn previews_list_a_changes_files_and_the_overlay_plan_without_local_paths() {
+    let s = Scratch::new("previews");
+    let layout = installed(&s);
+    let install = changes::list(&layout).unwrap().into_iter().find(|m| m.operation == "install-v1.4.7").unwrap();
+    let files = changes::files(&layout, &install.id).unwrap();
+    assert_eq!(files.len(), install.files);
+    assert!(files.iter().all(|f| !f.contains('\\') && !f.starts_with('/')), "{files:?}");
+    assert!(changes::files(&layout, "../../etc").unwrap_err().contains("no such change"));
+
+    let manifest = layout.data.join("overlay.json");
+    fs::write(&manifest, overlay::EXAMPLE).unwrap();
+    let plan = overlay::plan(&manifest).unwrap();
+    let randomizer = plan.iter().find(|e| e.name == "BotRandomizer").unwrap();
+    assert_eq!(randomizer.target, "addons/counterstrikesharp/plugins/BotRandomizer");
+    assert_eq!(randomizer.repo, "SamGu-NRX/CS2-Bot-Randomizer");
+    assert!(randomizer.files.contains(&"cosmetic_catalog.json".to_string()));
+    let json = serde_json::to_string(&plan).unwrap();
+    assert!(!json.contains("USERPROFILE") && !json.contains("checkout"), "no local checkout path: {json}");
+}
+
+#[test]
 fn the_catalog_lists_music_kits_knives_and_finish_weights() {
     let s = Scratch::new("catalog");
     let layout = fake_game(&s);

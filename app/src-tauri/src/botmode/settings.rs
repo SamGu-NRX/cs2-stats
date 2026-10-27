@@ -4,7 +4,9 @@
 //! difficulty level?"): copy `overrides\<Low|Medium|High>\botprofile.vpk` over
 //! `overrides\botprofile.vpk`. The cosmetics are three BotRandomizer convars, merged into
 //! `cfg\gamemode_competitive_server.cfg`, which runs after the mod's cfgs and which game and
-//! mod updates do not ship.
+//! mod updates do not ship. The same cfg takes the mod's `bot_aim` and `bot_nades` presets
+//! (its BotAimImprover and NadeSystem READMEs list the values) and this app's knife-drop bind
+//! (see [`KnifeBind`]).
 
 use super::cfg;
 use super::changes::{self, write_atomic, Meta};
@@ -261,6 +263,232 @@ pub fn read_catalog(csgo: &Path) -> Result<Option<Catalog>, String> {
         knives: f.knives.iter().map(|k| k.def_index).collect(),
         knife_finishes: f.knife_finish_preferences,
     }))
+}
+
+/// `bot_aim`, BotAimImprover's aim preset. Without a line the plugin uses mixed.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BotAim {
+    Head,
+    Body,
+    Mixed,
+}
+
+/// `bot_nades`, NadeSystem's grenade preset. Without a line the plugin uses normal.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BotNades {
+    Off,
+    Less,
+    Normal,
+    More,
+    Max,
+}
+
+impl BotAim {
+    const ALL: [(BotAim, &'static str); 3] = [(BotAim::Head, "head"), (BotAim::Body, "body"), (BotAim::Mixed, "mixed")];
+    fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(a, _)| *a == self).map(|(_, n)| *n).unwrap_or("mixed")
+    }
+    fn parse(s: &str) -> Option<BotAim> {
+        Self::ALL.iter().find(|(_, n)| n.eq_ignore_ascii_case(s)).map(|(a, _)| *a)
+    }
+}
+
+impl BotNades {
+    const ALL: [(BotNades, &'static str); 5] =
+        [(BotNades::Off, "off"), (BotNades::Less, "less"), (BotNades::Normal, "normal"), (BotNades::More, "more"), (BotNades::Max, "max")];
+    fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(a, _)| *a == self).map(|(_, n)| *n).unwrap_or("normal")
+    }
+    fn parse(s: &str) -> Option<BotNades> {
+        Self::ALL.iter().find(|(_, n)| n.eq_ignore_ascii_case(s)).map(|(a, _)| *a)
+    }
+}
+
+/// The knives `subclass_create` can spawn, by item definition index: the mod's own knife bind
+/// in `my_bot_normal_config.cfg` lists exactly these.
+pub const KNIVES: [u32; 20] = [500, 503, 505, 506, 507, 508, 509, 512, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 525, 526];
+
+/// This app's knife-drop bind: a key that spawns the chosen knives with `subclass_create`. It
+/// is one line in the server cfg, marked with [`KNIFE_MARK`]; the cfg runs after the mod's cfgs,
+/// so the bind wins over the mod's own one on the same key. When the key changes, the line
+/// before it unbinds the previous key, since CS2 keeps a key's bind in the user's key settings.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnifeBind {
+    pub key: String,
+    pub knives: Vec<u32>,
+}
+
+/// Ends every line of the server cfg this app manages for the knife bind.
+pub const KNIFE_MARK: &str = "// cs2-stats knife drop";
+
+/// A key name the console accepts unquoted: one character, or a name such as `mouse4` or `kp_end`.
+fn check_key(key: &str) -> Result<(), String> {
+    let one = key.chars().count() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric() || "\\`[]-=,./'".contains(c));
+    let name = (2..=16).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if one || name {
+        Ok(())
+    } else {
+        Err(format!("{key:?}: not a key name; use one character or a name such as mouse4 or kp_end"))
+    }
+}
+
+impl KnifeBind {
+    fn check(&self) -> Result<(), String> {
+        check_key(&self.key)?;
+        if self.knives.is_empty() {
+            return Err("choose at least one knife for the knife-drop bind".into());
+        }
+        for (i, k) in self.knives.iter().enumerate() {
+            if !KNIVES.contains(k) {
+                return Err(format!("knife {k} is not one subclass_create spawns"));
+            }
+            if self.knives[..i].contains(k) {
+                return Err(format!("knife {k} is listed twice"));
+            }
+        }
+        Ok(())
+    }
+
+    fn line(&self) -> String {
+        let cmds: Vec<String> = self.knives.iter().map(|k| format!("subclass_create {k}")).collect();
+        format!("bind {} \"{}\" {KNIFE_MARK}", self.key, cmds.join(";"))
+    }
+
+    /// The bind on a line this app wrote: exactly [`line`](Self::line)'s form, with a key and
+    /// knives that pass [`check`](Self::check). Anything else, even with the marker, is the
+    /// user's and is neither read nor touched.
+    fn parse(line: &str) -> Option<KnifeBind> {
+        let code = line.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?;
+        let rest = code.strip_prefix("bind ")?;
+        let (key, cmds) = rest.split_once(' ')?;
+        let cmds = cmds.strip_prefix('"')?.strip_suffix('"')?;
+        let knives = cmds.split(';').map(|c| c.strip_prefix("subclass_create ")?.parse().ok()).collect::<Option<Vec<u32>>>()?;
+        let bind = KnifeBind { key: key.to_string(), knives };
+        (bind.check().is_ok() && bind.line() == line.trim_end()).then_some(bind)
+    }
+}
+
+/// An `unbind` line this app wrote when the knife key moved, in exactly that form.
+fn managed_unbind(line: &str) -> bool {
+    let Some(key) = line.trim_end().strip_suffix(KNIFE_MARK).and_then(|c| c.strip_suffix(' ')).and_then(|c| c.strip_prefix("unbind ")) else { return false };
+    check_key(key).is_ok()
+}
+
+/// A line of this app's knife bind: replaced on every change to it.
+fn managed(line: &str) -> bool {
+    KnifeBind::parse(line).is_some() || managed_unbind(line)
+}
+
+/// Everything this app sets in `cfg\gamemode_competitive_server.cfg`, as the game will read it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSettings {
+    pub cosmetics: Cosmetics,
+    /// `None` when no line sets it, so the plugin's default applies.
+    pub bot_aim: Option<BotAim>,
+    pub bot_nades: Option<BotNades>,
+    /// `None` when the cfg has no knife bind of this app's; the mod's own bind applies.
+    pub knife_bind: Option<KnifeBind>,
+}
+
+/// The changes to make; a field left out keeps what the cfg has.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServerPatch {
+    #[serde(default)]
+    pub cosmetics: Option<Cosmetics>,
+    #[serde(default)]
+    pub bot_aim: Option<BotAim>,
+    #[serde(default)]
+    pub bot_nades: Option<BotNades>,
+    #[serde(default)]
+    pub knife_bind: Option<KnifeBind>,
+}
+
+fn server_in(text: &str) -> ServerSettings {
+    ServerSettings {
+        cosmetics: cosmetics_in(text),
+        bot_aim: cfg::read(text, "bot_aim").and_then(|v| BotAim::parse(&v)),
+        bot_nades: cfg::read(text, "bot_nades").and_then(|v| BotNades::parse(&v)),
+        knife_bind: text.lines().filter_map(KnifeBind::parse).last(),
+    }
+}
+
+pub fn read_server(csgo: &Path) -> Result<ServerSettings, String> {
+    let path = confined_read(csgo, SERVER_CFG)?;
+    match std::fs::read_to_string(&path) {
+        Ok(t) => Ok(server_in(&t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ServerSettings::default()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// The cfg's text with `patch` applied: convar lines merged (every other line kept), and this
+/// app's knife-bind lines replaced.
+fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String {
+    let flag = |b: bool| if b { "1" } else { "0" }.to_string();
+    let mut values: Vec<(&str, String)> = Vec::new();
+    if let Some(c) = patch.cosmetics {
+        values.push((COSMETIC_CONVARS[0], flag(c.dropped_knife_skins)));
+        values.push((COSMETIC_CONVARS[1], flag(c.dropped_knife_premium)));
+        values.push((COSMETIC_CONVARS[2], c.music_kit.to_string()));
+    }
+    if let Some(a) = patch.bot_aim {
+        values.push(("bot_aim", a.name().into()));
+    }
+    if let Some(n) = patch.bot_nades {
+        values.push(("bot_nades", n.name().into()));
+    }
+    let mut out = if values.is_empty() { text.to_string() } else { cfg::merge(text, &values) };
+    if let Some(bind) = &patch.knife_bind {
+        let eol = if out.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut lines: Vec<&str> = out.lines().filter(|l| !managed(l)).collect();
+        let unbind = now.knife_bind.as_ref().filter(|old| !old.key.eq_ignore_ascii_case(&bind.key)).map(|old| format!("unbind {} {KNIFE_MARK}", old.key));
+        let line = bind.line();
+        if let Some(u) = &unbind {
+            lines.push(u);
+        }
+        lines.push(&line);
+        let mut joined = lines.join(eol);
+        joined.push_str(eol);
+        out = joined;
+    }
+    out
+}
+
+/// Applies `patch` to the server cfg as one change, refused (writing nothing) when the cfg no
+/// longer holds `seen`, what the caller read. The write is a compare-and-swap against the cfg
+/// as read here, as in [`set_cosmetics_from`].
+pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch, seen: ServerSettings) -> Result<Meta, String> {
+    ensure_cs2_closed(probe, Phase::Operation)?;
+    let lock = OpLock::acquire(layout)?;
+    if let Some(c) = patch.cosmetics {
+        check_music_kit(&layout.csgo, c.music_kit)?;
+    }
+    if let Some(b) = &patch.knife_bind {
+        b.check()?;
+    }
+    let path = layout.confined(SERVER_CFG)?;
+    let (text, read_hash) = match std::fs::read(&path) {
+        Ok(b) => {
+            let h = hash::bytes(&b);
+            (String::from_utf8(b).map_err(|e| format!("{}: {e}", path.display()))?, Some(h))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (NEW_CFG_HEADER.to_string(), None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let now = if read_hash.is_some() { server_in(&text) } else { ServerSettings::default() };
+    if now != seen {
+        return Err(format!("{SERVER_CFG}: the Bot Mode settings {}; nothing was written", changes::CHANGED_SINCE_READ));
+    }
+    let merged = apply_patch(&text, &now, &patch);
+    let (_, meta) = changes::run(layout, probe, &lock, "server-cfg", |cs| {
+        cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())
+    })?;
+    Ok(meta)
 }
 
 /// Settings that live in the app, not the game folder.

@@ -136,6 +136,35 @@ impl Manifest {
     }
 }
 
+/// One entry of the manifest as the view previews it: where its files go and where they come
+/// from. Local checkout paths are left out; they name the user's folders.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedEntry {
+    pub name: String,
+    pub target: String,
+    pub files: Vec<String>,
+    /// "owner/name" on GitHub.
+    pub repo: String,
+    /// The branch, or the release tag.
+    pub reference: String,
+}
+
+/// What `apply` would copy, from the manifest alone: reads it, checks nothing else.
+pub fn plan(path: &Path) -> Result<Vec<PlannedEntry>, String> {
+    Ok(Manifest::load(path)?
+        .entries
+        .into_iter()
+        .map(|e| {
+            let (repo, reference) = match e.source {
+                Source::Local { repo, branch, .. } => (repo, branch),
+                Source::GithubRelease { repo, tag, .. } => (repo, tag),
+            };
+            PlannedEntry { name: e.name, target: e.target, files: e.files, repo, reference }
+        })
+        .collect())
+}
+
 struct ResolvedFile {
     rel: String,
     sha: String,
