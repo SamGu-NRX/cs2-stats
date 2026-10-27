@@ -706,6 +706,9 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
     monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
+    # A test that needs another value sets free_gb itself.
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
 
 
 
