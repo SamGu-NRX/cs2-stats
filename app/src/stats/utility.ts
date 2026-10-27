@@ -5,7 +5,10 @@
 import { blindWindows } from "./blinds";
 import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
 import { THROW_LOGGED, type GrenadeFact } from "./facts";
+import { FLASHED_MIN_S } from "./rules";
 import { classFromDisplay, isUtility, PRICE } from "./weapons";
+
+export { FLASHED_MIN_S };
 
 /**
  * Copies each THROW_LOGGED numerator into its twin on the player-rounds of matches with a throw log
@@ -16,9 +19,6 @@ export function logThrowScoped(c: Ctx): void {
   const pairs = Object.entries(THROW_LOGGED) as [keyof typeof THROW_LOGGED, (typeof THROW_LOGGED)[keyof typeof THROW_LOGGED]][];
   for (const rows of c.pr) for (const p of rows) if (p && p.m.throwRounds) for (const [from, to] of pairs) p.m[to] = p.m[from];
 }
-
-/** Leetify: blind longer than this counts as flashed. */
-export const FLASHED_MIN_S = 1.1;
 
 const THROWN: Record<string, "smokes" | "flashes" | "hes" | "molotovs" | null> = {
   smokegrenade: "smokes", flashbang: "flashes", hegrenade: "hes", molotov: "molotovs", incgrenade: "molotovs", decoy: null,

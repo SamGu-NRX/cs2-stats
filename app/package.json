@@ -8,6 +8,7 @@
     "dev": "vite",
     "capture": "vite --mode capture",
     "build": "tsc -b && vite build",
+    "bundle-budget": "vite-node tools/bundle-budget.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri",
@@ -24,7 +25,8 @@
     "metric-evidence": "vite-node tools/metric-evidence.ts",
     "recoil": "vite-node tools/recoil.ts",
     "spray-counts": "vite-node tools/spray-counts.ts",
-    "fit-luck": "vite-node tools/fit-luck.ts"
+    "fit-luck": "vite-node tools/fit-luck.ts",
+    "perf-maps": "vite-node tools/perf-maps.ts"
   },
   "dependencies": {
     "@fontsource-variable/schibsted-grotesk": "^5.3.0",

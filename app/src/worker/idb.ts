@@ -31,6 +31,14 @@ export async function idbGet<T>(store: Store, key: string): Promise<T | undefine
   return wrap(db.transaction(store).objectStore(store).get(key)) as Promise<T | undefined>;
 }
 
+/** Several keys in one transaction, in their order; undefined for a key that is not there. */
+export async function idbGetMany<T>(store: Store, keys: string[]): Promise<(T | undefined)[]> {
+  if (!keys.length) return [];
+  const db = await open();
+  const os = db.transaction(store).objectStore(store);
+  return Promise.all(keys.map((k) => wrap(os.get(k)) as Promise<T | undefined>));
+}
+
 export async function idbPut(store: Store, key: string, value: unknown): Promise<void> {
   const db = await open();
   await wrap(db.transaction(store, "readwrite").objectStore(store).put(value, key));

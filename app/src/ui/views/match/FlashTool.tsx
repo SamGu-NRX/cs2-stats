@@ -6,7 +6,7 @@
 // not leave a row lit.
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { FlashRow } from "../../../stats/flashes";
-import { FLASHED_MIN_S } from "../../../stats/utility";
+import { FLASHED_MIN_S } from "../../../stats/rules";
 import { Card } from "../../components/Card";
 import { rovingIndex, Segmented, Select, type Option } from "../../components/controls";
 import { frameFor, RadarView, type Frame } from "../../components/MapArt";

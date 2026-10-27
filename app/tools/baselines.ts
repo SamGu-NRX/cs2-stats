@@ -15,7 +15,7 @@ import { derive } from "../src/stats/derive";
 import { modelFingerprint } from "../src/stats/model-params";
 import type { MatchFacts } from "../src/stats/facts";
 import { rollup, type Summary } from "../src/stats/rollup";
-import { LOCAL_BASELINES } from "../src/worker/baselines-pool";
+import { LOCAL_BASELINES } from "../src/worker/pool-names";
 import { checkOutput, shippedPool, writeOutput, type OutputKind } from "./outputs";
 import { DATA_DIR, MAP_MIN_ROUNDS, MIN_ROUNDS, WINPROB, proMapDirs, proMaps } from "./node-read";
 

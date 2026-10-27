@@ -5,7 +5,7 @@
 import type { FileEntry } from "../host/host";
 import type { AimAgg } from "../stats/aim";
 import type { AttributeScore, CompareOptions, Percentile, SideKey } from "../stats/compare";
-import type { PoolKind } from "./baselines-pool";
+import type { PoolKind } from "./pool-names";
 import type { EconomyView } from "../stats/economy";
 import type { GrenadeFact, MatchFacts, Measure, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
@@ -280,7 +280,12 @@ export interface Api {
   /** winprobPack: the packs folder's winprob-hltv.json; localBaselines: its baselines.local.json; null when absent */
   meta(winprobPack: ArrayBuffer | null, localBaselines: ArrayBuffer | null): Meta;
   baselines(): BaselineInfo;
-  sync(entries: FileEntry[]): { matches: MatchEntry[]; errors: { file: string; message: string }[] };
+  /**
+   * The match list for the listed files. `matches` is null when it is the list the previous sync
+   * returned (the same files with the same entries), so a rescan that finds nothing new, one per window
+   * focus, sends nothing back and the views keep what they show.
+   */
+  sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[] };
   match(file: string): MatchBundle;
   /** every round of the match, in round row order */
   rounds(file: string): RoundBundle[];

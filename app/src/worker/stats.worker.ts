@@ -1,7 +1,8 @@
 /// <reference lib="webworker" />
 // All decoding, deriving and rolling up runs here, off the UI thread. A plugin file is decoded,
 // turned into tables (plugin/adapter.ts) and derived into MatchFacts, which IndexedDB caches by file,
-// size, mtime and DERIVE_VERSION next to the file's MatchEntry.
+// size, mtime and DERIVE_VERSION next to the file's MatchEntry. A scan that finds many files to
+// derive hands them to derive workers (derive-pool.ts) running the same code.
 //
 // Memory holds the match index (one MatchEntry per file) and the full facts of at most LRU_FACTS
 // matches, the ones the match views have open. A career question streams facts from IndexedDB one
@@ -14,25 +15,23 @@ import { opponentsIn, vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
 import { matchValues, matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
-import { derive } from "../stats/derive";
 import { flashTool } from "../stats/flashes";
 import type { MatchFacts } from "../stats/facts";
 import { gunProficiency } from "../stats/guns";
-import { loadTables, withPov } from "../stats/load";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
 import { choosePool, type ChosenPool } from "./baselines-pool";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
-import { decodeMatch } from "../stats/plugin/decode";
-import { pluginToTables } from "../stats/plugin/adapter";
 import { roundPlaces } from "../stats/positions";
 import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
 import { rosterTables, type RosterTables } from "../stats/roster";
-import type { MatchTables } from "../stats/tables";
 import { byNewest, type MatchEntry } from "../ui/data/match";
-import { idbDelete, idbGet, idbKeys, idbPut } from "./idb";
+import { idbDelete, idbGet, idbGetMany, idbKeys, idbPut } from "./idb";
 import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
+import { deriveFile, fileTables, type Cached } from "./derive-file";
+import { derivePool, poolSize, type DerivePool } from "./derive-pool";
+import { mapLimit } from "./map-limit";
 import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -83,11 +82,10 @@ function baselines(): Promise<Baselines> {
 
 // ---- the index, the facts cache and the passes
 
-/** What IndexedDB keeps per file: the facts and the plugin's own label for the file. */
-interface Cached { facts: MatchFacts; origin: string }
-
 /** The round win-probability source, set by meta() before any match is derived; facts depend on it. */
 let wp: WinProbSource | null = null;
+/** The pack wp was read from, for the derive workers (derive-pool.ts), which read it the same way. */
+let wpPack: ArrayBuffer | null = null;
 const source = () => {
   if (!wp) throw new Error("the stats worker derived a match before meta() chose the win-probability source");
   return wp;
@@ -98,31 +96,24 @@ let baselinesHash = "none";
 const entryKey = (k: string) => entryKeyOf(k, baselinesHash);
 
 let index = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
+/**
+ * What the entries store holds for a file whose facts make no match entry (entryOf throws: the
+ * recording player is not among the players, say): the error, under the entry's key. entryOf depends
+ * only on the facts, so the next sync reports the error from this record. Without it the file was
+ * derived again on every sync, one per window focus.
+ */
+interface NoEntry { noEntry: string }
+/** Whether a sync has returned the match list yet; after that, an unchanged list is not sent again (Api.sync). */
+let listSent = false;
 /** Increments when the index changes, so cached summaries of the old file set are not reused. */
 let gen = 0;
 const lru = new Map<string, { key: string; facts: MatchFacts }>();
 
-/** An extracted match folder (host.ts: any path not ending in .json.gz), read table by table; else a plugin file. */
-const isFolder = (file: string) => !file.endsWith(".json.gz");
-
 /** The user's SteamID64 for each listed folder that carries one (the user's Valve matches), from the last sync. */
 const povs = new Map<string, string>();
 
-async function folderTables(file: string): Promise<MatchTables> {
-  const names = new Set(JSON.parse(new TextDecoder().decode(await bytes(file))) as string[]);
-  const t = await loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)));
-  const pov = povs.get(file);
-  return pov ? withPov(t, pov) : t;
-}
-
-async function deriveFile(file: string): Promise<Cached> {
-  if (isFolder(file)) {
-    const t = await folderTables(file);
-    return { facts: derive(t, source()), origin: `extracted, ${t.match.extractor_version[0]}` };
-  }
-  const m = await decodeMatch(await bytes(file), file);
-  return { facts: derive(pluginToTables(m), source()), origin: m.env.plugin ?? "" };
-}
+/** Derives one file in this thread. */
+const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), source());
 
 /**
  * The open match's tables, for what facts do not keep (one round's places). Decoded again on demand;
@@ -136,15 +127,15 @@ async function tablesOf(file: string): Promise<RosterTables> {
   if (!ix) throw new Error(`${file} is not in the match folder; rescan it`);
   if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
   openTables = null;
-  const tables = rosterTables(isFolder(file) ? await folderTables(file) : pluginToTables(await decodeMatch(await bytes(file), file)));
+  const tables = rosterTables(await fileTables(file, bytes, povs.get(file)));
   openTables = { file, key: ix.key, tables };
   return tables;
 }
 
-async function cached(file: string, key: string): Promise<Cached> {
+async function cached(file: string, key: string, derive: (file: string) => Promise<Cached> = deriveHere): Promise<Cached> {
   const c = await idbGet<Cached>("facts", key);
   if (c) return c;
-  const d = await deriveFile(file);
+  const d = await derive(file);
   await idbPut("facts", key, d);
   return d;
 }
@@ -284,6 +275,7 @@ type Impl = { [K in Method]: (...a: Parameters<Api[K]>) => Promise<ReturnType<Ap
 const api: Impl = {
   async meta(winprobPack, localBaselines) {
     wp = winProbSource(winprobPack === null ? null : JSON.parse(new TextDecoder().decode(winprobPack)));
+    wpPack = winprobPack;
     setLocal(localBaselines);
     return metaOf(wp);
   },
@@ -296,27 +288,72 @@ const api: Impl = {
     await baselines().catch(() => undefined);
     povs.clear();
     for (const e of entries) if (e.pov) povs.set(e.file, e.pov);
-    const errors: { file: string; message: string }[] = [];
-    const next = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
+    type Row = { key: string; ekey: string; entry: MatchEntry } | { error: string } | null;
+    /** entry keys holding a NoEntry record, which the pruning below keeps */
+    const noEntryKeys = new Set<string>();
     let done = 0;
-    for (const e of entries) {
-      const key = factsKey(e);
-      try {
-        const prev = index.get(e.file);
-        const ekey = entryKey(key);
-        let entry = sameEntry(prev, key, ekey) ? prev!.entry : await idbGet<MatchEntry>("entries", ekey);
-        if (!entry) {
-          const c = await cached(e.file, key);
-          entry = entryOf(e.file, c.origin, c.facts);
-          await idbPut("entries", ekey, entry);
-        }
-        next.set(e.file, { key, ekey, entry });
-      } catch (err) {
-        errors.push({ file: e.file, message: (err as Error).message });
-      }
+    const tick = () => {
       done++;
       if (done % 5 === 0 || done === entries.length) post({ progress: { done, total: entries.length } });
+    };
+    // first every entry already built, then the files that need one, which may need deriving
+    const rows: Row[] = [];
+    // entries not held in memory are read in one transaction rather than one read after another; if
+    // the batch fails, each file is read and fails on its own
+    const keys = entries.map((e) => factsKey(e));
+    const held = entries.map((e, i) => sameEntry(index.get(e.file), keys[i], entryKey(keys[i])));
+    const toRead = entries.flatMap((_, i) => (held[i] ? [] : [entryKey(keys[i])]));
+    const read = await idbGetMany<MatchEntry | NoEntry>("entries", toRead).then((xs) => new Map(toRead.map((k, j) => [k, xs[j]])), () => null);
+    for (const [i, e] of entries.entries()) {
+      const key = keys[i];
+      const ekey = entryKey(key);
+      try {
+        const entry = held[i] ? index.get(e.file)!.entry : read ? read.get(ekey) : await idbGet<MatchEntry | NoEntry>("entries", ekey);
+        if (entry && "noEntry" in entry) { noEntryKeys.add(ekey); rows.push({ error: entry.noEntry }); tick(); }
+        else if (entry) { rows.push({ key, ekey, entry }); tick(); }
+        else rows.push(null);
+      } catch (err) {
+        rows.push({ error: (err as Error).message });
+        tick();
+      }
     }
+    const missing = rows.flatMap((r, i) => (r === null ? [i] : []));
+    // derive workers only for a scan with more than one file to build (derive-pool.ts)
+    const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1) : 0;
+    const pool: DerivePool | null = size >= 2 ? derivePool(size, wpPack, bytes) : null;
+    try {
+      await mapLimit(missing, pool ? size : 1, async (i) => {
+        const e = entries[i];
+        const key = factsKey(e);
+        const ekey = entryKey(key);
+        try {
+          const c = await cached(e.file, key, pool ? (file) => pool.derive(file, povs.get(file)) : deriveHere);
+          let entry: MatchEntry;
+          try {
+            entry = entryOf(e.file, c.origin, c.facts);
+          } catch (err) {
+            // a record that fails to save only costs the next sync a derive
+            if (await idbPut("entries", ekey, { noEntry: (err as Error).message } satisfies NoEntry).then(() => true, () => false)) noEntryKeys.add(ekey);
+            throw err;
+          }
+          await idbPut("entries", ekey, entry);
+          rows[i] = { key, ekey, entry };
+        } catch (err) {
+          rows[i] = { error: (err as Error).message };
+        }
+        tick();
+      });
+    } finally {
+      pool?.close();
+    }
+    const errors: { file: string; message: string }[] = [];
+    const next = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
+    entries.forEach((e, i) => {
+      const r = rows[i]!;
+      if ("error" in r) errors.push({ file: e.file, message: r.error });
+      else next.set(e.file, r);
+    });
+    const sameList = listSent && next.size === index.size && [...next].every(([f, x]) => index.get(f)?.ekey === x.ekey);
     if (next.size !== index.size || [...next].some(([f, x]) => index.get(f)?.key !== x.key)) {
       gen++;
       summaries.clear();
@@ -327,9 +364,10 @@ const api: Impl = {
     // drop cached facts and entries no listed file needs: gone, changed, or of an older version
     const live = new Set([...index.values()].map((x) => x.key));
     await idbDelete("facts", (await idbKeys("facts")).filter((k) => !live.has(k)));
-    const liveEntries = new Set([...live].map(entryKey));
+    const liveEntries = new Set([...[...live].map(entryKey), ...noEntryKeys]);
     await idbDelete("entries", (await idbKeys("entries")).filter((k) => !liveEntries.has(k)));
-    return { matches: [...index.values()].map((x) => x.entry).sort(byNewest), errors };
+    listSent = true;
+    return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors };
   },
   async match(file) {
     if (openTables && openTables.file !== file) openTables = null;

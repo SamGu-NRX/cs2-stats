@@ -3,7 +3,7 @@
 // change, the career Luck card, Economy's team-buy tiers and the Aim tab's reloading rows.
 // Every number comes from the worker; a card whose call has nothing says why in one line.
 import { useId, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { BEST_COUNTS, COMPOSITES } from "../../../stats/career";
+import { BEST_COUNTS, COMPOSITES } from "../../../stats/career-lists";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import { BUY_TIERS, ECO_BELOW_PER_PLAYER, FORCE_FROM_PER_PLAYER, FULL_FROM_PER_PLAYER, type BuyTier } from "../../../stats/economy";
 import type { Measures } from "../../../stats/facts";

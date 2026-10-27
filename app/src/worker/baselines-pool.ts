@@ -5,9 +5,7 @@
 // (%APPDATA%\BotMatchStats\packs, never the repository), and the worker ranks against that file when it
 // is present and valid, else against the shipped one.
 import { QUANTILES, type Baselines } from "../stats/compare";
-
-export type PoolKind = "local" | "shipped";
-export const LOCAL_BASELINES = "baselines.local.json";
+import { LOCAL_BASELINES, type PoolKind } from "./pool-names";
 
 export interface ChosenPool {
   b: Baselines;
@@ -83,8 +81,3 @@ export async function choosePool(local: string | null, shipped: () => Promise<st
   return { b: parseBaselines(text, "baselines.json"), text, pool: "shipped", localError };
 }
 
-/** "Pro pool: local (HLTV model)": the pool in use and the win-probability model it was built with. */
-export function poolLabel(pool: PoolKind, model: string): string {
-  const kind = model.startsWith("hltv-") ? "HLTV model" : model.startsWith("cs2rb-") ? "CS2RB" : `model ${model}`;
-  return `Pro pool: ${pool} (${kind})`;
-}

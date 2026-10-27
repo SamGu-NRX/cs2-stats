@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Percentile as Pct, SideKey as PoolSide } from "../../../stats/compare";
 import type { Measures } from "../../../stats/facts";
-import { packerFeatures, type RoleBlend } from "../../../stats/identity";
+import type { RoleBlend } from "../../../stats/identity";
+import { packerFeatures } from "../../../stats/role-features";
 import type { Query, Rolled, Values } from "../../../worker/protocol";
 import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";

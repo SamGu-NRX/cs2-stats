@@ -11,7 +11,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createHost, type Host } from "../../host/host";
 import { createClient, type Client } from "../../worker/client";
 import type { BaselineInfo } from "../../worker/protocol";
-import { LOCAL_BASELINES } from "../../worker/baselines-pool";
+import { LOCAL_BASELINES } from "../../worker/pool-names";
 import { coverEntry, isOwn } from "./engine";
 import type { MatchEntry } from "./match";
 import { setMeta } from "./meta";
@@ -70,6 +70,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setState((s) => ({ ...s, status: s.status === "ready" ? "ready" : "syncing" }));
       const entries = await r.host.list();
       const synced = await r.client.sync(entries);
+      if (synced.matches === null) {
+        // nothing changed: the views keep their data and do not refetch (version stays)
+        setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, progress: null, lastSync: Date.now() }));
+        return;
+      }
       const matches = synced.matches.map(coverEntry);
       const you = [...new Set(matches.filter(isOwn).map((m) => m.players[m.you].id))];
       setState((s) => ({ ...s, status: "ready", error: null, matches, you, fileErrors: synced.errors, progress: null, version: s.version + 1, lastSync: Date.now() }));

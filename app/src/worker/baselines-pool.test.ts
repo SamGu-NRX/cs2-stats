@@ -3,7 +3,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { choosePool, parseBaselines, poolLabel } from "./baselines-pool";
+import { choosePool, parseBaselines } from "./baselines-pool";
+import { poolLabel } from "./pool-names";
 
 /** 21 rising quantiles, as tools/baselines.ts writes them */
 const Q = Array.from({ length: 21 }, (_, i) => i / 10);

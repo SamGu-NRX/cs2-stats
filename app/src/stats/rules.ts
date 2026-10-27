@@ -1,5 +1,6 @@
-// Event rules shared by several families: trades, the opening duel, KAST and clutches. Each one is
-// checked against HLTV's per-map scoreboards (hltv-exact.test.ts, VALIDATION.md).
+// Event rules shared by several families: trades, the opening duel, KAST and clutches, each checked
+// against HLTV's per-map scoreboards (hltv-exact.test.ts, VALIDATION.md), and Leetify's cut for a
+// flashed player.
 import type { KillFact, RoundFact } from "./facts";
 import type { Side } from "./tables";
 
@@ -11,6 +12,9 @@ import type { Side } from "./tables";
  * (for model/rating3's round fit), which the engine does not read.
  */
 export const TRADE_WINDOW_S = 5.4;
+
+/** Leetify: blind longer than this counts as flashed. */
+export const FLASHED_MIN_S = 1.1;
 
 /**
  * Marks trade kills and traded deaths in one round's kills (tick order). A later enemy kill is a trade
