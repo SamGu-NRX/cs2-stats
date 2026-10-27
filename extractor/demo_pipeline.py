@@ -24,6 +24,7 @@ import logging
 import logging.handlers
 import math
 import os
+import queue
 import re
 import shutil
 import socket
@@ -249,7 +250,7 @@ def is_complete_rar(path: Path, tracker: CompletenessTracker, now: float) -> boo
 class Archive:
     rar: Path
     id: str
-    state: str = "pending"  # pending -> extracting -> parsing -> (done | failed)
+    state: str = "pending"  # (hashing ->) pending -> extracting -> parsing -> (done | failed)
     slug: str | None = None
     work: Path | None = None
     dems: list[Path] = field(default_factory=list)
@@ -270,6 +271,57 @@ class Archive:
     download_started: float = 0.0
     download_finished: float | None = None  # the first poll at its final size, for a download seen in progress
     archive_gb_counted: bool = False
+
+
+# Hashing attempts per archive in one run before an OSError fails it. A finished download can be held for a moment by
+# the browser or a virus scan (PermissionError, a sharing violation), so an OSError is retried by a later scan; five
+# is the value asked for in review of PR 61, not a measured bound.
+HASH_ATTEMPTS = 5
+
+
+class Hasher:
+    """SHA-256 of picked-up archives, one at a time on a daemon thread, so the main loop keeps serving status.
+    Hashed in scan(), each archive kept in failed/ blocked the loop for about 50 s on a --retry-failed restart, and
+    /pending answered {} for minutes. take(path) returns the hex digest, the exception that stopped it, or None
+    while it is not done. Every archive gets a result: an exception is recorded as its result and the thread goes
+    on to the next one; one that ends the thread (SystemExit) is recorded first, and the thread is started again
+    while archives wait (review of PR 61: an uncaught error left its archive hashing forever)."""
+
+    def __init__(self):
+        self._todo: queue.Queue[Path] = queue.Queue()
+        self._done: dict[Path, str | BaseException] = {}
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def _ensure_running(self) -> None:
+        with self._lock:
+            if (self._thread is None or not self._thread.is_alive()) and not self._todo.empty():
+                self._thread = threading.Thread(target=self._run, daemon=True, name="archive-sha256")
+                self._thread.start()
+
+    def submit(self, path: Path) -> None:
+        self._todo.put(path)
+        self._ensure_running()
+
+    def _run(self) -> None:
+        while True:
+            try:
+                path = self._todo.get_nowait()
+            except queue.Empty:
+                return  # started again by the next submit
+            try:
+                result: str | BaseException = extract.file_sha256(path)
+            except BaseException as e:  # noqa: BLE001 - every archive must get a result, or it waits forever
+                result = e
+            with self._lock:
+                self._done[path] = result
+            if not isinstance(result, (str, Exception)):
+                raise result
+
+    def take(self, path: Path) -> str | BaseException | None:
+        self._ensure_running()
+        with self._lock:
+            return self._done.pop(path, None)
 
 
 @dataclass
@@ -855,6 +907,8 @@ class Pipeline:
         self.status: dict = {}
         self.ignored: set[Path] = set()
         self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
+        self.hasher = Hasher()
+        self.hash_errors: dict[Path, int] = {}  # OSErrors hashing each archive in this run (HASH_ATTEMPTS)
         rows = read_jsonl(MANIFEST)
         peaks, parse_s = manifest_seed(rows)
         self.output_gb: deque[float] = deque(output_seed(rows), maxlen=TIMING_SAMPLES)
@@ -947,15 +1001,41 @@ class Pipeline:
             st = f.stat()
             # The download began no later than the file appeared: its creation time, or when this run first saw it.
             created = getattr(st, "st_birthtime", st.st_ctime)
-            sha = extract.file_sha256(f)
             started = min(created, seen) if seen is not None else created
-            if in_failed:  # a retry: the download's own times, from its failure record, if it is the same file
-                rec = self.failure_record(f.parent, sha)
-                if rec:
-                    started, finished = rec.get("download_started") or started, rec.get("download_finished")
-            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=sha,
+            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, state="hashing",
                                          download_started=started, download_finished=finished)
-            log.info("pending archive %s (%.0f MB)", f, f.stat().st_size / 1e6)
+            self.hasher.submit(f)
+            log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
+
+    def poll_hashes(self) -> None:
+        """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
+        record, when that record is of the same file. An OSError (the file held by a scan, or gone) drops the
+        archive for a later scan to find again, up to HASH_ATTEMPTS times in a run, then fails it; any other error
+        fails it at once. A failed archive is kept for a retry."""
+        for a in [a for a in self.archives.values() if a.state == "hashing"]:
+            sha = self.hasher.take(a.rar)
+            if sha is None:
+                continue
+            if isinstance(sha, OSError):
+                n = self.hash_errors[a.rar] = self.hash_errors.get(a.rar, 0) + 1
+                if n < HASH_ATTEMPTS:
+                    log.warning("could not hash %s (%s: %s), attempt %d of %d; a later scan tries again", a.rar,
+                                type(sha).__name__, sha, n, HASH_ATTEMPTS)
+                    del self.archives[a.id]
+                    self.retried.discard(a.rar)  # a retry from failed/ is picked up again too
+                    continue
+            if not isinstance(sha, str):
+                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}"
+                                     + (f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""))
+                continue
+            a.rar_sha256 = sha
+            if a.rar.parent.parent == FAILED_DIR:
+                rec = self.failure_record(a.rar.parent, sha)
+                if rec:
+                    a.download_started = rec.get("download_started") or a.download_started
+                    a.download_finished = rec.get("download_finished")
+            a.state = "pending"
+            log.info("pending archive %s (%.0f MB)", a.rar, a.rar_bytes / 1e6)
 
     # --- extraction
     def extracted_count(self) -> int:
@@ -1510,7 +1590,7 @@ class Pipeline:
         downloading = sum(1 for p in self.tracker.tracked() if p.exists() and p not in self.ignored)
         statuses = [r.get("status") for r in self.ledger.values()]
         our, capacity = self.budget()
-        pending = st.count("pending")
+        pending = st.count("pending") + st.count("hashing")  # an archive being hashed is downloaded and waiting
         avail = self.available_gb()
         workers_max = self.worker_max()
         want = desired_downloads(workers_max, mean(self.parse_s, DEFAULT_PARSE_S),
@@ -1536,6 +1616,7 @@ class Pipeline:
         now = time.time()
         self.cs2 = cs2_running()
         self.scan(now)
+        self.poll_hashes()
         self.poll_extractions()
         self.start_extractions()
         self.poll_workers()
@@ -1691,6 +1772,8 @@ def main(argv=None) -> int:
     tidy_demos()
     for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
         pipeline.clean_copies(rec)
+    with pipeline.lock:  # the first status, before the first scan
+        pipeline.status = pipeline.snapshot()
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")
