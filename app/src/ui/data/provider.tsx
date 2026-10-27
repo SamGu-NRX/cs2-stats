@@ -60,6 +60,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   });
   const ref = useRef<{ host: Host; client: Client } | null>(null);
   const last = useRef(0);
+  /** set by refresh and an import's end: the views refetch even when the list is unchanged, so a failed question is asked again */
+  const forced = useRef(false);
   // One scan at a time; a forced rescan (refresh, an import ending) asked for during one runs right after
   // it instead of being dropped (scan-queue.ts).
   const scans = useRef(scanQueue(async () => {
@@ -68,11 +70,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     last.current = Date.now();
     try {
       setState((s) => ({ ...s, status: s.status === "ready" ? "ready" : "syncing" }));
+      const force = forced.current;
+      forced.current = false;
       const entries = await r.host.list();
       const synced = await r.client.sync(entries);
       if (synced.matches === null) {
-        // nothing changed: the views keep their data and do not refetch (version stays)
-        setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, progress: null, lastSync: Date.now() }));
+        // the list is unchanged: a focus rescan leaves the views' data alone; a forced one makes them ask again
+        setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, progress: null, version: force ? s.version + 1 : s.version, lastSync: Date.now() }));
         return;
       }
       const matches = synced.matches.map(coverEntry);
@@ -111,7 +115,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       // An import that ends rescans the matches whichever page is open, and one already running when the
       // app opens is followed to its end (review of #29).
       stopImports.current();
-      stopImports.current = host.imports.onFinish(() => { last.current = 0; void sync(); });
+      stopImports.current = host.imports.onFinish(() => { last.current = 0; forced.current = true; void sync(); });
       void host.imports.sync();
       setState((s) => ({ ...s, host, client, meta: true }));
       await sync();
@@ -133,6 +137,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => {
     last.current = 0;
+    forced.current = true;
     if (ref.current) void sync();
     else void start();
   }, [sync, start]);

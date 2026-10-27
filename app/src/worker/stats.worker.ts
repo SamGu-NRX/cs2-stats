@@ -359,6 +359,8 @@ const api: Impl = {
       summaries.clear();
       careerSets.clear();
     }
+    // until this sync returns, the UI has not seen this index: a failure below must not let the next sync call it unchanged
+    listSent = false;
     index = next;
     for (const [f, x] of [...lru]) if (index.get(f)?.key !== x.key) lru.delete(f);
     // drop cached facts and entries no listed file needs: gone, changed, or of an older version
