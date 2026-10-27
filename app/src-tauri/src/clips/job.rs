@@ -350,21 +350,48 @@ pub fn new_job_id(now: SystemTime) -> (String, String) {
     )
 }
 
-/// Writes `files` into `dir` so that none is ever half-written or missing its partner: each goes to a
-/// temporary name first, then all are renamed in order. The plan is renamed last, so a plan never
-/// exists without its director. On a failure the temporary files are removed.
-pub fn write_together(dir: &Path, files: &[(&str, &str)]) -> Result<(), String> {
-    let tmp = |n: &str| dir.join(format!("{n}.tmp"));
-    let clean = || for (n, _) in files { let _ = fs::remove_file(tmp(n)); };
-    for (n, text) in files {
-        if let Err(e) = fs::write(tmp(n), text) {
-            clean();
-            return Err(format!("{}: {e}", tmp(n).display()));
+/// A new file `.<name>.<random>.tmp` in `dir`, created exclusively (`create_new`), so nothing that was
+/// already there, a file, a link or another writer's temporary, is ever written into.
+fn new_temp(dir: &Path, name: &str, text: &[u8]) -> Result<PathBuf, String> {
+    use std::hash::{BuildHasher, Hasher};
+    use std::io::Write;
+    for _ in 0..8 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let p = dir.join(format!(".{name}.{:016x}.tmp", h.finish()));
+        match fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(mut f) => {
+                return f.write_all(text).and_then(|_| f.sync_all()).map(|_| p.clone()).map_err(|e| {
+                    let _ = fs::remove_file(&p);
+                    format!("{}: {e}", p.display())
+                })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", p.display())),
         }
     }
-    for (n, _) in files {
-        if let Err(e) = fs::rename(tmp(n), dir.join(n)) {
-            clean();
+    Err(format!("{}: no free temporary name for {name}", dir.display()))
+}
+
+/// Writes `files` into `dir` so that none is ever half-written or missing its partner: each goes to a
+/// new temporary file first ([`new_temp`]), then all are renamed in order, which replaces a directory
+/// entry and never writes through an existing file or hard link. The plan is renamed last, so a plan
+/// never exists without its director. On a failure the temporary files are removed.
+pub fn write_together(dir: &Path, files: &[(&str, &[u8])]) -> Result<(), String> {
+    let mut tmps: Vec<PathBuf> = Vec::new();
+    let clean = |t: &[PathBuf]| for p in t { let _ = fs::remove_file(p); };
+    for (n, text) in files {
+        match new_temp(dir, n, text) {
+            Ok(p) => tmps.push(p),
+            Err(e) => {
+                clean(&tmps);
+                return Err(e);
+            }
+        }
+    }
+    for (i, (n, _)) in files.iter().enumerate() {
+        if let Err(e) = fs::rename(&tmps[i], dir.join(n)) {
+            clean(&tmps[i..]);
             return Err(format!("{}: {e}", dir.join(n).display()));
         }
     }
@@ -380,7 +407,7 @@ pub fn save(plan: &Plan, script: &str) -> Result<(), String> {
     }
     fs::create_dir_all(dir.join("raw")).map_err(|e| format!("{}: {e}", dir.display()))?;
     let plan_json = serde_json::to_string_pretty(plan).map_err(|e| e.to_string())? + "\n";
-    write_together(&dir, &[("director.js", script), ("plan.json", &plan_json)])
+    write_together(&dir, &[("director.js", script.as_bytes()), ("plan.json", plan_json.as_bytes())])
 }
 
 #[cfg(test)]
@@ -556,8 +583,19 @@ mod tests {
         let m = machine("atomic");
         let dir = m.env.clips_root.join("jobs").join(ID);
         fs::create_dir_all(dir.join("plan.json")).unwrap(); // a folder where the plan should go: its rename fails
-        let e = write_together(&dir, &[("director.js", "d"), ("plan.json", "p")]).unwrap_err();
+        let e = write_together(&dir, &[("director.js", b"d"), ("plan.json", b"p")]).unwrap_err();
         assert!(e.contains("plan.json"), "{e}");
-        assert!(dir.join("plan.json").is_dir() && !dir.join("plan.json.tmp").exists() && !dir.join("director.js.tmp").exists());
+        assert!(dir.join("plan.json").is_dir());
+        assert!(fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")), "a temporary file was left");
+    }
+
+    #[test]
+    fn a_temporary_file_is_always_new() {
+        let m = machine("temp");
+        let dir = &m.env.clips_root;
+        let a = new_temp(dir, "plan.json", b"a").unwrap();
+        let b = new_temp(dir, "plan.json", b"b").unwrap();
+        assert_ne!(a, b);
+        assert_eq!((fs::read(&a).unwrap(), fs::read(&b).unwrap()), (b"a".to_vec(), b"b".to_vec()));
     }
 }

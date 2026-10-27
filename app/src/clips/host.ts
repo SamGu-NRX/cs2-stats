@@ -10,13 +10,14 @@ export interface Found { path: string | null; error: string | null }
 export interface ClipsEnv { clipsDir: string; cs2: Found; replays: Found; hlae: Found; ffmpeg: Found; font: string | null }
 export interface DemoOnDisk { name: string; path: string | null; size: number }
 export interface Finished { id: string; path: string; size: number; mtime: number }
-export interface Take { id: string; job: string; video: string; audio: string | null; mtime: number }
+/** HLAE's newest complete recording of a clip: the job, its take folder (take0000 and up), and the video and sound in it. */
+export interface Take { id: string; job: string; take: string; video: string; audio: string | null; mtime: number }
 export interface ClipsScan { finished: Finished[]; takes: Take[]; reels: Finished[] }
 export interface Launched { pid: number; cfg: string; ffmpegIni: string | null }
 /** An FFmpeg run: its exit code, the end of what it wrote to stderr when it failed, and the file it wrote. */
 export interface FfmpegRun { code: number | null; error: string | null; output: string }
-/** A take to finish: the clip, the job that recorded it, the lower third's two lines (personal info already hidden when the setting is on) and the clip's length. */
-export interface FinishRequest { id: string; job: string; reason: string; subline: string; durationS: number }
+/** A take to finish: the clip, the job and take folder that recorded it, the lower third's two lines (personal info already hidden when the setting is on) and the clip's length. */
+export interface FinishRequest { id: string; job: string; take: string; reason: string; subline: string; durationS: number }
 
 export interface ClipsHost {
   /** `hlae`: the HLAE.exe the user chose, if any */
@@ -40,7 +41,7 @@ async function tauriClips(): Promise<ClipsHost> {
     scan: () => invoke("clips_scan"),
     plan: (request, write) => invoke("clips_plan", { request, write }),
     launch: (job) => invoke("clips_launch", { job }),
-    finish: (r, hlae) => invoke("clips_finish", { id: r.id, job: r.job, reason: r.reason, subline: r.subline, durationS: r.durationS, hlae }),
+    finish: (r, hlae) => invoke("clips_finish", { id: r.id, job: r.job, take: r.take, reason: r.reason, subline: r.subline, durationS: r.durationS, hlae }),
     reel: (ids, hlae) => invoke("clips_reel", { ids, hlae }),
   };
 }

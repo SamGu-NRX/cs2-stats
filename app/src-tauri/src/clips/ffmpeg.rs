@@ -23,6 +23,18 @@ const FADE: f64 = 0.25;
 const OUT: f64 = 0.4;
 const STAGGER: f64 = 0.08;
 
+/// One input, opened only as `format` and only through the file protocol: FFmpeg would otherwise
+/// pick the demuxer from the file's content, and a playlist or concat list disguised as a take could
+/// name other files. `lavfi` reads no file at all. The reel joins clips with the concat filter, not the
+/// concat demuxer, so `-safe` has nothing to apply to.
+fn input(format: &str, path: String) -> [String; 6] {
+    ["-protocol_whitelist".into(), "file".into(), "-f".into(), format.into(), "-i".into(), path]
+}
+
+/// The demuxers an input may be forced to: HLAE's takes (mp4 video, wav sound), the finished clips
+/// (mp4) and the generated silence (lavfi).
+const INPUT_FORMATS: [&str; 3] = ["mp4", "wav", "lavfi"];
+
 /// The fonts the lower third may use, first found wins: Segoe UI Semibold and Bold, then Arial Bold,
 /// in Windows' Fonts folder; DejaVu Sans Bold on Linux, for the tests.
 fn font_candidates() -> Vec<(PathBuf, &'static str)> {
@@ -129,13 +141,16 @@ pub fn finish_args(s: &FinishSpec) -> Result<Vec<String>, String> {
     let trim = ["-ss".to_string(), num(s.start_s), "-t".into(), num(d)];
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y"].map(String::from).to_vec();
     a.extend(trim.iter().cloned());
-    a.extend(["-i".into(), s.video.display().to_string()]);
+    a.extend(input("mp4", s.video.display().to_string()));
     match s.audio {
         Some(au) => {
             a.extend(trim.iter().cloned());
-            a.extend(["-i".into(), au.display().to_string()]);
+            a.extend(input("wav", au.display().to_string()));
         }
-        None => a.extend(["-f", "lavfi", "-t"].map(String::from).into_iter().chain([num(d), "-i".into(), "anullsrc=r=48000:cl=stereo".into()])),
+        None => {
+            a.extend(["-t".into(), num(d)]);
+            a.extend(input("lavfi", "anullsrc=r=48000:cl=stereo".into()));
+        }
     }
     a.extend(["-filter_complex".into(), format!("[0:v]{video}[v];[1:a]aresample=48000,apad[a]")]);
     a.extend(["-map", "[v]", "-map", "[a]", "-t"].map(String::from));
@@ -153,7 +168,7 @@ pub fn reel_args(clips: &[PathBuf], out: &Path) -> Result<Vec<String>, String> {
     let pads: String = (0..clips.len()).map(|i| format!("[{i}:v][{i}:a]")).collect();
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y"].map(String::from).to_vec();
     for c in clips {
-        a.extend(["-i".into(), c.display().to_string()]);
+        a.extend(input("mp4", c.display().to_string()));
     }
     a.extend(["-filter_complex".into(), format!("{pads}concat=n={}:v=1:a=1[v][a]", clips.len())]);
     a.extend(["-map", "[v]", "-map", "[a]"].map(String::from));
@@ -165,7 +180,17 @@ pub fn reel_args(clips: &[PathBuf], out: &Path) -> Result<Vec<String>, String> {
 /// A last check on arguments this module built: none may name a protocol (`file:`, `http:`, any
 /// `scheme:` of two letters or more, which a drive letter is not) or a filter that reads a file of its
 /// own (`movie=`, `amovie=`). The templates never write them; a path that happened to would be refused.
+///
+/// Every input must also be opened as `-protocol_whitelist file -f <one of INPUT_FORMATS> -i`.
 pub fn check_built(args: &[String]) -> Result<(), String> {
+    for (i, a) in args.iter().enumerate() {
+        if a == "-i" {
+            let before = &args[i.saturating_sub(4)..i];
+            if i < 4 || before[..3] != ["-protocol_whitelist", "file", "-f"] || !INPUT_FORMATS.contains(&before[3].as_str()) {
+                return Err(format!("FFmpeg input {} is not opened as -protocol_whitelist file -f <format>", args.get(i + 1).map_or("", String::as_str)));
+            }
+        }
+    }
     for a in args {
         let low = a.to_ascii_lowercase();
         if low.contains("movie=") || low.contains("file:") {
@@ -193,11 +218,35 @@ mod tests {
 
     #[test]
     fn built_arguments_may_name_no_protocol_or_file_reading_filter() {
-        let ok: Vec<String> = ["-i", r"C:\clips\a.mp4", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "[0:v]fps=60[v]", "/tmp/a.mp4"].map(String::from).to_vec();
+        let mut ok: Vec<String> = input("mp4", r"C:\clips\a.mp4".into()).to_vec();
+        ok.extend(input("lavfi", "anullsrc=r=48000:cl=stereo".into()));
+        ok.extend(["[0:v]fps=60[v]", "/tmp/a.mp4"].map(String::from));
         check_built(&ok).unwrap();
+        // an input left to content detection, or opened with another demuxer or protocol list
+        for bad in [vec!["-i", "a.mp4"], vec!["-protocol_whitelist", "file", "-f", "hls", "-i", "a.mp4"], vec!["-protocol_whitelist", "file,http", "-f", "mp4", "-i", "a.mp4"]] {
+            assert!(check_built(&bad.iter().map(|x| x.to_string()).collect::<Vec<_>>()).is_err(), "{bad:?}");
+        }
         for bad in ["file:///C:/secret.txt", "FILE:C:/x", "http://example.com/x.mp4", "concat:a.mp4|b.mp4", "[0:v]movie=C\\:/secret.mp4[m]", "amovie=x.wav"] {
             assert!(check_built(&[bad.to_string()]).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn every_input_is_opened_with_a_forced_demuxer_through_the_file_protocol_only() {
+        let p = Path::new("x.mp4");
+        let w = Path::new("x.wav");
+        let s = FinishSpec { video: p, audio: Some(w), reason_file: p, subline_file: p, font: p, start_s: 1.0, duration_s: 3.0, width: 640, height: 360, fps: 30, out: p };
+        let inputs = |args: &[String]| -> Vec<Vec<String>> {
+            args.iter().enumerate().filter(|(_, a)| a.as_str() == "-i").map(|(i, _)| args[i - 4..=i + 1].to_vec()).collect()
+        };
+        let want = |f: &str, path: &str| ["-protocol_whitelist", "file", "-f", f, "-i", path].map(String::from).to_vec();
+        let finish = finish_args(&s).unwrap();
+        assert_eq!(inputs(&finish), [want("mp4", "x.mp4"), want("wav", "x.wav")]);
+        check_built(&finish).unwrap();
+        let silent = finish_args(&FinishSpec { audio: None, ..s }).unwrap();
+        assert_eq!(inputs(&silent), [want("mp4", "x.mp4"), want("lavfi", "anullsrc=r=48000:cl=stereo")]);
+        let reel = reel_args(&[PathBuf::from("a.mp4"), PathBuf::from("b.mp4")], Path::new("r.mp4")).unwrap();
+        assert_eq!(inputs(&reel), [want("mp4", "a.mp4"), want("mp4", "b.mp4")]);
     }
 
     #[test]

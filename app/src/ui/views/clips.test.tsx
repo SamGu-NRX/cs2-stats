@@ -88,13 +88,18 @@ afterEach(() => {
   act(() => { setHidePersonal(false); });
   document.body.innerHTML = "";
 });
-const { default: ClipsView } = await import("./Clips");
+const { default: ClipsView, clock } = await import("./Clips");
 const { BarProvider } = await import("../shell/Bar");
 /** Renders the page and lets the stand-in host answer. */
 const render = async () => { await act(async () => root.render(<BarProvider><ClipsView /></BarProvider>)); await act(async () => {}); };
 const rowOf = (reason: string) => [...el.querySelectorAll<HTMLElement>(".clip")].find((r) => r.querySelector(".clip__reason")?.textContent === reason)!;
 const click = (b: Element | null | undefined) => act(async () => { (b as HTMLElement).click(); });
 const button = (scope: ParentNode, text: string) => [...scope.querySelectorAll("button")].find((b) => b.textContent?.startsWith(text));
+
+it("writes a clip's length as m:ss, rounding before it splits minutes from seconds", () => {
+  // fails if 59.6 s reads 0:60, or the rounding moves a whole second elsewhere
+  expect([0, 9.4, 59.4, 59.6, 60, 119.5, 600].map(clock)).toEqual(["0:00", "0:09", "0:59", "1:00", "1:00", "2:00", "10:00"]);
+});
 
 describe("the Clips page", () => {
   it("lists every moment best first with its state, says why a demo is missing, and lets only renderable ones be chosen", async () => {
@@ -144,11 +149,11 @@ describe("the Clips page", () => {
 
   it("finishes a recorded take by sending the host the clip, its job and the lower third's text", async () => {
     // fails if the page sends anything but the typed request, or the lower third's text differs from the moment's
-    takes = [{ id: TAKEN, job: JOB, video: `${CLIPS}\\jobs\\${JOB}\\raw\\${TAKEN}\\video.mp4`, audio: null, mtime: 2 }];
+    takes = [{ id: TAKEN, job: JOB, take: "take0001", video: `${CLIPS}\\jobs\\${JOB}\\raw\\${TAKEN}\\take0001\\video.mp4`, audio: null, mtime: 2 }];
     moments = [...moments, row(TAKEN, VALVE, 5, "4K on A Site, +70% round impact")];
     await render();
     await act(async () => { rowOf("4K on A Site, +70% round impact").querySelector<HTMLInputElement>("input")!.click(); });
     await click(button(el, "Finish 1 clip"));
-    expect(finished).toEqual([{ id: TAKEN, job: JOB, reason: "4K on A Site, +70% round impact", subline: "Mirage · Round 5 · Oct 24", durationS: 15 }]);
+    expect(finished).toEqual([{ id: TAKEN, job: JOB, take: "take0001", reason: "4K on A Site, +70% round impact", subline: "Mirage · Round 5 · Oct 24", durationS: 15 }]);
   });
 });

@@ -28,7 +28,7 @@ describe("clipState", () => {
 
   it("prefers a finished clip, then the newest take, then the demo on disk", () => {
     // fails if a rendered clip shows as ready, an older take wins, or a found demo is not ready
-    const take = (job: string, mtime: number) => ({ id: ID, job, video: `${job}/video.mp4`, audio: null, mtime });
+    const take = (job: string, mtime: number) => ({ id: ID, job, take: "take0000", video: `${job}/take0000/video.mp4`, audio: null, mtime });
     const demos = new Map([["m.dem", { name: "m.dem", path: "D:/r/m.dem", size: 1 }]]);
     expect(clipState(ID, demo, look({ demos, scan: scan({ finished: [{ id: ID, path: "E:/c.mp4", size: 1, mtime: 1 }], takes: [take("a", 1)] }) }))).toEqual({ kind: "rendered", path: "E:/c.mp4" });
     expect(clipState(ID, demo, look({ demos, scan: scan({ takes: [take("old", 1), take("new", 2)] }) }))).toMatchObject({ kind: "recorded", take: { job: "new" } });

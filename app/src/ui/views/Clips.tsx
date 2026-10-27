@@ -35,8 +35,11 @@ type Show = "all" | "ready" | "needs" | "done";
 const PAGE = 50;
 interface Item { row: MomentRow; rank: number; entry: MatchEntry | undefined; src: DemoSource; state: ClipState }
 
-/** Seconds as m:ss. */
-const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+/** Seconds as m:ss, rounded to the second once before splitting, so 59.6 s reads 1:00, never 0:60. */
+export const clock = (s: number) => {
+  const t = Math.round(s);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
 const durationOf = (r: Pick<MomentRow, "startTick" | "endTick" | "tickRate">) => (r.endTick - r.startTick) / r.tickRate;
 /** The lower third's second line: where and when. */
 const subline = (r: MomentRow, e: MatchEntry | undefined) => [mapName(r.map), `Round ${r.round}`, e ? fmtMatchDay(e.match) : null].filter(Boolean).join(" · ");
@@ -369,7 +372,7 @@ export default function ClipsView() {
     try {
       for (const it of its) {
         const take = (it.state as { take: Take }).take;
-        const r = await tools.host.finish({ id: it.row.id, job: take.job, reason: lowerThird(it.row.reason), subline: lowerThird(subline(it.row, it.entry)), durationS: durationOf(it.row) }, hlae || null);
+        const r = await tools.host.finish({ id: it.row.id, job: take.job, take: take.take, reason: lowerThird(it.row.reason), subline: lowerThird(subline(it.row, it.entry)), durationS: durationOf(it.row) }, hlae || null);
         if (r.code === 0) ok++;
         else toast(`FFmpeg could not finish "${it.row.reason}": ${(r.error ?? "").split("\n").pop()}`, "poor");
       }

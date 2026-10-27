@@ -334,7 +334,7 @@ function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): Clip
       hlae: { path: hlae, error: null }, ffmpeg: { path: `${HOME_DIR}\\scoop\\shims\\ffmpeg.exe`, error: null },
     }),
     demos: async (names) => names.map((name) => ({ name, path: `${HOME_DIR}\\replays\\${name}`, size: 1 })),
-    scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }] }),
+    scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", take: "take0000", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }] }),
     plan: async (request) => plan(request),
     launch: async () => { throw new Error("the sentinel test never launches"); },
     finish: async (r) => { finished.push(r); return { code: 0, error: null, output: `${clipsDir}\\${r.id}.mp4` }; },

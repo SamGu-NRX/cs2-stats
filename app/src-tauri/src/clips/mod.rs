@@ -59,6 +59,15 @@ pub(crate) fn clip_id_ok(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------- paths
+//
+// What the confinement below defends, and what it does not (design/clips.md "Threat model"): it keeps
+// the web view, a stale or edited plan.json, a link or junction left in the clips folder, and content
+// disguised as a take from steering a read or write outside the clips folder or the replays folder.
+// It does not defend against another process running as the same user that can already write to
+// %APPDATA%\BotMatchStats\clips or to CS2's replays folder: that process can read anything the user can,
+// so racing a check against it protects nothing (the same ruling as the packs folder, #41). For the
+// same reason the job, raw and replays folders themselves may be junctions: a user can move CS2's
+// replays folder with one, and the checks resolve links before comparing.
 
 /// A resolved path without Windows' verbatim prefix (`\\?\C:\x` becomes `C:\x`), so FFmpeg and HLAE
 /// read it as written. Other verbatim forms are kept.
@@ -106,13 +115,43 @@ fn folder_in(root: &Path, rel: &[&str]) -> Result<PathBuf, String> {
 }
 
 /// A file `name` to write in `dir` (a folder from [`folder_in`]): refused when something other than a
-/// regular file is already there under that name, such as a link.
+/// regular file is already there under that name, such as a link, or a file with another hard link,
+/// which FFmpeg's overwrite would write through.
 fn output_in(dir: &Path, name: &str) -> Result<PathBuf, String> {
     let p = dir.join(name);
     match fs::symlink_metadata(&p) {
         Ok(m) if m.file_type().is_symlink() || is_reparse(&m) || !m.is_file() => Err(format!("{} exists and is not a regular file", p.display())),
+        Ok(_) if link_count(&p)? > 1 => Err(format!("{} has another hard link", p.display())),
         _ => Ok(p),
     }
+}
+
+/// How many directory entries (hard links) name the file at `p`.
+#[cfg(windows)]
+fn link_count(p: &Path) -> Result<u32, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES};
+    let f = fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(7)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(p)
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    // SAFETY: zeroed plain-data struct filled by the call for a handle `f` owns.
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        if GetFileInformationByHandle(f.as_raw_handle() as HANDLE, &mut info) == 0 {
+            return Err(format!("{}: {}", p.display(), std::io::Error::last_os_error()));
+        }
+        Ok(info.nNumberOfLinks)
+    }
+}
+#[cfg(not(windows))]
+fn link_count(p: &Path) -> Result<u32, String> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(p).map(|m| m.nlink() as u32).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 fn file_info(p: &Path) -> Option<(u64, u64)> {
@@ -311,6 +350,8 @@ pub struct Finished {
 pub struct Take {
     id: String,
     job: String,
+    /// the take folder HLAE made, `take0000` and up (take_name_ok)
+    take: String,
     video: String,
     audio: Option<String>,
     mtime: u64,
@@ -321,6 +362,55 @@ pub struct ClipsScan {
     finished: Vec<Finished>,
     takes: Vec<Take>,
     reels: Vec<Finished>,
+}
+
+/// A take folder name as HLAE makes it: `take` and four digits (SuggestTakePath in advancedfx
+/// shared/FileTools.cpp, called with 4 digits from AfxHookSource2/RenderSystemDX11Hooks.cpp).
+fn take_name_ok(s: &str) -> bool {
+    s.len() == 8 && s.starts_with("take") && s[4..].bytes().all(|b| b.is_ascii_digit())
+}
+
+/// One recorded take: its folder name, its video and sound, and the video's modified time.
+struct TakeFiles {
+    name: String,
+    video: PathBuf,
+    audio: Option<PathBuf>,
+    mtime: u64,
+}
+
+/// HLAE's files in one take folder, or None when it holds no video yet. HLAE records each
+/// `mirv_streams record start` into a new `<record name>\takeNNNN` folder. The screen stream, which
+/// the director records, writes into the take folder itself (CAfxStreams::GetStreamFolder,
+/// RenderSystemDX11Hooks.cpp); a named stream writes into `take\<stream name>`. The FFmpeg preset
+/// names the file video.mp4. The game's sound goes to `take\audio.wav` (the startmovie wav detour in
+/// AfxHookSource2/main.cpp). A video of 0 bytes is still being written or failed, so it does not count.
+fn take_files(take: &Path) -> Option<TakeFiles> {
+    let name = take.file_name()?.to_str()?.to_string();
+    let mut subs: Vec<String> = fs::read_dir(take).ok()?.filter_map(|e| e.ok()).filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).filter_map(|e| e.file_name().into_string().ok()).collect();
+    subs.sort();
+    let video = std::iter::once(take.join("video.mp4"))
+        .chain(subs.iter().map(|s| take.join(s).join("video.mp4")))
+        .find(|p| file_info(p).is_some_and(|(size, _)| size > 0))?;
+    let (_, mtime) = file_info(&video)?;
+    let audio = take.join("audio.wav");
+    Some(TakeFiles { name, audio: file_info(&audio).map(|_| audio), video, mtime })
+}
+
+/// The newest complete take of one clip (`raw\<clip id>`): the highest-numbered take folder with a video.
+fn newest_take(clip: &Path) -> Option<TakeFiles> {
+    let mut takes: Vec<String> = fs::read_dir(clip).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| take_name_ok(n)).collect();
+    takes.sort();
+    takes.iter().rev().find_map(|t| take_files(&clip.join(t)))
+}
+
+/// A file to read inside `root` ([`file_inside`]) that has no other hard link, which could make a
+/// file elsewhere readable through the clips folder.
+fn input_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
+    let q = file_inside(root, p)?;
+    if link_count(&q)? > 1 {
+        return Err(format!("{} has another hard link", p.display()));
+    }
+    Ok(q)
 }
 
 fn scan_in(root: &Path) -> Result<ClipsScan, String> {
@@ -345,10 +435,8 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
     for job in names(&root.join("jobs")).into_iter().filter(|j| job_id_ok(j)) {
         let raw = root.join("jobs").join(&job).join("raw");
         for id in names(&raw).into_iter().filter(|i| clip_id_ok(i)) {
-            let video = raw.join(&id).join("video.mp4");
-            let audio = raw.join(&id).join("audio.wav");
-            if let Some((_, mtime)) = file_info(&video) {
-                out.takes.push(Take { id, job: job.clone(), video: video.display().to_string(), audio: file_info(&audio).map(|_| audio.display().to_string()), mtime });
+            if let Some(t) = newest_take(&raw.join(&id)) {
+                out.takes.push(Take { id, job: job.clone(), take: t.name, video: t.video.display().to_string(), audio: t.audio.map(|a| a.display().to_string()), mtime: t.mtime });
             }
         }
     }
@@ -392,7 +480,7 @@ fn ensure_ffmpeg_ini(hlae: &Path, ffmpeg: &Path) -> Result<Option<PathBuf>, Stri
         return Ok(None);
     }
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    fs::write(&ini, format!("[Ffmpeg]\nPath={}\n", ffmpeg.display())).map_err(|e| format!("{}: {e}", ini.display()))?;
+    job::write_together(&dir, &[("ffmpeg.ini", format!("[Ffmpeg]\nPath={}\n", ffmpeg.display()).as_bytes())])?;
     Ok(Some(ini))
 }
 
@@ -414,7 +502,7 @@ fn rebuild_saved(env: &job::JobEnv, id: &str) -> Result<job::Plan, String> {
     if plan != saved {
         return Err(format!("{} differs from the plan the app builds from its own request; save the plan again", plan_path.display()));
     }
-    job::write_together(&dir, &[("director.js", &script)])?;
+    job::write_together(&dir, &[("director.js", script.as_bytes())])?;
     Ok(plan)
 }
 
@@ -444,7 +532,7 @@ pub async fn clips_launch(job: String) -> Result<Launched, String> {
         let ffmpeg = find_ffmpeg(Some(&hlae))?;
         let ini = ensure_ffmpeg_ini(&hlae, &ffmpeg)?;
         let cfg = csgo.join("cfg").join(&plan.cfg_file);
-        fs::write(&cfg, &plan.cfg_text).map_err(|e| format!("{}: {e}", cfg.display()))?;
+        job::write_together(cfg.parent().ok_or("CS2 has no cfg folder")?, &[(plan.cfg_file.as_str(), plan.cfg_text.as_bytes())])?;
         let child = std::process::Command::new(&hlae)
             .args(&plan.argv[1..])
             .current_dir(hlae.parent().unwrap_or(Path::new(".")))
@@ -469,25 +557,26 @@ fn lower_third_line(s: &str) -> Result<&str, String> {
 /// Builds the finishing command for clip `id`'s take in job `job`: the take resolved inside the clips
 /// folder, the two lines written to `text\` by this function, the font from the fixed list, the
 /// output `<id>.mp4` in the clips folder.
-fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, reason: &str, subline: &str, duration_s: f64) -> Result<Vec<String>, String> {
-    if !clip_id_ok(id) || !job_id_ok(job_id) {
-        return Err(format!("{id:?} in {job_id:?} is not a clip of a job"));
+#[allow(clippy::too_many_arguments)]
+fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, reason: &str, subline: &str, duration_s: f64) -> Result<Vec<String>, String> {
+    if !clip_id_ok(id) || !job_id_ok(job_id) || !take_name_ok(take) {
+        return Err(format!("{id:?} in {job_id:?}, {take:?} is not a take of a clip of a job"));
     }
     if !(duration_s.is_finite() && duration_s > 0.0 && duration_s <= 600.0) {
         return Err(format!("a clip of {duration_s} s"));
     }
-    let take = root.join("jobs").join(job_id).join("raw").join(id);
-    let video = file_inside(root, &take.join("video.mp4"))?;
-    let audio = match fs::symlink_metadata(take.join("audio.wav")) {
-        Ok(_) => Some(file_inside(root, &take.join("audio.wav"))?),
-        Err(_) => None,
-    };
+    let dir = root.join("jobs").join(job_id).join("raw").join(id).join(take);
+    let files = take_files(&dir).ok_or_else(|| format!("{} holds no recorded video", dir.display()))?;
+    let video = input_inside(root, &files.video)?;
+    let audio = files.audio.map(|a| input_inside(root, &a)).transpose()?;
+    // every target is checked before anything is written, so a refusal leaves nothing behind
     let text = folder_in(root, &["text"])?;
-    let reason_file = output_in(&text, &format!("{id}.txt"))?;
-    let sub_file = output_in(&text, &format!("{id}-sub.txt"))?;
-    fs::write(&reason_file, lower_third_line(reason)?).map_err(|e| format!("{}: {e}", reason_file.display()))?;
-    fs::write(&sub_file, lower_third_line(subline)?).map_err(|e| format!("{}: {e}", sub_file.display()))?;
+    let (rn, sn) = (format!("{id}.txt"), format!("{id}-sub.txt"));
+    let reason_file = output_in(&text, &rn)?;
+    let sub_file = output_in(&text, &sn)?;
     let out = output_in(root, &format!("{id}.mp4"))?;
+    let (reason, subline) = (lower_third_line(reason)?, lower_third_line(subline)?);
+    job::write_together(&text, &[(rn.as_str(), reason.as_bytes()), (sn.as_str(), subline.as_bytes())])?;
     let args = ffmpeg::finish_args(&ffmpeg::FinishSpec {
         video: &video, audio: audio.as_deref(), reason_file: &reason_file, subline_file: &sub_file, font,
         start_s: 0.0, duration_s, width: job::WIDTH, height: job::HEIGHT, fps: job::FPS, out: &out,
@@ -500,7 +589,7 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, reason: &str
 fn reel_command(root: &Path, ids: &[String], name: &str) -> Result<Vec<String>, String> {
     let clips = ids
         .iter()
-        .map(|id| if clip_id_ok(id) { file_inside(root, &root.join(format!("{id}.mp4"))) } else { Err(format!("{id:?} is not a clip id")) })
+        .map(|id| if clip_id_ok(id) { input_inside(root, &root.join(format!("{id}.mp4"))) } else { Err(format!("{id:?} is not a clip id")) })
         .collect::<Result<Vec<_>, _>>()?;
     let out = output_in(&folder_in(root, &["reels"])?, name)?;
     let args = ffmpeg::reel_args(&clips, &out)?;
@@ -529,14 +618,14 @@ fn run_ffmpeg(root: &Path, args: &[String], hlae: Option<&str>) -> Result<Ffmpeg
     Ok(FfmpegRun { code, error: (code != Some(0)).then(|| err[err.len().saturating_sub(2000)..].iter().collect()), output: args.last().cloned().unwrap_or_default() })
 }
 
-/// Finishes HLAE's take of clip `id` from job `job` into `<id>.mp4`: trimmed to `duration_s`, the
+/// Finishes HLAE's take `take` of clip `id` from job `job` into `<id>.mp4`: trimmed to `duration_s`, the
 /// lower third's two lines (`reason`, `subline`; the app hides personal info in them first) drawn in.
 #[tauri::command]
-pub async fn clips_finish(id: String, job: String, reason: String, subline: String, duration_s: f64, hlae: Option<String>) -> Result<FfmpegRun, String> {
+pub async fn clips_finish(id: String, job: String, take: String, reason: String, subline: String, duration_s: f64, hlae: Option<String>) -> Result<FfmpegRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
         let font = ffmpeg::allowed_font().ok_or("No font for the lower third was found (Segoe UI or Arial in Windows' Fonts folder)")?;
-        let args = finish_command(&root, &font, &id, &job, &reason, &subline, duration_s)?;
+        let args = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s)?;
         run_ffmpeg(&root, &args, hlae.as_deref())
     })
     .await
@@ -602,8 +691,11 @@ mod tests {
         }
     }
 
+    const TAKE: &str = "take0000";
+
+    /// A take as HLAE lays one out: the screen stream's video in the take folder, the sound beside it.
     fn take(root: &Path, audio: bool) {
-        let t = root.join("jobs").join(JOB).join("raw").join(CLIP);
+        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
         fs::create_dir_all(&t).unwrap();
         fs::write(t.join("video.mp4"), b"v").unwrap();
         if audio {
@@ -612,13 +704,56 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_complete_take_is_found_in_hlaes_take_folders() {
+        let s = scratch("takes");
+        let clip = s.0.join("jobs").join(JOB).join("raw").join(CLIP);
+        let mk = |rel: &str, bytes: &[u8]| {
+            let p = clip.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, bytes).unwrap();
+        };
+        // take0000: the screen stream in the take folder; take0001: a named stream's folder with the
+        // sound in the take; take0002: a video still empty; notes: not a take
+        mk("take0000/video.mp4", b"v0");
+        mk("take0001/screen/video.mp4", b"v1");
+        mk("take0001/audio.wav", b"a1");
+        mk("take0002/video.mp4", b"");
+        mk("notes/video.mp4", b"x");
+        let t = newest_take(&clip).unwrap();
+        assert_eq!((t.name.as_str(), t.video.clone(), t.audio.clone()), ("take0001", clip.join("take0001").join("screen").join("video.mp4"), Some(clip.join("take0001").join("audio.wav"))));
+        let scan = scan_in(&s.0).unwrap();
+        assert_eq!(scan.takes.iter().map(|t| (t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [("take0001", true)]);
+        // finishing names its take, and reads that take's files only
+        let args = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0001", "r", "s", 3.0).unwrap();
+        assert!(args.contains(&clip.join("take0001").join("screen").join("video.mp4").display().to_string()));
+        assert!(args.contains(&clip.join("take0001").join("audio.wav").display().to_string()));
+        assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0002", "r", "s", 3.0).unwrap_err().contains("no recorded video"));
+        for bad in ["../take0001", "take01", "takeABCD"] {
+            assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, bad, "r", "s", 3.0).unwrap_err().contains("is not a take"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_take_file_with_another_hard_link_is_not_read() {
+        let s = scratch("takelink");
+        take(&s.0, false);
+        let elsewhere = s.0.join("elsewhere.mp4");
+        fs::write(&elsewhere, b"secret").unwrap();
+        let v = s.0.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE).join("video.mp4");
+        fs::remove_file(&v).unwrap();
+        fs::hard_link(&elsewhere, &v).unwrap();
+        let e = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        assert!(e.contains("another hard link"), "{e}");
+    }
+
+    #[test]
     fn finishing_reads_only_the_take_and_writes_the_text_and_clip_into_the_clips_folder() {
         let s = scratch("finish");
         let root = &s.0;
         take(root, true);
         let font = root.join("font.ttf");
-        let args = finish_command(root, &font, CLIP, JOB, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0).unwrap();
-        let take = root.join("jobs").join(JOB).join("raw").join(CLIP);
+        let args = finish_command(root, &font, CLIP, JOB, TAKE, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0).unwrap();
+        let take = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
         assert_eq!(args.iter().filter(|a| a.as_str() == "-i").count(), 2);
         assert!(args.contains(&take.join("video.mp4").display().to_string()) && args.contains(&take.join("audio.wav").display().to_string()));
         assert_eq!(args.last().unwrap(), &root.join(format!("{CLIP}.mp4")).display().to_string());
@@ -627,10 +762,10 @@ mod tests {
         assert!(!filter.contains("round impact") && filter.contains(&ffmpeg::filter_path(&root.join("text").join(format!("{CLIP}.txt")))));
         assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "3K on B Site, +38% round impact");
         // refused: a bad id, a missing take, text that is not one line, a clip of no length
-        assert!(finish_command(root, &font, "../x", JOB, "r", "s", 3.0).is_err());
-        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, "r", "s", 3.0).is_err());
-        assert!(finish_command(root, &font, CLIP, JOB, "a\nb", "s", 3.0).unwrap_err().contains("one line"));
-        assert!(finish_command(root, &font, CLIP, JOB, "r", "s", 0.0).is_err());
+        assert!(finish_command(root, &font, "../x", JOB, TAKE, "r", "s", 3.0).is_err());
+        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, TAKE, "r", "s", 3.0).is_err());
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "a\nb", "s", 3.0).unwrap_err().contains("one line"));
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "r", "s", 0.0).is_err());
     }
 
     #[test]
@@ -639,17 +774,44 @@ mod tests {
         let root = &s.0;
         let outside = root.join("..").join(format!("cs2stats-clips-outside-{}", std::process::id()));
         fs::create_dir_all(&outside).unwrap();
-        fs::write(outside.join("video.mp4"), b"secret").unwrap();
+        fs::create_dir_all(outside.join(TAKE)).unwrap();
+        fs::write(outside.join(TAKE).join("video.mp4"), b"secret").unwrap();
         // the take's folder is a junction to a folder outside the clips folder
         let raw = root.join("jobs").join(JOB).join("raw");
         fs::create_dir_all(&raw).unwrap();
         link(&outside, &raw.join(CLIP));
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, "r", "s", 3.0).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
         assert!(e.contains("outside"), "{e}");
         // a finished clip's name taken by a link
         link(&outside, &root.join(format!("{CLIP}.mp4")));
         assert!(reel_command(root, &[CLIP.into(), CLIP.into()], "r.mp4").unwrap_err().contains("link"));
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn an_output_or_lower_third_with_another_hard_link_is_refused() {
+        let s = scratch("hardlink");
+        let root = &s.0;
+        take(root, false);
+        let elsewhere = root.join("elsewhere.txt");
+        fs::write(&elsewhere, b"keep").unwrap();
+        // the clip's output name is a second hard link to another file
+        fs::hard_link(&elsewhere, root.join(format!("{CLIP}.mp4"))).unwrap();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        assert!(e.contains("another hard link"), "{e}");
+        assert!(!root.join("text").join(format!("{CLIP}.txt")).exists(), "a refused finish wrote its text");
+        fs::remove_file(root.join(format!("{CLIP}.mp4"))).unwrap();
+        // the lower third's text file, likewise
+        fs::create_dir_all(root.join("text")).unwrap();
+        fs::hard_link(&elsewhere, root.join("text").join(format!("{CLIP}.txt"))).unwrap();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        assert!(e.contains("another hard link"), "{e}");
+        assert_eq!(fs::read(&elsewhere).unwrap(), b"keep");
+        // a plain file of that name is replaced, not written through
+        fs::remove_file(root.join("text").join(format!("{CLIP}.txt"))).unwrap();
+        fs::write(root.join("text").join(format!("{CLIP}.txt")), b"old").unwrap();
+        finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "new", "s", 3.0).unwrap();
+        assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "new");
     }
 
     #[test]
@@ -679,7 +841,7 @@ mod tests {
         let s = scan_in(root).unwrap();
         assert_eq!(s.finished.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), [CLIP]);
         assert_eq!(s.reels.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["reel-1"]);
-        assert_eq!(s.takes.iter().map(|t| (t.id.as_str(), t.job.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [(CLIP, JOB, false)]);
+        assert_eq!(s.takes.iter().map(|t| (t.id.as_str(), t.job.as_str(), t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [(CLIP, JOB, TAKE, false)]);
     }
 
     /// A machine with a saved job, for the launch's rebuild check.
