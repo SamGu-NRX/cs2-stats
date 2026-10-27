@@ -41,6 +41,8 @@ interface Camera {
   specFromFrame?: number;
   /** an HLAE without getObserverMode */
   noObserverMode?: boolean;
+  /** the observer mode each spec_mode value gives; by default the value itself (the schema's numbering) */
+  modeFor?: Record<number, number>;
 }
 
 /**
@@ -56,6 +58,9 @@ function standIn(demos: Record<string, Demo>, cvar?: unknown, cam: Camera = {}) 
   const modeAtStart: number[] = [];
   let demo: Demo | null = null, loading = 0, tick = -1, observed = 1, quit = false, frame = 0;
   let mode = cam.mode ?? 3;
+  let recording = false;
+  /** per frame recorded, whether the director sent spec_player for the observed player that frame */
+  const heldWhileRecording: boolean[] = [];
   let cb: ((e: { isBefore: boolean; curStage: number }) => void) | null = null;
   const entity = (i: number) => {
     if (i === 99) return { isPlayerController: () => false, getPlayerPawnHandle: () => 98 };
@@ -78,8 +83,9 @@ function standIn(demos: Record<string, Demo>, cvar?: unknown, cam: Camera = {}) 
       const spec = /^spec_player (\d+)$/.exec(c);
       if (spec && frame >= (cam.specFromFrame ?? 0)) observed = Number(spec[1]);
       const specMode = /^spec_mode (\d+)$/.exec(c);
-      if (specMode) mode = Number(specMode[1]);
-      if (c === "mirv_streams record start") modeAtStart.push(mode);
+      if (specMode) mode = cam.modeFor?.[Number(specMode[1])] ?? Number(specMode[1]);
+      if (c === "mirv_streams record start") { modeAtStart.push(mode); recording = true; }
+      if (c === "mirv_streams record end") recording = false;
       if (c === "quit") quit = true;
     },
     getDemoTick: () => tick,
@@ -96,9 +102,11 @@ function standIn(demos: Record<string, Demo>, cvar?: unknown, cam: Camera = {}) 
     for (; frame < maxFrames && !quit; frame++) {
       if (loading > 0 && --loading === 0) tick = 1;
       else if (demo && tick >= 0) tick++;
+      const sent = execs.length, was = recording;
       cb!({ isBefore: false, curStage: 12 });
+      if (was && recording) heldWhileRecording.push(execs.slice(sent).includes(`spec_player ${observed}`));
     }
-    return { execs, logs, quit, modeAtStart };
+    return { execs, logs, quit, modeAtStart, heldWhileRecording };
   };
 }
 
@@ -120,12 +128,14 @@ describe("the director", () => {
     ]);
     // every line carries the launch's nonce
     expect(logs.every((l) => l.includes(n))).toBe(true);
-    // seeks land two seconds early; the camera goes to ME's controller: 2 in the first demo, where it
-    // stays across the second seek, and 1 in the second
-    expect(execs.filter((c) => /^(playdemo|demo_gototick|spec_player)/.test(c))).toEqual([
-      `playdemo "${DEMO_A}"`, "demo_gototick 872", "spec_player 2", "demo_gototick 2872",
-      `playdemo "${DEMO_B}"`, "demo_gototick 272", "spec_player 1",
+    // seeks land two seconds early
+    expect(execs.filter((c) => /^(playdemo|demo_gototick)/.test(c))).toEqual([
+      `playdemo "${DEMO_A}"`, "demo_gototick 872", "demo_gototick 2872", `playdemo "${DEMO_B}"`, "demo_gototick 272",
     ]);
+    // the camera is held on ME's controller, 2 in the first demo and 1 in the second, and on no one else
+    const second = execs.indexOf(`playdemo "${DEMO_B}"`);
+    const held = (from: number, to: number) => [...new Set(execs.slice(from, to).filter((c) => c.startsWith("spec_player")))];
+    expect([held(0, second), held(second, execs.length)]).toEqual([["spec_player 2"], ["spec_player 1"]]);
     expect(execs.filter((c) => c.startsWith("mirv_streams record name"))).toEqual([A1, A2, B1].map((id) => `mirv_streams record name "${OUT}/${id}"`));
     // the job's block in the console log, which the host copies into its session log (clips/mod.rs capture_sessions)
     expect([logs[0], logs.at(-1)]).toEqual([`[cs2stats] director loaded job=${JOB_ID}: 2 demos nonce=${NONCE}`, `[cs2stats] ALL DONE job=${JOB_ID} nonce=${NONCE}`]);
@@ -175,10 +185,32 @@ describe("the director", () => {
     const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
     // ME is controller 1, which the demo camera already follows, in chase mode (3)
     const { execs, modeAtStart } = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } }, undefined, { mode: 3 })(script(j), 20000);
-    expect(execs.filter((c) => c.startsWith("spec_player"))).toEqual([]);
+    expect([...new Set(execs.filter((c) => c.startsWith("spec_player")))]).toEqual(["spec_player 1"]);
     expect(execs.indexOf("spec_mode 2")).toBeGreaterThan(-1);
     expect(execs.indexOf("spec_mode 2")).toBeLessThan(execs.indexOf("mirv_streams record start"));
     expect(modeAtStart).toEqual([2]);
+  });
+
+  it("holds the camera on the player with spec_player on every recorded frame", () => {
+    // fails if the director sends spec_player once and lets CS2 move the camera, which advancedfx #1172
+    // found a single spec_player no longer prevents; HLAE's mirv_script_spec_lock sends it every frame
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    const { heldWhileRecording } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002", ME] } })(script(j), 20000);
+    expect(heldWhileRecording.length).toBeGreaterThan(90);
+    expect(heldWhileRecording.every(Boolean)).toBe(true);
+  });
+
+  it("falls back to spec_mode 1 when spec_mode 2 does not give first person, and records only once the mode reads in-eye", () => {
+    // fails if the director asks only for spec_mode 2, or records before the mode reads 2 (in-eye). Here,
+    // as advancedfx #1172 reported on CS2 1.41.6.2, spec_mode 1 is the value that gives the in-eye view.
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    const { execs, logs, modeAtStart } = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } }, undefined, { mode: 3, modeFor: { 1: 2, 2: 3 } })(script(j), 20000);
+    const modes = execs.filter((c) => c.startsWith("spec_mode"));
+    expect(modes.slice(0, 31)).toEqual([...Array(30).fill("spec_mode 2"), "spec_mode 1"]);
+    expect(modeAtStart).toEqual([2]);
+    expect(logs.filter((l) => /START|END/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
+      `START ${A1} tick=1000 nonce=${NONCE}`, `END ${A1} nonce=${NONCE} why=end_tick tick=1100`,
+    ]);
   });
 
   it("skips a clip when HLAE cannot report the observer mode", () => {

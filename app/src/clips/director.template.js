@@ -35,6 +35,8 @@
 	let clip = 0;
 	let seekTries = 0;
 	let camTries = 0;
+	// frames spent asking for first person in this lock (lockCamera's spec_mode fallback)
+	let modeAsks = 0;
 	// the camera was confirmed on the player, in first person, on a frame before the clip's start tick
 	let lockedBefore = false;
 	let controller = null;
@@ -95,8 +97,14 @@
 		}
 	}
 
-	// CS2's observer mode for the player's own eyes (ObserverMode_t: 0 none, 1 fixed, 2 in-eye, 3 chase, 4 roaming).
+	// CS2's observer mode for the player's own eyes (ObserverMode_t: 0 none, 1 fixed, 2 in-eye, 3 chase,
+	// 4 roaming; CounterStrikeSharp's generated schema). HLAE's mirv_script_view snippet also reads 2 as in-eye.
 	const IN_EYE = 2;
+	// spec_mode values to ask for first person, in order: 2, the schema's in-eye, which mirv_script_view
+	// passes to spec_mode as read; then 1, which advancedfx issue #1172 found gives in-eye on CS2 1.41.6.2.
+	// Each is asked for MODE_ASK_FRAMES frames in turn until the mode reads IN_EYE. No live run behind it.
+	const MODE_ORDER = [IN_EYE, 1];
+	const MODE_ASK_FRAMES = 30;
 	// How often a clip whose camera locked too late is sought again before it is skipped.
 	const CAMERA_RETRIES = 2;
 
@@ -115,19 +123,28 @@
 		}
 	}
 
-	// Puts the camera on the clip's player in first person. Until both are confirmed, every call asks for
-	// them again: spec_player when it follows someone else, and spec_mode 2 always, because a demo can
-	// already follow the player in chase mode. Returns 'locked' once the camera reads as on the player
-	// in first person, 'no_mode' when this HLAE cannot report the mode, else 'waiting'.
+	// Holds the demo camera on the clip's player: spec_player with the controller's entity index, sent
+	// every frame. That is what HLAE's mirv_script_spec_lock snippet does, and what its author gave as the
+	// way to lock the camera after CS2 1.41.6.2 stopped honouring a single spec_player (advancedfx #1172).
+	function holdPlayer() {
+		mirv.exec('spec_player ' + controller);
+	}
+
+	// Puts the camera on the clip's player in first person. It holds the player every frame, and until
+	// the mode reads in-eye it asks for first person (MODE_ORDER), because a demo can already follow the
+	// player in chase mode. Returns 'locked' once the camera reads as on the player in first person,
+	// 'no_mode' when this HLAE cannot report the mode, else 'waiting'.
 	function lockCamera(c) {
 		if (controller === null) controller = findController(c.steamid);
 		if (controller === null) return 'waiting';
+		holdPlayer();
 		const mode = observerMode();
 		if (mode === undefined) return 'no_mode';
-		const on = observedController() === controller;
-		if (on && mode === IN_EYE) return 'locked';
-		if (!on) mirv.exec('spec_player ' + controller);
-		mirv.exec('spec_mode ' + IN_EYE);
+		if (observedController() === controller && mode === IN_EYE) return 'locked';
+		if (mode !== IN_EYE) {
+			mirv.exec('spec_mode ' + MODE_ORDER[Math.floor(modeAsks / MODE_ASK_FRAMES) % MODE_ORDER.length]);
+			modeAsks++;
+		}
 		return 'waiting';
 	}
 
@@ -159,6 +176,7 @@
 		clip++;
 		seekTries = 0;
 		camTries = 0;
+		modeAsks = 0;
 		lockedBefore = false;
 		controller = null;
 		if (clip < currentDemo().clips.length) setState(S.SEEK);
@@ -170,6 +188,7 @@
 		clip = 0;
 		seekTries = 0;
 		camTries = 0;
+		modeAsks = 0;
 		lockedBefore = false;
 		controller = null;
 		mirv.exec('playdemo "' + d.path + '"');
@@ -264,6 +283,7 @@
 			case S.REC:
 				if (!playing || mirv.isDemoPaused()) { stopRecording(c, 'demo_end'); nextClip(); return; }
 				if (tick >= c.end) { stopRecording(c, 'end_tick'); nextClip(); return; }
+				holdPlayer();
 				if (observedController() !== controller || observerMode() !== IN_EYE) {
 					// the camera left the player or first person: stop rather than record something else
 					stopRecording(c, 'camera_lost');

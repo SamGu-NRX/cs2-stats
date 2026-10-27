@@ -203,6 +203,12 @@ impl Guard {
         self.st.running += 1;
     }
 
+    /// How many launches' watchers still hold the OS lock: their HLAE or CS2 may still run, whatever
+    /// their result says (a damaged launch has one at once).
+    pub fn launches_running(&self) -> usize {
+        self.st.running
+    }
+
     /// A launch's watcher has settled it: when no other launch runs, the OS lock goes with this guard.
     pub fn launch_done(&mut self) {
         self.st.running = self.st.running.saturating_sub(1);
@@ -680,7 +686,8 @@ mod tests {
         if std::env::var("CS2STATS_TEST_SHORT_CHILD").is_err() {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // long enough for the tests to look at the launch while it runs
+        std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
     #[test]

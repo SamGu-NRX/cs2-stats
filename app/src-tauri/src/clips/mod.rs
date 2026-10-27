@@ -382,7 +382,8 @@ pub struct ClipsScan {
     finished: Vec<Finished>,
     takes: Vec<Take>,
     reels: Vec<Finished>,
-    /// launches whose HLAE or CS2 still runs: their takes are listed once those exit
+    /// launches whose HLAE or CS2 may still run (unsettled ones, or more while this app's watchers run):
+    /// their takes are listed once those exit
     waiting: usize,
 }
 
@@ -502,10 +503,11 @@ pub async fn clips_scan() -> Result<ClipsScan, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = clips_root()?;
         let g = launch::guard(&root)?;
-        let waiting = match cs2_paths() {
+        let pending = match cs2_paths() {
             Ok((csgo, _)) => settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?,
             Err(_) => 0,
         };
+        let waiting = pending.max(g.launches_running());
         launch::sweep_parts(&g, &root);
         Ok(ClipsScan { waiting, ..scan_in(&root)? })
     })
@@ -605,6 +607,10 @@ fn prepare_launch(g: &launch::Guard, env: &job::JobEnv, csgo: &Path, id: &str, r
     let plan = rebuild_saved(env, id)?;
     if plan.review != review {
         return Err("this job is not the plan you reviewed; open the render dialog and review it again".into());
+    }
+    // a launch this app started still runs, though its result may already be written (a damaged launch)
+    if g.launches_running() > 0 {
+        return Err("an earlier render is still running (HLAE or CS2). Let it end, then render again.".into());
     }
     if settle_launches(g, &env.clips_root, &csgo.join("console.log"), procs)? > 0 {
         return Err("an earlier render is still running (HLAE or CS2). Let it end, then render again.".into());
@@ -1243,6 +1249,13 @@ mod tests {
         }
         let damaged_now = |ls: &[launch::Launch]| matches!(&ls[0].outcome, launch::Outcome::Damaged(d) if d.contains("disk full"));
         assert!(damaged_now(&launch::launches(&job_dir)));
+        // its result is written, but its HLAE still runs: no second launch starts another
+        {
+            let g = launch::guard(&env.clips_root).unwrap();
+            let e = prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).err().unwrap();
+            assert!(e.contains("an earlier render is still running"), "{e}");
+        }
+        assert_eq!(launch::launches(&job_dir).len(), 1, "the refused launch wrote a record");
         w.join().unwrap();
         assert_eq!(launch::running_launches(), 0);
         let ls = launch::launches(&job_dir);
