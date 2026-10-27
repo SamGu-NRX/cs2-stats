@@ -6,7 +6,7 @@
 //
 // Only the desktop app checks demos and renders; the browser lists the moments and says so.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { clipsHost, savedHlae, saveHlae, type ClipsEnv, type ClipsHost, type DemoOnDisk, type Take } from "../../clips/host";
+import { clipsHost, savedHlae, saveHlae, type ClipsEnv, type ClipsHost, type Take } from "../../clips/host";
 import { jobRequest, type RenderPlan } from "../../clips/plan";
 import { clipState, demoSource, ROUND_IMPACT_TIP, STATE_LABEL, type ClipState, type DemoSource, type Lookup } from "../../clips/state";
 import type { MomentRow } from "../../worker/protocol";
@@ -58,19 +58,29 @@ function useClipTools(names: string[], hlae: string | null): Tools & { recheck: 
   const key = names.join("|");
   useEffect(() => {
     let alive = true;
+    // the host, once found, stays even when a call below fails: the desktop app is still the desktop app
+    let found: ClipsHost | null = null;
     setSt((s) => ({ ...s, checking: true }));
     (async () => {
-      const host = await clipsHost();
+      const host = (found = await clipsHost());
       if (!host) return { host, env: null, lookup: { demos: null, scan: null, why: "Demos are checked by the desktop app." }, error: null };
-      const [env, scan] = await Promise.all([host.env(hlae), host.scan()]);
-      let demos: Map<string, DemoOnDisk> | null = null, why: string | null = null;
-      if (names.length) {
-        try { demos = new Map((await host.demos(names)).map((d) => [d.name, d])); } catch (e) { why = `Demos could not be checked: ${String(e)}`; }
-      } else demos = new Map();
-      return { host, env, lookup: { demos, scan, why }, error: null };
+      // each check stands alone: a failed scan still leaves the tools and the demos known, so moments stay renderable
+      const [env, scan, demoList] = await Promise.allSettled([host.env(hlae), host.scan(), names.length ? host.demos(names) : Promise.resolve([])]);
+      const failed = [env, scan].flatMap((r) => (r.status === "rejected" ? [String(r.reason)] : []));
+      return {
+        host,
+        env: env.status === "fulfilled" ? env.value : null,
+        lookup: {
+          demos: demoList.status === "fulfilled" ? new Map(demoList.value.map((d) => [d.name, d])) : null,
+          scan: scan.status === "fulfilled" ? scan.value : null,
+          why: demoList.status === "rejected" ? `Demos could not be checked: ${String(demoList.reason)}` : null,
+        },
+        error: failed.length ? failed.join("; ") : null,
+      };
     })().then(
       (r) => alive && setSt({ ...r, checking: false }),
-      (e) => alive && setSt((s) => ({ ...s, error: String(e), checking: false })),
+      // only finding the host itself can fail here; keep whatever host was found
+      (e) => alive && setSt((s) => ({ ...s, host: found ?? s.host, error: String(e), checking: false })),
     );
     return () => { alive = false; };
   }, [key, hlae, n]);
@@ -439,6 +449,8 @@ export default function ClipsView() {
             )}
           </div>
         </header>
+        {/* the clips folder or the tools could not be read: said above everything else, whatever the list shows */}
+        {tools.error && <p className="rdlg__problem clips__error" role="alert">Checking the clips folder and tools failed: {hide ? hideText(tools.error) : tools.error}</p>}
 
         {call.error && !call.stale ? <LoadFailed what="Moments" error={call.error} /> : !rows ? <div className="skel" style={{ height: 320 }} /> : !items.length ? (
           <Empty icon={<ClipsIcon size={20} />} text="No moments yet: no 3K, won clutch, high-swing, flick or opening kill in your matches." />
@@ -457,7 +469,6 @@ export default function ClipsView() {
                 {whys.map(([why, n]) => <li key={why}><span className="num">{n}</span> {n === 1 ? "moment needs" : "moments need"} a demo. {hide ? hideText(why) : why}</li>)}
               </ul>
             )}
-            {tools.error && <p className="rdlg__problem" role="alert">{hide ? hideText(tools.error) : tools.error}</p>}
             <ol className="clips__list" aria-label="Moments, best first">
               {shown.slice(0, limit).map((it) => <ClipRow key={it.row.id} it={it} chosen={chosen.has(it.row.id)} onChoose={(on, kb) => setOne(it.row.id, on, kb)} clipsDir={env?.clipsDir ?? null} />)}
             </ol>

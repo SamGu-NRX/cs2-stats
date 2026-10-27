@@ -28,6 +28,8 @@ let launched: string[] = [];
 let planned: { request: JobRequest; write: boolean }[] = [];
 let finished: FinishRequest[] = [];
 let takes: Take[] = [];
+/** when set, the stand-in host's scan rejects with it */
+let scanFails: string | null = null;
 
 vi.mock("../data/provider", () => ({ useData: () => ({ matches: [entry(VALVE, "valve"), entry(PLUGIN, "local")], you: [ME], version: 0, client: null }) }));
 vi.mock("../data/engine", async (orig) => ({ ...(await orig<object>()), careerEntries: (m: MatchEntry[]) => m }));
@@ -60,7 +62,10 @@ const host: ClipsHost = {
     hlae: { path: HLAE, error: null }, ffmpeg: { path: "D:\\Tools\\ffmpeg.exe", error: null },
   }),
   demos: async (names) => names.map((name) => ({ name, path: `D:\\replays\\${name}`, size: 1 })),
-  scan: async () => ({ finished: [{ id: DONE, path: `${CLIPS}\\${DONE}.mp4`, size: 1, mtime: 1 }], takes, reels: [] }),
+  scan: async () => {
+    if (scanFails) throw new Error(scanFails);
+    return { finished: [{ id: DONE, path: `${CLIPS}\\${DONE}.mp4`, size: 1, mtime: 1 }], takes, reels: [] };
+  },
   plan: async (request, write) => { planned.push({ request, write }); return planOf(request, write ? JOB : "job-20261026T180405000Z-000000"); },
   launch: async (job) => { launched.push(job); return { pid: 4242, cfg: "x", ffmpegIni: null }; },
   finish: async (r) => { finished.push(r); return { code: 0, error: null, output: `${CLIPS}\\${r.id}.mp4` }; },
@@ -79,7 +84,7 @@ let el: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   moments = [row(READY, VALVE, 3, "3K on B Site, +30% round impact"), row(DONE, VALVE, 9, "Ace on Mid, +90% round impact"), row(NODEMO, PLUGIN, 1, "1v2 clutch, +51% round impact")];
-  launched = []; planned = []; finished = []; takes = [];
+  launched = []; planned = []; finished = []; takes = []; scanFails = null;
   el = document.body.appendChild(document.createElement("div"));
   root = createRoot(el);
 });
@@ -117,6 +122,27 @@ describe("the Clips page", () => {
     expect([...rowOf("3K on B Site, +30% round impact").querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
       `#/match/valve/match730_0001/v-3.1.0-0123abcd/rounds?round=3`, `#/match/valve/match730_0001/v-3.1.0-0123abcd/replay?round=3`,
     ]);
+  });
+
+  it("stays the desktop app when the first scan fails, and says why at the top of the page", async () => {
+    // fails if a rejected scan drops the host (the page then claims rendering needs the desktop app and
+    // disables Render), or the error shows only inside the list
+    scanFails = `${CLIPS}\\jobs: access denied`;
+    await render();
+    expect(el.textContent).not.toMatch(/Rendering runs in the desktop app/);
+    const alert = el.querySelector(".clips__error")!;
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toBe(`Checking the clips folder and tools failed: Error: ${CLIPS}\\jobs: access denied`);
+    // it sits between the page head and the list, not inside the list
+    expect(alert.previousElementSibling?.className).toBe("clips__head");
+    // the host is kept: ready moments can still be chosen and rendered, and Check again is there
+    await act(async () => { rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.click(); });
+    expect(button(el, "Render 1 clip")!.hasAttribute("disabled")).toBe(false);
+    expect(button(el, "Check again")).toBeDefined();
+    // with personal info hidden, the folder in the error is masked
+    act(() => { setHidePersonal(true); });
+    await act(async () => {});
+    expect(el.querySelector(".clips__error")!.textContent).toBe("Checking the clips folder and tools failed: Error: <path>: access denied");
   });
 
   it("masks a rendered clip's folder with personal info hidden", async () => {
