@@ -24,6 +24,7 @@ import { MapThumb } from "../../components/bits";
 import { matchHref, setQuery } from "../../router";
 import { roleValueDescriptor } from "./role-decision";
 import { RoleEvidence } from "./evidence";
+import { OutsideLink } from "../../components/OutsideLink";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -362,8 +363,8 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
       <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
-            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer"
-              data-tip={[careers.provisional ? PROVISIONAL_TIP : null, "The match is how closely your style's shape fits theirs.", "Opens their HLTV page."].filter(Boolean).join("\n")}>
+            <OutsideLink className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`}
+              tip={[careers.provisional ? PROVISIONAL_TIP : null, "The match is how closely your style's shape fits theirs.", "Opens their HLTV page."].filter(Boolean).join("\n")}>
               <ProFace pro={pick.item} className="probanner__face" />
               <div className="probanner__body">
                 <ProMarks pro={pick.item} />
@@ -373,7 +374,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
               <span className="probanner__score">
                 <b className={`probanner__pct num ${careers.provisional ? "is-prov" : ""}`}>{pick.pct}<small>%</small></b>
               </span>
-            </a>
+            </OutsideLink>
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>

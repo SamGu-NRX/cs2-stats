@@ -1,4 +1,5 @@
-// Data & settings: where matches come from, what each source supports, import, the optional packs,
+// Data & settings: where matches come from, what each source supports, import, the Leetify connection
+// (leetify/LeetifyConnect.tsx), the optional packs,
 // hiding personal info, and which models the numbers use. It stays usable when the match folder cannot
 // be read (App.tsx), since Rescan, Import and the converted-log switch are the ways out; the failure
 // shows on Sources. It is the one view that shows the host's folders, the Valve user and the
@@ -23,6 +24,7 @@ import { fmtWhen, plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { poolLabel } from "../../worker/baselines-pool";
 import { KeyChips, SHORTCUTS } from "../shell/Palette";
+import { LeetifyConnect } from "./leetify/LeetifyConnect";
 
 const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -121,6 +123,8 @@ export default function Settings() {
           </div>
           {counts.pro > 0 && <p className="meta settings__pro">{plural(counts.pro, "pro demo is", "pro demos are")} listed in Matches from the development folder. They open like any match and never count toward your career.</p>}
         </Card>
+
+        <LeetifyConnect />
 
         <Packs />
 

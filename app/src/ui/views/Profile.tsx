@@ -1,6 +1,6 @@
 // Profile: the player card (design-target-v2), then tabs. Overview: HLTV's attributes, Form, Where you
 // rank (or its change since the period before), what moves with winning (profile/WinCorrelation.tsx),
-// Strongest and Records, round swing, multi-kill rounds,
+// Strongest and Records, round swing, the Leetify comparison (leetify/), multi-kill rounds,
 // clutches, highlights (profile/Highlights.tsx), Luck and maps. Duels: metric rows. Utility: Utility
 // rating, then metric rows. Economy: metric rows, buy classes and team-buy tiers. Aim and Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
 // like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
@@ -48,6 +48,7 @@ import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile
 import { roleValueDescriptor } from "./profile/role-decision";
 import { AggressionCard } from "./profile/v2";
 import { HighlightsCard } from "./profile/Highlights";
+import { LeetifyProfileCard } from "./leetify/LeetifyProfileCard";
 import { WinCorrelationCard } from "./profile/WinCorrelation";
 import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import { BuyTiersCard, CareerRatingCard, LuckCard, RecordsCard, TopStatsCard, WhereYouRank } from "./profile/career";
@@ -253,6 +254,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 </div>
               )}
               <SwingCard you={p.you} list={list} bots={p.bots} swingOf={(e) => p.perMatch(e).swing} />
+              <LeetifyProfileCard q={base} t={p.t} ct={p.ct} matches={list.length} />
               <div className="profile__cols">
                 <Multis m={p.you.m} q={sideQ} list={list} />
                 <Clutches m={p.you.m} q={base} side={side} list={list} />

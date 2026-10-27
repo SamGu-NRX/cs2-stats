@@ -4,9 +4,11 @@
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
 //! `import_valve` runs the importer that writes them.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
-//! launcher is in `botmode`.
+//! launcher is in `botmode`; the optional Leetify import is in `leetify`. `open_external` opens the app's
+//! outside links in the system browser.
 
 pub mod botmode;
+mod leetify;
 
 use serde::Serialize;
 use std::fs;
@@ -546,6 +548,80 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
     result
 }
 
+// ---------------------------------------------------------------- outside links
+//
+// The web view opens no window for a target="_blank" link: with no new-window handler set (this app sets
+// none), wry marks WebView2's NewWindowRequested event handled and does nothing (wry 0.55
+// src/webview2/mod.rs, the `else { args.SetHandled(true) }` branch). So every outside link in the page
+// calls `open_external` (app/src/host/external.ts), which hands the URL to the system's default browser
+// with ShellExecuteW, the shell's own "open" verb. No other program starts: the `open` crate, which this
+// replaced, runs powershell.exe to do the same on Windows (review of #52).
+
+/// The hosts the app links to: Leetify's pages (views/leetify) and HLTV's player pages (the Plays like banner).
+const OUTSIDE_HOSTS: [&str; 3] = ["leetify.com", "www.leetify.com", "www.hltv.org"];
+
+/// The URL when the page may open it: https, no user name, password or port, and a host in OUTSIDE_HOSTS.
+/// Anything else is refused, so the page cannot use this to start a program or open a file.
+fn outside_url(url: &str) -> Result<tauri::Url, String> {
+    let u = tauri::Url::parse(url).map_err(|e| format!("{url}: not a URL ({e})"))?;
+    let host_ok = u.host_str().is_some_and(|h| OUTSIDE_HOSTS.contains(&h));
+    if u.scheme() != "https" || !host_ok || !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
+        return Err(format!("{url}: not a page this app links to"));
+    }
+    Ok(u)
+}
+
+/// What `open_external` asks the shell for: ShellExecuteW's verb, file and show command, and its return.
+/// A seam, so a test can stand in for the shell and see exactly what would be launched.
+type ShellLaunch = fn(verb: &str, file: &str, show: i32) -> isize;
+
+/// The show command ShellExecuteW gets: a normal window.
+#[cfg(windows)]
+const SHOW_NORMAL: i32 = windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+#[cfg(not(windows))]
+const SHOW_NORMAL: i32 = 1;
+
+/// Opens an outside link in the system's default browser; an error says why it did not open.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    open_with(&url, shell_execute)
+}
+
+/// The URL through outside_url, then to the shell as one file argument with the "open" verb; nothing is
+/// launched for a refused URL, and a failed launch says why.
+fn open_with(url: &str, launch: ShellLaunch) -> Result<(), String> {
+    let u = outside_url(url)?;
+    shell_result(launch("open", u.as_str(), SHOW_NORMAL)).map_err(|e| format!("could not open the browser: {e}"))
+}
+
+/// What ShellExecuteW's return means: above 32 it opened, at or below 32 an error code.
+fn shell_result(code: isize) -> Result<(), String> {
+    match code {
+        c if c > 32 => Ok(()),
+        0 | 8 => Err("Windows is out of memory or resources".into()),
+        2 | 3 => Err("Windows found no program for the link".into()),
+        5 => Err("Windows denied access to the browser".into()),
+        31 => Err("Windows has no browser set for web links (SE_ERR_NOASSOC)".into()),
+        c => Err(format!("ShellExecuteW returned {c}")),
+    }
+}
+
+#[cfg(windows)]
+fn shell_execute(verb: &str, file: &str, show: i32) -> isize {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (verb, file) = (wide(verb), wide(file));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; the window, parameters and
+    // folder are null, which ShellExecuteW accepts
+    unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), show) as isize }
+}
+
+/// Elsewhere nothing is launched: ERROR_FILE_NOT_FOUND, which shell_result reports.
+#[cfg(not(windows))]
+fn shell_execute(_: &str, _: &str, _: i32) -> isize {
+    2
+}
+
 /// Turns off WebView2's status bar in every window. Like a browser, WebView2 shows a link's target in
 /// a bubble at the lower left while the pointer is over it. A desktop app has no use for that, and a
 /// match link names the match's file, which the user may have named after a person; with "Hide
@@ -596,6 +672,15 @@ pub fn run() {
             read_valve,
             import_valve,
             valve_import_state,
+            open_external,
+            leetify::leetify_status,
+            leetify::leetify_save_key,
+            leetify::leetify_clear_key,
+            leetify::leetify_connect,
+            leetify::leetify_disconnect,
+            leetify::leetify_discard,
+            leetify::leetify_badge,
+            leetify::leetify_load,
             botmode::commands::botmode_status,
             botmode::commands::botmode_releases,
             botmode::commands::botmode_download,
@@ -826,6 +911,56 @@ mod tests {
         assert!(!done.running && done.last.unwrap().code == Some(0));
         gate.begin().unwrap();
         assert!(gate.state().at.is_none());
+    }
+
+    #[test]
+    fn opens_only_https_pages_on_the_hosts_the_app_links_to() {
+        // fails if the page can open a file, a program, another site, or a look-alike host through open_external
+        for ok in ["https://leetify.com/app/profile/76561197960265729", "https://leetify.com/", "https://www.hltv.org/player/1/x", "https://leetify.com/app/match-details/a-b/overview?x=1#y"] {
+            assert!(outside_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://leetify.com/", "https://evil.example/", "https://leetify.com.evil.example/", "https://leetify.com@evil.example/",
+            "https://user@leetify.com/", "https://leetify.com:8443/", "file:///C:/Windows/System32/calc.exe", "javascript:alert(1)",
+            "ms-settings:privacy", "leetify.com", "", "https://hltv.org/",
+        ] {
+            assert!(outside_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    // what the stand-in shell was asked for, per test thread
+    thread_local! {
+        static SHELL_CALLS: std::cell::RefCell<Vec<(String, String, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn shell_ok(verb: &str, file: &str, show: i32) -> isize {
+        SHELL_CALLS.with(|c| c.borrow_mut().push((verb.into(), file.into(), show)));
+        42
+    }
+    fn shell_no_browser(verb: &str, file: &str, show: i32) -> isize {
+        shell_ok(verb, file, show);
+        31
+    }
+
+    #[test]
+    fn open_external_asks_the_shell_to_open_exactly_the_allowed_url() {
+        // fails if a refused URL reaches the shell, the shell gets another verb, a changed URL or another
+        // show command, or a failed ShellExecuteW reads as success (review of #52)
+        let url = "https://leetify.com/app/match-details/5e7a1c00-0000-4000-8000-000000000001/overview?x=1&y=a%20b";
+        open_with(url, shell_ok).unwrap();
+        assert!(open_with("file:///C:/Windows/System32/calc.exe", shell_ok).is_err());
+        assert!(open_with("https://evil.example/", shell_ok).is_err());
+        let calls = SHELL_CALLS.with(|c| c.take());
+        assert_eq!(calls, [("open".to_string(), url.to_string(), SHOW_NORMAL)]);
+        #[cfg(windows)]
+        assert_eq!(SHOW_NORMAL, 1, "SW_SHOWNORMAL");
+        let e = open_with("https://www.hltv.org/player/1/x", shell_no_browser).unwrap_err();
+        assert!(e.contains("no browser set"), "{e}");
+        SHELL_CALLS.with(|c| c.take());
+        assert!(shell_result(42).is_ok());
+        for code in [0, 2, 5, 31, 32] {
+            assert!(shell_result(code).is_err(), "{code}");
+        }
+        assert!(shell_result(31).unwrap_err().contains("no browser set"));
     }
 
     #[test]
