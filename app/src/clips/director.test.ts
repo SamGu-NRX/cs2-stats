@@ -13,8 +13,9 @@ const SETUP = ["demo_timescale 1", "mirv_streams record screen enabled 1", "mirv
 
 interface Clip { id: string; steamid: string; start: number; end: number }
 const JOB_ID = "job-20261026T180405123Z-a1b2c3";
+const NONCE = "0123456789abcdef0123456789abcdef";
 const job = (demos: { path: string; clips: Clip[] }[]) => ({
-  id: JOB_ID, outDir: OUT, demos: demos.map((d) => ({ ...d, tickrate: 64 })), setup: SETUP,
+  id: JOB_ID, nonce: NONCE, outDir: OUT, demos: demos.map((d) => ({ ...d, tickrate: 64 })), setup: SETUP,
   frameStage: 12, bootFrames: 300, loadTimeoutFrames: 20000, seekRetryFrames: 900, finishFrames: 180, seekLeadSeconds: 2, quitWhenDone: true,
 });
 const clip = (id: string, start: number, end: number): Clip => ({ id, steamid: ME, start, end });
@@ -92,7 +93,13 @@ describe("the director", () => {
     expect(quit).toBe(true);
     expect(execs.slice(0, SETUP.length)).toEqual(SETUP);
     const marks = logs.filter((l) => /\] (START|END) /.test(l)).map((l) => l.replace("[cs2stats] ", ""));
-    expect(marks).toEqual([`START ${A1} tick=1000`, `END ${A1} tick=1100 why=end_tick`, `START ${A2} tick=3000`, `END ${A2} tick=3050 why=end_tick`, `START ${B1} tick=400`, `END ${B1} tick=450 why=end_tick`]);
+    const n = `nonce=${NONCE}`;
+    expect(marks).toEqual([
+      `START ${A1} tick=1000 ${n}`, `END ${A1} ${n} why=end_tick tick=1100`, `START ${A2} tick=3000 ${n}`, `END ${A2} ${n} why=end_tick tick=3050`,
+      `START ${B1} tick=400 ${n}`, `END ${B1} ${n} why=end_tick tick=450`,
+    ]);
+    // every line carries the launch's nonce
+    expect(logs.every((l) => l.includes(n))).toBe(true);
     // seeks land two seconds early; the camera goes to ME's controller: 2 in the first demo, where it
     // stays across the second seek, and 1 in the second
     expect(execs.filter((c) => /^(playdemo|demo_gototick|spec_player)/.test(c))).toEqual([
@@ -101,7 +108,7 @@ describe("the director", () => {
     ]);
     expect(execs.filter((c) => c.startsWith("mirv_streams record name"))).toEqual([A1, A2, B1].map((id) => `mirv_streams record name "${OUT}/${id}"`));
     // the job's block in the console log, which the host copies into its session log (clips/mod.rs capture_sessions)
-    expect([logs[0], logs.at(-1)]).toEqual([`[cs2stats] director loaded job=${JOB_ID}: 2 demos`, `[cs2stats] ALL DONE job=${JOB_ID}`]);
+    expect([logs[0], logs.at(-1)]).toEqual([`[cs2stats] director loaded job=${JOB_ID}: 2 demos nonce=${NONCE}`, `[cs2stats] ALL DONE job=${JOB_ID} nonce=${NONCE}`]);
   });
 
   it("skips a clip whose player is not in the demo and goes on", () => {
@@ -110,7 +117,7 @@ describe("the director", () => {
     const { logs, quit } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002"] } })(script(j), 20000);
     expect(quit).toBe(true);
     expect(logs.filter((l) => /START|ERROR/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
-      `ERROR could not put the camera on the player for ${A1}; skipping it`, `ERROR could not put the camera on the player for ${A2}; skipping it`,
+      `ERROR could not put the camera on the player for ${A1}; skipping it nonce=${NONCE}`, `ERROR could not put the camera on the player for ${A2}; skipping it nonce=${NONCE}`,
     ]);
   });
 
@@ -128,6 +135,6 @@ describe("the director", () => {
     // without the API nothing is changed, and the job still runs
     const bare = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } })(script(j), 20000);
     expect(bare.quit).toBe(true);
-    expect(bare.logs).toContain("[cs2stats] WARNING HLAE has no cvar API; the demo bar stays");
+    expect(bare.logs).toContain(`[cs2stats] WARNING HLAE has no cvar API; the demo bar stays nonce=${NONCE}`);
   });
 });

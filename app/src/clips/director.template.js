@@ -9,9 +9,11 @@
 //
 // The app's host (src-tauri/src/clips/job.rs) replaces the job placeholder below with the job as
 // JSON. Every line it logs starts with "[cs2stats]", so CS2's console.log says what happened to each clip.
-// HLAE's script cannot write files, so these lines are the director's only record: the host copies a
-// job's block, from "director loaded job=<id>" to "ALL DONE job=<id>", into the job's session.log, and a
-// take counts as recorded only when its "END <clip> ... why=end_tick" line is there (clips/mod.rs).
+// HLAE's script cannot write files, so these lines are the director's only record. Each launch writes
+// its own copy of this script with a fresh random nonce (clips/launch.rs), and every line carries it:
+// "END <clip> nonce=<n> why=<why> tick=<t>" for each clip, "<message> nonce=<n>" otherwise. Once that
+// launch's HLAE and CS2 have exited, the host reads its END lines from console.log, and a take counts
+// as recorded only with "why=end_tick" under that launch's nonce.
 //
 // demo_ui_mode hides the demo playback bar. The director sets it through HLAE's cvar API
 // (AdvancedfxCVar, HLAE 2.187.4 and later), keeps the value it found, and puts that back before CS2
@@ -32,7 +34,7 @@
 	let seekTries = 0;
 	let controller = null;
 
-	const log = (msg) => mirv.message('[cs2stats] ' + msg + '\n');
+	const log = (msg) => mirv.message('[cs2stats] ' + msg + ' nonce=' + JOB.nonce + '\n');
 	const setState = (s) => { state = s; stateFrame = frame; };
 	const tickNow = () => { const t = mirv.getDemoTick(); return typeof t === 'number' ? t : -1; };
 	const currentDemo = () => JOB.demos[demo];
@@ -108,7 +110,8 @@
 
 	function stopRecording(c, why) {
 		mirv.exec('mirv_streams record end');
-		log('END ' + c.id + ' tick=' + tickNow() + ' why=' + why);
+		// the host reads this line: the clip, the nonce, why recording stopped (clips/launch.rs read_console)
+		mirv.message('[cs2stats] END ' + c.id + ' nonce=' + JOB.nonce + ' why=' + why + ' tick=' + tickNow() + '\n');
 	}
 
 	function nextClip() {

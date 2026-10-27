@@ -651,6 +651,8 @@ pub fn run() {
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
         .setup(|_app| {
             botmode::commands::on_app_start();
+            // FFmpeg part files a crashed finish left behind; off the UI's start path
+            std::thread::spawn(clips::on_app_start);
             Ok(())
         })
         // every webview, the first window's and any opened later, as its page starts loading

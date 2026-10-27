@@ -111,7 +111,10 @@ pub struct Plan {
     /// passes argv to the process directly and uses no shell.
     pub powershell: String,
     pub cfg_file: String,
+    /// what the cfg's one line loads: each launch's own copy of the director, with that launch's nonce
+    /// (clips/mod.rs prepare_launch); written here with the copy's name left as `<launch nonce>`
     pub cfg_text: String,
+    /// the director for reading, without a nonce; a launch runs its own copy in `launches\<nonce>.js`
     pub director_file: String,
     pub demos: Vec<PlanDemo>,
     pub outputs: Vec<Output>,
@@ -230,48 +233,77 @@ pub fn demo_playback_ticks(path: &Path) -> Result<i64, String> {
     f.seek(SeekFrom::Start(offset)).map_err(|e| fail(&e.to_string()))?;
     let mut b = Vec::new();
     f.take(4096).read_to_end(&mut b).map_err(|e| fail(&e.to_string()))?;
-    fn varint(b: &[u8], i: &mut usize) -> Option<u64> {
-        let mut v = 0u64;
-        for shift in (0..64).step_by(7) {
-            let c = *b.get(*i)?;
-            *i += 1;
-            v |= u64::from(c & 0x7f) << shift;
-            if c < 0x80 {
-                return Some(v);
-            }
+    file_info_ticks(&b).map_err(|m| fail(&m))
+}
+
+/// A protobuf varint at `b[*i..]`: at most 10 bytes, the tenth carrying only the 64th bit. Every shift
+/// and step is checked, so truncated, overlong or oversized input is an error, never a panic or a wrap.
+fn varint(b: &[u8], i: &mut usize) -> Result<u64, &'static str> {
+    let mut v = 0u64;
+    for k in 0..10u32 {
+        let c = *b.get(*i).ok_or("a number is cut short")?;
+        *i = i.checked_add(1).ok_or("a number is cut short")?;
+        let bits = u64::from(c & 0x7f);
+        if k == 9 && bits > 1 {
+            return Err("a number is larger than 64 bits");
         }
-        None
+        v |= bits.checked_shl(7 * k).ok_or("a number is larger than 64 bits")?;
+        if c < 0x80 {
+            return Ok(v);
+        }
     }
+    Err("a number runs past 10 bytes")
+}
+
+/// `i + n` as an index into `b`, refused when it overflows or runs past the end.
+fn advance(b: &[u8], i: usize, n: u64) -> Result<usize, &'static str> {
+    let n = usize::try_from(n).map_err(|_| "a length is too large")?;
+    let j = i.checked_add(n).ok_or("a length is too large")?;
+    if j > b.len() {
+        return Err("a length runs past the end");
+    }
+    Ok(j)
+}
+
+/// The tick count in a demo's file-info frame (`b` starts at the frame): a varint command (2,
+/// DEM_FileInfo; 64 marks compression), tick and size, then the CDemoFileInfo message, whose field 2,
+/// playback_ticks, is an int32.
+fn file_info_ticks(b: &[u8]) -> Result<i64, String> {
     let mut i = 0;
-    let (cmd, _tick, size) = (varint(&b, &mut i), varint(&b, &mut i), varint(&b, &mut i));
-    let (Some(cmd), Some(size)) = (cmd, size) else { return Err(fail("its file info frame is cut short")) };
+    let cmd = varint(b, &mut i).map_err(|e| format!("its file info frame is malformed: {e}"))?;
+    let _tick = varint(b, &mut i).map_err(|e| format!("its file info frame is malformed: {e}"))?;
+    let size = varint(b, &mut i).map_err(|e| format!("its file info frame is malformed: {e}"))?;
     if cmd & 64 != 0 {
-        return Err(fail("its file info is compressed, which the app does not read"));
+        return Err("its file info is compressed, which the app does not read".into());
     }
     if cmd != 2 {
-        return Err(fail("no file info frame at its file info offset"));
+        return Err("no file info frame at its file info offset".into());
     }
-    let end = i + size as usize;
-    if end > b.len() {
-        return Err(fail("its file info frame is cut short"));
-    }
-    while i < end {
-        let key = varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
+    let end = advance(b, i, size).map_err(|e| format!("its file info frame is malformed: {e}"))?;
+    let msg = &b[i..end];
+    let mut j = 0;
+    let bad = |e: &str| format!("its file info is malformed: {e}");
+    while j < msg.len() {
+        let key = varint(msg, &mut j).map_err(bad)?;
         match (key >> 3, key & 7) {
-            (2, 0) => return varint(&b, &mut i).map(|v| v as i64).ok_or_else(|| fail("its file info is malformed")),
+            (2, 0) => {
+                let v = varint(msg, &mut j).map_err(bad)?;
+                // an int32 field: protobuf writes a negative one as ten bytes, which is no tick count either
+                return i32::try_from(v).ok().filter(|t| *t >= 0).map(i64::from).ok_or_else(|| bad("the tick count is not a non-negative int32"));
+            }
             (_, 0) => {
-                varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
+                varint(msg, &mut j).map_err(bad)?;
             }
-            (_, 5) => i += 4,
-            (_, 1) => i += 8,
+            (_, 5) => j = advance(msg, j, 4).map_err(bad)?,
+            (_, 1) => j = advance(msg, j, 8).map_err(bad)?,
             (_, 2) => {
-                let n = varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
-                i += n as usize;
+                let n = varint(msg, &mut j).map_err(bad)?;
+                j = advance(msg, j, n).map_err(bad)?;
             }
-            _ => return Err(fail("its file info is malformed")),
+            _ => return Err(bad("an unknown field type")),
         }
     }
-    Err(fail("its file info holds no tick count"))
+    Err("its file info holds no tick count".into())
 }
 
 fn steamid_ok(s: &str) -> bool {
@@ -374,20 +406,21 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
         powershell: powershell_command(&argv),
         argv,
         cfg_file: format!("{CFG_NAME}.cfg"),
-        cfg_text: format!("mirv_script_load \"{}\"\n", fwd(&director.display().to_string())),
+        cfg_text: format!("mirv_script_load \"{}/launches/<launch nonce>.js\"\n", fwd(&job_dir.display().to_string())),
         director_file: director.display().to_string(),
         demos,
         outputs,
         request: req.clone(),
     };
-    let script = director_script(&plan)?;
+    let script = director_script(&plan, "")?;
     Ok((plan, script))
 }
 
 /// Timing the director waits on, in rendered frames, and the lead before each clip: povforge's values
 /// (hlae.py build_job), not measured here.
-fn director_job(plan: &Plan) -> serde_json::Value {
+fn director_job(plan: &Plan, nonce: &str) -> serde_json::Value {
     json!({
+        "nonce": nonce,
         "id": plan.id,
         "outDir": fwd(&format!("{}\\raw", plan.job_dir)),
         "demos": plan.demos.iter().map(|d| json!({
@@ -401,11 +434,13 @@ fn director_job(plan: &Plan) -> serde_json::Value {
 }
 
 /// The director script: the template with the job as JSON in place of its one placeholder.
-pub fn director_script(plan: &Plan) -> Result<String, String> {
+/// The director script for a launch with `nonce` (empty for the copy kept to read): the template with
+/// the job as JSON in place of its one placeholder.
+pub fn director_script(plan: &Plan, nonce: &str) -> Result<String, String> {
     if TEMPLATE.matches(PLACEHOLDER).count() != 1 {
         return Err("the director template must hold its job placeholder exactly once".into());
     }
-    Ok(TEMPLATE.replacen(PLACEHOLDER, &director_job(plan).to_string(), 1))
+    Ok(TEMPLATE.replacen(PLACEHOLDER, &director_job(plan, nonce).to_string(), 1))
 }
 
 /// Days since 1970-01-01 as (year, month, day): Howard Hinnant's civil_from_days.
@@ -620,7 +655,7 @@ mod tests {
         let (plan, script) = build(&req(&m, vec![clip(D1, 3, 1000, 2280)]), &m.env, ID, "t").unwrap();
         let dir = m.env.clips_root.join("jobs").join(ID);
         assert_eq!(plan.job_dir, dir.display().to_string());
-        assert_eq!(plan.cfg_text, format!("mirv_script_load \"{}/director.js\"\n", dir.display().to_string().replace('\\', "/")));
+        assert_eq!(plan.cfg_text, format!("mirv_script_load \"{}/launches/<launch nonce>.js\"\n", dir.display().to_string().replace('\\', "/")));
         assert_eq!(plan.outputs[0].finished, m.env.clips_root.join(format!("{}.mp4", a1())).display().to_string());
         assert_eq!(plan.outputs[0].duration_s, 20.0);
         // the director holds the job, with the demo's resolved path and no reason text. The template's
@@ -633,7 +668,7 @@ mod tests {
         // the keys director.template.js reads, which src/clips/director.test.ts's fixture copies
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["bootFrames", "demos", "finishFrames", "frameStage", "id", "loadTimeoutFrames", "outDir", "quitWhenDone", "seekLeadSeconds", "seekRetryFrames", "setup"]);
+        assert_eq!(keys, ["bootFrames", "demos", "finishFrames", "frameStage", "id", "loadTimeoutFrames", "nonce", "outDir", "quitWhenDone", "seekLeadSeconds", "seekRetryFrames", "setup"]);
         assert_eq!(v["demos"][0]["tickrate"], 64.0);
         assert!(!v["setup"].as_array().unwrap().iter().any(|c| c.as_str().unwrap().contains("demo_ui_mode")), "the director, not setup, owns demo_ui_mode");
         assert!(!script.contains("reason c-"));
@@ -661,6 +696,48 @@ mod tests {
             assert!(e.contains("does not match its demo, player and round"), "{e}");
         }
         build(&req(&m, vec![clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
+    }
+
+    #[test]
+    fn a_malformed_demo_is_an_error_never_a_panic() {
+        // the frame as a real demo writes it, then varints and lengths at their limits
+        let good = fake_demo(1234);
+        let frame = &good[64..];
+        assert_eq!(file_info_ticks(frame), Ok(1234));
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            (vec![], "cut short"),
+            (vec![0x82], "cut short"),                                    // a truncated varint
+            (vec![0x80; 11], "past 10 bytes"),                           // an overlong one
+            (vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f], "larger than 64 bits"),
+            ([vec![2, 0], vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]].concat(), "too large"), // size u64::MAX
+            (vec![2, 0, 50, 0x10, 0x05], "runs past the end"),           // a size past the frame
+            (vec![2, 0, 3, 0x0a, 0xff, 0x01], "runs past the end"),     // a field length past the message
+            (vec![2, 0, 2, 0x0d, 0x00], "runs past the end"),           // a fixed32 cut short
+            (vec![2, 0, 2, 0x10, 0x80], "cut short"),                    // the tick count cut short
+            ([vec![2, 0, 11, 0x10], vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]].concat(), "non-negative int32"),
+            (vec![2, 0, 2, 0x0f, 0x00], "unknown field type"),
+            (vec![66, 0, 0], "compressed"),
+            (vec![3, 0, 0], "no file info frame"),
+        ];
+        for (bytes, want) in cases {
+            let e = file_info_ticks(&bytes).unwrap_err();
+            assert!(e.contains(want), "{bytes:?}: {e}");
+        }
+        // every truncation and every single-byte change of a good frame: an answer or an error, never a panic
+        for n in 0..frame.len() {
+            let _ = file_info_ticks(&frame[..n]);
+        }
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        for k in 0..frame.len() {
+            for _ in 0..64 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let mut f = frame.to_vec();
+                f[k] = seed as u8;
+                let _ = file_info_ticks(&f);
+            }
+        }
     }
 
     #[test]

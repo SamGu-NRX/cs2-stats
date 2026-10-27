@@ -11,9 +11,9 @@
 
 pub mod ffmpeg;
 pub mod job;
+pub mod launch;
 
 use crate::botmode::paths::is_reparse;
-use crate::botmode::process::cs2_listed;
 use crate::botmode::steam::{find_cs2, steam_root};
 use serde::Serialize;
 use std::fs;
@@ -396,84 +396,29 @@ fn take_files(take: &Path) -> Option<TakeFiles> {
     Some(TakeFiles { name, audio: file_info(&audio).map(|_| audio), video, mtime })
 }
 
-/// How long a take's files must have gone unchanged before the take counts: they stop changing when
-/// HLAE's encoder closes them, and by then CS2 has quit, so this only covers a file system that reports
-/// the last write late. Ours; not measured.
-const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// The director's console lines for one job, kept beside its takes (`jobs\<job>\session.log`).
-const SESSION_LOG: &str = "session.log";
-
-/// Copies each job's block of director lines out of CS2's console.log (`-condebug`), from `director
-/// loaded job=<id>` to `ALL DONE job=<id>`, into that job's session.log, when the job's folder exists
-/// and has none yet. Only `[cs2stats]` lines are kept. HLAE's script API cannot write files (mirv-script
-/// fs.d.ts reads folders only), so the console log is the one record the director leaves; a later CS2
-/// session may replace it, so this runs before every launch and every scan. Returns the jobs captured.
-fn capture_sessions(root: &Path, console_log: &Path) -> Result<Vec<String>, String> {
-    let Ok(text) = fs::read_to_string(console_log) else { return Ok(vec![]) };
-    let mut captured = Vec::new();
-    let mut block: Option<(String, Vec<String>)> = None;
-    for line in text.lines() {
-        let Some(at) = line.find("[cs2stats] ") else { continue };
-        let ours = line[at..].trim_end().to_string();
-        let job_of = |key: &str| ours.split(key).nth(1).map(|r| r.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>());
-        if let Some(j) = job_of("director loaded job=") {
-            block = Some((j, vec![ours]));
-            continue;
-        }
-        let Some((j, lines)) = block.as_mut() else { continue };
-        lines.push(ours.clone());
-        if job_of("ALL DONE job=").as_deref() == Some(j.as_str()) {
-            let (j, lines) = block.take().unwrap();
-            if !job_id_ok(&j) {
-                continue;
-            }
-            let dir = root.join("jobs").join(&j);
-            if dir.is_dir() && fs::symlink_metadata(dir.join(SESSION_LOG)).is_err() {
-                let dir = folder_in(root, &["jobs", &j])?;
-                job::write_together(&dir, &[(SESSION_LOG, (lines.join("\n") + "\n").as_bytes())])?;
-                captured.push(j);
-            }
-        }
-    }
-    Ok(captured)
+/// The newest take of one clip (`raw\<clip id>`) that its launch proves complete (launch::take_proven):
+/// takes newest first, so a newer take that failed does not hide an older one that worked.
+fn newest_proven_take(clip_dir: &Path, clip: &str, launches: &[launch::Launch]) -> Option<TakeFiles> {
+    let mut takes: Vec<String> = fs::read_dir(clip_dir).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| take_name_ok(n)).collect();
+    takes.sort();
+    takes.iter().rev().find_map(|t| {
+        let files = take_files(&clip_dir.join(t))?;
+        (files.audio.is_some() && launch::take_proven(launches, clip, t).is_ok()).then_some(files)
+    })
 }
 
-/// What proves a take complete (design/clips.md "When a take counts"): CS2 is no longer running; the
-/// job's session log shows the director ended this clip at its end tick (`END <id> ... why=end_tick`)
-/// and then finished the job (`ALL DONE job=<job>`); the take holds a non-empty video.mp4 and the
-/// audio.wav the job asked for (it always sets `startMovieWav 1`); and neither file has changed for
-/// SETTLE. Otherwise the reason it does not count.
-fn take_complete(job_dir: &Path, job_id: &str, id: &str, t: &TakeFiles, cs2_running: bool, now: SystemTime) -> Result<(), String> {
-    if cs2_running {
-        return Err("CS2 is still running, so the take may still be recording".into());
-    }
-    let log = file_inside(job_dir, &job_dir.join(SESSION_LOG)).map_err(|_| "the director has not reported this job finished".to_string())?;
-    let log = fs::read_to_string(&log).map_err(|e| format!("{}: {e}", log.display()))?;
-    let ended = log.lines().any(|l| l.starts_with(&format!("[cs2stats] END {id} ")) && l.contains(" why=end_tick"));
-    if !ended {
-        return Err("the director did not record this clip to its end tick".into());
-    }
-    if !log.lines().any(|l| l == format!("[cs2stats] ALL DONE job={job_id}")) {
-        return Err("the director did not finish this job".into());
-    }
-    let audio = t.audio.as_ref().ok_or("the take has no audio.wav")?;
-    let settled = |p: &Path| -> bool {
-        let Some((size, mtime)) = file_info(p) else { return false };
-        let age = now.duration_since(UNIX_EPOCH + std::time::Duration::from_millis(mtime)).unwrap_or_default();
-        size > 0 && age >= SETTLE
-    };
-    if !settled(&t.video) || !settled(audio) {
-        return Err("the take's files are empty or still changing".into());
+/// Settles every launch of every job whose processes have exited (launch::settle), reading CS2's
+/// console.log at most once per launch.
+fn settle_launches(root: &Path, console_log: &Path, procs: &dyn launch::Procs) -> Result<(), String> {
+    let (_, held) = launch::lock_state(root, procs);
+    let jobs = fs::read_dir(root.join("jobs")).map(|r| r.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|j| job_id_ok(j)).collect::<Vec<_>>()).unwrap_or_default();
+    for j in jobs {
+        let dir = root.join("jobs").join(&j);
+        for mut l in launch::launches(&dir) {
+            launch::settle(&dir, &mut l, console_log, held.as_deref(), procs)?;
+        }
     }
     Ok(())
-}
-
-/// The newest complete take of one clip (`raw\<clip id>`): the highest-numbered take folder with a video.
-fn newest_take(clip: &Path) -> Option<TakeFiles> {
-    let mut takes: Vec<String> = fs::read_dir(clip).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| take_name_ok(n)).collect();
-    takes.sort();
-    takes.iter().rev().find_map(|t| take_files(&clip.join(t)))
 }
 
 /// A file to read inside `root` ([`file_inside`]) that has no other hard link, which could make a
@@ -486,7 +431,7 @@ fn input_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
     Ok(q)
 }
 
-fn scan_in(root: &Path, cs2_running: bool, now: SystemTime) -> Result<ClipsScan, String> {
+fn scan_in(root: &Path) -> Result<ClipsScan, String> {
     let mut out = ClipsScan { finished: vec![], takes: vec![], reels: vec![] };
     let names = |d: &Path| -> Vec<String> {
         fs::read_dir(d).map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default()
@@ -508,9 +453,9 @@ fn scan_in(root: &Path, cs2_running: bool, now: SystemTime) -> Result<ClipsScan,
     }
     for job in names(&root.join("jobs")).into_iter().filter(|j| job_id_ok(j)) {
         let raw = root.join("jobs").join(&job).join("raw");
+        let launches = launch::launches(&root.join("jobs").join(&job));
         for id in names(&raw).into_iter().filter(|i| clip_id_ok(i)) {
-            let Some(t) = newest_take(&raw.join(&id)) else { continue };
-            if take_complete(&root.join("jobs").join(&job), &job, &id, &t, cs2_running, now).is_ok() {
+            if let Some(t) = newest_proven_take(&raw.join(&id), &id, &launches) {
                 out.takes.push(Take { id, job: job.clone(), take: t.name, video: t.video.display().to_string(), audio: t.audio.map(|a| a.display().to_string()), mtime: t.mtime });
             }
         }
@@ -526,13 +471,22 @@ fn scan_in(root: &Path, cs2_running: bool, now: SystemTime) -> Result<ClipsScan,
 pub async fn clips_scan() -> Result<ClipsScan, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = clips_root()?;
+        let procs = launch::System;
         if let Ok((csgo, _)) = cs2_paths() {
-            capture_sessions(&root, &csgo.join("console.log"))?;
+            settle_launches(&root, &csgo.join("console.log"), &procs)?;
         }
-        scan_in(&root, !cs2_listed()?.is_empty(), SystemTime::now())
+        launch::sweep_parts(&root, &procs);
+        scan_in(&root)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// At app start: removes the part files a crashed finish or reel left, unless a lock is live.
+pub fn on_app_start() {
+    if let Ok(root) = clips_root() {
+        launch::sweep_parts(&root, &launch::System);
+    }
 }
 
 // ---------------------------------------------------------------- jobs
@@ -589,6 +543,35 @@ fn rebuild_saved(env: &job::JobEnv, id: &str) -> Result<job::Plan, String> {
     Ok(plan)
 }
 
+/// What a launch writes before HLAE starts: its record (the takes each clip had, console.log's identity
+/// and length), the director with its nonce, and the cfg line that loads it.
+struct Prepared {
+    nonce: String,
+    launches_dir: PathBuf,
+    cfg_text: String,
+}
+
+/// Prepares a launch of the saved job `id` under the lock: refused while any cs2.exe runs, so no two
+/// launches, and no launch and finish, overlap.
+fn prepare_launch(env: &job::JobEnv, csgo: &Path, id: &str, procs: &dyn launch::Procs) -> Result<(job::Plan, launch::Lock, Prepared), String> {
+    let plan = rebuild_saved(env, id)?;
+    let nonce = launch::new_nonce()?;
+    let lock = launch::Lock::acquire(&env.clips_root, "launch", Some(&nonce), procs)?;
+    if procs.cs2_running()? {
+        return Err("CS2 is running. Close it, then render again.".into());
+    }
+    let job_dir = folder_in(&env.clips_root, &["jobs", id])?;
+    let clips: Vec<String> = plan.demos.iter().flat_map(|d| d.clips.iter().map(|c| c.id.clone())).collect();
+    let started = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis() as u64;
+    let record = launch::LaunchRecord { nonce: nonce.clone(), job: id.into(), started, takes_before: launch::takes_now(&job_dir, &clips), console: launch::console_mark(&csgo.join("console.log")) };
+    let launches_dir = launch::write_record(&job_dir, &record)?;
+    let script = job::director_script(&plan, &nonce)?;
+    let js = format!("{nonce}.js");
+    job::write_together(&launches_dir, &[(js.as_str(), script.as_bytes())])?;
+    let cfg_text = format!("mirv_script_load \"{}\"\n", launches_dir.join(&js).display().to_string().replace('\\', "/"));
+    Ok((plan, lock, Prepared { nonce, launches_dir, cfg_text }))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Launched {
@@ -599,30 +582,31 @@ pub struct Launched {
 
 /// Starts CS2 through HLAE for a saved job. The user confirms this in the app first; nothing else calls it.
 ///
-/// It rebuilds the job from its request ([`rebuild_saved`]) and refuses while any cs2.exe runs. Then
-/// it writes `game\csgo\cfg\cs2stats_clips.cfg` (the line that loads the job's director), writes
-/// HLAE's ffmpeg.ini when HLAE has no FFmpeg of its own, and starts the rebuilt command without
-/// waiting for it. Untested against a live game.
+/// Under the clips lock ([`prepare_launch`]): it rebuilds the job from its request, refuses while any
+/// cs2.exe runs, writes the launch's record and its director (with a fresh nonce), points
+/// `game\csgo\cfg\cs2stats_clips.cfg` at that director, writes HLAE's ffmpeg.ini when HLAE has no
+/// FFmpeg of its own, and starts the rebuilt command without waiting for it. The lock stays until HLAE
+/// and CS2 have exited. Untested against a live game.
 #[tauri::command]
 pub async fn clips_launch(job: String) -> Result<Launched, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (env, csgo) = job_env()?;
-        // the console log of an earlier job is replaced by this session's; keep its director lines first
-        capture_sessions(&env.clips_root, &csgo.join("console.log"))?;
-        let plan = rebuild_saved(&env, &job)?;
-        if let Some(p) = cs2_listed()?.first() {
-            return Err(format!("CS2 is running (process {}). Close it, then render again.", p.pid));
-        }
+        let procs = launch::System;
+        let (plan, mut lock, prep) = prepare_launch(&env, &csgo, &job, &procs)?;
         let hlae = PathBuf::from(&plan.argv[0]);
         let ffmpeg = find_ffmpeg(Some(&hlae))?;
         let ini = ensure_ffmpeg_ini(&hlae, &ffmpeg)?;
         let cfg = csgo.join("cfg").join(&plan.cfg_file);
-        job::write_together(cfg.parent().ok_or("CS2 has no cfg folder")?, &[(plan.cfg_file.as_str(), plan.cfg_text.as_bytes())])?;
+        job::write_together(cfg.parent().ok_or("CS2 has no cfg folder")?, &[(plan.cfg_file.as_str(), prep.cfg_text.as_bytes())])?;
         let child = std::process::Command::new(&hlae)
             .args(&plan.argv[1..])
             .current_dir(hlae.parent().unwrap_or(Path::new(".")))
             .spawn()
             .map_err(|e| format!("{}: {e}", hlae.display()))?;
+        // HLAE's own process, by its id and creation time; if it has already exited, CS2's exit alone ends the launch
+        let hlae_proc = launch::proc_id(child.id()).unwrap_or(launch::ProcId { pid: child.id(), created: 0 });
+        launch::write_pids(&prep.launches_dir, &prep.nonce, &launch::LaunchPids { hlae: hlae_proc })?;
+        lock.started(hlae_proc)?;
         Ok(Launched { pid: child.id(), cfg: cfg.display().to_string(), ffmpeg_ini: ini.map(|p| p.display().to_string()) })
     })
     .await
@@ -639,10 +623,6 @@ fn lower_third_line(s: &str) -> Result<&str, String> {
     Ok(s)
 }
 
-/// Builds the finishing command for clip `id`'s take in job `job`: the take resolved inside the clips
-/// folder, the two lines written to `text\` by this function, the font from the fixed list, the
-/// output `<id>.mp4` in the clips folder.
-#[allow(clippy::too_many_arguments)]
 /// An FFmpeg run that writes `part`, renamed over `out` only after a clean exit (run_render).
 #[derive(Debug)]
 struct Render {
@@ -651,14 +631,11 @@ struct Render {
     out: PathBuf,
 }
 
-/// Whether CS2 runs and the time now, which decide whether a take is complete (take_complete).
-struct Gate {
-    cs2_running: bool,
-    now: SystemTime,
-}
-
+/// Builds the finishing command for clip `id`'s take in job `job`: the take resolved inside the clips
+/// folder and proven complete by its launch, the two lines written to `text\` by this function, the
+/// font from the fixed list, FFmpeg's part file beside the output `<id>.mp4` in the clips folder.
 #[allow(clippy::too_many_arguments)]
-fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, reason: &str, subline: &str, duration_s: f64, gate: &Gate) -> Result<Render, String> {
+fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, reason: &str, subline: &str, duration_s: f64) -> Result<Render, String> {
     if !clip_id_ok(id) || !job_id_ok(job_id) || !take_name_ok(take) {
         return Err(format!("{id:?} in {job_id:?}, {take:?} is not a take of a clip of a job"));
     }
@@ -669,7 +646,8 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, 
     let files = take_files(&dir).ok_or_else(|| format!("{} holds no recorded video", dir.display()))?;
     let video = input_inside(root, &files.video)?;
     let audio = files.audio.as_ref().map(|a| input_inside(root, a)).transpose()?;
-    take_complete(&root.join("jobs").join(job_id), job_id, id, &files, gate.cs2_running, gate.now).map_err(|e| format!("{}: not finished recording: {e}", dir.display()))?;
+    let proven = launch::take_proven(&launch::launches(&root.join("jobs").join(job_id)), id, take).and_then(|_| files.audio.as_ref().map(|_| ()).ok_or("the take has no audio.wav".into()));
+    proven.map_err(|e| format!("{}: not finished recording: {e}", dir.display()))?;
     // every target is checked before anything is written, so a refusal leaves nothing behind
     let text = folder_in(root, &["text"])?;
     let (rn, sn) = (format!("{id}.txt"), format!("{id}-sub.txt"));
@@ -757,8 +735,13 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
         let font = ffmpeg::allowed_font().ok_or("No font for the lower third was found (Segoe UI or Arial in Windows' Fonts folder)")?;
-        let gate = Gate { cs2_running: !cs2_listed()?.is_empty(), now: SystemTime::now() };
-        let render = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s, &gate)?;
+        let procs = launch::System;
+        if let Ok((csgo, _)) = cs2_paths() {
+            settle_launches(&root, &csgo.join("console.log"), &procs)?;
+        }
+        // no launch may start while this finish runs, and a launch still recording blocks it
+        let _lock = launch::Lock::acquire(&root, "finish", None, &procs)?;
+        let render = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s)?;
         run_ffmpeg(&root, &render, hlae.as_deref())
     })
     .await
@@ -770,6 +753,7 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
 pub async fn clips_reel(ids: Vec<String>, hlae: Option<String>) -> Result<FfmpegRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
+        let _lock = launch::Lock::acquire(&root, "finish", None, &launch::System)?;
         let (stamp, _) = job::new_job_id(SystemTime::now());
         let render = reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-")))?;
         run_ffmpeg(&root, &render, hlae.as_deref())
@@ -826,67 +810,96 @@ mod tests {
 
     const TAKE: &str = "take0000";
 
-    /// CS2 has quit, now.
-    fn gate() -> Gate {
-        Gate { cs2_running: false, now: SystemTime::now() }
+    fn nonce(i: u8) -> String {
+        format!("{i:02x}").repeat(16)
     }
 
-    /// Sets a file's last write a minute back, past SETTLE.
-    fn settle(p: &Path) {
-        fs::OpenOptions::new().write(true).open(p).unwrap().set_modified(SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
+    /// A settled launch of JOB that started when CLIP had the takes in `before`, and whose director ended
+    /// CLIP with `why` (end_tick, or why it stopped early).
+    fn launched(root: &Path, i: u8, before: &[&str], why: &str) {
+        let job_dir = root.join("jobs").join(JOB);
+        fs::create_dir_all(&job_dir).unwrap();
+        let rec = launch::LaunchRecord {
+            nonce: nonce(i), job: JOB.into(), started: u64::from(i) * 1000,
+            takes_before: std::collections::BTreeMap::from([(CLIP.to_string(), before.iter().map(|s| s.to_string()).collect())]),
+            console: launch::ConsoleMark { identity: None, len: 0 },
+        };
+        let dir = launch::write_record(&job_dir, &rec).unwrap();
+        let (ended, stopped) = if why == "end_tick" { (vec![CLIP.to_string()], vec![]) } else { (vec![], vec![(CLIP.to_string(), why.to_string())]) };
+        launch::write_result(&dir, &launch::LaunchResult { nonce: nonce(i), evidence: "test".into(), ended, stopped }).unwrap();
     }
 
-    /// The director's session log for JOB, as capture_sessions keeps it: CLIP recorded to its end tick, the job finished.
-    fn session(root: &Path, why: &str) {
-        let dir = root.join("jobs").join(JOB);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(SESSION_LOG), format!("[cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] END {CLIP} tick=2000 why={why}\n[cs2stats] ALL DONE job={JOB}\n")).unwrap();
-    }
-
-    /// A complete take as HLAE lays one out: the screen stream's video in the take folder, the sound
-    /// beside it, both settled, and the director's log saying it recorded the clip and finished.
-    fn take(root: &Path) {
-        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
+    /// A take's files as HLAE lays them out: the screen stream's video in the take folder, the sound beside it.
+    fn files(root: &Path, take: &str) {
+        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(take);
         fs::create_dir_all(&t).unwrap();
         fs::write(t.join("video.mp4"), b"v").unwrap();
         fs::write(t.join("audio.wav"), b"a").unwrap();
-        settle(&t.join("video.mp4"));
-        settle(&t.join("audio.wav"));
-        session(root, "end_tick");
+    }
+
+    /// A complete take: TAKE, made by a launch whose director recorded CLIP to its end tick.
+    fn take(root: &Path) {
+        launched(root, 1, &[], "end_tick");
+        files(root, TAKE);
     }
 
     #[test]
-    fn a_take_counts_only_after_the_director_ends_it_and_cs2_has_quit() {
-        let s = scratch("complete");
+    fn the_newest_proven_take_counts_and_an_older_good_one_shows_through_a_newer_bad_one() {
+        let s = scratch("proven");
         let root = &s.0;
-        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
+        let listed = || scan_in(root).unwrap().takes.into_iter().map(|t| t.take).collect::<Vec<_>>();
+        let finish = |take: &str| finish_command(root, &root.join("f.ttf"), CLIP, JOB, take, "r", "s", 3.0);
+        // a take no launch made does not count
+        files(root, "take0000");
+        assert!(listed().is_empty());
+        assert!(finish("take0000").unwrap_err().contains("no launch of this job made this take"));
+        // launch 1 made take0000 and recorded it to the end tick
+        launched(root, 1, &[], "end_tick");
+        assert_eq!(listed(), ["take0000"]);
+        // launch 2 made take0001 and lost the camera: the older take still counts, the newer does not
+        files(root, "take0001");
+        launched(root, 2, &["take0000"], "camera_lost");
+        assert_eq!(listed(), ["take0000"]);
+        assert!(finish("take0001").unwrap_err().contains("stopped this clip early (camera_lost)"));
+        finish("take0000").unwrap();
+        // launch 3 made take0002, which has no sound: still take0000
+        launched(root, 3, &["take0000", "take0001"], "end_tick");
+        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join("take0002");
         fs::create_dir_all(&t).unwrap();
         fs::write(t.join("video.mp4"), b"v").unwrap();
-        let listed = |running: bool| scan_in(root, running, SystemTime::now()).unwrap().takes.len();
-        let finish = |running: bool| finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &Gate { cs2_running: running, now: SystemTime::now() });
-        // a growing video, with no sound yet and no word from the director: not recorded
-        assert_eq!(listed(false), 0);
-        assert!(finish(false).unwrap_err().contains("not finished recording"));
-        // the director's lines reach the job through CS2's console log, once it has said ALL DONE
-        let console = root.join("console.log");
-        fs::write(&console, format!("noise\n[cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] START {CLIP} tick=1000\n")).unwrap();
-        assert_eq!(capture_sessions(root, &console).unwrap(), Vec::<String>::new());
-        fs::write(&console, format!("noise\n00:01 [cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] END {CLIP} tick=2000 why=end_tick\nmore noise\n[cs2stats] ALL DONE job={JOB}\n")).unwrap();
-        assert_eq!(capture_sessions(root, &console).unwrap(), [JOB]);
-        let log = fs::read_to_string(root.join("jobs").join(JOB).join(SESSION_LOG)).unwrap();
-        assert!(!log.contains("noise") && log.contains(&format!("[cs2stats] END {CLIP} tick=2000 why=end_tick")));
-        // still no sound, then sound still being written, then CS2 still running: not yet
-        assert_eq!(listed(false), 0);
+        assert_eq!(listed(), ["take0000"]);
+        assert!(finish("take0002").unwrap_err().contains("no audio.wav"));
+        // and once it has its sound, the newest proven take wins
         fs::write(t.join("audio.wav"), b"a").unwrap();
-        assert_eq!(listed(false), 0);
-        settle(&t.join("video.mp4"));
-        settle(&t.join("audio.wav"));
-        assert_eq!((listed(true), listed(false)), (0, 1));
-        assert!(finish(true).unwrap_err().contains("CS2 is still running"));
-        finish(false).unwrap();
-        // a clip the director stopped early (the camera left the player) is not a recording of the moment
-        session(root, "camera_lost");
-        assert_eq!(listed(false), 0);
+        assert_eq!(listed(), ["take0002"]);
+    }
+
+    #[test]
+    fn two_launches_cannot_overlap_and_each_records_the_takes_before_it() {
+        let s = scratch("prepare");
+        let (env, plan) = saved_job(&s);
+        let csgo = s.0.join("csgo");
+        fs::create_dir_all(&csgo).unwrap();
+        let procs = launch::fake::Fake::new();
+        let clip = plan.demos[0].clips[0].id.clone();
+        let raw = env.clips_root.join("jobs").join(JOB).join("raw").join(&clip).join("take0000");
+        fs::create_dir_all(&raw).unwrap();
+        let (_, lock, prep) = prepare_launch(&env, &csgo, JOB, &procs).unwrap();
+        // the second launch, while the first holds the lock
+        assert!(prepare_launch(&env, &csgo, JOB, &procs).err().unwrap().contains("another launch is running"));
+        // the record lists the take that was there, the director carries the nonce, and the cfg loads it
+        let ls = launch::launches(&env.clips_root.join("jobs").join(JOB));
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].record.takes_before.get(&clip).unwrap(), &vec!["take0000".to_string()]);
+        let js = fs::read_to_string(prep.launches_dir.join(format!("{}.js", prep.nonce))).unwrap();
+        assert!(js.contains(&format!("\"nonce\":\"{}\"", prep.nonce)));
+        assert!(prep.cfg_text.ends_with(&format!("/launches/{}.js\"\n", prep.nonce)));
+        drop(lock);
+        // with CS2 running, no launch starts, and the lock is released again
+        *procs.cs2.borrow_mut() = true;
+        assert!(prepare_launch(&env, &csgo, JOB, &procs).err().unwrap().contains("CS2 is running"));
+        *procs.cs2.borrow_mut() = false;
+        assert!(prepare_launch(&env, &csgo, JOB, &procs).is_ok());
     }
 
     #[test]
@@ -897,7 +910,7 @@ mod tests {
         let out = root.join(format!("{CLIP}.mp4"));
         fs::write(&out, b"the good clip").unwrap();
         let parts = || fs::read_dir(root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part.mp4")).count();
-        let render = || finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap();
+        let render = || finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap();
         // FFmpeg writes half a file and fails: the old clip stays, the part goes
         let r = render();
         assert_eq!((r.args.last().unwrap(), &r.out), (&r.part.display().to_string(), &out));
@@ -933,21 +946,20 @@ mod tests {
         mk("take0001/audio.wav", b"a1");
         mk("take0002/video.mp4", b"");
         mk("notes/video.mp4", b"x");
-        let t = newest_take(&clip).unwrap();
+        // one launch made each take; take0000 has no sound, so it would not count anyway
+        launched(&s.0, 1, &[], "end_tick");
+        launched(&s.0, 2, &["take0000"], "end_tick");
+        let t = newest_proven_take(&clip, CLIP, &launch::launches(&s.0.join("jobs").join(JOB))).unwrap();
         assert_eq!((t.name.as_str(), t.video.clone(), t.audio.clone()), ("take0001", clip.join("take0001").join("screen").join("video.mp4"), Some(clip.join("take0001").join("audio.wav"))));
-        for p in ["take0000/video.mp4", "take0001/screen/video.mp4", "take0001/audio.wav"] {
-            settle(&clip.join(p));
-        }
-        session(&s.0, "end_tick");
-        let scan = scan_in(&s.0, false, SystemTime::now()).unwrap();
+        let scan = scan_in(&s.0).unwrap();
         assert_eq!(scan.takes.iter().map(|t| (t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [("take0001", true)]);
         // finishing names its take, and reads that take's files only
-        let args = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0001", "r", "s", 3.0, &gate()).unwrap().args;
+        let args = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0001", "r", "s", 3.0).unwrap().args;
         assert!(args.contains(&clip.join("take0001").join("screen").join("video.mp4").display().to_string()));
         assert!(args.contains(&clip.join("take0001").join("audio.wav").display().to_string()));
-        assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0002", "r", "s", 3.0, &gate()).unwrap_err().contains("no recorded video"));
+        assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0002", "r", "s", 3.0).unwrap_err().contains("no recorded video"));
         for bad in ["../take0001", "take01", "takeABCD"] {
-            assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, bad, "r", "s", 3.0, &gate()).unwrap_err().contains("is not a take"), "{bad}");
+            assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, bad, "r", "s", 3.0).unwrap_err().contains("is not a take"), "{bad}");
         }
     }
 
@@ -960,7 +972,7 @@ mod tests {
         let v = s.0.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE).join("video.mp4");
         fs::remove_file(&v).unwrap();
         fs::hard_link(&elsewhere, &v).unwrap();
-        let e = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
+        let e = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
     }
 
@@ -970,7 +982,7 @@ mod tests {
         let root = &s.0;
         take(root);
         let font = root.join("font.ttf");
-        let r = finish_command(root, &font, CLIP, JOB, TAKE, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0, &gate()).unwrap();
+        let r = finish_command(root, &font, CLIP, JOB, TAKE, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0).unwrap();
         let args = &r.args;
         let take = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
         assert_eq!(args.iter().filter(|a| a.as_str() == "-i").count(), 2);
@@ -983,10 +995,10 @@ mod tests {
         assert!(!filter.contains("round impact") && filter.contains(&ffmpeg::filter_path(&root.join("text").join(format!("{CLIP}.txt")))));
         assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "3K on B Site, +38% round impact");
         // refused: a bad id, a missing take, text that is not one line, a clip of no length
-        assert!(finish_command(root, &font, "../x", JOB, TAKE, "r", "s", 3.0, &gate()).is_err());
-        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, TAKE, "r", "s", 3.0, &gate()).is_err());
-        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "a\nb", "s", 3.0, &gate()).unwrap_err().contains("one line"));
-        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "r", "s", 0.0, &gate()).is_err());
+        assert!(finish_command(root, &font, "../x", JOB, TAKE, "r", "s", 3.0).is_err());
+        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, TAKE, "r", "s", 3.0).is_err());
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "a\nb", "s", 3.0).unwrap_err().contains("one line"));
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "r", "s", 0.0).is_err());
     }
 
     #[test]
@@ -1001,7 +1013,7 @@ mod tests {
         let raw = root.join("jobs").join(JOB).join("raw");
         fs::create_dir_all(&raw).unwrap();
         link(&outside, &raw.join(CLIP));
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
         assert!(e.contains("outside"), "{e}");
         // a finished clip's name taken by a link
         link(&outside, &root.join(format!("{CLIP}.mp4")));
@@ -1018,20 +1030,20 @@ mod tests {
         fs::write(&elsewhere, b"keep").unwrap();
         // the clip's output name is a second hard link to another file
         fs::hard_link(&elsewhere, root.join(format!("{CLIP}.mp4"))).unwrap();
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
         assert!(!root.join("text").join(format!("{CLIP}.txt")).exists(), "a refused finish wrote its text");
         fs::remove_file(root.join(format!("{CLIP}.mp4"))).unwrap();
         // the lower third's text file, likewise
         fs::create_dir_all(root.join("text")).unwrap();
         fs::hard_link(&elsewhere, root.join("text").join(format!("{CLIP}.txt"))).unwrap();
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
         assert_eq!(fs::read(&elsewhere).unwrap(), b"keep");
         // a plain file of that name is replaced, not written through
         fs::remove_file(root.join("text").join(format!("{CLIP}.txt"))).unwrap();
         fs::write(root.join("text").join(format!("{CLIP}.txt")), b"old").unwrap();
-        finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "new", "s", 3.0, &gate()).unwrap();
+        finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "new", "s", 3.0).unwrap();
         assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "new");
     }
 
@@ -1064,7 +1076,7 @@ mod tests {
         fs::write(root.join(format!(".{CLIP}.0123456789abcdef.part.mp4")), b"x").unwrap();
         fs::write(root.join("reels").join(".reel-2.0123456789abcdef.part.mp4"), b"x").unwrap();
         fs::write(root.join("reels").join("reel-3.mp4"), b"").unwrap();
-        let s = scan_in(root, false, SystemTime::now()).unwrap();
+        let s = scan_in(root).unwrap();
         assert_eq!(s.finished.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), [CLIP]);
         assert_eq!(s.reels.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["reel-1"]);
         assert_eq!(s.takes.iter().map(|t| (t.id.as_str(), t.job.as_str(), t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [(CLIP, JOB, TAKE, true)]);
