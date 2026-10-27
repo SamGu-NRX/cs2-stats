@@ -1,6 +1,7 @@
 // Overview: both scoreboards with HLTV's columns (one sort and one side switch for both) and a team
 // total under each, swing per player, this match against your recent ones (YourMatch), your rounds
-// that decided the match, and you against the other nine players. Team facts live on the Advanced tab.
+// that decided the match, you against the other nine players, and Leetify's numbers for the match when it
+// is joined to a Leetify match (leetify/LeetifyMatchCard.tsx). Team facts live on the Advanced tab.
 import { useMemo, useState } from "react";
 import { ClutchBadge, DeathMark, FirstPip, MultiBadge, Num } from "../../components/bits";
 import { Card } from "../../components/Card";
@@ -21,6 +22,7 @@ import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip, YouTag } from "../sh
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { YourMatch } from "./YourMatch";
+import { LeetifyMatchCard } from "../leetify/LeetifyMatchCard";
 
 type Multi = Record<2 | 3 | 4 | 5, number>;
 /** A scoreboard row: a player, or the team total under the five players (pi null). */
@@ -112,6 +114,7 @@ export default function Overview({ v, file }: TabProps) {
           <DecidingRounds v={v} file={file} side={side} />
         </div>
       </div>
+      <LeetifyMatchCard v={v} />
     </div>
   );
 }

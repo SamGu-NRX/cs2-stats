@@ -15,7 +15,7 @@
 76561190000000032 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py
 76561190000000099 synthetic test id (account numbers 1 to 99 below the public universe's range): the user's sentinel SteamID in app/src/ui/views/privacy.test.tsx and app/src/ui/data/privacy.test.ts
 76561197960265728 SteamID64 of account 0 in the public universe: the lower bound valve_import.py, valve-folder.ts and lib.rs check against
-76561197960265729 account 1, the fake user in the Valve import tests (lib.rs, valve-folder.test.ts, test_repo_guard.py)
+76561197960265729 account 1, the fake user in the Valve import tests (lib.rs, valve-folder.test.ts, test_repo_guard.py) and the Leetify import tests (leetify.rs)
 76561197960390124 bot Gunner (IsBot: true) in fixtures/de_dust2_20261024_190549_match_end.json
 76561197960976520 bot Syfers (IsBot: true) in fixtures/de_dust2_20261024_171429_match_end.json
 76561197961265729 the synthetic replacement for the user's real id (8bd950b), in the samples, fixtures and tests

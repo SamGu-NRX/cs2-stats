@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: the app's match commands, and showing the window after the first paint. The window keeps the native title bar, so no move, minimise or close permissions are needed.",
+  "description": "The main window: the app's own commands (match files, Leetify, open_external for outside links), and showing the window after the first paint. The window keeps the native title bar, so no move, minimise or close permissions are needed.",
   "windows": ["main"],
   "permissions": [
     "core:default",

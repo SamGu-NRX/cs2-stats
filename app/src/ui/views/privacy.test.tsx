@@ -8,7 +8,10 @@
 // paths around the layer.
 //
 // The data goes through the real DataValue, useMatch and useCall; only the worker and the host are
-// stood in for, answering from the samples as the worker would (as views.test.tsx does).
+// stood in for, answering from the samples as the worker would (as views.test.tsx does). The host's
+// Leetify bridge answers with an imported profile and history named after another sentinel and keyed by
+// the sentinel SteamID, one match of it joined to the Valve match by its share code, so Data & settings,
+// Profile's Leetify card, the match page's Leetify card and Matches' Leetify-only rows are all drawn.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -45,6 +48,9 @@ import { DataValue, type Data } from "../data/provider";
 import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
 import { rosterTables } from "../../stats/roster";
+import type { LeetifyBridge } from "../../host/leetify";
+import { encodeShareCode } from "../data/leetify/sharecode";
+import { SYNTHETIC_MATCHES, syntheticPayload, syntheticProfile, type SyntheticMatch } from "../data/leetify/synthetic";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const PROS = JSON.parse(readFileSync(path.resolve(import.meta.dirname, "../../../public/baselines.json"), "utf8")) as Baselines;
@@ -58,7 +64,9 @@ const ID = "76561190000000099";
 const HOME_DIR = ["C:", "Users", "SENTINEL_USER"].join("\\");
 const DATA_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\matches`;
 const VALVE_FOLDER = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\valve`;
-const SENTINELS = [NAME, MATE, OPPONENT, ID, "SENTINEL_USER"];
+/** The player's name as Leetify has it, which the Leetify views show. */
+const LEETIFY_NAME = "SENTINEL_LEETIFY";
+const SENTINELS = [NAME, MATE, OPPONENT, ID, "SENTINEL_USER", LEETIFY_NAME];
 /**
  * A file name the user chose, of an imported match and of a file that could not be read. With personal
  * info hidden it may not appear in the page's text, in any attribute (a link's target shows in the
@@ -109,7 +117,9 @@ async function fixture(f: string, file: string, source?: "valve" | "hltv"): Prom
 const names = readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"));
 const own = await Promise.all(names.map((f) => fixture(f, `samples/${f}`)));
 // a Valve match is an extracted folder, so it has a replay (replay/support.ts) whose sidebar lists the round's kills
-const valve = await fixture("20261025T000642Z_de_dust2_9b00e592.json.gz", "valve/sentinel-demo/v1", "valve");
+// named as the Valve importer names a demo's folder, so the Leetify match with its share code joins it
+const VALVE_MATCH_ID = 3900000000000000042n;
+const valve = await fixture("20261025T000642Z_de_dust2_9b00e592.json.gz", "valve/match730_003900000000000000042_0000027042_100/v1", "valve");
 // a match from the development folder that is not a pro demo: its strangers are hidden like any other's
 const devMatch = await fixture("20261024T223834Z_de_dust2_abe5d91c.json.gz", "dev/scrim");
 // a match file the user imported and named
@@ -172,10 +182,23 @@ const failedDemos: ImportStatus = {
   running: false, at: null, error: null,
   last: { code: 1, error: null, summary: { demos: 2, ok: 1, results: [{ demo: `${FILE} scrim.dem`, ok: false, user_in_match: true }, { demo: "match730_1.dem", ok: true, user_in_match: true }] } },
 };
+// The imported Leetify data: the user under the Leetify sentinel name and the sentinel SteamID, one match
+// joined to the Valve match, the rest Leetify-only; and a key store error that names a sentinel path.
+const leetifyMatches: SyntheticMatch[] = [
+  { ...SYNTHETIC_MATCHES[0], id: "5e7a1c00-0000-4000-8000-0000000000a1", sourceId: encodeShareCode({ matchId: VALVE_MATCH_ID, reservationId: 1n, tvPort: 27042 }), finished: "2026-10-01T20:00:00.000Z" },
+  ...SYNTHETIC_MATCHES.slice(1),
+].map((m) => ({ ...m, steam64: ID, name: LEETIFY_NAME }));
+const LEETIFY: LeetifyBridge = {
+  status: async () => ({ player: { kind: "steam", id: ID }, hasKey: false, keyStore: true, keyError: `could not read ${HOME_DIR}\\AppData\\credential for ${ID}`, cooldownS: null }),
+  saveKey: async () => {}, clearKey: async () => {}, disconnect: async () => {}, discard: async () => {}, badge: async () => null,
+  connect: async () => ({ kind: "steam", id: ID }),
+  load: async () => ({ ...syntheticPayload(Date.now(), leetifyMatches), player: { kind: "steam", id: ID }, profile: syntheticProfile({ name: LEETIFY_NAME, steam64_id: ID }) }),
+};
+
 function hostWith(valve: ValveFolder, status = failedDemos): Host {
   const imports: ImportStore = { get: () => status, subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} };
   return {
-    kind: "web", folder: DATA_FOLDER, valve, imports,
+    kind: "web", folder: DATA_FOLDER, valve, imports, leetify: LEETIFY,
     list: async () => [],
     read: async (file) => { throw new Error(`${DATA_FOLDER}\\${file} could not be read`); },
     importFiles: async () => ({ imported: [], skipped: [] }),
@@ -306,6 +329,11 @@ describe("Hide personal info", () => {
     expect(union).toContain("picked/&lt;file&gt;.json.gz");
     expect(union).toContain(`href="${matchHref(imported.file)}"`);
     expect(union).toContain("&lt;file&gt;.dem");
+    // the Leetify views were drawn: the connect card, Profile's card, the joined match's card and the Leetify-only rows
+    expect(union).toContain("Data Provided by Leetify");
+    expect(union).toContain("Aim Rating");
+    expect(union).toContain("Leetify, this match");
+    expect(union).toContain("lt-row");
   }, 120_000);
 
   it("hides them in Overview's win correlation rows and its trend's match links", async () => {
