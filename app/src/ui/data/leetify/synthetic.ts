@@ -86,9 +86,10 @@ const uuid = (n: number) => `5e7a1c00-0000-4000-8000-${String(n).padStart(12, "0
 export const syntheticCode = (n: number) => encodeShareCode({ matchId: 3_900_000_000_000_000_000n + BigInt(n), reservationId: 3_900_000_000_000_500_000n + BigInt(n), tvPort: 27000 + n });
 
 /**
- * The stand-in history: one match that time-joins the bundled sample 20261025T000642Z_de_dust2_9b00e592
- * (Dust II, 13:8, ended 00:39:43 UTC; join.test.ts checks it still does), and Leetify-only matches on
- * other maps, as a Leetify user without demos here would see them.
+ * The stand-in history: matches on several maps and sources. The bundled samples are no Valve demos, so
+ * none of these joins one (join.ts joins by Valve match id only); all list as Leetify-only rows, as they
+ * would for a Leetify user without demos here. The first shares the Dust II sample's map, score and end
+ * time, which join.test.ts uses to check that a close fit alone does not join.
  */
 export const SYNTHETIC_MATCHES: SyntheticMatch[] = [
   { id: uuid(1), finished: "2026-10-25T00:41:10.000Z", map: "de_dust2", sourceId: syntheticCode(1), won: 13, lost: 8, kills: 15, deaths: 14, rating: 0.0412 },

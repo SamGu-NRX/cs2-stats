@@ -44,67 +44,30 @@ describe("joining Leetify matches to local ones", () => {
     expect(j.only.map((x) => x.id)).toEqual(["b"]);
   });
 
-  it("joins by end time, map and score when there is no id to compare", () => {
-    // the local match ends 19:20 + 40 min = 20:00; Leetify's ends 20:01
-    const j = joinMatches([leetify({})], [local("2026/a.json.gz")], ME);
-    expect(j.byFile.get("2026/a.json.gz")?.rule).toBe("time");
-    expect(j.only).toEqual([]);
-  });
-
-  it("refuses a time join that is loose or ambiguous", () => {
-    // fails if one match's numbers can land beside another's
-    const l = leetify({});
-    const cases: [string, MatchEntry[], LeetifyMatch[]][] = [
-      ["ended 11 minutes apart", [local("2026/a.json.gz", { durationS: 2400 - 660 + 60 })], [l]],
-      ["another map", [local("2026/a.json.gz", { map: "de_dust2" })], [l]],
-      ["another score", [local("2026/a.json.gz", { us: 9, them: 13 })], [l]],
-      ["a date but no clock time", [local("2026/a.json.gz", { startedAt: null })], [l]],
-      ["two local candidates", [local("2026/a.json.gz"), local("2026/b.json.gz", { startedAt: "2026-10-20T19:22:00.000Z", durationS: 2300 })], [l]],
-      ["two Leetify matches want one local match", [local("2026/a.json.gz")], [l, leetify({ id: "l2", finished: "2026-10-20T19:59:00.000Z" })]],
-      ["a pro demo", [local("dev/pro-demo")], [l]],
-    ];
-    for (const [what, entries, ls] of cases) {
-      const j = joinMatches(ls, entries, ME);
-      expect(j.byFile.size, what).toBe(0);
-      expect(j.only.length, what).toBe(ls.length);
+  it("never joins on time, map and score, however well they fit", () => {
+    // fails if a guess attaches a match that may be another one (review of #52): only a Valve match id joins
+    for (const e of [local("2026/a.json.gz"), local(VALVE, { startedAt: "2026-10-20T19:20:00.000Z", durationS: 2400 })]) {
+      const j = joinMatches([leetify({ sourceId: null })], [e], ME);
+      expect(j.byFile.size, e.file).toBe(0);
+      expect(j.only.map((x) => x.id), e.file).toEqual(["l1"]);
     }
+    // a share code naming another match does not join either
+    expect(joinMatches([leetify({ sourceId: code(3900000000000000077n) })], [local(VALVE)], ME).byFile.size).toBe(0);
   });
 
-  it("joins by time only on a known end on both sides, within 10 minutes", () => {
-    // fails if a match with no recorded length joins on its start, or ends 121 minutes apart still join (review of #52)
-    const at = (start: string, durationS: number | null) => joinMatches([leetify({})], [local("2026/a.json.gz", { startedAt: start, durationS })], ME).byFile.size;
-    // Leetify's match ended 20:01
-    expect(at("2026-10-20T19:20:00.000Z", 2400), "ended 20:00").toBe(1);
-    expect(at("2026-10-20T19:20:00.000Z", null), "a start with no length: its end is unknown").toBe(0);
-    expect(at("2026-10-20T18:00:00.000Z", null), "121 minutes before Leetify's end, no length").toBe(0);
-    expect(at("2026-10-20T17:20:00.000Z", 2400), "ended 18:00, 121 minutes earlier").toBe(0);
-    expect(at("2026-10-20T19:31:00.000Z", 2400), "ended 20:11, 10 minutes later").toBe(1);
-    expect(at("2026-10-20T19:32:00.000Z", 2400), "ended 20:12, 11 minutes later").toBe(0);
-  });
-
-  it("never joins by time a pair whose Valve match ids are both known and differ", () => {
-    // fails if the time rule overrides an id that says these are two matches (review of #52)
-    const e = local(VALVE, { startedAt: "2026-10-20T19:20:00.000Z", durationS: 2400 });
-    expect(joinMatches([leetify({ sourceId: code(3900000000000000077n) })], [e], ME).byFile.size).toBe(0);
-    // with no id on Leetify's side, the time rule may still join it
-    expect(joinMatches([leetify({ sourceId: null })], [e], ME).byFile.get(VALVE)?.rule).toBe("time");
-  });
-
-  it("joins only demos the profile's own player recorded, by either rule", () => {
+  it("joins only demos the profile's own player recorded", () => {
     // fails if another account's recording sits beside these numbers (review of #52)
     const other = "76561197960265729";
     const byId = local(VALVE, { pov: other });
     expect(joinMatches([leetify({ sourceId: code(3900000000000000042n) })], [byId], ME).byFile.size).toBe(0);
-    expect(joinMatches([leetify({})], [local("2026/a.json.gz", { pov: other })], ME).byFile.size).toBe(0);
-    expect(joinMatches([leetify({})], [local("2026/a.json.gz", { pov: other })], other).byFile.size).toBe(1);
+    expect(joinMatches([leetify({ sourceId: code(3900000000000000042n) })], [byId], other).byFile.get(VALVE)?.rule).toBe("match-id");
   });
 
-  it("joins the dev build's synthetic history to the bundled sample it was written for", () => {
-    // fails if the sample or the synthetic data drift apart, which would empty the screenshots' match card
+  it("lists the dev build's synthetic history as Leetify-only beside the bundled samples, which are no Valve demos", () => {
     const data = parsePayload(syntheticPayload(0, SYNTHETIC_MATCHES));
     const j = joinMatches(data.matches, [base], ME);
-    expect(j.byFile.get(base.file)?.match.id).toBe(SYNTHETIC_MATCHES[0].id);
-    expect(j.only).toHaveLength(SYNTHETIC_MATCHES.length - 1);
+    expect(j.byFile.size).toBe(0);
+    expect(j.only).toHaveLength(SYNTHETIC_MATCHES.length);
     expect(base.match.pov).toBe(SYNTHETIC_STEAM64);
   });
 });

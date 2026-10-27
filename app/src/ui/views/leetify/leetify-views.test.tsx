@@ -43,10 +43,12 @@ describe("whose Leetify data it is", () => {
 
   it("joins none of your matches, and lists no Leetify rows, for another player's data", () => {
     // fails if a friend's profile puts their numbers beside your matches (review of #52)
+    // the sample as the Valve demo of synthetic match 1, whose share code names Valve match id ...0001
+    const valve = { ...sample, file: "valve/match730_003900000000000000001_0000027001_100/v1" };
     const mine = parsePayload(syntheticPayload(0, SYNTHETIC_MATCHES));
-    expect(joinFor(mine, [sample], "you").byFile.get(sample.file)).toBeDefined();
+    expect(joinFor(mine, [valve], "you").byFile.get(valve.file)?.match.id).toBe(SYNTHETIC_MATCHES[0].id);
     const theirs = parsePayload({ ...syntheticPayload(0, SYNTHETIC_MATCHES.map((x) => ({ ...x, steam64: OTHER }))), profile: syntheticProfile({ steam64_id: OTHER }) });
-    const j = joinFor(theirs, [sample], leetifyOwner(theirs.profile.steam64, [sample.match.pov!]));
+    const j = joinFor(theirs, [valve], leetifyOwner(theirs.profile.steam64, [valve.match.pov!]));
     expect(j.byFile.size).toBe(0);
     expect(j.only).toEqual([]);
   });

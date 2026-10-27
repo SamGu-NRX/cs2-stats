@@ -410,8 +410,16 @@ pub struct Status {
     pub cooldown_s: Option<u64>,
 }
 
-/// The last answer, in memory for the life of the process; never written to disk.
-pub type Session = Mutex<Option<Payload>>;
+/// The last answer, in memory for the life of the process and never written to disk, with the connection's
+/// generation: a number that every connect and disconnect bumps. A fetch keeps its answer only if the
+/// generation is the one it started under, so a request still in flight from before a disconnect never
+/// lands in a later connection, even one to the same player (review of #52).
+#[derive(Default)]
+pub struct Held {
+    pub generation: u64,
+    pub data: Option<Payload>,
+}
+pub type Session = Mutex<Held>;
 
 /// Writes through a temporary file and a rename, so a crash never leaves half a file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), LeetifyError> {
@@ -444,7 +452,7 @@ impl Leetify<'_> {
     fn settings_file(&self) -> PathBuf {
         self.dir.join("settings.json")
     }
-    fn memory(&self) -> std::sync::MutexGuard<'_, Option<Payload>> {
+    fn memory(&self) -> std::sync::MutexGuard<'_, Held> {
         self.session.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -457,13 +465,13 @@ impl Leetify<'_> {
         }
     }
 
-    /// The answer in memory for `player`; another player's is dropped.
-    fn held(&self, player: &PlayerRef) -> Option<Payload> {
+    /// The answer in memory for `player`, with the generation now; another player's is dropped.
+    fn held(&self, player: &PlayerRef) -> (Option<Payload>, u64) {
         let mut m = self.memory();
-        if m.as_ref().is_some_and(|p| &p.player != player) {
-            *m = None;
+        if m.data.as_ref().is_some_and(|p| &p.player != player) {
+            m.data = None;
         }
-        m.clone()
+        (m.data.clone(), m.generation)
     }
 
     pub fn status(&self) -> Result<Status, LeetifyError> {
@@ -516,13 +524,14 @@ impl Leetify<'_> {
         self.keys.delete().map_err(|e| err(ErrorKind::KeyStore, format!("Windows Credential Manager did not remove the key: {e}")))
     }
 
-    /// Saves the player to fetch. Another player's answer is dropped from memory. The memory lock is held
-    /// throughout, so a fetch finishing meanwhile sees either the old setting or the new one (load).
+    /// Saves the player to fetch and starts a new generation, so no fetch from before lands in this
+    /// connection. Another player's answer is dropped from memory. The memory lock is held throughout.
     pub fn connect(&self, input: &str) -> Result<PlayerRef, LeetifyError> {
         let player = parse_player(input)?;
         let mut m = self.memory();
+        m.generation += 1;
         if self.player()?.as_ref() != Some(&player) {
-            *m = None;
+            m.data = None;
         }
         let body = serde_json::to_vec_pretty(&Settings { player: player.clone() }).map_err(|e| err(ErrorKind::Storage, e.to_string()))?;
         write_atomic(&self.settings_file(), &body)?;
@@ -532,17 +541,19 @@ impl Leetify<'_> {
     /// Drops the answer from memory, for a copy the page could not read (app/src/ui/data/leetify/store.ts),
     /// so the next load fetches instead of returning it again.
     pub fn discard(&self) {
-        *self.memory() = None;
+        self.memory().data = None;
     }
 
     /// Forgets the player, drops the answer from memory and removes the key. The key goes last, so a key
     /// store failure still leaves no player setting and no data. It never waits for a request in flight
-    /// (the command takes no FLIGHT lock); a fetch that finishes afterwards finds no player and keeps nothing.
+    /// (the command takes no FLIGHT lock); a fetch that finishes afterwards is of an old generation and
+    /// keeps nothing.
     pub fn disconnect(&self) -> Result<(), LeetifyError> {
         {
             let mut m = self.memory();
+            m.generation += 1;
             remove(&self.settings_file())?;
-            *m = None;
+            m.data = None;
         }
         self.clear_key()
     }
@@ -552,7 +563,7 @@ impl Leetify<'_> {
     /// and `refresh` is false. A 404 or 403 drops the copy, since Leetify no longer returns it.
     pub fn load(&self, refresh: bool) -> Result<Option<Payload>, LeetifyError> {
         let Some(player) = self.player()? else { return Ok(None) };
-        let held = self.held(&player);
+        let (held, generation) = self.held(&player);
         let recent = held.as_ref().is_some_and(|c| self.clock.wall_ms().saturating_sub(c.fetched_at) < REFRESH_MIN_MS);
         if !refresh || recent {
             return Ok(held);
@@ -560,17 +571,18 @@ impl Leetify<'_> {
         let key = self.keys.get().map_err(|e| err(ErrorKind::KeyStore, format!("Windows Credential Manager did not return the saved key: {e}")))?;
         match self.fetch(&player, key.as_ref()) {
             Ok(p) => {
-                // the user disconnected or switched players while this was in flight: keep nothing
+                // a connect or disconnect while this was in flight, even to the same player: keep nothing
                 let mut m = self.memory();
-                if self.player()?.as_ref() != Some(&player) {
+                if m.generation != generation {
                     return Ok(None);
                 }
-                *m = Some(p.clone());
+                m.data = Some(p.clone());
                 Ok(Some(p))
             }
             Err(e) => {
-                if matches!(e.kind, ErrorKind::NotFound | ErrorKind::Private) {
-                    *self.memory() = None;
+                let mut m = self.memory();
+                if matches!(e.kind, ErrorKind::NotFound | ErrorKind::Private) && m.generation == generation {
+                    m.data = None;
                 }
                 Err(e)
             }
@@ -657,7 +669,7 @@ pub async fn leetify_badge() -> Result<tauri::ipc::Response, String> {
 // ---------------------------------------------------------------- commands
 
 static GATE: Gate = Gate::new();
-static SESSION: Session = Mutex::new(None);
+static SESSION: Session = Mutex::new(Held { generation: 0, data: None });
 /// One request-making command at a time (load, save_key), so two refreshes never run side by side. The
 /// other commands do not take it, so Disconnect, the status and the key's removal never wait on Leetify.
 static FLIGHT: Mutex<()> = Mutex::new(());
@@ -874,7 +886,7 @@ mod tests {
     fn a_key_is_checked_with_leetify_before_it_is_saved_and_never_appears_in_an_error() {
         // fails if a refused key is stored, a good one is not, or the key leaks into an error or Debug
         let s = Scratch::new("key");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/api-key/validate", 401, "Unauthorized").on("/api-key/validate", 200, "OK");
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -898,7 +910,7 @@ mod tests {
     fn fetches_the_profile_then_the_matches_with_the_key_and_holds_them_in_memory_only() {
         // fails if the requests, their order, the key header or the copy change, or Leetify's data reaches the disk
         let s = Scratch::new("fetch");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -916,7 +928,7 @@ mod tests {
         let setting = fs::read_to_string(s.0.join("settings.json")).unwrap();
         assert!(!setting.contains(KEY) && !setting.contains("Synthetic"), "{setting}");
         // a new session (the app restarted) has nothing until it fetches again
-        let fresh: Session = Mutex::new(None);
+        let fresh = Session::default();
         assert_eq!(with(&http, &keys, &gate, &clock, &s.0, &fresh).load(false).unwrap(), None);
     }
 
@@ -924,7 +936,7 @@ mod tests {
     fn keeps_no_other_players_data() {
         // fails if a teammate's SteamID or another player's match row is held
         let s = Scratch::new("minimal");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let other = "76561197960265728";
         let profile = format!(r#"{{"name":"Synthetic","steam64_id":"{STEAM}","recent_teammates":[{{"steam64_id":"{other}","recent_matches_count":3}}]}}"#);
@@ -935,7 +947,7 @@ mod tests {
         let p = l.load(true).unwrap().unwrap();
         assert!(p.profile.get("recent_teammates").is_none());
         assert_eq!(p.matches[0]["stats"].as_array().unwrap().len(), 1);
-        let held = serde_json::to_string(&*mem.lock().unwrap()).unwrap();
+        let held = serde_json::to_string(&mem.lock().unwrap().data).unwrap();
         assert!(!held.contains(other) && !held.contains("Someone"), "{held}");
         // a profile without its own SteamID cannot say which rows are the player's
         let http = FakeHttp::default().on("/v3/profile?", 200, r#"{"name":"x"}"#);
@@ -947,7 +959,7 @@ mod tests {
     fn a_fetch_that_ends_after_disconnect_keeps_nothing() {
         // fails if data Leetify sent for a player the user disconnected while the request ran comes back
         let s = Scratch::new("race");
-        let mem = std::sync::Arc::new(Mutex::new(None));
+        let mem = std::sync::Arc::new(Session::default());
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -958,15 +970,40 @@ mod tests {
             Leetify { http: &http, keys: &keys, dir, gate: &gate, clock: &clock, session: &other }.disconnect().unwrap();
         }));
         assert_eq!(l.load(true).unwrap(), None);
-        assert!(mem.lock().unwrap().is_none());
+        assert!(mem.lock().unwrap().data.is_none());
         assert_eq!(files(&s.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_fetch_from_before_a_reconnect_to_the_same_player_keeps_nothing() {
+        // fails if a load started before Disconnect lands in the next connection to the same profile and
+        // overwrites what that connection fetched (review of #52)
+        let s = Scratch::new("regen");
+        let mem = std::sync::Arc::new(Session::default());
+        let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
+        let stale = r#"{"name":"Before","steam64_id":"76561197960265729"}"#;
+        let http = FakeHttp::default().on("/v3/profile?", 200, stale).on("/v3/profile/matches", 200, MATCHES);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
+        l.connect(STEAM).unwrap();
+        let (dir, other) = (s.0.clone(), mem.clone());
+        // while the first load is in flight: disconnect, reconnect the same player, and fetch afresh
+        *http.during.lock().unwrap() = Some(Box::new(move || {
+            let (keys, gate, clock) = (FakeKeys::default(), Gate::new(), FakeClock::new());
+            let fresh = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
+            let again = Leetify { http: &fresh, keys: &keys, dir, gate: &gate, clock: &clock, session: &other };
+            again.disconnect().unwrap();
+            again.connect(STEAM).unwrap();
+            assert_eq!(again.load(true).unwrap().unwrap().profile["name"], "Synthetic");
+        }));
+        assert_eq!(l.load(true).unwrap(), None, "the old load returns nothing");
+        assert_eq!(mem.lock().unwrap().data.as_ref().unwrap().profile["name"], "Synthetic", "and leaves the fresh copy alone");
     }
 
     #[test]
     fn a_discarded_copy_is_fetched_again_rather_than_returned() {
         // fails if a copy the page could not read keeps coming back, even inside the one-minute floor
         let s = Scratch::new("discard");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES).on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -982,7 +1019,7 @@ mod tests {
     fn a_refresh_inside_a_minute_is_answered_from_memory() {
         // fails if pressing Refresh twice sends a second pair of requests
         let s = Scratch::new("recent");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES).on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -1003,7 +1040,7 @@ mod tests {
         // fails if a status maps to the wrong error, a 404 or 403 keeps data Leetify no longer returns, or
         // a network or server failure throws away the copy the page is showing
         let s = Scratch::new("errors");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let cases: [(FakeHttp, ErrorKind, bool); 6] = [
             (FakeHttp::default().on("/v3/profile?", 401, "Unauthorized"), ErrorKind::BadKey, true),
@@ -1022,7 +1059,7 @@ mod tests {
             let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
             let e = l.load(true).unwrap_err();
             assert_eq!(e.kind, kind, "{e:?}");
-            assert_eq!(mem.lock().unwrap().is_some(), kept, "{kind:?}");
+            assert_eq!(mem.lock().unwrap().data.is_some(), kept, "{kind:?}");
             assert!(!e.message.contains(KEY));
         }
         // a reply that is JSON but not the documented shape is refused too
@@ -1035,7 +1072,7 @@ mod tests {
     fn a_429_holds_every_request_back_for_its_retry_after() {
         // fails if the app keeps calling Leetify after a 429, or ignores the Retry-After it names
         let s = Scratch::new("429");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on_429("/v3/profile?", Some("45"));
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -1071,7 +1108,7 @@ mod tests {
         assert_eq!(retry_after_s(Some("0"), at), 1);
         // the gate holds the whole hour
         let s = Scratch::new("429-hour");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on_429("/v3/profile?", Some("3600"));
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -1086,21 +1123,21 @@ mod tests {
     fn the_copy_belongs_to_one_player() {
         // fails if switching players shows the last one's data
         let s = Scratch::new("expiry");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         l.load(true).unwrap();
         l.connect("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d").unwrap();
-        assert!(mem.lock().unwrap().is_none(), "another player's copy is dropped on connect");
+        assert!(mem.lock().unwrap().data.is_none(), "another player's copy is dropped on connect");
         assert_eq!(l.load(false).unwrap(), None);
     }
 
     #[test]
     fn disconnect_removes_the_player_the_copy_and_the_key() {
         let s = Scratch::new("disconnect");
-        let mem: Session = Mutex::new(None);
+        let mem = Session::default();
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
         let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
@@ -1109,7 +1146,7 @@ mod tests {
         l.disconnect().unwrap();
         let st = l.status().unwrap();
         assert!(st.player.is_none() && !st.has_key);
-        assert!(mem.lock().unwrap().is_none());
+        assert!(mem.lock().unwrap().data.is_none());
         assert_eq!(files(&s.0), Vec::<String>::new());
     }
 }

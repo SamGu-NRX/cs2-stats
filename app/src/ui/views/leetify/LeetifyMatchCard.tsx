@@ -11,7 +11,6 @@ import { Attribution, CompareTable, LeetifyLink, LeetifyPending, SyntheticChip }
 
 const RULE = {
   "match-id": { label: "Same match id", tip: "Leetify's share code for this match holds the same Valve match id as this demo's file name." },
-  time: { label: "Same time, map and score", tip: "Leetify's match ended within 10 minutes of this one, on the same map with the same score, and no other match fits." },
 };
 
 export function LeetifyMatchCard({ v }: { v: MatchModel }) {

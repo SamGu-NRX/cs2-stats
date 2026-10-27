@@ -133,6 +133,27 @@ describe("the Leetify store", () => {
     expect(leetifyPhase(s.get())).toBe("ready");
   });
 
+  it("drops a load from before a disconnect when it resolves after a reconnect to the same player", async () => {
+    // fails if the boot's old load, resolving late, overwrites what the new connection fetched (review of #52)
+    const f = fakeBridge();
+    let resolveOld: (p: LeetifyPayload | null) => void = () => {};
+    const old = new Promise<LeetifyPayload | null>((r) => { resolveOld = r; });
+    const load = f.bridge.load;
+    f.bridge.load = async (refresh) => (refresh ? load(refresh) : (f.calls.push("load:memory (held back)"), old));
+    const s = new LeetifyStore(f.bridge);
+    const booting = s.start();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.calls).toEqual(["load:memory (held back)"]);
+    expect(await s.disconnect()).toBe(true);
+    f.next.load = { ...syntheticPayload(NOW), profile: syntheticProfile({ name: "Fresh" }) };
+    expect(await s.connect(SYNTHETIC_STEAM64, null)).toBe(true);
+    expect(s.get().data?.profile.name).toBe("Fresh");
+    resolveOld({ ...syntheticPayload(NOW - 60_000), profile: syntheticProfile({ name: "Old" }) });
+    await booting;
+    expect(s.get().data?.profile.name).toBe("Fresh");
+    expect(f.calls.filter((c) => c === "load:refresh")).toHaveLength(1);
+  });
+
   it("runs one action at a time", async () => {
     const f = fakeBridge({ held: syntheticPayload(NOW) });
     const s = new LeetifyStore(f.bridge);

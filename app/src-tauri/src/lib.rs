@@ -571,16 +571,27 @@ fn outside_url(url: &str) -> Result<tauri::Url, String> {
     Ok(u)
 }
 
+/// What `open_external` asks the shell for: ShellExecuteW's verb, file and show command, and its return.
+/// A seam, so a test can stand in for the shell and see exactly what would be launched.
+type ShellLaunch = fn(verb: &str, file: &str, show: i32) -> isize;
+
+/// The show command ShellExecuteW gets: a normal window.
+#[cfg(windows)]
+const SHOW_NORMAL: i32 = windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+#[cfg(not(windows))]
+const SHOW_NORMAL: i32 = 1;
+
 /// Opens an outside link in the system's default browser; an error says why it did not open.
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
-    open_checked(&url, shell_open)
+    open_with(&url, shell_execute)
 }
 
-/// The URL through outside_url, then to `launch`; nothing is launched for a refused URL.
-fn open_checked(url: &str, launch: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
+/// The URL through outside_url, then to the shell as one file argument with the "open" verb; nothing is
+/// launched for a refused URL, and a failed launch says why.
+fn open_with(url: &str, launch: ShellLaunch) -> Result<(), String> {
     let u = outside_url(url)?;
-    launch(u.as_str())
+    shell_result(launch("open", u.as_str(), SHOW_NORMAL)).map_err(|e| format!("could not open the browser: {e}"))
 }
 
 /// What ShellExecuteW's return means: above 32 it opened, at or below 32 an error code.
@@ -596,20 +607,19 @@ fn shell_result(code: isize) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn shell_open(url: &str) -> Result<(), String> {
+fn shell_execute(verb: &str, file: &str, show: i32) -> isize {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
-    let (verb, file) = (wide("open"), wide(url));
+    let (verb, file) = (wide(verb), wide(file));
     // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; the window, parameters and
     // folder are null, which ShellExecuteW accepts
-    let code = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
-    shell_result(code as isize).map_err(|e| format!("could not open the browser: {e}"))
+    unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), show) as isize }
 }
 
+/// Elsewhere nothing is launched: ERROR_FILE_NOT_FOUND, which shell_result reports.
 #[cfg(not(windows))]
-fn shell_open(_: &str) -> Result<(), String> {
-    Err("opening links is built for Windows only".into())
+fn shell_execute(_: &str, _: &str, _: i32) -> isize {
+    2
 }
 
 /// Turns off WebView2's status bar in every window. Like a browser, WebView2 shows a link's target in
@@ -911,17 +921,34 @@ mod tests {
         }
     }
 
+    // what the stand-in shell was asked for, per test thread
+    thread_local! {
+        static SHELL_CALLS: std::cell::RefCell<Vec<(String, String, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn shell_ok(verb: &str, file: &str, show: i32) -> isize {
+        SHELL_CALLS.with(|c| c.borrow_mut().push((verb.into(), file.into(), show)));
+        42
+    }
+    fn shell_no_browser(verb: &str, file: &str, show: i32) -> isize {
+        shell_ok(verb, file, show);
+        31
+    }
+
     #[test]
-    fn open_external_launches_only_allowed_urls_and_reports_why_a_launch_failed() {
-        // fails if a refused URL reaches the shell, the shell gets something other than the checked URL,
-        // or a failed ShellExecuteW reads as success (review of #52)
-        let launched = std::cell::RefCell::new(Vec::new());
-        let ok = |u: &str| { launched.borrow_mut().push(u.to_string()); Ok(()) };
-        open_checked("https://leetify.com/app/profile/76561197960265729", ok).unwrap();
-        assert!(open_checked("file:///C:/Windows/System32/calc.exe", ok).is_err());
-        assert!(open_checked("https://evil.example/", ok).is_err());
-        assert_eq!(*launched.borrow(), ["https://leetify.com/app/profile/76561197960265729"]);
-        assert_eq!(open_checked("https://www.hltv.org/player/1/x", |_| Err("no browser".into())), Err("no browser".into()));
+    fn open_external_asks_the_shell_to_open_exactly_the_allowed_url() {
+        // fails if a refused URL reaches the shell, the shell gets another verb, a changed URL or another
+        // show command, or a failed ShellExecuteW reads as success (review of #52)
+        let url = "https://leetify.com/app/match-details/5e7a1c00-0000-4000-8000-000000000001/overview?x=1&y=a%20b";
+        open_with(url, shell_ok).unwrap();
+        assert!(open_with("file:///C:/Windows/System32/calc.exe", shell_ok).is_err());
+        assert!(open_with("https://evil.example/", shell_ok).is_err());
+        let calls = SHELL_CALLS.with(|c| c.take());
+        assert_eq!(calls, [("open".to_string(), url.to_string(), SHOW_NORMAL)]);
+        #[cfg(windows)]
+        assert_eq!(SHOW_NORMAL, 1, "SW_SHOWNORMAL");
+        let e = open_with("https://www.hltv.org/player/1/x", shell_no_browser).unwrap_err();
+        assert!(e.contains("no browser set"), "{e}");
+        SHELL_CALLS.with(|c| c.take());
         assert!(shell_result(42).is_ok());
         for code in [0, 2, 5, 31, 32] {
             assert!(shell_result(code).is_err(), "{code}");

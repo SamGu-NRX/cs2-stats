@@ -1,58 +1,23 @@
-// Which Leetify match is which local match. Two rules, in order:
-// 1. Match id. A matchmaking match's share code (data_source_match_id) holds Valve's match id, and a Valve
-//    match's file path holds the same id (sharecode.ts). Exact, so it wins.
-// 2. Time, map and score, for a match the first rule left: the local match ended (its start plus its
-//    duration) within END_SLACK_MS of Leetify's finished_at, on the same map, with the same rounds won and
-//    lost. Only one-to-one pairs join; a Leetify match with two candidates, or a local match two Leetify
-//    matches point at, stays apart, since a wrong join would put one match's numbers beside another's.
-// Both rules join only a demo recorded by the Leetify profile's own player (MatchInfo.pov equal to the
-// profile's SteamID), so another account's recording never sits beside these numbers. Rule 2 needs a
-// reliable end on both sides: a local match with a clock start and a recorded duration. It never joins a
-// pair whose two Valve match ids are both known and differ. Pro demos never join; they are not the user's.
+// Which Leetify match is which local match: only by Valve match id. A matchmaking match's share code
+// (data_source_match_id) holds Valve's match id, and a Valve match's file path holds the same id
+// (sharecode.ts), so a pair is either the same match or not. There is no fallback on time, map and score:
+// a guess can attach the wrong match, which would put one match's numbers beside another's. A Leetify
+// match with no demo here stays a Leetify-only row in Matches.
+//
+// Only a demo recorded by the Leetify profile's own player (MatchInfo.pov equal to the profile's SteamID)
+// joins, so another account's recording never sits beside these numbers. Pro demos never join.
 import type { MatchEntry } from "../match";
-import { startMs } from "../match";
 import { isOwn } from "../engine";
 import type { LeetifyMatch } from "./api";
 import { decodeShareCode, valveMatchId } from "./sharecode";
 
-/**
- * How far apart the local end and Leetify's finished_at may be. Leetify's finished_at for the matches
- * seen is the server's end time and our end is start plus the rounds' duration, which leaves out the
- * warmup and the final scoreboard. 10 minutes is a guess that covers that gap; there is no measured spread
- * behind it. Two matches on one map with one score ending inside it would claim each other's partner, and
- * the one-to-one rule leaves all of them apart.
- */
-export const END_SLACK_MS = 10 * 60 * 1000;
-
-export type JoinRule = "match-id" | "time";
+export type JoinRule = "match-id";
 
 export interface Joined {
   /** local file to its Leetify match */
   byFile: Map<string, { match: LeetifyMatch; rule: JoinRule }>;
   /** Leetify matches with no local match: the rows Matches lists from Leetify alone */
   only: LeetifyMatch[];
-}
-
-const sameScore = (l: LeetifyMatch, e: MatchEntry) => l.score !== null && l.score.us === e.score.us && l.score.them === e.score.them;
-const sameMap = (l: LeetifyMatch, e: MatchEntry) => l.map.toLowerCase() === e.match.map.toLowerCase();
-
-/** When a local match ended, ms since the epoch: its clock start plus its duration; null without either. */
-function localEnd(e: MatchEntry): number | null {
-  if (!e.match.startedAt || e.match.durationS === null) return null;
-  return startMs(e.match) + e.match.durationS * 1000;
-}
-
-/** Whether a local match ended within END_SLACK_MS of a Leetify match's end; false when its end is unknown. */
-function fitsTime(l: LeetifyMatch, e: MatchEntry): boolean {
-  const end = localEnd(e);
-  return end !== null && Math.abs(end - l.finishedMs) <= END_SLACK_MS;
-}
-
-const leetifyValveId = (l: LeetifyMatch) => (l.dataSourceMatchId ? decodeShareCode(l.dataSourceMatchId)?.matchId ?? null : null);
-/** Both sides name a Valve match id and the two differ: the same match they cannot be. */
-function idsDiffer(l: LeetifyMatch, e: MatchEntry): boolean {
-  const a = leetifyValveId(l), b = valveMatchId(e.file);
-  return a !== null && b !== null && a !== b;
 }
 
 /**
@@ -62,33 +27,17 @@ function idsDiffer(l: LeetifyMatch, e: MatchEntry): boolean {
 export function joinMatches(leetify: LeetifyMatch[], entries: MatchEntry[], steam64: string): Joined {
   const byFile: Joined["byFile"] = new Map();
   const joined = new Set<string>();
-  const own = entries.filter((e) => isOwn(e) && e.match.pov === steam64);
-
-  // 1. match id
   const byValveId = new Map<bigint, MatchEntry>();
-  for (const e of own) {
+  for (const e of entries) {
+    if (!isOwn(e) || e.match.pov !== steam64) continue;
     const id = valveMatchId(e.file);
     if (id !== null) byValveId.set(id, e);
   }
-  const left: LeetifyMatch[] = [];
   for (const l of leetify) {
-    const id = leetifyValveId(l);
+    const id = l.dataSourceMatchId ? decodeShareCode(l.dataSourceMatchId)?.matchId ?? null : null;
     const e = id !== null ? byValveId.get(id) : undefined;
     if (e && !byFile.has(e.file)) {
       byFile.set(e.file, { match: l, rule: "match-id" });
-      joined.add(l.id);
-    } else left.push(l);
-  }
-
-  // 2. time, map and score, one-to-one
-  const free = own.filter((e) => !byFile.has(e.file));
-  const candidates = new Map(left.map((l) => [l.id, free.filter((e) => !idsDiffer(l, e) && sameMap(l, e) && sameScore(l, e) && fitsTime(l, e))]));
-  const claims = new Map<string, number>();
-  for (const list of candidates.values()) for (const e of list) claims.set(e.file, (claims.get(e.file) ?? 0) + 1);
-  for (const l of left) {
-    const list = candidates.get(l.id)!;
-    if (list.length === 1 && claims.get(list[0].file) === 1) {
-      byFile.set(list[0].file, { match: l, rule: "time" });
       joined.add(l.id);
     }
   }

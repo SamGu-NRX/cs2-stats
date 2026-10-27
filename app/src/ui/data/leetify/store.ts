@@ -38,6 +38,13 @@ export class LeetifyStore {
   private st: LeetifyState = INITIAL;
   private readonly subs = new Set<() => void>();
   private started = false;
+  /**
+   * The connection's generation, bumped by every connect and disconnect. A load answers for the
+   * generation it started under; one that resolves under another is dropped, even for the same player, so
+   * a request from before a disconnect never overwrites what a later connection fetched (review of #52).
+   * The host keeps the same count for its own copy (src-tauri/src/leetify.rs Held).
+   */
+  private generation = 0;
   constructor(private readonly bridge: LeetifyBridge) {}
 
   get = () => this.st;
@@ -54,16 +61,21 @@ export class LeetifyStore {
     return this.boot();
   }
   private async boot() {
+    const generation = this.generation;
+    const current = () => this.generation === generation;
     try {
       const status = await this.bridge.status();
+      if (!current()) return;
       this.set({ status });
       if (!status.player) return;
       const held = await this.bridge.load(false);
+      // a connect or disconnect since boot began: its own fetch stands, not this one
+      if (!current()) return;
       // a copy this page cannot read is dropped by apply, and fetched again here
       const readable = held !== null && (await this.apply(held));
-      if (!readable) await this.run("refresh", () => this.fetch());
+      if (!readable && current()) await this.run("refresh", () => this.fetch());
     } catch (e) {
-      this.set({ error: toFailure(e) });
+      if (current()) this.set({ error: toFailure(e) });
     } finally {
       this.set({ starting: false });
     }
@@ -85,8 +97,11 @@ export class LeetifyStore {
       return false;
     }
   }
+  /** Fetches and reads the reply, unless a connect or disconnect started a new generation meanwhile. */
   private async fetch() {
-    await this.apply(await this.bridge.load(true));
+    const generation = this.generation;
+    const reply = await this.bridge.load(true);
+    if (generation === this.generation) await this.apply(reply);
   }
 
   /** Runs one action at a time; returns whether it succeeded. The status is re-read after each. */
@@ -113,6 +128,7 @@ export class LeetifyStore {
   /** Saves the key first when one is given (a key Leetify refuses stops here), then connects and fetches. */
   connect = (player: string, key: string | null) => this.run("connect", async () => {
     if (key) await this.bridge.saveKey(key);
+    this.generation++;
     await this.bridge.connect(player);
     this.set({ data: null });
     await this.fetch();
@@ -124,6 +140,7 @@ export class LeetifyStore {
    * is attempted, even when removing the key fails; that failure still shows.
    */
   disconnect = () => this.run("disconnect", async () => {
+    this.generation++;
     try {
       await this.bridge.disconnect();
     } finally {
