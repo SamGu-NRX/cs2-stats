@@ -1121,6 +1121,20 @@ describe("the sixth review (at 500957e)", () => {
   });
 });
 
+describe("comments in the knife file", () => {
+  it("a whole-line comment is skipped, so Replace on a file with an unbindall uses the file's keys", async () => {
+    // fails if the mock reads `// mine` as a command, calls the file unreadable and replaces it from the last change
+    await render("installed");
+    await applyKey("k");
+    backend.state.knifeFile = [...backend.state.knifeFile!, "// mine", "unbindall", 'bind m "subclass_create 500"'];
+    await click(button(/Check again/));
+    expect(text(".bm-unbound .bm-note")).toMatch(/^An unbindall line in the knife file unbinds every key \(cfg\/cs2stats_knife\.cfg:7: unbindall\)/);
+    await click(button("Replace…"));
+    expect(text("dialog .bm-facts")).toContain("with the keys it holds now, written plainly");
+    expect(knifeList().filter((l) => !l?.startsWith("//"))).toEqual(["unbind \\", "unbind k", 'bind m "subclass_create 500"']);
+  });
+});
+
 describe("keys Bot Mode keeps unbound", () => {
   it("moving the knife key off \\ keeps \\ unbound; Stop unbinding takes a key back, previewed first", async () => {
     await render("installed");

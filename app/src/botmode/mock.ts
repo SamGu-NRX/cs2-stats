@@ -138,10 +138,22 @@ const KNIFE_HEADER = [
 ];
 const bindLine = (b: KnifeBind) => `bind ${b.key} "${b.knives.map((k) => `subclass_create ${k}`).join(";")}"`;
 const sameKey = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/**
+ * A line without its comment. As cfg.rs `commands` reads it, `//` outside quotes starts one
+ * anywhere on the line, so a whole-line comment such as `// mine` leaves nothing.
+ */
+const codeOf = (l: string) => {
+  let quoted = false;
+  for (let i = 0; i < l.length; i++) {
+    if (l[i] === '"') quoted = !quoted;
+    else if (!quoted && l[i] === "/" && l[i + 1] === "/") return l.slice(0, i);
+  }
+  return l;
+};
 /** A line's words, quotes dropped and a comment cut; the mock reads one command per line. */
-const wordsOf = (l: string) => l.split(" //")[0].trim().match(/"[^"]*"|\S+/g)?.map((w) => w.replace(/^"|"$/g, "")) ?? [];
+const wordsOf = (l: string) => codeOf(l).trim().match(/"[^"]*"|\S+/g)?.map((w) => w.replace(/^"|"$/g, "")) ?? [];
 /** Whether a line holds one command (no `;` outside quotes). */
-const single = (l: string) => !l.split(" //")[0].replace(/"[^"]*"/g, "").includes(";");
+const single = (l: string) => !codeOf(l).replace(/"[^"]*"/g, "").includes(";");
 type KeyState = "u" | "o" | KnifeBind;
 /**
  * settings.rs Knife::read: command by command in file order, the last bind or unbind of each key

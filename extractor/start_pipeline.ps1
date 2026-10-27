@@ -4,7 +4,7 @@
 # Stop: Stop-Process -Id (Get-Content <cs2-stats-data>\logs\pipeline.pid). The pid printed below is the venv
 # launcher stub; the pipeline writes its real pid to that file.
 # Settings come from this session's environment, passed on byte for byte: CS2_DEMO_DOWNLOADS (required),
-# CS2_STATS_DATA, CS2_PIPELINE_MAX_GB and CS2_PIPELINE_MAX_WORKERS.
+# CS2_STATS_DATA, CS2_PIPELINE_MAX_GB, CS2_PIPELINE_MAX_WORKERS and CS2_PIPELINE_DOWNLOAD_COPIES.
 $root = $PSScriptRoot
 . (Join-Path $root 'start_detached.ps1')
 $py = Join-Path $root '.venv\Scripts\pythonw.exe'
