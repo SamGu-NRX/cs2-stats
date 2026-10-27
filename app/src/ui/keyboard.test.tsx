@@ -165,8 +165,11 @@ describe("opening a match", () => {
   beforeEach(() => {
     transition.mockClear();
     Object.assign(document, { startViewTransition: transition });
-    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+    // stubbed for this block only: the test files share one process, and a stub without addEventListener
+    // left behind broke the Replay tab in files that run later
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
   });
+  afterEach(() => { vi.unstubAllGlobals(); });
   it("from the keyboard is instant: no view transition, no view fade", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     openMatch("#/match/a.json.gz/overview");

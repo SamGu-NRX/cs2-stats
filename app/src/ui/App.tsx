@@ -10,6 +10,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { BotModeRecovery } from "./components/BotModeRecovery";
 import { MenuLayer, ToastLayer, TooltipLayer, toast } from "./components/overlay";
 import { DataProvider, useData } from "./data/provider";
+import { isOwn } from "./data/engine";
 import { scanErrorText } from "./data/sources";
 import { privacyForced, setHidePersonal, useHidePersonal } from "./data/privacy";
 import { BarContent, BarProvider, useBarSlots } from "./shell/Bar";
@@ -120,9 +121,12 @@ export function Shell() {
       }
       if (ctrl || e.altKey) return;
       if ((e.key === "[" || e.key === "]") && r.page === "match" && r.file) {
-        const i = matches.findIndex((s) => s.file === matchFile(r.file!));
-        // matches are newest first: "[" goes to the older match, "]" to the newer one
-        const next = matches[e.key === "[" ? i + 1 : i - 1];
+        // within the match's own list (the user's matches or the pro demos), newest first: "[" goes to the
+        // older match, "]" to the newer one
+        const cur = matches.find((s) => s.file === matchFile(r.file!));
+        const group = cur ? matches.filter((s) => isOwn(s) === isOwn(cur)) : [];
+        const i = group.findIndex((s) => s === cur);
+        const next = group[e.key === "[" ? i + 1 : i - 1];
         if (next) go(matchHref(next.file, r.tab), { instant: true });
         return;
       }

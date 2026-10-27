@@ -49,6 +49,27 @@ function flatTables(root: string, dir: string): Record<string, number> {
   return out;
 }
 
+/**
+ * Each map folder's last answer, by folder, with the stamp it was given under: the CURRENT pointer and
+ * the stat of the file that completes the map (the version's COMPLETE, or match.parquet in a flat
+ * folder). A version folder never changes once COMPLETE is written (SCHEMA-v1.md), so a map whose stamp
+ * is unchanged keeps its answer and the next listing makes three file calls for it instead of one per
+ * table: a full listing of 1,080 maps took 40 s on this machine. Reads still check each table's size.
+ */
+const answers = new Map<string, { stamp: string; file?: ProEntry; skipped?: string }>();
+
+function stampOf(dir: string): string {
+  let pointer = "";
+  try { pointer = readFileSync(path.join(dir, "CURRENT"), "utf-8").trim(); } catch { /* a flat folder, or none */ }
+  const done = path.join(dir, pointer, pointer ? "COMPLETE" : "match.parquet");
+  try {
+    const st = statSync(done);
+    return `${pointer}|${st.size}|${st.mtimeMs}|${existsSync(path.join(dir, "RETIRED"))}`;
+  } catch {
+    return `${pointer}|missing|${existsSync(path.join(dir, "RETIRED"))}`;
+  }
+}
+
 export function listPro(folder: string): ProListing {
   const out: ProListing = { folder, files: [], skipped: [], error: null };
   const root = seriesRoot(folder);
@@ -64,25 +85,36 @@ export function listPro(folder: string): ProListing {
       const dir = path.join(root, s, m);
       if (!isName(m) || !statSync(dir).isDirectory()) continue;
       const rel = `pro/${s}/${m}`;
-      try {
-        const r = mapTablesDir(dir);
-        if (!r) continue;
-        if ("skipped" in r) { out.skipped.push({ file: rel, why: r.skipped }); continue; }
-        if (!inside(root, path.join(r.dir, "match.parquet"))) { out.skipped.push({ file: rel, why: "resolves outside the library" }); continue; }
-        if (r.manifest) {
-          const at = path.join(r.dir, "COMPLETE");
-          out.files.push({ file: `${rel}/${path.basename(r.dir)}`, size: Object.values(r.manifest).reduce((a, b) => a + b, 0), mtime: Math.round(statSync(at).mtimeMs) });
-        } else {
-          const sizes = flatTables(root, r.dir);
-          out.files.push({ file: rel, size: Object.values(sizes).reduce((a, b) => a + b, 0), mtime: Math.round(statSync(path.join(r.dir, "match.parquet")).mtimeMs) });
-        }
-      } catch (e) {
-        out.skipped.push({ file: rel, why: (e as Error).message });
+      const stamp = stampOf(dir);
+      let a = answers.get(dir);
+      if (a?.stamp !== stamp) {
+        a = { stamp, ...mapAnswer(root, dir, rel) };
+        answers.set(dir, a);
       }
+      if (a.file) out.files.push(a.file);
+      else if (a.skipped) out.skipped.push({ file: rel, why: a.skipped });
     }
   }
   out.files.sort((a, b) => b.file.localeCompare(a.file));
   return out;
+}
+
+/** One map folder's entry, why it has none, or neither when it holds no map. */
+function mapAnswer(root: string, dir: string, rel: string): { file?: ProEntry; skipped?: string } {
+  try {
+    const r = mapTablesDir(dir);
+    if (!r) return {};
+    if ("skipped" in r) return { skipped: r.skipped };
+    if (!inside(root, path.join(r.dir, "match.parquet"))) return { skipped: "resolves outside the library" };
+    if (r.manifest) {
+      const at = path.join(r.dir, "COMPLETE");
+      return { file: { file: `${rel}/${path.basename(r.dir)}`, size: Object.values(r.manifest).reduce((x, y) => x + y, 0), mtime: Math.round(statSync(at).mtimeMs) } };
+    }
+    const sizes = flatTables(root, r.dir);
+    return { file: { file: rel, size: Object.values(sizes).reduce((x, y) => x + y, 0), mtime: Math.round(statSync(path.join(r.dir, "match.parquet")).mtimeMs) } };
+  } catch (e) {
+    return { skipped: (e as Error).message };
+  }
 }
 
 /**

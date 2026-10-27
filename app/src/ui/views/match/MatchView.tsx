@@ -10,6 +10,7 @@ import { mapAccent } from "../../data/maps";
 import type { MatchEntry, MatchModel, Team, ViewedMatch } from "../../data/match";
 import { useData } from "../../data/provider";
 import { sourceOf } from "../../data/sources";
+import { teamNames, useHidePersonal } from "../../data/privacy";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
 import { fmtAdr, fmtMatchDay, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
@@ -50,6 +51,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
   const { matches, status } = useData();
   const r = useRoute();
   const s = matches.find((x) => x.file === file) ?? null;
+  const hide = useHidePersonal();
   // a pro demo is seen through the player picked on its scoreboard (Viewer.tsx), if any
   const loaded = useMatch(file, r.query.get("as"));
   const v = loaded.data;
@@ -71,7 +73,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
       <BarContent
         crumbs={[
           ...(s && isOwn(s) ? [{ label: s.players[s.you].name, href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }] : [{ label: "Pro matches", href: pageHref("matches", { view: "pro" }) }]),
-          { label: s ? (pro ? `${s.match.teams[0]} vs ${s.match.teams[1]}, ${mapName(s.match.map)}` : `${mapName(s.match.map)}, ${fmtMatchDay(s.match)}`) : "Match" },
+          { label: s ? (pro ? `${teamNames(s, hide).join(" vs ")}, ${mapName(s.match.map)}` : `${mapName(s.match.map)}, ${fmtMatchDay(s.match)}`) : "Match" },
         ]}
         tools={
           <span className="pager">
@@ -199,7 +201,7 @@ function Halves({ v, team, usStart }: { v: MatchModel | null; team: Team; usStar
  */
 function ProHero({ s, v }: { s: MatchEntry; v: MatchModel | null }) {
   const map = s.match.map;
-  const [a, b] = s.match.teams;
+  const [a, b] = teamNames(s, useHidePersonal());
   const { us, them } = s.score;
   const viewer = v && v.human !== null ? { name: v.players[v.human].name, line: statLine(v.b.lines.both[v.human]) } : null;
   return (

@@ -10,10 +10,10 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, opponentIds, recordEntries, teamsOf, type OwnEntry } from "./engine";
+import { aimEntries, botPopulation, careerEntries, coverEntry, entryLine, filterEntries, opponentIds, recordEntries, teamsOf, type OwnEntry } from "./engine";
 import { opponentsIn } from "../../stats/opponents";
 import { FREEZE_END, oneRound } from "../../stats/testing/match";
-import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type ViewedMatch } from "./match";
+import { byNewest, matchModel, roundMatrix, sideOf, teamLabel, type MatchEntry, type ViewedMatch } from "./match";
 import { sourceOf } from "./sources";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
@@ -97,27 +97,58 @@ describe("match model", async () => {
   });
 });
 
-it("keeps unfinished matches and partial logs out of career views but in the match list", async () => {
-  // fails if an abandoned match or a log covering a few rounds shows in Form, Recent matches or a
-  // career average (the sidebar, the Rating 3.0 tile and Form's pooled line must read one match set)
+it("keeps unfinished matches, partial logs and pro demos out of career views but in the match list", async () => {
+  // fails if an abandoned match, a log covering a few rounds or a pro demo shows in Form, Recent matches
+  // or a career average (the sidebar, the Rating 3.0 tile and Form's pooled line must read one match set)
   // a bundled log that covers most of its rounds
   const logs = await Promise.all(FILES.map((f) => decodeMatch(readFileSync(path.join(SAMPLES, f)), f)));
   const m = logs.find((x) => { const f = derive(pluginToTables(x), CS2RB).match; return f.nRounds >= f.roundsPlayed / 2; })!;
-  const done = entryOf("done", "", derive(pluginToTables(m), CS2RB));
+  const facts = derive(pluginToTables(m), CS2RB);
+  const done = entryOf("done", "", facts);
   const left = entryOf("left", "", derive(pluginToTables({ ...m, status: "abandoned" }), CS2RB));
   const partial = { ...done, file: "partial", match: { ...done.match, nRounds: 1, roundsPlayed: done.match.roundsPlayed } };
-  // a pro demo (served from the dev folder) opens from Matches but is never the user's career
-  const pro = { ...done, file: "dev/faze-vs-sangal" };
+  // a map from the pro library, which nobody recorded: it opens from Matches but is never the user's career
+  const pro = entryOf("pro/faze-vs-sangal/m2-nuke", "", { ...facts, match: { ...facts.match, pov: null } });
   expect(careerEntries([done, left, partial, pro], null).map((e) => e.file)).toEqual(["done"]);
   expect(filterEntries([done, left, partial, pro], null)).toHaveLength(4);
   // W-L counts the user's finished matches, a thin log included (its result is real); not the abandoned one or the pro demo
   expect(recordEntries([done, left, partial, pro]).map((e) => e.file)).toEqual(["done", "partial"]);
+  expect(aimEntries([done, pro], null).map((e) => e.file)).toEqual(done.hasAim ? ["done"] : []);
+  expect(opponentIds([pro])).toEqual([]);
   // the adapter keeps a thin log's counts but none of its per-round values, so no view shows its few rounds as the match
   const thin = coverEntry(partial);
   expect(thin.line!.m.kills).toBe(partial.line!.m.kills);
   expect(Object.values(thin.line!.v).every((v) => v === null)).toBe(true);
   expect(thin.line!.eco).toBeNull();
   expect(coverEntry(done)).toBe(done);
+});
+
+it("gives a pro map an entry with no recording player, and a recording without one none", async () => {
+  // fails if a map from the pro library, which carries no recording player, gets no entry (it would
+  // never list), or if one of the user's files without its player is listed as if it were a pro demo
+  const file = FILES.find((x) => !x.includes("synthetic"))!;
+  const f = derive(pluginToTables(await decodeMatch(readFileSync(path.join(SAMPLES, file)), file)), CS2RB);
+  const noPov = { ...f, match: { ...f.match, pov: null } };
+  const pro = entryOf("pro/vitality-vs-mouz-1/m1-mirage/v-1.16.0-0123abcd", "extracted, 1.16.0", noPov);
+  expect([pro.you, pro.line, pro.shots, sourceOf(pro).id]).toEqual([null, null, 0, "pro"]);
+  expect([pro.score.us, pro.score.them]).toEqual(noPov.match.score);
+  expect(() => entryOf("2026/recorded.json.gz", "", noPov)).toThrow(/recording player/);
+});
+
+it("sees a pro demo through nobody until a player is picked, and the user's match through the user", async () => {
+  // fails if a pro demo frames a player as yours before a pick, ignores the pick, or if a pick (?as=)
+  // could make another player "you" on the user's own match
+  const file = FILES.find((x) => !x.includes("synthetic"))!;
+  const f = derive(pluginToTables(await decodeMatch(readFileSync(path.join(SAMPLES, file)), file)), CS2RB);
+  const pro = entryOf("pro/a-vs-b-1/m1-dust2", "", { ...f, match: { ...f.match, pov: null } });
+  const before = matchModel(pro, matchBundle(pro, f, null));
+  expect([before.human, before.pro, before.players.some((p) => p.isHuman), before.b.yourRounds.length]).toEqual([null, true, false, 0]);
+  expect([teamLabel(before, "us"), teamLabel(before, "them")]).toEqual(f.match.teams);
+  const pick = f.players[3].id;
+  const after = matchModel(pro, matchBundle(pro, f, pick), pick);
+  expect([after.human, after.b.yourRounds.length]).toEqual([3, f.rounds.length]);
+  const own = entryOf(`samples/${file}`, "", f);
+  expect(matchModel(own, matchBundle(own, f, null), pick).human).toBe(own.you);
 });
 
 it("orders matches newest first by start time, not by day or file name", () => {

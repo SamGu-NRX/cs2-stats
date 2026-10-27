@@ -27,6 +27,8 @@ import { fmtAdr, fmtDate, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmt
 import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
+import { Segmented } from "../components/controls";
+import { ProMatches } from "./ProMatches";
 import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
 import { lf, sourceName } from "../data/leetify/present";
 import { leetifyPhase, useLeetify, useLeetifyJoin } from "../data/leetify/store";
@@ -181,7 +183,31 @@ const NoDemo = () => <span className="faint" data-tip={NO_DEMO}>{DASH}</span>;
 
 const openLeetify = (l: LeetifyMatch) => openOutside(matchUrl(l));
 
+/**
+ * Matches: the user's own history, and beside it the pro match library (ProMatches.tsx) once a library
+ * folder is set or a pro demo is listed. The two never mix, so a library of a thousand maps does not
+ * bury the user's games. ?view=pro picks the library.
+ */
 export function MatchesView() {
+  const { matches, host } = useData();
+  const r = useRoute();
+  const hasPro = !!host?.pro?.folder || matches.some((e) => !isOwn(e));
+  const switcher = (view: "own" | "pro") => (
+    <Segmented label="Which matches" value={view} onChange={(v) => setQuery("view", v === "pro" ? "pro" : null)}
+      options={[{ value: "own", label: "Your matches" }, { value: "pro", label: "Pro matches" }]} />
+  );
+  if (hasPro && r.query.get("view") === "pro") {
+    return (
+      <div className="view view--flush matches">
+        <BarContent crumbs={[{ label: "Matches", href: pageHref("matches") }, { label: "Pro" }]} />
+        <ProMatches switcher={switcher("pro")} />
+      </div>
+    );
+  }
+  return <OwnMatches switcher={hasPro ? switcher("own") : null} />;
+}
+
+function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
   const { matches: all } = useData();
   const r = useRoute();
   const { map, result } = useScope();
@@ -238,12 +264,15 @@ export function MatchesView() {
   const left = rows.length - rated.length;
   const open = (x: ListRow) => (x.kind === "local" ? openMatch(matchHref(x.e.file), rowOf(x.e.file)) : openLeetify(x.l));
 
-  const nothing = !all.length && !leetify?.joined.only.length;
+  // the user's own matches: pro demos are the Pro view's
+  const own = all.some(isOwn);
+  const nothing = !own && !leetify?.joined.only.length;
   return (
     <div className="view view--flush matches">
       <BarContent crumbs={[{ label: "Matches" }]} scope={{ controls: ["map", "result"], maps: "all", off: nothing ? { map: "No matches yet", result: "No matches yet" } : undefined }} />
       {!nothing && (
         <div className="matches__toolbar toolbar">
+          {switcher}
           <label className="search-field">
             <SearchIcon size={14} />
             <input className="input" data-filter placeholder="Search map, date or bot name" value={q} onChange={(e) => setQuery("q", e.target.value)} aria-label="Search matches" aria-keyshortcuts="/" />
@@ -265,7 +294,8 @@ export function MatchesView() {
           <LeetifyPending phase={leetifyNow} error={leetifyState?.fetchError ?? leetifyState?.error ?? null} hasKey={leetifyState?.status?.hasKey ?? false} retry={() => void leetifyLive?.store.refresh()} />
         </div>
       )}
-      {all.length > 0 && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
+      {nothing && switcher && <div className="matches__toolbar toolbar">{switcher}</div>}
+      {own && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
       {table.length === 0 ? (
         <div className="matches__empty">
           {nothing ? (

@@ -7,7 +7,7 @@ import type { Client } from "../../worker/client";
 import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
 import { careerEntries, type OwnEntry } from "./engine";
 import { matchModel, type MatchEntry, type MatchModel } from "./match";
-import { hideBundle, hideTextAndFiles, useHidePersonal } from "./privacy";
+import { hideBundle, hideTextAndFiles, teamNames, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
 export interface Loaded<T> {
@@ -80,7 +80,9 @@ export function useMatch(file: string | null, viewer: string | null = null): Loa
   return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}:${as ?? ""}` : null, async () => {
     if (!entry) throw new Error(`${file} is not in the match folder`);
     const b = await bundleOf(client!, version, file!, as);
-    return matchModel(entry, hide ? hideBundle(b, entry) : b, as);
+    const v = matchModel(entry, hide ? hideBundle(b, entry) : b, as);
+    const [us, them] = teamNames(entry, hide);
+    return { ...v, teamName: entry.usTeam === 0 ? { us, them } : { us: them, them: us } };
   }, { file });
 }
 

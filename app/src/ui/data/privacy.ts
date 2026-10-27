@@ -111,6 +111,13 @@ interface Seat {
  */
 export const isProDemo = (e: Pick<MatchEntry, "match">) => e.match.source === "hltv";
 
+/**
+ * A match's two team names as a page may show them: a pro demo's are public; any other file's (a scrim
+ * in the development folder, say) can carry a player's name, so while hiding they read "Team 1" and
+ * "Team 2".
+ */
+export const teamNames = (e: Pick<MatchEntry, "match">, hide: boolean): [string, string] => (hide && !isProDemo(e) ? ["Team 1", "Team 2"] : e.match.teams);
+
 const seatOf = (e: MatchEntry): Seat => ({ you: e.you, usTeam: e.usTeam, pro: isProDemo(e) });
 
 /** One match's players under the rules at the top of this file, in the same order. */
@@ -138,7 +145,7 @@ export const STEAMID_HIDDEN = "<SteamID>";
  * The folders Data & settings shows once the host has resolved them. Before that it shows them as
  * %APPDATA%\BotMatchStats\..., which holds nothing personal and stays.
  */
-export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>" } as const;
+export const FOLDER_HIDDEN = { data: "<data folder>", valve: "<Valve folder>", pro: "<pro library folder>" } as const;
 
 // A path ends at a quote, a bracket or a character no file name can hold. Folder names may contain
 // spaces, so a path runs to its last separator on the line, then to the end of its last name, which

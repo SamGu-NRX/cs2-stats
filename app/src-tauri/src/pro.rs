@@ -60,8 +60,9 @@ fn mtime_ms(p: &Path) -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-/// A version folder's COMPLETE list, when it and every table it names lie inside `root` at their listed
-/// sizes. Each check comes before the open it guards.
+/// A version folder's COMPLETE list (table file name to bytes), when COMPLETE lies inside `root` and names
+/// only plain table files. The tables themselves are checked as each is read (read_in): checking every
+/// table of every map at each listing made a listing of 1,080 maps take over half a minute.
 fn complete(root: &Path, dir: &Path) -> Result<BTreeMap<String, u64>, String> {
     let c = dir.join("COMPLETE");
     if !c.exists() {
@@ -72,17 +73,8 @@ fn complete(root: &Path, dir: &Path) -> Result<BTreeMap<String, u64>, String> {
     }
     let text = fs::read_to_string(&c).map_err(|e| format!("COMPLETE: {e}"))?;
     let sizes: BTreeMap<String, u64> = serde_json::from_str(&text).map_err(|e| format!("COMPLETE: {e}"))?;
-    for (f, n) in &sizes {
-        if !table_name(f) {
-            return Err(format!("COMPLETE lists \"{f}\", which is not a table file name"));
-        }
-        let p = dir.join(f);
-        if !inside(root, &p) {
-            return Err(format!("{f} is missing or resolves outside the library"));
-        }
-        if fs::metadata(&p).map(|m| m.len()).ok() != Some(*n) {
-            return Err(format!("{f} is not at its listed {n} bytes"));
-        }
+    if let Some(f) = sizes.keys().find(|f| !table_name(f)) {
+        return Err(format!("COMPLETE lists \"{f}\", which is not a table file name"));
     }
     Ok(sizes)
 }
@@ -104,7 +96,8 @@ fn flat_tables(root: &Path, dir: &Path) -> Result<BTreeMap<String, u64>, String>
 /// Where one map folder's tables are now: a version folder (CURRENT), the flat folder, or why neither.
 enum Map {
     Versioned { version: String, sizes: BTreeMap<String, u64> },
-    Flat { sizes: BTreeMap<String, u64> },
+    /// match.parquet's size: a flat folder is the extractor's output from before version folders, never rewritten
+    Flat { size: u64 },
     Skip(String),
     None,
 }
@@ -127,13 +120,14 @@ fn resolve(root: &Path, map: &Path) -> Map {
             Err(why) => Map::Skip(format!("{version}: {why}")),
         };
     }
-    if !map.join("match.parquet").is_file() {
+    let first = map.join("match.parquet");
+    if !first.is_file() {
         return Map::None;
     }
-    match flat_tables(root, map) {
-        Ok(sizes) => Map::Flat { sizes },
-        Err(why) => Map::Skip(why),
+    if !inside(root, &first) {
+        return Map::Skip("match.parquet resolves outside the library".into());
     }
+    Map::Flat { size: fs::metadata(&first).map(|m| m.len()).unwrap_or(0) }
 }
 
 #[derive(Serialize)]
@@ -178,7 +172,7 @@ pub fn list_in(folder: &Path) -> ProListing {
                     size: sizes.values().sum(),
                     file: format!("{rel}/{version}"),
                 }),
-                Map::Flat { sizes } => out.files.push(FileEntry { mtime: mtime_ms(&map.join("match.parquet")), size: sizes.values().sum(), file: rel }),
+                Map::Flat { size } => out.files.push(FileEntry { mtime: mtime_ms(&map.join("match.parquet")), size, file: rel }),
                 Map::Skip(why) => out.skipped.push(Skipped { file: rel, why }),
                 Map::None => {}
             }
@@ -206,31 +200,37 @@ pub fn read_in(folder: &Path, path: &str) -> Result<Vec<u8>, String> {
     };
     let root = series_root(folder);
     let map = root.join(parts[0]).join(parts[1]);
-    let (dir, sizes) = match version {
+    // a version folder's tables are the ones its COMPLETE lists; a flat folder's, its plain table files
+    let (dir, listed) = match version {
         Some(v) => {
             let dir = map.join(v);
             let sizes = complete(&root, &dir).map_err(|why| format!("{path}: {why}; rescan"))?;
-            (dir, sizes)
+            (dir, Some(sizes))
         }
         None => {
             if !inside(&root, &map.join("match.parquet")) {
                 return Err(format!("{path}: no map here; rescan"));
             }
-            let sizes = flat_tables(&root, &map)?;
-            (map, sizes)
+            (map, None)
         }
     };
     let Some(table) = table else {
-        let names: Vec<&String> = sizes.keys().collect();
+        let names: Vec<String> = match listed {
+            Some(sizes) => sizes.into_keys().collect(),
+            None => flat_tables(&root, &dir)?.into_keys().collect(),
+        };
         return serde_json::to_vec(&names).map_err(|e| e.to_string());
     };
-    let want = *sizes.get(table).ok_or_else(|| format!("{path}: not one of this map's tables"))?;
+    let want = match &listed {
+        Some(sizes) => Some(*sizes.get(table).ok_or_else(|| format!("{path}: not one of this map's tables"))?),
+        None => None,
+    };
     let p = dir.join(table);
     if !inside(&root, &p) {
-        return Err(format!("{path}: resolves outside the library"));
+        return Err(format!("{path}: not one of this map's tables"));
     }
     let bytes = fs::read(&p).map_err(|e| format!("{path}: {e}"))?;
-    if version.is_some() && bytes.len() as u64 != want {
+    if let Some(want) = want.filter(|w| bytes.len() as u64 != *w) {
         return Err(format!("{path}: {} bytes, not the {want} COMPLETE lists; rescan", bytes.len()));
     }
     Ok(bytes)
@@ -327,7 +327,8 @@ mod tests {
         let l = list_in(&lib.0);
         let files: Vec<&str> = l.files.iter().map(|f| f.file.as_str()).collect();
         assert_eq!(files, ["pro/a-vs-b-1/m2-nuke/v-1.2.0-0123abcd", "pro/a-vs-b-1/m1-dust2"]);
-        assert_eq!(l.files[1].size, 11);
+        // a flat folder is keyed by match.parquet alone
+        assert_eq!(l.files[1].size, 5);
         let mut skipped: Vec<&str> = l.skipped.iter().map(|s| s.file.as_str()).collect();
         skipped.sort();
         assert_eq!(skipped, ["pro/a-vs-b-1/m3-inferno", "pro/c-vs-d-2/m1-mirage"]);
