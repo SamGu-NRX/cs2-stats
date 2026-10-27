@@ -20,6 +20,8 @@ usage: cs2-stats botmode <command> [options]
   backups                    List recorded changes.
   launch                     Start a Bot Mode session: CS2 through Steam, always with -insecure,
                              watched until it exits; Bot Mode is on only for that session.
+  recover off|leave          Answer the prompt shown after a session died with Bot Mode on:
+                             turn Bot Mode off, or leave it as it is. Either stops the prompt.
   set difficulty low|medium|high
   set knife-skins 0|1
   set knife-premium 0|1
@@ -34,7 +36,7 @@ options:
   --sha256 <hex>     Expected hash, for an asset GitHub publishes no digest for.
   --json             Print JSON instead of text.
 
-Install, overlay, rollback, set and launch refuse while cs2.exe is running.";
+Install, overlay, rollback, set, launch and recover refuse while cs2.exe is running.";
 
 struct Args {
     words: Vec<String>,
@@ -158,9 +160,9 @@ fn run(a: Args) -> Result<(), String> {
     }
     // Bot Mode left on with no supervisor is dealt with before anything that changes game
     // files, and those commands wait while a session runs. Read-only commands only report it.
-    let writes = matches!(words.first().copied(), Some("install" | "overlay" | "rollback" | "set" | "launch"));
+    let writes = matches!(words.first().copied(), Some("install" | "overlay" | "rollback" | "set" | "launch" | "recover"));
     if writes {
-        if let Some(notice) = session::guard(layout, &probe, &monitor::Windows, &|| start_adopter(layout))? {
+        if let Some(notice) = session::guard(layout, &monitor::Windows, &|| start_adopter(layout))? {
             eprintln!("{notice}");
         }
     }
@@ -249,7 +251,6 @@ fn run(a: Args) -> Result<(), String> {
         ["launch"] => {
             let run_id = session::start_launch(
                 layout,
-                &probe,
                 &monitor::Windows,
                 &|| session::start_and_wait(layout, &monitor::Windows, session::RunMode::Launch),
                 &|| start_adopter(layout),
@@ -266,7 +267,7 @@ fn run(a: Args) -> Result<(), String> {
             })?;
             if status.state == "failed" {
                 // A supervisor that died is cleaned up at once.
-                if let Some(notice) = session::cleanup_message(&session::cleanup(layout, &probe, &monitor::Windows, &|| start_adopter(layout))) {
+                if let Some(notice) = session::cleanup_message(&session::cleanup(layout, &monitor::Windows, &|| start_adopter(layout))) {
                     eprintln!("{notice}");
                 }
             }
@@ -283,6 +284,17 @@ fn run(a: Args) -> Result<(), String> {
             if status.state != "done" || unsafe_seen || no_start || status.left_on.is_some() {
                 return Err(status.message);
             }
+        }
+        ["recover", answer @ ("off" | "leave")] => {
+            let r = if *answer == "off" {
+                // Typing the command is the confirmation, so the file it applies to is the one
+                // read now; the write still refuses if the file changes before it lands.
+                let shown = session::recovery(layout)?.ok_or(format!("No Bot Mode session was left unfinished with Bot Mode on. {}.", session::NOT_CHANGED))?;
+                session::recover(layout, &probe, session::RecoverAction::Off, Some(&shown.hash))?
+            } else {
+                session::recover(layout, &probe, session::RecoverAction::Leave, None)?
+            };
+            print(a.json, &r, |r| format!("{}\n{}", r.message, r.change.as_ref().map(meta_line).unwrap_or_default()));
         }
         ["set", "difficulty", level] => {
             let m = settings::set_difficulty(layout, &probe, Difficulty::parse(level)?)?;

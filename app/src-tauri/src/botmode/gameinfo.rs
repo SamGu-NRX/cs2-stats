@@ -111,6 +111,19 @@ pub fn enable(text: &str) -> Result<String, String> {
     Ok(joined)
 }
 
+/// The lines [`disable`] removes from `text`, trimmed: every bot search path in `SearchPaths`,
+/// whichever tool added it.
+pub fn bot_lines(text: &str) -> Result<Vec<String>, String> {
+    let block = search_paths(text)?;
+    let lines: Vec<&str> = text.lines().collect();
+    Ok(block
+        .entries
+        .iter()
+        .filter(|(_, k, v)| BOT_SEARCH_PATHS.iter().any(|p| is_game(k, v, p)))
+        .map(|(i, _, _)| lines[*i].trim().to_string())
+        .collect())
+}
+
 /// Returns `text` without the bot search paths, keeping every other line and the file's line
 /// endings. The mod's files stay on disk; without these lines CS2 does not load them.
 pub fn disable(text: &str) -> Result<String, String> {

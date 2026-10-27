@@ -203,14 +203,42 @@ export interface SessionStatus {
   leftOn: string | null;
 }
 
+/**
+ * A Bot Mode session of this app died with Bot Mode on. CS2 Stats cannot tell whether the current
+ * gameinfo.gi is that session's or another tool's (the Bot-Improver Panel keeps Bot Mode on by
+ * editing the same file), so it changes nothing and asks. Answer with botmode.recover().
+ */
+export interface Recovery {
+  /** the prompt to show; it says that "Leave it on" keeps another tool's setting */
+  message: string;
+  /** gameinfo.gi, the one file "off" writes */
+  file: string;
+  /** the lines "off" removes, as they read now, including any another tool added */
+  lines: string[];
+  /** gameinfo.gi's SHA-256 when the prompt was read; recover("off") refuses once the file differs */
+  hash: string;
+}
+
+/** What botmode.recover() did. */
+export interface Recovered {
+  /** the change that turned Bot Mode off; null when nothing was written */
+  change: Change | null;
+  message: string;
+}
+
 /** The Bot Mode session, from botmode.session(). Poll it while a session runs. */
 export interface SessionView {
   /** whether a supervisor process holds the session lease right now */
   supervised: boolean;
   status: SessionStatus | null;
-  /** what session cleanup last said, e.g. that it turned off Bot Mode another tool left on */
+  /** what session cleanup last said, e.g. that Bot Mode is managed by another tool */
   notice: string | null;
+  /** the recovery prompt, read from the files on every call; null when there is nothing to ask */
+  recovery: Recovery | null;
 }
+
+/** An answer to the recovery prompt: "off" names the hash the prompt carried. */
+export type RecoverAnswer = { action: "off"; expectHash: string } | { action: "leave" };
 
 /** Show this with Bot Mode: the one case a session cannot protect. */
 export const UNPROTECTED_NOTICE =
@@ -292,6 +320,11 @@ export function botmodeOver(call: Call) {
      */
     launch: (t: Target = {}) => call<SessionView>("botmode_launch", { ...t }),
     session: (t: Target = {}) => call<SessionView>("botmode_session", { ...t }),
+    /**
+     * Answers the recovery prompt. "off" turns Bot Mode off only while gameinfo.gi still has
+     * `expectHash`; "leave" changes nothing. Either stops the prompt. Rejects while CS2 is running.
+     */
+    recover: (answer: RecoverAnswer, t: Target = {}) => call<Recovered>("botmode_recover", { ...t, ...answer }),
     /** `seen`: the active profile's hash as the caller showed it (Status.activeProfile); refused when it has changed. */
     setDifficulty: (level: Difficulty, seen?: { sha256: string | null }, t: Target = {}) => call<Change>("botmode_set_difficulty", { ...t, level, seen }),
     /**

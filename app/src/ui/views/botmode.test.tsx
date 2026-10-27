@@ -161,7 +161,7 @@ describe("Bot Mode states", () => {
     expect(text(".bm-session [role=alert]")).toContain("The session's state could not be read, so what shows here may be out of date");
     // the session ends: everything is read again, and VAC is on once CS2 has exited
     delete fail.botmode_session;
-    backend.state.session = { supervised: false, notice: null, status: { ...backend.state.session.status!, state: "done" } };
+    backend.state.session = { supervised: false, notice: null, recovery: null, status: { ...backend.state.session.status!, state: "done" } };
     backend.state.status = { ...backend.state.status, supervised: false, cs2Running: false, botMode: false };
     backend.state.running = [];
     await act(async () => { await new Promise((r) => setTimeout(r, 2100)); });
@@ -170,11 +170,10 @@ describe("Bot Mode states", () => {
     expect(text(".bm-vac")).toBe("VAC on");
   }, 15_000);
 
-  it("CS2 open outside a session: VAC on from its command line, cleanup's notice, writes blocked", async () => {
+  it("CS2 open outside a session: VAC on from its command line, writes blocked", async () => {
     await render("cs2-running");
     expect(text("#bm-state")).toBe("CS2 is open");
     expect(text(".bm-vac")).toBe("VAC on");
-    expect(text(".bm-notes")).toContain("Bot Mode was left on by another tool; it's now off.");
     expect(text("#bm-launch-why")).toBe("CS2 is running. Close it to change game files.");
   });
 
@@ -638,6 +637,50 @@ describe("console commands", () => {
     type($<HTMLInputElement>(".bm-cmds__find input")!, "bot_aim h");
     await click(button("bot_aim head"));
     expect(copied.at(-1)).toBe("bot_aim head");
+  });
+});
+
+describe("Bot Mode another tool turned on, and a session that died (#50)", () => {
+  it("managed by another tool: says so, and a launch promises to leave gameinfo.gi as it is", async () => {
+    await render("managed");
+    expect(text("#bm-state")).toBe("Ready");
+    expect(text(".bm-hero__facts")).toContain("Bot Mode in gameinfo.gi on · Bot Mode is managed by another tool (left as is)");
+    await click(button(/Launch Bot Mode/));
+    expect(text("dialog .bm-facts")).toContain("Nothing in gameinfo.gi: Bot Mode is already on, set by another tool. The session leaves it on when CS2 exits.");
+    expect(text("dialog .bm-facts")).not.toContain("two search paths");
+    await click(button("Cancel"));
+    // off: the launch turns it on and promises only to take out what it wrote
+    await render("installed");
+    await click(button(/Launch Bot Mode/));
+    expect(text("dialog .bm-facts")).toContain("the session takes them out again if the file still holds what it wrote");
+  });
+
+  it("a session that died with Bot Mode on: asks, and turns it off only for the file it showed", async () => {
+    await render("recovery");
+    expect(text("#bm-state")).toBe("Bot Mode left on");
+    expect(text(".bm-hero__sub")).toMatch(/^Bot Mode is on after CS2 Stats closed unexpectedly/);
+    expect(writes()).toEqual([]);
+    await click(button("Turn off Bot Mode…"));
+    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["Game	csgo/addons", "Game	csgo_bots"]);
+    // another tool rewrote gameinfo.gi after the prompt was read
+    const shown = backend.state.session.recovery!.hash;
+    backend.state.session = { ...backend.state.session, recovery: { ...backend.state.session.recovery!, hash: "a".repeat(64) } };
+    await click(button("Turn off Bot Mode"));
+    expect(sent("botmode_recover")).toEqual({ action: "off", expectHash: shown });
+    expect(text("dialog [role=alert]")).toMatch(/^gameinfo\.gi changed after CS2 Stats asked about it/);
+    // shown again for the file as it is now, and confirmed
+    await click(button("Turn off Bot Mode"));
+    expect(sent("botmode_recover")).toEqual({ action: "off", expectHash: "a".repeat(64) });
+    expect(dialog()).toBeNull();
+    expect(text("#bm-state")).toBe("Ready");
+  });
+
+  it("Leave it on writes nothing and stops asking", async () => {
+    await render("recovery");
+    await click(button("Leave it on"));
+    expect(sent("botmode_recover")).toEqual({ action: "leave" });
+    expect(text("#bm-state")).toBe("Ready");
+    expect(text(".bm-hero__facts")).toContain("Bot Mode is managed by another tool (left as is)");
   });
 });
 

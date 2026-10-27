@@ -220,6 +220,11 @@
 /* a file list wraps its long lines (a bind line, a deep path) even inside the dialog's unbroken flags rule */
 .bm-facts dd .bm-files { white-space: normal; }
 
+/* ---------------------------------------------------------------- after a session died with Bot Mode on (#50) */
+.bm-recover { align-items: center; }
+.bm-recover .bm-problem { flex-basis: 100%; }
+.bm-managed { color: var(--ink2); }
+
 /* ---------------------------------------------------------------- keys kept unbound */
 .bm-unbound { display: grid; gap: 6px; width: 100%; padding-top: 4px; }
 .bm-unbound h3 { margin: 0; }

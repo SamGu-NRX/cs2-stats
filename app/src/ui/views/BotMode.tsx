@@ -9,8 +9,10 @@
 // once when it opens and again after each action; it polls only while a session runs. Paths,
 // command lines and errors pass through the privacy layer (data/privacy.ts).
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { UNREACHABLE, type BotModeApi, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
+import { UNREACHABLE, type BotModeApi, type Recovery, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
 import { Card } from "../components/Card";
+import { onRecoveryAnswered, recoveryAnswered } from "../components/BotModeRecovery";
+import { OutsideLink } from "../components/OutsideLink";
 import { toast } from "../components/overlay";
 import { botModeApi, cosmeticsSupport, errorText, repairable, installState, vacState, writeBlocker, type InstallState } from "../data/botmode";
 import { DownloadIcon, PlayIcon, RefreshIcon } from "../icons/ui";
@@ -105,7 +107,11 @@ type Dialog =
   | { kind: "overlay"; instant: boolean }
   | { kind: "rollback"; change: Change; interrupted: boolean; instant: boolean }
   | { kind: "apply"; instant: boolean }
-  | { kind: "launch"; instant: boolean };
+  | { kind: "launch"; instant: boolean }
+  | { kind: "recover"; recovery: Recovery; instant: boolean };
+
+/** session.rs MANAGED_BY_OTHER_TOOL: Bot Mode is on, and not by a session of this app's. */
+const MANAGED = "Bot Mode is managed by another tool (left as is)";
 
 // ---------------------------------------------------------------- the view
 
@@ -163,11 +169,30 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
   const tag = state.kind === "current" || state.kind === "behind" ? state.tag : state.latest?.tag_name ?? null;
   const close = () => setDialog(null);
   const done = () => { setDialog(null); void bm.reload(); };
+  // the startup prompt answered elsewhere: read the state again
+  const self = useRef({}).current;
+  const reload = bm.reload;
+  useEffect(() => onRecoveryAnswered((from) => { if (from !== self) void reload(); }), [self, reload]);
+  const [leaving, setLeaving] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const leaveOn = async () => {
+    setLeaving({ busy: true, error: null });
+    try {
+      const r = await api.recover({ action: "leave" });
+      recoveryAnswered(self);
+      toast(r.message);
+      setLeaving({ busy: false, error: null });
+      void bm.reload();
+    } catch (e) {
+      setLeaving({ busy: false, error: errorText(e) });
+    }
+  };
   const undoable = status.backups.find((b) => b.kind === "normal" && b.status === "complete");
 
   return (
     <div className="view__in bm">
       <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} keptUnread={keptUnread} onCheck={() => void bm.reload()}
+        leaving={leaving} onLeaveOn={() => void leaveOn()}
+        onTurnOff={(r, e) => setDialog({ kind: "recover", recovery: r, instant: fromKeyboard(e) })}
         onLaunch={(e) => setDialog({ kind: "launch", instant: fromKeyboard(e) })}
         onRollback={(e) => { if (status.unfinished) setDialog({ kind: "rollback", change: status.unfinished, interrupted: true, instant: fromKeyboard(e) }); }} />
       <div className="bm-cols">
@@ -206,6 +231,11 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           <PlanList plan={pending.plan} difficultyFrom={status.difficulty} />
         </ActionDialog>
       )}
+      {dialog?.kind === "recover" && (
+        <TurnOffDialog api={api} recovery={dialog.recovery} instant={dialog.instant} onClose={close}
+          onDone={(message) => { recoveryAnswered(self); toast(message, "good"); done(); }}
+          onAskAgain={(r) => setDialog({ kind: "recover", recovery: r, instant: true })} />
+      )}
       {dialog?.kind === "launch" && (
         <ActionDialog instant={dialog.instant} title="Start CS2 in Bot Mode?" confirm="Launch with -insecure" busyText="Turning Bot Mode on and asking Steam to start CS2"
           onClose={close}
@@ -222,7 +252,9 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           <LaunchLine status={status} options={pending?.plan.launch ?? status.launchOptions} />
           <dl className="bm-facts">
             <dt>Changes</dt>
-            <dd><span className="mono">gameinfo.gi</span>: two search paths turn Bot Mode on. They come out again when CS2 exits.</dd>
+            {status.botMode
+              ? <dd>Nothing in <span className="mono">gameinfo.gi</span>: Bot Mode is already on, {status.notice === MANAGED ? "set by another tool" : "and this session did not turn it on"}. The session leaves it on when CS2 exits.</dd>
+              : <dd><span className="mono">gameinfo.gi</span>: two search paths turn Bot Mode on. When CS2 exits, the session takes them out again if the file still holds what it wrote; if another tool changed the file meanwhile, it is left as that tool set it.</dd>}
             <dt>Watches</dt>
             <dd>Every CS2 of this install until it exits. One started without <span className="mono">-insecure</span> is closed.</dd>
           </dl>
@@ -252,15 +284,19 @@ const KEPT_UNREAD = "You have kept changes, but the server cfg could not be read
 
 // ---------------------------------------------------------------- hero
 
-function Hero({ status, session, running, state, blocker, checking, pending, keptUnread, onCheck, onLaunch, onRollback }: {
+function Hero({ status, session, running, state, blocker, checking, pending, keptUnread, leaving, onCheck, onLaunch, onRollback, onTurnOff, onLeaveOn }: {
   status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null; keptUnread: boolean;
-  onCheck: () => void; onLaunch: (e: MouseEvent) => void; onRollback: (e: MouseEvent) => void;
+  leaving: { busy: boolean; error: string | null };
+  onCheck: () => void; onLaunch: (e: MouseEvent) => void; onRollback: (e: MouseEvent) => void; onTurnOff: (r: Recovery, e: MouseEvent) => void; onLeaveOn: () => void;
 }) {
   const shown = useShown();
   const supervised = session?.supervised ?? false;
   const unseen = status.cs2Running === null && !supervised;
-  const word = status.unfinished ? "Interrupted" : supervised ? "In session" : unseen ? "Can't check CS2" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
-  const tone = status.unfinished ? "poor" : supervised ? "live" : unseen || status.cs2Running || state.kind === "missing" ? "idle" : "ready";
+  // a session of ours died with Bot Mode on (#50): the app changed nothing and asks
+  const recovery = !supervised ? session?.recovery ?? null : null;
+  const managed = !supervised && !recovery && status.botMode === true && status.notice === MANAGED;
+  const word = status.unfinished ? "Interrupted" : supervised ? "In session" : recovery ? "Bot Mode left on" : unseen ? "Can't check CS2" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
+  const tone = status.unfinished || recovery ? "poor" : supervised ? "live" : unseen || status.cs2Running || state.kind === "missing" ? "idle" : "ready";
   const version = state.kind === "current" || state.kind === "behind" ? state.tag : state.kind === "byHand" ? state.reference : null;
   const launchWhy = state.kind === "missing" ? "Install the mod first." : keptUnread ? KEPT_UNREAD : pending?.invalid ?? blocker;
   const vac = vacState(status, running, supervised);
@@ -269,6 +305,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
   const sub = status.unfinished
     ? `Change ${status.unfinished.operation} stopped part-way, so the game folder may be half-written. Roll it back before anything else.`
     : supervised ? shown(session?.status?.message ?? "A Bot Mode session is watching CS2.")
+    : recovery ? recovery.message
     : unseen ? "The process list could not be read, so the app can't tell whether CS2 is open. It changes nothing and won't launch until it can; check again in a moment."
     : status.cs2Running ? "Close CS2, then launch Bot Mode, so the game starts with -insecure."
     : state.kind === "missing" ? "The mod's loaders, Metamod and CounterStrikeSharp, aren't in the CS2 folder. Install a release to play with bots."
@@ -288,12 +325,19 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
       <ul className="bm-hero__facts" aria-label="Game state">
         <li><span className="faint">Mod</span> <b>{version ? `CS2-Bot-Improver ${version}` : "none"}</b></li>
         <li><span className="faint">CS2</span> <b>{status.cs2Running === null ? "unknown" : status.cs2Running ? "running" : "closed"}</b></li>
-        <li><span className="faint">Bot Mode in gameinfo.gi</span> <b>{status.botMode === null ? "unknown" : status.botMode ? "on" : "off"}</b></li>
+        <li><span className="faint">Bot Mode in gameinfo.gi</span> <b>{status.botMode === null ? "unknown" : status.botMode ? "on" : "off"}</b>{managed && <span className="bm-managed"> · {MANAGED}</span>}</li>
         {status.buildId && <li><span className="faint">Steam build</span> <b className="num">{status.buildId}</b></li>}
       </ul>
       {status.unfinished ? (
         <div className="bm-hero__act">
           <button className="btn btn--primary press" onClick={onRollback}>Roll back the change…</button>
+        </div>
+      ) : recovery ? (
+        <div className="bm-hero__act bm-recover">
+          <button className="btn btn--primary press" onClick={(e) => onTurnOff(recovery, e)} disabled={leaving.busy || !!blocker}>Turn off Bot Mode…</button>
+          <button className="btn press" onClick={onLeaveOn} disabled={leaving.busy || !!blocker} aria-busy={leaving.busy || undefined}>{leaving.busy ? "Leaving it on" : "Leave it on"}</button>
+          <span className="meta">Leave it on changes nothing and stops asking. Either answer waits while CS2 runs.</span>
+          {leaving.error && <p className="bm-problem selectable" role="alert">{shown(leaving.error)}</p>}
         </div>
       ) : (
         <div className="bm-hero__act">
@@ -309,13 +353,13 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
           {keptUnread && <> <button className="link" onClick={onCheck} disabled={checking}>Check again</button></>}
         </p>
       )}
-      {(session?.notice || warnings.length > 0) && (
+      {((session?.notice && session.notice !== status.notice) || warnings.length > 0) && (
         <ul className="bm-notes">
-          {session?.notice && <li className="selectable">{shown(session.notice)}</li>}
+          {session?.notice && session.notice !== status.notice && <li className="selectable">{shown(session.notice)}</li>}
           {warnings.map((w, i) => <li key={i} className="selectable" data-tone="poor">{shown(w)}</li>)}
         </ul>
       )}
-      {state.kind !== "missing" && <p className="meta bm-hero__notice">{status.notice}</p>}
+      {state.kind !== "missing" && !recovery && !managed && <p className="meta bm-hero__notice">{status.notice}</p>}
     </section>
   );
 }
@@ -363,7 +407,7 @@ function Install({ status, state, releases, replaced, blocker, onRetryReleases, 
         {chip && <span className="chip" data-tone={state.kind === "behind" ? "new" : undefined}>{chip}</span>}
       </div>
       <p className="meta">
-        {r.installed ? <>CS2-Bot-Improver, installed by this app {day(r.installed.installedAt)}. <a className="link" href={r.installed.source.url} target="_blank" rel="noreferrer">Source</a></>
+        {r.installed ? <>CS2-Bot-Improver, installed by this app {day(r.installed.installedAt)}. <OutsideLink className="link" href={r.installed.source.url}>Source</OutsideLink></>
           : state.kind === "byHand" ? "Not installed by this app; the files match a release it downloaded."
           : state.kind === "missing" ? "The mod isn't in the CS2 folder."
           : "Not installed by this app, and no downloaded release to compare with."}
@@ -382,7 +426,7 @@ function Install({ status, state, releases, replaced, blocker, onRetryReleases, 
               <span className="bm-comps__name">{c.name}</span>
               <span className="bm-comps__what">
                 {STATE_LABEL[c.state]}
-                {c.overlay && <> · <a className="link" href={c.overlay.url} target="_blank" rel="noreferrer" data-tip={`${c.overlay.repo} at ${c.overlay.commit?.slice(0, 12) ?? c.overlay.reference}`}>{c.overlay.reference}</a></>}
+                {c.overlay && <> · <OutsideLink className="link" href={c.overlay.url} tip={`${c.overlay.repo} at ${c.overlay.commit?.slice(0, 12) ?? c.overlay.reference}`}>{c.overlay.reference}</OutsideLink></>}
                 {c.differs.length > 0 && <> · <span className="has-def" tabIndex={0} data-tip={c.differs.join("\n")}>{plural(c.differs.length, "file differs", "files differ")}</span></>}
                 {c.missing.length > 0 && <> · {plural(c.missing.length, "file")} missing</>}
               </span>
@@ -513,6 +557,39 @@ function OverlayDialog({ api, instant, onClose, onDone }: { api: BotModeApi; ins
             <dd>Every file it replaces. History on this page undoes it.</dd>
           </dl>
         )}
+    </ActionDialog>
+  );
+}
+
+/**
+ * The page's "Turn off Bot Mode" for the recovery prompt: the one file it writes and the lines it
+ * takes out, as the prompt read them. Refused once gameinfo.gi differs from that read; the
+ * dialog then shows the file as it is now, or closes when there is nothing left to ask.
+ */
+function TurnOffDialog({ api, recovery, instant, onClose, onDone, onAskAgain }: {
+  api: BotModeApi; recovery: Recovery; instant: boolean; onClose: () => void; onDone: (message: string) => void; onAskAgain: (r: Recovery) => void;
+}) {
+  const shown = useShown();
+  return (
+    <ActionDialog instant={instant} title="Turn off Bot Mode?" confirm="Turn off Bot Mode" busyText="Turning Bot Mode off" onClose={onClose}
+      run={async () => {
+        try {
+          const r = await api.recover({ action: "off", expectHash: recovery.hash });
+          onDone(r.message);
+        } catch (e) {
+          const why = errorText(e);
+          const now = await api.session().then((s) => s.recovery, () => undefined);
+          if (now && now.hash !== recovery.hash) { onAskAgain(now); }
+          throw why;
+        }
+      }}>
+      <p className="bm-dialog__lead">This takes these lines out of gameinfo.gi, including any that another tool such as the Bot-Improver Panel added. Nothing else in the file changes.</p>
+      <dl className="bm-facts">
+        <dt>Changes</dt>
+        <dd><span className="mono selectable">{shown(recovery.file)}</span>, taking out:<ul className="bm-files mono selectable">{recovery.lines.map((l) => <li key={l}>{l.trim()}</li>)}</ul></dd>
+        <dt>Keeps</dt>
+        <dd>Another tool's Bot Mode setting is lost. To keep it, cancel and choose Leave it on.</dd>
+      </dl>
     </ActionDialog>
   );
 }

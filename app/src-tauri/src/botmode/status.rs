@@ -79,7 +79,8 @@ pub struct Status {
     pub bot_mode: Option<bool>,
     /// Whether a live Bot Mode session (the app or the CLI) is watching CS2.
     pub supervised: bool,
-    /// [`session::UNPROTECTED`], for the Bot Mode view.
+    /// [`session::UNPROTECTED`]; with Bot Mode on and no session watching, the recovery prompt
+    /// ([`session::RECOVERY`]) or [`session::MANAGED_BY_OTHER_TOOL`].
     pub notice: &'static str,
     pub release: ReleaseStatus,
     pub difficulty: Option<settings::Difficulty>,
@@ -231,9 +232,18 @@ pub fn status(
     let steam_tokens = steam_launch_options.as_deref().and_then(|o| super::launch::split(o).ok()).unwrap_or_default();
     let steam_safe = steam_tokens.iter().any(|a| a.eq_ignore_ascii_case("-insecure")) && !steam_tokens.iter().any(|a| is_secure_token(a));
     let supervised = session_held(&layout.csgo).unwrap_or(false);
+    // Bot Mode on with no supervisor: a dead session of this app (the recovery prompt), or
+    // another tool's. CS2 Stats leaves it on either way until the user answers.
+    let notice = if bot_mode != Some(true) || supervised {
+        session::UNPROTECTED
+    } else if matches!(session::recovery(layout), Ok(Some(_))) {
+        session::RECOVERY
+    } else {
+        session::MANAGED_BY_OTHER_TOOL
+    };
     if bot_mode == Some(true) && !supervised {
         warnings.push(format!(
-            "Bot Mode is on in gameinfo.gi with no session watching CS2{}. The next Bot Mode command or app start turns it off. {}",
+            "Bot Mode is on in gameinfo.gi with no session watching CS2{}. {notice} {}",
             if steam_safe { "" } else { ", and CS2's launch options in Steam would start it with VAC on" },
             session::UNPROTECTED
         ));
@@ -253,7 +263,7 @@ pub fn status(
         cs2_running,
         bot_mode,
         supervised,
-        notice: session::UNPROTECTED,
+        notice,
         release,
         difficulty,
         active_profile,

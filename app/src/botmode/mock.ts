@@ -9,7 +9,16 @@
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
 import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
 
-export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable"] as const;
+export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery"] as const;
+
+/** session.rs's notices (#50), as the backend sends them. */
+export const NOTICES = {
+  unprotected: "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.",
+  managed: "Bot Mode is managed by another tool (left as is)",
+  recovery: "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off. Leave it on to keep another tool's setting, such as the Bot-Improver Panel's.",
+  changedSinceAsked: "gameinfo.gi changed after CS2 Stats asked about it, so Bot Mode was not changed. Check Bot Mode again before turning it off.",
+} as const;
+const BOT_LINES = ["\t\t\tGame\tcsgo/addons", "\t\t\tGame\tcsgo_bots"];
 export type Scenario = (typeof SCENARIOS)[number];
 
 const CSGO = String.raw`C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo`;
@@ -123,9 +132,10 @@ function initial(s: Scenario): State {
   const status: Status = {
     csgo: CSGO, steam: String.raw`C:\Program Files (x86)\Steam`, buildId: "20577134",
     cs2Running: s === "session" || s === "cs2-running",
-    botMode: s === "session",
+    // managed: another tool (the Panel) keeps Bot Mode on; recovery: a session of ours died with it on
+    botMode: s === "session" || s === "managed" || s === "recovery",
     supervised: s === "session",
-    notice: "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.",
+    notice: s === "managed" ? NOTICES.managed : s === "recovery" ? NOTICES.recovery : NOTICES.unprotected,
     release: installed
       ? { installed: { tag: installedTag, asset: "CS2BotImprover.zip", installedAt: "2026-10-25T22:30:12Z", source: link("ed0ard/CS2-Bot-Improver", installedTag, "a1f4c2e9d7b3058e6c1a9f2d4b7e0c3a5f8d1b6e") }, reference: installedTag, matching: 551, total: 562 }
       : { installed: null, reference: null, matching: 0, total: 0 },
@@ -146,8 +156,11 @@ function initial(s: Scenario): State {
     status.warnings.push(`Change ${status.unfinished!.id} (install-v1.4.7) was interrupted or only partly undone, so the game folder may be half-written. Run \`botmode rollback\` to put it back.`);
   }
   const session: SessionView = s === "session"
-    ? { supervised: true, notice: null, status: { ...lastSession(), runId: "r-1761530000", state: "running", message: "cs2.exe (pid 22916) started with -insecure; watching it until it exits", verdicts: [{ verdict: "safe", pid: 22916, commandLine: `"${CS2_EXE}" -insecure -novid -fullscreen -w 1280 -h 960 +exec botmode` }], outcome: null, botModeOn: change(11, "bot-mode-on", new Date(Date.now() - 25 * 60_000).toISOString().slice(0, 19) + "Z", 1, "complete", "session"), botModeOff: null, heartbeat: Math.floor(Date.now() / 1000) } }
-    : { supervised: false, notice: s === "cs2-running" ? "Bot Mode was left on by another tool; it's now off. Launch Bot Mode from this app." : null, status: installed ? lastSession() : null };
+    ? { supervised: true, notice: null, recovery: null, status: { ...lastSession(), runId: "r-1761530000", state: "running", message: "cs2.exe (pid 22916) started with -insecure; watching it until it exits", verdicts: [{ verdict: "safe", pid: 22916, commandLine: `"${CS2_EXE}" -insecure -novid -fullscreen -w 1280 -h 960 +exec botmode` }], outcome: null, botModeOn: change(11, "bot-mode-on", new Date(Date.now() - 25 * 60_000).toISOString().slice(0, 19) + "Z", 1, "complete", "session"), botModeOff: null, heartbeat: Math.floor(Date.now() / 1000) } }
+    : {
+      supervised: false, notice: s === "managed" ? NOTICES.managed : null, status: installed ? lastSession() : null,
+      recovery: s === "recovery" ? { message: NOTICES.recovery, file: `${CSGO}\\gameinfo.gi`, lines: BOT_LINES, hash: sha("gameinfo-on") } : null,
+    };
   const files: Record<string, string[]> = {};
   const installFiles = ["addons/metamod.vdf", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll", "cfg/my_bot_normal_config.cfg"];
   for (const b of status.backups) {
@@ -191,6 +204,22 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         if (st.statusError) throw st.statusError;
         return structuredClone(st.status);
       case "botmode_session": return structuredClone(st.session);
+      case "botmode_recover": {
+        // as session.rs recover: refused while CS2 runs or a session holds the game
+        if (st.status.cs2Running) throw "CS2 is running. Close it first: Bot Mode never changes game files while the game is open.";
+        if (st.session.supervised) throw "a Bot Mode session is running; wait until CS2 has exited";
+        const prompt = st.session.recovery;
+        if (a.action === "leave") {
+          st.session = { ...st.session, recovery: null };
+          st.status.notice = st.status.botMode ? NOTICES.managed : NOTICES.unprotected;
+          return { change: null, message: "Bot Mode was not changed." };
+        }
+        if (!prompt) throw "No Bot Mode session was left unfinished, so there is nothing to recover. Bot Mode was not changed.";
+        if (a.expectHash !== prompt.hash) throw NOTICES.changedSinceAsked;
+        st.session = { ...st.session, recovery: null };
+        st.status = { ...st.status, botMode: false, notice: NOTICES.unprotected };
+        return { change: record("bot-mode-off", 1, ["gameinfo.gi"]), message: "Bot Mode is off." };
+      }
       case "botmode_server_cfg": return structuredClone(serverOf());
       case "botmode_running": return structuredClone(st.running);
       case "botmode_overlay_plan": {
@@ -313,7 +342,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         // a stand-in session: nothing is started
         st.status.supervised = true;
         st.status.botMode = true;
-        st.session = { supervised: true, notice: null, status: { ...lastSession(), runId: `r-${Date.now()}`, state: "waiting", message: "waiting for CS2 to start", verdicts: [], outcome: null, botModeOff: null, heartbeat: Math.floor(Date.now() / 1000) } };
+        st.session = { supervised: true, notice: null, recovery: null, status: { ...lastSession(), runId: `r-${Date.now()}`, state: "waiting", message: "waiting for CS2 to start", verdicts: [], outcome: null, botModeOff: null, heartbeat: Math.floor(Date.now() / 1000) } };
         return structuredClone(st.session);
       }
       default:
