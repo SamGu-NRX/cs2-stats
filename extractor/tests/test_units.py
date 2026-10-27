@@ -727,7 +727,7 @@ def test_workers_run_a_frozen_copy_of_the_extractor(tmp_path, monkeypatch):
     # Edits to the repo while the pipeline ran reached live workers and failed 13 maps.
     monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
     dp.freeze_code()
-    assert sorted(p.name for p in (tmp_path / "run").iterdir()) == sorted(dp.CODE_FILES)
+    assert sorted(p.name for p in (tmp_path / "run").iterdir()) == sorted([*dp.CODE_FILES, dp.FROZEN_MARKER])
     for name in dp.CODE_FILES:
         assert (tmp_path / "run" / name).read_bytes() == (dp.ROOT / name).read_bytes()
 
@@ -932,6 +932,43 @@ def test_only_a_players_candidate_attempts_can_explain_his_scoreboard():
     # A player who left before an attempt, or whose round-1 baseline already holds it, cannot have kept it.
     _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}], {A: set()}, NO_GAP)
     assert problems
+
+
+def test_a_player_who_left_during_an_attempt_can_have_kept_it():
+    # Review of PR 54 (finding 6): his row is read at his disconnect at 4000, inside the attempt 3000-5000. Only
+    # attempts that ended before it counted, so the attempt's death in his counters went unexplained.
+    windows = [(1000, 2000), (3000, 5000), (6000, 7000)]
+    assert ex.candidate_attempts(windows, 4000, set()) == {0, 1}
+    assert ex.candidate_attempts(windows, 9000, {0}) == {1, 2}  # attempt 0 is inside his round-1 baseline
+
+
+def test_a_rise_before_round_one_needs_exactly_one_attempt_to_explain_it():
+    # Review of PR 54: the baseline accepted a rise any subset explained, though two different attempts each did.
+    one, two = _ev(deaths=1), _ev(deaths=1)
+    assert ex.baseline_rise_explained(B, {"deaths_total": 1}, [one, None]) is True
+    assert ex.baseline_rise_explained(B, {"deaths_total": 1}, [None, None]) is False
+    with pytest.raises(RuntimeError, match="each explain it"):
+        ex.baseline_rise_explained(B, {"deaths_total": 1}, [one, two])
+
+
+def test_only_an_explosion_may_name_no_player_in_the_bomb_table():
+    # Review of PR 54: the bomb key holds steamid, so a pickup without one could hide a second pickup on its tick.
+    rows = lambda *ev: pd.DataFrame(dict(tick=[1] * len(ev), event=[e for e, _ in ev],
+                                         steamid=pd.array([s for _, s in ev], dtype="UInt64")))
+    assert ex.bomb_rows_name_a_player(rows(("exploded", None), ("pickup", A)))["ok"]
+    assert not ex.bomb_rows_name_a_player(rows(("pickup", None)))["ok"]
+
+
+def test_a_purchase_is_read_from_the_buyers_own_column():
+    # Review of PR 54: item_purchase names its buyer in a bare steamid column; read as user_steamid, every purchase
+    # was lost, and a sixth player who bought a pistol would have been left out instead of refusing the map.
+    pid = lambda df, prefix: ex.col(df, f"{prefix}_steamid" if prefix else "steamid")
+    events = {"weapon_fire": pd.DataFrame(dict(user_steamid=[1])), "grenade_thrown": pd.DataFrame(dict(user_steamid=[]))
+              , "item_purchase": pd.DataFrame(dict(steamid=[COACH]))}
+    case = _slot_case()
+    case["acts"] = pd.DataFrame({"steamid": ex.acting_players(events, pid)})
+    with pytest.raises(RuntimeError, match="fired, threw or bought"):
+        ex.non_combatants(**case)
 
 
 def test_more_than_eight_attempts_or_one_over_a_counted_round_refuses_the_map():

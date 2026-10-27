@@ -17,7 +17,26 @@ import json
 import os
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# The pipeline runs workers from a copy of this folder under %TEMP% (demo_pipeline.freeze_code), with FROZEN_MARKER
+# beside it. There __file__ says nothing about the repository, so the pipeline names it in REPO_ENV; a frozen copy
+# without it refuses every output instead of guarding %TEMP%'s parent.
+FROZEN_MARKER = "FROZEN_COPY"
+REPO_ENV = "CS2_STATS_REPO"
+
+
+def repo_root() -> Path:
+    """The repository this code guards: the folder above this file, or REPO_ENV in the pipeline's frozen copy."""
+    here = Path(__file__).resolve().parent
+    if not (here / FROZEN_MARKER).exists():
+        return here.parent
+    named = os.environ.get(REPO_ENV)
+    if not named:
+        raise OutputRefused(f"this is the pipeline's frozen copy of the extractor ({here}); {REPO_ENV} must name the "
+                            "repository it was copied from, and is not set")
+    return Path(named)
+
+
+REPO_ROOT = None if (Path(__file__).resolve().parent / FROZEN_MARKER).exists() else Path(__file__).resolve().parent.parent
 PRIVATE_KEY = "_private"
 PRIVATE_VALUE = "do not commit"
 
@@ -47,10 +66,11 @@ def is_inside(child: Path | str, parent: Path | str) -> bool:
 
 
 def check_output(path: Path | str, *, private: bool, what: str, in_repo: Path | str | None = None,
-                 repo: Path | str = REPO_ROOT) -> Path:
-    """Path, after refusing a private output anywhere in the repository, or a public one in the
-    repository anywhere but its declared in_repo path. Raises OutputRefused naming both."""
+                 repo: Path | str | None = None) -> Path:
+    """Path, after refusing a private output anywhere in the repository (repo, or repo_root()), or a public one in
+    the repository anywhere but its declared in_repo path. Raises OutputRefused naming both."""
     path = Path(path)
+    repo = repo if repo is not None else repo_root()
     if not is_inside(path, repo):
         return path
     if private:
@@ -62,7 +82,7 @@ def check_output(path: Path | str, *, private: bool, what: str, in_repo: Path | 
 
 
 def check_text_output(path: Path | str, *, private: bool, what: str, in_repo: Path | str | None = None,
-                      repo: Path | str = REPO_ROOT) -> Path:
+                      repo: Path | str | None = None) -> Path:
     """check_output for a file that cannot hold the JSON marker: a private one must also be named
     *.private.*, so the name carries the marker instead."""
     path = check_output(path, private=private, what=what, in_repo=in_repo, repo=repo)
@@ -72,7 +92,7 @@ def check_text_output(path: Path | str, *, private: bool, what: str, in_repo: Pa
 
 
 def write_text(path: Path | str, text: str, *, private: bool, what: str, in_repo: Path | str | None = None,
-               repo: Path | str = REPO_ROOT) -> Path:
+               repo: Path | str | None = None) -> Path:
     """Checks where path may go (check_text_output), then writes text."""
     path = check_text_output(path, private=private, what=what, in_repo=in_repo, repo=repo)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +101,7 @@ def write_text(path: Path | str, text: str, *, private: bool, what: str, in_repo
 
 
 def write_json(path: Path | str, obj: dict, *, private: bool, what: str, in_repo: Path | str | None = None,
-               repo: Path | str = REPO_ROOT, **dump) -> Path:
+               repo: Path | str | None = None, **dump) -> Path:
     """Checks where path may go, then writes obj as JSON, with the private marker first when private."""
     path = check_output(path, private=private, what=what, in_repo=in_repo, repo=repo)
     if private:

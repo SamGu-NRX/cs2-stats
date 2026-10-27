@@ -586,6 +586,44 @@ def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: 
     return take, kept, problems
 
 
+def baseline_rise_explained(sid: int, excess: dict[str, int], events: list[dict[str, int] | None]) -> bool:
+    """Whether exactly one subset of the attempts before round 1 (events: the player's, None for one that is not a
+    candidate) explains a rise in round 1's freeze time no row explains; the rise is then the baseline's. None
+    explaining returns False (the baseline then refuses the rise); two different ones raise with the numbers."""
+    res = {k: excess.get(c, 0) for k, c in (("kills", "kills_total"), ("deaths", "deaths_total"),
+                                            ("assists", "assists_total"), ("headshots", "headshot_kills_total"))}
+    found = {f[0] for f in kept_subsets(res, 0, events)}
+    if len(found) > 1:
+        raise RuntimeError(f"player {sid}'s rise {res} before round 1's freeze end: dropped attempts {sorted(found)} "
+                           "each explain it, so the baseline cannot be read")
+    return bool(found)
+
+
+def bomb_rows_name_a_player(bomb: pd.DataFrame) -> dict:
+    """The check that every bomb row but an explosion names its player, as the bomb key (tick, event, steamid)
+    assumes: a pickup or plant with no SteamID would hide a second one on its tick."""
+    bad = bomb[bomb.steamid.isna() & (bomb.event != "exploded")]
+    return dict(check="bomb_rows_name_a_player", expected=0, actual=len(bad), ok=bad.empty, fatal=True,
+                note="" if bad.empty else str(bad[["tick", "event"]].head(5).values.tolist()))
+
+
+# Events a sixth slot must have none of (non_combatants), and the column naming who did each.
+ACTING_EVENTS = {"weapon_fire": "user", "grenade_thrown": "user", "item_purchase": ""}
+
+
+def acting_players(events: dict[str, pd.DataFrame], pid) -> pd.Series:
+    """Who fired, threw or bought in events (name -> rows), each read from its own event's player column:
+    item_purchase names its buyer in a bare steamid column, and read as user_steamid every buyer was lost."""
+    return pd.concat([pid(events[n], ACTING_EVENTS[n]) for n in ACTING_EVENTS if n in events], ignore_index=True)
+
+
+def candidate_attempts(windows: list[tuple[int, int]], row_tick: int, in_baseline: set[int]) -> set[int]:
+    """The dropped attempts a player's scoreboard row (read on row_tick) can hold: every one that began before it,
+    including one he left during (a row read at his disconnect inside it holds what he did there), less those
+    already inside his round-1 baseline (in_baseline: their indices, empty for a player with no baseline row)."""
+    return {i for i, (a, _) in enumerate(windows) if a < row_tick and i not in in_baseline}
+
+
 def less_taken(df: pd.DataFrame, take: dict[int, dict[str, int]]) -> pd.DataFrame:
     """Scoreboard rows less what the kept dropped attempts put on them."""
     out = df.copy()
@@ -1323,8 +1361,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                       "weapon": col(h_, "weapon", None)}),
         pd.DataFrame({"round": team_rows.tick.map(tick_round), "steamid": team_rows.steamid.astype("int64"),
                       "side": team_rows.team_num.map(SIDE)}).dropna(subset=["round"]),
-        pd.DataFrame({"steamid": pd.concat([pid(in_match(ev(n)), "user") for n in ("weapon_fire", "grenade_thrown",
-                                                                                   "item_purchase")], ignore_index=True)}),
+        pd.DataFrame({"steamid": acting_players({n: in_match(ev(n)) for n in ACTING_EVENTS}, pid)}),
         pd.concat([pd.DataFrame({"tick": in_match(ev(n)).tick, "event": n, "steamid": pid(in_match(ev(n)), "user")})
                    for n in ("bomb_pickup", "bomb_dropped", "bomb_beginplant", "bomb_planted", "bomb_abortplant",
                              "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True))
@@ -1352,10 +1389,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     pre_round_1 = {i for i, (a_, b_) in enumerate(voided) if not pd.isna(fe1) and b_ <= int(fe1)}
 
     def explain_before_round_1(sid: int, excess: dict) -> bool:
-        evs = [att_events[i].get(sid) if i in pre_round_1 else None for i in range(len(voided))]
-        res = {k: excess.get(c, 0) for k, c in (("kills", "kills_total"), ("deaths", "deaths_total"),
-                                                ("assists", "assists_total"), ("headshots", "headshot_kills_total"))}
-        return bool(kept_subsets(res, 0, evs))
+        return baseline_rise_explained(sid, excess, [att_events[i].get(sid) if i in pre_round_1 else None
+                                                     for i in range(len(voided))])
 
     k0 = stamp(ev("player_death"))
     r1_deaths = pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user"),
@@ -1936,8 +1971,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                               (("kills", "kills_total"), ("deaths", "deaths_total"), ("assists", "assists_total"),
                                ("headshots", "headshot_kills_total"))}
             counted_self[sid] = c_.get("selfkills", 0)
-            candidates[sid] = {i for i, (a_, b_) in enumerate(voided)
-                               if b_ < t_ and not (i in pre_round_1 and sid in baseline)}
+            candidates[sid] = candidate_attempts(voided, t_, pre_round_1 if sid in baseline else set())
     game_dmg = {(int(r_), int(s_)): int(g) for r_, s_, g in zip(player_rounds["round"], player_rounds.steamid,
                                                                  player_rounds.game_damage) if not pd.isna(g)}
     hit_dmg = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
@@ -1966,6 +2000,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                     else "restored attempt with no winner; not a counted round")))
     checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, less_taken(sb_part, take),
                                  less_taken(departed, take), everyone) + validate_rounds(rounds, final_score)
+    checks.append(bomb_rows_name_a_player(T["bomb"]))
     checks.append(dict(check="dropped_attempts_explained", expected=0, actual=len(attempt_problems),
                        ok=not attempt_problems, fatal=True, note="; ".join(attempt_problems)[:3000]))
     hit_checks, unattributed_hp = hit_table_checks(dmg, player_rounds)
