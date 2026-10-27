@@ -405,11 +405,19 @@ const KNIFE_HEADER: [&str; 3] = [
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Knife {
-    /// `None`: the file leaves no key bound to knives, so only the mod's own `\` can spawn them,
-    /// and only if `unbound` does not hold it.
+    /// The knife key: of the keys the file leaves bound to knives, the one bound last. `None`: it
+    /// leaves no key bound to knives, so only the mod's own `\` can spawn them, and only if
+    /// `unbound` does not hold it.
     pub bind: Option<KnifeBind>,
     /// Keys the file leaves unbound, in the order they first appear.
     pub unbound: Vec<String>,
+    /// Other keys the file leaves bound to knives, in file order. The app leaves their lines alone.
+    #[serde(default)]
+    pub extra: Vec<KnifeBind>,
+    /// Keys in `unbound` that an `unbindall` in the file unbinds whatever their own lines say (no
+    /// `bind` of theirs follows it): Stop unbinding can't take these out.
+    #[serde(default)]
+    pub held: Vec<String>,
 }
 
 /// What a command in the knife file leaves a key as.
@@ -421,12 +429,29 @@ enum KeyState {
     Other,
 }
 
-/// `bind <key> "<cmds>"` read as a knife bind: every command `subclass_create <knife>`, with a key
-/// and knives that pass [`KnifeBind::check`].
+/// A key name as the knife file may spell it: one character, or a name such as `MOUSE4` in any case.
+fn read_key(key: &str) -> bool {
+    let one = key.chars().count() == 1 && !key.contains(|c: char| c.is_whitespace() || c == '"' || c == ';');
+    one || ((2..=16).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+}
+
+/// `bind <key> "<cmds>"` read as a knife bind: every command `subclass_create <knife>`, each knife
+/// one `subclass_create` spawns, none twice.
 fn knife_bind_of(key: &str, cmds: &str) -> Option<KnifeBind> {
     let knives = cmds.split(';').map(|c| c.trim().strip_prefix("subclass_create ")?.trim().parse().ok()).collect::<Option<Vec<u32>>>()?;
-    let b = KnifeBind { key: key.to_string(), knives };
-    b.check().is_ok().then_some(b)
+    let ok = read_key(key) && !knives.is_empty() && knives.iter().enumerate().all(|(i, k)| KNIVES.contains(k) && !knives[..i].contains(k));
+    ok.then(|| KnifeBind { key: key.to_string(), knives })
+}
+
+/// Whether a knife file command is one the reader understands: `bind <key> <command>`,
+/// `unbind <key>` or `unbindall`. Anything else makes the file "has commands Bot Mode can't read".
+fn readable_command(w: &[&str]) -> bool {
+    match w {
+        [c] => is_cmd(c, "unbindall"),
+        [c, k] => is_cmd(c, "unbind") && read_key(k),
+        [c, k, _] => is_cmd(c, "bind") && read_key(k),
+        _ => false,
+    }
 }
 
 fn is_cmd(word: &str, name: &str) -> bool {
@@ -474,7 +499,7 @@ impl Knife {
     /// the key being left unbound, and the keys the change took out of the set back in it:
     /// bind = B.k, set = (B.s ∪ {A.k}) \ {B.k}.
     fn undo(before: &Knife, after: &Knife) -> Knife {
-        let mut next = Knife { bind: Some(before.bind.clone().unwrap_or_else(KnifeBind::of_mod)), unbound: before.unbound.clone() };
+        let mut next = Knife { bind: Some(before.bind.clone().unwrap_or_else(KnifeBind::of_mod)), unbound: before.unbound.clone(), ..Knife::default() };
         next.add(after.key());
         let key = before.key().to_string();
         next.unbound.retain(|k| !k.eq_ignore_ascii_case(&key));
@@ -483,56 +508,65 @@ impl Knife {
 
     /// The knife key a knife file leaves, read as CS2 runs it: command by command in file order,
     /// each `bind` or `unbind` setting its key and `unbindall` clearing every key (the mod's own
-    /// `\` included), the last one for each key winning. The knife bind is the key the last knife
-    /// bind went to, if nothing after it rebound or unbound that key. A BOM at the start is skipped.
+    /// `\` included), the last command for each key winning. Every key left bound to knives is
+    /// reported: the one bound last is the knife key, the rest are `extra`. A BOM is skipped.
     fn read(text: &str) -> Knife {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let mut keys: Vec<(String, KeyState)> = Vec::new();
-        let mut last_knife: Option<String> = None;
-        for (_, w) in cfg::commands_of(text) {
+        // each key's final state, the index of the command that set it, and of its last bind
+        let mut keys: Vec<(String, KeyState, usize, Option<usize>)> = Vec::new();
+        let mut unbindall: Option<usize> = None;
+        for (i, (_, w)) in cfg::commands_of(text).into_iter().enumerate() {
             if matches!(w.as_slice(), [c] if is_cmd(c, "unbindall")) {
                 for entry in keys.iter_mut() {
-                    entry.1 = KeyState::Unbound;
+                    (entry.1, entry.2) = (KeyState::Unbound, i);
                 }
-                if !keys.iter().any(|(k, _)| k == MOD_KNIFE_KEY) {
-                    keys.push((MOD_KNIFE_KEY.to_string(), KeyState::Unbound));
+                if !keys.iter().any(|(k, ..)| k == MOD_KNIFE_KEY) {
+                    keys.push((MOD_KNIFE_KEY.to_string(), KeyState::Unbound, i, None));
                 }
-                last_knife = None;
+                unbindall = Some(i);
                 continue;
             }
-            let (key, state) = match w.as_slice() {
-                [c, key] if is_cmd(c, "unbind") && check_key(key).is_ok() => (*key, KeyState::Unbound),
-                [c, key, cmds] if is_cmd(c, "bind") => (*key, knife_bind_of(key, cmds).map_or(KeyState::Other, KeyState::Knife)),
-                [c, key, ..] if is_cmd(c, "bind") => (*key, KeyState::Other),
+            let (key, state, bind) = match w.as_slice() {
+                [c, key] if is_cmd(c, "unbind") && read_key(key) => (*key, KeyState::Unbound, false),
+                [c, key, cmds] if is_cmd(c, "bind") => (*key, knife_bind_of(key, cmds).map_or(KeyState::Other, KeyState::Knife), true),
+                [c, key, ..] if is_cmd(c, "bind") => (*key, KeyState::Other, true),
                 _ => continue,
             };
-            if matches!(state, KeyState::Knife(_)) {
-                last_knife = Some(key.to_string());
-            }
-            match keys.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
-                Some(entry) => entry.1 = state,
-                None => keys.push((key.to_string(), state)),
+            match keys.iter_mut().find(|(k, ..)| k.eq_ignore_ascii_case(key)) {
+                Some(entry) => {
+                    (entry.1, entry.2) = (state, i);
+                    if bind {
+                        entry.3 = Some(i);
+                    }
+                }
+                None => keys.push((key.to_string(), state, i, bind.then_some(i))),
             }
         }
-        let bind = last_knife.and_then(|lk| match keys.iter().find(|(k, _)| k.eq_ignore_ascii_case(&lk)) {
-            Some((_, KeyState::Knife(b))) => Some(b.clone()),
-            _ => None,
-        });
-        Knife { bind, unbound: keys.into_iter().filter(|(_, s)| *s == KeyState::Unbound).map(|(k, _)| k).collect() }
-    }
-
-    /// The first command in a knife file that runs commands this reader can't follow (`exec`, or
-    /// an alias), as `file:line: text`; such a file is treated as unreadable.
-    fn unreadable_command(text: &str) -> Option<String> {
-        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let cmds = cfg::numbered_commands(text);
-        let aliases: Vec<&str> = cmds.iter().filter_map(|(_, _, w)| match w.as_slice() {
-            [c, name, ..] if is_cmd(c, "alias") => Some(*name),
+        let mut knives: Vec<(usize, KnifeBind)> = keys.iter().filter_map(|(_, s, at, _)| match s {
+            KeyState::Knife(b) => Some((*at, b.clone())),
             _ => None,
         }).collect();
-        cmds.iter()
-            .find(|(_, _, w)| is_cmd(w[0], "exec") || is_cmd(w[0], "alias") || aliases.iter().any(|a| a.eq_ignore_ascii_case(w[0])))
-            .map(|(n, line, _)| format!("{KNIFE_CFG}:{n}: {}", line.trim()))
+        knives.sort_by_key(|(at, _)| *at);
+        let bind = knives.pop().map(|(_, b)| b);
+        let unbound: Vec<&(String, KeyState, usize, Option<usize>)> = keys.iter().filter(|(_, s, ..)| *s == KeyState::Unbound).collect();
+        let held = match unbindall {
+            Some(u) => unbound.iter().filter(|(.., last_bind)| last_bind.map_or(true, |b| b < u)).map(|(k, ..)| k.clone()).collect(),
+            None => Vec::new(),
+        };
+        Knife { bind, unbound: unbound.iter().map(|(k, ..)| k.clone()).collect(), extra: knives.into_iter().map(|(_, b)| b).collect(), held }
+    }
+
+    /// The first command in a knife file the reader doesn't understand (see [`readable_command`]),
+    /// as `file:line: text`; such a file is treated as unreadable.
+    fn unreadable_command(text: &str) -> Option<String> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        cfg::numbered_commands(text).into_iter().find(|(_, _, w)| !readable_command(w)).map(|(n, line, _)| format!("{KNIFE_CFG}:{n}: {}", line.trim()))
+    }
+
+    /// The knife file's last `unbindall`, as `file:line: text`.
+    fn unbindall_line(text: &str) -> Option<String> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        cfg::numbered_commands(text).into_iter().filter(|(_, _, w)| matches!(w.as_slice(), [c] if is_cmd(c, "unbindall"))).last().map(|(n, line, _)| format!("{KNIFE_CFG}:{n}: {}", line.trim()))
     }
 
     /// The knife file that takes `old` (the file's text, `None` when there is none; it leaves
@@ -547,46 +581,29 @@ impl Knife {
         keys.extend(now.bind.iter().chain(&self.bind).map(|b| b.key.as_str()));
         let targeted: Vec<&str> = keys.into_iter().filter(|k| now.state_of(k) != self.state_of(k)).collect();
         let hit = |k: &str| targeted.iter().any(|t| t.eq_ignore_ascii_case(k));
-        let raw = old.unwrap_or("");
-        let (bom, body) = match raw.strip_prefix('\u{feff}') {
-            Some(rest) => ("\u{feff}", rest),
-            None => ("", raw),
-        };
-        let crlf = body.matches("\r\n").count();
-        let eol = if body.matches('\n').count() - crlf > crlf { "\n" } else { "\r\n" };
-        let final_newline = body.is_empty() || body.ends_with('\n');
-        let mut out: Vec<(String, String)> = KNIFE_HEADER.iter().map(|l| (l.to_string(), eol.to_string())).collect();
+        let mut raw = cfg::RawLines::parse(old.unwrap_or(""), "\r\n");
+        let eol = raw.eol();
         let mut removed = Vec::new();
-        for span in body.split_inclusive('\n') {
-            let line = span.strip_suffix("\r\n").or_else(|| span.strip_suffix('\n')).unwrap_or(span);
-            if KNIFE_HEADER.contains(&line) {
+        let mut kept: Vec<(String, String)> = KNIFE_HEADER.iter().map(|l| (l.to_string(), eol.to_string())).collect();
+        for (line, end) in std::mem::take(&mut raw.lines) {
+            if KNIFE_HEADER.contains(&line.as_str()) {
                 continue;
             }
-            let moves = matches!(cfg::line_words(line).as_deref(), Some([c, k, ..]) if (is_cmd(c, "bind") || is_cmd(c, "unbind")) && hit(k));
+            let moves = matches!(cfg::line_words(&line).as_deref(), Some([c, k, ..]) if (is_cmd(c, "bind") || is_cmd(c, "unbind")) && hit(k));
             if moves {
-                removed.push(line.to_string());
+                removed.push(line);
             } else {
-                out.push((line.to_string(), span[line.len()..].to_string()));
+                kept.push((line, end));
             }
         }
-        let added: Vec<String> = self.unbound.iter().filter(|k| hit(k)).map(|k| format!("unbind {k}")).chain(self.bind.iter().filter(|b| hit(&b.key)).map(KnifeBind::line)).collect();
-        for line in added {
-            if let Some(last) = out.last_mut().filter(|l| l.1.is_empty()) {
-                last.1 = eol.to_string();
-            }
-            out.push((line, eol.to_string()));
+        raw.lines = kept;
+        for k in self.unbound.iter().filter(|k| hit(k)) {
+            raw.push(format!("unbind {k}"));
         }
-        if !final_newline {
-            if let Some(last) = out.last_mut() {
-                last.1.clear();
-            }
+        for b in self.bind.iter().filter(|b| hit(&b.key)) {
+            raw.push(b.line());
         }
-        let mut text = bom.to_string();
-        for (line, end) in out {
-            text.push_str(&line);
-            text.push_str(&end);
-        }
-        (text, removed)
+        (raw.finish(), removed)
     }
 }
 
@@ -636,11 +653,19 @@ pub struct KnifeFile {
     /// Whether the app's own exec line is the server cfg's last command. A write moves it there.
     #[serde(default)]
     pub exec_last: bool,
+    /// Whether the server cfg runs the file. A file it doesn't run has no effect in game, so an
+    /// unreadable one blocks nothing but a knife change, which would run it.
+    #[serde(default)]
+    pub runs: bool,
+    /// The file's last `unbindall`, as `file:line: text`: it unbinds every key, so Stop unbinding
+    /// can't take out the keys it holds ([`Knife::held`]); Replace can.
+    #[serde(default)]
+    pub unbindall: Option<String>,
 }
 
 impl Default for KnifeFile {
     fn default() -> KnifeFile {
-        KnifeFile { path: KNIFE_CFG.into(), status: KnifeFileStatus::None, sha256: None, error: None, overrides: Vec::new(), uncertain: Vec::new(), exec_last: false }
+        KnifeFile { path: KNIFE_CFG.into(), status: KnifeFileStatus::None, sha256: None, error: None, overrides: Vec::new(), uncertain: Vec::new(), exec_last: false, runs: false, unbindall: None }
     }
 }
 
@@ -745,12 +770,10 @@ fn place_exec(text: &str, add: bool, new_file: bool) -> String {
     if (!has && !add) || exec_is_last(text) {
         return text.to_string();
     }
-    let eol = if text.contains("\r\n") || new_file { "\r\n" } else { "\n" };
-    let mut lines: Vec<&str> = text.lines().filter(|l| l.trim() != KNIFE_EXEC_LINE).collect();
-    lines.push(KNIFE_EXEC_LINE);
-    let mut out = lines.join(eol);
-    out.push_str(eol);
-    out
+    let mut raw = cfg::RawLines::parse(text, if new_file { "\r\n" } else { "\n" });
+    raw.lines.retain(|(l, _)| l.trim() != KNIFE_EXEC_LINE);
+    raw.push(KNIFE_EXEC_LINE.to_string());
+    raw.finish()
 }
 
 /// Everything this app sets for the game: the server cfg's convars and the knife file.
@@ -766,6 +789,12 @@ pub struct ServerSettings {
     /// The keys the knife file unbinds, in its order.
     #[serde(default)]
     pub unbound_keys: Vec<String>,
+    /// Other keys the knife file leaves bound to knives ([`Knife::extra`]).
+    #[serde(default)]
+    pub extra_knife_binds: Vec<KnifeBind>,
+    /// Keys an `unbindall` in the knife file holds unbound ([`Knife::held`]).
+    #[serde(default)]
+    pub held_keys: Vec<String>,
     #[serde(default)]
     pub knife_file: KnifeFile,
 }
@@ -810,7 +839,7 @@ fn read_all(layout: &Layout) -> Result<Read, String> {
     };
     let exec = hash.is_some() && cfg::execs(&text, KNIFE_EXEC);
     let kpath = confined_read(&layout.csgo, KNIFE_CFG)?;
-    let mut file = KnifeFile { exec_last: hash.is_some() && exec_is_last(&text), ..KnifeFile::default() };
+    let mut file = KnifeFile { exec_last: hash.is_some() && exec_is_last(&text), runs: exec, ..KnifeFile::default() };
     let (mut knife_text, mut knife_hash) = (None, None);
     match std::fs::read(&kpath) {
         Ok(b) => {
@@ -822,6 +851,7 @@ fn read_all(layout: &Layout) -> Result<Read, String> {
                         file.status = KnifeFileStatus::Unsupported;
                         file.error = Some(at);
                     }
+                    file.unbindall = Knife::unbindall_line(&t);
                     knife_text = Some(t);
                 }
                 Err(e) => {
@@ -850,6 +880,8 @@ fn read_all(layout: &Layout) -> Result<Read, String> {
         bot_nades: cfg::read(&text, "bot_nades").and_then(|v| BotNades::parse(&v)),
         knife_bind: knife.bind.clone(),
         unbound_keys: knife.unbound.clone(),
+        extra_knife_binds: knife.extra.clone(),
+        held_keys: knife.held.clone(),
         knife_file: file,
     };
     Ok(Read { text, hash, knife_text, knife_hash, knife, now })
@@ -929,19 +961,21 @@ pub struct ReadHashes {
     pub knife_sha256: Option<String>,
 }
 
-/// One line of a diff: in the new file only (`added`), or in the old file only.
+/// One line of a diff: in the new file only (`added`), or in the old file only, with its own line
+/// ending (`"\r\n"`, `"\n"`, or `""` for a last line without one), so a change of ending alone shows.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffLine {
     pub added: bool,
     pub line: String,
+    pub ending: String,
 }
 
-/// The lines that differ between two texts, in file order (a longest-common-subsequence diff, so a
-/// moved line shows as taken out and put back).
+/// The lines that differ between two texts, in file order, compared with their endings (a
+/// longest-common-subsequence diff, so a moved line shows as taken out and put back).
 fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
-    let a: Vec<&str> = old.lines().collect();
-    let b: Vec<&str> = new.lines().collect();
+    let a = cfg::RawLines::parse(old, "\n").lines;
+    let b = cfg::RawLines::parse(new, "\n").lines;
     let mut lcs = vec![vec![0u32; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
@@ -949,16 +983,17 @@ fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
         }
     }
     let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    let line = |added: bool, (text, end): &(String, String)| DiffLine { added, line: text.clone(), ending: end.clone() };
     while i < a.len() || j < b.len() {
         if i < a.len() && j < b.len() && a[i] == b[j] {
             i += 1;
             j += 1;
         } else if i < a.len() && (j == b.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
             // a line taken out is listed before the line that replaces it
-            out.push(DiffLine { added: false, line: a[i].to_string() });
+            out.push(line(false, &a[i]));
             i += 1;
         } else {
-            out.push(DiffLine { added: true, line: b[j].to_string() });
+            out.push(line(true, &b[j]));
             j += 1;
         }
     }
@@ -1113,6 +1148,12 @@ fn knife_of(r: &Read, patch: &ServerPatch) -> Result<Option<Knife>, String> {
         return Ok(None);
     }
     knife_known(&r.now.knife_file)?;
+    if let Some(k) = patch.stop_unbinding.iter().find(|k| r.knife.held.iter().any(|h| h.eq_ignore_ascii_case(k))) {
+        return Err(format!(
+            "{}: an unbindall line in the knife file unbinds every key, so Stop unbinding can't take {k} out; replace the file to remove it. Nothing was written.",
+            r.now.knife_file.unbindall.as_deref().unwrap_or(KNIFE_CFG)
+        ));
+    }
     Ok(Some(r.knife.after(patch)))
 }
 
@@ -1259,14 +1300,15 @@ fn repair_source(layout: &Layout) -> Result<(RepairPlan, String), String> {
             Some(h) => Some(h.clone()),
             None => return Err(format!("{}; it can't be read at all, so it can't be replaced either", f.error.as_deref().unwrap_or(KNIFE_CFG))),
         },
-        _ => return Err(format!("{KNIFE_CFG} is neither missing nor unreadable; nothing to repair or replace")),
+        _ if f.unbindall.is_some() => r.knife_hash.clone(),
+        _ => return Err(format!("{KNIFE_CFG} is neither missing nor unreadable and has no unbindall; nothing to repair or replace")),
     };
     for m in changes::list(layout)?.into_iter().filter(|m| m.status == changes::Status::Complete) {
         if let Some(k) = record_of(layout, &m.id)?.and_then(|r| r.knife) {
             return Ok((RepairPlan { from: Some(m.id), lines: k.after_text.lines().map(str::to_string).collect(), replaces }, k.after_text));
         }
     }
-    let (text, _) = Knife { bind: Some(KnifeBind::of_mod()), unbound: Vec::new() }.rewrite(None, &Knife::default());
+    let (text, _) = Knife { bind: Some(KnifeBind::of_mod()), ..Knife::default() }.rewrite(None, &Knife::default());
     Ok((RepairPlan { from: None, lines: text.lines().map(str::to_string).collect(), replaces }, text))
 }
 
@@ -1330,4 +1372,15 @@ pub fn save_app(layout: &Layout, s: &AppSettings) -> Result<(), String> {
     let _lock = OpLock::acquire(layout)?;
     let text = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     write_atomic(&layout.settings_file(), text.as_bytes())
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::line_diff;
+
+    #[test]
+    fn a_change_of_line_ending_alone_shows_in_the_diff() {
+        let d = line_diff("a\r\nb\n", "a\nb\n");
+        assert_eq!(d.iter().map(|l| (l.added, l.line.as_str(), l.ending.as_str())).collect::<Vec<_>>(), [(false, "a", "\r\n"), (true, "a", "\n")]);
+    }
 }

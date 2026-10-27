@@ -52,7 +52,16 @@ export interface Plan {
 /** settings.rs KNIFE_EXEC_LINE: the one line the server cfg gets, which runs the knife file. */
 export const KNIFE_EXEC_LINE = "exec cs2stats_knife // cs2-stats knife drop";
 
-/** Why the knife file can't be used as it is (knife changes and Launch wait); null when it can. */
+/**
+ * Whether the knife file's state blocks Launch: only when the server cfg runs it, or it is
+ * missing (which means the server cfg runs it). One the server cfg doesn't run has no effect in
+ * game. The backend's launch decides the same way (settings.rs check_knife_file).
+ */
+export function knifeBlocksLaunch(f: KnifeFile): boolean {
+  return knifeProblem(f) !== null && (f.runs || f.status === "missing");
+}
+
+/** Why the knife file can't be used as it is (knife changes wait, and Launch when it runs); null when it can. */
 export function knifeProblem(f: KnifeFile): string | null {
   if (f.status === "missing") return `Knife key file missing: the server cfg runs ${f.path}, but it is gone, so which keys Bot Mode keeps unbound is unknown. Repair puts it back.`;
   if (f.status === "unreadable") return `The knife key file can't be read (${f.error ?? f.path}), so which keys Bot Mode keeps unbound is unknown.${f.sha256 ? " Replace puts it back." : ""}`;
@@ -217,7 +226,10 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
     }
     await reload();
   };
-  return { draft, base, changed, plan, invalid, set, discard, apply, unbound: server.unboundKeys, knifeFile: server.knifeFile, kept: Object.keys(stored?.edits ?? {}).length };
+  return {
+    draft, base, changed, plan, invalid, set, discard, apply, unbound: server.unboundKeys, held: server.heldKeys, extraBinds: server.extraKnifeBinds,
+    knifeFile: server.knifeFile, kept: Object.keys(stored?.edits ?? {}).length,
+  };
 }
 export type Pending = ReturnType<typeof usePending>;
 
@@ -230,6 +242,10 @@ export function KnifeFileLines({ path, lines, removed }: { path: string; lines: 
   </>;
 }
 
+const ENDING: Record<string, string> = { "\r\n": "(CRLF)", "\n": "(LF)", "": "(no line ending)" };
+/** A line's ending is shown when the same text is taken out and put back with another ending: the ending is what changes. */
+const endingShown = (p: Preview, d: Preview["serverDiff"][number]) => p.serverDiff.some((o) => o.added !== d.added && o.line === d.line && o.ending !== d.ending);
+
 /** The server cfg's and the knife file's lines from a backend preview, for a confirmation. */
 export function PreviewLines({ preview }: { preview: Preview }) {
   return <>
@@ -238,7 +254,7 @@ export function PreviewLines({ preview }: { preview: Preview }) {
       <dd>
         <span className="mono">cfg/gamemode_competitive_server.cfg</span>, exactly these lines; your other lines stay:
         <ul className="bm-files bm-diff mono selectable">
-          {preview.serverDiff.map((d, i) => <li key={i} data-op={d.added ? "add" : "del"}><span className="bm-diff__op" aria-label={d.added ? "added" : "taken out"}>{d.added ? "+" : "−"}</span>{d.line}</li>)}
+          {preview.serverDiff.map((d, i) => <li key={i} data-op={d.added ? "add" : "del"}><span className="bm-diff__op" aria-label={d.added ? "added" : "taken out"}>{d.added ? "+" : "−"}</span>{d.line}{endingShown(preview, d) && <span className="faint bm-diff__end"> {ENDING[d.ending] ?? d.ending}</span>}</li>)}
         </ul>
         {preview.serverDiff.some((d) => d.added && d.line === KNIFE_EXEC_LINE) && <span className="meta">The exec line goes last, so no line after it in this file wins over the knife key.</span>}
       </dd>
@@ -347,7 +363,8 @@ function SetupRows({ cat, catalog, support, pending, blocker, onRepair }: {
         <div className="bm-row__label"><span id="bm-knife-l">Knife key</span><span className="mono faint">subclass_create</span></div>
         <div className="bm-row__ctl">
           {knifeProblem(pending.knifeFile) ? (
-            <div className="bm-problem" role="alert">
+            <div className={knifeBlocksLaunch(pending.knifeFile) ? "bm-problem" : "bm-note"} role={knifeBlocksLaunch(pending.knifeFile) ? "alert" : "note"}>
+              {!knifeBlocksLaunch(pending.knifeFile) && <span>The server cfg doesn't run <span className="mono">{pending.knifeFile.path}</span>, so it isn't active and has no effect in game. A knife key change would run it, so it needs the file readable first. </span>}
               <span className="selectable">{shown(knifeProblem(pending.knifeFile)!)}</span>
               {(pending.knifeFile.status === "missing" || pending.knifeFile.sha256) && <>
                 <button className="btn btn--sm press" onClick={onRepair} disabled={!!blocker} aria-describedby={blocker ? "bm-repair-why" : undefined}>
@@ -372,7 +389,13 @@ function SetupRows({ cat, catalog, support, pending, blocker, onRepair }: {
             )}
             <KnifePicker labelId="bm-knife-l" knives={cat?.knives.length ? cat.knives : KNIFE_IDS} bind={draft.bind}
               say={knifeSays(pending.knifeFile, pending.base.bind, pending.unbound)} onChange={(b) => set("bind", b)} />
-            <UnboundKeys unbound={pending.unbound} stop={draft.stop} onStop={(k) => set("stop", draft.stop.includes(k) ? draft.stop.filter((x) => x !== k) : [...draft.stop, k])} />
+            {pending.extraBinds.length > 0 && (
+              <p className="meta bm-extra">
+                The knife file also binds {pending.extraBinds.length === 1 ? "this key" : "these keys"} to knives, which spawn them too: {pending.extraBinds.map((b, i) => <span key={b.key}>{i > 0 && ", "}<span className="kbd"><kbd>{b.key}</kbd></span> ({plural(b.knives.length, "knife", "knives")})</span>)}. Bot Mode leaves those lines as they are.
+              </p>
+            )}
+            <UnboundKeys unbound={pending.unbound} held={pending.held} unbindall={pending.knifeFile.unbindall} stop={draft.stop}
+              onStop={(k) => set("stop", draft.stop.includes(k) ? draft.stop.filter((x) => x !== k) : [...draft.stop, k])} onReplace={onRepair} blocker={blocker} />
           </>}
           {!knifeProblem(pending.knifeFile) && <p className="meta bm-knifefile">
             {pending.knifeFile.status === "notRun" ? <>The server cfg no longer runs <span className="mono selectable">{pending.knifeFile.path}</span>, so in game the mod's own {MOD_KNIFE_KEY} applies. Applying a knife key change adds the line back.</>
@@ -480,21 +503,32 @@ function KnifePicker({ labelId, knives, bind, say, onChange }: { labelId: string
  * included. The knife file unbinds them on every map, as CS2 keeps old binds and the mod's cfg
  * binds \ again each map. Only the user takes one out.
  */
-function UnboundKeys({ unbound, stop, onStop }: { unbound: string[]; stop: string[]; onStop: (key: string) => void }) {
+function UnboundKeys({ unbound, held, unbindall, stop, onStop, onReplace, blocker }: {
+  unbound: string[]; held: string[]; unbindall: string | null; stop: string[]; onStop: (key: string) => void; onReplace: (e: MouseEvent) => void; blocker: string | null;
+}) {
   const id = useId();
   if (!unbound.length) return null;
+  const isHeld = (k: string) => held.some((h) => h.toLowerCase() === k.toLowerCase());
   return (
     <section className="bm-unbound" aria-labelledby={id}>
       <h3 className="caps" id={id}>Keys Bot Mode keeps unbound</h3>
       <p className="meta">The knife key used to be on these, so each map starts by unbinding them; otherwise they would keep spawning knives. Stop unbinding a key to use it for something else. On {MOD_KNIFE_KEY}, the mod then binds knives again.</p>
+      {held.length > 0 && (
+        <p className="bm-note" id={`${id}-held`}>
+          <span>An unbindall line in the knife file unbinds every key (<span className="mono selectable">{unbindall}</span>), so Stop unbinding can't free {held.length === 1 ? "the key it holds" : "the keys it holds"}. Bot Mode leaves that line as it is; Replace writes the file without it.</span>
+          <button className="btn btn--sm press" onClick={onReplace} disabled={!!blocker}>Replace…</button>
+        </p>
+      )}
       <ul>
         {unbound.map((k) => {
           const leaving = stop.includes(k);
+          const locked = isHeld(k);
           return (
             <li key={k} data-leaving={leaving}>
               <span className="kbd bm-unbound__key"><kbd>{k}</kbd></span>
-              <span className="meta">{leaving ? "Unbinding stops when you apply" : "Unbound on every map"}</span>
-              <button className="btn btn--ghost btn--sm press" onClick={() => onStop(k)} aria-label={leaving ? `Keep unbinding ${k}` : `Stop unbinding ${k}`}>
+              <span className="meta">{locked ? "Unbound by the unbindall line" : leaving ? "Unbinding stops when you apply" : "Unbound on every map"}</span>
+              <button className="btn btn--ghost btn--sm press" onClick={() => onStop(k)} disabled={locked} aria-describedby={locked ? `${id}-held` : undefined}
+                aria-label={leaving ? `Keep unbinding ${k}` : `Stop unbinding ${k}`}>
                 {leaving ? "Keep unbinding" : "Stop unbinding"}
               </button>
             </li>

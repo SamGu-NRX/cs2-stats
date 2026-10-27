@@ -834,11 +834,11 @@ fn a_hand_edit_of_the_knife_file_is_what_the_app_reads_next() {
     set_server(&layout, knife("l"));
     // the user deletes the app's `unbind \` line, and adds a line of their own
     let path = layout.target(settings::KNIFE_CFG);
-    fs::write(&path, read(&layout, settings::KNIFE_CFG).replace("unbind \\\r\n", "echo mine\r\n")).unwrap();
+    fs::write(&path, read(&layout, settings::KNIFE_CFG).replace("unbind \\\r\n", "bind j \"say hi\"\r\n")).unwrap();
     let now = settings::read_server(&layout).unwrap();
     assert_eq!(now.unbound_keys, ["k"], "the file is the record, so \\ is no longer in the set");
     set_server(&layout, knife("m"));
-    assert_eq!(knife_lines(&layout), ["echo mine", "unbind k", "unbind l", "bind m"], "the user's line kept, and \\ not brought back");
+    assert_eq!(knife_lines(&layout), ["bind j", "unbind k", "unbind l", "bind m"], "the user's line kept, and \\ not brought back");
     assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["k", "l"]);
 }
 
@@ -951,7 +951,7 @@ fn a_rewrite_keeps_the_users_lines_byte_for_byte_unless_the_change_moves_their_k
     set_server(&layout, knife("k"));
     let path = layout.target(settings::KNIFE_CFG);
     let mine = "unbind z // keep this key free for another tool";
-    let alias = "echo \"mine too\"";
+    let alias = "bind j \"say mine too\"";
     fs::write(&path, format!("{}{mine}\r\n{alias}\r\n", read(&layout, settings::KNIFE_CFG))).unwrap();
     assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "z"]);
     // moving the knife to l leaves z's line and the alias exactly as they are, and says so in the preview
@@ -1091,7 +1091,7 @@ fn a_rewrite_keeps_each_lines_ending_a_missing_final_newline_and_a_bom() {
     set_server(&layout, knife("k"));
     let path = layout.target(settings::KNIFE_CFG);
     // written by hand: a BOM, mixed line endings, no final newline, no header
-    fs::write(&path, "\u{feff}unbind \\\r\nbind k \"subclass_create 500\"\necho mine\nunbind z").unwrap();
+    fs::write(&path, "\u{feff}unbind \\\r\nbind k \"subclass_create 500\"\nbind j \"say hi\"\nunbind z").unwrap();
     let now = settings::read_server(&layout).unwrap();
     assert_eq!((now.knife_bind.as_ref().map(|b| b.key.as_str()), now.unbound_keys.clone()), (Some("k"), vec!["\\".to_string(), "z".to_string()]), "the BOM does not hide the first command");
     set_server(&layout, knife("l"));
@@ -1099,11 +1099,105 @@ fn a_rewrite_keeps_each_lines_ending_a_missing_final_newline_and_a_bom() {
     let header = "// Bot Mode's knife key, managed by CS2 Stats. The server cfg runs this file on every map\n// (exec cs2stats_knife). CS2 Stats rewrites it whole when you change the knife key, keeping\n// any line of yours it does not write.\n";
     assert_eq!(
         text,
-        format!("\u{feff}{header}unbind \\\r\necho mine\nunbind z\nunbind k\nbind l \"subclass_create 500\""),
+        format!("\u{feff}{header}unbind \\\r\nbind j \"say hi\"\nunbind z\nunbind k\nbind l \"subclass_create 500\""),
         "the BOM first, each kept line's own ending, new lines with the most common one (\\n), and still no final newline"
     );
     let now = settings::read_server(&layout).unwrap();
     assert_eq!((now.knife_bind.map(|b| b.key), now.unbound_keys), (Some("l".to_string()), vec!["\\".to_string(), "z".to_string(), "k".to_string()]));
+}
+
+#[test]
+fn a_server_cfg_write_keeps_each_lines_ending_and_a_missing_final_newline() {
+    use settings::{BotAim, ServerPatch, KNIFE_EXEC_LINE};
+    let s = Scratch::new("server-raw-bytes");
+    let layout = fake_game(&s);
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    write(&layout.target(cfg), b"// mine\r\nbot_aim head\nbot_nades more");
+    let patch = ServerPatch { bot_aim: Some(BotAim::Body), knife_bind: Some(settings::KnifeBind { key: "k".into(), knives: vec![500] }), ..Default::default() };
+    let preview = settings::preview_server(&layout, &patch).unwrap();
+    // the last line gains an ending only because a line now follows it; the diff shows that too
+    assert_eq!(diff(&preview), ["-bot_aim head", "-bot_nades more", "+bot_aim body", "+bot_nades more", &format!("+{KNIFE_EXEC_LINE}")]);
+    assert_eq!(preview.server_diff.iter().map(|d| d.ending.as_str()).collect::<Vec<_>>(), ["\n", "", "\n", "\n", ""]);
+    settings::set_server_checked(&layout, &CLOSED, patch, settings::read_server(&layout).unwrap(), Some(&preview.read)).unwrap();
+    assert_eq!(read(&layout, cfg), format!("// mine\r\nbot_aim body\nbot_nades more\n{KNIFE_EXEC_LINE}"), "each line's own ending, new lines with the most common one, still no final newline");
+}
+
+#[test]
+fn a_knife_file_the_server_cfg_does_not_run_blocks_nothing_but_a_knife_change() {
+    use settings::KnifeFileStatus;
+    let s = Scratch::new("knife-not-run");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    // a knife file with a command Bot Mode can't read, which the server cfg doesn't run
+    write(&layout.target(settings::KNIFE_CFG), b"exec more_keys\r\n");
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_file.status, now.knife_file.runs), (KnifeFileStatus::Unsupported, false));
+    let lock = OpLock::acquire(&layout).unwrap();
+    launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    drop(lock);
+    // a knife change would run it, so it still needs the file readable
+    let err = settings::set_server(&layout, &CLOSED, knife("k"), now).unwrap_err();
+    assert!(err.contains("has commands Bot Mode can't read"), "{err}");
+}
+
+#[test]
+fn only_bind_unbind_and_unbindall_make_a_knife_file_readable() {
+    use settings::KnifeFileStatus;
+    let s = Scratch::new("knife-allowlist");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    // an alias defined elsewhere, called here; and an echo
+    for (line, at) in [("go", "cfg/cs2stats_knife.cfg:6: go"), ("echo hi", "cfg/cs2stats_knife.cfg:6: echo hi"), ("bind k", "cfg/cs2stats_knife.cfg:6: bind k")] {
+        fs::write(&path, format!("{written}{line}\r\n")).unwrap();
+        let f = settings::read_server(&layout).unwrap().knife_file;
+        assert_eq!((f.status, f.error.as_deref()), (KnifeFileStatus::Unsupported, Some(at)), "{line}");
+    }
+    // comments, blank lines and a user's own binds are fine
+    fs::write(&path, format!("{written}\r\n// mine\r\nbind j \"say hi\"\r\nunbind MOUSE4\r\nunbindall\r\n")).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().knife_file.status, KnifeFileStatus::Ok);
+}
+
+#[test]
+fn an_unbindall_in_the_knife_file_holds_its_keys_and_stop_unbinding_says_so() {
+    use settings::ServerPatch;
+    let s = Scratch::new("knife-held");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    fs::write(&path, format!("{written}unbindall\r\nbind m \"subclass_create 500\"\r\nbind q \"say q\"\r\nunbind q\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!(now.knife_bind.as_ref().map(|b| b.key.as_str()), Some("m"));
+    assert_eq!(now.unbound_keys, ["\\", "k", "q"]);
+    assert_eq!(now.held_keys, ["\\", "k"], "q is bound after the unbindall, so its own unbind is what holds it");
+    assert_eq!(now.knife_file.unbindall.as_deref(), Some("cfg/cs2stats_knife.cfg:6: unbindall"));
+    let err = settings::set_server(&layout, &CLOSED, ServerPatch { stop_unbinding: vec!["k".into()], ..Default::default() }, now.clone()).unwrap_err();
+    assert!(err.contains("an unbindall line in the knife file unbinds every key, so Stop unbinding can't take k out"), "{err}");
+    // q is not held: Stop unbinding it works, and the unbindall line stays
+    set_server(&layout, ServerPatch { stop_unbinding: vec!["q".into()], ..Default::default() });
+    assert!(read(&layout, settings::KNIFE_CFG).contains("\r\nunbindall\r\n"));
+    // Replace is offered for it
+    assert!(settings::knife_repair_plan(&layout).unwrap().replaces.is_some());
+}
+
+#[test]
+fn every_key_the_knife_file_leaves_bound_to_knives_is_reported() {
+    let s = Scratch::new("knife-many-binds");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    // k, then l, then l unbound: k still spawns knives
+    fs::write(&path, format!("{written}bind l \"subclass_create 503\"\r\nunbind l\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind.map(|b| b.key), now.extra_knife_binds, now.unbound_keys), (Some("k".to_string()), vec![], vec!["\\".to_string(), "l".to_string()]));
+    // k and l both left bound: l, bound last, is the knife key, and k is reported too
+    fs::write(&path, format!("{written}bind l \"subclass_create 503\"\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!(now.knife_bind.map(|b| b.key), Some("l".to_string()));
+    assert_eq!(now.extra_knife_binds.iter().map(|b| b.key.as_str()).collect::<Vec<_>>(), ["k"]);
 }
 
 #[test]

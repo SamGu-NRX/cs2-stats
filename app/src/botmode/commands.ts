@@ -285,6 +285,10 @@ export interface KnifeFile {
   uncertain: string[];
   /** whether the app's exec line is the server cfg's last command; any write moves it there */
   execLast: boolean;
+  /** whether the server cfg runs the file; one it doesn't run has no effect in game, so an unreadable one blocks only a knife change */
+  runs: boolean;
+  /** the file's last unbindall, as "file:line: text": Stop unbinding can't take out the keys it holds (heldKeys); Replace can */
+  unbindall: string | null;
 }
 
 /** The files a preview was worked out from; a write that carries them is refused if either changed. */
@@ -293,7 +297,7 @@ export interface ReadHashes { serverSha256: string | null; knifeSha256: string |
 /** What a settings write does to both files, worked out by the code that writes them (settings.rs Preview). */
 export interface Preview {
   /** the server cfg's lines that change, as written: taken out (added false) or put in */
-  serverDiff: { added: boolean; line: string }[];
+  serverDiff: { added: boolean; line: string; ending: string }[];
   /** the knife file as written, all but its header; null when it is not written */
   knifeLines: string[] | null;
   /** knife file lines it takes out */
@@ -312,6 +316,10 @@ export interface ServerSettings {
   knifeBind: KnifeBind | null;
   /** the keys the knife file unbinds on every map: each key the knife bind has left (settings.rs Knife) */
   unboundKeys: string[];
+  /** other keys the knife file leaves bound to knives */
+  extraKnifeBinds: KnifeBind[];
+  /** keys an unbindall in the knife file holds unbound */
+  heldKeys: string[];
   knifeFile: KnifeFile;
 }
 

@@ -19,7 +19,7 @@ import { DownloadIcon, PlayIcon, RefreshIcon } from "../icons/ui";
 import { plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { ModCommands } from "./botmode/ModCommands";
-import { KNIFE_EXEC_LINE, knifeProblem, PlanList, PreviewLines, Setup, usePending, useServerPreview, type Pending } from "./botmode/Setup";
+import { KNIFE_EXEC_LINE, knifeBlocksLaunch, knifeProblem, PlanList, PreviewLines, Setup, usePending, useServerPreview, type Pending } from "./botmode/Setup";
 import { ActionDialog, clock, day, FileList, fromKeyboard, stamp, useShown } from "./botmode/shared";
 
 // ---------------------------------------------------------------- data
@@ -311,7 +311,7 @@ function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSetting
   const p = usePending(api, status, server ?? EMPTY_SERVER, reload, server !== null);
   return server ? { pending: p, keptUnread: false } : { pending: null, keptUnread: p.kept > 0 };
 }
-const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false } };
+const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false, runs: false, unbindall: null }, extraKnifeBinds: [], heldKeys: [] };
 
 // ---------------------------------------------------------------- hero
 
@@ -334,7 +334,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, cfg
   // a missing or unreadable knife file, or a server cfg that can't be read, leaves which keys stay
   // unbound unknown: a key the knife left would spawn knives again, so Launch waits, as the
   // backend's launch does (settings.rs check_knife_file)
-  const knife = pending && knifeProblem(pending.knifeFile);
+  const knife = pending && knifeBlocksLaunch(pending.knifeFile) ? knifeProblem(pending.knifeFile) : null;
   const launchWhy = state.kind === "missing" ? "Install the mod first." : cfgUnread ?? (knife ? `${knife} Launch waits until then.` : pending?.invalid ?? blocker);
   const vac = vacState(status, running, supervised);
   // the interrupted change has its own sentence and button above; its warning would repeat it
@@ -716,7 +716,7 @@ function RepairDialog({ api, instant, onClose, onDone }: { api: BotModeApi; inst
         </dd>
         {replace && <>
           <dt>Keeps</dt>
-          <dd>The unreadable file, in this change's backup. Undoing the change in History puts it back as it was.</dd>
+          <dd>The file as it is now, in this change's backup. Undoing the change in History puts it back as it was.</dd>
         </>}
         <dt>Server cfg</dt>
         <dd>Unchanged: its <span className="mono">{KNIFE_EXEC_LINE.split(" //")[0]}</span> line already runs the file.</dd>

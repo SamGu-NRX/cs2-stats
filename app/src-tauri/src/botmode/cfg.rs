@@ -140,12 +140,11 @@ pub fn read(text: &str, name: &str) -> Option<String> {
 
 /// Sets each `(name, value)` in `text`. See the module notes for the rules.
 pub fn merge(text: &str, values: &[(&str, String)]) -> String {
-    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut raw = RawLines::parse(text, "\n");
     for (name, value) in values {
         let mut last_simple = None;
         let mut last_any = None;
-        for (i, line) in lines.iter_mut().enumerate() {
+        for (i, (line, _)) in raw.lines.iter_mut().enumerate() {
             if let Some((n, _)) = simple(line) {
                 if n.eq_ignore_ascii_case(name) {
                     let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
@@ -162,12 +161,70 @@ pub fn merge(text: &str, values: &[(&str, String)]) -> String {
             }
         }
         if last_simple.is_none() || last_simple != last_any {
-            lines.push(format!("{name} {value}"));
+            raw.push(format!("{name} {value}"));
         }
     }
-    let mut out = lines.join(eol);
-    out.push_str(eol);
-    out
+    raw.finish()
+}
+
+/// A text as its raw lines, so a rewrite keeps the bytes it doesn't change: a BOM at the start,
+/// each line's own ending (`"\r\n"`, `"\n"`, or `""` for a last line without one), and whether
+/// the text ends with a newline. Lines added take the text's most common ending.
+pub struct RawLines {
+    bom: bool,
+    /// Each line's content and its ending.
+    pub lines: Vec<(String, String)>,
+    eol: &'static str,
+    final_newline: bool,
+}
+
+impl RawLines {
+    /// `default_eol` is used when the text has no line ending, or as many `\r\n` as bare `\n`.
+    pub fn parse(text: &str, default_eol: &'static str) -> RawLines {
+        let (bom, body) = match text.strip_prefix('\u{feff}') {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
+        let crlf = body.matches("\r\n").count();
+        let lf = body.matches('\n').count() - crlf;
+        let eol = if lf > crlf { "\n" } else if crlf > lf { "\r\n" } else { default_eol };
+        let lines = body
+            .split_inclusive('\n')
+            .map(|span| {
+                let line = span.strip_suffix("\r\n").or_else(|| span.strip_suffix('\n')).unwrap_or(span);
+                (line.to_string(), span[line.len()..].to_string())
+            })
+            .collect();
+        RawLines { bom, lines, eol, final_newline: body.is_empty() || body.ends_with('\n') }
+    }
+
+    /// The ending new lines take.
+    pub fn eol(&self) -> &'static str {
+        self.eol
+    }
+
+    /// Adds a line at the end; a last line without an ending gets one first.
+    pub fn push(&mut self, line: String) {
+        if let Some(last) = self.lines.last_mut().filter(|l| l.1.is_empty()) {
+            last.1 = self.eol.to_string();
+        }
+        self.lines.push((line, self.eol.to_string()));
+    }
+
+    /// The text: the BOM, then each line and its ending; still without a final newline if it had none.
+    pub fn finish(mut self) -> String {
+        if !self.final_newline {
+            if let Some(last) = self.lines.last_mut() {
+                last.1.clear();
+            }
+        }
+        let mut out = if self.bom { "\u{feff}".to_string() } else { String::new() };
+        for (line, end) in self.lines {
+            out.push_str(&line);
+            out.push_str(&end);
+        }
+        out
+    }
 }
 
 /// Adds the lines of `incoming` that set a convar in `known` and that `user` does not set,
@@ -218,6 +275,16 @@ mod tests {
 
     /// The user's real `gamemode_competitive_server.cfg`, shortened.
     const USER: &str = "// Local settings, run by CS2 on every competitive map load.\r\n\r\n// BotRandomizer: random finishes on dropped knives\r\nbr_dropped_knife_skins 1\r\nbr_dropped_knife_premium 0 // favor expensive finishes\r\nmp_maxrounds 24\r\nbr_player_music_kit 33\r\n";
+
+    #[test]
+    fn merge_keeps_each_lines_ending_a_missing_final_newline_and_a_bom() {
+        // mixed endings, a BOM, no final newline: only the changed line's text changes
+        let text = "\u{feff}// mine\r\nbot_aim head\nbot_nades more";
+        assert_eq!(merge(text, &[("bot_aim", "body".into())]), "\u{feff}// mine\r\nbot_aim body\nbot_nades more");
+        // a new line takes the most common ending (here \n), and the file still ends without one
+        assert_eq!(merge(text, &[("br_player_music_kit", "5".into())]), "\u{feff}// mine\r\nbot_aim head\nbot_nades more\nbr_player_music_kit 5");
+        assert_eq!(merge("a 1\r\nb 2\r\n", &[("c", "3".into())]), "a 1\r\nb 2\r\nc 3\r\n");
+    }
 
     #[test]
     fn exec_of_a_file_is_found_in_any_case_with_or_without_quotes_and_suffix() {

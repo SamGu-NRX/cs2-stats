@@ -123,7 +123,7 @@ interface State {
 }
 
 /** What the knife file leaves the keys as (settings.rs Knife). */
-export interface Knife { bind: KnifeBind | null; unbound: string[] }
+export interface Knife { bind: KnifeBind | null; unbound: string[]; extra?: KnifeBind[]; held?: string[] }
 interface SettingsRecord {
   scalars: { name: string; before: string | null; after: string }[];
   knife?: { before: Knife; after: Knife; afterSha256: string; afterText: string };
@@ -148,26 +148,35 @@ type KeyState = "u" | "o" | KnifeBind;
  * winning and unbindall clearing every key (the mod's \ included); keys compared in any case.
  */
 export function readKnife(lines: string[]): Knife {
-  const keys: [string, KeyState][] = [];
-  let last: string | null = null;
-  const set = (key: string, st: KeyState) => { const e = keys.find(([k]) => sameKey(k, key)); if (e) e[1] = st; else keys.push([key, st]); };
-  for (const l of lines) {
+  // each key's final state, the index of the command that set it, and of its last bind
+  const keys: { key: string; st: KeyState; at: number; bound: number | null }[] = [];
+  let unbindall: number | null = null;
+  const set = (key: string, st: KeyState, at: number, bind: boolean) => {
+    const e = keys.find((x) => sameKey(x.key, key));
+    if (e) { e.st = st; e.at = at; if (bind) e.bound = at; } else keys.push({ key, st, at, bound: bind ? at : null });
+  };
+  lines.forEach((l, i) => {
     const w = wordsOf(l);
     const c = w[0]?.toLowerCase();
     if (c === "unbindall" && w.length === 1) {
-      for (const e of keys) e[1] = "u";
-      if (!keys.some(([k]) => k === "\\")) keys.push(["\\", "u"]);
-      last = null;
-    } else if (c === "unbind" && w.length === 2) set(w[1], "u");
+      for (const e of keys) { e.st = "u"; e.at = i; }
+      if (!keys.some((e) => e.key === "\\")) keys.push({ key: "\\", st: "u", at: i, bound: null });
+      unbindall = i;
+    } else if (c === "unbind" && w.length === 2) set(w[1], "u", i, false);
     else if (c === "bind" && w.length >= 3) {
       const knives = w.length === 3 ? w[2].split(";").map((x) => /^\s*subclass_create (\d+)\s*$/.exec(x)) : [null];
-      const st: KeyState = knives.every(Boolean) ? { key: w[1], knives: knives.map((m) => Number(m![1])) } : "o";
-      if (typeof st === "object") last = w[1];
-      set(w[1], st);
+      set(w[1], knives.every(Boolean) ? { key: w[1], knives: knives.map((m) => Number(m![1])) } : "o", i, true);
     }
-  }
-  const lk = last ? keys.find(([k]) => sameKey(k, last!)) : undefined;
-  return { bind: lk && typeof lk[1] === "object" ? lk[1] : null, unbound: keys.filter(([, st]) => st === "u").map(([k]) => k) };
+  });
+  const knifeKeys = keys.filter((e) => typeof e.st === "object").sort((a, b) => a.at - b.at).map((e) => e.st as KnifeBind);
+  const unbound = keys.filter((e) => e.st === "u");
+  const u = unbindall as number | null;
+  return {
+    bind: knifeKeys.pop() ?? null,
+    unbound: unbound.map((e) => e.key),
+    extra: knifeKeys,
+    held: u === null ? [] : unbound.filter((e) => e.bound === null || e.bound < u).map((e) => e.key),
+  };
 }
 const stateOf = (k: Knife, key: string) => (k.bind && sameKey(k.bind.key, key) ? JSON.stringify(k.bind) : k.unbound.some((u) => sameKey(u, key)) ? "u" : null);
 /**
@@ -189,8 +198,14 @@ function rewriteKnife(old: string[], now: Knife, next: Knife) {
 /** The knife file's text: the header, then its lines. */
 const knifeText = (lines: string[]) => [...KNIFE_HEADER, ...lines].map((l) => `${l}\r\n`).join("");
 /** settings.rs Knife::unreadable_command: an exec or an alias in the knife file. */
+/** settings.rs readable_command: only bind <key> <command>, unbind <key> and unbindall; comments and blank lines aside. */
 const unsupported = (lines: string[]) => {
-  const i = lines.findIndex((l) => /^(exec|alias)$/i.test(wordsOf(l)[0] ?? ""));
+  const ok = (w: string[]) => (w.length === 1 && /^unbindall$/i.test(w[0])) || (w.length === 2 && /^unbind$/i.test(w[0])) || (w.length === 3 && /^bind$/i.test(w[0]));
+  const i = lines.findIndex((l) => { const w = wordsOf(l); return w.length > 0 && !ok(w); });
+  return i < 0 ? null : `${KNIFE_CFG}:${i + KNIFE_HEADER.length + 1}: ${lines[i].trim()}`;
+};
+const unbindallLine = (lines: string[]) => {
+  const i = lines.map((l) => /^unbindall$/i.test(wordsOf(l).join(" "))).lastIndexOf(true);
   return i < 0 ? null : `${KNIFE_CFG}:${i + KNIFE_HEADER.length + 1}: ${lines[i].trim()}`;
 };
 const UNREADABLE_SHA = "9f2c6c1d0e4b8a7f3e5d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f";
@@ -316,10 +331,13 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     ...st.server,
     knifeBind: knifeNow().bind,
     unboundKeys: knifeNow().unbound,
+    extraKnifeBinds: knifeNow().extra ?? [],
+    heldKeys: knifeNow().held ?? [],
     knifeFile: {
       path: KNIFE_CFG, status: knifeStatus(), sha256: knifeSha(),
       error: st.knifeUnreadable ? `${KNIFE_CFG}: stream did not contain valid UTF-8` : st.knifeFile ? unsupported(st.knifeFile) : null,
       overrides: knifeStatus() === "ok" ? st.overrides : [], uncertain: knifeStatus() === "ok" ? st.uncertain : [], execLast: st.exec && st.execLast,
+      runs: st.exec, unbindall: st.knifeFile ? unbindallLine(st.knifeFile) : null,
     },
   });
   // the five convars, as settings.rs scalar_in reads them
@@ -349,8 +367,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       const before = scalar(name);
       if ((before ?? SCALAR_DEFAULTS[name]) !== after) rec.scalars.push({ name, before, after });
       if (before !== after) {
-        if (before !== null) serverDiff.push({ added: false, line: `${name} ${before}` });
-        serverDiff.push({ added: true, line: `${name} ${after}` });
+        if (before !== null) serverDiff.push({ added: false, line: `${name} ${before}`, ending: "\r\n" });
+        serverDiff.push({ added: true, line: `${name} ${after}`, ending: "\r\n" });
       }
     }
     let file = st.knifeFile;
@@ -366,8 +384,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     }
     const execMoves = (st.exec && !st.execLast) || (!!rec.knife && !st.exec);
     if (execMoves) {
-      if (st.exec) serverDiff.unshift({ added: false, line: KNIFE_EXEC_LINE });
-      serverDiff.push({ added: true, line: KNIFE_EXEC_LINE });
+      if (st.exec) serverDiff.unshift({ added: false, line: KNIFE_EXEC_LINE, ending: "\r\n" });
+      serverDiff.push({ added: true, line: KNIFE_EXEC_LINE, ending: "\r\n" });
     }
     const preview: Preview = { serverDiff, knifeLines: rec.knife ? file : null, knifeRemoved, read: { serverSha256: serverSha(), knifeSha256: knifeSha() } };
     return { rec, file, preview, execMoves };
@@ -397,6 +415,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     if (knifeStatus() === "unreadable") throw `${KNIFE_CFG}: stream did not contain valid UTF-8; replace it first. Nothing was written.`;
     if (knifeStatus() === "unsupported") throw `${KNIFE_CFG} has commands Bot Mode can't read (${unsupported(st.knifeFile!)}); replace it first. Nothing was written.`;
     const was = knifeNow();
+    const held = patch.stopUnbinding?.find((k) => was.held?.some((h) => sameKey(h, k)));
+    if (held) throw `${unbindallLine(st.knifeFile!)}: an unbindall line in the knife file unbinds every key, so Stop unbinding can't take ${held} out; replace the file to remove it. Nothing was written.`;
     let unbound = [...was.unbound];
     if (bind && !sameKey(keyOf(was), bind.key)) unbound = withKey(unbound, keyOf(was));
     const next: Knife = { bind: bind ?? was.bind, unbound };
@@ -433,7 +453,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
   /** settings.rs repair_source */
   const repairPlan = (): RepairPlan => {
     const status = knifeStatus();
-    if (status !== "missing" && status !== "unreadable" && status !== "unsupported") throw `${KNIFE_CFG} is neither missing nor unreadable; nothing to repair`;
+    if (status !== "missing" && status !== "unreadable" && status !== "unsupported" && !(st.knifeFile && unbindallLine(st.knifeFile))) throw `${KNIFE_CFG} is neither missing nor unreadable; nothing to repair`;
     const replaces = status === "missing" ? null : knifeSha();
     for (const b of st.status.backups) {
       const k = b.status === "complete" ? st.records[b.id]?.knife : undefined;

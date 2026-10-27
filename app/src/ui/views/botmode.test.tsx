@@ -292,7 +292,7 @@ describe("settings", () => {
     expect(calls.filter(([c]) => writes().includes(c))).toEqual([
       ["botmode_set_server_cfg", {
         patch: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: true, musicKit: 4 }, botAim: "head", botNades: "max", knifeBind: { key: "kp_end", knives: [507, 515] } },
-        seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false } },
+        seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], extraKnifeBinds: [], heldKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false, runs: false, unbindall: null } },
         read: { serverSha256: expect.any(String), knifeSha256: null },
       }],
       ["botmode_set_difficulty", { level: "high", seen: { sha256: sha256Before } }],
@@ -327,7 +327,7 @@ describe("settings", () => {
     await click(button("Apply"));
     expect(sent("botmode_set_server_cfg")).toEqual({
       patch: { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 5 } },
-      seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 5 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false } },
+      seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 5 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], extraKnifeBinds: [], heldKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], uncertain: [], execLast: false, runs: false, unbindall: null } },
       read: { serverSha256: expect.any(String), knifeSha256: null },
     });
     expect(backend.state.status.cosmetics.droppedKnifeSkins).toBe(false);
@@ -958,7 +958,7 @@ describe("inside the knife file (re-review at 4fdf48a)", () => {
     await click(button("Replace…"));
     expect(text(".bm-dialog__title")).toBe("Replace the knife key file?");
     expect(text("dialog .bm-facts")).toContain(`as change ${from} wrote it`);
-    expect(text("dialog .bm-facts")).toContain("The unreadable file, in this change's backup. Undoing the change in History puts it back as it was.");
+    expect(text("dialog .bm-facts")).toContain("The file as it is now, in this change's backup. Undoing the change in History puts it back as it was.");
     await click(button("Replace"));
     expect(sent("botmode_knife_repair")).toMatchObject({ seen: { from, replaces: expect.any(String) } });
     expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
@@ -1050,6 +1050,69 @@ describe("fidelity (re-review at 2c1d79b)", () => {
     expect(dialog()).toBeNull();
     expect($<HTMLInputElement>(".bm-key")!.value).toBe("K");
     expect(unboundShown()).toEqual(["\\"]);
+  });
+});
+
+describe("the sixth review (at 500957e)", () => {
+  it("a line whose ending alone changes shows its ending in the diff", async () => {
+    // fails if the diff drops line endings, so an ending-only change would look like no change
+    await render("installed");
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      if (cmd === "botmode_server_preview") {
+        return Promise.resolve({ serverDiff: [{ added: false, line: "bot_nades more", ending: "" }, { added: true, line: "bot_nades more", ending: "\r\n" }, { added: true, line: "bot_aim head", ending: "\r\n" }], knifeLines: null, knifeRemoved: [], read: { serverSha256: "x", knifeSha256: null } });
+      }
+      return backend(cmd, args as Record<string, unknown>);
+    });
+    await click(button("Head"));
+    await click(button("Apply changes…"));
+    expect(Array.from(dialog()!.querySelectorAll(".bm-diff li"), (li) => li.textContent)).toEqual(["\u2212bot_nades more (no line ending)", "+bot_nades more (CRLF)", "+bot_aim head"]);
+  });
+
+  it("a knife file the server cfg doesn't run blocks nothing but a knife change, as the backend decides", async () => {
+    // fails if the page blocks Launch on a file that has no effect in game while the backend allows it
+    await render("installed");
+    backend.state.knifeFile = ["exec more_keys"];
+    await click(button(/Check again/));
+    expect(button(/Launch Bot Mode/).disabled).toBe(false);
+    expect(text(".bm-setup .bm-note[role=note]")).toMatch(/^The server cfg doesn't run cfg\/cs2stats_knife\.cfg, so it isn't active and has no effect in game\. A knife key change would run it, so it needs the file readable first\. The knife key file has commands Bot Mode can't read \(cfg\/cs2stats_knife\.cfg:4: exec more_keys\)/);
+    expect(button("Replace…")).toBeTruthy();
+  });
+
+  it("any command but bind, unbind and unbindall makes the knife file unreadable, an alias call included", async () => {
+    // fails if only exec and alias definitions count, so a call to an alias defined elsewhere reads as known keys
+    await render("installed");
+    await applyKey("k");
+    backend.state.knifeFile = [...backend.state.knifeFile!, "go"];
+    await click(button(/Check again/));
+    expect(text(".bm-setup [role=alert]")).toMatch(/^The knife key file has commands Bot Mode can't read \(cfg\/cs2stats_knife\.cfg:6: go\)/);
+  });
+
+  it("an unbindall in the knife file locks Stop unbinding for the keys it holds, says why, and offers Replace", async () => {
+    // fails if Stop unbinding is offered for a key the unbindall would unbind anyway
+    await render("installed");
+    await applyKey("k");
+    backend.state.knifeFile = [...backend.state.knifeFile!, "unbindall", 'bind m "subclass_create 500"'];
+    await click(button(/Check again/));
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>(".bm-unbound li button"), (b) => [b.getAttribute("aria-label"), b.disabled])).toEqual([["Stop unbinding " + String.fromCharCode(92), true], ["Stop unbinding k", true]]);
+    expect(text(".bm-unbound .bm-note")).toBe("An unbindall line in the knife file unbinds every key (cfg/cs2stats_knife.cfg:6: unbindall), so Stop unbinding can't free the keys it holds. Bot Mode leaves that line as it is; Replace writes the file without it.Replace…");
+    await click(button("Replace…"));
+    expect(text(".bm-dialog__title")).toBe("Replace the knife key file?");
+  });
+
+  it("every key the knife file leaves bound to knives is on the card, and k still counts after l is unbound", async () => {
+    // fails if several knife binds collapse into the last one, so a key that still spawns knives goes unmentioned
+    await render("installed");
+    await applyKey("k");
+    const lines = backend.state.knifeFile!;
+    backend.state.knifeFile = [...lines, 'bind l "subclass_create 503"', "unbind l"];
+    await click(button(/Check again/));
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
+    expect(text(".bm-knifepick")).not.toContain("No key spawns knives");
+    backend.state.knifeFile = [...lines, 'bind l "subclass_create 503"'];
+    await click(button(/Check again/));
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("l");
+    expect(text(".bm-extra")).toMatch(/^The knife file also binds this key to knives, which spawn them too: k \(20 knives\)\. Bot Mode leaves those lines as they are\.$/);
   });
 });
 
