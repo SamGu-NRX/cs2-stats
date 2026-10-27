@@ -7,8 +7,13 @@
 // which plays one demo per launch. This one plays the job's demos in turn. The API is HLAE's
 // mirv-script (advancedfx misc/mirv-script/src/types/mirv.d.ts).
 //
-// clips/plan.ts replaces the job placeholder below with the job as JSON. Every line it logs starts
-// with "[cs2stats]", so CS2's console.log says what happened to each clip.
+// The app's host (src-tauri/src/clips/job.rs) replaces the job placeholder below with the job as
+// JSON. Every line it logs starts with "[cs2stats]", so CS2's console.log says what happened to each clip.
+//
+// demo_ui_mode hides the demo playback bar. The director sets it through HLAE's cvar API
+// (AdvancedfxCVar, HLAE 2.187.4 and later), keeps the value it found, and puts that back before CS2
+// quits, so the user's setting is never left changed; whether CS2 saves it to the config at all is
+// unconfirmed. Without that API the director leaves it alone and the bar shows in the clips.
 //
 // Untested in a live game: nobody has run this inside CS2 yet (design/clips.md).
 {
@@ -28,6 +33,31 @@
 	const setState = (s) => { state = s; stateFrame = frame; };
 	const tickNow = () => { const t = mirv.getDemoTick(); return typeof t === 'number' ? t : -1; };
 	const currentDemo = () => JOB.demos[demo];
+
+	// demo_ui_mode as it was before the director changed it: { cvar, value }, or null when untouched
+	let uiMode = null;
+	function hideDemoUi() {
+		try {
+			if (typeof AdvancedfxCVar === 'undefined') { log('WARNING HLAE has no cvar API; the demo bar stays'); return; }
+			const index = AdvancedfxCVar.getIndexFromName('demo_ui_mode');
+			if (index === undefined) { log('WARNING no demo_ui_mode; the demo bar stays'); return; }
+			const cvar = new AdvancedfxCVar(index);
+			uiMode = { cvar, value: cvar.value };
+			cvar.value = 0;
+		} catch (err) {
+			log('WARNING demo_ui_mode left as it was: ' + err);
+		}
+	}
+	function restoreDemoUi() {
+		if (uiMode === null) return;
+		try {
+			uiMode.cvar.value = uiMode.value;
+			log('demo_ui_mode restored to ' + uiMode.value);
+		} catch (err) {
+			log('ERROR demo_ui_mode could not be restored to ' + uiMode.value + ': ' + err);
+		}
+		uiMode = null;
+	}
 	const currentClip = () => (demo < JOB.demos.length ? JOB.demos[demo].clips[clip] : undefined);
 
 	// The controller entity of the player with this SteamID64; null until the demo has spawned it.
@@ -107,6 +137,7 @@
 				// give the main menu a moment, then set up and load the first demo
 				if (frame - stateFrame < JOB.bootFrames) return;
 				for (const cmd of JOB.setup) mirv.exec(cmd);
+				hideDemoUi();
 				loadDemo();
 				return;
 
@@ -179,6 +210,7 @@
 			case S.FINISH:
 				// let the encoder finish writing, then close the game
 				if (frame - stateFrame >= JOB.finishFrames) {
+					restoreDemoUi();
 					log('ALL DONE');
 					setState(S.DONE);
 					if (JOB.quitWhenDone) mirv.exec('quit');

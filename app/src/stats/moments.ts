@@ -56,19 +56,24 @@ export interface Moment {
   /** the clutch won in the round: enemies left when it began */
   clutch: { opponents: number } | null;
   /**
-   * The player's swing credits on their own kills in the round, a win-probability fraction; null when
-   * the round was not valued (no win probability). It leaves out the round-end remainder and the
-   * player's own death, so it says what the clipped kills were worth.
+   * Round impact: the player's swing credits on their own kills in the round, added up, as a
+   * win-probability fraction; null when the round was not valued (no win probability). It leaves out the
+   * round-end remainder and the player's own death, so it says what the clipped kills were worth. It
+   * is a sum of credits, not one change in probability, so it passes 1 when the round swings back and
+   * forth (clips/state.ts ROUND_IMPACT_TIP says so in the app).
    */
   swing: number | null;
   /** where most of the kills were, raw ("BombsiteB"); null when the source records no place */
   place: string | null;
-  /** demo ticks to record: PRE_ROLL_S before the first event, POST_ROLL_S after the last */
+  /**
+   * demo ticks to record: PRE_ROLL_S before the first event, POST_ROLL_S after the last, no earlier
+   * than freeze end and no later than the round's end (or the last kill, when a kill came after it)
+   */
   startTick: number;
   endTick: number;
   tickRate: number;
   score: number;
-  /** "3K on B Site, +38% swing" */
+  /** "3K on B Site, +38% round impact" */
   reason: string;
 }
 
@@ -91,7 +96,7 @@ const pct = (x: number) => `${x >= 0 ? "+" : "−"}${Math.round(Math.abs(x) * 10
 
 /**
  * The moment's line for the lower third and the list: the headline (multi-kill, else the clutch, else
- * the kind), where, then the other kinds and the swing. "3K on B Site, opening kill, +38% swing".
+ * the kind), where, then the other kinds and the round impact. "3K on B Site, opening kill, +38% round impact".
  */
 export function momentReason(m: Pick<Moment, "kinds" | "clutch" | "place" | "swing" | "flicks">): string {
   const multi = m.kinds.find((k) => MULTI_LABEL[k]);
@@ -101,7 +106,7 @@ export function momentReason(m: Pick<Moment, "kinds" | "clutch" | "place" | "swi
   if (multi && clutch) parts.push(clutch);
   if (m.flicks && head !== "Flick kill") parts.push(m.flicks > 1 ? `${m.flicks} flicks` : "flick");
   if (m.kinds.includes("opening") && head !== "Opening kill") parts.push("opening kill");
-  if (m.swing !== null && Math.abs(m.swing) >= 0.005) parts.push(`${pct(m.swing)} swing`);
+  if (m.swing !== null && Math.abs(m.swing) >= 0.005) parts.push(`${pct(m.swing)} round impact`);
   return parts.join(", ");
 }
 
@@ -149,7 +154,9 @@ export function scoreMoments(f: MatchFacts, filter: Filter): Moment[] {
     }
     const first = Math.min(...ticks), last = Math.max(...ticks);
     const startTick = Math.max(fe ?? 0, first - Math.round(PRE_ROLL_S * rate));
-    const endTick = last + Math.round(POST_ROLL_S * rate);
+    // the post-roll stays inside the round: it stops at the round's end, or at the last kill when one
+    // came after the end (a kill in the round-end delay), so no clip runs into the next round
+    const endTick = Math.min(last + Math.round(POST_ROLL_S * rate), Math.max(round.endTick, last));
 
     const score = (multi ? MULTI_POINTS[multi]! : 0)
       + (clutch ? POINTS.clutchBase + POINTS.clutchPerEnemy * (clutch.opponents - 1) : 0)

@@ -1,6 +1,9 @@
-// Typed calls to the clips commands in src-tauri/src/clips.rs; the types mirror the Rust structs'
-// JSON. Only the desktop app has them: the browser build lists moments but cannot check demos or render.
+// Typed calls to the clips commands in src-tauri/src/clips/mod.rs; the types mirror the Rust structs'
+// JSON. The web view sends typed requests only: clip ids, demo file names, ticks and the lower third's
+// text; the host builds every command and path. Only the desktop app has these: the browser build
+// lists moments but cannot check demos or render.
 import { isTauri } from "../host/host";
+import type { JobRequest, RenderPlan } from "./plan";
 
 /** Where a tool is, or why it was not found. */
 export interface Found { path: string | null; error: string | null }
@@ -10,19 +13,23 @@ export interface Finished { id: string; path: string; size: number; mtime: numbe
 export interface Take { id: string; job: string; video: string; audio: string | null; mtime: number }
 export interface ClipsScan { finished: Finished[]; takes: Take[]; reels: Finished[] }
 export interface Launched { pid: number; cfg: string; ffmpegIni: string | null }
-export interface FfmpegRun { code: number | null; error: string | null }
-export interface NamedText { name: string; text: string }
+/** An FFmpeg run: its exit code, the end of what it wrote to stderr when it failed, and the file it wrote. */
+export interface FfmpegRun { code: number | null; error: string | null; output: string }
+/** A take to finish: the clip, the job that recorded it, the lower third's two lines (personal info already hidden when the setting is on) and the clip's length. */
+export interface FinishRequest { id: string; job: string; reason: string; subline: string; durationS: number }
 
 export interface ClipsHost {
   /** `hlae`: the HLAE.exe the user chose, if any */
   env(hlae: string | null): Promise<ClipsEnv>;
   demos(names: string[]): Promise<DemoOnDisk[]>;
   scan(): Promise<ClipsScan>;
-  /** writes plan.json and director.js into jobs\<job>; touches nothing outside the clips folder */
-  saveJob(job: string, files: NamedText[]): Promise<string>;
+  /** builds the job for the chosen clips; with `write`, saves it as a new job folder. Touches nothing outside the clips folder. */
+  plan(request: JobRequest, write: boolean): Promise<RenderPlan>;
   /** starts CS2 through HLAE for a saved job: only after the user confirms */
   launch(job: string): Promise<Launched>;
-  ffmpeg(args: string[], texts: NamedText[], hlae: string | null): Promise<FfmpegRun>;
+  finish(r: FinishRequest, hlae: string | null): Promise<FfmpegRun>;
+  /** joins finished clips, in order, into a new reel */
+  reel(ids: string[], hlae: string | null): Promise<FfmpegRun>;
 }
 
 async function tauriClips(): Promise<ClipsHost> {
@@ -31,9 +38,10 @@ async function tauriClips(): Promise<ClipsHost> {
     env: (hlae) => invoke("clips_env", { hlae }),
     demos: (names) => invoke("clips_demos", { names }),
     scan: () => invoke("clips_scan"),
-    saveJob: (job, files) => invoke("clips_save_job", { job, files }),
+    plan: (request, write) => invoke("clips_plan", { request, write }),
     launch: (job) => invoke("clips_launch", { job }),
-    ffmpeg: (args, texts, hlae) => invoke("clips_ffmpeg", { args, texts, hlae }),
+    finish: (r, hlae) => invoke("clips_finish", { id: r.id, job: r.job, reason: r.reason, subline: r.subline, durationS: r.durationS, hlae }),
+    reel: (ids, hlae) => invoke("clips_reel", { ids, hlae }),
   };
 }
 

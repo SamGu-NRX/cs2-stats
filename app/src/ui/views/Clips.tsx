@@ -1,14 +1,14 @@
 // Clips: your best moments, ranked across your matches (stats/moments.ts), each with the demo it
 // needs and where it stands: needs a demo, ready to render, recorded by HLAE, or rendered. Choosing
-// moments and pressing Render shows the plan (clips/plan.ts) and asks before anything starts CS2;
-// recorded takes are finished and joined into a reel with FFmpeg (clips/ffmpeg.ts). design/clips.md.
+// moments and pressing Render shows the plan the host built (clips/plan.ts) and asks before anything
+// starts CS2; recorded takes are finished and joined into a reel with FFmpeg, whose commands the host
+// builds (src-tauri/src/clips/ffmpeg.rs). design/clips.md.
 //
 // Only the desktop app checks demos and renders; the browser lists the moments and says so.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { finishArgs, reelArgs } from "../../clips/ffmpeg";
 import { clipsHost, savedHlae, saveHlae, type ClipsEnv, type ClipsHost, type DemoOnDisk, type Take } from "../../clips/host";
-import { buildRenderJob, jobFiles, RENDER_DEFAULTS, type RenderJob } from "../../clips/plan";
-import { clipState, demoSource, STATE_LABEL, type ClipState, type DemoSource, type Lookup } from "../../clips/state";
+import { jobRequest, type RenderPlan } from "../../clips/plan";
+import { clipState, demoSource, ROUND_IMPACT_TIP, STATE_LABEL, type ClipState, type DemoSource, type Lookup } from "../../clips/state";
 import type { MomentRow } from "../../worker/protocol";
 import { ClutchBadge, MapThumb, MultiBadge } from "../components/bits";
 import { Segmented } from "../components/controls";
@@ -16,7 +16,7 @@ import { copyText, toast } from "../components/overlay";
 import { careerEntries } from "../data/engine";
 import { useCall, useYourQuery } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
-import { hideText, useHidePersonal } from "../data/privacy";
+import { hideText, hidingPersonal, useHidePersonal } from "../data/privacy";
 import { useData } from "../data/provider";
 import { FlagIcon, WeaponIcon } from "../icons/game";
 import { ChevronRightIcon, ClipsIcon, CloseIcon, CopyIcon, PlayIcon, RefreshIcon } from "../icons/ui";
@@ -43,7 +43,6 @@ const subline = (r: MomentRow, e: MatchEntry | undefined) => [mapName(r.map), `R
 const isNeeds = (s: ClipState) => s.kind === "no-demo" || s.kind === "unchecked";
 const isDone = (s: ClipState) => s.kind === "recorded" || s.kind === "rendered";
 const choosable = (s: ClipState) => s.kind === "ready" || isDone(s);
-const join = (dir: string, ...parts: string[]) => [dir.replace(/[\\/]+$/, ""), ...parts].join("\\");
 
 // ---------------------------------------------------------------- the host's view of the clips
 
@@ -142,11 +141,14 @@ function ClipRow({ it, chosen, onChoose, clipsDir }: { it: Item; chosen: boolean
   const { row: r, entry: e, state: s } = it;
   const multi = r.kinds.find((k) => k === "ace" || k === "4k" || k === "3k");
   const where = `round ${r.round} on ${mapName(r.map)}`;
+  // a reason holds no personal info today, but a place name is the map maker's text: it goes through the layer like any other
+  const hide = useHidePersonal();
+  const reason = hide ? hideText(r.reason) : r.reason;
   return (
-    <li className="clip" data-chosen={chosen || undefined} data-s={s.kind}>
+    <li className="clip" data-clip={r.id} data-chosen={chosen || undefined} data-s={s.kind}>
       <label className="check clip__pick">
         <input type="checkbox" checked={chosen} disabled={!choosable(s)} onChange={() => {}} onClick={(ev) => onChoose(ev.currentTarget.checked, fromKeyboard(ev))}
-          aria-label={`Choose ${r.reason}, ${where}`} />
+          aria-label={`Choose ${reason}, ${where}`} />
       </label>
       <span className="clip__rank num" aria-label={`Rank ${it.rank}`}>{it.rank}</span>
       <span className="clip__kinds">
@@ -154,7 +156,7 @@ function ClipRow({ it, chosen, onChoose, clipsDir }: { it: Item; chosen: boolean
         {r.clutch && <ClutchBadge vs={r.clutch.opponents} won />}
       </span>
       <span className="clip__main">
-        <span className="clip__reason">{r.reason}</span>
+        <span className="clip__reason" data-tip={r.swing !== null ? ROUND_IMPACT_TIP : undefined}>{reason}</span>
         <span className="clip__meta meta">
           <MapThumb map={r.map} size={14} />
           <span>{mapName(r.map)}</span>
@@ -199,38 +201,37 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => { ref.current?.showModal(); }, []);
   const env = tools.env;
-  // items are the moments chosen when the dialog opened, so the plan (and its job id) is rebuilt only when the tools change
-  const ready = useMemo(() => items.filter((i) => i.state.kind === "ready"), [items]);
-  // built in memory for the user to read; nothing is written until Save or Launch
-  const plan = useMemo((): { job: RenderJob | null; problem: string | null } => {
-    if (!env) return { job: null, problem: "The tools are still being checked." };
-    if (!env.hlae.path) return { job: null, problem: env.hlae.error };
-    if (!env.cs2.path) return { job: null, problem: env.cs2.error };
-    try {
-      const clips = ready.map((i) => ({
-        id: i.row.id, demoPath: (i.state as Extract<ClipState, { kind: "ready" }>).demoPath, steamid: i.row.player,
-        startTick: i.row.startTick, endTick: i.row.endTick, tickRate: i.row.tickRate, reason: i.row.reason,
-      }));
-      return { job: buildRenderJob(clips, { clipsDir: env.clipsDir, hlaeExe: env.hlae.path, cs2Exe: env.cs2.path }, RENDER_DEFAULTS, new Date()), problem: null };
-    } catch (e) {
-      return { job: null, problem: (e as Error).message };
-    }
-  }, [env, ready]);
+  // the moments chosen when the dialog opened, so the plan is asked for again only when the tools change
+  const ready = useMemo(() => items.filter((i) => i.state.kind === "ready" && i.src.kind === "demo"), [items]);
+  const request = useMemo(() => (env?.hlae.path
+    ? jobRequest(ready.map((i) => ({ ...i.row, demo: (i.src as Extract<DemoSource, { kind: "demo" }>).name })), env.hlae.path)
+    : null), [env, ready]);
+  // the host builds the plan without writing anything, for the user to read before Save or Launch
+  const [plan, setPlan] = useState<{ plan: RenderPlan | null; problem: string | null }>({ plan: null, problem: "Building the plan…" });
+  useEffect(() => {
+    if (!env) { setPlan({ plan: null, problem: "The tools are still being checked." }); return; }
+    if (!env.hlae.path) { setPlan({ plan: null, problem: env.hlae.error }); return; }
+    if (!env.cs2.path) { setPlan({ plan: null, problem: env.cs2.error }); return; }
+    if (!request || !tools.host) return;
+    let alive = true;
+    tools.host.plan(request, false).then(
+      (p) => alive && setPlan({ plan: p, problem: null }),
+      (e) => alive && setPlan({ plan: null, problem: String(e) }),
+    );
+    return () => { alive = false; };
+  }, [env, request, tools.host]);
   const show = (s: string) => (hide ? hideText(s) : s);
   const total = ready.reduce((s, i) => s + durationOf(i.row), 0);
 
-  const save = async (): Promise<RenderJob | null> => {
-    if (!plan.job || !tools.host) return null;
-    const dir = await tools.host.saveJob(plan.job.id, jobFiles(plan.job));
-    toast(`Plan saved in ${show(dir)}`, "good");
-    return plan.job;
-  };
   const run = async (what: "save" | "launch") => {
+    if (!request || !tools.host) return;
     setBusy(what); setFailed(null);
     try {
-      const job = await save();
-      if (job && what === "launch") setDone({ pid: (await tools.host!.launch(job.id)).pid });
-      else if (job) close();
+      // the host builds the job again and saves it in a new folder; the launch builds it once more from that
+      const saved = await tools.host.plan(request, true);
+      toast(`Plan saved in ${show(saved.jobDir)}`, "good");
+      if (what === "launch") setDone({ pid: (await tools.host.launch(saved.id)).pid });
+      else close();
     } catch (e) {
       setFailed(String(e));
     } finally {
@@ -238,6 +239,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
     }
   };
   const close = () => { ref.current?.close(); };
+  const p = plan.plan;
 
   return (
     <dialog ref={ref} className={`rdlg ${instant ? "is-instant" : ""}`} aria-labelledby="rdlg-title" onClose={onClose}>
@@ -263,26 +265,26 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
           <Tool name="FFmpeg" f={env?.ffmpeg ?? null} />
         </dl>
 
-        {plan.job ? (
+        {p ? (
           <>
             <section className="rdlg__sec">
               <h3 className="caps">What runs</h3>
-              <pre className="rdlg__cmd mono selectable">{show(plan.job.commandLine)}</pre>
-              <button className="btn btn--ghost btn--sm press" onClick={() => copyText(plan.job!.commandLine, "Command copied")}><CopyIcon size={12} />Copy the command</button>
+              <pre className="rdlg__cmd mono selectable">{show(p.commandLine)}</pre>
+              <button className="btn btn--ghost btn--sm press" onClick={() => copyText(p.commandLine, "Command copied")}><CopyIcon size={12} />Copy the command</button>
             </section>
             <section className="rdlg__sec">
               <h3 className="caps">What it writes</h3>
               <ul className="rdlg__files">
-                <li><span className="mono">{show(plan.job.jobDir)}</span><span className="meta">the plan, the director script, and HLAE's raw takes</span></li>
-                <li><span className="mono">game\csgo\cfg\{plan.job.cfg.file}</span><span className="meta">one line that loads the director: <code className="mono">{show(plan.job.cfg.text.trim())}</code></span></li>
+                <li><span className="mono">{show(p.jobDir.replace(/[^\\/]+$/, "<new job>"))}</span><span className="meta">a new folder for the plan, the director script, and HLAE's raw takes</span></li>
+                <li><span className="mono">game\csgo\cfg\{p.cfgFile}</span><span className="meta">one line that loads the director: <code className="mono">{show(p.cfgText.trim())}</code></span></li>
                 <li><span className="mono">ffmpeg\ffmpeg.ini</span><span className="meta">beside HLAE.exe, only if HLAE has no FFmpeg of its own</span></li>
               </ul>
             </section>
             <section className="rdlg__sec">
               <h3 className="caps">Clips</h3>
               <ol className="rdlg__clips">
-                {plan.job.demos.flatMap((d) => d.clips.map((c) => (
-                  <li key={c.id}><span>{c.reason}</span><span className="meta mono">{show(d.path.slice(d.path.search(/[^\\/]+$/)))} · ticks {c.start}–{c.end} · {clock((c.end - c.start) / d.tickRate)}</span></li>
+                {p.demos.flatMap((d) => d.clips.map((c) => (
+                  <li key={c.id}><span>{show(c.reason)}</span><span className="meta mono">{show(d.path.slice(d.path.search(/[^\\/]+$/)))} · ticks {c.start}–{c.end} · {clock((c.end - c.start) / d.tickRate)}</span></li>
                 )))}
               </ol>
             </section>
@@ -301,8 +303,8 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
         ) : (
           <>
             <button className="btn btn--ghost press" onClick={close}>Cancel</button>
-            <button className="btn press" disabled={!plan.job || busy !== null} onClick={() => run("save")}>{busy === "save" ? "Saving…" : "Save the plan only"}</button>
-            <button className="btn btn--primary press" disabled={!plan.job || busy !== null} onClick={() => run("launch")}>
+            <button className="btn press" disabled={!p || busy !== null} onClick={() => run("save")}>{busy === "save" ? "Saving…" : "Save the plan only"}</button>
+            <button className="btn btn--primary press" disabled={!p || busy !== null} onClick={() => run("launch")}>
               <PlayIcon size={14} />{busy === "launch" ? "Starting…" : "Launch CS2 with -insecure"}
             </button>
           </>
@@ -357,20 +359,17 @@ export default function ClipsView() {
   const canEdit = !!(tools.host && env?.ffmpeg.path && env.font);
   const editWhy = !tools.host ? "Needs the desktop app" : !env?.ffmpeg.path ? env?.ffmpeg.error ?? "Checking for FFmpeg" : !env.font ? "No font for the lower third was found" : undefined;
 
-  /** Finishes recorded takes: trimmed to the moment, the lower third, sound or silence (ffmpeg.ts finishArgs). */
+  /** The lower third's text as the clip will burn it in: with personal info hidden when the setting is on (privacy.ts). */
+  const lowerThird = (t: string) => (hidingPersonal() ? hideText(t) : t);
+  /** Finishes recorded takes: trimmed to the moment, the lower third, sound or silence (the host's template, ffmpeg.rs). */
   const finish = async (its: Item[]) => {
-    if (!tools.host || !env?.font) return;
+    if (!tools.host) return;
     setWorking(`Finishing ${plural(its.length, "clip")}…`);
     let ok = 0;
     try {
       for (const it of its) {
         const take = (it.state as { take: Take }).take;
-        const reasonName = `${it.row.id}.txt`, subName = `${it.row.id}-sub.txt`;
-        const args = finishArgs({
-          video: take.video, audio: take.audio, reasonFile: join(env.clipsDir, "text", reasonName), sublineFile: join(env.clipsDir, "text", subName), fontFile: env.font,
-          startS: 0, durationS: durationOf(it.row), width: RENDER_DEFAULTS.width, height: RENDER_DEFAULTS.height, fps: RENDER_DEFAULTS.fps, out: join(env.clipsDir, `${it.row.id}.mp4`),
-        });
-        const r = await tools.host.ffmpeg(args, [{ name: reasonName, text: it.row.reason }, { name: subName, text: subline(it.row, it.entry) }], hlae || null);
+        const r = await tools.host.finish({ id: it.row.id, job: take.job, reason: lowerThird(it.row.reason), subline: lowerThird(subline(it.row, it.entry)), durationS: durationOf(it.row) }, hlae || null);
         if (r.code === 0) ok++;
         else toast(`FFmpeg could not finish "${it.row.reason}": ${(r.error ?? "").split("\n").pop()}`, "poor");
       }
@@ -383,14 +382,13 @@ export default function ClipsView() {
       tools.recheck();
     }
   };
-  /** Joins the chosen rendered clips, best first, into one reel (ffmpeg.ts reelArgs). */
+  /** Joins the chosen rendered clips, best first, into one reel (the host's template, ffmpeg.rs). */
   const reel = async (its: Item[]) => {
     if (!tools.host || !env) return;
     setWorking("Making the reel…");
-    const out = join(env.clipsDir, "reels", `reel-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}.mp4`);
     try {
-      const r = await tools.host.ffmpeg(reelArgs(its.map((i) => (i.state as { path: string }).path), out), [], hlae || null);
-      if (r.code === 0) toast(`Reel saved: ${hide ? "<clips folder>\\reels" : join(env.clipsDir, "reels")}`, "good");
+      const r = await tools.host.reel(its.map((i) => i.row.id), hlae || null);
+      if (r.code === 0) toast(`Reel saved: ${hide ? "<clips folder>\\reels" : r.output}`, "good");
       else toast(`FFmpeg could not make the reel: ${(r.error ?? "").split("\n").pop()}`, "poor");
     } catch (e) {
       toast(`FFmpeg could not make the reel: ${String(e)}`, "poor");
@@ -422,7 +420,7 @@ export default function ClipsView() {
           <div>
             <h1 className="clips__title">Your best moments</h1>
             <p className="meta">
-              Ranked by multi-kills, clutches won, round swing, flicks and opening kills across your matches. Each clip is your view, from five seconds before your first kill to three after your last.
+              Ranked by multi-kills, clutches won, round impact, flicks and opening kills across your matches. Each clip is your view, from five seconds before your first kill to three after your last, within the round. {ROUND_IMPACT_TIP}
             </p>
           </div>
           <div className="clips__tools" aria-label="Rendering tools">

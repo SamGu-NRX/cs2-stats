@@ -1,6 +1,6 @@
 # Clips: how POV clips are rendered
 
-Read by whoever changes the clip renderer (`app/src/clips`, `app/src-tauri/src/clips.rs`) or runs the first supervised render. It records which render path was chosen and why, what has been checked, and what has not. Issue #11.
+Read by whoever changes the clip renderer (`app/src/clips`, `app/src-tauri/src/clips/`) or runs the first supervised render. It records which render path was chosen and why, what has been checked, and what has not. Issue #11.
 
 ## The decision
 
@@ -29,28 +29,28 @@ Every path shares one limit. CS2 refuses a demo recorded on another game build (
 
 ## How a render runs
 
-1. The engine scores moments from facts (`app/src/stats/moments.ts`). A moment has its round, the POV player's SteamID64, and demo ticks with 5 s before the first kill and 3 s after the last (povforge's defaults). A won clutch runs from when the clutch began to the round's end. The ranking points are ours, with no fit behind them.
+1. The engine scores moments from facts (`app/src/stats/moments.ts`). A moment has its round, the POV player's SteamID64, and demo ticks with 5 s before the first kill and 3 s after the last (povforge's defaults), kept inside the round: no earlier than freeze end, and no later than the round's end unless a kill came after it. A won clutch runs from when the clutch began to the round's end. The reason's "round impact" adds up the win-probability credit from the player's kills in the round, so it can pass 100% when the round swings back and forth. The ranking points are ours, with no fit behind them.
 2. The Clips page says which demo each moment needs. Only a Valve match has one: `<Steam library>\steamapps\common\Counter-Strike Global Offensive\game\csgo\replays\<demo>.dem`, named after the match's folder. Plugin recordings, converted logs and pro demos have none, and the page says so per match.
-3. Choosing moments and pressing Render builds the job in memory (`app/src/clips/plan.ts`) and shows it: the HLAE command, the files it writes and the clips. Nothing is written until **Save the plan only** or **Launch CS2 with -insecure**.
-4. Launch (`clips_launch` in `clips.rs`) refuses while any cs2.exe runs. It also refuses a command that differs from the one plan.ts writes: HLAE.exe with its hook beside it, this install's cs2.exe, and a game command line that starts with `-insecure`, has no token that turns VAC on, and runs only `+exec cs2stats_clips`. It then writes `game\csgo\cfg\cs2stats_clips.cfg`, whose one line loads the director script from the job folder. If HLAE has no FFmpeg of its own, it writes `ffmpeg\ffmpeg.ini` beside HLAE.exe. Last, it starts HLAE and does not wait for it.
-5. The director (`app/src/clips/director.template.js`) waits for the menu, sets up `mirv_streams`, then plays each demo in turn. For each clip it seeks 2 s early, puts the camera on the player by SteamID64 in first person, records from the start tick to the end tick, and then quits CS2. Each line it logs starts with `[cs2stats]` and lands in `game\csgo\console.log` (`-condebug`).
-6. Back in the app, Check again finds the takes in `%APPDATA%\BotMatchStats\clips\jobs\<job>\raw\<clip id>\`. **Finish** runs the FFmpeg template (`app/src/clips/ffmpeg.ts`), which trims each take to the moment, draws the reason in a lower third and gives it a sound track. The result is `%APPDATA%\BotMatchStats\clips\<clip id>.mp4`. **Make a reel** joins rendered clips into `clips\reels\`.
+3. Choosing moments and pressing Render sends the host a typed request: each clip's id, its demo's file name, the POV player's SteamID64 and the ticks, and the HLAE.exe the user chose. The host (`app/src-tauri/src/clips/job.rs`) checks each demo is a regular file directly in CS2's replays folder, reached without a link, and builds the job: HLAE's command from a fixed template, the director script and the plan. The dialog shows the plan. Nothing is written until **Save the plan only** or **Launch CS2 with -insecure**, which saves the job in a new folder named to the millisecond with a random suffix. The director and the plan are written to temporary names first and renamed, the plan last, so a plan never exists without its director.
+4. Launch (`clips_launch` in `clips/mod.rs`) builds the job again from the request saved in its plan.json, and refuses when the saved plan differs in anything: the command, a demo, a folder or a clip. It writes the director again from that build, so an edited director.js never runs, and refuses while any cs2.exe runs. The command is always HLAE.exe with its hook beside it, this install's cs2.exe, and `-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips` as the game's command line. It then writes `game\csgo\cfg\cs2stats_clips.cfg`, whose one line loads the director script from the job folder. If HLAE has no FFmpeg of its own, it writes `ffmpeg\ffmpeg.ini` beside HLAE.exe. Last, it starts HLAE and does not wait for it.
+5. The director (`app/src/clips/director.template.js`) waits for the menu, sets up `mirv_streams`, and hides the demo bar by setting `demo_ui_mode` to 0 through HLAE's cvar API, keeping the value it found. It then plays each demo in turn. For each clip it seeks 2 s early, puts the camera on the player by SteamID64 in first person, records from the start tick to the end tick, and finally puts `demo_ui_mode` back to the value it found and quits CS2. On an HLAE without the cvar API (before 2.187.4) it leaves `demo_ui_mode` alone, and the bar shows in the clips. Each line it logs starts with `[cs2stats]` and lands in `game\csgo\console.log` (`-condebug`).
+6. Back in the app, Check again finds the takes in `%APPDATA%\BotMatchStats\clips\jobs\<job>\raw\<clip id>\`. **Finish** sends the host the clip id, the job and the lower third's two lines, with personal info hidden when that setting is on. The host (`app/src-tauri/src/clips/ffmpeg.rs`) resolves the take inside the clips folder, writes the lines to `clips\text\`, takes the font from a fixed list in Windows' Fonts folder, and builds the FFmpeg command, which trims each take to the moment, draws the reason in a lower third and gives it a sound track. No argument may name a protocol or a file-reading filter. The result is `%APPDATA%\BotMatchStats\clips\<clip id>.mp4`. **Make a reel** joins rendered clips into `clips\reels\`.
 
 ## What is checked and what is not
 
 Checked without the game:
 
 - Moment scoring has known-answer tests on hand-built rounds (`moments.test.ts`).
-- Plan generation and the HLAE command are tested flag by flag (`plan.test.ts`). The director runs in the test against a stand-in for HLAE's script API, which plays two demos tick by tick. That checks its order of work and the commands it sends, not how CS2 answers them.
-- The launch's command check, the FFmpeg argument confinement and the job files have Rust tests (`clips.rs`).
-- The FFmpeg templates run on synthetic takes from `testsrc2` (`ffmpeg.test.ts`). The test checks durations, stream shapes, where the lower third is drawn and that it is absent before its fade-in, and the reel's length.
+- The job (`clips/job.rs`) has Rust tests: the exact command, the folder and cfg, grouping by demo, refusals by name, a junction named like a demo, unique ids, and the paired write. The launch's rebuild refuses a tampered plan (an extra game flag, another program, another cfg line) and replaces an edited director (`clips/mod.rs`). Finishing and reels refuse links and paths outside the clips folder.
+- The director runs in `director.test.ts` against a stand-in for HLAE's script API, which plays two demos tick by tick and stands in for the cvar API. That checks its order of work, the commands it sends and that `demo_ui_mode` is put back before `quit`, not how CS2 answers them.
+- The FFmpeg templates run on synthetic takes from `testsrc2` in a Rust test (`clips/ffmpeg.rs`). It checks durations, stream shapes, where the lower third is drawn and that it is absent before its fade-in, and the reel's length. It skips, saying why, where FFmpeg or a font is missing, as on CI's runners.
 
 Not checked, because nobody has run any of this inside CS2:
 
 - that HLAE 2.192.x starts this game build with these flags, and that `+exec` runs the cfg after HLAE's commands exist;
 - that `spec_player <controller index>` with `spec_mode 2` gives the first-person view in a matchmaking demo (povforge's choice, unconfirmed in HLAE's docs);
 - that the extractor's ticks (demoparser2) equal what `demo_gototick` and `mirv.getDemoTick()` use. povforge assumes so;
-- whether `demo_ui_mode 0` is saved to the user's CS2 config;
+- whether CS2 saves `demo_ui_mode` to the user's config at all, and whether HLAE's cvar API reaches it (the director puts it back either way, but a crash or a closed game before the director's last step would leave it at 0);
 - local `tv_autorecord` demos and HLTV demos.
 
 ## The first supervised render

@@ -48,6 +48,9 @@ export function clipState(id: string, src: DemoSource, look: Lookup): ClipState 
   return { kind: "no-demo", why: `${src.name} is not in CS2's replays folder any more. Download the match's demo again to clip it.` };
 }
 
+/** What "round impact" means, for the tooltip wherever a moment's reason shows. */
+export const ROUND_IMPACT_TIP = "Round impact adds up the win-probability credit your kills earned in the round (round swing). It can pass 100% when the round swings back and forth.";
+
 export const STATE_LABEL: Record<ClipState["kind"], string> = {
   rendered: "Rendered", recorded: "Recorded", ready: "Ready to render", "no-demo": "Needs a demo", unchecked: "Demo not checked",
 };

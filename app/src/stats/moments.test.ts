@@ -28,13 +28,14 @@ describe("scoreMoments", () => {
     // the three kills took CT from the start's win probability to a won round; no damage rows, so a gets all of each kill
     const path = f.rounds[0].winProb!;
     expect(m.swing).toBeCloseTo(path[0].pT - path[3].pT, 12);
-    expect(m.reason).toBe(`3K on B Site, opening kill, +${Math.round(m.swing! * 100)}% swing`);
+    expect(m.reason).toBe(`3K on B Site, opening kill, +${Math.round(m.swing! * 100)}% round impact`);
     expect(m.score).toBeCloseTo(POINTS.k3 + POINTS.opening + POINTS.swingPerUnit * m.swing!, 2);
   });
 
   it("clips a won clutch from its start to the round's end", () => {
     // fails if the clutch window starts at b's first kill instead of a's death, stops before the round
-    // ends, or the clutch is not a kind. c kills a at 1 s: b is alone against c, d and e and kills all three.
+    // ends or runs past it into the next round, or the clutch is not a kind. c kills a at 1 s: b is
+    // alone against c, d and e and kills all three.
     const f = round({
       kills: [
         { tick: t(1), killer: "c", victim: "a" },
@@ -45,8 +46,18 @@ describe("scoreMoments", () => {
     });
     const [m] = scoreMoments(f, { player: "b" });
     expect([m.kinds, m.clutch]).toEqual([["3k", "clutch", "swing"], { opponents: 3 }]);
-    expect([m.startTick, m.endTick]).toEqual([FREEZE_END, ROUND_END + POST_ROLL_S * RATE]);
+    expect([m.startTick, m.endTick]).toEqual([FREEZE_END, ROUND_END]);
     expect(m.reason.startsWith("3K, 1v3 clutch, +")).toBe(true);
+  });
+
+  it("keeps the post-roll inside the round, and a kill after the round's end in the clip", () => {
+    // fails if the clip runs past the round's end into the next round, or cuts off a kill made in the
+    // round-end delay. a kills c one second before the round ends; in the second round a's third kill
+    // of a 3K comes 2 s after it.
+    const near = round({ kills: [{ tick: ROUND_END - RATE, killer: "a", victim: "c" }] });
+    expect(scoreMoments(near, { player: "a" }).map((m) => m.endTick)).toEqual([ROUND_END]);
+    const after = round({ kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(20), killer: "a", victim: "d" }, { tick: ROUND_END + 2 * RATE, killer: "a", victim: "e" }] });
+    expect(scoreMoments(after, { player: "a" }).map((m) => [m.kinds[0], m.endTick])).toEqual([["3k", ROUND_END + 2 * RATE]]);
   });
 
   it("starts no clip before freeze end", () => {
@@ -102,12 +113,12 @@ describe("momentReason", () => {
   const base: Pick<Moment, "kinds" | "clutch" | "place" | "swing" | "flicks"> = { kinds: [], clutch: null, place: null, swing: null, flicks: 0 };
   it("leads with the multi-kill, then the clutch, then the kind, and says where and how much", () => {
     // fails if a headline, a callout name, the order of the parts or the swing's rounding changes
-    expect(momentReason({ ...base, kinds: ["3k", "swing"], place: "BombsiteB", swing: 0.384 })).toBe("3K on B Site, +38% swing");
-    expect(momentReason({ ...base, kinds: ["ace", "clutch", "flick"], clutch: { opponents: 4 }, place: "Middle", swing: 0.9, flicks: 2 })).toBe("Ace on Mid, 1v4 clutch, 2 flicks, +90% swing");
-    expect(momentReason({ ...base, kinds: ["clutch"], clutch: { opponents: 2 }, swing: 0.51 })).toBe("1v2 clutch, +51% swing");
+    expect(momentReason({ ...base, kinds: ["3k", "swing"], place: "BombsiteB", swing: 0.384 })).toBe("3K on B Site, +38% round impact");
+    expect(momentReason({ ...base, kinds: ["ace", "clutch", "flick"], clutch: { opponents: 4 }, place: "Middle", swing: 0.9, flicks: 2 })).toBe("Ace on Mid, 1v4 clutch, 2 flicks, +90% round impact");
+    expect(momentReason({ ...base, kinds: ["clutch"], clutch: { opponents: 2 }, swing: 0.51 })).toBe("1v2 clutch, +51% round impact");
     expect(momentReason({ ...base, kinds: ["flick", "opening"], place: "Catwalk", flicks: 1 })).toBe("Flick kill on Catwalk, opening kill");
-    expect(momentReason({ ...base, kinds: ["swing"], swing: 0.2 })).toBe("High-swing kill, +20% swing");
-    expect(momentReason({ ...base, kinds: ["opening"], swing: -0.04 })).toBe("Opening kill, −4% swing");
+    expect(momentReason({ ...base, kinds: ["swing"], swing: 0.2 })).toBe("High-swing kill, +20% round impact");
+    expect(momentReason({ ...base, kinds: ["opening"], swing: -0.04 })).toBe("Opening kill, −4% round impact");
   });
 });
 

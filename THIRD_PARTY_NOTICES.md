@@ -29,7 +29,7 @@ These are bundled into the app that `pnpm tauri build` produces.
 | @fontsource-variable/schibsted-grotesk (Schibsted Grotesk, Copyright 2023 The Schibsted-Grotesk Project Authors) | 5.3.0 | OFL-1.1 |
 | @fontsource/ibm-plex-mono (IBM Plex Mono, Copyright 2017 IBM Corp.) | 5.3.0 | OFL-1.1 |
 
-`app/src/clips/director.template.js`, the script HLAE runs inside CS2 to record the clips, is adapted from [CS2-povforge](https://github.com/Chester-chs/CS2-povforge)'s `povforge/director.js` (MIT, Copyright (c) 2026 Chester-chs); `app/src/clips/plan.ts` follows its HLAE launch command (`povforge/hlae.py`). The notice is in the script's header.
+`app/src/clips/director.template.js`, the script HLAE runs inside CS2 to record the clips, is adapted from [CS2-povforge](https://github.com/Chester-chs/CS2-povforge)'s `povforge/director.js` (MIT, Copyright (c) 2026 Chester-chs); `app/src-tauri/src/clips/job.rs` follows its HLAE launch command (`povforge/hlae.py`). The notice is in the script's header.
 
 `app/src/ui/icons/ui.tsx` copies path data from Lucide 1.61.0 (ISC, Copyright 2026 Lucide Icons and Contributors) and Feather (MIT, Copyright 2013-present Cole Bemis). Both notices are in that file.
 
