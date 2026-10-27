@@ -293,6 +293,11 @@ TYPES: dict[str, dict[str, str]] = {
         "unavailable_fields": "String",
         "visibility_status": "String",
         "voided_windows": "String",
+        "dropped_attempts": "String",
+        "excluded_players": "String",
+        "parts": "String",
+        "departed": "String",
+        "scoreboard_taken": "String",
         "truncated": "Boolean",
         "velocity_source": "String",
     },
@@ -400,7 +405,6 @@ TYPES: dict[str, dict[str, str]] = {
         "voided_attempts": "Int16",
         "winner_side": "String",
         "winner_team": "String",
-        "aborted": "Boolean",
     },
     "scoreboard": {
         "3k_rounds_total": "Int32",
@@ -518,7 +522,7 @@ NULLABLE: dict[str, list[str]] = {
     "players": ["side_h1", "side_h2", "team"],
     "positions": ["active_weapon", "vel_x", "vel_y", "vel_z"],
     "purchases": [],
-    "rounds": ["defuse_tick", "defuser_steamid", "explode_tick", "freeze_end_tick", "official_end_tick", "plant_site", "plant_tick", "planter_steamid", "winner_side", "winner_team"],
+    "rounds": ["defuse_tick", "defuser_steamid", "explode_tick", "freeze_end_tick", "official_end_tick", "plant_site", "plant_tick", "planter_steamid"],
     "scoreboard": [],
     "shots": ["bullet_inair", "bullet_pitch", "bullet_yaw", "eye_x", "eye_y", "eye_z", "inaccuracy", "item_def_index", "num_bullets_remaining", "recoil_index", "seed", "speed_2d", "spread", "vel_x", "vel_y", "vel_z", "zoom_lvl"],
     "smokes": ["duration_s", "end_tick"],
@@ -528,7 +532,7 @@ NULLABLE: dict[str, list[str]] = {
 # Columns whose values identify one row; tables keyed only by row order have none.
 KEYS: dict[str, list[str]] = {
     "blinds": ["tick", "victim_steamid"],
-    "bomb": ["tick", "event"],
+    "bomb": ["tick", "event", "steamid"],
     "engagement_ticks": ["engagement_id", "tick"],
     "engagements": ["engagement_id"],
     "grenade_events": ["tick", "event", "entity_id"],

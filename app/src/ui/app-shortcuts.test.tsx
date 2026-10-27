@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { App } from "./App";
 import { go, parseHash, PROFILE_TABS } from "./router";
+import { NAV } from "./shell/Sidebar";
 
 vi.mock("./data/provider", () => ({
   DataProvider: ({ children }: { children: ReactNode }) => children,
@@ -24,6 +25,8 @@ vi.mock("./views/Home", () => ({ HomeView: () => <p data-home /> }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
 Element.prototype.scrollTo ??= function () {};
+// jsdom has no PointerEvent; the tooltip layer checks for one on every focus (components/overlay.tsx)
+globalThis.PointerEvent ??= class extends MouseEvent {} as unknown as typeof PointerEvent;
 globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia;
 
 let host: HTMLDivElement;
@@ -67,5 +70,38 @@ describe("a new page", () => {
     const pane = host.querySelector("main.pane");
     expect(document.activeElement).toBe(pane);
     expect(pane?.getAttribute("aria-label")).toBe("Profile");
+  });
+});
+
+describe("shortcuts while a confirmation is open", () => {
+  it("navigate nowhere until the dialog closes", async () => {
+    Element.prototype.scrollTo ??= () => {};
+    // fails if Ctrl+1 can leave Bot Mode with a confirmation open or its action running (#47 review)
+    act(() => go("#/profile/overview"));
+    await act(async () => root.render(<App />));
+    const dialog = document.body.appendChild(document.createElement("dialog"));
+    dialog.setAttribute("open", "");
+    const ctrl = (key: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true })); });
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("profile");
+    // Ctrl+R would reload the window under the confirmation: its default is held back
+    const reload = new KeyboardEvent("keydown", { key: "r", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => { document.body.dispatchEvent(reload); });
+    expect(reload.defaultPrevented).toBe(true);
+    dialog.remove();
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("home");
+  });
+});
+
+describe("Ctrl and a digit", () => {
+  it("opens each sidebar page by its key, Clips on Ctrl+5 after Bot Mode's Ctrl+4", async () => {
+    // fails if Clips and Bot Mode share a key, or Ctrl+5 is not handled
+    Element.prototype.scrollTo ??= () => {};
+    act(() => go("#/profile/overview"));
+    await act(async () => root.render(<App />));
+    expect(NAV.map((n) => [n.page, n.key])).toEqual([["home", "1"], ["matches", "2"], ["profile", "3"], ["botmode", "4"], ["clips", "5"]]);
+    act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "5", ctrlKey: true, bubbles: true })); });
+    expect(parseHash(location.hash).page).toBe("clips");
   });
 });

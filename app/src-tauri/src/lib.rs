@@ -703,6 +703,18 @@ pub fn run() {
             botmode::commands::botmode_recover,
             botmode::commands::botmode_set_difficulty,
             botmode::commands::botmode_set_cosmetics,
+            botmode::commands::botmode_catalog,
+            botmode::commands::botmode_server_cfg,
+            botmode::commands::botmode_set_server_cfg,
+            botmode::commands::botmode_server_preview,
+            botmode::commands::botmode_server_undo_plan,
+            botmode::commands::botmode_server_undo,
+            botmode::commands::botmode_knife_repair_plan,
+            botmode::commands::botmode_knife_repair,
+            botmode::commands::botmode_running,
+            botmode::commands::botmode_overlay_plan,
+            botmode::commands::botmode_change_files,
+            botmode::commands::botmode_mod_commands,
             botmode::commands::botmode_set_launch_options,
         ])
         .run(tauri::generate_context!())

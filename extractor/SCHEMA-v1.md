@@ -23,7 +23,7 @@ Changing a map folder by hand is not supported: do not delete or edit a version 
 - **Time.** `tick` and every `*_tick` column are demo ticks (Int32). Convert to seconds with `match.tick_rate`; never assume 64, because tick rates differ by source. Columns ending in `_s` are already seconds.
 - **Space.** Positions are Hammer units in the map's world frame, `z` at the feet. Eye height is `z + 64 - 18 * duck_amount` (on the Ancient fixture, `fire_bullets` eye origins sit at median 63.2 / p95 64.0 standing and 45.2 / 46.0 ducked). Angles are degrees; pitch is positive looking down.
 - **Money** is in dollars. **HP and armor** are points.
-- **Rounds.** `round` is 1-based. Rows outside a counted round are dropped: warmup, backup-restored attempts (from the attempt's start to the restore tick, inclusive; a restore on round 1's start tick before `begin_new_match`, as a split recording's later part can open with, voids only its tick), and anything after game over. An attempt ended with no winner counts as voided only if the game rolled its stats back (kills plus deaths unchanged across it); otherwise it is kept as a round with `aborted = true` and no winner. `events_misc` keeps warmup rows as round 0.
+- **Rounds.** `round` is 1-based. Rows outside a counted round are dropped: warmup, backup-restored attempts (from the attempt's start to the restore tick, inclusive; a restore on round 1's start tick before `begin_new_match`, as a split recording's later part can open with, voids only its tick, found by a winnerless `round_end` or by "world" deaths there), and anything after game over. Restores of one round that overlap or share a tick (a round restored twice) are one attempt. An attempt has no winner and is never a round, even when the game kept some of its stats on the scoreboard (HLTV counts only rounds with a winner); `match.dropped_attempts` lists each one with what the game kept, and validation takes off what one subset of the attempts' own events explains, and refuses the map when none does. Every round has a winner. A team's sixth slot that takes no part in the match (`match.excluded_players`) is in no table; a team left with fewer than five players fails the map instead. `events_misc` keeps warmup rows as round 0. A map HLTV recorded as several demos (`<map>-p1.dem`, `-p2.dem`, ...) is one map or none: `stitch.py` joins its parts into one map on the match's own round numbers and one tick line (`match.parts`) when they provably make one continuous, finished match, and otherwise holds them back under `parts/`, outside `demos/`, with the reason in `parts/parts.jsonl`. The pipeline deletes a stitched map's parts; held parts stay until `parts/` passes 2 GB, when the oldest held map's go (`expired` in `parts.jsonl`).
 - **Nulls.** A missing value is null, never 0 or an empty string. "null: yes" below means the column can be null; a "no" column never is.
 - **Pre-event state.** Player state attached to an event (kills `a_*`/`v_*`, shots, damages) is read at the event tick, before the event applies; a victim's health in `kills` is his health before the fatal hit.
 
@@ -94,7 +94,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `match_id` | String | no | first 16 hex digits of demo_sha256 |
 | `match_start_tick` | Int32 | no | begin_new_match tick (0 when absent) |
 | `mesh_buildid` | String | no | Steam build id the mesh was built from |
-| `mesh_kill_agreement` | Float32 | no | share of non-wallbang kills where the mesh gives the attacker line of sight; below 0.9 sets mesh_mismatch |
+| `mesh_kill_agreement` | Float32 | no | share of non-wallbang kills where the mesh gives the attacker line of sight; below 0.9 sets mesh_mismatch; for a stitched map, the lowest of its parts' |
 | `mesh_patch_version` | String | no | CS2 patch the mesh was built from, e.g. 1.41.9.2 |
 | `mesh_release` | String | no | awpy-data release (CS2 ClientVersion) the mesh came from |
 | `mesh_sha256` | String | no | SHA-256 of the .mesh file used |
@@ -124,6 +124,11 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `unavailable_fields` | String | no | JSON: data the demo does not carry, and what replaces it |
 | `visibility_status` | String | no | ok | no_mapdata | no_mesh | mesh_mismatch. Anything but ok means mesh_visible is null and only damage and kills trigger engagements |
 | `voided_windows` | String | no | JSON [[from, to], ...] tick ranges dropped as backup restores |
+| `dropped_attempts` | String | no | JSON [{round, from_tick, to_tick, restore_ticks, players, reason}, ...]: each backup-restored attempt dropped from the rounds; `round` is the counted round that replaced it, `players` maps each SteamID with a part in the attempt's own events to those events (kills, selfkills, deaths, assists, headshots, damage) and a status: `kept` (the scoreboard holds them, so HLTV's totals may too), `rolled back`, `in round 1's baseline`, or `unknown` (damage only, and no gap in the round before shows it kept); [] when none |
+| `excluded_players` | String | no | JSON [{steamid, name, reason}, ...]: a team's sixth slot that takes no part (spawned every round, killed only by its own damage from no weapon; no kill, death, hit, shot, grenade, purchase or bomb event but the spawn-tick C4 handoff; a coach), left out of every table and check; [] when none |
+| `parts` | String | no | JSON [{part, dem_file, demo_sha256, tick_offset, first_round, n_rounds}, ...]: the demos a stitched map was joined from (stitch.py), in order; [] for a map from one demo. A stitched map's ticks run on one line: part i's ticks plus its tick_offset; its dem_file joins the parts' names with " + ", and demo_sha256 is the SHA-256 of their SHA-256s joined |
+| `departed` | String | no | JSON [{steamid, tick, kills_total, deaths_total, assists_total, damage_total, headshot_kills_total, team_rounds_total, and each of those with _at_start}, ...]: each player who left before the final tick, with his counters as read just after his last disconnect (tick) and at the recording's start; validation checks him on these. [] when none |
+| `scoreboard_taken` | String | no | JSON {steamid: {kills_total, deaths_total, assists_total, headshot_kills_total}}: what the kept dropped attempts (dropped_attempts) put on each player's scoreboard, taken off before validation; {} when none |
 | `truncated` | Boolean | no | the demo is cut off mid-file (awpy refuses it); tables cover the rounds up to the last complete one |
 | `velocity_source` | String | no | networked (m_vecVelocity via awpy) or position_diff (demoparser2, used for a truncated demo) |
 
@@ -168,10 +173,9 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `t_money_start` | Int32 | no | as ct_money_start |
 | `t_team` | String | no | clan name on T |
 | `t_team_score_after` | Int16 | no | score of t_team after the round |
-| `voided_attempts` | Int16 | no | backup-restored attempts of this round |
-| `winner_side` | String | yes | CT | T; null for an aborted round |
-| `winner_team` | String | yes | clan name of the winner; null for an aborted round |
-| `aborted` | Boolean | no | a round ended with no winner whose stats the game kept (its kills and deaths count); not part of the score |
+| `voided_attempts` | Int16 | no | backup-restored attempts this round replaced, as `match.dropped_attempts` counts them: overlapping restores of one round are one attempt |
+| `winner_side` | String | no | CT | T |
+| `winner_team` | String | no | clan name of the winner |
 
 ### `player_rounds`
 One row per player per round, read at freeze end. Key: (round, steamid).
@@ -565,7 +569,7 @@ Detonations, smoke and inferno start and end. Key: (tick, event, entity_id).
 | `z` | Float32 | no |  |
 
 ### `bomb`
-Bomb events. Key: (tick, event).
+Bomb events. Two players' C4 events can share a tick (a handoff on a spawn tick), so the key names the player; steamid is null only for an event no player triggers (the explosion), one a tick. Key: (tick, event, steamid).
 
 | field | type | null | meaning, units |
 |---|---|---|---|

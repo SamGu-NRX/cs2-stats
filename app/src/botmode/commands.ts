@@ -98,6 +98,8 @@ export interface Status {
   };
   /** null when the active bot profile matches none of the three shipped levels */
   difficulty: Difficulty | null;
+  /** SHA-256 of overrides\botprofile.vpk, sent back with a difficulty change; null when there is none */
+  activeProfile: string | null;
   cosmetics: CosmeticsState;
   steamLaunchOptions: string | null;
   launchOptions: string;
@@ -184,8 +186,11 @@ export type Outcome =
 export interface SessionStatus {
   runId: string;
   mode: "launch" | "adopt";
-  /** cannotSee: the process list cannot be read; show the message ("close CS2 now") */
-  state: "starting" | "waiting" | "running" | "cannotSee" | "done" | "failed";
+  /**
+   * ready: the supervisor holds the lease and is about to ask Steam; cannotSee: the process list
+   * cannot be read; closing: Bot Mode could not be turned off yet. Show the message for both.
+   */
+  state: "starting" | "ready" | "waiting" | "running" | "cannotSee" | "closing" | "done" | "failed";
   message: string;
   verdicts: Checked[];
   errors: string[];
@@ -241,34 +246,188 @@ export const UNPROTECTED_NOTICE =
 
 export interface AppSettings { launchOptions: string }
 
+/** The installed BotRandomizer's cosmetic_catalog.json, as botmode_catalog reads it. */
+export interface Catalog {
+  /** the ids br_player_music_kit accepts; a name only when the build ships musicKitNames */
+  musicKits: { id: number; name: string | null }[];
+  /** item definition indexes of the knives a dropped knife can get a finish on */
+  knives: number[];
+  /** the finish weights br_dropped_knife_premium squares */
+  knifeFinishes: { finish: string; weight: number }[];
+}
+
+/** `bot_aim` (BotAimImprover); the plugin's default is mixed. */
+export type BotAim = "head" | "body" | "mixed";
+/** `bot_nades` (NadeSystem); the plugin's default is normal. */
+export type BotNades = "off" | "less" | "normal" | "more" | "max";
+
+/** This app's knife-drop bind: `key` spawns `knives` (item definition indexes) with subclass_create. */
+export interface KnifeBind { key: string; knives: number[] }
+
+/**
+ * How the knife file (settings.rs KNIFE_CFG) stands: "none", no file and no exec line, so the
+ * mod's own key applies; "ok", run and read; "missing", run but gone, so which keys stay unbound
+ * is unknown; "unreadable"; "notRun", there but the server cfg no longer runs it.
+ */
+export type KnifeFileStatus = "none" | "ok" | "missing" | "unreadable" | "unsupported" | "notRun";
+export interface KnifeFile {
+  path: string;
+  status: KnifeFileStatus;
+  sha256: string | null;
+  /** `unreadable`: why; `unsupported`: the command it can't follow (an exec or an alias), as "file:line: text" */
+  error: string | null;
+  /**
+   * commands after the knife file that win over it in game, as "file:line: text": in the server cfg
+   * or a cfg it execs afterwards, a bind of the knife key or of a key it unbinds, an unbind of the knife key
+   */
+  overrides: string[];
+  /** commands after the knife file whose effect can't be told (an alias call, an exec that can't be followed), as "file:line: text" */
+  uncertain: string[];
+  /** whether the app's exec line is the server cfg's last command; any write moves it there */
+  execLast: boolean;
+  /** whether the server cfg runs the file; one it doesn't run has no effect in game, so an unreadable one blocks only a knife change */
+  runs: boolean;
+  /** the file's last unbindall, as "file:line: text": Stop unbinding can't take out the keys it holds (heldKeys); Replace can */
+  unbindall: string | null;
+}
+
+/** The files a preview was worked out from; a write that carries them is refused if either changed. */
+export interface ReadHashes { serverSha256: string | null; knifeSha256: string | null }
+
+/** What a settings write does to both files, worked out by the code that writes them (settings.rs Preview). */
+export interface Preview {
+  /** the server cfg's lines that change, as written: taken out (added false) or put in */
+  serverDiff: { added: boolean; line: string; ending: string }[];
+  /** the knife file as written, all but its header; null when it is not written */
+  knifeLines: string[] | null;
+  /** knife file lines it takes out */
+  knifeRemoved: string[];
+  /** the bytes it was worked out from; send them back with the write */
+  read: ReadHashes;
+}
+
+/** Everything this app sets for the game (the server cfg's convars and the knife file), from botmode_server_cfg. */
+export interface ServerSettings {
+  cosmetics: Cosmetics;
+  /** null: no line sets it, so the plugin's default applies */
+  botAim: BotAim | null;
+  botNades: BotNades | null;
+  /** the knife file's bind; null: none, so the mod's own knife bind applies */
+  knifeBind: KnifeBind | null;
+  /** the keys the knife file unbinds on every map: each key the knife bind has left (settings.rs Knife) */
+  unboundKeys: string[];
+  /** other keys the knife file leaves bound to knives */
+  extraKnifeBinds: KnifeBind[];
+  /** keys an unbindall in the knife file holds unbound */
+  heldKeys: string[];
+  knifeFile: KnifeFile;
+}
+
+/** What Undo of a settings change would write (settings.rs undo_plan). */
+export interface UndoPlan extends Preview {
+  change: string;
+  /** why Undo would refuse: a setting it wrote changed since; null when it can run */
+  refused: string | null;
+}
+
+/**
+ * What Repair (a missing knife file) or Replace (an unreadable one) writes: the file as change
+ * `from` left it, or, with no such change, the mod's own key. `replaces`: the unreadable file's
+ * SHA-256, which the change keeps in its backup; null for Repair.
+ */
+export interface RepairPlan {
+  from: string | null;
+  /** written from the keys the readable file holds now (one with an unbindall), not from a change */
+  fromFile: boolean;
+  /** the file as written, in the app's own form: no unbindall, nothing Bot Mode can't read */
+  lines: string[];
+  replaces: string | null;
+}
+
+/** One change to the server cfg; a field left out keeps what the cfg has. */
+export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind; /** keys the user takes back */ stopUnbinding?: string[] }
+
+/** A CS2 of this install running now, judged by its command line (monitor.rs Running). */
+export type RunningCs2 =
+  | { vac: "off"; pid: number; commandLine: string }
+  | { vac: "on"; pid: number; why: string }
+  | { vac: "unknown"; pid: number; why: string };
+
+/** One entry of overlay.json as botmode_overlay_plan previews it. */
+export interface PlannedEntry { name: string; target: string; files: string[]; repo: string; reference: string }
+/** What overlay.json would copy, and the manifest's hash to send back with the confirmation. */
+export interface OverlayPlan { sha256: string; entries: PlannedEntry[] }
+
+/** Starts the error of a read that gave up (commands.rs READ_LIMIT). */
+export const UNREACHABLE = "Library unreachable";
+
 /** Overrides Steam detection with a game\csgo folder. */
 export interface Target { game?: string }
 
-export const botmode = {
-  status: (t: Target = {}) => invoke<Status>("botmode_status", { ...t }),
-  releases: () => invoke<GithubRelease[]>("botmode_releases"),
-  /** Downloads and verifies a release into the app folder; does not touch the game. */
-  download: (tag: string, asset?: string, t: Target = {}) => invoke<ReleaseIndex>("botmode_download", { ...t, tag, asset }),
-  install: (tag: string, asset?: string, t: Target = {}) => invoke<InstallReport>("botmode_install", { ...t, tag, asset }),
-  /** Applies %APPDATA%\BotMatchStats\botmode\overlay.json, or `manifest`. */
-  overlay: (manifest?: string, t: Target = {}) => invoke<OverlayReport>("botmode_overlay", { ...t, manifest }),
-  /** Undoes the newest change; `id` must name that change when given. */
-  rollback: (id?: string, t: Target = {}) => invoke<RollbackReport>("botmode_rollback", { ...t, id }),
-  backups: (t: Target = {}) => invoke<Change[]>("botmode_backups", { ...t }),
-  /**
-   * Starts a session supervisor process, which turns Bot Mode on, starts CS2 through Steam,
-   * watches it until it exits (ending any CS2 of this install without -insecure) and turns
-   * Bot Mode off. Resolves once Steam has been asked; closing the app does not end the session.
-   */
-  launch: (t: Target = {}) => invoke<SessionView>("botmode_launch", { ...t }),
-  session: (t: Target = {}) => invoke<SessionView>("botmode_session", { ...t }),
-  /**
-   * Answers the recovery prompt. "off" turns Bot Mode off only while gameinfo.gi still has
-   * `expectHash`; "leave" changes nothing. Either stops the prompt. Rejects while CS2 is running.
-   */
-  recover: (answer: RecoverAnswer, t: Target = {}) => invoke<Recovered>("botmode_recover", { ...t, ...answer }),
-  setDifficulty: (level: Difficulty, t: Target = {}) => invoke<Change>("botmode_set_difficulty", { ...t, level }),
-  /** Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line. */
-  setCosmetics: (cosmetics: Cosmetics, t: Target = {}) => invoke<Change>("botmode_set_cosmetics", { ...t, cosmetics }),
-  setLaunchOptions: (options: string, t: Target = {}) => invoke<AppSettings>("botmode_set_launch_options", { ...t, options }),
-};
+/** How a call reaches the backend: Tauri's invoke, or a stand-in (mock.ts). */
+export type Call = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
+/** The Bot Mode commands over `call`. */
+export function botmodeOver(call: Call) {
+  return {
+    status: (t: Target = {}) => call<Status>("botmode_status", { ...t }),
+    releases: () => call<GithubRelease[]>("botmode_releases"),
+    /** Downloads and verifies a release into the app folder; does not touch the game. */
+    download: (tag: string, asset?: string, t: Target = {}) => call<ReleaseIndex>("botmode_download", { ...t, tag, asset }),
+    install: (tag: string, asset?: string, t: Target = {}) => call<InstallReport>("botmode_install", { ...t, tag, asset }),
+    /** Applies %APPDATA%\BotMatchStats\botmode\overlay.json, or `manifest`. */
+    /** `previewed`: the plan's sha256; a manifest changed since the preview is refused. */
+    overlay: (manifest?: string, previewed?: string, t: Target = {}) => call<OverlayReport>("botmode_overlay", { ...t, manifest, previewed }),
+    /** Undoes the newest change; `id` must name that change when given. */
+    rollback: (id?: string, t: Target = {}) => call<RollbackReport>("botmode_rollback", { ...t, id }),
+    backups: (t: Target = {}) => call<Change[]>("botmode_backups", { ...t }),
+    /**
+     * Starts a session supervisor process, which turns Bot Mode on, starts CS2 through Steam,
+     * watches it until it exits (ending any CS2 of this install without -insecure) and turns
+     * Bot Mode off. Resolves once Steam has been asked; closing the app does not end the session.
+     */
+    launch: (t: Target = {}) => call<SessionView>("botmode_launch", { ...t }),
+    session: (t: Target = {}) => call<SessionView>("botmode_session", { ...t }),
+    /**
+     * Answers the recovery prompt. "off" turns Bot Mode off only while gameinfo.gi still has
+     * `expectHash`; "leave" changes nothing. Either stops the prompt. Rejects while CS2 is running.
+     */
+    recover: (answer: RecoverAnswer, t: Target = {}) => call<Recovered>("botmode_recover", { ...t, ...answer }),
+    /** `seen`: the active profile's hash as the caller showed it (Status.activeProfile); refused when it has changed. */
+    setDifficulty: (level: Difficulty, seen?: { sha256: string | null }, t: Target = {}) => call<Change>("botmode_set_difficulty", { ...t, level, seen }),
+    /**
+     * Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line.
+     * With `seen`, the values this caller read, it writes nothing when the cfg no longer holds them.
+     */
+    setCosmetics: (cosmetics: Cosmetics, seen?: Cosmetics, t: Target = {}) => call<Change>("botmode_set_cosmetics", { ...t, cosmetics, seen }),
+    /** `seen`: the options as the caller showed them; refused when they have changed. */
+    setLaunchOptions: (options: string, seen?: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options, seen }),
+    /** null when BotRandomizer has no catalog in the game folder. */
+    catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
+    serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
+    /** What setServerCfg would write for `patch` now, line by line. Reads only. */
+    serverPreview: (patch: ServerPatch, t: Target = {}) => call<Preview>("botmode_server_preview", { ...t, patch }),
+    /** What Undo of settings change `id` would write, or why it would refuse. Reads only. */
+    serverUndoPlan: (id: string, t: Target = {}) => call<UndoPlan>("botmode_server_undo_plan", { ...t, id }),
+    /** Undoes settings change `id` as a new change; refused when a setting it wrote has changed since. */
+    serverUndo: (id: string, read?: ReadHashes, t: Target = {}) => call<Change>("botmode_server_undo", { ...t, id, read }),
+    /** What Repair would write for a missing knife file. Reads only. */
+    knifeRepairPlan: (t: Target = {}) => call<RepairPlan>("botmode_knife_repair_plan", { ...t }),
+    /** Writes the missing knife file back; refused when it would no longer write `seen`. */
+    knifeRepair: (seen: RepairPlan, t: Target = {}) => call<Change>("botmode_knife_repair", { ...t, seen }),
+    /** One change to the server cfg; refused, writing nothing, when it no longer holds `seen`. */
+    /** `read`, from a preview: also refused if either file's bytes changed since, so the write is what was shown. */
+    setServerCfg: (patch: ServerPatch, seen: ServerSettings, read?: ReadHashes, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen, read }),
+    /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */
+    running: (t: Target = {}) => call<RunningCs2[]>("botmode_running", { ...t }),
+    overlayPlan: (manifest?: string, t: Target = {}) => call<OverlayPlan>("botmode_overlay_plan", { ...t, manifest }),
+    /** The game files a recorded change wrote. */
+    changeFiles: (id: string, t: Target = {}) => call<string[]>("botmode_change_files", { ...t, id }),
+    /** The mod's Commands.txt at `tag`, from GitHub. */
+    modCommands: (tag: string) => call<string>("botmode_mod_commands", { tag }),
+  };
+}
+
+export type BotModeApi = ReturnType<typeof botmodeOver>;
+
+export const botmode: BotModeApi = botmodeOver(invoke);

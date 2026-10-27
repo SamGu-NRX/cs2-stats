@@ -963,6 +963,18 @@
      "String",
      "c97244ec16e34208"
     ],
+    "departed": [
+     "String",
+     "159c15b8d12cb074"
+    ],
+    "dropped_attempts": [
+     "String",
+     "159c15b8d12cb074"
+    ],
+    "excluded_players": [
+     "String",
+     "159c15b8d12cb074"
+    ],
     "extra": [
      "String",
      "eb4e847aa0b85bf0"
@@ -973,7 +985,7 @@
     ],
     "extractor_version": [
      "String",
-     "bf15f70b3380975d"
+     "efda5acb7ea0e440"
     ],
     "final_tick": [
      "Int32",
@@ -1027,6 +1039,10 @@
      "String",
      null
     ],
+    "parts": [
+     "String",
+     "159c15b8d12cb074"
+    ],
     "patch_version": [
      "String",
      "2641b1e1d059161c"
@@ -1066,6 +1082,10 @@
     "score_t_start": [
      "Int16",
      "d713ad7758fba4de"
+    ],
+    "scoreboard_taken": [
+     "String",
+     "eb4e847aa0b85bf0"
     ],
     "server_name": [
      "String",
@@ -1428,10 +1448,6 @@
   },
   "rounds": {
    "columns": {
-    "aborted": [
-     "Boolean",
-     "b2d10285cdc235dc"
-    ],
     "ct_equip_value": [
      "Int32",
      "6e0f503b26c87fa2"

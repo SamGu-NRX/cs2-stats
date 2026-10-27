@@ -50,6 +50,9 @@ import { DataValue, type Data } from "../data/provider";
 import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
 import { BarProvider } from "../shell/Bar";
 import { rosterTables } from "../../stats/roster";
+import { botmodeOver } from "../../botmode/commands";
+import { mockCall } from "../../botmode/mock";
+import { setBotModeApi } from "../data/botmode";
 import type { LeetifyBridge } from "../../host/leetify";
 import { encodeShareCode } from "../data/leetify/sharecode";
 import { SYNTHETIC_MATCHES, syntheticPayload, syntheticProfile, type SyntheticMatch } from "../data/leetify/synthetic";
@@ -227,6 +230,19 @@ function dataWith(over: Partial<Data> = {}): Data {
     ...over,
   };
 }
+
+// ---------------------------------------------------------------- Bot Mode
+
+// Bot Mode answers from a scripted game folder (botmode/mock.ts) whose folder, launch options, the
+// session's command line and a warning carry the sentinel path and SteamID.
+const CSGO = [HOME_DIR, "Games", "Steam", "steamapps", "common", "Counter-Strike Global Offensive", "game", "csgo"].join("\\");
+const bot = mockCall("installed");
+bot.state.status.csgo = CSGO;
+bot.state.status.launchOptions = `+exec "${HOME_DIR}\\cfg\\bots.cfg"`;
+bot.state.status.warnings = [`${CSGO}\\addons is a junction or symbolic link; Bot Mode does not read or write through it, so its files are not shown.`];
+const line = `"${CSGO}\\..\\bin\\win64\\cs2.exe" -insecure +connect_lobby ${ID}`;
+bot.state.session.status = { ...bot.state.session.status!, verdicts: [{ verdict: "safe", pid: 1, commandLine: line }], outcome: { outcome: "exited", checked: [{ verdict: "safe", pid: 1, commandLine: line }] } };
+setBotModeApi(botmodeOver(bot));
 
 // ---------------------------------------------------------------- rendering
 
@@ -534,6 +550,20 @@ describe("Hide personal info", () => {
     expect(found(union).sort()).toEqual([...SENTINELS].sort());
     expect(visible).toContain(FILE);
   }, 120_000);
+
+  it("hides the game folder, launch options and session command line on Bot Mode, which reach the page with the setting off", async () => {
+    const off = await show(pageHref("botmode"), dataWith());
+    const pane = () => document.querySelector(".pane")!.outerHTML;
+    expect(off.html).toContain("bm-hero");
+    expect(found(pane()).sort()).toEqual([ID, "SENTINEL_USER"].sort());
+    hidePersonal(true);
+    const on = await show(pageHref("botmode"), dataWith());
+    expect(found(on.html)).toEqual([]);
+    // the launch options hold a path, so the field shows them hidden and cannot be edited
+    const opts = document.querySelector<HTMLInputElement>("#bm-launch-opts")!;
+    expect([opts.value, opts.readOnly]).toEqual(['+exec "<path>"', true]);
+    expect(document.querySelector(".bm-folder")?.textContent).toBe("CS2 folder <path>");
+  }, 30_000);
 
   it("replaces identity, never numbers: the scoreboard's figures are the same either way", async () => {
     const figures = async () => {

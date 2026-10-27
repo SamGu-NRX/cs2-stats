@@ -36,7 +36,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 # Rust thread pools (demoparser2, awpy, polars) default to every core and read
-# these at import; the pipeline runs up to 4 workers, so cap each one first.
+# these at import; the pipeline runs several workers at once, so cap each one first.
 os.environ.setdefault("RAYON_NUM_THREADS", "4")
 os.environ.setdefault("POLARS_MAX_THREADS", "4")
 
@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.13.0"
+EXTRACTOR_VERSION = "1.15.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -200,6 +200,22 @@ def check_purchase_cost(item: str, cost: int) -> str | None:
 # Validation (pure functions over DataFrames; unit-tested)
 # ---------------------------------------------------------------------------
 
+def counted_events(kills: pd.DataFrame) -> dict[int, dict[str, int]]:
+    """Per player, the counted kills table's enemy kills, selfkills (suicides and team kills), deaths, credited
+    assists and enemy headshot kills, as validate_scoreboard counts them."""
+    enemy = kills[~kills.is_teamkill & ~kills.is_suicide & kills.attacker_steamid.notna()]
+    credited = (kills.assister_side != kills.v_side).fillna(True).astype(bool)
+    out: dict[int, dict[str, int]] = {}
+    for key, ids in (("kills", enemy.attacker_steamid),
+                     ("selfkills", pd.concat([kills.attacker_steamid[kills.is_teamkill & ~kills.is_suicide],
+                                              kills.victim_steamid[kills.is_suicide]])),
+                     ("deaths", kills.victim_steamid), ("assists", kills.assister_steamid[credited]),
+                     ("headshots", enemy.attacker_steamid[enemy.headshot.astype(bool)])):
+        for s_, n in ids.dropna().astype("int64").value_counts().items():
+            out.setdefault(int(s_), {})[key] = int(n)
+    return out
+
+
 def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreboard: pd.DataFrame,
                         departed: pd.DataFrame | None = None, players=()) -> list[dict]:
     """Compare event-derived K/D/A, and the per-round damage counter, with the final-tick scoreboard.
@@ -268,8 +284,7 @@ def validate_rounds(rounds: pd.DataFrame, final_score: dict[str, int]) -> list[d
     for r in rounds.itertuples():
         ticks = (r.start_tick, r.freeze_end_tick, r.end_tick)
         actual = [None if pd.isna(t) else int(t) for t in ticks]
-        why = ("recording began with round 1 live; no freeze end" if getattr(r, "started_live", False) else
-               "aborted round; it may end before its freeze end" if getattr(r, "aborted", False) else None)
+        why = "recording began with round 1 live; no freeze end" if getattr(r, "started_live", False) else None
         if why and pd.isna(r.freeze_end_tick) and not pd.isna(r.start_tick) and r.start_tick <= r.end_tick:
             checks.append(dict(check="round_ticks", round=int(r.round), expected="start<=end", actual=actual,
                                ok=True, fatal=False, note=why))
@@ -279,9 +294,8 @@ def validate_rounds(rounds: pd.DataFrame, final_score: dict[str, int]) -> list[d
         checks.append(dict(check="round_ticks", round=int(r.round), expected="start<=freeze_end<=end",
                            actual=actual, ok=bool(ordered), fatal=True, note=""))
     total = sum(final_score.values())
-    played = int((~rounds["aborted"]).sum()) if "aborted" in rounds else len(rounds)
-    checks.append(dict(check="round_count", expected=total, actual=played, ok=total == played, fatal=True,
-                       note="aborted rounds have no winner and are not counted" if played != len(rounds) else ""))
+    checks.append(dict(check="round_count", expected=total, actual=len(rounds), ok=total == len(rounds), fatal=True,
+                       note=""))
     wins = rounds.winner_team.value_counts().to_dict()
     for team, score in final_score.items():
         checks.append(dict(check="team_wins", team=team, expected=int(score), actual=int(wins.get(team, 0)),
@@ -446,22 +460,322 @@ def match_start_tick(begin_new_match: list[int], real_round_end_ticks: list[int]
     return max(followed) if followed else 0
 
 
-RESTORE_SETTLE_S = 1.0  # how long after a restore tick its counters are read
+# A dropped attempt's part in each counter is read from its own events (attempt_events), never from the
+# counters around it; a player's kept attempts are the one subset of them whose events explain what the
+# scoreboard holds beyond the counted rounds (kept_subsets). That enumerates 2^n subsets.
+MAX_DROPPED_ATTEMPTS = 8
+ATTEMPT_COUNTERS = ("kills", "selfkills", "deaths", "assists", "headshots", "damage")
 
 
-def restore_settle_ticks(rate: float) -> int:
-    return int(round(RESTORE_SETTLE_S * rate))
+def replaced_by(rounds: pd.DataFrame, b: int) -> int | None:
+    """The counted round that replaced a dropped attempt ending on tick b: the first to start on or after it."""
+    later = rounds["round"][rounds.start_tick >= b]
+    return int(later.min()) if len(later) else None
 
 
-def split_restores(windows: list[tuple[int, int]], kills_plus_deaths: dict[int, int], rate: float):
-    """(rolled_back, aborted): an attempt is rolled back when the players' kills plus deaths are the same
-    RESTORE_SETTLE_S after its restore tick as at its start; otherwise the game kept its stats."""
-    settle = restore_settle_ticks(rate)
-    rolled_back, aborted = [], []
+def attempts_per_round(rounds: pd.DataFrame, voided: list[tuple[int, int]]) -> list[int]:
+    """rounds.voided_attempts: how many dropped attempts (voided windows, merged) each round replaced, so it agrees
+    with match.dropped_attempts. Counted before merging, a round restored twice read 2 against one attempt."""
+    replaced = [replaced_by(rounds, b) for _, b in voided]
+    return [replaced.count(int(r)) for r in rounds["round"]]
+
+
+def check_dropped_attempts(rounds: pd.DataFrame, voided: list[tuple[int, int]]) -> None:
+    """Raise unless every dropped attempt lies outside the counted rounds (each has a winner, and none may lose
+    its events) and there are at most MAX_DROPPED_ATTEMPTS of them. An attempt may end on a round's start tick."""
+    for a, b in voided:
+        inside = rounds[(rounds.end_tick >= a) & (rounds.start_tick.fillna(rounds.end_tick) < b)]
+        if len(inside):
+            raise RuntimeError(f"the dropped attempt {a}-{b} covers round {int(inside['round'].iloc[0])}, which has a winner")
+    if len(voided) > MAX_DROPPED_ATTEMPTS:
+        raise RuntimeError(f"{len(voided)} dropped attempts; at most {MAX_DROPPED_ATTEMPTS} are attributed")
+
+
+def attempt_events(windows: list[tuple[int, int]], restores: set[int], deaths: pd.DataFrame,
+                   hurts: pd.DataFrame) -> list[dict[int, dict[str, int]]]:
+    """Per dropped attempt (voided window [a, b]), each player's part in its own events, which the tables leave
+    out: enemy kills, selfkills (suicides and team kills, which the game may deduct from kills), deaths,
+    credited assists, enemy headshot kills, and damage dealt to enemies (player_hurt dmg_health). Events on a
+    restore tick are not the attempt's: the restore kills every player with "world" there, and the game
+    counted none of those deaths (deaths_total unchanged across one pro demo's restore at 97787).
+
+    deaths: tick, attacker_steamid, victim_steamid, assister_steamid, a_team, v_team, as_team, headshot.
+    hurts: tick, attacker_steamid, victim_steamid, a_team, v_team, dmg_health.
+    """
+    out = []
     for a, b in windows:
-        same = kills_plus_deaths.get(b + settle, 0) == kills_plus_deaths.get(a, 0)
-        (rolled_back if same else aborted).append((a, b))
-    return rolled_back, aborted
+        d = deaths[(deaths.tick >= a) & (deaths.tick <= b) & ~deaths.tick.isin(restores)]
+        h = hurts[(hurts.tick >= a) & (hurts.tick <= b) & ~hurts.tick.isin(restores)]
+        c: dict[int, dict[str, int]] = {}
+
+        def add(ids, key, weights=None):
+            ids = ids.dropna().astype("int64")
+            w = weights.loc[ids.index] if weights is not None else pd.Series(1, index=ids.index)
+            for s_, n in w.groupby(ids).sum().items():
+                c.setdefault(int(s_), dict.fromkeys(ATTEMPT_COUNTERS, 0))[key] += int(n)
+
+        own = (d.attacker_steamid == d.victim_steamid).fillna(False).astype(bool)
+        team = (d.a_team == d.v_team).fillna(False).astype(bool) & ~own
+        enemy = d[~own & ~team]
+        add(enemy.attacker_steamid, "kills")
+        add(d.attacker_steamid[own | team], "selfkills")
+        add(d.victim_steamid, "deaths")
+        add(d.assister_steamid[(d.as_team != d.v_team).fillna(True).astype(bool)], "assists")
+        add(enemy.attacker_steamid[enemy.headshot.fillna(False).astype(bool)], "headshots")
+        hit = h[(h.a_team != h.v_team).fillna(False).astype(bool)]
+        add(hit.attacker_steamid, "damage", hit.dmg_health.fillna(0).astype("int64"))
+        out.append(c)
+    return out
+
+
+def kept_subsets(residual: dict[str, int], counted_selfkills: int, events: list[dict[str, int] | None],
+                 match_headshots: bool = True) -> list[tuple[tuple[int, ...], int]]:
+    """Every subset of the attempts (indices into events; None for an attempt that cannot be this player's)
+    whose events explain the player's residual at once, with the kills to take off the scoreboard for it.
+
+    residual: kills, deaths, assists and headshots on the scoreboard (less the round-1 baseline) minus the
+    counted events' (as validate_scoreboard counts them). A restore keeps or rolls back a player's whole
+    attempt, so one subset must explain all four: deaths, assists and headshots exactly, kills either with no
+    suicide or team kill deducted or with all of them deducted, counted ones included (the check accepts
+    either). Attempts with no kill, suicide, death or assist of his are left out: no counter shows whether the
+    game kept them. match_headshots=False leaves headshots out of the match.
+    """
+    import itertools
+    idx = [i for i, e in enumerate(events)
+           if e and any(e[k] for k in ("kills", "selfkills", "deaths", "assists", "headshots"))]
+    found = []
+    for r in range(len(idx) + 1):
+        for subset in itertools.combinations(idx, r):
+            sm = {k: sum(events[i][k] for i in subset) for k in ATTEMPT_COUNTERS}
+            if (sm["deaths"], sm["assists"]) != (residual["deaths"], residual["assists"]):
+                continue
+            if match_headshots and sm["headshots"] != residual["headshots"]:
+                continue
+            if residual["kills"] == sm["kills"]:
+                found.append((subset, sm["kills"]))
+            elif residual["kills"] == sm["kills"] - sm["selfkills"] - counted_selfkills:
+                found.append((subset, sm["kills"] - sm["selfkills"]))
+    return found
+
+
+def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: dict[int, int],
+                       events: list[dict[int, dict[str, int]]], candidates: dict[int, set[int]],
+                       damage_gap) -> tuple[dict[int, dict[str, int]], dict[int, tuple[int, ...]], list[str], list[str]]:
+    """(scoreboard columns to take off per player, his kept attempts, problems, warnings) for the dropped attempts.
+
+    Each player's kept attempts are the one subset of his candidate attempts (candidates: indices) that
+    kept_subsets finds; none, or two that differ, is a problem with the numbers, and the map is refused. Damage
+    a kept attempt dealt is committed on the next round start, inside the round before it, where it cannot be
+    split from that round's: a problem too. So is damage in an attempt his other counters cannot place, when
+    the round before it holds at least that much game damage no hit of his explains (damage_gap(steamid,
+    attempt index)): it may have been kept.
+    Headshot kills are the scoreboard check's one non-fatal counter: when one subset explains everything else and
+    only headshots differ, that is a warning with the numbers, not a problem.
+    """
+    take, kept, problems, warnings = {}, {}, [], []
+    for sid in sorted(set(residuals) | {s for e in events for s in e}):
+        res = residuals.get(sid, dict(kills=0, deaths=0, assists=0, headshots=0))
+        cand = candidates.get(sid, set())
+        evs = [e.get(sid) if i in cand else None for i, e in enumerate(events)]
+        found = kept_subsets(res, counted_selfkills.get(sid, 0), evs)
+        if not found:
+            found = kept_subsets(res, counted_selfkills.get(sid, 0), evs, match_headshots=False)
+            if len({f[0] for f in found}) == 1:
+                hs = sum(evs[i]["headshots"] for i in found[0][0])
+                warnings.append(f"player {sid}: headshot kills on the scoreboard beyond the counted ones: "
+                                f"{res['headshots']}, of which his kept attempts explain {hs}")
+        if not found:
+            problems.append(f"player {sid}: the scoreboard holds {res} beyond the counted events, which no set of "
+                            f"his dropped attempts' events explains: {[e for e in evs if e]}")
+            continue
+        if len({f[0] for f in found}) > 1:
+            problems.append(f"player {sid}: dropped attempts {sorted({f[0] for f in found})} each explain {res}")
+            continue
+        subset, kills_off = found[0]
+        kept[sid] = subset
+        if any(evs[i]["damage"] for i in subset):
+            problems.append(f"player {sid}: a kept dropped attempt dealt {sum(evs[i]['damage'] for i in subset)} "
+                            "damage, which the game committed inside the round before it")
+        for i, e in enumerate(evs):
+            undetermined = not any(e[k] for k in ("kills", "selfkills", "deaths", "assists")) if e else False
+            if e and i not in subset and e["damage"] and undetermined and damage_gap(sid, i) >= e["damage"]:
+                problems.append(f"player {sid}: dropped attempt {i} dealt {e['damage']} damage and the round before it "
+                                f"holds {damage_gap(sid, i)} game damage no hit explains; it may have been kept")
+        if subset:
+            sums = {k: sum(evs[i][k] for i in subset) for k in ("deaths", "assists", "headshots")}
+            take[sid] = {"kills_total": kills_off, "deaths_total": sums["deaths"], "assists_total": sums["assists"],
+                         "headshot_kills_total": sums["headshots"]}
+    return take, kept, problems, warnings
+
+
+def baseline_rise_explained(sid: int, excess: dict[str, int], events: list[dict[str, int] | None]) -> bool:
+    """Whether exactly one subset of the attempts before round 1 (events: the player's, None for one that is not a
+    candidate) explains a rise in round 1's freeze time no row explains; the rise is then the baseline's. None
+    explaining returns False (the baseline then refuses the rise); two different ones raise with the numbers."""
+    res = {k: excess.get(c, 0) for k, c in (("kills", "kills_total"), ("deaths", "deaths_total"),
+                                            ("assists", "assists_total"), ("headshots", "headshot_kills_total"))}
+    found = {f[0] for f in kept_subsets(res, 0, events)}
+    if len(found) > 1:
+        raise RuntimeError(f"player {sid}'s rise {res} before round 1's freeze end: dropped attempts {sorted(found)} "
+                           "each explain it, so the baseline cannot be read")
+    return bool(found)
+
+
+def bomb_rows_name_a_player(bomb: pd.DataFrame) -> dict:
+    """The check that every bomb row but an explosion names its player, as the bomb key (tick, event, steamid)
+    assumes: a pickup or plant with no SteamID would hide a second one on its tick."""
+    bad = bomb[bomb.steamid.isna() & (bomb.event != "exploded")]
+    return dict(check="bomb_rows_name_a_player", expected=0, actual=len(bad), ok=bad.empty, fatal=True,
+                note="" if bad.empty else str(bad[["tick", "event"]].head(5).values.tolist()))
+
+
+# Events a sixth slot must have none of (non_combatants), and the column naming who did each.
+ACTING_EVENTS = {"weapon_fire": "user", "grenade_thrown": "user", "item_purchase": ""}
+
+
+def acting_players(events: dict[str, pd.DataFrame], pid) -> pd.Series:
+    """Who fired, threw or bought in events (name -> rows), each read from its own event's player column:
+    item_purchase names its buyer in a bare steamid column, and read as user_steamid every buyer was lost."""
+    return pd.concat([pid(events[n], ACTING_EVENTS[n]) for n in ACTING_EVENTS if n in events], ignore_index=True)
+
+
+def candidate_attempts(windows: list[tuple[int, int]], row_tick: int, in_baseline: set[int]) -> set[int]:
+    """The dropped attempts a player's scoreboard row (read on row_tick) can hold: every one that began before it,
+    including one he left during (a row read at his disconnect inside it holds what he did there), less those
+    already inside his round-1 baseline (in_baseline: their indices, empty for a player with no baseline row)."""
+    return {i for i, (a, _) in enumerate(windows) if a < row_tick and i not in in_baseline}
+
+
+def less_taken(df: pd.DataFrame, take: dict[int, dict[str, int]]) -> pd.DataFrame:
+    """Scoreboard rows less what the kept dropped attempts put on them."""
+    out = df.copy()
+    for c in ("kills_total", "deaths_total", "assists_total", "headshot_kills_total"):
+        out[c] = [int(v) - take.get(int(s_), {}).get(c, 0) for s_, v in zip(df.steamid, df[c])]
+    return out
+
+
+TEAM_SIZE = 5  # HLTV lists five players a team
+
+
+def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
+                   sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame) -> dict[int, str]:
+    """{steamid: reason} for each team's sixth slot that takes no part in the match: a coach the server
+    spawns every round and then kills with damage from no weapon (three HLTV archives of one team: spawned
+    in all 19-22 rounds, 17-23 such deaths, no player_death, no kill, no hit on anyone, no shot, grenade or
+    purchase; the C4 handed to him and on to a teammate on the same spawn tick gave the bomb table two
+    pickups, and his death counter, reset at every spawn, failed the scoreboard check).
+
+    A player qualifies only if he
+    - spawns inside [start_tick, end_tick] of every round with any recorded spawn (round 1 of a recording that
+      begins on its round_start has none);
+    - is in no player_death row (killer, victim or assister), hurts nobody else, and takes hits only from
+      himself with no weapon, at least one;
+    - fires no weapon, throws no grenade and buys nothing (acts: steamid of each weapon_fire, grenade_thrown
+      and item_purchase);
+    - has no bomb event but a pickup on a spawn tick on which another player picks the C4 up too (the
+      handoff; bomb: tick, event, steamid).
+    Excluding the qualifiers must leave every side of every round exactly TEAM_SIZE players or fewer, with none
+    under TEAM_SIZE that was not already (sides: round, steamid, side); otherwise this raises, naming each
+    extra player and the conditions he failed, and nobody is excluded.
+    rounds: round, start_tick, end_tick. spawns: tick, steamid. deaths: attacker_steamid, victim_steamid,
+    assister_steamid. hurts: attacker_steamid, victim_steamid, weapon. All steamids already resolved.
+    """
+    ids = lambda col: set(col.dropna().astype("int64"))
+    players = ids(sides.steamid)
+    failed: dict[int, list[str]] = {s_: [] for s_ in players}
+    spawned = None
+    for r in rounds.itertuples():
+        lo = r.start_tick if not pd.isna(r.start_tick) else r.end_tick
+        in_round = ids(spawns.steamid[(spawns.tick >= lo) & (spawns.tick <= r.end_tick)])
+        if in_round:  # a recording that begins after a round's spawns has none for that round
+            spawned = in_round if spawned is None else spawned & in_round
+    a, v = hurts.attacker_steamid, hurts.victim_steamid
+    own_no_weapon = ((a == v).fillna(False) & hurts.weapon.fillna("").astype(str).str.strip().eq("")).astype(bool)
+    pickups = bomb[bomb.event.isin(["pickup", "bomb_pickup"])]
+    handoff_ticks = set(pickups.tick[pickups.tick.isin(set(spawns.tick))].groupby(pickups.tick).size().loc[lambda n: n > 1].index) \
+        if len(pickups) else set()
+    other_bomb = bomb[~(bomb.event.isin(["pickup", "bomb_pickup"]) & bomb.tick.isin(handoff_ticks))]
+    for s_ in players:
+        if spawned is not None and s_ not in spawned:
+            failed[s_].append("misses a round's spawn")
+    for what, who in (("is in a player_death row", ids(deaths.attacker_steamid) | ids(deaths.victim_steamid)
+                       | ids(deaths.assister_steamid)),
+                      ("hurt someone", ids(a[(a != v).fillna(True)])),
+                      ("was hurt by something else", ids(v[~own_no_weapon])),
+                      ("fired, threw or bought", ids(acts.steamid)),
+                      ("has a bomb event besides the spawn handoff", ids(other_bomb.steamid))):
+        for s_ in who & players:
+            failed[s_].append(what)
+    for s_ in players - ids(v[own_no_weapon]):
+        failed[s_].append("never killed by his own hit from no weapon")
+    out = {s_: "a sixth slot that spawns every round and dies only to its own damage from no weapon, with no kill, "
+               "death, hit, shot, grenade, purchase or bomb event (a coach)" for s_ in sorted(players) if not failed[s_]}
+    full = sides.groupby(["round", "side"]).steamid.nunique()
+    left = sides[~sides.steamid.isin(list(out))].groupby(["round", "side"]).steamid.nunique().reindex(full.index, fill_value=0)
+    short = left[(left < TEAM_SIZE) & (left < full)]
+    if len(short):
+        (rnd, side), n = next(iter(short.items()))
+        raise RuntimeError(f"players {sorted(out)} take no part in the match, but without them side {side} of "
+                           f"round {rnd} has {int(n)} players, fewer than {TEAM_SIZE}; not excluding anyone")
+    over = left[left > TEAM_SIZE]
+    if len(over):
+        (rnd, side), n = next(iter(over.items()))
+        extra = sorted(sides.steamid[(sides["round"] == rnd) & (sides.side == side)].astype("int64"))
+        detail = {s_: failed.get(s_) for s_ in extra if s_ not in out}
+        raise RuntimeError(f"side {side} of round {rnd} has {int(n)} players and no sixth slot qualifies to be left out: "
+                           + "; ".join(f"{s_}: {', '.join(f) or 'qualifies'}" for s_, f in detail.items()))
+    return out
+
+
+def drop_players(T: dict[str, pd.DataFrame], ids: set[int]) -> dict[str, pd.DataFrame]:
+    """The tables without the players in ids: every row naming one in a steamid column, his SteamID in a
+    positions.spotted_by list, and the engagement_ticks of an engagement that went (they carry no SteamID).
+    rounds keeps every row; a planter_steamid or defuser_steamid naming one of them becomes null."""
+    out = {}
+    for name, df in T.items():
+        cols = [c for c in df.columns if c == "steamid" or c.endswith("_steamid")]
+        if name == "rounds":
+            out[name] = df.assign(**{c: df[c].where(~df[c].isin(list(ids)).fillna(False).astype(bool)) for c in cols})
+            continue
+        if not cols:
+            out[name] = df
+            continue
+        hit = np.logical_or.reduce([df[c].isin(list(ids)).fillna(False).to_numpy(dtype=bool) for c in cols])
+        out[name] = df[~hit].reset_index(drop=True)
+    if "positions" in out and "spotted_by" in out["positions"]:
+        out["positions"] = out["positions"].assign(
+            spotted_by=[[x for x in v if x not in ids] for v in out["positions"].spotted_by])
+    if "engagement_ticks" in out and "engagements" in out:
+        et = out["engagement_ticks"]
+        out["engagement_ticks"] = et[et.engagement_id.isin(out["engagements"].engagement_id)].reset_index(drop=True)
+    return out
+
+
+def restore_ticks_before_match(death_ticks: pd.Series, weapons: pd.Series, first_start, match_start: int) -> list[int]:
+    """Ticks from round 1's start up to begin_new_match on which someone died to "world": a backup restore
+    with no winnerless round_end (one HLTV split recording's second part: round_start at 0, ten "world"
+    deaths and two bomb pickups that name no player on 0, begin_new_match at 1, and no game counter moved).
+    A normal start hands out the C4 and the default weapons on that tick, with no death, and keeps them."""
+    if first_start is None or pd.isna(first_start):
+        return []
+    return sorted({int(t) for t, w in zip(death_ticks, weapons) if str(w) == "world" and first_start <= t < match_start})
+
+
+def merge_windows(windows) -> list[tuple[int, int]]:
+    """Inclusive [a, b] tick windows, with any that overlap or share a tick joined into one.
+
+    A round restored twice yields a window per restore plus one from its first start to its last (one HLTV
+    demo: restores at 10108 and 10176 gave 4638-10108, 10108-10176 and 4638-10176). Measured one at a time,
+    the first was read inside the second attempt, after a death there, and the three became three rows of
+    the rounds table, two sharing one freeze end and one with no economy. Joined, they are one attempt.
+    """
+    merged: list[tuple[int, int]] = []
+    for a, b in sorted(windows):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
 
 
 def real_round_ends(round_ends: pd.DataFrame) -> pd.Series:
@@ -477,7 +791,7 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
     A backup restore replays a round: its earlier attempt has a round_start but
     no round_end. The round's start is the last round_start before its freeze
     end; earlier starts after the previous round's end open voided windows,
-    whose events are dropped (the game rolls their stats back too).
+    whose events are dropped.
     """
     rs = np.sort(np.asarray(round_starts, dtype=np.int64))
     fe = np.sort(np.asarray(freeze_ends, dtype=np.int64))
@@ -519,7 +833,10 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
             # (deaths_total summed 68 -> 67 on one). A winnerless round_end on begin_new_match's own tick is the
             # recording's leftover first round_end, not a restore (one pro demo: tick 0, no deaths), and stays.
             voided.append((int(r_tick), int(r_tick)))
-    return pd.DataFrame(rows), sorted(set(voided))
+    rounds, voided = pd.DataFrame(rows), merge_windows(set(voided))
+    if len(rounds):
+        rounds["voided_attempts"] = attempts_per_round(rounds, voided)
+    return rounds, voided
 
 
 def assign_rounds(ticks: pd.Series, rounds: pd.DataFrame, voided: list[tuple[int, int]],
@@ -702,7 +1019,8 @@ def settle_tick(t: int, guard: pd.DataFrame, rate: float) -> int:
 
 
 def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guard: pd.DataFrame, rate: float,
-                        match_start: int = 0, ids=lambda rows: rows.steamid) -> pd.DataFrame:
+                        match_start: int = 0, ids=lambda rows: rows.steamid, skip=(),
+                        explain=lambda sid, excess: False) -> pd.DataFrame:
     """BASELINE_PROPS per player before the first counted round: zero for a whole match, the earlier parts'
     totals for a later part of a split recording (one demo's second part starts at 8-8 with kills and damage
     carried over). Empty for a round 1 recorded already live.
@@ -719,7 +1037,9 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     - a rise between the player's first recorded tick in the window (from round 1's start, or the tick after
       begin_new_match when later) and freeze end that his death, kill or assist rows there cannot explain: a
       death the demo lost.
-    ids: the player ids of parsed rows (resolve_ids for bots).
+    ids: the player ids of parsed rows (resolve_ids for bots). skip: player ids left out (non_combatants).
+    explain(steamid, {counter: excess}): whether a dropped attempt before round 1 explains a rise no row does
+    (its events, by the same rule as the scoreboard's: attribute_attempts); the rise then stays in the baseline.
     """
     fe1 = rounds.freeze_end_tick.iloc[0]
     if pd.isna(fe1):
@@ -727,11 +1047,13 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     fe1 = int(fe1)
     base = read_at(parser, BASELINE_PROPS, [fe1], after=False, guard=guard, rate=rate)
     base["steamid"] = ids(base)
+    base = base[~base.steamid.isin(list(skip))]
     deaths = deaths[deaths.tick <= fe1]
     who = {c: col(deaths, c, None) for c in ("victim_steamid", "attacker_steamid", "assister_steamid")}
 
     def keyed(df):
         df = df.assign(steamid=ids(df)).dropna(subset=["steamid"])
+        df = df[~df.steamid.isin(list(skip))]
         df = df.assign(tick=df.tick.astype("int64"), steamid=df.steamid.astype("int64"))
         return df.drop_duplicates(["tick", "steamid"]).set_index(["tick", "steamid"])[DEATH_COUNTERS]
 
@@ -752,6 +1074,9 @@ def scoreboard_baseline(parser, rounds: pd.DataFrame, deaths: pd.DataFrame, guar
     for sid, r in (end - first[DEATH_COUNTERS]).dropna().iterrows():
         f = int(first.tick[sid])
         explained = rows_of((deaths.tick > f).to_numpy())
+        excess = {c: int(r[c]) - int(explained[c].get(sid, 0)) for c in DEATH_COUNTERS}
+        if any(v > 0 for v in excess.values()) and explain(int(sid), excess):
+            continue
         for c in DEATH_COUNTERS:
             if r[c] > explained[c].get(sid, 0):
                 raise RuntimeError(f"player {sid}'s {c} rose by {int(r[c])} between ticks {f} and {fe1}, with "
@@ -959,38 +1284,22 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                              match_start)
         if rounds.empty:
             raise RuntimeError("no round_end events after match start")
+        dth = ev("player_death")
+        restores_pre_match = set(restore_ticks_before_match(dth.tick, col(dth, "weapon", ""),
+                                                            rounds.start_tick.iloc[0], match_start))
+        voided = merge_windows(set(voided) | {(t, t) for t in restores_pre_match})
         if ctx.truncated:
             # Without awpy's playback header, measure the tick rate from game time across the match.
             fe_t = sorted(int(t) for t in ev("round_freeze_end").tick if t >= match_start)
             gt = parser.parse_ticks(["game_time"], ticks=[fe_t[0], fe_t[-1]]).drop_duplicates("tick") \
                 .set_index("tick").game_time
             rate = ctx.tick_rate = round((fe_t[-1] - fe_t[0]) / float(gt[fe_t[-1]] - gt[fe_t[0]]), 3)
-        # A winnerless round end does not always roll stats back. The game's counters decide: if kills plus
-        # deaths are the same just after the restore as at the attempt's start, the attempt was rolled back
-        # and stays voided; otherwise its events count, and it becomes a round with aborted = true and no
-        # winner (one pro demo: a world suicide at 78957 inside the 78153-97787 attempt raised
-        # deaths_total 7 -> 8 and stayed counted, while the 45420-57646 attempt rolled back).
-        settle = restore_settle_ticks(rate)
-        counters = read_at(parser, ["kills_total", "deaths_total"],
-                           {t for a_, b_ in voided for t in (a_, b_ + settle)}, after=True, guard=guard, rate=rate)
-        total_at = (counters.kills_total + counters.deaths_total).groupby(counters.tick).sum()
-        rolled_back, aborted = split_restores(voided, total_at.to_dict(), rate)
-        if aborted:
-            fe_all = np.sort(ev("round_freeze_end").tick.to_numpy())
-            extra = []
-            for a_, b_ in aborted:
-                fe_in = fe_all[(fe_all >= a_) & (fe_all <= b_)]
-                extra.append(dict(start_tick=a_, freeze_end_tick=int(fe_in.max()) if len(fe_in) else None,
-                                  end_tick=b_, started_live=False, winner_side=None, reason="aborted",
-                                  voided_attempts=0, aborted=True))
-            rounds = pd.concat([rounds.assign(aborted=False), pd.DataFrame(extra)], ignore_index=True) \
-                .sort_values("start_tick", kind="stable").reset_index(drop=True)
-            rounds["round"] = np.arange(1, len(rounds) + 1)
-        else:
-            rounds["aborted"] = False
-        # The restore tick itself is voided either way: every player dies to "world" on it, and the game
-        # never counts those deaths (deaths_total unchanged across 97787 on that demo).
-        voided = rolled_back + [(b_, b_) for _, b_ in aborted]
+        # A winnerless attempt (a backup restore) is never a counted round: it has no winner, and HLTV lists
+        # only rounds with one. Its events are dropped even when the game kept some of its stats (one HLTV
+        # demo: two restored attempts before round 1 left one player at 14 kills and 21 deaths on the
+        # scoreboard; HLTV has 12 and 17, the counted rounds alone). What the game kept is read from each
+        # attempt's own events (attribute_attempts) and taken off the scoreboard before validation.
+        restores = ({int(t) for t in re_all.tick[~real_round_ends(re_all)]} if len(re_all) else set()) | restores_pre_match
         off = ev("round_officially_ended")
         offt = np.sort(off.tick.to_numpy()) if len(off) else np.array([], dtype=np.int64)
         rounds["official_end_tick"] = [int(offt[offt >= e].min()) if (offt >= e).any() else None
@@ -1004,6 +1313,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 rounds = rounds.iloc[:-1].reset_index(drop=True)
             if rounds.empty:
                 raise RuntimeError(f"{TRUNCATED}: no complete round before the cut")
+        check_dropped_attempts(rounds, voided)
+        rounds["voided_attempts"] = attempts_per_round(rounds, voided)
 
     # The final scoreboard is read at game over: the win panel. A demo without one (the first part of a
     # split recording, or a recording that stops) is read at the next round start after its last round,
@@ -1062,11 +1373,57 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
 
     for df in (pos, econ_raw, sb, dmg_counter, score_at):
         df["steamid"] = resolve_ids(df.steamid, df.name, bots)
+    # A team's sixth slot that takes no part (non_combatants) is dropped from every table and every check.
+    in_match = lambda df: df[(assign_rounds(df.tick, rounds, voided, final_tick) > 0).to_numpy()]
+    d_, h_, sp_ = in_match(ev("player_death")), in_match(ev("player_hurt")), ev("player_spawn")
+    team_rows = econ_raw[econ_raw.team_num.isin([2, 3]) & econ_raw.steamid.notna()]
+    tick_round = dict(zip(rounds.team_tick, rounds["round"]))
+    excluded = non_combatants(
+        rounds[["round", "start_tick", "end_tick"]],
+        pd.DataFrame({"tick": sp_.tick, "steamid": pid(sp_, "user")}),
+        pd.DataFrame({c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"), ("victim_steamid", "user"),
+                                                 ("assister_steamid", "assister"))}),
+        pd.DataFrame({"attacker_steamid": pid(h_, "attacker"), "victim_steamid": pid(h_, "user"),
+                      "weapon": col(h_, "weapon", None)}),
+        pd.DataFrame({"round": team_rows.tick.map(tick_round), "steamid": team_rows.steamid.astype("int64"),
+                      "side": team_rows.team_num.map(SIDE)}).dropna(subset=["round"]),
+        pd.DataFrame({"steamid": acting_players({n: in_match(ev(n)) for n in ACTING_EVENTS}, pid)}),
+        pd.concat([pd.DataFrame({"tick": in_match(ev(n)).tick, "event": n, "steamid": pid(in_match(ev(n)), "user")})
+                   for n in ("bomb_pickup", "bomb_dropped", "bomb_beginplant", "bomb_planted", "bomb_abortplant",
+                             "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True))
+    drop_ids = list(excluded)
+    if excluded:
+        names_ = pos.dropna(subset=["steamid"]).groupby("steamid").name.last()
+        excluded_rows = [dict(steamid=str(s_), name=names_.get(s_), reason=r_) for s_, r_ in excluded.items()]
+        pos, econ_raw, sb, dmg_counter, score_at = (df[~df.steamid.isin(drop_ids)].copy()
+                                                    for df in (pos, econ_raw, sb, dmg_counter, score_at))
+    else:
+        excluded_rows = []
+    dth, hrt = ev("player_death"), ev("player_hurt")
+    att_deaths = pd.DataFrame({"tick": dth.tick, "attacker_steamid": pid(dth, "attacker"), "victim_steamid": pid(dth, "user"),
+                               "assister_steamid": pid(dth, "assister"), "a_team": col(dth, "attacker_team_num"),
+                               "v_team": col(dth, "user_team_num"), "as_team": col(dth, "assister_team_num"),
+                               "headshot": col(dth, "headshot", False)})
+    att_hurts = pd.DataFrame({"tick": hrt.tick, "attacker_steamid": pid(hrt, "attacker"), "victim_steamid": pid(hrt, "user"),
+                              "a_team": col(hrt, "attacker_team_num"), "v_team": col(hrt, "user_team_num"),
+                              "dmg_health": col(hrt, "dmg_health", 0)})
+    named = lambda df, cols: df[~np.logical_or.reduce([df[c].isin(drop_ids).fillna(False).to_numpy(dtype=bool)
+                                                       for c in cols])] if drop_ids else df
+    att_events = attempt_events(voided, restores, named(att_deaths, ["attacker_steamid", "victim_steamid", "assister_steamid"]),
+                                named(att_hurts, ["attacker_steamid", "victim_steamid"]))
+    fe1 = rounds.freeze_end_tick.iloc[0]
+    pre_round_1 = {i for i, (a_, b_) in enumerate(voided) if not pd.isna(fe1) and b_ <= int(fe1)}
+
+    def explain_before_round_1(sid: int, excess: dict) -> bool:
+        return baseline_rise_explained(sid, excess, [att_events[i].get(sid) if i in pre_round_1 else None
+                                                     for i in range(len(voided))])
+
     k0 = stamp(ev("player_death"))
     r1_deaths = pd.DataFrame({"tick": k0.tick, "victim_steamid": pid(k0, "user"),
                               "attacker_steamid": pid(k0, "attacker"), "assister_steamid": pid(k0, "assister")})
     base = scoreboard_baseline(parser, rounds, r1_deaths[(k0["round"] == 1).to_numpy()], guard, rate, match_start,
-                               ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots))
+                               ids=lambda rows: resolve_ids(rows.steamid, rows.name, bots), skip=drop_ids,
+                               explain=explain_before_round_1)
     baseline = baseline_of(base)
     # Teams are named by clan name. When the server set no distinct clan names (one pro
     # demo: both empty, so the two teams merged into one with 13 wins), each player is named instead by the
@@ -1087,7 +1444,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                      "vel_z": v.velocity_Z.astype("float32")})
     vel = ctx.velocity
     vel["steamid"] = resolve_ids(vel.steamid, vel.pop("name"), bots)
-    ctx.velocity = vel[vel.steamid.notna()]
+    ctx.velocity = vel[vel.steamid.notna() & ~vel.steamid.isin(drop_ids)]
 
     # ----- teams per side per round
     team_rows = econ_raw[econ_raw.team_num.isin([2, 3])]
@@ -1597,6 +1954,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         columns=["tick", "event", "steamid", "data", "round"])
     T["events_misc"] = em
 
+    # ----- the excluded sixth slot leaves every table
+    if excluded:
+        T.update(drop_players(T, set(excluded)))
+        kills, dmg, player_rounds = T["kills"], T["damages"], T["player_rounds"]
+
     # ----- validation
     # Damage passes on the game's own counter; the hit table is checked against it per round, where a
     # round boundary read one tick early credits some round more than the game counted and fails the map.
@@ -1608,7 +1970,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     on_board = {int(s_) for s_ in sb.steamid}
     gone_at: dict[int, int] = {}
     for s_, t_ in zip(pid(dc, "user"), dc.tick) if len(dc) else ():
-        if not pd.isna(s_) and int(s_) not in on_board and match_start <= int(t_) <= final_tick:
+        if not pd.isna(s_) and int(s_) not in on_board and int(s_) not in excluded and match_start <= int(t_) <= final_tick:
             gone_at[int(s_)] = max(gone_at.get(int(s_), 0), int(t_))
     # His counters after the disconnect tick, which carries the death his leaving causes.
     departed = read_at(parser, BASELINE_PROPS, set(gone_at.values()), after=True, guard=guard, rate=rate,
@@ -1616,13 +1978,63 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     departed["steamid"] = resolve_ids(departed.steamid, departed.name, bots)
     departed = departed.loc[np.array([not pd.isna(s_) and gone_at.get(int(s_)) == int(t_)
                                       for s_, t_ in zip(departed.steamid, departed.tick)], dtype=bool)].copy()
+    # Kept as read, with each player's baseline, so a stitched map can check its parts' join (stitch.py).
+    departed_rows = [dict(steamid=int(r.steamid), tick=int(r.tick), **{c: int(getattr(r, c)) for c in BASELINE_PROPS},
+                          **{f"{c}_at_start": baseline.get(int(r.steamid), {}).get(c, 0) for c in BASELINE_PROPS})
+                     for r in departed.itertuples()]
     departed = since_start(departed, baseline)
     # Every player in any table is checked, not only those in a kill.
     seen = [T["players"].steamid, T["positions"].steamid, T["shots"].steamid, dmg.attacker_steamid,
             dmg.victim_steamid, kills.attacker_steamid, kills.victim_steamid, kills.assister_steamid]
     everyone = {int(x) for ids in seen for x in ids.dropna()}
-    checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, sb_part, departed,
-                                 everyone) + validate_rounds(rounds, final_score)
+    # What the scoreboard holds beyond the counted events is explained by the dropped attempts' own events, one
+    # subset of them per player (attribute_attempts), and taken off before the check. A player with a round-1
+    # baseline row has the attempts before round 1's freeze end inside it already; anyone else may have kept
+    # any attempt that ended before his row was read.
+    counted = counted_events(kills)
+    residuals, candidates, counted_self = {}, {}, {}
+    for df in (sb_part, departed):
+        for r in df.itertuples():
+            sid, t_ = int(r.steamid), int(r.tick)
+            c_ = counted.get(sid, {})
+            residuals[sid] = {k: int(getattr(r, col_)) - c_.get(k, 0) for k, col_ in
+                              (("kills", "kills_total"), ("deaths", "deaths_total"), ("assists", "assists_total"),
+                               ("headshots", "headshot_kills_total"))}
+            counted_self[sid] = c_.get("selfkills", 0)
+            candidates[sid] = candidate_attempts(voided, t_, pre_round_1 if sid in baseline else set())
+    game_dmg = {(int(r_), int(s_)): int(g) for r_, s_, g in zip(player_rounds["round"], player_rounds.steamid,
+                                                                 player_rounds.game_damage) if not pd.isna(g)}
+    hit_dmg = dmg[~dmg.is_team_damage & dmg.attacker_steamid.notna()].groupby(["round", "attacker_steamid"]) \
+        .dmg_health_capped.sum()
+
+    def damage_gap(sid: int, i: int) -> int:
+        before = rounds["round"][rounds.end_tick < voided[i][0]]
+        n_ = int(before.max()) if len(before) else None
+        return 0 if n_ is None else game_dmg.get((n_, sid), 0) - int(hit_dmg.get((n_, sid), 0))
+
+    take, kept_by, attempt_problems, attempt_warnings = attribute_attempts(residuals, counted_self, att_events,
+                                                                          candidates, damage_gap)
+    dropped = []
+    for i, (a_, b_) in enumerate(voided):
+        players_ = {}
+        for sid, e in att_events[i].items():
+            if not any(e.values()):
+                continue
+            status = ("in round 1's baseline" if i in pre_round_1 and sid in baseline else
+                      "kept" if i in kept_by.get(sid, ()) else
+                      "rolled back" if any(e[k] for k in ("kills", "selfkills", "deaths", "assists")) else "unknown")
+            players_[str(sid)] = dict(status=status, **{k: v for k, v in e.items() if v})
+        dropped.append(dict(round=replaced_by(rounds, b_), from_tick=a_, to_tick=b_,
+                            restore_ticks=sorted(r for r in restores if a_ <= r <= b_), players=players_,
+                            reason=("backup restore on round 1's start tick, before begin_new_match" if a_ == b_ < match_start
+                                    else "restored attempt with no winner; not a counted round")))
+    checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, less_taken(sb_part, take),
+                                 less_taken(departed, take), everyone) + validate_rounds(rounds, final_score)
+    checks.append(bomb_rows_name_a_player(T["bomb"]))
+    checks.append(dict(check="dropped_attempts_headshots", expected=0, actual=len(attempt_warnings),
+                       ok=not attempt_warnings, fatal=False, note="; ".join(attempt_warnings)[:2000]))
+    checks.append(dict(check="dropped_attempts_explained", expected=0, actual=len(attempt_problems),
+                       ok=not attempt_problems, fatal=True, note="; ".join(attempt_problems)[:3000]))
     hit_checks, unattributed_hp = hit_table_checks(dmg, player_rounds)
     checks += hit_checks
     gl = ctx.info["grenade_link"]
@@ -1634,7 +2046,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # from PRICE_FILE. Both columns are stored.
     ctx.info.update(dict(header=header, convars=cvars, final_score=final_score, teams=teams,
                          rounds=len(rounds), match_start_tick=match_start, final_tick=final_tick,
-                         voided_windows=voided, checks=checks, unattributed_damage_hp=unattributed_hp,
+                         voided_windows=voided, dropped_attempts=dropped, excluded_players=excluded_rows,
+                         departed=departed_rows, scoreboard_taken={str(s_): v for s_, v in sorted(take.items())},
+                         checks=checks, unattributed_damage_hp=unattributed_hp,
                          equip_value_mismatch_rows=int((econ.equip_value_game != econ.inventory_value
                                                         + np.where(econ.armor > 0, VEST_PRICE, 0)
                                                         + np.where(econ.helmet, HELMET_UPGRADE_COST, 0)
@@ -2183,13 +2597,16 @@ _DTYPES = {"Boolean": pl.Boolean, "Float32": pl.Float32, "Int8": pl.Int8, "Int16
 def _to_polars(df, table: str) -> pl.DataFrame:
     """Convert a table to its declared schema v1 types (schema_v1.TYPES), in declared column order."""
     declared = TYPES[table]
-    df = df.reset_index(drop=True)
-    for c in df.columns:
-        if df[c].dtype == object:
-            sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
-            if isinstance(sample, np.ndarray):
-                df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
-    out = pl.from_pandas(df)
+    if isinstance(df, pl.DataFrame):  # stitch.py's tables are polars already
+        out = df
+    else:
+        df = df.reset_index(drop=True)
+        for c in df.columns:
+            if df[c].dtype == object:
+                sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
+                if isinstance(sample, np.ndarray):
+                    df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
+        out = pl.from_pandas(df)
     extra, missing = set(out.columns) - set(declared), set(declared) - set(out.columns)
     if extra or missing:
         raise ValueError(f"table {table}: columns not in schema v1 {sorted(extra)}, missing {sorted(missing)}")
@@ -2275,6 +2692,9 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     parsed_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, extractor_trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
                     voided_windows=json.dumps(info["voided_windows"]),
+                    dropped_attempts=json.dumps(info["dropped_attempts"]),
+                    excluded_players=json.dumps(info["excluded_players"], default=str), parts="[]",
+                    departed=json.dumps(info["departed"]), scoreboard_taken=json.dumps(info["scoreboard_taken"]),
                     convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
                         **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "

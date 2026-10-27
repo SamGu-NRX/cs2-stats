@@ -1,11 +1,16 @@
 import json
+import os
 import sys
 import threading
+import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from collections import deque
+
 import numpy as np
+import psutil
 import pandas as pd
 import pytest
 
@@ -374,6 +379,22 @@ def test_status_endpoint_cors_and_options():
         server.shutdown()
 
 
+def test_a_second_pipeline_cannot_bind_the_status_port():
+    # SO_REUSEADDR let a second pipeline bind 8766 beside the running one on Windows.
+    first = ThreadingHTTPServer(("127.0.0.1", 0), dp.make_handler(None))  # the old server, reuse on
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", first.server_address[1]), dp.make_handler(None))
+    finally:
+        first.server_close()
+    mine = dp.StatusServer(("127.0.0.1", 0), dp.make_handler(None))
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", mine.server_address[1]), dp.make_handler(None))
+    finally:
+        mine.server_close()
+
+
 def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch):
     # Regression: a download sampled before its RAR header was written used to be ignored forever.
     monkeypatch.setattr(dp, "DOWNLOADS", tmp_path)
@@ -394,6 +415,26 @@ def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch
     p.scan(20.0)
     p.scan(31.0)
     assert junk in p.ignored and "notrar" not in p.archives
+
+
+def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
+    # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
+    # cleanup match those copies exactly.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    data = dp.RAR_MAGIC + b"payload" * 100
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(data)
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(16.0)
+    a = p.archives[rar.name]
+    assert (a.rar_bytes, a.rar_sha256) == (len(data), hashlib.sha256(data).hexdigest())
+    assert a.download_started <= rar.stat().st_mtime
+    a.slug, a.listing = "slug-r", {"x-m1-nuke.dem": {}}
+    p.fail_archive(a, "7z listing failed: test")
+    rec = json.loads(dp.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
+    assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
 def test_assist_on_own_teammate_is_not_credited():
@@ -427,16 +468,425 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
     assert any(c["check"] == "round_ticks" and c["note"].startswith("recording began") for c in checks)
 
 
+# --- scheduler policy (memory and CPU readings are injected; no test starts a parse) -------------------
+
+def test_memory_sizes_the_pool_under_the_cpu_cs2_and_configured_caps():
+    # 20 GB available, 3 GB kept back, 1.5 GB a parse: 11 workers on 16 cores.
+    assert dp.worker_capacity(20.0, 1.5, 0.0, 0, 16, False, None) == 11
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, None) == 14  # cpu_count - 2
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, 3) == 3  # CS2_PIPELINE_MAX_WORKERS
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, True, None) == dp.GAMING_WORKERS
+
+
+def test_running_workers_keep_their_slots_and_their_growth_is_reserved():
+    # Three running workers still to grow 5.4 GB leave nothing for a fourth on 10 GB.
+    assert dp.worker_capacity(10.0, 2.0, 5.4, 3, 16, False, None) == 3
+    # Under the pressure floor nothing new starts, and nobody is dropped from the count.
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 2, 16, False, None) == 2
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 0, 16, False, None) == 0
+
+
+def test_one_worker_may_start_when_none_runs_above_the_pressure_floor():
+    # A run on a copied archive: 6.8 GB available, the unmeasured 4 GB estimate, nothing running. The division
+    # gives no worker, and with other work holding memory the pipeline would never parse.
+    assert dp.worker_capacity(6.8, 4.0, 0.0, 0, 16, False, None) == 1
+
+
+class _FakeProc:
+    pids = iter(range(50000, 60000))
+
+    def __init__(self, *a, **k):
+        self.pid = next(self.pids)
+
+    def poll(self):
+        return None
+
+
+class _FakePs:
+    def memory_info(self):
+        return type("mi", (), {"rss": int(0.5e9)})()
+
+
+def _fake_tree(monkeypatch):
+    """worker_processes over _FakeProc jobs: one process while poll() says running, none after."""
+    monkeypatch.setattr(dp, "worker_processes", lambda j: [_FakePs()] if j.proc.poll() is None else [])
+
+
+def _jobs(n):
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="slug-r")
+    return [dp.Job(archive=a, dem=dp.WORK_DIR / f"d{i}.dem", out_dir=dp.DEMOS_DIR / "slug-r" / f"m{i}", map_key=f"m{i}",
+                   result_path=dp.WORK_DIR / f"d{i}.result.json", log_path=dp.LOG_DIR / f"d{i}.log") for i in range(n)]
+
+
+def test_a_burst_of_starts_reserves_each_new_workers_peak(tmp_path, monkeypatch):
+    # 12 GB available that the new workers have not touched yet: 4 starts of a 2 GB parse, not 6.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.available_gb, p.cpu_count, p.peaks = (lambda: 12.0), 16, deque([2.0])
+    p.jobs.extend(_jobs(6))
+    p.dispatch()
+    assert len(p.running) == 4 and len(p.jobs) == 2
+
+
+def test_a_parse_starts_only_if_the_floor_holds_after_every_running_parses_tables(tmp_path, monkeypatch):
+    # 45.9 GB free, a 45 GB floor and 0.5 GB of tables a parse: with one parse running, a second would leave
+    # 44.9 GB, so it waits; once the first ends its reservation is released and the second starts.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    monkeypatch.setattr(dp, "MIN_FREE_GB", 45.0)
+    monkeypatch.setattr(dp, "lowest_free_gb", lambda: 45.9)
+    p = dp.Pipeline()
+    p.worker_max, p.output_gb = (lambda: 4), deque([0.5])
+    first, second = _jobs(2)
+    first.proc, first.output_gb = _FakeProc(), 0.5
+    p.running.append(first)
+    p.jobs.append(second)
+    p.dispatch()
+    assert p.running == [first] and list(p.jobs) == [second]
+    p.running.remove(first)
+    p.dispatch()
+    assert p.running == [second]
+
+
+def test_a_running_parse_keeps_the_reservation_it_started_with(tmp_path, monkeypatch):
+    # A run of small maps pushed a 1 GB sample out of the window, and every live reservation fell to 0.02 GB.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.worker_max, p.output_gb = (lambda: 4), deque([1.0])
+    (j,) = _jobs(1)
+    p.jobs.append(j)
+    p.dispatch()
+    p.output_gb.extend([0.02] * 20)
+    assert p.output_est_gb() == 0.02 and p.output_reserved_gb() == 1.0
+
+
+def test_downloads_get_no_room_that_running_parses_hold(tmp_path, monkeypatch):
+    # 46 GB free, a 45 GB floor, and a running parse holding 1 GB for its tables: nothing more fits.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MIN_FREE_GB", 45.0)
+    monkeypatch.setattr(dp, "lowest_free_gb", lambda: 46.0)
+    p = dp.Pipeline()
+    assert p.budget()[1] and p.room_gb() == pytest.approx(1.0)
+    (j,) = _jobs(1)
+    j.proc, j.output_gb = _FakeProc(), 1.0
+    p.running.append(j)
+    assert not p.budget()[1] and p.room_gb() <= 0
+    assert p.snapshot()["want"] == 0
+
+
+def test_the_table_estimate_is_the_p90_of_measured_maps_with_a_default_until_then(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    assert dp.Pipeline().output_est_gb() == dp.DEFAULT_OUTPUT_GB
+    rows = [dict(ok=True, output_bytes=(i + 1) * 1e6) for i in range(20)] + [dict(ok=False, output_bytes=9e9)]
+    assert dp.output_seed(rows)[-1] == 0.02 and len(dp.output_seed(rows)) == 20
+    dp.append_jsonl(dp.MANIFEST, rows[0])
+    assert dp.Pipeline().output_est_gb() == 0.001
+
+
+def test_a_worker_that_cannot_start_fails_its_demo_with_the_reason(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    def no_python(*a, **k):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(dp.subprocess, "Popen", no_python)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.worker_max = lambda: 4
+    (j,) = _jobs(1)
+    p.jobs.append(j)
+    p.dispatch()
+    res = j.archive.results[j.dem.name]
+    assert p.running == [] and not p.jobs and not res["ok"] and "worker did not start" in res["errors"][0]
+    assert res.get("extractor_version") is None  # so --retry-failed tries it again
+
+
+def test_startup_refuses_a_missing_worker_interpreter_and_a_worker_cap_below_one(tmp_path, monkeypatch, capsys):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "worker_python", lambda: (str(tmp_path / "gone" / "python.exe"), {}))
+    with pytest.raises(SystemExit):
+        dp.main([])
+    assert "does not exist" in capsys.readouterr().err
+    for raw in ("0", "-2", "two"):
+        with pytest.raises(ValueError, match="at least 1"):
+            dp.max_workers_setting(raw)
+    assert dp.max_workers_setting("3") == 3 and dp.max_workers_setting(None) is None
+    monkeypatch.setattr(dp, "MAX_WORKERS_ERROR", "CS2_PIPELINE_MAX_WORKERS is '0'; set a whole number of at least 1")
+    with pytest.raises(SystemExit):
+        dp.main([])
+    assert "CS2_PIPELINE_MAX_WORKERS is '0'" in capsys.readouterr().err
+
+
+def test_how_many_archives_fit_uses_the_largest_recent_one(tmp_path, monkeypatch):
+    # Nineteen 1 GB archives and one of 6 GB, 10 GB of room: the mean (1.25 GB) said eight more fit.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    p.worker_max, p.budget, p.room_gb = (lambda: 8), (lambda: (0.0, True)), (lambda: 10.0)
+    p.parse_s, p.download_s = deque([10.0]), deque([100.0])
+    p.archive_gb = deque([1.0] * 19 + [6.0])
+    assert p.snapshot()["want"] == 1
+
+
+def test_low_memory_requeues_the_newest_worker_and_keeps_published_tables(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    old, new = _jobs(2)
+    for j in (old, new):
+        j.proc, j.t0 = _FakeProc(), time.time()
+        p.running.append(j)
+    published = new.out_dir / "v-1.13.0-abc"
+    staging = new.out_dir / f".tmp-{new.proc.pid + 1}"  # the interpreter under the venv launcher stub
+    published.mkdir(parents=True)
+    staging.mkdir()
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: [proc.pid, proc.pid + 1])
+    monkeypatch.setattr(dp, "tree_rss_gb", lambda pid: 0.5)
+    _fake_tree(monkeypatch)
+    p.available_gb = lambda: 0.8
+    p.poll_workers()
+    assert p.running == [old] and p.jobs[0] is new
+    assert published.exists() and not staging.exists()
+
+
+def test_want_keeps_the_workers_fed_by_littles_law():
+    # 4 workers at 600 worker-seconds an archive finish one every 150 s; a 120 s download keeps 0.8 busy: 1 + 1.
+    assert dp.desired_downloads(4, 600, 120, 0, 100.0, 2.0) == 2
+    # Slow downloads need more in flight, up to MAX_WANT.
+    assert dp.desired_downloads(14, 240, 300, 0, 100.0, 2.0) == dp.MAX_WANT
+    # The disk budget left holds one more 2 GB archive beside the one in flight.
+    assert dp.desired_downloads(14, 240, 300, 1, 2.5, 2.0) == 2
+    assert dp.desired_downloads(14, 240, 300, 0, -5.0, 2.0) == 0
+
+
+def test_no_download_is_requested_when_the_budget_holds_no_whole_archive():
+    # Review of PR 55: want was at least 1, so with 1.5 GB of room and 2 GB archives the tab started one more.
+    assert dp.desired_downloads(14, 240, 300, 0, 1.5, 2.0) == 0
+    assert dp.desired_downloads(14, 240, 300, 1, 1.5, 2.0) == 1  # the one in flight, no more
+
+
+def test_capacity_is_off_at_the_budget_itself(tmp_path, monkeypatch):
+    # Review of PR 55: our + held == MAX_OUR_GB still read as capacity (<=), so the tab kept downloading.
+    _isolate(tmp_path, monkeypatch)
+    (dp.FAILED_DIR / "x.rar").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    assert dp.Pipeline().budget()[1] is False
+
+
+def test_a_download_that_just_finished_counts_at_the_next_status_read(tmp_path, monkeypatch):
+    # Review of PR 55: room_gb() came from a disk reading kept for 10 s, so an archive that finished downloading
+    # within it was missed and the tab was told to start one more past the budget.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 3000 / 1e9)
+    p = dp.Pipeline()
+    assert p.snapshot()["capacity"] is True
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(b"x" * 3000)
+    p.archives[rar.name] = dp.Archive(rar=rar, id=rar.name)  # picked up as pending, a second later
+    snap = p.snapshot()
+    # The tab starts one only while downloading + pending + extracting < want: here nothing new.
+    assert snap["capacity"] is False and snap["want"] <= snap["downloading"] + snap["pendingActual"] + snap["extracting"]
+
+
+def test_published_tables_are_not_in_the_budget(tmp_path, monkeypatch):
+    # The budget is the pipeline's transient space. Counting demos/, the published product, stopped extraction after
+    # about 1,300 more maps for no reason; the free-space floor bounds the product instead.
+    _isolate(tmp_path, monkeypatch)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke").mkdir(parents=True)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke" / "kills.parquet").write_bytes(b"x" * 5000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 0 and p.budget()[1] is True
+
+
+def test_failed_archives_count_inside_the_budget(tmp_path, monkeypatch):
+    # Review of PR 55: the budget is everything the pipeline holds, and failed/ was left out of it.
+    _isolate(tmp_path, monkeypatch)
+    (dp.FAILED_DIR / "kept").mkdir()
+    (dp.FAILED_DIR / "kept" / "archive.rar").write_bytes(b"x" * 700)
+    assert dp.Pipeline().disk_usage()[0] == 700
+
+
+def test_the_fullest_volume_decides_capacity(tmp_path, monkeypatch):
+    # Review of PR 55: only the data folder's volume was checked; archives land in the downloads folder.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0 if Path(path) == dp.DATA_ROOT else 40.0)
+    assert dp.Pipeline().budget()[1] is False
+
+
+def test_low_memory_never_requeues_a_worker_that_already_exited(tmp_path, monkeypatch):
+    # Review of PR 55: the newest job was popped and requeued without a poll; one that had just finished lost its
+    # result and was parsed again.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    older, newest = _jobs(2)
+    older.proc, newest.proc = _FakeProc(), _FakeProc()
+    newest.proc.poll = lambda: 0
+    p.running = [older, newest]
+    killed = []
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: killed.append(proc.pid) or [proc.pid])
+    _fake_tree(monkeypatch)
+    p.requeue_newest(0.5)
+    assert killed == [older.proc.pid] and p.running == [newest] and list(p.jobs) == [older]
+
+
+def test_shutdown_kills_each_worker_with_its_children(tmp_path, monkeypatch):
+    # Review of PR 55: shutdown killed only the venv's launcher stub, leaving the interpreter that parses running
+    # whenever the kill-on-close job could not be set up.
+    import subprocess as sp
+    _isolate(tmp_path, monkeypatch)
+    stub = sp.Popen([sys.executable, "-c", "import subprocess, sys, time; "
+                     "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); time.sleep(120)"])
+    try:
+        deadline = time.time() + 20
+        while not psutil.Process(stub.pid).children() and time.time() < deadline:
+            time.sleep(0.1)
+        child = psutil.Process(stub.pid).children()[0]
+        p = dp.Pipeline()
+        job = _jobs(1)[0]
+        job.proc = stub
+        p.running = [job]
+        p.shutdown()
+        assert stub.poll() is not None
+        child.wait(timeout=10)
+        assert not child.is_running()
+    finally:
+        for proc in psutil.Process().children(recursive=True):
+            proc.kill()
+
+
+def test_a_worker_is_one_process_the_venvs_interpreter(tmp_path):
+    # Review of PR 55: started through the venv's python.exe, a worker was a launcher stub plus the interpreter under
+    # it, and poll() asked the stub, which could exit while the interpreter kept parsing. The started process must be
+    # the interpreter itself, running in this venv.
+    import subprocess as sp
+    python, extra = dp.worker_python()
+    out = tmp_path / "who.json"
+    code = f"import json, os, sys; json.dump([os.getpid(), sys.prefix], open({str(out)!r}, 'w'))"
+    proc = sp.Popen([python, "-I", "-c", code], env=dict(os.environ, **extra))
+    proc.wait(timeout=60)
+    pid, prefix = json.loads(out.read_text(encoding="utf-8"))
+    assert pid == proc.pid and Path(prefix) == Path(sys.prefix)
+
+
+def test_a_worker_is_running_while_a_process_it_started_still_runs(tmp_path, monkeypatch):
+    # A worker that exited is finished only once every process it was seen to start is gone too.
+    _isolate(tmp_path, monkeypatch)
+
+    class Kid:
+        pid, running = 4242, True
+
+        def is_running(self):
+            return self.running
+
+        def status(self):
+            return "running"
+
+        def memory_info(self):
+            return type("mi", (), {"rss": int(0.2e9)})()
+
+    job = _jobs(1)[0]
+    job.proc, job.t0 = _FakeProc(), time.time()
+    job.proc.poll, job.proc.returncode = (lambda: 0), 0
+    kid = Kid()
+    job.kids = {kid.pid: kid}
+    p = dp.Pipeline()
+    p.available_gb = lambda: 50.0
+    p.running = [job]
+    finished = []
+    monkeypatch.setattr(p, "finish_job", lambda j, rc: finished.append(j))
+    p.poll_workers()
+    assert p.running == [job] and finished == []
+    kid.running = False
+    p.poll_workers()
+    assert finished == [job] and p.running == []
+
+
+def test_parse_peak_is_the_p90_of_measured_peaks():
+    assert dp.p90([], 4.0) == 4.0
+    assert dp.p90([1.0 + i / 10 for i in range(20)], 4.0) == pytest.approx(2.7)  # the 18th of 20
+    peaks, parse_s = dp.manifest_seed([dict(archive="a", peak_rss_gb=1.2, timings=dict(worker_wall_s=60)),
+                                       dict(archive="b", peak_rss_gb=None, timings=dict(worker_wall_s=30)),
+                                       dict(archive="a", peak_rss_gb=1.4, timings=dict(worker_wall_s=90))])
+    assert peaks == [1.2, 1.4] and parse_s == [30.0, 150.0]
+
+
+def test_a_download_is_timed_from_first_sight_only_if_it_grew():
+    t = dp.CompletenessTracker(stable_seconds=10)
+    t.observe(Path("x"), 100, 0.0)
+    t.observe(Path("x"), 500, 40.0)
+    assert t.observe(Path("x"), 500, 50.0) and t.download_s(Path("x"), 50.0) == 50.0
+    t.observe(Path("y"), 900, 0.0)  # already whole when first seen
+    assert t.observe(Path("y"), 900, 10.0) and t.download_s(Path("y"), 10.0) is None
+
+
+def test_each_failed_demo_is_retried_once_per_extractor_version(tmp_path):
+    f = tmp_path / "kept"
+    f.mkdir()
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.10.0")))
+    (f / "x-m2-dust2.result.json").write_text(json.dumps(dict(dem_file="x-m2-dust2.dem", extractor_version="1.14.0")))
+    assert dp.due_for_retry(f, "1.14.0")  # m1 failed under 1.10.0
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(f, "1.14.0") and dp.due_for_retry(f, "1.15.0")
+    g = tmp_path / "unlisted"  # a 7-Zip failure has no demo results
+    g.mkdir()
+    (g / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(g, "1.14.0")
+
+
+def test_a_retry_where_one_demo_passes_leaves_only_the_still_failing_one_on_record(tmp_path, monkeypatch):
+    # Both demos failed under 1.10.0. Retried under 1.14.0, m2 passes and m1 fails again; m2's old record kept the
+    # archive due for retry on every scan.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.extract, "EXTRACTOR_VERSION", "1.14.0")
+    kept = dp.FAILED_DIR / "slug-r1"
+    kept.mkdir()
+    (kept / "archive.rar").write_bytes(dp.RAR_MAGIC + bytes(10))
+    for m in ("r1-m1-nuke", "r1-m2-dust2"):
+        (kept / f"{m}.dem").write_bytes(b"dem")
+        (kept / f"{m}.result.json").write_text(json.dumps(dict(dem_file=f"{m}.dem", ok=False, extractor_version="1.10.0")))
+    assert dp.due_for_retry(kept, "1.14.0")
+    p = dp.Pipeline(retry_failed=True)
+    a = dp.Archive(rar=kept / "archive.rar", id="r1", slug="slug-r1", work=dp.WORK_DIR / "r1",
+                   listing={"r1-m1-nuke.dem": {}, "r1-m2-dust2.dem": {}})
+    a.work.mkdir()
+    a.results = {"r1-m1-nuke.dem": dict(dem_file="r1-m1-nuke.dem", ok=False, errors=["deaths"], extractor_version="1.14.0"),
+                 "r1-m2-dust2.dem": dict(dem_file="r1-m2-dust2.dem", ok=True, extractor_version="1.14.0")}
+    p.archives[a.id] = a
+    p.fail_archive(a, "deaths")
+    assert dp.failure_versions(kept)[0] == {"r1-m1-nuke.dem": "1.14.0"} and not (kept / "r1-m2-dust2.dem").exists()
+    assert not dp.due_for_retry(kept, "1.14.0") and dp.due_for_retry(kept, "1.15.0")
+    p2 = dp.Pipeline(retry_failed=True)  # a later run on the same version picks nothing up
+    p2.scan(0.0)
+    assert p2.archives == {}
+
+
+def test_status_reports_want_beside_the_real_pending_count(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    p.available_gb = lambda: 20.0
+    snap = p.snapshot()
+    assert snap["capacity"] and snap["pending"] == snap["pendingActual"] == 0
+    assert {"want", "workersMax", "parseEstGB", "availGB"} <= set(snap) and snap["parseEstGB"] == dp.DEFAULT_PARSE_EST_GB
+
+
 # --- disk budget ------------------------------------------------------------
 
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "DATA_ROOT", tmp_path)
-    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS"):
+    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS", "PARTS_DIR"):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
+    monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
+    # A test that needs another value sets free_gb itself.
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
 
 
 
@@ -445,9 +895,9 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)  # 1000 bytes
     p = dp.Pipeline()
-    assert p.budget(fresh=True)[1]
-    (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 2000)
-    our, ok = p.budget(fresh=True)
+    assert p.budget()[1]
+    (dp.WORK_DIR / "x.dem").write_bytes(b"x" * 2000)
+    our, ok = p.budget()
     assert not ok and our > 1e-6
     snap = p.snapshot()
     assert snap["capacity"] is False and snap["pending"] >= 2 and snap["pendingActual"] == 0
@@ -456,7 +906,7 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
 def test_capacity_respects_free_space(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 44.0)
-    assert not dp.Pipeline().budget(fresh=True)[1]
+    assert not dp.Pipeline().budget()[1]
 
 
 def test_sweep_removes_only_stale_unowned_work(tmp_path, monkeypatch):
@@ -504,6 +954,117 @@ def test_restore_in_round_one_is_voided():
     rounds, voided = ex.build_round_windows([0, 98, 4020], [5892], ends, 99)
     assert rounds.start_tick.tolist() == [4020] and voided == [(98, 4020)]
     assert ex.assign_rounds(pd.Series([318, 4020, 6000]), rounds, voided).tolist() == [0, 0, 1]
+
+
+def test_a_round_restored_twice_is_one_dropped_attempt_and_every_round_keeps_its_freeze_end():
+    # An HLTV demo: round 2's first attempt (start 4638, freeze end 9531) was restored at 10108, the next at
+    # 10176, and round 2 was then played from 10176 (freeze end 25941). Each window was judged alone, so the
+    # map got three winnerless rows, two sharing freeze end 9531, and one of them no economy.
+    ends = pd.DataFrame(dict(tick=[4190, 10108, 10176, 28210, 32355], winner=["T", None, None, "T", "T"],
+                             reason=["bomb_exploded", None, None, "ct_killed", "ct_killed"]))
+    rounds, voided = ex.build_round_windows([1, 4638, 10108, 10176, 28658], [9531, 25941, 29938], ends, 0)
+    assert voided == [(4638, 10176)]
+    assert rounds["round"].tolist() == [1, 2, 3] and rounds.start_tick.tolist() == [1, 10176, 28658]
+    assert rounds.freeze_end_tick.tolist()[1:] == [25941, 29938]
+    # One merged attempt, so round 2 says one, as match.dropped_attempts does (review of PR 54: it said 2).
+    assert rounds.voided_attempts.tolist() == [0, 1, 0]
+    # The attempt's freeze end and its disconnect death at 10111 belong to no round.
+    assert ex.assign_rounds(pd.Series([9531, 10111, 10176, 25941]), rounds, voided).tolist() == [0, 0, 0, 2]
+
+
+def test_a_restore_before_begin_new_match_is_found_by_its_world_deaths():
+    # An HLTV split recording's second part: round_start at 0, ten "world" deaths and two bomb pickups with no
+    # player on 0, begin_new_match at 1. The pickups shared a (tick, event) key and failed the bomb table.
+    assert ex.restore_ticks_before_match(pd.Series([0] * 10 + [900]), pd.Series(["world"] * 10 + ["ak47"]), 0, 1) == [0]
+    # A normal start: the C4 and default weapons are handed out on round_start, a tick before begin_new_match,
+    # with no death; that tick stays in round 1.
+    assert ex.restore_ticks_before_match(pd.Series([4000]), pd.Series(["world"]), 3614, 3615) == []
+
+
+COACH = 99
+
+
+def _slot_case(t_side=6):
+    """Two rounds, CT five (1-5), T t_side players (6.., the last is COACH): everyone spawns on each round start,
+    the coach dies each round to his own hit from no weapon, players fight each other, and the C4 goes from the
+    coach to player 6 on each spawn tick."""
+    rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 1000], end_tick=[900, 1900]))
+    t_ids = list(range(6, 6 + t_side - 1)) + [COACH]
+    everyone = list(range(1, 6)) + t_ids
+    spawns = pd.DataFrame(dict(tick=[100] * len(everyone) + [1000] * len(everyone), steamid=everyone * 2))
+    deaths = pd.DataFrame(dict(attacker_steamid=[1, 6], victim_steamid=[6, 2], assister_steamid=[None, None]))
+    hurts = pd.DataFrame(dict(attacker_steamid=[1, 6, COACH, COACH], victim_steamid=[6, 2, COACH, COACH],
+                              weapon=["ak47", "glock", "", ""]))
+    sides = pd.DataFrame([dict(round=r, steamid=s, side="CT" if s <= 5 else "T") for r in (1, 2) for s in everyone])
+    acts = pd.DataFrame(dict(steamid=[1, 6, 7]))
+    bomb = pd.DataFrame(dict(tick=[100, 100, 1000, 1000], event="bomb_pickup", steamid=[COACH, 6, COACH, 6]))
+    return dict(rounds=rounds, spawns=spawns, deaths=deaths, hurts=hurts, sides=sides, acts=acts, bomb=bomb)
+
+
+def test_a_coach_in_a_sixth_slot_is_excluded():
+    # Three HLTV archives of one team: a sixth T spawned every round and killed by his own hit from no weapon,
+    # with no player_death, shot, grenade or purchase; the C4 handed to him and on to a teammate gave the bomb
+    # table two pickups on one tick.
+    out = ex.non_combatants(**_slot_case())
+    assert list(out) == [COACH] and "coach" in out[COACH]
+
+
+def test_a_round_whose_spawns_came_before_the_recording_does_not_save_the_coach():
+    case = _slot_case()
+    case["spawns"] = case["spawns"][case["spawns"].tick > 100]
+    case["bomb"] = case["bomb"][case["bomb"].tick > 100]  # the round 1 handoff went with its spawns
+    assert list(ex.non_combatants(**case)) == [COACH]
+
+
+@pytest.mark.parametrize("change, why", [
+    (lambda c: c["acts"].loc.__setitem__(len(c["acts"]), [COACH]), "fired, threw or bought"),
+    (lambda c: c["bomb"].loc.__setitem__(len(c["bomb"]), [1500, "bomb_planted", COACH]), "bomb event"),
+    (lambda c: c["deaths"].loc.__setitem__(len(c["deaths"]), [COACH, 3, None]), "player_death"),
+])
+def test_a_sixth_slot_that_takes_any_part_refuses_the_map(change, why):
+    # Review of PR 54: a sixth player who shoots, throws, buys, plants or fights is not left out in part; the
+    # map is refused, naming what he did.
+    case = _slot_case()
+    change(case)
+    with pytest.raises(RuntimeError, match=why):
+        ex.non_combatants(**case)
+
+
+def test_excluding_a_player_from_a_five_man_team_fails_instead():
+    with pytest.raises(RuntimeError, match="fewer than 5"):
+        ex.non_combatants(**_slot_case(t_side=5))
+
+
+def test_the_coach_leaves_every_steamid_column_of_every_table():
+    # Review of PR 54: rounds kept his SteamID as planter or defuser, and engagement_ticks (no SteamID column)
+    # kept the ticks of his engagements.
+    import schema_v1
+    T = {}
+    for table, types in schema_v1.TYPES.items():
+        cols = [c for c in types if c == "steamid" or c.endswith("_steamid")]
+        if not cols:
+            continue
+        T[table] = pd.DataFrame({**{c: pd.array([COACH, 1], dtype="UInt64") for c in cols},
+                                 **({"engagement_id": [10, 11]} if table == "engagements" else {})})
+    T["engagement_ticks"] = pd.DataFrame(dict(engagement_id=[10, 11], tick=[1, 2]))
+    T["positions"]["spotted_by"] = [[COACH, 6], [COACH]]
+    out = ex.drop_players(T, {COACH})
+    for name, df in out.items():
+        for c in [c for c in df.columns if c == "steamid" or c.endswith("_steamid")]:
+            assert not df[c].isin([COACH]).fillna(False).any(), (name, c)
+    assert len(out["rounds"]) == 2 and out["rounds"].planter_steamid.isna().tolist() == [True, False]
+    assert out["engagement_ticks"].engagement_id.tolist() == [11]
+    assert out["positions"].spotted_by.tolist() == [[]]
+
+
+def test_two_players_c4_events_on_one_tick_are_two_bomb_rows():
+    # Review of PR 54: the bomb key (tick, event) refused a handoff between two real players on one tick.
+    import schema_v1
+    row = {c: _PLACEHOLDER[t] for c, t in schema_v1.TYPES["bomb"].items()}
+    rows = pd.DataFrame([dict(row, steamid=11), dict(row, steamid=22)])
+    ex._to_polars(rows, "bomb")
+    with pytest.raises(ValueError, match="share a key"):
+        ex._to_polars(pd.DataFrame([dict(row, steamid=11), dict(row, steamid=11)]), "bomb")
 
 
 def test_round_one_without_restore_has_no_voided_window():
@@ -618,10 +1179,153 @@ def test_workers_run_a_frozen_copy_of_the_extractor(tmp_path, monkeypatch):
     # Edits to the repo while the pipeline ran reached live workers and failed 13 maps.
     monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
     dp.freeze_code()
-    assert sorted(p.name for p in (tmp_path / "run").iterdir()) == sorted(dp.CODE_FILES)
+    assert sorted(p.name for p in (tmp_path / "run").iterdir()) == sorted([*dp.CODE_FILES, dp.FROZEN_MARKER])
     for name in dp.CODE_FILES:
         assert (tmp_path / "run" / name).read_bytes() == (dp.ROOT / name).read_bytes()
 
+
+
+def test_the_frozen_copy_holds_every_module_the_extractor_imports():
+    # extract.py began importing repo_guard and the copy did not follow: every worker died on the import.
+    import ast
+    code = [n for n in dp.CODE_FILES if n.endswith(".py")]
+    for name in code:
+        for node in ast.walk(ast.parse((dp.ROOT / name).read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else                 [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+            for m in mods:
+                if (dp.ROOT / f"{m.split('.')[0]}.py").exists():
+                    assert f"{m.split('.')[0]}.py" in code, f"{name} imports {m}, which the frozen copy lacks"
+
+
+def test_a_split_maps_parts_are_stitched_or_held_and_recorded(tmp_path, monkeypatch):
+    # A split recording's parts are written under parts/, never demos/; when the archive finishes, its split map
+    # is joined into demos/ or held back, and parts.jsonl says which.
+    _isolate(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(dp.stitch, "stitch_map",
+                        lambda parts, out: calls.append((sorted(parts), out)) or dict(map=str(out), status="stitched"))
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="x-vs-y-r")
+    a.out_dirs = {f"x-vs-y-m1-nuke-p{n}.dem": dp.PARTS_DIR / a.slug / f"m1-nuke-p{n}" for n in (1, 2)}
+    a.out_dirs["x-vs-y-m2-dust2.dem"] = dp.DEMOS_DIR / a.slug / "m2-dust2"
+    a.split = {f"x-vs-y-m1-nuke-p{n}.dem": ("m1-nuke", n) for n in (1, 2)}
+    for d in a.out_dirs.values():
+        d.mkdir(parents=True)
+    p.stitch_parts(a)
+    assert calls == [([1, 2], dp.DEMOS_DIR / a.slug / "m1-nuke")]
+    assert not (dp.PARTS_DIR / a.slug / "m1-nuke-p1").exists()  # stitched: the joined map holds what they did
+    p.stitch_parts(a, failed="ValidationFailed: deaths 12!=13")
+    rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["status"] for r in rows] == ["stitched", "held"] and "the archive failed" in rows[1]["reason"]
+
+
+def test_held_parts_count_in_the_budget_and_the_oldest_go_past_the_cap(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    for i, slug in enumerate(("old-vs-one-r", "new-vs-two-r")):
+        for n in (1, 2):
+            d = dp.PARTS_DIR / slug / f"m1-nuke-p{n}"
+            d.mkdir(parents=True)
+            (d / "kills.parquet").write_bytes(b"x" * 1000)
+            os.utime(d / "kills.parquet", (1000 + i, 1000 + i))
+            os.utime(d, (1000 + i, 1000 + i))
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 4000
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 2500 / 1e9)
+    p.enforce_parts_cap()
+    assert not (dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1").exists()
+    assert (dp.PARTS_DIR / "new-vs-two-r" / "m1-nuke-p2").exists()
+    row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
+    assert (row["status"], row["bytes"], row["map"]) == ("expired", 2000, str(dp.DEMOS_DIR / "old-vs-one-r"))
+
+
+def test_the_parts_cap_never_expires_an_archive_still_in_flight(tmp_path, monkeypatch):
+    # A finished part of an archive whose other part was still parsing was expired, so the stitch found a part
+    # missing while the archive's demos and RAR were still deleted.
+    _isolate(tmp_path, monkeypatch)
+    for slug in ("busy-vs-one-r", "idle-vs-two-r"):
+        d = dp.PARTS_DIR / slug / "m1-nuke-p1"
+        d.mkdir(parents=True)
+        (d / "kills.parquet").write_bytes(b"x" * 1000)
+    p = dp.Pipeline()
+    p.archives["r1"] = dp.Archive(rar=dp.DOWNLOADS / "r1", id="r1", slug="busy-vs-one-r", state="parsing")
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p.enforce_parts_cap()
+    assert (dp.PARTS_DIR / "busy-vs-one-r" / "m1-nuke-p1").exists()
+    assert not (dp.PARTS_DIR / "idle-vs-two-r").exists()
+
+
+def test_the_parts_cap_skips_a_part_whose_map_lock_is_held(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "idle-vs-two-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    (d / "kills.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    with ex.map_lock(d):
+        dp.Pipeline().enforce_parts_cap()
+    assert d.exists() and not (dp.PARTS_DIR / "parts.jsonl").exists()
+
+
+def _split_archive(slug, parts=(1, 2)):
+    work = dp.WORK_DIR / slug
+    work.mkdir(parents=True)
+    rar = dp.DOWNLOADS / slug
+    rar.write_bytes(dp.RAR_MAGIC + bytes(10))
+    a = dp.Archive(rar=rar, id=slug, slug=slug, state="parsing", work=work)
+    for n in parts:
+        dem = work / f"x-vs-y-m1-nuke-p{n}.dem"
+        dem.write_bytes(b"dem")
+        a.dems.append(dem)
+        a.out_dirs[dem.name] = dp.PARTS_DIR / slug / f"m1-nuke-p{n}"
+        a.split[dem.name] = ("m1-nuke", n)
+        a.results[dem.name] = dict(ok=True, dem_file=dem.name, map=f"m1-nuke-p{n}")
+    return a
+
+
+def test_an_archive_is_done_only_when_every_map_is_published_or_held_with_its_parts(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.stitch, "stitch_map", lambda parts, out: dict(map=str(out), status="held", reason="test"))
+    p = dp.Pipeline()
+    # Held, with both part folders still holding their tables: done, and the held map is in the ledger record.
+    kept = _split_archive("kept-vs-x-r")
+    for d in kept.out_dirs.values():
+        (d.mkdir(parents=True), (d / "match.parquet").write_bytes(b"x"))
+    p.archives[kept.id] = kept
+    p.finish_archives()
+    rec = p.ledger[kept.id]
+    assert rec["status"] == "done" and rec["held"] == [dict(map="m1-nuke", reason="test")]
+    # Held, but part 2's folder is gone: the RAR is kept in failed/ and the archive is not done.
+    lost = _split_archive("lost-vs-x-r")
+    d1 = lost.out_dirs["x-vs-y-m1-nuke-p1.dem"]
+    d1.mkdir(parents=True)
+    (d1 / "match.parquet").write_bytes(b"x")
+    p.archives[lost.id] = lost
+    p.finish_archives()
+    assert p.ledger[lost.id]["status"] == "failed" and "m1-nuke-p2" in p.ledger[lost.id]["reason"]
+    assert (dp.FAILED_DIR / "lost-vs-x-r" / "archive.rar").exists()
+
+
+def test_a_second_copy_of_a_part_holds_its_map_and_is_never_published_alone(tmp_path, monkeypatch):
+    # Two demos named for m1-nuke-p1: the second's folder became m1-nuke-p1_dup, which split_key did not
+    # recognize, so a partial recording was published as a whole map.
+    _isolate(tmp_path, monkeypatch)
+    slug = "x-vs-y-r"
+    work = dp.WORK_DIR / slug
+    work.mkdir()
+    for name in ("x-vs-y-m1-nuke-p1.dem", "z-vs-w-m1-nuke-p1.dem", "x-vs-y-m1-nuke-p2.dem"):
+        (work / name).write_bytes(b"dem")
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug=slug, state="extracting", work=work,
+                   extract_log=dp.LOG_DIR / "x.log")
+    a.proc = type("done", (), {"poll": lambda self: 0})()
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.poll_extractions()
+    assert set(a.split.values()) == {("m1-nuke", 1), ("m1-nuke", 2)} and len(a.split) == 3
+    assert all(Path(d).parent.parent == dp.PARTS_DIR for d in a.out_dirs.values())
+    assert sorted(Path(d).name for d in a.out_dirs.values()) == ["m1-nuke-p1", "m1-nuke-p1_dup", "m1-nuke-p2"]
+    monkeypatch.setattr(dp.stitch, "stitch_map", lambda *x, **k: pytest.fail("a duplicate part must not be joined"))
+    rows = p.stitch_parts(a)
+    assert rows["m1-nuke"]["status"] == "held" and "part 1 appears more than once" in rows["m1-nuke"]["reason"]
+    assert not (dp.DEMOS_DIR / slug).exists()
 
 
 def _failed_archive(tmp_path, name, dem_bytes=b"dem", reason="ValidationFailed: deaths 12!=13"):
@@ -724,20 +1428,167 @@ def test_lost_burn_ticks_stay_unattributed():
     assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
 
 
-def test_a_winnerless_attempt_is_voided_only_if_the_game_rolled_its_stats_back():
-    # A pro demo: kills plus deaths stay put across the 45420-57646 restore (rolled back), but a
-    # world suicide inside 78153-97787 raised deaths_total and stayed counted (the game kept that attempt).
-    totals = {45420: 120, 57646 + 64: 120, 78153: 131, 97787 + 64: 132}
-    assert ex.split_restores([(45420, 57646), (78153, 97787)], totals, 64.0) == ([(45420, 57646)],
-                                                                                [(78153, 97787)])
+def _ev(**k):
+    return {**dict.fromkeys(ex.ATTEMPT_COUNTERS, 0), **k}
 
 
-def test_restores_are_judged_one_second_after_the_restore_at_any_tick_rate():
-    # The counters were sampled 64 ticks after the restore, which is half a second on a 128-tick demo.
-    # Here a 128-tick demo's kept attempt only shows its counted death one second (128 ticks) later.
-    totals = {1000: 50, 5000 + 64: 50, 5000 + 128: 51}
-    assert ex.split_restores([(1000, 5000)], totals, 128.0) == ([], [(1000, 5000)])
+def _res(kills=0, deaths=0, assists=0, headshots=0):
+    return dict(kills=kills, deaths=deaths, assists=assists, headshots=headshots)
 
+
+NO_GAP = lambda sid, i: 0
+
+
+def test_an_attempt_the_game_kept_is_explained_by_its_own_events():
+    # An HLTV demo: a disconnect death inside a restored attempt stayed on the scoreboard (one more death than the
+    # counted rounds hold), and an admin restart that rolled nothing back keeps every counter the same way.
+    take, kept, problems, _ = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{B: _ev(deaths=1, selfkills=1)}], {B: {0}}, NO_GAP)
+    assert (take, kept, problems) == ({B: dict(kills_total=0, deaths_total=1, assists_total=0, headshot_kills_total=0)},
+                                      {B: (0,)}, [])
+
+
+def test_an_attempt_the_restore_rolled_back_takes_nothing_off():
+    take, kept, problems, _ = ex.attribute_attempts({B: _res()}, {}, [{B: _ev(kills=2, deaths=1)}], {B: {0}}, NO_GAP)
+    assert (take, kept, problems) == ({}, {B: ()}, [])
+
+
+def test_a_counted_death_whose_event_is_missing_is_not_explained_away():
+    # Review of PR 54 (finding 1): the scoreboard holds a death the tables lack, and no dropped attempt has one.
+    _, _, problems, _ = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{A: _ev(kills=1)}], {B: {0}}, NO_GAP)
+    assert problems and "beyond the counted events" in problems[0]
+
+
+def test_a_kept_suicide_takes_a_kill_off_the_scoreboard():
+    # Review of PR 54: a kept grenade suicide takes a kill off (deducted) and adds a death.
+    take, _, problems, _ = ex.attribute_attempts({A: _res(kills=-1, deaths=1)}, {}, [{A: _ev(selfkills=1, deaths=1)}],
+                                              {A: {0}}, NO_GAP)
+    assert problems == [] and take[A]["kills_total"] == -1 and take[A]["deaths_total"] == 1
+
+
+def test_a_restore_keeps_a_players_whole_attempt_or_none_of_it():
+    # One subset explains every counter at once: keeping the death but not the kill of one attempt is no option.
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(kills=1, deaths=1)}], {A: {0}}, NO_GAP)
+    assert problems
+    take, kept, problems, _ = ex.attribute_attempts({A: _res(deaths=1, assists=1)}, {},
+                                                 [{A: _ev(deaths=1)}, {A: _ev(assists=1)}], {A: {0, 1}}, NO_GAP)
+    assert problems == [] and kept[A] == (0, 1)
+
+
+def test_a_headshot_count_alone_is_a_warning_as_on_the_scoreboard():
+    # Review of PR 54: headshot kills are validate_scoreboard's non-fatal counter, but a player whose headshots alone
+    # differed (no dropped attempt of his at all) failed the map through dropped_attempts_explained.
+    take, kept, problems, warnings = ex.attribute_attempts({A: _res(headshots=1)}, {}, [], {A: set()}, NO_GAP)
+    assert (take, problems) == ({}, []) and len(warnings) == 1 and "headshot" in warnings[0]
+    # The rest still has to be explained, and is: the kept death comes off, the headshot stays a warning.
+    take, kept, problems, warnings = ex.attribute_attempts({A: _res(deaths=1, headshots=1)}, {}, [{A: _ev(deaths=1)}],
+                                                           {A: {0}}, NO_GAP)
+    assert problems == [] and kept[A] == (0,) and take[A]["deaths_total"] == 1 and len(warnings) == 1
+
+
+def test_two_attempts_that_each_explain_the_scoreboard_refuse_the_map():
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}, {A: _ev(deaths=1)}],
+                                           {A: {0, 1}}, NO_GAP)
+    assert problems and "each explain" in problems[0]
+
+
+def test_damage_a_kept_attempt_dealt_refuses_the_map():
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1, damage=50)}], {A: {0}}, NO_GAP)
+    assert problems and "dealt 50 damage" in problems[0]
+
+
+def test_damage_in_an_attempt_no_counter_places_is_judged_by_the_round_before():
+    # Review of PR 54 (finding 1): 30 HP dealt in an attempt, nothing else. If the round before holds 30 HP of game
+    # damage no hit explains, the attempt may have been kept and the map is refused; with no such gap it was not.
+    events = [{A: _ev(damage=30)}]
+    assert ex.attribute_attempts({A: _res()}, {}, events, {A: {0}}, lambda s, i: 30)[2]
+    assert ex.attribute_attempts({A: _res()}, {}, events, {A: {0}}, lambda s, i: 0)[2] == []
+
+
+def test_only_a_players_candidate_attempts_can_explain_his_scoreboard():
+    # A player who left before an attempt, or whose round-1 baseline already holds it, cannot have kept it.
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}], {A: set()}, NO_GAP)
+    assert problems
+
+
+def test_a_player_who_left_during_an_attempt_can_have_kept_it():
+    # Review of PR 54 (finding 6): his row is read at his disconnect at 4000, inside the attempt 3000-5000. Only
+    # attempts that ended before it counted, so the attempt's death in his counters went unexplained.
+    windows = [(1000, 2000), (3000, 5000), (6000, 7000)]
+    assert ex.candidate_attempts(windows, 4000, set()) == {0, 1}
+    assert ex.candidate_attempts(windows, 9000, {0}) == {1, 2}  # attempt 0 is inside his round-1 baseline
+
+
+def test_a_rise_before_round_one_needs_exactly_one_attempt_to_explain_it():
+    # Review of PR 54: the baseline accepted a rise any subset explained, though two different attempts each did.
+    one, two = _ev(deaths=1), _ev(deaths=1)
+    assert ex.baseline_rise_explained(B, {"deaths_total": 1}, [one, None]) is True
+    assert ex.baseline_rise_explained(B, {"deaths_total": 1}, [None, None]) is False
+    with pytest.raises(RuntimeError, match="each explain it"):
+        ex.baseline_rise_explained(B, {"deaths_total": 1}, [one, two])
+
+
+def test_only_an_explosion_may_name_no_player_in_the_bomb_table():
+    # Review of PR 54: the bomb key holds steamid, so a pickup without one could hide a second pickup on its tick.
+    rows = lambda *ev: pd.DataFrame(dict(tick=[1] * len(ev), event=[e for e, _ in ev],
+                                         steamid=pd.array([s for _, s in ev], dtype="UInt64")))
+    assert ex.bomb_rows_name_a_player(rows(("exploded", None), ("pickup", A)))["ok"]
+    assert not ex.bomb_rows_name_a_player(rows(("pickup", None)))["ok"]
+
+
+def test_a_purchase_is_read_from_the_buyers_own_column():
+    # Review of PR 54: item_purchase names its buyer in a bare steamid column; read as user_steamid, every purchase
+    # was lost, and a sixth player who bought a pistol would have been left out instead of refusing the map.
+    pid = lambda df, prefix: ex.col(df, f"{prefix}_steamid" if prefix else "steamid")
+    events = {"weapon_fire": pd.DataFrame(dict(user_steamid=[1])), "grenade_thrown": pd.DataFrame(dict(user_steamid=[]))
+              , "item_purchase": pd.DataFrame(dict(steamid=[COACH]))}
+    case = _slot_case()
+    case["acts"] = pd.DataFrame({"steamid": ex.acting_players(events, pid)})
+    with pytest.raises(RuntimeError, match="fired, threw or bought"):
+        ex.non_combatants(**case)
+
+
+def test_more_than_eight_attempts_or_one_over_a_counted_round_refuses_the_map():
+    rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 2000], end_tick=[1500, 3000]))
+    ex.check_dropped_attempts(rounds, [(1600, 2000)])  # may end on the next round's start
+    with pytest.raises(RuntimeError, match="covers round 1"):
+        ex.check_dropped_attempts(rounds, [(1000, 1600)])
+    with pytest.raises(RuntimeError, match="at most 8"):
+        ex.check_dropped_attempts(rounds, [(1600 + i, 1600 + i) for i in range(9)])
+
+
+def _attempt_deaths(*rows):
+    """rows: (tick, attacker, victim, assister, headshot)."""
+    df = pd.DataFrame(rows, columns=["tick", "attacker_steamid", "victim_steamid", "assister_steamid", "headshot"])
+    for c, t in (("a_team", "attacker_steamid"), ("v_team", "victim_steamid"), ("as_team", "assister_steamid")):
+        df[c] = df[t].map({A: 3, B: 3, C: 2, D: 2})
+    return df
+
+
+def test_an_attempts_events_leave_out_its_restore_tick():
+    deaths = _attempt_deaths((1100, A, C, B, True), (1200, D, D, None, False), (1300, C, D, None, False),
+                             (2000, A, A, None, False), (2000, C, C, None, False))  # restore at 2000 kills everyone
+    hurts = pd.DataFrame(dict(tick=[1050, 1060], attacker_steamid=[A, C], victim_steamid=[C, D], a_team=[3, 2],
+                              v_team=[2, 2], dmg_health=[40, 10]))
+    (ev_,) = ex.attempt_events([(1000, 2000)], {2000}, deaths, hurts)
+    assert ev_[A] == _ev(kills=1, headshots=1, damage=40) and ev_[B] == _ev(assists=1)
+    assert ev_[D] == _ev(selfkills=1, deaths=2) and ev_[C] == _ev(deaths=1, selfkills=1)
+
+
+def test_validation_passes_once_the_kept_attempt_comes_off_the_scoreboard():
+    # End to end: in a dropped attempt B died to "world" (a disconnect) and the game kept it; the tables, rightly,
+    # do not have it. The residual is read the way validate_scoreboard counts.
+    kills, game_damage, sb = _base()
+    sb.loc[sb.steamid == B, "deaths_total"] = 1
+    events = ex.attempt_events([(5000, 6000)], set(), _attempt_deaths((5500, B, B, None, False)),
+                               pd.DataFrame(columns=["tick", "attacker_steamid", "victim_steamid", "a_team", "v_team",
+                                                     "dmg_health"]))
+    counted = ex.counted_events(kills)
+    residuals = {int(r.steamid): {k: int(getattr(r, c)) - counted.get(int(r.steamid), {}).get(k, 0) for k, c in
+                                  (("kills", "kills_total"), ("deaths", "deaths_total"), ("assists", "assists_total"),
+                                   ("headshots", "headshot_kills_total"))} for r in sb.itertuples()}
+    take, _, problems, _ = ex.attribute_attempts(residuals, {}, events, {s_: {0} for s_ in residuals}, NO_GAP)
+    assert problems == [] and _fatal_failures(ex.validate_scoreboard(kills, game_damage, sb))
+    assert _fatal_failures(ex.validate_scoreboard(kills, game_damage, ex.less_taken(sb, take))) == []
 
 
 def test_trade_flags_skip_a_world_death_before_the_trade():
@@ -898,7 +1749,7 @@ def test_a_crash_after_a_pre_1_5_swap_keeps_the_new_map(tmp_path):
 def _rounds_frame(**override):
     import schema_v1
     row = {c: None for c in schema_v1.TYPES["rounds"]}
-    row.update(round=1, start_tick=1, freeze_end_tick=100, end_tick=900, started_live=False, aborted=False,
+    row.update(round=1, start_tick=1, freeze_end_tick=100, end_tick=900, started_live=False,
                winner_side="CT", reason="t_killed", voided_attempts=0, ct_team="A", t_team="B", winner_team="A",
                ct_team_score_after=1, t_team_score_after=0, duration_s=12.5, ct_equip_value=4000, t_equip_value=4000,
                ct_money_start=4000, t_money_start=4000)
@@ -1083,7 +1934,6 @@ def _one_row(table, **override):
     ("kills", ["s_since_freeze_end"]),  # a kill in a round recorded already live
     ("bomb", ["steamid", "place", "x", "y", "z"]),  # a pickup on tick 0 that names no player
     ("grenade_events", ["steamid"]),  # an inferno_expire that names no player
-    ("rounds", ["winner_side", "winner_team"]),  # an aborted round (no winner, stats kept)
 ])
 def test_the_writer_accepts_the_nulls_real_maps_carry(table, cols):
     ex._to_polars(_one_row(table, **{c: None for c in cols}), table)
@@ -1612,3 +2462,15 @@ def test_a_kill_whose_event_lacks_the_killfeed_modifiers_writes_null_not_a_faile
     with_flags = pd.DataFrame(dict(tick=[100, 200], attackerblind=[True, False], attackerinair=[False, True]))
     flags = ex.kill_modifiers(with_flags)
     assert flags["attackerblind"].tolist() == [True, False] and flags["attackerinair"].tolist() == [False, True]
+
+
+def test_a_test_file_that_cannot_import_fails_collection(tmp_path):
+    # A conftest that turned every import error into a skip let a broken extractor pass CI as green. Any conftest
+    # beside these tests is copied in, so one that swallowed import errors again would fail this.
+    import subprocess
+    for f in Path(__file__).parent.glob("conftest.py"):
+        (tmp_path / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "test_broken.py").write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n")
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 2 and "ERROR collecting" in r.stdout, r.stdout[-2000:]

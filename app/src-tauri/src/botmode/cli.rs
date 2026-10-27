@@ -301,7 +301,8 @@ fn run(a: Args) -> Result<(), String> {
             print(a.json, &m, meta_line);
         }
         ["set", key @ ("knife-skins" | "knife-premium" | "music-kit"), value] => {
-            let mut c = settings::read_cosmetics(&layout.csgo)?.cosmetics;
+            let seen = settings::read_cosmetics(&layout.csgo)?.cosmetics;
+            let mut c = seen;
             let flag = |v: &str| match v {
                 "0" => Ok(false),
                 "1" => Ok(true),
@@ -312,7 +313,7 @@ fn run(a: Args) -> Result<(), String> {
                 "knife-premium" => c.dropped_knife_premium = flag(value)?,
                 _ => c.music_kit = value.parse().map_err(|_| format!("{value}: music-kit is a number"))?,
             }
-            let m = settings::set_cosmetics(layout, &probe, c)?;
+            let m = settings::set_cosmetics_from(layout, &probe, c, Some(seen))?;
             print(a.json, &m, meta_line);
         }
         ["set", "launch-options", options] => {

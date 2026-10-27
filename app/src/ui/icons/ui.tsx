@@ -48,10 +48,6 @@ export const AimIcon = (p: IconProps) => (
 export const ClipsIcon = (p: IconProps) => (
   <Svg {...p}><path d="m12.296 3.464 3.02 3.956" /><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z" /><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="m6.18 5.276 3.1 3.899" /></Svg>
 );
-/** Lucide play. */
-export const PlayIcon = (p: IconProps) => (
-  <Svg {...p}><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" /></Svg>
-);
 /** Lucide settings-2. */
 export const SettingsIcon = (p: IconProps) => (
   <Svg {...p}><path d="M14 17H5" /><path d="M19 7h-9" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></Svg>
@@ -60,6 +56,15 @@ export const SettingsIcon = (p: IconProps) => (
 export const PanelCloseIcon = (p: IconProps) => (
   <Svg {...p}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" /></Svg>
 );
+
+/** Lucide bot: Bot Mode. */
+export const BotIcon = (p: IconProps) => (
+  <Svg {...p}><path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" /></Svg>
+);
+/** Lucide play: launching the game. */
+export const PlayIcon = (p: IconProps) => <Svg {...p}><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" /></Svg>;
+/** Lucide download: installing a release. */
+export const DownloadIcon = (p: IconProps) => <Svg {...p}><path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /></Svg>;
 
 export const ChevronIcon = (p: IconProps) => <Svg {...p}><path d="m6 9 6 6 6-6" /></Svg>;
 export const ChevronRightIcon = (p: IconProps) => <Svg {...p}><path d="m9 18 6-6-6-6" /></Svg>;
