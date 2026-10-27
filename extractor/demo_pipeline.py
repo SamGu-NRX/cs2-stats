@@ -238,6 +238,9 @@ class Archive:
     listing: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)
     out_dirs: dict = field(default_factory=dict)  # demo name -> the folder its job writes, as allocated
+    # demo name -> (base map key, part number) for a part of a split recording, from its file name; its folder name
+    # may carry a _dup suffix, so the identity is kept here and never read back from the folder
+    split: dict = field(default_factory=dict)
     proc: subprocess.Popen | None = None
     extract_log: Path | None = None
     size_at_extract: int = 0
@@ -964,12 +967,15 @@ class Pipeline:
             failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
             for dem in a.dems:
                 key = extract.map_key_for(dem, dem.stem)
+                part = stitch.split_key(key)
+                if part:
+                    a.split[dem.name] = part
                 while key in keys:
                     key += "_dup"
                 keys.add(key)
                 jd = LOG_DIR / "jobs"
                 jd.mkdir(parents=True, exist_ok=True)
-                a.out_dirs[dem.name] = (PARTS_DIR if stitch.split_key(key) else DEMOS_DIR) / a.slug / key
+                a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
                 if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
                     a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
                     log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
@@ -1139,9 +1145,13 @@ class Pipeline:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
                 continue
             replace_old_extractions(a.results, a.out_dirs)
-            self.stitch_parts(a)
+            rows = self.stitch_parts(a)
             self.outputs_changed()
-            # Every map is written and validated: the inputs can go.
+            missing = self.unaccounted(a, rows)
+            if missing:  # the RAR stays, in failed/, so nothing is lost
+                self.fail_archive(a, "maps neither published nor held with their parts: " + "; ".join(missing))
+                continue
+            # Every map is published, or held back with its parts intact: the inputs can go.
             safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
                 log.error("could not remove %s; keeping RAR %s", a.work, a.rar)
@@ -1151,54 +1161,92 @@ class Pipeline:
             else:
                 safe_unlink(a.rar)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
+                       held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
+                             if row["status"] != "stitched"],
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
 
-    def stitch_parts(self, a: Archive, failed: str | None = None) -> None:
-        """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so."""
-        split: dict[str, dict[int, Path]] = {}
-        for d in a.out_dirs.values():
-            k = stitch.split_key(Path(d).name)
-            if k:
-                split.setdefault(k[0], {})[k[1]] = Path(d)
-        for base, parts in sorted(split.items()):
+    def stitch_parts(self, a: Archive, failed: str | None = None) -> dict[str, dict]:
+        """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so. Returns
+        {base map key: parts.jsonl row}. Parts are grouped by the identity their file names give (Archive.split),
+        so a second copy of a part, whose folder got a _dup suffix, holds its map instead of passing for a map."""
+        groups: dict[str, dict[int, list[Path]]] = {}
+        for dem, (base, n) in sorted(a.split.items()):
+            groups.setdefault(base, {}).setdefault(n, []).append(Path(a.out_dirs[dem]))
+        rows = {}
+        for base, by_n in sorted(groups.items()):
             out_dir = DEMOS_DIR / (a.slug or a.id) / base
+            parts = {n: ds[0] for n, ds in sorted(by_n.items())}
+            dup = {n: ds for n, ds in sorted(by_n.items()) if len(ds) > 1}
+            held = dict(map=str(out_dir), parts={str(n): [str(d) for d in ds] for n, ds in sorted(by_n.items())},
+                        status="held")
             if failed:
-                row = dict(map=str(out_dir), parts={str(n): str(d) for n, d in parts.items()}, status="held",
-                           reason=f"the archive failed: {failed[:300]}")
+                row = dict(held, reason=f"the archive failed: {failed[:300]}")
+            elif dup:
+                row = dict(held, reason="part " + ", ".join(map(str, dup)) + " appears more than once in the archive; "
+                                        "which copy is the match's cannot be told")
             else:
                 try:
                     row = stitch.stitch_map(parts, out_dir)
                 except Exception as e:  # noqa: BLE001 - a map that cannot be stitched is held, the archive is still done
-                    row = dict(map=str(out_dir), parts={str(n): str(d) for n, d in parts.items()}, status="held",
-                               reason=f"stitching raised {type(e).__name__}: {e}"[:500])
+                    row = dict(held, reason=f"stitching raised {type(e).__name__}: {e}"[:500])
             append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, row)
             log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
             if row["status"] == "stitched":  # the joined map in demos/ holds everything its parts did
                 for d in parts.values():
-                    safe_rmtree(d, ignore_errors=True)
+                    stitch.delete_part(d)
+            rows[base] = row
         self.enforce_parts_cap()
+        return rows
+
+    def unaccounted(self, a: Archive, rows: dict[str, dict]) -> list[str]:
+        """What keeps the archive's originals from being deleted: a whole map that does not resolve, a stitched map
+        that does not resolve, or a held split map with a part folder that no longer holds its tables."""
+        out = []
+        for dem, d in sorted(a.out_dirs.items()):
+            if dem not in a.split and extract.resolve_map_dir(Path(d)) is None:
+                out.append(f"{dem}: {d} holds no complete map")
+        for base, row in sorted(rows.items()):
+            if row["status"] == "stitched":
+                if extract.resolve_map_dir(DEMOS_DIR / (a.slug or a.id) / base) is None:
+                    out.append(f"{base}: stitched, but holds no complete map")
+                continue
+            gone = [str(a.out_dirs[dem]) for dem, (b, _) in sorted(a.split.items())
+                    if b == base and extract.resolve_map_dir(Path(a.out_dirs[dem])) is None]
+            if gone:
+                out.append(f"{base}: held, but part folder(s) {gone} hold no complete map")
+        return out
 
     def enforce_parts_cap(self) -> None:
-        """Delete the oldest held split map's parts while parts/ holds more than MAX_PARTS_GB, recording each."""
-        held = sorted(stitch.split_maps(PARTS_DIR).items(), key=lambda kv: max(d.stat().st_mtime for d in kv[1].values()))
-        sizes = {key: sum(tree_bytes(d) for d in ps.values()) for key, ps in held}
+        """Delete the oldest held parts, one archive's folder in parts/ at a time, while parts/ holds more than
+        MAX_PARTS_GB, recording each. An archive still in flight is never touched: its finished parts wait for its
+        other parts. A part folder whose map lock another process holds is skipped."""
+        active = {a.slug for a in self.archives.values() if a.slug}
+        folders = sorted((d for d in PARTS_DIR.iterdir() if d.is_dir()), key=lambda d: newest_mtime(d)) \
+            if PARTS_DIR.exists() else []
+        sizes = {d: tree_bytes(d) for d in folders}
         total = sum(sizes.values())
-        for key, ps in held:
+        for d in folders:
             if total <= MAX_PARTS_GB * 1e9:
                 return
-            for d in ps.values():
+            if d.name in active:
+                continue
+            removed = [m for m in sorted(x for x in d.iterdir() if x.is_dir()) if stitch.delete_part(m)]
+            if not removed:
+                continue
+            if not any(x.is_dir() for x in d.iterdir()):
                 safe_rmtree(d, ignore_errors=True)
-            total -= sizes[key]
+            self.outputs_changed()
+            total -= sizes[d]
             append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
-                map=str(DEMOS_DIR / key[0] / key[1]), parts={str(n): str(d) for n, d in sorted(ps.items())},
-                status="expired", reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held map's parts were deleted",
-                bytes=sizes[key], checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
-            log.warning("parts/ over %.0f GB; deleted the held parts of %s/%s (%.1f MB)", MAX_PARTS_GB, key[0], key[1],
-                        sizes[key] / 1e6)
+                map=str(DEMOS_DIR / d.name), parts=[str(m) for m in removed], status="expired",
+                reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
+                checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            log.warning("parts/ over %.0f GB; deleted the held parts of %s (%.1f MB)", MAX_PARTS_GB, d.name,
+                        sizes[d] / 1e6)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""

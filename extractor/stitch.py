@@ -3,11 +3,12 @@
 A split recording's parts are extracted one by one (extract.py). Published as maps, each was its own match:
 rounds numbered from 1 inside each part, so a second part's halftime and pistol rounds were wrong, and
 neither part could join HLTV's map. Here the parts become one map with the match's own round numbers, but
-only when they are provably one continuous recording of the whole match (plan): every part from 1 is present,
-all are of one map, tick rate, source, archive and pair of teams, the first starts at round 1, each part's first
-round follows the last one's, both teams' scores and every player's counters (one who left included) carry over
-unchanged, the sides are those the swap rule gives, the rosters are the same, and the last part ends the match;
-and the joined map passes the scoreboard check on its own (join_failures). Anything else is held back: its parts are kept, out of every reader's sight,
+only when they are provably one continuous recording of the whole match (plan): every part from 1 is present, all
+are of one map, tick rate, source, archive, pair of teams and visibility setup, the first starts at round 1, each
+part's first round follows the last one's, both teams' scores and every player's counters (one who left included)
+carry over unchanged, the sides are those the swap rule gives, the rosters are the same, and the last part ends the
+match; and the joined map passes the scoreboard check on its own (join_failures).
+Anything else is held back: its parts are kept, out of every reader's sight,
 and parts.jsonl in the parts folder says why, so the map can be joined if a missing part arrives.
 
 Run:  .venv\\Scripts\\python.exe -I stitch.py --data <cs2-stats-data>            (report only)
@@ -20,6 +21,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,8 +37,11 @@ PART = re.compile(r"^(?P<base>.+)-p(?P<n>\d+)$")
 # Counters that must carry over from one part's end to the next part's start, per player.
 CARRIED = ["kills_total", "deaths_total", "assists_total", "damage_total", "headshot_kills_total"]
 PARTS_MANIFEST = "parts.jsonl"  # in the parts folder
-# match columns every part must share: one map, one recording setup, one match between the same two teams.
-IDENTITY = ("map", "tick_rate", "source", "archive", "team1_file", "team2_file")
+# match columns every part must share: one map, one recording setup, one match between the same two teams, and
+# one way of judging visibility (the stitched map has one visibility_status, so parts that differ are held).
+IDENTITY = ("map", "tick_rate", "source", "archive", "team1_file", "team2_file", "visibility_status", "mesh_sha256",
+            "velocity_source")
+DUP = re.compile(r"^(?P<key>.+?)(?:_dup)+$")  # demo_pipeline's folder for a second demo with the same map key
 # Every column that names something by number, in one of two groups (a test fails on an ID column in neither).
 # OFFSET_IDS are numbers the extractor assigns, unique in the match; each part numbers its own from 0, so a later
 # part's move past every earlier part's. GAME_IDS are the game's own entity indices and user slots: the game reuses
@@ -312,6 +317,8 @@ def _match(tables, parts, offsets, n_rounds, base) -> pl.DataFrame:
         dropped_attempts=merged("dropped_attempts", lambda d, o: dict(
             d, round=None if d.get("round") is None else d["round"] + o["rounds"], from_tick=d["from_tick"] + o["ticks"],
             to_tick=d["to_tick"] + o["ticks"], restore_ticks=[t + o["ticks"] for t in d.get("restore_ticks", [])])),
+        mesh_kill_agreement=min((r["mesh_kill_agreement"] for r in rows if r.get("mesh_kill_agreement") is not None),
+                                default=last.get("mesh_kill_agreement")),
         excluded_players=json.dumps(list({x["steamid"]: x for r in rows for x in json.loads(r["excluded_players"] or "[]")}.values())),
         departed=json.dumps(_departed(tables, offsets, base)), scoreboard_taken=json.dumps(_taken(tables)),
         parsed_at_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -396,15 +403,36 @@ def stitch_map(part_dirs: dict[int, Path], out_dir: Path, ignore_retired: bool =
     return dict(row, status="stitched", version_dir=result["version_dir"], rounds=stitched["rounds"].height)
 
 
-def split_maps(root: Path) -> dict[tuple[str, str], dict[int, Path]]:
-    """{(archive folder, base map key): {part number: map folder}} under root (demos/ or parts/)."""
-    out: dict[tuple[str, str], dict[int, Path]] = {}
+def split_maps(root: Path) -> dict[tuple[str, str], dict[int, list[Path]]]:
+    """{(archive folder, base map key): {part number: [map folders]}} under root (demos/ or parts/). A part with two
+    folders (the second named <key>_dup by demo_pipeline) has both listed; such a map is held, never joined."""
+    out: dict[tuple[str, str], dict[int, list[Path]]] = {}
     for archive in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
         for m in sorted(p for p in archive.iterdir() if p.is_dir()):
-            k = split_key(m.name)
+            dup = DUP.match(m.name)
+            k = split_key(dup["key"] if dup else m.name)
             if k:
-                out.setdefault((archive.name, k[0]), {})[k[1]] = m
+                out.setdefault((archive.name, k[0]), {}).setdefault(k[1], []).append(m)
     return out
+
+
+def readable(map_dir: Path) -> bool:
+    """Whether readers still see a map folder in any layout they read (SCHEMA-v1.md "Finding a map's tables"): not
+    withdrawn, and a CURRENT pointer, a schema v1 match.parquet, or a pre-v1 meta.parquet."""
+    if (map_dir / extract.RETIRED).exists():
+        return False
+    return any((map_dir / f).exists() for f in (extract.CURRENT, "match.parquet", "meta.parquet"))
+
+
+def delete_part(map_dir: Path) -> bool:
+    """Delete a staged part's folder in parts/ under its map lock; False, leaving it, while another process holds
+    the lock."""
+    try:
+        with extract.map_lock(map_dir, wait=False):
+            shutil.rmtree(map_dir, ignore_errors=True)
+    except extract.MapLocked:
+        return False
+    return not map_dir.exists()
 
 
 def main(argv=None) -> int:
@@ -414,19 +442,27 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     demos, parts_root = a.data / "demos", a.data / "parts"
     found = split_maps(demos)
-    for key, ps in split_maps(parts_root).items():
-        found.setdefault(key, {}).update({n: d for n, d in ps.items() if n not in found.get(key, {})})
+    for key, ps in split_maps(parts_root).items():  # a part published in demos/ wins over a staged copy
+        found.setdefault(key, {}).update({n: ds for n, ds in ps.items() if n not in found.get(key, {})})
     rows = []
-    for (archive, base), ps in sorted(found.items()):
+    for (archive, base), by_n in sorted(found.items()):
         out_dir = demos / archive / base
+        ps = {n: ds[0] for n, ds in by_n.items()}
+        dup = sorted(n for n, ds in by_n.items() if len(ds) > 1)
+        why = f"part {', '.join(map(str, dup))} appears more than once; which copy is the match's cannot be told" \
+            if dup else None
         if not a.apply:
-            why = join(ps, ignore_retired=True)[1]
+            why = why or join(ps, ignore_retired=True)[1]
             row = dict(map=str(out_dir), status="held" if why else "would stitch", reason=why)
         else:
             extract.check_output(out_dir, private=True, what="a stitched map")
-            row = stitch_map(ps, out_dir, ignore_retired=True)
-            for n, d in ps.items():
-                if d.parent.parent != demos or extract.resolve_map_dir(d) is None:
+            row = dict(map=str(out_dir), status="held", reason=why) if why else stitch_map(ps, out_dir, ignore_retired=True)
+            for d in [d for ds in by_n.values() for d in ds]:
+                if d.parent.parent == parts_root:
+                    if row["status"] == "stitched":
+                        delete_part(d)  # staged; the stitched map holds it now, so a later run cannot join it again
+                    continue
+                if not readable(d):
                     continue  # already out of readers' sight
                 if row["status"] == "stitched":
                     extract.retire_map(d, successor=out_dir)

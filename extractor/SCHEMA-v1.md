@@ -94,7 +94,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `match_id` | String | no | first 16 hex digits of demo_sha256 |
 | `match_start_tick` | Int32 | no | begin_new_match tick (0 when absent) |
 | `mesh_buildid` | String | no | Steam build id the mesh was built from |
-| `mesh_kill_agreement` | Float32 | no | share of non-wallbang kills where the mesh gives the attacker line of sight; below 0.9 sets mesh_mismatch |
+| `mesh_kill_agreement` | Float32 | no | share of non-wallbang kills where the mesh gives the attacker line of sight; below 0.9 sets mesh_mismatch; for a stitched map, the lowest of its parts' |
 | `mesh_patch_version` | String | no | CS2 patch the mesh was built from, e.g. 1.41.9.2 |
 | `mesh_release` | String | no | awpy-data release (CS2 ClientVersion) the mesh came from |
 | `mesh_sha256` | String | no | SHA-256 of the .mesh file used |

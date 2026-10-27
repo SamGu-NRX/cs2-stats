@@ -16,7 +16,8 @@ import stitch  # noqa: E402
 
 A1, A2, B1, B2 = 1, 2, 3, 4  # team A: A1, A2; team B: B1, B2 (two a side keeps the tables short)
 IDENT = dict(map="de_nuke", tick_rate=64.0, source="hltv", archive="a-vs-b-1", team1_file="a", team2_file="b",
-             map_key="m1-nuke", mp_maxrounds=4, mp_overtime_maxrounds=6)
+             visibility_status="ok", mesh_sha256="ab" * 32, velocity_source="networked", map_key="m1-nuke",
+             mp_maxrounds=4, mp_overtime_maxrounds=6)
 
 
 def test_sides_swap_at_each_halftime_and_never_at_an_overtimes_start():
@@ -71,6 +72,9 @@ def test_two_continuous_parts_that_end_the_match_join():
     ([P1, replace(P2, identity={**IDENT, "archive": "a-vs-b-2"})], "archive differs"),
     ([P1, replace(P2, identity={**IDENT, "team2_file": "c"})], "team2_file differs"),
     ([P1, replace(P2, identity={**IDENT, "map_key": "m2-nuke"})], "map_key differs"),
+    ([P1, replace(P2, identity={**IDENT, "visibility_status": "no_mesh"})], "visibility_status differs: part 1 'ok', part 2 'no_mesh'"),
+    ([P1, replace(P2, identity={**IDENT, "mesh_sha256": "cd" * 32})], "mesh_sha256 differs"),
+    ([P1, replace(P2, identity={**IDENT, "velocity_source": "position_diff"})], "velocity_source differs"),
 ])
 def test_parts_that_do_not_provably_make_one_match_are_held(parts, reason):
     assert reason in stitch.plan(parts, "1.15.0")
@@ -262,3 +266,44 @@ def test_a_real_split_recording_stitches_through_the_writer(tmp_path):
     assert spans.filter((pl.col("a") < p2["tick_offset"]) & (pl.col("b") >= p2["tick_offset"])).height == 0
     linked = throws.join(spans, on="projectile")
     assert linked.height == throws.height and (linked["a"] >= linked["tick"]).all()
+
+
+# --- the migration CLI over a data folder ------------------------------------------------------------------------
+
+def _folder(d: Path, *files):
+    d.mkdir(parents=True)
+    for f in files:
+        (d / f).write_bytes(b"x")
+    return d
+
+
+def test_the_cli_withdraws_held_parts_in_every_layout_readers_read(tmp_path):
+    # Pre-v1 parts (meta.parquet and economy.parquet, no match.parquet) are still read by the app and the model;
+    # resolve_map_dir does not see them, and the CLI used to leave them published.
+    parts = [_folder(tmp_path / "demos" / "a-vs-b-1" / f"m1-nuke-p{n}", "meta.parquet", "economy.parquet") for n in (1, 2)]
+    assert stitch.main(["--data", str(tmp_path), "--apply"]) == 0
+    for d in parts:
+        assert (d / "RETIRED").read_text(encoding="utf-8").startswith("stale: split part held back")
+        assert (d / "meta.parquet").exists()  # withdrawn, not deleted
+        assert not stitch.readable(d)
+
+
+def test_the_cli_deletes_staged_parts_once_their_map_is_stitched(tmp_path, monkeypatch):
+    staged = [_folder(tmp_path / "parts" / "a-vs-b-1" / f"m1-nuke-p{n}", "match.parquet") for n in (1, 2)]
+    monkeypatch.setattr(stitch, "stitch_map", lambda ps, out, ignore_retired=False: dict(map=str(out), status="stitched"))
+    stitch.main(["--data", str(tmp_path), "--apply"])
+    assert not any(d.exists() for d in staged)  # a later run has nothing to join again
+    assert stitch.split_maps(tmp_path / "parts") == {}
+
+
+def test_a_part_with_two_copies_is_held_and_neither_is_joined(tmp_path, monkeypatch, capsys):
+    for name in ("m1-nuke-p1", "m1-nuke-p1_dup", "m1-nuke-p2"):
+        _folder(tmp_path / "parts" / "a-vs-b-1" / name, "match.parquet")
+    found = stitch.split_maps(tmp_path / "parts")
+    assert {n: [d.name for d in ds] for n, ds in found[("a-vs-b-1", "m1-nuke")].items()} == {
+        1: ["m1-nuke-p1", "m1-nuke-p1_dup"], 2: ["m1-nuke-p2"]}
+    monkeypatch.setattr(stitch, "stitch_map", lambda *a, **k: pytest.fail("a duplicate part must not be joined"))
+    stitch.main(["--data", str(tmp_path), "--apply"])
+    row = json.loads((tmp_path / "parts" / "parts.jsonl").read_text(encoding="utf-8"))
+    assert row["status"] == "held" and "part 1 appears more than once" in row["reason"]
+    assert (tmp_path / "parts" / "a-vs-b-1" / "m1-nuke-p1_dup").exists()
