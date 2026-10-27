@@ -15,7 +15,10 @@ export const ECO_BELOW_PER_PLAYER = 1000;
 /** Team equipment per player from which a round is a full buy. */
 export const FULL_FROM_PER_PLAYER = 3250;
 
-/** First round of either regulation half (ri is 0-based). Overtime starts with full-buy money and has no pistol rounds. */
+/**
+ * First round of either regulation half (ri is 0-based). CS2's MR12 overtime is MR3 halves that start
+ * every player on $10,000 (mp_overtime_startmoney), so overtime has no pistol rounds.
+ */
 export function isPistolRound(ri: number, maxRounds: number): boolean {
   return ri === 0 || ri === maxRounds / 2;
 }
