@@ -186,19 +186,20 @@
       "kills": 45034,
       "gain_credits": 68155,
       "gain_within_0_01": 0.9705377448463062,
-      "gain_mae_points": 0.06659217616271039,
+      "gain_mae_points": 0.06659217616269449,
       "flash_observations": 3021,
       "failed_trade_observations": 5112
     },
     "event_credit_model": "weighted_damage_kill_trade_flash",
     "trade_window_seconds": 5.0,
     "event_credit": {
-      "kill_weight": 57.13783840761984,
-      "flash_weight": 28.570437968106717,
-      "trade_weight": 99.99446350198711,
+      "kill_weight": 57.13783840767287,
+      "flash_weight": 28.57043796816623,
+      "trade_weight": 99.99446350220755,
       "victim_weight": 214.27839043009956,
       "failed_trade_weight": 100.0,
-      "trade_window_seconds": 5.5
+      "trade_window_seconds": 5.5,
+      "defuse_share": 0.6
     },
     "zero_rules": [
       "unpreventable post-bomb kills have zero swing",
@@ -388,7 +389,7 @@
     "source": {
       "source": "research",
       "script": "fit_params.py",
-      "maps": 733,
+      "maps": 738,
       "fit_date": "2026-10-26"
     },
     "eKAST": {

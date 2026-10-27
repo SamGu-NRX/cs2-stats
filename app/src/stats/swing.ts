@@ -3,8 +3,8 @@
 // describes. Values are win-probability fractions (0.05 = 5 points); HLTV shows a player's mean per
 // round in percent.
 //
-// The kill shares follow params.json swing.event_credit, fitted to HLTV's own per-kill credits by
-// model/rating3/swing_credit_fit.py. The winners' split of a detonation or time-out is ours (HLTV's is
+// The kill shares and the defuse share follow params.json swing.event_credit, fitted to HLTV's own
+// credits by model/rating3/swing_credit_fit.py. The winners' split of a time-out is ours (HLTV's is
 // not recovered). VALIDATION.md compares the result with HLTV's per-player swing.
 import { blindWindows } from "./blinds";
 import { PARAMS as params } from "./model-params";
@@ -71,6 +71,9 @@ export function swing(c: Ctx): void {
     // Every valued event so far: its change in P(T wins) and the credits it gave, each signed for the
     // side it favoured, as replay reads them.
     const history: { dT: number; credits: [number, number][] }[] = [];
+    // where the plant falls in history, and who was alive on each side when it did
+    let plantAt: number | null = null;
+    let aliveAtPlant: Record<Side, Set<number>> | null = null;
     // A plant's, a defuse's or the round end's change in P(T wins), dT, shared like the round's earlier
     // events that moved it the same way, each in proportion to its own change (HLTV's plant and defuse
     // credits, SPEC.md). With no such event, each side's living players share it equally.
@@ -101,6 +104,8 @@ export function swing(c: Ctx): void {
         if (p === null) { valued = false; break; }
         const cr = replay(p - pT);
         credited(cr, source.end);
+        plantAt = history.length;
+        aliveAtPlant = { CT: new Set(alive.CT), T: new Set(alive.T) };
         history.push({ dT: p - pT, credits: cr });
         pT = p;
         path.push({ tick: e.tick, event: "plant", pT });
@@ -172,20 +177,38 @@ export function swing(c: Ctx): void {
     }
     if (!valued) { for (const k of c.kills[ri]) k.credits = []; continue; }
 
-    // The round's end: what the last event left. A detonation or the clock running out pays the
-    // winners alive and charges the losers alive, each equally (HLTV charges the losers so; its split
-    // among the winners is not recovered, SPEC.md). A defuse, and what an elimination leaves, replay
-    // the round's events.
+    // The round's end: what the last event left (SPEC.md "Swing credits", fitted to HLTV's credits).
+    // - A defuse: the defuser takes the defuse share and the winners' credits from the events since the
+    //   plant that moved the round their way take the rest; the losers alive at the plant share the charge.
+    // - A detonation: the winners' credits from those events take it all, else the winners alive share
+    //   it; the losers alive share the charge.
+    // - The clock running out: each side's living players share it equally.
+    // - An elimination's remainder replays the round's events.
     const winner = rf.winner;
     const loser: Side = winner === "T" ? "CT" : "T";
     const rest = 1 - pSide(pT, winner);
+    const sign = winner === "T" ? 1 : -1;
+    const winnersSincePlant = (amount: number): [number, number][] => {
+      if (plantAt === null) return [];
+      const pos = history.slice(plantAt + 1).filter((h) => Math.sign(h.dT) === sign).flatMap((h) => h.credits.filter(([, v]) => v > 0));
+      const sum = pos.reduce((t, [, v]) => t + v, 0);
+      return sum > 0 ? pos.map(([pl, v]): [number, number] => [pl, (amount * v) / sum]) : [];
+    };
+    const everyone = (side: Side) => rows.filter((p) => p?.side === side).map((p) => p!.pi);
+    const orAll = (set: Set<number> | undefined, side: Side) => (set && set.size ? [...set] : everyone(side));
     if (rest !== 0) {
-      const objective = !rf.defused && (rf.exploded || rf.reason === "time_ran_out");
-      if (objective && alive[winner].size > 0) {
-        const losers = alive[loser].size ? alive[loser] : rows.filter((p) => p?.side === loser).map((p) => p!.pi);
-        credited([...evenly(alive[winner], rest), ...evenly(losers, -rest)], source.end);
+      if (rf.defused && rf.defuser !== null && plantAt !== null) {
+        const replayed = winnersSincePlant(rest * (1 - E.defuse_share));
+        const own = replayed.length ? rest * E.defuse_share : rest;
+        credited([[rf.defuser, own], ...replayed, ...evenly(orAll(aliveAtPlant?.[loser], loser), -rest)], source.end);
+      } else if (rf.exploded && !rf.defused) {
+        const replayed = winnersSincePlant(rest);
+        const winners = replayed.length ? replayed : evenly(orAll(alive[winner], winner), rest);
+        credited([...winners, ...evenly(orAll(alive[loser], loser), -rest)], source.end);
+      } else if (rf.reason === "time_ran_out" && alive[winner].size > 0) {
+        credited([...evenly(alive[winner], rest), ...evenly(orAll(alive[loser], loser), -rest)], source.end);
       } else {
-        credited(replay(winner === "T" ? rest : -rest), source.end);
+        credited(replay(sign * rest), source.end);
       }
     }
 

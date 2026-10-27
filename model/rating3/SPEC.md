@@ -89,7 +89,14 @@ A kill's gain is shared among the gaining side by weight:
 - the earliest teammate the victim killed within 5.5 s before adds the trade weight, 100;
 - each enemy flasher whose flash was still blinding the victim adds the flash weight, 28.57.
 
-The victim is charged the whole change, unless the same killer kills a teammate of the victim within 5.5 s after. In that case the charge is split 0.682 to the victim and 0.318 to that teammate, a failed trade. A plant and a defuse are shared like the round's earlier events that moved the round the same way, each in proportion to its own change. When no such event exists, each side's living players share it equally. A detonation or the clock running out pays the winners alive equally and charges the losers alive equally. HLTV charges the losers this way, but its split among the winners is not recovered.
+The victim is charged the whole change, unless the same killer kills a teammate of the victim within 5.5 s after. In that case the charge is split 0.682 to the victim and 0.318 to that teammate, a failed trade. A plant is shared like the round's earlier events that moved the round the same way, each in proportion to its own change; with no such event, each side's living players share it equally. This reproduces 2,922 of 3,144 plants exactly in a sample of 300 maps.
+
+The round's end is shared by how it ended:
+
+- A defuse: the defuser takes the defuse share, 0.60, and the winners' positive credits from the events after the plant that moved the round their way take the rest. The losers alive at the plant share the charge equally (90% of their charges exact). The share is fitted on 1,903 defuses with such events (credit MAE 0.24 points; 0.55 and 0.65 fit worse).
+- A detonation: the winners' positive credits from the events after the plant take it all, else the winners alive share it equally; the losers alive share the charge equally. Replaying the events after the plant cuts the winners' credit error from 1.12 to 0.63 points against an equal split.
+- The clock running out: each side's living players share it equally. HLTV's split among the winners is not recovered.
+- What an elimination leaves replays the round's events.
 
 The weights are 400/7, 100, 200/7 and 1500/7 : 100 to within the fit's noise. On kills without a flash, 97.1% of HLTV's credits are reproduced to 0.01 points (68,155 credits, MAE 0.067 points). The flash weight comes from 3,021 kills with exactly one credited player outside the damage ledger and the trade candidates; its interquartile range is 28.53 to 28.61. The 5.5 s window gives a lower credit error than 5.0, 5.25, 5.75 or 6.0 s.
 

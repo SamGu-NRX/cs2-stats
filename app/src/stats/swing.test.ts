@@ -67,3 +67,27 @@ it("shares a victim's charge with the teammate the same killer kills within the 
   expect(first.z / first.y).toBeCloseTo(E.failed_trade_weight / E.victim_weight, 12);
   expect(Object.keys(charge(1))).toEqual(["z"]);
 });
+
+it("gives a defuse to the defuser and the play since the plant, and charges the losers alive at the plant", () => {
+  // fails if the defuser's share, the replay of the winners' credits since the plant, or the losers'
+  // equal charge is wrong. x plants first (every player alive), a kills x and b kills y, then b defuses.
+  const f = oneRound({
+    round: 5,
+    players: { a: "CT", b: "CT", x: "T", y: "T" },
+    player_rounds: { a: equip, b: equip, x: equip, y: equip },
+    kills: [{ tick: t(20), killer: "a", victim: "x" }, { tick: t(25), killer: "b", victim: "y" }],
+    roundRow: { plant_tick: t(5), planter_steamid: "x", plant_site: "A", defuse_tick: t(30), defuser_steamid: "b", end_tick: t(30), reason: "bomb_defused", winner_side: "CT" },
+  });
+  const path = f.rounds[0].winProb!;
+  expect(path.map((p) => p.event)).toEqual(["start", "plant", "kill", "kill"]);
+  const plant = path[1].pT - path[0].pT;
+  const rest = path[3].pT; // what is left of P(T wins) for the CTs to take at the defuse
+  const end = (id: string) => f.pr.find((r) => f.players[r.pi].id === id)!.m.swingEnd ?? 0;
+  const gain = (k: number, id: string) => f.kills[k].credits.filter(([p, v]) => v > 0 && f.players[p].id === id).reduce((s, [, v]) => s + v, 0);
+  const [ka, kb] = [gain(0, "a"), gain(1, "b")];
+  // the plant, with no earlier event, is shared equally by each side's living players
+  expect(end("x")).toBeCloseTo(plant / 2 - rest / 2, 12);
+  expect(end("y")).toBeCloseTo(plant / 2 - rest / 2, 12);
+  expect(end("a")).toBeCloseTo(-plant / 2 + (1 - E.defuse_share) * rest * (ka / (ka + kb)), 12);
+  expect(end("b")).toBeCloseTo(-plant / 2 + E.defuse_share * rest + (1 - E.defuse_share) * rest * (kb / (ka + kb)), 12);
+});

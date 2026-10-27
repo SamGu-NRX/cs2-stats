@@ -187,6 +187,72 @@ def victim_share(ev: list[dict], window: float) -> dict:
             "victim_weight": 100.0 * (1 - s) / s, "failed_trade_weight": 100.0}
 
 
+def defuse_events(hltv: Path) -> list[dict]:
+    """Every defuse HLTV credits: its change, the defuser, and the winners' positive credits from the
+    events after the plant that moved the round the defusers' way, from HLTV's map files alone."""
+    out = []
+    for path in sorted(hltv.glob("map_*.json")):
+        d = json.loads(path.read_text(encoding="utf-8"))
+        if d.get("v") != 3:
+            continue
+        perf = d["performance"]
+        team = {}
+        for board in d["scoreboards"]:
+            if "totalstats" in board["cls"].split():
+                for r in board["rows"]:
+                    team[r["player"]] = board["head"][0][1]
+        for rname, rd in perf["rounds"].items():
+            credits = defaultdict(dict)
+            for p in perf["players"]:
+                for i, (_, text) in enumerate(p["events"].get(rname, [])):
+                    for nick, value in CREDIT.findall(text):
+                        if nick.strip() == p["nick"]:
+                            credits[i][nick.strip()] = float(value)
+            evs = rd["events"]
+            plant = None
+            for i, e in enumerate(evs[1:], start=1):
+                title = e["title"]
+                change = (float(e["y"]) - float(evs[i - 1]["y"])) * 100
+                if title.endswith(" planted the bomb"):
+                    plant = i
+                if not title.endswith(" defused the bomb") or plant is None or abs(change) < 0.05:
+                    continue
+                defuser = title[: -len(" defused the bomb")]
+                if defuser not in team:
+                    continue
+                after = [credits.get(j, {}) for j in range(plant + 1, i)
+                         if np.sign((float(evs[j]["y"]) - float(evs[j - 1]["y"]))) == np.sign(change)]
+                pos = defaultdict(float)
+                for c in after:
+                    for nick, v in c.items():
+                        if v > 0 and team.get(nick) == team[defuser]:
+                            pos[nick] += v
+                winners = {n: v for n, v in credits.get(i, {}).items() if team.get(n) == team[defuser]}
+                out.append({"change": abs(change), "defuser": defuser, "replay": dict(pos), "credits": winners})
+    return out
+
+
+def defuse_share(hltv: Path) -> dict:
+    """The defuser's share of a defuse's change when earlier events since the plant take the rest."""
+    ev = [e for e in defuse_events(hltv) if e["replay"]]
+
+    def errors(share):
+        err = []
+        for e in ev:
+            total = sum(e["replay"].values())
+            pred = {n: (1 - share) * e["change"] * v / total for n, v in e["replay"].items()}
+            pred[e["defuser"]] = pred.get(e["defuser"], 0.0) + share * e["change"]
+            err.extend(abs(pred.get(n, 0.0) - e["credits"].get(n, 0.0)) for n in set(pred) | set(e["credits"]))
+        return np.array(err)
+
+    grid = [float(round(x, 2)) for x in np.arange(0.30, 0.91, 0.05)]
+    scores = {x: float(errors(x).mean()) for x in grid}
+    best = min(scores, key=scores.get)
+    err = errors(best)
+    return {"defuse_share": best, "defuses": len(ev), "credits": int(len(err)), "mae_points": float(err.mean()),
+            "within_0_01": float((err <= 0.0101).mean()), "grid_mae": {str(k): v for k, v in scores.items()}}
+
+
 def fit_block(data: Path) -> dict:
     ev = events(data)
     windows = {}
@@ -196,6 +262,7 @@ def fit_block(data: Path) -> dict:
     gain = windows[best]
     flash = flash_weight(ev, gain["kill_weight"], gain["trade_weight"], best)
     debit = victim_share(ev, best)
+    defuse = defuse_share(data / "hltv")
     return {
         "kill_weight": gain["kill_weight"],
         "flash_weight": flash["flash_weight"],
@@ -203,7 +270,8 @@ def fit_block(data: Path) -> dict:
         "victim_weight": debit["victim_weight"],
         "failed_trade_weight": debit["failed_trade_weight"],
         "trade_window_seconds": best,
-        "fit": {"kills": len(ev), "gain": gain, "flash": flash, "debit": debit,
+        "defuse_share": defuse["defuse_share"],
+        "fit": {"kills": len(ev), "gain": gain, "flash": flash, "debit": debit, "defuse": defuse,
                 "windows": {str(w): {k: v for k, v in r.items()} for w, r in windows.items()}},
     }
 

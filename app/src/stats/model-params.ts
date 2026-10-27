@@ -25,7 +25,7 @@ export interface RatingParams {
   swing: {
     trade_window_seconds: number;
     /** the weights a kill's credit and charge are shared by (SPEC.md "Swing credits") */
-    event_credit: { kill_weight: number; flash_weight: number; trade_weight: number; victim_weight: number; failed_trade_weight: number; trade_window_seconds: number };
+    event_credit: { kill_weight: number; flash_weight: number; trade_weight: number; victim_weight: number; failed_trade_weight: number; trade_window_seconds: number; defuse_share: number };
   };
   duel: { groups: string[]; strength: Record<string, number>; ct_edge: number; kill_points_scale: number };
 }
