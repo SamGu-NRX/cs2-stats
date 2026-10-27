@@ -292,14 +292,19 @@ def worker_capacity(avail_gb: float, parse_est_gb: float, growth_gb: float, runn
 
     Memory sets it: what is available, less RAM_HEADROOM_GB and less growth_gb, the RSS that running workers
     have yet to reach (each one's estimated peak minus its RSS now, so a burst of starts cannot overcommit),
-    divided by the estimated peak of a new parse. Nothing new starts below RAM_PRESSURE_GB. It is capped at
-    cpu_count - 2, at cap when set, and at GAMING_WORKERS while CS2 runs.
+    divided by the estimated peak of a new parse. Nothing new starts below RAM_PRESSURE_GB. With none running
+    and RAM_PRESSURE_GB available, one may start even when the division gives none: a run on a copied archive
+    with 6.8 GB available and the 4 GB default estimate waited 2.5 minutes for memory, and with other work
+    holding it would wait for good. RAM_KILL_GB still guards that one. It is capped at cpu_count - 2, at cap
+    when set, and at GAMING_WORKERS while CS2 runs.
     """
     limit = GAMING_WORKERS if cs2 else max(1, cpu_count - 2)
     if cap is not None:
         limit = min(limit, cap)
-    new = 0 if avail_gb < RAM_PRESSURE_GB else max(0, math.floor((avail_gb - RAM_HEADROOM_GB - growth_gb) / parse_est_gb))
-    return min(limit, running + new)
+    if avail_gb < RAM_PRESSURE_GB:
+        return min(limit, running)
+    new = max(0, math.floor((avail_gb - RAM_HEADROOM_GB - growth_gb) / parse_est_gb))
+    return min(limit, max(running + new, 1))
 
 
 def desired_downloads(workers: int, parse_s: float, download_s: float, in_flight: int, room_gb: float,

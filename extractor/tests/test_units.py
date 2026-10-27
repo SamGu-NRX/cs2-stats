@@ -445,6 +445,13 @@ def test_running_workers_keep_their_slots_and_their_growth_is_reserved():
     assert dp.worker_capacity(10.0, 2.0, 5.4, 3, 16, False, None) == 3
     # Under the pressure floor nothing new starts, and nobody is dropped from the count.
     assert dp.worker_capacity(1.9, 0.5, 0.0, 2, 16, False, None) == 2
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 0, 16, False, None) == 0
+
+
+def test_one_worker_may_start_when_none_runs_above_the_pressure_floor():
+    # A run on a copied archive: 6.8 GB available, the unmeasured 4 GB estimate, nothing running. The division
+    # gives no worker, and with other work holding memory the pipeline would never parse.
+    assert dp.worker_capacity(6.8, 4.0, 0.0, 0, 16, False, None) == 1
 
 
 class _FakeProc:
