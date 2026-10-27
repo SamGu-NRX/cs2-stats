@@ -7,13 +7,14 @@
 // once the file differs from the one the prompt was about (src-tauri/src/botmode/session.rs,
 // `recover`). The Bot Mode page will show the same state from botmode.session().
 //
-// One answer runs at a time: while one is in flight, both buttons are disabled and the
-// confirmation cannot open.
+// One answer runs at a time: while one is in flight, the prompt is locked (both buttons and its
+// close button disabled) and the confirmation cannot open. A failed answer leaves the prompt up,
+// with the error beside it.
 import { useEffect, useId, useRef, useState } from "react";
 import { botmode, type Recovery } from "../../botmode/commands";
 import { isTauri } from "../../host/host";
 import { hideText, useHidePersonal } from "../data/privacy";
-import { dismissToast, setToastActions, toast, type ToastAction } from "./overlay";
+import { dismissToast, lockToast, toast } from "./overlay";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -61,10 +62,6 @@ export function BotModeRecovery() {
     }
   };
 
-  const actions = (disabled: boolean): ToastAction[] => [
-    { label: "Turn off Bot Mode", primary: true, run: openConfirm, disabled },
-    { label: "Leave it on", run: () => void leave(), disabled },
-  ];
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -73,7 +70,10 @@ export function BotModeRecovery() {
       (v) => {
         if (!live || !v.recovery) return;
         asked.current = v.recovery;
-        toastId.current = toast(v.recovery.message, "poor", 0, [], actions(pending.current));
+        toastId.current = toast(v.recovery.message, "poor", 0, [], [
+          { label: "Turn off Bot Mode", primary: true, run: openConfirm },
+          { label: "Leave it on", run: () => void leave() },
+        ]);
       },
       // no Steam or no CS2 found: there is nothing to ask about
       () => {},
@@ -86,7 +86,7 @@ export function BotModeRecovery() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (toastId.current !== null) setToastActions(toastId.current, actions(busy));
+    if (toastId.current !== null) lockToast(toastId.current, busy);
   }, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!confirming) return null;
@@ -173,9 +173,12 @@ function TurnOffDialog({ recovery, busy, promptShowing, onClose, turnOff }: {
       onCancel={(e) => { e.preventDefault(); if (!busy) onClose(); }}>
       <h2 id={titleId} className="dialog__title">Turn off Bot Mode?</h2>
       <div className="dialog__body">
-        <p id={leadId}>CS2 Stats removes Bot Mode's search paths from this file and changes nothing else in it:</p>
-        <p className="dialog__file mono selectable">{shown(recovery.file)}</p>
-        <p className="meta">If you turned Bot Mode on with another tool, cancel and choose Leave it on.</p>
+        <p id={leadId}>CS2 Stats removes these lines from gameinfo.gi, including any that another tool such as the Bot-Improver Panel added. Nothing else in the file changes.</p>
+        <div className="dialog__file mono selectable">
+          <p>{shown(recovery.file)}</p>
+          <ul aria-label="Lines removed">{recovery.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+        </div>
+        <p className="meta">To keep another tool's Bot Mode setting, cancel and choose Leave it on.</p>
       </div>
       {error && <p className="dialog__problem selectable" role="alert">{shown(error)}</p>}
       <div className="dialog__foot">

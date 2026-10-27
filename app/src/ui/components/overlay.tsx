@@ -178,12 +178,13 @@ export function HoverCard({ card, children, prefer = "bottom", className, as: Ta
 // button. Entry and exit are CSS transitions (interruptible), not keyframes.
 //
 // A toast with actions is a prompt: it stays until answered or dismissed, and newer toasts never
-// push it out. Its caller dismisses it once the answer is done.
+// push it out. Its caller dismisses it once the answer is done, and locks it while an answer is
+// in flight: its actions and its close button are disabled then.
 //
 // A toast keeps its text as written and hides personal info as it draws (data/privacy.ts), so turning
 // the setting on hides it in a toast already showing. `files` are the file names the text mentions.
-export interface ToastAction { label: string; run: () => void; primary?: boolean; disabled?: boolean }
-export interface Toast { id: number; text: string; files: string[]; tone: "good" | "poor" | "info"; actions: ToastAction[]; out?: boolean }
+export interface ToastAction { label: string; run: () => void; primary?: boolean }
+export interface Toast { id: number; text: string; files: string[]; tone: "good" | "poor" | "info"; actions: ToastAction[]; locked?: boolean; out?: boolean }
 let toasts: Toast[] = [];
 let nextId = 1;
 const listeners = new Set<() => void>();
@@ -192,10 +193,10 @@ const dismissers = new Map<number, () => void>();
 
 export function dismissToast(id: number) { dismissers.get(id)?.(); }
 
-/** Replaces a showing prompt's actions, to disable them while an answer is in flight. */
-export function setToastActions(id: number, actions: ToastAction[]) {
+/** Locks or unlocks a showing prompt: while locked, its actions and its close button are disabled. */
+export function lockToast(id: number, locked: boolean) {
   if (!toasts.some((x) => x.id === id)) return;
-  toasts = toasts.map((x) => (x.id === id ? { ...x, actions } : x));
+  toasts = toasts.map((x) => (x.id === id ? { ...x, locked } : x));
   emit();
 }
 
@@ -238,11 +239,11 @@ function ToastItem({ t }: { t: Toast }) {
         <div className="toast__body">
           {text}
           <div className="toast__actions">
-            {t.actions.map((a) => <button key={a.label} className={`btn btn--sm ${a.primary ? "btn--primary" : ""}`} onClick={a.run} disabled={a.disabled}>{a.label}</button>)}
+            {t.actions.map((a) => <button key={a.label} className={`btn btn--sm ${a.primary ? "btn--primary" : ""}`} onClick={a.run} disabled={t.locked}>{a.label}</button>)}
           </div>
         </div>
       ) : text}
-      <button className="toast__close" onClick={() => dismissToast(t.id)} aria-label="Dismiss"><CloseIcon size={14} /></button>
+      <button className="toast__close" onClick={() => dismissToast(t.id)} disabled={t.locked} aria-label="Dismiss"><CloseIcon size={14} /></button>
     </div>
   );
 }

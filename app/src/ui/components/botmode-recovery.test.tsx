@@ -14,10 +14,11 @@ import { ToastLayer } from "./overlay";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const PROMPT = "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off.";
+const PROMPT = "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off. Leave it on to keep another tool's setting, such as the Bot-Improver Panel's.";
+const LINES = ["Game\tcsgo/overrides/botprofile.vpk", "Game\tcsgo/addons/metamod"];
 const CHANGED = "gameinfo.gi changed after CS2 Stats asked about it, so Bot Mode was not changed. Check Bot Mode again before turning it off.";
 const FILE = String.raw`C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo\gameinfo.gi`;
-const asked = (hash: string): Recovery => ({ message: PROMPT, file: FILE, hash });
+const asked = (hash: string): Recovery => ({ message: PROMPT, file: FILE, lines: LINES, hash });
 const view = (recovery: Recovery | null) => ({ supervised: false, status: null, notice: null, recovery });
 const answered = (a: Record<string, unknown>) => ({ change: null, message: a.action === "off" ? "Bot Mode is off." : "Bot Mode was not changed." });
 
@@ -110,6 +111,8 @@ it("turns Bot Mode off only after a confirmation that names the file, then gives
   const d = dialog()!;
   expect(d.open).toBe(true);
   expect(d.textContent).toContain("<path>");
+  expect(Array.from(d.querySelectorAll("[aria-label='Lines removed'] li"), (li) => li.textContent), "it lists what it removes").toEqual(LINES);
+  expect(d.textContent).toContain("including any that another tool such as the Bot-Improver Panel added");
   expect(document.body.innerHTML, "the folder is hidden with personal info hidden").not.toContain("steamapps");
   expect(document.activeElement).toBe(button("Cancel", d));
   expect(answers).toEqual([]);
@@ -148,7 +151,7 @@ it("runs one answer at a time", async () => {
   act(() => { leaveButton.click(); leaveButton.click(); });
   await settle();
   expect(answers).toEqual([{ action: "leave" }]);
-  expect(buttons(prompt()!).filter((b) => b.disabled).map((b) => b.textContent)).toEqual(["Turn off Bot Mode", "Leave it on"]);
+  expect(buttons(prompt()!).filter((b) => b.disabled).map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual(["Turn off Bot Mode", "Leave it on", "Dismiss"]);
   // the confirmation cannot open while the answer is in flight
   act(() => { button("Turn off Bot Mode", prompt()!).click(); });
   await settle();
@@ -171,7 +174,7 @@ it("keeps the confirmation open on Escape while turning off is in flight, and cl
   await escape(dialog()!);
   expect(dialog(), "not while the answer is in flight").not.toBeNull();
   expect(button("Cancel", dialog()!).disabled).toBe(true);
-  expect(buttons(prompt()!).filter((b) => b.disabled)).toHaveLength(2);
+  expect(buttons(prompt()!).filter((b) => b.disabled), "the prompt cannot be closed mid-answer either").toHaveLength(3);
   await act(async () => { off.resolve(answered({ action: "off" })); });
   await settle();
   expect(dialog()).toBeNull();
@@ -207,6 +210,23 @@ it("keeps the prompt when reading the state again fails, and shows that error wi
   // the answer still names the hash the user was asked about
   await press(button("Turn off Bot Mode", dialog()!));
   expect(answers).toEqual([{ action: "off", expectHash: "h1" }, { action: "off", expectHash: "h1" }]);
+});
+
+it("cannot be closed while an answer is in flight, and stays up with the error when it fails", async () => {
+  const leaving = deferred<unknown>();
+  await start(asked("h1"), () => leaving.promise);
+  await press(button("Leave it on", prompt()!));
+  const close = button("", prompt()!);
+  expect(close.getAttribute("aria-label")).toBe("Dismiss");
+  expect(close.disabled).toBe(true);
+  act(() => { close.click(); });
+  await wait(200);
+  expect(prompt(), "closing is refused mid-answer").not.toBeNull();
+  await act(async () => { leaving.reject("CS2 is running (cs2.exe). Close the game first: Bot Mode never changes game files while it runs."); });
+  await settle();
+  expect(prompt(), "a failed answer keeps the prompt").not.toBeNull();
+  expect(toastTexts().some((t) => t?.startsWith("CS2 is running")), "with the error").toBe(true);
+  expect(buttons(prompt()!).filter((b) => b.disabled)).toHaveLength(0);
 });
 
 it("asks nothing when no session died with Bot Mode on", async () => {
