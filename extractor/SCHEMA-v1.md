@@ -65,7 +65,7 @@ awpy refuses a demo cut off mid-file ("unexpected end of data"). demoparser2 rea
 
 ## Maps refused for good reasons
 - **`unplayed_round`:** a round after round 1 never left freeze time (no `round_freeze_end` between its start and end). Two HLTV maps did this: after 16 rounds, round 17 sat in freeze time for about 9 and 18 minutes, eight or nine players disconnected, and the game gave the round to the side left standing. The map was abandoned; HLTV lists no stats for either, and no scoreboard holds only the rounds played. The extractor refuses such a map as soon as its rounds are known.
-- **`parser_unreadable`:** demoparser2 raises `EntityNotFound` on the demo's first entity pass, so no table can be built. Two HLTV demos from one server did this on demoparser2 0.42.0 and 0.42.1, while awpy's own parser read every round; it is a parser fault (as LaihoE/demoparser#339), not a damaged demo, and the archive stays queued for a retry under a later extractor.
+- **`parser_unreadable`:** demoparser2 raises `EntityNotFound` on a pass that decodes the demo's entities, so no table can be built. Two HLTV demos from one server did this on demoparser2 0.42.0 and 0.42.1, while awpy's own parser read every round; it is a parser fault (as LaihoE/demoparser#339), not a damaged demo, and the archive stays queued for a retry under a later extractor.
 
 ## Not in the demo
 - **Penetration** for non-fatal hits: `player_hurt` has none (`kills.penetrated` covers kill shots).

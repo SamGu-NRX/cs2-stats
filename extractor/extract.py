@@ -803,19 +803,31 @@ def real_round_ends(round_ends: pd.DataFrame) -> pd.Series:
 
 def rolled_back_ends(round_ends: pd.DataFrame) -> pd.Series:
     """Round ends with a winner that a later backup restore undid: a winnerless round_end after it whose
-    total_rounds_played, the count the restore loaded, is below the round end's own.
+    total_rounds_played, the count the restore loaded, is below the round end's own, followed by the round played
+    again (a round end with a winner, after the restore, at or below that count).
 
     A restore can load the backup of an earlier round than the one in progress. Three HLTV demos ended a round,
     started the next, then restored to the start of the round already ended (one: round 12 ended at 104349 with
     total_rounds_played 12, and a restore at 111771 set it to 11). The game took that round's win, kills,
-    deaths and damage back off its counters, and the round was played again.
+    deaths and damage back off its counters, and the round was played again. Without the replay a lower count
+    proves nothing (a winnerless round_end after the last round, as a server reset leaves, would drop a final
+    round with no kills and pass every check one round short), so the round stays.
     round_ends: tick, winner, total_rounds_played (gamerules, read on each event's tick).
     """
+    if "total_rounds_played" not in round_ends.columns:
+        raise ValueError("round_end events carry no total_rounds_played, so rounds a restore rolled back cannot be "
+                         "told from rounds that count")
     real = real_round_ends(round_ends)
-    restores = round_ends[~real]
-    return pd.Series([bool(r) and bool(((restores.tick > t) & (restores.total_rounds_played < n)).any())
-                      for t, n, r in zip(round_ends.tick, round_ends.total_rounds_played, real)],
-                     index=round_ends.index, dtype=bool)
+    restores, ends = round_ends[~real], round_ends[real]
+
+    def undone(t, n) -> bool:
+        for r_tick in restores.tick[(restores.tick > t) & (restores.total_rounds_played < n)]:
+            if ((ends.tick > r_tick) & (ends.total_rounds_played <= n)).any():
+                return True
+        return False
+
+    return pd.Series([bool(r) and undone(t, n) for t, n, r in
+                      zip(round_ends.tick, round_ends.total_rounds_played, real)], index=round_ends.index, dtype=bool)
 
 
 def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, match_start: int):
@@ -1384,10 +1396,40 @@ def link_throws(throws: pd.DataFrame, proj: pd.DataFrame, rate: float):
     return pd.array(ids, dtype="Int32"), pd.array(dists, dtype="Float32")
 
 
+class ReadableParser:
+    """A demoparser2 DemoParser whose calls raise parser_unreadable, naming the call, where the parser raises
+    EntityNotFound.
+
+    Two HLTV demos from one server: every demoparser2 call that decodes entities (0.42.0 and 0.42.1) raised it
+    within the first 200 KB, while the header and the event list read and awpy's own parser read every round. The
+    parser loses its entity stream, as in LaihoE/demoparser#339 (open). awpy: what awpy made of the demo.
+    """
+
+    def __init__(self, parser, awpy: str):
+        self._parser, self._awpy = parser, awpy
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._parser, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except Exception as e:  # demoparser2 raises a bare Exception
+                if "EntityNotFound" not in str(e):
+                    raise
+                raise RuntimeError(f"{PARSER_UNREADABLE}: demoparser2 {pkg_version('demoparser2')} cannot decode this "
+                                   f"demo's entities (EntityNotFound in {name}), so no table can be built; "
+                                   f"{self._awpy}. Retry after a demoparser2 upgrade") from e
+        return call
+
+
 def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     from demoparser2 import DemoParser
 
-    parser = DemoParser(str(ctx.dem))
+    parser = ReadableParser(DemoParser(str(ctx.dem)), "awpy's own parser could not read it either" if ctx.truncated
+                            else "awpy's own parser read all of it")
     T: dict[str, pd.DataFrame] = {}
     with Timer(ctx, "dp_header"):
         header = parser.parse_header()
@@ -1398,18 +1440,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     heavy = ["player_death", "player_hurt", "weapon_fire", "grenade_thrown", "bomb_planted", "bomb_defused",
              "bomb_beginplant", "bomb_begindefuse"]
     with Timer(ctx, "dp_events"):
-        try:
-            E = _events(parser, [e for e in heavy if e in present], STATE_PROPS)
-        except Exception as e:  # demoparser2 raises a bare Exception
-            if "EntityNotFound" not in str(e):
-                raise
-            # Two HLTV demos from one server: every demoparser2 call that decodes entities (0.42.0 and 0.42.1)
-            # raises this within the first 200 KB, while the header and the event list read and awpy's own parser
-            # reads every round. The parser loses its entity stream, as in LaihoE/demoparser#339 (open).
-            awpy = "awpy's own parser could not read it either" if ctx.truncated else "awpy's own parser read all of it"
-            raise RuntimeError(f"{PARSER_UNREADABLE}: demoparser2 {pkg_version('demoparser2')} cannot decode this "
-                               f"demo's entities (EntityNotFound on its first pass), so no table can be built; {awpy}. "
-                               "Retry after a demoparser2 upgrade") from e
+        E = _events(parser, [e for e in heavy if e in present], STATE_PROPS)
         light = (present | set(SYNTH_EVENTS)) - set(heavy) - NOISE_EVENTS - {"player_blind"}
         # server_cvar rides along in the same pass (a pass of its own took 1.6-4.5 s) and is not kept as an event.
         E.update(_events(parser, sorted(light | ({"server_cvar"} & present)), LIGHT_PROPS))

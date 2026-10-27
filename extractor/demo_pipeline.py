@@ -341,15 +341,33 @@ def extracted_demos(work: Path) -> list[Path]:
     return sorted(work.glob("*.dem"))
 
 
+def starts_as_demo(rar: Path, path: str) -> bool:
+    """Whether the archived file at path begins with DEM_MAGIC. 7z streams it and is stopped after 8 bytes, so a
+    file is not decompressed whole (in a solid archive, what comes before it is)."""
+    if path.startswith("@") or any(c in path for c in "*?"):
+        return False  # 7z would read it as a list file or a wildcard
+    proc = subprocess.Popen([SEVEN_ZIP, "e", "-so", "-bd", "--", str(rar), path], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=IDLE | NO_WINDOW)
+    try:
+        head = proc.stdout.read(len(DEM_MAGIC))
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
+        proc.stdout.close()
+    return head == DEM_MAGIC
+
+
 def list_archive(rar: Path) -> dict[str, dict]:
-    """Names, sizes and mtimes of the files inside the archive that may be demos (maybe_demo; 7z -slt listing)."""
+    """Names, sizes and mtimes of the demos inside the archive (7z -slt listing): every .dem, and each file with a
+    plain extensionless name (maybe_demo) whose first bytes are DEM_MAGIC, so the disk budget counts demos only."""
     out = subprocess.run([SEVEN_ZIP, "l", "-slt", "-ba", "--", str(rar)], capture_output=True, text=True,
                          creationflags=IDLE | NO_WINDOW, timeout=120, encoding="utf-8", errors="replace")
     entries, cur = {}, {}
     for line in out.stdout.splitlines() + [""]:
         if not line.strip():
-            if maybe_demo(cur.get("Path", "")) and cur.get("Folder") != "+":
-                name = Path(cur["Path"].replace("\\", "/")).name
+            path = cur.get("Path", "")
+            if maybe_demo(path) and cur.get("Folder") != "+" and (path.lower().endswith(".dem") or starts_as_demo(rar, path)):
+                name = Path(path.replace("\\", "/")).name
                 entries[name] = dict(size=int(cur.get("Size") or 0), modified=cur.get("Modified"))
             cur = {}
             continue
