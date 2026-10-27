@@ -22,6 +22,16 @@ export const MOMENT_KINDS: MomentKind[] = ["ace", "4k", "3k", "clutch", "swing",
 export const PRE_ROLL_S = 5;
 export const POST_ROLL_S = 3;
 
+/**
+ * How long a clip runs past the POV player's death, when they die before its planned end: long enough
+ * to show the death itself. After a death CS2's demo camera leaves the player (death cam, then another
+ * player); the director reads that as camera_lost and that take never counts (design/clips.md), so a
+ * clip must end before the camera moves. 0.5 s is ours, with no measurement of when CS2 switches: if it
+ * switches at the death tick itself, the first supervised render will show camera_lost here too, and
+ * the tail has to go to 0.
+ */
+export const DEATH_TAIL_S = 0.5;
+
 /** The killer's swing credit on one kill from which the kill is a "swing" moment (0.2 = 20 points of round win probability). Ours, no fit. */
 export const HIGH_SWING = 0.2;
 
@@ -67,7 +77,8 @@ export interface Moment {
   place: string | null;
   /**
    * demo ticks to record: PRE_ROLL_S before the first event, POST_ROLL_S after the last, no earlier
-   * than freeze end and no later than the round's end (or the last kill, when a kill came after it)
+   * than freeze end and no later than the round's end (or the last kill, when a kill came after it),
+   * nor than DEATH_TAIL_S after the player's death
    */
   startTick: number;
   endTick: number;
@@ -156,7 +167,12 @@ export function scoreMoments(f: MatchFacts, filter: Filter): Moment[] {
     const startTick = Math.max(fe ?? 0, first - Math.round(PRE_ROLL_S * rate));
     // the post-roll stays inside the round: it stops at the round's end, or at the last kill when one
     // came after the end (a kill in the round-end delay), so no clip runs into the next round
-    const endTick = Math.min(last + Math.round(POST_ROLL_S * rate), Math.max(round.endTick, last));
+    const planned = Math.min(last + Math.round(POST_ROLL_S * rate), Math.max(round.endTick, last));
+    // and it stops DEATH_TAIL_S after the player dies, before the demo camera leaves them. A kill the
+    // player's grenade makes after that is cut off: the camera cannot follow it from their view. A death
+    // before the clip starts (a moment of such kills alone) leaves the clip as it was.
+    const death = f.kills.reduce((d, k) => (k.ri === r.ri && k.victim === r.pi && k.tick < d ? k.tick : d), Infinity);
+    const endTick = death >= startTick ? Math.min(planned, death + Math.round(DEATH_TAIL_S * rate)) : planned;
 
     const score = (multi ? MULTI_POINTS[multi]! : 0)
       + (clutch ? POINTS.clutchBase + POINTS.clutchPerEnemy * (clutch.opponents - 1) : 0)

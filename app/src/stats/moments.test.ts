@@ -2,7 +2,7 @@
 // player with 4000 of equipment so the round is valued, unless a test says otherwise.
 import { describe, expect, it } from "vitest";
 import type { SightFact } from "./aim";
-import { bestMomentFirst, momentReason, POINTS, POST_ROLL_S, PRE_ROLL_S, scoreMoments, type Moment } from "./moments";
+import { bestMomentFirst, DEATH_TAIL_S, momentReason, POINTS, POST_ROLL_S, PRE_ROLL_S, scoreMoments, type Moment } from "./moments";
 import { FREEZE_END, oneRound, ROUND_END, type OneRound } from "./testing/match";
 
 const RATE = 64;
@@ -58,6 +58,19 @@ describe("scoreMoments", () => {
     expect(scoreMoments(near, { player: "a" }).map((m) => m.endTick)).toEqual([ROUND_END]);
     const after = round({ kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(20), killer: "a", victim: "d" }, { tick: ROUND_END + 2 * RATE, killer: "a", victim: "e" }] });
     expect(scoreMoments(after, { player: "a" }).map((m) => [m.kinds[0], m.endTick])).toEqual([["3k", ROUND_END + 2 * RATE]]);
+  });
+
+  it("ends the clip half a second after the player dies, when they are traded right after their last kill", () => {
+    // fails if the clip runs on past a's death, where CS2's demo camera leaves a and the director stops
+    // with camera_lost, so the moment could never be rendered. a kills c, d and e; f trades a 0.5 s after
+    // the third kill. In the second round f kills a 10 s after the third kill, past the post-roll.
+    const players = { ...five, f: "T" as const };
+    const kills = [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(11), killer: "a", victim: "d" }, { tick: t(12), killer: "a", victim: "e" }];
+    const traded = round({ players, kills: [...kills, { tick: t(12.5), killer: "f", victim: "a" }] });
+    const [m] = scoreMoments(traded, { player: "a" });
+    expect([m.kinds[0], m.startTick, m.endTick]).toEqual(["3k", t(10) - PRE_ROLL_S * RATE, t(12.5) + DEATH_TAIL_S * RATE]);
+    const late = round({ players, kills: [...kills, { tick: t(22), killer: "f", victim: "a" }] });
+    expect(scoreMoments(late, { player: "a" }).map((x) => x.endTick)).toEqual([t(12) + POST_ROLL_S * RATE]);
   });
 
   it("starts no clip before freeze end", () => {
