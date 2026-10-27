@@ -7,7 +7,7 @@
 // or a session holds the game, and a cosmetics write whose `seen` no longer matches is refused as
 // a stale read. The releases and catalog entries are copied from the public GitHub release list
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
-import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
+import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
 
 export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
@@ -97,6 +97,8 @@ interface State {
   running: RunningCs2[];
   /** what each recorded change wrote, by id */
   files: Record<string, string[]>;
+  /** overlay.json's hash; a test changes it to stand in for an edit after the preview */
+  manifestSha: string;
 }
 
 /** A few entries of the mod's Commands.txt, in its layout (the real list has 40 teams). */
@@ -128,6 +130,7 @@ function initial(s: Scenario): State {
       ? { installed: { tag: installedTag, asset: "CS2BotImprover.zip", installedAt: "2026-10-25T22:30:12Z", source: link("ed0ard/CS2-Bot-Improver", installedTag, "a1f4c2e9d7b3058e6c1a9f2d4b7e0c3a5f8d1b6e") }, reference: installedTag, matching: 551, total: 562 }
       : { installed: null, reference: null, matching: 0, total: 0 },
     difficulty: installed ? "medium" : null,
+    activeProfile: installed ? sha("profile-medium") : null,
     cosmetics: installed ? { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3, cfgPresent: true } : { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0, cfgPresent: false },
     steamLaunchOptions: "-novid -fullscreen -w 1280 -h 960",
     launchOptions: installed ? "+exec botmode" : "",
@@ -155,7 +158,7 @@ function initial(s: Scenario): State {
   const running: RunningCs2[] = s === "session" ? [{ vac: "off", pid: 22916, commandLine: `"${CS2_EXE}" -insecure -novid -fullscreen -w 1280 -h 960 +exec botmode` }]
     : s === "cs2-running" ? [{ vac: "on", pid: 30112, why: "-insecure is missing" }] : [];
   return {
-    status, session, files, running,
+    status, session, files, running, manifestSha: sha("overlay.json"),
     server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null },
     statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
       : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
@@ -190,7 +193,11 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       case "botmode_session": return structuredClone(st.session);
       case "botmode_server_cfg": return structuredClone(serverOf());
       case "botmode_running": return structuredClone(st.running);
-      case "botmode_overlay_plan": return Object.entries(FORKS).map(([name, [repo, reference, , target]]): PlannedEntry => ({ name, target, repo, reference, files: ["dll", "deps.json", "pdb"].map((x) => `${name}.${x}`) }));
+      case "botmode_overlay_plan": {
+        const entries = Object.entries(FORKS).map(([name, [repo, reference, , target]]): PlannedEntry => ({ name, target, repo, reference, files: ["dll", "deps.json", "pdb"].map((x) => `${name}.${x}`) }));
+        const plan: OverlayPlan = { sha256: st.manifestSha, entries };
+        return plan;
+      }
       case "botmode_change_files": {
         const f = st.files[a.id as string];
         if (!f) throw `${a.id as string}: no such change`;
@@ -245,6 +252,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       }
       case "botmode_overlay": {
         writable();
+        if (a.previewed && a.previewed !== st.manifestSha) throw `overlay.json: changed since it was read (it was previewed at another version); nothing was written`;
         const c = record("overlay", 18);
         st.status.components = components(true);
         st.status.overlays = initial("installed").status.overlays;
@@ -264,6 +272,9 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       }
       case "botmode_set_difficulty": {
         writable();
+        const seenProfile = a.seen as { sha256: string | null } | undefined;
+        if (seenProfile && seenProfile.sha256 !== st.status.activeProfile) throw "overrides/botprofile.vpk: changed since it was read; nothing was written";
+        st.status.activeProfile = sha(`profile-${a.level as string}`);
         st.status.difficulty = a.level as Difficulty;
         return record(`difficulty-${a.level as string}`, 1, ["overrides/botprofile.vpk"]);
       }
@@ -281,6 +292,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       }
       case "botmode_set_launch_options": {
         const options = a.options as string;
+        if (typeof a.seen === "string" && a.seen !== st.status.launchOptions) throw `the app's launch options changed since it was read (now ${JSON.stringify(st.status.launchOptions)}); nothing was written`;
         const bad = options.split(/\s+/).find((t) => /^[-+]{1,2}secure\b/i.test(t.replace(/"/g, "")));
         if (bad) throw `launch options contain ${bad}, which turns VAC on; Bot Mode only starts CS2 with -insecure`;
         if ((options.match(/"/g) ?? []).length % 2) throw `${options}: unbalanced quote`;

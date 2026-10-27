@@ -243,6 +243,7 @@ describe("Bot Mode states", () => {
 describe("settings", () => {
   it("round trip: the dialog lists each file and line, then the server cfg goes as one change with what the page read", async () => {
     await render("installed");
+    const sha256Before = backend.state.status.activeProfile;
     expect(button("Apply changes…").disabled).toBe(true);
     await click($(".bm-kit")!);
     const find = $<HTMLInputElement>(".bm-kitpop__input")!;
@@ -276,8 +277,8 @@ describe("settings", () => {
         patch: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: true, musicKit: 4 }, botAim: "head", botNades: "max", knifeBind: { key: "kp_end", knives: [507, 515] } },
         seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3 }, botAim: null, botNades: "more", knifeBind: null },
       }],
-      ["botmode_set_difficulty", { level: "high" }],
-      ["botmode_set_launch_options", { options: "+exec botmode -novid" }],
+      ["botmode_set_difficulty", { level: "high", seen: { sha256: sha256Before } }],
+      ["botmode_set_launch_options", { options: "+exec botmode -novid", seen: "+exec botmode" }],
     ]);
     expect(dialog()).toBeNull();
     expect(text(".bm-foot__state")).toBe("Saved in the game folder");
@@ -334,6 +335,36 @@ describe("settings", () => {
     await click(button("Launch with -insecure"));
     expect(writes()).toEqual(["botmode_set_difficulty", "botmode_launch"]);
     expect(localStorage.getItem("cs2stats.botmode.pending")).toBeNull();
+  });
+
+  it("a change kept while CS2 ran is refused if the file it was previewed against changed meanwhile", async () => {
+    await render("cs2-running");
+    await click(button("High"));
+    // another tool replaces the active bot profile before the next launch
+    backend.state.status = { ...backend.state.status, cs2Running: false, activeProfile: "f".repeat(64) };
+    backend.state.running = [];
+    await click(button(/Check again/));
+    await click(button(/Launch Bot Mode/));
+    await click(button("Launch with -insecure"));
+    expect(text("dialog [role=alert]")).toMatch(/^Something else changed these settings after you made your changes, so nothing was saved \(overrides\/botprofile\.vpk: changed since it was read/);
+    expect(sent("botmode_set_difficulty")).toEqual({ level: "high", seen: { sha256: mockCall("installed").state.status.activeProfile } });
+    expect(writes()).toEqual(["botmode_set_difficulty"]);
+    expect(backend.state.status.activeProfile).toBe("f".repeat(64));
+    // previewed again against the file as it is now, the user confirms and it goes through
+    await click(button("Launch with -insecure"));
+    expect(sent("botmode_set_difficulty")).toEqual({ level: "high", seen: { sha256: "f".repeat(64) } });
+    expect(writes()).toEqual(["botmode_set_difficulty", "botmode_set_difficulty", "botmode_launch"]);
+  });
+
+  it("the launch confirmation shows the command with the kept launch options", async () => {
+    await render("cs2-running");
+    type($<HTMLInputElement>("#bm-launch-opts")!, "-novid -tickrate 128");
+    backend.state.status = { ...backend.state.status, cs2Running: false };
+    backend.state.running = [];
+    await click(button(/Check again/));
+    await click(button(/Launch Bot Mode/));
+    expect(text("dialog .bm-line")).toBe("steam.exe -applaunch 730 -insecure -novid -tickrate 128 then Steam's own -novid -fullscreen -w 1280 -h 960");
+    expect(text(".bm-hero .bm-line")).toContain("-insecure -novid -tickrate 128 then");
   });
 
   it("the kit picker works from the keyboard: Down opens, arrows move, Escape closes and returns focus", async () => {
@@ -411,6 +442,41 @@ describe("actions wait for a confirmation that lists their files", () => {
     await click(button("Apply builds"));
     expect(writes().at(-1)).toBe("botmode_overlay");
     expect(text(".bm-install")).not.toContain("The install replaced your builds");
+  });
+
+  it("builds: an overlay.json edited after the preview is refused, shown again, then applied as shown", async () => {
+    await render("installed");
+    await click(button("Apply your builds…"));
+    const previewed = backend.state.manifestSha;
+    backend.state.manifestSha = "e".repeat(64);
+    await click(button("Apply builds"));
+    expect(sent("botmode_overlay")).toMatchObject({ previewed });
+    expect(text("dialog [role=alert]")).toMatch(/^overlay\.json changed after this list was shown, so nothing was copied/);
+    expect(calls.filter(([c]) => c === "botmode_overlay_plan")).toHaveLength(2);
+    await click(button("Apply builds"));
+    expect(sent("botmode_overlay")).toMatchObject({ previewed: "e".repeat(64) });
+    expect(dialog()).toBeNull();
+  });
+
+  it("undo and roll back can't be confirmed until the change's file list has loaded", async () => {
+    await render("installed", { botmode_change_files: "entries.jsonl: access denied" });
+    await click(button("Undo…"));
+    expect(text("dialog .bm-facts")).toContain("entries.jsonl: access denied");
+    expect(button("Undo").disabled).toBe(true);
+    await click(button("Cancel"));
+    // a list still loading: the confirm waits for it
+    let release!: (v: string[]) => void;
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      if (cmd === "botmode_change_files") return new Promise<string[]>((r) => { release = r; });
+      return backend(cmd, args as Record<string, unknown>);
+    });
+    await click(button("Undo…"));
+    expect(button("Undo").disabled).toBe(true);
+    await act(async () => { release(["cfg/gamemode_competitive_server.cfg"]); });
+    await settle();
+    expect(button("Undo").disabled).toBe(false);
+    expect(writes()).toEqual([]);
   });
 
   it("undo: the newest change, one button away, its files listed from its journal", async () => {

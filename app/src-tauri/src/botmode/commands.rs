@@ -7,8 +7,8 @@
 
 use super::changes::{self, Meta, RollbackReport};
 use super::monitor::Running;
-use super::overlay::PlannedEntry;
-use super::settings::{ServerPatch, ServerSettings};
+use super::overlay::OverlayPlan;
+use super::settings::{FileSeen, ServerPatch, ServerSettings};
 use std::time::Duration;
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::monitor;
@@ -142,10 +142,11 @@ pub async fn botmode_install(game: Option<String>, tag: String, asset: Option<St
 }
 
 #[tauri::command]
-pub async fn botmode_overlay(game: Option<String>, manifest: Option<String>) -> Result<OverlayReport, String> {
+/// `previewed` is the hash botmode_overlay_plan gave the view; a manifest changed since is refused.
+pub async fn botmode_overlay(game: Option<String>, manifest: Option<String>, previewed: Option<String>) -> Result<OverlayReport, String> {
     mutating(game, move |ctx| {
         let path = manifest.map(PathBuf::from).unwrap_or_else(|| ctx.layout.default_manifest());
-        overlay::apply(&ctx.layout, &SystemProbe, &path)
+        overlay::apply_checked(&ctx.layout, &SystemProbe, &path, previewed.as_deref())
     })
     .await
 }
@@ -211,8 +212,9 @@ pub async fn botmode_session(game: Option<String>) -> Result<SessionView, String
 }
 
 #[tauri::command]
-pub async fn botmode_set_difficulty(game: Option<String>, level: Difficulty) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::set_difficulty(&ctx.layout, &SystemProbe, level)).await
+/// `seen` is the active profile as the view showed it; refused when it has changed since.
+pub async fn botmode_set_difficulty(game: Option<String>, level: Difficulty, seen: Option<FileSeen>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_difficulty_from(&ctx.layout, &SystemProbe, level, seen.as_ref())).await
 }
 
 /// `seen` is what the view read; the write is refused when the cfg no longer holds it.
@@ -247,7 +249,7 @@ pub async fn botmode_running(game: Option<String>) -> Result<Vec<Running>, Strin
 
 /// What applying the overlay manifest would copy, for the confirmation. Reads only.
 #[tauri::command]
-pub async fn botmode_overlay_plan(game: Option<String>, manifest: Option<String>) -> Result<Vec<PlannedEntry>, String> {
+pub async fn botmode_overlay_plan(game: Option<String>, manifest: Option<String>) -> Result<OverlayPlan, String> {
     reading(game, move |ctx| overlay::plan(&manifest.map(PathBuf::from).unwrap_or_else(|| ctx.layout.default_manifest()))).await
 }
 
@@ -268,14 +270,9 @@ pub async fn botmode_mod_commands(tag: String) -> Result<String, String> {
 
 /// App settings only; the game is not touched, so no session cleanup.
 #[tauri::command]
-pub async fn botmode_set_launch_options(game: Option<String>, options: String) -> Result<AppSettings, String> {
-    blocking(game, move |ctx| {
-        let mut s = settings::load_app(&ctx.layout)?;
-        s.launch_options = options;
-        settings::save_app(&ctx.layout, &s)?;
-        Ok(s)
-    })
-    .await
+/// `seen` is the options as the view showed them; refused when they have changed since.
+pub async fn botmode_set_launch_options(game: Option<String>, options: String, seen: Option<String>) -> Result<AppSettings, String> {
+    blocking(game, move |ctx| settings::set_launch_options(&ctx.layout, &options, seen.as_deref())).await
 }
 
 /// At app start: session cleanup, so Bot Mode left on with no supervisor is turned off (or the

@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { GithubRelease, Status } from "../../botmode/commands";
 import { mockCall, RELEASES } from "../../botmode/mock";
-import { installState, isKeyName, kitChoices, kitParts, latestRelease, parseModCommands, vacState, writeBlocker } from "./botmode";
+import { installState, isKeyName, kitChoices, kitParts, latestRelease, parseModCommands, splitOptions, vacState, writeBlocker } from "./botmode";
 
 const status = (s: Parameters<typeof mockCall>[0]): Status => structuredClone(mockCall(s).state.status);
 const rel = (tag: string, published: string | null, extra: Partial<GithubRelease> = {}): GithubRelease => ({ ...RELEASES[0], tag_name: tag, published_at: published, ...extra });
@@ -71,12 +71,37 @@ describe("vacState", () => {
     expect(vacState(s, null, false).tone).toBe("unknown");
     expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], true).text).toBe("VAC off for this session");
     expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], false).text).toBe("VAC off");
-    expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }, { vac: "unknown", pid: 8, why: "access denied" }], false).text).toBe("VAC unknown");
+    expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }, { vac: "unknown", pid: 8, why: "access denied" }], false).text).toBe("VAC state unknown");
     expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }], false).text).toBe("VAC on");
     // nothing runs, but the next start from Steam would not be a plain VAC game
     expect(vacState({ ...s, botMode: true }, [], false)).toMatchObject({ tone: "warn", text: "Bot Mode on in gameinfo.gi" });
     expect(vacState({ ...s, steamLaunchOptions: "-novid -INSECURE" }, [], false)).toMatchObject({ tone: "warn", text: "VAC off on Steam starts" });
     expect(vacState({ ...s, steamLaunchOptions: "-insecurex" }, [], false).text).toBe("VAC on");
+  });
+
+  it("counts a quoted -insecure as the command line does, and a -secure after it turns VAC back on", () => {
+    const s = status("installed");
+    expect(vacState({ ...s, steamLaunchOptions: '-novid "-insecure"' }, [], false).text).toBe("VAC off on Steam starts");
+    expect(vacState({ ...s, steamLaunchOptions: '"-novid -insecure"' }, [], false).text).toBe("VAC on");
+    expect(vacState({ ...s, steamLaunchOptions: "-insecure +secure" }, [], false).text).toBe("VAC on");
+    expect(vacState({ ...s, steamLaunchOptions: '-insecure "unbalanced' }, [], false).text).toBe("VAC state unknown");
+  });
+
+  it("never says VAC on when gameinfo.gi or Steam's options could not be read", () => {
+    const s = status("installed");
+    expect(vacState({ ...s, botMode: null }, [], false)).toMatchObject({ tone: "unknown", text: "VAC state unknown" });
+    expect(vacState({ ...s, steamLaunchOptions: null }, [], false)).toMatchObject({ tone: "unknown", text: "VAC state unknown" });
+    // a running CS2's own command line still decides: it is the game itself
+    expect(vacState({ ...s, botMode: null, steamLaunchOptions: null }, [{ vac: "on", pid: 7, why: "-insecure is missing" }], false).text).toBe("VAC on");
+  });
+});
+
+describe("splitOptions", () => {
+  it("splits as launch.rs split does", () => {
+    expect(splitOptions('-novid +exec "my autoexec" -insecure')).toEqual(["-novid", "+exec", "my autoexec", "-insecure"]);
+    expect(splitOptions('""')).toEqual([""]);
+    expect(splitOptions("  ")).toEqual([]);
+    expect(splitOptions('+exec "x')).toBeNull();
   });
 });
 

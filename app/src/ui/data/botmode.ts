@@ -133,9 +133,29 @@ export const isKeyName = (k: string) => /^(?:[a-zA-Z0-9\\`[\]\-=,./']|[a-z0-9_]{
  * - warn: none runs, but a start from Steam would not be a plain VAC game;
  * - unknown: a running CS2 could not be read.
  */
+/**
+ * Launch options as the command line reads them (launch.rs split): whitespace separates, double
+ * quotes group and are dropped, so `"-insecure"` is the token -insecure. null for an unbalanced quote.
+ */
+export function splitOptions(options: string): string[] | null {
+  const out: string[] = [];
+  let cur = "", quoted = false, any = false;
+  for (const c of options) {
+    if (c === '"') { quoted = !quoted; any = true; }
+    else if (/\s/.test(c) && !quoted) { if (any) { out.push(cur); cur = ""; any = false; } }
+    else { cur += c; any = true; }
+  }
+  if (quoted) return null;
+  if (any) out.push(cur);
+  return out;
+}
+
+/** A token that turns VAC back on: -secure, +secure, --secure, -secure=1 (process.rs is_secure_token). */
+const isSecureToken = (t: string) => t.replace(/^[-+]+/, "").toLowerCase().split(/[=\s]/)[0] === "secure";
+
 export function vacState(s: Status, running: RunningCs2[] | null, supervised: boolean): { tone: "off" | "on" | "warn" | "unknown"; text: string; detail: string } {
-  const steamInsecure = (s.steamLaunchOptions ?? "").split(/\s+/).some((t) => t.toLowerCase() === "-insecure");
-  if (running === null) return { tone: "unknown", text: "VAC unknown", detail: "The running CS2 processes could not be read." };
+  const UNKNOWN = "VAC state unknown";
+  if (running === null) return { tone: "unknown", text: UNKNOWN, detail: "The running CS2 processes could not be read." };
   const off = running.find((r) => r.vac === "off");
   if (off) {
     return supervised
@@ -143,8 +163,15 @@ export function vacState(s: Status, running: RunningCs2[] | null, supervised: bo
       : { tone: "off", text: "VAC off", detail: `CS2 (pid ${off.pid}) runs with -insecure outside a Bot Mode session.` };
   }
   const unknown = running.find((r) => r.vac === "unknown");
-  if (unknown && unknown.vac === "unknown") return { tone: "unknown", text: "VAC unknown", detail: `CS2 (pid ${unknown.pid}) could not be checked: ${unknown.why}.` };
+  if (unknown && unknown.vac === "unknown") return { tone: "unknown", text: UNKNOWN, detail: `CS2 (pid ${unknown.pid}) could not be checked: ${unknown.why}.` };
+  // a running CS2's own command line is direct evidence; without one, the next start from Steam
+  // is judged from gameinfo.gi and Steam's options, and either one unread leaves it unknown
   if (running.length) return { tone: "on", text: "VAC on", detail: "CS2 runs without -insecure." };
+  if (s.botMode === null) return { tone: "unknown", text: UNKNOWN, detail: "gameinfo.gi could not be read, so whether CS2 started from Steam would load the mod is unknown." };
+  if (s.steamLaunchOptions === null) return { tone: "unknown", text: UNKNOWN, detail: "CS2's launch options in Steam could not be read, so whether CS2 started from Steam runs with -insecure is unknown." };
+  const tokens = splitOptions(s.steamLaunchOptions);
+  if (tokens === null) return { tone: "unknown", text: UNKNOWN, detail: "CS2's launch options in Steam have an unbalanced quote, so how Steam reads them is unknown." };
+  const steamInsecure = tokens.some((t) => t.toLowerCase() === "-insecure") && !tokens.some(isSecureToken);
   if (steamInsecure) return { tone: "warn", text: "VAC off on Steam starts", detail: "CS2's launch options in Steam contain -insecure, so CS2 started from Steam runs with VAC off. This app never writes Steam's launch options; remove it in Steam > Counter-Strike 2 > Properties." };
   if (s.botMode) return { tone: "warn", text: "Bot Mode on in gameinfo.gi", detail: "No CS2 runs, and Bot Mode is on with no session of this app's. CS2 started from Steam would load the mod." };
   return { tone: "on", text: "VAC on", detail: "No CS2 runs and Bot Mode is off in gameinfo.gi, so CS2 started from Steam runs with VAC on." };

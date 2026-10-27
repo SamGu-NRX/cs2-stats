@@ -68,15 +68,41 @@ pub fn current_difficulty(csgo: &Path) -> Result<Option<Difficulty>, String> {
 }
 
 pub fn set_difficulty(layout: &Layout, probe: &dyn ProcessProbe, level: Difficulty) -> Result<Meta, String> {
+    set_difficulty_from(layout, probe, level, None)
+}
+
+/// What a caller saw of a file before asking to change it: its SHA-256, or `None` when it was absent.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSeen {
+    pub sha256: Option<String>,
+}
+
+/// [`set_difficulty`] for a caller that showed the user the active profile first (the view's
+/// preview, or a change kept while CS2 ran): refused, writing nothing, when
+/// `overrides/botprofile.vpk` no longer has the content `seen` describes. The copy itself is a
+/// compare-and-swap against the profile as read here.
+pub fn set_difficulty_from(layout: &Layout, probe: &dyn ProcessProbe, level: Difficulty, seen: Option<&FileSeen>) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
     let src = layout.confined(level.variant())?;
     let sha = hash::file_if_exists(&src)?
         .ok_or_else(|| format!("{} is missing; install the mod first", level.variant()))?;
+    let now = hash::file_if_exists(&confined_read(&layout.csgo, ACTIVE_PROFILE)?)?;
+    if let Some(seen) = seen {
+        if seen.sha256 != now {
+            return Err(format!("{ACTIVE_PROFILE}: {}; nothing was written", changes::CHANGED_SINCE_READ));
+        }
+    }
     let (_, meta) = changes::run(layout, probe, &lock, &format!("difficulty-{}", level.name()), |cs| {
-        cs.put_file(ACTIVE_PROFILE, &src, &sha)
+        cs.put_file_if_unchanged(ACTIVE_PROFILE, &src, &sha, now.as_deref())
     })?;
     Ok(meta)
+}
+
+/// The SHA-256 of the active bot profile, for a caller to send back as [`FileSeen`].
+pub fn active_profile_sha(csgo: &Path) -> Result<Option<String>, String> {
+    hash::file_if_exists(&confined_read(csgo, ACTIVE_PROFILE)?)
 }
 
 /// The BotRandomizer convars for the human player. They come from the user's
@@ -429,9 +455,27 @@ pub fn read_server(csgo: &Path) -> Result<ServerSettings, String> {
     }
 }
 
+/// The keys this app's `unbind` lines in `text` name, in order.
+fn pending_unbinds(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| managed_unbind(l))
+        .filter_map(|l| l.trim_end().strip_suffix(KNIFE_MARK)?.strip_suffix(' ')?.strip_prefix("unbind ").map(str::to_string))
+        .collect()
+}
+
+/// Whether a Bot Mode session has started since the last change to the server cfg's knife bind,
+/// so the game has run that cfg and its `unbind` lines have done their work. A game started some
+/// other way leaves no record, so its run is not counted and the lines stay.
+fn knife_cfg_applied(layout: &Layout) -> Result<bool, String> {
+    let list = changes::list(layout)?;
+    let Some(last) = list.iter().position(|m| m.operation == "server-cfg" && m.status == changes::Status::Complete) else { return Ok(true) };
+    Ok(list[..last].iter().any(|m| m.kind == changes::Kind::Session && m.operation == "bot-mode-on" && m.status == changes::Status::Complete))
+}
+
 /// The cfg's text with `patch` applied: convar lines merged (every other line kept), and this
-/// app's knife-bind lines replaced.
-fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String {
+/// app's knife-bind lines replaced. `keep_unbinds`: the `unbind` lines already there have not
+/// run in a game yet, so they stay, or the key they free would keep spawning knives.
+fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch, keep_unbinds: bool) -> String {
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
     let mut values: Vec<(&str, String)> = Vec::new();
     if let Some(c) = patch.cosmetics {
@@ -449,11 +493,17 @@ fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String 
     if let Some(bind) = &patch.knife_bind {
         let eol = if out.contains("\r\n") { "\r\n" } else { "\n" };
         let mut lines: Vec<&str> = out.lines().filter(|l| !managed(l)).collect();
-        let unbind = now.knife_bind.as_ref().filter(|old| !old.key.eq_ignore_ascii_case(&bind.key)).map(|old| format!("unbind {} {KNIFE_MARK}", old.key));
-        let line = bind.line();
-        if let Some(u) = &unbind {
-            lines.push(u);
+        let mut keys: Vec<String> = if keep_unbinds { pending_unbinds(text) } else { Vec::new() };
+        keys.extend(now.knife_bind.as_ref().map(|old| old.key.clone()));
+        let mut unbinds: Vec<String> = Vec::new();
+        for k in keys {
+            if !k.eq_ignore_ascii_case(&bind.key) && !unbinds.iter().any(|u| u.eq_ignore_ascii_case(&k)) {
+                unbinds.push(k);
+            }
         }
+        let unbind_lines: Vec<String> = unbinds.iter().map(|k| format!("unbind {k} {KNIFE_MARK}")).collect();
+        let line = bind.line();
+        lines.extend(unbind_lines.iter().map(String::as_str));
         lines.push(&line);
         let mut joined = lines.join(eol);
         joined.push_str(eol);
@@ -489,7 +539,8 @@ pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch,
     if let Some(c) = patch.cosmetics.filter(|c| c.music_kit != now.cosmetics.music_kit) {
         check_music_kit(&layout.csgo, c.music_kit)?;
     }
-    let merged = apply_patch(&text, &now, &patch);
+    let keep_unbinds = !knife_cfg_applied(layout)?;
+    let merged = apply_patch(&text, &now, &patch, keep_unbinds);
     let (_, meta) = changes::run(layout, probe, &lock, "server-cfg", |cs| {
         cs.put_merged_cfg_if_unchanged(SERVER_CFG, merged.as_bytes(), read_hash.as_deref())
     })?;
@@ -513,6 +564,22 @@ pub fn load_app(layout: &Layout) -> Result<AppSettings, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppSettings::default()),
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
+}
+
+/// Sets the app's launch options, refused when they are no longer `seen`, what the caller showed
+/// the user (the view's preview, or a change kept while CS2 ran). The read, the check and the
+/// write happen under the operation lock.
+pub fn set_launch_options(layout: &Layout, options: &str, seen: Option<&str>) -> Result<AppSettings, String> {
+    super::launch::steam_args(options)?;
+    let _lock = OpLock::acquire(layout)?;
+    let mut s = load_app(layout)?;
+    if seen.is_some_and(|seen| seen != s.launch_options) {
+        return Err(format!("the app's launch options {} (now {:?}); nothing was written", changes::CHANGED_SINCE_READ, s.launch_options));
+    }
+    s.launch_options = options.to_string();
+    let text = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
+    write_atomic(&layout.settings_file(), text.as_bytes())?;
+    Ok(s)
 }
 
 pub fn save_app(layout: &Layout, s: &AppSettings) -> Result<(), String> {

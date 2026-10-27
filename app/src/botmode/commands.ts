@@ -98,6 +98,8 @@ export interface Status {
   };
   /** null when the active bot profile matches none of the three shipped levels */
   difficulty: Difficulty | null;
+  /** SHA-256 of overrides\botprofile.vpk, sent back with a difficulty change; null when there is none */
+  activeProfile: string | null;
   cosmetics: CosmeticsState;
   steamLaunchOptions: string | null;
   launchOptions: string;
@@ -255,6 +257,8 @@ export type RunningCs2 =
 
 /** One entry of overlay.json as botmode_overlay_plan previews it. */
 export interface PlannedEntry { name: string; target: string; files: string[]; repo: string; reference: string }
+/** What overlay.json would copy, and the manifest's hash to send back with the confirmation. */
+export interface OverlayPlan { sha256: string; entries: PlannedEntry[] }
 
 /** Starts the error of a read that gave up (commands.rs READ_LIMIT). */
 export const UNREACHABLE = "Library unreachable";
@@ -274,7 +278,8 @@ export function botmodeOver(call: Call) {
     download: (tag: string, asset?: string, t: Target = {}) => call<ReleaseIndex>("botmode_download", { ...t, tag, asset }),
     install: (tag: string, asset?: string, t: Target = {}) => call<InstallReport>("botmode_install", { ...t, tag, asset }),
     /** Applies %APPDATA%\BotMatchStats\botmode\overlay.json, or `manifest`. */
-    overlay: (manifest?: string, t: Target = {}) => call<OverlayReport>("botmode_overlay", { ...t, manifest }),
+    /** `previewed`: the plan's sha256; a manifest changed since the preview is refused. */
+    overlay: (manifest?: string, previewed?: string, t: Target = {}) => call<OverlayReport>("botmode_overlay", { ...t, manifest, previewed }),
     /** Undoes the newest change; `id` must name that change when given. */
     rollback: (id?: string, t: Target = {}) => call<RollbackReport>("botmode_rollback", { ...t, id }),
     backups: (t: Target = {}) => call<Change[]>("botmode_backups", { ...t }),
@@ -285,13 +290,15 @@ export function botmodeOver(call: Call) {
      */
     launch: (t: Target = {}) => call<SessionView>("botmode_launch", { ...t }),
     session: (t: Target = {}) => call<SessionView>("botmode_session", { ...t }),
-    setDifficulty: (level: Difficulty, t: Target = {}) => call<Change>("botmode_set_difficulty", { ...t, level }),
+    /** `seen`: the active profile's hash as the caller showed it (Status.activeProfile); refused when it has changed. */
+    setDifficulty: (level: Difficulty, seen?: { sha256: string | null }, t: Target = {}) => call<Change>("botmode_set_difficulty", { ...t, level, seen }),
     /**
      * Writes all three convars into cfg\gamemode_competitive_server.cfg, keeping every other line.
      * With `seen`, the values this caller read, it writes nothing when the cfg no longer holds them.
      */
     setCosmetics: (cosmetics: Cosmetics, seen?: Cosmetics, t: Target = {}) => call<Change>("botmode_set_cosmetics", { ...t, cosmetics, seen }),
-    setLaunchOptions: (options: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options }),
+    /** `seen`: the options as the caller showed them; refused when they have changed. */
+    setLaunchOptions: (options: string, seen?: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options, seen }),
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
     serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
@@ -299,7 +306,7 @@ export function botmodeOver(call: Call) {
     setServerCfg: (patch: ServerPatch, seen: ServerSettings, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen }),
     /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */
     running: (t: Target = {}) => call<RunningCs2[]>("botmode_running", { ...t }),
-    overlayPlan: (manifest?: string, t: Target = {}) => call<PlannedEntry[]>("botmode_overlay_plan", { ...t, manifest }),
+    overlayPlan: (manifest?: string, t: Target = {}) => call<OverlayPlan>("botmode_overlay_plan", { ...t, manifest }),
     /** The game files a recorded change wrote. */
     changeFiles: (id: string, t: Target = {}) => call<string[]>("botmode_change_files", { ...t, id }),
     /** The mod's Commands.txt at `tag`, from GitHub. */

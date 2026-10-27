@@ -9,7 +9,7 @@
 // once when it opens and again after each action; it polls only while a session runs. Paths,
 // command lines and errors pass through the privacy layer (data/privacy.ts).
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { UNREACHABLE, type BotModeApi, type Catalog, type Change, type Checked, type GithubRelease, type PlannedEntry, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
+import { UNREACHABLE, type BotModeApi, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RunningCs2, type ServerSettings, type SessionView, type Status } from "../../botmode/commands";
 import { Card } from "../components/Card";
 import { toast } from "../components/overlay";
 import { botModeApi, cosmeticsSupport, damaged, errorText, installState, vacState, writeBlocker, type InstallState } from "../data/botmode";
@@ -210,7 +210,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
             done();
           }}>
           <p className="bm-dialog__lead">CS2 starts with <b className="bm-flag">-insecure</b>, which turns VAC off for this session. Matchmaking and VAC-secured servers stay closed to it until you restart CS2 without Bot Mode.</p>
-          <LaunchLine status={status} />
+          <LaunchLine status={status} options={pending?.plan.launch ?? status.launchOptions} />
           <dl className="bm-facts">
             <dt>Changes</dt>
             <dd><span className="mono">gameinfo.gi</span>: two search paths turn Bot Mode on. They come out again when CS2 exits.</dd>
@@ -282,7 +282,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
         </div>
       ) : (
         <div className="bm-hero__act">
-          <LaunchLine status={status} />
+          <LaunchLine status={status} options={pending?.plan.launch ?? status.launchOptions} />
           <button className="btn btn--primary press bm-launch" onClick={onLaunch} disabled={!!launchWhy} aria-describedby={launchWhy ? "bm-launch-why" : undefined}>
             <PlayIcon size={14} />Launch Bot Mode…
           </button>
@@ -300,13 +300,17 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
   );
 }
 
-/** The command a launch runs, as the backend builds it: -insecure always first, then the app's options; Steam adds CS2's own. */
-function LaunchLine({ status }: { status: Status }) {
+/**
+ * The command a launch runs, as the backend builds it: -insecure always first, then the app's
+ * options; Steam adds CS2's own. `options`: the app's options the launch will use, which are the
+ * kept ones when a change to them waits, since the launch applies those first.
+ */
+function LaunchLine({ status, options }: { status: Status; options: string }) {
   const shown = useShown();
   return (
     <p className="bm-line mono selectable" aria-label="Launch command">
       <span className="faint">steam.exe -applaunch 730</span> <b className="bm-flag">-insecure</b>
-      {status.launchOptions && <> <span>{shown(status.launchOptions)}</span></>}
+      {options && <> <span>{shown(options)}</span></>}
       {status.steamLaunchOptions && <> <span className="bm-line__steam"><span className="faint">then Steam's own</span> {shown(status.steamLaunchOptions)}</span></>}
     </p>
   );
@@ -453,13 +457,23 @@ function InstallDialog({ api, status, dialog, onClose, onDone }: {
 /** Reads overlay.json first and lists every file each build puts where. */
 function OverlayDialog({ api, instant, onClose, onDone }: { api: BotModeApi; instant: boolean; onClose: () => void; onDone: () => void }) {
   const shown = useShown();
-  const [plan, setPlan] = useState<PlannedEntry[] | { error: string } | null>(null);
-  useEffect(() => { api.overlayPlan().then(setPlan, (e) => setPlan({ error: errorText(e) })); }, [api]);
-  const entries = Array.isArray(plan) ? plan : null;
+  const [plan, setPlan] = useState<OverlayPlan | { error: string } | null>(null);
+  const read = useCallback(() => api.overlayPlan().then(setPlan, (e) => setPlan({ error: errorText(e) })), [api]);
+  useEffect(() => { void read(); }, [read]);
+  const ready = plan && "entries" in plan ? plan : null;
   return (
-    <ActionDialog instant={instant} title="Apply your plugin builds?" confirm="Apply builds" busyText="Checking and copying your builds" ready={!!entries} onClose={onClose}
+    <ActionDialog instant={instant} title="Apply your plugin builds?" confirm="Apply builds" busyText="Checking and copying your builds" ready={!!ready} onClose={onClose}
       run={async () => {
-        const r = await api.overlay();
+        // the confirmation applies the manifest shown here: one edited since is refused, and shown again
+        let r;
+        try {
+          r = await api.overlay(undefined, ready!.sha256);
+        } catch (e) {
+          const text = errorText(e);
+          if (!text.includes("changed since it was read")) throw e;
+          await read();
+          throw "overlay.json changed after this list was shown, so nothing was copied. The list now shows the file as it is; check it and apply again.";
+        }
         toast(`Applied ${plural(r.entries.length, "build")}: ${r.entries.map((x) => x.name).join(", ")}`, "good");
         onDone();
       }}>
@@ -467,7 +481,7 @@ function OverlayDialog({ api, instant, onClose, onDone }: { api: BotModeApi; ins
         : "error" in plan ? <p className="bm-problem selectable" role="alert">{shown(plan.error)}</p>
         : (
           <dl className="bm-facts">
-            {plan.map((e) => (
+            {plan.entries.map((e) => (
               <div key={e.name} style={{ display: "contents" }}>
                 <dt>{e.name}</dt>
                 <dd>From {e.repo} at {e.reference}, into <span className="mono">{e.target}</span>:<FileList files={e.files.map((f) => `${e.target}/${f}`)} /></dd>
@@ -490,7 +504,7 @@ function RollbackDialog({ api, change, interrupted, instant, onClose, onDone }: 
   useEffect(() => { api.changeFiles(change.id).then(setFiles, (e) => setFiles({ error: errorText(e) })); }, [api, change.id]);
   return (
     <ActionDialog instant={instant} title={interrupted ? "Roll back the interrupted change?" : `Undo ${opLabel(change.operation).toLowerCase()}?`} confirm={interrupted ? "Roll back" : "Undo"}
-      busyText="Restoring files from the backup" onClose={onClose}
+      busyText="Restoring files from the backup" onClose={onClose} ready={Array.isArray(files)}
       run={async () => {
         const r = await api.rollback(change.id);
         toast(`${interrupted ? "Rolled back" : "Undid"} ${opLabel(r.operation).toLowerCase()}: ${plural(r.restored, "file")} restored`, "good");

@@ -3,9 +3,11 @@
 // runs (when the backend refuses every write) wait for the next launch from this page or for
 // Apply once CS2 has closed.
 //
-// The server cfg changes go as one compare-and-swap (botmode_set_server_cfg) with the cfg's
-// values as they were when the first change was made, so a value another tool set meanwhile is
-// refused rather than overwritten.
+// Every write carries the state it was previewed against, taken when the first change to it was
+// made: the server cfg's values (botmode_set_server_cfg), the active bot profile's hash
+// (botmode_set_difficulty) and the app's launch options. The backend refuses a write whose file
+// changed since, so a value another tool set meanwhile, even while the change waited for CS2 to
+// close, is never overwritten without the user seeing it first.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { BotAim, BotModeApi, BotNades, Catalog, Difficulty, KnifeBind, ServerPatch, ServerSettings, Status } from "../../../botmode/commands";
@@ -68,7 +70,11 @@ function planOf(changed: (keyof Draft)[], d: Draft, base: Draft): Plan {
 const PENDING = "cs2stats.botmode.pending";
 /** The draft's fields that live in the server cfg. */
 const CFG_KEYS: (keyof Draft)[] = ["skins", "premium", "kit", "aim", "nades", "bind"];
-interface Stored { edits: Partial<Draft>; seen: ServerSettings }
+/**
+ * The draft, and what each part of it was previewed against: `seen` the server cfg's values,
+ * `profile` the active bot profile's hash, `launch` the app's launch options.
+ */
+interface Stored { edits: Partial<Draft>; seen: ServerSettings; profile?: { sha256: string | null }; launch?: string }
 function readStored(): Stored | null {
   try {
     const t = localStorage.getItem(PENDING);
@@ -97,15 +103,25 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
     : null;
 
   const set = useCallback(<K extends keyof Draft>(k: K, v: Draft[K]) => {
-    // `seen` is the cfg as it was when the first cfg change of this draft was made; with no cfg
-    // change waiting (none yet, or the last ones applied), it is the cfg as read now
-    setStored((s) => ({ edits: { ...(s?.edits ?? {}), [k]: v }, seen: s && CFG_KEYS.some((c) => c in s.edits) ? s.seen : server }));
-  }, [server]);
+    // each baseline is the state when the first change to it was made; with none of its changes
+    // waiting (none yet, or the last ones applied), it is the state as read now
+    setStored((s) => {
+      const had = (keys: (keyof Draft)[]) => !!s && keys.some((c) => c in s.edits);
+      return {
+        edits: { ...(s?.edits ?? {}), [k]: v },
+        seen: had(CFG_KEYS) ? s!.seen : server,
+        profile: had(["difficulty"]) ? s!.profile : { sha256: status.activeProfile },
+        launch: had(["launch"]) ? s!.launch : status.launchOptions,
+      };
+    });
+  }, [server, status.activeProfile, status.launchOptions]);
   const discard = useCallback(() => setStored(null), []);
 
   /** Writes the plan; throws the backend's refusal after reading the state again. */
   const apply = async () => {
     const seen = stored?.seen ?? server;
+    const profile = stored?.profile ?? { sha256: status.activeProfile };
+    const launchSeen = stored?.launch ?? status.launchOptions;
     const drop = (...keys: (keyof Draft)[]) => setStored((s) => {
       if (!s) return s;
       const n = { ...s.edits };
@@ -117,14 +133,20 @@ export function usePending(api: BotModeApi, status: Status, server: ServerSettin
         await api.setServerCfg(plan.patch, seen);
         drop(...CFG_KEYS);
       }
-      if (plan.difficulty) { await api.setDifficulty(plan.difficulty); drop("difficulty"); }
-      if (plan.launch !== null) { await api.setLaunchOptions(plan.launch); drop("launch"); }
+      if (plan.difficulty) { await api.setDifficulty(plan.difficulty, profile); drop("difficulty"); }
+      if (plan.launch !== null) { await api.setLaunchOptions(plan.launch, launchSeen); drop("launch"); }
     } catch (e) {
       const text = errorText(e);
       if (text.includes("changed since it was read")) {
-        // the edits stay; the next apply compares against what the cfg holds now
-        const fresh = await api.serverCfg().catch(() => null);
-        if (fresh) setStored((s) => s && { ...s, seen: fresh });
+        // the edits stay, previewed again against what the files hold now: the next apply,
+        // which the user confirms after seeing them, compares with that
+        const [fresh, now] = await Promise.all([api.serverCfg().catch(() => null), api.status().catch(() => null)]);
+        setStored((s) => s && {
+          ...s,
+          seen: fresh ?? s.seen,
+          profile: now ? { sha256: now.activeProfile } : s.profile,
+          launch: now ? now.launchOptions : s.launch,
+        });
         await reload();
         throw `Something else changed these settings after you made your changes, so nothing was saved (${text}). The page now shows the current values; apply again to keep your changes.`;
       }

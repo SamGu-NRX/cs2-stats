@@ -283,6 +283,27 @@ impl<'p> ChangeSet<'p> {
         self.put(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()))
     }
 
+    /// [`put_file`](Self::put_file) as a compare-and-swap: refused unless the target still
+    /// hashes to `read_hash` (`None`: still absent), checked as in
+    /// [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_file_if_unchanged(&mut self, rel: &str, src: &Path, expected: &str, read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::None {
+            return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, expected, |f| {
+            let r = File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+            hash::copy(r, f).map(|_| ()).map_err(|e| format!("{}: {e}", src.display()))
+        });
+        self.guard = None;
+        r
+    }
+
     pub fn put_file(&mut self, rel: &str, src: &Path, expected: &str) -> Result<bool, String> {
         self.put(rel, expected, |f| {
             let r = File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;

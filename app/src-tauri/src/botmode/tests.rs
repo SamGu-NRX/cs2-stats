@@ -577,6 +577,62 @@ fn a_music_kit_already_in_the_cfg_does_not_block_another_setting() {
 }
 
 #[test]
+fn a_moved_knife_key_keeps_every_unbind_until_a_session_has_run_the_cfg() {
+    use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
+    let s = Scratch::new("knife-unbinds");
+    let layout = fake_game(&s);
+    let set = |key: &str| {
+        let seen = settings::read_server(&layout.csgo).unwrap();
+        let bind = KnifeBind { key: key.into(), knives: vec![500] };
+        settings::set_server(&layout, &CLOSED, ServerPatch { knife_bind: Some(bind), ..Default::default() }, seen).unwrap();
+    };
+    let tail = |layout: &Layout| {
+        let text = read(layout, "cfg/gamemode_competitive_server.cfg");
+        text.lines().filter(|l| l.ends_with(KNIFE_MARK)).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>()
+    };
+    // k, then j, then m, with no game run in between: k's unbind has not run yet, so it stays
+    set("k");
+    set("j");
+    set("m");
+    assert_eq!(tail(&layout), ["unbind k", "unbind j", "bind m"]);
+    // moving back to a key drops its own unbind
+    set("k");
+    assert_eq!(tail(&layout), ["unbind j", "unbind m", "bind k"]);
+    // a Bot Mode session runs the cfg; the next move needs only the key it leaves
+    let lock = OpLock::acquire(&layout).unwrap();
+    changes::run_kind(&layout, &CLOSED, &lock, "bot-mode-on", changes::Kind::Session, |cs| cs.put_bytes("gameinfo.gi", b"on")).unwrap();
+    drop(lock);
+    set("p");
+    assert_eq!(tail(&layout), ["unbind k", "bind p"]);
+}
+
+#[test]
+fn queued_difficulty_launch_options_and_builds_are_refused_once_their_file_changed() {
+    let s = Scratch::new("queued");
+    let layout = installed(&s);
+    // the active profile as the view previewed it, then replaced by another tool
+    let seen = settings::FileSeen { sha256: settings::active_profile_sha(&layout.csgo).unwrap() };
+    let profile = layout.target("overrides/botprofile.vpk");
+    fs::write(&profile, b"someone else's profile").unwrap();
+    let err = settings::set_difficulty_from(&layout, &CLOSED, Difficulty::High, Some(&seen)).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(fs::read(&profile).unwrap(), b"someone else's profile");
+    let now = settings::FileSeen { sha256: settings::active_profile_sha(&layout.csgo).unwrap() };
+    settings::set_difficulty_from(&layout, &CLOSED, Difficulty::High, Some(&now)).unwrap();
+    assert_eq!(settings::current_difficulty(&layout.csgo).unwrap(), Some(Difficulty::High));
+
+    settings::set_launch_options(&layout, "-novid", Some("")).unwrap();
+    let err = settings::set_launch_options(&layout, "+exec x", Some("")).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(settings::load_app(&layout).unwrap().launch_options, "-novid");
+
+    let manifest = layout.data.join("overlay.json");
+    fs::write(&manifest, overlay::EXAMPLE).unwrap();
+    let err = overlay::apply_checked(&layout, &CLOSED, &manifest, Some(&"0".repeat(64))).unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+}
+
+#[test]
 fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
     use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
     let s = Scratch::new("knife-bind-own");
@@ -648,7 +704,8 @@ fn previews_list_a_changes_files_and_the_overlay_plan_without_local_paths() {
     let manifest = layout.data.join("overlay.json");
     fs::write(&manifest, overlay::EXAMPLE).unwrap();
     let plan = overlay::plan(&manifest).unwrap();
-    let randomizer = plan.iter().find(|e| e.name == "BotRandomizer").unwrap();
+    assert_eq!(plan.sha256, hash::file(&manifest).unwrap());
+    let randomizer = plan.entries.iter().find(|e| e.name == "BotRandomizer").unwrap();
     assert_eq!(randomizer.target, "addons/counterstrikesharp/plugins/BotRandomizer");
     assert_eq!(randomizer.repo, "SamGu-NRX/CS2-Bot-Randomizer");
     assert!(randomizer.files.contains(&"cosmetic_catalog.json".to_string()));
