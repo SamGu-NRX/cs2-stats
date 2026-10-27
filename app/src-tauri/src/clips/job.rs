@@ -454,8 +454,10 @@ mod tests {
         assert_eq!(plan.cfg_text, format!("mirv_script_load \"{}/director.js\"\n", dir.display().to_string().replace('\\', "/")));
         assert_eq!(plan.outputs[0].finished, m.env.clips_root.join(format!("{A1}.mp4")).display().to_string());
         assert_eq!(plan.outputs[0].duration_s, 20.0);
-        // the director holds the job, with the demo's resolved path and no reason text
-        let job = script.split("const JOB = ").nth(1).unwrap().split(";\n").next().unwrap();
+        // the director holds the job, with the demo's resolved path and no reason text. The template's
+        // line ends are whatever the checkout gave it (CRLF on Windows with core.autocrlf), so the job's
+        // line is read with lines(), which takes either.
+        let job = script.split("const JOB = ").nth(1).unwrap().lines().next().unwrap().trim_end().trim_end_matches(';');
         let v: serde_json::Value = serde_json::from_str(job).unwrap();
         assert_eq!(v["demos"][0]["path"], m.env.replays.join("match730_0001.dem").display().to_string().replace('\\', "/"));
         assert_eq!(v["demos"][0]["clips"][0], json!({ "id": A1, "steamid": ME, "start": 1000, "end": 2280 }));
