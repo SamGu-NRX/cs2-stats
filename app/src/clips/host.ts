@@ -52,8 +52,20 @@ async function tauriClips(): Promise<ClipsHost> {
   };
 }
 
-/** The desktop app's clips commands; null in the browser. */
-export const clipsHost = (): Promise<ClipsHost | null> => (isTauri() ? tauriClips() : Promise.resolve(null));
+/**
+ * The desktop app's clips commands; null in the browser. `vite dev` and `pnpm capture` with
+ * ?clips=<scenario> get the stand-in host in mock.ts instead, for screenshots; the import is dynamic and
+ * DEV-only, so a release build carries none of it.
+ */
+export async function clipsHost(): Promise<ClipsHost | null> {
+  if (isTauri()) return tauriClips();
+  const scenario = import.meta.env.DEV ? new URLSearchParams(location.search).get("clips") : null;
+  if (scenario) {
+    const { mockClipsHost } = await import("./mock");
+    return mockClipsHost(scenario);
+  }
+  return null;
+}
 
 const HLAE_KEY = "cs2stats.hlae";
 /** The HLAE.exe the user chose last; null when none was saved or storage is blocked. */

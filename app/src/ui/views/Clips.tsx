@@ -16,7 +16,7 @@ import { copyText, toast } from "../components/overlay";
 import { careerEntries } from "../data/engine";
 import { useCall, useYourQuery } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
-import { hideText, hidingPersonal, useHidePersonal } from "../data/privacy";
+import { hideFile, hideText, hidingPersonal, useHidePersonal } from "../data/privacy";
 import { useData } from "../data/provider";
 import { FlagIcon, WeaponIcon } from "../icons/game";
 import { ChevronRightIcon, ClipsIcon, CloseIcon, CopyIcon, PlayIcon, RefreshIcon } from "../icons/ui";
@@ -48,6 +48,9 @@ const subline = (r: MomentRow, e: MatchEntry | undefined) => [mapName(r.map), `R
 const isNeeds = (s: ClipState) => s.kind === "no-demo" || s.kind === "unchecked";
 const isDone = (s: ClipState) => s.kind === "recorded" || s.kind === "rendered";
 const choosable = (s: ClipState) => s.kind === "ready" || isDone(s);
+const DEMO_NAME = /[A-Za-z0-9_.-]+\.dem\b/g;
+/** Text with personal info hidden, demo file names included: a Valve demo's name names one of your matches, and hideText leaves file names alone (privacy.ts hideFile). */
+const hideClipText = (s: string) => hideText(s).replace(DEMO_NAME, (m) => hideFile(m));
 
 // ---------------------------------------------------------------- the host's view of the clips
 
@@ -145,7 +148,7 @@ function StateCell({ s, clipsDir }: { s: ClipState; clipsDir: string | null }) {
   const tip = s.kind === "no-demo" || s.kind === "unchecked" ? s.why : s.kind === "recorded" ? "HLAE recorded this clip. Finish it to trim it and add the lower third." : "The demo is in CS2's replays folder.";
   return (
     <span className="clip__state">
-      <span className="cstate" data-s={s.kind} data-tip={hide ? hideText(tip) : tip} tabIndex={isNeeds(s) ? 0 : undefined}>{STATE_LABEL[s.kind]}</span>
+      <span className="cstate" data-s={s.kind} data-tip={hide ? hideClipText(tip) : tip} tabIndex={isNeeds(s) ? 0 : undefined}>{STATE_LABEL[s.kind]}</span>
     </span>
   );
 }
@@ -225,21 +228,21 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   // the host builds the plan without writing anything, for the user to read before Save or Launch. A
   // plan counts only for the request it was built for: when the tools or the HLAE path change, the old
   // one is gone from the first render, and Save and Launch wait for the new one.
-  const [plan, setPlan] = useState<{ plan: RenderPlan | null; problem: string | null; for: JobRequest | null }>({ plan: null, problem: "Building the plan…", for: null });
+  const [plan, setPlan] = useState<{ plan: RenderPlan | null; problem: string | null; for: JobRequest | null }>({ plan: null, problem: null, for: null });
   useEffect(() => {
     if (!env) { setPlan({ plan: null, problem: "The tools are still being checked.", for: request }); return; }
     if (!env.hlae.path) { setPlan({ plan: null, problem: env.hlae.error, for: request }); return; }
     if (!env.cs2.path) { setPlan({ plan: null, problem: env.cs2.error, for: request }); return; }
     if (!request || !tools.host) return;
     let alive = true;
-    setPlan({ plan: null, problem: "Building the plan…", for: request });
+    setPlan({ plan: null, problem: null, for: request });
     tools.host.plan(request, null).then(
       (p) => alive && setPlan({ plan: p, problem: null, for: request }),
       (e) => alive && setPlan({ plan: null, problem: String(e), for: request }),
     );
     return () => { alive = false; };
   }, [env, request, tools.host]);
-  const show = (s: string) => (hide ? hideText(s) : s);
+  const show = (s: string) => (hide ? hideClipText(s) : s);
   const total = ready.reduce((s, i) => s + durationOf(i.row), 0);
 
   const run = async (what: "save" | "launch") => {
@@ -314,7 +317,9 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
             </section>
           </>
         ) : (
-          <p className="rdlg__problem" role="alert">{plan.for === request && plan.problem ? show(plan.problem) : "Building the plan…"}</p>
+          plan.for === request && plan.problem
+            ? <p className="rdlg__problem" role="alert">{show(plan.problem)}</p>
+            : <p className="rdlg__note meta" role="status">Building the plan…</p>
         )}
         {pending && p && <p className="rdlg__note meta" id="rdlg-pending" role="status">{pending}</p>}
         {failed && <p className="rdlg__problem" role="alert">{show(failed)}</p>}
@@ -493,7 +498,7 @@ export default function ClipsView() {
             </div>
             {whys.length > 0 && (show === "all" || show === "needs") && (
               <ul className="clips__whys" aria-label="Why some moments need a demo">
-                {whys.map(([why, n]) => <li key={why}><span className="num">{n}</span> {n === 1 ? "moment needs" : "moments need"} a demo. {hide ? hideText(why) : why}</li>)}
+                {whys.map(([why, n]) => <li key={why}><span className="num">{n}</span> {n === 1 ? "moment needs" : "moments need"} a demo. {hide ? hideClipText(why) : why}</li>)}
               </ul>
             )}
             <ol className="clips__list" aria-label="Moments, best first">

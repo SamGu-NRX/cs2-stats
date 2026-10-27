@@ -167,6 +167,18 @@ describe("the Clips page", () => {
     expect(path.getAttribute("data-tip")).toBe(`<clips folder>\\${DONE}.mp4\nCopy the path`);
   });
 
+  it("hides the demo's file name in the Render dialog with personal info hidden", async () => {
+    // fails if a Valve demo's name, which names one of the user's matches, shows in the plan's clip list
+    act(() => { setHidePersonal(true); });
+    await render();
+    await act(async () => { rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.click(); });
+    await click(button(el, "Render 1 clip"));
+    await act(async () => {});
+    const clips = document.querySelector("dialog.rdlg .rdlg__clips")!.textContent!;
+    expect(clips).toContain("<file>.dem · ticks 1000–1960");
+    expect(document.querySelector("dialog.rdlg")!.textContent).not.toContain("match730_0001");
+  });
+
   it("asks the host for the plan, shows it with the -insecure warning, and starts CS2 only when the launch is confirmed", async () => {
     // fails if opening the dialog writes or launches anything, the request carries a path instead of
     // the demo's name, the plan or warning is missing, or Launch does not save the job first
@@ -215,6 +227,9 @@ describe("the Clips page", () => {
     await act(async () => {});
     expect(dlg.querySelector(".rdlg__cmd")).toBeNull();
     expect([saveBtn().disabled, launchBtn().disabled]).toEqual([true, true]);
+    // building is said as a status, not raised as a problem
+    expect(dlg.querySelector(".rdlg__problem")).toBeNull();
+    expect(dlg.querySelector(".rdlg__note[role=status]")!.textContent).toBe("Building the plan…");
     await act(async () => { open(); });
     await act(async () => {});
     expect(dlg.querySelector(".rdlg__cmd")!.textContent).toContain("Other\\HLAE\\HLAE.exe");

@@ -102,6 +102,10 @@ The host's checks (`app/src-tauri/src/clips/`) defend against inputs the app doe
 
 Out of scope: another process running as the same user that can already write to `%APPDATA%\BotMatchStats\clips` or to CS2's replays folder. That process can read anything the user can, so racing a check against it protects nothing. This is the same ruling as the packs folder (#41). For the same reason CS2's replays folder may be a junction: the checks resolve it before comparing, and a user can legitimately move it with one. Inside the clips folder the app never needs one, so a junction there is refused.
 
+## Screenshots of states that need CS2
+
+No agent may start CS2, so the states a render puts the page in come from a stand-in clips host, `app/src/clips/mock.ts`. `vite dev` and `pnpm capture` load it with `?clips=waiting` (a launch's CS2 still runs), `?clips=ready` (the dialog's plan arrives at once) or `?clips=held` (the plan never arrives, so Save and Launch stay off), for example `/?clips=held#/clips`. It reports every demo on disk and every tool found, and refuses to save, launch or run FFmpeg. `clipsHost` imports it only when `import.meta.env.DEV` is set, so the release build drops it: after `pnpm build`, neither its marker string `cs2stats-mock-clips-host` nor `mockClipsHost` appears anywhere in `app/dist`. With `CS2_VALVE_MATCHES` pointing at a folder of extracted Valve matches, the moments are real and only the host is stood in.
+
 ## The first supervised render
 
 The user runs this, at the machine, with nothing else using CS2.
