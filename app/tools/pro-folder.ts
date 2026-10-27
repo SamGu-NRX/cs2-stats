@@ -3,9 +3,9 @@
 // src-tauri/src/pro.rs implements the same rules for the desktop app, where the user picks the folder.
 // Nothing here writes: listing and reading are readdir, stat and readFile. A map is listed as
 // "pro/<series>/<map>" (flat) or "pro/<series>/<map>/<version folder>" (versioned).
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import path from "node:path";
-import { mapTablesDir, VERSION_DIR } from "./map-dir";
+import { VERSION_DIR } from "./map-dir";
 
 export interface ProEntry { file: string; size: number; mtime: number }
 export interface ProListing {
@@ -50,47 +50,30 @@ function flatTables(root: string, dir: string): Record<string, number> {
 }
 
 /**
- * Each map folder's last answer, by folder, with the stamp it was given under: the CURRENT pointer and
- * the stat of the file that completes the map (the version's COMPLETE, or match.parquet in a flat
- * folder). A version folder never changes once COMPLETE is written (SCHEMA-v1.md), so a map whose stamp
- * is unchanged keeps its answer and the next listing makes three file calls for it instead of one per
- * table: a full listing of 1,080 maps took 40 s on this machine. Reads still check each table's size.
+ * Every map of the library that is complete now. A version folder counts once its COMPLETE file exists
+ * and a flat folder (the extractor's output from before version folders, never rewritten) once its
+ * match.parquet does; each is keyed by that file's size and time, and a map's tables are checked as each
+ * is read (readPro). The walk reads directory entries, so a folder or file that is a link shows as one:
+ * only a map with a link on its path costs a realpath to prove it stays inside the library. Checking
+ * every table of every map made a listing of 1,080 maps take 40 s on this machine.
  */
-const answers = new Map<string, { stamp: string; file?: ProEntry; skipped?: string }>();
-
-function stampOf(dir: string): string {
-  let pointer = "";
-  try { pointer = readFileSync(path.join(dir, "CURRENT"), "utf-8").trim(); } catch { /* a flat folder, or none */ }
-  const done = path.join(dir, pointer, pointer ? "COMPLETE" : "match.parquet");
-  try {
-    const st = statSync(done);
-    return `${pointer}|${st.size}|${st.mtimeMs}|${existsSync(path.join(dir, "RETIRED"))}`;
-  } catch {
-    return `${pointer}|missing|${existsSync(path.join(dir, "RETIRED"))}`;
-  }
-}
-
 export function listPro(folder: string): ProListing {
   const out: ProListing = { folder, files: [], skipped: [], error: null };
   const root = seriesRoot(folder);
-  let series: string[];
+  let series: Dirent[];
   try {
-    series = readdirSync(root);
+    series = readdirSync(root, { withFileTypes: true });
   } catch (e) {
     return { ...out, error: (e as Error).message };
   }
   for (const s of series) {
-    if (!isName(s) || !statSync(path.join(root, s)).isDirectory()) continue;
-    for (const m of readdirSync(path.join(root, s))) {
-      const dir = path.join(root, s, m);
-      if (!isName(m) || !statSync(dir).isDirectory()) continue;
-      const rel = `pro/${s}/${m}`;
-      const stamp = stampOf(dir);
-      let a = answers.get(dir);
-      if (a?.stamp !== stamp) {
-        a = { stamp, ...mapAnswer(root, dir, rel) };
-        answers.set(dir, a);
-      }
+    if (!isName(s.name) || !(s.isDirectory() || s.isSymbolicLink())) continue;
+    let maps: Dirent[];
+    try { maps = readdirSync(path.join(root, s.name), { withFileTypes: true }); } catch { continue; }
+    for (const m of maps) {
+      if (!isName(m.name) || !(m.isDirectory() || m.isSymbolicLink())) continue;
+      const rel = `pro/${s.name}/${m.name}`;
+      const a = mapAnswer(root, path.join(root, s.name, m.name), rel, s.isSymbolicLink() || m.isSymbolicLink());
       if (a.file) out.files.push(a.file);
       else if (a.skipped) out.skipped.push({ file: rel, why: a.skipped });
     }
@@ -99,19 +82,32 @@ export function listPro(folder: string): ProListing {
   return out;
 }
 
-/** One map folder's entry, why it has none, or neither when it holds no map. */
-function mapAnswer(root: string, dir: string, rel: string): { file?: ProEntry; skipped?: string } {
+/** One map folder's entry, why it has none, or neither when it holds no map. `linked`: a link is on the path so far. */
+function mapAnswer(root: string, dir: string, rel: string, linked: boolean): { file?: ProEntry; skipped?: string } {
   try {
-    const r = mapTablesDir(dir);
-    if (!r) return {};
-    if ("skipped" in r) return { skipped: r.skipped };
-    if (!inside(root, path.join(r.dir, "match.parquet"))) return { skipped: "resolves outside the library" };
-    if (r.manifest) {
-      const at = path.join(r.dir, "COMPLETE");
-      return { file: { file: `${rel}/${path.basename(r.dir)}`, size: Object.values(r.manifest).reduce((x, y) => x + y, 0), mtime: Math.round(statSync(at).mtimeMs) } };
+    const names = new Map(readdirSync(dir, { withFileTypes: true }).map((d) => [d.name, d]));
+    if (names.has("RETIRED")) return { skipped: "retired" };
+    const pointer = names.get("CURRENT");
+    let file: string, done: string, link = linked;
+    if (pointer) {
+      const v = readFileSync(path.join(dir, "CURRENT"), "utf-8").trim();
+      if (!VERSION_DIR.test(v)) return { skipped: `CURRENT names "${v}", which is not a version folder` };
+      const vdir = names.get(v);
+      if (!vdir) return { skipped: `${v}: no such version folder` };
+      done = path.join(dir, v, "COMPLETE");
+      file = `${rel}/${v}`;
+      link ||= pointer.isSymbolicLink() || vdir.isSymbolicLink();
+    } else {
+      const first = names.get("match.parquet");
+      if (!first) return {};
+      done = path.join(dir, "match.parquet");
+      file = rel;
+      link ||= first.isSymbolicLink();
     }
-    const sizes = flatTables(root, r.dir);
-    return { file: { file: rel, size: Object.values(sizes).reduce((x, y) => x + y, 0), mtime: Math.round(statSync(path.join(r.dir, "match.parquet")).mtimeMs) } };
+    let st;
+    try { st = lstatSync(done); } catch { return { skipped: `${path.basename(path.dirname(done))}: no COMPLETE file yet` }; }
+    if ((link || st.isSymbolicLink()) && !inside(root, done)) return { skipped: "resolves outside the library" };
+    return { file: { file, size: st.size, mtime: Math.round(st.mtimeMs) } };
   } catch (e) {
     return { skipped: (e as Error).message };
   }

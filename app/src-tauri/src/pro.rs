@@ -52,14 +52,6 @@ fn series_root(folder: &Path) -> PathBuf {
     if demos.is_dir() { demos } else { folder.to_path_buf() }
 }
 
-fn mtime_ms(p: &Path) -> u64 {
-    fs::metadata(p)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
 /// A version folder's COMPLETE list (table file name to bytes), when COMPLETE lies inside `root` and names
 /// only plain table files. The tables themselves are checked as each is read (read_in): checking every
 /// table of every map at each listing made a listing of 1,080 maps take over half a minute.
@@ -93,41 +85,46 @@ fn flat_tables(root: &Path, dir: &Path) -> Result<BTreeMap<String, u64>, String>
     Ok(out)
 }
 
-/// Where one map folder's tables are now: a version folder (CURRENT), the flat folder, or why neither.
+/// One map folder now: its listed path and the file it is keyed by (the version's COMPLETE, or a flat
+/// folder's match.parquet), why it has no complete map, or no map at all.
 enum Map {
-    Versioned { version: String, sizes: BTreeMap<String, u64> },
-    /// match.parquet's size: a flat folder is the extractor's output from before version folders, never rewritten
-    Flat { size: u64 },
+    Listed { file: String, key: fs::Metadata },
     Skip(String),
     None,
 }
 
-fn resolve(root: &Path, map: &Path) -> Map {
-    if map.join("RETIRED").exists() {
+/// A version folder counts once its COMPLETE file exists, and a flat folder (the extractor's output from
+/// before version folders, never rewritten) once its match.parquet does; a map's tables are checked as
+/// each is read (read_in). The walk reads directory entries, so a folder or file that is a link shows as
+/// one, and only a map with a link on its path costs a canonicalize to prove it stays inside the library.
+/// Checking every table of every map made a listing of 1,080 maps take over half a minute.
+fn resolve(root: &Path, map: &Path, rel: &str, linked: bool) -> Map {
+    let Ok(items) = fs::read_dir(map) else { return Map::Skip("the folder cannot be read".into()) };
+    let names: BTreeMap<String, fs::FileType> = items
+        .flatten()
+        .filter_map(|e| Some((e.file_name().to_str()?.to_owned(), e.file_type().ok()?)))
+        .collect();
+    if names.contains_key("RETIRED") {
         return Map::Skip("retired".into());
     }
-    let pointer = map.join("CURRENT");
-    if pointer.exists() {
-        if !inside(root, &pointer) {
-            return Map::Skip("CURRENT resolves outside the library".into());
-        }
-        let version = fs::read_to_string(&pointer).unwrap_or_default().trim().to_string();
+    let (file, done, mut link) = if let Some(pointer) = names.get("CURRENT") {
+        let version = fs::read_to_string(map.join("CURRENT")).unwrap_or_default().trim().to_string();
         if !version_dir(&version) {
             return Map::Skip(format!("CURRENT names \"{version}\", which is not a version folder"));
         }
-        return match complete(root, &map.join(&version)) {
-            Ok(sizes) => Map::Versioned { version, sizes },
-            Err(why) => Map::Skip(format!("{version}: {why}")),
-        };
-    }
-    let first = map.join("match.parquet");
-    if !first.is_file() {
+        let Some(vdir) = names.get(&version) else { return Map::Skip(format!("{version}: no such version folder")) };
+        (format!("{rel}/{version}"), map.join(&version).join("COMPLETE"), linked || pointer.is_symlink() || vdir.is_symlink())
+    } else if let Some(first) = names.get("match.parquet") {
+        (rel.to_string(), map.join("match.parquet"), linked || first.is_symlink())
+    } else {
         return Map::None;
+    };
+    let Ok(key) = fs::symlink_metadata(&done) else { return Map::Skip("no COMPLETE file yet".into()) };
+    link |= key.file_type().is_symlink();
+    if link && !inside(root, &done) {
+        return Map::Skip("resolves outside the library".into());
     }
-    if !inside(root, &first) {
-        return Map::Skip("match.parquet resolves outside the library".into());
-    }
-    Map::Flat { size: fs::metadata(&first).map(|m| m.len()).unwrap_or(0) }
+    Map::Listed { file, key }
 }
 
 #[derive(Serialize)]
@@ -153,26 +150,26 @@ pub fn list_in(folder: &Path) -> ProListing {
             return out;
         }
     };
+    // a folder entry that is a link (a junction) is followed, and its maps proven to stay inside the library
+    let folder_like = |t: &fs::FileType| t.is_dir() || t.is_symlink();
     for s in series.flatten() {
-        let Some(sname) = s.file_name().to_str().map(str::to_owned) else { continue };
-        if !plain_name(&sname) || !s.path().is_dir() {
+        let (Some(sname), Ok(st)) = (s.file_name().to_str().map(str::to_owned), s.file_type()) else { continue };
+        if !plain_name(&sname) || !folder_like(&st) {
             continue;
         }
         let Ok(maps) = fs::read_dir(s.path()) else { continue };
         for m in maps.flatten() {
-            let Some(mname) = m.file_name().to_str().map(str::to_owned) else { continue };
-            let map = m.path();
-            if !plain_name(&mname) || !map.is_dir() {
+            let (Some(mname), Ok(mt)) = (m.file_name().to_str().map(str::to_owned), m.file_type()) else { continue };
+            if !plain_name(&mname) || !folder_like(&mt) {
                 continue;
             }
             let rel = format!("pro/{sname}/{mname}");
-            match resolve(&root, &map) {
-                Map::Versioned { version, sizes } => out.files.push(FileEntry {
-                    mtime: mtime_ms(&map.join(&version).join("COMPLETE")),
-                    size: sizes.values().sum(),
-                    file: format!("{rel}/{version}"),
+            match resolve(&root, &m.path(), &rel, st.is_symlink() || mt.is_symlink()) {
+                Map::Listed { file, key } => out.files.push(FileEntry {
+                    size: key.len(),
+                    mtime: key.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64),
+                    file,
                 }),
-                Map::Flat { size } => out.files.push(FileEntry { mtime: mtime_ms(&map.join("match.parquet")), size, file: rel }),
                 Map::Skip(why) => out.skipped.push(Skipped { file: rel, why }),
                 Map::None => {}
             }
@@ -351,6 +348,18 @@ mod tests {
             "a-vs-b-1/m2-nuke/v-1.2.0-0123abcd/kills.parquet",
         ] {
             assert!(read_in(&lib.0, bad).is_err(), "{bad} was read");
+        }
+    }
+
+    /// How long listing a real library takes: `CS2_PRO_LIBRARY=<folder> cargo test --lib pro:: -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn times_a_real_library() {
+        let folder = PathBuf::from(std::env::var_os("CS2_PRO_LIBRARY").expect("CS2_PRO_LIBRARY names the library"));
+        for pass in ["first", "second"] {
+            let t = std::time::Instant::now();
+            let l = list_in(&folder);
+            println!("{pass} listing: {} maps, {} skipped, {:?}", l.files.len(), l.skipped.len(), t.elapsed());
         }
     }
 
