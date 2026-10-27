@@ -281,6 +281,9 @@ function routesOf(page: Page): string[] {
       ];
     case "profile":
       return PROFILE_TABS.map((t) => profileHref(t));
+    // Matches' Pro view lists the development folder's scrim: its players and teams are not public
+    case "matches":
+      return [pageHref(page), pageHref(page, { view: "pro" })];
     default:
       return [pageHref(page)];
   }

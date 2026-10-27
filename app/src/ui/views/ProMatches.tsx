@@ -28,7 +28,8 @@ export function ProMatches({ switcher }: { switcher: JSX.Element }) {
   const r = useRoute();
   const f = { q: r.query.get("pq") ?? "", team: r.query.get("team"), player: r.query.get("player"), map: r.query.get("pmap") };
   const all = useMemo(() => proEntries(matches), [matches]);
-  const choices = useMemo(() => proChoices(all, (e) => (hide && !isProDemo(e) ? [] : e.match.teams)), [all, hide]);
+  // while hiding personal info, a match that is not an HLTV demo offers no team or player to pick (privacy.ts)
+  const choices = useMemo(() => proChoices(hide ? all.filter(isProDemo) : all), [all, hide]);
   // the list follows the filters at a lower priority than the typing: a key never waits for a thousand rows
   const q = useDeferredValue(f.q), team = useDeferredValue(f.team), player = useDeferredValue(f.player), map = useDeferredValue(f.map);
   const rows = useMemo(() => filterPro(all, { q, team, player, map }), [all, q, team, player, map]);

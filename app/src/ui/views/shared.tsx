@@ -94,7 +94,8 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
         <span className={`pcard__dot ${p.team === "us" ? "us" : "them"}`} />
         <div>
           <b>{p.name}</b>
-          <div className="meta">{p.isHuman ? "You" : `${p.team === "us" ? "Teammate" : "Opponent"}${p.bot ? ", bot" : ""}`}</div>
+          {/* a pro demo's players belong to named teams; nobody in it is you */}
+          <div className="meta">{v.pro ? v.teamName[p.team] : p.isHuman ? "You" : `${p.team === "us" ? "Teammate" : "Opponent"}${p.bot ? ", bot" : ""}`}</div>
         </div>
         <span className="pcard__rating num" style={{ color: ratingText(both.rating ?? 1) }}>{fmtRating(both.rating)}</span>
       </div>
@@ -185,13 +186,13 @@ export function TotalsCardBody({ v, col }: { v: MatchModel; col: Extract<RoundCo
     <div className="rcard">
       <div className="rcard__head">
         <b>Round {col.number}</b>
-        <span className="meta">{w === "us" ? "Won" : w === "them" ? "Lost" : "Result unknown"}</span>
+        <span className="meta">{w === null ? "Result unknown" : v.pro ? `Won by ${v.teamName[w]}` : w === "us" ? "Won" : "Lost"}</span>
       </div>
       <p className="meta">Totals only for this round.</p>
-      <div className="rcard__foot">
-        <span>You <b className="num">{you ? `${you.kills}–${you.deaths}` : "–"}</b></span>
+      {v.human !== null && <div className="rcard__foot">
+        <span>{v.pro ? v.players[v.human].name : "You"} <b className="num">{you ? `${you.kills}–${you.deaths}` : "–"}</b></span>
         <span>Damage <b className="num">{you ? you.dmg : "–"}</b></span>
-      </div>
+      </div>}
     </div>
   );
 }

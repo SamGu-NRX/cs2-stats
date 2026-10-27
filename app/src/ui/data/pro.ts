@@ -44,14 +44,13 @@ const NAMES = new Intl.Collator(undefined, { sensitivity: "base" });
 
 /**
  * The filters' choices over the whole library, each with how many maps it has: teams and players by
- * name, maps by count. `teamsOf` gives the team names a match may offer (none for a match whose names
- * are hidden, privacy.ts teamNames).
+ * name, maps by count.
  */
-export function proChoices(list: MatchEntry[], teamsOf: (e: MatchEntry) => readonly string[] = (e) => e.match.teams): { teams: [string, number][]; players: [string, number][]; maps: [string, number][] } {
+export function proChoices(list: MatchEntry[]): { teams: [string, number][]; players: [string, number][]; maps: [string, number][] } {
   const teams = new Map<string, number>(), players = new Map<string, number>(), maps = new Map<string, number>();
   const add = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
   for (const e of list) {
-    for (const t of new Set(teamsOf(e))) add(teams, t);
+    for (const t of new Set(e.match.teams)) add(teams, t);
     for (const p of new Set(playersOf(e).map((x) => x.name))) add(players, p);
     add(maps, e.match.map);
   }

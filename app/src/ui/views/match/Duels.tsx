@@ -125,7 +125,7 @@ function YourRounds({ v }: { v: ViewedMatch }) {
   })), [v, human]);
   const metric = (s: (typeof rows)[number]["s"], id: string) => fmtMetric(id, s[id]);
   return (
-    <Card title="Your duels, round by round" aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
+    <Card title={v.pro ? `${v.players[v.human].name}, round by round` : "Your duels, round by round"} aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
       <div className="tbl-wrap">
         <table className="tbl yrounds">
           <thead><tr>

@@ -50,8 +50,8 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
   ];
   return (
     <Card title="Every clutch" className="clutchtbl" flush id="match-clutch-list" collapsible
-      aside={<>
-        <SectionAside label="You won" value={<>{mine.filter((c) => c.won).length}<span className="faint">/{mine.length}</span></>} color="var(--cream)" />
+      aside={v.human === null ? undefined : <>
+        <SectionAside label={v.pro ? `${v.players[v.human].name} won` : "You won"} value={<>{mine.filter((c) => c.won).length}<span className="faint">/{mine.length}</span></>} color="var(--cream)" />
         <SectionAside label="Saved" value={mine.filter((c) => c.saved).length} />
       </>}>
       {call.error && !call.stale ? <div className="tabpad"><LoadFailed what="The clutches" error={call.error} /></div> : !call.data || call.stale ? <div className="skel" style={{ height: 160, margin: 12 }} /> : !rows.length ? (
