@@ -486,6 +486,32 @@ def test_a_hash_that_raises_fails_its_archive_and_later_archives_are_still_hashe
     assert (dp.FAILED_DIR / "a1-runtime" / "archive.rar").exists()
 
 
+def test_a_download_held_by_another_program_is_hashed_again_and_failed_only_after_five_tries(tmp_path, monkeypatch):
+    # Review of PR 61: a finished download briefly held by a virus scan or the browser (PermissionError) was failed
+    # on the first try. An OSError is retried by later scans, up to dp.HASH_ATTEMPTS per run, then fails.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    for n in ("held-briefly", "held-always"):
+        (dp.DOWNLOADS / n).write_bytes(dp.RAR_MAGIC + n.encode())
+    real, calls = ex.file_sha256, {}
+
+    def sha(path):
+        calls[path.name] = calls.get(path.name, 0) + 1
+        if path.name == "held-always" or calls[path.name] <= 2:
+            raise PermissionError(13, "in use by another process", str(path))
+        return real(path)
+
+    monkeypatch.setattr(ex, "file_sha256", sha)
+    p = dp.Pipeline()
+    for i in range(20):  # each retry needs a scan to see the file again and one to find it stable
+        p.scan(16.0 * i)
+        _hashed(p)
+    assert p.archives["held-briefly"].rar_sha256 == hashlib.sha256(dp.RAR_MAGIC + b"held-briefly").hexdigest()
+    assert calls == {"held-briefly": 3, "held-always": dp.HASH_ATTEMPTS}
+    reason = {r["id"]: r["reason"] for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert list(reason) == ["held-always"] and "PermissionError" in reason["held-always"]
+
+
 def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
     # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
     # cleanup match those copies exactly.

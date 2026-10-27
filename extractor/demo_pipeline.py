@@ -273,6 +273,12 @@ class Archive:
     archive_gb_counted: bool = False
 
 
+# Hashing attempts per archive in one run before an OSError fails it. A finished download can be held for a moment by
+# the browser or a virus scan (PermissionError, a sharing violation), so an OSError is retried by a later scan; five
+# is the value asked for in review of PR 61, not a measured bound.
+HASH_ATTEMPTS = 5
+
+
 class Hasher:
     """SHA-256 of picked-up archives, one at a time on a daemon thread, so the main loop keeps serving status.
     Hashed in scan(), each archive kept in failed/ blocked the loop for about 50 s on a --retry-failed restart, and
@@ -902,6 +908,7 @@ class Pipeline:
         self.ignored: set[Path] = set()
         self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
         self.hasher = Hasher()
+        self.hash_errors: dict[Path, int] = {}  # OSErrors hashing each archive in this run (HASH_ATTEMPTS)
         rows = read_jsonl(MANIFEST)
         peaks, parse_s = manifest_seed(rows)
         self.output_gb: deque[float] = deque(output_seed(rows), maxlen=TIMING_SAMPLES)
@@ -1002,18 +1009,24 @@ class Pipeline:
 
     def poll_hashes(self) -> None:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
-        record, when that record is of the same file. An archive whose file went is dropped (a later scan finds it
-        if it comes back); any other error fails the archive with it, kept for a retry."""
+        record, when that record is of the same file. An OSError (the file held by a scan, or gone) drops the
+        archive for a later scan to find again, up to HASH_ATTEMPTS times in a run, then fails it; any other error
+        fails it at once. A failed archive is kept for a retry."""
         for a in [a for a in self.archives.values() if a.state == "hashing"]:
             sha = self.hasher.take(a.rar)
             if sha is None:
                 continue
-            if isinstance(sha, FileNotFoundError):
-                log.warning("%s went before it was hashed; dropped until a later scan finds it", a.rar)
-                del self.archives[a.id]
-                continue
+            if isinstance(sha, OSError):
+                n = self.hash_errors[a.rar] = self.hash_errors.get(a.rar, 0) + 1
+                if n < HASH_ATTEMPTS:
+                    log.warning("could not hash %s (%s: %s), attempt %d of %d; a later scan tries again", a.rar,
+                                type(sha).__name__, sha, n, HASH_ATTEMPTS)
+                    del self.archives[a.id]
+                    self.retried.discard(a.rar)  # a retry from failed/ is picked up again too
+                    continue
             if not isinstance(sha, str):
-                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}")
+                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}"
+                                     + (f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""))
                 continue
             a.rar_sha256 = sha
             if a.rar.parent.parent == FAILED_DIR:
