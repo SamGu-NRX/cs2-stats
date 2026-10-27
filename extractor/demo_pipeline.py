@@ -483,7 +483,7 @@ def tidy_demos() -> None:
 # Workers run a copy of the extractor taken at startup. Running the repo files directly let edits made
 # while the pipeline ran reach live workers, which failed 13 maps on half-edited code.
 RUN_CODE = Path(tempfile.gettempdir()) / "cs2-stats-pipeline" / str(os.getpid())
-CODE_FILES = ("extract.py", "engagements.py", "schema_v1.py", "prices_cs2_1.41.9.2.json")
+CODE_FILES = ("extract.py", "engagements.py", "schema_v1.py", "repo_guard.py", "prices_cs2_1.41.9.2.json")
 
 
 def freeze_code() -> None:
