@@ -11,7 +11,7 @@ import { ViewerNeeded } from "./Viewer";
 
 const PRO = "pro/vitality-vs-mouz-1/m1-mirage";
 const OTHER = "pro/vitality-vs-mouz-1/m2-inferno";
-const STEAMIDS = ["76561197960287930", "76561198034202275", "76561198012345678"];
+const STEAMIDS = ["76561190000000011", "76561190000000012", "76561190000000013"];
 const v = {
   file: PRO, pro: true, human: null, teamName: { us: "Team Vitality", them: "MOUZ" },
   players: STEAMIDS.map((key, pi) => ({ pi, key, name: `p${pi}`, bot: false, team: pi < 2 ? "us" : "them", isHuman: false })),
