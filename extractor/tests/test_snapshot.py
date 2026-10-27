@@ -107,3 +107,38 @@ def test_a_dropped_attempt_and_an_excluded_coach_leave_no_trace(tmp_path):
     assert sides.min() == sides.max() == 5
     rounds = pl.read_parquet(d / "rounds.parquet")
     assert rounds["round"].to_list() == list(range(1, 20)) and rounds["winner_side"].null_count() == 0
+
+
+def test_a_finished_round_a_restore_rolled_back_is_dropped_and_the_map_validates(tmp_path):
+    # Fixture E (an HLTV Ancient map, 20 rounds): round 2 ended at 20663, round 3 started, and a restore at 21912
+    # loaded round 2's backup; round 2 was played again. Extractor 1.15.0 counted the first round 2 too (21 rounds,
+    # one death too many for the player team-killed in it), and refused the team killer's attempt as explained
+    # both ways. The recording opens on round 1's start, where the C4 pickup names nobody.
+    src = FIXTURES / "fixture-e.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; rolled-back rounds are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    match = pl.read_parquet(d / "match.parquet").row(0, named=True)
+    dropped = json.loads(match["dropped_attempts"])
+    assert match["n_rounds"] == 20 and [(x["round"], x["from_tick"], x["to_tick"]) for x in dropped] == [(2, 6571, 21912)]
+    assert "rolled back" in dropped[0]["reason"]
+    bomb = pl.read_parquet(d / "bomb.parquet")
+    pickup = bomb.filter(pl.col("event") == "pickup").row(0, named=True)
+    drop = bomb.filter(pl.col("event") == "dropped").row(0, named=True)
+    # The tick-0 pickup goes to the player holding the C4 then, who is the one to drop it first.
+    assert pickup["tick"] == 0 and pickup["steamid"] == drop["steamid"] and pickup["x"] is not None
+
+
+def test_an_abandoned_map_is_refused_as_unplayed_instead_of_crashing(tmp_path):
+    # Fixture F (an HLTV Nuke map HLTV lists no stats for): after 16 rounds, round 17 sat in freeze time for 9
+    # minutes while players left, and the game gave it to the side left standing. By the next round start nobody had
+    # a team, and extractor 1.15.0 crashed reading the scoreboard there ('DataFrame' object has no attribute
+    # 'team_num').
+    src = FIXTURES / "fixture-f.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; abandoned maps are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert not res["ok"] and res["errors"][0].startswith("RuntimeError: unplayed_round: round 17 never left freeze time")
+    assert ex.resolve_map_dir(tmp_path / "out") is None
