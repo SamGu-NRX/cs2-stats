@@ -416,3 +416,16 @@ def test_an_empty_replays_folder_is_an_error_not_a_successful_import(tmp_path):
     with pytest.raises(SystemExit) as e:
         vi.main(["--out", str(tmp_path / "out"), "--steam", str(steam), "--user", str(U1)])
     assert e.value.code == 2
+
+
+def test_a_rise_before_round_one_a_dropped_attempt_explains_stays_in_the_baseline():
+    # Review of PR 54 (finding 3): a restored attempt before round 1 kept one player's death, and his counter
+    # settled in round 1's freeze time, where no row explains it. The baseline refused it as a lost death; when
+    # the attempt's own events explain the rise, it belongs to the baseline instead.
+    rounds = pd.DataFrame(dict(start_tick=[65], freeze_end_tick=[1710]))
+    p = SkippingParser({0: {1: dict(deaths_total=0)}, 300: {1: dict(deaths_total=1)}})
+    with pytest.raises(RuntimeError, match="rose by 1"):
+        ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64)
+    base = ex.scoreboard_baseline(p, rounds, NO_DEATHS, NO_GUARD, 64,
+                                  explain=lambda sid, excess: excess["deaths_total"] == 1)
+    assert base.deaths_total.tolist() == [1]

@@ -70,22 +70,24 @@ export const R3_INPUT_LABEL: Record<string, { label: string; fmt: (v: number) =>
   swing: { label: "Round swing", fmt: (v) => `${v.toFixed(2)}%` },
 };
 
-/** One term of Rating 3.0 for a breakdown: the input's value, its coefficient, and coefficient × value. */
-export interface RatingTerm { label: string; input: string; coefficient: number; contribution: number }
+/** One term of Rating 3.0 for a breakdown: the input's value and its contribution to the rating. */
+export interface RatingTerm { label: string; input: string; contribution: number }
+
+/** A rating as the breakdown reads it: Rating3's inputs, base and the engine's per-input contributions. */
+export interface RatingSplit { inputs: Record<string, number>; base: number; terms: Record<string, number> }
 
 /**
- * Rating 3.0's terms over a rating's own inputs (Rating3.inputs from rating3Of), in params.json's
- * order, then the constant: the intercept plus every contribution is the rating's value.
+ * Rating 3.0's terms in the engine's input order (Meta.rating.inputs), then the base: the base plus
+ * every contribution is the rating's value (rating3.ts rating3Of).
  */
-export function ratingTerms(inputs: Record<string, number>): { terms: RatingTerm[]; intercept: number } {
-  const r = ratingInfo();
+export function ratingTerms(r: RatingSplit): { terms: RatingTerm[]; base: number } {
   return {
-    terms: r.terms.map((t) => {
-      const l = R3_INPUT_LABEL[t.input];
-      if (!l || inputs[t.input] === undefined) throw new Error(`Rating 3.0 term ${t.name} reads input "${t.input}", which the breakdown does not have`);
-      return { label: l.label, input: l.fmt(inputs[t.input]), coefficient: t.coefficient, contribution: t.coefficient * inputs[t.input] };
+    terms: ratingInfo().inputs.map((input) => {
+      const l = R3_INPUT_LABEL[input];
+      if (!l || r.inputs[input] === undefined || r.terms[input] === undefined) throw new Error(`Rating 3.0 input "${input}" is not one the breakdown has`);
+      return { label: l.label, input: l.fmt(r.inputs[input]), contribution: r.terms[input] };
     }),
-    intercept: r.intercept,
+    base: r.base,
   };
 }
 

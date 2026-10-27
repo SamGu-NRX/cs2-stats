@@ -12,7 +12,7 @@ import { matchWon, winCorrelationOf } from "../stats/trends";
 import { oneRound } from "../stats/testing/match";
 import { compare, percentileOf, type Baselines } from "../stats/compare";
 import { METRICS } from "../stats/metrics";
-import { rating3FromInputs } from "../stats/rating3";
+import { FEATURES } from "../stats/rating3";
 import { at, combine } from "../stats/testing/summary";
 import { entryOf, ratingsOf, valuesOf } from "./views";
 
@@ -62,5 +62,5 @@ it("shows the rating it ranks when one side is too thin to rate", () => {
   const pool: Baselines = { version: 1, built: "x", source: "test", model: "m", n: {}, pools: { all: { both: Object.fromEntries(METRICS.map((m) => [m.id, quantiles])) } } };
   const ranked = compare(both, pool, { pool: "all" }).rating3;
   expect([valuesOf(both).rating3, ranked.value, ranked.pct]).toEqual([shown.value, shown.value, percentileOf(quantiles, shown.value!)]);
-  expect(rating3FromInputs(shown.inputs!)).toBeCloseTo(shown.value!, 9);
+  expect(FEATURES.reduce((a, f) => a + shown.terms![f], shown.base!)).toBeCloseTo(shown.value!, 9);
 });
