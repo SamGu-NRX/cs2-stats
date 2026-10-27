@@ -36,7 +36,7 @@ import psutil
 ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
 import extract  # noqa: E402
-from repo_guard import OutputRefused, check_output  # noqa: E402
+from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, repo_root  # noqa: E402
 
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
@@ -483,13 +483,15 @@ def tidy_demos() -> None:
 # Workers run a copy of the extractor taken at startup. Running the repo files directly let edits made
 # while the pipeline ran reach live workers, which failed 13 maps on half-edited code.
 RUN_CODE = Path(tempfile.gettempdir()) / "cs2-stats-pipeline" / str(os.getpid())
-CODE_FILES = ("extract.py", "engagements.py", "schema_v1.py", "prices_cs2_1.41.9.2.json")
+CODE_FILES = ("extract.py", "engagements.py", "schema_v1.py", "repo_guard.py", "prices_cs2_1.41.9.2.json")
 
 
 def freeze_code() -> None:
     RUN_CODE.mkdir(parents=True, exist_ok=True)
     for name in CODE_FILES:
         shutil.copy2(ROOT / name, RUN_CODE / name)
+    # The copy's repo_guard guards the repository named in REPO_ENV (set for each worker), not %TEMP%'s parent.
+    (RUN_CODE / FROZEN_MARKER).write_text(str(repo_root()), encoding="utf-8")
     log.info("workers run extractor %s copied to %s", extract.EXTRACTOR_VERSION, RUN_CODE)
 
 
@@ -690,7 +692,8 @@ class Pipeline:
             cmd = [sys.executable, "-I", str(RUN_CODE / "extract.py"), str(j.dem), str(j.out_dir), "--source", "hltv",
                    "--mapdata", str(MAPDATA), "--archive", j.archive.id, "--meta", json.dumps(meta),
                    "--result", str(j.result_path)]
-            env = dict(os.environ, RAYON_NUM_THREADS="4", POLARS_MAX_THREADS="4", PYTHONIOENCODING="utf-8")
+            env = dict(os.environ, RAYON_NUM_THREADS="4", POLARS_MAX_THREADS="4", PYTHONIOENCODING="utf-8",
+                       **{REPO_ENV: str(repo_root())})
             j.out_dir.parent.mkdir(parents=True, exist_ok=True)
             with open(j.log_path, "w", encoding="utf-8") as lf:
                 j.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
