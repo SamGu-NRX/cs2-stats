@@ -35,6 +35,8 @@ export interface RenderPlan {
   demos: { path: string; tickRate: number; clips: { id: string; steamid: string; start: number; end: number; reason: string }[] }[];
   outputs: { id: string; take: string; finished: string; reason: string; durationS: number }[];
   request: JobRequest;
+  /** SHA-256 of what a launch of this plan runs, without the job's id and time (job.rs review_hash): Save and Launch send it back */
+  review: string;
 }
 
 /** The request for these moments: each with its demo's file name (state.ts demoSource). */

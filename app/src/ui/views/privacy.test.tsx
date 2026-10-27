@@ -324,7 +324,7 @@ function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): Clip
     return {
       version: 2, id: "job-20261026T180405123Z-a1b2c3", created: "2026-10-26T18:04:05.123Z", settings: { width: 1920, height: 1080, fps: 60 }, jobDir, hlaeExe: hlae, hookDll: argv[7], cs2Exe: cs2, argv,
       powershell: ["&", ...argv.map((a) => `'${a}'`)].join(" "), cfgFile: "cs2stats_clips.cfg", cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`,
-      directorFile: `${jobDir}\\director.js`, outputs: [], request,
+      directorFile: `${jobDir}\\director.js`, outputs: [], request, review: "0".repeat(64),
       demos: request.clips.map((c) => ({ path: `${HOME_DIR}\\replays\\${c.demo}`, tickRate: c.tickRate, clips: [{ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason }] })),
     };
   };
@@ -334,7 +334,7 @@ function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): Clip
       hlae: { path: hlae, error: null }, ffmpeg: { path: `${HOME_DIR}\\scoop\\shims\\ffmpeg.exe`, error: null },
     }),
     demos: async (names) => names.map((name) => ({ name, path: `${HOME_DIR}\\replays\\${name}`, size: 1 })),
-    scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", take: "take0000", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }] }),
+    scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", take: "take0000", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }], waiting: 0 }),
     plan: async (request) => plan(request),
     launch: async () => { throw new Error("the sentinel test never launches"); },
     finish: async (r) => { finished.push(r); return { code: 0, error: null, output: `${clipsDir}\\${r.id}.mp4` }; },

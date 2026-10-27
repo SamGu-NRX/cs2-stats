@@ -23,7 +23,7 @@ describe("demoSource", () => {
 describe("clipState", () => {
   const ID = "c-0123456789abcdef-r3";
   const demo = { kind: "demo" as const, name: "m.dem" };
-  const scan = (s: Partial<ClipsScan>): ClipsScan => ({ finished: [], takes: [], reels: [], ...s });
+  const scan = (s: Partial<ClipsScan>): ClipsScan => ({ finished: [], takes: [], reels: [], waiting: 0, ...s });
   const look = (l: Partial<Lookup>): Lookup => ({ demos: null, scan: null, why: null, ...l });
 
   it("prefers a finished clip, then the newest take, then the demo on disk", () => {

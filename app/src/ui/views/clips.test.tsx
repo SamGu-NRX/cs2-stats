@@ -23,9 +23,15 @@ const row = (id: string, file: string, round: number, reason: string): MomentRow
 const READY = "c-00000000000000aa-r3", DONE = "c-00000000000000aa-r9", NODEMO = "c-00000000000000bb-r1", TAKEN = "c-00000000000000aa-r5";
 const JOB = "job-20261026T180405123Z-a1b2c3";
 let moments: MomentRow[] = [];
-let launched: string[] = [];
-/** each plan the page asked the host for, and whether it asked to save it */
-let planned: { request: JobRequest; write: boolean }[] = [];
+/** each launch the page asked for: the job and the review value it sent */
+let launched: { job: string; review: string }[] = [];
+/** each plan the page asked the host for, and the review value it asked to save it under (null: a preview) */
+let planned: { request: JobRequest; save: string | null }[] = [];
+/** when set, the stand-in host answers plan() only once this resolves */
+let planGate: Promise<void> | null = null;
+/** what the stand-in host's scan says about launches still running */
+let waiting = 0;
+let scans = 0;
 let finished: FinishRequest[] = [];
 let takes: Take[] = [];
 /** when set, the stand-in host's scan rejects with it */
@@ -44,30 +50,37 @@ const HLAE = "D:\\Tools\\HLAE\\HLAE.exe";
 /** A plan as the host returns it (src-tauri/src/clips/job.rs Plan), for the dialog to show. */
 function planOf(request: JobRequest, id: string): RenderPlan {
   const jobDir = `${CLIPS}\\jobs\\${id}`;
-  const argv = [HLAE, "-noGui", "-autoStart", "-noConfig", "-afxDisableSteamStorage", "-customLoader", "-hookDllPath", "D:\\Tools\\HLAE\\x64\\AfxHookSource2.dll",
+  const argv = [request.hlae, "-noGui", "-autoStart", "-noConfig", "-afxDisableSteamStorage", "-customLoader", "-hookDllPath", "D:\\Tools\\HLAE\\x64\\AfxHookSource2.dll",
     "-programPath", "D:\\Steam\\cs2.exe", "-cmdLine", "-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips"];
   return {
     version: 2, id, created: "2026-10-26T18:04:05.123Z", settings: { width: 1920, height: 1080, fps: 60 }, jobDir, hlaeExe: argv[0], hookDll: argv[7], cs2Exe: argv[9], argv,
     powershell: ["&", ...argv.map((a) => `'${a}'`)].join(" "), cfgFile: "cs2stats_clips.cfg",
     cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`, directorFile: `${jobDir}\\director.js`,
     demos: request.clips.map((c) => ({ path: `D:\\replays\\${c.demo}`, tickRate: c.tickRate, clips: [{ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason }] })),
-    outputs: [], request,
+    outputs: [], request, review: reviewOf(request),
   };
 }
+/** The stand-in's review value: it changes with the HLAE and the clips, as job.rs review_hash does. */
+const reviewOf = (request: JobRequest) => `review:${request.hlae}:${request.clips.map((c) => `${c.id}@${c.startTick}-${c.endTick}`).join(",")}`;
 
 const host: ClipsHost = {
-  env: async () => ({
+  env: async (hlae) => ({
     clipsDir: CLIPS, font: "C:/Windows/Fonts/seguisb.ttf",
     cs2: { path: "D:\\Steam\\cs2.exe", error: null }, replays: { path: "D:\\replays", error: null },
-    hlae: { path: HLAE, error: null }, ffmpeg: { path: "D:\\Tools\\ffmpeg.exe", error: null },
+    hlae: { path: hlae ?? HLAE, error: null }, ffmpeg: { path: "D:\\Tools\\ffmpeg.exe", error: null },
   }),
   demos: async (names) => names.map((name) => ({ name, path: `D:\\replays\\${name}`, size: 1 })),
   scan: async () => {
     if (scanFails) throw new Error(scanFails);
-    return { finished: [{ id: DONE, path: `${CLIPS}\\${DONE}.mp4`, size: 1, mtime: 1 }], takes, reels: [] };
+    scans++;
+    return { finished: [{ id: DONE, path: `${CLIPS}\\${DONE}.mp4`, size: 1, mtime: 1 }], takes, reels: [], waiting };
   },
-  plan: async (request, write) => { planned.push({ request, write }); return planOf(request, write ? JOB : "job-20261026T180405000Z-000000"); },
-  launch: async (job) => { launched.push(job); return { pid: 4242, cfg: "x", ffmpegIni: null }; },
+  plan: async (request, save) => {
+    planned.push({ request, save });
+    if (planGate) await planGate;
+    return planOf(request, save ? JOB : "job-20261026T180405000Z-000000");
+  },
+  launch: async (job, review) => { launched.push({ job, review }); return { pid: 4242, cfg: "x", ffmpegIni: null, damaged: null }; },
   finish: async (r) => { finished.push(r); return { code: 0, error: null, output: `${CLIPS}\\${r.id}.mp4` }; },
   reel: async () => ({ code: 0, error: null, output: `${CLIPS}\\reels\\reel.mp4` }),
 };
@@ -84,7 +97,7 @@ let el: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   moments = [row(READY, VALVE, 3, "3K on B Site, +30% round impact"), row(DONE, VALVE, 9, "Ace on Mid, +90% round impact"), row(NODEMO, PLUGIN, 1, "1v2 clutch, +51% round impact")];
-  launched = []; planned = []; finished = []; takes = []; scanFails = null;
+  launched = []; planned = []; finished = []; takes = []; scanFails = null; planGate = null; waiting = 0; scans = 0;
   el = document.body.appendChild(document.createElement("div"));
   root = createRoot(el);
 });
@@ -165,12 +178,77 @@ describe("the Clips page", () => {
     expect(dlg.hasAttribute("open")).toBe(true);
     expect(dlg.querySelector(".rdlg__warn")!.textContent).toMatch(/This starts CS2 with -insecure/);
     expect(dlg.querySelector(".rdlg__cmd")!.textContent).toMatch(/^& '.*HLAE\.exe' '-noGui' .* '-cmdLine' '-insecure /);
-    expect(planned).toEqual([{ write: false, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
+    expect(planned).toEqual([{ save: null, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
     expect(launched).toEqual([]);
     await click(button(dlg, "Launch CS2 with -insecure"));
-    expect(planned.map((p) => p.write)).toEqual([false, true]);
-    expect(launched).toEqual([JOB]);
+    // the save and the launch both carry the review value of the plan shown
+    const review = reviewOf(planned[0].request);
+    expect(planned.map((p) => p.save)).toEqual([null, review]);
+    expect(launched).toEqual([{ job: JOB, review }]);
     expect(dlg.querySelector(".rdlg__done")!.textContent).toMatch(/process 4242/);
+  });
+
+  it("drops the plan shown when the HLAE path changes, and saves or launches only the new one once it is built", async () => {
+    // fails if Save or Launch stays enabled on the old plan while a new HLAE path waits to be checked or
+    // its plan is still being built, or if they send the old plan's review value
+    await render();
+    await act(async () => { rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.click(); });
+    await click(button(el, "Render 1 clip"));
+    await act(async () => {});
+    const dlg = document.querySelector("dialog.rdlg")!;
+    const launchBtn = () => button(dlg, "Launch CS2 with -insecure") as HTMLButtonElement;
+    const saveBtn = () => button(dlg, "Save the plan only") as HTMLButtonElement;
+    expect(launchBtn().disabled).toBe(false);
+    // a new path typed, not yet checked: the plan shown would still run the old HLAE
+    const NEW = "D:\\Other\\HLAE\\HLAE.exe";
+    const input = dlg.querySelector<HTMLInputElement>(".rtool__pick input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, NEW);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect([saveBtn().disabled, launchBtn().disabled]).toEqual([true, true]);
+    expect(dlg.querySelector("#rdlg-pending")!.textContent).toBe("Check the new HLAE path first.");
+    // checked: the tools change, the old plan is gone at once, and nothing can run until the new plan is built
+    let open!: () => void;
+    planGate = new Promise((res) => { open = res; });
+    await act(async () => { dlg.querySelector<HTMLFormElement>(".rtool__pick")!.requestSubmit(); });
+    await act(async () => {});
+    expect(dlg.querySelector(".rdlg__cmd")).toBeNull();
+    expect([saveBtn().disabled, launchBtn().disabled]).toEqual([true, true]);
+    await act(async () => { open(); });
+    await act(async () => {});
+    expect(dlg.querySelector(".rdlg__cmd")!.textContent).toContain("Other\\HLAE\\HLAE.exe");
+    expect(launchBtn().disabled).toBe(false);
+    await click(launchBtn());
+    const review = reviewOf(planned.at(-2)!.request);
+    expect(review).toContain(NEW);
+    expect(planned.at(-1)!.save).toBe(review);
+    expect(launched).toEqual([{ job: JOB, review }]);
+  });
+
+  it("says it is waiting for CS2 to close while a render's CS2 still runs, holds Render, and checks again until it closes", async () => {
+    // fails if the page offers a new render while the last one's CS2 runs, shows only a long "Checking…",
+    // or never looks again once CS2 has closed
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      waiting = 1;
+      await render();
+      expect(el.querySelector(".clips__waiting")!.textContent).toMatch(/^Waiting for CS2 to close\./);
+      expect(el.querySelector(".clips__tools")!.textContent).toContain("Check again");
+      await act(async () => { rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.click(); });
+      expect((button(el, "Render 1 clip") as HTMLButtonElement).disabled).toBe(true);
+      expect(el.querySelector("#clips-act-why")!.textContent).toBe("Waiting for CS2 to close before the next render.");
+      // CS2 closes; the next check, a few seconds later, clears the wait
+      waiting = 0;
+      const before = scans;
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      await act(async () => {});
+      expect(scans).toBe(before + 1);
+      expect(el.querySelector(".clips__waiting")).toBeNull();
+      expect((button(el, "Render 1 clip") as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("finishes a recorded take by sending the host the clip, its job and the lower third's text", async () => {

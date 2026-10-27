@@ -34,20 +34,35 @@ function cvars(values: Record<string, number>, log: string[]) {
   };
 }
 
+interface Camera {
+  /** the observer mode the demo starts in (3 is chase) */
+  mode?: number;
+  /** spec_player does nothing before this frame */
+  specFromFrame?: number;
+  /** an HLAE without getObserverMode */
+  noObserverMode?: boolean;
+}
+
 /**
  * Plays demos the way the director sees them: playdemo starts a demo at tick 1 a few frames later,
- * each frame advances one tick, demo_gototick jumps, spec_player follows a controller. Controllers
- * are entities 1..n (the demo's players), their pawns 51..; the local player is 99 with pawn 98.
- * `cvar` is the stand-in AdvancedfxCVar, or undefined for an HLAE without it.
+ * each frame advances one tick, demo_gototick jumps, spec_player follows a controller, spec_mode sets
+ * the observer mode. Controllers are entities 1..n (the demo's players), their pawns 51..; the local
+ * player is 99 with pawn 98. `cvar` is the stand-in AdvancedfxCVar, or undefined for an HLAE without it.
+ * `modeAtStart` records the observer mode each time recording starts.
  */
-function standIn(demos: Record<string, Demo>, cvar?: unknown) {
+function standIn(demos: Record<string, Demo>, cvar?: unknown, cam: Camera = {}) {
   const execs: string[] = [];
   const logs: string[] = [];
-  let demo: Demo | null = null, loading = 0, tick = -1, observed = 1, quit = false;
+  const modeAtStart: number[] = [];
+  let demo: Demo | null = null, loading = 0, tick = -1, observed = 1, quit = false, frame = 0;
+  let mode = cam.mode ?? 3;
   let cb: ((e: { isBefore: boolean; curStage: number }) => void) | null = null;
   const entity = (i: number) => {
     if (i === 99) return { isPlayerController: () => false, getPlayerPawnHandle: () => 98 };
-    if (i === 98) return { isPlayerController: () => false, getObserverTargetHandle: () => observed + 50 };
+    if (i === 98) {
+      const pawn = { isPlayerController: () => false, getObserverTargetHandle: () => observed + 50 };
+      return cam.noObserverMode ? pawn : { ...pawn, getObserverMode: () => mode };
+    }
     if (demo && i >= 1 && i <= demo.players.length) return { isPlayerController: () => true, getSteamId: () => BigInt(demo!.players[i - 1]) };
     if (demo && i >= 51 && i <= 50 + demo.players.length) return { isPlayerController: () => false, getPlayerControllerHandle: () => i - 50 };
     return null;
@@ -61,7 +76,10 @@ function standIn(demos: Record<string, Demo>, cvar?: unknown) {
       const go = /^demo_gototick (\d+)$/.exec(c);
       if (go) tick = Number(go[1]);
       const spec = /^spec_player (\d+)$/.exec(c);
-      if (spec) observed = Number(spec[1]);
+      if (spec && frame >= (cam.specFromFrame ?? 0)) observed = Number(spec[1]);
+      const specMode = /^spec_mode (\d+)$/.exec(c);
+      if (specMode) mode = Number(specMode[1]);
+      if (c === "mirv_streams record start") modeAtStart.push(mode);
       if (c === "quit") quit = true;
     },
     getDemoTick: () => tick,
@@ -75,12 +93,12 @@ function standIn(demos: Record<string, Demo>, cvar?: unknown) {
   };
   return (text: string, maxFrames: number) => {
     new Function("mirv", "AdvancedfxCVar", text)(mirv, cvar);
-    for (let f = 0; f < maxFrames && !quit; f++) {
+    for (; frame < maxFrames && !quit; frame++) {
       if (loading > 0 && --loading === 0) tick = 1;
       else if (demo && tick >= 0) tick++;
       cb!({ isBefore: false, curStage: 12 });
     }
-    return { execs, logs, quit };
+    return { execs, logs, quit, modeAtStart };
   };
 }
 
@@ -89,8 +107,10 @@ describe("the director", () => {
     // fails if the director records before the camera is on the player, misses a clip's start or end,
     // records into the wrong folder, skips the second demo, or never quits
     const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100), clip(A2, 3000, 3050)] }, { path: DEMO_B, clips: [clip(B1, 400, 450)] }]);
-    const { execs, logs, quit } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002", ME] }, [DEMO_B]: { ticks: 2000, players: [ME] } })(script(j), 20000);
+    const { execs, logs, quit, modeAtStart } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002", ME] }, [DEMO_B]: { ticks: 2000, players: [ME] } })(script(j), 20000);
     expect(quit).toBe(true);
+    // every recording starts in first person, though the demo began in chase mode
+    expect(modeAtStart).toEqual([2, 2, 2]);
     expect(execs.slice(0, SETUP.length)).toEqual(SETUP);
     const marks = logs.filter((l) => /\] (START|END) /.test(l)).map((l) => l.replace("[cs2stats] ", ""));
     const n = `nonce=${NONCE}`;
@@ -112,12 +132,81 @@ describe("the director", () => {
   });
 
   it("skips a clip whose player is not in the demo and goes on", () => {
-    // fails if a missing player stalls the job or records someone else
+    // fails if a missing player stalls the job, records someone else, or leaves no END line saying why
     const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100), clip(A2, 3000, 3050)] }]);
     const { logs, quit } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002"] } })(script(j), 20000);
     expect(quit).toBe(true);
-    expect(logs.filter((l) => /START|ERROR/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
-      `ERROR could not put the camera on the player for ${A1}; skipping it nonce=${NONCE}`, `ERROR could not put the camera on the player for ${A2}; skipping it nonce=${NONCE}`,
+    const n = `nonce=${NONCE}`;
+    expect(logs.filter((l) => /START|ERROR|END/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
+      `ERROR could not find the player for ${A1}; skipping it ${n}`, `END ${A1} ${n} why=no_player tick=1000`,
+      `ERROR could not find the player for ${A2}; skipping it ${n}`, `END ${A2} ${n} why=no_player tick=3000`,
+    ]);
+  });
+
+  it("records only once the camera is on the player before the start, seeking back when it locked late", () => {
+    // fails if a camera that locks after the start tick records a short clip from there and calls it
+    // complete (why=end_tick), instead of seeking back so the clip still starts at its start tick
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    // the first seek lands at frame ~311 on tick 872, so the start comes at frame ~439; spec_player works from frame 450
+    const { logs, quit, modeAtStart } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002", ME] } }, undefined, { specFromFrame: 450 })(script(j), 20000);
+    expect(quit).toBe(true);
+    const n = `nonce=${NONCE}`;
+    expect(logs.filter((l) => /START|END|seeking back/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
+      `camera not on the player before ${A1} started; seeking back (try 1) ${n}`, `START ${A1} tick=1000 ${n}`, `END ${A1} ${n} why=end_tick tick=1100`,
+    ]);
+    expect(modeAtStart).toEqual([2]);
+  });
+
+  it("skips with camera_late, never end_tick, when the camera never locks before the start", () => {
+    // fails if a clip whose camera never reached the player is recorded, or skipped without the END line the host reads
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    const { execs, logs, quit } = standIn({ [DEMO_A]: { ticks: 5000, players: ["76561190000000002", ME] } }, undefined, { specFromFrame: Infinity })(script(j), 20000);
+    expect(quit).toBe(true);
+    expect(execs).not.toContain("mirv_streams record start");
+    const n = `nonce=${NONCE}`;
+    expect(logs.filter((l) => /START|END|seeking back/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
+      `camera not on the player before ${A1} started; seeking back (try 1) ${n}`, `camera not on the player before ${A1} started; seeking back (try 2) ${n}`,
+      `END ${A1} ${n} why=camera_late tick=1000`,
+    ]);
+  });
+
+  it("forces first person when the demo already follows the player in chase mode", () => {
+    // fails if the camera counts as locked because it follows the right player, while it is in chase mode
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    // ME is controller 1, which the demo camera already follows, in chase mode (3)
+    const { execs, modeAtStart } = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } }, undefined, { mode: 3 })(script(j), 20000);
+    expect(execs.filter((c) => c.startsWith("spec_player"))).toEqual([]);
+    expect(execs.indexOf("spec_mode 2")).toBeGreaterThan(-1);
+    expect(execs.indexOf("spec_mode 2")).toBeLessThan(execs.indexOf("mirv_streams record start"));
+    expect(modeAtStart).toEqual([2]);
+  });
+
+  it("skips a clip when HLAE cannot report the observer mode", () => {
+    // fails if first person is assumed when it cannot be confirmed
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    const { execs, logs, quit } = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } }, undefined, { noObserverMode: true })(script(j), 20000);
+    expect(quit).toBe(true);
+    expect(execs).not.toContain("mirv_streams record start");
+    expect(logs.some((l) => l.startsWith(`[cs2stats] END ${A1} nonce=${NONCE} why=camera_mode_unknown `))).toBe(true);
+  });
+
+  it("stops with camera_lost when the camera leaves first person while recording", () => {
+    // fails if a recording that switched to chase mode halfway is ended as complete
+    const j = job([{ path: DEMO_A, clips: [clip(A1, 1000, 1100)] }]);
+    const run = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } });
+    const text = script(j).replace("case S.REC:", "case S.REC:\n\t\t\t\tif (tick === 1050) mirv.exec('spec_mode 3');");
+    const { logs } = run(text, 20000);
+    expect(logs.some((l) => l.startsWith(`[cs2stats] END ${A1} nonce=${NONCE} why=camera_lost tick=105`))).toBe(true);
+  });
+
+  it("records a clip that starts just after the earliest start tick the host accepts", () => {
+    // the host refuses a start before seekLeadSeconds of demo plus one tick (clips/job.rs MIN_START_S): the
+    // director then seeks to tick 1 and still has time to lock the camera before the start
+    const start = 2 * 64 + 1;
+    const j = job([{ path: DEMO_A, clips: [clip(A1, start, start + 50)] }]);
+    const { logs } = standIn({ [DEMO_A]: { ticks: 5000, players: [ME] } })(script(j), 20000);
+    expect(logs.filter((l) => /START|END/.test(l)).map((l) => l.replace("[cs2stats] ", ""))).toEqual([
+      `START ${A1} tick=${start} nonce=${NONCE}`, `END ${A1} nonce=${NONCE} why=end_tick tick=${start + 50}`,
     ]);
   });
 

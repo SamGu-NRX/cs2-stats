@@ -66,8 +66,9 @@ pub(crate) fn clip_id_ok(s: &str) -> bool {
 // It does not defend against another process running as the same user that can already write to
 // %APPDATA%\BotMatchStats\clips or to CS2's replays folder: that process can read anything the user can,
 // so racing a check against it protects nothing (the same ruling as the packs folder, #41). For the
-// same reason the job, raw and replays folders themselves may be junctions: a user can move CS2's
-// replays folder with one, and the checks resolve links before comparing.
+// same reason CS2's replays folder may be a junction: a user can move it with one, and the checks
+// resolve links before comparing. Inside the clips folder no folder on the way to a file the app reads
+// may be a link or junction (no_link_below), so the scan lists only what finishing would read.
 
 /// A resolved path without Windows' verbatim prefix (`\\?\C:\x` becomes `C:\x`), so FFmpeg and HLAE
 /// read it as written. Other verbatim forms are kept.
@@ -101,6 +102,25 @@ pub(crate) fn file_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
         return Err(format!("{} is not a regular file", p.display()));
     }
     resolved_inside(root, p)
+}
+
+/// Refuses `p` unless it is under `root` as written and no part of it below `root` (the root itself
+/// excluded) is a link or junction. Finishing and the scan both check this, so a take or clip is
+/// listed only when finishing it would read it.
+fn no_link_below(root: &Path, p: &Path) -> Result<(), String> {
+    let rel = p.strip_prefix(root).map_err(|_| format!("{} is not in {}", p.display(), root.display()))?;
+    let mut at = root.to_path_buf();
+    for c in rel.components() {
+        let std::path::Component::Normal(name) = c else {
+            return Err(format!("{} is not a plain path in {}", p.display(), root.display()));
+        };
+        at.push(name);
+        let m = fs::symlink_metadata(&at).map_err(|e| format!("{}: {e}", at.display()))?;
+        if m.file_type().is_symlink() || is_reparse(&m) {
+            return Err(format!("{} is a link", at.display()));
+        }
+    }
+    Ok(())
 }
 
 /// The folder `rel` under the clips folder, created, checked to be that folder once links are resolved.
@@ -362,6 +382,8 @@ pub struct ClipsScan {
     finished: Vec<Finished>,
     takes: Vec<Take>,
     reels: Vec<Finished>,
+    /// launches whose HLAE or CS2 still runs: their takes are listed once those exit
+    waiting: usize,
 }
 
 /// A take folder name as HLAE makes it: `take` and four digits (SuggestTakePath in advancedfx
@@ -396,14 +418,17 @@ fn take_files(take: &Path) -> Option<TakeFiles> {
     Some(TakeFiles { name, audio: file_info(&audio).map(|_| audio), video, mtime })
 }
 
-/// The newest take of one clip (`raw\<clip id>`) that its launch proves complete (launch::take_proven):
-/// takes newest first, so a newer take that failed does not hide an older one that worked.
-fn newest_proven_take(clip_dir: &Path, clip: &str, launches: &[launch::Launch]) -> Option<TakeFiles> {
+/// The newest take of one clip (`raw\<clip id>` in the clips folder `root`) that its launch proves
+/// complete (launch::take_proven) and that finishing would read: its video and sound pass the same
+/// checks as in finish_command (input_inside). Takes newest first, so a newer take that failed does
+/// not hide an older one that worked.
+fn newest_proven_take(root: &Path, clip_dir: &Path, clip: &str, launches: &[launch::Launch]) -> Option<TakeFiles> {
     let mut takes: Vec<String> = fs::read_dir(clip_dir).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| take_name_ok(n)).collect();
     takes.sort();
     takes.iter().rev().find_map(|t| {
         let files = take_files(&clip_dir.join(t))?;
-        (files.audio.is_some() && launch::take_proven(launches, clip, t).is_ok()).then_some(files)
+        let readable = input_inside(root, &files.video).is_ok() && files.audio.as_ref().is_some_and(|a| input_inside(root, a).is_ok());
+        (readable && launch::take_proven(launches, clip, t).is_ok()).then_some(files)
     })
 }
 
@@ -415,7 +440,7 @@ fn settle_launches(g: &launch::Guard, root: &Path, console_log: &Path, procs: &d
     for j in jobs {
         let dir = root.join("jobs").join(&j);
         for mut l in launch::launches(&dir) {
-            launch::settle(g, &dir, &mut l, console_log, procs)?;
+            launch::settle(g, &dir, &mut l, console_log, procs, None)?;
             if l.outcome == launch::Outcome::Pending {
                 running += 1;
             }
@@ -424,9 +449,11 @@ fn settle_launches(g: &launch::Guard, root: &Path, console_log: &Path, procs: &d
     Ok(running)
 }
 
-/// A file to read inside `root` ([`file_inside`]) that has no other hard link, which could make a
-/// file elsewhere readable through the clips folder.
+/// A file to read inside `root` ([`file_inside`]), with no link or junction on the way to it below
+/// `root` ([`no_link_below`]) and no other hard link, which could make a file elsewhere readable
+/// through the clips folder.
 fn input_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
+    no_link_below(root, p)?;
     let q = file_inside(root, p)?;
     if link_count(&q)? > 1 {
         return Err(format!("{} has another hard link", p.display()));
@@ -435,7 +462,7 @@ fn input_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
 }
 
 fn scan_in(root: &Path) -> Result<ClipsScan, String> {
-    let mut out = ClipsScan { finished: vec![], takes: vec![], reels: vec![] };
+    let mut out = ClipsScan { finished: vec![], takes: vec![], reels: vec![], waiting: 0 };
     let names = |d: &Path| -> Vec<String> {
         fs::read_dir(d).map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default()
     };
@@ -443,14 +470,14 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
         if let Some(id) = n.strip_suffix(".mp4").filter(|id| clip_id_ok(id)) {
             let p = root.join(&n);
             // a clip is renamed into place only after FFmpeg exits cleanly (run_render); an empty file is not one
-            if let Some((size @ 1.., mtime)) = file_info(&p) {
+            if let (Ok(()), Some((size @ 1.., mtime))) = (no_link_below(root, &p), file_info(&p)) {
                 out.finished.push(Finished { id: id.into(), path: p.display().to_string(), size, mtime });
             }
         }
     }
     for n in names(&root.join("reels")) {
         let p = root.join("reels").join(&n);
-        if let (true, Some((size @ 1.., mtime))) = (n.ends_with(".mp4") && !n.starts_with('.'), file_info(&p)) {
+        if let (true, Ok(()), Some((size @ 1.., mtime))) = (n.ends_with(".mp4") && !n.starts_with('.'), no_link_below(root, &p), file_info(&p)) {
             out.reels.push(Finished { id: n.trim_end_matches(".mp4").into(), path: p.display().to_string(), size, mtime });
         }
     }
@@ -458,7 +485,7 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
         let raw = root.join("jobs").join(&job).join("raw");
         let launches = launch::launches(&root.join("jobs").join(&job));
         for id in names(&raw).into_iter().filter(|i| clip_id_ok(i)) {
-            if let Some(t) = newest_proven_take(&raw.join(&id), &id, &launches) {
+            if let Some(t) = newest_proven_take(root, &raw.join(&id), &id, &launches) {
                 out.takes.push(Take { id, job: job.clone(), take: t.name, video: t.video.display().to_string(), audio: t.audio.map(|a| a.display().to_string()), mtime: t.mtime });
             }
         }
@@ -475,11 +502,12 @@ pub async fn clips_scan() -> Result<ClipsScan, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = clips_root()?;
         let g = launch::guard(&root)?;
-        if let Ok((csgo, _)) = cs2_paths() {
-            settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?;
-        }
+        let waiting = match cs2_paths() {
+            Ok((csgo, _)) => settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?,
+            Err(_) => 0,
+        };
         launch::sweep_parts(&g, &root);
-        scan_in(&root)
+        Ok(ClipsScan { waiting, ..scan_in(&root)? })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -497,21 +525,32 @@ pub fn on_app_start() {
 
 // ---------------------------------------------------------------- jobs
 
-/// Builds the render job for the chosen clips and, when `write`, saves it as a new job folder. The
-/// plan comes back either way, for the dialog to show; nothing touches the game.
+/// Builds the render job for the chosen clips, for the dialog to show; nothing touches the game. With
+/// `save`, the review value (job::review_hash) of the plan the dialog showed, it also saves the job as a
+/// new folder, but only when the plan built now has that value.
 #[tauri::command]
-pub async fn clips_plan(request: job::JobReq, write: bool) -> Result<job::Plan, String> {
+pub async fn clips_plan(request: job::JobReq, save: Option<String>) -> Result<job::Plan, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (env, _) = job_env()?;
-        let (id, created) = job::new_job_id(SystemTime::now());
-        let (plan, script) = job::build(&request, &env, &id, &created)?;
-        if write {
-            job::save(&plan, &script)?;
-        }
-        Ok(plan)
+        plan_in(&env, &request, save.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// [`clips_plan`]'s work. Saving writes a job folder, so it runs under the guard like every other
+/// write to the clips folder.
+fn plan_in(env: &job::JobEnv, request: &job::JobReq, save: Option<&str>) -> Result<job::Plan, String> {
+    let _g = save.map(|_| launch::guard(&env.clips_root)).transpose()?;
+    let (id, created) = job::new_job_id(SystemTime::now());
+    let (plan, script) = job::build(request, env, &id, &created)?;
+    if let Some(want) = save {
+        if plan.review != want {
+            return Err("the plan changed since it was shown (a demo, the HLAE chosen or a clip); review the new plan, then save it".into());
+        }
+        job::save(&plan, &script)?;
+    }
+    Ok(plan)
 }
 
 /// HLAE finds FFmpeg in `ffmpeg\bin\ffmpeg.exe` beside HLAE.exe, else through `ffmpeg\ffmpeg.ini`
@@ -557,12 +596,16 @@ struct Prepared {
     cfg_text: String,
 }
 
-/// Prepares a launch of the saved job `id` under the guard. It first settles every earlier launch whose
-/// processes have exited, so their director lines are read before this session replaces console.log,
-/// and refuses while any earlier launch or any cs2.exe still runs. The launch's sequence number is one
-/// above the job's highest; nothing orders launches by the clock.
-fn prepare_launch(g: &launch::Guard, env: &job::JobEnv, csgo: &Path, id: &str, procs: &dyn launch::Procs) -> Result<(job::Plan, Prepared), String> {
+/// Prepares a launch of the saved job `id` under the guard. It refuses a job whose plan, built again now,
+/// is not the one the user reviewed (`review`, job::review_hash). It then settles every earlier launch
+/// whose processes have exited, so their director lines are read before this session replaces
+/// console.log, and refuses while any earlier launch or any cs2.exe still runs. The launch's sequence
+/// number is one above the job's highest; nothing orders launches by the clock.
+fn prepare_launch(g: &launch::Guard, env: &job::JobEnv, csgo: &Path, id: &str, review: &str, procs: &dyn launch::Procs) -> Result<(job::Plan, Prepared), String> {
     let plan = rebuild_saved(env, id)?;
+    if plan.review != review {
+        return Err("this job is not the plan you reviewed; open the render dialog and review it again".into());
+    }
     if settle_launches(g, &env.clips_root, &csgo.join("console.log"), procs)? > 0 {
         return Err("an earlier render is still running (HLAE or CS2). Let it end, then render again.".into());
     }
@@ -588,38 +631,90 @@ pub struct Launched {
     pid: u32,
     cfg: String,
     ffmpeg_ini: Option<String>,
+    /// set when HLAE started but the launch could not record it: none of this launch's takes will count
+    damaged: Option<String>,
+}
+
+/// What a launch does once its record is published (prepare_launch), with each step that touches the
+/// system passed in so tests can drive it: `before` (the cfg and ffmpeg.ini), `spawn` (HLAE), and
+/// `publish_pids`. A failure before HLAE runs is published as the launch's result at once ("not
+/// started"). Once HLAE runs, the launch keeps it whatever happens next: a failure to publish its process
+/// ids is recorded as damage (the launch's result says so, and none of its takes counts), and the guard's
+/// OS lock and the HLAE process still pass to the watcher (launch::watch), which settles the launch when
+/// its processes exit. Returns HLAE's process id, the damage if any, and the watcher's thread.
+#[allow(clippy::too_many_arguments)]
+fn start_launch(
+    g: &mut launch::Guard,
+    root: &Path,
+    job_dir: &Path,
+    prep: &Prepared,
+    console_log: &Path,
+    before: impl FnOnce() -> Result<(), String>,
+    spawn: impl FnOnce() -> Result<std::process::Child, String>,
+    publish_pids: impl FnOnce(&launch::Guard, &launch::LaunchPids) -> Result<(), String>,
+    procs: Box<dyn launch::Procs + Send>,
+) -> Result<(u32, Option<String>, std::thread::JoinHandle<()>), String> {
+    let child = match before().and_then(|_| spawn()) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = launch::record_not_started(g, &prep.launches_dir, &prep.nonce, &e);
+            return Err(e);
+        }
+    };
+    let pid = child.id();
+    // HLAE's own process, by its id and creation time; if it has already exited, CS2's exit alone ends the launch
+    let hlae = launch::proc_id(pid).unwrap_or(launch::ProcId { pid, created: 0 });
+    let damage = publish_pids(g, &launch::LaunchPids { hlae }).err().map(|e| format!("HLAE started, but its process id could not be recorded ({e})"));
+    if let Some(d) = &damage {
+        // if this write fails too, the watcher writes it when the launch ends
+        let _ = launch::record_damaged(g, &prep.launches_dir, &prep.nonce, d);
+    }
+    g.launch_running();
+    let w = launch::watch(child, hlae, root.to_path_buf(), job_dir.to_path_buf(), prep.nonce.clone(), console_log.to_path_buf(), procs, damage.clone());
+    Ok((pid, damage, w))
 }
 
 /// Starts CS2 through HLAE for a saved job. The user confirms this in the app first; nothing else calls it.
 ///
-/// All under one guard ([`launch::guard`]): it rebuilds the job from its request, settles earlier
-/// launches and refuses while one or any cs2.exe runs ([`prepare_launch`]), publishes the launch's
-/// record and its director (with a fresh nonce), points `game\csgo\cfg\cs2stats_clips.cfg` at that
-/// director, writes HLAE's ffmpeg.ini when HLAE has no FFmpeg of its own, starts the rebuilt command
-/// without waiting for it, and publishes HLAE's process id. The clips folder's OS lock stays with this
-/// process until HLAE and CS2 have exited (launch::watch). Untested against a live game.
+/// All under one guard ([`launch::guard`]): it rebuilds the job from its request and refuses one that is
+/// not the plan the user reviewed (`review`), settles earlier launches and refuses while one or any
+/// cs2.exe runs ([`prepare_launch`]), publishes the launch's record and its director (with a fresh
+/// nonce), then ([`start_launch`]) points `game\csgo\cfg\cs2stats_clips.cfg` at that director, writes
+/// HLAE's ffmpeg.ini when HLAE has no FFmpeg of its own, starts the rebuilt command without waiting for
+/// it, publishes HLAE's process id, and hands HLAE and the clips folder's OS lock to the launch's watcher
+/// (launch::watch). Untested against a live game.
 #[tauri::command]
-pub async fn clips_launch(job: String) -> Result<Launched, String> {
+pub async fn clips_launch(job: String, review: String) -> Result<Launched, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (env, csgo) = job_env()?;
         let mut g = launch::guard(&env.clips_root)?;
-        let (plan, prep) = prepare_launch(&g, &env, &csgo, &job, &launch::System)?;
+        let (plan, prep) = prepare_launch(&g, &env, &csgo, &job, &review, &launch::System)?;
+        let job_dir = folder_in(&env.clips_root, &["jobs", &job])?;
         let hlae = PathBuf::from(&plan.argv[0]);
-        let ffmpeg = find_ffmpeg(Some(&hlae))?;
-        let ini = ensure_ffmpeg_ini(&hlae, &ffmpeg)?;
         let cfg = csgo.join("cfg").join(&plan.cfg_file);
-        job::write_together(cfg.parent().ok_or("CS2 has no cfg folder")?, &[(plan.cfg_file.as_str(), prep.cfg_text.as_bytes())])?;
-        let child = std::process::Command::new(&hlae)
-            .args(&plan.argv[1..])
-            .current_dir(hlae.parent().unwrap_or(Path::new(".")))
-            .spawn()
-            .map_err(|e| format!("{}: {e}", hlae.display()))?;
-        // HLAE's own process, by its id and creation time; if it has already exited, CS2's exit alone ends the launch
-        let hlae_proc = launch::proc_id(child.id()).unwrap_or(launch::ProcId { pid: child.id(), created: 0 });
-        launch::write_pids(&g, &prep.launches_dir, &prep.nonce, &launch::LaunchPids { hlae: hlae_proc })?;
-        g.launch_running();
-        launch::watch(hlae_proc);
-        Ok(Launched { pid: child.id(), cfg: cfg.display().to_string(), ffmpeg_ini: ini.map(|p| p.display().to_string()) })
+        let mut ini = None;
+        let (pid, damaged, _) = start_launch(
+            &mut g,
+            &env.clips_root,
+            &job_dir,
+            &prep,
+            &csgo.join("console.log"),
+            || {
+                let ffmpeg = find_ffmpeg(Some(&hlae))?;
+                ini = ensure_ffmpeg_ini(&hlae, &ffmpeg)?;
+                job::write_together(cfg.parent().ok_or("CS2 has no cfg folder")?, &[(plan.cfg_file.as_str(), prep.cfg_text.as_bytes())])
+            },
+            || {
+                std::process::Command::new(&hlae)
+                    .args(&plan.argv[1..])
+                    .current_dir(hlae.parent().unwrap_or(Path::new(".")))
+                    .spawn()
+                    .map_err(|e| format!("{}: {e}", hlae.display()))
+            },
+            |g, pids| launch::write_pids(g, &prep.launches_dir, &prep.nonce, pids),
+            Box::new(launch::System),
+        )?;
+        Ok(Launched { pid, cfg: cfg.display().to_string(), ffmpeg_ini: ini.map(|p| p.display().to_string()), damaged })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -658,8 +753,8 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, 
     let files = take_files(&dir).ok_or_else(|| format!("{} holds no recorded video", dir.display()))?;
     let video = input_inside(root, &files.video)?;
     let audio = files.audio.as_ref().map(|a| input_inside(root, a)).transpose()?;
-    let proven = launch::take_proven(&launch::launches(&root.join("jobs").join(job_id)), id, take).and_then(|_| files.audio.as_ref().map(|_| ()).ok_or("the take has no audio.wav".into()));
-    proven.map_err(|e| format!("{}: not finished recording: {e}", dir.display()))?;
+    let proven = launch::take_proven(&launch::launches(&root.join("jobs").join(job_id)), id, take).and_then(|_| audio.clone().ok_or("the take has no audio.wav".into()));
+    let audio = proven.map_err(|e| format!("{}: not finished recording: {e}", dir.display()))?;
     // every target is checked before anything is written, so a refusal leaves nothing behind
     let text = folder_in(root, &["text"])?;
     let (rn, sn) = (format!("{id}.txt"), format!("{id}-sub.txt"));
@@ -670,7 +765,7 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, 
     job::write_together(&text, &[(rn.as_str(), reason.as_bytes()), (sn.as_str(), subline.as_bytes())])?;
     let part = job::new_part(root, &format!("{id}.mp4"))?;
     let args = ffmpeg::finish_args(&ffmpeg::FinishSpec {
-        video: &video, audio: audio.as_deref(), reason_file: &reason_file, subline_file: &sub_file, font,
+        video: &video, audio: &audio, reason_file: &reason_file, subline_file: &sub_file, font,
         start_s: 0.0, duration_s, width: job::WIDTH, height: job::HEIGHT, fps: job::FPS, out: &part,
     })
     .and_then(|a| ffmpeg::check_built(&a).map(|_| a))
@@ -696,7 +791,7 @@ fn reel_command(root: &Path, ids: &[String], name: &str) -> Result<Render, Strin
     Ok(Render { args, part, out })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct FfmpegRun {
     code: Option<i32>,
     /// the last 2000 characters FFmpeg wrote to stderr, for a failed run
@@ -726,11 +821,18 @@ fn run_render(r: &Render, exec: impl FnOnce(&[String]) -> Result<(Option<i32>, S
     Ok(FfmpegRun { code: if code == Some(0) { None } else { code }, error: Some(if code == Some(0) { "FFmpeg exited cleanly but wrote nothing".into() } else { tail }), output: String::new() })
 }
 
+/// Finds FFmpeg (`find`), and only then builds the render (`build`, which creates its part file) and
+/// runs it, so a missing FFmpeg leaves no file behind.
+fn render_found(root: &Path, find: impl FnOnce() -> Result<PathBuf, String>, build: impl FnOnce() -> Result<Render, String>) -> Result<FfmpegRun, String> {
+    let ffmpeg = find()?;
+    let render = build()?;
+    run_ffmpeg(root, &ffmpeg, &render)
+}
+
 /// Runs FFmpeg from the clips folder on a built render.
-fn run_ffmpeg(root: &Path, r: &Render, hlae: Option<&str>) -> Result<FfmpegRun, String> {
-    let ffmpeg = find_ffmpeg(hlae.map(Path::new))?;
+fn run_ffmpeg(root: &Path, ffmpeg: &Path, r: &Render) -> Result<FfmpegRun, String> {
     run_render(r, |args| {
-        let out = std::process::Command::new(&ffmpeg)
+        let out = std::process::Command::new(ffmpeg)
             .args(args)
             .current_dir(root)
             .stdin(std::process::Stdio::null())
@@ -752,8 +854,7 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
         if let Ok((csgo, _)) = cs2_paths() {
             settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?;
         }
-        let render = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s)?;
-        run_ffmpeg(&root, &render, hlae.as_deref())
+        render_found(&root, || find_ffmpeg(hlae.as_deref().map(Path::new)), || finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -766,8 +867,7 @@ pub async fn clips_reel(ids: Vec<String>, hlae: Option<String>) -> Result<Ffmpeg
         let root = clips_root()?;
         let _g = launch::guard(&root)?;
         let (stamp, _) = job::new_job_id(SystemTime::now());
-        let render = reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-")))?;
-        run_ffmpeg(&root, &render, hlae.as_deref())
+        render_found(&root, || find_ffmpeg(hlae.as_deref().map(Path::new)), || reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-"))))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -830,6 +930,8 @@ mod tests {
     fn launched(root: &Path, i: u8, before: &[&str], why: &str) {
         let job_dir = root.join("jobs").join(JOB);
         fs::create_dir_all(&job_dir).unwrap();
+        // the guard refuses another root while a watcher test's launch runs: take turns with those tests
+        let _s = launch::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
         let g = launch::guard(root).unwrap();
         let rec = launch::LaunchRecord {
             nonce: nonce(i), job: JOB.into(), seq: u64::from(i), started: u64::from(i) * 1000,
@@ -837,7 +939,7 @@ mod tests {
         };
         let dir = launch::write_record(&g, &job_dir, &rec).unwrap();
         let (ended, stopped) = if why == "end_tick" { (vec![CLIP.to_string()], vec![]) } else { (vec![], vec![(CLIP.to_string(), why.to_string())]) };
-        launch::write_result(&g, &dir, &launch::LaunchResult { nonce: nonce(i), evidence: "test".into(), ended, stopped }).unwrap();
+        launch::write_result(&g, &dir, &launch::LaunchResult { nonce: nonce(i), evidence: "test".into(), ended, stopped, damaged: None }).unwrap();
     }
 
     /// A take's files as HLAE lays them out: the screen stream's video in the take folder, the sound beside it.
@@ -896,8 +998,12 @@ mod tests {
         let clip = plan.demos[0].clips[0].id.clone();
         fs::create_dir_all(env.clips_root.join("jobs").join(JOB).join("raw").join(&clip).join("take0000")).unwrap();
         let g = launch::guard(&env.clips_root).unwrap();
+        // a job that is not the plan the user reviewed is refused before anything is written
+        let e = prepare_launch(&g, &env, &csgo, JOB, &"0".repeat(64), &procs).err().unwrap();
+        assert!(e.contains("not the plan you reviewed"), "{e}");
+        assert!(launch::launches(&env.clips_root.join("jobs").join(JOB)).is_empty());
         // launch 1: its record lists the take already there, its director carries its nonce, the cfg loads it
-        let (_, first) = prepare_launch(&g, &env, &csgo, JOB, &procs).unwrap();
+        let (_, first) = prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).unwrap();
         let ls = launch::launches(&env.clips_root.join("jobs").join(JOB));
         assert_eq!((ls.len(), ls[0].record.seq), (1, 1));
         assert_eq!(ls[0].record.takes_before.get(&clip).unwrap(), &vec!["take0000".to_string()]);
@@ -908,18 +1014,18 @@ mod tests {
         let hlae = launch::ProcId { pid: 40, created: 4 };
         launch::write_pids(&g, &first.launches_dir, &first.nonce, &launch::LaunchPids { hlae }).unwrap();
         procs.alive.borrow_mut().push(hlae);
-        assert!(prepare_launch(&g, &env, &csgo, JOB, &procs).err().unwrap().contains("an earlier render is still running"));
+        assert!(prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).err().unwrap().contains("an earlier render is still running"));
         // it ends and wrote its END line; the next launch reads that line before its own session replaces the log
         procs.alive.borrow_mut().clear();
         fs::write(csgo.join("console.log"), format!("[cs2stats] END {clip} nonce={} why=end_tick tick=2000\n", first.nonce)).unwrap();
-        let (_, second) = prepare_launch(&g, &env, &csgo, JOB, &procs).unwrap();
+        let (_, second) = prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).unwrap();
         let ls = launch::launches(&env.clips_root.join("jobs").join(JOB));
         let one = ls.iter().find(|l| l.record.nonce == first.nonce).unwrap();
         assert!(matches!(&one.outcome, launch::Outcome::Settled(r) if r.ended == [clip.clone()]));
         assert_eq!(ls.iter().find(|l| l.record.nonce == second.nonce).unwrap().record.seq, 2);
-        // with CS2 running, no launch starts (launch 2 never started HLAE, so it settles as not started)
+        // with CS2 running, no launch starts (launch 2 never recorded HLAE, so it settles as damaged)
         *procs.cs2.borrow_mut() = true;
-        assert!(prepare_launch(&g, &env, &csgo, JOB, &procs).err().unwrap().contains("CS2 is running"));
+        assert!(prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).err().unwrap().contains("CS2 is running"));
     }
 
     #[test]
@@ -969,7 +1075,7 @@ mod tests {
         // one launch made each take; take0000 has no sound, so it would not count anyway
         launched(&s.0, 1, &[], "end_tick");
         launched(&s.0, 2, &["take0000"], "end_tick");
-        let t = newest_proven_take(&clip, CLIP, &launch::launches(&s.0.join("jobs").join(JOB))).unwrap();
+        let t = newest_proven_take(&s.0, &clip, CLIP, &launch::launches(&s.0.join("jobs").join(JOB))).unwrap();
         assert_eq!((t.name.as_str(), t.video.clone(), t.audio.clone()), ("take0001", clip.join("take0001").join("screen").join("video.mp4"), Some(clip.join("take0001").join("audio.wav"))));
         let scan = scan_in(&s.0).unwrap();
         assert_eq!(scan.takes.iter().map(|t| (t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [("take0001", true)]);
@@ -1034,11 +1140,133 @@ mod tests {
         fs::create_dir_all(&raw).unwrap();
         link(&outside, &raw.join(CLIP));
         let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
-        assert!(e.contains("outside"), "{e}");
+        assert!(e.contains("is a link"), "{e}");
         // a finished clip's name taken by a link
         link(&outside, &root.join(format!("{CLIP}.mp4")));
         assert!(reel_command(root, &[CLIP.into(), CLIP.into()], "r.mp4").unwrap_err().contains("link"));
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_take_behind_a_junction_is_neither_listed_nor_finished() {
+        let s = scratch("junctake");
+        let root = &s.0;
+        launched(root, 1, &[], "end_tick");
+        let raw = root.join("jobs").join(JOB).join("raw");
+        fs::create_dir_all(&raw).unwrap();
+        // the clip's folder is a junction: once to a folder outside the clips folder, once to one inside it
+        let outside = root.join("..").join(format!("cs2stats-clips-junctake-{}", std::process::id()));
+        let inside = root.join("elsewhere");
+        for target in [&outside, &inside] {
+            fs::create_dir_all(target.join(TAKE)).unwrap();
+            fs::write(target.join(TAKE).join("video.mp4"), b"v").unwrap();
+            fs::write(target.join(TAKE).join("audio.wav"), b"a").unwrap();
+            link(target, &raw.join(CLIP));
+            assert!(scan_in(root).unwrap().takes.is_empty(), "a take behind a junction to {} was listed", target.display());
+            let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+            assert!(e.contains("is a link"), "{e}");
+            fs::remove_dir(raw.join(CLIP)).unwrap();
+        }
+        // the same take in a plain folder is listed
+        fs::create_dir_all(raw.join(CLIP)).unwrap();
+        fs::rename(inside.join(TAKE), raw.join(CLIP).join(TAKE)).unwrap();
+        assert_eq!(scan_in(root).unwrap().takes.len(), 1);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_missing_ffmpeg_refuses_before_any_file_is_written() {
+        let s = scratch("noffmpeg");
+        let root = &s.0;
+        take(root);
+        let built = std::cell::Cell::new(false);
+        let e = render_found(root, || Err("FFmpeg was not found".into()), || {
+            built.set(true);
+            finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0)
+        })
+        .unwrap_err();
+        assert!(e.contains("not found"), "{e}");
+        assert!(!built.get(), "the render was built without FFmpeg");
+        let parts = fs::read_dir(root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part.mp4")).count();
+        assert_eq!(parts, 0);
+        assert!(!root.join("text").exists());
+    }
+
+    #[test]
+    fn saving_a_plan_waits_for_the_guard_and_needs_the_reviewed_value() {
+        let _s = launch::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let s = scratch("saveplan");
+        let (env, plan) = saved_job(&s);
+        let jobs = || fs::read_dir(env.clips_root.join("jobs")).unwrap().count();
+        assert_eq!(jobs(), 1);
+        // a plan that differs from the one shown is not saved
+        let e = plan_in(&env, &plan.request, Some(&"0".repeat(64))).unwrap_err();
+        assert!(e.contains("changed since it was shown"), "{e}");
+        assert_eq!(jobs(), 1);
+        // a preview never waits; a save waits while another clips operation holds the guard
+        let g = launch::guard(&env.clips_root).unwrap();
+        plan_in(&env, &plan.request, None).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (env2, req, review) = (env.clone(), plan.request.clone(), plan.review.clone());
+        let t = std::thread::spawn(move || tx.send(plan_in(&env2, &req, Some(&review))).unwrap());
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "the save ran while the guard was held");
+        assert_eq!(jobs(), 1);
+        drop(g);
+        let saved = rx.recv().unwrap().unwrap();
+        t.join().unwrap();
+        assert_eq!((jobs(), saved.review), (2, plan.review));
+    }
+
+    #[test]
+    fn a_launch_whose_process_ids_cannot_be_published_keeps_hlae_and_the_lock_and_is_damaged() {
+        let _s = launch::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let s = scratch("startdmg");
+        let (env, plan) = saved_job(&s);
+        let csgo = s.0.join("csgo");
+        fs::create_dir_all(&csgo).unwrap();
+        let job_dir = env.clips_root.join("jobs").join(JOB);
+        let log = csgo.join("console.log");
+        let procs = launch::fake::Fake::new();
+        // its director would say the clip ended at its end tick; the damage still wins
+        let mut g = launch::guard(&env.clips_root).unwrap();
+        let (_, prep) = prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).unwrap();
+        fs::write(&log, format!("[cs2stats] END {} nonce={} why=end_tick tick=2000\n", plan.demos[0].clips[0].id, prep.nonce)).unwrap();
+        let (pid, damaged, w) = start_launch(&mut g, &env.clips_root, &job_dir, &prep, &log, || Ok(()), || Ok(launch::fake::short_child()), |_, _| Err("disk full".into()), Box::new(launch::fake::Fake::new())).unwrap();
+        assert!(pid > 0);
+        assert!(damaged.unwrap().contains("disk full"));
+        drop(g);
+        // HLAE runs: the lock stays, and a scan meanwhile finds the launch damaged, never "not started"
+        assert_eq!(launch::running_launches(), 1);
+        {
+            let g = launch::guard(&env.clips_root).unwrap();
+            settle_launches(&g, &env.clips_root, &log, &procs).unwrap();
+        }
+        let damaged_now = |ls: &[launch::Launch]| matches!(&ls[0].outcome, launch::Outcome::Damaged(d) if d.contains("disk full"));
+        assert!(damaged_now(&launch::launches(&job_dir)));
+        w.join().unwrap();
+        assert_eq!(launch::running_launches(), 0);
+        let ls = launch::launches(&job_dir);
+        assert!(damaged_now(&ls));
+        assert!(launch::take_proven(&ls, &plan.demos[0].clips[0].id, "take0000").is_err());
+    }
+
+    #[test]
+    fn a_launch_whose_hlae_cannot_start_says_so_and_lets_the_lock_go() {
+        let _s = launch::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let s = scratch("startfail");
+        let (env, plan) = saved_job(&s);
+        let csgo = s.0.join("csgo");
+        fs::create_dir_all(&csgo).unwrap();
+        let job_dir = env.clips_root.join("jobs").join(JOB);
+        let procs = launch::fake::Fake::new();
+        let mut g = launch::guard(&env.clips_root).unwrap();
+        let (_, prep) = prepare_launch(&g, &env, &csgo, JOB, &plan.review, &procs).unwrap();
+        let e = start_launch(&mut g, &env.clips_root, &job_dir, &prep, &csgo.join("console.log"), || Ok(()), || Err("HLAE.exe: not found".into()), |_, _| unreachable!(), Box::new(launch::fake::Fake::new())).err().unwrap();
+        assert_eq!(e, "HLAE.exe: not found");
+        drop(g);
+        assert_eq!(launch::running_launches(), 0);
+        let ls = launch::launches(&job_dir);
+        assert!(matches!(&ls[0].outcome, launch::Outcome::Settled(r) if r.evidence == "missing: HLAE was not started (HLAE.exe: not found)"));
     }
 
     #[test]

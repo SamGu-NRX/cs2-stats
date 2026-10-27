@@ -5,8 +5,9 @@
 //! reaches drawtext only through a file this module writes there, the font comes from a fixed list,
 //! and `check_built` refuses any argument that names a protocol or a file-reading filter.
 //!
-//! Every finished clip has the same size, frame rate, pixel format and an audio track (silence when
-//! the take has none), so the reel's concat filter never meets two kinds of stream. The tests run the
+//! Every finished clip has the same size, frame rate, pixel format and the take's recorded sound (a take
+//! without audio.wav does not count, clips/mod.rs finish_command), so the reel's concat filter never
+//! meets two kinds of stream. The tests run the
 //! templates on takes made with FFmpeg's testsrc2.
 
 use std::path::{Path, PathBuf};
@@ -25,15 +26,14 @@ const STAGGER: f64 = 0.08;
 
 /// One input, opened only as `format` and only through the file protocol: FFmpeg would otherwise
 /// pick the demuxer from the file's content, and a playlist or concat list disguised as a take could
-/// name other files. `lavfi` reads no file at all. The reel joins clips with the concat filter, not the
+/// name other files. The reel joins clips with the concat filter, not the
 /// concat demuxer, so `-safe` has nothing to apply to.
 fn input(format: &str, path: String) -> [String; 6] {
     ["-protocol_whitelist".into(), "file".into(), "-f".into(), format.into(), "-i".into(), path]
 }
 
-/// The demuxers an input may be forced to: HLAE's takes (mp4 video, wav sound), the finished clips
-/// (mp4) and the generated silence (lavfi).
-const INPUT_FORMATS: [&str; 3] = ["mp4", "wav", "lavfi"];
+/// The demuxers an input may be forced to: HLAE's takes (mp4 video, wav sound) and the finished clips (mp4).
+const INPUT_FORMATS: [&str; 2] = ["mp4", "wav"];
 
 /// The fonts the lower third may use, first found wins: Segoe UI Semibold and Bold, then Arial Bold,
 /// in Windows' Fonts folder; DejaVu Sans Bold on Linux, for the tests.
@@ -83,9 +83,9 @@ fn fade_alpha(t0: f64, d: f64) -> String {
 }
 
 pub struct FinishSpec<'a> {
-    /// HLAE's take: video.mp4, and audio.wav beside it when the game's sound was recorded
+    /// HLAE's take: video.mp4, and the game's sound, audio.wav, beside it
     pub video: &'a Path,
-    pub audio: Option<&'a Path>,
+    pub audio: &'a Path,
     /// UTF-8 text files with the lower third's two lines, written by this module
     pub reason_file: &'a Path,
     pub subline_file: &'a Path,
@@ -99,7 +99,7 @@ pub struct FinishSpec<'a> {
     pub out: &'a Path,
 }
 
-/// One finished clip from a take: trimmed, scaled and padded to the size, the lower third drawn over its bottom left, sound or silence.
+/// One finished clip from a take: trimmed, scaled and padded to the size, the lower third drawn over its bottom left, with the take's sound.
 pub fn finish_args(s: &FinishSpec) -> Result<Vec<String>, String> {
     if !(s.duration_s.is_finite() && s.duration_s > 0.0 && s.start_s.is_finite() && s.start_s >= 0.0) {
         return Err(format!("FFmpeg template: a clip of {} s from {} s", s.duration_s, s.start_s));
@@ -142,16 +142,8 @@ pub fn finish_args(s: &FinishSpec) -> Result<Vec<String>, String> {
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y"].map(String::from).to_vec();
     a.extend(trim.iter().cloned());
     a.extend(input("mp4", s.video.display().to_string()));
-    match s.audio {
-        Some(au) => {
-            a.extend(trim.iter().cloned());
-            a.extend(input("wav", au.display().to_string()));
-        }
-        None => {
-            a.extend(["-t".into(), num(d)]);
-            a.extend(input("lavfi", "anullsrc=r=48000:cl=stereo".into()));
-        }
-    }
+    a.extend(trim.iter().cloned());
+    a.extend(input("wav", s.audio.display().to_string()));
     a.extend(["-filter_complex".into(), format!("[0:v]{video}[v];[1:a]aresample=48000,apad[a]")]);
     a.extend(["-map", "[v]", "-map", "[a]", "-t"].map(String::from));
     a.push(num(d));
@@ -219,11 +211,11 @@ mod tests {
     #[test]
     fn built_arguments_may_name_no_protocol_or_file_reading_filter() {
         let mut ok: Vec<String> = input("mp4", r"C:\clips\a.mp4".into()).to_vec();
-        ok.extend(input("lavfi", "anullsrc=r=48000:cl=stereo".into()));
+        ok.extend(input("wav", r"C:\clips\a.wav".into()));
         ok.extend(["[0:v]fps=60[v]", "/tmp/a.mp4"].map(String::from));
         check_built(&ok).unwrap();
         // an input left to content detection, or opened with another demuxer or protocol list
-        for bad in [vec!["-i", "a.mp4"], vec!["-protocol_whitelist", "file", "-f", "hls", "-i", "a.mp4"], vec!["-protocol_whitelist", "file,http", "-f", "mp4", "-i", "a.mp4"]] {
+        for bad in [vec!["-i", "a.mp4"], vec!["-protocol_whitelist", "file", "-f", "hls", "-i", "a.mp4"], vec!["-protocol_whitelist", "file,http", "-f", "mp4", "-i", "a.mp4"], vec!["-protocol_whitelist", "file", "-f", "lavfi", "-i", "anullsrc"]] {
             assert!(check_built(&bad.iter().map(|x| x.to_string()).collect::<Vec<_>>()).is_err(), "{bad:?}");
         }
         for bad in ["file:///C:/secret.txt", "FILE:C:/x", "http://example.com/x.mp4", "concat:a.mp4|b.mp4", "[0:v]movie=C\\:/secret.mp4[m]", "amovie=x.wav"] {
@@ -235,7 +227,7 @@ mod tests {
     fn every_input_is_opened_with_a_forced_demuxer_through_the_file_protocol_only() {
         let p = Path::new("x.mp4");
         let w = Path::new("x.wav");
-        let s = FinishSpec { video: p, audio: Some(w), reason_file: p, subline_file: p, font: p, start_s: 1.0, duration_s: 3.0, width: 640, height: 360, fps: 30, out: p };
+        let s = FinishSpec { video: p, audio: w, reason_file: p, subline_file: p, font: p, start_s: 1.0, duration_s: 3.0, width: 640, height: 360, fps: 30, out: p };
         let inputs = |args: &[String]| -> Vec<Vec<String>> {
             args.iter().enumerate().filter(|(_, a)| a.as_str() == "-i").map(|(i, _)| args[i - 4..=i + 1].to_vec()).collect()
         };
@@ -243,8 +235,6 @@ mod tests {
         let finish = finish_args(&s).unwrap();
         assert_eq!(inputs(&finish), [want("mp4", "x.mp4"), want("wav", "x.wav")]);
         check_built(&finish).unwrap();
-        let silent = finish_args(&FinishSpec { audio: None, ..s }).unwrap();
-        assert_eq!(inputs(&silent), [want("mp4", "x.mp4"), want("lavfi", "anullsrc=r=48000:cl=stereo")]);
         let reel = reel_args(&[PathBuf::from("a.mp4"), PathBuf::from("b.mp4")], Path::new("r.mp4")).unwrap();
         assert_eq!(inputs(&reel), [want("mp4", "a.mp4"), want("mp4", "b.mp4")]);
     }
@@ -253,7 +243,7 @@ mod tests {
     fn the_templates_refuse_a_reel_of_one_and_a_clip_of_no_length() {
         assert!(reel_args(&[PathBuf::from("a.mp4")], Path::new("r.mp4")).unwrap_err().contains("two clips or more"));
         let p = Path::new("x");
-        let s = FinishSpec { video: p, audio: None, reason_file: p, subline_file: p, font: p, start_s: 0.0, duration_s: 0.0, width: 640, height: 360, fps: 30, out: p };
+        let s = FinishSpec { video: p, audio: p, reason_file: p, subline_file: p, font: p, start_s: 0.0, duration_s: 0.0, width: 640, height: 360, fps: 30, out: p };
         assert!(finish_args(&s).unwrap_err().contains("a clip of 0 s"));
     }
 
@@ -305,32 +295,30 @@ mod tests {
         let root = std::env::temp_dir().join(format!("cs2stats-ffmpeg-{}", std::process::id()));
         let dir = root.join("it's a [clips] folder");
         let _ = fs::remove_dir_all(&root);
-        let take = |name: &str, secs: u32, size: &str, tone: bool| {
+        let take = |name: &str, secs: u32, size: &str| {
             let d = dir.join(name);
             fs::create_dir_all(&d).unwrap();
             let v = d.join("video.mp4");
             run(&ffmpeg, &["-hide_banner", "-nostdin", "-y", "-f", "lavfi", "-i", &format!("testsrc2=size={size}:rate=30:duration={secs}"), "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", &v.display().to_string()].map(String::from));
             let a = d.join("audio.wav");
-            if tone {
-                run(&ffmpeg, &["-hide_banner", "-nostdin", "-y", "-f", "lavfi", "-i", &format!("sine=frequency=440:sample_rate=48000:duration={secs}"), &a.display().to_string()].map(String::from));
-            }
-            (v, tone.then_some(a))
+            run(&ffmpeg, &["-hide_banner", "-nostdin", "-y", "-f", "lavfi", "-i", &format!("sine=frequency=440:sample_rate=48000:duration={secs}"), &a.display().to_string()].map(String::from));
+            (v, a)
         };
-        let (va, aa) = take("take a", 4, "1280x720", true);
-        let (vb, ab) = take("take b", 2, "640x360", false);
+        let (va, aa) = take("take a", 4, "1280x720");
+        let (vb, ab) = take("take b", 2, "640x360");
         let reason = dir.join("reason.txt");
         fs::write(&reason, "3K on B Site, opening kill, +38% round impact").unwrap();
         let sub = dir.join("sub.txt");
         fs::write(&sub, "Mirage · Round 14").unwrap();
-        let fin = |v: &Path, a: Option<&Path>, out: &str, start_s: f64, duration_s: f64| {
+        let fin = |v: &Path, a: &Path, out: &str, start_s: f64, duration_s: f64| {
             let out = dir.join(out);
             let args = finish_args(&FinishSpec { video: v, audio: a, reason_file: &reason, subline_file: &sub, font: &font, start_s, duration_s, width: W as u32, height: H as u32, fps: 30, out: &out }).unwrap();
             check_built(&args).unwrap();
             run(&ffmpeg, &args);
             out
         };
-        let fa = fin(&va, aa.as_deref(), "a.mp4", 0.5, 3.0);
-        let fb = fin(&vb, ab.as_deref(), "b.mp4", 0.0, 2.0);
+        let fa = fin(&va, &aa, "a.mp4", 0.5, 3.0);
+        let fb = fin(&vb, &ab, "b.mp4", 0.0, 2.0);
         for (f, d) in [(&fa, 3.0), (&fb, 2.0)] {
             let p = probe(&ffprobe, f);
             let dur: f64 = p.format["duration"].as_str().unwrap().parse().unwrap();

@@ -6,7 +6,8 @@
 //! another. The guard also holds the clips folder's OS lock, an exclusive handle on `clips.lock`, so a
 //! second instance of the app cannot work on the same folder. The handle closes when this process ends,
 //! however it ends, so no lock outlives its owner and there is nothing stale to clear. After a launch, a
-//! watcher thread keeps the OS lock until that launch's processes have exited.
+//! watcher thread ([`watch`]) keeps the OS lock, waits on HLAE's process handle and then for no cs2.exe,
+//! settles that launch under the guard, and only then lets the lock go.
 //!
 //! Each launch gets a fresh 128-bit nonce from the OS's random source and a sequence number one above
 //! the job's highest, both assigned under the guard. The director script written for that launch logs
@@ -14,7 +15,8 @@
 //! player names were recorded before the nonce existed. Each launch leaves, in
 //! `jobs\<job>\launches\`, files published by a rename that never replaces an existing one:
 //! - `<nonce>.json`, before HLAE starts: the sequence number and the takes each clip already had;
-//! - `<nonce>.pids.json`, once HLAE has started (in the same guarded step): its process id and creation time;
+//! - `<nonce>.pids.json`, once HLAE has started (in the same guarded step): its process id and creation
+//!   time. A launch without it settles as damaged: HLAE may have started without being recorded;
 //! - `<nonce>.result.json`, once that launch's processes have exited: the clips the director recorded to
 //!   their end tick, read once from console.log and kept, because the next CS2 session replaces the log.
 //!
@@ -196,9 +198,14 @@ pub fn guard(root: &Path) -> Result<Guard, String> {
 }
 
 impl Guard {
-    /// A launch started processes: the OS lock stays after this guard ends, until [`launch_ended`].
+    /// A launch started processes: the OS lock stays after this guard ends, until its watcher settles it.
     pub fn launch_running(&mut self) {
         self.st.running += 1;
+    }
+
+    /// A launch's watcher has settled it: when no other launch runs, the OS lock goes with this guard.
+    pub fn launch_done(&mut self) {
+        self.st.running = self.st.running.saturating_sub(1);
     }
 }
 
@@ -210,25 +217,51 @@ impl Drop for Guard {
     }
 }
 
-/// A launch's processes have exited: when no other launch runs, the OS lock goes with the next guard's end.
-pub fn launch_ended() {
-    let mut st = STATE.lock().unwrap_or_else(|p| p.into_inner());
-    st.running = st.running.saturating_sub(1);
-    if st.running == 0 {
-        st.os_lock = None;
-    }
-}
-
-/// Watches a launch's processes on a thread of its own and calls [`launch_ended`] once HLAE has
-/// exited and no cs2.exe runs. It only reads the process list; it never stops a process.
-pub fn watch(hlae: ProcId) {
+/// Watches a launch on a thread of its own: waits on HLAE's process through the `Child` handle the
+/// launch holds, then for no cs2.exe to run, then takes the guard, settles that launch and only then
+/// lets the OS lock go, so no other CS2 session can replace console.log before it is read. `damage` is
+/// set when the launch could not record its process ids: it then settles as damaged, whatever the log
+/// says. It only waits and reads the process list; it never stops a process.
+#[allow(clippy::too_many_arguments)]
+pub fn watch(mut child: std::process::Child, hlae: ProcId, root: PathBuf, job_dir: PathBuf, nonce: String, log: PathBuf, procs: Box<dyn Procs + Send>, damage: Option<String>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let procs = System;
-        while procs.alive(&hlae) || procs.cs2_running().unwrap_or(true) {
+        let _ = child.wait();
+        while procs.cs2_running().unwrap_or(true) {
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
-        launch_ended();
-    });
+        let mut g = match guard(&root) {
+            Ok(g) => g,
+            // cannot happen while this launch keeps the OS lock for `root`; release its hold anyway
+            Err(_) => {
+                let mut st = STATE.lock().unwrap_or_else(|p| p.into_inner());
+                st.running = st.running.saturating_sub(1);
+                if st.running == 0 {
+                    st.os_lock = None;
+                }
+                return;
+            }
+        };
+        if let Some(mut l) = launches(&job_dir).into_iter().find(|l| l.record.nonce == nonce) {
+            match &damage {
+                Some(d) if l.outcome == Outcome::Pending => {
+                    if let Ok(dir) = folder_in(&job_dir, &["launches"]) {
+                        let _ = record_damaged(&g, &dir, &nonce, d);
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    let _ = settle(&g, &job_dir, &mut l, &log, &*procs, Some(hlae));
+                }
+            }
+        }
+        g.launch_done();
+    })
+}
+
+/// How many launches' watchers still keep the OS lock, for tests.
+#[cfg(test)]
+pub(crate) fn running_launches() -> usize {
+    STATE.lock().unwrap_or_else(|p| p.into_inner()).running
 }
 
 /// Removes FFmpeg's part files (`.*.part.mp4`) that a crashed finish or reel left in the clips folder
@@ -276,6 +309,9 @@ pub struct LaunchResult {
     pub ended: Vec<String>,
     /// clips it stopped early, with why
     pub stopped: Vec<(String, String)>,
+    /// set when the launch's evidence cannot be trusted (its process ids were never recorded): no take counts
+    #[serde(default)]
+    pub damaged: Option<String>,
 }
 
 /// A launch's result as found: settled, damaged (a result file that does not read), or not yet.
@@ -337,7 +373,10 @@ pub fn launches(job_dir: &Path) -> Vec<Launch> {
             }
             let outcome = match read_json::<LaunchResult>(&dir, &format!("{nonce}.result.json")) {
                 None => Outcome::Pending,
-                Some(Ok(r)) if r.nonce == nonce => Outcome::Settled(r),
+                Some(Ok(r)) if r.nonce == nonce => match &r.damaged {
+                    Some(d) => Outcome::Damaged(d.clone()),
+                    None => Outcome::Settled(r),
+                },
                 Some(Ok(_)) => Outcome::Damaged("its result names another launch".into()),
                 Some(Err(e)) => Outcome::Damaged(e),
             };
@@ -374,7 +413,7 @@ pub fn write_result(_g: &Guard, launches_dir: &Path, r: &LaunchResult) -> Result
 /// only lines that start with `[cs2stats] END ` and carry this nonce count, so nothing a demo recorded,
 /// and nothing from another launch, can be taken for them, wherever in the log they are.
 pub fn read_console(log: &Path, nonce: &str) -> LaunchResult {
-    let empty = |evidence: &str| LaunchResult { nonce: nonce.into(), evidence: evidence.into(), ended: vec![], stopped: vec![] };
+    let empty = |evidence: &str| LaunchResult { nonce: nonce.into(), evidence: evidence.into(), ended: vec![], stopped: vec![], damaged: None };
     let Ok(f) = fs::File::open(log) else { return empty("missing: CS2 wrote no console.log") };
     let mut r = std::io::BufReader::new(f);
     let tag = format!("nonce={nonce}");
@@ -421,36 +460,59 @@ pub fn read_console(log: &Path, nonce: &str) -> LaunchResult {
             break;
         }
     }
-    LaunchResult { nonce: nonce.into(), evidence: "console.log, read whole".into(), ended, stopped }
+    LaunchResult { nonce: nonce.into(), evidence: "console.log, read whole".into(), ended, stopped, damaged: None }
 }
 
-/// Whether a launch's processes may still run: it recorded HLAE, and HLAE or any cs2.exe is alive.
-pub fn running(l: &Launch, procs: &dyn Procs) -> Result<bool, String> {
-    Ok(match &l.pids {
-        Some(p) => procs.alive(&p.hlae) || procs.cs2_running()?,
+/// Whether a launch's processes may still run: its HLAE (from `known`, else its pids file) or any
+/// cs2.exe is alive. A launch without recorded processes is not known to run.
+pub fn running(l: &Launch, known: Option<ProcId>, procs: &dyn Procs) -> Result<bool, String> {
+    Ok(match known.or(l.pids.as_ref().map(|p| p.hlae)) {
+        Some(h) => procs.alive(&h) || procs.cs2_running()?,
         None => false,
     })
 }
 
+/// Publishes the result of a launch whose HLAE could not be started: `why` is the start's error.
+pub fn record_not_started(g: &Guard, launches_dir: &Path, nonce: &str, why: &str) -> Result<(), String> {
+    write_result(g, launches_dir, &LaunchResult { nonce: nonce.into(), evidence: format!("missing: HLAE was not started ({why})"), ended: vec![], stopped: vec![], damaged: None })
+}
+
+/// Publishes a launch as damaged: its evidence cannot be trusted, so none of its takes counts.
+pub fn record_damaged(g: &Guard, launches_dir: &Path, nonce: &str, why: &str) -> Result<(), String> {
+    write_result(g, launches_dir, &LaunchResult { nonce: nonce.into(), evidence: "damaged".into(), ended: vec![], stopped: vec![], damaged: Some(why.into()) })
+}
+
 /// Settles one launch once its processes have exited: reads its director lines and publishes them as its
-/// result. A launch that never recorded HLAE's process settles with none: its start failed, because the
-/// record and the process ids are published in one guarded step. A result that some earlier run already
-/// published is kept as it is.
-pub fn settle(g: &Guard, job_dir: &Path, l: &mut Launch, log: &Path, procs: &dyn Procs) -> Result<(), String> {
-    if l.outcome != Outcome::Pending || running(l, procs)? {
+/// result. `known` is HLAE's process when the caller holds it (the watcher). A launch with no recorded
+/// HLAE settles as damaged, never as "not started": the app may have stopped between starting HLAE and
+/// recording it (a failed start is recorded at once, record_not_started). A result some earlier run
+/// already published is kept as it is.
+pub fn settle(g: &Guard, job_dir: &Path, l: &mut Launch, log: &Path, procs: &dyn Procs, known: Option<ProcId>) -> Result<(), String> {
+    if l.outcome != Outcome::Pending || running(l, known, procs)? {
         return Ok(());
     }
-    let result = match &l.pids {
-        None => LaunchResult { nonce: l.record.nonce.clone(), evidence: "missing: HLAE was not started".into(), ended: vec![], stopped: vec![] },
+    let result = match known.or(l.pids.as_ref().map(|p| p.hlae)) {
+        None => LaunchResult {
+            nonce: l.record.nonce.clone(), evidence: "damaged".into(), ended: vec![], stopped: vec![],
+            damaged: Some("its HLAE process was never recorded; the app may have stopped while starting it".into()),
+        },
         Some(_) => read_console(log, &l.record.nonce),
     };
     let dir = folder_in(job_dir, &["launches"])?;
     match write_result(g, &dir, &result) {
-        Ok(()) => l.outcome = Outcome::Settled(result),
+        Ok(()) => {
+            l.outcome = match &result.damaged {
+                Some(d) => Outcome::Damaged(d.clone()),
+                None => Outcome::Settled(result),
+            }
+        }
         // published by an earlier run after this one listed the launches: read that one instead
         Err(_) => {
             l.outcome = match read_json::<LaunchResult>(&dir, &format!("{}.result.json", l.record.nonce)) {
-                Some(Ok(r)) => Outcome::Settled(r),
+                Some(Ok(r)) => match &r.damaged {
+                    Some(d) => Outcome::Damaged(d.clone()),
+                    None => Outcome::Settled(r),
+                },
                 Some(Err(e)) => Outcome::Damaged(e),
                 None => return Err(format!("{}: its result could not be written", l.record.nonce)),
             };
@@ -473,7 +535,7 @@ pub fn take_proven(launches: &[Launch], clip: &str, take: &str) -> Result<(), St
     let r = match &l.outcome {
         Outcome::Settled(r) => r,
         Outcome::Pending => return Err("its launch has not ended (CS2 or HLAE still running)".into()),
-        Outcome::Damaged(e) => return Err(format!("launch {} has a damaged result file ({e}); render the moment again", l.record.seq)),
+        Outcome::Damaged(e) => return Err(format!("launch {} is damaged ({e}); render the moment again", l.record.seq)),
     };
     if r.ended.iter().any(|c| c == clip) {
         return Ok(());
@@ -520,6 +582,16 @@ pub(crate) mod fake {
         fn cs2_running(&self) -> Result<bool, String> {
             Ok(*self.cs2.borrow())
         }
+    }
+
+    /// A process standing in for HLAE: this test binary, running only short_child_exits_soon.
+    pub(crate) fn short_child() -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "clips::launch::tests::short_child_exits_soon", "--test-threads=1"])
+            .env("CS2STATS_TEST_SHORT_CHILD", "1")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
     }
 }
 
@@ -602,6 +674,66 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Run only as a child of the watcher tests: a stand-in for HLAE that exits by itself.
+    #[test]
+    fn short_child_exits_soon() {
+        if std::env::var("CS2STATS_TEST_SHORT_CHILD").is_err() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
+    #[test]
+    fn the_watcher_settles_its_launch_before_letting_the_lock_go() {
+        let _s = serial();
+        let root = scratch("watch");
+        let job = root.join("jobs").join(JOB);
+        fs::create_dir_all(&job).unwrap();
+        let log = root.join("console.log");
+        fs::write(&log, format!("[cs2stats] END {CLIP} nonce={} why=end_tick tick=900\n", n(7))).unwrap();
+        let mut g = guard(&root).unwrap();
+        record(&g, &job, 7, 1, 1, &[]);
+        let child = fake::short_child();
+        let hlae = ProcId { pid: child.id(), created: 1 };
+        g.launch_running();
+        drop(g);
+        let w = watch(child, hlae, root.clone(), job.clone(), n(7), log.clone(), Box::new(Fake::new()), None);
+        assert_eq!(running_launches(), 1, "the launch let go of the lock while HLAE ran");
+        #[cfg(windows)]
+        assert!(imp::exclusive(&root.join(LOCK)).is_err(), "another app could take the lock while HLAE ran");
+        w.join().unwrap();
+        // by the time the lock went, the launch had settled from the log
+        assert_eq!(running_launches(), 0);
+        assert!(matches!(&launches(&job)[0].outcome, Outcome::Settled(r) if r.ended == [CLIP]));
+        drop(imp::exclusive(&root.join(LOCK)).expect("the lock went with the watcher"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_damaged_launch_stays_damaged_whatever_its_log_says() {
+        let _s = serial();
+        let root = scratch("watchdmg");
+        let job = root.join("jobs").join(JOB);
+        fs::create_dir_all(&job).unwrap();
+        let log = root.join("console.log");
+        fs::write(&log, format!("[cs2stats] END {CLIP} nonce={} why=end_tick tick=900\n", n(8))).unwrap();
+        let mut g = guard(&root).unwrap();
+        // the record, without its process ids (their write failed), and the damaged result not yet written
+        let rec = LaunchRecord { nonce: n(8), job: JOB.into(), seq: 1, started: 1, takes_before: BTreeMap::from([(CLIP.to_string(), vec![])]) };
+        write_record(&g, &job, &rec).unwrap();
+        let child = fake::short_child();
+        let hlae = ProcId { pid: child.id(), created: 1 };
+        g.launch_running();
+        drop(g);
+        watch(child, hlae, root.clone(), job.clone(), n(8), log, Box::new(Fake::new()), Some("its process ids could not be recorded".into())).join().unwrap();
+        let ls = launches(&job);
+        assert!(matches!(&ls[0].outcome, Outcome::Damaged(d) if d.contains("could not be recorded")));
+        assert!(take_proven(&ls, CLIP, "take0000").unwrap_err().contains("is damaged"));
+        assert_eq!(running_launches(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+
     /// Run only as the child of the next test: holds the lock until killed.
     #[test]
     fn lock_child_holds_the_lock() {
@@ -647,8 +779,8 @@ mod tests {
         record(&g, &job, 2, 2, 1000, &["take0000"]);
         assert_eq!(next_seq(&job), 3);
         let dir = job.join("launches");
-        write_result(&g, &dir, &LaunchResult { nonce: n(1), evidence: "t".into(), ended: vec![CLIP.into()], stopped: vec![] }).unwrap();
-        write_result(&g, &dir, &LaunchResult { nonce: n(2), evidence: "t".into(), ended: vec![], stopped: vec![(CLIP.into(), "camera_lost".into())] }).unwrap();
+        write_result(&g, &dir, &LaunchResult { nonce: n(1), evidence: "t".into(), ended: vec![CLIP.into()], stopped: vec![], damaged: None }).unwrap();
+        write_result(&g, &dir, &LaunchResult { nonce: n(2), evidence: "t".into(), ended: vec![], stopped: vec![(CLIP.into(), "camera_lost".into())], damaged: None }).unwrap();
         let ls = launches(&job);
         assert_eq!(ls.iter().map(|l| l.record.seq).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(owner(&ls, CLIP, "take0001").unwrap().record.seq, 2);
@@ -672,26 +804,26 @@ mod tests {
         procs.alive.borrow_mut().push(hlae);
         fs::write(&log, format!("[cs2stats] END {CLIP} nonce={} why=end_tick tick=1\n", n(3))).unwrap();
         let mut ls = launches(&job);
-        settle(&g, &job, &mut ls[0], &log, &procs).unwrap();
+        settle(&g, &job, &mut ls[0], &log, &procs, None).unwrap();
         assert_eq!(ls[0].outcome, Outcome::Pending, "HLAE still running");
         procs.alive.borrow_mut().clear();
         *procs.cs2.borrow_mut() = true;
-        settle(&g, &job, &mut ls[0], &log, &procs).unwrap();
+        settle(&g, &job, &mut ls[0], &log, &procs, None).unwrap();
         assert_eq!(ls[0].outcome, Outcome::Pending, "CS2 still running");
         *procs.cs2.borrow_mut() = false;
-        settle(&g, &job, &mut ls[0], &log, &procs).unwrap();
+        settle(&g, &job, &mut ls[0], &log, &procs, None).unwrap();
         assert!(matches!(&ls[0].outcome, Outcome::Settled(r) if r.ended == [CLIP]));
         // settled once: a later log changes nothing
         fs::write(&log, "").unwrap();
         let mut ls = launches(&job);
-        settle(&g, &job, &mut ls[0], &log, &procs).unwrap();
+        settle(&g, &job, &mut ls[0], &log, &procs, None).unwrap();
         assert!(matches!(&ls[0].outcome, Outcome::Settled(r) if r.ended == [CLIP]));
-        // a launch whose HLAE never started settles with nothing
+        // a launch whose HLAE was never recorded settles as damaged, never as "not started"
         let rec = LaunchRecord { nonce: n(4), job: JOB.into(), seq: 2, started: 2, takes_before: BTreeMap::new() };
         write_record(&g, &job, &rec).unwrap();
         let mut ls = launches(&job);
-        settle(&g, &job, &mut ls[1], &log, &procs).unwrap();
-        assert!(matches!(&ls[1].outcome, Outcome::Settled(r) if r.evidence == "missing: HLAE was not started"));
+        settle(&g, &job, &mut ls[1], &log, &procs, None).unwrap();
+        assert!(matches!(&ls[1].outcome, Outcome::Damaged(d) if d.contains("never recorded")));
         drop(g);
         let _ = fs::remove_dir_all(&root);
     }
@@ -708,16 +840,16 @@ mod tests {
         let dir = job.join("launches");
         // launch 1's result was cut off mid-write by something other than this app; launch 2's is whole
         fs::write(dir.join(format!("{}.result.json", n(5))), b"{\"nonce\": \"").unwrap();
-        write_result(&g, &dir, &LaunchResult { nonce: n(6), evidence: "t".into(), ended: vec![CLIP.into()], stopped: vec![] }).unwrap();
+        write_result(&g, &dir, &LaunchResult { nonce: n(6), evidence: "t".into(), ended: vec![CLIP.into()], stopped: vec![], damaged: None }).unwrap();
         let mut ls = launches(&job);
         assert!(matches!(&ls[0].outcome, Outcome::Damaged(_)));
         let e = take_proven(&ls, CLIP, "take0000").unwrap_err();
-        assert!(e.starts_with("launch 1 has a damaged result file"), "{e}");
+        assert!(e.starts_with("launch 1 is damaged"), "{e}");
         assert_eq!(take_proven(&ls, CLIP, "take0001"), Ok(()));
         // settling leaves a damaged result as it is; publishing over it is refused, never a replace
-        settle(&g, &job, &mut ls[0], &root.join("console.log"), &Fake::new()).unwrap();
+        settle(&g, &job, &mut ls[0], &root.join("console.log"), &Fake::new(), None).unwrap();
         assert!(matches!(&ls[0].outcome, Outcome::Damaged(_)));
-        assert!(write_result(&g, &dir, &LaunchResult { nonce: n(5), evidence: "x".into(), ended: vec![], stopped: vec![] }).is_err());
+        assert!(write_result(&g, &dir, &LaunchResult { nonce: n(5), evidence: "x".into(), ended: vec![], stopped: vec![], damaged: None }).is_err());
         assert!(fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
         drop(g);
         let _ = fs::remove_dir_all(&root);

@@ -5,9 +5,9 @@
 // builds (src-tauri/src/clips/ffmpeg.rs). design/clips.md.
 //
 // Only the desktop app checks demos and renders; the browser lists the moments and says so.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clipsHost, savedHlae, saveHlae, type ClipsEnv, type ClipsHost, type Take } from "../../clips/host";
-import { jobRequest, type RenderPlan } from "../../clips/plan";
+import { jobRequest, type JobRequest, type RenderPlan } from "../../clips/plan";
 import { clipState, demoSource, ROUND_IMPACT_TIP, STATE_LABEL, type ClipState, type DemoSource, type Lookup } from "../../clips/state";
 import type { MomentRow } from "../../worker/protocol";
 import { ClutchBadge, MapThumb, MultiBadge } from "../components/bits";
@@ -33,6 +33,8 @@ type Show = "all" | "ready" | "needs" | "done";
  * 2026-10-26); paging keeps a long career from rendering thousands of rows at once.
  */
 const PAGE = 50;
+/** How often the page checks again while a render's CS2 still runs: ours, no measurement behind it. */
+const WAIT_POLL_MS = 5000;
 interface Item { row: MomentRow; rank: number; entry: MatchEntry | undefined; src: DemoSource; state: ClipState }
 
 /** Seconds as m:ss, rounded to the second once before splitting, so 59.6 s reads 1:00, never 0:60. */
@@ -84,7 +86,8 @@ function useClipTools(names: string[], hlae: string | null): Tools & { recheck: 
     );
     return () => { alive = false; };
   }, [key, hlae, n]);
-  return { ...st, recheck: () => setN((x) => x + 1) };
+  const recheck = useCallback(() => setN((x) => x + 1), []);
+  return { ...st, recheck };
 }
 
 // ---------------------------------------------------------------- one moment
@@ -210,7 +213,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   const hide = useHidePersonal();
   const [draft, setDraft] = useState(hlae);
   const [busy, setBusy] = useState<"save" | "launch" | null>(null);
-  const [done, setDone] = useState<{ pid: number } | null>(null);
+  const [done, setDone] = useState<{ pid: number; damaged: string | null } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => { ref.current?.showModal(); }, []);
   const env = tools.env;
@@ -219,17 +222,20 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   const request = useMemo(() => (env?.hlae.path
     ? jobRequest(ready.map((i) => ({ ...i.row, demo: (i.src as Extract<DemoSource, { kind: "demo" }>).name })), env.hlae.path)
     : null), [env, ready]);
-  // the host builds the plan without writing anything, for the user to read before Save or Launch
-  const [plan, setPlan] = useState<{ plan: RenderPlan | null; problem: string | null }>({ plan: null, problem: "Building the plan…" });
+  // the host builds the plan without writing anything, for the user to read before Save or Launch. A
+  // plan counts only for the request it was built for: when the tools or the HLAE path change, the old
+  // one is gone from the first render, and Save and Launch wait for the new one.
+  const [plan, setPlan] = useState<{ plan: RenderPlan | null; problem: string | null; for: JobRequest | null }>({ plan: null, problem: "Building the plan…", for: null });
   useEffect(() => {
-    if (!env) { setPlan({ plan: null, problem: "The tools are still being checked." }); return; }
-    if (!env.hlae.path) { setPlan({ plan: null, problem: env.hlae.error }); return; }
-    if (!env.cs2.path) { setPlan({ plan: null, problem: env.cs2.error }); return; }
+    if (!env) { setPlan({ plan: null, problem: "The tools are still being checked.", for: request }); return; }
+    if (!env.hlae.path) { setPlan({ plan: null, problem: env.hlae.error, for: request }); return; }
+    if (!env.cs2.path) { setPlan({ plan: null, problem: env.cs2.error, for: request }); return; }
     if (!request || !tools.host) return;
     let alive = true;
-    tools.host.plan(request, false).then(
-      (p) => alive && setPlan({ plan: p, problem: null }),
-      (e) => alive && setPlan({ plan: null, problem: String(e) }),
+    setPlan({ plan: null, problem: "Building the plan…", for: request });
+    tools.host.plan(request, null).then(
+      (p) => alive && setPlan({ plan: p, problem: null, for: request }),
+      (e) => alive && setPlan({ plan: null, problem: String(e), for: request }),
     );
     return () => { alive = false; };
   }, [env, request, tools.host]);
@@ -237,14 +243,17 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
   const total = ready.reduce((s, i) => s + durationOf(i.row), 0);
 
   const run = async (what: "save" | "launch") => {
-    if (!request || !tools.host) return;
+    if (!request || !tools.host || !p) return;
     setBusy(what); setFailed(null);
     try {
-      // the host builds the job again and saves it in a new folder; the launch builds it once more from that
-      const saved = await tools.host.plan(request, true);
+      // the host builds the job again and saves it only if it is the plan shown (its review value); the
+      // launch builds it once more from the saved request and refuses it on the same terms
+      const saved = await tools.host.plan(request, p.review);
       toast(`Plan saved in ${show(saved.jobDir)}`, "good");
-      if (what === "launch") setDone({ pid: (await tools.host.launch(saved.id)).pid });
-      else close();
+      if (what === "launch") {
+        const l = await tools.host.launch(saved.id, p.review);
+        setDone({ pid: l.pid, damaged: l.damaged });
+      } else close();
     } catch (e) {
       setFailed(String(e));
     } finally {
@@ -252,7 +261,9 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
     }
   };
   const close = () => { ref.current?.close(); };
-  const p = plan.plan;
+  // the plan shown is for the current request, and no HLAE path waits to be checked
+  const p = plan.for === request ? plan.plan : null;
+  const pending = draft.trim() !== hlae.trim() ? "Check the new HLAE path first." : tools.checking ? "Checking the tools again…" : null;
 
   return (
     <dialog ref={ref} className={`rdlg ${instant ? "is-instant" : ""}`} aria-labelledby="rdlg-title" onClose={onClose}>
@@ -303,12 +314,14 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
             </section>
           </>
         ) : (
-          <p className="rdlg__problem" role="alert">{plan.problem ? show(plan.problem) : "No plan yet."}</p>
+          <p className="rdlg__problem" role="alert">{plan.for === request && plan.problem ? show(plan.problem) : "Building the plan…"}</p>
         )}
+        {pending && p && <p className="rdlg__note meta" id="rdlg-pending" role="status">{pending}</p>}
         {failed && <p className="rdlg__problem" role="alert">{show(failed)}</p>}
         {done && (
-          <p className="rdlg__done" role="status">CS2 is starting through HLAE (process {done.pid}). It quits by itself when the clips are recorded; then press Check again here or on the page, and finish the recorded clips.</p>
+          <p className="rdlg__done" role="status">CS2 is starting through HLAE (process {done.pid}). It quits by itself when the clips are recorded; the page then lists them to finish.</p>
         )}
+        {done?.damaged && <p className="rdlg__problem" role="alert">This launch could not be recorded, so none of its clips will count: {show(done.damaged)}</p>}
       </div>
       <footer className="rdlg__foot">
         {done ? (
@@ -316,8 +329,8 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
         ) : (
           <>
             <button className="btn btn--ghost press" onClick={close}>Cancel</button>
-            <button className="btn press" disabled={!p || busy !== null} onClick={() => run("save")}>{busy === "save" ? "Saving…" : "Save the plan only"}</button>
-            <button className="btn btn--primary press" disabled={!p || busy !== null} onClick={() => run("launch")}>
+            <button className="btn press" disabled={!p || !!pending || busy !== null} aria-describedby={pending ? "rdlg-pending" : undefined} onClick={() => run("save")}>{busy === "save" ? "Saving…" : "Save the plan only"}</button>
+            <button className="btn btn--primary press" disabled={!p || !!pending || busy !== null} aria-describedby={pending ? "rdlg-pending" : undefined} onClick={() => run("launch")}>
               <PlayIcon size={14} />{busy === "launch" ? "Starting…" : "Launch CS2 with -insecure"}
             </button>
           </>
@@ -369,12 +382,20 @@ export default function ClipsView() {
     setChosen((s) => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n; });
   };
   const env = tools.env;
+  // a launch's HLAE or CS2 still runs: its takes are read once they exit, so the page checks again until then
+  const waiting = tools.lookup.scan?.waiting ?? 0;
+  const { recheck, checking } = tools;
+  useEffect(() => {
+    if (!waiting || checking) return;
+    const t = setTimeout(recheck, WAIT_POLL_MS);
+    return () => clearTimeout(t);
+  }, [waiting, checking, recheck]);
   const canEdit = !!(tools.host && env?.ffmpeg.path && env.font);
   const editWhy = !tools.host ? "Needs the desktop app" : !env?.ffmpeg.path ? env?.ffmpeg.error ?? "Checking for FFmpeg" : !env.font ? "No font for the lower third was found" : undefined;
 
   /** The lower third's text as the clip will burn it in: with personal info hidden when the setting is on (privacy.ts). */
   const lowerThird = (t: string) => (hidingPersonal() ? hideText(t) : t);
-  /** Finishes recorded takes: trimmed to the moment, the lower third, sound or silence (the host's template, ffmpeg.rs). */
+  /** Finishes recorded takes: trimmed to the moment, the lower third, the take's sound (the host's template, ffmpeg.rs). */
   const finish = async (its: Item[]) => {
     if (!tools.host) return;
     setWorking(`Finishing ${plural(its.length, "clip")}…`);
@@ -415,6 +436,7 @@ export default function ClipsView() {
   const nRecorded = pick("recorded").length, nRendered = pick("rendered").length, nReady = pick("ready").length;
   const why = [
     nReady > 0 && !tools.host ? "Rendering runs in the desktop app." : null,
+    nReady > 0 && waiting > 0 ? "Waiting for CS2 to close before the next render." : null,
     (nRecorded > 0 || nRendered > 1) && !canEdit && editWhy ? editWhy : null,
     nRendered === 1 ? "Choose two rendered clips or more to make a reel." : null,
   ].filter((x): x is string => !!x).join(" ");
@@ -442,7 +464,7 @@ export default function ClipsView() {
                 {toolDot("CS2", env?.cs2)}
                 {toolDot("HLAE", env?.hlae)}
                 {toolDot("FFmpeg", env?.ffmpeg)}
-                <button className="btn btn--ghost btn--sm press" onClick={tools.recheck} disabled={tools.checking}><RefreshIcon size={12} />{tools.checking ? "Checking…" : "Check again"}</button>
+                <button className="btn btn--ghost btn--sm press" onClick={tools.recheck} disabled={tools.checking}><RefreshIcon size={12} />{tools.checking && !waiting ? "Checking…" : "Check again"}</button>
               </>
             ) : (
               <span className="meta">Rendering runs in the desktop app</span>
@@ -451,6 +473,11 @@ export default function ClipsView() {
         </header>
         {/* the clips folder or the tools could not be read: said above everything else, whatever the list shows */}
         {tools.error && <p className="rdlg__problem clips__error" role="alert">Checking the clips folder and tools failed: {hide ? hideText(tools.error) : tools.error}</p>}
+        {waiting > 0 && (
+          <p className="clips__waiting" role="status">
+            <strong>Waiting for CS2 to close.</strong> The clips the last render recorded are read once CS2 and HLAE have exited; this page checks again every few seconds.
+          </p>
+        )}
 
         {call.error && !call.stale ? <LoadFailed what="Moments" error={call.error} /> : !rows ? <div className="skel" style={{ height: 320 }} /> : !items.length ? (
           <Empty icon={<ClipsIcon size={20} />} text="No moments yet: no 3K, won clutch, high-swing, flick or opening kill in your matches." />
@@ -492,7 +519,7 @@ export default function ClipsView() {
               <button className="btn btn--sm press" disabled={!canEdit || !!working || nRendered < 2} aria-describedby="clips-act-why" onClick={() => reel(pick("rendered"))}>Make a reel of {nRendered}</button>
             )}
             {nReady > 0 && (
-              <button className="btn btn--primary btn--sm press" disabled={!tools.host} aria-describedby="clips-act-why" onClick={(e) => setDialog({ instant: fromKeyboard(e), items: pick("ready") })}>
+              <button className="btn btn--primary btn--sm press" disabled={!tools.host || waiting > 0} aria-describedby="clips-act-why" onClick={(e) => setDialog({ instant: fromKeyboard(e), items: pick("ready") })}>
                 <PlayIcon size={12} />Render {plural(nReady, "clip")}…
               </button>
             )}

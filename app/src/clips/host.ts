@@ -12,8 +12,10 @@ export interface DemoOnDisk { name: string; path: string | null; size: number }
 export interface Finished { id: string; path: string; size: number; mtime: number }
 /** HLAE's newest complete recording of a clip: the job, its take folder (take0000 and up), and the video and sound in it. */
 export interface Take { id: string; job: string; take: string; video: string; audio: string | null; mtime: number }
-export interface ClipsScan { finished: Finished[]; takes: Take[]; reels: Finished[] }
-export interface Launched { pid: number; cfg: string; ffmpegIni: string | null }
+/** `waiting`: launches whose HLAE or CS2 still runs; their takes are listed once those exit. */
+export interface ClipsScan { finished: Finished[]; takes: Take[]; reels: Finished[]; waiting: number }
+/** `damaged`: HLAE started but the launch could not record it, so none of its takes will count. */
+export interface Launched { pid: number; cfg: string; ffmpegIni: string | null; damaged: string | null }
 /** An FFmpeg run: its exit code, the end of what it wrote to stderr when it failed, and the file it wrote. */
 export interface FfmpegRun { code: number | null; error: string | null; output: string }
 /** A take to finish: the clip, the job and take folder that recorded it, the lower third's two lines (personal info already hidden when the setting is on) and the clip's length. */
@@ -24,10 +26,14 @@ export interface ClipsHost {
   env(hlae: string | null): Promise<ClipsEnv>;
   demos(names: string[]): Promise<DemoOnDisk[]>;
   scan(): Promise<ClipsScan>;
-  /** builds the job for the chosen clips; with `write`, saves it as a new job folder. Touches nothing outside the clips folder. */
-  plan(request: JobRequest, write: boolean): Promise<RenderPlan>;
-  /** starts CS2 through HLAE for a saved job: only after the user confirms */
-  launch(job: string): Promise<Launched>;
+  /**
+   * builds the job for the chosen clips. With `save`, the review value of the plan the user was shown,
+   * it also saves the job as a new folder, and the host refuses when the plan it builds now differs.
+   * Touches nothing outside the clips folder.
+   */
+  plan(request: JobRequest, save: string | null): Promise<RenderPlan>;
+  /** starts CS2 through HLAE for a saved job, only after the user confirms; refused when the job is not the plan with this review value */
+  launch(job: string, review: string): Promise<Launched>;
   finish(r: FinishRequest, hlae: string | null): Promise<FfmpegRun>;
   /** joins finished clips, in order, into a new reel */
   reel(ids: string[], hlae: string | null): Promise<FfmpegRun>;
@@ -39,8 +45,8 @@ async function tauriClips(): Promise<ClipsHost> {
     env: (hlae) => invoke("clips_env", { hlae }),
     demos: (names) => invoke("clips_demos", { names }),
     scan: () => invoke("clips_scan"),
-    plan: (request, write) => invoke("clips_plan", { request, write }),
-    launch: (job) => invoke("clips_launch", { job }),
+    plan: (request, save) => invoke("clips_plan", { request, save }),
+    launch: (job, review) => invoke("clips_launch", { job, review }),
     finish: (r, hlae) => invoke("clips_finish", { id: r.id, job: r.job, take: r.take, reason: r.reason, subline: r.subline, durationS: r.durationS, hlae }),
     reel: (ids, hlae) => invoke("clips_reel", { ids, hlae }),
   };

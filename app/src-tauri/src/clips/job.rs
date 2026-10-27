@@ -23,6 +23,8 @@ pub const FPS: u32 = 60;
 const TAKE_VIDEO_OPTIONS: &str = "-c:v libx264 -pix_fmt yuv420p -preset veryfast -crf 16";
 /// The longest clip a job may hold, in seconds; a moment is one round, which CS2 caps well under it.
 const MAX_CLIP_S: f64 = 600.0;
+/// How far before a clip's start the director seeks (its seekLeadSeconds), povforge's value.
+const SEEK_LEAD_S: f64 = 2.0;
 const TEMPLATE: &str = include_str!("../../../src/clips/director.template.js");
 const PLACEHOLDER: &str = "__CS2STATS_JOB__";
 
@@ -51,6 +53,7 @@ pub struct JobReq {
 }
 
 /// Where things are on this machine: the clips folder, CS2's replays folder and cs2.exe.
+#[derive(Clone)]
 pub struct JobEnv {
     pub clips_root: PathBuf,
     pub replays: PathBuf,
@@ -120,6 +123,20 @@ pub struct Plan {
     pub outputs: Vec<Output>,
     /// what the plan was built from; the launch builds it again from this
     pub request: JobReq,
+    /// [`review_hash`] of this plan: the dialog shows a plan, then saves and launches it by this value
+    pub review: String,
+}
+
+/// SHA-256 of everything a launch of `plan` runs and writes: the plan as JSON, with the job's id and
+/// creation time left out (the plan the dialog shows and the one it saves are built under different
+/// ids) and `review` itself empty. Saving and launching refuse a plan whose value is not the one the
+/// user reviewed, so a changed HLAE, demo or clip never runs unseen.
+pub fn review_hash(plan: &Plan) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let blank = Plan { id: String::new(), created: String::new(), review: String::new(), ..plan.clone() };
+    let text = serde_json::to_string(&blank).map_err(|e| e.to_string())?;
+    let text = if plan.id.is_empty() { text } else { text.replace(&plan.id, "<job>") };
+    Ok(Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The game's own arguments, inside HLAE's -cmdLine. -insecure is required: HLAE injects into the
@@ -339,8 +356,15 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
         if !(c.tick_rate.is_finite() && c.tick_rate > 0.0 && c.tick_rate <= 1024.0) {
             return Err(at("no tick rate"));
         }
-        if c.start_tick < 0 || c.end_tick <= c.start_tick || (c.end_tick - c.start_tick) as f64 > MAX_CLIP_S * c.tick_rate {
+        if c.end_tick <= c.start_tick || (c.end_tick - c.start_tick) as f64 > MAX_CLIP_S * c.tick_rate {
             return Err(at(&format!("ticks {} to {} are not a range of at most {MAX_CLIP_S} s", c.start_tick, c.end_tick)));
+        }
+        // the director seeks SEEK_LEAD_S before the start and must have the camera on the player before
+        // the start tick (director.template.js PREROLL); a demo plays from tick 1, so an earlier start
+        // leaves it no tick to seek to before the clip
+        let earliest = (SEEK_LEAD_S * c.tick_rate).ceil() as i64 + 1;
+        if c.start_tick < earliest {
+            return Err(at(&format!("starts at tick {}, before tick {earliest}: the director needs {SEEK_LEAD_S} s of demo before a clip", c.start_tick)));
         }
         if !steamid_ok(&c.steamid) {
             return Err(at("the POV player has no SteamID64, so the director cannot find them"));
@@ -411,7 +435,9 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
         demos,
         outputs,
         request: req.clone(),
+        review: String::new(),
     };
+    let plan = Plan { review: review_hash(&plan)?, ..plan };
     let script = director_script(&plan, "")?;
     Ok((plan, script))
 }
@@ -428,12 +454,11 @@ fn director_job(plan: &Plan, nonce: &str) -> serde_json::Value {
             "clips": d.clips.iter().map(|c| json!({ "id": c.id, "steamid": c.steamid, "start": c.start, "end": c.end })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "setup": setup_commands(),
-        "frameStage": 12, "bootFrames": 300, "loadTimeoutFrames": 20000, "seekRetryFrames": 900, "finishFrames": 180, "seekLeadSeconds": 2,
+        "frameStage": 12, "bootFrames": 300, "loadTimeoutFrames": 20000, "seekRetryFrames": 900, "finishFrames": 180, "seekLeadSeconds": SEEK_LEAD_S,
         "quitWhenDone": true,
     })
 }
 
-/// The director script: the template with the job as JSON in place of its one placeholder.
 /// The director script for a launch with `nonce` (empty for the copy kept to read): the template with
 /// the job as JSON in place of its one placeholder.
 pub fn director_script(plan: &Plan, nonce: &str) -> Result<String, String> {
@@ -678,7 +703,7 @@ mod tests {
     #[test]
     fn clips_group_by_demo_in_the_order_chosen_each_demo_in_tick_order() {
         let m = machine("group");
-        let r = req(&m, vec![clip(D1, 9, 9000, 9500), clip(D2, 1, 100, 900), clip(D1, 3, 1000, 2000)]);
+        let r = req(&m, vec![clip(D1, 9, 9000, 9500), clip(D2, 1, 200, 900), clip(D1, 3, 1000, 2000)]);
         let (plan, _) = build(&r, &m.env, ID, "t").unwrap();
         let got: Vec<(String, Vec<String>)> = plan.demos.iter().map(|d| (Path::new(&d.path).file_name().unwrap().to_string_lossy().into(), d.clips.iter().map(|c| c.id.clone()).collect())).collect();
         assert_eq!(got, [(D1.to_string(), vec![a1(), a2()]), (D2.to_string(), vec![b1()])]);
@@ -750,11 +775,31 @@ mod tests {
         assert!(e.contains("run past the end of the demo, 100000 ticks"), "{e}");
         // a file that is not a CS2 demo, and a demo whose file info is compressed, bound nothing: refused
         fs::write(m.env.replays.join(D2), b"HL2DEMO\0................").unwrap();
-        assert!(build(&req(&m, vec![clip(D2, 1, 1, 2)]), &m.env, ID, "t").unwrap_err().contains("not a CS2 demo"));
+        assert!(build(&req(&m, vec![clip(D2, 1, 200, 300)]), &m.env, ID, "t").unwrap_err().contains("not a CS2 demo"));
         let mut z = fake_demo(5000);
         z[64] = 2 | 64;
         fs::write(m.env.replays.join(D2), z).unwrap();
-        assert!(build(&req(&m, vec![clip(D2, 1, 1, 2)]), &m.env, ID, "t").unwrap_err().contains("compressed"));
+        assert!(build(&req(&m, vec![clip(D2, 1, 200, 300)]), &m.env, ID, "t").unwrap_err().contains("compressed"));
+    }
+
+    #[test]
+    fn the_review_value_names_what_runs_not_the_job_id_it_is_saved_under() {
+        let m = machine("review");
+        let r = req(&m, vec![clip(D1, 3, 1000, 2000)]);
+        let (a, _) = build(&r, &m.env, ID, "t").unwrap();
+        let (b, _) = build(&r, &m.env, "job-20261027T010203004Z-ffffff", "later").unwrap();
+        assert_eq!(a.review.len(), 64);
+        assert_eq!(a.review, b.review, "the preview and the saved job differ only in id and time");
+        assert_eq!(a.review, review_hash(&a).unwrap());
+        // another HLAE, another clip window: another value
+        let other = m.root.join("HLAE2").join("HLAE.exe");
+        fs::create_dir_all(other.parent().unwrap().join("x64")).unwrap();
+        fs::write(&other, b"").unwrap();
+        fs::write(other.parent().unwrap().join("x64").join("AfxHookSource2.dll"), b"").unwrap();
+        let (c, _) = build(&JobReq { hlae: other.display().to_string(), ..r.clone() }, &m.env, ID, "t").unwrap();
+        let (d, _) = build(&req(&m, vec![clip(D1, 3, 1000, 2001)]), &m.env, ID, "t").unwrap();
+        assert_ne!(a.review, c.review);
+        assert_ne!(a.review, d.review);
     }
 
     #[test]
@@ -774,6 +819,10 @@ mod tests {
         refused(ClipReq { id: "../x".into(), ..ok.clone() }, "not a clip id");
         refused(ClipReq { end_tick: 1000, ..ok.clone() }, "not a range");
         refused(ClipReq { end_tick: 1000 + 64 * 601, ..ok.clone() }, "not a range");
+        // the director seeks two seconds (128 ticks at 64) before the start, and a demo plays from tick 1
+        refused(ClipReq { start_tick: 0, ..ok.clone() }, "starts at tick 0, before tick 129");
+        refused(ClipReq { start_tick: 128, ..ok.clone() }, "before tick 129");
+        build(&req(&m, vec![ClipReq { start_tick: 129, ..ok.clone() }]), &m.env, ID, "t").unwrap();
         refused(ClipReq { steamid: "BOT Kev".into(), ..ok.clone() }, "no SteamID64");
         refused(ClipReq { demo: "..\\x.dem".into(), ..ok.clone() }, "not a demo file name");
         refused(ClipReq { demo: "match730_9999.dem".into(), ..ok.clone() }, "demo match730_9999.dem");

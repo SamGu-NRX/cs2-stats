@@ -16,6 +16,9 @@
 .clips__bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .clips__whys { display: grid; gap: 4px; margin: 0; padding: 10px 12px; list-style: none; border-radius: var(--r-ctl); background: var(--well); font-size: 12px; color: var(--ink2); text-wrap: pretty; }
 .clips__whys .num { color: var(--ink); font-weight: 600; }
+/* a render's CS2 still runs: said once, quietly, in the same well as the whys; no motion, since it can stay for minutes */
+.clips__waiting { margin: 0; padding: 10px 12px; border-radius: var(--r-ctl); background: var(--well); font-size: 12px; color: var(--ink2); text-wrap: pretty; }
+.clips__waiting strong { color: var(--ink); font-weight: 600; }
 
 /* the list: one row per moment, a hairline between, the rank first so the order reads as the ranking */
 .clips__list { display: grid; margin: 0; padding: 0; list-style: none; background: var(--s1); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
@@ -120,6 +123,7 @@
 .rdlg__files code { font-size: 11px; overflow-wrap: anywhere; }
 .rdlg__problem { margin: 0; color: var(--poor-text); font-size: 12px; overflow-wrap: anywhere; }
 .rdlg__done { margin: 0; color: var(--good-text); font-size: 12px; }
+.rdlg__note { margin: 0; font-size: 12px; }
 .rdlg__foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
 
 /* narrower panes, such as a 1024 px window: the links move under the reason */
