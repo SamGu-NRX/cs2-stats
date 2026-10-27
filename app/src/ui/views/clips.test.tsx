@@ -46,7 +46,7 @@ function planOf(request: JobRequest, id: string): RenderPlan {
     "-programPath", "D:\\Steam\\cs2.exe", "-cmdLine", "-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips"];
   return {
     version: 2, id, created: "2026-10-26T18:04:05.123Z", settings: { width: 1920, height: 1080, fps: 60 }, jobDir, hlaeExe: argv[0], hookDll: argv[7], cs2Exe: argv[9], argv,
-    commandLine: argv.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" "), cfgFile: "cs2stats_clips.cfg",
+    powershell: ["&", ...argv.map((a) => `'${a}'`)].join(" "), cfgFile: "cs2stats_clips.cfg",
     cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`, directorFile: `${jobDir}\\director.js`,
     demos: request.clips.map((c) => ({ path: `D:\\replays\\${c.demo}`, tickRate: c.tickRate, clips: [{ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason }] })),
     outputs: [], request,
@@ -138,8 +138,8 @@ describe("the Clips page", () => {
     const dlg = document.querySelector("dialog.rdlg")!;
     expect(dlg.hasAttribute("open")).toBe(true);
     expect(dlg.querySelector(".rdlg__warn")!.textContent).toMatch(/This starts CS2 with -insecure/);
-    expect(dlg.querySelector(".rdlg__cmd")!.textContent).toMatch(/HLAE\.exe -noGui .* -cmdLine "-insecure /);
-    expect(planned).toEqual([{ write: false, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
+    expect(dlg.querySelector(".rdlg__cmd")!.textContent).toMatch(/^& '.*HLAE\.exe' '-noGui' .* '-cmdLine' '-insecure /);
+    expect(planned).toEqual([{ write: false, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
     expect(launched).toEqual([]);
     await click(button(dlg, "Launch CS2 with -insecure"));
     expect(planned.map((p) => p.write)).toEqual([false, true]);

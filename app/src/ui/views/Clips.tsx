@@ -271,9 +271,9 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
         {p ? (
           <>
             <section className="rdlg__sec">
-              <h3 className="caps">What runs</h3>
-              <pre className="rdlg__cmd mono selectable">{show(p.commandLine)}</pre>
-              <button className="btn btn--ghost btn--sm press" onClick={() => copyText(p.commandLine, "Command copied")}><CopyIcon size={12} />Copy the command</button>
+              <h3 className="caps">What runs, as a PowerShell command</h3>
+              <pre className="rdlg__cmd mono selectable">{show(p.powershell)}</pre>
+              <button className="btn btn--ghost btn--sm press" onClick={() => copyText(p.powershell, "PowerShell command copied")}><CopyIcon size={12} />Copy for PowerShell</button>
             </section>
             <section className="rdlg__sec">
               <h3 className="caps">What it writes</h3>

@@ -12,8 +12,9 @@ const OUT = "E:/Data/BotMatchStats/clips/jobs/job-20261026T180405123Z-a1b2c3/raw
 const SETUP = ["demo_timescale 1", "mirv_streams record screen enabled 1", "mirv_streams record fps 60"];
 
 interface Clip { id: string; steamid: string; start: number; end: number }
+const JOB_ID = "job-20261026T180405123Z-a1b2c3";
 const job = (demos: { path: string; clips: Clip[] }[]) => ({
-  outDir: OUT, demos: demos.map((d) => ({ ...d, tickrate: 64 })), setup: SETUP,
+  id: JOB_ID, outDir: OUT, demos: demos.map((d) => ({ ...d, tickrate: 64 })), setup: SETUP,
   frameStage: 12, bootFrames: 300, loadTimeoutFrames: 20000, seekRetryFrames: 900, finishFrames: 180, seekLeadSeconds: 2, quitWhenDone: true,
 });
 const clip = (id: string, start: number, end: number): Clip => ({ id, steamid: ME, start, end });
@@ -99,6 +100,8 @@ describe("the director", () => {
       `playdemo "${DEMO_B}"`, "demo_gototick 272", "spec_player 1",
     ]);
     expect(execs.filter((c) => c.startsWith("mirv_streams record name"))).toEqual([A1, A2, B1].map((id) => `mirv_streams record name "${OUT}/${id}"`));
+    // the job's block in the console log, which the host copies into its session log (clips/mod.rs capture_sessions)
+    expect([logs[0], logs.at(-1)]).toEqual([`[cs2stats] director loaded job=${JOB_ID}: 2 demos`, `[cs2stats] ALL DONE job=${JOB_ID}`]);
   });
 
   it("skips a clip whose player is not in the demo and goes on", () => {

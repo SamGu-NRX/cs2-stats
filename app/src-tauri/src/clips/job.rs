@@ -29,10 +29,13 @@ const PLACEHOLDER: &str = "__CS2STATS_JOB__";
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClipReq {
+    /// the clip id, which must be the one clip_id_for gives the demo, player and round below
     pub id: String,
     /// the demo's file name in CS2's replays folder
     pub demo: String,
     pub steamid: String,
+    /// the round's number in the match
+    pub round: u32,
     pub start_tick: i64,
     pub end_tick: i64,
     pub tick_rate: f64,
@@ -103,8 +106,10 @@ pub struct Plan {
     pub cs2_exe: String,
     /// HLAE.exe and its arguments: exactly what the launch runs
     pub argv: Vec<String>,
-    /// argv quoted for a Windows command prompt, for the user to read or run by hand
-    pub command_line: String,
+    /// argv as one PowerShell command (`& 'HLAE.exe' '-noGui' ...`), for the user to read or run by
+    /// hand in PowerShell. Not a cmd.exe command: cmd would read `&` and `%` in a path. The launch itself
+    /// passes argv to the process directly and uses no shell.
+    pub powershell: String,
     pub cfg_file: String,
     pub cfg_text: String,
     pub director_file: String,
@@ -132,31 +137,15 @@ pub fn hlae_argv(hlae: &Path, cs2: &Path) -> Vec<String> {
     v
 }
 
-/// A Windows command-line argument, quoted when it holds a space, a tab or a quote (CommandLineToArgvW's rules).
-pub fn quote_arg(a: &str) -> String {
-    if !a.is_empty() && !a.chars().any(|c| c.is_whitespace() || c == '"') {
-        return a.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut slashes = 0;
-    for c in a.chars() {
-        match c {
-            '\\' => slashes += 1,
-            '"' => {
-                out.push_str(&"\\".repeat(slashes * 2 + 1));
-                out.push('"');
-                slashes = 0;
-            }
-            c => {
-                out.push_str(&"\\".repeat(slashes));
-                out.push(c);
-                slashes = 0;
-            }
-        }
-    }
-    out.push_str(&"\\".repeat(slashes * 2));
-    out.push('"');
-    out
+/// One PowerShell argument: single-quoted, so nothing in it is expanded (`$`, `%`, `&`, backticks), with a
+/// single quote doubled, as PowerShell's single-quoted strings write one.
+pub fn ps_quote(a: &str) -> String {
+    format!("'{}'", a.replace('\'', "''"))
+}
+
+/// argv as a PowerShell command: the call operator `&` and each argument single-quoted.
+pub fn powershell_command(argv: &[String]) -> String {
+    std::iter::once("&".to_string()).chain(argv.iter().map(|a| ps_quote(a))).collect::<Vec<_>>().join(" ")
 }
 
 /// The console commands the director runs once before the first demo: record the screen through
@@ -196,6 +185,93 @@ pub fn resolve_demo(replays: &Path, name: &str) -> Result<PathBuf, String> {
         return Err(format!("demo {name} resolves outside CS2's replays folder"));
     }
     Ok(p)
+}
+
+/// 64 bits of FNV-1a over the text's UTF-16 code units, as 16 hex digits: clips/ids.ts fnv64.
+pub fn fnv64(text: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for u in text.encode_utf16() {
+        h ^= u64::from(u);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// The clip id the app gives a moment of `player` in `round` of the Valve match whose demo is `demo`:
+/// clips/ids.ts clipId over the match key `valve/<demo name without .dem>` (ids.ts matchKey). Valve
+/// matches are the only ones with a demo on disk (clips/state.ts demoSource).
+pub fn clip_id_for(demo: &str, player: &str, round: u32) -> Result<String, String> {
+    if !demo_name_ok(demo) {
+        return Err(format!("{demo:?} is not a demo file name"));
+    }
+    if !(1..=999).contains(&round) {
+        return Err(format!("round {round} is not a round number"));
+    }
+    Ok(format!("c-{}-r{round}", fnv64(&format!("valve/{}|{player}", &demo[..demo.len() - 4]))))
+}
+
+/// The demo's length in ticks, from its file info (CDemoFileInfo.playback_ticks): a CS2 demo starts
+/// with `PBDEMS2\0` and the file info's offset; there, a frame of a varint command (2, DEM_FileInfo),
+/// tick and size, then the message, whose field 2 is the tick count. Refused, naming why, when the demo
+/// is not a CS2 demo or its file info is compressed or missing, so a clip is never bounded by a guess.
+pub fn demo_playback_ticks(path: &Path) -> Result<i64, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let fail = |m: &str| format!("{}: {m}", path.display());
+    let mut f = fs::File::open(path).map_err(|e| fail(&e.to_string()))?;
+    let mut head = [0u8; 16];
+    f.read_exact(&mut head).map_err(|_| fail("too short for a CS2 demo"))?;
+    if &head[..8] != b"PBDEMS2\0" {
+        return Err(fail("not a CS2 demo (no PBDEMS2 header)"));
+    }
+    let offset = u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as u64;
+    if offset < 16 {
+        return Err(fail("its file info offset is missing; the demo may not have been finished"));
+    }
+    f.seek(SeekFrom::Start(offset)).map_err(|e| fail(&e.to_string()))?;
+    let mut b = Vec::new();
+    f.take(4096).read_to_end(&mut b).map_err(|e| fail(&e.to_string()))?;
+    fn varint(b: &[u8], i: &mut usize) -> Option<u64> {
+        let mut v = 0u64;
+        for shift in (0..64).step_by(7) {
+            let c = *b.get(*i)?;
+            *i += 1;
+            v |= u64::from(c & 0x7f) << shift;
+            if c < 0x80 {
+                return Some(v);
+            }
+        }
+        None
+    }
+    let mut i = 0;
+    let (cmd, _tick, size) = (varint(&b, &mut i), varint(&b, &mut i), varint(&b, &mut i));
+    let (Some(cmd), Some(size)) = (cmd, size) else { return Err(fail("its file info frame is cut short")) };
+    if cmd & 64 != 0 {
+        return Err(fail("its file info is compressed, which the app does not read"));
+    }
+    if cmd != 2 {
+        return Err(fail("no file info frame at its file info offset"));
+    }
+    let end = i + size as usize;
+    if end > b.len() {
+        return Err(fail("its file info frame is cut short"));
+    }
+    while i < end {
+        let key = varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
+        match (key >> 3, key & 7) {
+            (2, 0) => return varint(&b, &mut i).map(|v| v as i64).ok_or_else(|| fail("its file info is malformed")),
+            (_, 0) => {
+                varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
+            }
+            (_, 5) => i += 4,
+            (_, 1) => i += 8,
+            (_, 2) => {
+                let n = varint(&b, &mut i).ok_or_else(|| fail("its file info is malformed"))?;
+                i += n as usize;
+            }
+            _ => return Err(fail("its file info is malformed")),
+        }
+    }
+    Err(fail("its file info holds no tick count"))
 }
 
 fn steamid_ok(s: &str) -> bool {
@@ -241,6 +317,18 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
             return Err(at("the reason is not one line of at most 300 characters"));
         }
         let path = resolve_demo(&env.replays, &c.demo).map_err(|e| at(&e))?;
+        // the clip id names the match (its demo), the player and the round, so a request cannot pair one
+        // moment's id with another demo, player or round: the output would be filed as the wrong moment
+        let want = clip_id_for(&c.demo, &c.steamid, c.round)?;
+        if c.id != want {
+            return Err(at(&format!("the id does not match its demo, player and round {} (expected {want})", c.round)));
+        }
+        // the host cannot read the match's round ticks (they are in parquet), so it bounds the clip by the
+        // demo itself: its file info gives the length in ticks
+        let length = demo_playback_ticks(&path).map_err(|e| at(&e))?;
+        if c.end_tick > length {
+            return Err(at(&format!("ticks {} to {} run past the end of the demo, {length} ticks", c.start_tick, c.end_tick)));
+        }
         match demos.iter_mut().find(|d| d.0 == path) {
             Some(d) if d.1 != c.tick_rate => return Err(format!("render plan: {}: its clips disagree on the tick rate", c.demo)),
             Some(d) => d.2.push(c),
@@ -283,7 +371,7 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
         hlae_exe: argv[0].clone(),
         hook_dll: argv[7].clone(),
         cs2_exe: argv[9].clone(),
-        command_line: argv.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" "),
+        powershell: powershell_command(&argv),
         argv,
         cfg_file: format!("{CFG_NAME}.cfg"),
         cfg_text: format!("mirv_script_load \"{}\"\n", fwd(&director.display().to_string())),
@@ -300,6 +388,7 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
 /// (hlae.py build_job), not measured here.
 fn director_job(plan: &Plan) -> serde_json::Value {
     json!({
+        "id": plan.id,
         "outDir": fwd(&format!("{}\\raw", plan.job_dir)),
         "demos": plan.demos.iter().map(|d| json!({
             "path": fwd(&d.path), "tickrate": d.tick_rate,
@@ -373,6 +462,25 @@ fn new_temp(dir: &Path, name: &str, text: &[u8]) -> Result<PathBuf, String> {
     Err(format!("{}: no free temporary name for {name}", dir.display()))
 }
 
+/// A new, empty file `.<stem>.<random>.part.mp4` beside `name` in `dir`, created exclusively, for FFmpeg
+/// to write into: the result is renamed over `name` only once FFmpeg exits cleanly (mod.rs run_render),
+/// so a failed or cut-off render never stands where a finished clip should.
+pub(crate) fn new_part(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    use std::hash::{BuildHasher, Hasher};
+    let stem = name.strip_suffix(".mp4").ok_or_else(|| format!("{name} is not an .mp4"))?;
+    for _ in 0..8 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let p = dir.join(format!(".{stem}.{:016x}.part.mp4", h.finish()));
+        match fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(_) => return Ok(p),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", p.display())),
+        }
+    }
+    Err(format!("{}: no free temporary name for {name}", dir.display()))
+}
+
 /// Writes `files` into `dir` so that none is ever half-written or missing its partner: each goes to a
 /// new temporary file first ([`new_temp`]), then all are renamed in order, which replaces a directory
 /// entry and never writes through an existing file or hard link. The plan is renamed last, so a plan
@@ -410,14 +518,47 @@ pub fn save(plan: &Plan, script: &str) -> Result<(), String> {
     write_together(&dir, &[("director.js", script.as_bytes()), ("plan.json", plan_json.as_bytes())])
 }
 
+/// A CS2 demo as far as the host reads one: the PBDEMS2 header, its file info offset, and there an
+/// uncompressed DEM_FileInfo frame whose message holds playback_time (field 1), playback_ticks
+/// (field 2) and playback_frames (field 3), laid out as a real demo's (the HLTV demo read 2026-10-27).
+#[cfg(test)]
+pub(crate) fn fake_demo(ticks: u64) -> Vec<u8> {
+    fn varint(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 { out.push(b); return; }
+            out.push(b | 0x80);
+        }
+    }
+    let mut msg = vec![0x0d];
+    msg.extend((ticks as f32 / 64.0).to_le_bytes());
+    msg.push(0x10);
+    varint(ticks, &mut msg);
+    msg.push(0x18);
+    varint(ticks + 1, &mut msg);
+    let mut d = b"PBDEMS2\0".to_vec();
+    d.extend(64u32.to_le_bytes());
+    d.extend(0u32.to_le_bytes());
+    d.resize(64, 0);
+    varint(2, &mut d);
+    varint(ticks, &mut d);
+    varint(msg.len() as u64, &mut d);
+    d.extend(msg);
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const ME: &str = "76561190000000001";
-    const A1: &str = "c-00000000000000aa-r3";
-    const A2: &str = "c-00000000000000aa-r9";
-    const B1: &str = "c-00000000000000bb-r1";
+    const D1: &str = "match730_0001.dem";
+    const D2: &str = "match730_0002.dem";
+    /// the moments' ids, as the app gives them (clip_id_for): demo 1 rounds 3 and 9, demo 2 round 1
+    fn a1() -> String { clip_id_for(D1, ME, 3).unwrap() }
+    fn a2() -> String { clip_id_for(D1, ME, 9).unwrap() }
+    fn b1() -> String { clip_id_for(D2, ME, 1).unwrap() }
     const ID: &str = "job-20261026T180405123Z-a1b2c3";
 
     /// A scratch machine: a clips folder, CS2's replays folder with two demos, cs2.exe and an HLAE folder.
@@ -437,8 +578,8 @@ mod tests {
         let game = root.join("Counter-Strike Global Offensive").join("game");
         let replays = game.join("csgo").join("replays");
         fs::create_dir_all(&replays).unwrap();
-        for d in ["match730_0001.dem", "match730_0002.dem"] {
-            fs::write(replays.join(d), b"demo").unwrap();
+        for d in [D1, D2] {
+            fs::write(replays.join(d), fake_demo(100_000)).unwrap();
         }
         let cs2 = game.join("bin").join("win64").join("cs2.exe");
         fs::create_dir_all(cs2.parent().unwrap()).unwrap();
@@ -452,8 +593,9 @@ mod tests {
         let canon = |p: &Path| plain(&p.canonicalize().unwrap());
         Machine { env: JobEnv { clips_root: canon(&clips), replays: canon(&replays), cs2_exe: canon(&cs2) }, hlae: canon(&hlae), root }
     }
-    fn clip(id: &str, demo: &str, start: i64, end: i64) -> ClipReq {
-        ClipReq { id: id.into(), demo: demo.into(), steamid: ME.into(), start_tick: start, end_tick: end, tick_rate: 64.0, reason: format!("reason {id}") }
+    fn clip(demo: &str, round: u32, start: i64, end: i64) -> ClipReq {
+        let id = clip_id_for(demo, ME, round).unwrap();
+        ClipReq { reason: format!("reason {id}"), id, demo: demo.into(), steamid: ME.into(), round, start_tick: start, end_tick: end, tick_rate: 64.0 }
     }
     fn req(m: &Machine, clips: Vec<ClipReq>) -> JobReq {
         JobReq { clips, hlae: m.hlae.display().to_string() }
@@ -462,24 +604,24 @@ mod tests {
     #[test]
     fn the_command_is_the_fixed_template_with_insecure_first_in_the_games_arguments() {
         let m = machine("argv");
-        let (plan, _) = build(&req(&m, vec![clip(A1, "match730_0001.dem", 1000, 2000)]), &m.env, ID, "t").unwrap();
+        let (plan, _) = build(&req(&m, vec![clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
         let hook = m.hlae.parent().unwrap().join("x64").join("AfxHookSource2.dll");
         assert_eq!(plan.argv, [
             m.hlae.display().to_string().as_str(), "-noGui", "-autoStart", "-noConfig", "-afxDisableSteamStorage", "-customLoader",
             "-hookDllPath", hook.display().to_string().as_str(), "-programPath", m.env.cs2_exe.display().to_string().as_str(),
             "-cmdLine", "-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips",
         ]);
-        assert!(plan.command_line.ends_with(r#"-cmdLine "-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips""#));
+        assert!(plan.powershell.starts_with("& '") && plan.powershell.ends_with("'-cmdLine' '-insecure -novid -condebug -console -sw -width 1920 -height 1080 +exec cs2stats_clips'"), "{}", plan.powershell);
     }
 
     #[test]
     fn the_job_lives_in_its_own_folder_and_the_cfg_loads_its_director() {
         let m = machine("dir");
-        let (plan, script) = build(&req(&m, vec![clip(A1, "match730_0001.dem", 1000, 2280)]), &m.env, ID, "t").unwrap();
+        let (plan, script) = build(&req(&m, vec![clip(D1, 3, 1000, 2280)]), &m.env, ID, "t").unwrap();
         let dir = m.env.clips_root.join("jobs").join(ID);
         assert_eq!(plan.job_dir, dir.display().to_string());
         assert_eq!(plan.cfg_text, format!("mirv_script_load \"{}/director.js\"\n", dir.display().to_string().replace('\\', "/")));
-        assert_eq!(plan.outputs[0].finished, m.env.clips_root.join(format!("{A1}.mp4")).display().to_string());
+        assert_eq!(plan.outputs[0].finished, m.env.clips_root.join(format!("{}.mp4", a1())).display().to_string());
         assert_eq!(plan.outputs[0].duration_s, 20.0);
         // the director holds the job, with the demo's resolved path and no reason text. The template's
         // line ends are whatever the checkout gave it (CRLF on Windows with core.autocrlf), so the job's
@@ -487,11 +629,11 @@ mod tests {
         let job = script.split("const JOB = ").nth(1).unwrap().lines().next().unwrap().trim_end().trim_end_matches(';');
         let v: serde_json::Value = serde_json::from_str(job).unwrap();
         assert_eq!(v["demos"][0]["path"], m.env.replays.join("match730_0001.dem").display().to_string().replace('\\', "/"));
-        assert_eq!(v["demos"][0]["clips"][0], json!({ "id": A1, "steamid": ME, "start": 1000, "end": 2280 }));
+        assert_eq!(v["demos"][0]["clips"][0], json!({ "id": a1(), "steamid": ME, "start": 1000, "end": 2280 }));
         // the keys director.template.js reads, which src/clips/director.test.ts's fixture copies
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["bootFrames", "demos", "finishFrames", "frameStage", "loadTimeoutFrames", "outDir", "quitWhenDone", "seekLeadSeconds", "seekRetryFrames", "setup"]);
+        assert_eq!(keys, ["bootFrames", "demos", "finishFrames", "frameStage", "id", "loadTimeoutFrames", "outDir", "quitWhenDone", "seekLeadSeconds", "seekRetryFrames", "setup"]);
         assert_eq!(v["demos"][0]["tickrate"], 64.0);
         assert!(!v["setup"].as_array().unwrap().iter().any(|c| c.as_str().unwrap().contains("demo_ui_mode")), "the director, not setup, owns demo_ui_mode");
         assert!(!script.contains("reason c-"));
@@ -501,16 +643,53 @@ mod tests {
     #[test]
     fn clips_group_by_demo_in_the_order_chosen_each_demo_in_tick_order() {
         let m = machine("group");
-        let r = req(&m, vec![clip(A2, "match730_0001.dem", 9000, 9500), clip(B1, "match730_0002.dem", 100, 900), clip(A1, "match730_0001.dem", 1000, 2000)]);
+        let r = req(&m, vec![clip(D1, 9, 9000, 9500), clip(D2, 1, 100, 900), clip(D1, 3, 1000, 2000)]);
         let (plan, _) = build(&r, &m.env, ID, "t").unwrap();
         let got: Vec<(String, Vec<String>)> = plan.demos.iter().map(|d| (Path::new(&d.path).file_name().unwrap().to_string_lossy().into(), d.clips.iter().map(|c| c.id.clone()).collect())).collect();
-        assert_eq!(got, [("match730_0001.dem".into(), vec![A1.to_string(), A2.into()]), ("match730_0002.dem".into(), vec![B1.to_string()])]);
+        assert_eq!(got, [(D1.to_string(), vec![a1(), a2()]), (D2.to_string(), vec![b1()])]);
+    }
+
+    #[test]
+    fn a_clip_id_must_name_its_demo_player_and_round() {
+        let m = machine("bind");
+        // the value clips/ids.ts gives the same match key, player and round (src/clips/ids.test.ts)
+        assert_eq!(clip_id_for("match730_0001.dem", ME, 3).unwrap(), "c-e3fad9374b01f517-r3");
+        let refused = |c: ClipReq| build(&req(&m, vec![c]), &m.env, ID, "t").unwrap_err();
+        // match 1's round 3 id, with match 2's demo, another player, or another round
+        for c in [ClipReq { demo: D2.into(), ..clip(D1, 3, 1000, 2000) }, ClipReq { steamid: "76561190000000002".into(), ..clip(D1, 3, 1000, 2000) }, ClipReq { round: 4, ..clip(D1, 3, 1000, 2000) }] {
+            let e = refused(c);
+            assert!(e.contains("does not match its demo, player and round"), "{e}");
+        }
+        build(&req(&m, vec![clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
+    }
+
+    #[test]
+    fn a_clip_must_end_within_its_demo() {
+        let m = machine("length");
+        // the fixture demos are 100,000 ticks long
+        assert_eq!(demo_playback_ticks(&m.env.replays.join(D1)).unwrap(), 100_000);
+        build(&req(&m, vec![clip(D1, 3, 99_000, 100_000)]), &m.env, ID, "t").unwrap();
+        let e = build(&req(&m, vec![clip(D1, 3, 99_000, 100_001)]), &m.env, ID, "t").unwrap_err();
+        assert!(e.contains("run past the end of the demo, 100000 ticks"), "{e}");
+        // a file that is not a CS2 demo, and a demo whose file info is compressed, bound nothing: refused
+        fs::write(m.env.replays.join(D2), b"HL2DEMO\0................").unwrap();
+        assert!(build(&req(&m, vec![clip(D2, 1, 1, 2)]), &m.env, ID, "t").unwrap_err().contains("not a CS2 demo"));
+        let mut z = fake_demo(5000);
+        z[64] = 2 | 64;
+        fs::write(m.env.replays.join(D2), z).unwrap();
+        assert!(build(&req(&m, vec![clip(D2, 1, 1, 2)]), &m.env, ID, "t").unwrap_err().contains("compressed"));
+    }
+
+    #[test]
+    fn the_copyable_command_is_a_powershell_call_that_expands_nothing() {
+        let argv: Vec<String> = [r"C:\Tools & More\100% HLAE\it's\HLAE.exe", "-cmdLine", "-insecure +exec cs2stats_clips"].map(String::from).to_vec();
+        assert_eq!(powershell_command(&argv), r"& 'C:\Tools & More\100% HLAE\it''s\HLAE.exe' '-cmdLine' '-insecure +exec cs2stats_clips'");
     }
 
     #[test]
     fn a_request_the_director_cannot_record_is_refused_by_name() {
         let m = machine("bad");
-        let ok = clip(A1, "match730_0001.dem", 1000, 2000);
+        let ok = clip(D1, 3, 1000, 2000);
         let refused = |c: ClipReq, want: &str| {
             let e = build(&req(&m, vec![c]), &m.env, ID, "t").unwrap_err();
             assert!(e.contains(want), "{e}");
@@ -524,7 +703,7 @@ mod tests {
         refused(ClipReq { reason: "two\nlines".into(), ..ok.clone() }, "one line");
         let twice = build(&req(&m, vec![ok.clone(), ok.clone()]), &m.env, ID, "t").unwrap_err();
         assert!(twice.contains("chosen twice"), "{twice}");
-        let rates = build(&req(&m, vec![ok.clone(), ClipReq { id: A2.into(), tick_rate: 128.0, ..ok.clone() }]), &m.env, ID, "t").unwrap_err();
+        let rates = build(&req(&m, vec![ok.clone(), ClipReq { tick_rate: 128.0, ..clip(D1, 9, 1000, 2000) }]), &m.env, ID, "t").unwrap_err();
         assert!(rates.contains("disagree on the tick rate"), "{rates}");
         let not_hlae = build(&JobReq { clips: vec![ok.clone()], hlae: m.env.cs2_exe.display().to_string() }, &m.env, ID, "t").unwrap_err();
         assert!(not_hlae.contains("is not HLAE.exe"), "{not_hlae}");
@@ -548,7 +727,7 @@ mod tests {
         let elsewhere = m.root.join("elsewhere");
         fs::create_dir_all(&elsewhere).unwrap();
         link(&elsewhere, &m.env.replays.join("evil.dem"));
-        let e = build(&req(&m, vec![clip(A1, "evil.dem", 1000, 2000)]), &m.env, ID, "t").unwrap_err();
+        let e = build(&req(&m, vec![ClipReq { demo: "evil.dem".into(), ..clip(D1, 3, 1000, 2000) }]), &m.env, ID, "t").unwrap_err();
         assert!(e.contains("demo evil.dem"), "{e}");
         assert!(resolve_demo(&m.env.replays, "evil.dem").is_err());
         assert!(resolve_demo(&m.env.replays, "match730_0001.dem").is_ok());
@@ -567,7 +746,7 @@ mod tests {
     #[test]
     fn a_saved_job_holds_its_director_and_plan_and_refuses_its_folder_twice() {
         let m = machine("save");
-        let (plan, script) = build(&req(&m, vec![clip(A1, "match730_0001.dem", 1000, 2000)]), &m.env, ID, "t").unwrap();
+        let (plan, script) = build(&req(&m, vec![clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
         save(&plan, &script).unwrap();
         let dir = PathBuf::from(&plan.job_dir);
         assert_eq!(fs::read_to_string(dir.join("director.js")).unwrap(), script);

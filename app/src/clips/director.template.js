@@ -9,6 +9,9 @@
 //
 // The app's host (src-tauri/src/clips/job.rs) replaces the job placeholder below with the job as
 // JSON. Every line it logs starts with "[cs2stats]", so CS2's console.log says what happened to each clip.
+// HLAE's script cannot write files, so these lines are the director's only record: the host copies a
+// job's block, from "director loaded job=<id>" to "ALL DONE job=<id>", into the job's session.log, and a
+// take counts as recorded only when its "END <clip> ... why=end_tick" line is there (clips/mod.rs).
 //
 // demo_ui_mode hides the demo playback bar. The director sets it through HLAE's cvar API
 // (AdvancedfxCVar, HLAE 2.187.4 and later), keeps the value it found, and puts that back before CS2
@@ -211,7 +214,7 @@
 				// let the encoder finish writing, then close the game
 				if (frame - stateFrame >= JOB.finishFrames) {
 					restoreDemoUi();
-					log('ALL DONE');
+					log('ALL DONE job=' + JOB.id);
 					setState(S.DONE);
 					if (JOB.quitWhenDone) mirv.exec('quit');
 				}
@@ -250,5 +253,5 @@
 		}
 	});
 
-	log('director loaded: ' + JOB.demos.length + ' demos');
+	log('director loaded job=' + JOB.id + ': ' + JOB.demos.length + ' demos');
 }

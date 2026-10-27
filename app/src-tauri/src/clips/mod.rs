@@ -396,6 +396,79 @@ fn take_files(take: &Path) -> Option<TakeFiles> {
     Some(TakeFiles { name, audio: file_info(&audio).map(|_| audio), video, mtime })
 }
 
+/// How long a take's files must have gone unchanged before the take counts: they stop changing when
+/// HLAE's encoder closes them, and by then CS2 has quit, so this only covers a file system that reports
+/// the last write late. Ours; not measured.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The director's console lines for one job, kept beside its takes (`jobs\<job>\session.log`).
+const SESSION_LOG: &str = "session.log";
+
+/// Copies each job's block of director lines out of CS2's console.log (`-condebug`), from `director
+/// loaded job=<id>` to `ALL DONE job=<id>`, into that job's session.log, when the job's folder exists
+/// and has none yet. Only `[cs2stats]` lines are kept. HLAE's script API cannot write files (mirv-script
+/// fs.d.ts reads folders only), so the console log is the one record the director leaves; a later CS2
+/// session may replace it, so this runs before every launch and every scan. Returns the jobs captured.
+fn capture_sessions(root: &Path, console_log: &Path) -> Result<Vec<String>, String> {
+    let Ok(text) = fs::read_to_string(console_log) else { return Ok(vec![]) };
+    let mut captured = Vec::new();
+    let mut block: Option<(String, Vec<String>)> = None;
+    for line in text.lines() {
+        let Some(at) = line.find("[cs2stats] ") else { continue };
+        let ours = line[at..].trim_end().to_string();
+        let job_of = |key: &str| ours.split(key).nth(1).map(|r| r.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>());
+        if let Some(j) = job_of("director loaded job=") {
+            block = Some((j, vec![ours]));
+            continue;
+        }
+        let Some((j, lines)) = block.as_mut() else { continue };
+        lines.push(ours.clone());
+        if job_of("ALL DONE job=").as_deref() == Some(j.as_str()) {
+            let (j, lines) = block.take().unwrap();
+            if !job_id_ok(&j) {
+                continue;
+            }
+            let dir = root.join("jobs").join(&j);
+            if dir.is_dir() && fs::symlink_metadata(dir.join(SESSION_LOG)).is_err() {
+                let dir = folder_in(root, &["jobs", &j])?;
+                job::write_together(&dir, &[(SESSION_LOG, (lines.join("\n") + "\n").as_bytes())])?;
+                captured.push(j);
+            }
+        }
+    }
+    Ok(captured)
+}
+
+/// What proves a take complete (design/clips.md "When a take counts"): CS2 is no longer running; the
+/// job's session log shows the director ended this clip at its end tick (`END <id> ... why=end_tick`)
+/// and then finished the job (`ALL DONE job=<job>`); the take holds a non-empty video.mp4 and the
+/// audio.wav the job asked for (it always sets `startMovieWav 1`); and neither file has changed for
+/// SETTLE. Otherwise the reason it does not count.
+fn take_complete(job_dir: &Path, job_id: &str, id: &str, t: &TakeFiles, cs2_running: bool, now: SystemTime) -> Result<(), String> {
+    if cs2_running {
+        return Err("CS2 is still running, so the take may still be recording".into());
+    }
+    let log = file_inside(job_dir, &job_dir.join(SESSION_LOG)).map_err(|_| "the director has not reported this job finished".to_string())?;
+    let log = fs::read_to_string(&log).map_err(|e| format!("{}: {e}", log.display()))?;
+    let ended = log.lines().any(|l| l.starts_with(&format!("[cs2stats] END {id} ")) && l.contains(" why=end_tick"));
+    if !ended {
+        return Err("the director did not record this clip to its end tick".into());
+    }
+    if !log.lines().any(|l| l == format!("[cs2stats] ALL DONE job={job_id}")) {
+        return Err("the director did not finish this job".into());
+    }
+    let audio = t.audio.as_ref().ok_or("the take has no audio.wav")?;
+    let settled = |p: &Path| -> bool {
+        let Some((size, mtime)) = file_info(p) else { return false };
+        let age = now.duration_since(UNIX_EPOCH + std::time::Duration::from_millis(mtime)).unwrap_or_default();
+        size > 0 && age >= SETTLE
+    };
+    if !settled(&t.video) || !settled(audio) {
+        return Err("the take's files are empty or still changing".into());
+    }
+    Ok(())
+}
+
 /// The newest complete take of one clip (`raw\<clip id>`): the highest-numbered take folder with a video.
 fn newest_take(clip: &Path) -> Option<TakeFiles> {
     let mut takes: Vec<String> = fs::read_dir(clip).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| take_name_ok(n)).collect();
@@ -413,7 +486,7 @@ fn input_inside(root: &Path, p: &Path) -> Result<PathBuf, String> {
     Ok(q)
 }
 
-fn scan_in(root: &Path) -> Result<ClipsScan, String> {
+fn scan_in(root: &Path, cs2_running: bool, now: SystemTime) -> Result<ClipsScan, String> {
     let mut out = ClipsScan { finished: vec![], takes: vec![], reels: vec![] };
     let names = |d: &Path| -> Vec<String> {
         fs::read_dir(d).map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect()).unwrap_or_default()
@@ -421,21 +494,23 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
     for n in names(root) {
         if let Some(id) = n.strip_suffix(".mp4").filter(|id| clip_id_ok(id)) {
             let p = root.join(&n);
-            if let Some((size, mtime)) = file_info(&p) {
+            // a clip is renamed into place only after FFmpeg exits cleanly (run_render); an empty file is not one
+            if let Some((size @ 1.., mtime)) = file_info(&p) {
                 out.finished.push(Finished { id: id.into(), path: p.display().to_string(), size, mtime });
             }
         }
     }
     for n in names(&root.join("reels")) {
         let p = root.join("reels").join(&n);
-        if let (true, Some((size, mtime))) = (n.ends_with(".mp4"), file_info(&p)) {
+        if let (true, Some((size @ 1.., mtime))) = (n.ends_with(".mp4") && !n.starts_with('.'), file_info(&p)) {
             out.reels.push(Finished { id: n.trim_end_matches(".mp4").into(), path: p.display().to_string(), size, mtime });
         }
     }
     for job in names(&root.join("jobs")).into_iter().filter(|j| job_id_ok(j)) {
         let raw = root.join("jobs").join(&job).join("raw");
         for id in names(&raw).into_iter().filter(|i| clip_id_ok(i)) {
-            if let Some(t) = newest_take(&raw.join(&id)) {
+            let Some(t) = newest_take(&raw.join(&id)) else { continue };
+            if take_complete(&root.join("jobs").join(&job), &job, &id, &t, cs2_running, now).is_ok() {
                 out.takes.push(Take { id, job: job.clone(), take: t.name, video: t.video.display().to_string(), audio: t.audio.map(|a| a.display().to_string()), mtime: t.mtime });
             }
         }
@@ -449,7 +524,15 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
 /// The clips folder's finished clips, reels and HLAE's raw takes. Reads only; links are not listed.
 #[tauri::command]
 pub async fn clips_scan() -> Result<ClipsScan, String> {
-    tauri::async_runtime::spawn_blocking(|| scan_in(&clips_root()?)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(|| {
+        let root = clips_root()?;
+        if let Ok((csgo, _)) = cs2_paths() {
+            capture_sessions(&root, &csgo.join("console.log"))?;
+        }
+        scan_in(&root, !cs2_listed()?.is_empty(), SystemTime::now())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------------------------------------------------------------- jobs
@@ -524,6 +607,8 @@ pub struct Launched {
 pub async fn clips_launch(job: String) -> Result<Launched, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (env, csgo) = job_env()?;
+        // the console log of an earlier job is replaced by this session's; keep its director lines first
+        capture_sessions(&env.clips_root, &csgo.join("console.log"))?;
         let plan = rebuild_saved(&env, &job)?;
         if let Some(p) = cs2_listed()?.first() {
             return Err(format!("CS2 is running (process {}). Close it, then render again.", p.pid));
@@ -558,7 +643,22 @@ fn lower_third_line(s: &str) -> Result<&str, String> {
 /// folder, the two lines written to `text\` by this function, the font from the fixed list, the
 /// output `<id>.mp4` in the clips folder.
 #[allow(clippy::too_many_arguments)]
-fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, reason: &str, subline: &str, duration_s: f64) -> Result<Vec<String>, String> {
+/// An FFmpeg run that writes `part`, renamed over `out` only after a clean exit (run_render).
+#[derive(Debug)]
+struct Render {
+    args: Vec<String>,
+    part: PathBuf,
+    out: PathBuf,
+}
+
+/// Whether CS2 runs and the time now, which decide whether a take is complete (take_complete).
+struct Gate {
+    cs2_running: bool,
+    now: SystemTime,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, reason: &str, subline: &str, duration_s: f64, gate: &Gate) -> Result<Render, String> {
     if !clip_id_ok(id) || !job_id_ok(job_id) || !take_name_ok(take) {
         return Err(format!("{id:?} in {job_id:?}, {take:?} is not a take of a clip of a job"));
     }
@@ -568,7 +668,8 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, 
     let dir = root.join("jobs").join(job_id).join("raw").join(id).join(take);
     let files = take_files(&dir).ok_or_else(|| format!("{} holds no recorded video", dir.display()))?;
     let video = input_inside(root, &files.video)?;
-    let audio = files.audio.map(|a| input_inside(root, &a)).transpose()?;
+    let audio = files.audio.as_ref().map(|a| input_inside(root, a)).transpose()?;
+    take_complete(&root.join("jobs").join(job_id), job_id, id, &files, gate.cs2_running, gate.now).map_err(|e| format!("{}: not finished recording: {e}", dir.display()))?;
     // every target is checked before anything is written, so a refusal leaves nothing behind
     let text = folder_in(root, &["text"])?;
     let (rn, sn) = (format!("{id}.txt"), format!("{id}-sub.txt"));
@@ -577,24 +678,32 @@ fn finish_command(root: &Path, font: &Path, id: &str, job_id: &str, take: &str, 
     let out = output_in(root, &format!("{id}.mp4"))?;
     let (reason, subline) = (lower_third_line(reason)?, lower_third_line(subline)?);
     job::write_together(&text, &[(rn.as_str(), reason.as_bytes()), (sn.as_str(), subline.as_bytes())])?;
+    let part = job::new_part(root, &format!("{id}.mp4"))?;
     let args = ffmpeg::finish_args(&ffmpeg::FinishSpec {
         video: &video, audio: audio.as_deref(), reason_file: &reason_file, subline_file: &sub_file, font,
-        start_s: 0.0, duration_s, width: job::WIDTH, height: job::HEIGHT, fps: job::FPS, out: &out,
-    })?;
-    ffmpeg::check_built(&args)?;
-    Ok(args)
+        start_s: 0.0, duration_s, width: job::WIDTH, height: job::HEIGHT, fps: job::FPS, out: &part,
+    })
+    .and_then(|a| ffmpeg::check_built(&a).map(|_| a))
+    .inspect_err(|_| { let _ = fs::remove_file(&part); })?;
+    Ok(Render { args, part, out })
 }
 
 /// Builds the reel command for finished clips `ids`, in order, into `reels\<name>`.
-fn reel_command(root: &Path, ids: &[String], name: &str) -> Result<Vec<String>, String> {
+fn reel_command(root: &Path, ids: &[String], name: &str) -> Result<Render, String> {
     let clips = ids
         .iter()
         .map(|id| if clip_id_ok(id) { input_inside(root, &root.join(format!("{id}.mp4"))) } else { Err(format!("{id:?} is not a clip id")) })
         .collect::<Result<Vec<_>, _>>()?;
-    let out = output_in(&folder_in(root, &["reels"])?, name)?;
-    let args = ffmpeg::reel_args(&clips, &out)?;
-    ffmpeg::check_built(&args)?;
-    Ok(args)
+    let reels = folder_in(root, &["reels"])?;
+    let out = output_in(&reels, name)?;
+    if clips.len() < 2 {
+        return Err(format!("FFmpeg template: a reel needs two clips or more, got {}", clips.len()));
+    }
+    let part = job::new_part(&reels, name)?;
+    let args = ffmpeg::reel_args(&clips, &part)
+        .and_then(|a| ffmpeg::check_built(&a).map(|_| a))
+        .inspect_err(|_| { let _ = fs::remove_file(&part); })?;
+    Ok(Render { args, part, out })
 }
 
 #[derive(Serialize)]
@@ -605,17 +714,40 @@ pub struct FfmpegRun {
     output: String,
 }
 
-fn run_ffmpeg(root: &Path, args: &[String], hlae: Option<&str>) -> Result<FfmpegRun, String> {
+/// Runs a render with `exec` (FFmpeg's exit code and stderr) and settles its part file: renamed over the
+/// output only after exit code 0 with a non-empty file, else removed, so a failed or cut-off run never
+/// replaces a good clip or stands as one.
+fn run_render(r: &Render, exec: impl FnOnce(&[String]) -> Result<(Option<i32>, String), String>) -> Result<FfmpegRun, String> {
+    let ran = exec(&r.args);
+    let ok = matches!(ran, Ok((Some(0), _))) && file_info(&r.part).is_some_and(|(size, _)| size > 0);
+    if !ok {
+        let _ = fs::remove_file(&r.part);
+    }
+    let (code, stderr) = ran.inspect_err(|_| { let _ = fs::remove_file(&r.part); })?;
+    if ok {
+        fs::rename(&r.part, &r.out).map_err(|e| {
+            let _ = fs::remove_file(&r.part);
+            format!("{}: {e}", r.out.display())
+        })?;
+        return Ok(FfmpegRun { code, error: None, output: r.out.display().to_string() });
+    }
+    let err: Vec<char> = stderr.trim().chars().collect();
+    let tail: String = err[err.len().saturating_sub(2000)..].iter().collect();
+    Ok(FfmpegRun { code: if code == Some(0) { None } else { code }, error: Some(if code == Some(0) { "FFmpeg exited cleanly but wrote nothing".into() } else { tail }), output: String::new() })
+}
+
+/// Runs FFmpeg from the clips folder on a built render.
+fn run_ffmpeg(root: &Path, r: &Render, hlae: Option<&str>) -> Result<FfmpegRun, String> {
     let ffmpeg = find_ffmpeg(hlae.map(Path::new))?;
-    let out = std::process::Command::new(&ffmpeg)
-        .args(args)
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("{}: {e}", ffmpeg.display()))?;
-    let err: Vec<char> = String::from_utf8_lossy(&out.stderr).trim().chars().collect();
-    let code = out.status.code();
-    Ok(FfmpegRun { code, error: (code != Some(0)).then(|| err[err.len().saturating_sub(2000)..].iter().collect()), output: args.last().cloned().unwrap_or_default() })
+    run_render(r, |args| {
+        let out = std::process::Command::new(&ffmpeg)
+            .args(args)
+            .current_dir(root)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("{}: {e}", ffmpeg.display()))?;
+        Ok((out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned()))
+    })
 }
 
 /// Finishes HLAE's take `take` of clip `id` from job `job` into `<id>.mp4`: trimmed to `duration_s`, the
@@ -625,8 +757,9 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
         let font = ffmpeg::allowed_font().ok_or("No font for the lower third was found (Segoe UI or Arial in Windows' Fonts folder)")?;
-        let args = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s)?;
-        run_ffmpeg(&root, &args, hlae.as_deref())
+        let gate = Gate { cs2_running: !cs2_listed()?.is_empty(), now: SystemTime::now() };
+        let render = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s, &gate)?;
+        run_ffmpeg(&root, &render, hlae.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -638,8 +771,8 @@ pub async fn clips_reel(ids: Vec<String>, hlae: Option<String>) -> Result<Ffmpeg
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
         let (stamp, _) = job::new_job_id(SystemTime::now());
-        let args = reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-")))?;
-        run_ffmpeg(&root, &args, hlae.as_deref())
+        let render = reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-")))?;
+        run_ffmpeg(&root, &render, hlae.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -693,14 +826,95 @@ mod tests {
 
     const TAKE: &str = "take0000";
 
-    /// A take as HLAE lays one out: the screen stream's video in the take folder, the sound beside it.
-    fn take(root: &Path, audio: bool) {
+    /// CS2 has quit, now.
+    fn gate() -> Gate {
+        Gate { cs2_running: false, now: SystemTime::now() }
+    }
+
+    /// Sets a file's last write a minute back, past SETTLE.
+    fn settle(p: &Path) {
+        fs::OpenOptions::new().write(true).open(p).unwrap().set_modified(SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
+    }
+
+    /// The director's session log for JOB, as capture_sessions keeps it: CLIP recorded to its end tick, the job finished.
+    fn session(root: &Path, why: &str) {
+        let dir = root.join("jobs").join(JOB);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(SESSION_LOG), format!("[cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] END {CLIP} tick=2000 why={why}\n[cs2stats] ALL DONE job={JOB}\n")).unwrap();
+    }
+
+    /// A complete take as HLAE lays one out: the screen stream's video in the take folder, the sound
+    /// beside it, both settled, and the director's log saying it recorded the clip and finished.
+    fn take(root: &Path) {
         let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
         fs::create_dir_all(&t).unwrap();
         fs::write(t.join("video.mp4"), b"v").unwrap();
-        if audio {
-            fs::write(t.join("audio.wav"), b"a").unwrap();
-        }
+        fs::write(t.join("audio.wav"), b"a").unwrap();
+        settle(&t.join("video.mp4"));
+        settle(&t.join("audio.wav"));
+        session(root, "end_tick");
+    }
+
+    #[test]
+    fn a_take_counts_only_after_the_director_ends_it_and_cs2_has_quit() {
+        let s = scratch("complete");
+        let root = &s.0;
+        let t = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
+        fs::create_dir_all(&t).unwrap();
+        fs::write(t.join("video.mp4"), b"v").unwrap();
+        let listed = |running: bool| scan_in(root, running, SystemTime::now()).unwrap().takes.len();
+        let finish = |running: bool| finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &Gate { cs2_running: running, now: SystemTime::now() });
+        // a growing video, with no sound yet and no word from the director: not recorded
+        assert_eq!(listed(false), 0);
+        assert!(finish(false).unwrap_err().contains("not finished recording"));
+        // the director's lines reach the job through CS2's console log, once it has said ALL DONE
+        let console = root.join("console.log");
+        fs::write(&console, format!("noise\n[cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] START {CLIP} tick=1000\n")).unwrap();
+        assert_eq!(capture_sessions(root, &console).unwrap(), Vec::<String>::new());
+        fs::write(&console, format!("noise\n00:01 [cs2stats] director loaded job={JOB}: 1 demos\n[cs2stats] END {CLIP} tick=2000 why=end_tick\nmore noise\n[cs2stats] ALL DONE job={JOB}\n")).unwrap();
+        assert_eq!(capture_sessions(root, &console).unwrap(), [JOB]);
+        let log = fs::read_to_string(root.join("jobs").join(JOB).join(SESSION_LOG)).unwrap();
+        assert!(!log.contains("noise") && log.contains(&format!("[cs2stats] END {CLIP} tick=2000 why=end_tick")));
+        // still no sound, then sound still being written, then CS2 still running: not yet
+        assert_eq!(listed(false), 0);
+        fs::write(t.join("audio.wav"), b"a").unwrap();
+        assert_eq!(listed(false), 0);
+        settle(&t.join("video.mp4"));
+        settle(&t.join("audio.wav"));
+        assert_eq!((listed(true), listed(false)), (0, 1));
+        assert!(finish(true).unwrap_err().contains("CS2 is still running"));
+        finish(false).unwrap();
+        // a clip the director stopped early (the camera left the player) is not a recording of the moment
+        session(root, "camera_lost");
+        assert_eq!(listed(false), 0);
+    }
+
+    #[test]
+    fn a_failed_render_leaves_the_old_clip_and_no_part_file() {
+        let s = scratch("render");
+        let root = &s.0;
+        take(root);
+        let out = root.join(format!("{CLIP}.mp4"));
+        fs::write(&out, b"the good clip").unwrap();
+        let parts = || fs::read_dir(root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part.mp4")).count();
+        let render = || finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap();
+        // FFmpeg writes half a file and fails: the old clip stays, the part goes
+        let r = render();
+        assert_eq!((r.args.last().unwrap(), &r.out), (&r.part.display().to_string(), &out));
+        let run = run_render(&r, |args| { fs::write(args.last().unwrap(), b"half").unwrap(); Ok((Some(1), "boom".into())) }).unwrap();
+        assert_eq!((run.code, run.error.as_deref(), fs::read(&out).unwrap(), parts()), (Some(1), Some("boom"), b"the good clip".to_vec(), 0));
+        // a clean exit that wrote nothing counts as a failure too
+        let r = render();
+        let run = run_render(&r, |_| Ok((Some(0), String::new()))).unwrap();
+        assert_eq!((run.error.is_some(), fs::read(&out).unwrap(), parts()), (true, b"the good clip".to_vec(), 0));
+        // FFmpeg could not start: nothing changes either
+        let r = render();
+        assert!(run_render(&r, |_| Err("no ffmpeg".into())).is_err());
+        assert_eq!((fs::read(&out).unwrap(), parts()), (b"the good clip".to_vec(), 0));
+        // a clean, non-empty run replaces the clip
+        let r = render();
+        let run = run_render(&r, |args| { fs::write(args.last().unwrap(), b"the new clip").unwrap(); Ok((Some(0), String::new())) }).unwrap();
+        assert_eq!((run.code, run.output, fs::read(&out).unwrap(), parts()), (Some(0), out.display().to_string(), b"the new clip".to_vec(), 0));
     }
 
     #[test]
@@ -721,28 +935,32 @@ mod tests {
         mk("notes/video.mp4", b"x");
         let t = newest_take(&clip).unwrap();
         assert_eq!((t.name.as_str(), t.video.clone(), t.audio.clone()), ("take0001", clip.join("take0001").join("screen").join("video.mp4"), Some(clip.join("take0001").join("audio.wav"))));
-        let scan = scan_in(&s.0).unwrap();
+        for p in ["take0000/video.mp4", "take0001/screen/video.mp4", "take0001/audio.wav"] {
+            settle(&clip.join(p));
+        }
+        session(&s.0, "end_tick");
+        let scan = scan_in(&s.0, false, SystemTime::now()).unwrap();
         assert_eq!(scan.takes.iter().map(|t| (t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [("take0001", true)]);
         // finishing names its take, and reads that take's files only
-        let args = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0001", "r", "s", 3.0).unwrap();
+        let args = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0001", "r", "s", 3.0, &gate()).unwrap().args;
         assert!(args.contains(&clip.join("take0001").join("screen").join("video.mp4").display().to_string()));
         assert!(args.contains(&clip.join("take0001").join("audio.wav").display().to_string()));
-        assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0002", "r", "s", 3.0).unwrap_err().contains("no recorded video"));
+        assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, "take0002", "r", "s", 3.0, &gate()).unwrap_err().contains("no recorded video"));
         for bad in ["../take0001", "take01", "takeABCD"] {
-            assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, bad, "r", "s", 3.0).unwrap_err().contains("is not a take"), "{bad}");
+            assert!(finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, bad, "r", "s", 3.0, &gate()).unwrap_err().contains("is not a take"), "{bad}");
         }
     }
 
     #[test]
     fn a_take_file_with_another_hard_link_is_not_read() {
         let s = scratch("takelink");
-        take(&s.0, false);
+        take(&s.0);
         let elsewhere = s.0.join("elsewhere.mp4");
         fs::write(&elsewhere, b"secret").unwrap();
         let v = s.0.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE).join("video.mp4");
         fs::remove_file(&v).unwrap();
         fs::hard_link(&elsewhere, &v).unwrap();
-        let e = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        let e = finish_command(&s.0, &s.0.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
     }
 
@@ -750,22 +968,25 @@ mod tests {
     fn finishing_reads_only_the_take_and_writes_the_text_and_clip_into_the_clips_folder() {
         let s = scratch("finish");
         let root = &s.0;
-        take(root, true);
+        take(root);
         let font = root.join("font.ttf");
-        let args = finish_command(root, &font, CLIP, JOB, TAKE, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0).unwrap();
+        let r = finish_command(root, &font, CLIP, JOB, TAKE, "3K on B Site, +38% round impact", "Mirage · Round 14", 3.0, &gate()).unwrap();
+        let args = &r.args;
         let take = root.join("jobs").join(JOB).join("raw").join(CLIP).join(TAKE);
         assert_eq!(args.iter().filter(|a| a.as_str() == "-i").count(), 2);
         assert!(args.contains(&take.join("video.mp4").display().to_string()) && args.contains(&take.join("audio.wav").display().to_string()));
-        assert_eq!(args.last().unwrap(), &root.join(format!("{CLIP}.mp4")).display().to_string());
+        // FFmpeg writes a part file beside the clip, renamed over it only after a clean run (run_render)
+        assert_eq!((args.last().unwrap(), &r.out), (&r.part.display().to_string(), &root.join(format!("{CLIP}.mp4"))));
+        assert!(r.part.parent() == Some(root.as_path()) && r.part.file_name().unwrap().to_string_lossy().ends_with(".part.mp4"));
         // the text reaches drawtext only through files written into text\, never inline
         let filter = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
         assert!(!filter.contains("round impact") && filter.contains(&ffmpeg::filter_path(&root.join("text").join(format!("{CLIP}.txt")))));
         assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "3K on B Site, +38% round impact");
         // refused: a bad id, a missing take, text that is not one line, a clip of no length
-        assert!(finish_command(root, &font, "../x", JOB, TAKE, "r", "s", 3.0).is_err());
-        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, TAKE, "r", "s", 3.0).is_err());
-        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "a\nb", "s", 3.0).unwrap_err().contains("one line"));
-        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "r", "s", 0.0).is_err());
+        assert!(finish_command(root, &font, "../x", JOB, TAKE, "r", "s", 3.0, &gate()).is_err());
+        assert!(finish_command(root, &font, "c-0123456789abcdef-r4", JOB, TAKE, "r", "s", 3.0, &gate()).is_err());
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "a\nb", "s", 3.0, &gate()).unwrap_err().contains("one line"));
+        assert!(finish_command(root, &font, CLIP, JOB, TAKE, "r", "s", 0.0, &gate()).is_err());
     }
 
     #[test]
@@ -780,7 +1001,7 @@ mod tests {
         let raw = root.join("jobs").join(JOB).join("raw");
         fs::create_dir_all(&raw).unwrap();
         link(&outside, &raw.join(CLIP));
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
         assert!(e.contains("outside"), "{e}");
         // a finished clip's name taken by a link
         link(&outside, &root.join(format!("{CLIP}.mp4")));
@@ -792,25 +1013,25 @@ mod tests {
     fn an_output_or_lower_third_with_another_hard_link_is_refused() {
         let s = scratch("hardlink");
         let root = &s.0;
-        take(root, false);
+        take(root);
         let elsewhere = root.join("elsewhere.txt");
         fs::write(&elsewhere, b"keep").unwrap();
         // the clip's output name is a second hard link to another file
         fs::hard_link(&elsewhere, root.join(format!("{CLIP}.mp4"))).unwrap();
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
         assert!(!root.join("text").join(format!("{CLIP}.txt")).exists(), "a refused finish wrote its text");
         fs::remove_file(root.join(format!("{CLIP}.mp4"))).unwrap();
         // the lower third's text file, likewise
         fs::create_dir_all(root.join("text")).unwrap();
         fs::hard_link(&elsewhere, root.join("text").join(format!("{CLIP}.txt"))).unwrap();
-        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0).unwrap_err();
+        let e = finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "r", "s", 3.0, &gate()).unwrap_err();
         assert!(e.contains("another hard link"), "{e}");
         assert_eq!(fs::read(&elsewhere).unwrap(), b"keep");
         // a plain file of that name is replaced, not written through
         fs::remove_file(root.join("text").join(format!("{CLIP}.txt"))).unwrap();
         fs::write(root.join("text").join(format!("{CLIP}.txt")), b"old").unwrap();
-        finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "new", "s", 3.0).unwrap();
+        finish_command(root, &root.join("f.ttf"), CLIP, JOB, TAKE, "new", "s", 3.0, &gate()).unwrap();
         assert_eq!(fs::read_to_string(root.join("text").join(format!("{CLIP}.txt"))).unwrap(), "new");
     }
 
@@ -822,8 +1043,8 @@ mod tests {
         for id in [CLIP, b] {
             fs::write(root.join(format!("{id}.mp4")), b"x").unwrap();
         }
-        let args = reel_command(root, &[CLIP.into(), b.into()], "reel-1.mp4").unwrap();
-        assert_eq!(args.last().unwrap(), &root.join("reels").join("reel-1.mp4").display().to_string());
+        let r = reel_command(root, &[CLIP.into(), b.into()], "reel-1.mp4").unwrap();
+        assert_eq!((r.args.last().unwrap(), r.out.clone()), (&r.part.display().to_string(), root.join("reels").join("reel-1.mp4")));
         assert!(reel_command(root, &["../../x".into(), b.into()], "r.mp4").unwrap_err().contains("not a clip id"));
         assert!(reel_command(root, &[CLIP.into()], "r.mp4").unwrap_err().contains("two clips or more"));
     }
@@ -836,12 +1057,17 @@ mod tests {
         fs::write(root.join("notes.mp4"), b"x").unwrap();
         fs::create_dir_all(root.join("reels")).unwrap();
         fs::write(root.join("reels").join("reel-1.mp4"), b"x").unwrap();
-        take(root, false);
+        take(root);
         fs::create_dir_all(root.join("jobs").join("junk").join("raw").join(CLIP)).unwrap();
-        let s = scan_in(root).unwrap();
+        // an empty clip and a part file are not finished clips
+        fs::write(root.join("c-0123456789abcdef-r4.mp4"), b"").unwrap();
+        fs::write(root.join(format!(".{CLIP}.0123456789abcdef.part.mp4")), b"x").unwrap();
+        fs::write(root.join("reels").join(".reel-2.0123456789abcdef.part.mp4"), b"x").unwrap();
+        fs::write(root.join("reels").join("reel-3.mp4"), b"").unwrap();
+        let s = scan_in(root, false, SystemTime::now()).unwrap();
         assert_eq!(s.finished.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), [CLIP]);
         assert_eq!(s.reels.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["reel-1"]);
-        assert_eq!(s.takes.iter().map(|t| (t.id.as_str(), t.job.as_str(), t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [(CLIP, JOB, TAKE, false)]);
+        assert_eq!(s.takes.iter().map(|t| (t.id.as_str(), t.job.as_str(), t.take.as_str(), t.audio.is_some())).collect::<Vec<_>>(), [(CLIP, JOB, TAKE, true)]);
     }
 
     /// A machine with a saved job, for the launch's rebuild check.
@@ -849,7 +1075,7 @@ mod tests {
         let root = &s.0;
         let replays = root.join("replays");
         fs::create_dir_all(&replays).unwrap();
-        fs::write(replays.join("match730_0001.dem"), b"demo").unwrap();
+        fs::write(replays.join("match730_0001.dem"), job::fake_demo(100_000)).unwrap();
         let cs2 = root.join("bin").join("cs2.exe");
         fs::create_dir_all(cs2.parent().unwrap()).unwrap();
         fs::write(&cs2, b"").unwrap();
@@ -861,7 +1087,7 @@ mod tests {
         fs::create_dir_all(&clips).unwrap();
         let env = job::JobEnv { clips_root: clips, replays, cs2_exe: cs2 };
         let req = job::JobReq {
-            clips: vec![job::ClipReq { id: CLIP.into(), demo: "match730_0001.dem".into(), steamid: "76561190000000001".into(), start_tick: 1000, end_tick: 2000, tick_rate: 64.0, reason: "r".into() }],
+            clips: vec![job::ClipReq { id: job::clip_id_for("match730_0001.dem", "76561190000000001", 3).unwrap(), demo: "match730_0001.dem".into(), steamid: "76561190000000001".into(), round: 3, start_tick: 1000, end_tick: 2000, tick_rate: 64.0, reason: "r".into() }],
             hlae: hlae.display().to_string(),
         };
         let (plan, script) = job::build(&req, &env, JOB, "2026-10-26T18:04:05.123Z").unwrap();

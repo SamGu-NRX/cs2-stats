@@ -3,8 +3,12 @@
 // exact HLAE command, the director script and every path itself, and checks each demo in CS2's
 // replays folder; nothing here can change what the launch runs. The types mirror the Rust structs' JSON.
 
-/** One chosen moment: its clip id, its demo's file name in CS2's replays folder, the POV player and the ticks. */
-export interface ClipRequest { id: string; demo: string; steamid: string; startTick: number; endTick: number; tickRate: number; reason: string }
+/**
+ * One chosen moment: its clip id, its demo's file name in CS2's replays folder, the POV player, its
+ * round and the ticks. The host recomputes the id from the demo, player and round (job.rs clip_id_for)
+ * and refuses a request whose id does not match.
+ */
+export interface ClipRequest { id: string; demo: string; steamid: string; round: number; startTick: number; endTick: number; tickRate: number; reason: string }
 export interface JobRequest { clips: ClipRequest[]; hlae: string }
 
 /** The size and rate every take is recorded at (job.rs WIDTH, HEIGHT, FPS). */
@@ -22,8 +26,8 @@ export interface RenderPlan {
   cs2Exe: string;
   /** HLAE.exe and its arguments: exactly what the launch runs */
   argv: string[];
-  /** argv quoted for a Windows command prompt */
-  commandLine: string;
+  /** argv as one PowerShell command (`& 'HLAE.exe' '-noGui' ...`): for PowerShell, not cmd.exe */
+  powershell: string;
   /** written into CS2's cfg folder at launch: game\csgo\cfg\<cfgFile> */
   cfgFile: string;
   cfgText: string;
@@ -34,6 +38,6 @@ export interface RenderPlan {
 }
 
 /** The request for these moments: each with its demo's file name (state.ts demoSource). */
-export function jobRequest(clips: { id: string; demo: string; player: string; startTick: number; endTick: number; tickRate: number; reason: string }[], hlae: string): JobRequest {
-  return { hlae, clips: clips.map((c) => ({ id: c.id, demo: c.demo, steamid: c.player, startTick: c.startTick, endTick: c.endTick, tickRate: c.tickRate, reason: c.reason })) };
+export function jobRequest(clips: { id: string; demo: string; player: string; round: number; startTick: number; endTick: number; tickRate: number; reason: string }[], hlae: string): JobRequest {
+  return { hlae, clips: clips.map((c) => ({ id: c.id, demo: c.demo, steamid: c.player, round: c.round, startTick: c.startTick, endTick: c.endTick, tickRate: c.tickRate, reason: c.reason })) };
 }

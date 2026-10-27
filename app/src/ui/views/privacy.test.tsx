@@ -323,7 +323,7 @@ function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): Clip
     const argv = [hlae, "-noGui", "-autoStart", "-noConfig", "-afxDisableSteamStorage", "-customLoader", "-hookDllPath", `${HOME_DIR}\\Tools\\HLAE\\x64\\AfxHookSource2.dll`, "-programPath", cs2, "-cmdLine", "-insecure +exec cs2stats_clips"];
     return {
       version: 2, id: "job-20261026T180405123Z-a1b2c3", created: "2026-10-26T18:04:05.123Z", settings: { width: 1920, height: 1080, fps: 60 }, jobDir, hlaeExe: hlae, hookDll: argv[7], cs2Exe: cs2, argv,
-      commandLine: argv.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" "), cfgFile: "cs2stats_clips.cfg", cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`,
+      powershell: ["&", ...argv.map((a) => `'${a}'`)].join(" "), cfgFile: "cs2stats_clips.cfg", cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`,
       directorFile: `${jobDir}\\director.js`, outputs: [], request,
       demos: request.clips.map((c) => ({ path: `${HOME_DIR}\\replays\\${c.demo}`, tickRate: c.tickRate, clips: [{ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason }] })),
     };
