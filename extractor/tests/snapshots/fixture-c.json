@@ -963,6 +963,10 @@
      "String",
      "c97244ec16e34208"
     ],
+    "departed": [
+     "String",
+     "159c15b8d12cb074"
+    ],
     "dropped_attempts": [
      "String",
      "6a43788daa3b485e"
@@ -981,7 +985,7 @@
     ],
     "extractor_version": [
      "String",
-     "c3240999f7475e86"
+     "efda5acb7ea0e440"
     ],
     "final_tick": [
      "Int32",
@@ -1035,6 +1039,10 @@
      "String",
      null
     ],
+    "parts": [
+     "String",
+     "159c15b8d12cb074"
+    ],
     "patch_version": [
      "String",
      "4deccdb9e047686f"
@@ -1074,6 +1082,10 @@
     "score_t_start": [
      "Int16",
      "22dcd4a33cdf5b6d"
+    ],
+    "scoreboard_taken": [
+     "String",
+     "eb4e847aa0b85bf0"
     ],
     "server_name": [
      "String",
