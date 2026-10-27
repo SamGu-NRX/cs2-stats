@@ -17,8 +17,8 @@ const ME = "76561190000000001";
 const entry = (file: string, source: string) => ({ file, origin: "", hasAim: true, hasPos: true, match: { source, map: "de_mirage", date: "2026-10-24", startedAt: null, complete: true }, you: 0, players: [] }) as unknown as MatchEntry;
 const row = (id: string, file: string, round: number, reason: string): MomentRow => ({
   id, file, round, reason, map: "de_mirage", start: 0, matchRank: 1, player: ME, side: "T", kinds: ["3k"], flicks: 0, clutch: null, swing: 0.3, place: "BombsiteB",
-  kills: [{ tick: 1320, weapon: "ak47", headshot: true, wallbang: false, smoke: false, noscope: false, blind: null, inAir: null }],
-  startTick: 1000, endTick: 1960, tickRate: 64, score: 6,
+  kills: [{ tick: 1320, weapon: "ak47", headshot: true, wallbang: false, smoke: false, noscope: false, blind: null, inAir: null, inClip: true }],
+  startTick: 1000, endTick: 1960, tickRate: 64, score: 6, clipNote: null,
 });
 const READY = "c-00000000000000aa-r3", DONE = "c-00000000000000aa-r9", NODEMO = "c-00000000000000bb-r1", TAKEN = "c-00000000000000aa-r5";
 const JOB = "job-20261026T180405123Z-a1b2c3";
@@ -264,6 +264,23 @@ describe("the Clips page", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("draws only the kills inside the clip on its track, keeps the round's 4K, and says why the last kill is not in the video", async () => {
+    // fails if a kill after the clip's end (moments.ts inClip) gets a mark on the track or an icon in the
+    // feed, if the badge drops to the kills shown, or if the note is missing on the row or in the dialog
+    const note = "The 4th kill came 2.1 s after they died. The clip ends 0.5 s after the death, so it isn't in the video.";
+    const k = (tick: number, inClip: boolean) => ({ tick, weapon: "ak47", headshot: false, wallbang: false, smoke: false, noscope: false, blind: null, inAir: null, inClip });
+    moments = [{ ...row(READY, VALVE, 3, "4K on B Site, +80% round impact"), kinds: ["4k"], kills: [k(1320, true), k(1400, true), k(1500, true), k(1650, false)], endTick: 1550, clipNote: note }];
+    await render();
+    const r = rowOf("4K on B Site, +80% round impact");
+    expect([r.querySelectorAll(".ctrack__kill").length, r.querySelectorAll(".clip__feed .hlr__kill").length, r.querySelector(".mk")!.textContent]).toEqual([3, 3, "4K"]);
+    expect(r.querySelector(".ctrack")!.getAttribute("aria-label")).toBe("0:09 clip, 3 kills at 5 s, 6 s, 8 s");
+    expect(r.querySelector(".clip__note")!.textContent).toBe(note);
+    await act(async () => { r.querySelector<HTMLInputElement>("input")!.click(); });
+    await click(button(el, "Render 1 clip"));
+    await act(async () => {});
+    expect(document.querySelector("dialog.rdlg .rdlg__clips .clip__note")!.textContent).toBe(note);
   });
 
   it("finishes a recorded take by sending the host the clip, its job and the lower third's text", async () => {

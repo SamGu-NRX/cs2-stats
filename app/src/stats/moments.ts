@@ -59,8 +59,12 @@ export interface Moment {
   player: string;
   side: Side;
   kinds: MomentKind[];
-  /** the player's enemy kills in the round, in order: tick, weapon and flags for the killfeed */
-  kills: { tick: number; weapon: string; headshot: boolean; wallbang: boolean; smoke: boolean; noscope: boolean; blind: boolean | null; inAir: boolean | null }[];
+  /**
+   * the player's enemy kills in the round, in order: tick, weapon and flags for the killfeed. All of
+   * them count toward the kinds and the score; `inClip` is false for a kill after endTick, which the
+   * video does not show (clipNote says why)
+   */
+  kills: { tick: number; weapon: string; headshot: boolean; wallbang: boolean; smoke: boolean; noscope: boolean; blind: boolean | null; inAir: boolean | null; inClip: boolean }[];
   /** the player's kills that were flicks (FLICK_MIN_DEG) */
   flicks: number;
   /** the clutch won in the round: enemies left when it began */
@@ -78,10 +82,15 @@ export interface Moment {
   /**
    * demo ticks to record: PRE_ROLL_S before the first event, POST_ROLL_S after the last, no earlier
    * than freeze end and no later than the round's end (or the last kill, when a kill came after it),
-   * nor than DEATH_TAIL_S after the player's death
+   * nor than DEATH_TAIL_S after the player's death or than their disconnect
    */
   startTick: number;
   endTick: number;
+  /**
+   * Why some of the kills are not in the clip, with the numbers: "The 4th kill came 2.1 s after they
+   * died. The clip ends 0.5 s after the death, so it isn't in the video." Null when every kill is in it.
+   */
+  clipNote: string | null;
   tickRate: number;
   score: number;
   /** "3K on B Site, +38% round impact" */
@@ -168,11 +177,13 @@ export function scoreMoments(f: MatchFacts, filter: Filter): Moment[] {
     // the post-roll stays inside the round: it stops at the round's end, or at the last kill when one
     // came after the end (a kill in the round-end delay), so no clip runs into the next round
     const planned = Math.min(last + Math.round(POST_ROLL_S * rate), Math.max(round.endTick, last));
-    // and it stops DEATH_TAIL_S after the player dies, before the demo camera leaves them. A kill the
-    // player's grenade makes after that is cut off: the camera cannot follow it from their view. A death
-    // before the clip starts (a moment of such kills alone) leaves the clip as it was.
-    const death = f.kills.reduce((d, k) => (k.ri === r.ri && k.victim === r.pi && k.tick < d ? k.tick : d), Infinity);
-    const endTick = death >= startTick ? Math.min(planned, death + Math.round(DEATH_TAIL_S * rate)) : planned;
+    // and it stops DEATH_TAIL_S after the player dies, before the demo camera leaves them, or when they
+    // disconnect alive, since the camera cannot follow a player who left. A kill the player's grenade makes
+    // after that is cut off: their view cannot show it. An exit before the clip starts (a moment of such
+    // kills alone) leaves the clip as it was.
+    const exit = playerExit(f, r.ri, r.pi, rate);
+    const endTick = exit && exit.tick >= startTick ? Math.min(planned, exit.end) : planned;
+    const cut = kills.map((k, i) => ({ n: i + 1, tick: k.tick })).filter((k) => k.tick > endTick);
 
     const score = (multi ? MULTI_POINTS[multi]! : 0)
       + (clutch ? POINTS.clutchBase + POINTS.clutchPerEnemy * (clutch.opponents - 1) : 0)
@@ -181,13 +192,38 @@ export function scoreMoments(f: MatchFacts, filter: Filter): Moment[] {
       + (kinds.includes("opening") ? POINTS.opening : 0);
     const m: Omit<Moment, "reason"> = {
       ri: r.ri, round: round.number, pi: r.pi, player: f.players[r.pi].id, side: r.side, kinds,
-      kills: kills.map((k) => ({ tick: k.tick, weapon: k.weapon, headshot: k.headshot, wallbang: k.wallbang, smoke: k.smoke, noscope: k.noscope, blind: k.killerBlind, inAir: k.killerInAir })),
+      kills: kills.map((k) => ({ tick: k.tick, weapon: k.weapon, headshot: k.headshot, wallbang: k.wallbang, smoke: k.smoke, noscope: k.noscope, blind: k.killerBlind, inAir: k.killerInAir, inClip: k.tick <= endTick })),
       flicks: nFlicks, clutch: clutch && { opponents: clutch.opponents },
       swing, place: modePlace(kills.map((k) => k.place)), startTick, endTick, tickRate: rate, score: Math.round(score * 100) / 100,
+      clipNote: cut.length && exit ? clipNote(cut, exit, rate) : null,
     };
     out.push({ ...m, reason: momentReason(m) });
   }
   return out;
+}
+
+/** How the player's round ends early for the camera: their first death, or their disconnect alive, whichever is first; `end` is where a clip must stop. */
+interface Exit { kind: "death" | "disconnect"; tick: number; end: number }
+
+function playerExit(f: MatchFacts, ri: number, pi: number, rate: number): Exit | null {
+  const death = f.kills.reduce((d, k) => (k.ri === ri && k.victim === pi && k.tick < d ? k.tick : d), Infinity);
+  const leave = f.rounds[ri].leaves.reduce((d, l) => (l.pi === pi && l.tick < d ? l.tick : d), Infinity);
+  if (death === Infinity && leave === Infinity) return null;
+  return death <= leave ? { kind: "death", tick: death, end: death + Math.round(DEATH_TAIL_S * rate) } : { kind: "disconnect", tick: leave, end: leave };
+}
+
+const ORDINAL = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"];
+const ordinal = (n: number) => ORDINAL[n - 1] ?? `${n}th`;
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/** The moment's line about its kills after the clip's end: which ones, how long after the exit, and why the clip stops there. */
+function clipNote(cut: { n: number; tick: number }[], exit: Exit, rate: number): string {
+  const one = cut.length === 1;
+  const which = `The ${andList(cut.map((k) => ordinal(k.n)))} kill${one ? "" : "s"}`;
+  const after = andList(cut.map((k) => `${((k.tick - exit.tick) / rate).toFixed(1)} s`));
+  const event = exit.kind === "death" ? "died" : "disconnected";
+  const ends = exit.kind === "death" ? `The clip ends ${DEATH_TAIL_S} s after the death` : "The clip ends when they left";
+  return `${which} came ${after} after they ${event}. ${ends}, so ${one ? "it isn't" : "they aren't"} in the video.`;
 }
 
 /** Best first: the higher score, then the larger swing, then the earlier round, so ties keep one order. */
