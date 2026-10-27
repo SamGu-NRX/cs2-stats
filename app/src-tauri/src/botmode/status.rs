@@ -84,6 +84,9 @@ pub struct Status {
     pub notice: &'static str,
     pub release: ReleaseStatus,
     pub difficulty: Option<settings::Difficulty>,
+    /// SHA-256 of `overrides/botprofile.vpk`, which a difficulty change sends back
+    /// (`settings::FileSeen`); `None` when there is none.
+    pub active_profile: Option<String>,
     pub cosmetics: CosmeticsState,
     /// Launch options set for CS2 in Steam, which Steam adds to every start.
     pub steam_launch_options: Option<String>,
@@ -252,6 +255,7 @@ pub fn status(
         }
     }
     let app = settings::load_app(layout)?;
+    let (difficulty, active_profile) = settings::active_profile(&layout.csgo)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),
         steam: install.map(|i| i.steam.display().to_string()),
@@ -261,7 +265,8 @@ pub fn status(
         supervised,
         notice,
         release,
-        difficulty: settings::current_difficulty(&layout.csgo)?,
+        difficulty,
+        active_profile,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
         steam_launch_options,
         launch_options: app.launch_options,

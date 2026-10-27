@@ -1,16 +1,22 @@
 //! Tauri commands for the Bot Mode view. Each finds CS2 through Steam, unless `game` names
 //! the `game\csgo` folder, and runs off the UI thread. Every command that changes anything goes
-//! through [`mutating`], which first runs session cleanup (`session::guard`). Typed wrappers are
-//! in `app/src/botmode/`.
+//! through [`mutating`], which first runs session cleanup (`session::guard`). Every command that
+//! only reads goes through [`reading`], which gives up after [`READ_LIMIT`], so a Steam library
+//! on a drive that stopped answering shows as unreachable instead of a page that never loads.
+//! Typed wrappers are in `app/src/botmode/`.
 
 use super::changes::{self, Meta, RollbackReport};
+use super::monitor::Running;
+use super::overlay::OverlayPlan;
+use super::settings::{FileSeen, Preview, ReadHashes, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
+use std::time::Duration;
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::monitor;
 use super::overlay::{self, OverlayReport};
 use super::paths::Layout;
 use super::process::{session_held, SystemProbe};
 use super::session::{self, RecoverAction, Recovered, Recovery, SessionStatus};
-use super::settings::{self, AppSettings, Cosmetics, Difficulty};
+use super::settings::{self, AppSettings, Catalog, Cosmetics, Difficulty};
 use super::status::{self, Status};
 use super::{Ctx, Game};
 use std::path::PathBuf;
@@ -19,6 +25,60 @@ async fn blocking<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) 
     tauri::async_runtime::spawn_blocking(move || {
         let ctx = Ctx::new(game.map(|g| Game::Folder(PathBuf::from(g))).unwrap_or(Game::Steam), None)?;
         f(&ctx)
+    })
+    .await
+    .map_err(|e| format!("Bot Mode task failed: {e}"))?
+}
+
+/// How long a read may take. Hashing a full install from a local disk takes about a second; a
+/// library on a disconnected network or removable drive can block a file call for minutes.
+pub const READ_LIMIT: Duration = Duration::from_secs(30);
+
+/// Starts with this when a read gave up; the view shows "Library unreachable" for it.
+pub const UNREACHABLE: &str = "Library unreachable";
+
+/// How many reads may be under way at once (the view starts five when it opens). A read that
+/// gave up keeps its thread until the blocked file call returns; past this many, a new read is
+/// refused at once instead of adding another blocked thread.
+const READS_AT_ONCE: usize = 12;
+static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts one read for as long as its thread lives.
+struct ReadSlot;
+impl ReadSlot {
+    fn take() -> Option<ReadSlot> {
+        use std::sync::atomic::Ordering;
+        READS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < READS_AT_ONCE).then_some(n + 1)).ok().map(|_| ReadSlot)
+    }
+}
+impl Drop for ReadSlot {
+    fn drop(&mut self) {
+        READS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// [`blocking`] for commands that only read, given up after [`READ_LIMIT`]. The read itself
+/// runs on its own thread, which finishes or stays blocked on its own; nothing waits for it.
+async fn reading<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let slot = ReadSlot::take().ok_or_else(|| {
+            format!("{UNREACHABLE}: {READS_AT_ONCE} earlier reads of the CS2 install have not returned. If CS2 is on a network or removable drive, check that it is connected, then check again.")
+        })?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("botmode-read".into())
+            .spawn(move || {
+                let _slot = slot;
+                let r = Ctx::new(game.map(|g| Game::Folder(PathBuf::from(g))).unwrap_or(Game::Steam), None).and_then(|ctx| f(&ctx));
+                let _ = tx.send(r);
+            })
+            .map_err(|e| format!("Bot Mode read could not start: {e}"))?;
+        rx.recv_timeout(READ_LIMIT).unwrap_or_else(|_| {
+            Err(format!(
+                "{UNREACHABLE}: reading the CS2 install took longer than {} s. If CS2 is on a network or removable drive, check that it is connected, then check again.",
+                READ_LIMIT.as_secs()
+            ))
+        })
     })
     .await
     .map_err(|e| format!("Bot Mode task failed: {e}"))?
@@ -55,7 +115,7 @@ async fn mutating<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) 
 
 #[tauri::command]
 pub async fn botmode_status(game: Option<String>) -> Result<Status, String> {
-    blocking(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options())).await
+    reading(game, |ctx| status::status(&ctx.layout, &SystemProbe, ctx.install.as_ref(), ctx.steam_launch_options())).await
 }
 
 #[tauri::command]
@@ -88,10 +148,11 @@ pub async fn botmode_install(game: Option<String>, tag: String, asset: Option<St
 }
 
 #[tauri::command]
-pub async fn botmode_overlay(game: Option<String>, manifest: Option<String>) -> Result<OverlayReport, String> {
+/// `previewed` is the hash botmode_overlay_plan gave the view; a manifest changed since is refused.
+pub async fn botmode_overlay(game: Option<String>, manifest: Option<String>, previewed: Option<String>) -> Result<OverlayReport, String> {
     mutating(game, move |ctx| {
         let path = manifest.map(PathBuf::from).unwrap_or_else(|| ctx.layout.default_manifest());
-        overlay::apply(&ctx.layout, &SystemProbe, &path)
+        overlay::apply_checked(&ctx.layout, &SystemProbe, &path, previewed.as_deref())
     })
     .await
 }
@@ -103,7 +164,7 @@ pub async fn botmode_rollback(game: Option<String>, id: Option<String>) -> Resul
 
 #[tauri::command]
 pub async fn botmode_backups(game: Option<String>) -> Result<Vec<Meta>, String> {
-    blocking(game, |ctx| changes::list(&ctx.layout)).await
+    reading(game, |ctx| changes::list(&ctx.layout)).await
 }
 
 /// The Bot Mode session as the view shows it.
@@ -157,7 +218,7 @@ pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String>
 /// The session's state: poll this while a session runs.
 #[tauri::command]
 pub async fn botmode_session(game: Option<String>) -> Result<SessionView, String> {
-    blocking(game, |ctx| Ok(view(&ctx.layout))).await
+    reading(game, |ctx| Ok(view(&ctx.layout))).await
 }
 
 /// Answers the recovery prompt (`SessionView::recovery`): `action` "off" turns Bot Mode off
@@ -174,25 +235,99 @@ pub async fn botmode_recover(game: Option<String>, action: RecoverAction, expect
 }
 
 #[tauri::command]
-pub async fn botmode_set_difficulty(game: Option<String>, level: Difficulty) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::set_difficulty(&ctx.layout, &SystemProbe, level)).await
+/// `seen` is the active profile as the view showed it; refused when it has changed since.
+pub async fn botmode_set_difficulty(game: Option<String>, level: Difficulty, seen: Option<FileSeen>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_difficulty_from(&ctx.layout, &SystemProbe, level, seen.as_ref())).await
 }
 
+/// `seen` is what the view read; the write is refused when the cfg no longer holds it.
 #[tauri::command]
-pub async fn botmode_set_cosmetics(game: Option<String>, cosmetics: Cosmetics) -> Result<Meta, String> {
-    mutating(game, move |ctx| settings::set_cosmetics(&ctx.layout, &SystemProbe, cosmetics)).await
+pub async fn botmode_set_cosmetics(game: Option<String>, cosmetics: Cosmetics, seen: Option<Cosmetics>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_cosmetics_from(&ctx.layout, &SystemProbe, cosmetics, seen)).await
+}
+
+/// The installed BotRandomizer's music kits, knives and knife finish weights; reads only.
+#[tauri::command]
+pub async fn botmode_catalog(game: Option<String>) -> Result<Option<Catalog>, String> {
+    reading(game, |ctx| settings::read_catalog(&ctx.layout.csgo)).await
+}
+
+/// What this app sets for the game: the server cfg's cosmetics and presets, and the knife file.
+#[tauri::command]
+pub async fn botmode_server_cfg(game: Option<String>) -> Result<ServerSettings, String> {
+    reading(game, |ctx| settings::read_server(&ctx.layout)).await
+}
+
+/// What botmode_set_server_cfg would write for `patch` now, line by line; reads only.
+#[tauri::command]
+pub async fn botmode_server_preview(game: Option<String>, patch: ServerPatch) -> Result<Preview, String> {
+    reading(game, move |ctx| settings::preview_server(&ctx.layout, &patch)).await
+}
+
+/// What Undo of settings change `id` would write, or why it would refuse; reads only.
+#[tauri::command]
+pub async fn botmode_server_undo_plan(game: Option<String>, id: String) -> Result<UndoPlan, String> {
+    reading(game, move |ctx| settings::undo_plan(&ctx.layout, &id)).await
+}
+
+/// Undoes settings change `id` as a new change (`settings::undo_server`), refused when a setting
+/// it wrote has changed since.
+#[tauri::command]
+pub async fn botmode_server_undo(game: Option<String>, id: String, read: Option<ReadHashes>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::undo_server_checked(&ctx.layout, &SystemProbe, &id, read.as_ref())).await
+}
+
+/// What Repair would write for a missing knife file; reads only.
+#[tauri::command]
+pub async fn botmode_knife_repair_plan(game: Option<String>) -> Result<RepairPlan, String> {
+    reading(game, |ctx| settings::knife_repair_plan(&ctx.layout)).await
+}
+
+/// Writes the missing knife file back; refused when it would no longer write `seen`.
+#[tauri::command]
+pub async fn botmode_knife_repair(game: Option<String>, seen: RepairPlan) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::repair_knife(&ctx.layout, &SystemProbe, &seen)).await
+}
+
+/// One change to the server cfg; refused, writing nothing, when it no longer holds `seen`, or,
+/// with `read` (from a preview), when either file's bytes changed since.
+#[tauri::command]
+pub async fn botmode_set_server_cfg(game: Option<String>, patch: ServerPatch, seen: ServerSettings, read: Option<ReadHashes>) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::set_server_checked(&ctx.layout, &SystemProbe, patch, seen, read.as_ref())).await
+}
+
+/// Each CS2 of this install running now, with its VAC state from its command line. Reads only.
+#[tauri::command]
+pub async fn botmode_running(game: Option<String>) -> Result<Vec<Running>, String> {
+    reading(game, |ctx| monitor::inspect(&monitor::Windows, &monitor::cs2_image(&ctx.layout.csgo)?)).await
+}
+
+/// What applying the overlay manifest would copy, for the confirmation. Reads only.
+#[tauri::command]
+pub async fn botmode_overlay_plan(game: Option<String>, manifest: Option<String>) -> Result<OverlayPlan, String> {
+    reading(game, move |ctx| overlay::plan(&manifest.map(PathBuf::from).unwrap_or_else(|| ctx.layout.default_manifest()))).await
+}
+
+/// The game files a recorded change wrote, for the rollback confirmation. Reads only.
+#[tauri::command]
+pub async fn botmode_change_files(game: Option<String>, id: String) -> Result<Vec<String>, String> {
+    reading(game, move |ctx| changes::files(&ctx.layout, &id)).await
+}
+
+/// The mod's own list of console commands and pro-team bot lineups (`Commands.txt` in its
+/// repository at `tag`). The release zip does not carry it, so it comes from GitHub.
+#[tauri::command]
+pub async fn botmode_mod_commands(tag: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || super::github::file_text(install::OFFICIAL_REPO, &tag, "Commands.txt"))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// App settings only; the game is not touched, so no session cleanup.
 #[tauri::command]
-pub async fn botmode_set_launch_options(game: Option<String>, options: String) -> Result<AppSettings, String> {
-    blocking(game, move |ctx| {
-        let mut s = settings::load_app(&ctx.layout)?;
-        s.launch_options = options;
-        settings::save_app(&ctx.layout, &s)?;
-        Ok(s)
-    })
-    .await
+/// `seen` is the options as the view showed them; refused when they have changed since.
+pub async fn botmode_set_launch_options(game: Option<String>, options: String, seen: Option<String>) -> Result<AppSettings, String> {
+    blocking(game, move |ctx| settings::set_launch_options(&ctx.layout, &options, seen.as_deref())).await
 }
 
 /// At app start: session cleanup, which closes interrupted session toggles and starts watching

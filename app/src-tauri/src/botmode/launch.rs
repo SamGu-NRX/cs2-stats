@@ -113,13 +113,15 @@ fn check_closed(probe: &dyn ProcessProbe, phase: Phase, running: &str) -> Result
     }
 }
 
-/// Everything before starting the game: CS2 must be closed, no change may be unfinished,
-/// Steam's own options must not turn VAC on, the mod must be installed, and `gameinfo.gi`
-/// must be readable. Turning Bot Mode on is the session's job (`session::begin`), right before
-/// the spawn. The caller holds `lock` until the game has been handed to Steam.
+/// Everything before starting the game: CS2 must be closed, no change may be unfinished, the
+/// knife file the server cfg runs must be there (`settings::check_knife_file`), Steam's own
+/// options must not turn VAC on, the mod must be installed, and `gameinfo.gi` must be readable.
+/// Turning Bot Mode on is the session's job (`session::begin`), right before the spawn. The
+/// caller holds `lock` until the game has been handed to Steam.
 pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _lock: &OpLock) -> Result<LaunchPlan, String> {
     check_closed(probe, Phase::LaunchPrepare, "CS2 is already running. Close it, then launch Bot Mode, so the game starts with -insecure.")?;
     check_no_unfinished(layout)?;
+    settings::check_knife_file(layout)?;
     check_steam_options(steam)?;
     let mut missing = Vec::new();
     for r in REQUIRED {

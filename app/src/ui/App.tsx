@@ -4,7 +4,8 @@
 // Until the first scan finishes, the pane says how far it got rather than drawing a skeleton (a cold
 // first scan of many matches takes seconds). If the scan fails before any match is known, every view
 // but Data & settings shows the failure with Try again; Data & settings stays usable, since its
-// Rescan, Import and source switches are the ways out.
+// Rescan, Import and source switches are the ways out. Bot Mode reads no matches, so it shows in
+// every scan state.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { BotModeRecovery } from "./components/BotModeRecovery";
 import { MenuLayer, ToastLayer, TooltipLayer, toast } from "./components/overlay";
@@ -22,8 +23,9 @@ import { MatchesView } from "./views/Matches";
 const MatchView = lazy(() => import("./views/match/MatchView"));
 const ProfileView = lazy(() => import("./views/Profile"));
 const SettingsView = lazy(() => import("./views/Settings"));
+const BotModeView = lazy(() => import("./views/BotMode"));
 
-const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", settings: "Data & settings" };
+const TITLES: Record<string, string> = { home: "Home", matches: "Matches", match: "Match", profile: "Profile", botmode: "Bot Mode", settings: "Data & settings" };
 
 function AppBar({ onPalette }: { onPalette: () => void }) {
   const { set } = useBarSlots();
@@ -80,6 +82,13 @@ export function Shell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // a confirmation is open (Bot Mode's dialogs): the page behind is inert, and no shortcut may
+      // act on it, least of all while its action runs. Ctrl+R would reload the window itself, so
+      // its default is held back too.
+      if (document.querySelector("dialog[open]")) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") e.preventDefault();
+        return;
+      }
       const el = e.target as HTMLElement;
       const typing = isTextEntry(el);
       const ctrl = e.ctrlKey || e.metaKey;
@@ -88,7 +97,7 @@ export function Shell() {
       if (ctrl && e.key.toLowerCase() === "b") { e.preventDefault(); rail.toggle(false); return; }
       if (ctrl && e.key === ",") { e.preventDefault(); go(pageHref("settings"), { instant: true }); return; }
       if (ctrl && e.key.toLowerCase() === "r") { e.preventDefault(); refresh(); toast("Scanning the match folder"); return; }
-      if (ctrl && /^[1-3]$/.test(e.key)) {
+      if (ctrl && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
         const n = NAV.find((x) => x.key === e.key);
         if (n) go(pageHref(n.page), { instant: true });
@@ -134,7 +143,9 @@ export function Shell() {
   const title = TITLES[route.page];
   const firstScan = !matches.length && (status === "starting" || status === "syncing");
   let view: JSX.Element;
-  if (status === "error" && !matches.length && !(route.page === "settings" && meta)) {
+  // Bot Mode reads nothing from the match folder, so a failed or unfinished scan never hides it
+  if (route.page === "botmode") view = <BotModeView />;
+  else if (status === "error" && !matches.length && !(route.page === "settings" && meta)) {
     view = <ScanFailed title={title} error={error ?? ""} onRetry={refresh} />;
   } else if (!meta || (firstScan && route.page !== "settings")) {
     // the views read metric labels and units the worker sends once at start (data/meta.ts), and
