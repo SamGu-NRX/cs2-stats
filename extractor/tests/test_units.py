@@ -453,6 +453,28 @@ def test_a_download_seen_in_progress_records_when_it_reached_its_final_size(tmp_
     assert p.archives[whole.name].download_finished is None
 
 
+def test_a_retried_failure_keeps_its_downloads_finish_time(tmp_path, monkeypatch):
+    # A retry read the archive from failed/, where no download is seen, so a retry that passed had no finish time
+    # and its copy in Downloads was never cleaned.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    kept = dp.FAILED_DIR / "slug-r1"
+    kept.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 20
+    (kept / "archive.rar").write_bytes(data)
+    (kept / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.0.0")))
+    sha = hashlib.sha256(data).hexdigest()
+    dp.append_jsonl(dp.LEDGER, dict(id="r1", status="failed", kept=str(kept), rar_bytes=len(data), rar_sha256=sha,
+                                    download_started=100.0, download_finished=123.0, finished_utc="2026-10-27T01:00:00"))
+    p = dp.Pipeline(retry_failed=True)
+    p.scan(0.0)
+    a = p.archives["slug-r1"]
+    assert (a.rar_bytes, a.rar_sha256, a.download_started, a.download_finished) == (len(data), sha, 100.0, 123.0)
+    assert p.rar_facts(a)["download_finished"] == 123.0
+    # A record of other bytes (the folder reused for another archive) lends nothing.
+    assert p.failure_record(kept, "0" * 64) is None
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
 def test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)

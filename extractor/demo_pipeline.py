@@ -61,7 +61,8 @@ LEDGER = DEMOS_DIR / "archives.jsonl"  # one line per finished archive, done or 
 DROPPED = DEMOS_DIR / "failed_dropped.jsonl"  # failed archives deleted because failed/ was full
 # The browser's second copy of each archive, in Windows Downloads. Only a finished archive's copy is deleted: a
 # failed archive's copy is kept, because failed/ deletes its oldest archives past MAX_FAILED_GB and the copy may
-# then be the only one left to diagnose the failure. dry-run, the default, logs what delete would remove.
+# then be the only one left to diagnose the failure. dry-run, the default, logs what delete would remove; delete
+# is the user's choice, made knowing the one case it can remove a file of the user's (download_copies docstring).
 COPIES_MODE = os.environ.get("CS2_PIPELINE_DOWNLOAD_COPIES") or "dry-run"
 COPIES_LOG = LOG_DIR / "download_copies.jsonl"  # one line per candidate copy: deleted, would_delete or kept
 # Maps written by an older extractor; a re-downloaded copy extracted now replaces the old folder.
@@ -889,9 +890,14 @@ class Pipeline:
             st = f.stat()
             # The download began no later than the file appeared: its creation time, or when this run first saw it.
             created = getattr(st, "st_birthtime", st.st_ctime)
-            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=extract.file_sha256(f),
-                                         download_started=min(created, seen) if seen is not None else created,
-                                         download_finished=finished)
+            sha = extract.file_sha256(f)
+            started = min(created, seen) if seen is not None else created
+            if in_failed:  # a retry: the download's own times, from its failure record, if it is the same file
+                rec = self.failure_record(f.parent, sha)
+                if rec:
+                    started, finished = rec.get("download_started") or started, rec.get("download_finished")
+            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=sha,
+                                         download_started=started, download_finished=finished)
             log.info("pending archive %s (%.0f MB)", f, f.stat().st_size / 1e6)
 
     # --- extraction
@@ -1222,6 +1228,13 @@ class Pipeline:
         append_jsonl(LEDGER, rec)
         self.ledger[a.id] = rec
         self.archives.pop(a.id, None)
+
+    def failure_record(self, kept: Path, sha256: str) -> dict | None:
+        """The latest ledger record of the failure kept in folder kept whose file has this SHA-256: what its download
+        measured, carried into a retry so a retry that passes can still match the browser's copy."""
+        recs = [r for r in self.ledger.values() if r.get("kept") and Path(r["kept"]) == kept
+                and r.get("rar_sha256") == sha256]
+        return max(recs, key=lambda r: r.get("finished_utc") or "") if recs else None
 
     @staticmethod
     def rar_facts(a: Archive) -> dict:

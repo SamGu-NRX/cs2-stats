@@ -9,8 +9,11 @@ size.
 
 Identical bytes cannot tell the browser's copy from a file the user saved, so a copy is deleted only when it is
 the one file in the folder that matches. With two or more, or with one plus a candidate that could not be checked,
-none is deleted and each is logged as ambiguous. What remains: if the browser's copy is missing and the user saved
-the same bytes as a .rar within COPY_WINDOW_S of the download finishing, the user's file is deleted.
+none is deleted and each is logged as ambiguous. One case remains, and no matching on bytes and times can rule it
+out without a provenance record from the browser: if the browser's copy is missing and the user saved the same bytes
+as a .rar within COPY_WINDOW_S of the download finishing, the user's file is deleted. That residual is accepted, so
+deletion is off by default (dry-run, demo_pipeline.COPIES_MODE). Setting CS2_PIPELINE_DOWNLOAD_COPIES to delete
+turns it on, and that is the user's choice to make with this case in view.
 
 A candidate is opened with no sharing, so nothing can write, rename or delete it while it is checked. Every
 check reads that handle: one hard link, no reparse point, the size, the creation time, the folder it resolves
@@ -194,15 +197,15 @@ def clean(folder: Path, d: Download, delete: bool, log_path: Path) -> list[dict]
                 rows.append(row(path, "deleting"))
                 _log(log_path, rows)  # the intent is on disk before the file goes
                 logged, rows = list(rows), []
+                # The outcome is the handle's own: the file it names is marked for deletion, and goes when this, its
+                # only handle, closes. A check of the path afterwards could see a file someone made there since.
                 try:
                     _mark_deleted(h)
                     failed = None
                 except OSError as e:
                     failed = f"deletion failed: {e}"
                 finally:
-                    _close(h)  # a file marked for deletion goes when its last handle closes, which is this one
-                if failed is None and path.exists():
-                    failed = "still there after its handle closed"
+                    _close(h)
                 rows.append(row(path, "kept" if failed else "deleted", failed))
                 _log(log_path, rows)
                 return logged + rows

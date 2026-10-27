@@ -210,6 +210,24 @@ def test_the_deletion_is_logged_before_the_file_goes(tmp_path, monkeypatch):
 
 
 @windows
+def test_the_outcome_is_the_handles_even_if_the_name_is_reused_at_once(tmp_path, monkeypatch):
+    # A file made at the same path right after the delete made path.exists() log a deletion that happened as kept.
+    copy = tmp_path / "c.rar"
+    copy.write_bytes(b"x" * 3000)
+    d = _download(copy)
+    close = dc._close
+
+    def close_then_recreate(h):
+        close(h)
+        copy.write_bytes(b"new")
+
+    monkeypatch.setattr(dc, "_close", close_then_recreate)
+    rows = dc.clean(tmp_path, d, delete=True, log_path=tmp_path / "logs" / "log.jsonl")
+    assert [(r["outcome"], r["reason"]) for r in rows] == [("deleting", None), ("deleted", None)]
+    assert copy.read_bytes() == b"new"
+
+
+@windows
 def test_a_symbolic_link_is_kept(tmp_path):
     target = tmp_path / "target"
     target.mkdir()
