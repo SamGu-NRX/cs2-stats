@@ -455,6 +455,37 @@ def test_status_is_served_while_a_large_archive_is_hashed(tmp_path, monkeypatch)
     assert next(iter(p.archives.values())).state == "pending"
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the SystemExit ends it on purpose
+def test_a_hash_that_raises_fails_its_archive_and_later_archives_are_still_hashed(tmp_path, monkeypatch):
+    # Review of PR 61: only an OSError was caught, so any other error ended the hashing thread with no result, and
+    # its archive sat in "hashing" forever (busy to scan, pending to /pending, the pipeline never idle). The second
+    # error here ends the thread outright; the third archive must still be hashed.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    names = ["a1-runtime", "a2-exit", "a3-fine"]
+    for n in names:
+        (dp.DOWNLOADS / n).write_bytes(dp.RAR_MAGIC + n.encode())
+    real = ex.file_sha256
+
+    def sha(path):
+        if path.name == "a1-runtime":
+            raise RuntimeError("bad read")
+        if path.name == "a2-exit":
+            raise SystemExit("thread ends")
+        return real(path)
+
+    monkeypatch.setattr(ex, "file_sha256", sha)
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(16.0)
+    _hashed(p)
+    assert list(p.archives) == ["a3-fine"] and p.archives["a3-fine"].state == "pending"
+    assert p.archives["a3-fine"].rar_sha256 == hashlib.sha256(dp.RAR_MAGIC + b"a3-fine").hexdigest()
+    failed = {r["id"]: r["reason"] for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert "RuntimeError: bad read" in failed["a1-runtime"] and "SystemExit: thread ends" in failed["a2-exit"]
+    assert (dp.FAILED_DIR / "a1-runtime" / "archive.rar").exists()
+
+
 def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
     # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
     # cleanup match those copies exactly.

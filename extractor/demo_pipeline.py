@@ -276,32 +276,44 @@ class Archive:
 class Hasher:
     """SHA-256 of picked-up archives, one at a time on a daemon thread, so the main loop keeps serving status.
     Hashed in scan(), each archive kept in failed/ blocked the loop for about 50 s on a --retry-failed restart, and
-    /pending answered {} for minutes. take(path) returns the hex digest, the OSError that stopped it, or None while
-    it is not done."""
+    /pending answered {} for minutes. take(path) returns the hex digest, the exception that stopped it, or None
+    while it is not done. Every archive gets a result: an exception is recorded as its result and the thread goes
+    on to the next one; one that ends the thread (SystemExit) is recorded first, and the thread is started again
+    while archives wait (review of PR 61: an uncaught error left its archive hashing forever)."""
 
     def __init__(self):
         self._todo: queue.Queue[Path] = queue.Queue()
-        self._done: dict[Path, str | OSError] = {}
+        self._done: dict[Path, str | BaseException] = {}
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
+    def _ensure_running(self) -> None:
+        with self._lock:
+            if (self._thread is None or not self._thread.is_alive()) and not self._todo.empty():
+                self._thread = threading.Thread(target=self._run, daemon=True, name="archive-sha256")
+                self._thread.start()
+
     def submit(self, path: Path) -> None:
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._run, daemon=True, name="archive-sha256")
-            self._thread.start()
         self._todo.put(path)
+        self._ensure_running()
 
     def _run(self) -> None:
         while True:
-            path = self._todo.get()
             try:
-                result: str | OSError = extract.file_sha256(path)
-            except OSError as e:
+                path = self._todo.get_nowait()
+            except queue.Empty:
+                return  # started again by the next submit
+            try:
+                result: str | BaseException = extract.file_sha256(path)
+            except BaseException as e:  # noqa: BLE001 - every archive must get a result, or it waits forever
                 result = e
             with self._lock:
                 self._done[path] = result
+            if not isinstance(result, (str, Exception)):
+                raise result
 
-    def take(self, path: Path) -> str | OSError | None:
+    def take(self, path: Path) -> str | BaseException | None:
+        self._ensure_running()
         with self._lock:
             return self._done.pop(path, None)
 
@@ -990,15 +1002,18 @@ class Pipeline:
 
     def poll_hashes(self) -> None:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
-        record, when that record is of the same file. An archive that could not be read is dropped; a later scan
-        finds it again if it is still there."""
+        record, when that record is of the same file. An archive whose file went is dropped (a later scan finds it
+        if it comes back); any other error fails the archive with it, kept for a retry."""
         for a in [a for a in self.archives.values() if a.state == "hashing"]:
             sha = self.hasher.take(a.rar)
             if sha is None:
                 continue
-            if isinstance(sha, OSError):
-                log.warning("could not hash %s (%s); dropped until a later scan", a.rar, sha)
+            if isinstance(sha, FileNotFoundError):
+                log.warning("%s went before it was hashed; dropped until a later scan finds it", a.rar)
                 del self.archives[a.id]
+                continue
+            if not isinstance(sha, str):
+                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}")
                 continue
             a.rar_sha256 = sha
             if a.rar.parent.parent == FAILED_DIR:
