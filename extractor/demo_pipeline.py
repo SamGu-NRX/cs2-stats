@@ -326,12 +326,13 @@ def desired_downloads(workers: int, parse_s: float, download_s: float, in_flight
 
     Little's law: workers busy for parse_s worker-seconds per archive finish workers / parse_s archives a
     second, and a download takes download_s, so workers * download_s / parse_s downloads keep them fed; one
-    more is the buffer. It is at most MAX_WANT, and at most in_flight plus the archives of archive_gb that
-    room_gb (the disk budget and free-space floor left) still holds; never below 1.
+    more is the buffer. It is at most MAX_WANT, and at most in_flight plus the whole archives of archive_gb that
+    room_gb (the disk budget and free-space floor left) still holds: with no room for one more, it is in_flight,
+    0 when nothing is in flight, and the tab starts nothing.
     """
     keep = math.ceil(workers * download_s / max(parse_s, 1e-9)) + 1
     fits = in_flight + max(0, math.floor(room_gb / max(archive_gb, 1e-9)))
-    return max(1, min(MAX_WANT, keep, fits))
+    return max(0, min(MAX_WANT, keep, fits))
 
 
 def tree_rss_gb(pid: int) -> float:
@@ -363,10 +364,20 @@ def kill_tree(proc: subprocess.Popen) -> list[int]:
             k.kill()
         except psutil.Error:
             pass
-    proc.kill()
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:  # it exited between the poll and the kill
+            pass
     proc.wait()
     psutil.wait_procs(kids, timeout=10)
     return [proc.pid, *(k.pid for k in kids)]
+
+
+def lowest_free_gb() -> float:
+    """Free space on the fullest volume the pipeline writes to: the data folder's, and the downloads folder's,
+    where archives land."""
+    return min(free_gb(p) for p in [p for p in (DATA_ROOT, DOWNLOADS) if p is not None and Path(p).exists()] or [DATA_ROOT])
 
 
 def free_gb(path: Path | None = None) -> float:
@@ -640,11 +651,14 @@ def tidy_demos() -> None:
 
 # Workers run a copy of the extractor taken at startup. Running the repo files directly let edits made
 # while the pipeline ran reach live workers, which failed 13 maps on half-edited code.
-RUN_CODE = Path(tempfile.gettempdir()) / "cs2-stats-pipeline" / str(os.getpid())
+RUN_CODE: Path | None = None  # %TEMP%\cs2-stats-pipeline\<pid>, set by freeze_code; importing needs no temp folder
 CODE_FILES = ("extract.py", "engagements.py", "schema_v1.py", "repo_guard.py", "prices_cs2_1.41.9.2.json")
 
 
 def freeze_code() -> None:
+    global RUN_CODE
+    if RUN_CODE is None:
+        RUN_CODE = Path(tempfile.gettempdir()) / "cs2-stats-pipeline" / str(os.getpid())
     RUN_CODE.mkdir(parents=True, exist_ok=True)
     for name in CODE_FILES:
         shutil.copy2(ROOT / name, RUN_CODE / name)
@@ -828,7 +842,7 @@ class Pipeline:
                 a.archive_gb_counted = True
             # Archives still extracting hold the rest of their listed size: their demos are not on disk yet.
             our, held = (b / 1e9 for b in self.disk_usage())
-            free = free_gb()
+            free = lowest_free_gb()
             if our + held + expand > MAX_OUR_GB or free - held - expand < MIN_FREE_GB:
                 log.warning("disk budget: ours %.2f + %.2f GB held by running extractions + %.2f GB of demos "
                             "(max %.0f), free %.1f GB (min %.0f after extracting); %s waits", our, held, expand,
@@ -950,7 +964,11 @@ class Pipeline:
     def requeue_newest(self, avail: float) -> None:
         """Memory is nearly gone: kill the newest worker and queue its demo again. Only that worker's staging
         folder (<map>/.tmp-<pid>, extract.write_output) goes; a version it or any earlier run published stays."""
-        j = self.running.pop()
+        alive = [j for j in self.running if j.proc.poll() is None]
+        if not alive:
+            return  # every worker has exited; poll_workers finishes them
+        j = alive[-1]
+        self.running.remove(j)
         pids = kill_tree(j.proc)
         for pid in pids:
             staging = j.out_dir / f".tmp-{pid}"
@@ -1146,15 +1164,16 @@ class Pipeline:
             if a.state == "extracting" and a.listing:
                 listed = sum(int(e.get("size") or 0) for e in a.listing.values())
                 held += max(0, listed - (work.get(Path(a.work), 0) if a.work else 0))
-        return tree_bytes(DEMOS_DIR) + sum(work.values()) + waiting + downloading, held
+        # failed/ is held too (MAX_FAILED_GB caps it inside the budget), and so are split parts.
+        return (tree_bytes(DEMOS_DIR) + tree_bytes(FAILED_DIR) + sum(work.values()) + waiting + downloading, held)
 
     def budget(self, fresh: bool = False) -> tuple[float, bool]:
         """(GB we use, whether a new extraction fits); room_gb() is what is left under both limits."""
         t, our, ok, _ = self._budget
         if fresh or time.time() - t > BUDGET_CACHE_S:
             our, held = (b / 1e9 for b in self.disk_usage())
-            free = free_gb()
-            ok = our + held <= MAX_OUR_GB and free - held >= MIN_FREE_GB
+            free = lowest_free_gb()
+            ok = our + held < MAX_OUR_GB and free - held > MIN_FREE_GB  # at either limit, nothing more fits
             self._budget = (time.time(), our, ok, min(MAX_OUR_GB - our - held, free - held - MIN_FREE_GB))
         return our, ok
 
@@ -1198,7 +1217,7 @@ class Pipeline:
             "pending": pending if capacity else max(pending, 2), "pendingActual": pending, "want": want,
             "extracting": st.count("extracting"), "parsing": st.count("parsing"),
             "done": statuses.count("done"), "failed": statuses.count("failed"),
-            "freeGB": round(free_gb(), 1), "ourGB": round(our, 2), "capacity": capacity,
+            "freeGB": round(lowest_free_gb(), 1), "ourGB": round(our, 2), "capacity": capacity,
             "failedGB": round(tree_bytes(FAILED_DIR) / 1e9, 2),
             "downloading": downloading, "workers": len(self.running), "workersMax": workers_max,
             "parseEstGB": round(self.parse_est_gb(), 2), "availGB": round(avail, 2),
@@ -1222,12 +1241,10 @@ class Pipeline:
             self.status = snap
 
     def shutdown(self) -> None:
-        for j in self.running:
-            if j.proc and j.proc.poll() is None:
-                j.proc.kill()
-        for a in self.archives.values():
-            if a.proc and a.proc.poll() is None:
-                a.proc.kill()
+        """Kill every worker and 7-Zip with its children; the kill-on-close job may not exist."""
+        for proc in [j.proc for j in self.running] + [a.proc for a in self.archives.values()]:
+            if proc is not None and proc.poll() is None:
+                kill_tree(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -1342,7 +1359,8 @@ def main(argv=None) -> int:
     try:
         bind_children_to_this_process()
     except OSError as e:
-        log.warning("workers will outlive this process if it is killed: %s", e)
+        log.error("NO KILL-ON-CLOSE JOB (%s): if this process is killed, its workers and 7-Zip outlive it and keep "
+                  "writing; a normal stop still kills each one with its children", e)
     # Leftovers from an interrupted run: extraction folders past the stale age (an archive that is
     # picked up again re-extracts into a clean folder) and partial outputs. Their RARs are still in
     # place and get processed again.

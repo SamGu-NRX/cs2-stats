@@ -9,6 +9,7 @@ from pathlib import Path
 from collections import deque
 
 import numpy as np
+import psutil
 import pandas as pd
 import pytest
 
@@ -547,6 +548,7 @@ def test_a_burst_of_starts_reserves_each_new_workers_peak(tmp_path, monkeypatch)
     # 12 GB available that the new workers have not touched yet: 4 starts of a 2 GB parse, not 6.
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
     p = dp.Pipeline()
     p.available_gb, p.cpu_count, p.peaks = (lambda: 12.0), 16, deque([2.0])
     p.jobs.extend(_jobs(6))
@@ -580,7 +582,76 @@ def test_want_keeps_the_workers_fed_by_littles_law():
     assert dp.desired_downloads(14, 240, 300, 0, 100.0, 2.0) == dp.MAX_WANT
     # The disk budget left holds one more 2 GB archive beside the one in flight.
     assert dp.desired_downloads(14, 240, 300, 1, 2.5, 2.0) == 2
-    assert dp.desired_downloads(14, 240, 300, 0, -5.0, 2.0) == 1
+    assert dp.desired_downloads(14, 240, 300, 0, -5.0, 2.0) == 0
+
+
+def test_no_download_is_requested_when_the_budget_holds_no_whole_archive():
+    # Review of PR 55: want was at least 1, so with 1.5 GB of room and 2 GB archives the tab started one more.
+    assert dp.desired_downloads(14, 240, 300, 0, 1.5, 2.0) == 0
+    assert dp.desired_downloads(14, 240, 300, 1, 1.5, 2.0) == 1  # the one in flight, no more
+
+
+def test_capacity_is_off_at_the_budget_itself(tmp_path, monkeypatch):
+    # Review of PR 55: our + held == MAX_OUR_GB still read as capacity (<=), so the tab kept downloading.
+    _isolate(tmp_path, monkeypatch)
+    (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    assert dp.Pipeline().budget(fresh=True)[1] is False
+
+
+def test_failed_archives_count_inside_the_budget(tmp_path, monkeypatch):
+    # Review of PR 55: the budget is everything the pipeline holds, and failed/ was left out of it.
+    _isolate(tmp_path, monkeypatch)
+    (dp.FAILED_DIR / "kept").mkdir()
+    (dp.FAILED_DIR / "kept" / "archive.rar").write_bytes(b"x" * 700)
+    assert dp.Pipeline().disk_usage()[0] == 700
+
+
+def test_the_fullest_volume_decides_capacity(tmp_path, monkeypatch):
+    # Review of PR 55: only the data folder's volume was checked; archives land in the downloads folder.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0 if Path(path) == dp.DATA_ROOT else 40.0)
+    assert dp.Pipeline().budget(fresh=True)[1] is False
+
+
+def test_low_memory_never_requeues_a_worker_that_already_exited(tmp_path, monkeypatch):
+    # Review of PR 55: the newest job was popped and requeued without a poll; one that had just finished lost its
+    # result and was parsed again.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    older, newest = _jobs(2)
+    older.proc, newest.proc = _FakeProc(), _FakeProc()
+    newest.proc.poll = lambda: 0
+    p.running = [older, newest]
+    killed = []
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: killed.append(proc.pid) or [proc.pid])
+    p.requeue_newest(0.5)
+    assert killed == [older.proc.pid] and p.running == [newest] and list(p.jobs) == [older]
+
+
+def test_shutdown_kills_each_worker_with_its_children(tmp_path, monkeypatch):
+    # Review of PR 55: shutdown killed only the venv's launcher stub, leaving the interpreter that parses running
+    # whenever the kill-on-close job could not be set up.
+    import subprocess as sp
+    _isolate(tmp_path, monkeypatch)
+    stub = sp.Popen([sys.executable, "-c", "import subprocess, sys, time; "
+                     "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); time.sleep(120)"])
+    try:
+        deadline = time.time() + 20
+        while not psutil.Process(stub.pid).children() and time.time() < deadline:
+            time.sleep(0.1)
+        child = psutil.Process(stub.pid).children()[0]
+        p = dp.Pipeline()
+        job = _jobs(1)[0]
+        job.proc = stub
+        p.running = [job]
+        p.shutdown()
+        assert stub.poll() is not None
+        child.wait(timeout=10)
+        assert not child.is_running()
+    finally:
+        for proc in psutil.Process().children(recursive=True):
+            proc.kill()
 
 
 def test_parse_peak_is_the_p90_of_measured_peaks():
