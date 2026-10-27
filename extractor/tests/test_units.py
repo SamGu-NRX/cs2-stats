@@ -431,7 +431,7 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
 
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "DATA_ROOT", tmp_path)
-    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS"):
+    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS", "PARTS_DIR"):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)
@@ -716,6 +716,24 @@ def test_the_frozen_copy_holds_every_module_the_extractor_imports():
             for m in mods:
                 if (dp.ROOT / f"{m.split('.')[0]}.py").exists():
                     assert f"{m.split('.')[0]}.py" in code, f"{name} imports {m}, which the frozen copy lacks"
+
+
+def test_a_split_maps_parts_are_stitched_or_held_and_recorded(tmp_path, monkeypatch):
+    # A split recording's parts are written under parts/, never demos/; when the archive finishes, its split map
+    # is joined into demos/ or held back, and parts.jsonl says which.
+    _isolate(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(dp.stitch, "stitch_map",
+                        lambda parts, out: calls.append((sorted(parts), out)) or dict(map=str(out), status="stitched"))
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="x-vs-y-r")
+    a.out_dirs = {f"x-vs-y-m1-nuke-p{n}.dem": dp.PARTS_DIR / a.slug / f"m1-nuke-p{n}" for n in (1, 2)}
+    a.out_dirs["x-vs-y-m2-dust2.dem"] = dp.DEMOS_DIR / a.slug / "m2-dust2"
+    p.stitch_parts(a)
+    assert calls == [([1, 2], dp.DEMOS_DIR / a.slug / "m1-nuke")]
+    p.stitch_parts(a, failed="ValidationFailed: deaths 12!=13")
+    rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["status"] for r in rows] == ["stitched", "held"] and "the archive failed" in rows[1]["reason"]
 
 
 def _failed_archive(tmp_path, name, dem_bytes=b"dem", reason="ValidationFailed: deaths 12!=13"):

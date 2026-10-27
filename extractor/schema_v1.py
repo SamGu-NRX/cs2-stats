@@ -295,6 +295,7 @@ TYPES: dict[str, dict[str, str]] = {
         "voided_windows": "String",
         "dropped_attempts": "String",
         "excluded_players": "String",
+        "parts": "String",
         "truncated": "Boolean",
         "velocity_source": "String",
     },

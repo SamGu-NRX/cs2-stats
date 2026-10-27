@@ -36,6 +36,7 @@ import psutil
 ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
 import extract  # noqa: E402
+import stitch  # noqa: E402
 from repo_guard import OutputRefused, check_output  # noqa: E402
 
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
@@ -45,6 +46,9 @@ DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-s
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
 FAILED_DIR = DATA_ROOT / "failed"
+# A split recording's parts (<map>-pN) are written here, never to demos/, and joined into one map in demos/ when
+# stitch.plan allows; parts.jsonl here records each split map's outcome.
+PARTS_DIR = DATA_ROOT / "parts"
 LOG_DIR = DATA_ROOT / "logs"
 # awpy-data release 2000935 was built from CS2 1.41.9.2 (Steam build 26144732), the build installed
 # locally; extract.py withholds mesh visibility for any map whose mesh disagrees with the demo.
@@ -667,7 +671,7 @@ class Pipeline:
                 keys.add(key)
                 jd = LOG_DIR / "jobs"
                 jd.mkdir(parents=True, exist_ok=True)
-                a.out_dirs[dem.name] = DEMOS_DIR / a.slug / key
+                a.out_dirs[dem.name] = (PARTS_DIR if stitch.split_key(key) else DEMOS_DIR) / a.slug / key
                 self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
                                      result_path=a.work / f"{dem.stem}.result.json",
                                      log_path=jd / f"{a.slug}-{key}.log"))
@@ -765,6 +769,7 @@ class Pipeline:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
                 continue
             replace_old_extractions(a.results, a.out_dirs)
+            self.stitch_parts(a)
             # Every map is written and validated: the inputs can go.
             safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
@@ -781,9 +786,31 @@ class Pipeline:
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
 
+    def stitch_parts(self, a: Archive, failed: str | None = None) -> None:
+        """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so."""
+        split: dict[str, dict[int, Path]] = {}
+        for d in a.out_dirs.values():
+            k = stitch.split_key(Path(d).name)
+            if k:
+                split.setdefault(k[0], {})[k[1]] = Path(d)
+        for base, parts in sorted(split.items()):
+            out_dir = DEMOS_DIR / (a.slug or a.id) / base
+            if failed:
+                row = dict(map=str(out_dir), parts={str(n): str(d) for n, d in parts.items()}, status="held",
+                           reason=f"the archive failed: {failed[:300]}")
+            else:
+                try:
+                    row = stitch.stitch_map(parts, out_dir)
+                except Exception as e:  # noqa: BLE001 - a map that cannot be stitched is held, the archive is still done
+                    row = dict(map=str(out_dir), parts={str(n): str(d) for n, d in parts.items()}, status="held",
+                               reason=f"stitching raised {type(e).__name__}: {e}"[:500])
+            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, row)
+            log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
+
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
         log.error("archive %s failed: %s", a.id, reason[:500])
+        self.stitch_parts(a, failed=reason)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         bad = {n: r for n, r in a.results.items() if not r.get("ok")}
         retried = a.rar.parent.parent == FAILED_DIR

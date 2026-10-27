@@ -1,6 +1,6 @@
 # Extractor
 
-`extract.py` turns one CS2 demo (HLTV GOTV or Valve matchmaking) into the schema v1 parquet tables described in `SCHEMA-v1.md`, and fails the map unless the tables reproduce the demo's own scoreboard. `demo_pipeline.py` runs it over downloaded HLTV archives (see the comment at the top of `start_pipeline.ps1` for starting and stopping it).
+`extract.py` turns one CS2 demo (HLTV GOTV or Valve matchmaking) into the schema v1 parquet tables described in `SCHEMA-v1.md`, and fails the map unless the tables reproduce the demo's own scoreboard. `demo_pipeline.py` runs it over downloaded HLTV archives (see the comment at the top of `start_pipeline.ps1` for starting and stopping it). `stitch.py` joins a map HLTV recorded as several demos into one map, or holds it back; the pipeline runs it on each archive, and `python -I stitch.py --data <folder>` reports on (or with `--apply`, joins or withdraws) parts published by earlier versions.
 
 ## Set up the environment
 

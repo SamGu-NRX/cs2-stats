@@ -981,7 +981,7 @@
     ],
     "extractor_version": [
      "String",
-     "c3240999f7475e86"
+     "efda5acb7ea0e440"
     ],
     "final_tick": [
      "Int32",
@@ -1034,6 +1034,10 @@
     "parsed_at_utc": [
      "String",
      null
+    ],
+    "parts": [
+     "String",
+     "159c15b8d12cb074"
     ],
     "patch_version": [
      "String",

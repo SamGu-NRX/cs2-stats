@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.14.0"
+EXTRACTOR_VERSION = "1.15.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -2387,13 +2387,16 @@ _DTYPES = {"Boolean": pl.Boolean, "Float32": pl.Float32, "Int8": pl.Int8, "Int16
 def _to_polars(df, table: str) -> pl.DataFrame:
     """Convert a table to its declared schema v1 types (schema_v1.TYPES), in declared column order."""
     declared = TYPES[table]
-    df = df.reset_index(drop=True)
-    for c in df.columns:
-        if df[c].dtype == object:
-            sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
-            if isinstance(sample, np.ndarray):
-                df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
-    out = pl.from_pandas(df)
+    if isinstance(df, pl.DataFrame):  # stitch.py's tables are polars already
+        out = df
+    else:
+        df = df.reset_index(drop=True)
+        for c in df.columns:
+            if df[c].dtype == object:
+                sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
+                if isinstance(sample, np.ndarray):
+                    df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
+        out = pl.from_pandas(df)
     extra, missing = set(out.columns) - set(declared), set(declared) - set(out.columns)
     if extra or missing:
         raise ValueError(f"table {table}: columns not in schema v1 {sorted(extra)}, missing {sorted(missing)}")
@@ -2480,7 +2483,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, extractor_trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
                     voided_windows=json.dumps(info["voided_windows"]),
                     dropped_attempts=json.dumps(info["dropped_attempts"]),
-                    excluded_players=json.dumps(info["excluded_players"], default=str),
+                    excluded_players=json.dumps(info["excluded_players"], default=str), parts="[]",
                     convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
                         **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "
