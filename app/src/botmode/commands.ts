@@ -335,7 +335,14 @@ export interface UndoPlan extends Preview {
  * `from` left it, or, with no such change, the mod's own key. `replaces`: the unreadable file's
  * SHA-256, which the change keeps in its backup; null for Repair.
  */
-export interface RepairPlan { from: string | null; lines: string[]; replaces: string | null }
+export interface RepairPlan {
+  from: string | null;
+  /** written from the keys the readable file holds now (one with an unbindall), not from a change */
+  fromFile: boolean;
+  /** the file as written, in the app's own form: no unbindall, nothing Bot Mode can't read */
+  lines: string[];
+  replaces: string | null;
+}
 
 /** One change to the server cfg; a field left out keeps what the cfg has. */
 export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind; /** keys the user takes back */ stopUnbinding?: string[] }

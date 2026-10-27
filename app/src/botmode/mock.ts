@@ -455,11 +455,14 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     const status = knifeStatus();
     if (status !== "missing" && status !== "unreadable" && status !== "unsupported" && !(st.knifeFile && unbindallLine(st.knifeFile))) throw `${KNIFE_CFG} is neither missing nor unreadable; nothing to repair`;
     const replaces = status === "missing" ? null : knifeSha();
+    // settings.rs Knife::canonical: the header, the unbind lines, the other knife binds, then the knife key's
+    const canonical = (k: Knife) => [...KNIFE_HEADER, ...k.unbound.map((u) => `unbind ${u}`), ...[...(k.extra ?? []), ...(k.bind ? [k.bind] : [])].map(bindLine)];
+    if (status === "ok" || status === "notRun") return { from: null, fromFile: true, lines: canonical(knifeNow()), replaces };
     for (const b of st.status.backups) {
       const k = b.status === "complete" ? st.records[b.id]?.knife : undefined;
-      if (k) return { from: b.id, lines: k.afterText.split("\r\n").slice(0, -1), replaces };
+      if (k) return { from: b.id, fromFile: false, lines: canonical(k.after), replaces };
     }
-    return { from: null, lines: knifeText(rewriteKnife([], { bind: null, unbound: [] }, { bind: { key: "\\", knives: CATALOG.knives }, unbound: [] }).lines).split("\r\n").slice(0, -1), replaces };
+    return { from: null, fromFile: false, lines: canonical({ bind: { key: "\\", knives: CATALOG.knives }, unbound: [] }), replaces };
   };
   /** The backend's refusals for anything that writes the game folder. */
   const writable = () => {

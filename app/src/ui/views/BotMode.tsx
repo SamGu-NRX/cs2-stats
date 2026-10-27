@@ -710,7 +710,7 @@ function RepairDialog({ api, instant, onClose, onDone }: { api: BotModeApi; inst
           {plan === null ? "Reading what the knife key file last held."
             : "error" in plan ? <span className="poor-text selectable">{shown(plan.error)}</span>
             : <>
-              <span className="mono">cfg/cs2stats_knife.cfg</span>, {plan.from ? <>as change <span className="mono">{plan.from}</span> wrote it</> : "with the mod's own key and no keys unbound, as no change recorded one"}:
+              <span className="mono">cfg/cs2stats_knife.cfg</span>, {plan.fromFile ? "with the keys it holds now, written plainly: no unbindall, none of the lines Bot Mode doesn't write" : plan.from ? <>with the knife key change <span className="mono">{plan.from}</span> left</> : "with the mod's own key and no keys unbound, as no change recorded one"}, exactly these lines:
               <ul className="bm-files mono selectable">{plan.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
             </>}
         </dd>

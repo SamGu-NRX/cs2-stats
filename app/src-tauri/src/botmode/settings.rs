@@ -607,6 +607,23 @@ impl Knife {
     }
 }
 
+impl Knife {
+    /// The knife file in the app's own form: the header, an `unbind` line for each key in the set,
+    /// the other knife binds, then the knife key's bind, which runs last. No `unbindall`, nothing
+    /// the reader can't follow; what Repair and Replace write.
+    fn canonical(&self) -> String {
+        let lines: Vec<String> = KNIFE_HEADER
+            .iter()
+            .map(|l| l.to_string())
+            .chain(self.unbound.iter().map(|k| format!("unbind {k}")))
+            .chain(self.extra.iter().chain(&self.bind).map(KnifeBind::line))
+            .collect();
+        let mut text = lines.join("\r\n");
+        text.push_str("\r\n");
+        text
+    }
+}
+
 /// The knife file's lines a preview lists: all but the header.
 fn shown_lines(text: &str) -> Vec<String> {
     text.strip_prefix('\u{feff}').unwrap_or(text).lines().filter(|l| !KNIFE_HEADER.contains(l)).map(str::to_string).collect()
@@ -766,7 +783,7 @@ fn exec_is_last(text: &str) -> bool {
 /// added when `add` (the knife file is being written) and it is missing. Exec lines the user wrote
 /// stay where they are; running the file twice does no harm.
 fn place_exec(text: &str, add: bool, new_file: bool) -> String {
-    let has = text.lines().any(|l| l.trim() == KNIFE_EXEC_LINE);
+    let has = cfg::unbom(text).lines().any(|l| l.trim() == KNIFE_EXEC_LINE);
     if (!has && !add) || exec_is_last(text) {
         return text.to_string();
     }
@@ -1276,13 +1293,18 @@ pub fn undo_server_checked(layout: &Layout, probe: &dyn ProcessProbe, id: &str, 
     write_settings(layout, probe, &lock, "server-cfg-undo", &u.read, &values, u.knife.as_ref())
 }
 
-/// What Repair (a missing knife file) or Replace (an unreadable one) writes.
+/// What Repair (a missing knife file) or Replace (an unreadable one, or one with an `unbindall`)
+/// writes: the knife key in the app's own form ([`Knife::canonical`]), nothing else.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepairPlan {
-    /// The change whose knife file goes back; `None` when no change recorded one, and the file
-    /// gets the mod's own key with no keys unbound.
+    /// The change whose knife key it writes back, for a file that can't be read; `None` when it
+    /// writes the keys the readable file holds now (`from_file`), or, with no change recorded, the
+    /// mod's own key with no keys unbound.
     pub from: Option<String>,
+    /// Written from the keys the file holds now, without the lines the app doesn't write.
+    #[serde(default)]
+    pub from_file: bool,
     /// The file as written, line by line.
     pub lines: Vec<String>,
     /// For Replace, the SHA-256 of the unreadable file, which the change keeps in its backup so
@@ -1303,13 +1325,20 @@ fn repair_source(layout: &Layout) -> Result<(RepairPlan, String), String> {
         _ if f.unbindall.is_some() => r.knife_hash.clone(),
         _ => return Err(format!("{KNIFE_CFG} is neither missing nor unreadable and has no unbindall; nothing to repair or replace")),
     };
+    let plan = |from: Option<String>, from_file: bool, knife: &Knife| {
+        let text = knife.canonical();
+        (RepairPlan { from, from_file, lines: text.lines().map(str::to_string).collect(), replaces: replaces.clone() }, text)
+    };
+    // a readable file (one with an unbindall): the keys it holds now, written plainly
+    if matches!(f.status, KnifeFileStatus::Ok | KnifeFileStatus::NotRun) {
+        return Ok(plan(None, true, &r.knife));
+    }
     for m in changes::list(layout)?.into_iter().filter(|m| m.status == changes::Status::Complete) {
         if let Some(k) = record_of(layout, &m.id)?.and_then(|r| r.knife) {
-            return Ok((RepairPlan { from: Some(m.id), lines: k.after_text.lines().map(str::to_string).collect(), replaces }, k.after_text));
+            return Ok(plan(Some(m.id), false, &k.after));
         }
     }
-    let (text, _) = Knife { bind: Some(KnifeBind::of_mod()), ..Knife::default() }.rewrite(None, &Knife::default());
-    Ok((RepairPlan { from: None, lines: text.lines().map(str::to_string).collect(), replaces }, text))
+    Ok(plan(None, false, &Knife { bind: Some(KnifeBind::of_mod()), ..Knife::default() }))
 }
 
 /// The preview of [`repair_knife`]; reads only.

@@ -917,7 +917,7 @@ describe("the knife file, and Undo from each change's record (re-review at 97aa8
     expect(button(/Launch Bot Mode/).disabled).toBe(true);
     expect(text("#bm-launch-why")).toMatch(/^Knife key file missing.*Launch waits until then\.$/);
     await click(button("Repair…"));
-    expect(text("dialog .bm-facts")).toContain(`as change ${from} wrote it`);
+    expect(text("dialog .bm-facts")).toContain(`with the knife key change ${from} left`);
     expect(knifeList().filter((l) => !l?.startsWith("//"))).toEqual(["unbind \\", 'bind k "subclass_create 500;subclass_create 507;subclass_create 515"']);
     expect(writes()).toEqual([]);
     await click(button("Repair"));
@@ -957,7 +957,7 @@ describe("inside the knife file (re-review at 4fdf48a)", () => {
     expect(button(/Launch Bot Mode/).disabled).toBe(true);
     await click(button("Replace…"));
     expect(text(".bm-dialog__title")).toBe("Replace the knife key file?");
-    expect(text("dialog .bm-facts")).toContain(`as change ${from} wrote it`);
+    expect(text("dialog .bm-facts")).toContain(`with the knife key change ${from} left`);
     expect(text("dialog .bm-facts")).toContain("The file as it is now, in this change's backup. Undoing the change in History puts it back as it was.");
     await click(button("Replace"));
     expect(sent("botmode_knife_repair")).toMatchObject({ seen: { from, replaces: expect.any(String) } });
@@ -1098,6 +1098,11 @@ describe("the sixth review (at 500957e)", () => {
     expect(text(".bm-unbound .bm-note")).toBe("An unbindall line in the knife file unbinds every key (cfg/cs2stats_knife.cfg:6: unbindall), so Stop unbinding can't free the keys it holds. Bot Mode leaves that line as it is; Replace writes the file without it.Replace…");
     await click(button("Replace…"));
     expect(text(".bm-dialog__title")).toBe("Replace the knife key file?");
+    // what it writes is exactly what it lists: the keys as they stand, without the unbindall
+    expect(knifeList().filter((l) => !l?.startsWith("//"))).toEqual(["unbind \\", "unbind k", 'bind m "subclass_create 500"']);
+    await click(button("Replace"));
+    expect(backend.state.knifeFile).toEqual(["unbind \\", "unbind k", 'bind m "subclass_create 500"']);
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>(".bm-unbound li button"), (b) => b.disabled)).toEqual([false, false]);
   });
 
   it("every key the knife file leaves bound to knives is on the card, and k still counts after l is unbound", async () => {

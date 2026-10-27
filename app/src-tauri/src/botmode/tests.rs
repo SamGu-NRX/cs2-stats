@@ -1201,6 +1201,56 @@ fn every_key_the_knife_file_leaves_bound_to_knives_is_reported() {
 }
 
 #[test]
+fn a_bom_before_the_server_cfgs_first_line_exec_still_runs_the_knife_file() {
+    let s = Scratch::new("server-bom-exec");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    write(&layout.target(cfg), format!("\u{feff}exec cs2stats_knife\r\n{}", read(&layout, cfg)).as_bytes());
+    let knife = layout.target(settings::KNIFE_CFG);
+    // missing, unreadable, and with a command Bot Mode can't read: each blocks the launch
+    for (state, bytes) in [("missing", None), ("unreadable", Some(&b"unbind \xff\r\n"[..])), ("unsupported", Some(&b"exec more_keys\r\n"[..]))] {
+        match bytes {
+            Some(b) => fs::write(&knife, b).unwrap(),
+            None => {
+                let _ = fs::remove_file(&knife);
+            }
+        }
+        assert!(settings::read_server(&layout).unwrap().knife_file.runs, "{state}: the BOM does not hide the exec");
+        let lock = OpLock::acquire(&layout).unwrap();
+        let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
+        assert!(err.contains("Launch waits until then."), "{state}: {err}");
+    }
+    // and a write keeps the BOM at the start
+    fs::remove_file(&knife).unwrap();
+    set_server(&layout, settings::ServerPatch { bot_aim: Some(settings::BotAim::Head), ..Default::default() });
+    assert!(fs::read_to_string(layout.target(cfg)).unwrap().starts_with("\u{feff}exec cs2stats_knife\r\n"));
+}
+
+#[test]
+fn replace_writes_the_knife_key_in_the_apps_own_form_without_the_unbindall() {
+    use settings::ServerPatch;
+    let s = Scratch::new("knife-replace-canonical");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    fs::write(&path, format!("{written}// mine\r\nunbindall\r\nbind m \"subclass_create 500\"\r\n")).unwrap();
+    let plan = settings::knife_repair_plan(&layout).unwrap();
+    assert!(plan.from_file && plan.replaces.is_some());
+    let body: Vec<&str> = plan.lines.iter().map(String::as_str).filter(|l| !l.starts_with("//")).collect();
+    assert_eq!(body, ["unbind \\", "unbind k", "bind m \"subclass_create 500\""], "the keys it holds now, and no unbindall");
+    settings::repair_knife(&layout, &CLOSED, &plan).unwrap();
+    assert_eq!(read(&layout, settings::KNIFE_CFG), plan.lines.iter().map(|l| format!("{l}\r\n")).collect::<String>(), "exactly what the confirmation listed");
+    let now = settings::read_server(&layout).unwrap();
+    assert!(now.held_keys.is_empty() && now.knife_file.unbindall.is_none(), "{now:?}");
+    assert_eq!(now.knife_bind.map(|b| b.key), Some("m".to_string()));
+    // so Stop unbinding works again
+    set_server(&layout, ServerPatch { stop_unbinding: vec!["k".into()], ..Default::default() });
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\"]);
+}
+
+#[test]
 fn a_knife_bind_that_could_run_other_commands_is_refused() {
     use settings::{KnifeBind, ServerPatch};
     let s = Scratch::new("knife-bind");

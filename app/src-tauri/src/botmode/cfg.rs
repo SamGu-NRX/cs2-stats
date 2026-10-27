@@ -104,7 +104,8 @@ pub fn commands_of(text: &str) -> Vec<(&str, Vec<&str>)> {
 
 /// [`commands_of`] with each command's 1-based line number.
 pub fn numbered_commands(text: &str) -> Vec<(usize, &str, Vec<&str>)> {
-    text.lines()
+    unbom(text)
+        .lines()
         .enumerate()
         .flat_map(|(i, l)| commands(l).0.into_iter().map(move |c| (i + 1, l, words(c))))
         .filter(|(_, _, w)| !w.is_empty())
@@ -130,7 +131,13 @@ pub fn execs(text: &str, file: &str) -> bool {
 
 /// Every value-setting command in `text`, in the order the game runs them.
 fn settings(text: &str) -> impl Iterator<Item = (&str, &str)> {
-    text.lines().flat_map(|l| commands(l).0).filter_map(setting)
+    unbom(text).lines().flat_map(|l| commands(l).0).filter_map(setting)
+}
+
+/// A cfg's text without a UTF-8 BOM at its start, for reading its commands: the game skips it, and
+/// left on, it would become part of the first command's name. Writes keep it (see [`RawLines`]).
+pub fn unbom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
 }
 
 /// The value the game ends up with: the last command anywhere that sets `name`.
