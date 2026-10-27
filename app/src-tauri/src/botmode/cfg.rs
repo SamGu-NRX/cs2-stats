@@ -97,12 +97,26 @@ pub fn line_words(line: &str) -> Option<Vec<&str>> {
     }
 }
 
-/// Whether any command in `text` is `exec <file>`, with or without `.cfg`.
-pub fn execs(text: &str, file: &str) -> bool {
-    text.lines().flat_map(|l| commands(l).0).any(|c| match words(c).as_slice() {
-        [cmd, arg] => cmd.eq_ignore_ascii_case("exec") && (arg.eq_ignore_ascii_case(file) || arg.strip_suffix(".cfg").is_some_and(|a| a.eq_ignore_ascii_case(file))),
+/// Every command in `text`, in the order the game runs them, with its words and the line it is on.
+pub fn commands_of(text: &str) -> Vec<(&str, Vec<&str>)> {
+    text.lines().flat_map(|l| commands(l).0.into_iter().map(move |c| (l, words(c)))).filter(|(_, w)| !w.is_empty()).collect()
+}
+
+/// Whether a command's words are `exec <file>`: the name in any case, with or without quotes
+/// (`words` drops them) and with or without a `.cfg` suffix in any case.
+pub fn is_exec_of(words: &[&str], file: &str) -> bool {
+    match words {
+        [cmd, arg] => {
+            let arg = arg.to_ascii_lowercase();
+            cmd.eq_ignore_ascii_case("exec") && (arg == file.to_ascii_lowercase() || arg.strip_suffix(".cfg") == Some(&file.to_ascii_lowercase()))
+        }
         _ => false,
-    })
+    }
+}
+
+/// Whether any command in `text` is `exec <file>` (see [`is_exec_of`]).
+pub fn execs(text: &str, file: &str) -> bool {
+    commands_of(text).iter().any(|(_, w)| is_exec_of(w, file))
 }
 
 /// Every value-setting command in `text`, in the order the game runs them.
@@ -195,6 +209,16 @@ mod tests {
 
     /// The user's real `gamemode_competitive_server.cfg`, shortened.
     const USER: &str = "// Local settings, run by CS2 on every competitive map load.\r\n\r\n// BotRandomizer: random finishes on dropped knives\r\nbr_dropped_knife_skins 1\r\nbr_dropped_knife_premium 0 // favor expensive finishes\r\nmp_maxrounds 24\r\nbr_player_music_kit 33\r\n";
+
+    #[test]
+    fn exec_of_a_file_is_found_in_any_case_with_or_without_quotes_and_suffix() {
+        for line in ["exec cs2stats_knife", "EXEC cs2stats_knife.CFG", "exec \"cs2stats_knife\"", "exec \"CS2Stats_Knife.cfg\" // mine", "say hi; exec cs2stats_knife.Cfg"] {
+            assert!(execs(line, "cs2stats_knife"), "{line}");
+        }
+        for line in ["// exec cs2stats_knife", "exec cs2stats_knife2", "exec other.cfg", "alias x \"exec cs2stats_knife\""] {
+            assert!(!execs(line, "cs2stats_knife"), "{line}");
+        }
+    }
 
     #[test]
     fn merging_changes_only_the_known_values_and_keeps_comments() {

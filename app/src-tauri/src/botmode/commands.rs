@@ -8,7 +8,7 @@
 use super::changes::{self, Meta, RollbackReport};
 use super::monitor::Running;
 use super::overlay::OverlayPlan;
-use super::settings::{FileSeen, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
+use super::settings::{FileSeen, Preview, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
 use std::time::Duration;
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::monitor;
@@ -256,6 +256,12 @@ pub async fn botmode_catalog(game: Option<String>) -> Result<Option<Catalog>, St
 #[tauri::command]
 pub async fn botmode_server_cfg(game: Option<String>) -> Result<ServerSettings, String> {
     reading(game, |ctx| settings::read_server(&ctx.layout)).await
+}
+
+/// What botmode_set_server_cfg would write for `patch` now, line by line; reads only.
+#[tauri::command]
+pub async fn botmode_server_preview(game: Option<String>, patch: ServerPatch) -> Result<Preview, String> {
+    reading(game, move |ctx| settings::preview_server(&ctx.layout, &patch)).await
 }
 
 /// What Undo of settings change `id` would write, or why it would refuse; reads only.

@@ -270,7 +270,26 @@ export interface KnifeBind { key: string; knives: number[] }
  * is unknown; "unreadable"; "notRun", there but the server cfg no longer runs it.
  */
 export type KnifeFileStatus = "none" | "ok" | "missing" | "unreadable" | "notRun";
-export interface KnifeFile { path: string; status: KnifeFileStatus; sha256: string | null; error: string | null }
+export interface KnifeFile {
+  path: string;
+  status: KnifeFileStatus;
+  sha256: string | null;
+  error: string | null;
+  /** server cfg lines after the knife file that win over it in game: a bind of the knife key or of a key it unbinds, an unbind of the knife key */
+  overrides: string[];
+  /** whether the app's exec line is the server cfg's last command; any write moves it there */
+  execLast: boolean;
+}
+
+/** What a settings write does to both files, line by line (settings.rs Preview). */
+export interface Preview {
+  /** the server cfg's lines it sets: convars, and the app's exec line when it is added or moved to the end */
+  serverLines: string[];
+  /** the knife file as written, all but its header; null when it is not written */
+  knifeLines: string[] | null;
+  /** knife file lines it takes out */
+  knifeRemoved: string[];
+}
 
 /** Everything this app sets for the game (the server cfg's convars and the knife file), from botmode_server_cfg. */
 export interface ServerSettings {
@@ -286,18 +305,18 @@ export interface ServerSettings {
 }
 
 /** What Undo of a settings change would write (settings.rs undo_plan). */
-export interface UndoPlan {
+export interface UndoPlan extends Preview {
   change: string;
-  /** the lines it sets in the server cfg */
-  serverLines: string[];
-  /** the knife file as it would write it, whole; null when the change did not write it */
-  knifeLines: string[] | null;
   /** why Undo would refuse: a setting it wrote changed since; null when it can run */
   refused: string | null;
 }
 
-/** What Repair writes for a missing knife file: the file as change `from` left it, or, with no such change, the mod's own key. */
-export interface RepairPlan { from: string | null; lines: string[] }
+/**
+ * What Repair (a missing knife file) or Replace (an unreadable one) writes: the file as change
+ * `from` left it, or, with no such change, the mod's own key. `replaces`: the unreadable file's
+ * SHA-256, which the change keeps in its backup; null for Repair.
+ */
+export interface RepairPlan { from: string | null; lines: string[]; replaces: string | null }
 
 /** One change to the server cfg; a field left out keeps what the cfg has. */
 export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind; /** keys the user takes back */ stopUnbinding?: string[] }
@@ -360,6 +379,8 @@ export function botmodeOver(call: Call) {
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
     serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
+    /** What setServerCfg would write for `patch` now, line by line. Reads only. */
+    serverPreview: (patch: ServerPatch, t: Target = {}) => call<Preview>("botmode_server_preview", { ...t, patch }),
     /** What Undo of settings change `id` would write, or why it would refuse. Reads only. */
     serverUndoPlan: (id: string, t: Target = {}) => call<UndoPlan>("botmode_server_undo_plan", { ...t, id }),
     /** Undoes settings change `id` as a new change; refused when a setting it wrote has changed since. */

@@ -19,7 +19,7 @@ import { DownloadIcon, PlayIcon, RefreshIcon } from "../icons/ui";
 import { plural } from "../lib/format";
 import { BarContent } from "../shell/Bar";
 import { ModCommands } from "./botmode/ModCommands";
-import { KNIFE_EXEC_LINE, KnifeFileLines, knifeProblem, PlanList, Setup, usePending, type Pending } from "./botmode/Setup";
+import { KNIFE_EXEC_LINE, knifeProblem, PlanList, PreviewLines, Setup, usePending, useServerPreview, type Pending } from "./botmode/Setup";
 import { ActionDialog, clock, day, FileList, fromKeyboard, stamp, useShown } from "./botmode/shared";
 
 // ---------------------------------------------------------------- data
@@ -180,6 +180,10 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
   /** builds the last install replaced, until they are applied again: an install never removes them silently */
   const [replaced, setReplaced] = useState<string[]>([]);
   const { pending, keptUnread } = usePendingOrNull(api, status, bm.server, bm.reload);
+  // the backend refuses a launch on a server cfg it can't read (settings.rs check_knife_file); so does the page
+  const cfgUnread = bm.server === null && bm.serverError !== null
+    ? `The server cfg can't be read (${bm.serverError}), so whether it runs the knife key file is unknown. Launch waits until it reads.${keptUnread ? " Your kept changes wait for it too." : ""}`
+    : null;
   const { session } = bm;
   const releases = bm.releases && "list" in bm.releases ? bm.releases.list : null;
   const state = installState(status, releases);
@@ -207,10 +211,13 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
     }
   };
   const undoable = status.backups.find((b) => b.kind === "normal" && b.status === "complete");
+  // the exact lines the apply and launch confirmations list, from the backend
+  const preview = useServerPreview(api, (dialog?.kind === "apply" || dialog?.kind === "launch") && pending ? pending.plan.patch : null, bm.server);
+  const previewReady = preview === null || (preview !== "loading" && !("error" in preview));
 
   return (
     <div className="view__in bm">
-      <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} keptUnread={keptUnread} onCheck={() => void bm.reload()}
+      <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} cfgUnread={cfgUnread} onCheck={() => void bm.reload()}
         leaving={leaving} onLeaveOn={() => void leaveOn()}
         onTurnOff={(r, e) => setDialog({ kind: "recover", recovery: r, instant: fromKeyboard(e) })}
         onLaunch={(e) => setDialog({ kind: "launch", instant: fromKeyboard(e) })}
@@ -243,13 +250,13 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
       )}
       {dialog?.kind === "apply" && pending && (
         <ActionDialog instant={dialog.instant} title={`Apply ${plural(pending.changed.length, "change")}?`} confirm="Apply" busyText="Writing your changes"
-          onClose={close}
+          onClose={close} ready={previewReady}
           run={async () => {
             await pending.apply();
             toast("Changes applied", "good");
             setDialog(null);
           }}>
-          <PlanList plan={pending.plan} difficultyFrom={status.difficulty} />
+          <PlanList plan={pending.plan} preview={preview} difficultyFrom={status.difficulty} />
         </ActionDialog>
       )}
       {dialog?.kind === "serverUndo" && (
@@ -264,10 +271,10 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
       )}
       {dialog?.kind === "launch" && (
         <ActionDialog instant={dialog.instant} title="Start CS2 in Bot Mode?" confirm="Launch with -insecure" busyText="Turning Bot Mode on and asking Steam to start CS2"
-          onClose={close}
+          onClose={close} ready={previewReady}
           run={async () => {
             // changes kept while CS2 ran go in first; a refusal stops the launch here
-            if (keptUnread) throw KEPT_UNREAD;
+            if (cfgUnread) throw cfgUnread;
             if (pending?.changed.length) await pending.apply();
             const s = await api.launch();
             bm.setSession(s);
@@ -286,7 +293,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
           </dl>
           {pending && pending.changed.length > 0 && <>
             <p className="bm-dialog__lead">First, your {plural(pending.changed.length, "kept change")}:</p>
-            <PlanList plan={pending.plan} difficultyFrom={status.difficulty} />
+            <PlanList plan={pending.plan} preview={preview} difficultyFrom={status.difficulty} />
           </>}
         </ActionDialog>
       )}
@@ -294,10 +301,9 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
   );
 }
 
-/** The settings draft, once the server cfg has been read. */
 /**
  * The settings draft, once the server cfg has been read. `keptUnread`: changes are kept but the
- * cfg could not be read, so they can be neither shown nor checked; launch waits for them.
+ * cfg could not be read, so they can be neither shown nor checked.
  */
 function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSettings | null, reload: () => Promise<void>): { pending: Pending | null; keptUnread: boolean } {
   // the hook runs on every render; without a read cfg it works on a stand-in that is not shown,
@@ -305,14 +311,14 @@ function usePendingOrNull(api: BotModeApi, status: Status, server: ServerSetting
   const p = usePending(api, status, server ?? EMPTY_SERVER, reload, server !== null);
   return server ? { pending: p, keptUnread: false } : { pending: null, keptUnread: p.kept > 0 };
 }
-const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null } };
-/** Why launch waits when kept changes can't be read. */
-const KEPT_UNREAD = "You have kept changes, but the server cfg could not be read, so they can't be checked. Launch waits until it reads; check again.";
+const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: null, knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null, overrides: [], execLast: false } };
 
 // ---------------------------------------------------------------- hero
 
-function Hero({ status, session, running, state, blocker, checking, pending, keptUnread, leaving, onCheck, onLaunch, onRollback, onTurnOff, onLeaveOn }: {
-  status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null; keptUnread: boolean;
+function Hero({ status, session, running, state, blocker, checking, pending, cfgUnread, leaving, onCheck, onLaunch, onRollback, onTurnOff, onLeaveOn }: {
+  status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null;
+  /** why Launch waits for the server cfg to read, or null */
+  cfgUnread: string | null;
   leaving: { busy: boolean; error: string | null };
   onCheck: () => void; onLaunch: (e: MouseEvent) => void; onRollback: (e: MouseEvent) => void; onTurnOff: (r: Recovery, e: MouseEvent) => void; onLeaveOn: () => void;
 }) {
@@ -325,10 +331,11 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
   const word = status.unfinished ? "Interrupted" : supervised ? "In session" : recovery ? "Bot Mode left on" : unseen ? "Can't check CS2" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
   const tone = status.unfinished || recovery ? "poor" : supervised ? "live" : unseen || status.cs2Running || state.kind === "missing" ? "idle" : "ready";
   const version = state.kind === "current" || state.kind === "behind" ? state.tag : state.kind === "byHand" ? state.reference : null;
-  // a missing or unreadable knife file leaves which keys stay unbound unknown: a key the knife
-  // left would spawn knives again, so Launch waits for Repair, as it does for an unread cfg
+  // a missing or unreadable knife file, or a server cfg that can't be read, leaves which keys stay
+  // unbound unknown: a key the knife left would spawn knives again, so Launch waits, as the
+  // backend's launch does (settings.rs check_knife_file)
   const knife = pending && knifeProblem(pending.knifeFile);
-  const launchWhy = state.kind === "missing" ? "Install the mod first." : keptUnread ? KEPT_UNREAD : knife ? `${knife} Launch waits until then.` : pending?.invalid ?? blocker;
+  const launchWhy = state.kind === "missing" ? "Install the mod first." : cfgUnread ?? (knife ? `${knife} Launch waits until then.` : pending?.invalid ?? blocker);
   const vac = vacState(status, running, supervised);
   // the interrupted change has its own sentence and button above; its warning would repeat it
   const warnings = status.warnings.filter((w) => !status.unfinished || !w.startsWith(`Change ${status.unfinished.id} `));
@@ -380,8 +387,8 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
       )}
       {launchWhy && !status.unfinished && (
         <p className="meta bm-hero__why" id="bm-launch-why">
-          {launchWhy}
-          {keptUnread && <> <button className="link" onClick={onCheck} disabled={checking}>Check again</button></>}
+          {shown(launchWhy)}
+          {cfgUnread && <> <button className="link" onClick={onCheck} disabled={checking}>Check again</button></>}
         </p>
       )}
       {((session?.notice && session.notice !== status.notice) || warnings.length > 0) && (
@@ -667,12 +674,9 @@ function ServerUndoDialog({ api, change, instant, onClose, onDone, reload }: {
           {plan === null ? "Reading what the change wrote."
             : "error" in plan ? <span className="poor-text selectable">{shown(plan.error)}</span>
             : plan.refused ? <span className="poor-text selectable" role="alert">{shown(plan.refused)}</span>
-            : <>
-              {plan.serverLines.length > 0 && <><span className="mono">cfg/gamemode_competitive_server.cfg</span>, as a new change; your other lines stay:
-                <ul className="bm-files mono selectable">{plan.serverLines.map((l) => <li key={l}>{l}</li>)}</ul></>}
-              {plan.knifeLines && <KnifeFileLines path="cfg/cs2stats_knife.cfg" lines={plan.knifeLines.filter((l) => !l.startsWith("//"))} />}
-            </>}
+            : "As a new change, these lines:"}
         </dd>
+        {ready && <PreviewLines preview={ready} />}
         {ready?.knifeLines && <>
           <dt>Keys</dt>
           <dd>CS2 keeps the binds a change made, so the key the knife key leaves joins the keys Bot Mode keeps unbound, and any key this change stopped unbinding is unbound again.</dd>
@@ -683,19 +687,21 @@ function ServerUndoDialog({ api, change, instant, onClose, onDone, reload }: {
 }
 
 /**
- * Puts a missing knife file back as the newest settings change left it (settings.rs
- * repair_knife), so the keys Bot Mode keeps unbound are known again.
+ * Writes the knife file back as the newest settings change left it (settings.rs repair_knife):
+ * Repair for a missing file, Replace for an unreadable one, whose bytes the change's backup keeps,
+ * so undoing it in History puts them back.
  */
 function RepairDialog({ api, instant, onClose, onDone }: { api: BotModeApi; instant: boolean; onClose: () => void; onDone: () => void }) {
   const shown = useShown();
   const [plan, setPlan] = useState<RepairPlan | { error: string } | null>(null);
   useEffect(() => { api.knifeRepairPlan().then(setPlan, (e) => setPlan({ error: errorText(e) })); }, [api]);
   const ready = plan && !("error" in plan) ? plan : null;
+  const replace = !!ready?.replaces;
   return (
-    <ActionDialog instant={instant} title="Repair the knife key file?" confirm="Repair" busyText="Writing it back" onClose={onClose} ready={!!ready}
+    <ActionDialog instant={instant} title={replace ? "Replace the knife key file?" : "Repair the knife key file?"} confirm={replace ? "Replace" : "Repair"} busyText="Writing it back" onClose={onClose} ready={!!ready}
       run={async () => {
         await api.knifeRepair(ready!);
-        toast("Knife key file repaired", "good");
+        toast(replace ? "Knife key file replaced" : "Knife key file repaired", "good");
         onDone();
       }}>
       <dl className="bm-facts">
@@ -705,9 +711,13 @@ function RepairDialog({ api, instant, onClose, onDone }: { api: BotModeApi; inst
             : "error" in plan ? <span className="poor-text selectable">{shown(plan.error)}</span>
             : <>
               <span className="mono">cfg/cs2stats_knife.cfg</span>, {plan.from ? <>as change <span className="mono">{plan.from}</span> wrote it</> : "with the mod's own key and no keys unbound, as no change recorded one"}:
-              <ul className="bm-files mono selectable">{plan.lines.filter((l) => !l.startsWith("//")).map((l) => <li key={l}>{l}</li>)}</ul>
+              <ul className="bm-files mono selectable">{plan.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
             </>}
         </dd>
+        {replace && <>
+          <dt>Keeps</dt>
+          <dd>The unreadable file, in this change's backup. Undoing the change in History puts it back as it was.</dd>
+        </>}
         <dt>Server cfg</dt>
         <dd>Unchanged: its <span className="mono">{KNIFE_EXEC_LINE.split(" //")[0]}</span> line already runs the file.</dd>
       </dl>
@@ -751,7 +761,7 @@ function opLabel(op: string): string {
   if (op === "overlay") return "Your builds applied";
   if (op === "server-cfg" || op === "cosmetics") return "Settings";
   if (op === "server-cfg-undo") return "Settings undone";
-  if (op === "knife-repair") return "Knife key file repaired";
+  if (op === "knife-repair") return "Knife key file written back";
   if (op.startsWith("difficulty-")) return `Bot difficulty ${op.slice(11)}`;
   return op;
 }

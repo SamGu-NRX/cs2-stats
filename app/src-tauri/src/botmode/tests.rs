@@ -730,7 +730,7 @@ fn bind_and_unbind_lines_in_the_server_cfg_are_the_users_whatever_they_say() {
     set_server(&layout, ServerPatch { stop_unbinding: vec!["k".into()], ..Default::default() });
     assert_eq!(knife_lines(&layout), ["unbind \\", "bind l"]);
     settings::undo_server(&layout, &CLOSED, &newest(&layout)).unwrap();
-    assert_eq!(knife_lines(&layout), ["unbind \\", "unbind k", "bind l"]);
+    assert_eq!(knife_lines(&layout), ["unbind \\", "bind l", "unbind k"], "k goes back in, at the end, where it runs last");
     changes::rollback(&layout, &CLOSED, None).unwrap();
     let text = read(&layout, cfg);
     assert!(text.starts_with(&user), "kept exactly, in place: {text}");
@@ -783,14 +783,14 @@ fn undo_of_a_stop_unbinding_puts_the_key_back_and_undo_of_an_undo_redoes() {
     assert_eq!(knife_lines(&layout), ["unbind \\", "bind l"]);
     let plan = settings::undo_plan(&layout, &stop.id).unwrap();
     assert_eq!(plan.refused, None);
-    assert!(plan.knife_lines.as_ref().unwrap().contains(&"unbind k".to_string()), "the preview lists the knife file: {plan:?}");
+    assert!(plan.preview.knife_lines.as_ref().unwrap().contains(&"unbind k".to_string()), "the preview lists the knife file: {plan:?}");
     settings::undo_server(&layout, &CLOSED, &stop.id).unwrap();
-    assert_eq!(knife_lines(&layout), ["unbind \\", "unbind k", "bind l"]);
+    assert_eq!(knife_lines(&layout), ["unbind \\", "bind l", "unbind k"]);
 
     // a scalar: head, undone to mixed, and that undo undone back to head
     let head = set_server(&layout, ServerPatch { bot_aim: Some(BotAim::Head), ..Default::default() });
     let plan = settings::undo_plan(&layout, &head.id).unwrap();
-    assert_eq!((plan.server_lines, plan.knife_lines), (vec!["bot_aim mixed".to_string()], None), "no line before, so the plugin's default");
+    assert_eq!((plan.preview.server_lines, plan.preview.knife_lines), (vec!["bot_aim mixed".to_string()], None), "no line before, so the plugin's default");
     settings::undo_server(&layout, &CLOSED, &head.id).unwrap();
     assert_eq!(settings::read_server(&layout).unwrap().bot_aim, Some(BotAim::Mixed));
     let undo = newest(&layout);
@@ -808,7 +808,7 @@ fn the_knife_moving_back_slash_to_k_to_l_then_undone_twice() {
     assert_eq!(knife_lines(&layout), ["unbind \\", "unbind k", "bind l"]);
     // undo l: k is bound again, and l, which CS2 kept bound, joins the set
     let plan = settings::undo_plan(&layout, &second.id).unwrap();
-    assert_eq!(plan.knife_lines.unwrap().iter().filter(|l| !l.starts_with("//")).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>(), ["unbind \\", "unbind l", "bind k"]);
+    assert_eq!(plan.preview.knife_lines.unwrap().iter().filter(|l| !l.starts_with("//")).map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>(), ["unbind \\", "unbind l", "bind k"]);
     settings::undo_server(&layout, &CLOSED, &second.id).unwrap();
     assert_eq!(knife_lines(&layout), ["unbind \\", "unbind l", "bind k"]);
     // the first change's file is gone, so undoing it now would overwrite the undo: refused
@@ -864,7 +864,7 @@ fn a_missing_knife_file_is_said_blocks_knife_changes_and_is_repaired_from_its_ch
     settings::repair_knife(&layout, &CLOSED, &plan).unwrap();
     assert_eq!(read(&layout, settings::KNIFE_CFG), written);
     assert_eq!(settings::read_server(&layout).unwrap().knife_file.status, KnifeFileStatus::Ok);
-    assert!(settings::knife_repair_plan(&layout).unwrap_err().contains("not missing"));
+    assert!(settings::knife_repair_plan(&layout).unwrap_err().contains("neither missing nor unreadable"));
     assert_eq!(settings::undo_plan(&layout, &moved.id).unwrap().refused, None, "the file is again what the change wrote");
 }
 
@@ -880,6 +880,121 @@ fn an_unreadable_knife_file_is_reported_and_never_overwritten() {
     assert!(now.knife_file.error.as_deref().unwrap_or("").starts_with("cfg/cs2stats_knife.cfg:"), "{:?}", now.knife_file.error);
     assert!(settings::set_server(&layout, &CLOSED, knife("m"), now).is_err());
     assert_eq!(fs::read(layout.target(settings::KNIFE_CFG)).unwrap(), b"unbind \xff\r\n");
+}
+
+#[test]
+fn the_apps_exec_line_goes_last_and_a_later_line_that_wins_over_the_knife_is_reported() {
+    use settings::{ServerPatch, KNIFE_EXEC_LINE};
+    let s = Scratch::new("knife-exec-last");
+    let layout = fake_game(&s);
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    set_server(&layout, knife("k"));
+    // the user's own exec of the knife file in place of the app's, then a bind of their own on k
+    let user = format!("{USER_SERVER_CFG}exec cs2stats_knife\r\nbind k \"say hi\"\r\n");
+    write(&layout.target(cfg), user.as_bytes());
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!(now.knife_file.overrides, ["bind k \"say hi\""], "in game the user's bind wins over the knife key");
+    set_server(&layout, settings::ServerPatch { knife_bind: Some(settings::KnifeBind { key: "k".into(), knives: vec![500, 507] }), ..Default::default() });
+    assert_eq!(read(&layout, cfg), format!("{user}{KNIFE_EXEC_LINE}\r\n"), "the app's line is added last; the user's exec and bind stay");
+    let now = settings::read_server(&layout).unwrap();
+    assert!(now.knife_file.exec_last && now.knife_file.overrides.is_empty(), "{:?}", now.knife_file);
+
+    // a line added after the app's exec that rebinds the knife key wins in game: it is reported
+    fs::write(layout.target(cfg), format!("{}bind k \"say late\"\r\nunbind \\\r\nbind \\ \"say free\"\r\n", read(&layout, cfg))).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert!(!now.knife_file.exec_last);
+    assert_eq!(now.knife_file.overrides, ["bind k \"say late\"", "bind \\ \"say free\""], "an unbind of a key the file unbinds anyway is no override");
+    // any write moves the app's line back to the end, past them
+    let preview = settings::preview_server(&layout, &ServerPatch { bot_aim: Some(settings::BotAim::Body), ..Default::default() }).unwrap();
+    assert_eq!(preview.server_lines, ["bot_aim body", KNIFE_EXEC_LINE]);
+    set_server(&layout, ServerPatch { bot_aim: Some(settings::BotAim::Body), ..Default::default() });
+    let text = read(&layout, cfg);
+    assert!(text.ends_with(&format!("bind \\ \"say free\"\r\nbot_aim body\r\n{KNIFE_EXEC_LINE}\r\n")), "{text}");
+    assert_eq!(text.matches(KNIFE_EXEC_LINE).count(), 1);
+    assert!(text.contains("\r\nexec cs2stats_knife\r\nbind k \"say hi\"\r\n"), "the user's own exec stays where it was: {text}");
+    let now = settings::read_server(&layout).unwrap();
+    assert!(now.knife_file.exec_last && now.knife_file.overrides.is_empty());
+}
+
+#[test]
+fn the_knife_file_is_read_in_order_and_the_last_command_for_a_key_wins() {
+    let s = Scratch::new("knife-order");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let written = read(&layout, settings::KNIFE_CFG);
+    // the user unbinds k after the app's bind: no key spawns knives
+    fs::write(&path, format!("{written}unbind k\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind.clone(), now.unbound_keys.clone()), (None, vec!["\\".to_string(), "k".to_string()]));
+    // the other way round, the bind wins
+    fs::write(&path, written.replace("unbind \\\r\n", "unbind \\\r\nunbind k\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind.map(|b| b.key), now.unbound_keys), (Some("k".to_string()), vec!["\\".to_string()]));
+    // and a later bind of k to something else leaves no knife bind, and k out of the set
+    fs::write(&path, format!("{written}bind k \"say hi\"\r\n")).unwrap();
+    let now = settings::read_server(&layout).unwrap();
+    assert_eq!((now.knife_bind, now.unbound_keys), (None, vec!["\\".to_string()]));
+}
+
+#[test]
+fn a_rewrite_keeps_the_users_lines_byte_for_byte_unless_the_change_moves_their_key() {
+    use settings::ServerPatch;
+    let s = Scratch::new("knife-user-bytes");
+    let layout = fake_game(&s);
+    set_server(&layout, knife("k"));
+    let path = layout.target(settings::KNIFE_CFG);
+    let mine = "unbind z // keep this key free for another tool";
+    let alias = "alias +x \"unbind q\"";
+    fs::write(&path, format!("{}{mine}\r\n{alias}\r\n", read(&layout, settings::KNIFE_CFG))).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().unbound_keys, ["\\", "z"]);
+    // moving the knife to l leaves z's line and the alias exactly as they are, and says so in the preview
+    let preview = settings::preview_server(&layout, &knife("l")).unwrap();
+    let lines = preview.knife_lines.unwrap();
+    assert!(lines.contains(&mine.to_string()) && lines.contains(&alias.to_string()), "{lines:?}");
+    assert_eq!(preview.knife_removed, ["bind k \"subclass_create 500\""]);
+    set_server(&layout, knife("l"));
+    let text = read(&layout, settings::KNIFE_CFG);
+    assert!(text.contains(&format!("\r\n{mine}\r\n{alias}\r\n")), "{text}");
+    // Stop unbinding z targets z: only then does its line come out, and the preview names it
+    let preview = settings::preview_server(&layout, &ServerPatch { stop_unbinding: vec!["z".into()], ..Default::default() }).unwrap();
+    assert_eq!(preview.knife_removed, [mine]);
+    set_server(&layout, ServerPatch { stop_unbinding: vec!["z".into()], ..Default::default() });
+    let text = read(&layout, settings::KNIFE_CFG);
+    assert!(!text.contains("unbind z") && text.contains(alias), "{text}");
+}
+
+#[test]
+fn an_unreadable_knife_file_is_replaced_from_its_change_and_the_replace_can_be_undone() {
+    use settings::KnifeFileStatus;
+    let s = Scratch::new("knife-replace");
+    let layout = fake_game(&s);
+    let moved = set_server(&layout, knife("k"));
+    let written = read(&layout, settings::KNIFE_CFG);
+    let broken: &[u8] = b"unbind \xff\r\n";
+    fs::write(layout.target(settings::KNIFE_CFG), broken).unwrap();
+    assert_eq!(settings::read_server(&layout).unwrap().knife_file.status, KnifeFileStatus::Unreadable);
+    let plan = settings::knife_repair_plan(&layout).unwrap();
+    assert_eq!((plan.from.as_deref(), plan.replaces.as_deref()), (Some(moved.id.as_str()), Some(hash::bytes(broken).as_str())));
+    settings::repair_knife(&layout, &CLOSED, &plan).unwrap();
+    assert_eq!(read(&layout, settings::KNIFE_CFG), written);
+    assert_eq!(settings::read_server(&layout).unwrap().knife_file.status, KnifeFileStatus::Ok);
+    let replace = changes::list(&layout).unwrap().remove(0);
+    assert_eq!(replace.operation, "knife-repair");
+    // the unreadable bytes are in the change's backup: undoing it puts them back
+    changes::rollback(&layout, &CLOSED, Some(&replace.id)).unwrap();
+    assert_eq!(fs::read(layout.target(settings::KNIFE_CFG)).unwrap(), broken);
+}
+
+#[test]
+fn a_launch_is_refused_while_the_server_cfg_cannot_be_read() {
+    let s = Scratch::new("launch-cfg-unread");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    fs::write(layout.target("cfg/gamemode_competitive_server.cfg"), b"bot_aim \xff\r\n").unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
+    assert!(err.starts_with("The server cfg can't be read (") && err.ends_with("so whether it runs the knife key file is unknown. Launch waits until it reads."), "{err}");
 }
 
 #[test]
