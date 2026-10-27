@@ -204,10 +204,12 @@ export interface SessionStatus {
  * editing the same file), so it changes nothing and asks. Answer with botmode.recover().
  */
 export interface Recovery {
-  /** the prompt to show */
+  /** the prompt to show; it says that "Leave it on" keeps another tool's setting */
   message: string;
   /** gameinfo.gi, the one file "off" writes */
   file: string;
+  /** the lines "off" removes, as they read now, including any another tool added */
+  lines: string[];
   /** gameinfo.gi's SHA-256 when the prompt was read; recover("off") refuses once the file differs */
   hash: string;
 }

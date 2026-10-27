@@ -1131,7 +1131,8 @@ fn cleanup_leaves_a_leased_session_alone() {
 
 /// A session marker as a launch leaves it when it dies: `state` is "pending" or "committed".
 fn mark_session(layout: &Layout, state: &str, before: &str, after: &str, run_id: &str) {
-    let marker = serde_json::json!({"state": state, "run_id": run_id, "before_hash": hash::bytes(before.as_bytes()), "after_hash": hash::bytes(after.as_bytes()), "before_content": before});
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let marker = serde_json::json!({"state": state, "run_id": run_id, "written_at_ns": now, "before_hash": hash::bytes(before.as_bytes()), "after_hash": hash::bytes(after.as_bytes()), "before_content": before});
     write(&session::marker_path(layout), marker.to_string().as_bytes());
 }
 
@@ -1179,6 +1180,7 @@ fn startup_after_a_session_died_with_bot_mode_on_asks_and_changes_nothing() {
         assert_eq!(r.message, session::RECOVERY);
         assert_eq!(r.hash, hash::bytes(after.as_bytes()), "the prompt carries the hash of the file it asks about");
         assert_eq!(Path::new(&r.file), layout.target("gameinfo.gi"));
+        assert_eq!(r.lines, ["Game\tcsgo/overrides/botprofile.vpk", "Game\tcsgo/addons/metamod"], "the confirmation lists what turning off removes");
         assert_eq!(session::cleanup_message(&c).as_deref(), Some(session::RECOVERY));
         assert_eq!(snapshot(&layout.csgo), before, "{state}: cleanup never writes gameinfo.gi");
         assert!(session::marker_path(&layout).is_file(), "{state}: the marker stays until the user answers");
@@ -1217,6 +1219,45 @@ fn startup_clears_a_dead_marker_silently_when_bot_mode_is_off() {
         assert!(!session::marker_path(&layout).is_file(), "{state}");
         assert_eq!(snapshot(&layout.csgo), files);
     }
+}
+
+/// Opens `path` so that it can be read but not deleted, as another program holding it open does.
+#[cfg(windows)]
+fn hold_undeletable(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).unwrap()
+}
+
+#[cfg(windows)]
+#[test]
+fn a_marker_that_cannot_be_deleted_never_prompts_for_the_panel_later() {
+    // A session died; Bot Mode was turned off since; the marker will not delete at startup.
+    let s = Scratch::new("marker-undeletable");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    mark_session(&layout, "committed", before, &gameinfo::enable(before).unwrap(), "dead");
+    let held = hold_undeletable(&session::marker_path(&layout));
+    let c = session::cleanup(&layout, &no_cs2(), NO_ADOPTER);
+    let Cleanup::RecordKept { why } = &c else { panic!("{c:?}") };
+    assert!(why.contains("ignores it from now on"), "{why}");
+    assert!(session::cleanup_message(&c).unwrap().starts_with("Bot Mode is off. An old session record could not be removed"));
+    assert!(session::marker_path(&layout).is_file(), "the delete really failed");
+    // Later the Panel turns Bot Mode on: that is the Panel's, and nothing asks about it.
+    turn_on_by_hand(&layout);
+    let panel = read(&layout, "gameinfo.gi");
+    assert_eq!(session::recovery(&layout).unwrap(), None);
+    let c = session::cleanup(&layout, &no_cs2(), NO_ADOPTER);
+    assert!(matches!(&c, Cleanup::LeftAlone { message } if message.starts_with(session::MANAGED_BY_OTHER_TOOL) && message.contains("could not be removed")), "{c:?}");
+    let st = status::status(&layout, &CLOSED, None, Some("-insecure".into())).unwrap();
+    assert_eq!(st.notice, session::MANAGED_BY_OTHER_TOOL);
+    let err = session::recover(&layout, &CLOSED, session::RecoverAction::Off, Some(&hash::bytes(panel.as_bytes()))).unwrap_err();
+    assert!(err.contains("nothing to recover"), "{err}");
+    assert_eq!(read(&layout, "gameinfo.gi"), panel);
+    // Once the file can go, the next start deletes it.
+    drop(held);
+    assert!(matches!(session::cleanup(&layout, &no_cs2(), NO_ADOPTER), Cleanup::LeftAlone { message } if message == session::MANAGED_BY_OTHER_TOOL));
+    assert!(!session::marker_path(&layout).is_file());
 }
 
 #[test]

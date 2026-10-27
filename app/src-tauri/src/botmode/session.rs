@@ -40,9 +40,12 @@
 //!   was not started by Bot Mode, so its options are whatever Steam had.
 //! - A CS2 that starts between the supervisor's last process-list poll and its write that
 //!   turns Bot Mode off. It may load the mod with nothing left watching it.
-//! - Valve's updater rewriting `gameinfo.gi` at the same instant as a toggle: the toggle compares
-//!   the file's hash before writing and again just before renaming its new content into place
-//!   (`ChangeSet::put_bytes_if_unchanged`), which narrows the window but cannot close it.
+//! - Another program (Valve's updater, the Panel) rewriting `gameinfo.gi` at the same instant as
+//!   any write here, the recovery answer included: the write compares the file's hash before
+//!   writing and again just before renaming its new content into place
+//!   (`ChangeSet::put_bytes_if_unchanged`). Windows has no atomic compare-and-swap for files, so
+//!   that second check narrows the window to the moment between the check and the rename; it
+//!   cannot close it.
 
 use super::changes::{self, Kind, Meta, Status};
 use super::gameinfo;
@@ -65,8 +68,7 @@ pub const MANAGED_BY_OTHER_TOOL: &str = "Bot Mode is managed by another tool (le
 /// Nothing was written to `gameinfo.gi`.
 pub const NOT_CHANGED: &str = "Bot Mode was not changed";
 /// The recovery prompt: a session died with Bot Mode on.
-pub const RECOVERY: &str =
-    "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off.";
+pub const RECOVERY: &str = "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off. Leave it on to keep another tool's setting, such as the Bot-Improver Panel's.";
 
 /// Records that a session of this app was turning Bot Mode on, in `bot-mode-session.json` in the
 /// app folder. A launch writes it as `pending` right before its "on" write and marks it
@@ -74,11 +76,20 @@ pub const RECOVERY: &str =
 /// left behind means a session died in flight, nothing more: it is never taken as proof that the
 /// current `gameinfo.gi` is that session's (see the module notes). It keeps the file as it was
 /// before, so "Turn off Bot Mode" in the recovery prompt can restore it exactly.
+///
+/// A marker written before the last time CS2 Stats saw Bot Mode off (`bot-mode-off-seen.json`)
+/// is stale: whatever that session wrote was undone since, so a later "on" is another tool's.
+/// That keeps a marker that could not be deleted from ever raising the prompt for the Panel.
+/// It relies on the system clock not running backwards between the two writes.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SessionMarker {
     /// "pending" or "committed". Recovery treats both alike.
     state: String,
     run_id: String,
+    /// Unix nanoseconds when the marker was written. Missing in markers from earlier builds of
+    /// this branch, which count as stale.
+    #[serde(default)]
+    written_at_ns: u64,
     before_hash: String,
     after_hash: String,
     before_content: String,
@@ -99,13 +110,37 @@ pub(crate) fn marker_path(layout: &Layout) -> PathBuf {
     layout.data.join("bot-mode-session.json")
 }
 
-/// The marker, when one is present and sound. An unsound or unreadable one is no evidence of a
-/// session; [`cleanup`] deletes it.
+fn off_seen_path(layout: &Layout) -> PathBuf {
+    layout.data.join("bot-mode-off-seen.json")
+}
+
+fn unix_now_ns() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+}
+
+/// When CS2 Stats last saw Bot Mode off with a marker present; 0 when never.
+fn off_seen_ns(layout: &Layout) -> u64 {
+    std::fs::read_to_string(off_seen_path(layout))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("at_ns").and_then(serde_json::Value::as_u64))
+        .unwrap_or(0)
+}
+
+/// Records that Bot Mode is off now, which makes every marker written before it stale.
+fn note_bot_mode_off(layout: &Layout) -> Result<(), String> {
+    let text = serde_json::json!({ "at_ns": unix_now_ns() }).to_string();
+    changes::write_atomic(&off_seen_path(layout), text.as_bytes())
+}
+
+/// The marker, when one is present, sound and newer than the last time Bot Mode was seen off.
+/// Any other marker is no evidence of a session in flight; [`cleanup`] deletes it.
 fn read_marker(layout: &Layout) -> Option<SessionMarker> {
+    let off_seen = off_seen_ns(layout);
     std::fs::read_to_string(marker_path(layout))
         .ok()
         .and_then(|text| serde_json::from_str::<SessionMarker>(&text).ok())
-        .filter(SessionMarker::is_sound)
+        .filter(|m| m.is_sound() && m.written_at_ns > off_seen)
 }
 
 fn write_marker(layout: &Layout, marker: &SessionMarker) -> Result<(), String> {
@@ -121,12 +156,22 @@ fn clear_marker(layout: &Layout) -> Result<(), String> {
     }
 }
 
-/// Deletes the marker only if `run_id` wrote it. Best effort: a marker left behind can only make
-/// CS2 Stats ask about Bot Mode, never change it.
-fn clear_own_marker(layout: &Layout, run_id: &str) {
+/// Deletes the marker only if `run_id` wrote it.
+fn clear_own_marker(layout: &Layout, run_id: &str) -> Result<(), String> {
     if read_marker(layout).is_some_and(|m| m.run_id == run_id) {
-        let _ = clear_marker(layout);
+        clear_marker(layout)?;
     }
+    Ok(())
+}
+
+/// Deletes the marker after Bot Mode was seen off. When the file will not go, the off time is
+/// recorded first so the marker reads as stale from now on; the error says what is left.
+fn clear_marker_after_off(layout: &Layout) -> Result<(), String> {
+    let noted = note_bot_mode_off(layout);
+    clear_marker(layout).map_err(|e| match noted {
+        Ok(()) => format!("{e}; CS2 Stats ignores it from now on and deletes it at its next start"),
+        Err(n) => format!("{e}; recording that Bot Mode is off also failed ({n}), so CS2 Stats may ask about Bot Mode again"),
+    })
 }
 
 /// How long a launch waits for CS2 to start before turning Bot Mode off again. Steam may be
@@ -183,12 +228,13 @@ fn turn_on(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, run_id: &st
         let new = gameinfo::enable(&text).map_err(|e| (e, None))?;
         if new == text {
             // Another tool turned it on between tries: an earlier try's marker is not a session
-            // in flight.
-            clear_own_marker(layout, run_id);
+            // in flight, and left behind it would raise the prompt for that tool's Bot Mode.
+            clear_own_marker(layout, run_id)
+                .map_err(|e| (format!("{NOT_CHANGED}: another tool turned Bot Mode on, and this launch's session record could not be removed ({e})"), None))?;
             return Ok(None);
         }
         let after_hash = hash::bytes(new.as_bytes());
-        let mut marker = SessionMarker { state: "pending".into(), run_id: run_id.into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone() };
+        let mut marker = SessionMarker { state: "pending".into(), run_id: run_id.into(), written_at_ns: unix_now_ns(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone() };
         write_marker(layout, &marker).map_err(|e| (format!("writing the Bot Mode session marker before the gameinfo edit: {e}"), None))?;
         match changes::run_kind(layout, probe, lock, "bot-mode-on", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), &read_hash)) {
             Ok((_, meta)) => {
@@ -206,8 +252,8 @@ fn turn_on(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, run_id: &st
         }
     }
     // The compare-and-swap refuses before renaming anything into place, so no try landed.
-    clear_own_marker(layout, run_id);
-    Err((format!("{NOT_CHANGED}: gameinfo.gi kept changing while Bot Mode was being turned on: {last}"), None))
+    let kept = clear_own_marker(layout, run_id).err().map(|e| format!("; the session record could not be removed ({e})")).unwrap_or_default();
+    Err((format!("{NOT_CHANGED}: gameinfo.gi kept changing while Bot Mode was being turned on: {last}{kept}"), None))
 }
 
 /// How a session's own "on" write ended.
@@ -224,8 +270,9 @@ enum Ending {
 }
 
 /// Undoes the session's own "on" write, only while `gameinfo.gi` is still exactly what it wrote.
-/// Another tool writing those same bytes during the session is the one case this gets wrong
-/// (see the module notes); a file that differs in any byte is left alone.
+/// Another tool writing those same bytes during the session is the one case this gets wrong, and
+/// a write landing between the final hash check and the rename is not caught either (see the
+/// module notes); a file that differs in any byte when checked is left alone.
 fn turn_off_own(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, w: &Written) -> Result<Ending, String> {
     let (text, hash) = read_gameinfo(layout)?;
     if !gameinfo::is_bot_mode(&text)? {
@@ -438,13 +485,24 @@ pub fn supervise_session(
     let watch = |mode: Mode, limit: Option<Duration>| monitor::supervise_with_tick(sys, &image, mode, limit, &|| Control::Go, &|e| r.event(e), &|| r.tick());
     let mut checked = watch_mode.map(|m| checked_of(&watch(m, limit))).unwrap_or_default();
     let mut outcome = None;
+    // Why the session marker could not be deleted at the end, if it could not.
+    let mut record_kept: Option<String> = None;
     // 6. Undo this session's own write, and leave only once that is settled: a CS2 that started
     // again is watched until it exits, and a failure is retried, with the lease kept throughout.
     let ending = loop {
         match end(layout, probe, sys, &image, written.as_ref()) {
             End::Done(ending) => {
                 if written.is_some() {
-                    clear_own_marker(layout, run_id);
+                    let cleared = match ending {
+                        // Bot Mode is off now, so the marker can be made stale if it will not go.
+                        Ending::TurnedOff(_) | Ending::AlreadyOff => clear_marker_after_off(layout),
+                        _ => clear_own_marker(layout, run_id),
+                    };
+                    if let Err(e) = cleared {
+                        let why = format!("the session record could not be removed: {e}");
+                        r.update(|s| s.errors.push(why.clone()));
+                        record_kept = Some(e);
+                    }
                 }
                 if let Ending::TurnedOff(meta) = &ending {
                     r.update(|s| s.bot_mode_off = Some(meta.clone()));
@@ -495,6 +553,12 @@ pub fn supervise_session(
                     _ => monitor::describe(&outcome),
                 };
             }
+        }
+        if let Some(e) = &record_kept {
+            s.message = match &ending {
+                Ending::TurnedOff(_) | Ending::AlreadyOff => format!("{} Bot Mode is off, but the session record couldn't be removed ({e}).", s.message),
+                _ => format!("{} The session record couldn't be removed ({e}), so CS2 Stats may ask about Bot Mode at its next start.", s.message),
+            };
         }
         s.outcome = Some(outcome);
         s.left_on = None;
@@ -586,6 +650,9 @@ pub enum Cleanup {
     Recovery(Recovery),
     /// Bot Mode is on, and no session of this app was turning it on.
     LeftAlone { message: String },
+    /// Bot Mode is off, but an old session marker could not be deleted; `why` says what happens
+    /// to it. It never raises the prompt (see [`SessionMarker`]).
+    RecordKept { why: String },
     /// Something could not be done; the reason.
     Problem { why: String },
 }
@@ -598,8 +665,12 @@ pub struct Recovery {
     pub message: String,
     /// `gameinfo.gi`, the one file "Turn off Bot Mode" writes.
     pub file: String,
-    /// The SHA-256 of `gameinfo.gi` when this was read. [`recover`] turns Bot Mode off only
-    /// while the file still has it, so the answer applies to the file the user was asked about.
+    /// The lines "Turn off Bot Mode" removes from it, as they read now, including any another
+    /// tool added.
+    pub lines: Vec<String>,
+    /// The SHA-256 of `gameinfo.gi` when this was read. [`recover`] refuses "off" once the file
+    /// hashes differently, so the answer applies to the file the user was asked about (up to
+    /// the check-to-rename window in the module notes).
     pub hash: String,
 }
 
@@ -613,7 +684,7 @@ pub fn recovery(layout: &Layout) -> Result<Option<Recovery>, String> {
     if !gameinfo::is_bot_mode(&text)? {
         return Ok(None);
     }
-    Ok(Some(Recovery { message: RECOVERY.into(), file: layout.target("gameinfo.gi").display().to_string(), hash }))
+    Ok(Some(Recovery { message: RECOVERY.into(), file: layout.target("gameinfo.gi").display().to_string(), lines: gameinfo::bot_lines(&text)?, hash }))
 }
 
 /// The user's answer to the recovery prompt.
@@ -640,11 +711,15 @@ pub const CHANGED_SINCE_ASKED: &str =
     "gameinfo.gi changed after CS2 Stats asked about it, so Bot Mode was not changed. Check Bot Mode again before turning it off.";
 
 /// Answers the recovery prompt; either answer deletes the session marker, so the prompt is not
-/// raised again. "off" writes `gameinfo.gi` only while it still hashes to `expect_hash`, the
-/// hash the prompt carried. When the file is exactly what the dead session wrote, it restores
-/// the marker's before-image; otherwise it removes only Bot Mode's search paths, since restoring
-/// an old before-image over a file that changed since would also undo that change (a Valve
-/// update, say). Refuses while a session runs or CS2 is running.
+/// raised again. "off" refuses unless `gameinfo.gi` still hashes to `expect_hash`, the hash the
+/// prompt carried, checked before writing and again just before the rename; a write by another
+/// program between that last check and the rename is not caught (see the module notes).
+///
+/// "off" means Bot Mode off, whichever tool turned it on: the user chose it over "Leave it on".
+/// When the file is exactly what the dead session wrote, it restores the marker's before-image.
+/// Otherwise it removes every Bot Mode search path, including ones another tool added, and
+/// nothing else, since restoring an old before-image over a file that changed since would also
+/// undo that change (a Valve update, say). Refuses while a session runs or CS2 is running.
 pub fn recover(layout: &Layout, probe: &dyn ProcessProbe, action: RecoverAction, expect_hash: Option<&str>) -> Result<Recovered, String> {
     // Held, not just checked, so no supervisor can start while the answer is written.
     let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo)
@@ -664,16 +739,19 @@ pub fn recover(layout: &Layout, probe: &dyn ProcessProbe, action: RecoverAction,
         return Err(CHANGED_SINCE_ASKED.into());
     }
     if !gameinfo::is_bot_mode(&text)? {
-        clear_marker(layout)?;
-        return Ok(Recovered { change: None, message: "Bot Mode is already off.".into() });
+        let message = match clear_marker_after_off(layout) {
+            Ok(()) => "Bot Mode is already off.".to_string(),
+            Err(e) => format!("Bot Mode is already off, but the session record couldn't be removed ({e})."),
+        };
+        return Ok(Recovered { change: None, message });
     }
     let new = if hash == marker.after_hash { marker.before_content } else { gameinfo::disable(&text)? };
     changes::supersede_unfinished_sessions(layout)?;
     match changes::run_kind(layout, probe, &lock, "bot-mode-off", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), expect)) {
         Ok((_, meta)) => {
-            let message = match clear_marker(layout) {
+            let message = match clear_marker_after_off(layout) {
                 Ok(()) => "Bot Mode is off.".to_string(),
-                Err(e) => format!("Bot Mode is off. The session record could not be deleted ({e}), so CS2 Stats may ask about Bot Mode again."),
+                Err(e) => format!("Bot Mode is off, but the session record couldn't be removed ({e})."),
             };
             Ok(Recovered { change: Some(meta), message })
         }
@@ -716,15 +794,20 @@ pub fn cleanup(layout: &Layout, sys: &dyn System, start_adopter: &dyn Fn() -> Re
     if let BotMode::Unknown(why) = &mode {
         return Cleanup::Problem { why: format!("Bot Mode's state could not be read: {why}") };
     }
-    // Deleting is best effort here: a marker left behind can only make CS2 Stats ask, never write.
+    let marker_file = marker_path(layout).exists();
     let marker = read_marker(layout);
-    if marker.is_none() {
-        // An unsound marker is no evidence of a session.
-        let _ = clear_marker(layout);
-    }
     if mode == BotMode::Off {
-        let _ = clear_marker(layout);
+        if marker_file {
+            if let Err(why) = clear_marker_after_off(layout) {
+                return Cleanup::RecordKept { why };
+            }
+        }
         return Cleanup::Off;
+    }
+    // A marker that is unsound or stale is no evidence of a session in flight.
+    let mut kept = None;
+    if marker_file && marker.is_none() {
+        kept = clear_marker(layout).err();
     }
     let image = match monitor::cs2_image(&layout.csgo) {
         Ok(i) => i,
@@ -742,7 +825,11 @@ pub fn cleanup(layout: &Layout, sys: &dyn System, start_adopter: &dyn Fn() -> Re
         };
     }
     if marker.is_none() {
-        return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() };
+        let message = match kept {
+            None => MANAGED_BY_OTHER_TOOL.to_string(),
+            Some(e) => format!("{MANAGED_BY_OTHER_TOOL}. An old session record could not be removed ({e}); CS2 Stats ignores it."),
+        };
+        return Cleanup::LeftAlone { message };
     }
     match recovery(layout) {
         Ok(Some(r)) => Cleanup::Recovery(r),
@@ -757,6 +844,7 @@ pub fn cleanup_message(c: &Cleanup) -> Option<String> {
         Cleanup::Off | Cleanup::Supervised => None,
         Cleanup::Recovery(r) => Some(r.message.clone()),
         Cleanup::LeftAlone { message } => Some(message.clone()),
+        Cleanup::RecordKept { why } => Some(format!("Bot Mode is off. An old session record could not be removed: {why}.")),
         Cleanup::Adopting { .. } => Some(format!(
             "A CS2 is running with Bot Mode on and nothing watching it; CS2 Stats now watches it and ends it if it was started without -insecure. {NOT_CHANGED}."
         )),
