@@ -9,7 +9,7 @@ use super::monitor;
 use super::overlay::{self, OverlayReport};
 use super::paths::Layout;
 use super::process::{session_held, SystemProbe};
-use super::session::{self, SessionStatus};
+use super::session::{self, RecoverAction, Recovered, Recovery, SessionStatus};
 use super::settings::{self, AppSettings, Cosmetics, Difficulty};
 use super::status::{self, Status};
 use super::{Ctx, Game};
@@ -33,6 +33,12 @@ fn set_notice(n: Option<String>) {
     }
 }
 
+fn clear_notice() {
+    if let Ok(mut slot) = NOTICE.lock() {
+        *slot = None;
+    }
+}
+
 fn start_adopter(layout: &Layout) -> Result<(), String> {
     session::start_and_wait(layout, &monitor::Windows, session::RunMode::Adopt).map(|_| ())
 }
@@ -41,7 +47,7 @@ fn start_adopter(layout: &Layout) -> Result<(), String> {
 /// session runs), then `f`.
 async fn mutating<T: Send + 'static>(game: Option<String>, f: impl FnOnce(&Ctx) -> Result<T, String> + Send + 'static) -> Result<T, String> {
     blocking(game, move |ctx| {
-        set_notice(session::guard(&ctx.layout, &SystemProbe, &monitor::Windows, &|| start_adopter(&ctx.layout))?);
+        set_notice(session::guard(&ctx.layout, &monitor::Windows, &|| start_adopter(&ctx.layout))?);
         f(ctx)
     })
     .await
@@ -110,6 +116,10 @@ pub struct SessionView {
     pub status: Option<SessionStatus>,
     /// What session cleanup last told the user, if anything.
     pub notice: Option<String>,
+    /// The recovery prompt, read from the files on every call: a session of this app died with
+    /// Bot Mode on. Answer it with `botmode_recover`. `None` when there is nothing to ask, or
+    /// `gameinfo.gi` cannot be read (`botmode_status` reports that).
+    pub recovery: Option<Recovery>,
 }
 
 fn view(layout: &Layout) -> SessionView {
@@ -117,6 +127,7 @@ fn view(layout: &Layout) -> SessionView {
         supervised: session_held(&layout.csgo).unwrap_or(false),
         status: session::read_status(layout),
         notice: NOTICE.lock().ok().and_then(|n| n.clone()),
+        recovery: session::recovery(layout).ok().flatten(),
     }
 }
 
@@ -128,7 +139,6 @@ pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String>
     mutating(game, |ctx| {
         let run_id = session::start_launch(
             &ctx.layout,
-            &SystemProbe,
             &monitor::Windows,
             &|| session::start_and_wait(&ctx.layout, &monitor::Windows, session::RunMode::Launch),
             &|| start_adopter(&ctx.layout),
@@ -136,7 +146,7 @@ pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String>
         // Past "ready" means Steam has been asked (or the launch failed).
         let status = session::follow(&ctx.layout, &monitor::Windows, &run_id, &|s| s.state != "ready", &|_| {})?;
         if status.state == "failed" {
-            set_notice(session::cleanup_message(&session::cleanup(&ctx.layout, &SystemProbe, &monitor::Windows, &|| start_adopter(&ctx.layout))));
+            set_notice(session::cleanup_message(&session::cleanup(&ctx.layout, &monitor::Windows, &|| start_adopter(&ctx.layout))));
             return Err(status.message);
         }
         Ok(view(&ctx.layout))
@@ -148,6 +158,19 @@ pub async fn botmode_launch(game: Option<String>) -> Result<SessionView, String>
 #[tauri::command]
 pub async fn botmode_session(game: Option<String>) -> Result<SessionView, String> {
     blocking(game, |ctx| Ok(view(&ctx.layout))).await
+}
+
+/// Answers the recovery prompt (`SessionView::recovery`): `action` "off" turns Bot Mode off
+/// while `gameinfo.gi` still has `expect_hash`, the prompt's hash; "leave" changes nothing.
+/// Either one stops the prompt. Refuses while a session runs or CS2 is running.
+#[tauri::command]
+pub async fn botmode_recover(game: Option<String>, action: RecoverAction, expect_hash: Option<String>) -> Result<Recovered, String> {
+    mutating(game, move |ctx| {
+        let r = session::recover(&ctx.layout, &SystemProbe, action, expect_hash.as_deref())?;
+        clear_notice();
+        Ok(r)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -172,12 +195,14 @@ pub async fn botmode_set_launch_options(game: Option<String>, options: String) -
     .await
 }
 
-/// At app start: session cleanup, so Bot Mode left on with no supervisor is turned off (or the
-/// running CS2 adopted). Runs off the UI thread; its message is kept for the view.
+/// At app start: session cleanup, which closes interrupted session toggles and starts watching
+/// a CS2 that runs with Bot Mode on and no supervisor. It never turns Bot Mode off; a session
+/// that died with Bot Mode on shows as `SessionView::recovery`. Runs off the UI thread; its
+/// message is kept for the view.
 pub fn on_app_start() {
     let _ = std::thread::Builder::new().name("botmode-cleanup".into()).spawn(|| {
         let Ok(ctx) = Ctx::new(Game::Steam, None) else { return };
-        let c = session::cleanup(&ctx.layout, &SystemProbe, &monitor::Windows, &|| start_adopter(&ctx.layout));
+        let c = session::cleanup(&ctx.layout, &monitor::Windows, &|| start_adopter(&ctx.layout));
         set_notice(session::cleanup_message(&c));
     });
 }

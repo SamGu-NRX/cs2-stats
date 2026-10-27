@@ -7,31 +7,39 @@
 //! 1. take the session lease (`process::LockKind::Session`, a named mutex keyed to the game
 //!    folder, which the OS releases when the process dies);
 //! 2. record the session start time;
-//! 3. turn Bot Mode on;
+//! 3. turn Bot Mode on, with a session marker written first (see [`SessionMarker`]);
 //! 4. ask Steam to start CS2;
 //! 5. watch until the last CS2 of this install exits, ending the unsafe ones;
-//! 6. turn Bot Mode off;
+//! 6. turn Bot Mode off, if `gameinfo.gi` is still exactly what step 3 wrote;
 //! 7. exit.
 //!
 //! "Supervised" means exactly "the lease is held". The supervisor does not recover from a
-//! panic: release builds abort on panic, the dead process frees the lease, and the next
-//! [`cleanup`] deals with what it left. Cleanup runs when the app starts and before every
-//! command that changes anything: with the lease free and Bot Mode on, it turns Bot Mode off
-//! when no CS2 runs, and otherwise starts a supervisor in adopt mode, which watches the running
-//! CS2 (ending it if unsafe) and turns Bot Mode off when it exits.
+//! panic: release builds abort on panic, and the dead process frees the lease.
+//!
+//! Who owns Bot Mode. Other tools turn Bot Mode on too: ed0ard's CS2-Bot-Improver Panel keeps
+//! it on for as long as the user wants it, by editing the same file. CS2 Stats turns Bot Mode
+//! off on its own only where it knows the "on" is its own: a live supervisor that wrote it and
+//! finds the file unchanged when CS2 exits. Nothing else is evidence. After a crash, the file
+//! cannot say who wrote it: an identical rewrite on NTFS can keep the same modification time,
+//! an in-place write keeps the file's identity, and a write by another tool with the same bytes
+//! hashes the same. So [`cleanup`], which runs when the app starts and before every command that
+//! changes anything, never turns Bot Mode off. When a session died with Bot Mode on, it raises
+//! [`Cleanup::Recovery`] and the user decides with [`recover`]. When a CS2 runs with Bot Mode on
+//! and no supervisor, it starts one in adopt mode, which watches that CS2 (ending it if unsafe)
+//! and never writes `gameinfo.gi`.
 //!
 //! What this cannot cover, by its nature:
 //! - The supervisor is killed (a crash, a reboot, Task Manager) between the write that turns
-//!   Bot Mode on and the one that turns it off. Bot Mode stays on with nothing watching until
-//!   the app or a Bot Mode command runs again; a CS2 started from Steam before then is
-//!   unprotected. [`UNPROTECTED`] is the notice the app shows about it.
+//!   Bot Mode on and the one that turns it off. Bot Mode stays on until the user answers the
+//!   recovery prompt; a CS2 started from Steam before then is unprotected. [`UNPROTECTED`] is
+//!   the notice the app shows about it.
+//! - Another tool writing exactly the bytes a live session wrote, during that session. The
+//!   supervisor cannot tell that write from its own and turns Bot Mode off when CS2 exits.
 //! - A Steam launch of CS2 that was already queued (say, from the Steam client) when the
 //!   supervisor turned Bot Mode on. It is watched like any other CS2 of this install, but it
 //!   was not started by Bot Mode, so its options are whatever Steam had.
 //! - A CS2 that starts between the supervisor's last process-list poll and its write that
 //!   turns Bot Mode off. It may load the mod with nothing left watching it.
-//! - Another tool (the mod's Panel, a copy made by hand) turning Bot Mode on later. The next app
-//!   start or Bot Mode command turns it off again and says so.
 //! - Valve's updater rewriting `gameinfo.gi` at the same instant as a toggle: the toggle compares
 //!   the file's hash before writing and again just before renaming its new content into place
 //!   (`ChangeSet::put_bytes_if_unchanged`), which narrows the window but cannot close it.
@@ -42,82 +50,62 @@ use super::hash;
 use super::launch::{self, LaunchPlan};
 use super::monitor::{self, Checked, Control, Event, Mode, Outcome, System};
 use super::paths::Layout;
-use super::process::{session_held, LockKind, NamedLock, OpLock, ProcessProbe};
+use super::process::{ensure_cs2_closed, session_held, LockKind, NamedLock, OpLock, Phase, ProcessProbe};
 use super::steam::SteamConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Shown with Bot Mode in the app and the CLI.
 pub const UNPROTECTED: &str =
     "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.";
 
-/// Shown when Bot Mode is on and no live session owns the current file.
+/// Bot Mode is on and no session of this app wrote the current file.
 pub const MANAGED_BY_OTHER_TOOL: &str = "Bot Mode is managed by another tool (left as is)";
-pub const PENDING_NOT_OURS: &str = "Bot Mode was left on; it may be another tool's";
-pub const NOT_MANAGED_BY_US: &str = "Bot Mode is still on and not managed by CS2 Stats.";
+/// Nothing was written to `gameinfo.gi`.
+pub const NOT_CHANGED: &str = "Bot Mode was not changed";
+/// The recovery prompt: a session died with Bot Mode on.
+pub const RECOVERY: &str =
+    "Bot Mode is on after CS2 Stats closed unexpectedly. If you didn't turn it on with another tool, turn it off.";
 
+/// Records that a session of this app was turning Bot Mode on, in `bot-mode-session.json` in the
+/// app folder. A launch writes it as `pending` right before its "on" write and marks it
+/// `committed` once that write landed; its supervisor deletes it when the session ends. A marker
+/// left behind means a session died in flight, nothing more: it is never taken as proof that the
+/// current `gameinfo.gi` is that session's (see the module notes). It keeps the file as it was
+/// before, so "Turn off Bot Mode" in the recovery prompt can restore it exactly.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SessionMarker {
-    #[serde(default = "default_marker_state")]
+    /// "pending" or "committed". Recovery treats both alike.
     state: String,
     run_id: String,
-    ownership: String,
     before_hash: String,
     after_hash: String,
     before_content: String,
-    #[serde(default)]
-    file_identity: Option<u64>,
-    #[serde(default)]
-    file_mtime_ms: Option<u64>,
-    #[serde(default)]
-    pending_at_ms: Option<u64>,
 }
 
-fn default_marker_state() -> String {
-    "committed".into()
-}
-
-const PENDING_WINDOW_MS: u64 = 10_000;
-
-fn unix_now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
-pub(crate) fn file_evidence(layout: &Layout) -> Result<(u64, u64), String> {
-    let path = layout.confined("gameinfo.gi")?;
-    let metadata = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    #[cfg(windows)]
-    let identity = {
-        let (volume, index) = super::process::file_id(&path)?;
-        u64::from(volume).wrapping_mul(31).wrapping_add(index)
-    };
-    #[cfg(not(windows))]
-    let identity = {
-        use std::os::unix::fs::MetadataExt;
-        metadata.dev().wrapping_mul(31).wrapping_add(metadata.ino())
-    };
-    let mtime_ms = metadata
-        .modified()
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .as_millis() as u64;
-    Ok((identity, mtime_ms))
-}
-
-fn pending_file_matches(layout: &Layout, marker: &SessionMarker) -> Result<bool, String> {
-    let Some(written_at) = marker.pending_at_ms else { return Ok(false) };
-    let (_, mtime_ms) = file_evidence(layout)?;
-    Ok(mtime_ms >= written_at.saturating_sub(1_000) && mtime_ms <= written_at.saturating_add(PENDING_WINDOW_MS))
+impl SessionMarker {
+    /// The before-image is what its hash says, and has Bot Mode off. A marker an earlier build
+    /// wrote for Bot Mode that was already on carried an empty before-image; restoring that would
+    /// empty `gameinfo.gi`.
+    fn is_sound(&self) -> bool {
+        matches!(self.state.as_str(), "pending" | "committed")
+            && hash::bytes(self.before_content.as_bytes()) == self.before_hash
+            && gameinfo::is_bot_mode(&self.before_content) == Ok(false)
+    }
 }
 
 pub(crate) fn marker_path(layout: &Layout) -> PathBuf {
     layout.data.join("bot-mode-session.json")
 }
 
+/// The marker, when one is present and sound. An unsound or unreadable one is no evidence of a
+/// session; [`cleanup`] deletes it.
 fn read_marker(layout: &Layout) -> Option<SessionMarker> {
-    std::fs::read_to_string(marker_path(layout)).ok().and_then(|text| serde_json::from_str(&text).ok())
+    std::fs::read_to_string(marker_path(layout))
+        .ok()
+        .and_then(|text| serde_json::from_str::<SessionMarker>(&text).ok())
+        .filter(SessionMarker::is_sound)
 }
 
 fn write_marker(layout: &Layout, marker: &SessionMarker) -> Result<(), String> {
@@ -125,42 +113,20 @@ fn write_marker(layout: &Layout, marker: &SessionMarker) -> Result<(), String> {
     changes::write_atomic(&marker_path(layout), &text)
 }
 
-fn clear_marker(layout: &Layout) {
-    let _ = std::fs::remove_file(marker_path(layout));
-}
-
-fn committed_file_matches(layout: &Layout, marker: &SessionMarker) -> Result<bool, String> {
-    let (_, hash) = read_gameinfo(layout)?;
-    let Some(identity) = marker.file_identity else { return Ok(false) };
-    let Some(mtime_ms) = marker.file_mtime_ms else { return Ok(false) };
-    let (current_identity, current_mtime_ms) = file_evidence(layout)?;
-    Ok(hash == marker.after_hash && current_identity == identity && current_mtime_ms == mtime_ms)
-}
-
-fn discard_stale_marker(layout: &Layout) {
-    let Some(marker) = read_marker(layout) else { return };
-    if marker.state == "committed" && !committed_file_matches(layout, &marker).unwrap_or(false) {
-        clear_marker(layout);
+fn clear_marker(layout: &Layout) -> Result<(), String> {
+    let path = marker_path(layout);
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("deleting {}: {e}", path.display())),
+        _ => Ok(()),
     }
 }
 
-fn marker_matches(layout: &Layout, run_id: Option<&str>) -> bool {
-    discard_stale_marker(layout);
-    let Some(marker) = read_marker(layout) else { return false };
-    if marker.state != "committed" || marker.ownership != "ours" || run_id.is_some_and(|id| marker.run_id != id) {
-        return false;
+/// Deletes the marker only if `run_id` wrote it. Best effort: a marker left behind can only make
+/// CS2 Stats ask about Bot Mode, never change it.
+fn clear_own_marker(layout: &Layout, run_id: &str) {
+    if read_marker(layout).is_some_and(|m| m.run_id == run_id) {
+        let _ = clear_marker(layout);
     }
-    match committed_file_matches(layout, &marker) {
-        Ok(true) => true,
-        _ => {
-            clear_marker(layout);
-            false
-        }
-    }
-}
-
-pub(crate) fn owns_current_bot_mode(layout: &Layout) -> bool {
-    marker_matches(layout, None)
 }
 
 /// How long a launch waits for CS2 to start before turning Bot Mode off again. Steam may be
@@ -194,50 +160,86 @@ fn read_gameinfo(layout: &Layout) -> Result<(String, String), String> {
 /// How many times a toggle re-reads `gameinfo.gi` when it changed between the read and the write.
 const CAS_TRIES: usize = 3;
 
-/// Turns Bot Mode on or off as a compare-and-swap: the change is written only if `gameinfo.gi`
-/// still has the content it was computed from, so a Valve update landing in between is never
-/// overwritten; the toggle reads the new file and tries again.
-fn set_bot_mode(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, on: bool, run_id: Option<&str>) -> Result<Option<(Meta, String, String, String)>, String> {
-    let op = if on { "bot-mode-on" } else { "bot-mode-off" };
-    let mut last = String::new();
-    for _ in 0..CAS_TRIES {
-        let (text, read_hash) = read_gameinfo(layout)?;
-        let new = if on { gameinfo::enable(&text)? } else { gameinfo::disable(&text)? };
-        if new == text { return Ok(None); }
-        let after_hash = hash::bytes(new.as_bytes());
-        if on {
-            let Some(run_id) = run_id else { return Err("Bot Mode ownership id is missing".into()) };
-            write_marker(layout, &SessionMarker { state: "pending".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone(), file_identity: None, file_mtime_ms: None, pending_at_ms: Some(unix_now_ms()) })
-                .map_err(|e| format!("writing Bot Mode ownership marker before the gameinfo edit: {e}"))?;
-        }
-        let result = changes::run_kind(layout, probe, lock, op, Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), &read_hash));
-        match result {
-            Ok((_, meta)) => {
-                if on {
-                    let run_id = run_id.expect("checked above");
-                    let (file_identity, file_mtime_ms) = file_evidence(layout)
-                        .map_err(|e| format!("recording Bot Mode file evidence after the gameinfo edit: {e}"))?;
-                    write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone(), file_identity: Some(file_identity), file_mtime_ms: Some(file_mtime_ms), pending_at_ms: None })
-                        .map_err(|e| format!("committing Bot Mode ownership marker after the gameinfo edit: {e}"))?;
-                }
-                return Ok(Some((meta, read_hash, after_hash, text)));
-            }
-            Err(e) if e.contains(changes::CHANGED_SINCE_READ) => last = e,
-            Err(e) if on => return Err(format!("Bot Mode was not changed: {e}")),
-            Err(e) => return Err(e),
-        }
-    }
-    let error = format!("gameinfo.gi kept changing while Bot Mode was being turned {}: {last}", if on { "on" } else { "off" });
-    Err(if on { format!("Bot Mode was not changed: {error}") } else { error })
+/// What a launch's own "on" write put in `gameinfo.gi`. The supervisor keeps it in memory for
+/// the whole session, so ending the session never depends on reading the marker back.
+struct Written {
+    after_hash: String,
+    before_content: String,
 }
 
-/// Finishes interrupted session toggles in the off direction. A session toggle is never rolled
-/// back, since that could turn Bot Mode back on; instead each unfinished one is closed as
-/// superseded, and Bot Mode is then turned off. Only runs when no CS2 is running (the caller
-/// checks, and the change it writes checks again).
-fn turn_off(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock) -> Result<Option<Meta>, String> {
+/// Turns Bot Mode on as a compare-and-swap: the change is written only if `gameinfo.gi` still
+/// has the content it was computed from, so a Valve update landing in between is never
+/// overwritten; the toggle reads the new file and tries again. `None` when Bot Mode was already
+/// on: then nothing is written, the session does not own Bot Mode, and an older session's
+/// marker is left for the recovery prompt.
+///
+/// An error carries the session's `Written` when its bytes are in `gameinfo.gi` anyway (the write
+/// landed, then finishing the change failed and its rollback could not run), so the supervisor
+/// still undoes it.
+fn turn_on(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, run_id: &str) -> Result<Option<(Meta, Written)>, (String, Option<Written>)> {
+    let mut last = String::new();
+    for _ in 0..CAS_TRIES {
+        let (text, read_hash) = read_gameinfo(layout).map_err(|e| (e, None))?;
+        let new = gameinfo::enable(&text).map_err(|e| (e, None))?;
+        if new == text {
+            // Another tool turned it on between tries: an earlier try's marker is not a session
+            // in flight.
+            clear_own_marker(layout, run_id);
+            return Ok(None);
+        }
+        let after_hash = hash::bytes(new.as_bytes());
+        let mut marker = SessionMarker { state: "pending".into(), run_id: run_id.into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone() };
+        write_marker(layout, &marker).map_err(|e| (format!("writing the Bot Mode session marker before the gameinfo edit: {e}"), None))?;
+        match changes::run_kind(layout, probe, lock, "bot-mode-on", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), &read_hash)) {
+            Ok((_, meta)) => {
+                marker.state = "committed".into();
+                // Best effort: the pending marker already holds everything recovery needs, and
+                // recovery treats both states alike.
+                let _ = write_marker(layout, &marker);
+                return Ok(Some((meta, Written { after_hash, before_content: text })));
+            }
+            Err(e) if e.contains(changes::CHANGED_SINCE_READ) => last = e,
+            Err(e) => {
+                let landed = read_gameinfo(layout).is_ok_and(|(_, h)| h == after_hash);
+                return Err(if landed { (e, Some(Written { after_hash, before_content: text })) } else { (format!("{NOT_CHANGED}: {e}"), None) });
+            }
+        }
+    }
+    // The compare-and-swap refuses before renaming anything into place, so no try landed.
+    clear_own_marker(layout, run_id);
+    Err((format!("{NOT_CHANGED}: gameinfo.gi kept changing while Bot Mode was being turned on: {last}"), None))
+}
+
+/// How a session's own "on" write ended.
+#[derive(Debug)]
+enum Ending {
+    /// The supervisor restored the file it changed.
+    TurnedOff(Meta),
+    /// Bot Mode was already off: something else turned it off during the session.
+    AlreadyOff,
+    /// The file is no longer what the session wrote, so it was left as is.
+    ChangedByOther,
+    /// The session never turned Bot Mode on (adopt mode, Bot Mode already on, or a failed write).
+    NeverWritten,
+}
+
+/// Undoes the session's own "on" write, only while `gameinfo.gi` is still exactly what it wrote.
+/// Another tool writing those same bytes during the session is the one case this gets wrong
+/// (see the module notes); a file that differs in any byte is left alone.
+fn turn_off_own(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, w: &Written) -> Result<Ending, String> {
+    let (text, hash) = read_gameinfo(layout)?;
+    if !gameinfo::is_bot_mode(&text)? {
+        return Ok(Ending::AlreadyOff);
+    }
+    if hash != w.after_hash {
+        return Ok(Ending::ChangedByOther);
+    }
     changes::supersede_unfinished_sessions(layout)?;
-    Ok(set_bot_mode(layout, probe, lock, false, None)?.map(|(meta, _, _, _)| meta))
+    let (_, meta) = changes::run_kind(layout, probe, lock, "bot-mode-off", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", w.before_content.as_bytes(), &w.after_hash))?;
+    if bot_mode(layout) != BotMode::Off {
+        return Err("gameinfo.gi does not read back as off".into());
+    }
+    Ok(Ending::TurnedOff(meta))
 }
 
 /// The progress of a supervisor, in `session-status.json`. Liveness comes from the lease, not
@@ -267,7 +269,8 @@ pub struct SessionStatus {
 pub enum RunMode {
     /// Turn Bot Mode on, start CS2 through Steam, watch, turn off.
     Launch,
-    /// Watch a CS2 already running with Bot Mode on, turn off when it exits.
+    /// Watch a CS2 already running with Bot Mode on, ending it if unsafe. Never writes
+    /// `gameinfo.gi`.
     Adopt,
 }
 
@@ -350,8 +353,9 @@ impl Reporter<'_> {
 }
 
 /// The supervisor's whole life; see the module notes. `spawn` asks Steam to start CS2 (only in
-/// launch mode). Returns the final status, also left in the status file. It returns only once
-/// Bot Mode is confirmed off, or when it could not start at all (with nothing turned on).
+/// launch mode). Returns the final status, also left in the status file. It returns once its own
+/// "on" write is settled (undone, or found replaced or already off), or when it could not start
+/// at all (with nothing turned on). A session that wrote nothing leaves Bot Mode as it is.
 pub fn supervise_session(
     layout: &Layout,
     probe: &dyn ProcessProbe,
@@ -404,20 +408,25 @@ pub fn supervise_session(
         s.message = "the Bot Mode supervisor is running".into();
     });
     let mut launch_error = None;
+    let mut written = None;
     let watch_mode = match mode {
         RunMode::Launch => {
             let Some(steam) = steam else { return fail("no Steam configuration to launch with".into()) };
             match start_cs2(layout, probe, sys, steam, run_id, spawn) {
-                Ok((since, meta)) => {
-                    r.update(|s| s.bot_mode_on = meta);
+                Ok((since, on)) => {
+                    if let Some((meta, w)) = on {
+                        r.update(|s| s.bot_mode_on = Some(meta));
+                        written = Some(w);
+                    }
                     Some(Mode::Launched { since })
                 }
                 // Nothing was turned on: nothing to undo.
                 Err(StartError::BeforeOn(e)) => return fail(e),
                 // Bot Mode may be on: go through the same turn-off loop as a finished session.
-                Err(StartError::AfterOn(e)) => {
+                Err(StartError::AfterOn(e, w)) => {
                     r.update(|s| s.errors.push(e.clone()));
                     launch_error = Some(e);
+                    written = w;
                     None
                 }
             }
@@ -429,14 +438,18 @@ pub fn supervise_session(
     let watch = |mode: Mode, limit: Option<Duration>| monitor::supervise_with_tick(sys, &image, mode, limit, &|| Control::Go, &|e| r.event(e), &|| r.tick());
     let mut checked = watch_mode.map(|m| checked_of(&watch(m, limit))).unwrap_or_default();
     let mut outcome = None;
-    // 6. Turn Bot Mode off, and leave only once it is confirmed off: a CS2 that started again
-    // is watched until it exits, and a failure is retried, with the lease kept throughout.
-    loop {
-        match end(layout, probe, sys, &image, run_id) {
-            End::Off(meta) => {
-                clear_marker(layout);
-                r.update(|s| s.bot_mode_off = meta);
-                break;
+    // 6. Undo this session's own write, and leave only once that is settled: a CS2 that started
+    // again is watched until it exits, and a failure is retried, with the lease kept throughout.
+    let ending = loop {
+        match end(layout, probe, sys, &image, written.as_ref()) {
+            End::Done(ending) => {
+                if written.is_some() {
+                    clear_own_marker(layout, run_id);
+                }
+                if let Ending::TurnedOff(meta) = &ending {
+                    r.update(|s| s.bot_mode_off = Some(meta.clone()));
+                }
+                break ending;
             }
             End::StillRunning => {
                 r.update(|s| s.message = "a CS2 of this install is running; watching it until it exits".into());
@@ -456,7 +469,7 @@ pub fn supervise_session(
                 sys.sleep(Duration::from_secs(5));
             }
         }
-    }
+    };
     let outcome = match outcome {
         // CS2 never started and nothing appeared after: say so.
         None if checked.is_empty() && mode == RunMode::Launch => Outcome::NoStart { last_error: None },
@@ -466,21 +479,21 @@ pub fn supervise_session(
         match &launch_error {
             Some(e) => {
                 s.state = "failed".into();
-                s.message = if bot_mode(layout) == BotMode::Off {
-                    if e.starts_with("Bot Mode was not changed") {
-                        e.clone()
-                    } else if e.contains("before the gameinfo edit") {
-                        format!("{e}; Bot Mode was not turned on.")
-                    } else {
-                        format!("{e}; Bot Mode was turned off again")
-                    }
-                } else {
-                    format!("{e}; {NOT_MANAGED_BY_US}")
+                s.message = match &ending {
+                    Ending::TurnedOff(_) => format!("{e}; Bot Mode was turned off again"),
+                    Ending::AlreadyOff => format!("{e}; Bot Mode is off"),
+                    Ending::ChangedByOther => format!("{e}; {MANAGED_BY_OTHER_TOOL}"),
+                    Ending::NeverWritten if e.starts_with(NOT_CHANGED) => e.clone(),
+                    Ending::NeverWritten if e.contains("before the gameinfo edit") => format!("{e}; Bot Mode was not turned on."),
+                    Ending::NeverWritten => format!("{e}; {NOT_CHANGED}"),
                 };
             }
             None => {
                 s.state = "done".into();
-                s.message = monitor::describe(&outcome);
+                s.message = match &ending {
+                    Ending::ChangedByOther => format!("{} {MANAGED_BY_OTHER_TOOL}.", monitor::describe(&outcome)),
+                    _ => monitor::describe(&outcome),
+                };
             }
         }
         s.outcome = Some(outcome);
@@ -500,13 +513,14 @@ fn checked_of(o: &Outcome) -> Vec<Checked> {
 /// Why [`start_cs2`] failed, by whether Bot Mode may already be on.
 enum StartError {
     BeforeOn(String),
-    /// The supervisor turns Bot Mode off with the loop it uses after every session.
-    AfterOn(String),
+    /// The supervisor ends the session with the loop it uses after every session; it turns Bot
+    /// Mode off only if this start wrote it (the `Written`).
+    AfterOn(String, Option<Written>),
 }
 
 /// Steps 2 to 4: under the operation lock, prepare, record the start time, turn Bot Mode on,
 /// and ask Steam to start CS2. Any failure from the "on" write onward is `AfterOn`: the caller
-/// keeps the lease and retries turning Bot Mode off until it is confirmed off.
+/// keeps the lease until its own write is undone or found replaced.
 fn start_cs2(
     layout: &Layout,
     probe: &dyn ProcessProbe,
@@ -514,27 +528,23 @@ fn start_cs2(
     steam: &SteamConfig,
     run_id: &str,
     spawn: &dyn Fn(&LaunchPlan) -> Result<(), String>,
-) -> Result<(u64, Option<Meta>), StartError> {
+) -> Result<(u64, Option<(Meta, Written)>), StartError> {
     let lock = OpLock::acquire(layout).map_err(StartError::BeforeOn)?;
     let plan = launch::prepare(layout, probe, steam, &lock).map_err(StartError::BeforeOn)?;
     launch::check_start(&plan, layout, probe, steam).map_err(StartError::BeforeOn)?;
     // Taken before Bot Mode is on, so no CS2 that could have loaded the mod is older.
     let since = sys.file_time();
     changes::supersede_unfinished_sessions(layout).map_err(StartError::BeforeOn)?;
-    let change = set_bot_mode(layout, probe, &lock, true, Some(run_id)).map_err(StartError::AfterOn)?;
-    if let Some((meta, _, _, _)) = &change {
-        spawn(&plan).map_err(StartError::AfterOn)?;
-        Ok((since, Some(meta.clone())))
-    } else {
-        write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "pre-existing".into(), before_hash: String::new(), after_hash: read_gameinfo(layout).map_err(StartError::AfterOn)?.1, before_content: String::new(), file_identity: None, file_mtime_ms: None, pending_at_ms: None }).map_err(StartError::AfterOn)?;
-        spawn(&plan).map_err(StartError::AfterOn)?;
-        Ok((since, None))
+    let on = turn_on(layout, probe, &lock, run_id).map_err(|(e, w)| StartError::AfterOn(e, w))?;
+    match spawn(&plan) {
+        Ok(()) => Ok((since, on)),
+        Err(e) => Err(StartError::AfterOn(e, on.map(|(_, w)| w))),
     }
 }
 
 enum End {
-    /// Bot Mode is confirmed off (the change that turned it off, unless it already was).
-    Off(Option<Meta>),
+    /// The session's own write is settled; how.
+    Done(Ending),
     /// A CS2 of this install runs, so Bot Mode cannot be turned off yet.
     StillRunning,
     /// Turning it off failed this time (CS2 could not be seen, the lock was busy, the write
@@ -542,27 +552,27 @@ enum End {
     Failed(String),
 }
 
-/// One attempt to turn Bot Mode off once no CS2 of this install runs, confirmed by reading
-/// `gameinfo.gi` back.
-fn end(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, image: &std::path::Path, run_id: &str) -> End {
+/// One attempt to settle the session's own write once no CS2 of this install runs. A session
+/// that wrote nothing (`written` is `None`: adopt mode, or Bot Mode was already on) never
+/// writes `gameinfo.gi` here.
+fn end(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, image: &std::path::Path, written: Option<&Written>) -> End {
     match monitor::sweep(sys, image) {
         Ok((_, false)) => {}
         Ok((_, true)) => return End::StillRunning,
         Err(e) => return End::Failed(format!("whether CS2 still runs could not be checked ({e})")),
     }
+    let Some(w) = written else { return End::Done(Ending::NeverWritten) };
     let lock = match OpLock::acquire(layout) {
         Ok(l) => l,
         Err(e) => return End::Failed(e),
     };
-    if !marker_matches(layout, Some(run_id)) { return End::Off(None); }
-    match turn_off(layout, probe, &lock) {
-        Ok(meta) if bot_mode(layout) == BotMode::Off => End::Off(meta),
-        Ok(_) => End::Failed("gameinfo.gi does not read back as off".into()),
+    match turn_off_own(layout, probe, &lock, w) {
+        Ok(ending) => End::Done(ending),
         Err(e) => End::Failed(e),
     }
 }
 
-/// What [`cleanup`] found and did.
+/// What [`cleanup`] found. Cleanup never writes `gameinfo.gi`.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "result")]
 pub enum Cleanup {
@@ -570,34 +580,112 @@ pub enum Cleanup {
     Off,
     /// A supervisor holds the lease.
     Supervised,
-    /// Bot Mode was on with no supervisor and no CS2 running, and was turned off. `message`
-    /// says who left it on.
-    TurnedOff { change: Option<Meta>, message: String },
-    /// A CS2 runs with Bot Mode on and no supervisor; a supervisor was started to adopt it.
+    /// A CS2 runs with Bot Mode on and no supervisor; a supervisor was started to watch it.
     Adopting { checked: Vec<Checked> },
-    /// Bot Mode is on, but this process has no safe ownership marker for the current file.
+    /// A session of this app died with Bot Mode on: the user is asked.
+    Recovery(Recovery),
+    /// Bot Mode is on, and no session of this app was turning it on.
     LeftAlone { message: String },
     /// Something could not be done; the reason.
     Problem { why: String },
 }
 
-fn revert_ours(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, marker: &SessionMarker) -> Result<Option<Meta>, String> {
-    let (_, current_hash) = read_gameinfo(layout)?;
-    let file_is_ours = if marker.state == "pending" {
-        current_hash == marker.after_hash && pending_file_matches(layout, marker)?
-    } else {
-        committed_file_matches(layout, marker)?
-    };
-    if !file_is_ours { return Ok(None); }
-    changes::supersede_unfinished_sessions(layout)?;
-    let result = changes::run_kind(layout, probe, lock, "bot-mode-off", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", marker.before_content.as_bytes(), &marker.after_hash))?;
-    clear_marker(layout);
-    Ok(Some(result.1))
+/// The recovery prompt, for the app and the CLI: a session of this app died with Bot Mode on.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Recovery {
+    /// [`RECOVERY`].
+    pub message: String,
+    /// `gameinfo.gi`, the one file "Turn off Bot Mode" writes.
+    pub file: String,
+    /// The SHA-256 of `gameinfo.gi` when this was read. [`recover`] turns Bot Mode off only
+    /// while the file still has it, so the answer applies to the file the user was asked about.
+    pub hash: String,
 }
 
-/// Deals with Bot Mode left on without a supervisor, and with interrupted session toggles.
-/// `start_adopter` starts a supervisor in adopt mode.
-pub fn cleanup(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, start_adopter: &dyn Fn() -> Result<(), String>) -> Cleanup {
+/// The recovery prompt, if there is one to show: no supervisor holds the lease, a session
+/// marker is present, and Bot Mode is on. Reads only.
+pub fn recovery(layout: &Layout) -> Result<Option<Recovery>, String> {
+    if session_held(&layout.csgo)? || read_marker(layout).is_none() {
+        return Ok(None);
+    }
+    let (text, hash) = read_gameinfo(layout)?;
+    if !gameinfo::is_bot_mode(&text)? {
+        return Ok(None);
+    }
+    Ok(Some(Recovery { message: RECOVERY.into(), file: layout.target("gameinfo.gi").display().to_string(), hash }))
+}
+
+/// The user's answer to the recovery prompt.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoverAction {
+    /// Turn Bot Mode off.
+    Off,
+    /// Leave Bot Mode as it is, and stop asking.
+    Leave,
+}
+
+/// What [`recover`] did.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Recovered {
+    /// The change that turned Bot Mode off; `None` when nothing was written.
+    pub change: Option<Meta>,
+    pub message: String,
+}
+
+/// `recover` refused "off" because the file is not the one the user was asked about.
+pub const CHANGED_SINCE_ASKED: &str =
+    "gameinfo.gi changed after CS2 Stats asked about it, so Bot Mode was not changed. Check Bot Mode again before turning it off.";
+
+/// Answers the recovery prompt; either answer deletes the session marker, so the prompt is not
+/// raised again. "off" writes `gameinfo.gi` only while it still hashes to `expect_hash`, the
+/// hash the prompt carried. When the file is exactly what the dead session wrote, it restores
+/// the marker's before-image; otherwise it removes only Bot Mode's search paths, since restoring
+/// an old before-image over a file that changed since would also undo that change (a Valve
+/// update, say). Refuses while a session runs or CS2 is running.
+pub fn recover(layout: &Layout, probe: &dyn ProcessProbe, action: RecoverAction, expect_hash: Option<&str>) -> Result<Recovered, String> {
+    // Held, not just checked, so no supervisor can start while the answer is written.
+    let _lease = NamedLock::acquire(LockKind::Session, &layout.csgo)
+        .map_err(|e| if e.contains("already running") { "a Bot Mode session is running; wait until CS2 has exited".to_string() } else { e })?;
+    let lock = OpLock::acquire(layout)?;
+    ensure_cs2_closed(probe, Phase::Operation)?;
+    let expect = match action {
+        RecoverAction::Leave => {
+            clear_marker(layout)?;
+            return Ok(Recovered { change: None, message: format!("{NOT_CHANGED}.") });
+        }
+        RecoverAction::Off => expect_hash.ok_or("turning Bot Mode off needs the gameinfo.gi hash from the recovery prompt")?,
+    };
+    let marker = read_marker(layout).ok_or_else(|| format!("No Bot Mode session was left unfinished, so there is nothing to recover. {NOT_CHANGED}."))?;
+    let (text, hash) = read_gameinfo(layout)?;
+    if hash != expect {
+        return Err(CHANGED_SINCE_ASKED.into());
+    }
+    if !gameinfo::is_bot_mode(&text)? {
+        clear_marker(layout)?;
+        return Ok(Recovered { change: None, message: "Bot Mode is already off.".into() });
+    }
+    let new = if hash == marker.after_hash { marker.before_content } else { gameinfo::disable(&text)? };
+    changes::supersede_unfinished_sessions(layout)?;
+    match changes::run_kind(layout, probe, &lock, "bot-mode-off", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), expect)) {
+        Ok((_, meta)) => {
+            let message = match clear_marker(layout) {
+                Ok(()) => "Bot Mode is off.".to_string(),
+                Err(e) => format!("Bot Mode is off. The session record could not be deleted ({e}), so CS2 Stats may ask about Bot Mode again."),
+            };
+            Ok(Recovered { change: Some(meta), message })
+        }
+        Err(e) if e.contains(changes::CHANGED_SINCE_READ) => Err(CHANGED_SINCE_ASKED.into()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Deals with Bot Mode left on without a supervisor, and with interrupted session toggles,
+/// without ever writing `gameinfo.gi` (see the module notes). `start_adopter` starts a
+/// supervisor in adopt mode.
+pub fn cleanup(layout: &Layout, sys: &dyn System, start_adopter: &dyn Fn() -> Result<(), String>) -> Cleanup {
     match session_held(&layout.csgo) {
         Ok(true) => return Cleanup::Supervised,
         Ok(false) => {}
@@ -614,26 +702,28 @@ pub fn cleanup(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, star
         Err(e) => return Cleanup::Problem { why: e },
     }
     let unfinished = changes::list(layout).map(|l| l.iter().any(|m| m.kind == Kind::Session && matches!(m.status, Status::InProgress | Status::RollbackPending)));
-    let unfinished = match unfinished {
-        Ok(u) => u,
+    match unfinished {
+        Ok(false) => {}
+        // Closed without being rolled back: rolling back a toggle could turn Bot Mode on.
+        Ok(true) => {
+            if let Err(e) = changes::supersede_unfinished_sessions(layout) {
+                return Cleanup::Problem { why: e };
+            }
+        }
         Err(e) => return Cleanup::Problem { why: e },
-    };
-    discard_stale_marker(layout);
+    }
     let mode = bot_mode(layout);
     if let BotMode::Unknown(why) = &mode {
         return Cleanup::Problem { why: format!("Bot Mode's state could not be read: {why}") };
     }
-    if unfinished {
-        if let Err(e) = changes::supersede_unfinished_sessions(layout) {
-            return Cleanup::Problem { why: e };
-        }
+    // Deleting is best effort here: a marker left behind can only make CS2 Stats ask, never write.
+    let marker = read_marker(layout);
+    if marker.is_none() {
+        // An unsound marker is no evidence of a session.
+        let _ = clear_marker(layout);
     }
     if mode == BotMode::Off {
-        if let Some(marker) = read_marker(layout) {
-            if marker.state == "pending" {
-                clear_marker(layout);
-            }
-        }
+        let _ = clear_marker(layout);
         return Cleanup::Off;
     }
     let image = match monitor::cs2_image(&layout.csgo) {
@@ -651,46 +741,34 @@ pub fn cleanup(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, star
             Err(e) => Cleanup::Problem { why: format!("a CS2 runs with Bot Mode on, and watching it could not be started: {e}") },
         };
     }
-    let Some(marker) = read_marker(layout) else { return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() }; };
-    if marker.state == "pending" {
-        let current_hash = match read_gameinfo(layout) {
-            Ok((_, hash)) => hash,
-            Err(e) => return Cleanup::Problem { why: e },
-        };
-        if current_hash == marker.before_hash {
-            clear_marker(layout);
-            return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() };
-        }
-        if current_hash != marker.after_hash || !pending_file_matches(layout, &marker).unwrap_or(false) {
-            // A pending marker can collide with a foreign rewrite of identical bytes. The timestamp
-            // window limits that residual risk to a rewrite during the short crash window.
-            clear_marker(layout);
-            return Cleanup::LeftAlone { message: PENDING_NOT_OURS.into() };
-        }
+    if marker.is_none() {
+        return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() };
     }
-    if marker.ownership != "ours" { return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() }; }
-    match revert_ours(layout, probe, &lock, &marker) {
-        Ok(Some(change)) => Cleanup::TurnedOff { change: Some(change), message: "A Bot Mode session ended without turning Bot Mode off; it's now off.".into() },
-        Ok(None) => Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() },
+    match recovery(layout) {
+        Ok(Some(r)) => Cleanup::Recovery(r),
+        Ok(None) => Cleanup::Off,
         Err(e) => Cleanup::Problem { why: e },
     }
 }
 
-/// A sentence for the user, when cleanup did something worth saying.
+/// A sentence for the user, when cleanup found something worth saying.
 pub fn cleanup_message(c: &Cleanup) -> Option<String> {
     match c {
         Cleanup::Off | Cleanup::Supervised => None,
-        Cleanup::TurnedOff { message, .. } | Cleanup::LeftAlone { message } => Some(message.clone()),
-        Cleanup::Adopting { .. } => Some("A CS2 is running with Bot Mode on and nothing watching it; Bot Mode now watches it and turns Bot Mode off when it exits.".into()),
+        Cleanup::Recovery(r) => Some(r.message.clone()),
+        Cleanup::LeftAlone { message } => Some(message.clone()),
+        Cleanup::Adopting { .. } => Some(format!(
+            "A CS2 is running with Bot Mode on and nothing watching it; CS2 Stats now watches it and ends it if it was started without -insecure. {NOT_CHANGED}."
+        )),
         Cleanup::Problem { why } => Some(format!("Bot Mode cleanup: {why}")),
     }
 }
 
 /// Run before every command that changes anything: cleanup, then refuse while a session runs
 /// (its CS2 may be loading the mod's files) or while one is being adopted. Returns a notice to
-/// show when cleanup did something.
-pub fn guard(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, start_adopter: &dyn Fn() -> Result<(), String>) -> Result<Option<String>, String> {
-    let c = cleanup(layout, probe, sys, start_adopter);
+/// show when cleanup found something.
+pub fn guard(layout: &Layout, sys: &dyn System, start_adopter: &dyn Fn() -> Result<(), String>) -> Result<Option<String>, String> {
+    let c = cleanup(layout, sys, start_adopter);
     match &c {
         Cleanup::Supervised => Err("a Bot Mode session is running; wait until CS2 has exited".into()),
         Cleanup::Adopting { .. } => Err(cleanup_message(&c).unwrap_or_default()),
@@ -779,15 +857,15 @@ pub fn start_and_wait(layout: &Layout, sys: &dyn System, mode: RunMode) -> Resul
 }
 
 /// Starts a launch with `start` (normally [`start_and_wait`]). If it fails, a supervisor may
-/// have turned Bot Mode on before dying, so cleanup runs at once and its message is added.
+/// have turned Bot Mode on before dying, so cleanup runs at once and its message (the recovery
+/// prompt, then) is added.
 pub fn start_launch(
     layout: &Layout,
-    probe: &dyn ProcessProbe,
     sys: &dyn System,
     start: &dyn Fn() -> Result<String, String>,
     start_adopter: &dyn Fn() -> Result<(), String>,
 ) -> Result<String, String> {
-    start().map_err(|e| match cleanup_message(&cleanup(layout, probe, sys, start_adopter)) {
+    start().map_err(|e| match cleanup_message(&cleanup(layout, sys, start_adopter)) {
         Some(c) => format!("{e}. {c}"),
         None => e,
     })
@@ -826,7 +904,7 @@ pub fn follow(
             if !session_held(&layout.csgo).unwrap_or(true) {
                 let mut died = s.clone();
                 died.state = "failed".into();
-                died.message = "the Bot Mode supervisor stopped unexpectedly; the next Bot Mode command or app start turns Bot Mode off once CS2 has exited".into();
+                died.message = "the Bot Mode supervisor stopped unexpectedly; if it left Bot Mode on, CS2 Stats asks whether to turn it off".into();
                 return Ok(died);
             }
             if until(&s) {
