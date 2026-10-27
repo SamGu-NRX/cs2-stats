@@ -279,6 +279,19 @@ pub struct InstallSummary {
     pub overlays_replaced: Vec<String>,
 }
 
+/// A cfg of the user's as text, with the SHA-256 of the bytes read; `(None, None)` when absent.
+fn read_user_text(layout: &Layout, rel: &str) -> Result<(Option<String>, Option<String>), String> {
+    let path = layout.confined(rel)?;
+    match std::fs::read(&path) {
+        Ok(b) => {
+            let h = hash::bytes(&b);
+            Ok((Some(String::from_utf8(b).map_err(|e| format!("{}: {e}", path.display()))?), Some(h)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
 /// Installs a downloaded release. Every write is backed up; any failure rolls the whole
 /// install back.
 pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Result<InstallReport, String> {
@@ -307,15 +320,12 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                 }
                 Protection::MergeConvars => {
                     let incoming = read_text(&mut archive, &map, &mut budget, rel)?.unwrap_or_default();
-                    let path = layout.confined(rel)?;
-                    let user = match std::fs::read_to_string(&path) {
-                        Ok(t) => t,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                        Err(e) => return Err(format!("{}: {e}", path.display())),
-                    };
+                    // the merge is computed from this read, so the write checks the cfg still holds it
+                    let (user, read_hash) = read_user_text(layout, rel)?;
+                    let user = user.unwrap_or_default();
                     let out = super::cfg::add_missing(&user, &incoming, &COSMETIC_CONVARS);
                     if out != user {
-                        cs.put_merged_cfg(rel, out.as_bytes())?;
+                        cs.put_merged_cfg_if_unchanged(rel, out.as_bytes(), read_hash.as_deref())?;
                     }
                     merged.push(rel.clone());
                     continue;
@@ -323,15 +333,12 @@ pub fn install(layout: &Layout, probe: &dyn ProcessProbe, cached: &Cached) -> Re
                 Protection::None => {}
             }
             if USER_EDITED_CFGS.iter().any(|c| c.eq_ignore_ascii_case(rel)) {
-                let path = layout.confined(rel)?;
-                let user = match std::fs::read_to_string(&path) {
-                    Ok(t) => Some(t),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(e) => return Err(format!("{}: {e}", path.display())),
-                };
+                let (user, read_hash) = read_user_text(layout, rel)?;
                 let release = read_text(&mut archive, &map, &mut budget, rel)?.unwrap_or_default();
                 if let Some(out) = user.map(|u| super::cfg::keep_user_values(&release, &u)).filter(|out| *out != release) {
-                    if cs.put_bytes(rel, out.as_bytes())? {
+                    // the user's values come from this read, so the write checks the cfg still holds it
+                    let read_hash = read_hash.ok_or_else(|| format!("{rel}: read but no hash"))?;
+                    if cs.put_bytes_if_unchanged(rel, out.as_bytes(), &read_hash)? {
                         written += 1;
                     } else {
                         unchanged += 1;

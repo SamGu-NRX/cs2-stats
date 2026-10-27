@@ -5,7 +5,8 @@
 // the file; "Leave it on" changes nothing. Either answer ends the prompt for good; closing the
 // toast asks again at the next start. The backend refuses both while CS2 runs, and refuses "off"
 // once the file differs from the one the prompt was about (src-tauri/src/botmode/session.rs,
-// `recover`). The Bot Mode page will show the same state from botmode.session().
+// `recover`). The Bot Mode page shows the same state from botmode.session(), with the same two
+// answers; whichever one is answered first ends the other (recoveryAnswered below).
 //
 // One answer runs at a time: while one is in flight, the prompt is locked (both buttons and its
 // close button disabled) and the confirmation cannot open. A failed answer leaves the prompt up,
@@ -17,6 +18,18 @@ import { hideText, useHidePersonal } from "../data/privacy";
 import { dismissToast, lockToast, toast } from "./overlay";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// The prompt is answered in one place and must end everywhere: this toast and the Bot Mode page.
+const answered = new Set<(from: object) => void>();
+/** Tells every other place showing the prompt that `from` answered it. */
+export function recoveryAnswered(from: object) {
+  for (const fn of answered) fn(from);
+}
+/** Calls `fn` when the prompt is answered somewhere; returns the unsubscribe. */
+export function onRecoveryAnswered(fn: (from: object) => void) {
+  answered.add(fn);
+  return () => { answered.delete(fn); };
+}
 
 export function BotModeRecovery() {
   const [confirming, setConfirming] = useState<Recovery | null>(null);
@@ -38,12 +51,19 @@ export function BotModeRecovery() {
     setBusy(false);
   };
 
-  const finish = () => {
+  const self = useRef({}).current;
+  const close = () => {
     if (toastId.current !== null) dismissToast(toastId.current);
     toastId.current = null;
     asked.current = null;
     setConfirming(null);
   };
+  const finish = () => {
+    close();
+    recoveryAnswered(self);
+  };
+  // answered on the Bot Mode page: this prompt has nothing left to ask
+  useEffect(() => onRecoveryAnswered((from) => { if (from !== self && !pending.current) close(); }), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openConfirm = () => {
     if (!pending.current && asked.current) setConfirming(asked.current);

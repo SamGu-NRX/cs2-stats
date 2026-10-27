@@ -50,3 +50,24 @@ describe("Alt+1 to Alt+7 on Profile", () => {
     }
   });
 });
+
+describe("shortcuts while a confirmation is open", () => {
+  it("navigate nowhere until the dialog closes", async () => {
+    Element.prototype.scrollTo ??= () => {};
+    // fails if Ctrl+1 can leave Bot Mode with a confirmation open or its action running (#47 review)
+    act(() => go("#/profile/overview"));
+    await act(async () => root.render(<App />));
+    const dialog = document.body.appendChild(document.createElement("dialog"));
+    dialog.setAttribute("open", "");
+    const ctrl = (key: string) => act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true })); });
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("profile");
+    // Ctrl+R would reload the window under the confirmation: its default is held back
+    const reload = new KeyboardEvent("keydown", { key: "r", ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => { document.body.dispatchEvent(reload); });
+    expect(reload.defaultPrevented).toBe(true);
+    dialog.remove();
+    ctrl("1");
+    expect(parseHash(location.hash).page).toBe("home");
+  });
+});

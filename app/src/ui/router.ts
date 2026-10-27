@@ -3,7 +3,7 @@
 // #/match/<file>/rounds?round=7. A view's section is the `sec` parameter: #/profile?sec=identity
 // scrolls Profile to its Identity section once (useSection below).
 //
-// The app has three views (Home, Matches, Profile) plus Data & settings and the match view. Profile
+// The app has three views (Home, Matches, Profile) plus Bot Mode, Data & settings and the match view. Profile
 // has tabs, #/profile/<tab>; the pages that became its tabs (#/playstyle, #/aim, #/weapons) still
 // parse, as Profile on that tab, so old links and bookmarks keep working.
 import { useCallback, useSyncExternalStore } from "react";
@@ -35,7 +35,7 @@ export const PROFILE_TAB_LABEL: Record<ProfileTab, string> = {
 };
 
 /** Every page; App.tsx titles each, and the privacy test renders each. */
-export const PAGES = ["home", "matches", "match", "profile", "settings"] as const;
+export const PAGES = ["home", "matches", "match", "profile", "botmode", "settings"] as const;
 export type Page = (typeof PAGES)[number];
 
 export interface Route {
@@ -208,7 +208,7 @@ export function parseHash(hash: string): Route {
   }
   // the pages that became Profile tabs
   if (p === "playstyle" || p === "aim" || p === "weapons") return profileRoute(p, query);
-  if (p === "matches" || p === "settings") return { page: p, query };
+  if (p === "matches" || p === "settings" || p === "botmode") return { page: p, query };
   return { page: "home", query };
 }
 

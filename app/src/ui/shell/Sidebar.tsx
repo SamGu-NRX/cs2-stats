@@ -1,22 +1,23 @@
-// Sidebar: the user, the six views, then Data & settings and the scan state. 232 px, or a 56 px rail.
+// Sidebar: the user, the three views and Bot Mode, then Data & settings and the scan state. 232 px, or a 56 px rail.
 // The toggle button animates the width; Ctrl+B and the automatic rail at a window 1100 px wide or
 // narrower do not.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentImg } from "../components/Agent";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
-import { HomeIcon, MatchesIcon, PanelCloseIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
+import { BotIcon, HomeIcon, MatchesIcon, PanelCloseIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
 import { careerEntries, isOwn, ratingHeadline } from "../data/engine";
 import { scanErrorText } from "../data/sources";
 import { fmtRating, plural } from "../lib/format";
 import { navWasInstant, pageHref, useRoute, type Page } from "../router";
 
 type NavPage = Exclude<Page, "match" | "settings">;
-/** The three views, in order; Ctrl+key opens each. Playstyle, Career aim and Weapons are Profile's tabs. */
+/** The three views and Bot Mode, in order; Ctrl+key opens each. Playstyle, Career aim and Weapons are Profile's tabs. */
 export const NAV: { page: NavPage; label: string; Icon: typeof HomeIcon; key: string }[] = [
   { page: "home", label: "Home", Icon: HomeIcon, key: "1" },
   { page: "matches", label: "Matches", Icon: MatchesIcon, key: "2" },
   { page: "profile", label: "Profile", Icon: ProfileIcon, key: "3" },
+  { page: "botmode", label: "Bot Mode", Icon: BotIcon, key: "4" },
 ];
 
 const RAIL_KEY = "cs2stats.rail";
