@@ -1137,8 +1137,41 @@ fn cleanup_leaves_bot_mode_another_tool_left_on_and_says_so() {
 }
 
 fn mark_dead_session(layout: &Layout, before: &str, after: &str, run_id: &str) {
-    let marker = serde_json::json!({"run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before});
+    let marker = serde_json::json!({"state": "committed", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before});
     write(&session::marker_path(layout), marker.to_string().as_bytes());
+}
+
+fn mark_pending_session(layout: &Layout, before: &str, after: &str, run_id: &str) {
+    let marker = serde_json::json!({"state": "pending", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before});
+    write(&session::marker_path(layout), marker.to_string().as_bytes());
+}
+
+#[test]
+fn cleanup_after_a_crash_before_the_gameinfo_write_clears_pending_intent() {
+    let s = Scratch::new("pending-before-write");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    mark_pending_session(&layout, before, &after, "dead");
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::Off));
+    assert!(!bot_mode_on(&layout));
+    assert!(!session::marker_path(&layout).is_file());
+}
+
+#[test]
+fn cleanup_after_a_crash_after_the_gameinfo_write_reverts_pending_intent() {
+    let s = Scratch::new("pending-after-write");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    write(&layout.target("gameinfo.gi"), after.as_bytes());
+    mark_pending_session(&layout, before, &after, "dead");
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::TurnedOff { .. }));
+    assert_eq!(read(&layout, "gameinfo.gi"), before);
 }
 
 #[test]
@@ -1191,6 +1224,82 @@ fn a_launch_over_pre_existing_bot_mode_leaves_it_on_after_cleanup() {
 }
 
 #[test]
+fn a_panel_rewrite_during_our_session_stays_on_after_cs2_exits() {
+    let s = Scratch::new("panel-mid-session");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let changed = std::cell::RefCell::new(None::<String>);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "ours", &|_| {
+        let current = read(&layout, "gameinfo.gi");
+        let panel = current.replace("SkyOccluder", "PanelRewrite");
+        write(&layout.target("gameinfo.gi"), panel.as_bytes());
+        *changed.borrow_mut() = Some(panel);
+        Ok(())
+    });
+    assert_eq!(st.state, "done");
+    assert_eq!(read(&layout, "gameinfo.gi"), changed.borrow().as_deref().unwrap());
+    assert!(bot_mode_on(&layout));
+}
+
+#[test]
+fn a_marker_write_failure_does_not_claim_bot_mode_was_turned_off() {
+    let s = Scratch::new("marker-write-failure");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    fs::create_dir(session::marker_path(&layout)).unwrap();
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "ours", &|_| Ok(()));
+    assert!(st.message.contains("Bot Mode was not turned on."), "{}", st.message);
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn a_marker_for_another_session_id_cannot_turn_bot_mode_off() {
+    let s = Scratch::new("marker-run-id");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    write(&layout.target("gameinfo.gi"), after.as_bytes());
+    mark_dead_session(&layout, before, &after, "other-run");
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let st = session::supervise_session(&layout, &CLOSED, &sys, None, RunMode::Adopt, "our-run", &|_| Ok(()));
+    assert_eq!(st.state, "done");
+    assert!(bot_mode_on(&layout));
+}
+
+#[test]
+fn cleanup_closes_an_interrupted_session_without_guessing_ownership() {
+    let s = Scratch::new("cleanup-interrupted");
+    let (layout, _) = session_game(&s);
+    let id = interrupted_toggle(&layout, "bot-mode-on", &gameinfo::enable(gameinfo::ONLINE_SAMPLE).unwrap());
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::LeftAlone { .. }));
+    let m = changes::list(&layout).unwrap().into_iter().find(|m| m.id == id).unwrap();
+    assert_eq!(m.status, changes::Status::Superseded);
+    let lock = OpLock::acquire(&layout).unwrap();
+    let result = changes::run_kind(&layout, &CLOSED, &lock, "test", changes::Kind::Normal, |cs| cs.put_bytes("gameinfo.gi", read(&layout, "gameinfo.gi").as_bytes()));
+    assert!(result.is_ok(), "the interrupted session no longer blocks changes: {result:?}");
+}
+
+#[test]
+fn cleanup_clears_a_stale_marker_when_bot_mode_is_off() {
+    let s = Scratch::new("stale-marker");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    mark_dead_session(&layout, before, &after, "dead");
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::Off));
+    assert!(!session::marker_path(&layout).is_file());
+}
+
+#[test]
 fn cleanup_with_cs2_running_starts_an_adopting_supervisor_and_changes_nothing() {
     let s = Scratch::new("cleanup-adopt");
     let (layout, image) = session_game(&s);
@@ -1232,10 +1341,10 @@ fn an_interrupted_session_toggle_without_a_marker_is_left_alone() {
     let id = interrupted_toggle(&layout, "bot-mode-off", gameinfo::ONLINE_SAMPLE);
     let sys = FakeSystem::new();
     sys.script(vec![vec![]]);
-    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::LeftAlone { .. }));
+    assert!(matches!(session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER), Cleanup::Off));
     assert!(!bot_mode_on(&layout));
     let m = changes::list(&layout).unwrap().into_iter().find(|m| m.id == id).unwrap();
-    assert_eq!(m.status, changes::Status::InProgress);
+    assert_eq!(m.status, changes::Status::Superseded);
 }
 
 #[test]

@@ -34,8 +34,8 @@ pub enum Status {
     /// Failed part-way, and the automatic rollback could not finish (CS2 was running, or a
     /// file had changed). Must be rolled back before anything else.
     RollbackPending,
-    /// An interrupted session toggle that was closed without being rolled back: Bot Mode was
-    /// turned off by a newer change instead (see `session::turn_off`).
+    /// An interrupted session toggle that was closed without being rolled back. Cleanup has
+    /// verified that restoring it is unsafe or that ownership was not recorded.
     Superseded,
 }
 
@@ -563,11 +563,11 @@ pub fn unfinished(layout: &Layout) -> Result<Option<Meta>, String> {
 }
 
 /// Closes every interrupted session toggle as superseded, without restoring anything. The
-/// caller then turns Bot Mode off with a new change, so recovery always ends with Bot Mode off.
+/// caller must verify ownership before deciding whether another change can turn Bot Mode off.
 pub fn supersede_unfinished_sessions(layout: &Layout) -> Result<(), String> {
     for mut m in list(layout)?.into_iter().filter(|m| m.kind == Kind::Session && m.status.unfinished()) {
         m.status = Status::Superseded;
-        m.error = Some("interrupted; closed without rollback, and Bot Mode turned off by a newer change".into());
+        m.error = Some("interrupted; closed without rollback; ownership was not recorded".into());
         write_meta(&layout.backups().join(&m.id), &m)?;
     }
     Ok(())
