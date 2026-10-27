@@ -51,28 +51,35 @@ function useBotMode(api: BotModeApi) {
   const [releases, setReleases] = useState<{ list: GithubRelease[] } | { error: string } | null>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  // Each read and each poll takes a generation; one that a newer read, poll or launch result has
-  // replaced is dropped, so an older observation never overwrites a newer one.
-  const generation = useRef(0);
-  const current = (g: number) => alive.current && g === generation.current;
+  // Two sequences, so an older observation never overwrites a newer one, and a poll never throws
+  // away a full read that takes longer than its interval (hashing the mod's files can):
+  // - `full` counts full reads and launch results. A full read lands only if no newer full read
+  //   or launch began after it.
+  // - `live` counts everything that writes the session and the running CS2: full reads, polls and
+  //   launch results. A poll lands only if nothing newer began after it; a full read keeps the
+  //   session and running CS2 a newer poll already showed, and lands the rest.
+  const full = useRef(0);
+  const live = useRef(0);
 
   const reload = useCallback(async () => {
-    const g = ++generation.current;
+    const f = ++full.current;
+    const l = ++live.current;
     setD((x) => ({ ...x, checking: true }));
     const [st, se, ca, sv, ru] = await Promise.allSettled([api.status(), api.session(), api.catalog(), api.serverCfg(), api.running()]);
-    if (!current(g)) return;
-    setD({
+    if (!alive.current || f !== full.current) return;
+    const ownLive = l === live.current;
+    setD((x) => ({
       status: st.status === "fulfilled" ? st.value : null,
       statusError: st.status === "rejected" ? errorText(st.reason) : null,
-      session: se.status === "fulfilled" ? se.value : null,
+      session: ownLive ? (se.status === "fulfilled" ? se.value : null) : x.session,
       catalog: ca.status === "fulfilled" ? { data: ca.value } : { error: errorText(ca.reason) },
       server: sv.status === "fulfilled" ? sv.value : null,
       serverError: sv.status === "rejected" ? errorText(sv.reason) : null,
-      running: ru.status === "fulfilled" ? ru.value : null,
+      running: ownLive ? (ru.status === "fulfilled" ? ru.value : null) : x.running,
       checking: false,
-      pollError: null,
-    });
-  }, [api]); // eslint-disable-line react-hooks/exhaustive-deps
+      pollError: ownLive ? null : x.pollError,
+    }));
+  }, [api]);
 
   const loadReleases = useCallback((again = false) => {
     setReleases(null);
@@ -87,18 +94,19 @@ function useBotMode(api: BotModeApi) {
   useEffect(() => {
     if (!supervised) return;
     const t = window.setInterval(() => {
-      const g = ++generation.current;
+      const l = ++live.current;
+      const landed = () => alive.current && l === live.current;
       Promise.all([api.session(), api.running().catch(() => null)]).then(([s, running]) => {
-        if (!current(g)) return;
+        if (!landed()) return;
         setD((x) => ({ ...x, session: s, running, pollError: null }));
         if (!s.supervised) void reload();
-      }, (e) => current(g) && setD((x) => ({ ...x, pollError: errorText(e) })));
+      }, (e) => landed() && setD((x) => ({ ...x, pollError: errorText(e) })));
     }, 2000);
     return () => clearInterval(t);
   }, [api, supervised, reload]);
 
   // a launch's own result is the newest observation: reads and polls begun before it are dropped
-  const setSession = useCallback((s: SessionView) => { generation.current++; setD((x) => ({ ...x, session: s })); }, []);
+  const setSession = useCallback((s: SessionView) => { full.current++; live.current++; setD((x) => ({ ...x, session: s })); }, []);
   return { ...d, releases, reload, loadReleases, setSession };
 }
 

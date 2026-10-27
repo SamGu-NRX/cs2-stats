@@ -503,6 +503,37 @@ describe("actions wait for a confirmation that lists their files", () => {
     expect(text(".bm-install")).not.toContain("The install replaced your builds");
   });
 
+  it("a full read slower than two session polls still lands, and keeps the newer polls' session", async () => {
+    await render("session");
+    // the next full read hashes slowly: its status read answers only when released
+    let release!: () => void;
+    let held = false;
+    mockIPC((cmd, args) => {
+      calls.push([cmd, (args ?? {}) as Record<string, unknown>]);
+      if (cmd === "botmode_status" && !held) {
+        held = true;
+        const answer = { ...structuredClone(backend.state.status), buildId: "20600000" };
+        return new Promise((r) => { release = () => r(answer); });
+      }
+      return backend(cmd, args as Record<string, unknown>);
+    });
+    await click(button(/Check again/));
+    expect(button(/Checking/).disabled).toBe(true);
+    // two polls land while the read runs; the second carries a newer session message
+    await act(async () => { await new Promise((r) => setTimeout(r, 2100)); });
+    backend.state.session.status = { ...backend.state.session.status!, message: "cs2.exe (pid 22916) still running" };
+    await act(async () => { await new Promise((r) => setTimeout(r, 2100)); });
+    expect(calls.filter(([c]) => c === "botmode_session").length).toBeGreaterThanOrEqual(3);
+    expect(text(".bm-sess [role=status]")).toBe("cs2.exe (pid 22916) still running");
+    await act(async () => { release(); });
+    await settle();
+    // the read landed: the build it read shows and Check again works again
+    expect(text(".bm-hero__facts")).toContain("Steam build 20600000");
+    expect(button(/Check again/).disabled).toBe(false);
+    // and its session, older than the polls', did not replace theirs
+    expect(text(".bm-sess [role=status]")).toBe("cs2.exe (pid 22916) still running");
+  }, 15_000);
+
   it("a read that a launch overtook can't put back the state from before it", async () => {
     await render("installed");
     // the next status read is slow, and answers with the state before the launch
