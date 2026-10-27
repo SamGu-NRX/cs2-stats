@@ -85,22 +85,38 @@ const names = (ids: string[]) => ids.map(labelOf).join(", ");
 /**
  * No stat has a row. Every decided match won (or lost) says so; a stat that never changed says so;
  * otherwise the count toward the minimum, as pips for the stat with the fewest decided matches with a
- * value, and the range when the stats' counts differ.
+ * value, and the range when the stats' counts differ. Under each, the stats that sentence does not
+ * cover, with why (LeftOut), so a stat left out for another reason never just disappears.
  */
 function NoRows({ st }: { st: WinState }) {
   const one = st.oneSided[0];
   if (one && st.oneSided.every((x) => x.won === one.won)) {
-    return <p className="meta wcor__state">{`All ${plural(Math.max(...st.oneSided.map((x) => x.n)), "decided match was", "decided matches were")} ${one.won ? "wins" : "losses"}, so nothing can move with winning yet.`}</p>;
+    return (
+      <>
+        <p className="meta wcor__state">{`All ${plural(Math.max(...st.oneSided.map((x) => x.n)), "decided match was", "decided matches were")} ${one.won ? "wins" : "losses"}, so nothing can move with winning yet.`}</p>
+        <LeftOut st={{ ...st, oneSided: [] }} />
+      </>
+    );
   }
-  if (!st.short.length) return <p className="meta wcor__state">{`${names(st.flat)} stayed the same in every match, so nothing moves with winning.`}</p>;
+  if (!st.short.length) {
+    return (
+      <>
+        {st.flat.length > 0 && <p className="meta wcor__state">{`${names(st.flat)} stayed the same in every match, so nothing moves with winning.`}</p>}
+        <LeftOut st={{ ...st, flat: [] }} />
+      </>
+    );
+  }
   const lo = st.short[0].n;
   const hi = st.short[st.short.length - 1].n;
   const have = Math.min(lo, WIN_CORRELATION_MIN);
   return (
-    <div className="wcor__empty">
-      <span className="wcor__pips" aria-hidden>{Array.from({ length: WIN_CORRELATION_MIN }, (_, i) => <i key={i} className={i < have ? "is-on" : undefined} />)}</span>
-      <p className="meta">Shows each stat from {WIN_CORRELATION_MIN} matches with a winner and a value. {lo === hi ? `${lo} so far.` : `${lo} to ${hi} so far.`}</p>
-    </div>
+    <>
+      <div className="wcor__empty">
+        <span className="wcor__pips" aria-hidden>{Array.from({ length: WIN_CORRELATION_MIN }, (_, i) => <i key={i} className={i < have ? "is-on" : undefined} />)}</span>
+        <p className="meta">Shows each stat from {WIN_CORRELATION_MIN} matches with a winner and a value. {lo === hi ? `${lo} so far.` : `${lo} to ${hi} so far.`}</p>
+      </div>
+      <LeftOut st={{ ...st, short: [] }} />
+    </>
   );
 }
 

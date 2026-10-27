@@ -1252,6 +1252,17 @@ describe("engine features bound to the UI", () => {
       expect(text(host.querySelector(".wcor__empty p"))).toBe("Shows each stat from 10 matches with a winner and a value. 8 so far.");
     });
 
+    it("keeps naming the stats that never changed while every other stat has no usable match yet", () => {
+      // fails if the count toward the minimum ("0 so far") hides the stats left out for another reason:
+      // rating3 and ADR were the same in all 12 decided matches, every other stat has none with a value
+      use(samples);
+      answers = { winCorrelation: { ...Object.fromEntries(WIN_STATS.map((id) => [id, c(null, 0, "few")])), rating3: c(null, 12, "flat"), adr: c(null, 12, "flat") } };
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={career()} />);
+      expect(host.querySelector("[role=tablist]")).toBeNull();
+      expect(text(host.querySelector(".wcor__empty p"))).toBe("Shows each stat from 10 matches with a winner and a value. 0 so far.");
+      expect(Array.from(host.querySelectorAll(".wcor__left p")).map(text)).toEqual(["Left out, the same in every match: Rating 3.0, ADR."]);
+    });
+
     it("says every decided match was a win instead of drawing r = 0, and names the stats it leaves out", () => {
       // fails if a run of wins, or a stat the same in every match, is drawn as a bar at 0, or a stat
       // under its own minimum disappears without a word
