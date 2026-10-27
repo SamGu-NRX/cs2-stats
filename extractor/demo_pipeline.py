@@ -23,6 +23,7 @@ import logging.handlers
 import math
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1175,6 +1176,18 @@ class Pipeline:
 # HTTP status endpoint
 # ---------------------------------------------------------------------------
 
+class StatusServer(ThreadingHTTPServer):
+    """The status server, bound so that a second pipeline cannot share its port. http.server sets
+    SO_REUSEADDR, which on Windows lets two processes bind one port: a second pipeline started while one
+    ran bound 8766 too, never reached "cannot bind", and answered the HLTV tab with its own counts."""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def make_handler(pipeline: Pipeline):
     class Handler(BaseHTTPRequestHandler):
         def _cors(self):
@@ -1264,7 +1277,7 @@ def main(argv=None) -> int:
     freeze_code()
     pipeline = Pipeline(retry_failed=a.retry_failed)
     try:
-        server = ThreadingHTTPServer((HOST, PORT), make_handler(pipeline))
+        server = StatusServer((HOST, PORT), make_handler(pipeline))
     except OSError as e:
         log.error("cannot bind %s:%d (another pipeline running?): %s", HOST, PORT, e)
         return 2

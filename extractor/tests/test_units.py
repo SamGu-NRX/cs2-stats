@@ -377,6 +377,22 @@ def test_status_endpoint_cors_and_options():
         server.shutdown()
 
 
+def test_a_second_pipeline_cannot_bind_the_status_port():
+    # SO_REUSEADDR let a second pipeline bind 8766 beside the running one on Windows.
+    first = ThreadingHTTPServer(("127.0.0.1", 0), dp.make_handler(None))  # the old server, reuse on
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", first.server_address[1]), dp.make_handler(None))
+    finally:
+        first.server_close()
+    mine = dp.StatusServer(("127.0.0.1", 0), dp.make_handler(None))
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", mine.server_address[1]), dp.make_handler(None))
+    finally:
+        mine.server_close()
+
+
 def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch):
     # Regression: a download sampled before its RAR header was written used to be ignored forever.
     monkeypatch.setattr(dp, "DOWNLOADS", tmp_path)
