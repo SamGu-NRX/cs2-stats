@@ -93,6 +93,12 @@ describe("table rows from the keyboard", () => {
     expect(e.defaultPrevented).toBe(true);
     expect(onRowContext).toHaveBeenCalledWith({ id: "r3" }, { x: 40, y: 50 });
   });
+  it("a table of 1,000 rows draws only the rows in view", () => {
+    // fails if the table stops windowing: Matches would draw every match of a 1,000-map pro library
+    render(table(rows(1000), vi.fn()));
+    expect(host.querySelectorAll("tr[data-i]").length).toBeLessThan(50);
+    expect(host.querySelector("table")!.getAttribute("aria-rowcount")).toBe("1001");
+  });
 });
 
 describe("row menu", () => {

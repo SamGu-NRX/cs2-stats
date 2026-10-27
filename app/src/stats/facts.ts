@@ -408,4 +408,10 @@ export interface TotalsRound {
   players: { pi: number; kills: number; deaths: number; assists: number; dmg: number; hsKills: number }[];
 }
 
-export const emptyMeasures = (): Measures => Object.fromEntries(MEASURES.map((k) => [k, 0])) as Measures;
+const ZERO_MEASURES = Object.freeze(Object.fromEntries(MEASURES.map((k) => [k, 0]))) as Measures;
+/**
+ * Every measure at 0, in MEASURES order. A copy of one zeroed object rather than a fresh
+ * Object.fromEntries: with 177 keys that builds a slow dictionary object, and a rollup makes three
+ * and adds into every key (creating and filling one was about 4 times slower under node).
+ */
+export const emptyMeasures = (): Measures => ({ ...ZERO_MEASURES });

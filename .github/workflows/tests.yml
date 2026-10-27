@@ -41,6 +41,8 @@ jobs:
       - run: pnpm exec tsc -p tsconfig.node.json --noEmit
       - run: pnpm test
       - run: pnpm build
+      # the UI chunks must not carry the stats engine (tools/bundle-budget.ts)
+      - run: pnpm bundle-budget
 
   rust:
     name: Rust tests (cargo test --lib)
