@@ -4,9 +4,10 @@
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
 //! `import_valve` runs the importer that writes them.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
-//! launcher is in `botmode`.
+//! launcher is in `botmode`; the optional Leetify import is in `leetify`.
 
 pub mod botmode;
+mod leetify;
 
 use serde::Serialize;
 use std::fs;
@@ -596,6 +597,12 @@ pub fn run() {
             read_valve,
             import_valve,
             valve_import_state,
+            leetify::leetify_status,
+            leetify::leetify_save_key,
+            leetify::leetify_clear_key,
+            leetify::leetify_connect,
+            leetify::leetify_disconnect,
+            leetify::leetify_load,
             botmode::commands::botmode_status,
             botmode::commands::botmode_releases,
             botmode::commands::botmode_download,

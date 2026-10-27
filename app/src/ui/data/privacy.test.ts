@@ -3,7 +3,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlayerInfo } from "../../stats/facts";
 import type { MatchEntry } from "./match";
-import { hideFile, hidePlayers, hideText, hideTextAndFiles, isProDemo, privacySwitch } from "./privacy";
+import { parsePayload } from "./leetify/api";
+import { syntheticPayload, syntheticProfile, SYNTHETIC_MATCHES } from "./leetify/synthetic";
+import { hideFile, hideLeetifyData, hideLeetifyStatus, hidePlayers, hideText, hideTextAndFiles, isProDemo, LEETIFY_ID_HIDDEN, privacySwitch, STEAMID_HIDDEN } from "./privacy";
 
 const ID = "76561190000000099";
 
@@ -139,5 +141,29 @@ describe("hideText", () => {
     "76561190000",
   ])("leaves %s", (s) => {
     expect(hideText(s)).toBe(s);
+  });
+});
+
+describe("hideLeetifyData", () => {
+  it("names the player You and hides their SteamID and Leetify id everywhere, numbers untouched", () => {
+    // fails if a name or id from the import survives into what the views read
+    const d = parsePayload({ ...syntheticPayload(0, SYNTHETIC_MATCHES.map((m) => ({ ...m, steam64: ID, name: "Someone" }))), profile: syntheticProfile({ name: "Someone", steam64_id: ID }) });
+    const h = hideLeetifyData(d);
+    const text = JSON.stringify({ ...h, profile: { ...h.profile, url: "" } });
+    expect(text).not.toContain(ID);
+    expect(text).not.toContain("Someone");
+    expect(h.profile).toMatchObject({ name: "You", steam64: STEAMID_HIDDEN, id: LEETIFY_ID_HIDDEN });
+    expect(h.matches.every((m) => m.me.name === "You" && m.me.steam64 === STEAMID_HIDDEN)).toBe(true);
+    expect(h.matches.map((m) => m.me.total_kills)).toEqual(d.matches.map((m) => m.me.total_kills));
+    expect(h.profile.rating).toEqual(d.profile.rating);
+    // the profile link keeps its address, which LeetifyLink never writes into the page while hiding
+    expect(h.profile.url).toBe(d.profile.url);
+  });
+
+  it("hides the connected player and the key store's error", () => {
+    const s = hideLeetifyStatus({ player: { kind: "steam", id: ID }, hasKey: false, keyStore: true, keyError: `${["C:", "Users", "someone", "cred"].join("\\")} for ${ID}`, cooldownS: null });
+    expect(s.player).toEqual({ kind: "steam", id: STEAMID_HIDDEN });
+    expect(s.keyError).toBe("<path> for <SteamID>");
+    expect(hideLeetifyStatus({ player: { kind: "leetify", id: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" }, hasKey: true, keyStore: true, keyError: null, cooldownS: null }).player?.id).toBe(LEETIFY_ID_HIDDEN);
   });
 });

@@ -6,6 +6,10 @@
 // demo", an abandoned match "Unfinished", and a converted log with under half its rounds logged shows
 // "1 of 16" rounds and no per-round values. The summary's W–L and rating count only the user's own
 // finished (and, for the rating, logged) matches, so they agree with the sidebar and Home.
+//
+// With a Leetify profile connected (data/leetify/), Leetify's matches with no demo here are listed too, as
+// summary rows marked Leetify: Leetify's own score, K–D and ADR, a dash with the reason in every column
+// that needs the demo, and Enter opens the match on Leetify. They count in no number on this page.
 import { useMemo, type ReactNode } from "react";
 import { MapThumb, Num, ScoreCell } from "../components/bits";
 import { DataTable } from "../components/DataTable";
@@ -22,7 +26,11 @@ import { SearchIcon } from "../icons/ui";
 import { fmtAdr, fmtDate, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmtTime, mapName, plural } from "../lib/format";
 import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
-import { matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
+import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
+import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
+import { lf, sourceName } from "../data/leetify/present";
+import { useLeetifyJoin } from "../data/leetify/store";
+import { openOutside } from "./leetify/parts";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { LoadFailed } from "./match/LoadFailed";
@@ -159,6 +167,19 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
   );
 }
 
+/** A table row: one of the user's matches here, or a Leetify match with no demo here (data/leetify/join.ts). */
+type ListRow = { kind: "local"; e: MatchEntry } | { kind: "leetify"; l: LeetifyMatch };
+const rowKeyOf = (r: ListRow) => (r.kind === "local" ? r.e.file : `leetify:${r.l.id}`);
+/** A cell or sort value from whichever kind the row is. */
+const by = <V,>(local: (s: MatchEntry) => V, leetify: (l: LeetifyMatch) => V) => (r: ListRow): V => (r.kind === "local" ? local(r.e) : leetify(r.l));
+
+const NO_DEMO = "No demo of this match here, so this number is not available. Import the demo to see it.";
+const lResult = (l: LeetifyMatch): "W" | "L" | "T" | null => (l.score === null ? null : l.score.us > l.score.them ? "W" : l.score.us < l.score.them ? "L" : "T");
+/** A dash that says why a Leetify row has no value in this column. */
+const NoDemo = () => <span className="faint" data-tip={NO_DEMO}>{DASH}</span>;
+
+const openLeetify = (l: LeetifyMatch) => openOutside(matchUrl(l));
+
 export function MatchesView() {
   const { matches: all } = useData();
   const r = useRoute();
@@ -167,9 +188,10 @@ export function MatchesView() {
   const sessionKey = r.query.get("session");
   const { rows: sessions, error: sessionsError } = useSessions(all, map);
   const session = sessionKey && sessions ? sessionFor(sessions, sessionKey) : null;
+  const leetify = useLeetifyJoin();
 
+  const terms = useMemo(() => q.toLowerCase().split(/\s+/).filter(Boolean), [q]);
   const rows = useMemo(() => {
-    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     // a recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled
     const inSession = session ? new Set(session.files) : null;
     return listedEntries(all, map).filter((s) => {
@@ -184,7 +206,20 @@ export function MatchesView() {
       ].join(" ").toLowerCase();
       return terms.every((t) => hay.includes(t));
     });
-  }, [all, map, q, result, session]);
+  }, [all, map, terms, result, session]);
+  // Leetify matches with no demo here, under the same map, result and search; a session holds only matches here
+  const leetifyRows = useMemo(() => (!leetify || session ? [] : leetify.joined.only.filter((l) => {
+    if (map && l.map !== map) return false;
+    const res = lResult(l);
+    if (result !== "all" && res !== result) return false;
+    if (!terms.length) return true;
+    const hay = [
+      mapName(l.map), l.map, fmtMatchDay({ date: null, startedAt: l.finishedAt }), l.score ? `${l.score.us}:${l.score.them}` : "",
+      res === "W" ? "win" : res === "L" ? "loss" : "", "leetify", sourceName(l.dataSource),
+    ].join(" ").toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  })), [leetify, session, map, result, terms]);
+  const table = useMemo((): ListRow[] => [...rows.map((e) => ({ kind: "local" as const, e })), ...leetifyRows.map((l) => ({ kind: "leetify" as const, l }))], [rows, leetifyRows]);
   const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [rows]);
   const line = (s: MatchEntry) => lines.get(s.file)!;
 
@@ -194,12 +229,13 @@ export function MatchesView() {
   const query = useYourQuery(rated);
   const avg = useRatings(useMemo(() => (query ? [query] : null), [query])).data?.[0].both.value ?? null;
   const left = rows.length - rated.length;
+  const open = (x: ListRow) => (x.kind === "local" ? openMatch(matchHref(x.e.file), rowOf(x.e.file)) : openLeetify(x.l));
 
-  const empty = !all.length;
+  const nothing = !all.length && !leetify?.joined.only.length;
   return (
     <div className="view view--flush matches">
-      <BarContent crumbs={[{ label: "Matches" }]} scope={{ controls: ["map", "result"], maps: "all", off: empty ? { map: "No matches yet", result: "No matches yet" } : undefined }} />
-      {!empty && (
+      <BarContent crumbs={[{ label: "Matches" }]} scope={{ controls: ["map", "result"], maps: "all", off: nothing ? { map: "No matches yet", result: "No matches yet" } : undefined }} />
+      {!nothing && (
         <div className="matches__toolbar toolbar">
           <label className="search-field">
             <SearchIcon size={14} />
@@ -207,19 +243,20 @@ export function MatchesView() {
             {!q && <span className="kbd search-field__key" aria-hidden><kbd>/</kbd></span>}
           </label>
           <div className="toolbar__end">
-            <SectionAside label="Shown" value={rows.length} />
-            <span data-tip={`Your finished matches; pro demos and unfinished matches are left out.`}><SectionAside label="W–L" value={`${wins}–${record.length - wins}`} /></span>
+            <SectionAside label="Shown" value={table.length} />
+            {leetifyRows.length > 0 && <span data-tip="Matches Leetify has analysed that have no demo here: Leetify's summary only. They count in no number on this page."><SectionAside label="Leetify only" value={leetifyRows.length} /></span>}
+            <span data-tip="Your finished matches here; pro demos, unfinished matches and Leetify-only rows are left out."><SectionAside label="W–L" value={`${wins}–${record.length - wins}`} /></span>
             <span data-tip={`${ratingHeadline()} over ${plural(rated.length, "rated match", "rated matches")}${left ? `. ${plural(left, "match", "matches")} shown here ${left === 1 ? "is" : "are"} left out: pro demos, unfinished matches and logs with under half their rounds logged.` : "."}`}>
               <SectionAside label="Rating" value={fmtRating(avg)} color={avg === null ? undefined : ratingText(avg)} />
             </span>
           </div>
         </div>
       )}
-      {!empty && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
-      {rows.length === 0 ? (
+      {all.length > 0 && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
+      {table.length === 0 ? (
         <div className="matches__empty">
-          {empty ? (
-            <Empty text="No matches yet. Record one with the capture plugin, or import match files." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} />
+          {nothing ? (
+            <Empty text="No matches yet. Record one with the capture plugin, import match files, or connect Leetify." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} />
           ) : q ? (
             <Empty text={`No matches for "${q}".`} action={<button className="btn" onClick={() => setQuery("q", null)}>Clear search</button>} />
           ) : (
@@ -228,83 +265,125 @@ export function MatchesView() {
         </div>
       ) : (
         <div className="matches__table">
-          <DataTable<MatchEntry>
+          <DataTable<ListRow>
             label="Matches"
-            caption={`${plural(rows.length, "match", "matches")}, newest first by default`}
-            rows={rows}
-            rowKey={(s) => s.file}
+            caption={`${plural(table.length, "match", "matches")}, newest first by default${leetifyRows.length ? `; ${plural(leetifyRows.length, "is", "are")} from Leetify without a demo here` : ""}`}
+            rows={table}
+            rowKey={rowKeyOf}
+            rowClass={(x) => (x.kind === "leetify" ? "lt-row" : undefined)}
             defaultSort={{ key: "date", dir: "desc" }}
-            onOpen={(s) => openMatch(matchHref(s.file), rowOf(s.file))}
-            onRowContext={(s, at) => openMenu(at, [
-              { label: "Open", hint: "Enter", run: () => openMatch(matchHref(s.file), rowOf(s.file)) },
-              { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) },
-              { label: "Open economy", run: () => openMatch(matchHref(s.file, "economy")) },
-              { label: "Copy file name", run: () => copyText(s.file, "File name copied", hideFile(s.file)) },
+            onOpen={open}
+            onRowContext={(x, at) => openMenu(at, x.kind === "local" ? [
+              { label: "Open", hint: "Enter", run: () => openMatch(matchHref(x.e.file), rowOf(x.e.file)) },
+              { label: "Open rounds", run: () => openMatch(matchHref(x.e.file, "rounds")) },
+              { label: "Open economy", run: () => openMatch(matchHref(x.e.file, "economy")) },
+              { label: "Copy file name", run: () => copyText(x.e.file, "File name copied", hideFile(x.e.file)) },
+            ] : [
+              { label: "View on Leetify", hint: "Enter", run: () => openLeetify(x.l) },
+              { label: "Import Valve demos", run: () => go(pageHref("settings")) },
             ])}
             columns={[
               {
                 key: "date", label: "Date", align: "l", sticky: true, width: 120, firstDir: "desc",
-                sort: (s) => startMs(s.match),
-                render: (s) => <span className="two matches__date" data-file={matchKey(s.file)}><span>{fmtMatchDay(s.match)}</span><small>{s.match.startedAt ? fmtTime(s.match.startedAt) : " "}</small></span>,
+                // a Leetify row has its end time only, so it sorts by when it ended
+                sort: by((s) => startMs(s.match), (l) => l.finishedMs),
+                render: by(
+                  (s) => <span className="two matches__date" data-file={matchKey(s.file)}><span>{fmtMatchDay(s.match)}</span><small>{s.match.startedAt ? fmtTime(s.match.startedAt) : " "}</small></span>,
+                  (l) => <span className="two matches__date"><span>{fmtMatchDay({ date: null, startedAt: l.finishedAt })}</span><small data-tip="When the match ended, from Leetify">ended {fmtTime(l.finishedAt)}</small></span>,
+                ),
               },
               {
-                key: "map", label: "Map", align: "l", width: 190, sort: (s) => mapName(s.match.map),
-                render: (s) => {
-                  const src = sourceOf(s);
-                  return (
+                key: "map", label: "Map", align: "l", width: 190, sort: by((s) => mapName(s.match.map), (l) => mapName(l.map)),
+                render: by(
+                  (s) => {
+                    const src = sourceOf(s);
+                    const joined = leetify?.joined.byFile.has(s.file) ?? false;
+                    return (
+                      <span className="mapcell">
+                        <MapThumb map={s.match.map} size={26} />
+                        <span className="two">
+                          <b data-vt="map">{mapName(s.match.map)}</b>
+                          {(src.id !== "recorded" || isWingman(s) || joined) && (
+                            <small className={joined ? "lt-srcline" : undefined} data-tip={src.id === "pro" || isWingman(s) ? notCountedText(s) ?? undefined : src.missing.length ? `No ${src.missing.join(" or ")} data.` : undefined}>
+                              {joined && <span className="lt-src" data-tip="Leetify has this match too: its numbers sit beside ours on the match's Overview.">Leetify</span>}
+                              {[src.id !== "recorded" ? src.label : null, isWingman(s) ? "Wingman" : null].filter(Boolean).join(" · ")}
+                            </small>
+                          )}
+                        </span>
+                      </span>
+                    );
+                  },
+                  (l) => (
                     <span className="mapcell">
-                      <MapThumb map={s.match.map} size={26} />
+                      <MapThumb map={l.map} size={26} />
                       <span className="two">
-                        <b data-vt="map">{mapName(s.match.map)}</b>
-                        {(src.id !== "recorded" || isWingman(s)) && (
-                          <small data-tip={src.id === "pro" || isWingman(s) ? notCountedText(s) ?? undefined : src.missing.length ? `No ${src.missing.join(" or ")} data.` : undefined}>
-                            {[src.id !== "recorded" ? src.label : null, isWingman(s) ? "Wingman" : null].filter(Boolean).join(" · ")}
-                          </small>
-                        )}
+                        <b>{mapName(l.map)}</b>
+                        <small className="lt-srcline" data-tip={`From Leetify (${sourceName(l.dataSource)}). No demo of it here, so only Leetify's summary shows; Enter opens it on Leetify.`}>
+                          <span className="lt-src">Leetify</span>{sourceName(l.dataSource)}
+                        </small>
                       </span>
                     </span>
-                  );
-                },
+                  ),
+                ),
               },
               {
-                key: "score", label: "Score", align: "l", width: 150, sort: (s) => s.score.us - s.score.them,
-                render: (s) => (isFinished(s)
-                  ? <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span>
-                  : (
-                    <span className="scorecell scorecell--open" data-vt="score" data-tip={notCountedText(s) ?? undefined}>
-                      <span className="chip chip--outline">Unfinished</span>
-                      <span className="num">{s.score.us}<span className="faint">:</span>{s.score.them}</span>
-                    </span>
-                  )),
+                key: "score", label: "Score", align: "l", width: 150, sort: by((s) => s.score.us - s.score.them, (l) => (l.score ? l.score.us - l.score.them : null)),
+                render: by(
+                  (s) => (isFinished(s)
+                    ? <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span>
+                    : (
+                      <span className="scorecell scorecell--open" data-vt="score" data-tip={notCountedText(s) ?? undefined}>
+                        <span className="chip chip--outline">Unfinished</span>
+                        <span className="num">{s.score.us}<span className="faint">:</span>{s.score.them}</span>
+                      </span>
+                    )),
+                  (l) => (l.score ? <ScoreCell us={l.score.us} them={l.score.them} result={lResult(l)!} /> : <span className="faint">{DASH}</span>),
+                ),
               },
               // kills and deaths are counts, so a thin log still shows the ones it recorded, marked partial
-              { key: "kd", label: "K–D", tip: "Kills and deaths", sort: (s) => line(s).kills, render: (s) => <Counted s={s}>{line(s).kills}<span className="faint">–</span>{line(s).deaths}</Counted> },
               {
-                key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths", sort: (s) => line(s).kills - line(s).deaths,
-                render: (s) => { const d = line(s).kills - line(s).deaths; return <span style={{ color: isLogged(s) ? scoreText(diffScore(d)) : undefined }}><Counted s={s}>{fmtDiff(d)}</Counted></span>; },
-              },
-              { key: "adr", label: "ADR", tip: "Damage per round", sort: (s) => line(s).adr, render: (s) => <Val s={s} text={fmtAdr(line(s).adr)} /> },
-              { key: "kast", label: "KAST", tip: "Share of rounds with a kill, assist, survival or traded death", sort: (s) => line(s).kast, render: (s) => <Val s={s} text={fmtPct(line(s).kast)} /> },
-              { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: (s) => line(s).hs, render: (s) => <Val s={s} text={fmtPct(line(s).hs)} /> },
-              {
-                key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win chance you caused, per round", sort: (s) => line(s).swing,
-                render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }}><Val s={s} text={fmtSwing(x)} tip={swingSumTip(s.line.m)} /></span>; },
+                key: "kd", label: "K–D", tip: "Kills and deaths", sort: by((s) => line(s).kills, (l) => l.me.total_kills),
+                render: by((s) => <Counted s={s}>{line(s).kills}<span className="faint">–</span>{line(s).deaths}</Counted>, (l) => <span className="num">{lf.count(l.me.total_kills)}<span className="faint">–</span>{lf.count(l.me.total_deaths)}</span>),
               },
               {
-                key: "rating", label: RATING_LABEL, colored: true, tip: "HLTV's Rating 3.0, reconstructed (approx.)", sort: (s) => entryRating(s),
-                render: (s) => {
-                  const v = entryRating(s);
-                  if (v === null) return <span className="faint" data-tip={notCountedText(s) ?? undefined}>{DASH}</span>;
-                  // a match outside the career keeps its rating, uncoloured, with the reason it does not count
-                  if (!isOwn(s) || !isFinished(s) || isWingman(s)) return <span className="num muted has-def" data-tip={notCountedText(s) ?? undefined}>{fmtRating(v)}</span>;
-                  return <b className="num" style={{ color: ratingText(v) }}>{fmtRating(v)}</b>;
-                },
+                key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths",
+                sort: by((s) => line(s).kills - line(s).deaths, (l) => (l.me.total_kills === null || l.me.total_deaths === null ? null : l.me.total_kills - l.me.total_deaths)),
+                render: by(
+                  (s) => { const d = line(s).kills - line(s).deaths; return <span style={{ color: isLogged(s) ? scoreText(diffScore(d)) : undefined }}><Counted s={s}>{fmtDiff(d)}</Counted></span>; },
+                  (l) => { const k = l.me.total_kills, d = l.me.total_deaths; return k === null || d === null ? <NoDemo /> : <span className="num" style={{ color: scoreText(diffScore(k - d)) }}>{fmtDiff(k - d)}</span>; },
+                ),
               },
               {
-                key: "rounds", label: "Rounds", width: 96, sort: (s) => s.match.roundsPlayed,
-                render: (s) => (s.match.nRounds < s.match.roundsPlayed
-                  ? <span className="num has-def" data-tip={`${plural(s.match.roundsPlayed - s.match.nRounds, "round has", "rounds have")} no kill-by-kill log; only logged rounds count in any number.`}>{s.match.nRounds} of {s.match.roundsPlayed}</span>
-                  : <span className="num">{s.match.roundsPlayed}</span>),
+                key: "adr", label: "ADR", tip: "Damage per round", sort: by((s) => line(s).adr, (l) => l.me.dpr),
+                render: by((s) => <Val s={s} text={fmtAdr(line(s).adr)} />, (l) => <span className="num has-def" data-tip="Leetify's ADR for this match">{lf.dmg(l.me.dpr)}</span>),
+              },
+              { key: "kast", label: "KAST", tip: "Share of rounds with a kill, assist, survival or traded death", sort: by((s) => line(s).kast, () => null), render: by((s) => <Val s={s} text={fmtPct(line(s).kast)} />, () => <NoDemo />) },
+              { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: by((s) => line(s).hs, () => null), render: by((s) => <Val s={s} text={fmtPct(line(s).hs)} />, () => <NoDemo />) },
+              {
+                key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win chance you caused, per round", sort: by((s) => line(s).swing, () => null),
+                render: by((s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }}><Val s={s} text={fmtSwing(x)} tip={swingSumTip(s.line.m)} /></span>; }, () => <NoDemo />),
+              },
+              {
+                key: "rating", label: RATING_LABEL, colored: true, tip: "HLTV's Rating 3.0, reconstructed (approx.)", sort: by((s) => entryRating(s), () => null),
+                render: by(
+                  (s) => {
+                    const v = entryRating(s);
+                    if (v === null) return <span className="faint" data-tip={notCountedText(s) ?? undefined}>{DASH}</span>;
+                    // a match outside the career keeps its rating, uncoloured, with the reason it does not count
+                    if (!isOwn(s) || !isFinished(s) || isWingman(s)) return <span className="num muted has-def" data-tip={notCountedText(s) ?? undefined}>{fmtRating(v)}</span>;
+                    return <b className="num" style={{ color: ratingText(v) }}>{fmtRating(v)}</b>;
+                  },
+                  (l) => <span className="faint" data-tip={`Rating 3.0 needs the demo. Leetify Rating for this match: ${lf.ratingX100(l.me.leetify_rating)}.`}>{DASH}</span>,
+                ),
+              },
+              {
+                key: "rounds", label: "Rounds", width: 96, sort: by((s) => s.match.roundsPlayed, (l) => l.me.rounds_count),
+                render: by(
+                  (s) => (s.match.nRounds < s.match.roundsPlayed
+                    ? <span className="num has-def" data-tip={`${plural(s.match.roundsPlayed - s.match.nRounds, "round has", "rounds have")} no kill-by-kill log; only logged rounds count in any number.`}>{s.match.nRounds} of {s.match.roundsPlayed}</span>
+                    : <span className="num">{s.match.roundsPlayed}</span>),
+                  (l) => <span className="num">{lf.count(l.me.rounds_count)}</span>,
+                ),
               },
             ]}
           />

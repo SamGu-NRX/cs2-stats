@@ -18,7 +18,11 @@
 // - usePros (packs.ts) and the replay's round loader (Replay.tsx): their errors;
 // - copyText (overlay.tsx): text put on the clipboard, or the hidden form its caller gives;
 // - Data & settings, the one view that shows the host's folders, the Valve user and the importer's
-//   output, passes them through hideText and FOLDER_HIDDEN.
+//   output, passes them through hideText and FOLDER_HIDDEN;
+// - useLeetify (leetify/store.ts): the imported Leetify profile and matches (hideLeetifyData), the
+//   connected player (hideLeetifyStatus) and Leetify's errors. A Leetify profile link names the player's
+//   SteamID, so while hiding, LeetifyLink (views/leetify/parts.tsx) opens it from a button and never
+//   writes it into the page.
 // privacy.test.tsx renders every page and tab with sentinel names, SteamIDs and paths, and fails when
 // one reaches the page or the window title.
 //
@@ -26,8 +30,10 @@
 // or ?privacy=1 in the page's URL. Either one holds it on for the session; the saved setting is left
 // as it was.
 import { useSyncExternalStore } from "react";
+import type { LeetifyStatus } from "../../host/leetify";
 import type { PlayerInfo } from "../../stats/facts";
 import type { MatchBundle } from "../../worker/protocol";
+import type { LeetifyData } from "./leetify/api";
 import type { MatchEntry } from "./match";
 import type { Data } from "./provider";
 
@@ -208,5 +214,31 @@ export function hideData(d: Data): Data {
     fileErrors: d.fileErrors.map((e) => ({ file: hideFile(e.file), message: hideTextAndFiles(e.message, [e.file]) })),
     baselines: d.baselines && { ...d.baselines, source: hideText(d.baselines.source), localError: hideOrNull(d.baselines.localError, []) },
     baselinesError: hideOrNull(d.baselinesError, []),
+  };
+}
+
+// ---------------------------------------------------------------- Leetify
+
+export const LEETIFY_ID_HIDDEN = "<Leetify id>";
+
+/**
+ * The imported Leetify data as the views may show it: the player reads "You" and their SteamID and
+ * Leetify id become placeholders, in the profile and in every match row. The profile's link keeps the
+ * SteamID (see the top of this file). Numbers are untouched.
+ */
+export function hideLeetifyData(d: LeetifyData): LeetifyData {
+  return {
+    ...d,
+    profile: { ...d.profile, name: YOU, steam64: STEAMID_HIDDEN, id: d.profile.id === null ? null : LEETIFY_ID_HIDDEN },
+    matches: d.matches.map((m) => ({ ...m, me: { ...m.me, name: YOU, steam64: STEAMID_HIDDEN } })),
+  };
+}
+
+/** The connected player as a placeholder, and the key store's error through hideText. */
+export function hideLeetifyStatus(s: LeetifyStatus): LeetifyStatus {
+  return {
+    ...s,
+    player: s.player && { ...s.player, id: s.player.kind === "steam" ? STEAMID_HIDDEN : LEETIFY_ID_HIDDEN },
+    keyError: s.keyError === null ? null : hideText(s.keyError),
   };
 }

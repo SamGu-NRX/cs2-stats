@@ -1,0 +1,91 @@
+/* The Leetify import (views/leetify/): the connect card in Data & settings, the comparison cards on
+   Profile and the match page, and the Leetify-only rows in Matches. Tokens only (tokens.css). */
+
+/* ---------------------------------------------------------------- links back to Leetify */
+/* Leetify's guidelines ask for "View on Leetify" in bold, underlined or Leetify's pink; bold and underlined
+   here, since the pink would read as this app's own colour. */
+.lt-link { display: inline; padding: 0; border: 0; background: none; font: 600 12px/1.3 var(--f); color: var(--ink); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; cursor: pointer; border-radius: 2px; transition: color var(--d-hover) ease, text-decoration-color var(--d-hover) ease; white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) { .lt-link:hover { color: var(--cream); text-decoration-color: currentColor; } }
+.lt-link:focus-visible, .lt-attr:focus-visible, .lt-seam:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.lt-attr { font: 400 12px/1.3 var(--f); color: var(--ink2); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; white-space: nowrap; border-radius: 2px; transition: color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .lt-attr:hover { color: var(--ink); } }
+.lt-synthetic { color: var(--tan); }
+
+/* ---------------------------------------------------------------- the comparison table */
+/* Five columns: Leetify's label, its value, the seam, our value, our label. The seam is a dotted rule
+   down the middle with one mark per row: = the two count the same thing, ≠ they count it differently,
+   · we have nothing to set beside it. ≠ is tan so the rows that need a second look stand out; = and ·
+   stay quiet. No verdict colour on either value: different scales, different matches. */
+.lt-cmp { display: grid; grid-template-columns: minmax(160px, 1.3fr) 88px 32px 88px minmax(120px, 1fr); }
+.lt-cmp__head, .lt-cmp__group, .lt-cmp__row, .lt-cmp__title { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.lt-cmp__head { align-items: end; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.lt-cmp__title { padding: 14px 0 4px; }
+.lt-cmp__title > * { grid-column: 1 / -1; }
+.lt-cmp__group:first-of-type .lt-cmp__title { padding-top: 10px; }
+.lt-cmp__row { align-items: center; min-height: 34px; border-bottom: 1px solid var(--line); transition: background-color var(--d-hover) ease; }
+.lt-cmp__group:last-child .lt-cmp__row:last-child { border-bottom: 0; }
+@media (hover: hover) and (pointer: fine) { .lt-cmp__row:hover { background: var(--hover); } }
+.lt-cmp__label { font: 500 13px/1.3 var(--f); color: var(--ink); padding-right: 12px; }
+.lt-cmp__v { text-align: right; font-variant-numeric: tabular-nums; }
+.lt-cmp__row b.lt-cmp__v { font: 600 13px/1 var(--f); color: var(--ink); }
+.lt-cmp__row span.lt-cmp__v { font: 500 13px/1 var(--f); color: var(--ink); }
+.lt-cmp__row span.lt-cmp__v.faint { color: var(--ink3); }
+.lt-cmp__ours { padding-left: 14px; }
+.lt-cmp__row .lt-cmp__ours { padding-top: 4px; padding-bottom: 4px; }
+.lt-cmp__seamhead, .lt-cmp__seam { align-self: stretch; display: grid; place-items: center; background: repeating-linear-gradient(to bottom, var(--line2) 0 2px, transparent 2px 5px) center / 1px 100% no-repeat; }
+/* a 24 px focus and hover target (WCAG 2.5.8) around a 20 px drawn ring */
+.lt-seam { position: relative; isolation: isolate; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font: 600 13px/1 var(--f-mono); color: var(--ink3); cursor: help; }
+.lt-seam::before { content: ""; position: absolute; inset: 2px; z-index: -1; border-radius: 50%; background: var(--s1); box-shadow: inset 0 0 0 1px var(--line2); transition: background-color var(--d-hover) ease; }
+.lt-seam--differs { color: var(--tan); }
+.lt-seam--differs::before { box-shadow: inset 0 0 0 1px rgba(172, 149, 122, 0.45); }
+@media (hover: hover) and (pointer: fine) { .lt-cmp__row:hover .lt-seam::before { background: var(--s2); } }
+
+
+/* ---------------------------------------------------------------- the profile card */
+.lt-scores { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.lt-score { display: grid; gap: 8px; align-content: start; padding: 12px 14px; border-radius: var(--r-ctl); background: var(--s2); }
+.lt-score .caps { justify-self: start; }
+.lt-score__v { font-size: 30px; color: var(--ink); }
+.lt-sample { margin: 12px 0 10px; }
+
+/* ---------------------------------------------------------------- Data & settings */
+.lt-connect__body { display: grid; gap: 16px; }
+.lt-lede { max-width: 72ch; }
+.lt-form { display: grid; gap: 14px; max-width: 620px; }
+.lt-field { display: grid; gap: 6px; }
+.lt-field > label { font: 600 12px/1.3 var(--f); color: var(--ink); }
+.lt-field > label .faint { font-weight: 400; margin-left: 6px; }
+.lt-field__row { display: flex; gap: 8px; align-items: center; }
+.lt-input { width: 100%; height: 32px; }
+.lt-form__go { display: flex; gap: 8px; }
+.lt-facts { padding-top: 14px; border-top: 1px solid var(--line); gap: 8px 16px; }
+/* one run of text per answer: .facts dd is a wrapping flex row, which would set the folder path on a line of its own */
+.lt-facts dd { display: block; max-width: 78ch; }
+.lt-more > summary { width: fit-content; font: 500 12px/1.3 var(--f); color: var(--ink2); cursor: pointer; border-radius: 2px; transition: color var(--d-hover) ease; }
+@media (hover: hover) and (pointer: fine) { .lt-more > summary:hover { color: var(--ink); } }
+.lt-more > summary:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.lt-more[open] > .lt-facts { margin-top: 12px; }
+.lt-failed { margin-bottom: 0; }
+.lt-failed + .lt-connect__body { margin-top: 12px; }
+
+/* connected: when the summary replaces the form on this page (lt-arrive, LeetifyConnect.tsx), it rises
+   4 px and fades in over 180 ms; with reduced motion (--mo 0) it only fades. Opening the page while
+   connected, or a refresh, re-renders without lt-arrive or on the same element, so nothing moves. */
+.lt-arrive { transition: opacity var(--d-view) var(--ease-out), transform var(--d-view) var(--ease-out); }
+@starting-style { .lt-arrive { opacity: 0; transform: translateY(calc(4px * var(--mo))); } }
+.lt-who { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.lt-who__id { display: grid; gap: 4px; min-width: 0; }
+.lt-who__name { font: 650 15px/1.25 var(--f); color: var(--ink); }
+.lt-status { min-height: 1.3em; }
+.lt-inline { display: inline; font-size: inherit; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+.lt-keyrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lt-input--key { width: 280px; }
+.lt-actions { display: flex; gap: 8px; }
+
+/* ---------------------------------------------------------------- Matches: Leetify-only rows */
+/* The source mark is text in a pip, as the design system's W/L and 2K pips are; never Leetify's logo,
+   which Leetify's guidelines keep out of other apps' own marks. */
+.lt-srcline { display: inline-flex; align-items: center; gap: 6px; }
+.lt-src { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(172, 149, 122, 0.45); color: var(--tan); font: 600 10px/1 var(--f); letter-spacing: 0.06em; text-transform: uppercase; }
+.tbl tr.lt-row td { color: var(--ink2); }
+.tbl tr.lt-row .mapcell b { color: var(--ink); }

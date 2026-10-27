@@ -11,6 +11,7 @@
 // lib.rs on the desktop) as "valve/<demo>/<version folder>", each carrying the user's SteamID64 as pov.
 
 import { importStore, type ImportQuery, type ImportStore } from "./import-store";
+import { tauriLeetify, type LeetifyBridge } from "./leetify";
 
 export interface FileEntry {
   /** path relative to the match folder, e.g. "2026/20261024T223834Z_de_dust2_abe5d91c.json.gz" */
@@ -63,6 +64,8 @@ export interface Host {
   readonly valve: ValveFolder | null;
   /** The Valve importer over the CS2 replays folder: one import at a time, its state outliving any page. */
   readonly imports: ImportStore;
+  /** The optional Leetify import (host/leetify.ts); absent where the host cannot reach Leetify. */
+  readonly leetify?: LeetifyBridge;
 }
 
 interface ValveListing extends ValveFolder { files: FileEntry[] }
@@ -129,6 +132,7 @@ async function tauriHost(): Promise<Host> {
     get folder() { return folder; },
     get valve() { return valve; },
     imports,
+    leetify: tauriLeetify(invoke),
     async list() {
       const l = await invoke<{ folder: string; files: FileEntry[] }>("list_matches");
       folder = l.folder;
@@ -267,5 +271,15 @@ function webHost(): Host {
 }
 
 export async function createHost(): Promise<Host> {
-  return isTauri() ? tauriHost() : webHost();
+  if (isTauri()) return tauriHost();
+  const web = webHost();
+  // `vite dev` with ?leetify=synthetic (connected) or ?leetify=synthetic-new (at the connect form):
+  // synthetic Leetify data for screenshots, labelled wherever it shows. The import is dynamic and
+  // DEV-only, so a release build carries none of it.
+  const stand = import.meta.env.DEV ? new URLSearchParams(location.search).get("leetify") : null;
+  if (stand === "synthetic" || stand === "synthetic-new") {
+    const { syntheticBridge } = await import("../ui/data/leetify/synthetic");
+    return Object.defineProperties(web, { leetify: { value: syntheticBridge(stand === "synthetic"), enumerable: true } });
+  }
+  return web;
 }
