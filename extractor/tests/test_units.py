@@ -1,9 +1,12 @@
 import json
 import sys
 import threading
+import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+
+from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -427,6 +430,120 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
     assert any(c["check"] == "round_ticks" and c["note"].startswith("recording began") for c in checks)
 
 
+# --- scheduler policy (memory and CPU readings are injected; no test starts a parse) -------------------
+
+def test_memory_sizes_the_pool_under_the_cpu_cs2_and_configured_caps():
+    # 20 GB available, 3 GB kept back, 1.5 GB a parse: 11 workers on 16 cores.
+    assert dp.worker_capacity(20.0, 1.5, 0.0, 0, 16, False, None) == 11
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, None) == 14  # cpu_count - 2
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, 3) == 3  # CS2_PIPELINE_MAX_WORKERS
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, True, None) == dp.GAMING_WORKERS
+
+
+def test_running_workers_keep_their_slots_and_their_growth_is_reserved():
+    # Three running workers still to grow 5.4 GB leave nothing for a fourth on 10 GB.
+    assert dp.worker_capacity(10.0, 2.0, 5.4, 3, 16, False, None) == 3
+    # Under the pressure floor nothing new starts, and nobody is dropped from the count.
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 2, 16, False, None) == 2
+
+
+class _FakeProc:
+    pids = iter(range(50000, 60000))
+
+    def __init__(self, *a, **k):
+        self.pid = next(self.pids)
+
+    def poll(self):
+        return None
+
+
+def _jobs(n):
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="slug-r")
+    return [dp.Job(archive=a, dem=dp.WORK_DIR / f"d{i}.dem", out_dir=dp.DEMOS_DIR / "slug-r" / f"m{i}", map_key=f"m{i}",
+                   result_path=dp.WORK_DIR / f"d{i}.result.json", log_path=dp.LOG_DIR / f"d{i}.log") for i in range(n)]
+
+
+def test_a_burst_of_starts_reserves_each_new_workers_peak(tmp_path, monkeypatch):
+    # 12 GB available that the new workers have not touched yet: 4 starts of a 2 GB parse, not 6.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    p = dp.Pipeline()
+    p.available_gb, p.cpu_count, p.peaks = (lambda: 12.0), 16, deque([2.0])
+    p.jobs.extend(_jobs(6))
+    p.dispatch()
+    assert len(p.running) == 4 and len(p.jobs) == 2
+
+
+def test_low_memory_requeues_the_newest_worker_and_keeps_published_tables(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    old, new = _jobs(2)
+    for j in (old, new):
+        j.proc, j.t0 = _FakeProc(), time.time()
+        p.running.append(j)
+    published = new.out_dir / "v-1.13.0-abc"
+    staging = new.out_dir / f".tmp-{new.proc.pid + 1}"  # the interpreter under the venv launcher stub
+    published.mkdir(parents=True)
+    staging.mkdir()
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: [proc.pid, proc.pid + 1])
+    monkeypatch.setattr(dp, "tree_rss_gb", lambda pid: 0.5)
+    p.available_gb = lambda: 0.8
+    p.poll_workers()
+    assert p.running == [old] and p.jobs[0] is new
+    assert published.exists() and not staging.exists()
+
+
+def test_want_keeps_the_workers_fed_by_littles_law():
+    # 4 workers at 600 worker-seconds an archive finish one every 150 s; a 120 s download keeps 0.8 busy: 1 + 1.
+    assert dp.desired_downloads(4, 600, 120, 0, 100.0, 2.0) == 2
+    # Slow downloads need more in flight, up to MAX_WANT.
+    assert dp.desired_downloads(14, 240, 300, 0, 100.0, 2.0) == dp.MAX_WANT
+    # The disk budget left holds one more 2 GB archive beside the one in flight.
+    assert dp.desired_downloads(14, 240, 300, 1, 2.5, 2.0) == 2
+    assert dp.desired_downloads(14, 240, 300, 0, -5.0, 2.0) == 1
+
+
+def test_parse_peak_is_the_p90_of_measured_peaks():
+    assert dp.p90([], 4.0) == 4.0
+    assert dp.p90([1.0 + i / 10 for i in range(20)], 4.0) == pytest.approx(2.7)  # the 18th of 20
+    peaks, parse_s = dp.manifest_seed([dict(archive="a", peak_rss_gb=1.2, timings=dict(worker_wall_s=60)),
+                                       dict(archive="b", peak_rss_gb=None, timings=dict(worker_wall_s=30)),
+                                       dict(archive="a", peak_rss_gb=1.4, timings=dict(worker_wall_s=90))])
+    assert peaks == [1.2, 1.4] and parse_s == [30.0, 150.0]
+
+
+def test_a_download_is_timed_from_first_sight_only_if_it_grew():
+    t = dp.CompletenessTracker(stable_seconds=10)
+    t.observe(Path("x"), 100, 0.0)
+    t.observe(Path("x"), 500, 40.0)
+    assert t.observe(Path("x"), 500, 50.0) and t.download_s(Path("x"), 50.0) == 50.0
+    t.observe(Path("y"), 900, 0.0)  # already whole when first seen
+    assert t.observe(Path("y"), 900, 10.0) and t.download_s(Path("y"), 10.0) is None
+
+
+def test_each_failed_demo_is_retried_once_per_extractor_version(tmp_path):
+    f = tmp_path / "kept"
+    f.mkdir()
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.10.0")))
+    (f / "x-m2-dust2.result.json").write_text(json.dumps(dict(dem_file="x-m2-dust2.dem", extractor_version="1.14.0")))
+    assert dp.due_for_retry(f, "1.14.0")  # m1 failed under 1.10.0
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(f, "1.14.0") and dp.due_for_retry(f, "1.15.0")
+    g = tmp_path / "unlisted"  # a 7-Zip failure has no demo results
+    g.mkdir()
+    (g / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(g, "1.14.0")
+
+
+def test_status_reports_want_beside_the_real_pending_count(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    p.available_gb = lambda: 20.0
+    snap = p.snapshot()
+    assert snap["capacity"] and snap["pending"] == snap["pendingActual"] == 0
+    assert {"want", "workersMax", "parseEstGB", "availGB"} <= set(snap) and snap["parseEstGB"] == dp.DEFAULT_PARSE_EST_GB
+
+
 # --- disk budget ------------------------------------------------------------
 
 def _isolate(tmp_path, monkeypatch):
@@ -437,6 +554,7 @@ def _isolate(tmp_path, monkeypatch):
         monkeypatch.setattr(dp, name, d)
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
+    monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
 
 
 

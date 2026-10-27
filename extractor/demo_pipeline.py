@@ -9,7 +9,9 @@ downloads.
 
 Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stopped)
       .venv\\Scripts\\python.exe -I demo_pipeline.py --once     (exit when idle)
-      add --retry-failed to also pick up RARs in failed/
+      add --retry-failed to also pick up RARs in failed/ (each failed demo once per extractor version)
+Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
+CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import argparse
 import json
 import logging
 import logging.handlers
+import math
 import os
 import shutil
 import subprocess
@@ -63,15 +66,36 @@ STABLE_SECONDS = 10.0
 # failed/ has its own cap: each failed archive is kept with its failing .dem files and their validation
 # reports so the failure can be diagnosed, up to MAX_FAILED_GB; beyond that the oldest is logged and deleted.
 MIN_FREE_GB = 45.0
-MAX_OUR_GB = 12.0
+MAX_OUR_GB = float(os.environ.get("CS2_PIPELINE_MAX_GB") or 30)
 MAX_FAILED_GB = 8.0
 TRUNCATED = "truncated_demo"  # fail_reason of a demo nothing can read to a complete round; never retried
 STALE_WORK_S = 2 * 3600
 WORK_SWEEP_S = 600
 BUDGET_CACHE_S = 10.0
 MAX_EXTRACTED = 2  # archives whose .dem files are on disk (extracting or parsing)
-MAX_WORKERS = 4
+# Parse workers run as many as memory allows (worker_capacity): never more than cpu_count - 2, nor
+# CS2_PIPELINE_MAX_WORKERS when set, nor GAMING_WORKERS while CS2 runs.
+MAX_WORKERS_SET = int(os.environ["CS2_PIPELINE_MAX_WORKERS"]) if os.environ.get("CS2_PIPELINE_MAX_WORKERS") else None
 GAMING_WORKERS = 1
+# Memory floors, set by the user: RAM_HEADROOM_GB stays free for other work when sizing the pool, nothing starts
+# below RAM_PRESSURE_GB available, and below RAM_KILL_GB the newest worker is killed and its demo requeued.
+RAM_HEADROOM_GB = 3.0
+RAM_PRESSURE_GB = 2.0
+RAM_KILL_GB = 1.0
+# A parse's peak RSS is the p90 of the last PEAK_SAMPLES measured peaks, seeded at startup from the manifest.
+# With none measured, DEFAULT_PARSE_EST_GB stands in; it has no measurement behind it (the measured peaks
+# noted at WORKER_RSS_LIMIT_GB are under 2 GB), so it starts fewer workers until real peaks arrive.
+DEFAULT_PARSE_EST_GB = 4.0
+PEAK_SAMPLES = 20
+# want (desired_downloads) uses per-archive means over the last TIMING_SAMPLES archives: parse worker-seconds,
+# seeded from the manifest, and download seconds, measured only in this run. The defaults stand in until then
+# and have no measurement behind them; neither does DEFAULT_ARCHIVE_GB, replaced by each archive's RAR plus
+# listed demo bytes.
+DEFAULT_PARSE_S = 600.0
+DEFAULT_DOWNLOAD_S = 120.0
+DEFAULT_ARCHIVE_GB = 2.0
+TIMING_SAMPLES = 20
+MAX_WANT = 4
 # Kill a worker above this RSS. Measured peaks: 1.05 GB (401 MB Nuke demo), 1.46 GB (670 MB Dust2).
 WORKER_RSS_LIMIT_GB = 3.5
 WORKER_TIMEOUT_S = 45 * 60
@@ -120,8 +144,10 @@ class CompletenessTracker:
     def __init__(self, stable_seconds: float = STABLE_SECONDS):
         self.stable_seconds = stable_seconds
         self._seen: dict[Path, tuple[int, float]] = {}
+        self._first: dict[Path, tuple[int, float]] = {}  # (size, time) when first observed
 
     def observe(self, path: Path, size: int, now: float) -> bool:
+        self._first.setdefault(path, (size, now))
         prev = self._seen.get(path)
         if prev is None or prev[0] != size:
             self._seen[path] = (size, now)
@@ -130,6 +156,16 @@ class CompletenessTracker:
 
     def forget(self, path: Path) -> None:
         self._seen.pop(path, None)
+        self._first.pop(path, None)
+
+    def download_s(self, path: Path, now: float) -> float | None:
+        """Seconds from the file's first observation to now, if its size changed in between (a download seen
+        in progress). None for a file already whole when first seen: one waiting at startup, or one a browser
+        moved in finished, whose download time is unknown."""
+        first, seen = self._first.get(path), self._seen.get(path)
+        if first is None or seen is None or seen[0] == first[0]:
+            return None
+        return now - first[1]
 
     def tracked(self) -> set[Path]:
         return set(self._seen)
@@ -165,6 +201,8 @@ class Archive:
     size_at_extract: int = 0
     t_extract: float = 0.0
     t_extract_s: float = 0.0
+    worker_s: float = 0.0  # parse worker-seconds spent on its demos
+    archive_gb_counted: bool = False
 
 
 @dataclass
@@ -177,6 +215,8 @@ class Job:
     log_path: Path
     proc: subprocess.Popen | None = None
     t0: float = 0.0
+    rss_gb: float = 0.0  # the worker's process tree, at the last poll
+    peak_rss_gb: float = 0.0
     killed: str | None = None
 
 
@@ -230,6 +270,85 @@ def cs2_running() -> bool:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return False
+
+
+def available_gb() -> float:
+    return psutil.virtual_memory().available / 1e9
+
+
+def p90(values, default: float) -> float:
+    """The 90th percentile (nearest rank) of values, or default when there are none."""
+    ordered = sorted(values)
+    return ordered[math.ceil(0.9 * len(ordered)) - 1] if ordered else default
+
+
+def mean(values, default: float) -> float:
+    return sum(values) / len(values) if values else default
+
+
+def worker_capacity(avail_gb: float, parse_est_gb: float, growth_gb: float, running: int, cpu_count: int,
+                    cs2: bool, cap: int | None = MAX_WORKERS_SET) -> int:
+    """The most parse workers to run now, running ones included.
+
+    Memory sets it: what is available, less RAM_HEADROOM_GB and less growth_gb, the RSS that running workers
+    have yet to reach (each one's estimated peak minus its RSS now, so a burst of starts cannot overcommit),
+    divided by the estimated peak of a new parse. Nothing new starts below RAM_PRESSURE_GB. It is capped at
+    cpu_count - 2, at cap when set, and at GAMING_WORKERS while CS2 runs.
+    """
+    limit = GAMING_WORKERS if cs2 else max(1, cpu_count - 2)
+    if cap is not None:
+        limit = min(limit, cap)
+    new = 0 if avail_gb < RAM_PRESSURE_GB else max(0, math.floor((avail_gb - RAM_HEADROOM_GB - growth_gb) / parse_est_gb))
+    return min(limit, running + new)
+
+
+def desired_downloads(workers: int, parse_s: float, download_s: float, in_flight: int, room_gb: float,
+                      archive_gb: float) -> int:
+    """Archives to keep downloading, pending or extracting (the HLTV tab starts one while fewer are).
+
+    Little's law: workers busy for parse_s worker-seconds per archive finish workers / parse_s archives a
+    second, and a download takes download_s, so workers * download_s / parse_s downloads keep them fed; one
+    more is the buffer. It is at most MAX_WANT, and at most in_flight plus the archives of archive_gb that
+    room_gb (the disk budget and free-space floor left) still holds; never below 1.
+    """
+    keep = math.ceil(workers * download_s / max(parse_s, 1e-9)) + 1
+    fits = in_flight + max(0, math.floor(room_gb / max(archive_gb, 1e-9)))
+    return max(1, min(MAX_WANT, keep, fits))
+
+
+def tree_rss_gb(pid: int) -> float:
+    """RSS of a process and its children. A worker started through the venv's python.exe is a launcher
+    stub whose child is the interpreter doing the parse; the stub alone holds about 0.01 GB."""
+    try:
+        root = psutil.Process(pid)
+        procs = [root, *root.children(recursive=True)]
+    except psutil.Error:
+        return 0.0
+    total = 0
+    for pr in procs:
+        try:
+            total += pr.memory_info().rss
+        except psutil.Error:
+            continue
+    return total / 1e9
+
+
+def kill_tree(proc: subprocess.Popen) -> list[int]:
+    """Kill a worker and its children (killing the launcher stub alone leaves the parse running); returns
+    every pid it had."""
+    try:
+        kids = psutil.Process(proc.pid).children(recursive=True)
+    except psutil.Error:
+        kids = []
+    for k in kids:
+        try:
+            k.kill()
+        except psutil.Error:
+            pass
+    proc.kill()
+    proc.wait()
+    psutil.wait_procs(kids, timeout=10)
+    return [proc.pid, *(k.pid for k in kids)]
 
 
 def free_gb(path: Path | None = None) -> float:
@@ -493,6 +612,43 @@ def freeze_code() -> None:
     log.info("workers run extractor %s copied to %s", extract.EXTRACTOR_VERSION, RUN_CODE)
 
 
+def failure_versions(folder: Path) -> tuple[dict[str, str | None], str | None]:
+    """A kept failure's extractor versions: ({demo file: version its parse failed under}, the version in
+    reason.json). A failure kept before versions were recorded reads as None."""
+    demos = {}
+    for f in folder.glob("*.result.json"):
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        demos[r.get("dem_file") or f.name.removesuffix(".result.json") + ".dem"] = r.get("extractor_version")
+    try:
+        archive = json.loads((folder / "reason.json").read_text(encoding="utf-8")).get("extractor_version")
+    except (OSError, json.JSONDecodeError):
+        archive = None
+    return demos, archive
+
+
+def due_for_retry(folder: Path, version: str) -> bool:
+    """--retry-failed tries each failed demo once per extractor version: a kept failure is due while one of
+    its demos failed under another version, or, with no demo results (7-Zip or listing failures), while
+    reason.json names another."""
+    demos, archive = failure_versions(folder)
+    return any(v != version for v in demos.values()) if demos else archive != version
+
+
+def manifest_seed(rows: list[dict]) -> tuple[list[float], list[float]]:
+    """(peak RSS GB of the last PEAK_SAMPLES parses, parse worker-seconds of the last TIMING_SAMPLES archives)
+    from manifest rows, so the estimates start from this machine's measurements, not the defaults."""
+    peaks = [float(r["peak_rss_gb"]) for r in rows if r.get("peak_rss_gb")][-PEAK_SAMPLES:]
+    per: dict[str, float] = {}
+    for r in rows:
+        w = (r.get("timings") or {}).get("worker_wall_s")
+        if w:
+            per[r.get("archive")] = per.pop(r.get("archive"), 0.0) + float(w)  # re-inserted: ordered by last map
+    return peaks, list(per.values())[-TIMING_SAMPLES:]
+
+
 def read_ledger() -> dict[str, dict]:
     return {rec["id"]: rec for rec in read_jsonl(LEDGER)}
 
@@ -512,10 +668,18 @@ class Pipeline:
         self.lock = threading.Lock()
         self.status: dict = {}
         self.ignored: set[Path] = set()
-        self.retried: set[Path] = set()  # --retry-failed tries each failed RAR once per process run
+        self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
+        peaks, parse_s = manifest_seed(read_jsonl(MANIFEST))
+        self.peaks: deque[float] = deque(peaks, maxlen=PEAK_SAMPLES)
+        self.parse_s: deque[float] = deque(parse_s, maxlen=TIMING_SAMPLES)
+        self.download_s: deque[float] = deque(maxlen=TIMING_SAMPLES)
+        self.archive_gb: deque[float] = deque(maxlen=TIMING_SAMPLES)
+        self.available_gb = available_gb  # replaced in tests
+        self.cpu_count = os.cpu_count() or 1
+        self.cs2 = False  # read once per step
         self.started = time.time()
         self.last_sweep = 0.0
-        self._budget: tuple[float, float, bool] = (0.0, 0.0, True)  # (computed_at, ourGB, capacity)
+        self._budget: tuple[float, float, bool, float] = (0.0, 0.0, True, 0.0)  # (computed_at, ourGB, capacity, roomGB)
         self._reextract: tuple[float, set[str]] = (-1.0, set())  # (needs_reextract mtime, ledger ids)
 
     def reextract_ids(self) -> set[str]:
@@ -568,7 +732,7 @@ class Pipeline:
             done = self.ledger.get(aid, {}).get("status") == "done" and aid not in self.reextract_ids()
             if done or (self.ledger.get(aid, {}).get("status") == "failed" and not in_failed):
                 continue
-            if in_failed and f in self.retried:
+            if in_failed and (f in self.retried or not due_for_retry(f.parent, extract.EXTRACTOR_VERSION)):
                 continue
             if in_failed:
                 self.retried.add(f)
@@ -581,6 +745,9 @@ class Pipeline:
                 # with bytes that are not yet the RAR header.
                 if not (self.tracker.observe(f, size, now) and not has_partial_marker(f)):
                     continue
+                took = self.tracker.download_s(f, now)
+                if took is not None:
+                    self.download_s.append(took)
             self.tracker.forget(f)
             if not is_rar(f):
                 self.ignored.add(f)
@@ -612,6 +779,9 @@ class Pipeline:
             if expand > MAX_OUR_GB:
                 self.fail_archive(a, f"its demos ({expand:.1f} GB) are larger than the {MAX_OUR_GB:.0f} GB budget")
                 continue
+            if not a.archive_gb_counted:
+                self.archive_gb.append(expand + a.rar.stat().st_size / 1e9)  # what it holds on disk while it parses
+                a.archive_gb_counted = True
             # Archives still extracting hold the rest of their listed size: their demos are not on disk yet.
             our, held = (b / 1e9 for b in self.disk_usage())
             free = free_gb()
@@ -660,6 +830,9 @@ class Pipeline:
             safe_unlink(a.extract_log, missing_ok=True)
             a.state = "parsing"
             keys: set[str] = set()
+            # A retried failure parses only the demos that failed under another extractor version; one that
+            # already failed under this one keeps that result.
+            failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
             for dem in a.dems:
                 key = extract.map_key_for(dem, dem.stem)
                 while key in keys:
@@ -668,19 +841,29 @@ class Pipeline:
                 jd = LOG_DIR / "jobs"
                 jd.mkdir(parents=True, exist_ok=True)
                 a.out_dirs[dem.name] = DEMOS_DIR / a.slug / key
+                if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
+                    a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
+                    log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
+                             extract.EXTRACTOR_VERSION)
+                    continue
                 self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
                                      result_path=a.work / f"{dem.stem}.result.json",
                                      log_path=jd / f"{a.slug}-{key}.log"))
             log.info("extracted %s in %.1fs: %s", a.id, a.t_extract_s, [d.name for d in a.dems])
 
     # --- parsing
-    def worker_limit(self) -> int:
-        return GAMING_WORKERS if cs2_running() else MAX_WORKERS
+    def parse_est_gb(self) -> float:
+        return p90(self.peaks, DEFAULT_PARSE_EST_GB)
+
+    def worker_max(self) -> int:
+        est = self.parse_est_gb()
+        growth = sum(max(0.0, est - j.rss_gb) for j in self.running)
+        return worker_capacity(self.available_gb(), est, growth, len(self.running), self.cpu_count, self.cs2)
 
     def dispatch(self) -> None:
         while self.jobs:
-            # Re-check before each job: one worker while CS2 runs, otherwise up to four.
-            if len(self.running) >= self.worker_limit():
+            # Re-checked before each start: the worker just started reserves a whole estimated peak.
+            if len(self.running) >= self.worker_max():
                 return
             j = self.jobs.popleft()
             listing = j.archive.listing.get(j.dem.name, {})
@@ -695,32 +878,47 @@ class Pipeline:
             with open(j.log_path, "w", encoding="utf-8") as lf:
                 j.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                           cwd=str(DATA_ROOT), env=env, creationflags=IDLE | NO_WINDOW)
-            j.t0 = time.time()
+            j.t0, j.rss_gb, j.peak_rss_gb, j.killed = time.time(), 0.0, 0.0, None
             self.running.append(j)
             log.info("parsing %s/%s (%d running)", j.archive.slug, j.map_key, len(self.running))
 
     def poll_workers(self) -> None:
+        avail = self.available_gb()
+        if self.running and avail < RAM_KILL_GB:
+            self.requeue_newest(avail)
         for j in list(self.running):
             rc = j.proc.poll()
             if rc is None:
-                try:
-                    rss = psutil.Process(j.proc.pid).memory_info().rss / 1e9
-                except psutil.Error:
-                    rss = 0.0
-                if rss > WORKER_RSS_LIMIT_GB:
-                    j.killed = f"killed: worker RSS {rss:.2f} GB > {WORKER_RSS_LIMIT_GB} GB"
+                j.rss_gb = tree_rss_gb(j.proc.pid)
+                j.peak_rss_gb = max(j.peak_rss_gb, j.rss_gb)
+                if j.rss_gb > WORKER_RSS_LIMIT_GB:
+                    j.killed = f"killed: worker RSS {j.rss_gb:.2f} GB > {WORKER_RSS_LIMIT_GB} GB"
                 elif time.time() - j.t0 > WORKER_TIMEOUT_S:
                     j.killed = f"killed: worker ran longer than {WORKER_TIMEOUT_S} s"
                 if j.killed:
                     log.error("%s/%s %s", j.archive.slug, j.map_key, j.killed)
-                    j.proc.kill()
-                    j.proc.wait()
+                    kill_tree(j.proc)
                 else:
                     continue
             self.running.remove(j)
             self.finish_job(j, j.proc.returncode)
 
+    def requeue_newest(self, avail: float) -> None:
+        """Memory is nearly gone: kill the newest worker and queue its demo again. Only that worker's staging
+        folder (<map>/.tmp-<pid>, extract.write_output) goes; a version it or any earlier run published stays."""
+        j = self.running.pop()
+        pids = kill_tree(j.proc)
+        for pid in pids:
+            staging = j.out_dir / f".tmp-{pid}"
+            if staging.exists():
+                safe_rmtree(staging, ignore_errors=True)
+        j.result_path.unlink(missing_ok=True)
+        log.error("%s/%s killed and requeued: %.2f GB of RAM available, under %.1f GB", j.archive.slug, j.map_key,
+                  avail, RAM_KILL_GB)
+        self.jobs.appendleft(j)
+
     def finish_job(self, j: Job, rc: int) -> None:
+        j.archive.worker_s += time.time() - j.t0
         res = None
         if j.result_path.exists():
             try:
@@ -752,6 +950,10 @@ class Pipeline:
                     errors=res.get("errors"), fail_reason=fail_reason(res, j.log_path),
                     finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
         append_jsonl(MANIFEST, line)
+        # The worker's own peak working set when it reported one; polling every POLL_S can miss the top.
+        peak = max(j.peak_rss_gb, float(res.get("peak_rss_gb") or 0.0))
+        if peak and not j.killed:
+            self.peaks.append(peak)
         log.info("%s/%s %s in %.0fs%s", j.archive.slug, j.map_key, "OK" if line["ok"] else "FAILED",
                  time.time() - j.t0, "" if line["ok"] else f": {res.get('errors')}")
 
@@ -760,6 +962,8 @@ class Pipeline:
         for a in [a for a in self.archives.values() if a.state == "parsing"]:
             if len(a.results) < len(a.dems):
                 continue
+            if a.worker_s:
+                self.parse_s.append(a.worker_s)
             bad = {n: r.get("errors") for n, r in a.results.items() if not r.get("ok")}
             if bad:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
@@ -812,7 +1016,8 @@ class Pipeline:
             (dest / f"{Path(name).stem}.result.json").write_text(json.dumps(res, default=str, indent=1),
                                                                  encoding="utf-8")
         (dest / "reason.json").write_text(json.dumps(dict(id=a.id, original_path=str(a.rar), slug=a.slug,
-                                                          dems=sorted(a.listing), reason=reason, failed_utc=now),
+                                                          dems=sorted(a.listing), reason=reason,
+                                                          extractor_version=extract.EXTRACTOR_VERSION, failed_utc=now),
                                                      default=str, indent=1), encoding="utf-8")
         if a.work and a.work.exists():
             safe_rmtree(a.work, ignore_errors=True)
@@ -880,12 +1085,18 @@ class Pipeline:
         return tree_bytes(DEMOS_DIR) + sum(work.values()) + waiting + downloading, held
 
     def budget(self, fresh: bool = False) -> tuple[float, bool]:
-        t, our, ok = self._budget
+        """(GB we use, whether a new extraction fits); room_gb() is what is left under both limits."""
+        t, our, ok, _ = self._budget
         if fresh or time.time() - t > BUDGET_CACHE_S:
             our, held = (b / 1e9 for b in self.disk_usage())
-            ok = our + held <= MAX_OUR_GB and free_gb() - held >= MIN_FREE_GB
-            self._budget = (time.time(), our, ok)
+            free = free_gb()
+            ok = our + held <= MAX_OUR_GB and free - held >= MIN_FREE_GB
+            self._budget = (time.time(), our, ok, min(MAX_OUR_GB - our - held, free - held - MIN_FREE_GB))
         return our, ok
+
+    def room_gb(self) -> float:
+        self.budget()
+        return self._budget[3]
 
     def sweep_work(self, force: bool = False) -> None:
         """Delete extraction folders in work/ older than STALE_WORK_S that no active archive owns."""
@@ -911,22 +1122,30 @@ class Pipeline:
         statuses = [r.get("status") for r in self.ledger.values()]
         our, capacity = self.budget()
         pending = st.count("pending")
+        avail = self.available_gb()
+        workers_max = self.worker_max()
+        want = desired_downloads(workers_max, mean(self.parse_s, DEFAULT_PARSE_S),
+                                 mean(self.download_s, DEFAULT_DOWNLOAD_S),
+                                 downloading + pending + st.count("extracting"), self.room_gb(),
+                                 mean(self.archive_gb, DEFAULT_ARCHIVE_GB))
         return {
-            # The HLTV feeder downloads only while pending + extracting < 2, so without capacity
+            # The HLTV tab downloads only while downloading + pending + extracting < want, so without capacity
             # pending reports at least 2 to stop it; pendingActual is the real count.
-            "pending": pending if capacity else max(pending, 2), "pendingActual": pending,
+            "pending": pending if capacity else max(pending, 2), "pendingActual": pending, "want": want,
             "extracting": st.count("extracting"), "parsing": st.count("parsing"),
             "done": statuses.count("done"), "failed": statuses.count("failed"),
             "freeGB": round(free_gb(), 1), "ourGB": round(our, 2), "capacity": capacity,
             "failedGB": round(tree_bytes(FAILED_DIR) / 1e9, 2),
-            "downloading": downloading, "workers": len(self.running), "queuedDems": len(self.jobs),
-            "cs2Running": cs2_running()}
+            "downloading": downloading, "workers": len(self.running), "workersMax": workers_max,
+            "parseEstGB": round(self.parse_est_gb(), 2), "availGB": round(avail, 2),
+            "queuedDems": len(self.jobs), "cs2Running": self.cs2}
 
     def idle(self) -> bool:
         return not self.archives and not self.jobs and not self.running and not self.tracker.tracked()
 
     def step(self) -> None:
         now = time.time()
+        self.cs2 = cs2_running()
         self.scan(now)
         self.poll_extractions()
         self.start_extractions()
