@@ -408,17 +408,20 @@ fn newest_proven_take(clip_dir: &Path, clip: &str, launches: &[launch::Launch]) 
 }
 
 /// Settles every launch of every job whose processes have exited (launch::settle), reading CS2's
-/// console.log at most once per launch.
-fn settle_launches(root: &Path, console_log: &Path, procs: &dyn launch::Procs) -> Result<(), String> {
-    let (_, held) = launch::lock_state(root, procs);
+/// console.log at most once per launch. Returns how many launches are still running.
+fn settle_launches(g: &launch::Guard, root: &Path, console_log: &Path, procs: &dyn launch::Procs) -> Result<usize, String> {
     let jobs = fs::read_dir(root.join("jobs")).map(|r| r.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|j| job_id_ok(j)).collect::<Vec<_>>()).unwrap_or_default();
+    let mut running = 0;
     for j in jobs {
         let dir = root.join("jobs").join(&j);
         for mut l in launch::launches(&dir) {
-            launch::settle(&dir, &mut l, console_log, held.as_deref(), procs)?;
+            launch::settle(g, &dir, &mut l, console_log, procs)?;
+            if l.outcome == launch::Outcome::Pending {
+                running += 1;
+            }
         }
     }
-    Ok(())
+    Ok(running)
 }
 
 /// A file to read inside `root` ([`file_inside`]) that has no other hard link, which could make a
@@ -471,21 +474,24 @@ fn scan_in(root: &Path) -> Result<ClipsScan, String> {
 pub async fn clips_scan() -> Result<ClipsScan, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let root = clips_root()?;
-        let procs = launch::System;
+        let g = launch::guard(&root)?;
         if let Ok((csgo, _)) = cs2_paths() {
-            settle_launches(&root, &csgo.join("console.log"), &procs)?;
+            settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?;
         }
-        launch::sweep_parts(&root, &procs);
+        launch::sweep_parts(&g, &root);
         scan_in(&root)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// At app start: removes the part files a crashed finish or reel left, unless a lock is live.
+/// At app start: removes the part files a crashed finish or reel left. Skipped when another instance
+/// of the app holds the clips folder.
 pub fn on_app_start() {
     if let Ok(root) = clips_root() {
-        launch::sweep_parts(&root, &launch::System);
+        if let Ok(g) = launch::guard(&root) {
+            launch::sweep_parts(&g, &root);
+        }
     }
 }
 
@@ -551,25 +557,29 @@ struct Prepared {
     cfg_text: String,
 }
 
-/// Prepares a launch of the saved job `id` under the lock: refused while any cs2.exe runs, so no two
-/// launches, and no launch and finish, overlap.
-fn prepare_launch(env: &job::JobEnv, csgo: &Path, id: &str, procs: &dyn launch::Procs) -> Result<(job::Plan, launch::Lock, Prepared), String> {
+/// Prepares a launch of the saved job `id` under the guard. It first settles every earlier launch whose
+/// processes have exited, so their director lines are read before this session replaces console.log,
+/// and refuses while any earlier launch or any cs2.exe still runs. The launch's sequence number is one
+/// above the job's highest; nothing orders launches by the clock.
+fn prepare_launch(g: &launch::Guard, env: &job::JobEnv, csgo: &Path, id: &str, procs: &dyn launch::Procs) -> Result<(job::Plan, Prepared), String> {
     let plan = rebuild_saved(env, id)?;
-    let nonce = launch::new_nonce()?;
-    let lock = launch::Lock::acquire(&env.clips_root, "launch", Some(&nonce), procs)?;
+    if settle_launches(g, &env.clips_root, &csgo.join("console.log"), procs)? > 0 {
+        return Err("an earlier render is still running (HLAE or CS2). Let it end, then render again.".into());
+    }
     if procs.cs2_running()? {
         return Err("CS2 is running. Close it, then render again.".into());
     }
+    let nonce = launch::new_nonce()?;
     let job_dir = folder_in(&env.clips_root, &["jobs", id])?;
     let clips: Vec<String> = plan.demos.iter().flat_map(|d| d.clips.iter().map(|c| c.id.clone())).collect();
     let started = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis() as u64;
-    let record = launch::LaunchRecord { nonce: nonce.clone(), job: id.into(), started, takes_before: launch::takes_now(&job_dir, &clips), console: launch::console_mark(&csgo.join("console.log")) };
-    let launches_dir = launch::write_record(&job_dir, &record)?;
+    let record = launch::LaunchRecord { nonce: nonce.clone(), job: id.into(), seq: launch::next_seq(&job_dir), started, takes_before: launch::takes_now(&job_dir, &clips) };
+    let launches_dir = launch::write_record(g, &job_dir, &record)?;
     let script = job::director_script(&plan, &nonce)?;
     let js = format!("{nonce}.js");
     job::write_together(&launches_dir, &[(js.as_str(), script.as_bytes())])?;
     let cfg_text = format!("mirv_script_load \"{}\"\n", launches_dir.join(&js).display().to_string().replace('\\', "/"));
-    Ok((plan, lock, Prepared { nonce, launches_dir, cfg_text }))
+    Ok((plan, Prepared { nonce, launches_dir, cfg_text }))
 }
 
 #[derive(Serialize)]
@@ -582,17 +592,18 @@ pub struct Launched {
 
 /// Starts CS2 through HLAE for a saved job. The user confirms this in the app first; nothing else calls it.
 ///
-/// Under the clips lock ([`prepare_launch`]): it rebuilds the job from its request, refuses while any
-/// cs2.exe runs, writes the launch's record and its director (with a fresh nonce), points
-/// `game\csgo\cfg\cs2stats_clips.cfg` at that director, writes HLAE's ffmpeg.ini when HLAE has no
-/// FFmpeg of its own, and starts the rebuilt command without waiting for it. The lock stays until HLAE
-/// and CS2 have exited. Untested against a live game.
+/// All under one guard ([`launch::guard`]): it rebuilds the job from its request, settles earlier
+/// launches and refuses while one or any cs2.exe runs ([`prepare_launch`]), publishes the launch's
+/// record and its director (with a fresh nonce), points `game\csgo\cfg\cs2stats_clips.cfg` at that
+/// director, writes HLAE's ffmpeg.ini when HLAE has no FFmpeg of its own, starts the rebuilt command
+/// without waiting for it, and publishes HLAE's process id. The clips folder's OS lock stays with this
+/// process until HLAE and CS2 have exited (launch::watch). Untested against a live game.
 #[tauri::command]
 pub async fn clips_launch(job: String) -> Result<Launched, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let (env, csgo) = job_env()?;
-        let procs = launch::System;
-        let (plan, mut lock, prep) = prepare_launch(&env, &csgo, &job, &procs)?;
+        let mut g = launch::guard(&env.clips_root)?;
+        let (plan, prep) = prepare_launch(&g, &env, &csgo, &job, &launch::System)?;
         let hlae = PathBuf::from(&plan.argv[0]);
         let ffmpeg = find_ffmpeg(Some(&hlae))?;
         let ini = ensure_ffmpeg_ini(&hlae, &ffmpeg)?;
@@ -605,8 +616,9 @@ pub async fn clips_launch(job: String) -> Result<Launched, String> {
             .map_err(|e| format!("{}: {e}", hlae.display()))?;
         // HLAE's own process, by its id and creation time; if it has already exited, CS2's exit alone ends the launch
         let hlae_proc = launch::proc_id(child.id()).unwrap_or(launch::ProcId { pid: child.id(), created: 0 });
-        launch::write_pids(&prep.launches_dir, &prep.nonce, &launch::LaunchPids { hlae: hlae_proc })?;
-        lock.started(hlae_proc)?;
+        launch::write_pids(&g, &prep.launches_dir, &prep.nonce, &launch::LaunchPids { hlae: hlae_proc })?;
+        g.launch_running();
+        launch::watch(hlae_proc);
         Ok(Launched { pid: child.id(), cfg: cfg.display().to_string(), ffmpeg_ini: ini.map(|p| p.display().to_string()) })
     })
     .await
@@ -735,12 +747,11 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
         let font = ffmpeg::allowed_font().ok_or("No font for the lower third was found (Segoe UI or Arial in Windows' Fonts folder)")?;
-        let procs = launch::System;
+        // nothing else in clips runs while this finish does: no launch, scan or part-file sweep
+        let g = launch::guard(&root)?;
         if let Ok((csgo, _)) = cs2_paths() {
-            settle_launches(&root, &csgo.join("console.log"), &procs)?;
+            settle_launches(&g, &root, &csgo.join("console.log"), &launch::System)?;
         }
-        // no launch may start while this finish runs, and a launch still recording blocks it
-        let _lock = launch::Lock::acquire(&root, "finish", None, &procs)?;
         let render = finish_command(&root, &font, &id, &job, &take, &reason, &subline, duration_s)?;
         run_ffmpeg(&root, &render, hlae.as_deref())
     })
@@ -753,7 +764,7 @@ pub async fn clips_finish(id: String, job: String, take: String, reason: String,
 pub async fn clips_reel(ids: Vec<String>, hlae: Option<String>) -> Result<FfmpegRun, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = clips_root()?;
-        let _lock = launch::Lock::acquire(&root, "finish", None, &launch::System)?;
+        let _g = launch::guard(&root)?;
         let (stamp, _) = job::new_job_id(SystemTime::now());
         let render = reel_command(&root, &ids, &format!("reel-{}.mp4", stamp.trim_start_matches("job-")))?;
         run_ffmpeg(&root, &render, hlae.as_deref())
@@ -819,14 +830,14 @@ mod tests {
     fn launched(root: &Path, i: u8, before: &[&str], why: &str) {
         let job_dir = root.join("jobs").join(JOB);
         fs::create_dir_all(&job_dir).unwrap();
+        let g = launch::guard(root).unwrap();
         let rec = launch::LaunchRecord {
-            nonce: nonce(i), job: JOB.into(), started: u64::from(i) * 1000,
+            nonce: nonce(i), job: JOB.into(), seq: u64::from(i), started: u64::from(i) * 1000,
             takes_before: std::collections::BTreeMap::from([(CLIP.to_string(), before.iter().map(|s| s.to_string()).collect())]),
-            console: launch::ConsoleMark { identity: None, len: 0 },
         };
-        let dir = launch::write_record(&job_dir, &rec).unwrap();
+        let dir = launch::write_record(&g, &job_dir, &rec).unwrap();
         let (ended, stopped) = if why == "end_tick" { (vec![CLIP.to_string()], vec![]) } else { (vec![], vec![(CLIP.to_string(), why.to_string())]) };
-        launch::write_result(&dir, &launch::LaunchResult { nonce: nonce(i), evidence: "test".into(), ended, stopped }).unwrap();
+        launch::write_result(&g, &dir, &launch::LaunchResult { nonce: nonce(i), evidence: "test".into(), ended, stopped }).unwrap();
     }
 
     /// A take's files as HLAE lays them out: the screen stream's video in the take folder, the sound beside it.
@@ -875,31 +886,40 @@ mod tests {
     }
 
     #[test]
-    fn two_launches_cannot_overlap_and_each_records_the_takes_before_it() {
+    fn a_launch_settles_the_earlier_ones_first_and_waits_while_one_runs() {
+        let _s = launch::SERIAL.lock().unwrap_or_else(|p| p.into_inner());
         let s = scratch("prepare");
         let (env, plan) = saved_job(&s);
         let csgo = s.0.join("csgo");
         fs::create_dir_all(&csgo).unwrap();
         let procs = launch::fake::Fake::new();
         let clip = plan.demos[0].clips[0].id.clone();
-        let raw = env.clips_root.join("jobs").join(JOB).join("raw").join(&clip).join("take0000");
-        fs::create_dir_all(&raw).unwrap();
-        let (_, lock, prep) = prepare_launch(&env, &csgo, JOB, &procs).unwrap();
-        // the second launch, while the first holds the lock
-        assert!(prepare_launch(&env, &csgo, JOB, &procs).err().unwrap().contains("another launch is running"));
-        // the record lists the take that was there, the director carries the nonce, and the cfg loads it
+        fs::create_dir_all(env.clips_root.join("jobs").join(JOB).join("raw").join(&clip).join("take0000")).unwrap();
+        let g = launch::guard(&env.clips_root).unwrap();
+        // launch 1: its record lists the take already there, its director carries its nonce, the cfg loads it
+        let (_, first) = prepare_launch(&g, &env, &csgo, JOB, &procs).unwrap();
         let ls = launch::launches(&env.clips_root.join("jobs").join(JOB));
-        assert_eq!(ls.len(), 1);
+        assert_eq!((ls.len(), ls[0].record.seq), (1, 1));
         assert_eq!(ls[0].record.takes_before.get(&clip).unwrap(), &vec!["take0000".to_string()]);
-        let js = fs::read_to_string(prep.launches_dir.join(format!("{}.js", prep.nonce))).unwrap();
-        assert!(js.contains(&format!("\"nonce\":\"{}\"", prep.nonce)));
-        assert!(prep.cfg_text.ends_with(&format!("/launches/{}.js\"\n", prep.nonce)));
-        drop(lock);
-        // with CS2 running, no launch starts, and the lock is released again
+        let js = fs::read_to_string(first.launches_dir.join(format!("{}.js", first.nonce))).unwrap();
+        assert!(js.contains(&format!("\"nonce\":\"{}\"", first.nonce)));
+        assert!(first.cfg_text.ends_with(&format!("/launches/{}.js\"\n", first.nonce)));
+        // HLAE started and is still running: a second launch waits for it
+        let hlae = launch::ProcId { pid: 40, created: 4 };
+        launch::write_pids(&g, &first.launches_dir, &first.nonce, &launch::LaunchPids { hlae }).unwrap();
+        procs.alive.borrow_mut().push(hlae);
+        assert!(prepare_launch(&g, &env, &csgo, JOB, &procs).err().unwrap().contains("an earlier render is still running"));
+        // it ends and wrote its END line; the next launch reads that line before its own session replaces the log
+        procs.alive.borrow_mut().clear();
+        fs::write(csgo.join("console.log"), format!("[cs2stats] END {clip} nonce={} why=end_tick tick=2000\n", first.nonce)).unwrap();
+        let (_, second) = prepare_launch(&g, &env, &csgo, JOB, &procs).unwrap();
+        let ls = launch::launches(&env.clips_root.join("jobs").join(JOB));
+        let one = ls.iter().find(|l| l.record.nonce == first.nonce).unwrap();
+        assert!(matches!(&one.outcome, launch::Outcome::Settled(r) if r.ended == [clip.clone()]));
+        assert_eq!(ls.iter().find(|l| l.record.nonce == second.nonce).unwrap().record.seq, 2);
+        // with CS2 running, no launch starts (launch 2 never started HLAE, so it settles as not started)
         *procs.cs2.borrow_mut() = true;
-        assert!(prepare_launch(&env, &csgo, JOB, &procs).err().unwrap().contains("CS2 is running"));
-        *procs.cs2.borrow_mut() = false;
-        assert!(prepare_launch(&env, &csgo, JOB, &procs).is_ok());
+        assert!(prepare_launch(&g, &env, &csgo, JOB, &procs).err().unwrap().contains("CS2 is running"));
     }
 
     #[test]
