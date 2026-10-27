@@ -532,60 +532,87 @@ def test_a_restore_before_begin_new_match_is_found_by_its_world_deaths():
 COACH = 99
 
 
-def _slot_case(coach_kills=False, t_side=6):
+def _slot_case(t_side=6):
     """Two rounds, CT five (1-5), T t_side players (6.., the last is COACH): everyone spawns on each round start,
-    the coach dies each round to his own hit from no weapon, players fight each other."""
+    the coach dies each round to his own hit from no weapon, players fight each other, and the C4 goes from the
+    coach to player 6 on each spawn tick."""
     rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 1000], end_tick=[900, 1900]))
     t_ids = list(range(6, 6 + t_side - 1)) + [COACH]
     everyone = list(range(1, 6)) + t_ids
     spawns = pd.DataFrame(dict(tick=[100] * len(everyone) + [1000] * len(everyone), steamid=everyone * 2))
-    deaths = pd.DataFrame(dict(attacker_steamid=[1, 6] + ([COACH] if coach_kills else []),
-                               victim_steamid=[6, 2] + ([3] if coach_kills else []),
-                               assister_steamid=[None] * (3 if coach_kills else 2)))
+    deaths = pd.DataFrame(dict(attacker_steamid=[1, 6], victim_steamid=[6, 2], assister_steamid=[None, None]))
     hurts = pd.DataFrame(dict(attacker_steamid=[1, 6, COACH, COACH], victim_steamid=[6, 2, COACH, COACH],
                               weapon=["ak47", "glock", "", ""]))
     sides = pd.DataFrame([dict(round=r, steamid=s, side="CT" if s <= 5 else "T") for r in (1, 2) for s in everyone])
-    return rounds, spawns, deaths, hurts, sides
+    acts = pd.DataFrame(dict(steamid=[1, 6, 7]))
+    bomb = pd.DataFrame(dict(tick=[100, 100, 1000, 1000], event="bomb_pickup", steamid=[COACH, 6, COACH, 6]))
+    return dict(rounds=rounds, spawns=spawns, deaths=deaths, hurts=hurts, sides=sides, acts=acts, bomb=bomb)
 
 
 def test_a_coach_in_a_sixth_slot_is_excluded():
     # Three HLTV archives of one team: a sixth T spawned every round and killed by his own hit from no weapon,
-    # with no player_death; the C4 handed to him and on to a teammate gave the bomb table a duplicate key.
-    out = ex.non_combatants(*_slot_case())
+    # with no player_death, shot, grenade or purchase; the C4 handed to him and on to a teammate gave the bomb
+    # table two pickups on one tick.
+    out = ex.non_combatants(**_slot_case())
     assert list(out) == [COACH] and "coach" in out[COACH]
 
 
 def test_a_round_whose_spawns_came_before_the_recording_does_not_save_the_coach():
-    # Those archives begin on round 1's round_start, after its spawns: nobody has a round 1 spawn.
-    rounds, spawns, deaths, hurts, sides = _slot_case()
-    assert list(ex.non_combatants(rounds, spawns[spawns.tick > 100], deaths, hurts, sides)) == [COACH]
+    case = _slot_case()
+    case["spawns"] = case["spawns"][case["spawns"].tick > 100]
+    case["bomb"] = case["bomb"][case["bomb"].tick > 100]  # the round 1 handoff went with its spawns
+    assert list(ex.non_combatants(**case)) == [COACH]
 
 
-def test_a_sixth_slot_that_fought_is_not_excluded():
-    assert ex.non_combatants(*_slot_case(coach_kills=True)) == {}
-
-
-def test_the_coach_leaves_every_table_and_his_engagements_children():
-    # Review of PR 54: engagement_ticks names no player, so its rows of an engagement he was in were orphaned.
-    T = {
-        "kills": pd.DataFrame(dict(tick=[1, 2], attacker_steamid=[1, COACH], victim_steamid=[6, 2])),
-        "blinds": pd.DataFrame(dict(tick=[3], attacker_steamid=[1], victim_steamid=[COACH])),
-        "engagements": pd.DataFrame(dict(engagement_id=[10, 11], a_steamid=[1, COACH], v_steamid=[6, 3])),
-        "engagement_ticks": pd.DataFrame(dict(engagement_id=[10, 10, 11, 11], tick=[1, 2, 1, 2])),
-        "positions": pd.DataFrame(dict(tick=[1, 1], steamid=[1, COACH], spotted_by=[[COACH, 6], [1]])),
-        "rounds": pd.DataFrame(dict(round=[1], planter_steamid=[None])),
-    }
-    out = ex.drop_players(T, {COACH})
-    for name, df in out.items():
-        for c in [c for c in df.columns if c == "steamid" or c.endswith("_steamid")]:
-            assert not df[c].isin([COACH]).any(), (name, c)
-    assert out["engagement_ticks"].engagement_id.tolist() == [10, 10]
-    assert out["positions"].spotted_by.tolist() == [[6]] and out["rounds"] is T["rounds"]
+@pytest.mark.parametrize("change, why", [
+    (lambda c: c["acts"].loc.__setitem__(len(c["acts"]), [COACH]), "fired, threw or bought"),
+    (lambda c: c["bomb"].loc.__setitem__(len(c["bomb"]), [1500, "bomb_planted", COACH]), "bomb event"),
+    (lambda c: c["deaths"].loc.__setitem__(len(c["deaths"]), [COACH, 3, None]), "player_death"),
+])
+def test_a_sixth_slot_that_takes_any_part_refuses_the_map(change, why):
+    # Review of PR 54: a sixth player who shoots, throws, buys, plants or fights is not left out in part; the
+    # map is refused, naming what he did.
+    case = _slot_case()
+    change(case)
+    with pytest.raises(RuntimeError, match=why):
+        ex.non_combatants(**case)
 
 
 def test_excluding_a_player_from_a_five_man_team_fails_instead():
     with pytest.raises(RuntimeError, match="fewer than 5"):
-        ex.non_combatants(*_slot_case(t_side=5))
+        ex.non_combatants(**_slot_case(t_side=5))
+
+
+def test_the_coach_leaves_every_steamid_column_of_every_table():
+    # Review of PR 54: rounds kept his SteamID as planter or defuser, and engagement_ticks (no SteamID column)
+    # kept the ticks of his engagements.
+    import schema_v1
+    T = {}
+    for table, types in schema_v1.TYPES.items():
+        cols = [c for c in types if c == "steamid" or c.endswith("_steamid")]
+        if not cols:
+            continue
+        T[table] = pd.DataFrame({**{c: pd.array([COACH, 1], dtype="UInt64") for c in cols},
+                                 **({"engagement_id": [10, 11]} if table == "engagements" else {})})
+    T["engagement_ticks"] = pd.DataFrame(dict(engagement_id=[10, 11], tick=[1, 2]))
+    T["positions"]["spotted_by"] = [[COACH, 6], [COACH]]
+    out = ex.drop_players(T, {COACH})
+    for name, df in out.items():
+        for c in [c for c in df.columns if c == "steamid" or c.endswith("_steamid")]:
+            assert not df[c].isin([COACH]).fillna(False).any(), (name, c)
+    assert len(out["rounds"]) == 2 and out["rounds"].planter_steamid.isna().tolist() == [True, False]
+    assert out["engagement_ticks"].engagement_id.tolist() == [11]
+    assert out["positions"].spotted_by.tolist() == [[]]
+
+
+def test_two_players_c4_events_on_one_tick_are_two_bomb_rows():
+    # Review of PR 54: the bomb key (tick, event) refused a handoff between two real players on one tick.
+    import schema_v1
+    row = {c: _PLACEHOLDER[t] for c, t in schema_v1.TYPES["bomb"].items()}
+    rows = pd.DataFrame([dict(row, steamid=11), dict(row, steamid=22)])
+    ex._to_polars(rows, "bomb")
+    with pytest.raises(ValueError, match="share a key"):
+        ex._to_polars(pd.DataFrame([dict(row, steamid=11), dict(row, steamid=11)]), "bomb")
 
 
 def test_round_one_without_restore_has_no_voided_window():
@@ -818,95 +845,119 @@ def test_lost_burn_ticks_stay_unattributed():
     assert out.attacker_steamid.isna().all() and out.reconstructed_ambiguous.all()
 
 
-def _counters(*rows):
-    """rows: (tick, steamid, kills, deaths[, damage])."""
-    return pd.DataFrame(dict(tick=[r[0] for r in rows], steamid=[r[1] for r in rows], kills_total=[r[2] for r in rows],
-                             deaths_total=[r[3] for r in rows], assists_total=0, headshot_kills_total=0,
-                             damage_total=[r[4] if len(r) > 4 else 0 for r in rows]))
+def _ev(**k):
+    return {**dict.fromkeys(ex.ATTEMPT_COUNTERS, 0), **k}
 
 
-def _tkills(*rows):
-    """Counted kills table rows: (tick, attacker, victim, weapon)."""
-    df = pd.DataFrame(dict(tick=[r[0] for r in rows], attacker_steamid=[r[1] for r in rows],
-                           victim_steamid=[r[2] for r in rows], assister_steamid=None, headshot=False,
-                           weapon=[r[3] for r in rows]))
-    df["is_suicide"] = (df.attacker_steamid == df.victim_steamid).astype(bool)
-    df["is_teamkill"] = [TEAM.get(x) == TEAM.get(y) and x != y for x, y in zip(df.attacker_steamid, df.victim_steamid)]
-    df["v_side"], df["assister_side"] = df.victim_steamid.map(TEAM), None
+def _res(kills=0, deaths=0, assists=0, headshots=0):
+    return dict(kills=kills, deaths=deaths, assists=assists, headshots=headshots)
+
+
+NO_GAP = lambda sid, i: 0
+
+
+def test_an_attempt_the_game_kept_is_explained_by_its_own_events():
+    # An HLTV demo: a disconnect death inside a restored attempt stayed on the scoreboard (one more death than the
+    # counted rounds hold), and an admin restart that rolled nothing back keeps every counter the same way.
+    take, kept, problems = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{B: _ev(deaths=1, selfkills=1)}], {B: {0}}, NO_GAP)
+    assert (take, kept, problems) == ({B: dict(kills_total=0, deaths_total=1, assists_total=0, headshot_kills_total=0)},
+                                      {B: (0,)}, [])
+
+
+def test_an_attempt_the_restore_rolled_back_takes_nothing_off():
+    take, kept, problems = ex.attribute_attempts({B: _res()}, {}, [{B: _ev(kills=2, deaths=1)}], {B: {0}}, NO_GAP)
+    assert (take, kept, problems) == ({}, {B: ()}, [])
+
+
+def test_a_counted_death_whose_event_is_missing_is_not_explained_away():
+    # Review of PR 54 (finding 1): the scoreboard holds a death the tables lack, and no dropped attempt has one.
+    _, _, problems = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{A: _ev(kills=1)}], {B: {0}}, NO_GAP)
+    assert problems and "beyond the counted events" in problems[0]
+
+
+def test_a_kept_suicide_takes_a_kill_off_the_scoreboard():
+    # Review of PR 54: a kept grenade suicide takes a kill off (deducted) and adds a death.
+    take, _, problems = ex.attribute_attempts({A: _res(kills=-1, deaths=1)}, {}, [{A: _ev(selfkills=1, deaths=1)}],
+                                              {A: {0}}, NO_GAP)
+    assert problems == [] and take[A]["kills_total"] == -1 and take[A]["deaths_total"] == 1
+
+
+def test_a_restore_keeps_a_players_whole_attempt_or_none_of_it():
+    # One subset explains every counter at once: keeping the death but not the kill of one attempt is no option.
+    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(kills=1, deaths=1)}], {A: {0}}, NO_GAP)
+    assert problems
+    take, kept, problems = ex.attribute_attempts({A: _res(deaths=1, assists=1)}, {},
+                                                 [{A: _ev(deaths=1)}, {A: _ev(assists=1)}], {A: {0, 1}}, NO_GAP)
+    assert problems == [] and kept[A] == (0, 1)
+
+
+def test_two_attempts_that_each_explain_the_scoreboard_refuse_the_map():
+    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}, {A: _ev(deaths=1)}],
+                                           {A: {0, 1}}, NO_GAP)
+    assert problems and "each explain" in problems[0]
+
+
+def test_damage_a_kept_attempt_dealt_refuses_the_map():
+    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1, damage=50)}], {A: {0}}, NO_GAP)
+    assert problems and "dealt 50 damage" in problems[0]
+
+
+def test_damage_in_an_attempt_no_counter_places_is_judged_by_the_round_before():
+    # Review of PR 54 (finding 1): 30 HP dealt in an attempt, nothing else. If the round before holds 30 HP of game
+    # damage no hit explains, the attempt may have been kept and the map is refused; with no such gap it was not.
+    events = [{A: _ev(damage=30)}]
+    assert ex.attribute_attempts({A: _res()}, {}, events, {A: {0}}, lambda s, i: 30)[2]
+    assert ex.attribute_attempts({A: _res()}, {}, events, {A: {0}}, lambda s, i: 0)[2] == []
+
+
+def test_only_a_players_candidate_attempts_can_explain_his_scoreboard():
+    # A player who left before an attempt, or whose round-1 baseline already holds it, cannot have kept it.
+    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}], {A: set()}, NO_GAP)
+    assert problems
+
+
+def test_more_than_eight_attempts_or_one_over_a_counted_round_refuses_the_map():
+    rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 2000], end_tick=[1500, 3000]))
+    ex.check_dropped_attempts(rounds, [(1600, 2000)])  # may end on the next round's start
+    with pytest.raises(RuntimeError, match="covers round 1"):
+        ex.check_dropped_attempts(rounds, [(1000, 1600)])
+    with pytest.raises(RuntimeError, match="at most 8"):
+        ex.check_dropped_attempts(rounds, [(1600 + i, 1600 + i) for i in range(9)])
+
+
+def _attempt_deaths(*rows):
+    """rows: (tick, attacker, victim, assister, headshot)."""
+    df = pd.DataFrame(rows, columns=["tick", "attacker_steamid", "victim_steamid", "assister_steamid", "headshot"])
+    for c, t in (("a_team", "attacker_steamid"), ("v_team", "victim_steamid"), ("as_team", "assister_steamid")):
+        df[c] = df[t].map({A: 3, B: 3, C: 2, D: 2})
     return df
 
 
-NO_KILLS = _tkills()
+def test_an_attempts_events_leave_out_its_restore_tick():
+    deaths = _attempt_deaths((1100, A, C, B, True), (1200, D, D, None, False), (1300, C, D, None, False),
+                             (2000, A, A, None, False), (2000, C, C, None, False))  # restore at 2000 kills everyone
+    hurts = pd.DataFrame(dict(tick=[1050, 1060], attacker_steamid=[A, C], victim_steamid=[C, D], a_team=[3, 2],
+                              v_team=[2, 2], dmg_health=[40, 10]))
+    (ev_,) = ex.attempt_events([(1000, 2000)], {2000}, deaths, hurts)
+    assert ev_[A] == _ev(kills=1, headshots=1, damage=40) and ev_[B] == _ev(assists=1)
+    assert ev_[D] == _ev(selfkills=1, deaths=2) and ev_[C] == _ev(deaths=1, selfkills=1)
 
 
-def test_a_restored_attempt_keeps_only_what_the_game_counted():
-    # A pro demo: the 45420-57646 restore rolled everything back; a world suicide inside 78153-97787 raised one
-    # player's deaths_total and stayed counted. Neither attempt is a round; the second kept one death.
-    c = _counters((45420, A, 3, 4), (45420, B, 2, 5), (57646 + 64, A, 3, 4), (57646 + 64, B, 2, 5),
-                  (78153, A, 5, 6), (78153, B, 4, 7), (97787 + 64, A, 5, 6), (97787 + 64, B, 4, 8))
-    assert ex.kept_by_attempt([(45420, 57646), (78153, 97787)], c, NO_KILLS, 64.0) == [{}, {B: {"deaths_total": 1}}]
-
-
-def test_restores_are_measured_one_second_after_the_restore_at_any_tick_rate():
-    # Here a 128-tick demo's kept attempt only shows its counted death one second (128 ticks) later.
-    c = _counters((1000, A, 0, 0), (5000 + 128, A, 0, 1))
-    assert ex.kept_by_attempt([(1000, 5000)], c, NO_KILLS, 128.0) == [{A: {"deaths_total": 1}}]
-
-
-def test_a_counted_death_in_the_second_after_the_restore_is_not_the_attempts():
-    # Review of PR 54: a disconnect death at 5030 belongs to the round after the restore at 5000; read at 5064 it
-    # was taken for the attempt's and came off the scoreboard while its kills row stayed.
-    c = _counters((1000, A, 0, 0), (5064, A, 0, 1))
-    assert ex.kept_by_attempt([(1000, 5000)], c, _tkills((5030, A, A, "world")), 64.0) == [{}]
-    with pytest.raises(RuntimeError, match="cannot be told apart"):  # a grenade suicide: deducted or not
-        ex.kept_by_attempt([(1000, 5000)], c, _tkills((5030, A, A, "hegrenade")), 64.0)
-
-
-def test_a_kept_suicide_penalty_is_a_signed_kill_change():
-    # Review of PR 54: a kept suicide takes a kill off (4 -> 3) and adds a death; it is not an earlier backup.
-    c = _counters((1000, A, 4, 4), (5064, A, 3, 5))
-    assert ex.kept_by_attempt([(1000, 5000)], c, NO_KILLS, 64.0) == [{A: {"kills_total": -1, "deaths_total": 1}}]
-    with pytest.raises(RuntimeError, match="fell across the restored attempt 1000-5000"):
-        ex.kept_by_attempt([(1000, 5000)], _counters((1000, A, 4, 4), (5064, A, 4, 3)), NO_KILLS, 64.0)
-
-
-def test_a_player_who_reconnects_in_an_attempt_is_measured_from_his_first_tick():
-    # Review of PR 54: no controller at the attempt's start, back at 3000, 30 damage the restore kept. Marked
-    # unmeasured, that damage went into the round before the attempt; now it is measured and refuses the map.
-    c = _counters((1000, A, 0, 0), (5064, A, 0, 0), (3000, B, 2, 2, 400), (5064, B, 2, 2, 430))
-    kept = ex.kept_by_attempt([(1000, 5000)], c, NO_KILLS, 64.0)
-    assert kept == [{B: {"damage_total": 30}}]
-    with pytest.raises(RuntimeError, match="kept damage"):
-        ex.kept_off_scoreboard([(1000, 5000)], kept, 900, {A, B})
-
-
-def test_round_one_baseline_covers_an_attempt_only_for_players_it_has():
-    # Review of PR 54: an attempt ending at 5000 kept a death of B, who left before round 1's freeze end at 6000
-    # and has no baseline row; his death comes off, A's (in the baseline) does not.
-    kept = [{A: {"deaths_total": 1}, B: {"deaths_total": 1}}]
-    assert ex.kept_off_scoreboard([(1000, 5000)], kept, 6000, {A}) == [(5000, {B: {"deaths_total": 1}})]
-    assert ex.kept_off_scoreboard([(1000, 5000)], kept, None, {A}) == [(5000, kept[0])]  # round 1 recorded live
-
-
-def test_kept_counters_come_off_only_rows_read_after_the_attempt():
-    kept = [(5000, {B: {"deaths_total": 1}})]
-    rows = pd.DataFrame(dict(tick=[9000, 4000], steamid=[B, B], kills_total=[7, 2], deaths_total=[9, 3],
-                             assists_total=0, headshot_kills_total=0))
-    assert ex.less_kept(rows, kept)[["kills_total", "deaths_total"]].values.tolist() == [[7, 8], [2, 3]]
-
-
-def test_validation_passes_once_what_an_attempt_kept_comes_off_the_scoreboard():
-    # End to end from the counters: in a dropped attempt (20000-24000) B died to "world" and A killed himself
-    # with a grenade (kills deducted). The game kept both; the tables, rightly, have neither.
+def test_validation_passes_once_the_kept_attempt_comes_off_the_scoreboard():
+    # End to end: in a dropped attempt B died to "world" (a disconnect) and the game kept it; the tables, rightly,
+    # do not have it. The residual is read the way validate_scoreboard counts.
     kills, game_damage, sb = _base()
-    c = _counters((20000, A, 1, 0), (20000, B, 1, 0), (24064, A, 0, 1), (24064, B, 1, 1))
-    kept = ex.kept_by_attempt([(20000, 24000)], c, NO_KILLS, 64.0)
-    off = ex.kept_off_scoreboard([(20000, 24000)], kept, 900, {A, B, C, D})
-    sb_game = sb.assign(tick=30000)
-    sb_game.loc[sb_game.steamid == A, ["kills_total", "deaths_total"]] = [0, 2]
-    sb_game.loc[sb_game.steamid == B, "deaths_total"] = 1
-    assert _fatal_failures(ex.validate_scoreboard(kills, game_damage, sb_game))
-    assert _fatal_failures(ex.validate_scoreboard(kills, game_damage, ex.less_kept(sb_game, off))) == []
+    sb.loc[sb.steamid == B, "deaths_total"] = 1
+    events = ex.attempt_events([(5000, 6000)], set(), _attempt_deaths((5500, B, B, None, False)),
+                               pd.DataFrame(columns=["tick", "attacker_steamid", "victim_steamid", "a_team", "v_team",
+                                                     "dmg_health"]))
+    counted = ex.counted_events(kills)
+    residuals = {int(r.steamid): {k: int(getattr(r, c)) - counted.get(int(r.steamid), {}).get(k, 0) for k, c in
+                                  (("kills", "kills_total"), ("deaths", "deaths_total"), ("assists", "assists_total"),
+                                   ("headshots", "headshot_kills_total"))} for r in sb.itertuples()}
+    take, _, problems = ex.attribute_attempts(residuals, {}, events, {s_: {0} for s_ in residuals}, NO_GAP)
+    assert problems == [] and _fatal_failures(ex.validate_scoreboard(kills, game_damage, sb))
+    assert _fatal_failures(ex.validate_scoreboard(kills, game_damage, ex.less_taken(sb, take))) == []
 
 
 def test_trade_flags_skip_a_world_death_before_the_trade():

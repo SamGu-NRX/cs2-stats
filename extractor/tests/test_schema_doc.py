@@ -32,8 +32,10 @@ def test_schema_doc_matches_the_enforced_types_nullability_and_keys():
 def test_no_key_column_may_hold_nulls():
     # engagement_ticks declared its key (engagement_id, tick) nullable, so the writer would have let a row
     # with no engagement or no tick through even though the duplicate-key check relies on both.
+    # bomb.steamid is the exception: the explosion names no player, and there is one a tick, so a null there
+    # still identifies its row.
     nullable_keys = {t: sorted(set(k) & set(NULLABLE.get(t, []))) for t, k in KEYS.items()}
-    assert {t: c for t, c in nullable_keys.items() if c} == {}
+    assert {t: c for t, c in nullable_keys.items() if c} == {"bomb": ["steamid"]}
 
 
 def test_derived_metrics_the_engine_owns_are_not_schema_columns():
