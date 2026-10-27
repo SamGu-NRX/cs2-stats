@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import logging.handlers
+import math
 import os
 import shutil
 import subprocess
@@ -63,15 +64,25 @@ STABLE_SECONDS = 10.0
 # failed/ has its own cap: each failed archive is kept with its failing .dem files and their validation
 # reports so the failure can be diagnosed, up to MAX_FAILED_GB; beyond that the oldest is logged and deleted.
 MIN_FREE_GB = 45.0
-MAX_OUR_GB = 12.0
+MAX_OUR_GB = float(os.environ.get("CS2_PIPELINE_MAX_GB", "30"))
 MAX_FAILED_GB = 8.0
 TRUNCATED = "truncated_demo"  # fail_reason of a demo nothing can read to a complete round; never retried
 STALE_WORK_S = 2 * 3600
 WORK_SWEEP_S = 600
 BUDGET_CACHE_S = 10.0
 MAX_EXTRACTED = 2  # archives whose .dem files are on disk (extracting or parsing)
-MAX_WORKERS = 4
+MAX_WORKERS_CAP = int(os.environ.get("CS2_PIPELINE_MAX_WORKERS", "1000"))
 GAMING_WORKERS = 1
+RAM_HEADROOM_GB = 3.0
+RAM_PRESSURE_GB = 2.0
+RAM_KILL_GB = 1.0
+# This default has no measurement behind it. It is replaced by the rolling p90 after workers finish.
+DEFAULT_PARSE_EST_GB = 4.0
+PEAK_SAMPLE_COUNT = 20
+# These formula defaults have no measurement behind them. Each rolling average replaces them as data arrives.
+DEFAULT_PARSE_SECS = 600.0
+DEFAULT_DOWNLOAD_SECS = 300.0
+THROUGHPUT_SAMPLE_COUNT = 20
 # Kill a worker above this RSS. Measured peaks: 1.05 GB (401 MB Nuke demo), 1.46 GB (670 MB Dust2).
 WORKER_RSS_LIMIT_GB = 3.5
 WORKER_TIMEOUT_S = 45 * 60
@@ -134,6 +145,10 @@ class CompletenessTracker:
     def tracked(self) -> set[Path]:
         return set(self._seen)
 
+    def age(self, path: Path, now: float) -> float | None:
+        seen = self._seen.get(path)
+        return None if seen is None else max(0.0, now - seen[1])
+
 
 def is_complete_rar(path: Path, tracker: CompletenessTracker, now: float) -> bool:
     try:
@@ -165,6 +180,8 @@ class Archive:
     size_at_extract: int = 0
     t_extract: float = 0.0
     t_extract_s: float = 0.0
+    download_s: float = 0.0
+    t_parse: float = 0.0
 
 
 @dataclass
@@ -177,6 +194,7 @@ class Job:
     log_path: Path
     proc: subprocess.Popen | None = None
     t0: float = 0.0
+    peak_rss_gb: float = 0.0
     killed: str | None = None
 
 
@@ -235,6 +253,39 @@ def cs2_running() -> bool:
 def free_gb(path: Path | None = None) -> float:
     # DATA_ROOT is read at call time, not bound as a default, so tests that move it are measured there
     return shutil.disk_usage(path or DATA_ROOT).free / 1e9
+
+
+def rolling_p90(values: deque[float], default: float) -> float:
+    if not values:
+        return default
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(len(ordered) * 0.9) - 1)]
+
+
+def worker_limit(cpu_count: int, cs2_is_running: bool, configured_cap: int = MAX_WORKERS_CAP) -> int:
+    """Return the current CPU and game-aware worker ceiling."""
+    if cs2_is_running:
+        return GAMING_WORKERS
+    return max(0, min(max(0, cpu_count - 2), configured_cap))
+
+
+def memory_policy(running: int, limit: int, available_gb: float, parse_est_gb: float) -> str:
+    """Return start, wait, or kill_newest for one scheduler decision."""
+    if running and available_gb < RAM_KILL_GB:
+        return "kill_newest"
+    if available_gb < RAM_PRESSURE_GB:
+        return "wait"
+    if running >= limit or available_gb < parse_est_gb + RAM_HEADROOM_GB:
+        return "wait"
+    return "start"
+
+
+def desired_downloads(running_capacity: int, avg_parse_secs: float, avg_download_secs: float,
+                      disk_capacity: bool) -> int:
+    if not disk_capacity:
+        return 1
+    ratio = max(1, math.ceil(running_capacity * avg_parse_secs / max(avg_download_secs, 1e-9)) + 1)
+    return max(1, min(4, ratio))
 
 
 def tree_bytes(path: Path) -> int:
@@ -512,7 +563,10 @@ class Pipeline:
         self.lock = threading.Lock()
         self.status: dict = {}
         self.ignored: set[Path] = set()
-        self.retried: set[Path] = set()  # --retry-failed tries each failed RAR once per process run
+        self.retried: set[Path] = set()
+        self.peak_samples: deque[float] = deque(maxlen=PEAK_SAMPLE_COUNT)
+        self.parse_samples: deque[float] = deque(maxlen=THROUGHPUT_SAMPLE_COUNT)
+        self.download_samples: deque[float] = deque(maxlen=THROUGHPUT_SAMPLE_COUNT)
         self.started = time.time()
         self.last_sweep = 0.0
         self._budget: tuple[float, float, bool] = (0.0, 0.0, True)  # (computed_at, ourGB, capacity)
@@ -565,6 +619,21 @@ class Pipeline:
                 continue
             in_failed = f.parent.parent == FAILED_DIR
             aid = f.parent.name if in_failed else f.name
+            if in_failed:
+                try:
+                    failed_version = json.loads((f.parent / "reason.json").read_text(encoding="utf-8")).get("extractor_version")
+                except (OSError, json.JSONDecodeError):
+                    failed_version = None
+                if failed_version is None:
+                    for result_file in f.parent.glob("*.result.json"):
+                        try:
+                            failed_version = json.loads(result_file.read_text(encoding="utf-8")).get("extractor_version")
+                        except (OSError, json.JSONDecodeError):
+                            continue
+                        if failed_version:
+                            break
+                if failed_version == extract.EXTRACTOR_VERSION:
+                    continue
             done = self.ledger.get(aid, {}).get("status") == "done" and aid not in self.reextract_ids()
             if done or (self.ledger.get(aid, {}).get("status") == "failed" and not in_failed):
                 continue
@@ -579,8 +648,12 @@ class Pipeline:
                     continue
                 # Judge the file only once it is complete: a download in progress can start
                 # with bytes that are not yet the RAR header.
-                if not (self.tracker.observe(f, size, now) and not has_partial_marker(f)):
+                complete = self.tracker.observe(f, size, now) and not has_partial_marker(f)
+                if not complete:
                     continue
+                age = self.tracker.age(f, now)
+                if age is not None and age > 0:
+                    self.download_samples.append(age)
             self.tracker.forget(f)
             if not is_rar(f):
                 self.ignored.add(f)
@@ -659,6 +732,7 @@ class Pipeline:
                 continue
             safe_unlink(a.extract_log, missing_ok=True)
             a.state = "parsing"
+            a.t_parse = time.time()
             keys: set[str] = set()
             for dem in a.dems:
                 key = extract.map_key_for(dem, dem.stem)
@@ -674,13 +748,17 @@ class Pipeline:
             log.info("extracted %s in %.1fs: %s", a.id, a.t_extract_s, [d.name for d in a.dems])
 
     # --- parsing
+    def parse_est_gb(self) -> float:
+        return rolling_p90(self.peak_samples, DEFAULT_PARSE_EST_GB)
+
     def worker_limit(self) -> int:
-        return GAMING_WORKERS if cs2_running() else MAX_WORKERS
+        return worker_limit(os.cpu_count() or 1, cs2_running())
 
     def dispatch(self) -> None:
         while self.jobs:
-            # Re-check before each job: one worker while CS2 runs, otherwise up to four.
-            if len(self.running) >= self.worker_limit():
+            policy = memory_policy(len(self.running), self.worker_limit(),
+                                   psutil.virtual_memory().available / 1e9, self.parse_est_gb())
+            if policy != "start":
                 return
             j = self.jobs.popleft()
             listing = j.archive.listing.get(j.dem.name, {})
@@ -700,18 +778,27 @@ class Pipeline:
             log.info("parsing %s/%s (%d running)", j.archive.slug, j.map_key, len(self.running))
 
     def poll_workers(self) -> None:
+        available_gb = psutil.virtual_memory().available / 1e9
+        if memory_policy(len(self.running), self.worker_limit(), available_gb, self.parse_est_gb()) == "kill_newest":
+            newest = self.running[-1]
+            newest.killed = f"killed: available RAM {available_gb:.2f} GB < {RAM_KILL_GB:.0f} GB pressure floor"
+            log.error("%s/%s %s; requeued", newest.archive.slug, newest.map_key, newest.killed)
+            newest.proc.kill()
+            newest.proc.wait()
+            self.running.pop()
+            newest.result_path.unlink(missing_ok=True)
+            if newest.out_dir.exists():
+                safe_rmtree(newest.out_dir, ignore_errors=True)
+            self.jobs.appendleft(newest)
         for j in list(self.running):
             rc = j.proc.poll()
             if rc is None:
                 try:
-                    rss = psutil.Process(j.proc.pid).memory_info().rss / 1e9
+                    j.peak_rss_gb = max(j.peak_rss_gb, psutil.Process(j.proc.pid).memory_info().rss / 1e9)
                 except psutil.Error:
-                    rss = 0.0
-                if rss > WORKER_RSS_LIMIT_GB:
-                    j.killed = f"killed: worker RSS {rss:.2f} GB > {WORKER_RSS_LIMIT_GB} GB"
-                elif time.time() - j.t0 > WORKER_TIMEOUT_S:
+                    pass
+                if time.time() - j.t0 > WORKER_TIMEOUT_S:
                     j.killed = f"killed: worker ran longer than {WORKER_TIMEOUT_S} s"
-                if j.killed:
                     log.error("%s/%s %s", j.archive.slug, j.map_key, j.killed)
                     j.proc.kill()
                     j.proc.wait()
@@ -721,6 +808,8 @@ class Pipeline:
             self.finish_job(j, j.proc.returncode)
 
     def finish_job(self, j: Job, rc: int) -> None:
+        if j.peak_rss_gb:
+            self.peak_samples.append(j.peak_rss_gb)
         res = None
         if j.result_path.exists():
             try:
@@ -774,6 +863,8 @@ class Pipeline:
                 safe_rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
             else:
                 safe_unlink(a.rar)
+            if a.t_parse:
+                self.parse_samples.append(max(0.0, time.time() - a.t_parse))
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
             append_jsonl(LEDGER, rec)
@@ -812,7 +903,9 @@ class Pipeline:
             (dest / f"{Path(name).stem}.result.json").write_text(json.dumps(res, default=str, indent=1),
                                                                  encoding="utf-8")
         (dest / "reason.json").write_text(json.dumps(dict(id=a.id, original_path=str(a.rar), slug=a.slug,
-                                                          dems=sorted(a.listing), reason=reason, failed_utc=now),
+                                                          dems=sorted(a.listing), reason=reason,
+                                                          extractor_version=extract.EXTRACTOR_VERSION,
+                                                          failed_utc=now),
                                                      default=str, indent=1), encoding="utf-8")
         if a.work and a.work.exists():
             safe_rmtree(a.work, ignore_errors=True)
@@ -911,16 +1004,22 @@ class Pipeline:
         statuses = [r.get("status") for r in self.ledger.values()]
         our, capacity = self.budget()
         pending = st.count("pending")
+        cs2 = cs2_running()
+        max_workers = worker_limit(os.cpu_count() or 1, cs2)
+        avail = psutil.virtual_memory().available / 1e9
+        parse_s = sum(self.parse_samples) / len(self.parse_samples) if self.parse_samples else DEFAULT_PARSE_SECS
+        download_s = (sum(self.download_samples) / len(self.download_samples)
+                      if self.download_samples else DEFAULT_DOWNLOAD_SECS)
+        want = desired_downloads(max_workers, parse_s, download_s, capacity)
         return {
-            # The HLTV feeder downloads only while pending + extracting < 2, so without capacity
-            # pending reports at least 2 to stop it; pendingActual is the real count.
-            "pending": pending if capacity else max(pending, 2), "pendingActual": pending,
+            "pending": want, "pendingActual": pending, "want": want,
             "extracting": st.count("extracting"), "parsing": st.count("parsing"),
             "done": statuses.count("done"), "failed": statuses.count("failed"),
-            "freeGB": round(free_gb(), 1), "ourGB": round(our, 2), "capacity": capacity,
+            "freeGB": round(free_gb(), 1), "availGB": round(avail, 2), "ourGB": round(our, 2),
+            "capacity": capacity, "workersMax": max_workers, "parseEstGB": round(self.parse_est_gb(), 2),
             "failedGB": round(tree_bytes(FAILED_DIR) / 1e9, 2),
             "downloading": downloading, "workers": len(self.running), "queuedDems": len(self.jobs),
-            "cs2Running": cs2_running()}
+            "cs2Running": cs2}
 
     def idle(self) -> bool:
         return not self.archives and not self.jobs and not self.running and not self.tracker.tracked()

@@ -427,6 +427,29 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
     assert any(c["check"] == "round_ticks" and c["note"].startswith("recording began") for c in checks)
 
 
+# --- scheduler policy -------------------------------------------------------
+
+def test_worker_limit_uses_cpu_game_and_configured_cap():
+    assert dp.worker_limit(16, False, 20) == 14
+    assert dp.worker_limit(16, False, 3) == 3
+    assert dp.worker_limit(16, True, 20) == dp.GAMING_WORKERS
+    assert dp.worker_limit(1, False, 20) == 0
+
+
+def test_memory_policy_stops_starts_and_kills_without_processes():
+    assert dp.memory_policy(0, 4, 8.0, 4.0) == "start"
+    assert dp.memory_policy(1, 4, 6.9, 4.0) == "wait"
+    assert dp.memory_policy(1, 4, 1.5, 4.0) == "wait"
+    assert dp.memory_policy(2, 4, 0.9, 4.0) == "kill_newest"
+    assert dp.memory_policy(4, 4, 20.0, 4.0) == "wait"
+
+
+def test_want_uses_throughput_and_disk_budget():
+    assert dp.desired_downloads(4, 100, 100, True) == 4
+    assert dp.desired_downloads(1, 100, 100, True) == 2
+    assert dp.desired_downloads(4, 100, 100, False) == 1
+
+
 # --- disk budget ------------------------------------------------------------
 
 def _isolate(tmp_path, monkeypatch):
