@@ -1,11 +1,16 @@
 import json
+import os
 import sys
 import threading
+import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from collections import deque
+
 import numpy as np
+import psutil
 import pandas as pd
 import pytest
 
@@ -374,6 +379,22 @@ def test_status_endpoint_cors_and_options():
         server.shutdown()
 
 
+def test_a_second_pipeline_cannot_bind_the_status_port():
+    # SO_REUSEADDR let a second pipeline bind 8766 beside the running one on Windows.
+    first = ThreadingHTTPServer(("127.0.0.1", 0), dp.make_handler(None))  # the old server, reuse on
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", first.server_address[1]), dp.make_handler(None))
+    finally:
+        first.server_close()
+    mine = dp.StatusServer(("127.0.0.1", 0), dp.make_handler(None))
+    try:
+        with pytest.raises(OSError):
+            dp.StatusServer(("127.0.0.1", mine.server_address[1]), dp.make_handler(None))
+    finally:
+        mine.server_close()
+
+
 def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch):
     # Regression: a download sampled before its RAR header was written used to be ignored forever.
     monkeypatch.setattr(dp, "DOWNLOADS", tmp_path)
@@ -394,6 +415,26 @@ def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch
     p.scan(20.0)
     p.scan(31.0)
     assert junk in p.ignored and "notrar" not in p.archives
+
+
+def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
+    # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
+    # cleanup match those copies exactly.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    data = dp.RAR_MAGIC + b"payload" * 100
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(data)
+    p = dp.Pipeline()
+    p.scan(0.0)
+    p.scan(16.0)
+    a = p.archives[rar.name]
+    assert (a.rar_bytes, a.rar_sha256) == (len(data), hashlib.sha256(data).hexdigest())
+    assert a.download_started <= rar.stat().st_mtime
+    a.slug, a.listing = "slug-r", {"x-m1-nuke.dem": {}}
+    p.fail_archive(a, "7z listing failed: test")
+    rec = json.loads(dp.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
+    assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
 def test_assist_on_own_teammate_is_not_credited():
@@ -427,6 +468,411 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
     assert any(c["check"] == "round_ticks" and c["note"].startswith("recording began") for c in checks)
 
 
+# --- scheduler policy (memory and CPU readings are injected; no test starts a parse) -------------------
+
+def test_memory_sizes_the_pool_under_the_cpu_cs2_and_configured_caps():
+    # 20 GB available, 3 GB kept back, 1.5 GB a parse: 11 workers on 16 cores.
+    assert dp.worker_capacity(20.0, 1.5, 0.0, 0, 16, False, None) == 11
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, None) == 14  # cpu_count - 2
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, False, 3) == 3  # CS2_PIPELINE_MAX_WORKERS
+    assert dp.worker_capacity(100.0, 1.5, 0.0, 0, 16, True, None) == dp.GAMING_WORKERS
+
+
+def test_running_workers_keep_their_slots_and_their_growth_is_reserved():
+    # Three running workers still to grow 5.4 GB leave nothing for a fourth on 10 GB.
+    assert dp.worker_capacity(10.0, 2.0, 5.4, 3, 16, False, None) == 3
+    # Under the pressure floor nothing new starts, and nobody is dropped from the count.
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 2, 16, False, None) == 2
+    assert dp.worker_capacity(1.9, 0.5, 0.0, 0, 16, False, None) == 0
+
+
+def test_one_worker_may_start_when_none_runs_above_the_pressure_floor():
+    # A run on a copied archive: 6.8 GB available, the unmeasured 4 GB estimate, nothing running. The division
+    # gives no worker, and with other work holding memory the pipeline would never parse.
+    assert dp.worker_capacity(6.8, 4.0, 0.0, 0, 16, False, None) == 1
+
+
+class _FakeProc:
+    pids = iter(range(50000, 60000))
+
+    def __init__(self, *a, **k):
+        self.pid = next(self.pids)
+
+    def poll(self):
+        return None
+
+
+class _FakePs:
+    def memory_info(self):
+        return type("mi", (), {"rss": int(0.5e9)})()
+
+
+def _fake_tree(monkeypatch):
+    """worker_processes over _FakeProc jobs: one process while poll() says running, none after."""
+    monkeypatch.setattr(dp, "worker_processes", lambda j: [_FakePs()] if j.proc.poll() is None else [])
+
+
+def _jobs(n):
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="slug-r")
+    return [dp.Job(archive=a, dem=dp.WORK_DIR / f"d{i}.dem", out_dir=dp.DEMOS_DIR / "slug-r" / f"m{i}", map_key=f"m{i}",
+                   result_path=dp.WORK_DIR / f"d{i}.result.json", log_path=dp.LOG_DIR / f"d{i}.log") for i in range(n)]
+
+
+def test_a_burst_of_starts_reserves_each_new_workers_peak(tmp_path, monkeypatch):
+    # 12 GB available that the new workers have not touched yet: 4 starts of a 2 GB parse, not 6.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.available_gb, p.cpu_count, p.peaks = (lambda: 12.0), 16, deque([2.0])
+    p.jobs.extend(_jobs(6))
+    p.dispatch()
+    assert len(p.running) == 4 and len(p.jobs) == 2
+
+
+def test_a_parse_starts_only_if_the_floor_holds_after_every_running_parses_tables(tmp_path, monkeypatch):
+    # 45.9 GB free, a 45 GB floor and 0.5 GB of tables a parse: with one parse running, a second would leave
+    # 44.9 GB, so it waits; once the first ends its reservation is released and the second starts.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    monkeypatch.setattr(dp, "MIN_FREE_GB", 45.0)
+    monkeypatch.setattr(dp, "lowest_free_gb", lambda: 45.9)
+    p = dp.Pipeline()
+    p.worker_max, p.output_gb = (lambda: 4), deque([0.5])
+    first, second = _jobs(2)
+    first.proc, first.output_gb = _FakeProc(), 0.5
+    p.running.append(first)
+    p.jobs.append(second)
+    p.dispatch()
+    assert p.running == [first] and list(p.jobs) == [second]
+    p.running.remove(first)
+    p.dispatch()
+    assert p.running == [second]
+
+
+def test_a_running_parse_keeps_the_reservation_it_started_with(tmp_path, monkeypatch):
+    # A run of small maps pushed a 1 GB sample out of the window, and every live reservation fell to 0.02 GB.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.worker_max, p.output_gb = (lambda: 4), deque([1.0])
+    (j,) = _jobs(1)
+    p.jobs.append(j)
+    p.dispatch()
+    p.output_gb.extend([0.02] * 20)
+    assert p.output_est_gb() == 0.02 and p.output_reserved_gb() == 1.0
+
+
+def test_downloads_get_no_room_that_running_parses_hold(tmp_path, monkeypatch):
+    # 46 GB free, a 45 GB floor, and a running parse holding 1 GB for its tables: nothing more fits.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MIN_FREE_GB", 45.0)
+    monkeypatch.setattr(dp, "lowest_free_gb", lambda: 46.0)
+    p = dp.Pipeline()
+    assert p.budget()[1] and p.room_gb() == pytest.approx(1.0)
+    (j,) = _jobs(1)
+    j.proc, j.output_gb = _FakeProc(), 1.0
+    p.running.append(j)
+    assert not p.budget()[1] and p.room_gb() <= 0
+    assert p.snapshot()["want"] == 0
+
+
+def test_the_table_estimate_is_the_p90_of_measured_maps_with_a_default_until_then(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    assert dp.Pipeline().output_est_gb() == dp.DEFAULT_OUTPUT_GB
+    rows = [dict(ok=True, output_bytes=(i + 1) * 1e6) for i in range(20)] + [dict(ok=False, output_bytes=9e9)]
+    assert dp.output_seed(rows)[-1] == 0.02 and len(dp.output_seed(rows)) == 20
+    dp.append_jsonl(dp.MANIFEST, rows[0])
+    assert dp.Pipeline().output_est_gb() == 0.001
+
+
+def test_a_worker_that_cannot_start_fails_its_demo_with_the_reason(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    def no_python(*a, **k):
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(dp.subprocess, "Popen", no_python)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.worker_max = lambda: 4
+    (j,) = _jobs(1)
+    p.jobs.append(j)
+    p.dispatch()
+    res = j.archive.results[j.dem.name]
+    assert p.running == [] and not p.jobs and not res["ok"] and "worker did not start" in res["errors"][0]
+    assert res.get("extractor_version") is None  # so --retry-failed tries it again
+
+
+def test_startup_refuses_a_missing_worker_interpreter_and_a_worker_cap_below_one(tmp_path, monkeypatch, capsys):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "worker_python", lambda: (str(tmp_path / "gone" / "python.exe"), {}))
+    with pytest.raises(SystemExit):
+        dp.main([])
+    assert "does not exist" in capsys.readouterr().err
+    for raw in ("0", "-2", "two"):
+        with pytest.raises(ValueError, match="at least 1"):
+            dp.max_workers_setting(raw)
+    assert dp.max_workers_setting("3") == 3 and dp.max_workers_setting(None) is None
+    monkeypatch.setattr(dp, "MAX_WORKERS_ERROR", "CS2_PIPELINE_MAX_WORKERS is '0'; set a whole number of at least 1")
+    with pytest.raises(SystemExit):
+        dp.main([])
+    assert "CS2_PIPELINE_MAX_WORKERS is '0'" in capsys.readouterr().err
+
+
+def test_how_many_archives_fit_uses_the_largest_recent_one(tmp_path, monkeypatch):
+    # Nineteen 1 GB archives and one of 6 GB, 10 GB of room: the mean (1.25 GB) said eight more fit.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    p.worker_max, p.budget, p.room_gb = (lambda: 8), (lambda: (0.0, True)), (lambda: 10.0)
+    p.parse_s, p.download_s = deque([10.0]), deque([100.0])
+    p.archive_gb = deque([1.0] * 19 + [6.0])
+    assert p.snapshot()["want"] == 1
+
+
+def test_low_memory_requeues_the_newest_worker_and_keeps_published_tables(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    old, new = _jobs(2)
+    for j in (old, new):
+        j.proc, j.t0 = _FakeProc(), time.time()
+        p.running.append(j)
+    published = new.out_dir / "v-1.13.0-abc"
+    staging = new.out_dir / f".tmp-{new.proc.pid + 1}"  # the interpreter under the venv launcher stub
+    published.mkdir(parents=True)
+    staging.mkdir()
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: [proc.pid, proc.pid + 1])
+    monkeypatch.setattr(dp, "tree_rss_gb", lambda pid: 0.5)
+    _fake_tree(monkeypatch)
+    p.available_gb = lambda: 0.8
+    p.poll_workers()
+    assert p.running == [old] and p.jobs[0] is new
+    assert published.exists() and not staging.exists()
+
+
+def test_want_keeps_the_workers_fed_by_littles_law():
+    # 4 workers at 600 worker-seconds an archive finish one every 150 s; a 120 s download keeps 0.8 busy: 1 + 1.
+    assert dp.desired_downloads(4, 600, 120, 0, 100.0, 2.0) == 2
+    # Slow downloads need more in flight, up to MAX_WANT.
+    assert dp.desired_downloads(14, 240, 300, 0, 100.0, 2.0) == dp.MAX_WANT
+    # The disk budget left holds one more 2 GB archive beside the one in flight.
+    assert dp.desired_downloads(14, 240, 300, 1, 2.5, 2.0) == 2
+    assert dp.desired_downloads(14, 240, 300, 0, -5.0, 2.0) == 0
+
+
+def test_no_download_is_requested_when_the_budget_holds_no_whole_archive():
+    # Review of PR 55: want was at least 1, so with 1.5 GB of room and 2 GB archives the tab started one more.
+    assert dp.desired_downloads(14, 240, 300, 0, 1.5, 2.0) == 0
+    assert dp.desired_downloads(14, 240, 300, 1, 1.5, 2.0) == 1  # the one in flight, no more
+
+
+def test_capacity_is_off_at_the_budget_itself(tmp_path, monkeypatch):
+    # Review of PR 55: our + held == MAX_OUR_GB still read as capacity (<=), so the tab kept downloading.
+    _isolate(tmp_path, monkeypatch)
+    (dp.FAILED_DIR / "x.rar").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    assert dp.Pipeline().budget()[1] is False
+
+
+def test_a_download_that_just_finished_counts_at_the_next_status_read(tmp_path, monkeypatch):
+    # Review of PR 55: room_gb() came from a disk reading kept for 10 s, so an archive that finished downloading
+    # within it was missed and the tab was told to start one more past the budget.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 3000 / 1e9)
+    p = dp.Pipeline()
+    assert p.snapshot()["capacity"] is True
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(b"x" * 3000)
+    p.archives[rar.name] = dp.Archive(rar=rar, id=rar.name)  # picked up as pending, a second later
+    snap = p.snapshot()
+    # The tab starts one only while downloading + pending + extracting < want: here nothing new.
+    assert snap["capacity"] is False and snap["want"] <= snap["downloading"] + snap["pendingActual"] + snap["extracting"]
+
+
+def test_published_tables_are_not_in_the_budget(tmp_path, monkeypatch):
+    # The budget is the pipeline's transient space. Counting demos/, the published product, stopped extraction after
+    # about 1,300 more maps for no reason; the free-space floor bounds the product instead.
+    _isolate(tmp_path, monkeypatch)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke").mkdir(parents=True)
+    (dp.DEMOS_DIR / "slug-r" / "m1-nuke" / "kills.parquet").write_bytes(b"x" * 5000)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 0 and p.budget()[1] is True
+
+
+def test_failed_archives_count_inside_the_budget(tmp_path, monkeypatch):
+    # Review of PR 55: the budget is everything the pipeline holds, and failed/ was left out of it.
+    _isolate(tmp_path, monkeypatch)
+    (dp.FAILED_DIR / "kept").mkdir()
+    (dp.FAILED_DIR / "kept" / "archive.rar").write_bytes(b"x" * 700)
+    assert dp.Pipeline().disk_usage()[0] == 700
+
+
+def test_the_fullest_volume_decides_capacity(tmp_path, monkeypatch):
+    # Review of PR 55: only the data folder's volume was checked; archives land in the downloads folder.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0 if Path(path) == dp.DATA_ROOT else 40.0)
+    assert dp.Pipeline().budget()[1] is False
+
+
+def test_low_memory_never_requeues_a_worker_that_already_exited(tmp_path, monkeypatch):
+    # Review of PR 55: the newest job was popped and requeued without a poll; one that had just finished lost its
+    # result and was parsed again.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    older, newest = _jobs(2)
+    older.proc, newest.proc = _FakeProc(), _FakeProc()
+    newest.proc.poll = lambda: 0
+    p.running = [older, newest]
+    killed = []
+    monkeypatch.setattr(dp, "kill_tree", lambda proc: killed.append(proc.pid) or [proc.pid])
+    _fake_tree(monkeypatch)
+    p.requeue_newest(0.5)
+    assert killed == [older.proc.pid] and p.running == [newest] and list(p.jobs) == [older]
+
+
+def test_shutdown_kills_each_worker_with_its_children(tmp_path, monkeypatch):
+    # Review of PR 55: shutdown killed only the venv's launcher stub, leaving the interpreter that parses running
+    # whenever the kill-on-close job could not be set up.
+    import subprocess as sp
+    _isolate(tmp_path, monkeypatch)
+    stub = sp.Popen([sys.executable, "-c", "import subprocess, sys, time; "
+                     "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); time.sleep(120)"])
+    try:
+        deadline = time.time() + 20
+        while not psutil.Process(stub.pid).children() and time.time() < deadline:
+            time.sleep(0.1)
+        child = psutil.Process(stub.pid).children()[0]
+        p = dp.Pipeline()
+        job = _jobs(1)[0]
+        job.proc = stub
+        p.running = [job]
+        p.shutdown()
+        assert stub.poll() is not None
+        child.wait(timeout=10)
+        assert not child.is_running()
+    finally:
+        for proc in psutil.Process().children(recursive=True):
+            proc.kill()
+
+
+def test_a_worker_is_one_process_the_venvs_interpreter(tmp_path):
+    # Review of PR 55: started through the venv's python.exe, a worker was a launcher stub plus the interpreter under
+    # it, and poll() asked the stub, which could exit while the interpreter kept parsing. The started process must be
+    # the interpreter itself, running in this venv.
+    import subprocess as sp
+    python, extra = dp.worker_python()
+    out = tmp_path / "who.json"
+    code = f"import json, os, sys; json.dump([os.getpid(), sys.prefix], open({str(out)!r}, 'w'))"
+    proc = sp.Popen([python, "-I", "-c", code], env=dict(os.environ, **extra))
+    proc.wait(timeout=60)
+    pid, prefix = json.loads(out.read_text(encoding="utf-8"))
+    assert pid == proc.pid and Path(prefix) == Path(sys.prefix)
+
+
+def test_a_worker_is_running_while_a_process_it_started_still_runs(tmp_path, monkeypatch):
+    # A worker that exited is finished only once every process it was seen to start is gone too.
+    _isolate(tmp_path, monkeypatch)
+
+    class Kid:
+        pid, running = 4242, True
+
+        def is_running(self):
+            return self.running
+
+        def status(self):
+            return "running"
+
+        def memory_info(self):
+            return type("mi", (), {"rss": int(0.2e9)})()
+
+    job = _jobs(1)[0]
+    job.proc, job.t0 = _FakeProc(), time.time()
+    job.proc.poll, job.proc.returncode = (lambda: 0), 0
+    kid = Kid()
+    job.kids = {kid.pid: kid}
+    p = dp.Pipeline()
+    p.available_gb = lambda: 50.0
+    p.running = [job]
+    finished = []
+    monkeypatch.setattr(p, "finish_job", lambda j, rc: finished.append(j))
+    p.poll_workers()
+    assert p.running == [job] and finished == []
+    kid.running = False
+    p.poll_workers()
+    assert finished == [job] and p.running == []
+
+
+def test_parse_peak_is_the_p90_of_measured_peaks():
+    assert dp.p90([], 4.0) == 4.0
+    assert dp.p90([1.0 + i / 10 for i in range(20)], 4.0) == pytest.approx(2.7)  # the 18th of 20
+    peaks, parse_s = dp.manifest_seed([dict(archive="a", peak_rss_gb=1.2, timings=dict(worker_wall_s=60)),
+                                       dict(archive="b", peak_rss_gb=None, timings=dict(worker_wall_s=30)),
+                                       dict(archive="a", peak_rss_gb=1.4, timings=dict(worker_wall_s=90))])
+    assert peaks == [1.2, 1.4] and parse_s == [30.0, 150.0]
+
+
+def test_a_download_is_timed_from_first_sight_only_if_it_grew():
+    t = dp.CompletenessTracker(stable_seconds=10)
+    t.observe(Path("x"), 100, 0.0)
+    t.observe(Path("x"), 500, 40.0)
+    assert t.observe(Path("x"), 500, 50.0) and t.download_s(Path("x"), 50.0) == 50.0
+    t.observe(Path("y"), 900, 0.0)  # already whole when first seen
+    assert t.observe(Path("y"), 900, 10.0) and t.download_s(Path("y"), 10.0) is None
+
+
+def test_each_failed_demo_is_retried_once_per_extractor_version(tmp_path):
+    f = tmp_path / "kept"
+    f.mkdir()
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.10.0")))
+    (f / "x-m2-dust2.result.json").write_text(json.dumps(dict(dem_file="x-m2-dust2.dem", extractor_version="1.14.0")))
+    assert dp.due_for_retry(f, "1.14.0")  # m1 failed under 1.10.0
+    (f / "x-m1-nuke.result.json").write_text(json.dumps(dict(dem_file="x-m1-nuke.dem", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(f, "1.14.0") and dp.due_for_retry(f, "1.15.0")
+    g = tmp_path / "unlisted"  # a 7-Zip failure has no demo results
+    g.mkdir()
+    (g / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.14.0")))
+    assert not dp.due_for_retry(g, "1.14.0")
+
+
+def test_a_retry_where_one_demo_passes_leaves_only_the_still_failing_one_on_record(tmp_path, monkeypatch):
+    # Both demos failed under 1.10.0. Retried under 1.14.0, m2 passes and m1 fails again; m2's old record kept the
+    # archive due for retry on every scan.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.extract, "EXTRACTOR_VERSION", "1.14.0")
+    kept = dp.FAILED_DIR / "slug-r1"
+    kept.mkdir()
+    (kept / "archive.rar").write_bytes(dp.RAR_MAGIC + bytes(10))
+    for m in ("r1-m1-nuke", "r1-m2-dust2"):
+        (kept / f"{m}.dem").write_bytes(b"dem")
+        (kept / f"{m}.result.json").write_text(json.dumps(dict(dem_file=f"{m}.dem", ok=False, extractor_version="1.10.0")))
+    assert dp.due_for_retry(kept, "1.14.0")
+    p = dp.Pipeline(retry_failed=True)
+    a = dp.Archive(rar=kept / "archive.rar", id="r1", slug="slug-r1", work=dp.WORK_DIR / "r1",
+                   listing={"r1-m1-nuke.dem": {}, "r1-m2-dust2.dem": {}})
+    a.work.mkdir()
+    a.results = {"r1-m1-nuke.dem": dict(dem_file="r1-m1-nuke.dem", ok=False, errors=["deaths"], extractor_version="1.14.0"),
+                 "r1-m2-dust2.dem": dict(dem_file="r1-m2-dust2.dem", ok=True, extractor_version="1.14.0")}
+    p.archives[a.id] = a
+    p.fail_archive(a, "deaths")
+    assert dp.failure_versions(kept)[0] == {"r1-m1-nuke.dem": "1.14.0"} and not (kept / "r1-m2-dust2.dem").exists()
+    assert not dp.due_for_retry(kept, "1.14.0") and dp.due_for_retry(kept, "1.15.0")
+    p2 = dp.Pipeline(retry_failed=True)  # a later run on the same version picks nothing up
+    p2.scan(0.0)
+    assert p2.archives == {}
+
+
+def test_status_reports_want_beside_the_real_pending_count(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    p.available_gb = lambda: 20.0
+    snap = p.snapshot()
+    assert snap["capacity"] and snap["pending"] == snap["pendingActual"] == 0
+    assert {"want", "workersMax", "parseEstGB", "availGB"} <= set(snap) and snap["parseEstGB"] == dp.DEFAULT_PARSE_EST_GB
+
+
 # --- disk budget ------------------------------------------------------------
 
 def _isolate(tmp_path, monkeypatch):
@@ -437,6 +883,10 @@ def _isolate(tmp_path, monkeypatch):
         monkeypatch.setattr(dp, name, d)
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
+    monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
+    # A test that needs another value sets free_gb itself.
+    monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
 
 
 
@@ -445,9 +895,9 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)  # 1000 bytes
     p = dp.Pipeline()
-    assert p.budget(fresh=True)[1]
-    (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 2000)
-    our, ok = p.budget(fresh=True)
+    assert p.budget()[1]
+    (dp.WORK_DIR / "x.dem").write_bytes(b"x" * 2000)
+    our, ok = p.budget()
     assert not ok and our > 1e-6
     snap = p.snapshot()
     assert snap["capacity"] is False and snap["pending"] >= 2 and snap["pendingActual"] == 0
@@ -456,7 +906,7 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
 def test_capacity_respects_free_space(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 44.0)
-    assert not dp.Pipeline().budget(fresh=True)[1]
+    assert not dp.Pipeline().budget()[1]
 
 
 def test_sweep_removes_only_stale_unowned_work(tmp_path, monkeypatch):
@@ -1881,3 +2331,15 @@ def test_a_kill_whose_event_lacks_the_killfeed_modifiers_writes_null_not_a_faile
     with_flags = pd.DataFrame(dict(tick=[100, 200], attackerblind=[True, False], attackerinair=[False, True]))
     flags = ex.kill_modifiers(with_flags)
     assert flags["attackerblind"].tolist() == [True, False] and flags["attackerinair"].tolist() == [False, True]
+
+
+def test_a_test_file_that_cannot_import_fails_collection(tmp_path):
+    # A conftest that turned every import error into a skip let a broken extractor pass CI as green. Any conftest
+    # beside these tests is copied in, so one that swallowed import errors again would fail this.
+    import subprocess
+    for f in Path(__file__).parent.glob("conftest.py"):
+        (tmp_path / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "test_broken.py").write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n")
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 2 and "ERROR collecting" in r.stdout, r.stdout[-2000:]
