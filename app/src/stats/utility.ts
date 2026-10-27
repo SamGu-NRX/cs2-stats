@@ -4,8 +4,18 @@
 // blind. Utility quality beyond usage (smokes) is utilq.ts.
 import { blindWindows } from "./blinds";
 import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
-import type { GrenadeFact } from "./facts";
+import { THROW_LOGGED, type GrenadeFact } from "./facts";
 import { classFromDisplay, isUtility, PRICE } from "./weapons";
+
+/**
+ * Copies each THROW_LOGGED numerator into its twin on the player-rounds of matches with a throw log
+ * (throwRounds). derive.ts runs it after every pass that counts a numerator (scoreboard's flash
+ * assists, utility's blinds, flash-to-kills and grenade damage), so the twin is the finished count.
+ */
+export function logThrowScoped(c: Ctx): void {
+  const pairs = Object.entries(THROW_LOGGED) as [keyof typeof THROW_LOGGED, (typeof THROW_LOGGED)[keyof typeof THROW_LOGGED]][];
+  for (const rows of c.pr) for (const p of rows) if (p && p.m.throwRounds) for (const [from, to] of pairs) p.m[to] = p.m[from];
+}
 
 /** Leetify: blind longer than this counts as flashed. */
 export const FLASHED_MIN_S = 1.1;

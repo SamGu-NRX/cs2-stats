@@ -17,7 +17,7 @@ import { rating3Of } from "./rating3";
 import { UTILQ_METRICS } from "./utilq";
 import { DUEL_METRICS } from "./xduel";
 import { FLASHED_MIN_S } from "./utility";
-import type { Input, Measure } from "./facts";
+import { THROW_LOGGED, type Input, type Measure } from "./facts";
 import type { Summary } from "./rollup";
 
 export type Kind = "performance" | "identity";
@@ -67,8 +67,15 @@ export interface Metric {
 export interface Sample { n: (s: Summary) => number; unit: string; min?: number }
 
 const per = (a: number, b: number) => (b > 0 ? a / b : null);
-/** Why a thrown-per-round rate has no value: rounds kept, none from a match with a throw log. */
+/** Why a thrown-per-round rate or a per-thrown ratio has no value: rounds kept, none from a match with a throw log. */
 const noThrowLog = (s: Summary) => (s.m.rounds > 0 && s.m.throwRounds === 0 ? "none of these matches logs grenade throws" : null);
+/**
+ * A count per grenade thrown, the one way a metric divides by a thrown count. Thrown counts exist only
+ * in matches with a throw log, so the numerator is its THROW_LOGGED twin, counted over the same
+ * matches; the plain numerator would add blinds, damage or assists from matches whose throws are
+ * unknown. Pair it with why: noThrowLog.
+ */
+const perThrown = (s: Summary, num: keyof typeof THROW_LOGGED, thrown: "flashes" | "hes" | "molotovs") => per(s.m[THROW_LOGGED[num]], s.m[thrown]);
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
 const clutchWins = (s: Summary) => s.m.clutchWon1 + s.m.clutchWon2 + s.m.clutchWon3 + s.m.clutchWon4 + s.m.clutchWon5;
 const WINDOW = "5.4 s, the window that reproduces HLTV's traded deaths best";
@@ -207,26 +214,26 @@ const M: Metric[] = [
     tip: "Win-chance change earned by your flashes on enemies who died.", def: "Swing credited to your flashes: the flash share of a kill's credit when your flash was blinding the victim (params.json swing.flash_credit_fraction), split equally when several flashes were, per round.",
     needs: ["model"], value: (s) => (s.m.swingRounds ? (100 * s.m.flashSwing) / s.m.swingRounds : null) },
   { id: "assistsPerFlash", label: "Assists per flash", hltv: "Assists per Flash", kind: "performance", group: "utility", unit: "perRound", status: "approx",
-    tip: "Flash assists per flashbang you throw.", def: "Flash assists (the game's) per flashbang thrown.", value: (s) => per(s.m.flashAssists, s.m.flashes) },
+    tip: "Flash assists per flashbang you throw.", def: "Flash assists (the game's) per flashbang thrown.", value: (s) => perThrown(s, "flashAssists", "flashes"), why: noThrowLog },
   { id: "grenadeDmgTaken", label: "Grenade damage received per round", hltv: "Grenade Damage Received", kind: "performance", group: "utility", unit: "dmg", status: "exact", lowerIsBetter: true,
     tip: "Damage you take from enemy grenades and fire per round.", def: "Damage you took from enemy grenades and fire, per round.", value: (s) => per(s.m.utilDmgTaken, s.m.rounds) },
   { id: "dmgPerHe", label: "Damage per HE thrown", hltv: "Damage per HE Thrown", kind: "performance", group: "utility", unit: "dmg", status: "exact",
-    tip: "Enemy damage per HE grenade you throw.", def: "Enemy damage from your HE grenades per HE thrown.", value: (s) => per(s.m.heDmg, s.m.hes) },
+    tip: "Enemy damage per HE grenade you throw.", def: "Enemy damage from your HE grenades per HE thrown.", value: (s) => perThrown(s, "heDmg", "hes"), why: noThrowLog },
   { id: "oneVsOne", label: "1v1 win rate", kind: "performance", group: "closing", unit: "pct", status: "exact",
     tip: "Share of your one-on-one clutches that you won.", def: "1v1 clutches won.", of: ["clutchWon1", "clutch1"], value: (s) => pct(s.m.clutchWon1, s.m.clutch1) },
 
   // ---- utility quality (performance; Leetify's flash definitions)
   { id: "flashKillsPerFlash", label: "Flash-to-kills per flash", kind: "performance", group: "utility", unit: "perRound", status: "exact",
-    tip: "Enemies your team killed while blinded by your flash, per flash.", def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per flashbang thrown, as Leetify counts it so players who flash more or less compare.", value: (s) => per(s.m.flashKills, s.m.flashes) },
+    tip: "Enemies your team killed while blinded by your flash, per flash.", def: "Enemies you flashed who died to your team while still blind (Leetify's flash-to-kill), per flashbang thrown, as Leetify counts it so players who flash more or less compare.", value: (s) => perThrown(s, "flashKills", "flashes"), why: noThrowLog },
   { id: "utilUnused", label: "Unused utility on death", kind: "performance", group: "utility", unit: "money", status: "approx", lowerIsBetter: true,
     tip: "Grenade value you still held when you died.", def: "Value of grenades you held at freeze end and had not thrown when you died, per death (Leetify's rate; per round it mostly measured dying early). Grenades picked up later are not seen.", needs: ["loadout"], value: (s) => per(s.m.utilUnused, s.m.utilDeaths) },
 
   // ---- utility description (identity). Not scored as performance: on pro team-rounds these duplicate
   // other metrics or show no lasting link to winning rounds (METRICS.md, "Descriptive utility").
   { id: "enemiesPerFlash", label: "Enemies flashed per flash", kind: "identity", group: "utility", unit: "perRound", status: "exact",
-    tip: "Enemies properly blinded per flashbang you throw.", def: `Enemies blinded for more than ${FLASHED_MIN_S} s (Leetify's cut) per flashbang thrown.`, value: (s) => per(s.m.enemiesFlashed, s.m.flashes) },
+    tip: "Enemies properly blinded per flashbang you throw.", def: `Enemies blinded for more than ${FLASHED_MIN_S} s (Leetify's cut) per flashbang thrown.`, value: (s) => perThrown(s, "enemiesFlashed", "flashes"), why: noThrowLog },
   { id: "blindPerFlash", label: "Enemy blind time per flash", kind: "identity", group: "utility", unit: "secs", status: "exact",
-    tip: "Seconds of enemy blindness per flashbang you throw.", def: `Seconds of enemy blindness (blinds over ${FLASHED_MIN_S} s) per flashbang thrown.`, value: (s) => per(s.m.enemyBlindSecs, s.m.flashes) },
+    tip: "Seconds of enemy blindness per flashbang you throw.", def: `Seconds of enemy blindness (blinds over ${FLASHED_MIN_S} s) per flashbang thrown.`, value: (s) => perThrown(s, "enemyBlindSecs", "flashes"), why: noThrowLog },
   { id: "teamFlashPR", label: "Teammates flashed per round", kind: "identity", group: "utility", unit: "perRound", status: "exact",
     tip: "Teammates you blinded per round.", def: `Teammates you blinded for more than ${FLASHED_MIN_S} s, per round.`, value: (s) => per(s.m.teamFlashed, s.m.rounds) },
   { id: "utilDmgPR", label: "Utility damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
@@ -236,10 +243,10 @@ const M: Metric[] = [
     value: (s) => per(s.m.utilSpent, s.m.purchaseRounds) },
   { id: "molotovEnemiesHit", label: "Enemies burned per molotov", kind: "performance", group: "utility", unit: "perRound", status: "approx",
     tip: "Enemies each molotov you throw burns.", def: "Distinct enemies your molotov or incendiary damaged, per one thrown (a fire that burned two enemies counts 2). Ours; nobody publishes a molotov usefulness definition, and its link to round wins is weak (VALIDATION.md).",
-    value: (s) => per(s.m.molotovHits, s.m.molotovs) },
+    value: (s) => perThrown(s, "molotovHits", "molotovs"), why: noThrowLog },
   { id: "molotovDmg", label: "Fire damage per molotov", kind: "performance", group: "utility", unit: "dmg", status: "approx",
     tip: "Damage each molotov you throw deals.", def: "Enemy damage from your molotovs and incendiaries per one thrown. Ours; its link to round wins is weak (VALIDATION.md).",
-    value: (s) => per(s.m.fireDmg, s.m.molotovs) },
+    value: (s) => perThrown(s, "fireDmg", "molotovs"), why: noThrowLog },
   { id: "fireDmgPR", label: "Fire damage per round", kind: "identity", group: "utility", unit: "dmg", status: "exact",
     tip: "Damage your molotovs deal per round.", def: "Enemy damage from your molotovs and incendiaries, per round.", value: (s) => per(s.m.fireDmg, s.m.rounds) },
 
