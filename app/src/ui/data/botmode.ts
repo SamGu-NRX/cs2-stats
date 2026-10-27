@@ -1,7 +1,7 @@
 // What the Bot Mode view reads from the backend (src/botmode/commands.ts), and the few judgements
 // it makes from that data: which release is newest, whether the installed one is behind, what blocks
 // a write, and the knives' names and icons. Everything else on the page is the backend's own words.
-import { botmode, type BotModeApi, type Catalog, type Component, type GithubRelease, type Status } from "../../botmode/commands";
+import { botmode, type BotModeApi, type Catalog, type Component, type GithubRelease, type RunningCs2, type Status } from "../../botmode/commands";
 import { isTauri } from "../../host/host";
 
 let override: BotModeApi | null | undefined;
@@ -116,6 +116,71 @@ export const KNIVES: Record<number, { icon: string; name: string }> = {
   525: { icon: "knife_skeleton", name: "Skeleton Knife" },
   526: { icon: "knife_kukri", name: "Kukri Knife" },
 };
+
+/** Every knife subclass_create spawns, in the mod's order (settings.rs KNIVES). */
+export const KNIFE_IDS = Object.keys(KNIVES).map(Number);
+/** The key the mod's own knife bind uses (its my_bot_*_config.cfg). */
+export const MOD_KNIFE_KEY = "\\";
+
+/** A key name the backend accepts for the knife bind (settings.rs check_key). */
+export const isKeyName = (k: string) => /^(?:[a-zA-Z0-9\\`[\]\-=,./']|[a-z0-9_]{2,16})$/.test(k);
+
+/**
+ * The VAC state the page shows, from what the game itself reports: each running CS2's command
+ * line (botmode_running), Bot Mode in gameinfo.gi, and Steam's own launch options.
+ * - off: a CS2 of this install runs with -insecure (VAC off for that run);
+ * - on: CS2 runs without -insecure, or none runs and nothing would start one insecure from Steam;
+ * - warn: none runs, but a start from Steam would not be a plain VAC game;
+ * - unknown: a running CS2 could not be read.
+ */
+export function vacState(s: Status, running: RunningCs2[] | null, supervised: boolean): { tone: "off" | "on" | "warn" | "unknown"; text: string; detail: string } {
+  const steamInsecure = (s.steamLaunchOptions ?? "").split(/\s+/).some((t) => t.toLowerCase() === "-insecure");
+  if (running === null) return { tone: "unknown", text: "VAC unknown", detail: "The running CS2 processes could not be read." };
+  const off = running.find((r) => r.vac === "off");
+  if (off) {
+    return supervised
+      ? { tone: "off", text: "VAC off for this session", detail: `CS2 (pid ${off.pid}) runs with -insecure, and Bot Mode is ${s.botMode ? "on" : "off"} in gameinfo.gi. VAC is back on once CS2 exits and starts without Bot Mode.` }
+      : { tone: "off", text: "VAC off", detail: `CS2 (pid ${off.pid}) runs with -insecure outside a Bot Mode session.` };
+  }
+  const unknown = running.find((r) => r.vac === "unknown");
+  if (unknown && unknown.vac === "unknown") return { tone: "unknown", text: "VAC unknown", detail: `CS2 (pid ${unknown.pid}) could not be checked: ${unknown.why}.` };
+  if (running.length) return { tone: "on", text: "VAC on", detail: "CS2 runs without -insecure." };
+  if (steamInsecure) return { tone: "warn", text: "VAC off on Steam starts", detail: "CS2's launch options in Steam contain -insecure, so CS2 started from Steam runs with VAC off. This app never writes Steam's launch options; remove it in Steam > Counter-Strike 2 > Properties." };
+  if (s.botMode) return { tone: "warn", text: "Bot Mode on in gameinfo.gi", detail: "No CS2 runs, and Bot Mode is on with no session of this app's. CS2 started from Steam would load the mod." };
+  return { tone: "on", text: "VAC on", detail: "No CS2 runs and Bot Mode is off in gameinfo.gi, so CS2 started from Steam runs with VAC on." };
+}
+
+/** The mod's Commands.txt as groups of copyable commands, and its team lineups. */
+export interface ModCommands {
+  groups: { title: string; commands: string[] }[];
+  teams: { name: string; ct: string | null; t: string | null }[];
+}
+
+/** Reads Commands.txt's layout: a heading in capitals, then one command a line; under ADD TEAMS, "N. Team" and its CT and T lines. */
+export function parseModCommands(text: string): ModCommands {
+  const out: ModCommands = { groups: [], teams: [] };
+  let group: { title: string; commands: string[] } | null = null;
+  let team: ModCommands["teams"][number] | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^[A-Z][A-Z /&()-]*$/.test(line)) {
+      team = null;
+      group = line === "ADD TEAMS" ? null : { title: line.charAt(0) + line.slice(1).toLowerCase(), commands: [] };
+      if (group) out.groups.push(group);
+      continue;
+    }
+    const t = /^\d+\.\s+(.+)$/.exec(line);
+    if (t && !group) { team = { name: t[1], ct: null, t: null }; out.teams.push(team); continue; }
+    if (team && !group) {
+      if (line.startsWith("bot_add_ct")) team.ct = line;
+      else if (line.startsWith("bot_add_t")) team.t = line;
+      continue;
+    }
+    group?.commands.push(line);
+  }
+  return out;
+}
 
 /** A music kit's catalog name ("Music Kit | Noisia, Sharpened") as artist and title. */
 export function kitParts(name: string | null, id: number): { artist: string | null; title: string } {

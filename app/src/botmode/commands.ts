@@ -226,6 +226,39 @@ export interface Catalog {
   knifeFinishes: { finish: string; weight: number }[];
 }
 
+/** `bot_aim` (BotAimImprover); the plugin's default is mixed. */
+export type BotAim = "head" | "body" | "mixed";
+/** `bot_nades` (NadeSystem); the plugin's default is normal. */
+export type BotNades = "off" | "less" | "normal" | "more" | "max";
+
+/** This app's knife-drop bind: `key` spawns `knives` (item definition indexes) with subclass_create. */
+export interface KnifeBind { key: string; knives: number[] }
+
+/** Everything this app sets in cfg\gamemode_competitive_server.cfg, from botmode_server_cfg. */
+export interface ServerSettings {
+  cosmetics: Cosmetics;
+  /** null: no line sets it, so the plugin's default applies */
+  botAim: BotAim | null;
+  botNades: BotNades | null;
+  /** null: no bind of this app's; the mod's own knife bind applies */
+  knifeBind: KnifeBind | null;
+}
+
+/** One change to the server cfg; a field left out keeps what the cfg has. */
+export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind }
+
+/** A CS2 of this install running now, judged by its command line (monitor.rs Running). */
+export type RunningCs2 =
+  | { vac: "off"; pid: number; commandLine: string }
+  | { vac: "on"; pid: number; why: string }
+  | { vac: "unknown"; pid: number; why: string };
+
+/** One entry of overlay.json as botmode_overlay_plan previews it. */
+export interface PlannedEntry { name: string; target: string; files: string[]; repo: string; reference: string }
+
+/** Starts the error of a read that gave up (commands.rs READ_LIMIT). */
+export const UNREACHABLE = "Library unreachable";
+
 /** Overrides Steam detection with a game\csgo folder. */
 export interface Target { game?: string }
 
@@ -261,6 +294,16 @@ export function botmodeOver(call: Call) {
     setLaunchOptions: (options: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options }),
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
+    serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
+    /** One change to the server cfg; refused, writing nothing, when it no longer holds `seen`. */
+    setServerCfg: (patch: ServerPatch, seen: ServerSettings, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen }),
+    /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */
+    running: (t: Target = {}) => call<RunningCs2[]>("botmode_running", { ...t }),
+    overlayPlan: (manifest?: string, t: Target = {}) => call<PlannedEntry[]>("botmode_overlay_plan", { ...t, manifest }),
+    /** The game files a recorded change wrote. */
+    changeFiles: (id: string, t: Target = {}) => call<string[]>("botmode_change_files", { ...t, id }),
+    /** The mod's Commands.txt at `tag`, from GitHub. */
+    modCommands: (tag: string) => call<string>("botmode_mod_commands", { tag }),
   };
 }
 

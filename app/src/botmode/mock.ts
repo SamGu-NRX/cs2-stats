@@ -7,9 +7,9 @@
 // or a session holds the game, and a cosmetics write whose `seen` no longer matches is refused as
 // a stale read. The releases and catalog entries are copied from the public GitHub release list
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
-import { botmodeOver, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type OverlayReport, type ReleaseIndex, type RollbackReport, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
+import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
 
-export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam"] as const;
+export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
 const CSGO = String.raw`C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo`;
@@ -92,7 +92,27 @@ interface State {
   status: Status;
   session: SessionView;
   statusError: string | null;
+  /** the server cfg's other settings; its cosmetics are status.cosmetics */
+  server: Omit<ServerSettings, "cosmetics">;
+  running: RunningCs2[];
+  /** what each recorded change wrote, by id */
+  files: Record<string, string[]>;
 }
+
+/** A few entries of the mod's Commands.txt, in its layout (the real list has 40 teams). */
+export const COMMANDS_TXT = [
+  "GAME MODE", "scouts_on", "scouts_off", "", "BOT AIM STYLE", "", "bot_aim head", "bot_aim body", "bot_aim mixed", "",
+  "BOT MANAGEMENT", "", "bot_kick", "bot_add_t", "mp_restartgame 1", "", "ADD TEAMS", "", "1. Falcons", "",
+  'bot_add_ct "NiKo";bot_add_ct "TeSeS";bot_add_ct "m0NESY";bot_add_ct "karrigan";bot_add_ct "kyousuke";mp_teamlogo_1 fal;mp_teamname_1 Falcons', "",
+  'bot_add_t "NiKo";bot_add_t "TeSeS";bot_add_t "m0NESY";bot_add_t "karrigan";bot_add_t "kyousuke";mp_teamlogo_2 fal;mp_teamname_2 Falcons', "",
+  "2. Team Vitality", "",
+  'bot_add_ct "apEX";bot_add_ct "ZywOo";bot_add_ct "ropz";bot_add_ct "mezii";bot_add_ct "flameZ";mp_teamlogo_1 vita;mp_teamname_1 Team Vitality', "",
+  'bot_add_t "apEX";bot_add_t "ZywOo";bot_add_t "ropz";bot_add_t "mezii";bot_add_t "flameZ";mp_teamlogo_2 vita;mp_teamname_2 Team Vitality', "",
+  "COORDINATED BUY", "", "ak47", "awp", "bot_buy",
+].join("\r\n");
+
+/** The key names the backend accepts (settings.rs check_key). */
+const KEY = /^(?:[a-z0-9\\`[\]\-=,./']|[a-z0-9_]{2,16})$/;
 
 function initial(s: Scenario): State {
   const installedTag = s === "outdated" ? "v1.4.6" : "v1.4.7";
@@ -125,9 +145,20 @@ function initial(s: Scenario): State {
   const session: SessionView = s === "session"
     ? { supervised: true, notice: null, status: { ...lastSession(), runId: "r-1761530000", state: "running", message: "cs2.exe (pid 22916) started with -insecure; watching it until it exits", verdicts: [{ verdict: "safe", pid: 22916, commandLine: `"${CS2_EXE}" -insecure -novid -fullscreen -w 1280 -h 960 +exec botmode` }], outcome: null, botModeOn: change(11, "bot-mode-on", new Date(Date.now() - 25 * 60_000).toISOString().slice(0, 19) + "Z", 1, "complete", "session"), botModeOff: null, heartbeat: Math.floor(Date.now() / 1000) } }
     : { supervised: false, notice: s === "cs2-running" ? "Bot Mode was left on by another tool; it's now off. Launch Bot Mode from this app." : null, status: installed ? lastSession() : null };
+  const files: Record<string, string[]> = {};
+  const installFiles = ["addons/metamod.vdf", "addons/counterstrikesharp/bin/win64/counterstrikesharp.dll", "cfg/my_bot_normal_config.cfg"];
+  for (const b of status.backups) {
+    files[b.id] = b.operation.startsWith("install") ? Array.from({ length: b.files }, (_, i) => installFiles[i] ?? `addons/counterstrikesharp/plugins/BotAI/file${i}.dll`)
+      : b.operation === "overlay" ? Object.entries(FORKS).flatMap(([name, [, , , target]]) => ["dll", "deps.json", "pdb"].map((x) => `${target}/${name}.${x}`))
+      : b.operation.startsWith("bot-mode") ? ["gameinfo.gi"] : ["cfg/gamemode_competitive_server.cfg"];
+  }
+  const running: RunningCs2[] = s === "session" ? [{ vac: "off", pid: 22916, commandLine: `"${CS2_EXE}" -insecure -novid -fullscreen -w 1280 -h 960 +exec botmode` }]
+    : s === "cs2-running" ? [{ vac: "on", pid: 30112, why: "-insecure is missing" }] : [];
   return {
-    status, session,
-    statusError: s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
+    status, session, files, running,
+    server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null },
+    statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
+      : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
   };
 }
 
@@ -138,11 +169,13 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
   const st = initial(scenario);
   let seq = 20;
   const now = () => new Date().toISOString().slice(0, 19) + "Z";
-  const record = (operation: string, files: number) => {
+  const record = (operation: string, files: number, paths: string[] = []) => {
     const c = change(++seq, operation, now(), files);
     st.status.backups = [c, ...st.status.backups];
+    st.files[c.id] = paths;
     return c;
   };
+  const serverOf = (): ServerSettings => ({ cosmetics: { droppedKnifeSkins: st.status.cosmetics.droppedKnifeSkins, droppedKnifePremium: st.status.cosmetics.droppedKnifePremium, musicKit: st.status.cosmetics.musicKit }, ...st.server });
   /** The backend's refusals for anything that writes the game folder. */
   const writable = () => {
     if (st.status.cs2Running) throw "CS2 is running. Close it first: Bot Mode never changes game files while the game is open.";
@@ -155,6 +188,32 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         if (st.statusError) throw st.statusError;
         return structuredClone(st.status);
       case "botmode_session": return structuredClone(st.session);
+      case "botmode_server_cfg": return structuredClone(serverOf());
+      case "botmode_running": return structuredClone(st.running);
+      case "botmode_overlay_plan": return Object.entries(FORKS).map(([name, [repo, reference, , target]]): PlannedEntry => ({ name, target, repo, reference, files: ["dll", "deps.json", "pdb"].map((x) => `${name}.${x}`) }));
+      case "botmode_change_files": {
+        const f = st.files[a.id as string];
+        if (!f) throw `${a.id as string}: no such change`;
+        return f;
+      }
+      case "botmode_mod_commands": return COMMANDS_TXT;
+      case "botmode_set_server_cfg": {
+        writable();
+        const patch = a.patch as ServerPatch;
+        const seen = a.seen as ServerSettings;
+        if (JSON.stringify(seen) !== JSON.stringify(serverOf())) throw "cfg/gamemode_competitive_server.cfg: the Bot Mode settings changed since it was read; nothing was written";
+        const bind = patch.knifeBind as KnifeBind | undefined;
+        if (bind && (!KEY.test(bind.key) || !bind.knives.length)) throw `${JSON.stringify(bind.key)}: not a key name; use one character or a name such as mouse4 or kp_end`;
+        if (patch.cosmetics) {
+          const kit = patch.cosmetics.musicKit;
+          if (kit > 0 && !CATALOG.musicKits.some((k) => k.id === kit)) throw `music kit ${kit} is not in BotRandomizer's catalog`;
+          st.status.cosmetics = { ...patch.cosmetics, cfgPresent: true };
+        }
+        if (patch.botAim) st.server.botAim = patch.botAim;
+        if (patch.botNades) st.server.botNades = patch.botNades;
+        if (bind) st.server.knifeBind = bind;
+        return record("server-cfg", 1, ["cfg/gamemode_competitive_server.cfg"]);
+      }
       case "botmode_releases": return RELEASES;
       case "botmode_catalog": return st.status.components.length ? CATALOG : null;
       case "botmode_download": {
@@ -205,7 +264,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
       case "botmode_set_difficulty": {
         writable();
         st.status.difficulty = a.level as Difficulty;
-        return record(`difficulty-${a.level as string}`, 1);
+        return record(`difficulty-${a.level as string}`, 1, ["overrides/botprofile.vpk"]);
       }
       case "botmode_set_cosmetics": {
         writable();
@@ -217,7 +276,7 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         }
         if (want.musicKit > 0 && !CATALOG.musicKits.some((k) => k.id === want.musicKit)) throw `music kit ${want.musicKit} is not in BotRandomizer's catalog`;
         st.status.cosmetics = { ...want, cfgPresent: true };
-        return record("cosmetics", 1);
+        return record("cosmetics", 1, ["cfg/gamemode_competitive_server.cfg"]);
       }
       case "botmode_set_launch_options": {
         const options = a.options as string;

@@ -1,9 +1,9 @@
 /* ================================================================ Bot Mode (views/BotMode.tsx) */
-/* A hero with the state word and the exact launch command, then the user's setup beside the install
-   and the last session. Motion: the dialog and the kit list scale in from 97% (their trigger, for the
-   list); the knife strip lights up left to right when dropped-knife finishes are turned on (colour
-   only, 12 ms apart); a live session's dot breathes. With reduced motion only opacity and colour
-   change (--mo), and the breathing stops. */
+/* A hero with the state word, the VAC state and the exact launch command, then the user's setup
+   beside the install, the session and the history, then the mod's console commands. Motion: the
+   dialog and the kit list scale in from 97% (the list from its trigger); a knife fades between lit
+   and dim as it is toggled; a live session's dot breathes. With reduced motion only opacity and
+   colour change (--mo), and the breathing stops. */
 
 /* Prose sets its punctuation proportionally (body's tabular figures widen commas and full stops);
    numbers that line up stay tabular. */
@@ -99,13 +99,12 @@
 .bm-kitopt__text small { margin-left: 0; font-size: 12px; color: var(--ink2); }
 .bm-kitpop__none { padding: 12px; font-size: 13px; color: var(--ink2); }
 
-/* the knives a dropped knife can be, as the game draws them: lit when finishes are on */
+/* the knives the knife key spawns, as the game draws them */
 .bm-knives {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 12px 8px; width: 100%; margin: 2px 0 0; padding: 12px;
   list-style: none; border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
 }
-.bm-knives li { display: grid; place-items: center; height: 22px; color: var(--ink3); transition: color var(--d-color) ease; }
-.bm-knives[data-on="true"] li { color: var(--ink); transition-delay: calc(var(--i, 0) * 12ms); }
+.bm-knives li { display: grid; place-items: center; }
 .bm-knives .gicon-text { font-size: 11px; text-align: center; }
 
 /* finish weights: the column in effect is the bright one */
@@ -169,3 +168,54 @@
 .bm-sha { font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
 /* a flag or file name never breaks at its own hyphen or dot */
 .bm-flag, .bm-facts dd .mono, .bm-row__ctl .meta .mono, .bm-hero__sub .mono { white-space: nowrap; }
+
+/* ---------------------------------------------------------------- VAC state */
+/* a chip beside the state word, always shown: what the running game and gameinfo.gi say */
+.bm-vac { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px; font: 600 12px/1 var(--f); white-space: nowrap; background: var(--s3); color: var(--ink2); }
+.bm-vac::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.bm-vac[data-tone="on"] { color: var(--ink); }
+.bm-vac[data-tone="on"]::before { background: var(--tan); }
+.bm-vac[data-tone="off"] { background: rgba(255, 215, 173, 0.14); color: var(--cream); }
+.bm-vac[data-tone="warn"] { background: var(--poor-soft); color: var(--poor-text); }
+
+/* ---------------------------------------------------------------- knife key */
+.bm-knifepick { display: grid; gap: 8px; width: 100%; }
+.bm-knifepick__key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 13px; color: var(--ink); }
+.bm-key { width: 96px; font-family: var(--f-mono); font-size: 12px; }
+.bm-knifepick__all { margin-left: auto; }
+/* each knife is a toggle: lit when the key spawns it */
+.bm-knife { display: grid; place-items: center; width: 100%; height: 36px; border-radius: var(--r-chip); color: var(--ink3); transition: color var(--d-color) ease, background-color var(--d-hover) ease; }
+.bm-knife[aria-pressed="true"] { color: var(--ink); }
+@media (hover: hover) and (pointer: fine) { .bm-knife:hover { background: var(--hover); } }
+
+/* ---------------------------------------------------------------- previews: the files a change writes */
+.bm-files { display: grid; gap: 2px; margin: 6px 0 0; padding: 8px 10px; max-height: 180px; overflow: auto; overscroll-behavior: contain; list-style: none;
+  border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
+.bm-files-more { margin-top: 6px; }
+.bm-files-more > summary { cursor: pointer; width: max-content; border-radius: var(--r-chip); font-size: 12px; color: var(--ink2); }
+@media (hover: hover) and (pointer: fine) { .bm-files-more > summary:hover { color: var(--ink); } }
+
+/* ---------------------------------------------------------------- history */
+.bm-hist { display: grid; margin: 0; padding: 0; list-style: none; }
+.bm-hist li { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.bm-hist li:first-child { border-top: 0; padding-top: 0; }
+.bm-hist__what { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.bm-hist__what b { font-weight: 500; color: var(--ink); }
+.bm-hist li[data-status="rolledBack"] b, .bm-hist li[data-status="failed"] b { color: var(--ink2); text-decoration: line-through; text-decoration-color: var(--ink3); }
+
+/* ---------------------------------------------------------------- console commands */
+.bm-cmds__load { display: grid; justify-items: start; gap: 10px; }
+.bm-cmds__in { display: grid; gap: 12px; }
+.bm-cmds__find .input { width: min(360px, 100%); }
+.bm-cmds__cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px 20px; align-items: start; }
+.bm-cmds__group, .bm-cmds__teams { display: grid; gap: 6px; }
+.bm-cmds__group ul, .bm-cmds__teams ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.bm-cmd { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 4px 8px; border-radius: var(--r-chip); text-align: left; font-size: 12px; color: var(--ink); overflow-wrap: anywhere; transition: background-color var(--d-hover) ease; }
+.bm-cmd__ico { margin-left: auto; flex: none; color: var(--ink3); opacity: 0; transition: opacity var(--d-hover) ease; }
+.bm-cmd:focus-visible .bm-cmd__ico { opacity: 1; }
+@media (hover: hover) and (pointer: fine) { .bm-cmd:hover { background: var(--hover); } .bm-cmd:hover .bm-cmd__ico { opacity: 1; } }
+.bm-cmds__teams ul { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 20px; }
+.bm-cmds__teams li { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 13px; }
+.bm-team { flex: 1; min-width: 0; color: var(--ink); }
+/* a file list wraps its long lines (a bind line, a deep path) even inside the dialog's unbroken flags rule */
+.bm-facts dd .bm-files { white-space: normal; }

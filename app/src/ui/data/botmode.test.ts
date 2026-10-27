@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { GithubRelease, Status } from "../../botmode/commands";
 import { mockCall, RELEASES } from "../../botmode/mock";
-import { installState, kitChoices, kitParts, latestRelease, writeBlocker } from "./botmode";
+import { installState, isKeyName, kitChoices, kitParts, latestRelease, parseModCommands, vacState, writeBlocker } from "./botmode";
 
 const status = (s: Parameters<typeof mockCall>[0]): Status => structuredClone(mockCall(s).state.status);
 const rel = (tag: string, published: string | null, extra: Partial<GithubRelease> = {}): GithubRelease => ({ ...RELEASES[0], tag_name: tag, published_at: published, ...extra });
@@ -61,5 +61,36 @@ describe("music kits", () => {
     const c = kitChoices({ musicKits: [{ id: 4, name: "Music Kit | Noisia, Sharpened" }, { id: 3, name: "Music Kit | Daniel Sadowski, Crimson Assault" }], knives: [], knifeFinishes: [] });
     expect(c.map((k) => k.id)).toEqual([0, -1, 3, 4]);
     expect(kitChoices(null).map((k) => k.title)).toEqual(["Off", "Random each map"]);
+  });
+});
+
+describe("vacState", () => {
+  it("reads VAC from the running game first, then from gameinfo.gi and Steam's own options", () => {
+    const s = status("installed");
+    expect(vacState(s, [], false).text).toBe("VAC on");
+    expect(vacState(s, null, false).tone).toBe("unknown");
+    expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], true).text).toBe("VAC off for this session");
+    expect(vacState(s, [{ vac: "off", pid: 7, commandLine: "cs2.exe -insecure" }], false).text).toBe("VAC off");
+    expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }, { vac: "unknown", pid: 8, why: "access denied" }], false).text).toBe("VAC unknown");
+    expect(vacState(s, [{ vac: "on", pid: 7, why: "-insecure is missing" }], false).text).toBe("VAC on");
+    // nothing runs, but the next start from Steam would not be a plain VAC game
+    expect(vacState({ ...s, botMode: true }, [], false)).toMatchObject({ tone: "warn", text: "Bot Mode on in gameinfo.gi" });
+    expect(vacState({ ...s, steamLaunchOptions: "-novid -INSECURE" }, [], false)).toMatchObject({ tone: "warn", text: "VAC off on Steam starts" });
+    expect(vacState({ ...s, steamLaunchOptions: "-insecurex" }, [], false).text).toBe("VAC on");
+  });
+});
+
+describe("parseModCommands", () => {
+  it("groups commands under their headings and pairs each team's CT and T lineups", () => {
+    const p = parseModCommands(["BOT AIM STYLE", "", "bot_aim head", "ADD TEAMS", "1. Falcons", 'bot_add_ct "NiKo"', 'bot_add_t "NiKo"', "2. Solo", 'bot_add_t "x"', "COORDINATED BUY", "awp", ""].join("\r\n"));
+    expect(p.groups).toEqual([{ title: "Bot aim style", commands: ["bot_aim head"] }, { title: "Coordinated buy", commands: ["awp"] }]);
+    expect(p.teams).toEqual([{ name: "Falcons", ct: 'bot_add_ct "NiKo"', t: 'bot_add_t "NiKo"' }, { name: "Solo", ct: null, t: 'bot_add_t "x"' }]);
+  });
+});
+
+describe("isKeyName", () => {
+  it("accepts what the backend's check_key accepts", () => {
+    for (const k of ["\\", "k", "K", "5", "/", "mouse4", "kp_end", "f12"]) expect(isKeyName(k), k).toBe(true);
+    for (const k of ["", "a;b", 'x"', "MOUSE4", "two words", "a_very_long_key_name_x", "//"]) expect(isKeyName(k), k).toBe(false);
   });
 });
