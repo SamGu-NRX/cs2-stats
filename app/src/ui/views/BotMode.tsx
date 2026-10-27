@@ -309,7 +309,8 @@ function Hero({ status, session, running, state, blocker, checking, pending, kep
     : unseen ? "The process list could not be read, so the app can't tell whether CS2 is open. It changes nothing and won't launch until it can; check again in a moment."
     : status.cs2Running ? "Close CS2, then launch Bot Mode, so the game starts with -insecure."
     : state.kind === "missing" ? "The mod's loaders, Metamod and CounterStrikeSharp, aren't in the CS2 folder. Install a release to play with bots."
-    : "Bot Mode starts CS2 through Steam and turns itself off when the game exits.";
+    : managed ? "Bot Mode is on, set by another tool such as the Bot-Improver Panel, and this app leaves it as it is. Launching from here starts CS2 with -insecure and leaves Bot Mode on afterwards."
+    : "Bot Mode starts CS2 through Steam with -insecure, and turns Bot Mode off again when the game exits.";
   return (
     <section className="card hero bm-hero" data-tone={tone} aria-labelledby="bm-state">
       <div className="bm-hero__head">
