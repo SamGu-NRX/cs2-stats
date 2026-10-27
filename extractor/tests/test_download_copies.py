@@ -110,9 +110,10 @@ def test_a_matching_copy_is_deleted_through_its_handle_and_logged(tmp_path):
     copy.write_bytes(b"Rar!\x1a\x07\x01\x00" + b"p" * 5000)
     d, log = _download(copy), tmp_path / "logs" / "copies.jsonl"
     rows = dc.clean(tmp_path, d, delete=True, log_path=log)
-    assert [r["outcome"] for r in rows] == ["deleted"] and not copy.exists()
-    logged = json.loads(log.read_text(encoding="utf-8"))
-    assert (logged["outcome"], logged["path"], logged["sha256"]) == ("deleted", str(copy), d.sha256)
+    assert [r["outcome"] for r in rows] == ["deleting", "deleted"] and not copy.exists()
+    logged = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert [(r["outcome"], r["path"], r["sha256"]) for r in logged] == [("deleting", str(copy), d.sha256),
+                                                                       ("deleted", str(copy), d.sha256)]
 
 
 @windows
@@ -160,6 +161,52 @@ def test_a_file_another_process_has_open_is_kept(tmp_path):
         rows = dc.clean(tmp_path, d, delete=True, log_path=tmp_path / "log.jsonl")
     assert [r["outcome"] for r in rows] == ["kept"] and "could not open it alone" in rows[0]["reason"]
     assert copy.exists()
+
+
+def test_only_rar_files_are_candidates(tmp_path):
+    # Same bytes, size and creation time, but not .rar: never opened, never deleted.
+    data = b"x" * 3000
+    for name in ("copy.RAR", "copy.zip", "copy.rar.txt", "copy"):
+        (tmp_path / name).write_bytes(data)
+    d = _download(tmp_path / "copy.RAR")
+    assert [p.name for p in dc.candidates(tmp_path, d)] == ["copy.RAR"]
+
+
+@windows
+def test_two_files_that_could_be_the_copy_are_both_kept_as_ambiguous(tmp_path):
+    # The browser's copy and a file the user saved with the same bytes: which is which cannot be told.
+    for name in ("browser-copy.rar", "users-own.rar"):
+        (tmp_path / name).write_bytes(b"x" * 3000)
+    rows = dc.clean(tmp_path, _download(tmp_path / "browser-copy.rar"), delete=True, log_path=tmp_path / "log.txt")
+    assert [r["outcome"] for r in rows] == ["ambiguous", "ambiguous"]
+    assert all("2 files could be the browser's copy" in r["reason"] for r in rows)
+    assert (tmp_path / "browser-copy.rar").exists() and (tmp_path / "users-own.rar").exists()
+
+
+@windows
+def test_a_match_beside_a_file_that_could_not_be_checked_is_ambiguous(tmp_path):
+    for name in ("a.rar", "b.rar"):
+        (tmp_path / name).write_bytes(b"x" * 3000)
+    d = _download(tmp_path / "a.rar")
+    with open(tmp_path / "b.rar", "rb"):  # open elsewhere: its bytes cannot be checked
+        rows = dc.clean(tmp_path, d, delete=True, log_path=tmp_path / "log.txt")
+    assert sorted(r["outcome"] for r in rows) == ["ambiguous", "ambiguous"] and (tmp_path / "a.rar").exists()
+
+
+@windows
+def test_the_deletion_is_logged_before_the_file_goes(tmp_path, monkeypatch):
+    # A crash between the deletion and its log row would leave a deletion no log shows.
+    copy = tmp_path / "c.rar"
+    copy.write_bytes(b"x" * 3000)
+    log = tmp_path / "logs" / "copies.jsonl"
+
+    def crash(h):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dc, "_mark_deleted", crash)
+    with pytest.raises(KeyboardInterrupt):
+        dc.clean(tmp_path, _download(copy), delete=True, log_path=log)
+    assert [json.loads(x)["outcome"] for x in log.read_text(encoding="utf-8").splitlines()] == ["deleting"]
 
 
 @windows

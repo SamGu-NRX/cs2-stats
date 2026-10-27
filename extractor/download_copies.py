@@ -2,13 +2,21 @@
 
 The HLTV tab's browser saves each archive twice: into its own download folder, which the pipeline watches
 (CS2_DEMO_DOWNLOADS) and empties as archives finish, and into Windows Downloads under the archive's HLTV name.
-Nothing the browser records links the two (its copy traces carry no paths), so a copy is matched by what the
-pipeline measured of the download: the same size, the same SHA-256, and a creation time within COPY_WINDOW_S of
-the moment the pipeline saw the download reach its final size.
+Nothing the browser records links the two (its copy traces carry no paths), and its settings cannot turn the
+copy off, so a copy is matched by what the pipeline measured of the download: a .rar file with the same size, the
+same SHA-256, and a creation time within COPY_WINDOW_S of the moment the pipeline saw the download reach its final
+size.
+
+Identical bytes cannot tell the browser's copy from a file the user saved, so a copy is deleted only when it is
+the one file in the folder that matches. With two or more, or with one plus a candidate that could not be checked,
+none is deleted and each is logged as ambiguous. What remains: if the browser's copy is missing and the user saved
+the same bytes as a .rar within COPY_WINDOW_S of the download finishing, the user's file is deleted.
 
 A candidate is opened with no sharing, so nothing can write, rename or delete it while it is checked. Every
 check reads that handle: one hard link, no reparse point, the size, the creation time, the folder it resolves
-to, and the SHA-256. The deletion goes through the same handle, so the file deleted is the file checked.
+to, and the SHA-256. The deletion goes through the same handle, so the file deleted is the file checked. Its log
+row is written, flushed and synced before the deletion, and its outcome after, so a crash cannot leave a deletion
+unlogged.
 """
 
 from __future__ import annotations
@@ -106,12 +114,12 @@ def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
 
 
 def candidates(folder: Path, d: Download) -> list[Path]:
-    """Plain files directly in folder whose size and creation time could make them d's copy. Read from the
-    folder listing; remove() checks both again through the file's handle."""
+    """Plain .rar files (any case) directly in folder whose size and creation time could make them d's copy. Read
+    from the folder listing, before anything is opened; clean() checks size and time again through the handle."""
     out = []
     with os.scandir(folder) as it:
         for e in it:
-            if not e.is_file(follow_symlinks=False):
+            if not e.name.lower().endswith(".rar") or not e.is_file(follow_symlinks=False):
                 continue
             st = e.stat(follow_symlinks=False)
             created = getattr(st, "st_birthtime", st.st_ctime)
@@ -120,43 +128,88 @@ def candidates(folder: Path, d: Download) -> list[Path]:
     return sorted(out)
 
 
-def remove(path: Path, d: Download, folder: Path, delete: bool) -> tuple[str, str | None]:
-    """("deleted" | "would_delete" | "kept", reason) for one candidate."""
-    try:
-        h = _open(path)
-    except OSError as e:
-        return "kept", f"could not open it alone: {e}"
-    try:
-        info = _info(h)
-        why = refusal(info, d, folder)
-        if why is None and _sha256(h) != d.sha256:
-            why = "SHA-256 differs"
-        if why is not None:
-            return "kept", why
-        if not delete:
-            return "would_delete", None
-        try:
-            _mark_deleted(h)
-        except OSError as e:
-            return "kept", f"deletion failed: {e}"
-        return "deleted", None
-    finally:
-        _close(h)  # a file marked for deletion goes when its last handle closes, which is this one
+def _log(log_path: Path, rows: list[dict]) -> None:
+    """Append rows, flushed and synced to disk before returning."""
+    if not rows:
+        return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def clean(folder: Path, d: Download, delete: bool, log_path: Path) -> list[dict]:
-    """Delete d's copy from folder (or, with delete False, say what would be deleted). Every candidate's outcome is
-    appended to log_path and returned."""
-    rows = []
-    for path in candidates(folder, d):
-        outcome, reason = remove(path, d, folder, delete)
-        rows.append(dict(time=time.strftime("%Y-%m-%dT%H:%M:%S%z"), archive=d.id, path=str(path), size=d.size,
-                         sha256=d.sha256, download_finished=d.finished, outcome=outcome, reason=reason))
-    if rows:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            for r in rows:
-                f.write(json.dumps(r) + "\n")
+    """Delete d's copy from folder when exactly one file there is it (with delete False, say it would be). Every
+    candidate's outcome is logged to log_path and returned: deleted (after a deleting row written first),
+    would_delete, ambiguous (more than one file could be the copy; none deleted) or kept, with the reason."""
+    def row(path, outcome, reason=None):
+        return dict(time=time.strftime("%Y-%m-%dT%H:%M:%S%z"), archive=d.id, path=str(path), size=d.size,
+                    sha256=d.sha256, download_finished=d.finished, outcome=outcome, reason=reason)
+
+    rows: list[dict] = []
+    matches: list[tuple[Path, object]] = []  # open handles of files that pass every check
+    unverified: list[tuple[Path, str]] = []  # same size and time, but not checked through: could be the copy
+    try:
+        for path in candidates(folder, d):
+            try:
+                h = _open(path)
+            except OSError as e:
+                unverified.append((path, f"could not open it alone: {e}"))
+                continue
+            try:
+                info = _info(h)
+                if info.size != d.size or abs(info.created - d.finished) > COPY_WINDOW_S:
+                    why, kind = refusal(info, d, folder), "kept"
+                elif refusal(info, d, folder):
+                    why, kind = refusal(info, d, folder), "unverified"
+                elif _sha256(h) != d.sha256:
+                    why, kind = "SHA-256 differs", "kept"
+                else:
+                    why, kind = None, "match"
+            except BaseException:
+                _close(h)
+                raise
+            if kind == "match":
+                matches.append((path, h))
+                continue
+            _close(h)
+            if kind == "unverified":
+                unverified.append((path, why))
+            else:
+                rows.append(row(path, "kept", why))
+        if matches and len(matches) + len(unverified) > 1:
+            paths = [str(x) for x, _ in matches] + [str(x) for x, _ in unverified]
+            for x, _ in matches:
+                rows.append(row(x, "ambiguous", f"{len(paths)} files could be the browser's copy: {paths}; none deleted"))
+            for x, why in unverified:
+                rows.append(row(x, "ambiguous", f"{why}; {len(paths)} files could be the browser's copy: {paths}"))
+        else:
+            rows += [row(x, "kept", why) for x, why in unverified]
+            if matches and not delete:
+                rows.append(row(matches[0][0], "would_delete"))
+            elif matches:
+                path, h = matches.pop()
+                rows.append(row(path, "deleting"))
+                _log(log_path, rows)  # the intent is on disk before the file goes
+                logged, rows = list(rows), []
+                try:
+                    _mark_deleted(h)
+                    failed = None
+                except OSError as e:
+                    failed = f"deletion failed: {e}"
+                finally:
+                    _close(h)  # a file marked for deletion goes when its last handle closes, which is this one
+                if failed is None and path.exists():
+                    failed = "still there after its handle closed"
+                rows.append(row(path, "kept" if failed else "deleted", failed))
+                _log(log_path, rows)
+                return logged + rows
+    finally:
+        for _, h in matches:
+            _close(h)
+    _log(log_path, rows)
     return rows
 
 

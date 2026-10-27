@@ -453,18 +453,26 @@ def test_a_download_seen_in_progress_records_when_it_reached_its_final_size(tmp_
     assert p.archives[whole.name].download_finished is None
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
 def test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
-    calls = []
-    monkeypatch.setattr(dp.download_copies, "clean", lambda folder, d, delete, log_path: calls.append(d) or [])
-    rec = dict(id="a1", status="done", rar_bytes=10, rar_sha256="ab" * 32, download_finished=5.0)
-    p = dp.Pipeline(copies_folder=tmp_path)
-    p.clean_copies(rec)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"
+    copies.mkdir()
+    copy = copies / "a-vs-b-bo3.rar"
+    copy.write_bytes(dp.RAR_MAGIC + b"payload" * 50)
+    import hashlib
+    rec = dict(id="a1", status="done", rar_bytes=copy.stat().st_size, rar_sha256=hashlib.sha256(copy.read_bytes()).hexdigest(),
+               download_finished=copy.stat().st_birthtime)
+    p = dp.Pipeline(copies_folder=copies)
     p.clean_copies({**rec, "status": "failed"})  # its copy may be the last one once failed/ is trimmed
     p.clean_copies({**rec, "download_finished": None})  # whole when first seen: nothing to match on
     p.clean_copies({k: v for k, v in rec.items() if not k.startswith("rar_")})  # written before hashes existed
     dp.Pipeline(copies_folder=None).clean_copies(rec)  # mode off, or the folder was refused
-    assert calls == [dp.download_copies.Download(id="a1", size=10, sha256="ab" * 32, finished=5.0)]
+    assert copy.exists() and not dp.COPIES_LOG.exists()
+    p.clean_copies(rec)
+    assert not copy.exists()
+    assert [json.loads(x)["outcome"] for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()] == ["deleting", "deleted"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
@@ -495,7 +503,7 @@ def test_a_finished_archives_downloads_copy_is_deleted(tmp_path, monkeypatch):
     assert not copy.exists() and other.exists()
     rows = [json.loads(x) for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()]
     assert sorted((Path(r["path"]).name, r["outcome"]) for r in rows) == [
-        (copy.name, "deleted"), (other.name, "kept")]
+        (copy.name, "deleted"), (copy.name, "deleting"), (other.name, "kept")]
 
 
 def test_assist_on_own_teammate_is_not_credited():
