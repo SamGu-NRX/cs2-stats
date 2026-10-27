@@ -99,3 +99,23 @@ class TestExtractor:
             dp.main(["--once"])
         assert e.value.code == 2 and "refusing to write the pipeline's data folder" in capsys.readouterr().err
         assert not (REPO / "data").exists()
+
+
+def test_the_frozen_copy_guards_the_repository_the_pipeline_names(tmp_path, monkeypatch):
+    # Review of PR 54: workers run a copy of repo_guard under %TEMP%, whose __file__ made %TEMP%'s parent "the
+    # repository"; a worker started by hand could then write tables into the real one. The copy now takes the
+    # repository from CS2_STATS_REPO and, without it, refuses every output.
+    import subprocess
+    import demo_pipeline as dp
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    dp.freeze_code()
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); import repo_guard as g\n"
+             "try:\n    g.check_output(sys.argv[2], private=True, what='t'); print('allowed')\n"
+             "except g.OutputRefused as e:\n    print('refused', e)\n")
+    run = lambda target, env: subprocess.run([sys.executable, "-I", "-c", probe, str(tmp_path / "run"), str(target)],
+                                             capture_output=True, text=True, env=env, timeout=60).stdout
+    env = {k: v for k, v in os.environ.items() if k != "CS2_STATS_REPO"}
+    assert "CS2_STATS_REPO must name" in run(tmp_path / "out", env)
+    named = dict(env, CS2_STATS_REPO=str(REPO))
+    assert run(REPO / "extractor" / "x.parquet", named).startswith("refused")
+    assert run(tmp_path / "out", named).startswith("allowed")
