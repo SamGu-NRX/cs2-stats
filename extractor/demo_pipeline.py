@@ -351,8 +351,7 @@ def starts_as_demo(rar: Path, path: str) -> bool:
     try:
         head = proc.stdout.read(len(DEM_MAGIC))
     finally:
-        proc.kill()
-        proc.wait(timeout=30)
+        kill_tree(proc)  # 7z can be a launcher (scoop's shim) whose child does the work
         proc.stdout.close()
     return head == DEM_MAGIC
 
