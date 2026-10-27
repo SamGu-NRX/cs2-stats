@@ -9,7 +9,7 @@ import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { attrsOf, fmtMetric, ratingTerms, type SideKey } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, type RatingSplit, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { metric, styleIds } from "../../data/meta";
@@ -39,18 +39,19 @@ export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip
 const signedNum = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(3)}`;
 
 /**
- * Rating 3.0's breakdown, as main showed it: each input with its weight, the input's value and its
- * contribution, then the constant. The rows add up to the rating (engine.ts ratingTerms).
+ * Rating 3.0's breakdown: each input's value and its contribution, then the base. The rows add up to
+ * the rating (engine.ts ratingTerms). The curves bend, so a contribution is not a fixed weight times
+ * the input, and no weight is shown.
  */
-export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
-  const { terms, intercept } = ratingTerms(inputs);
+export function RatingTerms({ rating }: { rating: RatingSplit }) {
+  const { terms, base } = ratingTerms(rating);
   return (
     <BreakRows rows={[
       ...terms.map((t) => ({
-        label: <>{t.label} <span className="faint">× {t.coefficient < 0 ? "−" : ""}{Math.abs(t.coefficient).toFixed(4)}</span></>,
+        label: t.label,
         value: <><span className="faint">{t.input} → </span>{signedNum(t.contribution)}</>,
       })),
-      { label: "Constant", value: signedNum(intercept) },
+      { label: "Base", value: signedNum(base) },
     ]} />
   );
 }

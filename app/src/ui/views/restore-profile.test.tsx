@@ -15,7 +15,8 @@ import { CS2RB } from "../../stats/model-params";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { styleZone } from "../../stats/identity";
-import { rating3FromInputs } from "../../stats/rating3";
+import { rating3Of } from "../../stats/rating3";
+import { at } from "../../stats/testing/summary";
 import { emptyMeasures } from "../../stats/facts";
 import { rollup } from "../../stats/rollup";
 import type { Method, Query, Session } from "../../worker/protocol";
@@ -129,19 +130,19 @@ it("adds the survival and traded-death rates to the KAST tile's breakdown", () =
   expect(text(row("Deaths traded")?.querySelector("b"))).toBe(fmtPct((100 * s.m.tradedDeaths) / s.m.deaths));
 });
 
-it("breaks Rating 3.0 into weighted terms and a constant that add up to the rating", () => {
-  // fails if a weight, an input or the constant shown in the rating breakdown is not the one the rating is computed from
-  const inputs = { kpr_eco: 0.74, adr_eco: 78.2, dpr_eco: 0.66, kast_eco: 71.5, mk: 14.0, swing: 1.25 };
-  render(<RatingTerms inputs={inputs} />);
+it("breaks Rating 3.0 into its inputs' contributions and a base that add up to the rating", () => {
+  // fails if an input, a contribution or the base shown in the rating breakdown is not the one the rating is computed from
+  const r = rating3Of(at({ kpr_eco: 0.74, adr_eco: 78.2, dpr_eco: 0.66, kast_eco: 71.5, mk: 14.0, swing: 1.25 }));
+  render(<RatingTerms rating={{ inputs: r.inputs!, base: r.base!, terms: r.terms! }} />);
   const rows = Array.from(host.querySelectorAll(".bd__row"));
   expect(rows.length).toBe(7);
-  expect(text(rows[6].firstElementChild)).toBe("Constant");
+  expect(text(rows[6].firstElementChild)).toBe("Base");
   // each value reads "input → ±contribution"; the contributions are rounded to 0.001 apiece
   const sum = rows.reduce((a, r) => {
     const v = text(r.querySelector("b")).split("→").pop()!.trim().replace("−", "-");
     return a + Number(v);
   }, 0);
-  expect(Math.abs(sum - rating3FromInputs(inputs))).toBeLessThan(0.0005 * 7);
+  expect(Math.abs(sum - r.value!)).toBeLessThan(0.0005 * 7);
   expect(text(rows[0].querySelector("b"))).toMatch(/^0\.74 → \+0\.\d{3}$/);
 });
 

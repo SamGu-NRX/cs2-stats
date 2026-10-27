@@ -5,8 +5,8 @@
 import { blindWindows } from "./blinds";
 import { metricDeltas } from "./career";
 import { enemyHit, hitDamage } from "./derive";
-import { emptyMeasures, type MatchFacts, type Measures } from "./facts";
-import { FEATURES, r3Inputs, rating3Of, RATING3_INTERCEPT, RATING3_TERMS, type Feature } from "./rating3";
+import { emptyMeasures, type MatchFacts } from "./facts";
+import { r3Inputs, ratedInputs, rating3Of, roundInputs, roundRating3, type Feature } from "./rating3";
 import { keptRounds, rollup, type Filter, type Summary } from "./rollup";
 import { roundPopulation } from "./rules";
 import { swingSources, type SwingSources } from "./swing";
@@ -25,13 +25,15 @@ export interface RoundRating {
   /** null when the round has no result */
   won: boolean | null;
   /**
-   * Rating 3.0 for this round alone: the intercept plus each input's coefficient times the round's
-   * value of that input (eco-adjusted kills, damage and deaths, KAST and multi-kill as 0 or 100, swing in
-   * points). The rating is linear, so the mean over a set of rated rounds is the rating of those rounds.
-   * Null for a round Rating 3.0 does not rate (its swing or an eco value is unknown).
+   * This round's share of Rating 3.0 (rating3.ts roundRating3): its side's rating moved by how far the
+   * round's inputs are from the side's, at each curve's slope there. The mean over a side's rated rounds
+   * is that side's rating, so the counted rounds average to the match rating. Null for a round Rating
+   * 3.0 does not rate (its swing or an eco value is unknown).
    */
   rating: number | null;
-  /** each input's contribution, coefficient times value (RATING3_TERMS order by input); null with rating */
+  /** the round's base (intercept, plus the CT offset on CT); base plus the terms is rating; null with rating */
+  base: number | null;
+  /** each input's contribution to rating; null with rating */
   terms: Record<Feature, number> | null;
   /** this round's swing by source (swing.ts swingSources); null when the round's swing is not valued */
   swing: SwingSources | null;
@@ -45,26 +47,19 @@ export interface RoundRating {
   counts: boolean;
 }
 
-/** One round's six Rating 3.0 inputs from its measures; null unless the round is rated. */
-function roundInputs(m: Partial<Measures>): Record<Feature, number> | null {
-  if (!m.ratedRounds) return null;
-  return {
-    kpr_eco: m.vEcoKills ?? 0, adr_eco: m.vEcoDmg ?? 0, dpr_eco: m.vEcoDeaths ?? 0, kast_eco: 100 * (m.vEcoKast ?? 0),
-    mk: 100 * (m.vMultiKillRounds ?? 0), swing: 100 * (m.vSwing ?? 0),
-  };
-}
-
 /** Every round the player played, in order, with its rating, its terms, its swing sources and its gap to `average`. */
 export function roundRatings(f: MatchFacts, player: string, average: number | null): RoundRating[] {
   const pi = playerIndex(f, player);
   const s = rollup([f], { player });
   const counted = new Set<Side>(rating3Of(s).value === null ? [] : (["CT", "T"] as const).filter((side) => r3Inputs(s.sides[side]) !== null));
+  const sideInputs = { CT: ratedInputs(s.sides.CT), T: ratedInputs(s.sides.T) };
   return f.pr.filter((r) => r.pi === pi).sort((a, b) => a.ri - b.ri).map((r) => {
     const q = roundInputs(r.m);
-    const terms = q ? Object.fromEntries(FEATURES.map((x) => [x, RATING3_TERMS.find((t) => t.input === x)!.coefficient * q[x]])) as Record<Feature, number> : null;
-    const rating = terms ? RATING3_INTERCEPT + FEATURES.reduce((a, x) => a + terms[x], 0) : null;
+    const at = sideInputs[r.side];
+    const split = q && at ? roundRating3(at, r.side, q) : null;
+    const rating = split?.value ?? null;
     return {
-      number: f.rounds[r.ri].number, side: r.side, won: r.won, rating, terms,
+      number: f.rounds[r.ri].number, side: r.side, won: r.won, rating, base: split?.base ?? null, terms: split?.terms ?? null,
       swing: r.m.swingRounds ? swingSources({ ...emptyMeasures(), ...r.m }) : null,
       vsAverage: rating !== null && average !== null ? rating - average : null,
       counts: rating !== null && counted.has(r.side),

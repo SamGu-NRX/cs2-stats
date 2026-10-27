@@ -698,6 +698,7 @@ pub fn run() {
             botmode::commands::botmode_backups,
             botmode::commands::botmode_launch,
             botmode::commands::botmode_session,
+            botmode::commands::botmode_recover,
             botmode::commands::botmode_set_difficulty,
             botmode::commands::botmode_set_cosmetics,
             botmode::commands::botmode_set_launch_options,

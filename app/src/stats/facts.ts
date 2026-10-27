@@ -12,8 +12,10 @@ import type { Side } from "./tables";
 /** Bump when a definition changes, so cached facts are rebuilt. */
 // 33: throwRounds, the player-rounds of matches with a throw log, which the thrown-per-round rates divide by
 // 34: the THROW_LOGGED numerators, so the per-grenade-thrown ratios count both sides over the same matches
-// 35: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
-export const DERIVE_VERSION = 35;
+// 35: swing shares each kill by HLTV's per-kill weights (params.json swing.event_credit); eco-adjusted KAST
+// counts survival only in a won round; the vK3-5Rounds measures for the per-side Rating 3.0
+// 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
+export const DERIVE_VERSION = 36;
 
 export interface MatchInfo {
   id: string;
@@ -257,7 +259,7 @@ export const MEASURES = [
   // eco-adjusted measures over the player-rounds whose every eco value is known (ecoRounds, rating3.ts ecoAdjust)
   "ecoKills", "ecoDeaths", "ecoDmg", "ecoKast", "ecoRounds",
   // Rating 3.0's six inputs over the rounds both swing and the eco adjustment valued (ratedRounds), so all six share one set of rounds
-  "ratedRounds", "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "vSwing",
+  "ratedRounds", "vEcoKills", "vEcoDeaths", "vEcoDmg", "vEcoKast", "vMultiKillRounds", "vK3Rounds", "vK4Rounds", "vK5Rounds", "vSwing",
   // luck (luck.ts): close calls and low-health duels; kills and deaths by gun and by headshot, with the
   // killing shot's speed and inaccuracy where known; the kill flags; spread luck for and against
   "closeCalls", "lowHpKills", "lowHpDeaths", "enemyDeaths", "gunKills", "gunDeaths", "rgKnown", "rgKills", "rgDeathsKnown", "rgDeaths",
