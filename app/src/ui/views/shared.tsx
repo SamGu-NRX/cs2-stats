@@ -8,10 +8,11 @@ import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
 import { YOU } from "../data/privacy";
 import { BUY_LABEL, BuyIcon, KillFlags, WeaponIcon, WIN_LABEL, WinIcon } from "../icons/game";
-import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing } from "../lib/format";
+import { fmtAdr, fmtClock, fmtMoney, fmtPct, fmtRating, fmtSecs, fmtSwing, plural } from "../lib/format";
 import { roundSwingScore, scoreText, swingScore, ratingText } from "../lib/scale";
 import { BENCH, verdictOf, type BenchId } from "../lib/verdict";
-import { pageHref } from "../router";
+import { pageHref, setQuery, useRoute } from "../router";
+import type { FormFilter } from "../lib/form";
 
 // ---------------------------------------------------------------- stat tile
 
@@ -282,4 +283,26 @@ export { ApproxMark } from "../components/Percentile";
 /** A match's swing is shown per round; its sum over the valued rounds goes in the tooltip. */
 export function swingSumTip(m: { swing: number; swingRounds: number }): string | undefined {
   return m.swingRounds ? `${fmtSwing(m.swing)} summed over ${m.swingRounds} ${m.swingRounds === 1 ? "round" : "rounds"} with swing` : undefined;
+}
+
+// ---------------------------------------------------------------- form filters
+
+/**
+ * The form chart's filters (lib/form.ts formWindow), read from the address: ?outliers=hide and
+ * ?first=skip. Home's and Profile's Form read the same keys, so a filtered chart is a link.
+ */
+export function useFormFilter(): FormFilter {
+  const q = useRoute().query;
+  return { noOutliers: q.get("outliers") === "hide", noFirst: q.get("first") === "skip" };
+}
+
+/** The two checkboxes under a form chart, and how many of its matches they hide. */
+export function FormToggles({ filter, hidden }: { filter: FormFilter; hidden: number }) {
+  return (
+    <div className="form-card__toggles">
+      <label className="check" data-tip="Leaves out ratings more than 1.5 interquartile ranges beyond the middle half"><input type="checkbox" checked={filter.noOutliers} onChange={(e) => setQuery("outliers", e.target.checked ? "hide" : null)} /><span>Hide outliers</span></label>
+      <label className="check" data-tip="Leaves out the first match you played each day, often a warm-up"><input type="checkbox" checked={filter.noFirst} onChange={(e) => setQuery("first", e.target.checked ? "skip" : null)} /><span>Skip first game of the day</span></label>
+      {hidden > 0 && <span className="meta">{plural(hidden, "match", "matches")} hidden</span>}
+    </div>
+  );
 }

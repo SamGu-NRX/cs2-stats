@@ -24,14 +24,21 @@ import type { ClutchRow, HighlightRow, Method, Query } from "../../worker/protoc
 import type { FlashRow, FlashTool } from "../../stats/flashes";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, rolled } from "../../worker/views";
-import { botPopulation as botPopulationText, careerEntries, listedEntries, provisionalText, recordEntries, statLine } from "../data/engine";
-import { tipOf } from "../data/tips";
+import { botPopulation as botPopulationText, careerEntries, entryRating, fmtMetric, listedEntries, opponentIds, provisionalText, recordEntries, statLine } from "../data/engine";
+import { noiseBand } from "../../stats/correlation";
+import { matchValues } from "../../stats/trends";
+import { ATTRIBUTES } from "../../stats/metrics";
+import { vsOpponents } from "../../stats/opponents";
+import { opponentScore } from "../../stats/opponent-score";
+import { formDay, formWindow } from "../lib/form";
+import { WIN_STATS, WinCorrelationCard } from "./profile/WinCorrelation";
+import { NO_THROW_LOG, tipOf } from "../data/tips";
 import { sentence } from "../components/Percentile";
 import { matchModel, type MatchEntry, type MatchModel } from "../data/match";
 import { metric, metrics, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
-import { fmtPct, fmtSwing, signed } from "../lib/format";
+import { fmtPct, fmtSwing, ordinal, signed } from "../lib/format";
 import { go, matchHref, navWasInstant, parseHash, profileHref, PROFILE_TABS } from "../router";
 import { MatchesView } from "./Matches";
 import CareerAim from "./CareerAim";
@@ -492,6 +499,17 @@ describe("missing values stay missing (#39 review)", () => {
     // two runs of two; the lone last match is a dot without a line
     expect(lines).toEqual([2, 2]);
   });
+
+  it("dates a short series only where the dates fit under it", () => {
+    // fails if three matches get three dates, about one 48 px pitch wide each, written over each other
+    // (Form after its filters can be this short)
+    const dates = (n: number) => {
+      const pts = Array.from({ length: n }, (_, i) => ({ key: `m${i}`, value: 1, label: `Oct ${i + 1}` }));
+      render(<MatchLine points={pts} fmt={(v) => v.toFixed(2)} pooled={null} label="Rating" />);
+      return Array.from(host.querySelectorAll("text.ax")).map(text).filter((t) => t.startsWith("Oct"));
+    };
+    expect([dates(2), dates(3), dates(4), dates(5)]).toEqual([["Oct 1"], ["Oct 1", "Oct 3"], ["Oct 1", "Oct 4"], ["Oct 1", "Oct 3", "Oct 5"]]);
+  });
 });
 
 describe("tooltips", () => {
@@ -503,7 +521,8 @@ describe("tooltips", () => {
     answers.style = await calls.style(q, { side: "both" });
     for (const tab of PROFILE_TABS) {
       render(<ProfileView tab={tab} />);
-      const stuck = Array.from(host.querySelectorAll(".profile [data-tip]")).filter((el) => !el.matches("a[href], button, input, select, [tabindex]"));
+      // a label's tip opens when its own input takes focus (overlay.tsx finds the closest data-tip)
+      const stuck = Array.from(host.querySelectorAll(".profile [data-tip]")).filter((el) => !el.matches("a[href], button, input, select, [tabindex]") && !(el.tagName === "LABEL" && el.querySelector("input")));
       expect(stuck.map((el) => `${el.tagName}.${el.getAttribute("class")}`), tab).toEqual([]);
     }
   });
@@ -907,6 +926,34 @@ it("plots a rebuilt file's detonations as approximate landing points, and a logg
   expect(host.querySelector(".landing__map")).toBeNull();
 });
 
+it("shows a dash with the reason for thrown counts when the file has no throw log, and the counts when it has one", () => {
+  // fails if a file without a throw log (the Valve imports) reads as everyone throwing 0 flashes and smokes
+  const v = modelOf(converted[1]);
+  const cells = (label: string) => {
+    const at = Array.from(host.querySelectorAll("thead th")).findIndex((th) => text(th).includes(label));
+    return Array.from(host.querySelectorAll("tbody tr")).map((tr) => tr.querySelectorAll("td")[at]).filter(Boolean);
+  };
+  const header = (label: string) => Array.from(host.querySelectorAll("thead th")).find((th) => text(th).includes(label))!;
+  const none: MatchModel = { ...v, facts: { ...v.facts, match: { ...v.facts.match, inputs: { ...v.facts.match.inputs, throws: null } } } };
+  render(<Utility v={none} file={v.file} round={null} />);
+  for (const label of ["Flashes thrown", "Smokes thrown"]) {
+    const cs = cells(label);
+    expect(cs.length).toBe(v.players.length);
+    // the reason is the cell's screen-reader text and its tooltip, and the header's tooltip from the keyboard
+    expect(cs.every((td) => text(td) === `–${NO_THROW_LOG}` && td.querySelector("[data-tip]")?.getAttribute("data-tip") === NO_THROW_LOG)).toBe(true);
+    expect(header(label).querySelector(".th")!.getAttribute("data-tip")).toContain(NO_THROW_LOG);
+    expect(header(label).querySelector(".th")!.getAttribute("tabindex")).toBe("0");
+    // an unknown count does not offer to sort
+    expect([header(label).hasAttribute("aria-sort"), header(label).querySelector("button")]).toEqual([false, null]);
+  }
+  // blinds come from their own events and stay
+  expect(cells("Blinded").some((td) => text(td) !== "0")).toBe(true);
+  render(<Utility v={v} file={v.file} round={null} />);
+  expect(cells("Flashes thrown").map((td) => text(td))).toEqual(cells("Flashes thrown").map((td) => String(Number(text(td)))));
+  expect(header("Flashes thrown").outerHTML).not.toContain(NO_THROW_LOG);
+  expect(header("Flashes thrown").getAttribute("aria-sort")).toBe("none");
+});
+
 describe("Weapons", () => {
   const all = queryOf(samples);
   const rowOf = (gun: string) => Array.from(host.querySelectorAll("tbody tr")).find((tr) => tr.querySelector(".guncell__txt > span")?.firstChild?.textContent === weaponLabel(gun)) ?? null;
@@ -1124,5 +1171,170 @@ describe("parity round 2: flashes, clutches and highlights", () => {
     expect(host.querySelectorAll(".hlr")).toHaveLength(4);
     expect(text(host.querySelector(".hl__head a"))).toBe("All 5");
     expect(host.querySelector(".hl__head a")!.getAttribute("href")).toBe("#/profile/overview?sec=highlights");
+  });
+});
+
+describe("engine features bound to the UI", () => {
+  const career = () => careerEntries(samples.map((s) => s.entry), null);
+  const careerSamples = () => samples.filter((s) => career().some((e) => e.file === s.file));
+  const ids = () => [...new Set(samples.map((s) => s.facts.match.pov!))];
+  beforeEach(() => { act(() => go("#/profile/overview")); });
+  afterEach(() => { act(() => go("#/")); });
+
+  describe("Moves with winning", () => {
+    const corr = (n: number, extra: Record<string, { r: number; n: number } | null> = {}) =>
+      ({ ...Object.fromEntries(WIN_STATS.map((id) => [id, null])), rating3: { r: 0.8, n }, adr: { r: -0.3, n }, ...extra });
+    const tabs = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".wcor__row"));
+    /** the worker's matchValues answer for one metric: each match's value under the query's filter */
+    const valuesOf = (q: Query, id: string) => Object.fromEntries(q.files.map((f) => [f, matchValues(factsOf.get(f)!, q.filter, [id])?.[id] ?? null]));
+
+    it("ranks the stats by r with each one's chance band, and leaves out a stat under the minimum sample", () => {
+      // fails if a stat with 9 decided matches shows, the order is not by r, the band is not Fisher's
+      // 5% band at n = 12, or a bar inside it is drawn as a relation
+      use(samples);
+      const q = queryOf(careerSamples());
+      answers = { winCorrelation: corr(12, { kast: { r: 0.9, n: 9 } }), trends: [{ slope: 0.01, r: 0.2, n: 4 }] };
+      render(<WinCorrelationCard q={q} list={career()} />);
+      expect(asked.winCorrelation).toEqual([q, [...WIN_STATS]]);
+      expect(tabs().map((b) => text(b.querySelector(".wcor__lab")))).toEqual(["Rating 3.0", "ADR"]);
+      expect(tabs().map((b) => text(b.querySelector(".wcor__r")))).toEqual(["+0.80", "−0.30"]);
+      const band = 100 * noiseBand(12)!;
+      expect(parseFloat(tabs()[0].querySelector<HTMLElement>(".wcor__band")!.style.width)).toBeCloseTo(band, 6);
+      expect(tabs().map((b) => b.hasAttribute("data-chance"))).toEqual([false, true]);
+      expect(tabs()[0].querySelector<HTMLElement>(".wcor__bar")!.style.width).toBe("40%");
+      expect(tabs()[1].querySelector<HTMLElement>(".wcor__bar")!.style.right).toBe("50%");
+      expect(tabs()[0].getAttribute("data-tip")).toBe("r +0.80 over 12 matches.");
+      // correlation, not cause: no causal words anywhere on the card
+      expect(text(host.querySelector(".wcor-card"))).not.toMatch(/\b(caus|because|drives?|makes? you|leads? to)/i);
+    });
+
+    it("shows the picked stat by match with its means in wins and in losses, and moves with the arrow keys", () => {
+      // fails if the means are not the per-match values averaged over won and lost matches, the trend
+      // panel does not follow the picked tab, or the keys do not move the selection and focus
+      use(samples);
+      const q = queryOf(careerSamples());
+      answers = { winCorrelation: corr(12), trends: [{ slope: 0.01, r: 0.2, n: 4 }], matchValues: valuesOf(q, "rating3") };
+      render(<WinCorrelationCard q={q} list={career()} />);
+      expect(asked.matchValues).toEqual([q, "rating3"]);
+      expect(tabs().map((b) => b.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+      const per = career().map((e) => ({ e, v: rolled(summary({ files: [e.file], filter: q.filter })).v.rating3 ?? null }));
+      const mean = (r: "W" | "L") => { const xs = per.filter((x) => x.e.result === r && x.v !== null).map((x) => x.v!); return xs.reduce((a, b) => a + b, 0) / xs.length; };
+      const figs = Array.from(host.querySelectorAll(".wcor__figs .fig")).map((f) => [text(f.querySelector("dt")), text(f.querySelector(".fig__v"))]);
+      expect(figs).toEqual([["In wins", fmtRating(mean("W"))], ["In losses", fmtRating(mean("L"))], ["Trend", "+0.01"]]);
+      expect(host.querySelector(".wcor__panel .ms")!.getAttribute("aria-label")).toMatch(/^Rating 3\.0 by match, oldest first: /);
+      // a vertical tablist: Left and Right do nothing, Down moves
+      act(() => { tabs()[0].focus(); tabs()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+      expect(parseHash(location.hash).query.get("trend")).toBeNull();
+      act(() => { tabs()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+      expect(parseHash(location.hash).query.get("trend")).toBe("adr");
+      expect(tabs().map((b) => b.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+      expect(document.activeElement).toBe(tabs()[1]);
+      expect(text(host.querySelector(".wcor__head b"))).toBe("ADR");
+      act(() => tabs()[0].click());
+      expect(parseHash(location.hash).query.get("trend")).toBeNull();
+    });
+
+    it("shows nothing but the count toward the minimum while every stat is under it", () => {
+      // fails if a correlation over 8 matches is drawn
+      use(samples);
+      answers = { winCorrelation: corr(8) };
+      const list = career();
+      render(<WinCorrelationCard q={queryOf(careerSamples())} list={list} />);
+      expect(host.querySelector("[role=tablist]")).toBeNull();
+      const decided = list.filter((e) => e.result !== "T").length;
+      expect(text(host.querySelector(".wcor__empty p"))).toBe(`Shows from 10 matches with a winner. ${decided} so far.`);
+      expect(host.querySelectorAll(".wcor__pips i.is-on")).toHaveLength(decided);
+      expect(host.querySelectorAll(".wcor__pips i")).toHaveLength(10);
+    });
+  });
+
+  describe("Form filters on Profile", () => {
+    it("puts Home's two filters under Profile's Form, applied by the same rule and kept in the address", () => {
+      // fails if Profile's Form lacks either filter, a filter leaves the chart as it was, or the state
+      // is not in the address that Home reads too
+      use(samples);
+      render(<ProfileView tab="overview" />);
+      const boxes = () => Array.from(host.querySelectorAll<HTMLInputElement>(".form-rail .form-card__toggles input[type=checkbox]"));
+      expect(Array.from(host.querySelectorAll(".form-rail .form-card__toggles .check")).map(text)).toEqual(["Hide outliers", "Skip first game of the day"]);
+      const points = () => host.querySelector(".form-rail .ms")!.getAttribute("aria-label")!.split(": ")[1].split(", ").length;
+      const want = formWindow(career(), entryRating, formDay, { noOutliers: false, noFirst: true });
+      expect(want.hidden).toBeGreaterThan(0);
+      expect(points()).toBe(Math.min(10, career().length));
+      act(() => boxes()[1].click());
+      expect(parseHash(location.hash).query.get("first")).toBe("skip");
+      expect(points()).toBe(want.shown.length);
+      expect(text(host.querySelector(".form-rail .form-card__toggles .meta"))).toBe(`${want.hidden} ${want.hidden === 1 ? "match" : "matches"} hidden`);
+      // Home's Form reads the same key with the same control
+      render(<HomeView />);
+      expect(Array.from(host.querySelectorAll<HTMLInputElement>(".form-card .form-card__toggles input")).map((x) => x.checked)).toEqual([false, true]);
+    });
+  });
+
+  describe("pistol rounds in Firepower", () => {
+    it("lists the pistol-round rating and kill rows inside Firepower, and keeps them on Economy", async () => {
+      // fails if Firepower has no pistol rows, they read another split than the pistol rounds, or
+      // Economy loses its pistol row
+      use(samples);
+      const q: Query = { files: career().map((e) => e.file), filter: { player: ids() } };
+      const pistol = rolled(summary({ files: q.files, filter: { ...q.filter, ownBuy: ["pistol"] } }));
+      expect(pistol.m.rounds).toBeGreaterThan(0);
+      answers = { attributeBlock: await calls.attributeBlock(q, { side: "both", pool: "role" }), buySplits: { own: { pistol }, opp: {} } };
+      act(() => go("#/profile/overview?attr=firepower"));
+      render(<ProfileView tab="overview" />);
+      const fp = host.querySelector('.hatt[data-attr="firepower"]')!;
+      const group = fp.querySelector(".mrows__group")!;
+      expect(text(group.querySelector(".mrows__group-l"))).toBe("Pistol rounds");
+      expect(text(group.querySelector(".meta"))).toBe(`${pistol.m.rounds} rounds`);
+      const after = (el: Element | null): Element[] => (el?.nextElementSibling ? [el.nextElementSibling, ...after(el.nextElementSibling)] : []);
+      const rows = after(group).map((el) => [el.querySelector(".mrow__lab")?.firstChild?.textContent, text(el.querySelector(".mrow__val"))]);
+      expect(rows).toEqual([["Rating 3.0", fmtRating(pistol.v.rating3 ?? null)], ["Kills per round", fmtMetric("kpr", pistol.v.kpr ?? null)], ["Rounds with a kill", fmtMetric("killRounds", pistol.v.killRounds ?? null)]]);
+      act(() => go("#/profile/economy"));
+      render(<ProfileView tab="economy" />);
+      expect(Array.from(host.querySelectorAll(".tbl td.l")).map(text)).toContain("Pistol rounds");
+    });
+  });
+
+  describe("comparing with your opponents", () => {
+    const vs = () => vsOpponents(careerSamples().map((s) => s.facts), { player: ids() });
+
+    it("offers your opponents beside the benchmarks and the bots, and measures the card's verdicts against them", () => {
+      // fails if the option is missing or miscounted, the card does not ask the engine for the
+      // opponents on its side, or a tile's tooltip does not say where you rank among them
+      use(samples);
+      act(() => go("#/profile/overview?cmp=opponents"));
+      const rows = vs();
+      answers = { opponents: rows };
+      render(<ProfileView tab="overview" />);
+      const q = asked.opponents![0] as Query;
+      expect(q.filter).toEqual({ player: ids() });
+      expect([...q.files].sort()).toEqual(career().map((e) => e.file).sort());
+      act(() => host.querySelector<HTMLButtonElement>(".ptabs__end .select-btn")!.click());
+      expect(Array.from(document.querySelectorAll("[role=option]")).map(text)).toContain(`Your opponents (${opponentIds(career()).length})`);
+      const adr = rows.find((x) => x.id === "adr")!;
+      const tile = Array.from(host.querySelectorAll(".ptile")).find((el) => text(el.querySelector(".ptile__l")) === "ADR")!;
+      expect(tile.getAttribute("data-tip")).toContain("against your opponents.");
+      expect(tile.getAttribute("data-tip")).toContain(`${ordinal(adr.rank!)} of ${adr.of}; they average ${fmtMetric("adr", adr.opponents)}.`);
+    });
+
+    it("scores Firepower against your opponents from the shares of them you beat", async () => {
+      // fails if the score is not the mean of the metrics' shares beaten, or the rows name another population
+      use(samples);
+      const q: Query = { files: career().map((e) => e.file), filter: { player: ids() } };
+      const rows = vs();
+      answers = { attributeBlock: await calls.attributeBlock(q, { side: "both", pool: "role" }), opponents: rows };
+      act(() => go("#/profile/overview?attr=firepower"));
+      render(<ProfileView tab="overview" />);
+      const seg = Array.from(host.querySelectorAll<HTMLButtonElement>(".hblock .seg__item")).find((b) => text(b) === "vs opponents")!;
+      act(() => seg.click());
+      const fp = host.querySelector('.hatt[data-attr="firepower"]')!;
+      const fpIds = ATTRIBUTES.find((a) => a.id === "firepower")!.metrics;
+      const n = Math.max(...rows.map((x) => x.of - 1));
+      expect(text(fp.querySelector(".hatt__score"))).toBe(`${Math.round(opponentScore(rows, fpIds)!)}/100`);
+      expect(text(fp.querySelector(".hatt__note"))).toBe(`vs ${n} opponents`);
+      const kpw = rows.find((x) => x.id === "killsPerWin")!;
+      const row = Array.from(fp.querySelectorAll(".mrow:not([data-extra])")).find((el) => text(el.querySelector(".mrow__lab")).startsWith(metric("killsPerWin").label))!;
+      expect(text(row.querySelector(".mrow__smp"))).toBe(`avg ${fmtMetric("killsPerWin", kpw.opponents)}`);
+      if (kpw.pct !== null) expect(row.getAttribute("data-tip")).toContain(`of ${n} opponents.`);
+    });
   });
 });

@@ -151,6 +151,13 @@ describe("Profile tabs", () => {
     // other pages keep theirs
     expect(parseHash("#/matches?result=W&guns=rifle").query.get("result")).toBe("W");
   });
+  it("keeps Overview's Form filters and picked trend in the address, and leaves them behind on a tab switch", () => {
+    // fails if Profile strips the Form filters or the trend (a filtered chart would not be a link), or
+    // carries them to a tab that does not read them
+    const q = parseHash("#/profile/overview?outliers=hide&first=skip&trend=adr&side=t&guns=rifle").query;
+    expect(Object.fromEntries(q)).toEqual({ outliers: "hide", first: "skip", trend: "adr", side: "t" });
+    expect(scopeQuery(q)).toEqual({ side: "t" });
+  });
 });
 
 describe("profileCanonicalHash", () => {

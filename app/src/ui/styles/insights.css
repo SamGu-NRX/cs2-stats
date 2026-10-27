@@ -1,0 +1,68 @@
+/* Overview's "Moves with winning" (views/profile/WinCorrelation.tsx), Firepower's pistol-round group
+   (profile/AttributesPanel.tsx) and the Form filters on Profile. Tokens only. */
+
+/* ---- moves with winning: the ranked list on the left, the picked stat's trend on the right */
+.wcor { display: grid; grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr); gap: 20px 40px; align-items: start; }
+@media (max-width: 1020px) { .wcor { grid-template-columns: minmax(0, 1fr); } }
+
+/* label, the diverging track, r: one column set shared by the rows and the key under them */
+.wcor { --wcor-cols: 9.5rem minmax(96px, 1fr) 3.25rem; }
+.wcor__list { display: grid; }
+.wcor__row {
+  display: grid; grid-template-columns: var(--wcor-cols); align-items: center; column-gap: 14px;
+  min-height: var(--row); margin: 0 -8px; padding: 0 8px; border: 0; border-radius: var(--r-chip);
+  background: none; color: var(--ink2); font: 500 13px/1.2 var(--f); text-align: left; cursor: pointer;
+  transition: background-color var(--d-hover) ease;
+}
+.wcor__row + .wcor__row { box-shadow: 0 -1px 0 var(--line); }
+@media (hover: hover) and (pointer: fine) { .wcor__row:hover { background: var(--hover); } }
+.wcor__row[aria-selected="true"] { background: var(--s2); color: var(--ink); box-shadow: inset 2px 0 0 var(--cream); }
+.wcor__row[aria-selected="true"] + .wcor__row { box-shadow: none; }
+.wcor__lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a narrow card: the label column gives up its fixed width and the track keeps a usable minimum */
+@media (max-width: 560px) {
+  .wcor { --wcor-cols: minmax(0, 1fr) minmax(64px, 1.2fr) 2.75rem; }
+  .wcor__row, .wcor__key { column-gap: 8px; }
+}
+
+/* -1 at the left edge, +1 at the right; the hatching is the band chance alone reaches at this sample */
+.wcor__trk { position: relative; height: 16px; }
+/* the whole -1 to +1 extent as the metric rows' dotted track, so a short bar reads as short */
+.wcor__trk::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: radial-gradient(circle at 1px 1px, var(--track) 1px, transparent 1.4px) 0 0 / 6px 2px repeat-x; }
+.wcor__trk > i { position: absolute; display: block; }
+.wcor__band { top: 1px; bottom: 1px; border-radius: 2px; background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.075) 0 2px, transparent 2px 5px); }
+.wcor__mid { left: 50%; top: 2px; height: 12px; width: 1px; background: var(--ink3); }
+.wcor__bar { top: 5px; height: 6px; border-radius: 2px; background: var(--cream); }
+.wcor__r { text-align: right; font: 500 13px/1 var(--f-mono); color: var(--ink); }
+/* inside the band: the same bar, quiet, since it is indistinguishable from no relation */
+.wcor__row[data-chance] .wcor__bar { background: var(--ink3); }
+.wcor__row[data-chance] .wcor__r { color: var(--ink3); }
+
+.wcor__key { display: grid; grid-template-columns: var(--wcor-cols); column-gap: 14px; align-items: center; margin: 10px 0 0; font-size: 11px; }
+.wcor__ends { grid-column: 2; display: flex; justify-content: space-between; color: var(--ink3); }
+.wcor__chance { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--ink3); }
+.wcor__swatch { width: 18px; height: 10px; border-radius: 2px; background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--line2); }
+
+.wcor__panel { min-width: 0; }
+.wcor__head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; }
+.wcor__head b { font: 600 14px/1.2 var(--f); color: var(--ink); }
+.wcor__line { overflow-x: auto; }
+.wcor__figs { margin-top: 14px; }
+
+/* not enough matches yet: the decided matches so far, out of the minimum */
+.wcor__empty { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 4px 0; }
+.wcor__empty p { margin: 0; }
+.wcor__pips { display: flex; gap: 5px; }
+.wcor__pips i { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.wcor__pips i.is-on { background: var(--cream); box-shadow: none; }
+
+/* ---- Firepower's pistol rounds: a heading row inside the metric list, then value-only rows */
+.mrows__group { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 12px 0 4px; border-top: 1px solid var(--line2); list-style: none; }
+.mrows__group-l { display: inline-flex; align-items: center; gap: 6px; font: 600 11px/1.3 var(--f); letter-spacing: 0.08em; text-transform: uppercase; color: var(--tan); }
+.mrows > .mrows__group + .mrow { border-top: 0; }
+
+/* ---- Form on Profile: the filters under the chart */
+.form-rail .form-card__toggles { margin-top: 6px; }
+/* each filter's whole label is its hit area, 40 px tall (better-accessibility hit-areas) */
+.form-card__toggles { row-gap: 0; }
+.form-card__toggles .check { min-height: 40px; padding: 0 6px; margin: 0 -6px; border-radius: var(--r-chip); }

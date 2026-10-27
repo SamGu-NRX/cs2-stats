@@ -10,7 +10,9 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, recordEntries, teamsOf } from "./engine";
+import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, opponentIds, recordEntries, teamsOf } from "./engine";
+import { opponentsIn } from "../../stats/opponents";
+import { FREEZE_END, oneRound } from "../../stats/testing/match";
 import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type MatchModel } from "./match";
 import { sourceOf } from "./sources";
 
@@ -146,5 +148,21 @@ describe("the match header's teams", () => {
     expect(teamsOf({ players: [p("You", 0, false), p("Solo", 1, true)], you: 0 }).opponents).toBe("1 bot");
     expect(teamsOf({ players: [p("You", 0, false)], you: 0 })).toEqual({ mates: 0, opponents: null });
     expect(teamsOf({ players: [p("You", null, false), p("Bot", 1, true)], you: 0 })).toEqual({ mates: 0, opponents: null });
+  });
+});
+
+describe("opponentIds", () => {
+  it("lists the players faced who played a round, by the engine's own rule", () => {
+    // fails if a teammate, a listed player who played no round, or a match the recording player sat out
+    // adds an opponent: in m1 a faces c; in m2 c is a's teammate, d is an opponent and e, marked dead at
+    // freeze end, never played; in m3 a is marked dead at freeze end, so its f is no one's opponent
+    const kill = [{ tick: FREEZE_END + 320, killer: "a", victim: "c" }];
+    const m1 = oneRound({ players: { a: "CT", c: "T" }, kills: kill });
+    const m2 = oneRound({ players: { a: "CT", c: "CT", d: "T", e: "T" }, player_rounds: { e: { alive_at_start: false } } });
+    const m3 = oneRound({ players: { a: "CT", f: "T" }, player_rounds: { a: { alive_at_start: false } } });
+    const facts = [m1, m2, m3].map((f) => ({ ...f, match: { ...f.match, pov: "a" } }));
+    const entries = facts.map((f, i) => entryOf(`m${i + 1}`, "test", f));
+    expect(opponentIds(entries).sort()).toEqual(["c", "d"]);
+    expect(opponentIds(entries).sort()).toEqual([...new Set(facts.flatMap((f) => opponentsIn(f, new Set(["a"]))))].sort());
   });
 });

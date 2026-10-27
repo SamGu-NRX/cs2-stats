@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtAdr, fmtClock, fmtDec, fmtDiff, fmtMoney, fmtMoneyShort, fmtPct, fmtRating, fmtRatio, fmtSwing, signed } from "./format";
+import { fmtAdr, fmtClock, fmtDec, fmtDiff, fmtMoney, fmtMoneyShort, fmtPct, fmtRating, fmtRatio, fmtSwing, ordinal, signed } from "./format";
 
 describe("HLTV number formats", () => {
   it("formats rating with two decimals", () => {
@@ -42,3 +42,9 @@ describe("HLTV number formats", () => {
   });
 });
 
+
+describe("ordinal", () => {
+  it("names a rank with its English suffix, the teens taking th", () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]);
+  });
+});

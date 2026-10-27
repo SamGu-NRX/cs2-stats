@@ -42,3 +42,9 @@ export const PANEL_TIP = {
 
 /** A provisional style score: the bot pool behind it is still small. */
 export const PROVISIONAL_TIP = "Few bot careers yet, so this may shift.";
+
+/**
+ * Why a grenade count reads "–": the file has no throw log (the Valve imports), so the count is
+ * unknown rather than 0. The flash tool says the same in its notes (stats/flashes.ts FlashTool.thrown).
+ */
+export const NO_THROW_LOG = "This file logs no grenade throws, so the count is unknown.";

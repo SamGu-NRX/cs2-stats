@@ -17,16 +17,28 @@ export function matchWon(f: MatchFacts, ids: Set<string>): boolean | null {
   return us === them ? null : us > them;
 }
 
+/**
+ * One match's value of each metric under a filter; null when the filter keeps none of its rounds (no
+ * value, as opposed to a metric whose value is null over rounds it does keep). The worker's
+ * winCorrelation and matchValues calls read matches through this one rule.
+ */
+export function matchValues(f: MatchFacts, filter: Filter, metricIds: string[]): Record<string, number | null> | null {
+  const ms = metricIds.map((id) => {
+    const m = METRIC[id];
+    if (!m) throw new Error(`trends: unknown metric "${id}"`);
+    return m;
+  });
+  const s = rollup([f], filter);
+  return s.m.rounds ? Object.fromEntries(ms.map((m) => [m.id, m.value(s)])) : null;
+}
+
 /** The metric per match, in date order (matches without a date keep their input order at the end). */
 export function series(facts: MatchFacts[], filter: Filter, metricId: string): TrendPoint[] {
-  const m = METRIC[metricId];
-  if (!m) throw new Error(`trends: unknown metric "${metricId}"`);
   const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
   const sorted = [...facts].sort((a, b) => (a.match.date ?? "9999").localeCompare(b.match.date ?? "9999"));
   return sorted.flatMap((f) => {
-    const s = rollup([f], filter);
-    if (!s.m.rounds) return [];
-    return [{ match: f.match.id, date: f.match.date, value: m.value(s), won: matchWon(f, ids) }];
+    const v = matchValues(f, filter, [metricId]);
+    return v ? [{ match: f.match.id, date: f.match.date, value: v[metricId], won: matchWon(f, ids) }] : [];
   });
 }
 

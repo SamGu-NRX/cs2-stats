@@ -23,6 +23,7 @@ import { Killfeed } from "./Killfeed";
 import { SwingSourcesChart } from "../profile/v2";
 import { RatingWaterfall, roundSteps } from "./RatingByRound";
 import { signedIn } from "./parity";
+import { NO_THROW_LOG } from "../../data/tips";
 import { LoadFailed } from "./LoadFailed";
 
 const W_KEY = "cs2stats.drawerW";
@@ -276,7 +277,7 @@ function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: 
                   </li>
                 );
               })}
-              {!anyNades && <li className="meta">No grenades thrown this round.</li>}
+              {!anyNades && <li className="meta">{v.facts.match.inputs.throws === null ? NO_THROW_LOG : "No grenades thrown this round."}</li>}
             </ul>
           )}
         </Section>

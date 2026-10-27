@@ -315,6 +315,8 @@ export interface Api {
   opponents(q: Query): VsOpponents[];
   /** Pearson r of each metric per match with winning it (stats/trends.ts winCorrelationOf) */
   winCorrelation(q: Query, metricIds: string[]): Record<string, { r: number; n: number } | null>;
+  /** one metric's value in each of the query's matches, by file; null where the filter keeps no round of it (stats/trends.ts matchValues) */
+  matchValues(q: Query, metricId: string): Record<string, number | null>;
   /** the role blend per side and per spawn the player used (the spawns filter), each spawn with its map, place name and position (SpawnRow) */
   rolesBySpawn(q: Query): Record<"T" | "CT", (SpawnRow & { blend: RoleBlend })[]>;
   /** Aim Rating, Utility Rating and its quantity and quality sub-ratings, 0-100, as weighted pro percentiles */

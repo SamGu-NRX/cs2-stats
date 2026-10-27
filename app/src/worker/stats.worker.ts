@@ -10,10 +10,9 @@
 import { BUY_CLASSES, BUY_TIERS } from "../stats/economy";
 import { addSituations, bombsites, headToHead, mapZones, openingDuels, roundRatings, yourMatch, type Situations } from "../stats/matchviews";
 import { rating3Of } from "../stats/rating3";
-import { METRIC } from "../stats/metrics";
 import { opponentsIn, vsOpponentsOf } from "../stats/opponents";
 import type { FileEntry } from "../host/host";
-import { matchWon, trend, winCorrelationOf } from "../stats/trends";
+import { matchValues, matchWon, trend, winCorrelationOf } from "../stats/trends";
 import type { Baselines, SideKey } from "../stats/compare";
 import { derive } from "../stats/derive";
 import { flashTool } from "../stats/flashes";
@@ -400,21 +399,27 @@ const api: Impl = {
   sessions: perMatch.sessions,
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
-    const opp = new Set<string>();
-    await stream(q.files, (f) => { for (const id of opponentsIn(f, me)) opp.add(id); });
-    const [mine, ...theirs] = await Promise.all([summaryOf(q), ...[...opp].map((id) => summaryOf({ files: q.files, filter: { ...q.filter, player: id } }))]);
+    // each opponent over the matches they faced the player in (opponents.ts opponentMatches)
+    const opp = new Map<string, Set<string>>();
+    await stream(q.files, (f, file) => { for (const id of opponentsIn(f, me)) opp.set(id, (opp.get(id) ?? new Set()).add(file)); });
+    const [mine, ...theirs] = await Promise.all([summaryOf(q), ...[...opp].map(([id, fs]) => summaryOf({ files: q.files.filter((x) => fs.has(x)), filter: { ...q.filter, player: id } }))]);
     return vsOpponentsOf(mine, theirs);
   },
   async winCorrelation(q, metricIds) {
     const points: Record<string, { value: number | null; won: boolean | null }[]> = Object.fromEntries(metricIds.map((id) => [id, []]));
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     await stream(q.files, (f) => {
-      const s = rollup([f], q.filter);
-      if (!s.m.rounds) return;
+      const v = matchValues(f, q.filter, metricIds);
+      if (!v) return;
       const won = matchWon(f, me);
-      for (const id of metricIds) points[id].push({ value: METRIC[id].value(s), won });
+      for (const id of metricIds) points[id].push({ value: v[id], won });
     });
     return Object.fromEntries(metricIds.map((id) => [id, winCorrelationOf(points[id])]));
+  },
+  async matchValues(q, metricId) {
+    const out: Record<string, number | null> = {};
+    await stream(q.files, (f, file) => { out[file] = matchValues(f, q.filter, [metricId])?.[metricId] ?? null; });
+    return out;
   },
   rolesBySpawn: ranking.rolesBySpawn,
   clutches: perMatch.clutches,
