@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.14.0"
+EXTRACTOR_VERSION = "1.15.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -1978,6 +1978,10 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     departed["steamid"] = resolve_ids(departed.steamid, departed.name, bots)
     departed = departed.loc[np.array([not pd.isna(s_) and gone_at.get(int(s_)) == int(t_)
                                       for s_, t_ in zip(departed.steamid, departed.tick)], dtype=bool)].copy()
+    # Kept as read, with each player's baseline, so a stitched map can check its parts' join (stitch.py).
+    departed_rows = [dict(steamid=int(r.steamid), tick=int(r.tick), **{c: int(getattr(r, c)) for c in BASELINE_PROPS},
+                          **{f"{c}_at_start": baseline.get(int(r.steamid), {}).get(c, 0) for c in BASELINE_PROPS})
+                     for r in departed.itertuples()]
     departed = since_start(departed, baseline)
     # Every player in any table is checked, not only those in a kill.
     seen = [T["players"].steamid, T["positions"].steamid, T["shots"].steamid, dmg.attacker_steamid,
@@ -2043,6 +2047,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     ctx.info.update(dict(header=header, convars=cvars, final_score=final_score, teams=teams,
                          rounds=len(rounds), match_start_tick=match_start, final_tick=final_tick,
                          voided_windows=voided, dropped_attempts=dropped, excluded_players=excluded_rows,
+                         departed=departed_rows, scoreboard_taken={str(s_): v for s_, v in sorted(take.items())},
                          checks=checks, unattributed_damage_hp=unattributed_hp,
                          equip_value_mismatch_rows=int((econ.equip_value_game != econ.inventory_value
                                                         + np.where(econ.armor > 0, VEST_PRICE, 0)
@@ -2592,13 +2597,16 @@ _DTYPES = {"Boolean": pl.Boolean, "Float32": pl.Float32, "Int8": pl.Int8, "Int16
 def _to_polars(df, table: str) -> pl.DataFrame:
     """Convert a table to its declared schema v1 types (schema_v1.TYPES), in declared column order."""
     declared = TYPES[table]
-    df = df.reset_index(drop=True)
-    for c in df.columns:
-        if df[c].dtype == object:
-            sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
-            if isinstance(sample, np.ndarray):
-                df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
-    out = pl.from_pandas(df)
+    if isinstance(df, pl.DataFrame):  # stitch.py's tables are polars already
+        out = df
+    else:
+        df = df.reset_index(drop=True)
+        for c in df.columns:
+            if df[c].dtype == object:
+                sample = next((v for v in df[c] if v is not None and not (isinstance(v, float) and math.isnan(v))), None)
+                if isinstance(sample, np.ndarray):
+                    df[c] = [list(v) if isinstance(v, np.ndarray) else v for v in df[c]]
+        out = pl.from_pandas(df)
     extra, missing = set(out.columns) - set(declared), set(declared) - set(out.columns)
     if extra or missing:
         raise ValueError(f"table {table}: columns not in schema v1 {sorted(extra)}, missing {sorted(missing)}")
@@ -2685,7 +2693,8 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     price_file=PRICE_FILE.name, price_source=PRICE_SOURCE, extractor_trade_window_s=TRADE_WINDOW_S, position_stride_ticks=POSITION_STRIDE_TICKS,
                     voided_windows=json.dumps(info["voided_windows"]),
                     dropped_attempts=json.dumps(info["dropped_attempts"]),
-                    excluded_players=json.dumps(info["excluded_players"], default=str),
+                    excluded_players=json.dumps(info["excluded_players"], default=str), parts="[]",
+                    departed=json.dumps(info["departed"]), scoreboard_taken=json.dumps(info["scoreboard_taken"]),
                     convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
                         **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "

@@ -17,6 +17,7 @@ import "./ui/styles/match-parity.css";
 import "./ui/styles/parity-round2.css";
 import "./ui/styles/insights.css";
 import "./ui/styles/leetify.css";
+import "./ui/styles/botmode.css";
 
 // Entrance motion is opt-in (views.css, "page enter"): the app turns it on here, so tests and static
 // renders, which never run this file, see every element in its final place.
@@ -24,6 +25,18 @@ document.documentElement.classList.add("anim");
 // Display numerals are set in Bahnschrift, which ships with Windows 10 and 11; elsewhere tokens.css
 // switches them to the fallback's own weight.
 if (!hasFont("Bahnschrift")) document.documentElement.classList.add("no-bahnschrift");
+
+// `vite dev` only: ?botmode=<scenario> answers the Bot Mode commands from a scripted game folder
+// (botmode/mock.ts), to build and screenshot the page without CS2. Builds drop this block.
+if (import.meta.env.DEV) {
+  const scenario = new URLSearchParams(location.search).get("botmode");
+  if (scenario) {
+    const { isScenario, mockBotmode, SCENARIOS } = await import("./botmode/mock");
+    const { setBotModeApi } = await import("./ui/data/botmode");
+    if (isScenario(scenario)) setBotModeApi(mockBotmode(scenario, 400));
+    else console.error(`?botmode=${scenario}: the scenarios are ${SCENARIOS.join(", ")}`);
+  }
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

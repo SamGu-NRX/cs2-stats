@@ -120,6 +120,34 @@ pub fn tag_commit(repo: &str, tag: &str) -> Result<String, String> {
     valid_sha1(&c.sha)
 }
 
+/// The largest text file [`file_text`] reads.
+const TEXT_LIMIT: u64 = 512 * 1024;
+/// How long [`file_text`] may take in all. The file is about 30 KB; no measurement backs the
+/// figure beyond being far above what that takes.
+const TEXT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A text file of `repo` at `tag`, through the contents API; at most [`TEXT_LIMIT`] bytes.
+pub fn file_text(repo: &str, tag: &str, path: &str) -> Result<String, String> {
+    check_repo(repo)?;
+    check_name("tag", tag)?;
+    if !path.split('/').all(|p| check_name("file path", p).is_ok()) {
+        return Err(format!("{path}: not a plain file path"));
+    }
+    let url = format!("https://api.github.com/repos/{repo}/contents/{path}?ref={tag}");
+    let resp = agent()
+        .get(&url)
+        .header("Accept", "application/vnd.github.raw")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        // the whole request, body included: the agent bounds only the connection and the headers,
+        // and a reply that stalls mid-body would otherwise hold its thread for good
+        .config()
+        .timeout_global(Some(TEXT_TIMEOUT))
+        .build()
+        .call()
+        .map_err(|e| format!("{url}: {e}"))?;
+    resp.into_body().into_with_config().limit(TEXT_LIMIT).read_to_string().map_err(|e| format!("{url}: {e}"))
+}
+
 fn valid_sha1(s: &str) -> Result<String, String> {
     if s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(s.to_ascii_lowercase())

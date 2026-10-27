@@ -155,8 +155,9 @@ pub struct ChangeSet<'p> {
     entries: Vec<Entry>,
     log: File,
     flusher: Flusher,
-    /// Set by `put_bytes_if_unchanged` for the length of its write.
-    guard_hash: Option<String>,
+    /// Set by the `*_if_unchanged` writes for the length of their write: the hash the target
+    /// must still have right before the rename, or `Some(None)` when it must still be absent.
+    guard: Option<Option<String>>,
 }
 
 impl<'p> ChangeSet<'p> {
@@ -229,7 +230,7 @@ impl<'p> ChangeSet<'p> {
                 return Err(format!("starting the change failed: {e}"));
             }
         };
-        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher, guard_hash: None })
+        Ok(ChangeSet { layout: layout.clone(), probe, root_canon, dir, meta, entries: Vec::new(), log, flusher, guard: None })
     }
 
     pub fn id(&self) -> &str {
@@ -272,15 +273,55 @@ impl<'p> ChangeSet<'p> {
             return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
         }
         let expected = hash::bytes(data);
-        self.guard_hash = Some(read_hash.to_string());
+        self.guard = Some(Some(read_hash.to_string()));
         let r = self.put_inner(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()));
-        self.guard_hash = None;
+        self.guard = None;
+        r
+    }
+
+    /// Writes a file this app owns whole (the knife file), as a compare-and-swap: refused unless
+    /// it still hashes to `read_hash` (`None`: still absent), checked as in
+    /// [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_app_file_if_unchanged(&mut self, rel: &str, data: &[u8], read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::None {
+            return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        let expected = hash::bytes(data);
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()));
+        self.guard = None;
         r
     }
 
     pub fn put_bytes(&mut self, rel: &str, data: &[u8]) -> Result<bool, String> {
         let expected = hash::bytes(data);
         self.put(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()))
+    }
+
+    /// [`put_file`](Self::put_file) as a compare-and-swap: refused unless the target still
+    /// hashes to `read_hash` (`None`: still absent), checked as in
+    /// [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_file_if_unchanged(&mut self, rel: &str, src: &Path, expected: &str, read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::None {
+            return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, expected, |f| {
+            let r = File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+            hash::copy(r, f).map(|_| ()).map_err(|e| format!("{}: {e}", src.display()))
+        });
+        self.guard = None;
+        r
     }
 
     pub fn put_file(&mut self, rel: &str, src: &Path, expected: &str) -> Result<bool, String> {
@@ -299,6 +340,37 @@ impl<'p> ChangeSet<'p> {
         }
         let expected = hash::bytes(merged);
         self.put_inner(rel, &expected, |f| f.write_all(merged).map_err(|e| e.to_string()))
+    }
+
+    /// [`put_merged_cfg`](Self::put_merged_cfg) as a compare-and-swap: refused unless the cfg
+    /// still hashes to `read_hash` (`None`: still absent), the content `merged` was computed
+    /// from. Checked when the write starts and again right before the rename, with the same
+    /// limit as [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_merged_cfg_if_unchanged(&mut self, rel: &str, merged: &[u8], read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::MergeConvars {
+            return Err(format!("{rel}: not a cfg Bot Mode merges convars into"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        let expected = hash::bytes(merged);
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, &expected, |f| f.write_all(merged).map_err(|e| e.to_string()));
+        self.guard = None;
+        r
+    }
+
+    /// A guarded write whose content comes from `fill`, which runs after the journal entry is
+    /// written and before the pre-rename check: tests use it to change the target in between.
+    #[cfg(test)]
+    pub fn put_guarded_with(&mut self, rel: &str, read_hash: &str, expected: &str, fill: impl FnOnce(&mut File) -> Result<(), String>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        self.guard = Some(Some(read_hash.to_string()));
+        let r = self.put_inner(rel, expected, fill);
+        self.guard = None;
+        r
     }
 
     fn confine(&self, rel: &str) -> Result<PathBuf, String> {
@@ -333,46 +405,53 @@ impl<'p> ChangeSet<'p> {
                 return Err(format!("{rel}: the backup copy does not match the original"));
             }
         }
+        // What the target must still hold at the rename: what the caller read for a guarded
+        // write, or else what was read and backed up just above. Every write is a
+        // compare-and-swap, so a file another program writes meanwhile (Valve's updater during an
+        // install) is never overwritten.
+        let must_hold = self.guard.clone().unwrap_or_else(|| before.clone());
         let entry = Entry { path: rel.clone(), before, after: expected.to_string() };
         let line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
+        // where this entry starts, so a write that fails before its rename can take it back
+        let journal_len = self.log.metadata().map_err(|e| format!("reading the change journal: {e}"))?.len();
         writeln!(self.log, "{line}")
             .and_then(|_| self.log.sync_data())
             .map_err(|e| format!("writing the change journal: {e}"))?;
         self.entries.push(entry);
 
         let tmp = tmp_path(&target);
-        self.confine(&rel)?;
-        let written = File::create(&tmp)
-            .map_err(|e| format!("{}: {e}", tmp.display()))
-            .and_then(|mut f| {
-                fill(&mut f)?;
-                f.sync_all().map_err(|e| e.to_string())
-            })
-            .and_then(|_| hash::file(&tmp));
-        match written {
-            Ok(got) if got == expected => {}
-            Ok(got) => {
-                let _ = fs::remove_file(&tmp);
+        let staged = (|| -> Result<(), String> {
+            self.confine(&rel)?;
+            let got = File::create(&tmp)
+                .map_err(|e| format!("{}: {e}", tmp.display()))
+                .and_then(|mut f| {
+                    fill(&mut f)?;
+                    f.sync_all().map_err(|e| e.to_string())
+                })
+                .and_then(|_| hash::file(&tmp))
+                .map_err(|e| format!("{rel}: {e}"))?;
+            if got != expected {
                 return Err(format!("{rel}: new content hashes to {got}, expected {expected}"));
             }
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                return Err(format!("{rel}: {e}"));
+            self.confine(&rel)?;
+            if hash::file_if_exists(&target)? != must_hold {
+                return Err(format!("{rel}: {CHANGED_SINCE_READ}; another program wrote it while Bot Mode was writing, so Bot Mode left it as that program wrote it"));
             }
-        }
-        if let Err(e) = self.confine(&rel) {
+            Ok(())
+        })();
+        if let Err(e) = staged {
             let _ = fs::remove_file(&tmp);
+            // Nothing was written: the entry comes back out of the journal, so the change is
+            // undone as one that wrote nothing, instead of rollback finding another program's
+            // content and refusing, which would leave every later change blocked.
+            self.entries.pop();
+            // the journal handle only appends, which Windows does not let truncate
+            OpenOptions::new()
+                .write(true)
+                .open(self.dir.join(ENTRIES))
+                .and_then(|f| f.set_len(journal_len).and_then(|_| f.sync_data()))
+                .map_err(|j| format!("{e}; and taking it back out of the change journal failed: {j}"))?;
             return Err(e);
-        }
-        if let Some(guard) = &self.guard_hash {
-            if hash::file_if_exists(&target)?.as_deref() != Some(guard.as_str()) {
-                let _ = fs::remove_file(&tmp);
-                // Nothing was renamed into place, so the automatic rollback has nothing of this
-                // change's to undo here. Left in the list, the entry would let that rollback
-                // "restore" a file another program wrote with the same bytes this change meant to.
-                self.entries.pop();
-                return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
-            }
         }
         fs::rename(&tmp, &target).map_err(|e| {
             let _ = fs::remove_file(&tmp);
@@ -539,6 +618,15 @@ fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
         }
     }
     Ok(out)
+}
+
+/// The game paths a recorded change wrote, as its journal lists them, for the view's rollback
+/// preview. `id` must name a recorded change; reads only.
+pub fn files(layout: &Layout, id: &str) -> Result<Vec<String>, String> {
+    if !list(layout)?.iter().any(|m| m.id == id) {
+        return Err(format!("{id}: no such change"));
+    }
+    Ok(read_entries(&layout.backups().join(id))?.into_iter().map(|e| e.path).collect())
 }
 
 /// Every recorded change, newest first.

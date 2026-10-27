@@ -187,6 +187,58 @@ fn check(sys: &dyn System, image: &Path, p: Listed) -> Verdict {
     }
 }
 
+/// A CS2 of this install as it runs now, judged by its command line for the view's VAC state.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "vac")]
+pub enum Running {
+    /// `-insecure`, and nothing turning VAC back on.
+    Off { pid: u32, command_line: String },
+    /// No `-insecure`, or a token that turns VAC on.
+    On { pid: u32, why: String },
+    /// Its executable or command line could not be read.
+    Unknown { pid: u32, why: String },
+}
+
+/// Every CS2 of this install that runs now, with its VAC state. Reads only: unlike the
+/// supervisor's check it never ends a process. A CS2 of another install is left out.
+pub fn inspect(sys: &dyn System, image: &Path) -> Result<Vec<Running>, String> {
+    let mut out = Vec::new();
+    for p in sys.cs2_list()? {
+        let pid = p.pid;
+        let h = match sys.open(pid) {
+            Ok(Some(h)) => h,
+            Ok(None) => continue,
+            Err(e) => {
+                out.push(Running::Unknown { pid, why: format!("it could not be opened ({e})") });
+                continue;
+            }
+        };
+        let img = match h.image() {
+            Ok(i) => i,
+            Err(e) => {
+                out.push(Running::Unknown { pid, why: format!("its executable could not be read ({e})") });
+                continue;
+            }
+        };
+        match sys.same_file(&img, image) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                out.push(Running::Unknown { pid, why: format!("its executable could not be compared with this install's ({e})") });
+                continue;
+            }
+        }
+        out.push(match h.command_line() {
+            Ok(line) => match judge_command_line(Some(&line)) {
+                Ok(()) => Running::Off { pid, command_line: line },
+                Err(why) => Running::On { pid, why },
+            },
+            Err(e) => Running::Unknown { pid, why: format!("its command line could not be read ({e})") },
+        });
+    }
+    Ok(out)
+}
+
 /// A sentence about one verdict.
 pub fn sentence(c: &Checked) -> String {
     match c {

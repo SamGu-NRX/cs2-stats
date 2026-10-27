@@ -437,6 +437,97 @@ def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path,
     assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
+def test_a_download_seen_in_progress_records_when_it_reached_its_final_size(tmp_path, monkeypatch):
+    # The browser's Downloads copy is created within seconds of this moment; a file already whole when first seen
+    # has no such moment, and its copy is never matched.
+    _isolate(tmp_path, monkeypatch)
+    growing, whole = dp.DOWNLOADS / "6b1c0d4e-growing", dp.DOWNLOADS / "6b1c0d4e-whole"
+    growing.write_bytes(dp.RAR_MAGIC)
+    whole.write_bytes(dp.RAR_MAGIC + b"whole")
+    p = dp.Pipeline()
+    p.scan(100.0)
+    growing.write_bytes(dp.RAR_MAGIC + b"rest of the archive")
+    p.scan(102.0)
+    p.scan(114.0)
+    assert p.archives[growing.name].download_finished == 102.0
+    assert p.archives[whole.name].download_finished is None
+
+
+def test_a_retried_failure_keeps_its_downloads_finish_time(tmp_path, monkeypatch):
+    # A retry read the archive from failed/, where no download is seen, so a retry that passed had no finish time
+    # and its copy in Downloads was never cleaned.
+    import hashlib
+    _isolate(tmp_path, monkeypatch)
+    kept = dp.FAILED_DIR / "slug-r1"
+    kept.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 20
+    (kept / "archive.rar").write_bytes(data)
+    (kept / "reason.json").write_text(json.dumps(dict(reason="7z exit 2", extractor_version="1.0.0")))
+    sha = hashlib.sha256(data).hexdigest()
+    dp.append_jsonl(dp.LEDGER, dict(id="r1", status="failed", kept=str(kept), rar_bytes=len(data), rar_sha256=sha,
+                                    download_started=100.0, download_finished=123.0, finished_utc="2026-10-27T01:00:00"))
+    p = dp.Pipeline(retry_failed=True)
+    p.scan(0.0)
+    a = p.archives["slug-r1"]
+    assert (a.rar_bytes, a.rar_sha256, a.download_started, a.download_finished) == (len(data), sha, 100.0, 123.0)
+    assert p.rar_facts(a)["download_finished"] == 123.0
+    # A record of other bytes (the folder reused for another archive) lends nothing.
+    assert p.failure_record(kept, "0" * 64) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
+def test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"
+    copies.mkdir()
+    copy = copies / "a-vs-b-bo3.rar"
+    copy.write_bytes(dp.RAR_MAGIC + b"payload" * 50)
+    import hashlib
+    rec = dict(id="a1", status="done", rar_bytes=copy.stat().st_size, rar_sha256=hashlib.sha256(copy.read_bytes()).hexdigest(),
+               download_finished=copy.stat().st_birthtime)
+    p = dp.Pipeline(copies_folder=copies)
+    p.clean_copies({**rec, "status": "failed"})  # its copy may be the last one once failed/ is trimmed
+    p.clean_copies({**rec, "download_finished": None})  # whole when first seen: nothing to match on
+    p.clean_copies({k: v for k, v in rec.items() if not k.startswith("rar_")})  # written before hashes existed
+    dp.Pipeline(copies_folder=None).clean_copies(rec)  # mode off, or the folder was refused
+    assert copy.exists() and not dp.COPIES_LOG.exists()
+    p.clean_copies(rec)
+    assert not copy.exists()
+    assert [json.loads(x)["outcome"] for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()] == ["deleting", "deleted"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
+def test_a_finished_archives_downloads_copy_is_deleted(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"  # _isolate made downloads/, the watched folder
+    copies.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 500
+    rar = dp.DOWNLOADS / "0d9f6a51-5d4e-4a8e-9a3e-3a1f0c2b7e11"
+    rar.write_bytes(data[:10])
+    p = dp.Pipeline(copies_folder=copies)
+    t0 = time.time()
+    p.scan(t0)
+    rar.write_bytes(data)
+    copy = copies / "event-team-a-vs-team-b-bo3-Xy12.rar"
+    copy.write_bytes(data)
+    other = copies / "same-size-other-archive.rar"
+    other.write_bytes(data[:-1] + b"!")
+    p.scan(t0 + 2)
+    p.scan(t0 + 14)
+    a = p.archives[rar.name]
+    a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-0d9f6a51", dp.WORK_DIR / "w"
+    a.work.mkdir()
+    a.dems, a.results = [a.work / "x-m1-nuke.dem"], {"x-m1-nuke.dem": {"ok": True, "map": "m1-nuke"}}
+    p.finish_archives()
+    assert p.ledger[rar.name]["download_finished"] == t0 + 2
+    assert not copy.exists() and other.exists()
+    rows = [json.loads(x) for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()]
+    assert sorted((Path(r["path"]).name, r["outcome"]) for r in rows) == [
+        (copy.name, "deleted"), (copy.name, "deleting"), (other.name, "kept")]
+
+
 def test_assist_on_own_teammate_is_not_credited():
     # A pro demo, tick 31391: a T player (C) hurt his teammate (D) for 38, a CT player (A) killed D, and
     # player_death names C as assister; the scoreboard does not count it (assists 1, not 2).
@@ -877,13 +968,14 @@ def test_status_reports_want_beside_the_real_pending_count(tmp_path, monkeypatch
 
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "DATA_ROOT", tmp_path)
-    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS"):
+    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS", "PARTS_DIR"):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
     monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    monkeypatch.setattr(dp, "COPIES_LOG", dp.LOG_DIR / "download_copies.jsonl")
     # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
     # A test that needs another value sets free_gb itself.
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
@@ -1195,6 +1287,137 @@ def test_the_frozen_copy_holds_every_module_the_extractor_imports():
             for m in mods:
                 if (dp.ROOT / f"{m.split('.')[0]}.py").exists():
                     assert f"{m.split('.')[0]}.py" in code, f"{name} imports {m}, which the frozen copy lacks"
+
+
+def test_a_split_maps_parts_are_stitched_or_held_and_recorded(tmp_path, monkeypatch):
+    # A split recording's parts are written under parts/, never demos/; when the archive finishes, its split map
+    # is joined into demos/ or held back, and parts.jsonl says which.
+    _isolate(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(dp.stitch, "stitch_map",
+                        lambda parts, out: calls.append((sorted(parts), out)) or dict(map=str(out), status="stitched"))
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="x-vs-y-r")
+    a.out_dirs = {f"x-vs-y-m1-nuke-p{n}.dem": dp.PARTS_DIR / a.slug / f"m1-nuke-p{n}" for n in (1, 2)}
+    a.out_dirs["x-vs-y-m2-dust2.dem"] = dp.DEMOS_DIR / a.slug / "m2-dust2"
+    a.split = {f"x-vs-y-m1-nuke-p{n}.dem": ("m1-nuke", n) for n in (1, 2)}
+    for d in a.out_dirs.values():
+        d.mkdir(parents=True)
+    p.stitch_parts(a)
+    assert calls == [([1, 2], dp.DEMOS_DIR / a.slug / "m1-nuke")]
+    assert not (dp.PARTS_DIR / a.slug / "m1-nuke-p1").exists()  # stitched: the joined map holds what they did
+    p.stitch_parts(a, failed="ValidationFailed: deaths 12!=13")
+    rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["status"] for r in rows] == ["stitched", "held"] and "the archive failed" in rows[1]["reason"]
+
+
+def test_held_parts_count_in_the_budget_and_the_oldest_go_past_the_cap(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    for i, slug in enumerate(("old-vs-one-r", "new-vs-two-r")):
+        for n in (1, 2):
+            d = dp.PARTS_DIR / slug / f"m1-nuke-p{n}"
+            d.mkdir(parents=True)
+            (d / "kills.parquet").write_bytes(b"x" * 1000)
+            os.utime(d / "kills.parquet", (1000 + i, 1000 + i))
+            os.utime(d, (1000 + i, 1000 + i))
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 4000
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 2500 / 1e9)
+    p.enforce_parts_cap()
+    assert not (dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1").exists()
+    assert (dp.PARTS_DIR / "new-vs-two-r" / "m1-nuke-p2").exists()
+    row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
+    assert (row["status"], row["bytes"], row["map"]) == ("expired", 2000, str(dp.DEMOS_DIR / "old-vs-one-r"))
+
+
+def test_the_parts_cap_never_expires_an_archive_still_in_flight(tmp_path, monkeypatch):
+    # A finished part of an archive whose other part was still parsing was expired, so the stitch found a part
+    # missing while the archive's demos and RAR were still deleted.
+    _isolate(tmp_path, monkeypatch)
+    for slug in ("busy-vs-one-r", "idle-vs-two-r"):
+        d = dp.PARTS_DIR / slug / "m1-nuke-p1"
+        d.mkdir(parents=True)
+        (d / "kills.parquet").write_bytes(b"x" * 1000)
+    p = dp.Pipeline()
+    p.archives["r1"] = dp.Archive(rar=dp.DOWNLOADS / "r1", id="r1", slug="busy-vs-one-r", state="parsing")
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p.enforce_parts_cap()
+    assert (dp.PARTS_DIR / "busy-vs-one-r" / "m1-nuke-p1").exists()
+    assert not (dp.PARTS_DIR / "idle-vs-two-r").exists()
+
+
+def test_the_parts_cap_skips_a_part_whose_map_lock_is_held(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "idle-vs-two-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    (d / "kills.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    with ex.map_lock(d):
+        dp.Pipeline().enforce_parts_cap()
+    assert d.exists() and not (dp.PARTS_DIR / "parts.jsonl").exists()
+
+
+def _split_archive(slug, parts=(1, 2)):
+    work = dp.WORK_DIR / slug
+    work.mkdir(parents=True)
+    rar = dp.DOWNLOADS / slug
+    rar.write_bytes(dp.RAR_MAGIC + bytes(10))
+    a = dp.Archive(rar=rar, id=slug, slug=slug, state="parsing", work=work)
+    for n in parts:
+        dem = work / f"x-vs-y-m1-nuke-p{n}.dem"
+        dem.write_bytes(b"dem")
+        a.dems.append(dem)
+        a.out_dirs[dem.name] = dp.PARTS_DIR / slug / f"m1-nuke-p{n}"
+        a.split[dem.name] = ("m1-nuke", n)
+        a.results[dem.name] = dict(ok=True, dem_file=dem.name, map=f"m1-nuke-p{n}")
+    return a
+
+
+def test_an_archive_is_done_only_when_every_map_is_published_or_held_with_its_parts(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.stitch, "stitch_map", lambda parts, out: dict(map=str(out), status="held", reason="test"))
+    p = dp.Pipeline()
+    # Held, with both part folders still holding their tables: done, and the held map is in the ledger record.
+    kept = _split_archive("kept-vs-x-r")
+    for d in kept.out_dirs.values():
+        (d.mkdir(parents=True), (d / "match.parquet").write_bytes(b"x"))
+    p.archives[kept.id] = kept
+    p.finish_archives()
+    rec = p.ledger[kept.id]
+    assert rec["status"] == "done" and rec["held"] == [dict(map="m1-nuke", reason="test")]
+    # Held, but part 2's folder is gone: the RAR is kept in failed/ and the archive is not done.
+    lost = _split_archive("lost-vs-x-r")
+    d1 = lost.out_dirs["x-vs-y-m1-nuke-p1.dem"]
+    d1.mkdir(parents=True)
+    (d1 / "match.parquet").write_bytes(b"x")
+    p.archives[lost.id] = lost
+    p.finish_archives()
+    assert p.ledger[lost.id]["status"] == "failed" and "m1-nuke-p2" in p.ledger[lost.id]["reason"]
+    assert (dp.FAILED_DIR / "lost-vs-x-r" / "archive.rar").exists()
+
+
+def test_a_second_copy_of_a_part_holds_its_map_and_is_never_published_alone(tmp_path, monkeypatch):
+    # Two demos named for m1-nuke-p1: the second's folder became m1-nuke-p1_dup, which split_key did not
+    # recognize, so a partial recording was published as a whole map.
+    _isolate(tmp_path, monkeypatch)
+    slug = "x-vs-y-r"
+    work = dp.WORK_DIR / slug
+    work.mkdir()
+    for name in ("x-vs-y-m1-nuke-p1.dem", "z-vs-w-m1-nuke-p1.dem", "x-vs-y-m1-nuke-p2.dem"):
+        (work / name).write_bytes(b"dem")
+    a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug=slug, state="extracting", work=work,
+                   extract_log=dp.LOG_DIR / "x.log")
+    a.proc = type("done", (), {"poll": lambda self: 0})()
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.poll_extractions()
+    assert set(a.split.values()) == {("m1-nuke", 1), ("m1-nuke", 2)} and len(a.split) == 3
+    assert all(Path(d).parent.parent == dp.PARTS_DIR for d in a.out_dirs.values())
+    assert sorted(Path(d).name for d in a.out_dirs.values()) == ["m1-nuke-p1", "m1-nuke-p1_dup", "m1-nuke-p2"]
+    monkeypatch.setattr(dp.stitch, "stitch_map", lambda *x, **k: pytest.fail("a duplicate part must not be joined"))
+    rows = p.stitch_parts(a)
+    assert rows["m1-nuke"]["status"] == "held" and "part 1 appears more than once" in rows["m1-nuke"]["reason"]
+    assert not (dp.DEMOS_DIR / slug).exists()
 
 
 def _failed_archive(tmp_path, name, dem_bytes=b"dem", reason="ValidationFailed: deaths 12!=13"):

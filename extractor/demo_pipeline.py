@@ -11,7 +11,9 @@ Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stop
       .venv\\Scripts\\python.exe -I demo_pipeline.py --once     (exit when idle)
       add --retry-failed to also pick up RARs in failed/ (each failed demo once per extractor version)
 Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
-CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest).
+CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest),
+CS2_PIPELINE_DOWNLOAD_COPIES (off, dry-run or delete; default dry-run): what to do with the copy of each finished
+archive that the browser also saves to Windows Downloads (download_copies.py).
 """
 
 from __future__ import annotations
@@ -39,7 +41,9 @@ import psutil
 
 ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
+import download_copies  # noqa: E402
 import extract  # noqa: E402
+import stitch  # noqa: E402
 from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, repo_root  # noqa: E402
 
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
@@ -49,6 +53,9 @@ DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-s
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
 FAILED_DIR = DATA_ROOT / "failed"
+# A split recording's parts (<map>-pN) are written here, never to demos/, and joined into one map in demos/ when
+# stitch.plan allows; parts.jsonl here records each split map's outcome.
+PARTS_DIR = DATA_ROOT / "parts"
 LOG_DIR = DATA_ROOT / "logs"
 # awpy-data release 2000935 was built from CS2 1.41.9.2 (Steam build 26144732), the build installed
 # locally; extract.py withholds mesh visibility for any map whose mesh disagrees with the demo.
@@ -56,6 +63,12 @@ MAPDATA = DATA_ROOT / "mapdata" / "2000935"
 MANIFEST = DEMOS_DIR / "manifest.jsonl"
 LEDGER = DEMOS_DIR / "archives.jsonl"  # one line per finished archive, done or failed
 DROPPED = DEMOS_DIR / "failed_dropped.jsonl"  # failed archives deleted because failed/ was full
+# The browser's second copy of each archive, in Windows Downloads. Only a finished archive's copy is deleted: a
+# failed archive's copy is kept, because failed/ deletes its oldest archives past MAX_FAILED_GB and the copy may
+# then be the only one left to diagnose the failure. dry-run, the default, logs what delete would remove; delete
+# is the user's choice, made knowing the one case it can remove a file of the user's (download_copies docstring).
+COPIES_MODE = os.environ.get("CS2_PIPELINE_DOWNLOAD_COPIES") or "dry-run"
+COPIES_LOG = LOG_DIR / "download_copies.jsonl"  # one line per candidate copy: deleted, would_delete or kept
 # Maps written by an older extractor; a re-downloaded copy extracted now replaces the old folder.
 NEEDS_REEXTRACT = DEMOS_DIR / "needs_reextract.jsonl"
 
@@ -64,13 +77,18 @@ PARTIAL_SUFFIXES = (".crdownload", ".part", ".partial", ".download", ".tmp")
 STABLE_SECONDS = 10.0
 # Disk budget (set by the user, who has limited disk): no new extraction when free space is
 # below MIN_FREE_GB, or when the pipeline's transient data exceeds MAX_OUR_GB: archives waiting and downloading,
-# work/, space held for running extractions, and failed/. demos/, the published tables, is the product and is not
-# in the budget; the free-space floor on every volume bounds it.
+# work/, space held for running extractions, failed/, and parts/ (a split map's parts while they wait to be joined).
+# demos/, the published tables, is the product and is not in the budget; the free-space floor on every volume
+# bounds it.
 # failed/ has its own cap: each failed archive is kept with its failing .dem files and their validation
 # reports so the failure can be diagnosed, up to MAX_FAILED_GB; beyond that the oldest is logged and deleted.
+# parts/ holds a split map's parts only while they are held back: a stitched map's parts are deleted, and beyond
+# MAX_PARTS_GB the oldest held map's parts are deleted, each with a parts.jsonl row. One HLTV map's two parts took
+# 1.3 and 4.4 MB, so the cap holds hundreds of held maps; it is not a measured need.
 MIN_FREE_GB = 45.0
 MAX_OUR_GB = float(os.environ.get("CS2_PIPELINE_MAX_GB") or 30)
 MAX_FAILED_GB = 8.0
+MAX_PARTS_GB = 2.0
 TRUNCATED = "truncated_demo"  # fail_reason of a demo nothing can read to a complete round; never retried
 STALE_WORK_S = 2 * 3600
 WORK_SWEEP_S = 600
@@ -187,6 +205,14 @@ class CompletenessTracker:
         self._seen.pop(path, None)
         self._first.pop(path, None)
 
+    def last_change(self, path: Path) -> float | None:
+        """When this run first saw the file at its current size, if its size changed while observed (a download
+        seen in progress). None for a file already whole when first seen."""
+        first, seen = self._first.get(path), self._seen.get(path)
+        if first is None or seen is None or seen[0] == first[0]:
+            return None
+        return seen[1]
+
     def first_seen(self, path: Path) -> float | None:
         first = self._first.get(path)
         return None if first is None else first[1]
@@ -229,6 +255,9 @@ class Archive:
     listing: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)
     out_dirs: dict = field(default_factory=dict)  # demo name -> the folder its job writes, as allocated
+    # demo name -> (base map key, part number) for a part of a split recording, from its file name; its folder name
+    # may carry a _dup suffix, so the identity is kept here and never read back from the folder
+    split: dict = field(default_factory=dict)
     proc: subprocess.Popen | None = None
     extract_log: Path | None = None
     size_at_extract: int = 0
@@ -238,6 +267,7 @@ class Archive:
     rar_bytes: int = 0  # the downloaded file as picked up: its size, SHA-256, and when its download began
     rar_sha256: str | None = None
     download_started: float = 0.0
+    download_finished: float | None = None  # the first poll at its final size, for a download seen in progress
     archive_gb_counted: bool = False
 
 
@@ -768,8 +798,9 @@ def read_ledger() -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 class Pipeline:
-    def __init__(self, retry_failed: bool = False):
+    def __init__(self, retry_failed: bool = False, copies_folder: Path | None = None):
         self.retry_failed = retry_failed
+        self.copies_folder = copies_folder  # checked by download_copies.check_folder; None: copies are left alone
         self.tracker = CompletenessTracker()
         self.archives: dict[str, Archive] = {}
         self.jobs: deque[Job] = deque()
@@ -862,7 +893,7 @@ class Pipeline:
                 took = self.tracker.download_s(f, now)
                 if took is not None:
                     self.download_s.append(took)
-            seen = self.tracker.first_seen(f)
+            seen, finished = self.tracker.first_seen(f), self.tracker.last_change(f)
             self.tracker.forget(f)
             if not is_rar(f):
                 self.ignored.add(f)
@@ -871,8 +902,14 @@ class Pipeline:
             st = f.stat()
             # The download began no later than the file appeared: its creation time, or when this run first saw it.
             created = getattr(st, "st_birthtime", st.st_ctime)
-            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=extract.file_sha256(f),
-                                         download_started=min(created, seen) if seen is not None else created)
+            sha = extract.file_sha256(f)
+            started = min(created, seen) if seen is not None else created
+            if in_failed:  # a retry: the download's own times, from its failure record, if it is the same file
+                rec = self.failure_record(f.parent, sha)
+                if rec:
+                    started, finished = rec.get("download_started") or started, rec.get("download_finished")
+            self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=sha,
+                                         download_started=started, download_finished=finished)
             log.info("pending archive %s (%.0f MB)", f, f.stat().st_size / 1e6)
 
     # --- extraction
@@ -955,12 +992,15 @@ class Pipeline:
             failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
             for dem in a.dems:
                 key = extract.map_key_for(dem, dem.stem)
+                part = stitch.split_key(key)
+                if part:
+                    a.split[dem.name] = part
                 while key in keys:
                     key += "_dup"
                 keys.add(key)
                 jd = LOG_DIR / "jobs"
                 jd.mkdir(parents=True, exist_ok=True)
-                a.out_dirs[dem.name] = DEMOS_DIR / a.slug / key
+                a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
                 if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
                     a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
                     log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
@@ -1130,8 +1170,13 @@ class Pipeline:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
                 continue
             replace_old_extractions(a.results, a.out_dirs)
+            rows = self.stitch_parts(a)
             self.outputs_changed()
-            # Every map is written and validated: the inputs can go.
+            missing = self.unaccounted(a, rows)
+            if missing:  # the RAR stays, in failed/, so nothing is lost
+                self.fail_archive(a, "maps neither published nor held with their parts: " + "; ".join(missing))
+                continue
+            # Every map is published, or held back with its parts intact: the inputs can go.
             safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
                 log.error("could not remove %s; keeping RAR %s", a.work, a.rar)
@@ -1141,16 +1186,99 @@ class Pipeline:
             else:
                 safe_unlink(a.rar)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
+                       held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
+                             if row["status"] != "stitched"],
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
+            self.clean_copies(rec)
+
+    def stitch_parts(self, a: Archive, failed: str | None = None) -> dict[str, dict]:
+        """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so. Returns
+        {base map key: parts.jsonl row}. Parts are grouped by the identity their file names give (Archive.split),
+        so a second copy of a part, whose folder got a _dup suffix, holds its map instead of passing for a map."""
+        groups: dict[str, dict[int, list[Path]]] = {}
+        for dem, (base, n) in sorted(a.split.items()):
+            groups.setdefault(base, {}).setdefault(n, []).append(Path(a.out_dirs[dem]))
+        rows = {}
+        for base, by_n in sorted(groups.items()):
+            out_dir = DEMOS_DIR / (a.slug or a.id) / base
+            parts = {n: ds[0] for n, ds in sorted(by_n.items())}
+            dup = {n: ds for n, ds in sorted(by_n.items()) if len(ds) > 1}
+            held = dict(map=str(out_dir), parts={str(n): [str(d) for d in ds] for n, ds in sorted(by_n.items())},
+                        status="held")
+            if failed:
+                row = dict(held, reason=f"the archive failed: {failed[:300]}")
+            elif dup:
+                row = dict(held, reason="part " + ", ".join(map(str, dup)) + " appears more than once in the archive; "
+                                        "which copy is the match's cannot be told")
+            else:
+                try:
+                    row = stitch.stitch_map(parts, out_dir)
+                except Exception as e:  # noqa: BLE001 - a map that cannot be stitched is held, the archive is still done
+                    row = dict(held, reason=f"stitching raised {type(e).__name__}: {e}"[:500])
+            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, row)
+            log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
+            if row["status"] == "stitched":  # the joined map in demos/ holds everything its parts did
+                for d in parts.values():
+                    stitch.delete_part(d)
+            rows[base] = row
+        self.enforce_parts_cap()
+        return rows
+
+    def unaccounted(self, a: Archive, rows: dict[str, dict]) -> list[str]:
+        """What keeps the archive's originals from being deleted: a whole map that does not resolve, a stitched map
+        that does not resolve, or a held split map with a part folder that no longer holds its tables."""
+        out = []
+        for dem, d in sorted(a.out_dirs.items()):
+            if dem not in a.split and extract.resolve_map_dir(Path(d)) is None:
+                out.append(f"{dem}: {d} holds no complete map")
+        for base, row in sorted(rows.items()):
+            if row["status"] == "stitched":
+                if extract.resolve_map_dir(DEMOS_DIR / (a.slug or a.id) / base) is None:
+                    out.append(f"{base}: stitched, but holds no complete map")
+                continue
+            gone = [str(a.out_dirs[dem]) for dem, (b, _) in sorted(a.split.items())
+                    if b == base and extract.resolve_map_dir(Path(a.out_dirs[dem])) is None]
+            if gone:
+                out.append(f"{base}: held, but part folder(s) {gone} hold no complete map")
+        return out
+
+    def enforce_parts_cap(self) -> None:
+        """Delete the oldest held parts, one archive's folder in parts/ at a time, while parts/ holds more than
+        MAX_PARTS_GB, recording each. An archive still in flight is never touched: its finished parts wait for its
+        other parts. A part folder whose map lock another process holds is skipped."""
+        active = {a.slug for a in self.archives.values() if a.slug}
+        folders = sorted((d for d in PARTS_DIR.iterdir() if d.is_dir()), key=lambda d: newest_mtime(d)) \
+            if PARTS_DIR.exists() else []
+        sizes = {d: tree_bytes(d) for d in folders}
+        total = sum(sizes.values())
+        for d in folders:
+            if total <= MAX_PARTS_GB * 1e9:
+                return
+            if d.name in active:
+                continue
+            removed = [m for m in sorted(x for x in d.iterdir() if x.is_dir()) if stitch.delete_part(m)]
+            if not removed:
+                continue
+            if not any(x.is_dir() for x in d.iterdir()):
+                safe_rmtree(d, ignore_errors=True)
+            self.outputs_changed()
+            total -= sizes[d]
+            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
+                map=str(DEMOS_DIR / d.name), parts=[str(m) for m in removed], status="expired",
+                reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
+                checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            log.warning("parts/ over %.0f GB; deleted the held parts of %s (%.1f MB)", MAX_PARTS_GB, d.name,
+                        sizes[d] / 1e6)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
         self.outputs_changed()
         log.error("archive %s failed: %s", a.id, reason[:500])
+        self.stitch_parts(a, failed=reason)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         bad = {n: r for n, r in a.results.items() if not r.get("ok")}
         retried = a.rar.parent.parent == FAILED_DIR
@@ -1203,12 +1331,36 @@ class Pipeline:
         self.ledger[a.id] = rec
         self.archives.pop(a.id, None)
 
+    def failure_record(self, kept: Path, sha256: str) -> dict | None:
+        """The latest ledger record of the failure kept in folder kept whose file has this SHA-256: what its download
+        measured, carried into a retry so a retry that passes can still match the browser's copy."""
+        recs = [r for r in self.ledger.values() if r.get("kept") and Path(r["kept"]) == kept
+                and r.get("rar_sha256") == sha256]
+        return max(recs, key=lambda r: r.get("finished_utc") or "") if recs else None
+
     @staticmethod
     def rar_facts(a: Archive) -> dict:
-        """The downloaded file's size, SHA-256 and download start, for its ledger record: what a later cleanup of
-        the browser's saved copies can match against."""
-        return dict(rar_bytes=a.rar_bytes, rar_sha256=a.rar_sha256, download_started=a.download_started) \
-            if a.rar_sha256 else {}
+        """The downloaded file's size, SHA-256, download start and finish, for its ledger record: what
+        clean_copies matches the browser's saved copy against."""
+        return dict(rar_bytes=a.rar_bytes, rar_sha256=a.rar_sha256, download_started=a.download_started,
+                    download_finished=a.download_finished) if a.rar_sha256 else {}
+
+    def clean_copies(self, rec: dict) -> None:
+        """Delete (or in dry-run, log) the browser's Downloads copy of a finished archive. A record without a
+        download seen in progress has no finish time to match on, and its copy is left alone."""
+        if self.copies_folder is None or rec.get("status") != "done" or not rec.get("rar_sha256") \
+                or rec.get("download_finished") is None:
+            return
+        d = download_copies.Download(id=rec["id"], size=rec["rar_bytes"], sha256=rec["rar_sha256"],
+                                     finished=rec["download_finished"])
+        try:
+            rows = download_copies.clean(self.copies_folder, d, delete=COPIES_MODE == "delete", log_path=COPIES_LOG)
+        except OSError as e:
+            log.error("could not clean the Downloads copy of %s: %s", rec["id"], e)
+            return
+        for r in rows:
+            log.info("Downloads copy %s of %s: %s%s", r["path"], rec["id"], r["outcome"],
+                     f" ({r['reason']})" if r["reason"] else "")
 
     def enforce_failed_cap(self) -> None:
         """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each."""
@@ -1264,12 +1416,12 @@ class Pipeline:
         return self.outputs_bytes() + sum(work.values()) + waiting + downloading, held
 
     def outputs_bytes(self) -> int:
-        """Bytes in failed/ (MAX_FAILED_GB caps it inside the budget). The reading is kept for up to BUDGET_CACHE_S;
-        the pipeline's own writes there drop it (outputs_changed). Everything a download changes (waiting and
-        in-progress archives, work/, space held by extractions) is read fresh every time, so a download that just
-        finished counts at once. demos/ is not in the budget."""
+        """Bytes in failed/ and parts/ (MAX_FAILED_GB and MAX_PARTS_GB cap them inside the budget). The reading is
+        kept for up to BUDGET_CACHE_S; the pipeline's own writes there drop it (outputs_changed). Everything a
+        download changes (waiting and in-progress archives, work/, space held by extractions) is read fresh every
+        time, so a download that just finished counts at once. demos/ is not in the budget."""
         if self._outputs is None or time.time() - self._outputs[0] > BUDGET_CACHE_S:
-            self._outputs = (time.time(), tree_bytes(FAILED_DIR))
+            self._outputs = (time.time(), tree_bytes(FAILED_DIR) + tree_bytes(PARTS_DIR))
         return self._outputs[1]
 
     def outputs_changed(self) -> None:
@@ -1437,6 +1589,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if DOWNLOADS is None:
         ap.error("set CS2_DEMO_DOWNLOADS to the folder the browser saves HLTV demo archives to")
+    if COPIES_MODE not in download_copies.MODES:
+        ap.error(f"CS2_PIPELINE_DOWNLOAD_COPIES is {COPIES_MODE!r}; use one of {', '.join(download_copies.MODES)}")
     if MAX_WORKERS_ERROR:
         ap.error(MAX_WORKERS_ERROR)
     python, _ = worker_python()
@@ -1465,7 +1619,14 @@ def main(argv=None) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     freeze_code()
-    pipeline = Pipeline(retry_failed=a.retry_failed)
+    copies = None
+    if COPIES_MODE != "off":
+        try:
+            copies = download_copies.check_folder(download_copies.downloads_folder(), DATA_ROOT, DOWNLOADS)
+            log.info("Downloads copies of finished archives: %s in %s, logged to %s", COPIES_MODE, copies, COPIES_LOG)
+        except download_copies.Refused as e:
+            log.error("leaving the browser's Downloads copies alone: %s", e)
+    pipeline = Pipeline(retry_failed=a.retry_failed, copies_folder=copies)
     try:
         server = StatusServer((HOST, PORT), make_handler(pipeline))
     except OSError as e:
@@ -1481,6 +1642,8 @@ def main(argv=None) -> int:
     # place and get processed again.
     pipeline.sweep_work(force=True)
     tidy_demos()
+    for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
+        pipeline.clean_copies(rec)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")

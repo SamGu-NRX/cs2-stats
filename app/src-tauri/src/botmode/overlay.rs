@@ -136,6 +136,57 @@ impl Manifest {
     }
 }
 
+/// One entry of the manifest as the view previews it: where its files go and where they come
+/// from. Local checkout paths are left out; they name the user's folders.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedEntry {
+    pub name: String,
+    pub target: String,
+    pub files: Vec<String>,
+    /// "owner/name" on GitHub.
+    pub repo: String,
+    /// The branch, or the release tag.
+    pub reference: String,
+}
+
+/// What `apply` would copy, from the manifest alone, and the manifest's hash: the view sends
+/// that hash back with its confirmation, so a manifest edited after the preview is refused.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayPlan {
+    pub sha256: String,
+    pub entries: Vec<PlannedEntry>,
+}
+
+/// The manifest's bytes, read once, with their hash and their parse.
+fn read_manifest(path: &Path) -> Result<(String, Manifest), String> {
+    let bytes = std::fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => format!("{} does not exist; create it with `botmode init-manifest` and edit it", path.display()),
+        _ => format!("{}: {e}", path.display()),
+    })?;
+    let text = std::str::from_utf8(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let m = Manifest::parse(text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((hash::bytes(&bytes), m))
+}
+
+/// Reads the manifest only; checks nothing else.
+pub fn plan(path: &Path) -> Result<OverlayPlan, String> {
+    let (sha256, m) = read_manifest(path)?;
+    let entries = m
+        .entries
+        .into_iter()
+        .map(|e| {
+            let (repo, reference) = match e.source {
+                Source::Local { repo, branch, .. } => (repo, branch),
+                Source::GithubRelease { repo, tag, .. } => (repo, tag),
+            };
+            PlannedEntry { name: e.name, target: e.target, files: e.files, repo, reference }
+        })
+        .collect();
+    Ok(OverlayPlan { sha256, entries })
+}
+
 struct ResolvedFile {
     rel: String,
     sha: String,
@@ -298,9 +349,18 @@ pub struct OverlayReport {
 
 /// Applies every entry of the manifest at `manifest_path`, as one change.
 pub fn apply(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path) -> Result<OverlayReport, String> {
+    apply_checked(layout, probe, manifest_path, None)
+}
+
+/// [`apply`], refused when the manifest no longer hashes to `previewed`, the manifest the
+/// caller showed the user. The manifest is read once, and that same read is applied.
+pub fn apply_checked(layout: &Layout, probe: &dyn ProcessProbe, manifest_path: &Path, previewed: Option<&str>) -> Result<OverlayReport, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
-    let manifest = Manifest::load(manifest_path)?;
+    let (sha256, manifest) = read_manifest(manifest_path)?;
+    if previewed.is_some_and(|p| p != sha256) {
+        return Err(format!("{}: {} (it was previewed at another version); nothing was written", manifest_path.display(), changes::CHANGED_SINCE_READ));
+    }
     let resolved = manifest.entries.iter().map(|e| resolve(layout, e)).collect::<Result<Vec<_>, _>>()?;
     let (entries, change) = changes::run(layout, probe, &lock, "overlay", |cs| {
         let mut st = state::load(layout)?;
