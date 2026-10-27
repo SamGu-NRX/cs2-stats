@@ -10,7 +10,7 @@ import { listedEntries, isOwn } from "../data/engine";
 import { startMs, type MatchEntry } from "../data/match";
 import { filterPro, proChoices } from "../data/pro";
 import { useData } from "../data/provider";
-import { isProDemo, teamNames, useHidePersonal } from "../data/privacy";
+import { FOLDER_HIDDEN, isProDemo, teamNames, useHidePersonal } from "../data/privacy";
 import { SearchIcon } from "../icons/ui";
 import { fmtMatchDay, fmtTime, mapName, plural } from "../lib/format";
 import { matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
@@ -62,7 +62,7 @@ export function ProMatches({ switcher }: { switcher: JSX.Element }) {
       </div>
       {!all.length ? (
         <div className="matches__empty">
-          <Empty text={folder ? `No complete maps in ${folder} yet. Maps appear here once the extractor publishes them.` : "Pick the extractor's demos folder in Data & settings to list pro matches here."}
+          <Empty text={folder ? `No complete maps in ${hide ? FOLDER_HIDDEN.pro : folder} yet. Maps appear here once the extractor publishes them.` : "Pick the extractor's demos folder in Data & settings to list pro matches here."}
             action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} />
         </div>
       ) : !rows.length ? (
