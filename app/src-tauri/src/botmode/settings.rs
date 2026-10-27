@@ -757,6 +757,28 @@ fn knife_known(file: &KnifeFile) -> Result<(), String> {
     }
 }
 
+/// Refuses a launch while the server cfg runs the knife file but the file is missing or can't be
+/// read: which keys Bot Mode keeps unbound is then unknown, and a key the knife left would spawn
+/// knives again. The message is the page's (`knifeProblem` in Setup.tsx). A server cfg that can't
+/// be read leaves it unknown whether the file runs at all, so that is not refused here, as on the
+/// page.
+pub fn check_knife_file(layout: &Layout) -> Result<(), String> {
+    let Ok(r) = read_all(layout) else { return Ok(()) };
+    let f = &r.now.knife_file;
+    let runs = r.hash.is_some() && cfg::execs(&r.text, KNIFE_EXEC);
+    match f.status {
+        KnifeFileStatus::Missing => Err(format!(
+            "Knife key file missing: the server cfg runs {}, but it is gone, so which keys Bot Mode keeps unbound is unknown. Repair puts it back. Launch waits until then.",
+            f.path
+        )),
+        KnifeFileStatus::Unreadable if runs => Err(format!(
+            "The knife key file can't be read ({}), so which keys Bot Mode keeps unbound is unknown. Launch waits until then.",
+            f.error.as_deref().unwrap_or(&f.path)
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Applies `patch` as one change, refused (writing nothing) when the server cfg or the knife file
 /// no longer holds `seen`, what the caller read. Each write is a compare-and-swap against the file
 /// as read here, as in [`set_cosmetics_from`].

@@ -1607,6 +1607,42 @@ fn a_supervisor_that_cannot_ask_steam_turns_bot_mode_off_again() {
 }
 
 #[test]
+fn a_launch_is_refused_while_the_knife_file_the_server_cfg_runs_is_missing_or_unreadable() {
+    let s = Scratch::new("launch-knife-file");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    set_server(&layout, knife("k"));
+    let file = layout.target(settings::KNIFE_CFG);
+    fs::remove_file(&file).unwrap();
+    // the path botmode_launch and `cs2-stats botmode launch` take: refused before Bot Mode goes on
+    let before = snapshot(&layout.csgo);
+    let st = session::supervise_session(&layout, &CLOSED, &FakeSystem::new(), Some(&steam), RunMode::Launch, "r", &|_| panic!("must not spawn"));
+    assert_eq!(st.state, "failed");
+    assert!(
+        st.message.contains("Knife key file missing: the server cfg runs cfg/cs2stats_knife.cfg, but it is gone, so which keys Bot Mode keeps unbound is unknown. Repair puts it back. Launch waits until then."),
+        "{}",
+        st.message
+    );
+    assert_eq!(snapshot(&layout.csgo), before, "nothing written, Bot Mode not turned on");
+    let lock = OpLock::acquire(&layout).unwrap();
+    fs::write(&file, b"unbind \xff\r\n").unwrap();
+    let err = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap_err();
+    assert!(err.starts_with("The knife key file can't be read (cfg/cs2stats_knife.cfg:") && err.ends_with("Launch waits until then."), "{err}");
+    // a knife file the server cfg no longer runs stops nothing
+    let cfg = "cfg/gamemode_competitive_server.cfg";
+    fs::write(layout.target(cfg), read(&layout, cfg).replace(settings::KNIFE_EXEC_LINE, "")).unwrap();
+    launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    // and once repaired, the launch goes ahead
+    fs::write(layout.target(cfg), read(&layout, cfg) + settings::KNIFE_EXEC_LINE + "\r\n").unwrap();
+    fs::remove_file(&file).unwrap();
+    drop(lock);
+    let plan = settings::knife_repair_plan(&layout).unwrap();
+    settings::repair_knife(&layout, &CLOSED, &plan).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+}
+
+#[test]
 fn a_second_supervisor_for_the_same_game_changes_nothing() {
     let s = Scratch::new("supervisor-twice");
     let steam = fake_steam_config(&s, Some("-novid"));
