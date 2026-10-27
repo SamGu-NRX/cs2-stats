@@ -177,9 +177,14 @@ export function HoverCard({ card, children, prefer = "bottom", className, as: Ta
 // background); errors stay until dismissed and are announced as alerts. Every toast has a close
 // button. Entry and exit are CSS transitions (interruptible), not keyframes.
 //
+// A toast with actions is a prompt: it stays until answered or dismissed, and newer toasts never
+// push it out. Its caller dismisses it once the answer is done, and locks it while an answer is
+// in flight: its actions and its close button are disabled then.
+//
 // A toast keeps its text as written and hides personal info as it draws (data/privacy.ts), so turning
 // the setting on hides it in a toast already showing. `files` are the file names the text mentions.
-export interface Toast { id: number; text: string; files: string[]; tone: "good" | "poor" | "info"; out?: boolean }
+export interface ToastAction { label: string; run: () => void; primary?: boolean }
+export interface Toast { id: number; text: string; files: string[]; tone: "good" | "poor" | "info"; actions: ToastAction[]; locked?: boolean; out?: boolean }
 let toasts: Toast[] = [];
 let nextId = 1;
 const listeners = new Set<() => void>();
@@ -188,14 +193,23 @@ const dismissers = new Map<number, () => void>();
 
 export function dismissToast(id: number) { dismissers.get(id)?.(); }
 
-export function toast(text: string, tone: Toast["tone"] = "info", ms = 4000, files: string[] = []) {
+/** Locks or unlocks a showing prompt: while locked, its actions and its close button are disabled. */
+export function lockToast(id: number, locked: boolean) {
+  if (!toasts.some((x) => x.id === id)) return;
+  toasts = toasts.map((x) => (x.id === id ? { ...x, locked } : x));
+  emit();
+}
+
+/** Shows a toast; returns its id, for dismissToast. */
+export function toast(text: string, tone: Toast["tone"] = "info", ms = 4000, files: string[] = [], actions: ToastAction[] = []): number {
   const id = nextId++;
-  toasts = [...toasts.slice(-2), { id, text, files, tone }];
+  const prompts = toasts.filter((x) => x.actions.length);
+  toasts = [...prompts, ...toasts.filter((x) => !x.actions.length).slice(-2), { id, text, files, tone, actions }];
   emit();
   let left = ms;
   let started = performance.now();
   let t = 0;
-  const persist = tone === "poor";
+  const persist = tone === "poor" || actions.length > 0;
   const run = () => { if (!persist) { t = window.setTimeout(dismiss, left); started = performance.now(); } };
   const blur = () => { clearTimeout(t); left -= performance.now() - started; };
   const focus = () => run();
@@ -212,15 +226,24 @@ export function toast(text: string, tone: Toast["tone"] = "info", ms = 4000, fil
   addEventListener("blur", blur);
   addEventListener("focus", focus);
   run();
+  return id;
 }
 
 function ToastItem({ t }: { t: Toast }) {
   const hide = useHidePersonal();
+  const text = <div className="toast__text">{hide ? hideTextAndFiles(t.text, t.files) : t.text}</div>;
   return (
     <div className={`toast ${t.out ? "is-out" : ""}`} data-tone={t.tone}>
       <i className="toast__dot" data-tone={t.tone} aria-hidden />
-      <div className="toast__text">{hide ? hideTextAndFiles(t.text, t.files) : t.text}</div>
-      <button className="toast__close" onClick={() => dismissToast(t.id)} aria-label="Dismiss"><CloseIcon size={14} /></button>
+      {t.actions.length ? (
+        <div className="toast__body">
+          {text}
+          <div className="toast__actions">
+            {t.actions.map((a) => <button key={a.label} className={`btn btn--sm ${a.primary ? "btn--primary" : ""}`} onClick={a.run} disabled={t.locked}>{a.label}</button>)}
+          </div>
+        </div>
+      ) : text}
+      <button className="toast__close" onClick={() => dismissToast(t.id)} disabled={t.locked} aria-label="Dismiss"><CloseIcon size={14} /></button>
     </div>
   );
 }

@@ -6,6 +6,7 @@
 // but Data & settings shows the failure with Try again; Data & settings stays usable, since its
 // Rescan, Import and source switches are the ways out.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { BotModeRecovery } from "./components/BotModeRecovery";
 import { MenuLayer, ToastLayer, TooltipLayer, toast } from "./components/overlay";
 import { DataProvider, useData } from "./data/provider";
 import { scanErrorText } from "./data/sources";
@@ -159,6 +160,7 @@ export function Shell() {
       <Palette open={palette} onClose={() => setPalette(false)} actions={actions} />
       <TooltipLayer />
       <ToastLayer />
+      <BotModeRecovery />
       <MenuLayer />
     </div>
   );

@@ -34,8 +34,8 @@ pub enum Status {
     /// Failed part-way, and the automatic rollback could not finish (CS2 was running, or a
     /// file had changed). Must be rolled back before anything else.
     RollbackPending,
-    /// An interrupted session toggle that was closed without being rolled back: Bot Mode was
-    /// turned off by a newer change instead (see `session::turn_off`).
+    /// An interrupted session toggle that was closed without being rolled back: rolling a
+    /// toggle back could turn Bot Mode on.
     Superseded,
 }
 
@@ -80,7 +80,8 @@ pub enum Kind {
     Normal,
     /// A session turning Bot Mode on or off in `gameinfo.gi`. Journaled for crash safety, but
     /// never taken off by `rollback`: undoing an "off" would turn Bot Mode on with nothing
-    /// watching CS2. An interrupted one is finished in the off direction instead.
+    /// watching CS2. An interrupted one is closed as `Superseded`, and Bot Mode is left as it is
+    /// (see `session`).
     Session,
 }
 
@@ -366,6 +367,10 @@ impl<'p> ChangeSet<'p> {
         if let Some(guard) = &self.guard_hash {
             if hash::file_if_exists(&target)?.as_deref() != Some(guard.as_str()) {
                 let _ = fs::remove_file(&tmp);
+                // Nothing was renamed into place, so the automatic rollback has nothing of this
+                // change's to undo here. Left in the list, the entry would let that rollback
+                // "restore" a file another program wrote with the same bytes this change meant to.
+                self.entries.pop();
                 return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
             }
         }
@@ -412,13 +417,13 @@ impl<'p> ChangeSet<'p> {
         self.meta.files = self.entries.len();
         self.meta.error = Some(error.clone());
         // A failed session "off" is never undone: restoring its before-image would turn Bot Mode
-        // back on. Whatever it managed to write stays, and the change is closed; the supervisor
-        // or the next cleanup turns Bot Mode off from there. A failed "on" is undone as usual,
-        // which is the off direction.
+        // back on. Whatever it managed to write stays, and the change is closed; a supervisor
+        // retries, and the recovery prompt can be answered again. A failed "on" is undone as
+        // usual, which is the off direction.
         if self.meta.kind == Kind::Session && self.meta.operation == "bot-mode-off" {
             self.meta.status = Status::Superseded;
             let _ = write_meta(&self.dir, &self.meta);
-            return format!("{error}. Turning Bot Mode off was not undone; it is retried until Bot Mode is off.");
+            return format!("{error}. Whatever this write changed was not undone, since undoing it would turn Bot Mode back on.");
         }
         let undo = restore(&self.layout, &self.root_canon, &self.dir, &self.entries, Some((self.probe, Phase::AutomaticRollback)), &mut self.flusher)
             .and_then(|r| restore_state(&self.layout, &self.dir).map(|_| r));
@@ -562,12 +567,12 @@ pub fn unfinished(layout: &Layout) -> Result<Option<Meta>, String> {
     Ok(list(layout)?.into_iter().find(|m| m.status.unfinished() && m.kind == Kind::Normal))
 }
 
-/// Closes every interrupted session toggle as superseded, without restoring anything. The
-/// caller then turns Bot Mode off with a new change, so recovery always ends with Bot Mode off.
+/// Closes every interrupted session toggle as superseded, without restoring anything. Whether
+/// Bot Mode is then turned off is the session's or the user's decision (see `session`).
 pub fn supersede_unfinished_sessions(layout: &Layout) -> Result<(), String> {
     for mut m in list(layout)?.into_iter().filter(|m| m.kind == Kind::Session && m.status.unfinished()) {
         m.status = Status::Superseded;
-        m.error = Some("interrupted; closed without rollback, and Bot Mode turned off by a newer change".into());
+        m.error = Some("interrupted; closed without rollback".into());
         write_meta(&layout.backups().join(&m.id), &m)?;
     }
     Ok(())
@@ -600,7 +605,7 @@ pub fn rollback(layout: &Layout, probe: &dyn ProcessProbe, id: Option<&str>) -> 
     let all = list(layout)?;
     if let Some(m) = id.and_then(|id| all.iter().find(|m| m.id == id)).filter(|m| m.kind == Kind::Session) {
         return Err(format!(
-            "{} turned Bot Mode {} for a session; session changes are never rolled back (Bot Mode is turned off when the session ends, or by the next Bot Mode command)",
+            "{} turned Bot Mode {} for a session; session changes are never rolled back (a session turns Bot Mode off when CS2 exits)",
             m.id,
             if m.operation == "bot-mode-on" { "on" } else { "off" }
         ));
