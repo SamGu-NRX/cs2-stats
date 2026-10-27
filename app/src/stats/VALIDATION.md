@@ -52,45 +52,42 @@ HLTV's round buy labels over every HLTV map: PISTOL $3,000 to $4,700 (2,932 team
 $4,950 (1,794), HALF $5,000 to $16,200 (3,773), FULL $16,250 to $38,100 (23,469). The engine's cuts,
 $1,000 and $3,250 per player, are those bands for five players.
 
-## Rating 3.0 and swing: `pnpm rating-check`
+## Rating 3.0 and swing: `pnpm rating-dump`, `model/rating3`
 
-Rating 3.0 is `params.json`'s six-term linear model as merged in #17 (swing and duel refitted on 304
-joins, flash share 0.154), with all six inputs averaged over the rounds swing valued (a player-map with
-swing on under half its rounds has no rating, which leaves 10 out; since round 3 of #20 a round must
-also have every eco value known). Against HLTV on 371 joined maps
-(3,700 player-maps) on 2026-10-25, with each
-win-probability source: `pnpm rating-check` uses the HLTV pack when installed,
-`CS2_WINPROB_PACK=none pnpm rating-check` forces CS2RB. Raw rows compare the engine's counts with
-HLTV's traditional columns, so an eco input's error can be told from a counting error.
+Rating 3.0 is rated per side by `params.json`'s curves (`model/rating3/SPEC.md` "Shipped approximation"),
+and the total is the sides' round-weighted mean. The fit is on HLTV's displayed side inputs; the engine
+supplies its own inputs. `pnpm rating-dump` writes the engine's rows for every joined map, and the
+numbers below are scored against HLTV's published rating on a held-out split by event and date. The 16
+latest events by first map date are held out: 185 HLTV maps, of which 81 are joined to demos (810
+player-maps). Every row uses the same 368 joined maps (2026-10-26, HLTV win-probability lookup).
 
-| Input | HLTV lookup: MAE / r | CS2RB: MAE / r | Mean ours / HLTV |
-|---|---|---|---|
-| KPR, raw | 0.0000 / 1.000 | same | 0.655 / 0.655 |
-| eKPR | 0.028 / 0.986 | 0.028 / 0.986 | 0.643 / 0.654 |
-| DPR, raw | 0.0003 / 1.000 | same | 0.660 / 0.659 |
-| eDPR | 0.036 / 0.973 | 0.037 / 0.974 | 0.643 / 0.676 |
-| ADR, raw | 0.078 / 1.000 | same | 71.81 / 71.82 |
-| eADR | 1.88 / 0.991 | 1.89 / 0.991 | 70.92 / 71.42 |
-| KAST, raw (percentage points) | 0.33 / 0.994 | same | 71.11 / 71.13 |
-| eKAST | 4.48 / 0.885 | 4.48 / 0.885 | 70.34 / 68.88 |
-| Swing (points per round) | 1.00 / 0.955 | 1.51 / 0.904 | 0.00 / -0.02 |
-| Rating 3.0 | 0.069 / 0.973 | 0.084 / 0.960 | 1.089 / 1.078 |
-| Rating 3.0, CT rounds | 0.120 / 0.966 | 0.135 / 0.952 | 1.172 / 1.101 |
-| Rating 3.0, T rounds | 0.107 / 0.970 | 0.126 / 0.957 | 1.007 / 1.067 |
+| Step | Held-out MAE | p95 | Within 0.01 |
+|---|---:|---:|---:|
+| Before: linear model on six inputs, old swing split | 0.067 | 0.162 | 9.0% |
+| Swing shares each kill like HLTV's per-kill credits | 0.057 | 0.143 | 11.6% |
+| Rating per side with fitted curves | 0.042 | 0.108 | 17.9% |
+| eKAST counts survival only in won rounds | 0.040 | 0.102 | 19.1% |
+| Defuses and detonations shared like HLTV's credits | 0.0375 | 0.094 | 19.4% |
 
-The HLTV-lookup column is the valued-round run; the CS2RB column is from the run before it, on all
-rounds. With the HLTV lookup the valued-round change moved swing MAE from 1.006 to 0.998 and the
-rating MAE from 0.0694 to 0.0691. Re-run with the HLTV lookup after round 3 of #20 (rated rounds need
-every eco value known; the total weights the side ratings by rated rounds): every figure in that
-column is unchanged at the precision shown, on the same 3,700 player-maps.
+With the 8 maps joined since (376 maps, 85 held out) the last row is MAE 0.0384, p95 0.098, 19.1%.
 
-The raw counts are within display rounding of HLTV, so the eco inputs' error is in the eco weighting.
-eKAST has the largest error and the weakest correlation (its transform `params.json` marks
-unresolved). The merged duel fit moved eKPR and eDPR low (0.643 against 0.654 and 0.676) and eADR from
-1.5 HP high to 0.5 HP low. Targets: swing r above 0.95 (met with the HLTV lookup); rating MAE under 0.04
-(not met) and r above 0.97 (met with the HLTV lookup). `params.json` reports a held-out MAE of 0.046
-when the model reads HLTV's own displayed inputs. Per-side ratings apply the map model to one side's
-rounds, which HLTV does not.
+The same per-side model scored on HLTV's own displayed inputs has held-out MAE 0.025, p95 0.064 and 25.5%
+within 0.01 (all 733 HLTV maps). That is the model's floor on these inputs. It does not move with more
+training maps (137 maps score the same as 548), nor with any tier or overtime filter.
+
+Inputs against HLTV's displayed side values (engine minus HLTV, 368 maps):
+
+| Input | Side MAE | Note |
+|---|---:|---|
+| Swing, per round | 0.78 points | was 3.25; 79% of player-rounds exact, was 28% |
+| Swing, per side | 0.52 points | |
+| eKAST | 5.15 points | was 6.58 |
+| eADR | 3.56 HP | |
+| eKPR, eDPR | 0.045 | HLTV shows eK and eD as whole kills, so part of this is its rounding |
+
+Raw K, D and ADR match HLTV's traditional columns to display rounding (the scoreboard section above).
+Swing would leave 0.033 if the engine had HLTV's per-round swing exactly. Of what remains in swing, defuse
+and detonation rounds carry 1.2 to 1.3 points per player-round against 0.5 to 0.6 in eliminations.
 
 ## Plugin adapter: `plugin/adapter.test.ts`
 
@@ -407,9 +404,11 @@ changes it in `server_cvar`, so the kick is at the game's default scale.
 
 ## Baselines: `pnpm baselines`
 
-`public/baselines.json` is 391 KB: 21 quantiles of every metric for each pool and side, with no names or
-ids. Built from 489 pro maps on 2026-10-25 with #17's merged parameters and swing from the HLTV
-win-probability lookup (recorded as its `model` fingerprint, which model-dependent comparisons check): 552 players with 40 or more rounds (454 riflers, 98 AWPers), and per-map pools
-of player-maps with 16 or more rounds. A metric's quantiles are written when at least 8 units have a
-value. The named pack (per-side style and performance scores) is written to the
+`public/baselines.json` is 512 KB: 21 quantiles of every metric for each pool and side, with no names or
+ids. Rebuilt on 2026-10-26 for the per-side Rating 3.0 and the fitted swing split, on the public CS2RB
+win-probability model (`CS2_WINPROB_PACK=none pnpm baselines`; recorded as its `model` fingerprint, which
+model-dependent comparisons check). The demo folder held 544 complete maps when the run ended; new
+demos were arriving during it. The pools hold 611 players with 40 or more rounds (502 riflers, 109
+AWPers), and per-map pools of player-maps with 16 or more rounds. A metric's quantiles are written when
+at least 8 units have a value. The named pack (per-side style and performance scores) is written to the
 private data folder only.

@@ -2,8 +2,7 @@
 import { expect, it } from "vitest";
 import { compare, type Baselines } from "./compare";
 import { METRIC, METRICS } from "./metrics";
-import { PARAMS } from "./model-params";
-import { RATING3_INTERCEPT, RATING3_TERMS, rating3FromInputs, rating3Of } from "./rating3";
+import { FEATURES, rating3Of, roundRating3, sideRating3, type R3Inputs } from "./rating3";
 import { rollup } from "./rollup";
 import { derive } from "./derive";
 import type { WinProbSource } from "./model-params";
@@ -61,31 +60,55 @@ it("gates the rating, its percentile and so Work on through one coverage rule", 
 });
 
 it("takes the total rating from the sides, weighted by their rated rounds", () => {
-  // fails if the total and side ratings disagree: Astra's case, 100 CT rounds with 50 rated at 1.00
-  // and 100 T rounds with 100 rated at 3.00, must total (50 x 1 + 100 x 3) / 150
-  const k = PARAMS.rating.coefficients.eKPR, b = PARAMS.rating.intercept;
-  const side = (side: "CT" | "T", rounds: number, rated: number, rating: number) =>
-    at({ kpr_eco: (rating - b) / k, adr_eco: 0, dpr_eco: 0, kast_eco: 0, mk: 0, swing: 0 }, rated, side, rounds);
-  const CT = side("CT", 100, 50, 1), T = side("T", 100, 100, 3);
-  expect([rating3Of(CT).value, rating3Of(T).value]).toEqual([expect.closeTo(1, 9), expect.closeTo(3, 9)]);
+  // fails if the total and side ratings disagree: 100 CT rounds with 50 rated and 100 T rounds with 100
+  // rated must total (50 x CT + 100 x T) / 150, as HLTV's map total is the sides' round-weighted mean
+  const qCT = { kpr_eco: 0.5, adr_eco: 60, dpr_eco: 0.8, kast_eco: 60, mk: 10, swing: -3 };
+  const qT = { kpr_eco: 1.1, adr_eco: 110, dpr_eco: 0.4, kast_eco: 85, mk: 30, swing: 6 };
+  const side = (s: "CT" | "T", rounds: number, rated: number, q: typeof qCT) => at(q, rated, s, rounds);
+  const CT = side("CT", 100, 50, qCT), T = side("T", 100, 100, qT);
+  const [ct, t] = [rating3Of(CT).value!, rating3Of(T).value!];
   const both = rating3Of(combine(CT, T));
-  expect(both.value).toBeCloseTo(350 / 150, 9);
-  expect(rating3FromInputs(both.inputs!)).toBeCloseTo(both.value!, 9);
-  // a side with no rating (CT rated on 40 of 100 rounds) adds nothing: the total is T's 3.00, not a
-  // pooled mix with rounds the CT rating rejected
-  const thin = side("CT", 100, 40, 1);
+  expect(both.value).toBeCloseTo((50 * ct + 100 * t) / 150, 12);
+  // a side with no rating (CT rated on 40 of 100 rounds) adds nothing: the total is T's alone
+  const thin = side("CT", 100, 40, qCT);
   expect(rating3Of(thin).value).toBeNull();
-  expect(rating3Of(combine(thin, T)).value).toBeCloseTo(3, 9);
+  expect(rating3Of(combine(thin, T)).value).toBeCloseTo(t, 12);
   // one rated side covering under half of all rounds is no total
-  const r = rating3Of(combine(thin, side("T", 300, 160, 3)));
+  const r = rating3Of(combine(thin, side("T", 300, 160, qT)));
   expect([r.value, r.reason]).toEqual([null, "the sides with half their own rounds rated cover 160 of 400 rounds; the rating needs half"]);
 });
 
-it("gives a breakdown whose terms add up to the rating", () => {
-  // fails if RATING3_TERMS pairs a coefficient with the wrong input, so a shown breakdown would not sum
-  // to the shown rating
+it("gives a breakdown whose base and terms add up to the rating", () => {
+  // fails if the total's base or terms are not the sides' round-weighted ones, so a shown breakdown
+  // would not sum to the shown rating
   const q = { kpr_eco: 0.7, adr_eco: 80, dpr_eco: 0.6, kast_eco: 72, mk: 18, swing: 1.5 };
-  const sum = RATING3_TERMS.reduce((a, t) => a + t.coefficient * q[t.input], RATING3_INTERCEPT);
-  expect(sum).toBeCloseTo(rating3FromInputs(q), 12);
-  expect(RATING3_TERMS.map((t) => t.input).sort()).toEqual(["adr_eco", "dpr_eco", "kast_eco", "kpr_eco", "mk", "swing"]);
+  const r = rating3Of(combine(at(q, 40, "CT"), at({ ...q, swing: -2 }, 60, "T")));
+  expect(FEATURES.reduce((a, f) => a + r.terms![f], r.base!)).toBeCloseTo(r.value!, 12);
 });
+
+it("rates a side as model/rating3/side_rating_fit.py does", () => {
+  // fails if the curves, the CT offset or the 2K-5K weights are read differently from the Python fit
+  // that produced params.json; the expected values are side_rating_fit.side_rating on the same inputs
+  for (const [q, side, expected] of GOLDEN) expect(sideRating3(q, side).value).toBeCloseTo(expected, 12);
+});
+
+it("splits a side's rating over its rated rounds so the rounds average to it", () => {
+  // fails if a round's share is its inputs put through the curves alone: the curves bend, so those
+  // would not average to the side's rating
+  const rounds: R3Inputs[] = [
+    { kpr_eco: 2.1, adr_eco: 180, dpr_eco: 0, kast_eco: 100, mk: 100, swing: 22, k2: 100, k3: 0, k4: 0, k5: 0 },
+    { kpr_eco: 0, adr_eco: 12, dpr_eco: 1, kast_eco: 0, mk: 0, swing: -14, k2: 0, k3: 0, k4: 0, k5: 0 },
+    { kpr_eco: 1, adr_eco: 64, dpr_eco: 0.9, kast_eco: 100, mk: 0, swing: 3, k2: 0, k3: 0, k4: 0, k5: 0 },
+  ];
+  const keys = Object.keys(rounds[0]) as (keyof R3Inputs)[];
+  const mean = Object.fromEntries(keys.map((k) => [k, rounds.reduce((a, r) => a + r[k], 0) / rounds.length])) as R3Inputs;
+  const side = sideRating3(mean, "T").value;
+  expect(rounds.reduce((a, r) => a + roundRating3(mean, "T", r).value, 0) / rounds.length).toBeCloseTo(side, 12);
+});
+
+/** Inputs, side and side_rating_fit.side_rating's value with the committed params.json. */
+const GOLDEN: [R3Inputs, "CT" | "T", number][] = [
+  [{kpr_eco: 0.25, adr_eco: 40, dpr_eco: 0.85, kast_eco: 50, swing: -8, k2: 4, k3: 0, k4: 0, k5: 0, mk: 4}, "CT", 0.3322858289694561],
+  [{kpr_eco: 0.72, adr_eco: 76, dpr_eco: 0.62, kast_eco: 72, swing: 0.5, k2: 12, k3: 4, k4: 1, k5: 0, mk: 17}, "T", 1.1572221333936923],
+  [{kpr_eco: 1.35, adr_eco: 130, dpr_eco: 0.35, kast_eco: 95, swing: 12, k2: 20, k3: 10, k4: 5, k5: 2, mk: 37}, "CT", 2.527024901017537],
+];

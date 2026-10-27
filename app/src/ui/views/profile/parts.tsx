@@ -9,7 +9,7 @@ import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { attrsOf, fmtMetric, ratingTerms, type SideKey } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, type RatingSplit, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { metric, styleIds } from "../../data/meta";
@@ -24,6 +24,7 @@ import { MapThumb } from "../../components/bits";
 import { matchHref, setQuery } from "../../router";
 import { roleValueDescriptor } from "./role-decision";
 import { RoleEvidence } from "./evidence";
+import { OutsideLink } from "../../components/OutsideLink";
 
 export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip: string; id?: string; sectionRef?: (el: HTMLElement | null) => void }) {
   return (
@@ -38,18 +39,19 @@ export function SectionHead({ title, tip, id, sectionRef }: { title: string; tip
 const signedNum = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(3)}`;
 
 /**
- * Rating 3.0's breakdown, as main showed it: each input with its weight, the input's value and its
- * contribution, then the constant. The rows add up to the rating (engine.ts ratingTerms).
+ * Rating 3.0's breakdown: each input's value and its contribution, then the base. The rows add up to
+ * the rating (engine.ts ratingTerms). The curves bend, so a contribution is not a fixed weight times
+ * the input, and no weight is shown.
  */
-export function RatingTerms({ inputs }: { inputs: Record<string, number> }) {
-  const { terms, intercept } = ratingTerms(inputs);
+export function RatingTerms({ rating }: { rating: RatingSplit }) {
+  const { terms, base } = ratingTerms(rating);
   return (
     <BreakRows rows={[
       ...terms.map((t) => ({
-        label: <>{t.label} <span className="faint">× {t.coefficient < 0 ? "−" : ""}{Math.abs(t.coefficient).toFixed(4)}</span></>,
+        label: t.label,
         value: <><span className="faint">{t.input} → </span>{signedNum(t.contribution)}</>,
       })),
-      { label: "Constant", value: signedNum(intercept) },
+      { label: "Base", value: signedNum(base) },
     ]} />
   );
 }
@@ -362,8 +364,8 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
       <Card title="Plays like" tip={PANEL_TIP.playsLike} aside={<span className="meta">Shape of the six attributes, {sideLabel}</span>} foot={<span>Pro scores and photos: HLTV</span>}>
         <div className="likes">
           <div className="likes__left">
-            <a className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`} target="_blank" rel="noreferrer"
-              data-tip={[careers.provisional ? PROVISIONAL_TIP : null, "The match is how closely your style's shape fits theirs.", "Opens their HLTV page."].filter(Boolean).join("\n")}>
+            <OutsideLink className="probanner" href={`${HLTV_ORIGIN}${pick.item.hltv}`}
+              tip={[careers.provisional ? PROVISIONAL_TIP : null, "The match is how closely your style's shape fits theirs.", "Opens their HLTV page."].filter(Boolean).join("\n")}>
               <ProFace pro={pick.item} className="probanner__face" />
               <div className="probanner__body">
                 <ProMarks pro={pick.item} />
@@ -373,7 +375,7 @@ function PlaysLikeBody({ q, side, initial, pros }: { q: Query; side: PoolSide; i
               <span className="probanner__score">
                 <b className={`probanner__pct num ${careers.provisional ? "is-prov" : ""}`}>{pick.pct}<small>%</small></b>
               </span>
-            </a>
+            </OutsideLink>
             <ul className="prolist" role="radiogroup" aria-label={`Pros by style match${careers.provisional ? ", provisional" : ""}`}>
               {top.map((x) => (
                 <li key={x.item.slug}>

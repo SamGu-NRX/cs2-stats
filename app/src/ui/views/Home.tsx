@@ -207,8 +207,8 @@ function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
         // the last match against the value over the filter, as the hero compares them; none when either is missing
         const d = noAim ? null : tileDelta(m, list[0] ?? null, value);
         const breakdown = m.id === "rating3" ? () => {
-          const x = t?.rating.inputs;
-          return x ? <RatingTerms inputs={x} /> : null;
+          const r = t?.rating;
+          return r?.inputs && r.terms && r.base !== null ? <RatingTerms rating={{ inputs: r.inputs, base: r.base, terms: r.terms }} /> : null;
         } : m.id === "kast" ? () => (t ? <KastSplit s={t.both} /> : null) : m.id === "adr" || m.id === "kpr" ? () => {
           if (!t) return null;
           const f = (s: Rolled) => fmtMetric(m.id, s.v[m.id]);
