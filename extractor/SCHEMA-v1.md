@@ -171,7 +171,7 @@ One row per round that counted (backup-restored attempts are dropped). Key: roun
 | `t_money_start` | Int32 | no | as ct_money_start |
 | `t_team` | String | no | clan name on T |
 | `t_team_score_after` | Int16 | no | score of t_team after the round |
-| `voided_attempts` | Int16 | no | backup-restored attempts of this round |
+| `voided_attempts` | Int16 | no | backup-restored attempts this round replaced, as `match.dropped_attempts` counts them: overlapping restores of one round are one attempt |
 | `winner_side` | String | no | CT | T |
 | `winner_team` | String | no | clan name of the winner |
 

@@ -467,6 +467,19 @@ MAX_DROPPED_ATTEMPTS = 8
 ATTEMPT_COUNTERS = ("kills", "selfkills", "deaths", "assists", "headshots", "damage")
 
 
+def replaced_by(rounds: pd.DataFrame, b: int) -> int | None:
+    """The counted round that replaced a dropped attempt ending on tick b: the first to start on or after it."""
+    later = rounds["round"][rounds.start_tick >= b]
+    return int(later.min()) if len(later) else None
+
+
+def attempts_per_round(rounds: pd.DataFrame, voided: list[tuple[int, int]]) -> list[int]:
+    """rounds.voided_attempts: how many dropped attempts (voided windows, merged) each round replaced, so it agrees
+    with match.dropped_attempts. Counted before merging, a round restored twice read 2 against one attempt."""
+    replaced = [replaced_by(rounds, b) for _, b in voided]
+    return [replaced.count(int(r)) for r in rounds["round"]]
+
+
 def check_dropped_attempts(rounds: pd.DataFrame, voided: list[tuple[int, int]]) -> None:
     """Raise unless every dropped attempt lies outside the counted rounds (each has a winner, and none may lose
     its events) and there are at most MAX_DROPPED_ATTEMPTS of them. An attempt may end on a round's start tick."""
@@ -515,8 +528,8 @@ def attempt_events(windows: list[tuple[int, int]], restores: set[int], deaths: p
     return out
 
 
-def kept_subsets(residual: dict[str, int], counted_selfkills: int,
-                 events: list[dict[str, int] | None]) -> list[tuple[tuple[int, ...], int]]:
+def kept_subsets(residual: dict[str, int], counted_selfkills: int, events: list[dict[str, int] | None],
+                 match_headshots: bool = True) -> list[tuple[tuple[int, ...], int]]:
     """Every subset of the attempts (indices into events; None for an attempt that cannot be this player's)
     whose events explain the player's residual at once, with the kills to take off the scoreboard for it.
 
@@ -525,7 +538,7 @@ def kept_subsets(residual: dict[str, int], counted_selfkills: int,
     attempt, so one subset must explain all four: deaths, assists and headshots exactly, kills either with no
     suicide or team kill deducted or with all of them deducted, counted ones included (the check accepts
     either). Attempts with no kill, suicide, death or assist of his are left out: no counter shows whether the
-    game kept them.
+    game kept them. match_headshots=False leaves headshots out of the match.
     """
     import itertools
     idx = [i for i, e in enumerate(events)
@@ -534,8 +547,9 @@ def kept_subsets(residual: dict[str, int], counted_selfkills: int,
     for r in range(len(idx) + 1):
         for subset in itertools.combinations(idx, r):
             sm = {k: sum(events[i][k] for i in subset) for k in ATTEMPT_COUNTERS}
-            if (sm["deaths"], sm["assists"], sm["headshots"]) != (residual["deaths"], residual["assists"],
-                                                                  residual["headshots"]):
+            if (sm["deaths"], sm["assists"]) != (residual["deaths"], residual["assists"]):
+                continue
+            if match_headshots and sm["headshots"] != residual["headshots"]:
                 continue
             if residual["kills"] == sm["kills"]:
                 found.append((subset, sm["kills"]))
@@ -546,8 +560,8 @@ def kept_subsets(residual: dict[str, int], counted_selfkills: int,
 
 def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: dict[int, int],
                        events: list[dict[int, dict[str, int]]], candidates: dict[int, set[int]],
-                       damage_gap) -> tuple[dict[int, dict[str, int]], dict[int, tuple[int, ...]], list[str]]:
-    """(scoreboard columns to take off per player, his kept attempts, problems) for the dropped attempts.
+                       damage_gap) -> tuple[dict[int, dict[str, int]], dict[int, tuple[int, ...]], list[str], list[str]]:
+    """(scoreboard columns to take off per player, his kept attempts, problems, warnings) for the dropped attempts.
 
     Each player's kept attempts are the one subset of his candidate attempts (candidates: indices) that
     kept_subsets finds; none, or two that differ, is a problem with the numbers, and the map is refused. Damage
@@ -555,13 +569,21 @@ def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: 
     split from that round's: a problem too. So is damage in an attempt his other counters cannot place, when
     the round before it holds at least that much game damage no hit of his explains (damage_gap(steamid,
     attempt index)): it may have been kept.
+    Headshot kills are the scoreboard check's one non-fatal counter: when one subset explains everything else and
+    only headshots differ, that is a warning with the numbers, not a problem.
     """
-    take, kept, problems = {}, {}, []
+    take, kept, problems, warnings = {}, {}, [], []
     for sid in sorted(set(residuals) | {s for e in events for s in e}):
         res = residuals.get(sid, dict(kills=0, deaths=0, assists=0, headshots=0))
         cand = candidates.get(sid, set())
         evs = [e.get(sid) if i in cand else None for i, e in enumerate(events)]
         found = kept_subsets(res, counted_selfkills.get(sid, 0), evs)
+        if not found:
+            found = kept_subsets(res, counted_selfkills.get(sid, 0), evs, match_headshots=False)
+            if len({f[0] for f in found}) == 1:
+                hs = sum(evs[i]["headshots"] for i in found[0][0])
+                warnings.append(f"player {sid}: headshot kills on the scoreboard beyond the counted ones: "
+                                f"{res['headshots']}, of which his kept attempts explain {hs}")
         if not found:
             problems.append(f"player {sid}: the scoreboard holds {res} beyond the counted events, which no set of "
                             f"his dropped attempts' events explains: {[e for e in evs if e]}")
@@ -583,7 +605,7 @@ def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: 
             sums = {k: sum(evs[i][k] for i in subset) for k in ("deaths", "assists", "headshots")}
             take[sid] = {"kills_total": kills_off, "deaths_total": sums["deaths"], "assists_total": sums["assists"],
                          "headshot_kills_total": sums["headshots"]}
-    return take, kept, problems
+    return take, kept, problems, warnings
 
 
 def baseline_rise_explained(sid: int, excess: dict[str, int], events: list[dict[str, int] | None]) -> bool:
@@ -811,7 +833,10 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
             # (deaths_total summed 68 -> 67 on one). A winnerless round_end on begin_new_match's own tick is the
             # recording's leftover first round_end, not a restore (one pro demo: tick 0, no deaths), and stays.
             voided.append((int(r_tick), int(r_tick)))
-    return pd.DataFrame(rows), merge_windows(set(voided))
+    rounds, voided = pd.DataFrame(rows), merge_windows(set(voided))
+    if len(rounds):
+        rounds["voided_attempts"] = attempts_per_round(rounds, voided)
+    return rounds, voided
 
 
 def assign_rounds(ticks: pd.Series, rounds: pd.DataFrame, voided: list[tuple[int, int]],
@@ -1289,6 +1314,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
             if rounds.empty:
                 raise RuntimeError(f"{TRUNCATED}: no complete round before the cut")
         check_dropped_attempts(rounds, voided)
+        rounds["voided_attempts"] = attempts_per_round(rounds, voided)
 
     # The final scoreboard is read at game over: the win panel. A demo without one (the first part of a
     # split recording, or a recording that stops) is read at the next round start after its last round,
@@ -1982,10 +2008,10 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         n_ = int(before.max()) if len(before) else None
         return 0 if n_ is None else game_dmg.get((n_, sid), 0) - int(hit_dmg.get((n_, sid), 0))
 
-    take, kept_by, attempt_problems = attribute_attempts(residuals, counted_self, att_events, candidates, damage_gap)
+    take, kept_by, attempt_problems, attempt_warnings = attribute_attempts(residuals, counted_self, att_events,
+                                                                          candidates, damage_gap)
     dropped = []
     for i, (a_, b_) in enumerate(voided):
-        nxt = rounds["round"][rounds.start_tick >= b_]
         players_ = {}
         for sid, e in att_events[i].items():
             if not any(e.values()):
@@ -1994,13 +2020,15 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                       "kept" if i in kept_by.get(sid, ()) else
                       "rolled back" if any(e[k] for k in ("kills", "selfkills", "deaths", "assists")) else "unknown")
             players_[str(sid)] = dict(status=status, **{k: v for k, v in e.items() if v})
-        dropped.append(dict(round=int(nxt.min()) if len(nxt) else None, from_tick=a_, to_tick=b_,
+        dropped.append(dict(round=replaced_by(rounds, b_), from_tick=a_, to_tick=b_,
                             restore_ticks=sorted(r for r in restores if a_ <= r <= b_), players=players_,
                             reason=("backup restore on round 1's start tick, before begin_new_match" if a_ == b_ < match_start
                                     else "restored attempt with no winner; not a counted round")))
     checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, less_taken(sb_part, take),
                                  less_taken(departed, take), everyone) + validate_rounds(rounds, final_score)
     checks.append(bomb_rows_name_a_player(T["bomb"]))
+    checks.append(dict(check="dropped_attempts_headshots", expected=0, actual=len(attempt_warnings),
+                       ok=not attempt_warnings, fatal=False, note="; ".join(attempt_warnings)[:2000]))
     checks.append(dict(check="dropped_attempts_explained", expected=0, actual=len(attempt_problems),
                        ok=not attempt_problems, fatal=True, note="; ".join(attempt_problems)[:3000]))
     hit_checks, unattributed_hp = hit_table_checks(dmg, player_rounds)

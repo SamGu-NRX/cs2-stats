@@ -516,6 +516,8 @@ def test_a_round_restored_twice_is_one_dropped_attempt_and_every_round_keeps_its
     assert voided == [(4638, 10176)]
     assert rounds["round"].tolist() == [1, 2, 3] and rounds.start_tick.tolist() == [1, 10176, 28658]
     assert rounds.freeze_end_tick.tolist()[1:] == [25941, 29938]
+    # One merged attempt, so round 2 says one, as match.dropped_attempts does (review of PR 54: it said 2).
+    assert rounds.voided_attempts.tolist() == [0, 1, 0]
     # The attempt's freeze end and its disconnect death at 10111 belong to no round.
     assert ex.assign_rounds(pd.Series([9531, 10111, 10176, 25941]), rounds, voided).tolist() == [0, 0, 0, 2]
 
@@ -877,46 +879,57 @@ NO_GAP = lambda sid, i: 0
 def test_an_attempt_the_game_kept_is_explained_by_its_own_events():
     # An HLTV demo: a disconnect death inside a restored attempt stayed on the scoreboard (one more death than the
     # counted rounds hold), and an admin restart that rolled nothing back keeps every counter the same way.
-    take, kept, problems = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{B: _ev(deaths=1, selfkills=1)}], {B: {0}}, NO_GAP)
+    take, kept, problems, _ = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{B: _ev(deaths=1, selfkills=1)}], {B: {0}}, NO_GAP)
     assert (take, kept, problems) == ({B: dict(kills_total=0, deaths_total=1, assists_total=0, headshot_kills_total=0)},
                                       {B: (0,)}, [])
 
 
 def test_an_attempt_the_restore_rolled_back_takes_nothing_off():
-    take, kept, problems = ex.attribute_attempts({B: _res()}, {}, [{B: _ev(kills=2, deaths=1)}], {B: {0}}, NO_GAP)
+    take, kept, problems, _ = ex.attribute_attempts({B: _res()}, {}, [{B: _ev(kills=2, deaths=1)}], {B: {0}}, NO_GAP)
     assert (take, kept, problems) == ({}, {B: ()}, [])
 
 
 def test_a_counted_death_whose_event_is_missing_is_not_explained_away():
     # Review of PR 54 (finding 1): the scoreboard holds a death the tables lack, and no dropped attempt has one.
-    _, _, problems = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{A: _ev(kills=1)}], {B: {0}}, NO_GAP)
+    _, _, problems, _ = ex.attribute_attempts({B: _res(deaths=1)}, {}, [{A: _ev(kills=1)}], {B: {0}}, NO_GAP)
     assert problems and "beyond the counted events" in problems[0]
 
 
 def test_a_kept_suicide_takes_a_kill_off_the_scoreboard():
     # Review of PR 54: a kept grenade suicide takes a kill off (deducted) and adds a death.
-    take, _, problems = ex.attribute_attempts({A: _res(kills=-1, deaths=1)}, {}, [{A: _ev(selfkills=1, deaths=1)}],
+    take, _, problems, _ = ex.attribute_attempts({A: _res(kills=-1, deaths=1)}, {}, [{A: _ev(selfkills=1, deaths=1)}],
                                               {A: {0}}, NO_GAP)
     assert problems == [] and take[A]["kills_total"] == -1 and take[A]["deaths_total"] == 1
 
 
 def test_a_restore_keeps_a_players_whole_attempt_or_none_of_it():
     # One subset explains every counter at once: keeping the death but not the kill of one attempt is no option.
-    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(kills=1, deaths=1)}], {A: {0}}, NO_GAP)
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(kills=1, deaths=1)}], {A: {0}}, NO_GAP)
     assert problems
-    take, kept, problems = ex.attribute_attempts({A: _res(deaths=1, assists=1)}, {},
+    take, kept, problems, _ = ex.attribute_attempts({A: _res(deaths=1, assists=1)}, {},
                                                  [{A: _ev(deaths=1)}, {A: _ev(assists=1)}], {A: {0, 1}}, NO_GAP)
     assert problems == [] and kept[A] == (0, 1)
 
 
+def test_a_headshot_count_alone_is_a_warning_as_on_the_scoreboard():
+    # Review of PR 54: headshot kills are validate_scoreboard's non-fatal counter, but a player whose headshots alone
+    # differed (no dropped attempt of his at all) failed the map through dropped_attempts_explained.
+    take, kept, problems, warnings = ex.attribute_attempts({A: _res(headshots=1)}, {}, [], {A: set()}, NO_GAP)
+    assert (take, problems) == ({}, []) and len(warnings) == 1 and "headshot" in warnings[0]
+    # The rest still has to be explained, and is: the kept death comes off, the headshot stays a warning.
+    take, kept, problems, warnings = ex.attribute_attempts({A: _res(deaths=1, headshots=1)}, {}, [{A: _ev(deaths=1)}],
+                                                           {A: {0}}, NO_GAP)
+    assert problems == [] and kept[A] == (0,) and take[A]["deaths_total"] == 1 and len(warnings) == 1
+
+
 def test_two_attempts_that_each_explain_the_scoreboard_refuse_the_map():
-    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}, {A: _ev(deaths=1)}],
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}, {A: _ev(deaths=1)}],
                                            {A: {0, 1}}, NO_GAP)
     assert problems and "each explain" in problems[0]
 
 
 def test_damage_a_kept_attempt_dealt_refuses_the_map():
-    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1, damage=50)}], {A: {0}}, NO_GAP)
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1, damage=50)}], {A: {0}}, NO_GAP)
     assert problems and "dealt 50 damage" in problems[0]
 
 
@@ -930,7 +943,7 @@ def test_damage_in_an_attempt_no_counter_places_is_judged_by_the_round_before():
 
 def test_only_a_players_candidate_attempts_can_explain_his_scoreboard():
     # A player who left before an attempt, or whose round-1 baseline already holds it, cannot have kept it.
-    _, _, problems = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}], {A: set()}, NO_GAP)
+    _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}], {A: set()}, NO_GAP)
     assert problems
 
 
@@ -1010,7 +1023,7 @@ def test_validation_passes_once_the_kept_attempt_comes_off_the_scoreboard():
     residuals = {int(r.steamid): {k: int(getattr(r, c)) - counted.get(int(r.steamid), {}).get(k, 0) for k, c in
                                   (("kills", "kills_total"), ("deaths", "deaths_total"), ("assists", "assists_total"),
                                    ("headshots", "headshot_kills_total"))} for r in sb.itertuples()}
-    take, _, problems = ex.attribute_attempts(residuals, {}, events, {s_: {0} for s_ in residuals}, NO_GAP)
+    take, _, problems, _ = ex.attribute_attempts(residuals, {}, events, {s_: {0} for s_ in residuals}, NO_GAP)
     assert problems == [] and _fatal_failures(ex.validate_scoreboard(kills, game_damage, sb))
     assert _fatal_failures(ex.validate_scoreboard(kills, game_damage, ex.less_taken(sb, take))) == []
 
