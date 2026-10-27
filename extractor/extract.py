@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.15.0"
+EXTRACTOR_VERSION = "1.16.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -66,6 +66,7 @@ MESH_MIN_KILL_AGREEMENT = 0.9
 # A demo cut off mid-file: awpy refuses it with one of these, demoparser2 reads it up to the cut.
 TRUNCATION_MESSAGES = ("unexpected end of data", "outside command stream")
 TRUNCATED = "truncated_demo"
+PARSER_UNREADABLE = "parser_unreadable"
 # Window of the extractor-internal trade flags (kills.extractor_trade_kill_5s / extractor_traded_death_5s),
 # kept for model/rating3's round fit. They are not the engine's trade, which uses 5.4 s and reproduces
 # HLTV's traded deaths better; nothing the UI shows reads them. awpy 3.1.1 hard-codes 5.25 s.
@@ -564,7 +565,9 @@ def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: 
     """(scoreboard columns to take off per player, his kept attempts, problems, warnings) for the dropped attempts.
 
     Each player's kept attempts are the one subset of his candidate attempts (candidates: indices) that
-    kept_subsets finds; none, or two that differ, is a problem with the numbers, and the map is refused. Damage
+    kept_subsets finds; none, or two that differ, is a problem with the numbers, and the map is refused. Two that
+    differ only in attempts holding nothing of his but team kills, and take the same off the scoreboard, are one
+    answer: those attempts are undetermined, judged for damage as below, and the rest are kept. Damage
     a kept attempt dealt is committed on the next round start, inside the round before it, where it cannot be
     split from that round's: a problem too. So is damage in an attempt his other counters cannot place, when
     the round before it holds at least that much game damage no hit of his explains (damage_gap(steamid,
@@ -588,16 +591,26 @@ def attribute_attempts(residuals: dict[int, dict[str, int]], counted_selfkills: 
             problems.append(f"player {sid}: the scoreboard holds {res} beyond the counted events, which no set of "
                             f"his dropped attempts' events explains: {[e for e in evs if e]}")
             continue
-        if len({f[0] for f in found}) > 1:
-            problems.append(f"player {sid}: dropped attempts {sorted({f[0] for f in found})} each explain {res}")
-            continue
-        subset, kills_off = found[0]
+        subsets = sorted({f[0] for f in found})
+        core = set.intersection(*(set(s) for s in subsets))
+        unsure = set().union(*(set(s) for s in subsets)) - core
+        if len(subsets) > 1:
+            # Attempts the subsets disagree on are undetermined, not a problem, when they hold only his team kills
+            # and every subset takes the same off the scoreboard: a team kill the game does not deduct moves no
+            # counter the check reads (an HLTV demo: a team kill in a rolled-back round left kills_total at 0 before
+            # the kill, after it and after the restore), so keeping it and rolling it back are the same numbers.
+            team_kills_only = all(not any(evs[i][k] for k in ("kills", "deaths", "assists", "headshots")) for i in unsure)
+            takes = {(f[1], *(sum(evs[i][k] for i in f[0]) for k in ("deaths", "assists", "headshots"))) for f in found}
+            if not team_kills_only or len(takes) > 1:
+                problems.append(f"player {sid}: dropped attempts {subsets} each explain {res}")
+                continue
+        subset, kills_off = tuple(sorted(core)), found[0][1]
         kept[sid] = subset
         if any(evs[i]["damage"] for i in subset):
             problems.append(f"player {sid}: a kept dropped attempt dealt {sum(evs[i]['damage'] for i in subset)} "
                             "damage, which the game committed inside the round before it")
         for i, e in enumerate(evs):
-            undetermined = not any(e[k] for k in ("kills", "selfkills", "deaths", "assists")) if e else False
+            undetermined = (i in unsure or not any(e[k] for k in ("kills", "selfkills", "deaths", "assists"))) if e else False
             if e and i not in subset and e["damage"] and undetermined and damage_gap(sid, i) >= e["damage"]:
                 problems.append(f"player {sid}: dropped attempt {i} dealt {e['damage']} damage and the round before it "
                                 f"holds {damage_gap(sid, i)} game damage no hit explains; it may have been kept")
@@ -785,20 +798,51 @@ def real_round_ends(round_ends: pd.DataFrame) -> pd.Series:
     return winner.notna() & ~winner.isin(["", "nan", "None"])
 
 
+def rolled_back_ends(round_ends: pd.DataFrame) -> pd.Series:
+    """Round ends with a winner that a later backup restore undid: a winnerless round_end after it whose
+    total_rounds_played, the count the restore loaded, is below the round end's own, followed by the round played
+    again (a round end with a winner, after the restore, at or below that count).
+
+    A restore can load the backup of an earlier round than the one in progress. Three HLTV demos ended a round,
+    started the next, then restored to the start of the round already ended (one: round 12 ended at 104349 with
+    total_rounds_played 12, and a restore at 111771 set it to 11). The game took that round's win, kills,
+    deaths and damage back off its counters, and the round was played again. Without the replay a lower count
+    proves nothing (a winnerless round_end after the last round, as a server reset leaves, would drop a final
+    round with no kills and pass every check one round short), so the round stays.
+    round_ends: tick, winner, total_rounds_played (gamerules, read on each event's tick).
+    """
+    if "total_rounds_played" not in round_ends.columns:
+        raise ValueError("round_end events carry no total_rounds_played, so rounds a restore rolled back cannot be "
+                         "told from rounds that count")
+    real = real_round_ends(round_ends)
+    restores, ends = round_ends[~real], round_ends[real]
+
+    def undone(t, n) -> bool:
+        for r_tick in restores.tick[(restores.tick > t) & (restores.total_rounds_played < n)]:
+            if ((ends.tick > r_tick) & (ends.total_rounds_played <= n)).any():
+                return True
+        return False
+
+    return pd.Series([bool(r) and undone(t, n) for t, n, r in
+                      zip(round_ends.tick, round_ends.total_rounds_played, real)], index=round_ends.index, dtype=bool)
+
+
 def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, match_start: int):
     """Return (rounds, voided) where rounds has start/freeze_end/end ticks per round.
 
     A backup restore replays a round: its earlier attempt has a round_start but
-    no round_end. The round's start is the last round_start before its freeze
+    no round_end, or a round_end that a later restore rolled back (rolled_back_ends).
+    The round's start is the last round_start before its freeze
     end; earlier starts after the previous round's end open voided windows,
     whose events are dropped.
+    round_ends: tick, winner, reason, total_rounds_played.
     """
     rs = np.sort(np.asarray(round_starts, dtype=np.int64))
     fe = np.sort(np.asarray(freeze_ends, dtype=np.int64))
     real = real_round_ends(round_ends)
     # This also drops the winnerless round_end that some pro demos carry at tick 1, left over
     # from before the recording began.
-    ends = round_ends[(round_ends.tick >= match_start) & real].sort_values("tick")
+    ends = round_ends[(round_ends.tick >= match_start) & real & ~rolled_back_ends(round_ends)].sort_values("tick")
     rows, voided = [], []
     prev_end = None
     for i, e in enumerate(ends.itertuples()):
@@ -837,6 +881,41 @@ def build_round_windows(round_starts, freeze_ends, round_ends: pd.DataFrame, mat
     if len(rounds):
         rounds["voided_attempts"] = attempts_per_round(rounds, voided)
     return rounds, voided
+
+
+UNPLAYED_ROUND = "unplayed_round"
+
+
+def refuse_unplayed_round(rounds: pd.DataFrame, disconnects: pd.DataFrame) -> None:
+    """Raise for a round after round 1 with no freeze end: its freeze time never ended, so nobody played it,
+    and the game's scoreboard still counts its winner.
+
+    Two HLTV maps that HLTV lists no stats for ended this way (one: round 17 started at 140989 and sat in freeze
+    time for 70769 ticks; eight players disconnected, the last on its round_end at 211758, which gave the
+    remaining side the win). The map was abandoned, and no exact scoreboard of the rounds played exists to
+    check it against. Round 1 recorded already live has no freeze end either and is left to validate_rounds.
+    disconnects: tick and user_steamid of each player_disconnect.
+    """
+    for r in rounds.itertuples():
+        if r.round == 1 or not pd.isna(r.freeze_end_tick) or pd.isna(r.start_tick):
+            continue
+        inside = disconnects[(disconnects.tick >= r.start_tick) & (disconnects.tick <= r.end_tick)]
+        left = inside.user_steamid.dropna().nunique()
+        raise RuntimeError(f"{UNPLAYED_ROUND}: round {r.round} never left freeze time (round_start {int(r.start_tick)}, "
+                           f"round_end {int(r.end_tick)} with no round_freeze_end between them) and {left} players "
+                           "disconnected in it: the game ended a round nobody played, so the map was abandoned and its "
+                           "scoreboard counts that round")
+
+
+C4 = "C4 Explosive"
+
+
+def c4_holders(state: pd.DataFrame) -> dict[int, int]:
+    """{tick: player id} for each tick on which exactly one player's inventory holds the C4 (there is one C4).
+    state: tick, steamid (resolved), inventory."""
+    has = state[[isinstance(v, (list, np.ndarray)) and C4 in list(v) for v in state.inventory]].dropna(subset=["steamid"])
+    one = has.groupby("tick").steamid.nunique().loc[lambda n: n == 1].index
+    return {int(t): int(s) for t, s in zip(has.tick, has.steamid) if t in one}
 
 
 def assign_rounds(ticks: pd.Series, rounds: pd.DataFrame, voided: list[tuple[int, int]],
@@ -1249,10 +1328,40 @@ def link_throws(throws: pd.DataFrame, proj: pd.DataFrame, rate: float):
     return pd.array(ids, dtype="Int32"), pd.array(dists, dtype="Float32")
 
 
+class ReadableParser:
+    """A demoparser2 DemoParser whose calls raise parser_unreadable, naming the call, where the parser raises
+    EntityNotFound.
+
+    Two HLTV demos from one server: every demoparser2 call that decodes entities (0.42.0 and 0.42.1) raised it
+    within the first 200 KB, while the header and the event list read and awpy's own parser read every round. The
+    parser loses its entity stream, as in LaihoE/demoparser#339 (open). awpy: what awpy made of the demo.
+    """
+
+    def __init__(self, parser, awpy: str):
+        self._parser, self._awpy = parser, awpy
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._parser, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except Exception as e:  # demoparser2 raises a bare Exception
+                if "EntityNotFound" not in str(e):
+                    raise
+                raise RuntimeError(f"{PARSER_UNREADABLE}: demoparser2 {pkg_version('demoparser2')} cannot decode this "
+                                   f"demo's entities (EntityNotFound in {name}), so no table can be built; "
+                                   f"{self._awpy}. Retry after a demoparser2 upgrade") from e
+        return call
+
+
 def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     from demoparser2 import DemoParser
 
-    parser = DemoParser(str(ctx.dem))
+    parser = ReadableParser(DemoParser(str(ctx.dem)), "awpy's own parser could not read it either" if ctx.truncated
+                            else "awpy's own parser read all of it")
     T: dict[str, pd.DataFrame] = {}
     with Timer(ctx, "dp_header"):
         header = parser.parse_header()
@@ -1300,6 +1409,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         # scoreboard; HLTV has 12 and 17, the counted rounds alone). What the game kept is read from each
         # attempt's own events (attribute_attempts) and taken off the scoreboard before validation.
         restores = ({int(t) for t in re_all.tick[~real_round_ends(re_all)]} if len(re_all) else set()) | restores_pre_match
+        rolled_back = sorted(int(t) for t in re_all.tick[rolled_back_ends(re_all)]) if len(re_all) else []
         off = ev("round_officially_ended")
         offt = np.sort(off.tick.to_numpy()) if len(off) else np.array([], dtype=np.int64)
         rounds["official_end_tick"] = [int(offt[offt >= e].min()) if (offt >= e).any() else None
@@ -1313,6 +1423,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 rounds = rounds.iloc[:-1].reset_index(drop=True)
             if rounds.empty:
                 raise RuntimeError(f"{TRUNCATED}: no complete round before the cut")
+        dc_ = ev("player_disconnect")
+        refuse_unplayed_round(rounds, pd.DataFrame({"tick": dc_.tick, "user_steamid": col(dc_, "user_steamid", None)}))
         check_dropped_attempts(rounds, voided)
         rounds["voided_attempts"] = attempts_per_round(rounds, voided)
 
@@ -1537,6 +1649,22 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     bomb = stamp(pd.concat(bomb_parts, ignore_index=True).sort_values("tick")) if bomb_parts else stamp(
         pd.DataFrame(columns=["tick", "event", "steamid", "site_entity", "zone", "place", "x", "y", "z"]))
     bomb = bomb[bomb["round"] > 0]
+    # A recording that opens on round 1's start has no player info on its first tick, so every event there names
+    # nobody, the C4 pickup included (an HLTV demo: ten spawns and the pickup on tick 0, all unnamed). The pickup
+    # is the one player's whose inventory holds the C4 on that tick; with none or several it stays unnamed, and
+    # bomb_rows_name_a_player fails the map.
+    lost = bomb.index[bomb.steamid.isna() & (bomb.event == "pickup")]
+    if len(lost):
+        st = parser.parse_ticks(["inventory", "X", "Y", "Z", "last_place_name"],
+                                ticks=sorted({int(t) for t in bomb.tick[lost]}))
+        st["steamid"] = resolve_ids(st.steamid, st.name, bots)
+        holder = c4_holders(st)
+        at = st.dropna(subset=["steamid"]).astype({"steamid": "int64"}).set_index(["tick", "steamid"])
+        for i in lost:
+            sid = holder.get(int(bomb.tick[i]))
+            if sid is not None:
+                s_ = at.loc[(int(bomb.tick[i]), sid)]
+                bomb.loc[i, ["steamid", "x", "y", "z", "place"]] = [sid, s_.X, s_.Y, s_.Z, s_.last_place_name]
     # Plant site letter from the planter's m_nWhichBombZone (1=A, 2=B); on the Nuke test demo it
     # agrees with the planter's place name (BombsiteA/BombsiteB) for all 15 plants.
     bomb["site"] = bomb.zone.map({1: "A", 2: "B"})
@@ -2022,11 +2150,15 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 continue
             status = ("in round 1's baseline" if i in pre_round_1 and sid in baseline else
                       "kept" if i in kept_by.get(sid, ()) else
-                      "rolled back" if any(e[k] for k in ("kills", "selfkills", "deaths", "assists")) else "unknown")
+                      # Team kills alone (selfkills with no death) show neither way when the game did not deduct them.
+                      "rolled back" if any(e[k] for k in ("kills", "deaths", "assists")) else "unknown")
             players_[str(sid)] = dict(status=status, **{k: v for k, v in e.items() if v})
+        undone = [t for t in rolled_back if a_ <= t <= b_]
         dropped.append(dict(round=replaced_by(rounds, b_), from_tick=a_, to_tick=b_,
                             restore_ticks=sorted(r for r in restores if a_ <= r <= b_), players=players_,
                             reason=("backup restore on round 1's start tick, before begin_new_match" if a_ == b_ < match_start
+                                    else f"a finished round (round_end at {undone[0]}) that a backup restore rolled "
+                                         "back; not a counted round" if undone
                                     else "restored attempt with no winner; not a counted round")))
     checks = validate_scoreboard(kills, {int(s_): int(v) for s_, v in gd.items()}, less_taken(sb_part, take),
                                  less_taken(departed, take), everyone) + validate_rounds(rounds, final_score)

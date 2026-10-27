@@ -24,6 +24,7 @@ import logging
 import logging.handlers
 import math
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -313,15 +314,59 @@ def _owned_by(folder: Path, archive_id: str) -> bool:
     return False
 
 
+def maybe_demo(name: str) -> bool:
+    """A file in an archive that may be a demo: a .dem, or a name with no extension made of letters, digits, "-" and
+    "_" only. One HLTV archive held its two demos as "<team1>-vs-<team2>-m1-dust2" and "...-m2-ancient", each
+    starting with the demo magic bytes; extracted_demos keeps an extensionless file only if it starts with them. The
+    bare names become 7z file arguments, so one that 7z would read as a wildcard or an @list file is never listed."""
+    n = Path(name.replace("\\", "/")).name
+    return n.lower().endswith(".dem") or re.fullmatch(r"[A-Za-z0-9_-]+", n) is not None
+
+
+DEM_MAGIC = b"PBDEMS2\x00"  # the first 8 bytes of a CS2 demo
+
+
+def extracted_demos(work: Path) -> list[Path]:
+    """The demos 7z extracted into work: every .dem, plus each extensionless file that starts with DEM_MAGIC, renamed
+    to <name>.dem. Any other extensionless file is deleted; it is not a demo."""
+    for f in sorted(p for p in work.iterdir() if p.is_file() and not p.suffix):
+        with open(f, "rb") as fh:
+            is_demo = fh.read(len(DEM_MAGIC)) == DEM_MAGIC
+        target = f.with_name(f.name + ".dem")
+        if is_demo and not target.exists():
+            f.rename(target)
+        else:
+            log.warning("%s: %s", f, "a .dem of that name is in the archive too; deleted" if is_demo else "not a demo; deleted")
+            safe_unlink(f)
+    return sorted(work.glob("*.dem"))
+
+
+def starts_as_demo(rar: Path, path: str) -> bool:
+    """Whether the archived file at path begins with DEM_MAGIC. 7z streams it and is stopped after 8 bytes, so a
+    file is not decompressed whole (in a solid archive, what comes before it is)."""
+    if path.startswith("@") or any(c in path for c in "*?"):
+        return False  # 7z would read it as a list file or a wildcard
+    proc = subprocess.Popen([SEVEN_ZIP, "e", "-so", "-bd", "--", str(rar), path], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=IDLE | NO_WINDOW)
+    try:
+        head = proc.stdout.read(len(DEM_MAGIC))
+    finally:
+        kill_tree(proc)  # 7z can be a launcher (scoop's shim) whose child does the work
+        proc.stdout.close()
+    return head == DEM_MAGIC
+
+
 def list_archive(rar: Path) -> dict[str, dict]:
-    """Names, sizes and mtimes of the .dem files inside the archive (7z -slt listing)."""
+    """Names, sizes and mtimes of the demos inside the archive (7z -slt listing): every .dem, and each file with a
+    plain extensionless name (maybe_demo) whose first bytes are DEM_MAGIC, so the disk budget counts demos only."""
     out = subprocess.run([SEVEN_ZIP, "l", "-slt", "-ba", "--", str(rar)], capture_output=True, text=True,
                          creationflags=IDLE | NO_WINDOW, timeout=120, encoding="utf-8", errors="replace")
     entries, cur = {}, {}
     for line in out.stdout.splitlines() + [""]:
         if not line.strip():
-            if cur.get("Path", "").lower().endswith(".dem") and cur.get("Folder") != "+":
-                name = Path(cur["Path"].replace("\\", "/")).name
+            path = cur.get("Path", "")
+            if maybe_demo(path) and cur.get("Folder") != "+" and (path.lower().endswith(".dem") or starts_as_demo(rar, path)):
+                name = Path(path.replace("\\", "/")).name
                 entries[name] = dict(size=int(cur.get("Size") or 0), modified=cur.get("Modified"))
             cur = {}
             continue
@@ -954,8 +999,10 @@ class Pipeline:
             a.work.mkdir(parents=True)
             a.extract_log = LOG_DIR / f"7z-{a.slug}.log"
             a.size_at_extract = a.rar.stat().st_size
-            # e: flat extraction (no stored paths, so no traversal); only *.dem, recursively.
-            cmd = [SEVEN_ZIP, "e", "-y", "-bd", "-r", f"-o{a.work}", "--", str(a.rar), "*.dem"]
+            # e: flat extraction (no stored paths, so no traversal); only *.dem and the extensionless names the
+            # listing found (maybe_demo), recursively.
+            bare = sorted({n for n in a.listing if not n.lower().endswith(".dem")})
+            cmd = [SEVEN_ZIP, "e", "-y", "-bd", "-r", f"-o{a.work}", "--", str(a.rar), "*.dem", *bare]
             with open(a.extract_log, "w", encoding="utf-8") as lf:
                 a.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                           creationflags=IDLE | NO_WINDOW, cwd=str(DATA_ROOT))
@@ -980,7 +1027,7 @@ class Pipeline:
                     continue
                 self.fail_archive(a, f"7z exit {rc}: {text[-800:]}")
                 continue
-            a.dems = sorted(a.work.glob("*.dem"))
+            a.dems = extracted_demos(a.work)
             if not a.dems:
                 self.fail_archive(a, "7z extracted no .dem files")
                 continue

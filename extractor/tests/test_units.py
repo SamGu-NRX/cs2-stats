@@ -297,7 +297,7 @@ def test_rounds_validation_rejects_unordered_ticks():
 
 
 def test_round_windows_and_voided_restore():
-    ends = pd.DataFrame(dict(tick=[900, 2000, 3000], round=[1, 2, 3], winner=["CT", "T", "CT"],
+    ends = pd.DataFrame(dict(tick=[900, 2000, 3000], total_rounds_played=[1, 2, 3], winner=["CT", "T", "CT"],
                              reason=["t_killed"] * 3))
     # round 2 was restarted: starts at 1000 (voided attempt) and again at 1500
     rounds, voided = ex.build_round_windows([1, 100, 1000, 1500, 2100], [200, 1100, 1600, 2200], ends, 50)
@@ -312,7 +312,7 @@ def test_backup_restore_voids_the_attempt_and_its_restore_tick_deaths():
     # A pro demo: round 17's attempt starts 110853 with no freeze end; a backup restore at
     # 119026 ends it with no winner and kills all 10 players with "world" on that tick (deaths +1 each
     # on the scoreboard check); the real round starts 119026 and ends 125482.
-    ends = pd.DataFrame(dict(tick=[110533, 119026, 125482], round=[16, 17, 18], winner=["T", None, "T"],
+    ends = pd.DataFrame(dict(tick=[110533, 119026, 125482], total_rounds_played=[16, 16, 17], winner=["T", None, "T"],
                              reason=["bomb_exploded", None, "ct_killed"]))
     rounds, voided = ex.build_round_windows([106405 - 1280, 110853, 119026], [106405, 121100], ends, 86)
     assert rounds.end_tick.tolist() == [110533, 125482]
@@ -548,7 +548,7 @@ def test_round_one_recorded_live_and_a_leftover_round_end_at_tick_1():
     # A pro demo: the recording starts at tick 1 with round 1 already live, so round 1 has no
     # freeze end, and a winnerless round_end left over from before the recording sits at tick 1. Before the
     # fix that leftover counted as round 1 (ticks [1, None, 1]) and round 1 failed round_ticks.
-    ends = pd.DataFrame(dict(tick=[1, 5163, 11169], round=[0, 1, 2], winner=[None, "CT", "CT"],
+    ends = pd.DataFrame(dict(tick=[1, 5163, 11169], total_rounds_played=[0, 1, 2], winner=[None, "CT", "CT"],
                              reason=[None, "t_killed", "t_killed"]))
     rounds, voided = ex.build_round_windows([1, 5483, 11489], [6763, 12769], ends, 0)
     assert rounds.start_tick.tolist() == [1, 5483] and rounds.end_tick.tolist() == [5163, 11169]
@@ -1041,7 +1041,7 @@ def test_children_die_with_the_pipeline(tmp_path):
 
 def test_restore_in_round_one_is_voided():
     # A pro demo: match starts at 98/99, restore at 4020, real round 1 freeze end 5892.
-    ends = pd.DataFrame(dict(tick=[0, 4020, 10704], round=[0, 1, 2], winner=[None, None, "T"],
+    ends = pd.DataFrame(dict(tick=[0, 4020, 10704], total_rounds_played=[0, 0, 1], winner=[None, None, "T"],
                              reason=[None, None, "bomb_exploded"]))
     rounds, voided = ex.build_round_windows([0, 98, 4020], [5892], ends, 99)
     assert rounds.start_tick.tolist() == [4020] and voided == [(98, 4020)]
@@ -1052,7 +1052,8 @@ def test_a_round_restored_twice_is_one_dropped_attempt_and_every_round_keeps_its
     # An HLTV demo: round 2's first attempt (start 4638, freeze end 9531) was restored at 10108, the next at
     # 10176, and round 2 was then played from 10176 (freeze end 25941). Each window was judged alone, so the
     # map got three winnerless rows, two sharing freeze end 9531, and one of them no economy.
-    ends = pd.DataFrame(dict(tick=[4190, 10108, 10176, 28210, 32355], winner=["T", None, None, "T", "T"],
+    ends = pd.DataFrame(dict(tick=[4190, 10108, 10176, 28210, 32355], total_rounds_played=[1, 1, 1, 2, 3],
+                             winner=["T", None, None, "T", "T"],
                              reason=["bomb_exploded", None, None, "ct_killed", "ct_killed"]))
     rounds, voided = ex.build_round_windows([1, 4638, 10108, 10176, 28658], [9531, 25941, 29938], ends, 0)
     assert voided == [(4638, 10176)]
@@ -1062,6 +1063,55 @@ def test_a_round_restored_twice_is_one_dropped_attempt_and_every_round_keeps_its
     assert rounds.voided_attempts.tolist() == [0, 1, 0]
     # The attempt's freeze end and its disconnect death at 10111 belong to no round.
     assert ex.assign_rounds(pd.Series([9531, 10111, 10176, 25941]), rounds, voided).tolist() == [0, 0, 0, 2]
+
+
+def test_a_finished_round_a_later_restore_rolled_back_is_not_a_round():
+    # An HLTV demo: round 12 ended at 104349 (total_rounds_played 12), round 13 started at 104893, and a restore at
+    # 111771 loaded round 12's backup (total_rounds_played 11); round 12 was played again and ended at 125328.
+    # Counting the first round 12 too gave 31 rounds against the game's 30, and its kills and deaths failed the
+    # scoreboard check by one (the same on two more HLTV demos).
+    ends = pd.DataFrame(dict(tick=[91247, 104349, 111771, 125328], total_rounds_played=[11, 12, 11, 12],
+                             winner=["CT", "T", None, "CT"], reason=["bomb_defused", "bomb_exploded", None, "t_killed"]))
+    rounds, voided = ex.build_round_windows([83040, 91695, 104893, 111771], [86334, 95785, 119492], ends, 0)
+    assert rounds.end_tick.tolist() == [91247, 125328] and rounds.start_tick.tolist() == [83040, 111771]
+    assert rounds.freeze_end_tick.tolist() == [86334, 119492]
+    assert voided == [(91695, 111771)] and rounds.voided_attempts.tolist() == [0, 1]
+    assert ex.assign_rounds(pd.Series([95000, 104349, 111771, 119492]), rounds, voided).tolist() == [0, 0, 0, 2]
+
+
+def test_a_lower_count_after_the_last_round_does_not_drop_it():
+    # Review of PR 59: a winnerless round_end after the last round with a lower total_rounds_played (a server reset)
+    # is no restore that replays a round. Taking the final round (a timeout win, no kills) off would read the
+    # score one round early and pass every check one round short; the map keeps the round, or is refused.
+    ends = pd.DataFrame(dict(tick=[900, 2000, 3000, 3100], total_rounds_played=[1, 2, 3, 2],
+                             winner=["CT", "T", "CT", None], reason=["t_killed", "ct_killed", "target_saved", None]))
+    rounds, voided = ex.build_round_windows([1, 1000, 2100], [200, 1100, 2200], ends, 0)
+    assert rounds.end_tick.tolist() == [900, 2000, 3000]
+    with pytest.raises(RuntimeError, match="covers round 3"):
+        ex.check_dropped_attempts(rounds, voided)
+
+
+def test_round_ends_without_a_round_count_are_refused_by_name():
+    ends = pd.DataFrame(dict(tick=[900], winner=["CT"], reason=["t_killed"]))
+    with pytest.raises(ValueError, match="no total_rounds_played"):
+        ex.build_round_windows([1], [200], ends, 0)
+
+
+def test_entity_not_found_in_any_parser_pass_refuses_as_parser_unreadable():
+    # Review of PR 59: only the first event pass named the parser; the same fault in a tick pass surfaced as a bare
+    # "Exception: EntityNotFound".
+    class Parser:
+        def parse_ticks(self, props, ticks=None):
+            raise Exception("EntityNotFound")
+
+        def parse_header(self):
+            raise Exception("something else")
+
+    p = ex.ReadableParser(Parser(), "awpy's own parser read all of it")
+    with pytest.raises(RuntimeError, match=r"^parser_unreadable: .*EntityNotFound in parse_ticks"):
+        p.parse_ticks(["X"], ticks=[1])
+    with pytest.raises(Exception, match="^something else$"):
+        p.parse_header()
 
 
 def test_a_restore_before_begin_new_match_is_found_by_its_world_deaths():
@@ -1160,7 +1210,7 @@ def test_two_players_c4_events_on_one_tick_are_two_bomb_rows():
 
 
 def test_round_one_without_restore_has_no_voided_window():
-    ends = pd.DataFrame(dict(tick=[7149], round=[1], winner=["T"], reason=["bomb_exploded"]))
+    ends = pd.DataFrame(dict(tick=[7149], total_rounds_played=[1], winner=["T"], reason=["bomb_exploded"]))
     rounds, voided = ex.build_round_windows([1, 576], [1856], ends, 577)
     assert rounds.start_tick.tolist() == [576] and voided == []
 
@@ -1581,6 +1631,16 @@ def test_two_attempts_that_each_explain_the_scoreboard_refuse_the_map():
     _, _, problems, _ = ex.attribute_attempts({A: _res(deaths=1)}, {}, [{A: _ev(deaths=1)}, {A: _ev(deaths=1)}],
                                            {A: {0, 1}}, NO_GAP)
     assert problems and "each explain" in problems[0]
+
+
+def test_a_team_kill_alone_in_a_dropped_attempt_is_undetermined_not_two_answers():
+    # An HLTV demo: the one kill in a rolled-back round was a team kill, and the killer's kills_total read 0 before
+    # it, after it and after the restore. Keeping that attempt and rolling it back take the same off his scoreboard,
+    # and the map was refused because both "explained" it.
+    take, kept, problems, _ = ex.attribute_attempts({A: _res()}, {}, [{A: _ev(selfkills=1)}], {A: {0}}, NO_GAP)
+    assert (take, kept, problems) == ({}, {A: ()}, [])
+    # Undetermined, its damage is judged by the round before, as for an attempt no counter places.
+    assert ex.attribute_attempts({A: _res()}, {}, [{A: _ev(selfkills=1, damage=40)}], {A: {0}}, lambda s, i: 40)[2]
 
 
 def test_damage_a_kept_attempt_dealt_refuses_the_map():
@@ -2094,6 +2154,29 @@ def test_a_write_between_the_size_reads_cannot_hide_a_running_extraction(tmp_pat
     monkeypatch.setattr(dp, "tree_bytes", write_after_first_work_read)
     p.start_extractions()
     assert wrote and len(started) == 1 and second.state == "pending"
+
+
+@pytest.mark.skipif(dp.shutil.which(dp.SEVEN_ZIP) is None, reason="7-Zip (7z) is not on PATH; extraction is not being checked")
+def test_a_demo_stored_without_its_extension_is_extracted_and_parsed(tmp_path, monkeypatch):
+    # An HLTV archive held its two demos as "<team1>-vs-<team2>-m1-dust2" and "...-m2-ancient", without ".dem", and
+    # the pipeline failed it as "archive lists no .dem files". A bare name that is not a demo stays out.
+    import zipfile
+    _isolate(tmp_path, monkeypatch)
+    archive = dp.DOWNLOADS / "a.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("x-vs-y-m1-dust2", b"PBDEMS2\x00" + bytes(64))
+        z.writestr("readme", b"not a demo")
+    # Only the demo is listed, so only it counts toward the disk budget (review of PR 59).
+    assert sorted(dp.list_archive(archive)) == ["x-vs-y-m1-dust2"]
+    a = dp.Archive(rar=archive, id="a")
+    p = dp.Pipeline()
+    p.archives[a.id] = a
+    p.start_extractions()
+    assert a.state == "extracting", a.state
+    a.proc.wait(timeout=60)
+    p.poll_extractions()
+    assert a.state == "parsing" and [j.dem.name for j in p.jobs] == ["x-vs-y-m1-dust2.dem"]
+    assert sorted(f.name for f in a.work.iterdir()) == ["x-vs-y-m1-dust2.dem"]
 
 
 def _rebuild_and_validate(drops, game_damage):
