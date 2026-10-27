@@ -70,13 +70,15 @@ export function bundleOf(client: Client, version: number, file: string, viewer: 
 /**
  * One match shaped for the match views. The entry must be in the match list. Its players are named as
  * the match list names them, so with personal info hidden every view of the match uses the same
- * placeholders (privacy.ts). `viewer`: the player picked on a pro demo's scoreboard (MatchModel.human).
+ * placeholders (privacy.ts). `at`: the ?as= address value, the position on a pro demo's scoreboard of the
+ * player picked there (MatchModel.human); the address never holds the player's SteamID.
  */
-export function useMatch(file: string | null, viewer: string | null = null): Loaded<MatchModel> {
+export function useMatch(file: string | null, at: string | null = null): Loaded<MatchModel> {
   const { client, version, matches } = useData();
   const hide = useHidePersonal();
   const entry = file ? matches.find((m) => m.file === file) ?? null : null;
-  const as = entry && entry.you === null ? viewer : null;
+  const pi = at !== null && /^\d+$/.test(at) ? Number(at) : null;
+  const as = entry && entry.you === null && pi !== null ? entry.players[pi]?.id ?? null : null;
   return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}:${as ?? ""}` : null, async () => {
     if (!entry) throw new Error(`${file} is not in the match folder`);
     const b = await bundleOf(client!, version, file!, as);

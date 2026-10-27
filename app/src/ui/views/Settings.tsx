@@ -260,11 +260,10 @@ function ValveSource({ n }: { n: number }) {
  * dev server takes it from CS2_PRO_LIBRARY.
  */
 function ProSource({ n }: { n: number }) {
-  const { host, refresh, status } = useData();
+  const { host, refresh } = useData();
   const hide = useHidePersonal();
   const [busy, setBusy] = useState(false);
   const folder = host?.pro?.folder ?? null;
-  const reading = status === "syncing" || status === "starting";
   const choose = async () => {
     if (!host?.chooseProLibrary) return;
     setBusy(true);
@@ -293,10 +292,11 @@ function ProSource({ n }: { n: number }) {
       ) : (
         <p className="meta">Point it at the extractor's demos folder, the one holding a folder per series.</p>
       )}
-      {(host?.pro?.error || host?.pro?.skipped.length) ? (
+      {/* a map is listed only when every table its COMPLETE names is whole; the rest wait for the extractor */}
+      {(host?.pro?.error || host?.pro?.incomplete) ? (
         <p className="meta">
           {host.pro.error ? <span className="poor-text selectable">{hide ? hideTextAndFiles(host.pro.error, []) : host.pro.error}</span>
-            : `${plural(host.pro.skipped.length, "map")} without complete tables yet${reading ? "" : ", left out"}.`}
+            : <span data-tip="A table the extractor listed is missing, empty or short. The map lists once it is whole." tabIndex={0}>{plural(host.pro.incomplete, "map")} skipped: incomplete</span>}
         </p>
       ) : null}
       {host?.chooseProLibrary ? (

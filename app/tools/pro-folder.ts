@@ -3,7 +3,7 @@
 // src-tauri/src/pro.rs implements the same rules for the desktop app, where the user picks the folder.
 // Nothing here writes: listing and reading are readdir, stat and readFile. A map is listed as
 // "pro/<series>/<map>" (flat) or "pro/<series>/<map>/<version folder>" (versioned).
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent, type Stats } from "node:fs";
 import path from "node:path";
 import { VERSION_DIR } from "./map-dir";
 
@@ -12,8 +12,10 @@ export interface ProListing {
   /** the library folder; null when none is set */
   folder: string | null;
   files: ProEntry[];
-  /** map folders with no complete map now, and why */
+  /** map folders left out, and why */
   skipped: { file: string; why: string }[];
+  /** how many of those are not whole yet (a table missing, empty or short of its listed size) */
+  incomplete: number;
   /** why the folder could not be listed at all */
   error: string | null;
 }
@@ -22,102 +24,148 @@ export interface ProListing {
 export class ProPathError extends Error {}
 
 export const proRoot = (env: NodeJS.ProcessEnv = process.env) => (env.CS2_PRO_LIBRARY ? path.resolve(env.CS2_PRO_LIBRARY) : null);
+/** The desktop app's data folder, which the library may not be, sit inside or hold (pro.rs open). */
+const appDir = (env: NodeJS.ProcessEnv = process.env) => (env.APPDATA ? path.join(env.APPDATA, "BotMatchStats") : null);
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 const isName = (s: string) => NAME.test(s) && s !== "." && s !== "..";
 const TABLE = /^[a-z0-9_]+\.parquet$/;
 
-/** The folder whose subfolders are series: the library folder, or its demos folder. */
-const seriesRoot = (folder: string) => (existsSync(path.join(folder, "demos")) ? path.join(folder, "demos") : folder);
+interface Library { canon: string; series: string }
 
-/** Whether p, with links resolved, lies inside root's own resolved path. */
-function inside(root: string, p: string): boolean {
+const within = (p: string, root: string) => p === root || p.startsWith(root + path.sep);
+
+/** The chosen folder resolved, and the folder of series under it; or why it cannot be the library (pro.rs open). */
+export function openLibrary(folder: string, app: string | null = appDir()): Library {
+  const canon = realpathSync.native(folder);
+  if (app) {
+    let a = app;
+    try { a = realpathSync.native(app); } catch { /* not created yet */ }
+    if (within(canon, a) || within(a, canon)) {
+      throw new Error(`${folder} is the app's own data folder, inside it or above it, and the app writes its settings there. Choose the extractor's demos folder instead.`);
+    }
+  }
+  const demos = path.join(canon, "demos");
+  let st: Stats | null = null;
+  try { st = lstatSync(demos); } catch { /* no demos folder: the series are in the chosen folder */ }
+  if (st?.isSymbolicLink()) throw new Error(`${demos} is a link to another folder. Choose the folder it points to instead.`);
+  return { canon, series: st?.isDirectory() ? demos : canon };
+}
+
+/** Whether p, resolved, lies inside the chosen folder. */
+function under(lib: Library, p: string): boolean {
   try {
-    return realpathSync.native(p).startsWith(realpathSync.native(root) + path.sep);
+    const q = realpathSync.native(p);
+    return q !== lib.canon && within(q, lib.canon);
   } catch {
     return false;
   }
 }
 
-/** A flat map folder's plain table files that resolve inside root, with their sizes. */
-function flatTables(root: string, dir: string): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const f of readdirSync(dir).sort()) {
-    const p = path.join(dir, f);
-    if (TABLE.test(f) && inside(root, p) && statSync(p).isFile()) out[f] = statSync(p).size;
-  }
-  return out;
+/** A version folder's COMPLETE list: file name to bytes, the extractor's record of every table it wrote. */
+function completeList(text: string): Record<string, number> {
+  const sizes = JSON.parse(text) as Record<string, number>;
+  const bad = Object.keys(sizes).find((t) => !TABLE.test(t));
+  if (bad !== undefined) throw new Error(`COMPLETE lists "${bad}", which is not a table file name`);
+  return sizes;
 }
 
+type Answer = { file?: ProEntry; skipped?: string; incomplete?: boolean };
+
 /**
- * Every map of the library that is complete now. A version folder counts once its COMPLETE file exists
- * and a flat folder (the extractor's output from before version folders, never rewritten) once its
- * match.parquet does; each is keyed by that file's size and time, and a map's tables are checked as each
- * is read (readPro). The walk reads directory entries, so a folder or file that is a link shows as one:
- * only a map with a link on its path costs a realpath to prove it stays inside the library. Checking
- * every table of every map made a listing of 1,080 maps take 40 s on this machine.
+ * Each map folder's last answer, by the file that completes it (a version's COMPLETE, or a flat folder's
+ * match.parquet) and that file's size and time. A version folder never changes once COMPLETE is written
+ * (SCHEMA-v1.md), so the dev server checks each table of a map once, not at every rescan: Node's
+ * directory entries carry no sizes, and a stat per table of 1,084 maps takes seconds here.
  */
-export function listPro(folder: string): ProListing {
-  const out: ProListing = { folder, files: [], skipped: [], error: null };
-  const root = seriesRoot(folder);
-  let series: Dirent[];
+const answers = new Map<string, Answer>();
+
+/**
+ * One map folder: listed when every table its version's COMPLETE names is there, not a link, not empty
+ * and at its listed size (a flat folder: match.parquet there and no table empty); else why not, or
+ * nothing when it holds no map. A folder or file that is a link is left out.
+ */
+function mapAnswer(dir: string, rel: string): Answer {
   try {
-    series = readdirSync(root, { withFileTypes: true });
+    const names = new Map(readdirSync(dir, { withFileTypes: true }).map((d) => [d.name, d]));
+    if (names.has("RETIRED")) return { skipped: "retired" };
+    if (names.has("CURRENT")) {
+      const v = readFileSync(path.join(dir, "CURRENT"), "utf-8").trim();
+      if (!VERSION_DIR.test(v)) return { skipped: `CURRENT names "${v}", which is not a version folder` };
+      const vdir = names.get(v);
+      if (!vdir) return { skipped: `${v}: no such version folder`, incomplete: true };
+      if (vdir.isSymbolicLink() || !vdir.isDirectory()) return { skipped: `${v}: a link, left out` };
+      const done = path.join(dir, v, "COMPLETE");
+      let st: Stats;
+      try { st = lstatSync(done); } catch { return { skipped: `${v}: no COMPLETE file yet`, incomplete: true }; }
+      if (!st.isFile()) return { skipped: `${v}: COMPLETE is a link, left out` };
+      const key = `${done}|${st.size}|${st.mtimeMs}`;
+      const known = answers.get(key);
+      if (known) return known;
+      let answer: Answer = { file: { file: `${rel}/${v}`, size: st.size, mtime: Math.round(st.mtimeMs) } };
+      try {
+        for (const [t, bytes] of Object.entries(completeList(readFileSync(done, "utf-8")))) {
+          let ts: Stats | null = null;
+          try { ts = lstatSync(path.join(dir, v, t)); } catch { /* missing */ }
+          const why = !ts ? `${t} is missing` : !ts.isFile() ? `${t} is a link, left out` : ts.size === 0 || bytes === 0 ? `${t} is empty`
+            : ts.size !== bytes ? `${t} is ${ts.size} bytes, not the ${bytes} COMPLETE lists` : null;
+          if (why) { answer = { skipped: `${v}: ${why}`, incomplete: true }; break; }
+        }
+      } catch (e) {
+        answer = { skipped: `${v}: ${(e as Error).message}`, incomplete: true };
+      }
+      answers.set(key, answer);
+      return answer;
+    }
+    const first = names.get("match.parquet");
+    if (!first) return {};
+    if (first.isSymbolicLink()) return { skipped: "match.parquet is a link, left out" };
+    for (const d of names.values()) {
+      if (TABLE.test(d.name) && d.isFile() && statSync(path.join(dir, d.name)).size === 0) return { skipped: `${d.name} is empty`, incomplete: true };
+    }
+    const st = statSync(path.join(dir, "match.parquet"));
+    return { file: { file: rel, size: st.size, mtime: Math.round(st.mtimeMs) } };
+  } catch (e) {
+    return { skipped: (e as Error).message };
+  }
+}
+
+/** Every whole map of the library; a folder that cannot be listed is reported in `error`. */
+export function listPro(folder: string, app: string | null = appDir()): ProListing {
+  const out: ProListing = { folder, files: [], skipped: [], incomplete: 0, error: null };
+  let lib: Library, series: Dirent[];
+  try {
+    lib = openLibrary(folder, app);
+    series = readdirSync(lib.series, { withFileTypes: true });
   } catch (e) {
     return { ...out, error: (e as Error).message };
   }
   for (const s of series) {
     if (!isName(s.name) || !(s.isDirectory() || s.isSymbolicLink())) continue;
+    if (s.isSymbolicLink()) { out.skipped.push({ file: `pro/${s.name}`, why: "a link, left out" }); continue; }
     let maps: Dirent[];
-    try { maps = readdirSync(path.join(root, s.name), { withFileTypes: true }); } catch { continue; }
+    try { maps = readdirSync(path.join(lib.series, s.name), { withFileTypes: true }); } catch { continue; }
     for (const m of maps) {
       if (!isName(m.name) || !(m.isDirectory() || m.isSymbolicLink())) continue;
       const rel = `pro/${s.name}/${m.name}`;
-      const a = mapAnswer(root, path.join(root, s.name, m.name), rel, s.isSymbolicLink() || m.isSymbolicLink());
+      const a = m.isSymbolicLink() ? { skipped: "a link, left out" } : mapAnswer(path.join(lib.series, s.name, m.name), rel);
       if (a.file) out.files.push(a.file);
-      else if (a.skipped) out.skipped.push({ file: rel, why: a.skipped });
+      else if (a.skipped) {
+        out.skipped.push({ file: rel, why: a.skipped });
+        if ("incomplete" in a && a.incomplete) out.incomplete++;
+      }
     }
   }
   out.files.sort((a, b) => b.file.localeCompare(a.file));
   return out;
 }
 
-/** One map folder's entry, why it has none, or neither when it holds no map. `linked`: a link is on the path so far. */
-function mapAnswer(root: string, dir: string, rel: string, linked: boolean): { file?: ProEntry; skipped?: string } {
-  try {
-    const names = new Map(readdirSync(dir, { withFileTypes: true }).map((d) => [d.name, d]));
-    if (names.has("RETIRED")) return { skipped: "retired" };
-    const pointer = names.get("CURRENT");
-    let file: string, done: string, link = linked;
-    if (pointer) {
-      const v = readFileSync(path.join(dir, "CURRENT"), "utf-8").trim();
-      if (!VERSION_DIR.test(v)) return { skipped: `CURRENT names "${v}", which is not a version folder` };
-      const vdir = names.get(v);
-      if (!vdir) return { skipped: `${v}: no such version folder` };
-      done = path.join(dir, v, "COMPLETE");
-      file = `${rel}/${v}`;
-      link ||= pointer.isSymbolicLink() || vdir.isSymbolicLink();
-    } else {
-      const first = names.get("match.parquet");
-      if (!first) return {};
-      done = path.join(dir, "match.parquet");
-      file = rel;
-      link ||= first.isSymbolicLink();
-    }
-    let st;
-    try { st = lstatSync(done); } catch { return { skipped: `${path.basename(path.dirname(done))}: no COMPLETE file yet` }; }
-    if ((link || st.isSymbolicLink()) && !inside(root, done)) return { skipped: "resolves outside the library" };
-    return { file: { file, size: st.size, mtime: Math.round(st.mtimeMs) } };
-  } catch (e) {
-    return { skipped: (e as Error).message };
-  }
-}
-
 /**
  * One read under the library: rel is the listed file without "pro/", "<series>/<map>[/<version>]" (the
- * map's table file names, as JSON), or that with "/<table>.parquet" (one of the map's tables).
+ * map's table file names, as JSON), or that with "/<table>.parquet" (one of the map's tables, at its
+ * COMPLETE size for a version folder), resolved inside the chosen folder.
  */
-export function readPro(folder: string, rel: string): Buffer {
+export function readPro(folder: string, rel: string, app: string | null = appDir()): Buffer {
   const parts = rel.split("/");
   const bad = () => new ProPathError(`${rel}: not a pro library path (<series>/<map>[/<version folder>][/<table>.parquet])`);
   if (parts.length < 2 || parts.length > 4 || !isName(parts[0]) || !isName(parts[1])) throw bad();
@@ -125,24 +173,24 @@ export function readPro(folder: string, rel: string): Buffer {
   const version = rest[0] && VERSION_DIR.test(rest[0]) ? rest[0] : null;
   const table = rest[version ? 1 : 0] ?? null;
   if (rest.length > (version ? 2 : 1) || (table !== null && !TABLE.test(table))) throw bad();
-  const root = seriesRoot(folder);
-  const map = path.join(root, parts[0], parts[1]);
-  let dir: string, sizes: Record<string, number>;
+  const lib = openLibrary(folder, app);
+  const map = path.join(lib.series, parts[0], parts[1]);
+  const dir = version ? path.join(map, version) : map;
+  let sizes: Record<string, number> | null = null;
   if (version) {
-    dir = path.join(map, version);
     const complete = path.join(dir, "COMPLETE");
-    if (!inside(root, complete)) throw new Error(`${rel}: this version is gone; rescan`);
-    sizes = JSON.parse(readFileSync(complete, "utf-8")) as Record<string, number>;
-    if (Object.keys(sizes).some((f) => !TABLE.test(f))) throw new Error(`${rel}: COMPLETE lists a name that is not a table file`);
-  } else {
-    if (!inside(root, path.join(map, "match.parquet"))) throw new Error(`${rel}: no map here; rescan`);
-    dir = map;
-    sizes = flatTables(root, map);
+    if (!under(lib, complete)) throw new Error(`${rel}: this version is gone; rescan`);
+    sizes = completeList(readFileSync(complete, "utf-8"));
+  } else if (!under(lib, path.join(map, "match.parquet"))) {
+    throw new Error(`${rel}: no map here; rescan`);
   }
-  if (table === null) return Buffer.from(JSON.stringify(Object.keys(sizes).sort()));
-  if (!(table in sizes)) throw new Error(`${rel}: not one of this map's tables`);
-  if (!inside(root, path.join(dir, table))) throw new ProPathError(`${rel}: resolves outside the library`);
+  if (table === null) {
+    const names = sizes ? Object.keys(sizes) : readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile() && TABLE.test(d.name)).map((d) => d.name);
+    return Buffer.from(JSON.stringify(names.sort()));
+  }
+  if (sizes && !(table in sizes)) throw new Error(`${rel}: not one of this map's tables`);
+  if (!under(lib, path.join(dir, table))) throw new ProPathError(`${rel}: not one of this map's tables`);
   const bytes = readFileSync(path.join(dir, table));
-  if (version && bytes.length !== sizes[table]) throw new Error(`${rel}: ${bytes.length} bytes, not the ${sizes[table]} COMPLETE lists; rescan`);
+  if (sizes && bytes.length !== sizes[table]) throw new Error(`${rel}: ${bytes.length} bytes, not the ${sizes[table]} COMPLETE lists; rescan`);
   return bytes;
 }

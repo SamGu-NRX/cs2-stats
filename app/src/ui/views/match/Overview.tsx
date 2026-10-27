@@ -83,7 +83,7 @@ export default function Overview({ v, file }: TabProps) {
         className="board"
       >
         <DataTable label={`${teamLabel(v, t)} scoreboard`} rows={rows} foot={[teamRow(v, t, rows, side)]} rowKey={(r) => r.key} columns={columns} sortKey={sort} onSort={setSort} rowClass={(r) => (r.isHuman ? "is-you" : undefined)}
-          onOpen={v.pro ? (r) => setQuery("as", r.isHuman ? null : r.key) : undefined} />
+          onOpen={v.pro ? (r) => setQuery("as", r.isHuman || r.pi === null ? null : String(r.pi)) : undefined} />
       </Card>
     );
   };

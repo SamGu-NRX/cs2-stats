@@ -56,6 +56,8 @@ export interface ProFolder {
   /** why it could not be listed at all; the other matches are still listed */
   error: string | null;
   skipped: { file: string; why: string }[];
+  /** how many of the skipped maps are not whole yet: a table missing, empty or short of its listed size */
+  incomplete: number;
 }
 interface ProListing extends ProFolder { files: FileEntry[] }
 
@@ -63,9 +65,9 @@ interface ProListing extends ProFolder { files: FileEntry[] }
 async function listProSafely(list: () => Promise<ProListing | null>): Promise<{ folder: ProFolder | null; files: FileEntry[] }> {
   try {
     const p = await list();
-    return p ? { folder: { folder: p.folder, error: p.error, skipped: p.skipped }, files: p.files } : { folder: null, files: [] };
+    return p ? { folder: { folder: p.folder, error: p.error, skipped: p.skipped, incomplete: p.incomplete }, files: p.files } : { folder: null, files: [] };
   } catch (e) {
-    return { folder: { folder: null, error: e instanceof Error ? e.message : String(e), skipped: [] }, files: [] };
+    return { folder: { folder: null, error: e instanceof Error ? e.message : String(e), skipped: [], incomplete: 0 }, files: [] };
   }
 }
 

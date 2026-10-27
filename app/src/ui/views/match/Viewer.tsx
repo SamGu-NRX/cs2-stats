@@ -1,6 +1,7 @@
 // Seeing a pro demo through one player. Nobody recorded a pro demo, so the panels that read one player
 // (aim, utility, luck, positions, a player's rounds) have no one to read until the user picks a player
-// on the scoreboard or here (?as=, router.ts keeps it on every link within the match). The user's own
+// on the scoreboard or here: ?as= holds the player's position on the scoreboard, never a SteamID, and
+// router.ts keeps it on every link within the match. The user's own
 // matches are always seen through the recording player and never reach the picker.
 import type { ReactNode } from "react";
 import type { MatchModel, ViewedMatch } from "../../data/match";
@@ -23,7 +24,7 @@ export function ViewerNeeded({ v, what, pad }: { v: MatchModel; what: string; pa
           <span className="caps">{teamLabel(v, t)}</span>
           <div className="viewer-need__players">
             {v.players.filter((p) => p.team === t).map((p) => (
-              <button key={p.key} type="button" className="chip chip--outline press" onClick={() => setQuery("as", p.key)}>{p.name}</button>
+              <button key={p.key} type="button" className="chip chip--outline press" onClick={() => setQuery("as", String(p.pi))}>{p.name}</button>
             ))}
           </div>
         </div>

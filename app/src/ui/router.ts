@@ -221,7 +221,7 @@ const qs = (q?: Record<string, string | number | null | undefined>) => {
 };
 
 /**
- * The player picked on a pro demo's scoreboard (?as=, a steamid) stays on every link within that
+ * The player picked on a pro demo's scoreboard (?as=, their position on it) stays on every link within that
  * match, so a tab or round link keeps seeing it through the same player. A link that names `as`
  * itself, null included, decides.
  */
