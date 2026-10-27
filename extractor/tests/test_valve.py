@@ -155,12 +155,12 @@ def test_a_counter_load_on_a_round_one_death_tick_fails_instead_of_emptying_the_
 def test_a_restore_on_round_one_start_before_the_match_restarts_voids_its_tick():
     # That part opened with round_start at 4, a winnerless round_end (the backup restore) at 4, and
     # begin_new_match at 5. Restores were voided only after begin_new_match, so the 10 restore deaths counted.
-    ends = pd.DataFrame(dict(tick=[4, 12228], winner=[None, "CT"], reason=[None, "t_killed"]))
+    ends = pd.DataFrame(dict(tick=[4, 12228], total_rounds_played=[0, 1], winner=[None, "CT"], reason=[None, "t_killed"]))
     rounds, voided = ex.build_round_windows([1, 4], [4279], ends, match_start=5)
     assert (int(rounds.start_tick.iloc[0]), voided) == (4, [(4, 4)])
     assert ex.assign_rounds(pd.Series([4, 5]), rounds, voided).tolist() == [0, 1]
     # On begin_new_match's own tick it is the recording's leftover first round_end, and nothing is voided.
-    ends0 = pd.DataFrame(dict(tick=[0, 5900], winner=[None, "CT"], reason=[None, "t_killed"]))
+    ends0 = pd.DataFrame(dict(tick=[0, 5900], total_rounds_played=[0, 1], winner=[None, "CT"], reason=[None, "t_killed"]))
     assert ex.build_round_windows([0], [1279], ends0, match_start=0)[1] == []
 
 
