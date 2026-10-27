@@ -80,3 +80,30 @@ def test_a_truncated_demo_is_extracted_through_its_last_complete_round(tmp_path)
     match = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet").row(0, named=True)
     assert (match["truncated"], match["velocity_source"], match["n_rounds"], match["tick_rate"]) == (
         True, "position_diff", 12, 64.0)
+
+
+def test_a_dropped_attempt_and_an_excluded_coach_leave_no_trace(tmp_path):
+    # Fixture C (an HLTV Nuke map, 19 rounds): round 3 was restored after a long attempt (11516-57971), and one
+    # team fielded a coach in a sixth slot, spawned every round and killed by his own hit from no weapon.
+    src = FIXTURES / "fixture-c.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; dropped attempts and the coach exclusion are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    match = pl.read_parquet(d / "match.parquet").row(0, named=True)
+    coach = {int(x["steamid"]) for x in json.loads(match["excluded_players"])}
+    dropped = json.loads(match["dropped_attempts"])
+    assert len(coach) == 1 and [(x["round"], x["from_tick"], x["to_tick"]) for x in dropped] == [(3, 11516, 57971)]
+    for f in d.glob("*.parquet"):
+        df = pl.read_parquet(f)
+        for c in [c for c in df.columns if c == "steamid" or c.endswith("_steamid")]:
+            assert not df[c].is_in(list(coach)).any(), (f.name, c)
+    pos = pl.read_parquet(d / "positions.parquet")
+    assert not any(set(v) & coach for v in pos["spotted_by"].to_list())
+    eng_ids = set(pl.read_parquet(d / "engagements.parquet")["engagement_id"].to_list())
+    assert set(pl.read_parquet(d / "engagement_ticks.parquet")["engagement_id"].to_list()) <= eng_ids
+    sides = pl.read_parquet(d / "player_rounds.parquet").group_by(["round", "side"]).len()["len"]
+    assert sides.min() == sides.max() == 5
+    rounds = pl.read_parquet(d / "rounds.parquet")
+    assert rounds["round"].to_list() == list(range(1, 20)) and rounds["winner_side"].null_count() == 0

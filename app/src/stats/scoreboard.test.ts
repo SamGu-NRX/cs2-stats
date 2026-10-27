@@ -1,4 +1,5 @@
 // What earned each KAST round, and team damage, on hand-built rounds.
+import { PARAMS } from "./model-params";
 import { expect, it } from "vitest";
 import { METRIC } from "./metrics";
 import { rollup } from "./rollup";
@@ -47,8 +48,10 @@ it("gives damage whose attacker the demo lost to nobody, in ADR or in swing's da
   });
   const dmg = (id: string) => f.pr.find((r) => f.players[r.pi].id === id)!.m.dmg ?? 0;
   expect([dmg("k"), dmg("h"), dmg("w")]).toEqual([0, 40, 0]);
-  const credited = f.kills[0].credits.filter(([, x]) => x > 0).map(([p]) => f.players[p].id);
-  expect(credited).toEqual(["h"]);
+  // h's 40 HP and the killer's kill weight share the gain; the lost 60 HP weighs for no one
+  const credit = Object.fromEntries(f.kills[0].credits.filter(([, x]) => x > 0).map(([p, x]) => [f.players[p].id, x]));
+  expect(Object.keys(credit).sort()).toEqual(["h", "k"]);
+  expect(credit.h / credit.k).toBeCloseTo(40 / PARAMS.swing.event_credit.kill_weight, 12);
 });
 
 it("rates traded death success over tradeable deaths only, so it cannot pass 100%", () => {

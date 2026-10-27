@@ -3,9 +3,9 @@
 // describes. Values are win-probability fractions (0.05 = 5 points); HLTV shows a player's mean per
 // round in percent.
 //
-// Provisional, as SPEC.md says: the round-end remainder rule is not fitted, and the flash share
-// (params.json swing.flash_credit_fraction) comes from 23 clean observations. VALIDATION.md compares
-// the result with HLTV's per-player swing.
+// The kill shares and the defuse share follow params.json swing.event_credit, fitted to HLTV's own
+// credits by model/rating3/swing_credit_fit.py. The winners' split of a time-out is ours (HLTV's is
+// not recovered). VALIDATION.md compares the result with HLTV's per-player swing.
 import { blindWindows } from "./blinds";
 import { PARAMS as params } from "./model-params";
 import { enemyHit, hitDamage, type Ctx } from "./derive";
@@ -14,8 +14,7 @@ import { roundPopulation } from "./rules";
 import type { Side } from "./tables";
 import { pTWins, type RoundState } from "./winprob";
 
-const W = params.swing.round_end_remainder;
-const FLASH = params.swing.flash_credit_fraction;
+const E = params.swing.event_credit;
 
 /** P(the side) wins, from P(T wins). */
 const pSide = (pT: number, s: Side) => (s === "T" ? pT : 1 - pT);
@@ -60,15 +59,32 @@ export function swing(c: Ctx): void {
     const path: NonNullable<typeof rf.winProb> = [{ tick: fe ?? c.t.rounds.start_tick[ri] ?? 0, event: "start", pT }];
     const credit = new Map<number, number>();
     const add = (p: number, v: number) => credit.set(p, (credit.get(p) ?? 0) + v);
-    const killSwingPlayers = new Set<number>();
     const part = { opening: new Map<number, number>(), clutch: new Map<number, number>(), awp: new Map<number, number>(), flash: new Map<number, number>() };
     // Each credit's source, one per credit, so the sources sum to the player's swing: the killer's own
-    // share of a kill (a trade kill's apart), a damage share of a teammate's kill, the flash share, the
-    // victim's charge, and the round-end remainder.
+    // share of a kill (a trade kill's apart, with the share a traded teammate gets back), a damage share
+    // of a teammate's kill, the flash share, the victim's and a failed trader's charge, and the share of
+    // a plant, a defuse or the round's end.
     const source = { kill: new Map<number, number>(), trade: new Map<number, number>(), damage: new Map<number, number>(), death: new Map<number, number>(), end: new Map<number, number>() };
     const addPart = (m: Map<number, number>, p: number, v: number) => m.set(p, (m.get(p) ?? 0) + v);
     // a player's clutch starts when they are the last of their side alive
     const inClutch = new Set<number>();
+    // Every valued event so far: its change in P(T wins) and the credits it gave, each signed for the
+    // side it favoured, as replay reads them.
+    const history: { dT: number; credits: [number, number][] }[] = [];
+    // where the plant falls in history, and who was alive on each side when it did
+    let plantAt: number | null = null;
+    let aliveAtPlant: Record<Side, Set<number>> | null = null;
+    // A plant's, a defuse's or the round end's change in P(T wins), dT, shared like the round's earlier
+    // events that moved it the same way, each in proportion to its own change (HLTV's plant and defuse
+    // credits, SPEC.md). With no such event, each side's living players share it equally.
+    const replay = (dT: number): [number, number][] => {
+      const same = history.filter((h) => h.dT !== 0 && Math.sign(h.dT) === Math.sign(dT));
+      const sum = same.reduce((t, h) => t + Math.abs(h.dT), 0);
+      if (sum > 0) return same.flatMap((h) => h.credits.map(([pl, v]): [number, number] => [pl, (v * Math.abs(dT)) / sum]));
+      const gainer: Side = dT > 0 ? "T" : "CT";
+      return [...evenly(alive[gainer], Math.abs(dT)), ...evenly(alive[gainer === "T" ? "CT" : "T"], -Math.abs(dT))];
+    };
+    const credited = (cr: [number, number][], m: Map<number, number>) => { for (const [pl, v] of cr) { add(pl, v); addPart(m, pl, v); } };
     // HLTV's event graph stops at round end, so later kills are not valued. A disconnect moves the win
     // probability as a death does but credits no one (ours): nobody's action caused it. On one tick a
     // death comes before a disconnect, and both before a plant.
@@ -77,6 +93,8 @@ export function swing(c: Ctx): void {
     if (rf.plantTick !== null && rf.plantTick <= rf.endTick) events.push({ kind: "plant", tick: rf.plantTick });
     const rank = { kill: 0, leave: 1, plant: 2 } as const;
     events.sort((a, b) => a.tick - b.tick || rank[a.kind] - rank[b.kind]);
+    const enemyDeaths = deaths.filter((k) => k.enemy && k.killer !== null);
+    const window = E.trade_window_seconds * c.tickRate;
 
     let valued = true;
     for (const e of events) {
@@ -84,6 +102,11 @@ export function swing(c: Ctx): void {
         state.planted = true;
         const p = at(e.tick);
         if (p === null) { valued = false; break; }
+        const cr = replay(p - pT);
+        credited(cr, source.end);
+        plantAt = history.length;
+        aliveAtPlant = { CT: new Set(alive.CT), T: new Set(alive.T) };
+        history.push({ dT: p - pT, credits: cr });
         pT = p;
         path.push({ tick: e.tick, event: "plant", pT });
         continue;
@@ -112,32 +135,40 @@ export function swing(c: Ctx): void {
       const delta = pSide(p, gainer) - pSide(pT, gainer);
       pT = p;
       path.push({ tick: k.tick, event: "kill", pT });
-      const credits: [number, number][] = [[k.victim, -delta]];
-      addPart(source.death, k.victim, -delta);
+      const credits: [number, number][] = [];
       const own = k.tradeKill ? source.trade : source.kill;
-      // positive credit: damage share of the gaining side's damage on the victim, else the killer
-      const ledger = new Map<number, number>();
+      // Positive credit (SPEC.md "Swing credits"): the gaining side shares the gain by weight. Each
+      // player weighs the HP-capped damage they did to the victim this round; the killer adds the kill
+      // weight, each eligible flasher the flash weight, and the earliest teammate the victim killed
+      // within the trade window the trade weight.
+      const shares: { pl: number; w: number; to: Map<number, number> }[] = [];
       for (const i of dmgRows) {
         if (c.t.damages.tick[i] > k.tick || c.t.damages.victim_steamid[i] !== c.players[k.victim].id || !enemyHit(c.t, i)) continue;
         const a = c.idOf(c.t.damages.attacker_steamid[i]);
         if (a === null || c.side[ri][a] !== gainer) continue;
-        ledger.set(a, (ledger.get(a) ?? 0) + hitDamage(c.t, i));
+        shares.push({ pl: a, w: hitDamage(c.t, i), to: a === k.killer ? own : source.damage });
       }
-      const total = [...ledger.values()].reduce((s, v) => s + v, 0);
+      let failed: KillFact | undefined;
+      if (k.enemy && k.killer !== null) {
+        shares.push({ pl: k.killer, w: E.kill_weight, to: own });
+        for (const f of new Set(flashersOf(c, ri, k, gainer))) shares.push({ pl: f, w: E.flash_weight, to: part.flash });
+        const traded = enemyDeaths.find((d) => d.killer === k.victim && d.victimSide === gainer && d.tick <= k.tick && k.tick - d.tick <= window);
+        if (traded) shares.push({ pl: traded.victim, w: E.trade_weight, to: source.trade });
+        failed = enemyDeaths.find((d) => d.killer === k.killer && d.victimSide === vs && d.tick > k.tick && d.tick - k.tick <= window);
+      }
+      const total = shares.reduce((t, x) => t + x.w, 0);
       const gain = Math.max(0, delta);
-      // SPEC.md: an eligible flash (the gaining side's, on the victim, still blinding him at the kill;
-      // not the killer's, a team flash or an ambiguous one) takes the flash share; the rest follows the
-      // damage ledger, else the killer. Several flashers split the share equally (ours).
-      const flashers = [...new Set(flashersOf(c, ri, k, gainer))];
-      const rest = flashers.length ? gain * (1 - FLASH) : gain;
-      for (const f of flashers) { credits.push([f, (gain * FLASH) / flashers.length]); addPart(part.flash, f, (gain * FLASH) / flashers.length); }
-      if (total > 0) for (const [a, d] of ledger) { credits.push([a, (rest * d) / total]); addPart(a === k.killer ? own : source.damage, a, (rest * d) / total); }
-      else if (k.enemy && k.killer !== null) { credits.push([k.killer, rest]); addPart(own, k.killer, rest); }
+      if (total > 0) for (const x of shares) { const v = (gain * x.w) / total; credits.push([x.pl, v]); add(x.pl, v); addPart(x.to, x.pl, v); }
+      // The victim's charge, shared with a teammate the same killer killed within the trade window
+      // after (a failed trade), by the victim and failed-trade weights.
+      const debits: [number, number][] = failed ? [[k.victim, E.victim_weight], [failed.victim, E.failed_trade_weight]] : [[k.victim, 1]];
+      const dsum = debits.reduce((t, [, w]) => t + w, 0);
+      for (const [pl, w] of debits) { const v = (-delta * w) / dsum; credits.push([pl, v]); add(pl, v); addPart(source.death, pl, v); }
       k.credits = credits;
+      // signed for the side the kill favoured: delta is the gaining side's change
+      history.push({ dT: gainer === "T" ? delta : -delta, credits });
       const awpDuel = k.weapon === "awp" || k.victimWeapon === "AWP";
       for (const [pl, v] of credits) {
-        add(pl, v);
-        if (v > 0) killSwingPlayers.add(pl);
         if (k.opening) addPart(part.opening, pl, v);
         if (inClutch.has(pl)) addPart(part.clutch, pl, v);
         if (awpDuel && (pl === k.victim ? k.victimWeapon === "AWP" : k.weapon === "awp" && pl === k.killer)) addPart(part.awp, pl, v);
@@ -146,28 +177,40 @@ export function swing(c: Ctx): void {
     }
     if (!valued) { for (const k of c.kills[ri]) k.credits = []; continue; }
 
-    // Round-end remainder: the winners split what the last event left, the losers are charged it.
+    // The round's end: what the last event left (SPEC.md "Swing credits", fitted to HLTV's credits).
+    // - A defuse: the defuser takes the defuse share and the winners' credits from the events since the
+    //   plant that moved the round their way take the rest; the losers alive at the plant share the charge.
+    // - A detonation: the winners' credits from those events take it all, else the winners alive share
+    //   it; the losers alive share the charge.
+    // - The clock running out: each side's living players share it equally.
+    // - An elimination's remainder replays the round's events.
     const winner = rf.winner;
     const loser: Side = winner === "T" ? "CT" : "T";
     const rest = 1 - pSide(pT, winner);
-    const clutcher = alive[winner].size === 1 ? [...alive[winner]][0] : null;
-    const defuser = rf.defused ? c.idOf(c.t.rounds.defuser_steamid[ri]) : null;
-    const weights = new Map<number, number>();
-    for (const p of rows) {
-      if (!p || p.side !== winner) continue;
-      let w = 0;
-      if (p.pi === clutcher) w += W.clutcher_weight;
-      if (killSwingPlayers.has(p.pi)) w += W.kill_swing_player_weight;
-      if (p.pi === defuser) w += W.defuser_weight;
-      if (alive[winner].has(p.pi)) w += W.survivor_weight;
-      if (w > 0) weights.set(p.pi, w);
+    const sign = winner === "T" ? 1 : -1;
+    const winnersSincePlant = (amount: number): [number, number][] => {
+      if (plantAt === null) return [];
+      const pos = history.slice(plantAt + 1).filter((h) => Math.sign(h.dT) === sign).flatMap((h) => h.credits.filter(([, v]) => v > 0));
+      const sum = pos.reduce((t, [, v]) => t + v, 0);
+      return sum > 0 ? pos.map(([pl, v]): [number, number] => [pl, (amount * v) / sum]) : [];
+    };
+    const everyone = (side: Side) => rows.filter((p) => p?.side === side).map((p) => p!.pi);
+    const orAll = (set: Set<number> | undefined, side: Side) => (set && set.size ? [...set] : everyone(side));
+    if (rest !== 0) {
+      if (rf.defused && rf.defuser !== null && plantAt !== null) {
+        const replayed = winnersSincePlant(rest * (1 - E.defuse_share));
+        const own = replayed.length ? rest * E.defuse_share : rest;
+        credited([[rf.defuser, own], ...replayed, ...evenly(orAll(aliveAtPlant?.[loser], loser), -rest)], source.end);
+      } else if (rf.exploded && !rf.defused) {
+        const replayed = winnersSincePlant(rest);
+        const winners = replayed.length ? replayed : evenly(orAll(alive[winner], winner), rest);
+        credited([...winners, ...evenly(orAll(alive[loser], loser), -rest)], source.end);
+      } else if (rf.reason === "time_ran_out" && alive[winner].size > 0) {
+        credited([...evenly(alive[winner], rest), ...evenly(orAll(alive[loser], loser), -rest)], source.end);
+      } else {
+        credited(replay(sign * rest), source.end);
+      }
     }
-    // A bomb win after the last T died can leave no eligible winner; then the winners share equally.
-    if (weights.size === 0) for (const p of rows) if (p?.side === winner) weights.set(p.pi, 1);
-    const wsum = [...weights.values()].reduce((s, v) => s + v, 0);
-    for (const [pl, w] of weights) { add(pl, (rest * w) / wsum); addPart(source.end, pl, (rest * w) / wsum); }
-    const losers = alive[loser].size ? [...alive[loser]] : rows.filter((p) => p?.side === loser).map((p) => p!.pi);
-    for (const pl of losers) { add(pl, -rest / losers.length); addPart(source.end, pl, -rest / losers.length); }
 
     rf.winProb = path;
     // round win shares: in a won round, the player's share of the team's positive swing
@@ -190,6 +233,12 @@ export function swing(c: Ctx): void {
       if (p.side === winner) { p.m.rwsRounds++; p.m.rws += teamGain > 0 ? Math.max(0, v) / teamGain : 1 / winners; }
     }
   }
+}
+
+/** `total` split equally over `players`, as [player, share] pairs; none when there are no players. */
+function evenly(players: Iterable<number>, total: number): [number, number][] {
+  const list = [...players];
+  return list.map((p) => [p, total / list.length]);
 }
 
 /** Players on the gaining side whose flash was blinding the victim at the kill (SPEC.md's eligible flashes). */

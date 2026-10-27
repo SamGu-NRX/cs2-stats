@@ -963,6 +963,14 @@
      "String",
      "c97244ec16e34208"
     ],
+    "dropped_attempts": [
+     "String",
+     "159c15b8d12cb074"
+    ],
+    "excluded_players": [
+     "String",
+     "159c15b8d12cb074"
+    ],
     "extra": [
      "String",
      "eb4e847aa0b85bf0"
@@ -973,7 +981,7 @@
     ],
     "extractor_version": [
      "String",
-     "bf15f70b3380975d"
+     "c3240999f7475e86"
     ],
     "final_tick": [
      "Int32",
@@ -1428,10 +1436,6 @@
   },
   "rounds": {
    "columns": {
-    "aborted": [
-     "Boolean",
-     "b2d10285cdc235dc"
-    ],
     "ct_equip_value": [
      "Int32",
      "6e0f503b26c87fa2"
