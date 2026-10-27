@@ -182,7 +182,7 @@ const leetifyMatches: SyntheticMatch[] = [
 ].map((m) => ({ ...m, steam64: ID, name: LEETIFY_NAME }));
 const LEETIFY: LeetifyBridge = {
   status: async () => ({ player: { kind: "steam", id: ID }, hasKey: false, keyStore: true, keyError: `could not read ${HOME_DIR}\\AppData\\credential for ${ID}`, cooldownS: null }),
-  saveKey: async () => {}, clearKey: async () => {}, disconnect: async () => {},
+  saveKey: async () => {}, clearKey: async () => {}, disconnect: async () => {}, discard: async () => {}, badge: async () => null,
   connect: async () => ({ kind: "steam", id: ID }),
   load: async () => ({ ...syntheticPayload(Date.now(), leetifyMatches), player: { kind: "steam", id: ID }, profile: syntheticProfile({ name: LEETIFY_NAME, steam64_id: ID }) }),
 };

@@ -2,28 +2,23 @@
 // what is running, and the last failure. One store per bridge, so Data & settings, Profile, Matches and
 // the match page share one copy and one set of requests.
 //
-// On first use the store reads the host's status and its cached copy, and asks for a refresh when the
-// copy is older than FRESH_MS. Leetify's guidelines ask apps to rely on the API's current data rather than
-// a stored copy, so a copy is shown as it is only while it is fresh; the host keeps it no longer than a
-// day and spaces and limits the requests (src-tauri/src/leetify.rs).
+// Leetify's guidelines ask apps not to store its data, so nothing from Leetify is saved: the host holds the
+// last answer in memory for the app's session (src-tauri/src/leetify.rs). On first use the store reads the
+// host's status, takes the host's copy when there is one (the page was reloaded within the session), and
+// otherwise fetches. After that it fetches only when the user presses Refresh or connects. The host spaces
+// and limits the requests.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { toFailure, type LeetifyBridge, type LeetifyFailure, type LeetifyPayload, type LeetifyStatus } from "../../../host/leetify";
 import { useData } from "../provider";
 import { hideLeetifyData, hideLeetifyStatus, hideText, useHidePersonal } from "../privacy";
 import { LeetifyShapeError, parsePayload, type LeetifyData } from "./api";
+import type { MatchEntry } from "../match";
 import { joinMatches, type Joined } from "./join";
-
-/**
- * A copy younger than this is not refreshed when a view opens. Ten minutes: Leetify analyses a match
- * some minutes after it ends, so refreshing more often finds nothing new; there is no measurement behind
- * the number.
- */
-export const FRESH_MS = 10 * 60 * 1000;
 
 export type LeetifyBusy = "connect" | "refresh" | "key" | "disconnect";
 
 export interface LeetifyState {
-  /** the first status and cached copy have not arrived yet */
+  /** the first status and the host's copy have not arrived yet */
   starting: boolean;
   status: LeetifyStatus | null;
   data: LeetifyData | null;
@@ -37,7 +32,7 @@ export class LeetifyStore {
   private st: LeetifyState = INITIAL;
   private readonly subs = new Set<() => void>();
   private started = false;
-  constructor(private readonly bridge: LeetifyBridge, private readonly now: () => number = Date.now) {}
+  constructor(private readonly bridge: LeetifyBridge) {}
 
   get = () => this.st;
   subscribe = (fn: () => void) => { this.subs.add(fn); return () => { this.subs.delete(fn); }; };
@@ -46,7 +41,7 @@ export class LeetifyStore {
     for (const fn of this.subs) fn();
   }
 
-  /** Reads the status and the cached copy once, then refreshes a copy that is missing or stale. */
+  /** Reads the status and the host's copy once, and fetches when the host has none. */
   start(): Promise<void> {
     if (this.started) return Promise.resolve();
     this.started = true;
@@ -57,9 +52,10 @@ export class LeetifyStore {
       const status = await this.bridge.status();
       this.set({ status });
       if (!status.player) return;
-      const cached = await this.bridge.load(false);
-      this.apply(cached);
-      if (!cached || this.now() - cached.fetchedAt >= FRESH_MS) await this.run("refresh", () => this.fetch());
+      const held = await this.bridge.load(false);
+      // a copy this page cannot read is dropped by apply, and fetched again here
+      const readable = held !== null && (await this.apply(held));
+      if (!readable) await this.run("refresh", () => this.fetch());
     } catch (e) {
       this.set({ error: toFailure(e) });
     } finally {
@@ -67,18 +63,24 @@ export class LeetifyStore {
     }
   }
 
-  /** Reads a payload; a reply in a shape the app does not read is a bad_response failure, with no data. */
-  private apply(p: LeetifyPayload | null) {
-    if (!p) { this.set({ data: null }); return; }
+  /**
+   * Reads a payload; whether it could be read. A reply in a shape the app does not read is a bad_response
+   * failure with no data at all, never part of it, and the host drops its copy so a retry fetches anew.
+   */
+  private async apply(p: LeetifyPayload | null): Promise<boolean> {
+    if (!p) { this.set({ data: null }); return true; }
     try {
       this.set({ data: parsePayload(p) });
+      return true;
     } catch (e) {
       if (!(e instanceof LeetifyShapeError)) throw e;
       this.set({ data: null, error: { kind: "bad_response", message: e.message, retryAfterS: null } });
+      try { await this.bridge.discard(); } catch { /* the error above already stands */ }
+      return false;
     }
   }
   private async fetch() {
-    this.apply(await this.bridge.load(true));
+    await this.apply(await this.bridge.load(true));
   }
 
   /** Runs one action at a time; returns whether it succeeded. The status is re-read after each. */
@@ -91,7 +93,7 @@ export class LeetifyStore {
       ok = this.st.error === null;
     } catch (e) {
       const error = toFailure(e);
-      // the host deleted its copy: Leetify no longer returns this player
+      // the host dropped its copy: Leetify no longer returns this player
       this.set(error.kind === "not_found" || error.kind === "private" ? { error, data: null } : { error });
     }
     try { this.set({ status: await this.bridge.status() }); } catch { /* the action's own result stands */ }
@@ -109,10 +111,49 @@ export class LeetifyStore {
   });
   saveKey = (key: string) => this.run("key", () => this.bridge.saveKey(key));
   clearKey = () => this.run("key", () => this.bridge.clearKey());
+  /**
+   * The host drops the data before it touches the key store, so the data goes here as soon as Disconnect
+   * is attempted, even when removing the key fails; that failure still shows.
+   */
   disconnect = () => this.run("disconnect", async () => {
-    await this.bridge.disconnect();
-    this.set({ data: null });
+    try {
+      await this.bridge.disconnect();
+    } finally {
+      this.set({ data: null });
+    }
   });
+}
+
+/**
+ * What a Leetify view may show: "none" (no bridge on this host, or the status is not in yet), "off" (no
+ * player connected), "loading" (connected, data on its way), "failed" (connected, no data, an error), or
+ * "ready". A view shows Leetify's numbers only when ready, so it never shows old or made-up values.
+ */
+export type LeetifyPhase = "none" | "off" | "loading" | "failed" | "ready";
+export function leetifyPhase(state: LeetifyState | null): LeetifyPhase {
+  if (!state) return "none";
+  if (state.data) return "ready";
+  if (!state.status) return state.error ? "failed" : "none";
+  if (!state.status.player) return "off";
+  if (state.starting || state.busy === "refresh" || state.busy === "connect") return "loading";
+  return state.error ? "failed" : "loading";
+}
+
+/**
+ * Whose Leetify data this is, against the player whose matches are here (Data.you, the recording player's
+ * SteamIDs): "you" when the profile's SteamID is among them, "other" when it is not, "unknown" with no
+ * matches here to say. Anyone's public profile can be connected; only "you" (or "unknown", where there
+ * is nothing of ours to compare) may sit beside our numbers or join our matches.
+ */
+export type LeetifyOwner = "you" | "other" | "unknown";
+export function leetifyOwner(steam64: string, you: readonly string[]): LeetifyOwner {
+  if (!you.length) return "unknown";
+  return you.includes(steam64) ? "you" : "other";
+}
+
+/** The join, or none for another player's data, whose matches are not the ones here. */
+export function joinFor(data: LeetifyData, entries: MatchEntry[], owner: LeetifyOwner): Joined {
+  return owner === "other" ? { byFile: new Map(), only: [] } : joinMatches(data.matches, entries);
 }
 
 const stores = new WeakMap<LeetifyBridge, LeetifyStore>();
@@ -126,29 +167,32 @@ const noSubscribe = () => () => {};
 const noState = () => null;
 
 /**
- * The Leetify state with personal info hidden when the setting asks (privacy.ts), and its actions; null
- * where the host has no Leetify bridge (a web build without the dev stand-in).
+ * The Leetify state with personal info hidden when the setting asks (privacy.ts), whose data it is (read
+ * before hiding, which replaces the SteamID), and its actions; null where the host has no Leetify bridge
+ * (a web build without the dev stand-in).
  */
-export function useLeetify(): { state: LeetifyState; store: LeetifyStore } | null {
-  const { host } = useData();
+export function useLeetify(): { state: LeetifyState; store: LeetifyStore; owner: LeetifyOwner } | null {
+  const { host, you } = useData();
   const store = host?.leetify ? leetifyStore(host.leetify) : null;
   useEffect(() => { void store?.start(); }, [store]);
   const raw = useSyncExternalStore(store?.subscribe ?? noSubscribe, store?.get ?? noState);
   const hide = useHidePersonal();
+  const owner = raw?.data ? leetifyOwner(raw.data.profile.steam64, you) : "unknown";
   const state = useMemo(() => (raw && hide ? {
     ...raw,
     status: raw.status && hideLeetifyStatus(raw.status),
-    data: raw.data && hideLeetifyData(raw.data),
+    data: raw.data && hideLeetifyData(raw.data, owner !== "other"),
     error: raw.error && { ...raw.error, message: hideText(raw.error.message) },
-  } : raw), [raw, hide]);
-  return store && state ? { state, store } : null;
+  } : raw), [raw, hide, owner]);
+  return store && state ? { state, store, owner } : null;
 }
 
-/** The connected player's data joined to the local matches (join.ts); null until there is data. */
-export function useLeetifyJoin(): { data: LeetifyData; joined: Joined; synthetic: boolean } | null {
+/** The connected player's data joined to the local matches (joinFor); null until there is data. */
+export function useLeetifyJoin(): { data: LeetifyData; joined: Joined; synthetic: boolean; owner: LeetifyOwner } | null {
   const l = useLeetify();
   const { matches } = useData();
   const data = l?.state.data ?? null;
   const synthetic = !!l?.state.status?.synthetic;
-  return useMemo(() => (data ? { data, joined: joinMatches(data.matches, matches), synthetic } : null), [data, matches, synthetic]);
+  const owner = l?.owner ?? "unknown";
+  return useMemo(() => (data ? { data, joined: joinFor(data, matches, owner), synthetic, owner } : null), [data, matches, synthetic, owner]);
 }

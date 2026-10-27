@@ -4,7 +4,8 @@
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
 //! `import_valve` runs the importer that writes them.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
-//! launcher is in `botmode`; the optional Leetify import is in `leetify`.
+//! launcher is in `botmode`; the optional Leetify import is in `leetify`. `open_external` opens the app's
+//! outside links in the system browser.
 
 pub mod botmode;
 mod leetify;
@@ -547,6 +548,34 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
     result
 }
 
+// ---------------------------------------------------------------- outside links
+//
+// The web view opens no window for a target="_blank" link: with no new-window handler set (this app sets
+// none), wry marks WebView2's NewWindowRequested event handled and does nothing (wry 0.55
+// src/webview2/mod.rs, the `else { args.SetHandled(true) }` branch). So every outside link in the page
+// calls `open_external` (app/src/host/external.ts), which hands the URL to the system's default browser.
+
+/// The hosts the app links to: Leetify's pages (views/leetify) and HLTV's player pages (the Plays like banner).
+const OUTSIDE_HOSTS: [&str; 3] = ["leetify.com", "www.leetify.com", "www.hltv.org"];
+
+/// The URL when the page may open it: https, no user name, password or port, and a host in OUTSIDE_HOSTS.
+/// Anything else is refused, so the page cannot use this to start a program or open a file.
+fn outside_url(url: &str) -> Result<tauri::Url, String> {
+    let u = tauri::Url::parse(url).map_err(|e| format!("{url}: not a URL ({e})"))?;
+    let host_ok = u.host_str().is_some_and(|h| OUTSIDE_HOSTS.contains(&h));
+    if u.scheme() != "https" || !host_ok || !u.username().is_empty() || u.password().is_some() || u.port().is_some() {
+        return Err(format!("{url}: not a page this app links to"));
+    }
+    Ok(u)
+}
+
+/// Opens an outside link in the system's default browser (ShellExecute on Windows).
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let u = outside_url(&url)?;
+    open::that_detached(u.as_str()).map_err(|e| format!("could not open the browser: {e}"))
+}
+
 /// Turns off WebView2's status bar in every window. Like a browser, WebView2 shows a link's target in
 /// a bubble at the lower left while the pointer is over it. A desktop app has no use for that, and a
 /// match link names the match's file, which the user may have named after a person; with "Hide
@@ -597,11 +626,14 @@ pub fn run() {
             read_valve,
             import_valve,
             valve_import_state,
+            open_external,
             leetify::leetify_status,
             leetify::leetify_save_key,
             leetify::leetify_clear_key,
             leetify::leetify_connect,
             leetify::leetify_disconnect,
+            leetify::leetify_discard,
+            leetify::leetify_badge,
             leetify::leetify_load,
             botmode::commands::botmode_status,
             botmode::commands::botmode_releases,
@@ -826,6 +858,21 @@ mod tests {
         assert!(!done.running && done.last.unwrap().code == Some(0));
         gate.begin().unwrap();
         assert!(gate.state().at.is_none());
+    }
+
+    #[test]
+    fn opens_only_https_pages_on_the_hosts_the_app_links_to() {
+        // fails if the page can open a file, a program, another site, or a look-alike host through open_external
+        for ok in ["https://leetify.com/app/profile/76561197960265729", "https://leetify.com/", "https://www.hltv.org/player/1/x", "https://leetify.com/app/match-details/a-b/overview?x=1#y"] {
+            assert!(outside_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://leetify.com/", "https://evil.example/", "https://leetify.com.evil.example/", "https://leetify.com@evil.example/",
+            "https://user@leetify.com/", "https://leetify.com:8443/", "file:///C:/Windows/System32/calc.exe", "javascript:alert(1)",
+            "ms-settings:privacy", "leetify.com", "", "https://hltv.org/",
+        ] {
+            assert!(outside_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

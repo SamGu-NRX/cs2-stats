@@ -117,5 +117,8 @@ export function syntheticBridge(connected = true): LeetifyBridge {
     connect: async () => (player = { kind: "steam", id: SYNTHETIC_STEAM64 }),
     disconnect: async () => { player = null; },
     load: async () => (player ? syntheticPayload(fetchedAt) : null),
+    discard: async () => {},
+    // the dev build has no host to fetch the badge, so the views show the text attribution
+    badge: async () => null,
   };
 }

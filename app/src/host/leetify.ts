@@ -1,5 +1,6 @@
 // The Leetify import's bridge to the desktop host (src-tauri/src/leetify.rs). Requests, the API key and
-// the cache all live on the Rust side; the page sees whether a key is saved, never the key.
+// the session's copy of Leetify's data all live on the Rust side; the page sees whether a key is saved,
+// never the key. Nothing from Leetify is written to disk.
 //
 // In `vite dev` with ?leetify=synthetic (or synthetic-new, starting disconnected), a stand-in bridge
 // serves synthetic data (ui/data/leetify/synthetic.ts), labelled as such wherever it shows; a plain web
@@ -27,7 +28,7 @@ export interface LeetifyStatus {
   synthetic?: boolean;
 }
 
-/** The host's copy: the two replies as Leetify sent them, unchecked (ui/data/leetify/api.ts checks them). */
+/** The host's in-memory copy: the two replies as Leetify sent them, unchecked (ui/data/leetify/api.ts checks them). */
 export interface LeetifyPayload { player: LeetifyPlayer; fetchedAt: number; profile: unknown; matches: unknown }
 
 export interface LeetifyBridge {
@@ -36,10 +37,14 @@ export interface LeetifyBridge {
   saveKey(key: string): Promise<void>;
   clearKey(): Promise<void>;
   connect(player: string): Promise<LeetifyPlayer>;
-  /** forgets the player, deletes the cache and removes the key */
+  /** forgets the player, drops the data from memory and removes the key */
   disconnect(): Promise<void>;
-  /** the cached copy, or with refresh a new fetch; null when no player is connected */
+  /** the copy in memory, or with refresh a new fetch; null when no player is connected or nothing was fetched this session */
   load(refresh: boolean): Promise<LeetifyPayload | null>;
+  /** drops the host's copy, which the page could not read, so the next load fetches */
+  discard(): Promise<void>;
+  /** Leetify's "Data provided by" badge as PNG bytes, fetched by the host (src-tauri/src/leetify.rs, "the badge"); null when it has none */
+  badge(): Promise<ArrayBuffer | null>;
 }
 
 const KINDS = new Set<string>(["bad_key", "not_found", "private", "rate_limited", "network", "server", "bad_response", "bad_input", "key_store", "storage"]);
@@ -64,5 +69,10 @@ export function tauriLeetify(invoke: Invoke): LeetifyBridge {
     connect: (player) => invoke("leetify_connect", { player }),
     disconnect: () => invoke("leetify_disconnect"),
     load: (refresh) => invoke("leetify_load", { refresh }),
+    discard: () => invoke("leetify_discard"),
+    badge: async () => {
+      const b = await invoke<ArrayBuffer>("leetify_badge");
+      return b.byteLength ? b : null;
+    },
   };
 }

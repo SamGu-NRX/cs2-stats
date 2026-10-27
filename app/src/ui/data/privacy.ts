@@ -221,16 +221,21 @@ export function hideData(d: Data): Data {
 
 export const LEETIFY_ID_HIDDEN = "<Leetify id>";
 
+/** The name a connected Leetify player who is not the user reads as. */
+export const LEETIFY_PLAYER = "Leetify player";
+
 /**
- * The imported Leetify data as the views may show it: the player reads "You" and their SteamID and
- * Leetify id become placeholders, in the profile and in every match row. The profile's link keeps the
- * SteamID (see the top of this file). Numbers are untouched.
+ * The imported Leetify data as the views may show it: the player reads "You" (or "Leetify player" when
+ * `self` is false: anyone's public profile can be connected), and their SteamID and Leetify id become
+ * placeholders, in the profile and in every match row. The profile's link keeps the SteamID (see the top
+ * of this file). Numbers are untouched.
  */
-export function hideLeetifyData(d: LeetifyData): LeetifyData {
+export function hideLeetifyData(d: LeetifyData, self: boolean): LeetifyData {
+  const name = self ? YOU : LEETIFY_PLAYER;
   return {
     ...d,
-    profile: { ...d.profile, name: YOU, steam64: STEAMID_HIDDEN, id: d.profile.id === null ? null : LEETIFY_ID_HIDDEN },
-    matches: d.matches.map((m) => ({ ...m, me: { ...m.me, name: YOU, steam64: STEAMID_HIDDEN } })),
+    profile: { ...d.profile, name, steam64: STEAMID_HIDDEN, id: d.profile.id === null ? null : LEETIFY_ID_HIDDEN },
+    matches: d.matches.map((m) => ({ ...m, me: { ...m.me, name, steam64: STEAMID_HIDDEN } })),
   };
 }
 

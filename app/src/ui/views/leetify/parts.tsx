@@ -1,20 +1,54 @@
 // Pieces every Leetify view shares: the link back to Leetify, the attribution Leetify's guidelines ask
 // for, and the comparison table, whose middle column (the seam) says whether a row's two numbers count
 // the same thing.
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { LeetifyBridge } from "../../../host/leetify";
+import { useData } from "../../data/provider";
+import type { LeetifyFailure } from "../../../host/leetify";
 import type { LeetifyData } from "../../data/leetify/api";
 import { LEETIFY_HOME } from "../../data/leetify/api";
 import { oursText, type Group, type OursSource, type Row } from "../../data/leetify/present";
 import { useHidePersonal } from "../../data/privacy";
 import { DASH } from "../../lib/format";
+import { OutsideLink, openOutside } from "../../components/OutsideLink";
+import { pageHref } from "../../router";
 
-/** Opens a page as the app's other outside links do: a target="_blank" anchor. lib.rs sets no new-window handler, so WebView2's default decides where it opens. */
-export function openOutside(url: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.target = "_blank";
-  a.rel = "noreferrer";
-  a.click();
+export const LEETIFY_FOLDER = String.raw`%APPDATA%\BotMatchStats\leetify`;
+
+/** A failure in plain words, with what to do next. */
+export function failureText(f: LeetifyFailure, hasKey: boolean): { head: string; next: string } {
+  switch (f.kind) {
+    case "bad_key": return hasKey
+      ? { head: "Leetify did not accept your saved API key.", next: "Remove it to connect without one, or paste a new key from leetify.com/app/developer." }
+      : { head: "Leetify did not accept this API key.", next: "Copy the key again from leetify.com/app/developer, or leave the field empty to connect without one." };
+    case "not_found": return { head: "Leetify has no profile for this player.", next: "Check the SteamID64 or profile link; Disconnect lets you enter another. A player Leetify has never analysed has no profile, and signing in to Leetify once starts one." };
+    case "private": return { head: "This Leetify profile is private.", next: "Leetify's public API shares only public profiles. Make it public in Leetify's settings, then refresh." };
+    case "rate_limited": return { head: `Leetify asked for a pause${f.retryAfterS ? ` of ${f.retryAfterS} s` : ""}.`, next: hasKey ? "Try again after it." : "Try again after it. An API key raises Leetify's limit." };
+    case "network": return { head: "Could not reach Leetify.", next: "Check your connection and try again. Data already fetched stays." };
+    case "server": return { head: "Leetify's API returned an error.", next: "Try again later. Data already fetched stays." };
+    case "bad_response": return { head: "Leetify's reply was not in the shape this app reads.", next: "Leetify may have changed its API; the details below say where." };
+    case "bad_input": return { head: f.message, next: "" };
+    case "key_store": return { head: "Windows Credential Manager refused.", next: "Connect without a key, or try again." };
+    case "storage": return { head: "The Leetify folder could not be read or written.", next: `Check that ${LEETIFY_FOLDER} is writable.` };
+  }
+}
+
+/**
+ * A Leetify view before its data is in: "Fetching from Leetify…" while it loads, the failure and the way
+ * to Data & settings when it could not load. Never a number: the data is not here yet.
+ */
+export function LeetifyPending({ phase, error, hasKey, retry }: { phase: "loading" | "failed"; error: LeetifyFailure | null; hasKey: boolean; retry: () => void }) {
+  if (phase === "loading") return <p className="meta lt-pending" role="status" aria-live="polite">Fetching from Leetify…</p>;
+  const t = error ? failureText(error, hasKey) : { head: "Leetify's data did not load.", next: "" };
+  return (
+    <div className="lt-pending lt-pending--failed" role="status">
+      <span className="meta"><span className="poor-text">{t.head}</span>{t.next ? ` ${t.next}` : ""}</span>
+      <span className="lt-pending__do">
+        <button type="button" className="btn btn--sm press" onClick={retry}>Try again</button>
+        <a className="link lt-inline" href={pageHref("settings")}>Open Data &amp; settings</a>
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -24,16 +58,46 @@ export function openOutside(url: string) {
 export function LeetifyLink({ url, personal, children = "View on Leetify" }: { url: string; personal?: boolean; children?: ReactNode }) {
   const hide = useHidePersonal();
   if (personal && hide) return <button type="button" className="lt-link" onClick={() => openOutside(url)}>{children}</button>;
-  return <a className="lt-link" href={url} target="_blank" rel="noreferrer">{children}</a>;
+  return <OutsideLink className="lt-link" href={url}>{children}</OutsideLink>;
+}
+
+/** The badge as an object URL, one fetch per bridge; null when the host has none. */
+const badges = new WeakMap<LeetifyBridge, Promise<string | null>>();
+export function badgeUrl(bridge: LeetifyBridge): Promise<string | null> {
+  let p = badges.get(bridge);
+  if (!p) {
+    p = bridge.badge().then((b) => (b ? URL.createObjectURL(new Blob([b], { type: "image/png" })) : null), () => null);
+    badges.set(bridge, p);
+  }
+  return p;
 }
 
 /**
- * "Data Provided by Leetify", linking to Leetify's landing page (guidelines, sections 1 and 3.2). The
- * guidelines ask for Leetify's logo here; the logo files sit in a Google Drive folder the app does not
- * ship, so this is the guideline's wording as text until the logo is added.
+ * "Data Provided by Leetify", linking to Leetify's landing page (guidelines, sections 1 and 3.2).
+ *
+ * With `badge`, wherever Leetify's numbers are on screen, it is Leetify's own "Data provided by" badge
+ * (the white one, for dark backgrounds), unmodified. The guidelines grant no licence to redistribute the
+ * badge, so the app ships none: the host fetches it from the file Leetify's guidelines link to and holds
+ * it for the session (src-tauri/src/leetify.rs, "the badge"). Until it arrives, and whenever it cannot,
+ * this is the guideline's words as a text link. Without `badge` (no Leetify data on screen) it is the text
+ * alone, so nothing is fetched before the user connects.
  */
-export function Attribution() {
-  return <a className="lt-attr" href={LEETIFY_HOME} target="_blank" rel="noreferrer">Data Provided by Leetify</a>;
+export function Attribution({ badge }: { badge?: boolean }) {
+  const bridge = useData().host?.leetify ?? null;
+  const [src, setSrc] = useState<string | null>(null);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    if (!badge || !bridge) return;
+    let alive = true;
+    void badgeUrl(bridge).then((u) => { if (alive) setSrc(u); });
+    return () => { alive = false; };
+  }, [badge, bridge]);
+  if (!badge || !src || broken) return <OutsideLink className="lt-attr" href={LEETIFY_HOME}>Data Provided by Leetify</OutsideLink>;
+  return (
+    <OutsideLink className="lt-attr lt-attr--badge" href={LEETIFY_HOME}>
+      <img className="lt-badge" src={src} alt="Data Provided by Leetify" width={66} height={28} onError={() => setBroken(true)} />
+    </OutsideLink>
+  );
 }
 
 /** The dev build's stand-in data says so wherever it shows. */
@@ -65,7 +129,29 @@ function Seam<S>({ r }: { r: Row<S> }) {
  * Leetify's value, the seam, our value and our label. No verdict colour on either side: the two are on
  * different scales and from different samples, so neither is "better".
  */
-export function CompareTable<S>({ groups, source, ours, label }: { groups: Group<S>[]; source: S; ours: OursSource | null; label: string }) {
+export function CompareTable<S>({ groups, source, ours, label, solo }: { groups: Group<S>[]; source: S; ours: OursSource | null; label: string; solo?: boolean }) {
+  // solo: another player's Leetify data, with nothing of ours to set beside it
+  if (solo) {
+    return (
+      <div className="lt-cmp lt-cmp--solo" role="table" aria-label={label}>
+        <div className="lt-cmp__head" role="row">
+          <span className="caps" role="columnheader">Leetify metric</span>
+          <span className="caps lt-cmp__v" role="columnheader">Leetify</span>
+        </div>
+        {groups.map((g) => (
+          <div key={g.title} role="rowgroup" className="lt-cmp__group">
+            <div className="lt-cmp__title" role="row"><span role="rowheader" className="caps">{g.title}</span></div>
+            {g.rows.map((r) => (
+              <div key={r.key} className="lt-cmp__row" role="row">
+                <span role="rowheader" className="lt-cmp__label"><span className="has-def" data-tip={r.what} tabIndex={0}>{r.label}</span></span>
+                <b role="cell" className="num lt-cmp__v">{r.fmt(r.value(source))}</b>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="lt-cmp" role="table" aria-label={label}>
       <div className="lt-cmp__head" role="row">

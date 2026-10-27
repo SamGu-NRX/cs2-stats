@@ -148,7 +148,7 @@ describe("hideLeetifyData", () => {
   it("names the player You and hides their SteamID and Leetify id everywhere, numbers untouched", () => {
     // fails if a name or id from the import survives into what the views read
     const d = parsePayload({ ...syntheticPayload(0, SYNTHETIC_MATCHES.map((m) => ({ ...m, steam64: ID, name: "Someone" }))), profile: syntheticProfile({ name: "Someone", steam64_id: ID }) });
-    const h = hideLeetifyData(d);
+    const h = hideLeetifyData(d, true);
     const text = JSON.stringify({ ...h, profile: { ...h.profile, url: "" } });
     expect(text).not.toContain(ID);
     expect(text).not.toContain("Someone");
@@ -158,6 +158,10 @@ describe("hideLeetifyData", () => {
     expect(h.profile.rating).toEqual(d.profile.rating);
     // the profile link keeps its address, which LeetifyLink never writes into the page while hiding
     expect(h.profile.url).toBe(d.profile.url);
+    // someone else's profile is not "You"
+    const other = hideLeetifyData(d, false);
+    expect([other.profile.name, other.matches[0].me.name]).toEqual(["Leetify player", "Leetify player"]);
+    expect(JSON.stringify({ ...other, profile: { ...other.profile, url: "" } })).not.toContain(ID);
   });
 
   it("hides the connected player and the key store's error", () => {

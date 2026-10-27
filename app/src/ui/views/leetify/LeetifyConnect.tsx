@@ -1,4 +1,4 @@
-// Data & settings, "Leetify": connect a Leetify profile, say what is fetched and where it stays, and
+// Data & settings, "Leetify": connect a Leetify profile, say what is fetched and that it is not saved, and
 // manage the optional API key. The key goes straight from the field to the host, which checks it with
 // Leetify and keeps it in Windows Credential Manager (src-tauri/src/leetify.rs); the field is cleared
 // right after, and the page never reads the key back.
@@ -12,27 +12,8 @@ import { useHidePersonal } from "../../data/privacy";
 import { useData } from "../../data/provider";
 import { RefreshIcon } from "../../icons/ui";
 import { pageHref } from "../../router";
-import { Attribution, fetchedAgo, joinedText, LeetifyLink, SyntheticChip } from "./parts";
+import { Attribution, failureText, fetchedAgo, joinedText, LEETIFY_FOLDER, LeetifyLink, SyntheticChip } from "./parts";
 
-export const LEETIFY_FOLDER = String.raw`%APPDATA%\BotMatchStats\leetify`;
-
-/** A failure in plain words, with what to do next. */
-export function failureText(f: LeetifyFailure, hasKey: boolean): { head: string; next: string } {
-  switch (f.kind) {
-    case "bad_key": return hasKey
-      ? { head: "Leetify did not accept your saved API key.", next: "Remove it to connect without one, or paste a new key from leetify.com/app/developer." }
-      : { head: "Leetify did not accept this API key.", next: "Copy the key again from leetify.com/app/developer, or leave the field empty to connect without one." };
-    case "not_found": return { head: "Leetify has no profile for this player.", next: "Check the SteamID64 or profile link; Disconnect lets you enter another. A player Leetify has never analysed has no profile, and signing in to Leetify once starts one." };
-    case "private": return { head: "This Leetify profile is private.", next: "Leetify's public API shares only public profiles. Make it public in Leetify's settings, then refresh." };
-    case "rate_limited": return { head: `Leetify asked for a pause${f.retryAfterS ? ` of ${f.retryAfterS} s` : ""}.`, next: hasKey ? "Try again after it." : "Try again after it. An API key raises Leetify's limit." };
-    case "network": return { head: "Could not reach Leetify.", next: "Check your connection and try again. Data already fetched stays." };
-    case "server": return { head: "Leetify's API returned an error.", next: "Try again later. Data already fetched stays." };
-    case "bad_response": return { head: "Leetify's reply was not in the shape this app reads.", next: "Leetify may have changed its API; the details below say where." };
-    case "bad_input": return { head: f.message, next: "" };
-    case "key_store": return { head: "Windows Credential Manager refused.", next: "Connect without a key, or try again." };
-    case "storage": return { head: "The Leetify folder could not be read or written.", next: `Check that ${LEETIFY_FOLDER} is writable.` };
-  }
-}
 
 function Failure({ f, hasKey }: { f: LeetifyFailure; hasKey: boolean }) {
   const t = failureText(f, hasKey);
@@ -45,16 +26,21 @@ function Failure({ f, hasKey }: { f: LeetifyFailure; hasKey: boolean }) {
   );
 }
 
-/** What the import reads, where it goes and where it stays: shown before connecting and after. */
+/**
+ * What the import reads, where it goes and what is saved: shown before connecting and after. Leetify's
+ * data is held in memory for the session only (src-tauri/src/leetify.rs), as Leetify's guidelines ask.
+ */
 function WhatIsFetched({ keyStore }: { keyStore: boolean }) {
   return (
     <dl className="facts facts--wide lt-facts">
       <dt>Read from Leetify</dt>
-      <dd className="meta">Your Leetify profile (ratings and averages) and your recent matches, with your own numbers in each. Nothing about other players is kept.</dd>
+      <dd className="meta">Your Leetify profile (ratings and averages) and your recent matches, with your own numbers in each. Other players' data is dropped as it arrives.</dd>
+      <dt>Leetify's data</dt>
+      <dd className="meta">Fetched from Leetify when you open the app; not saved on this computer.</dd>
       <dt>Sent</dt>
       <dd className="meta">Only to Leetify's public API, over HTTPS: the SteamID or Leetify id you enter, and your API key if you add one.</dd>
-      <dt>Kept on this computer</dt>
-      <dd className="meta">In <span className="mono nowrap">{LEETIFY_FOLDER}</span>, for a day at most. Each refresh replaces it; Disconnect deletes it, and so does Leetify no longer returning the profile.</dd>
+      <dt>Saved on this computer</dt>
+      <dd className="meta">Only whom to fetch: your SteamID or Leetify id, in <span className="mono nowrap">{LEETIFY_FOLDER}\settings.json</span>. Disconnect deletes it.</dd>
       <dt>API key</dt>
       <dd className="meta">{keyStore ? "In Windows Credential Manager, never in a file. Only Leetify receives it." : "Not available here: the key needs Windows Credential Manager. Connect without one."}</dd>
     </dl>
@@ -71,11 +57,13 @@ function ConnectForm({ state, connect, valveUser }: { state: LeetifyState; conne
   const hide = useHidePersonal();
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy) return;
-    // the host reads and refuses what is not a player or a key, with a sentence that says why
-    const k = key.trim() || null;
-    setKey("");
-    if (await connect(player, k)) toast("Connected to Leetify", "good");
+    if (state.busy) return;
+    // the host reads and refuses what is not a player or a key, with a sentence that says why; the key
+    // field empties only once the key is accepted, so a refused one can be corrected
+    if (await connect(player, key.trim() || null)) {
+      setKey("");
+      toast("Connected to Leetify", "good");
+    }
   };
   return (
     <form className="lt-form" onSubmit={submit} aria-busy={busy}>
@@ -96,7 +84,7 @@ function ConnectForm({ state, connect, valveUser }: { state: LeetifyState; conne
         </div>
       )}
       <div className="lt-form__go">
-        <button type="submit" className="btn btn--primary press" disabled={busy}>{busy ? "Connecting…" : "Connect"}</button>
+        <button type="submit" className="btn btn--primary press" disabled={state.busy !== null}>{busy ? "Connecting…" : "Connect"}</button>
       </div>
     </form>
   );
@@ -106,7 +94,8 @@ function KeyRow({ state, save, clear }: { state: LeetifyState; save: (k: string)
   const id = useId();
   const [key, setKey] = useState("");
   const st = state.status!;
-  const busy = state.busy === "key";
+  // any running Leetify action, not only a key action: the store runs one at a time and would decline this
+  const busy = state.busy !== null;
   if (!st.keyStore) return <p className="meta">Connected without an API key: this computer has no Windows Credential Manager to keep one in.</p>;
   if (st.hasKey) {
     return (
@@ -119,15 +108,17 @@ function KeyRow({ state, save, clear }: { state: LeetifyState; save: (k: string)
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
-    const k = key;
-    setKey("");
-    if (await save(k)) toast("API key saved", "good");
+    // the field keeps the key until Leetify accepts it, so a declined or refused key is not lost
+    if (await save(key)) {
+      setKey("");
+      toast("API key saved", "good");
+    }
   };
   return (
     <form className="lt-keyrow" onSubmit={submit}>
       <label htmlFor={`${id}-key`} className="meta">{st.keyError ? `The saved key could not be read (${st.keyError}). Add it again:` : "No API key: Leetify allows fewer requests."}</label>
       <input id={`${id}-key`} className="input lt-input lt-input--key" type="password" placeholder="Paste an API key" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} required />
-      <button type="submit" className="btn btn--sm press" disabled={busy}>{busy ? "Checking…" : "Save key"}</button>
+      <button type="submit" className="btn btn--sm press" disabled={busy}>{state.busy === "key" ? "Checking…" : "Save key"}</button>
     </form>
   );
 }
@@ -150,11 +141,12 @@ export function LeetifyConnect() {
   const synthetic = !!st?.synthetic;
   const refreshing = state.busy === "refresh" || (state.busy === "connect" && !!player);
   const data = state.data;
+  const other = l.owner === "other";
   // the summary rises in only when it replaces the form on this page, not on every visit
   const sawForm = useRef(false);
   if (st && !player) sawForm.current = true;
   return (
-    <Card title="Leetify" aside={<span className="card__aside-row">{synthetic && <SyntheticChip />}<Attribution /></span>} className="lt-connect">
+    <Card title="Leetify" aside={<span className="card__aside-row">{synthetic && <SyntheticChip />}<Attribution badge={!!state.data} /></span>} className="lt-connect">
       {state.error && <Failure f={state.error} hasKey={hasKey} />}
       {state.starting && !st ? <div className="skel" style={{ height: 120 }} aria-busy="true" /> : !player ? (
         <div className="lt-connect__body">
@@ -174,6 +166,7 @@ export function LeetifyConnect() {
           <p className="meta lt-status" role="status" aria-live="polite">
             {refreshing ? "Fetching from Leetify…" : data ? <>{fetchedAgo(data.fetchedAt)}. {j ? joinedText(data, j.joined.byFile.size) : ""}. <a className="link lt-inline" href={pageHref("matches")}>Open Matches</a></> : "Nothing fetched yet."}
           </p>
+          {other && <p className="meta lt-other" role="note">This is not the player in your matches here. Profile shows Leetify's numbers for them alone, with nothing of ours beside them, and no match is joined or listed from Leetify.</p>}
           <KeyRow state={state} save={store.saveKey} clear={store.clearKey} />
           <div className="lt-actions">
             <button type="button" className="btn btn--sm press" onClick={() => void store.refresh()} disabled={!!state.busy} aria-busy={refreshing}><RefreshIcon size={14} />Refresh</button>
@@ -183,7 +176,7 @@ export function LeetifyConnect() {
             </button>
           </div>
           <details className="lt-more">
-            <summary>What is read, sent and kept</summary>
+            <summary>What is read, sent and saved</summary>
             <WhatIsFetched keyStore={st?.keyStore ?? false} />
           </details>
         </div>

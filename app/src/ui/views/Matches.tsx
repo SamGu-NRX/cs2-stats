@@ -29,8 +29,9 @@ import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
 import { lf, sourceName } from "../data/leetify/present";
-import { useLeetifyJoin } from "../data/leetify/store";
-import { openOutside } from "./leetify/parts";
+import { leetifyPhase, useLeetify, useLeetifyJoin } from "../data/leetify/store";
+import { LeetifyPending } from "./leetify/parts";
+import { openOutside } from "../components/OutsideLink";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
 import { LoadFailed } from "./match/LoadFailed";
@@ -189,6 +190,9 @@ export function MatchesView() {
   const { rows: sessions, error: sessionsError } = useSessions(all, map);
   const session = sessionKey && sessions ? sessionFor(sessions, sessionKey) : null;
   const leetify = useLeetifyJoin();
+  const leetifyLive = useLeetify();
+  const leetifyState = leetifyLive?.state ?? null;
+  const leetifyNow = leetifyPhase(leetifyState);
 
   const terms = useMemo(() => q.toLowerCase().split(/\s+/).filter(Boolean), [q]);
   const rows = useMemo(() => {
@@ -250,6 +254,12 @@ export function MatchesView() {
               <SectionAside label="Rating" value={fmtRating(avg)} color={avg === null ? undefined : ratingText(avg)} />
             </span>
           </div>
+        </div>
+      )}
+      {(leetifyNow === "loading" || leetifyNow === "failed") && (
+        <div className="matches__leetify">
+          <span className="lt-src">Leetify</span>
+          <LeetifyPending phase={leetifyNow} error={leetifyState?.error ?? null} hasKey={leetifyState?.status?.hasKey ?? false} retry={() => void leetifyLive?.store.refresh()} />
         </div>
       )}
       {all.length > 0 && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}

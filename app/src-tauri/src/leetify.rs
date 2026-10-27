@@ -4,16 +4,14 @@
 //!
 //! - The key lives in Windows Credential Manager (`KeyStore`), never in a file, a log or an error. It is
 //!   sent only to Leetify, in the Authorization header.
-//! - The player to fetch (a SteamID64 or a Leetify user id) is `settings.json`, and the last answer is
-//!   `cache.json`, both in `%APPDATA%\BotMatchStats\leetify`.
-//! - One refresh is two requests: `/v3/profile` and `/v3/profile/matches`. The page asks for a refresh when
-//!   its copy is old (app/src/ui/data/leetify/store.ts); this side spaces requests, honours a 429, and
-//!   answers a refresh from the cache when the last fetch was under a minute ago.
-//!
-//! Leetify's developer guidelines (https://leetify.com/blog/leetify-api-developer-guidelines/, section 6)
-//! ask apps not to store API data and to delete any copy the API stops returning. The cache therefore lives
-//! at most `MAX_AGE_MS`, is replaced wholesale on every fetch, and is deleted when Leetify answers 404 or 403
-//! for the player, and on Disconnect.
+//! - The player to fetch (a SteamID64 or a Leetify user id) is the user's own setting, `settings.json` in
+//!   `%APPDATA%\BotMatchStats\leetify`. Nothing else is written there.
+//! - Leetify's data is never written to disk. Leetify's developer guidelines
+//!   (https://leetify.com/blog/leetify-api-developer-guidelines/, section 6) ask apps not to store API data,
+//!   so the last answer lives only in this process's memory (`Session`) and is gone when the app closes. The
+//!   page fetches when the app starts and when the user presses Refresh (app/src/ui/data/leetify/store.ts).
+//! - One refresh is two requests: `/v3/profile` and `/v3/profile/matches`. This side spaces requests,
+//!   honours a 429, and answers a refresh from memory when the last fetch was under a minute ago.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -23,14 +21,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const API: &str = "https://api-public.cs-prod.leetify.com";
 
-/// A refresh this soon after the last fetch is answered from the cache. Leetify publishes no numbers for
-/// its limits (only that keyless requests get stricter ones), so this is a guess on the safe side, not a
+/// A refresh this soon after the last fetch is answered from memory. Leetify publishes no numbers for its
+/// limits (only that keyless requests get stricter ones), so this is a guess on the safe side, not a
 /// measured limit: it stops a repeated Refresh press from sending requests.
 pub const REFRESH_MIN_MS: u64 = 60_000;
-/// The longest a cached answer is kept. Leetify's guidelines ask apps not to store API data at all; a day
-/// lets the app open offline with yesterday's numbers while staying a short-lived copy. No evidence says
-/// what Leetify would accept; the PR flags this for the user.
-pub const MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
 /// The space between two requests, so a refresh's two requests do not arrive together. Unmeasured guess.
 const GAP: Duration = Duration::from_millis(1_100);
 /// The wait after a 429 that names none, and the longest wait a Retry-After may set.
@@ -65,7 +59,7 @@ pub enum ErrorKind {
     BadInput,
     /// Windows Credential Manager refused.
     KeyStore,
-    /// The settings or cache file could not be read or written.
+    /// The settings file could not be read or written.
     Storage,
 }
 
@@ -257,6 +251,9 @@ impl Http for Ureq {
             .user_agent(concat!("cs2-stats/", env!("CARGO_PKG_VERSION"), " leetify-import"))
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_response(Some(Duration::from_secs(30)))
+            // a reply that stalls while its body arrives ends too, so a request never holds FLIGHT for long
+            .timeout_recv_body(Some(Duration::from_secs(30)))
+            .timeout_global(Some(Duration::from_secs(60)))
             // 4xx and 5xx come back as replies, so their status picks the error
             .http_status_as_error(false)
             .build()
@@ -346,8 +343,8 @@ struct Settings {
 }
 
 /// The page's copy: the player, when it was fetched, and the two replies as Leetify sent them. The page
-/// checks their shape (app/src/ui/data/leetify/api.ts).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// checks their shape (app/src/ui/data/leetify/api.ts). It is held in memory only.
+#[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Payload {
     pub player: PlayerRef,
@@ -369,6 +366,9 @@ pub struct Status {
     /// seconds left in a cooldown after a 429
     pub cooldown_s: Option<u64>,
 }
+
+/// The last answer, in memory for the life of the process; never written to disk.
+pub type Session = Mutex<Option<Payload>>;
 
 /// Writes through a temporary file and a rename, so a crash never leaves half a file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), LeetifyError> {
@@ -394,14 +394,15 @@ pub struct Leetify<'a> {
     pub dir: PathBuf,
     pub gate: &'a Gate,
     pub clock: &'a dyn Clock,
+    pub session: &'a Session,
 }
 
 impl Leetify<'_> {
     fn settings_file(&self) -> PathBuf {
         self.dir.join("settings.json")
     }
-    fn cache_file(&self) -> PathBuf {
-        self.dir.join("cache.json")
+    fn memory(&self) -> std::sync::MutexGuard<'_, Option<Payload>> {
+        self.session.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn player(&self) -> Result<Option<PlayerRef>, LeetifyError> {
@@ -413,20 +414,13 @@ impl Leetify<'_> {
         }
     }
 
-    /// The cached answer for `player` while it is under MAX_AGE_MS old; anything else in the cache file
-    /// (another player's, an expired or unreadable copy, one dated in the future) is deleted.
-    fn cached(&self, player: &PlayerRef) -> Result<Option<Payload>, LeetifyError> {
-        let f = self.cache_file();
-        let text = match fs::read_to_string(&f) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(storage(&f, e)),
-        };
-        let now = self.clock.wall_ms();
-        match serde_json::from_str::<Payload>(&text) {
-            Ok(p) if &p.player == player && p.fetched_at <= now + 60_000 && now.saturating_sub(p.fetched_at) <= MAX_AGE_MS => Ok(Some(p)),
-            _ => remove(&f).map(|()| None),
+    /// The answer in memory for `player`; another player's is dropped.
+    fn held(&self, player: &PlayerRef) -> Option<Payload> {
+        let mut m = self.memory();
+        if m.as_ref().is_some_and(|p| &p.player != player) {
+            *m = None;
         }
+        m.clone()
     }
 
     pub fn status(&self) -> Result<Status, LeetifyError> {
@@ -479,45 +473,61 @@ impl Leetify<'_> {
         self.keys.delete().map_err(|e| err(ErrorKind::KeyStore, format!("Windows Credential Manager did not remove the key: {e}")))
     }
 
-    /// Saves the player to fetch. Another player's cached answer is deleted.
+    /// Saves the player to fetch. Another player's answer is dropped from memory. The memory lock is held
+    /// throughout, so a fetch finishing meanwhile sees either the old setting or the new one (load).
     pub fn connect(&self, input: &str) -> Result<PlayerRef, LeetifyError> {
         let player = parse_player(input)?;
+        let mut m = self.memory();
         if self.player()?.as_ref() != Some(&player) {
-            remove(&self.cache_file())?;
+            *m = None;
         }
         let body = serde_json::to_vec_pretty(&Settings { player: player.clone() }).map_err(|e| err(ErrorKind::Storage, e.to_string()))?;
         write_atomic(&self.settings_file(), &body)?;
         Ok(player)
     }
 
-    /// Forgets the player, deletes the cache and removes the key. Files go first, so a key store failure
-    /// still leaves no Leetify data on disk.
+    /// Drops the answer from memory, for a copy the page could not read (app/src/ui/data/leetify/store.ts),
+    /// so the next load fetches instead of returning it again.
+    pub fn discard(&self) {
+        *self.memory() = None;
+    }
+
+    /// Forgets the player, drops the answer from memory and removes the key. The key goes last, so a key
+    /// store failure still leaves no player setting and no data. It never waits for a request in flight
+    /// (the command takes no FLIGHT lock); a fetch that finishes afterwards finds no player and keeps nothing.
     pub fn disconnect(&self) -> Result<(), LeetifyError> {
-        remove(&self.cache_file())?;
-        remove(&self.settings_file())?;
+        {
+            let mut m = self.memory();
+            remove(&self.settings_file())?;
+            *m = None;
+        }
         self.clear_key()
     }
 
-    /// The connected player's data: the cached copy, or with `refresh` a new fetch (unless the copy is
-    /// under REFRESH_MIN_MS old). None when no player is connected, or nothing is cached and `refresh` is
-    /// false. A 404 or 403 deletes the cache, as Leetify's guidelines ask.
+    /// The connected player's data: the copy in memory, or with `refresh` a new fetch (unless the copy is
+    /// under REFRESH_MIN_MS old). None when no player is connected, or nothing has been fetched this session
+    /// and `refresh` is false. A 404 or 403 drops the copy, since Leetify no longer returns it.
     pub fn load(&self, refresh: bool) -> Result<Option<Payload>, LeetifyError> {
         let Some(player) = self.player()? else { return Ok(None) };
-        let cached = self.cached(&player)?;
-        let recent = cached.as_ref().is_some_and(|c| self.clock.wall_ms().saturating_sub(c.fetched_at) < REFRESH_MIN_MS);
+        let held = self.held(&player);
+        let recent = held.as_ref().is_some_and(|c| self.clock.wall_ms().saturating_sub(c.fetched_at) < REFRESH_MIN_MS);
         if !refresh || recent {
-            return Ok(cached);
+            return Ok(held);
         }
         let key = self.keys.get().map_err(|e| err(ErrorKind::KeyStore, format!("Windows Credential Manager did not return the saved key: {e}")))?;
         match self.fetch(&player, key.as_ref()) {
             Ok(p) => {
-                let body = serde_json::to_vec(&p).map_err(|e| err(ErrorKind::Storage, e.to_string()))?;
-                write_atomic(&self.cache_file(), &body)?;
+                // the user disconnected or switched players while this was in flight: keep nothing
+                let mut m = self.memory();
+                if self.player()?.as_ref() != Some(&player) {
+                    return Ok(None);
+                }
+                *m = Some(p.clone());
                 Ok(Some(p))
             }
             Err(e) => {
                 if matches!(e.kind, ErrorKind::NotFound | ErrorKind::Private) {
-                    remove(&self.cache_file())?;
+                    *self.memory() = None;
                 }
                 Err(e)
             }
@@ -533,7 +543,7 @@ impl Leetify<'_> {
         let Some(me) = fields.get("steam64_id").and_then(|v| v.as_str()).map(str::to_owned) else {
             return Err(err(ErrorKind::BadResponse, "Leetify's profile reply names no steam64_id."));
         };
-        // other people's SteamIDs: the app shows none of them, so none are kept
+        // other people's SteamIDs: the app shows none of them, so none are held
         fields.remove("recent_teammates");
         let mut matches = self.request(&format!("/v3/profile/matches?{q}"), key)?;
         let Some(list) = matches.as_array_mut() else {
@@ -549,10 +559,64 @@ impl Leetify<'_> {
     }
 }
 
+// ---------------------------------------------------------------- the badge
+//
+// Leetify's guidelines (sections 1 and 3.2) ask for its "Data provided by" badge wherever its data shows,
+// and link the badge files from a Google Drive folder. They grant no licence to redistribute the files,
+// so the app ships none: this side fetches the white badge (for dark backgrounds) from that Drive file when
+// a view first asks, and holds it in memory for the session. The page cannot load it itself: Drive serves
+// it with Cross-Origin-Resource-Policy: same-site, which keeps any other site from embedding it. The page
+// shows these bytes through a blob: URL, and its own text link when this fails.
+
+/** "Leetify Badge White Small.png" in the folder Leetify's developer guidelines link to. */
+const BADGE_URL: &str = "https://drive.google.com/uc?export=view&id=1vN3f-vv2KPH20nkeVuJreXp_3sYRTTLZ";
+/** The badge is about 6 KB; anything past this is not it. */
+const BADGE_MAX: usize = 256 * 1024;
+
+/** The reply's bytes when they are the badge: HTTP 200, a PNG by its magic number, under BADGE_MAX. */
+fn check_badge(status: u16, bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    const PNG: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+    if status != 200 {
+        return Err(format!("the badge answered HTTP {status}"));
+    }
+    if bytes.len() > BADGE_MAX || !bytes.starts_with(&PNG) {
+        return Err("the badge is not a PNG of the expected size".into());
+    }
+    Ok(bytes)
+}
+
+fn fetch_badge() -> Result<Vec<u8>, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .user_agent(concat!("cs2-stats/", env!("CARGO_PKG_VERSION"), " leetify-badge"))
+        .timeout_global(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut resp = agent.get(BADGE_URL).call().map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let bytes = resp.body_mut().with_config().limit(BADGE_MAX as u64 + 1).read_to_vec().map_err(|e| e.to_string())?;
+    check_badge(status, bytes)
+}
+
+static BADGE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+/// The badge's PNG bytes, fetched once per session; an error when it cannot be had (the page falls back to text).
+#[tauri::command]
+pub async fn leetify_badge() -> Result<tauri::ipc::Response, String> {
+    if let Some(b) = BADGE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Ok(tauri::ipc::Response::new(b));
+    }
+    let b = tauri::async_runtime::spawn_blocking(fetch_badge).await.map_err(|e| e.to_string())??;
+    *BADGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(b.clone());
+    Ok(tauri::ipc::Response::new(b))
+}
+
 // ---------------------------------------------------------------- commands
 
 static GATE: Gate = Gate::new();
-/// One command at a time, so two refreshes never run side by side.
+static SESSION: Session = Mutex::new(None);
+/// One request-making command at a time (load, save_key), so two refreshes never run side by side. The
+/// other commands do not take it, so Disconnect, the status and the key's removal never wait on Leetify.
 static FLIGHT: Mutex<()> = Mutex::new(());
 
 fn leetify_dir() -> Result<PathBuf, LeetifyError> {
@@ -560,11 +624,12 @@ fn leetify_dir() -> Result<PathBuf, LeetifyError> {
     Ok(PathBuf::from(appdata).join("BotMatchStats").join("leetify"))
 }
 
-/// Runs `f` with the real collaborators on a blocking thread.
-async fn with_real<T: Send + 'static>(f: impl FnOnce(&Leetify) -> Result<T, LeetifyError> + Send + 'static) -> Result<T, LeetifyError> {
+/// Runs `f` with the real collaborators on a blocking thread; `requests` when it may call Leetify, which
+/// takes FLIGHT.
+async fn with_real<T: Send + 'static>(requests: bool, f: impl FnOnce(&Leetify) -> Result<T, LeetifyError> + Send + 'static) -> Result<T, LeetifyError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let _one = FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
-        let l = Leetify { http: &Ureq, keys: &Vault, dir: leetify_dir()?, gate: &GATE, clock: &SystemClock };
+        let _one = requests.then(|| FLIGHT.lock().unwrap_or_else(|e| e.into_inner()));
+        let l = Leetify { http: &Ureq, keys: &Vault, dir: leetify_dir()?, gate: &GATE, clock: &SystemClock, session: &SESSION };
         f(&l)
     })
     .await
@@ -573,32 +638,41 @@ async fn with_real<T: Send + 'static>(f: impl FnOnce(&Leetify) -> Result<T, Leet
 
 #[tauri::command]
 pub async fn leetify_status() -> Result<Status, LeetifyError> {
-    with_real(|l| l.status()).await
+    with_real(false, |l| l.status()).await
 }
 
 #[tauri::command]
 pub async fn leetify_save_key(key: String) -> Result<(), LeetifyError> {
-    with_real(move |l| l.save_key(&key)).await
+    with_real(true, move |l| l.save_key(&key)).await
 }
 
 #[tauri::command]
 pub async fn leetify_clear_key() -> Result<(), LeetifyError> {
-    with_real(|l| l.clear_key()).await
+    with_real(false, |l| l.clear_key()).await
 }
 
 #[tauri::command]
 pub async fn leetify_connect(player: String) -> Result<PlayerRef, LeetifyError> {
-    with_real(move |l| l.connect(&player)).await
+    with_real(false, move |l| l.connect(&player)).await
+}
+
+#[tauri::command]
+pub async fn leetify_discard() -> Result<(), LeetifyError> {
+    with_real(false, |l| {
+        l.discard();
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn leetify_disconnect() -> Result<(), LeetifyError> {
-    with_real(|l| l.disconnect()).await
+    with_real(false, |l| l.disconnect()).await
 }
 
 #[tauri::command]
 pub async fn leetify_load(refresh: bool) -> Result<Option<Payload>, LeetifyError> {
-    with_real(move |l| l.load(refresh)).await
+    with_real(true, move |l| l.load(refresh)).await
 }
 
 #[cfg(test)]
@@ -629,6 +703,8 @@ mod tests {
     struct FakeHttp {
         answers: Mutex<Vec<(&'static str, Result<(u16, Option<&'static str>, String), String>)>>,
         asked: Mutex<Vec<(String, Option<String>)>>,
+        /// runs once, inside the next request: what the user does while it is in flight
+        during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     }
     impl FakeHttp {
         fn on(self, path: &'static str, status: u16, body: &str) -> Self {
@@ -649,6 +725,9 @@ mod tests {
     }
     impl Http for FakeHttp {
         fn get(&self, url: &str, key: Option<&Secret>) -> Result<Reply, String> {
+            if let Some(f) = self.during.lock().unwrap().take() {
+                f();
+            }
             self.asked.lock().unwrap().push((url.to_string(), key.map(|k| k.0.clone())));
             let path = url.trim_start_matches(API);
             let mut answers = self.answers.lock().unwrap();
@@ -707,8 +786,26 @@ mod tests {
     const PROFILE: &str = r#"{"name":"Synthetic","steam64_id":"76561197960265729","rating":{"aim":50}}"#;
     const MATCHES: &str = r#"[{"id":"00000000-0000-4000-8000-000000000001","stats":[]}]"#;
 
-    fn with<'a>(http: &'a FakeHttp, keys: &'a FakeKeys, gate: &'a Gate, clock: &'a FakeClock, dir: &Path) -> Leetify<'a> {
-        Leetify { http, keys, dir: dir.to_path_buf(), gate, clock }
+    /// The import over a scratch folder; `session` is the test's own memory.
+    fn with<'a>(http: &'a FakeHttp, keys: &'a FakeKeys, gate: &'a Gate, clock: &'a FakeClock, dir: &Path, session: &'a Session) -> Leetify<'a> {
+        Leetify { http, keys, dir: dir.to_path_buf(), gate, clock, session }
+    }
+    /// Every file under the scratch folder, by name.
+    fn files(dir: &Path) -> Vec<String> {
+        let mut out: Vec<String> = fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn accepts_only_a_small_png_as_the_badge() {
+        // fails if an error page, an HTML consent page or a huge file is shown as Leetify's badge
+        let png = |n: usize| [&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'][..], &vec![0u8; n]].concat();
+        assert_eq!(check_badge(200, png(100)).unwrap().len(), 108);
+        assert!(check_badge(404, png(100)).is_err());
+        assert!(check_badge(200, b"<!doctype html><title>Google Drive</title>".to_vec()).is_err());
+        assert!(check_badge(200, png(BADGE_MAX)).is_err());
+        assert!(check_badge(200, Vec::new()).is_err());
     }
 
     #[test]
@@ -734,9 +831,10 @@ mod tests {
     fn a_key_is_checked_with_leetify_before_it_is_saved_and_never_appears_in_an_error() {
         // fails if a refused key is stored, a good one is not, or the key leaks into an error or Debug
         let s = Scratch::new("key");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/api-key/validate", 401, "Unauthorized").on("/api-key/validate", 200, "OK");
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         let e = l.save_key(&format!(" {KEY} ")).unwrap_err();
         assert_eq!(e.kind, ErrorKind::BadKey);
         assert!(keys.get().unwrap().is_none());
@@ -754,12 +852,13 @@ mod tests {
     }
 
     #[test]
-    fn fetches_the_profile_then_the_matches_with_the_key_and_caches_them() {
-        // fails if the requests, their order, the key header or the cached copy change
+    fn fetches_the_profile_then_the_matches_with_the_key_and_holds_them_in_memory_only() {
+        // fails if the requests, their order, the key header or the copy change, or Leetify's data reaches the disk
         let s = Scratch::new("fetch");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         assert_eq!(l.load(true).unwrap(), None, "no player connected: nothing is fetched");
         l.connect(STEAM).unwrap();
         let p = l.load(true).unwrap().unwrap();
@@ -769,40 +868,81 @@ mod tests {
         assert_eq!(p.fetched_at, clock.wall_ms(), "fetched_at is when the replies were in");
         // the second request waited the gap after the first
         assert_eq!(*clock.slept.lock().unwrap(), [GAP]);
-        assert_eq!(l.load(false).unwrap(), Some(p.clone()), "the cache answers without a request");
-        let cache = fs::read_to_string(s.0.join("cache.json")).unwrap();
-        assert!(!cache.contains(KEY));
+        assert_eq!(l.load(false).unwrap(), Some(p.clone()), "memory answers without a request");
+        assert_eq!(files(&s.0), ["settings.json"], "only the player setting is on disk");
+        let setting = fs::read_to_string(s.0.join("settings.json")).unwrap();
+        assert!(!setting.contains(KEY) && !setting.contains("Synthetic"), "{setting}");
+        // a new session (the app restarted) has nothing until it fetches again
+        let fresh: Session = Mutex::new(None);
+        assert_eq!(with(&http, &keys, &gate, &clock, &s.0, &fresh).load(false).unwrap(), None);
     }
 
     #[test]
     fn keeps_no_other_players_data() {
-        // fails if a teammate's SteamID or another player's match row reaches the cache
+        // fails if a teammate's SteamID or another player's match row is held
         let s = Scratch::new("minimal");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let other = "76561197960265728";
         let profile = format!(r#"{{"name":"Synthetic","steam64_id":"{STEAM}","recent_teammates":[{{"steam64_id":"{other}","recent_matches_count":3}}]}}"#);
         let matches = format!(r#"[{{"id":"m1","stats":[{{"steam64_id":"{other}","name":"Someone"}},{{"steam64_id":"{STEAM}","name":"Synthetic"}}]}}]"#);
         let http = FakeHttp::default().on("/v3/profile?", 200, &profile).on("/v3/profile/matches", 200, &matches);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         let p = l.load(true).unwrap().unwrap();
         assert!(p.profile.get("recent_teammates").is_none());
         assert_eq!(p.matches[0]["stats"].as_array().unwrap().len(), 1);
-        let cache = fs::read_to_string(s.0.join("cache.json")).unwrap();
-        assert!(!cache.contains(other) && !cache.contains("Someone"), "{cache}");
+        let held = serde_json::to_string(&*mem.lock().unwrap()).unwrap();
+        assert!(!held.contains(other) && !held.contains("Someone"), "{held}");
         // a profile without its own SteamID cannot say which rows are the player's
         let http = FakeHttp::default().on("/v3/profile?", 200, r#"{"name":"x"}"#);
         clock.advance(Duration::from_secs(61));
-        assert_eq!(with(&http, &keys, &gate, &clock, &s.0).load(true).unwrap_err().kind, ErrorKind::BadResponse);
+        assert_eq!(with(&http, &keys, &gate, &clock, &s.0, &mem).load(true).unwrap_err().kind, ErrorKind::BadResponse);
     }
 
     #[test]
-    fn a_refresh_inside_a_minute_is_answered_from_the_cache() {
-        // fails if pressing Refresh twice sends a second pair of requests
-        let s = Scratch::new("recent");
+    fn a_fetch_that_ends_after_disconnect_keeps_nothing() {
+        // fails if data Leetify sent for a player the user disconnected while the request ran comes back
+        let s = Scratch::new("race");
+        let mem = std::sync::Arc::new(Mutex::new(None));
+        let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
+        let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
+        l.connect(STEAM).unwrap();
+        let (dir, other) = (s.0.clone(), mem.clone());
+        *http.during.lock().unwrap() = Some(Box::new(move || {
+            let (http, keys, gate, clock) = (FakeHttp::default(), FakeKeys::default(), Gate::new(), FakeClock::new());
+            Leetify { http: &http, keys: &keys, dir, gate: &gate, clock: &clock, session: &other }.disconnect().unwrap();
+        }));
+        assert_eq!(l.load(true).unwrap(), None);
+        assert!(mem.lock().unwrap().is_none());
+        assert_eq!(files(&s.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_discarded_copy_is_fetched_again_rather_than_returned() {
+        // fails if a copy the page could not read keeps coming back, even inside the one-minute floor
+        let s = Scratch::new("discard");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES).on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
+        l.connect(STEAM).unwrap();
+        l.load(true).unwrap();
+        l.discard();
+        assert_eq!(l.load(false).unwrap(), None);
+        assert!(l.load(true).unwrap().is_some());
+        assert_eq!(http.asked().len(), 4, "the second load fetched, though under a minute had passed");
+    }
+
+    #[test]
+    fn a_refresh_inside_a_minute_is_answered_from_memory() {
+        // fails if pressing Refresh twice sends a second pair of requests
+        let s = Scratch::new("recent");
+        let mem: Session = Mutex::new(None);
+        let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
+        let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES).on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         l.load(true).unwrap();
         clock.advance(Duration::from_secs(30));
@@ -816,10 +956,11 @@ mod tests {
     }
 
     #[test]
-    fn names_each_failure_and_keeps_or_deletes_the_cache_as_leetify_asks() {
-        // fails if a status maps to the wrong error, a 404 or 403 leaves Leetify's data on disk, or a
-        // network or server failure throws away the copy the page is showing
+    fn names_each_failure_and_keeps_or_drops_the_copy_as_leetify_asks() {
+        // fails if a status maps to the wrong error, a 404 or 403 keeps data Leetify no longer returns, or
+        // a network or server failure throws away the copy the page is showing
         let s = Scratch::new("errors");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let cases: [(FakeHttp, ErrorKind, bool); 6] = [
             (FakeHttp::default().on("/v3/profile?", 401, "Unauthorized"), ErrorKind::BadKey, true),
@@ -831,29 +972,30 @@ mod tests {
         ];
         for (http, kind, kept) in cases {
             let seed = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-            let l = with(&seed, &keys, &gate, &clock, &s.0);
+            let l = with(&seed, &keys, &gate, &clock, &s.0, &mem);
             l.connect(STEAM).unwrap();
             l.load(true).unwrap();
             clock.advance(Duration::from_secs(61));
-            let l = with(&http, &keys, &gate, &clock, &s.0);
+            let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
             let e = l.load(true).unwrap_err();
             assert_eq!(e.kind, kind, "{e:?}");
-            assert_eq!(s.0.join("cache.json").exists(), kept, "{kind:?}");
+            assert_eq!(mem.lock().unwrap().is_some(), kept, "{kind:?}");
             assert!(!e.message.contains(KEY));
         }
         // a reply that is JSON but not the documented shape is refused too
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, "{}");
         clock.advance(Duration::from_secs(61));
-        assert_eq!(with(&http, &keys, &gate, &clock, &s.0).load(true).unwrap_err().kind, ErrorKind::BadResponse);
+        assert_eq!(with(&http, &keys, &gate, &clock, &s.0, &mem).load(true).unwrap_err().kind, ErrorKind::BadResponse);
     }
 
     #[test]
     fn a_429_holds_every_request_back_for_its_retry_after() {
         // fails if the app keeps calling Leetify after a 429, or ignores the Retry-After it names
         let s = Scratch::new("429");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on_429("/v3/profile?", Some("45"));
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         let e = l.load(true).unwrap_err();
         assert_eq!((e.kind, e.retry_after_s), (ErrorKind::RateLimited, Some(45)));
@@ -871,36 +1013,33 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_expires_after_a_day_and_belongs_to_one_player() {
-        // fails if a copy older than MAX_AGE_MS is shown, or switching players shows the last one's data
+    fn the_copy_belongs_to_one_player() {
+        // fails if switching players shows the last one's data
         let s = Scratch::new("expiry");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         l.load(true).unwrap();
-        clock.advance(Duration::from_millis(MAX_AGE_MS + 1));
-        assert_eq!(l.load(false).unwrap(), None);
-        assert!(!s.0.join("cache.json").exists(), "the expired copy is deleted");
-        let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
-        l.load(true).unwrap();
         l.connect("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d").unwrap();
-        assert!(!s.0.join("cache.json").exists(), "another player's copy is deleted on connect");
+        assert!(mem.lock().unwrap().is_none(), "another player's copy is dropped on connect");
         assert_eq!(l.load(false).unwrap(), None);
     }
 
     #[test]
-    fn disconnect_removes_the_player_the_cache_and_the_key() {
+    fn disconnect_removes_the_player_the_copy_and_the_key() {
         let s = Scratch::new("disconnect");
+        let mem: Session = Mutex::new(None);
         let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys(Mutex::new(Some(KEY.into()))));
         let http = FakeHttp::default().on("/v3/profile?", 200, PROFILE).on("/v3/profile/matches", 200, MATCHES);
-        let l = with(&http, &keys, &gate, &clock, &s.0);
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
         l.connect(STEAM).unwrap();
         l.load(true).unwrap();
         l.disconnect().unwrap();
         let st = l.status().unwrap();
         assert!(st.player.is_none() && !st.has_key);
-        assert!(!s.0.join("cache.json").exists() && !s.0.join("settings.json").exists());
+        assert!(mem.lock().unwrap().is_none());
+        assert_eq!(files(&s.0), Vec::<String>::new());
     }
 }

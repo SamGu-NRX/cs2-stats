@@ -10,6 +10,9 @@
 .lt-attr { font: 400 12px/1.3 var(--f); color: var(--ink2); text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; white-space: nowrap; border-radius: 2px; transition: color var(--d-hover) ease; }
 @media (hover: hover) and (pointer: fine) { .lt-attr:hover { color: var(--ink); } }
 .lt-synthetic { color: var(--tan); }
+/* Leetify's badge, unmodified (guidelines, section 2): sized only, never recoloured or animated */
+.lt-attr--badge { display: inline-flex; text-decoration: none; }
+.lt-badge { display: block; width: auto; height: 28px; }
 
 /* ---------------------------------------------------------------- the comparison table */
 /* Five columns: Leetify's label, its value, the seam, our value, our label. The seam is a dotted rule
@@ -47,6 +50,8 @@
 .lt-score .caps { justify-self: start; }
 .lt-score__v { font-size: 30px; color: var(--ink); }
 .lt-sample { margin: 12px 0 10px; }
+.lt-sample--top { margin-top: 0; }
+.lt-cmp--solo { grid-template-columns: minmax(160px, 1fr) 120px; max-width: 640px; }
 
 /* ---------------------------------------------------------------- Data & settings */
 .lt-connect__body { display: grid; gap: 16px; }
@@ -81,6 +86,12 @@
 .lt-keyrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .lt-input--key { width: 280px; }
 .lt-actions { display: flex; gap: 8px; }
+
+/* ---------------------------------------------------------------- before the data is in */
+.lt-pending { margin: 0; }
+.lt-pending--failed { display: grid; gap: 8px; justify-items: start; }
+.lt-pending__do { display: inline-flex; align-items: center; gap: 12px; }
+.matches__leetify { display: flex; align-items: center; gap: 10px; padding: 10px var(--gutter) 0; }
 
 /* ---------------------------------------------------------------- Matches: Leetify-only rows */
 /* The source mark is text in a pip, as the design system's W/L and 2K pips are; never Leetify's logo,
