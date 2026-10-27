@@ -10,7 +10,7 @@ import { GameIcon } from "../../components/GameIcon";
 import { Fig, symmetricMax } from "../../components/MatchSeries";
 import { MetricList, MetricRow } from "../../components/MetricRow";
 import { fmtMetric } from "../../data/engine";
-import type { ViewedMatch } from "../../data/match";
+import { teamLabel, type ViewedMatch } from "../../data/match";
 import { metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
 import { WeaponIcon } from "../../icons/game";
@@ -341,7 +341,7 @@ function Lobby({ v }: { v: ViewedMatch }) {
   const max = symmetricMax(rows.map((r) => r.score));
   const us = v.b.teams.us.v.luckScore;
   return (
-    <Card title="Luck in the lobby" tip="Every player's luck score in this match, luckiest first." aside={us === null ? undefined : <SectionAside label="Your team" value={fmtLuck(us)} color="var(--cream)" />}>
+    <Card title="Luck in the lobby" tip="Every player's luck score in this match, luckiest first." aside={us === null ? undefined : <SectionAside label={teamLabel(v, "us")} value={fmtLuck(us)} color="var(--cream)" />}>
       {rows.length ? (
         <ul className="lk-lobby" aria-label="Luck score by player">
           {rows.map((r) => (

@@ -55,7 +55,7 @@ export default function Positions({ v }: ViewedTabProps) {
   return (
     <div className="tabpad positions">
       <div className="toolbar">
-        <Segmented label="Whose" value={who} onChange={setWho} options={[{ value: "you", label: "You" }, { value: "team", label: "Your team" }, { value: "all", label: "All kills" }]} />
+        <Segmented label="Whose" value={who} onChange={setWho} options={[{ value: "you", label: v.pro ? v.players[v.human].name : "You" }, { value: "team", label: v.pro ? "Their team" : "Your team" }, { value: "all", label: "All kills" }]} />
         <Segmented label="Side" value={side} onChange={setSide} options={[{ value: "both", label: "Both sides" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
         <label className="check"><input type="checkbox" checked={lines} onChange={(e) => setLines(e.target.checked)} /><span>Killer to victim</span></label>
         {cells.length > 0 && <label className="check"><input type="checkbox" checked={heat} onChange={(e) => setHeat(e.target.checked)} /><span>Where you moved</span></label>}

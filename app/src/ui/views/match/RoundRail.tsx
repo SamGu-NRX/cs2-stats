@@ -46,8 +46,9 @@ export function RoundRail({ v, selected, onPick, compact }: { v: MatchModel; sel
   return (
     <div className="rail" role="group" aria-label="Round history">
       <div className="rail__labels" aria-hidden>
-        <span>You</span>
-        <span>Them</span>
+        {/* a pro demo names its teams; the user's own match is "you" against "them" */}
+        <span className={v.pro ? "rail__team" : undefined}>{v.pro ? v.teamName.us : "You"}</span>
+        <span className={v.pro ? "rail__team" : undefined}>{v.pro ? v.teamName.them : "Them"}</span>
         <span className="faint">Round</span>
       </div>
       <div className="rail__cols">

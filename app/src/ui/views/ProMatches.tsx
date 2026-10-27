@@ -2,7 +2,7 @@
 // bury the user's games. A search box and filters for team, player and map, every one a field the
 // published tables carry (data/pro.ts), newest first. The table windows past a few hundred rows, which
 // find in page cannot reach, so the search box is the way to find a game.
-import { useMemo } from "react";
+import { useDeferredValue, useMemo } from "react";
 import { MapThumb } from "../components/bits";
 import { Select } from "../components/controls";
 import { DataTable } from "../components/DataTable";
@@ -29,7 +29,9 @@ export function ProMatches({ switcher }: { switcher: JSX.Element }) {
   const f = { q: r.query.get("pq") ?? "", team: r.query.get("team"), player: r.query.get("player"), map: r.query.get("pmap") };
   const all = useMemo(() => proEntries(matches), [matches]);
   const choices = useMemo(() => proChoices(all, (e) => (hide && !isProDemo(e) ? [] : e.match.teams)), [all, hide]);
-  const rows = useMemo(() => filterPro(all, f), [all, f.q, f.team, f.player, f.map]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the list follows the filters at a lower priority than the typing: a key never waits for a thousand rows
+  const q = useDeferredValue(f.q), team = useDeferredValue(f.team), player = useDeferredValue(f.player), map = useDeferredValue(f.map);
+  const rows = useMemo(() => filterPro(all, { q, team, player, map }), [all, q, team, player, map]);
   const filtered = !!(f.q || f.team || f.player || f.map);
   const folder = host?.pro?.folder ?? null;
 

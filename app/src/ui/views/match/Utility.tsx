@@ -8,7 +8,7 @@ import { Segmented } from "../../components/controls";
 import { DataTable } from "../../components/DataTable";
 import { frameFor, RadarView } from "../../components/MapArt";
 import { SIDE_OPTIONS, fmtMetric, type SideKey } from "../../data/engine";
-import type { MPlayer as PlayerRow } from "../../data/match";
+import { teamLabel, type MPlayer as PlayerRow } from "../../data/match";
 import { metric } from "../../data/meta";
 import { NO_THROW_LOG } from "../../data/tips";
 import { NADE_LABEL, NadeIcon, type Nade } from "../../icons/game";
@@ -46,7 +46,7 @@ export default function Utility({ v }: TabProps) {
       <Card title="Flashes, grenades and smokes" flush>
         <DataTable<PlayerRow>
           label="Utility by player"
-          groups={[{ key: "us", label: "Your team", rows: team("us") }, { key: "them", label: "Opponents", rows: team("them") }]}
+          groups={[{ key: "us", label: teamLabel(v, "us"), rows: team("us") }, { key: "them", label: teamLabel(v, "them"), rows: team("them") }]}
           rowKey={(p) => p.key}
           defaultSort={{ key: "dmg", dir: "desc" }}
           rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
@@ -88,7 +88,8 @@ const NADE_OF: Record<string, Nade> = { smokegrenade: "smoke", flashbang: "flash
  */
 function Landing({ v }: { v: TabProps["v"] }) {
   const rebuilt = v.facts.match.inputs.throws === "rebuilt";
-  const [who, setWho] = useState<"you" | "team" | "all">("you");
+  // a pro demo seen through nobody has no "you" grenades: it opens on everyone's
+  const [who, setWho] = useState<"you" | "team" | "all">(v.human === null ? "all" : "you");
   const [types, setTypes] = useState<Set<Nade>>(new Set(TYPES));
   const nades = useMemo(() => v.b.grenades.flatMap((g) => {
     const type = NADE_OF[g.weapon];
@@ -108,7 +109,7 @@ function Landing({ v }: { v: TabProps["v"] }) {
       ) : (
         <div className="landing">
           <div className="landing__side">
-            <Segmented label="Whose grenades" value={who} onChange={setWho} options={[{ value: "you", label: "You" }, { value: "team", label: "Your team" }, { value: "all", label: "Everyone" }]} />
+            <Segmented label="Whose grenades" value={who} onChange={setWho} options={[...(v.human === null ? [] : [{ value: "you" as const, label: v.pro ? v.players[v.human].name : "You" }]), { value: "team" as const, label: v.human === null ? teamLabel(v, "us") : v.pro ? "Their team" : "Your team" }, { value: "all" as const, label: "Everyone" }]} />
             <div className="landing__types" role="group" aria-label="Grenade types">
               {TYPES.map((t) => {
                 const n = nades.filter((x) => x.type === t && mine(x.pi)).length;

@@ -9,7 +9,7 @@ import { TradingGlyph } from "./glyphs";
 import { HeadToHead } from "./HeadToHead";
 import { Openings } from "./Openings";
 import { fmtMetric } from "../../data/engine";
-import { deathOf, killsBy, type MPlayer as PlayerRow, type ViewedMatch } from "../../data/match";
+import { deathOf, killsBy, sideWord, teamLabel, type MPlayer as PlayerRow, type ViewedMatch } from "../../data/match";
 import { Viewed } from "./Viewer";
 import { metric as meta } from "../../data/meta";
 import { useData } from "../../data/provider";
@@ -86,12 +86,12 @@ function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
   const of = (t: "us" | "them") => (rows ?? []).filter((c) => v.players[c.pi].team === t);
   const score = (t: "us" | "them") => <>{of(t).filter((c) => c.won).length}<span className="faint">/{of(t).length}</span></>;
   return (
-    <Card title="Clutches" icon={<span className="cream"><WinIcon how="defuse" size={16} beside /></span>} aside={<><SectionAside label="You" value={score("us")} color="var(--cream)" /><SectionAside label="Them" value={score("them")} /></>}>
+    <Card title="Clutches" icon={<span className="cream"><WinIcon how="defuse" size={16} beside /></span>} aside={<><SectionAside label={sideWord(v, "us")} value={score("us")} color="var(--cream)" /><SectionAside label={sideWord(v, "them")} value={score("them")} /></>}>
       {rows === null ? <div className="skel" style={{ height: 120 }} /> : (
         <div className="clutches">
           {(["us", "them"] as const).map((t) => (
-            <section key={t} aria-label={t === "us" ? "Your team's clutches" : "Opponents' clutches"}>
-              <h3 className="caps clutches__h">{t === "us" ? "Your team" : "Opponents"}</h3>
+            <section key={t} aria-label={`Clutches: ${teamLabel(v, t)}`}>
+              <h3 className="caps clutches__h">{teamLabel(v, t)}</h3>
               {of(t).length ? (
                 <ul className="clutches__list">
                   {of(t).map((c) => (

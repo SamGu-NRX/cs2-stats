@@ -93,7 +93,7 @@ export default function Overview({ v, file }: TabProps) {
       <div className="overview__bar toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={SIDE_OPTIONS.map((o) => ({ ...o, label: o.value === "both" ? "Both sides" : o.label, side: o.value === "both" ? undefined : o.value }))} />
         <span className="meta">{v.human === null
-          ? "Pick a player on the scoreboard to see the match through them"
+          ? `${v.nRounds} rounds`
           : side === "both" ? `${lines[v.human].rounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
       </div>
       <div className="boards">

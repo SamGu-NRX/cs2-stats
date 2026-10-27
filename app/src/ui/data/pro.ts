@@ -39,6 +39,9 @@ export function filterPro(list: MatchEntry[], f: ProFilter): MatchEntry[] {
     .sort((a, b) => startMs(b.match) - startMs(a.match) || b.file.localeCompare(a.file));
 }
 
+/** Names in alphabetical order, case aside; one collator, since localeCompare with options builds one per call. */
+const NAMES = new Intl.Collator(undefined, { sensitivity: "base" });
+
 /**
  * The filters' choices over the whole library, each with how many maps it has: teams and players by
  * name, maps by count. `teamsOf` gives the team names a match may offer (none for a match whose names
@@ -52,6 +55,6 @@ export function proChoices(list: MatchEntry[], teamsOf: (e: MatchEntry) => reado
     for (const p of new Set(playersOf(e).map((x) => x.name))) add(players, p);
     add(maps, e.match.map);
   }
-  const byName = (m: Map<string, number>) => [...m].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
+  const byName = (m: Map<string, number>) => [...m].sort((a, b) => NAMES.compare(a[0], b[0]));
   return { teams: byName(teams), players: byName(players), maps: [...maps].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])) };
 }

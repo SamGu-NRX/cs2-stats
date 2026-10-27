@@ -302,7 +302,7 @@ function ProSource({ n }: { n: number }) {
       {host?.chooseProLibrary ? (
         <div className="source__actions">
           <button className="btn press" onClick={choose} disabled={busy} aria-busy={busy}><FolderIcon size={14} />{folder ? "Change folder" : "Choose folder"}</button>
-          {folder && <button className="btn btn--ghost press" onClick={forget}>Stop reading it</button>}
+          {folder && <button className="btn btn--ghost press" onClick={forget}>Stop using this folder</button>}
         </div>
       ) : (
         !folder && <p className="meta">In the browser build, start the dev server with CS2_PRO_LIBRARY set to that folder.</p>

@@ -18,5 +18,6 @@
 }
 
 .pro-player .input { width: 180px; }
-.pro-teams { display: inline-flex; gap: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pro-teams { white-space: nowrap; }
 .source__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.rail__team { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

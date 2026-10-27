@@ -6,7 +6,7 @@ import { useMemo, type ReactNode } from "react";
 import { ClutchBadge, FirstPip } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { BUY_CLASSES, BUY_CLASS_LABEL, clutchRows } from "../../data/engine";
-import type { MatchModel, Team } from "../../data/match";
+import { sideWord, teamLabel, type MatchModel, type Team } from "../../data/match";
 import { metric } from "../../data/meta";
 import { BuyIcon, WeaponIcon, WinIcon } from "../../icons/game";
 import { TradingIcon } from "../../icons/attributes";
@@ -109,7 +109,7 @@ export default function Advanced({ v, file }: TabProps) {
             })}
           </ul>
         </Card>
-        <Card title={<span className="adv__title"><WinIcon how="defuse" size={15} beside />Clutches <Hint tip="Your team's 1vX situations by enemies left." /></span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> you, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> them</span>}>
+        <Card title={<span className="adv__title"><WinIcon how="defuse" size={15} beside />Clutches <Hint tip={`${teamLabel(v, "us")}: 1vX situations by enemies left.`} /></span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> {sideWord(v, "us")}, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> {sideWord(v, "them")}</span>}>
           <ul className="clist">
             {a.clutches.map((c) => (
               <li key={c.vs}>

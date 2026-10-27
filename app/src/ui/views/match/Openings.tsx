@@ -7,7 +7,7 @@ import { Card } from "../../components/Card";
 import { DeathMark } from "../../components/bits";
 import { Fig } from "../../components/MatchSeries";
 import { useCall } from "../../data/hooks";
-import type { MPlayer, Team, ViewedMatch } from "../../data/match";
+import { teamLabel, type MPlayer, type Team, type ViewedMatch } from "../../data/match";
 import { WeaponIcon } from "../../icons/game";
 import { weaponLabel } from "../../../stats/weapons";
 import { fmtClock, plural } from "../../lib/format";
@@ -36,8 +36,8 @@ export function Openings({ v, file }: { v: ViewedMatch; file: string }) {
         <div className="opn__scroll">
           <div className="opn__strip" role="group" aria-label="First kill of each round" onKeyDown={roving.onKeyDown}>
             <div className="opn__lanes" aria-hidden>
-              <span className="caps">Your team</span>
-              <span className="caps">Opponents</span>
+              <span className="caps">{teamLabel(v, "us")}</span>
+              <span className="caps">{teamLabel(v, "them")}</span>
             </div>
             {o.rows.map((r, i) => {
               const killer = r.killer === null ? undefined : byId.get(r.killer);

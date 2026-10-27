@@ -124,6 +124,9 @@ export type ViewedMatch = MatchModel & { human: number };
 /** A side of the layout as the page names it: the team's name on a pro demo, else "Your team" and "Opponents". */
 export const teamLabel = (v: Pick<MatchModel, "pro" | "teamName">, t: Team) => (v.pro ? v.teamName[t] : t === "us" ? "Your team" : "Opponents");
 
+/** A side of the layout in a word, for asides and chart labels: a pro demo's team name, else "You" and "Them". */
+export const sideWord = (v: Pick<MatchModel, "pro" | "teamName">, t: Team) => (v.pro ? v.teamName[t] : t === "us" ? "You" : "Them");
+
 /** `viewer`: the steamid picked on a pro demo's scoreboard; ignored for the user's own matches, which are seen through the recording player. */
 export function matchModel(entry: MatchEntry, b: MatchBundle, viewer: string | null = null): MatchModel {
   const facts = b.core;

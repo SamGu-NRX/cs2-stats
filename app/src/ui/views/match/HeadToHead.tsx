@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { useCall } from "../../data/hooks";
-import { killMatrix, type MatchModel, type MPlayer } from "../../data/match";
+import { killMatrix, teamLabel, type MatchModel, type MPlayer } from "../../data/match";
 import { WeaponClassIcon } from "../../icons/game";
 import { fmtDiff, fmtSecs, plural } from "../../lib/format";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
@@ -61,7 +61,7 @@ export function HeadToHead({ v }: { v: MatchModel }) {
         <table className="tbl h2h">
           <thead>
             <tr>
-              <th className="l"><span className="th">Your team ↓ vs →</span></th>
+              <th className="l"><span className="th">{teamLabel(v, "us")} ↓ vs →</span></th>
               {them.map((q) => <th key={q.key}><span className="th"><PlayerName v={v} pi={q.pi} /></span></th>)}
               <th><span className="th">Total</span></th>
             </tr>
