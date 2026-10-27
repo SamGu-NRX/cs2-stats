@@ -9,8 +9,11 @@
 export type LeetifyErrorKind =
   | "bad_key" | "not_found" | "private" | "rate_limited" | "network" | "server" | "bad_response" | "bad_input" | "key_store" | "storage";
 
-/** A failure as the host reports it; `retryAfterS` only for rate_limited. */
-export interface LeetifyFailure { kind: LeetifyErrorKind; message: string; retryAfterS: number | null }
+/**
+ * A failure as the host reports it; `retryAfterS` only for rate_limited. `retryAt` (ms since the epoch) is
+ * when the next attempt can run, which the page works out from retryAfterS as the failure arrives.
+ */
+export interface LeetifyFailure { kind: LeetifyErrorKind; message: string; retryAfterS: number | null; retryAt?: number | null }
 
 /** Whose data to fetch: a SteamID64 or a Leetify user id. */
 export interface LeetifyPlayer { kind: "steam" | "leetify"; id: string }

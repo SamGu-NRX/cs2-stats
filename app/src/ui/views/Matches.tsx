@@ -189,10 +189,12 @@ export function MatchesView() {
   const sessionKey = r.query.get("session");
   const { rows: sessions, error: sessionsError } = useSessions(all, map);
   const session = sessionKey && sessions ? sessionFor(sessions, sessionKey) : null;
-  const leetify = useLeetifyJoin();
   const leetifyLive = useLeetify();
   const leetifyState = leetifyLive?.state ?? null;
   const leetifyNow = leetifyPhase(leetifyState);
+  // Leetify's rows and marks only while its data is current (leetifyPhase "ready")
+  const leetifyAll = useLeetifyJoin();
+  const leetify = leetifyNow === "ready" ? leetifyAll : null;
 
   const terms = useMemo(() => q.toLowerCase().split(/\s+/).filter(Boolean), [q]);
   const rows = useMemo(() => {
@@ -259,7 +261,7 @@ export function MatchesView() {
       {(leetifyNow === "loading" || leetifyNow === "failed") && (
         <div className="matches__leetify">
           <span className="lt-src">Leetify</span>
-          <LeetifyPending phase={leetifyNow} error={leetifyState?.error ?? null} hasKey={leetifyState?.status?.hasKey ?? false} retry={() => void leetifyLive?.store.refresh()} />
+          <LeetifyPending phase={leetifyNow} error={leetifyState?.fetchError ?? leetifyState?.error ?? null} hasKey={leetifyState?.status?.hasKey ?? false} retry={() => void leetifyLive?.store.refresh()} />
         </div>
       )}
       {all.length > 0 && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}

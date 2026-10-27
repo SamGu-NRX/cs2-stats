@@ -19,7 +19,7 @@ import { SYNTHETIC_MATCHES, SYNTHETIC_STEAM64, syntheticPayload, syntheticProfil
 import type { Host } from "../../../host/host";
 import type { LeetifyBridge } from "../../../host/leetify";
 import { DataValue, type Data } from "../../data/provider";
-import { Attribution, CompareTable } from "./parts";
+import { Attribution, CompareTable, failureText, nextAttempt } from "./parts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -59,6 +59,16 @@ describe("whose Leetify data it is", () => {
     expect(solo.querySelectorAll(".lt-seam")).toHaveLength(0);
     const paired = render(<CompareTable groups={PROFILE_GROUPS} source={p} ours={null} label="mine" />);
     expect(paired.textContent).toContain("Our metric");
+  });
+});
+
+describe("a pause Leetify asked for", () => {
+  it("says when the next attempt can run, today or on a later day", () => {
+    const now = new Date(2026, 9, 26, 20, 0).getTime();
+    expect(nextAttempt(now + 3_600_000, now)).toBe("at 9:00 PM");
+    expect(nextAttempt(new Date(2026, 9, 27, 9, 30).getTime(), now)).toBe("on Oct 27, 9:30 AM");
+    const t = failureText({ kind: "rate_limited", message: "", retryAfterS: 3600, retryAt: Date.now() + 3_600_000 }, false);
+    expect(t.head).toMatch(/^Leetify asked for a pause\. The next attempt can run (at|on) /);
   });
 });
 

@@ -164,7 +164,9 @@ export function LeetifyConnect() {
             {data && <LeetifyLink url={data.profile.url} personal />}
           </div>
           <p className="meta lt-status" role="status" aria-live="polite">
-            {refreshing ? "Fetching from Leetify…" : data ? <>{fetchedAgo(data.fetchedAt)}. {j ? joinedText(data, j.joined.byFile.size) : ""}. <a className="link lt-inline" href={pageHref("matches")}>Open Matches</a></> : "Nothing fetched yet."}
+            {refreshing ? "Fetching from Leetify…"
+              : state.fetchError ? "The last fetch failed, so Leetify's data is not shown anywhere until a refresh succeeds."
+              : data ? <>{fetchedAgo(data.fetchedAt)}. {j ? joinedText(data, j.joined.byFile.size) : ""}. <a className="link lt-inline" href={pageHref("matches")}>Open Matches</a></> : "Nothing fetched yet."}
           </p>
           {other && <p className="meta lt-other" role="note">This is not the player in your matches here. Profile shows Leetify's numbers for them alone, with nothing of ours beside them, and no match is joined or listed from Leetify.</p>}
           <KeyRow state={state} save={store.saveKey} clear={store.clearKey} />

@@ -23,14 +23,22 @@ export function failureText(f: LeetifyFailure, hasKey: boolean): { head: string;
       : { head: "Leetify did not accept this API key.", next: "Copy the key again from leetify.com/app/developer, or leave the field empty to connect without one." };
     case "not_found": return { head: "Leetify has no profile for this player.", next: "Check the SteamID64 or profile link; Disconnect lets you enter another. A player Leetify has never analysed has no profile, and signing in to Leetify once starts one." };
     case "private": return { head: "This Leetify profile is private.", next: "Leetify's public API shares only public profiles. Make it public in Leetify's settings, then refresh." };
-    case "rate_limited": return { head: `Leetify asked for a pause${f.retryAfterS ? ` of ${f.retryAfterS} s` : ""}.`, next: hasKey ? "Try again after it." : "Try again after it. An API key raises Leetify's limit." };
-    case "network": return { head: "Could not reach Leetify.", next: "Check your connection and try again. Data already fetched stays." };
-    case "server": return { head: "Leetify's API returned an error.", next: "Try again later. Data already fetched stays." };
+    case "rate_limited": return { head: f.retryAt ? `Leetify asked for a pause. The next attempt can run ${nextAttempt(f.retryAt)}.` : "Leetify asked for a pause.", next: hasKey ? "" : "An API key raises Leetify's limit." };
+    case "network": return { head: "Could not reach Leetify.", next: "Check your connection and try again." };
+    case "server": return { head: "Leetify's API returned an error.", next: "Try again later." };
     case "bad_response": return { head: "Leetify's reply was not in the shape this app reads.", next: "Leetify may have changed its API; the details below say where." };
     case "bad_input": return { head: f.message, next: "" };
     case "key_store": return { head: "Windows Credential Manager refused.", next: "Connect without a key, or try again." };
     case "storage": return { head: "The Leetify folder could not be read or written.", next: `Check that ${LEETIFY_FOLDER} is writable.` };
   }
+}
+
+const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+const dayClock = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+/** "at 9:40 PM" today, "on Oct 28, 9:40 AM" another day. */
+export function nextAttempt(at: number, now = Date.now()): string {
+  const d = new Date(at);
+  return d.toDateString() === new Date(now).toDateString() ? `at ${clock.format(d)}` : `on ${dayClock.format(d)}`;
 }
 
 /**

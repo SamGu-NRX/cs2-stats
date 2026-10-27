@@ -21,7 +21,7 @@ export function LeetifyMatchCard({ v }: { v: MatchModel }) {
   if (phase === "loading" || phase === "failed") {
     return (
       <Card title="Leetify, this match" className="lt-card lt-card--match" aside={<Attribution />}>
-        <LeetifyPending phase={phase} error={l?.state.error ?? null} hasKey={l?.state.status?.hasKey ?? false} retry={() => void l?.store.refresh()} />
+        <LeetifyPending phase={phase} error={l?.state.fetchError ?? l?.state.error ?? null} hasKey={l?.state.status?.hasKey ?? false} retry={() => void l?.store.refresh()} />
       </Card>
     );
   }

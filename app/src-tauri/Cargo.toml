@@ -23,9 +23,6 @@ serde_json = "1.0.154"
 sha2 = "0.10"
 zip = { version = "7.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 ureq = "3.5.0"
-# opens outside links in the system browser (lib.rs open_external); the crate tauri-plugin-opener 2.x
-# itself calls, without the plugin's command surface
-open = "5.3.2"
 
 [profile.release]
 codegen-units = 1
@@ -43,4 +40,4 @@ webview2-com = "0.38"
 # the Leetify API key in Windows Credential Manager (leetify.rs KeyStore); 3.6 is the last line whose
 # rust-version (1.75) the machine's Rust 1.85 meets
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
-windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem", "Wdk_System_Threading", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem", "Wdk_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

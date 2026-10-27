@@ -82,6 +82,9 @@ describe("the Leetify store", () => {
       expect(await s.refresh(), kind).toBe(false);
       expect(s.get().error?.kind, kind).toBe(kind);
       expect(s.get().data !== null, kind).toBe(kept);
+      // whatever is kept, no view shows it as current
+      expect(s.get().fetchError?.kind, kind).toBe(kind);
+      expect(leetifyPhase(s.get()), kind).toBe("failed");
     }
   });
 
@@ -111,6 +114,23 @@ describe("the Leetify store", () => {
     expect(f.calls).toEqual(["load:memory", "discard", "load:refresh"]);
     expect(s.get()).toMatchObject({ error: null, starting: false });
     expect(s.get().data?.matches.length).toBeGreaterThan(0);
+  });
+
+  it("says when a paused request can run again, and clears the failure once a refresh succeeds", async () => {
+    // fails if a long Retry-After shows only as a vague pause (review of #52)
+    const f = fakeBridge({ held: syntheticPayload(NOW) });
+    const s = new LeetifyStore(f.bridge);
+    await s.start();
+    f.next.load = fail("rate_limited", 3600);
+    const before = Date.now();
+    await s.refresh();
+    const at = s.get().fetchError?.retryAt ?? 0;
+    expect(at - before).toBeGreaterThanOrEqual(3_600_000);
+    expect(at - Date.now()).toBeLessThanOrEqual(3_600_000);
+    delete f.next.load;
+    expect(await s.refresh()).toBe(true);
+    expect(s.get().fetchError).toBeNull();
+    expect(leetifyPhase(s.get())).toBe("ready");
   });
 
   it("runs one action at a time", async () => {
@@ -145,7 +165,7 @@ describe("the Leetify store", () => {
 
   it("lets a view show Leetify's numbers only once they are in", () => {
     // fails if a view can show numbers while loading or after a failure, or a "not connected" state for a connected player
-    const st = (over: Partial<LeetifyState>): LeetifyState => ({ starting: false, status: null, data: null, busy: null, error: null, ...over });
+    const st = (over: Partial<LeetifyState>): LeetifyState => ({ starting: false, status: null, data: null, busy: null, error: null, fetchError: null, ...over });
     const status = (player: typeof PLAYER | null) => ({ player, hasKey: false, keyStore: true, keyError: null, cooldownS: null });
     expect(leetifyPhase(null)).toBe("none");
     expect(leetifyPhase(st({ starting: true }))).toBe("none");
@@ -154,7 +174,12 @@ describe("the Leetify store", () => {
     expect(leetifyPhase(st({ status: status(PLAYER), busy: "refresh" }))).toBe("loading");
     expect(leetifyPhase(st({ status: status(PLAYER), error: fail("network") }))).toBe("failed");
     expect(leetifyPhase(st({ error: fail("storage") }))).toBe("failed");
-    expect(leetifyPhase(st({ status: status(PLAYER), data: parsePayload(syntheticPayload(NOW)), error: fail("network") }))).toBe("ready");
+    const data = parsePayload(syntheticPayload(NOW));
+    // a key action's failure does not make the data stale
+    expect(leetifyPhase(st({ status: status(PLAYER), data, error: fail("bad_key") }))).toBe("ready");
+    // a refresh under way, and a failed one, are not current data (review of #52)
+    expect(leetifyPhase(st({ status: status(PLAYER), data, busy: "refresh" }))).toBe("loading");
+    expect(leetifyPhase(st({ status: status(PLAYER), data, fetchError: fail("network") }))).toBe("failed");
   });
 
   it("reads a host failure as it was sent, and anything else as a storage failure with its text", () => {

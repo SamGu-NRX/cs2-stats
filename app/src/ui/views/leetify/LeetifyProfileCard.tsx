@@ -33,7 +33,7 @@ export function LeetifyProfileCard({ q, t, ct, matches }: { q: Query; t: Rolled;
   if (!j || phase !== "ready") {
     return (
       <Card title="Leetify" className="lt-card" aside={<Attribution />}>
-        <LeetifyPending phase={phase === "failed" ? "failed" : "loading"} error={l?.state.error ?? null} hasKey={l?.state.status?.hasKey ?? false} retry={() => void l?.store.refresh()} />
+        <LeetifyPending phase={phase === "failed" ? "failed" : "loading"} error={l?.state.fetchError ?? l?.state.error ?? null} hasKey={l?.state.status?.hasKey ?? false} retry={() => void l?.store.refresh()} />
       </Card>
     );
   }

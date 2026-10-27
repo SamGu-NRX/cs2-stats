@@ -11,7 +11,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { toFailure, type LeetifyBridge, type LeetifyFailure, type LeetifyPayload, type LeetifyStatus } from "../../../host/leetify";
 import { useData } from "../provider";
 import { hideLeetifyData, hideLeetifyStatus, hideText, useHidePersonal } from "../privacy";
-import { LeetifyShapeError, parsePayload, type LeetifyData } from "./api";
+import { LeetifyShapeError, parsePayload, type LeetifyData, type LeetifyMatch } from "./api";
 import type { MatchEntry } from "../match";
 import { joinMatches, type Joined } from "./join";
 
@@ -23,10 +23,16 @@ export interface LeetifyState {
   status: LeetifyStatus | null;
   data: LeetifyData | null;
   busy: LeetifyBusy | null;
+  /** the last action's failure */
   error: LeetifyFailure | null;
+  /**
+   * The last fetch's failure (a refresh, or the fetch after connecting); null once one succeeds. While it
+   * is set, `data` is the copy from before and is not current, so no view shows it (leetifyPhase).
+   */
+  fetchError: LeetifyFailure | null;
 }
 
-const INITIAL: LeetifyState = { starting: true, status: null, data: null, busy: null, error: null };
+const INITIAL: LeetifyState = { starting: true, status: null, data: null, busy: null, error: null, fetchError: null };
 
 export class LeetifyStore {
   private st: LeetifyState = INITIAL;
@@ -92,10 +98,12 @@ export class LeetifyStore {
       await f();
       ok = this.st.error === null;
     } catch (e) {
-      const error = toFailure(e);
+      const raw = toFailure(e);
+      const error = raw.kind === "rate_limited" && raw.retryAfterS !== null ? { ...raw, retryAt: Date.now() + raw.retryAfterS * 1000 } : raw;
       // the host dropped its copy: Leetify no longer returns this player
       this.set(error.kind === "not_found" || error.kind === "private" ? { error, data: null } : { error });
     }
+    if (busy === "refresh" || busy === "connect") this.set({ fetchError: ok ? null : this.st.error });
     try { this.set({ status: await this.bridge.status() }); } catch { /* the action's own result stands */ }
     this.set({ busy: null });
     return ok;
@@ -119,23 +127,25 @@ export class LeetifyStore {
     try {
       await this.bridge.disconnect();
     } finally {
-      this.set({ data: null });
+      this.set({ data: null, fetchError: null });
     }
   });
 }
 
 /**
  * What a Leetify view may show: "none" (no bridge on this host, or the status is not in yet), "off" (no
- * player connected), "loading" (connected, data on its way), "failed" (connected, no data, an error), or
- * "ready". A view shows Leetify's numbers only when ready, so it never shows old or made-up values.
+ * player connected), "loading" (a fetch is running, the first or a refresh), "failed" (the last fetch
+ * failed), or "ready". A view shows Leetify's numbers only when ready: during a refresh and after a failed
+ * one the copy it has is not current, so it shows the fetch's progress or its failure instead.
  */
 export type LeetifyPhase = "none" | "off" | "loading" | "failed" | "ready";
 export function leetifyPhase(state: LeetifyState | null): LeetifyPhase {
   if (!state) return "none";
-  if (state.data) return "ready";
   if (!state.status) return state.error ? "failed" : "none";
   if (!state.status.player) return "off";
   if (state.starting || state.busy === "refresh" || state.busy === "connect") return "loading";
+  if (state.fetchError) return "failed";
+  if (state.data) return "ready";
   return state.error ? "failed" : "loading";
 }
 
@@ -151,9 +161,23 @@ export function leetifyOwner(steam64: string, you: readonly string[]): LeetifyOw
   return you.includes(steam64) ? "you" : "other";
 }
 
-/** The join, or none for another player's data, whose matches are not the ones here. */
+/**
+ * The join, or none for another player's data, whose matches are not the ones here. `data` is the copy
+ * before privacy.ts masks it: the join compares each demo's recording player with the profile's SteamID.
+ */
 export function joinFor(data: LeetifyData, entries: MatchEntry[], owner: LeetifyOwner): Joined {
-  return owner === "other" ? { byFile: new Map(), only: [] } : joinMatches(data.matches, entries);
+  return owner === "other" ? { byFile: new Map(), only: [] } : joinMatches(data.matches, entries, data.profile.steam64);
+}
+
+/** A join over the unmasked copy, its matches swapped for the same matches (by Leetify id) in `shown`. */
+function shownJoin(j: Joined, shown: LeetifyData): Joined {
+  const byId = new Map(shown.matches.map((m) => [m.id, m]));
+  const swap = (m: LeetifyMatch) => {
+    const s = byId.get(m.id);
+    if (!s) throw new Error(`Leetify match ${m.id} is in the join but not in the data shown`);
+    return s;
+  };
+  return { byFile: new Map([...j.byFile].map(([f, v]) => [f, { ...v, match: swap(v.match) }])), only: j.only.map(swap) };
 }
 
 const stores = new WeakMap<LeetifyBridge, LeetifyStore>();
@@ -171,8 +195,8 @@ const noState = () => null;
  * before hiding, which replaces the SteamID), and its actions; null where the host has no Leetify bridge
  * (a web build without the dev stand-in).
  */
-export function useLeetify(): { state: LeetifyState; store: LeetifyStore; owner: LeetifyOwner } | null {
-  const { host, you } = useData();
+export function useLeetify(): { state: LeetifyState; store: LeetifyStore; owner: LeetifyOwner; joined: Joined | null } | null {
+  const { host, you, matches } = useData();
   const store = host?.leetify ? leetifyStore(host.leetify) : null;
   useEffect(() => { void store?.start(); }, [store]);
   const raw = useSyncExternalStore(store?.subscribe ?? noSubscribe, store?.get ?? noState);
@@ -183,16 +207,21 @@ export function useLeetify(): { state: LeetifyState; store: LeetifyStore; owner:
     status: raw.status && hideLeetifyStatus(raw.status),
     data: raw.data && hideLeetifyData(raw.data, owner !== "other"),
     error: raw.error && { ...raw.error, message: hideText(raw.error.message) },
+    fetchError: raw.fetchError && { ...raw.fetchError, message: hideText(raw.fetchError.message) },
   } : raw), [raw, hide, owner]);
-  return store && state ? { state, store, owner } : null;
+  // the join reads the real SteamIDs, then hands the views the masked matches
+  const rawData = raw?.data ?? null;
+  const shown = state?.data ?? null;
+  const joined = useMemo(() => (rawData && shown ? shownJoin(joinFor(rawData, matches, owner), shown) : null), [rawData, shown, matches, owner]);
+  return store && state ? { state, store, owner, joined } : null;
 }
 
 /** The connected player's data joined to the local matches (joinFor); null until there is data. */
 export function useLeetifyJoin(): { data: LeetifyData; joined: Joined; synthetic: boolean; owner: LeetifyOwner } | null {
   const l = useLeetify();
-  const { matches } = useData();
   const data = l?.state.data ?? null;
+  const joined = l?.joined ?? null;
   const synthetic = !!l?.state.status?.synthetic;
   const owner = l?.owner ?? "unknown";
-  return useMemo(() => (data ? { data, joined: joinFor(data, matches, owner), synthetic, owner } : null), [data, matches, synthetic, owner]);
+  return useMemo(() => (data && joined ? { data, joined, synthetic, owner } : null), [data, joined, synthetic, owner]);
 }

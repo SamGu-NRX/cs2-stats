@@ -27,9 +27,11 @@ const API: &str = "https://api-public.cs-prod.leetify.com";
 pub const REFRESH_MIN_MS: u64 = 60_000;
 /// The space between two requests, so a refresh's two requests do not arrive together. Unmeasured guess.
 const GAP: Duration = Duration::from_millis(1_100);
-/// The wait after a 429 that names none, and the longest wait a Retry-After may set.
+/// The wait after a 429 that names none or names one this side cannot read.
 const COOLDOWN_DEFAULT_S: u64 = 60;
-const COOLDOWN_MAX_S: u64 = 15 * 60;
+/// The longest wait honoured. A Retry-After past a day is more likely a bad header than a real limit;
+/// one that long is held to a day, logged, and the page shows when the next attempt can run.
+const COOLDOWN_MAX_S: u64 = 24 * 60 * 60;
 /// The largest reply read. A 100-match history is about 190 KB.
 const BODY_MAX: u64 = 8 * 1024 * 1024;
 
@@ -274,8 +276,49 @@ impl Http for Ureq {
 
 /// Seconds a 429's Retry-After asks for: whole seconds, held to 1 to 15 minutes; the default otherwise
 /// (an HTTP date, or none).
-fn retry_after_s(h: Option<&str>) -> u64 {
-    h.and_then(|v| v.trim().parse::<u64>().ok()).map_or(COOLDOWN_DEFAULT_S, |s| s.clamp(1, COOLDOWN_MAX_S))
+fn retry_after_s(h: Option<&str>, now_ms: u64) -> u64 {
+    let Some(v) = h.map(str::trim) else { return COOLDOWN_DEFAULT_S };
+    let asked = match v.parse::<u64>() {
+        Ok(s) => s,
+        Err(_) => match http_date_ms(v) {
+            // a date already past still waits a second
+            Some(at) => at.saturating_sub(now_ms).div_ceil(1000),
+            None => {
+                eprintln!("leetify: unreadable Retry-After {v:?}; waiting {COOLDOWN_DEFAULT_S} s");
+                return COOLDOWN_DEFAULT_S;
+            }
+        },
+    };
+    if asked > COOLDOWN_MAX_S {
+        eprintln!("leetify: Retry-After of {asked} s held to {COOLDOWN_MAX_S} s");
+    }
+    asked.clamp(1, COOLDOWN_MAX_S)
+}
+
+/// An HTTP date in the IMF-fixdate form RFC 9110 requires senders to use ("Wed, 21 Oct 2026 07:28:00
+/// GMT"), as ms since the Unix epoch; None for anything else.
+fn http_date_ms(s: &str) -> Option<u64> {
+    let p: Vec<&str> = s.split_whitespace().collect();
+    if p.len() != 6 || p[5] != "GMT" || !p[0].ends_with(',') {
+        return None;
+    }
+    let day: u32 = p[1].parse().ok()?;
+    let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].iter().position(|m| *m == p[2])? as u32 + 1;
+    let year: i64 = p[3].parse().ok()?;
+    let hms: Vec<u64> = p[4].split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    if p[1].len() != 2 || p[3].len() != 4 || hms.len() != 3 || !(1..=31).contains(&day) || hms[0] > 23 || hms[1] > 59 || hms[2] > 60 {
+        return None;
+    }
+    // days from 1970-01-01 to the civil date (Howard Hinnant's days_from_civil)
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (i64::from(month) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = u64::try_from(days).ok()? * 86_400 + hms[0] * 3600 + hms[1] * 60 + hms[2];
+    Some(secs * 1000)
 }
 
 /// Spaces requests and holds them back after a 429. Shared by every command in the process.
@@ -445,7 +488,7 @@ impl Leetify<'_> {
             403 => Err(err(ErrorKind::Private, "Leetify does not share this profile through its public API.")),
             404 => Err(err(ErrorKind::NotFound, "Leetify has no profile for this player.")),
             429 => {
-                let s = retry_after_s(reply.retry_after.as_deref());
+                let s = retry_after_s(reply.retry_after.as_deref(), self.clock.wall_ms());
                 self.gate.cool(self.clock.now(), s);
                 Err(LeetifyError { retry_after_s: Some(s), ..err(ErrorKind::RateLimited, format!("Leetify asked for a pause of {s} s.")) })
             }
@@ -1005,11 +1048,38 @@ mod tests {
         assert_eq!(l.save_key(KEY).unwrap_err().kind, ErrorKind::RateLimited);
         assert_eq!(http.asked().len(), 1, "nothing is sent during the pause");
         assert_eq!(l.status().unwrap().cooldown_s, Some(25));
-        // a Retry-After that is a date, missing or huge
-        assert_eq!(retry_after_s(Some("Wed, 21 Oct 2026 07:28:00 GMT")), COOLDOWN_DEFAULT_S);
-        assert_eq!(retry_after_s(None), COOLDOWN_DEFAULT_S);
-        assert_eq!(retry_after_s(Some("999999")), COOLDOWN_MAX_S);
-        assert_eq!(retry_after_s(Some("0")), 1);
+    }
+
+    #[test]
+    fn a_retry_after_keeps_its_full_deadline_in_either_form() {
+        // fails if an hour's pause is cut short, or a date form is read as the 60 s default (review of #52)
+        // 2026-10-21T07:28:00Z
+        let at = 1_792_567_680_000;
+        assert_eq!(http_date_ms("Wed, 21 Oct 2026 07:28:00 GMT"), Some(at));
+        assert_eq!(http_date_ms("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(http_date_ms("Tue, 29 Feb 2028 23:59:59 GMT"), Some(1_835_481_599_000));
+        for bad in ["Wednesday, 21-Oct-26 07:28:00 GMT", "Wed Oct 21 07:28:00 2026", "Wed, 21 Oct 2026 07:28:00 UTC", "Wed, 32 Oct 2026 07:28:00 GMT", "soon"] {
+            assert_eq!(http_date_ms(bad), None, "{bad}");
+        }
+        assert_eq!(retry_after_s(Some("3600"), at), 3600);
+        assert_eq!(retry_after_s(Some("Wed, 21 Oct 2026 08:28:00 GMT"), at), 3600);
+        assert_eq!(retry_after_s(Some("Wed, 21 Oct 2026 07:28:00 GMT"), at + 500), 1, "a date already past waits a second");
+        assert_eq!(retry_after_s(Some("Wed, 21 Oct 2026 07:28:30 GMT"), at + 500), 30, "a part second rounds up");
+        assert_eq!(retry_after_s(None, at), COOLDOWN_DEFAULT_S);
+        assert_eq!(retry_after_s(Some("soon"), at), COOLDOWN_DEFAULT_S);
+        assert_eq!(retry_after_s(Some("999999"), at), COOLDOWN_MAX_S);
+        assert_eq!(retry_after_s(Some("0"), at), 1);
+        // the gate holds the whole hour
+        let s = Scratch::new("429-hour");
+        let mem: Session = Mutex::new(None);
+        let (gate, clock, keys) = (Gate::new(), FakeClock::new(), FakeKeys::default());
+        let http = FakeHttp::default().on_429("/v3/profile?", Some("3600"));
+        let l = with(&http, &keys, &gate, &clock, &s.0, &mem);
+        l.connect(STEAM).unwrap();
+        assert_eq!(l.load(true).unwrap_err().retry_after_s, Some(3600));
+        clock.advance(Duration::from_secs(3599));
+        assert_eq!(l.load(true).unwrap_err().retry_after_s, Some(1));
+        assert_eq!(http.asked().len(), 1);
     }
 
     #[test]
