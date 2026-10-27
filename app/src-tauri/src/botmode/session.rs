@@ -46,7 +46,7 @@ use super::process::{session_held, LockKind, NamedLock, OpLock, ProcessProbe};
 use super::steam::SteamConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Shown with Bot Mode in the app and the CLI.
 pub const UNPROTECTED: &str =
@@ -54,6 +54,7 @@ pub const UNPROTECTED: &str =
 
 /// Shown when Bot Mode is on and no live session owns the current file.
 pub const MANAGED_BY_OTHER_TOOL: &str = "Bot Mode is managed by another tool (left as is)";
+pub const PENDING_NOT_OURS: &str = "Bot Mode was left on; it may be another tool's";
 pub const NOT_MANAGED_BY_US: &str = "Bot Mode is still on and not managed by CS2 Stats.";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,10 +66,50 @@ struct SessionMarker {
     before_hash: String,
     after_hash: String,
     before_content: String,
+    #[serde(default)]
+    file_identity: Option<u64>,
+    #[serde(default)]
+    file_mtime_ms: Option<u64>,
+    #[serde(default)]
+    pending_at_ms: Option<u64>,
 }
 
 fn default_marker_state() -> String {
     "committed".into()
+}
+
+const PENDING_WINDOW_MS: u64 = 10_000;
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+pub(crate) fn file_evidence(layout: &Layout) -> Result<(u64, u64), String> {
+    let path = layout.confined("gameinfo.gi")?;
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    #[cfg(windows)]
+    let identity = {
+        let (volume, index) = super::process::file_id(&path)?;
+        u64::from(volume).wrapping_mul(31).wrapping_add(index)
+    };
+    #[cfg(not(windows))]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        metadata.dev().wrapping_mul(31).wrapping_add(metadata.ino())
+    };
+    let mtime_ms = metadata
+        .modified()
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .as_millis() as u64;
+    Ok((identity, mtime_ms))
+}
+
+fn pending_file_matches(layout: &Layout, marker: &SessionMarker) -> Result<bool, String> {
+    let Some(written_at) = marker.pending_at_ms else { return Ok(false) };
+    let (_, mtime_ms) = file_evidence(layout)?;
+    Ok(mtime_ms >= written_at.saturating_sub(1_000) && mtime_ms <= written_at.saturating_add(PENDING_WINDOW_MS))
 }
 
 pub(crate) fn marker_path(layout: &Layout) -> PathBuf {
@@ -88,9 +129,17 @@ fn clear_marker(layout: &Layout) {
     let _ = std::fs::remove_file(marker_path(layout));
 }
 
+fn committed_file_matches(layout: &Layout, marker: &SessionMarker) -> Result<bool, String> {
+    let (_, hash) = read_gameinfo(layout)?;
+    let Some(identity) = marker.file_identity else { return Ok(false) };
+    let Some(mtime_ms) = marker.file_mtime_ms else { return Ok(false) };
+    let (current_identity, current_mtime_ms) = file_evidence(layout)?;
+    Ok(hash == marker.after_hash && current_identity == identity && current_mtime_ms == mtime_ms)
+}
+
 fn discard_stale_marker(layout: &Layout) {
     let Some(marker) = read_marker(layout) else { return };
-    if marker.state == "committed" && read_gameinfo(layout).map(|(_, hash)| hash != marker.after_hash).unwrap_or(true) {
+    if marker.state == "committed" && !committed_file_matches(layout, &marker).unwrap_or(false) {
         clear_marker(layout);
     }
 }
@@ -101,8 +150,8 @@ fn marker_matches(layout: &Layout, run_id: Option<&str>) -> bool {
     if marker.state != "committed" || marker.ownership != "ours" || run_id.is_some_and(|id| marker.run_id != id) {
         return false;
     }
-    match read_gameinfo(layout) {
-        Ok((_, hash)) if hash == marker.after_hash => true,
+    match committed_file_matches(layout, &marker) {
+        Ok(true) => true,
         _ => {
             clear_marker(layout);
             false
@@ -158,7 +207,7 @@ fn set_bot_mode(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, on: bo
         let after_hash = hash::bytes(new.as_bytes());
         if on {
             let Some(run_id) = run_id else { return Err("Bot Mode ownership id is missing".into()) };
-            write_marker(layout, &SessionMarker { state: "pending".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone() })
+            write_marker(layout, &SessionMarker { state: "pending".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone(), file_identity: None, file_mtime_ms: None, pending_at_ms: Some(unix_now_ms()) })
                 .map_err(|e| format!("writing Bot Mode ownership marker before the gameinfo edit: {e}"))?;
         }
         let result = changes::run_kind(layout, probe, lock, op, Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", new.as_bytes(), &read_hash));
@@ -166,16 +215,20 @@ fn set_bot_mode(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, on: bo
             Ok((_, meta)) => {
                 if on {
                     let run_id = run_id.expect("checked above");
-                    write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone() })
+                    let (file_identity, file_mtime_ms) = file_evidence(layout)
+                        .map_err(|e| format!("recording Bot Mode file evidence after the gameinfo edit: {e}"))?;
+                    write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "ours".into(), before_hash: read_hash.clone(), after_hash: after_hash.clone(), before_content: text.clone(), file_identity: Some(file_identity), file_mtime_ms: Some(file_mtime_ms), pending_at_ms: None })
                         .map_err(|e| format!("committing Bot Mode ownership marker after the gameinfo edit: {e}"))?;
                 }
                 return Ok(Some((meta, read_hash, after_hash, text)));
             }
             Err(e) if e.contains(changes::CHANGED_SINCE_READ) => last = e,
+            Err(e) if on => return Err(format!("Bot Mode was not changed: {e}")),
             Err(e) => return Err(e),
         }
     }
-    Err(format!("gameinfo.gi kept changing while Bot Mode was being turned {}: {last}", if on { "on" } else { "off" }))
+    let error = format!("gameinfo.gi kept changing while Bot Mode was being turned {}: {last}", if on { "on" } else { "off" });
+    Err(if on { format!("Bot Mode was not changed: {error}") } else { error })
 }
 
 /// Finishes interrupted session toggles in the off direction. A session toggle is never rolled
@@ -414,7 +467,9 @@ pub fn supervise_session(
             Some(e) => {
                 s.state = "failed".into();
                 s.message = if bot_mode(layout) == BotMode::Off {
-                    if e.contains("before the gameinfo edit") {
+                    if e.starts_with("Bot Mode was not changed") {
+                        e.clone()
+                    } else if e.contains("before the gameinfo edit") {
                         format!("{e}; Bot Mode was not turned on.")
                     } else {
                         format!("{e}; Bot Mode was turned off again")
@@ -471,7 +526,7 @@ fn start_cs2(
         spawn(&plan).map_err(StartError::AfterOn)?;
         Ok((since, Some(meta.clone())))
     } else {
-        write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "pre-existing".into(), before_hash: String::new(), after_hash: read_gameinfo(layout).map_err(StartError::AfterOn)?.1, before_content: String::new() }).map_err(StartError::AfterOn)?;
+        write_marker(layout, &SessionMarker { state: "committed".into(), run_id: run_id.into(), ownership: "pre-existing".into(), before_hash: String::new(), after_hash: read_gameinfo(layout).map_err(StartError::AfterOn)?.1, before_content: String::new(), file_identity: None, file_mtime_ms: None, pending_at_ms: None }).map_err(StartError::AfterOn)?;
         spawn(&plan).map_err(StartError::AfterOn)?;
         Ok((since, None))
     }
@@ -528,7 +583,12 @@ pub enum Cleanup {
 
 fn revert_ours(layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, marker: &SessionMarker) -> Result<Option<Meta>, String> {
     let (_, current_hash) = read_gameinfo(layout)?;
-    if current_hash != marker.after_hash { return Ok(None); }
+    let file_is_ours = if marker.state == "pending" {
+        current_hash == marker.after_hash && pending_file_matches(layout, marker)?
+    } else {
+        committed_file_matches(layout, marker)?
+    };
+    if !file_is_ours { return Ok(None); }
     changes::supersede_unfinished_sessions(layout)?;
     let result = changes::run_kind(layout, probe, lock, "bot-mode-off", Kind::Session, |cs| cs.put_bytes_if_unchanged("gameinfo.gi", marker.before_content.as_bytes(), &marker.after_hash))?;
     clear_marker(layout);
@@ -601,9 +661,11 @@ pub fn cleanup(layout: &Layout, probe: &dyn ProcessProbe, sys: &dyn System, star
             clear_marker(layout);
             return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() };
         }
-        if current_hash != marker.after_hash {
+        if current_hash != marker.after_hash || !pending_file_matches(layout, &marker).unwrap_or(false) {
+            // A pending marker can collide with a foreign rewrite of identical bytes. The timestamp
+            // window limits that residual risk to a rewrite during the short crash window.
             clear_marker(layout);
-            return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() };
+            return Cleanup::LeftAlone { message: PENDING_NOT_OURS.into() };
         }
     }
     if marker.ownership != "ours" { return Cleanup::LeftAlone { message: MANAGED_BY_OTHER_TOOL.into() }; }

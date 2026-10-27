@@ -1137,12 +1137,14 @@ fn cleanup_leaves_bot_mode_another_tool_left_on_and_says_so() {
 }
 
 fn mark_dead_session(layout: &Layout, before: &str, after: &str, run_id: &str) {
-    let marker = serde_json::json!({"state": "committed", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before});
+    let (file_identity, file_mtime_ms) = super::session::file_evidence(layout).unwrap();
+    let marker = serde_json::json!({"state": "committed", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before, "file_identity": file_identity, "file_mtime_ms": file_mtime_ms});
     write(&session::marker_path(layout), marker.to_string().as_bytes());
 }
 
 fn mark_pending_session(layout: &Layout, before: &str, after: &str, run_id: &str) {
-    let marker = serde_json::json!({"state": "pending", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before});
+    let (_, file_mtime_ms) = super::session::file_evidence(layout).unwrap();
+    let marker = serde_json::json!({"state": "pending", "run_id": run_id, "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before, "pending_at_ms": file_mtime_ms.saturating_sub(1_000)});
     write(&session::marker_path(layout), marker.to_string().as_bytes());
 }
 
@@ -1204,6 +1206,40 @@ fn cleanup_leaves_our_leftover_that_changed_afterwards() {
 }
 
 #[test]
+fn cleanup_leaves_an_identical_bytes_rewrite_after_commit_alone() {
+    let s = Scratch::new("cleanup-identical-rewrite");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    write(&layout.target("gameinfo.gi"), after.as_bytes());
+    mark_dead_session(&layout, before, &after, "dead");
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    write(&layout.target("gameinfo.gi"), after.as_bytes());
+    let sys = FakeSystem::new(); sys.script(vec![vec![]]);
+    let c = session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER);
+    assert!(matches!(&c, Cleanup::LeftAlone { .. }));
+    assert_eq!(read(&layout, "gameinfo.gi"), after);
+    assert!(!session::marker_path(&layout).is_file());
+}
+
+#[test]
+fn cleanup_leaves_a_pending_marker_outside_the_write_window_alone() {
+    let s = Scratch::new("pending-outside-window");
+    let (layout, _) = session_game(&s);
+    let before = gameinfo::ONLINE_SAMPLE;
+    let after = gameinfo::enable(before).unwrap();
+    write(&layout.target("gameinfo.gi"), after.as_bytes());
+    let (_, file_mtime_ms) = super::session::file_evidence(&layout).unwrap();
+    let marker = serde_json::json!({"state": "pending", "run_id": "dead", "ownership": "ours", "before_hash": super::hash::bytes(before.as_bytes()), "after_hash": super::hash::bytes(after.as_bytes()), "before_content": before, "pending_at_ms": file_mtime_ms.saturating_sub(20_000)});
+    write(&session::marker_path(&layout), marker.to_string().as_bytes());
+    let sys = FakeSystem::new(); sys.script(vec![vec![]]);
+    let c = session::cleanup(&layout, &CLOSED, &sys, NO_ADOPTER);
+    assert!(matches!(&c, Cleanup::LeftAlone { message } if message == session::PENDING_NOT_OURS), "{c:?}");
+    assert_eq!(read(&layout, "gameinfo.gi"), after);
+    assert!(!session::marker_path(&layout).is_file());
+}
+
+#[test]
 fn cleanup_with_no_session_marker_does_nothing() {
     let s = Scratch::new("cleanup-no-marker");
     let (layout, _) = session_game(&s);
@@ -1253,6 +1289,20 @@ fn a_marker_write_failure_does_not_claim_bot_mode_was_turned_off() {
     sys.script(vec![vec![]]);
     let st = session::supervise_session(&layout, &CLOSED, &sys, Some(&steam), RunMode::Launch, "ours", &|_| Ok(()));
     assert!(st.message.contains("Bot Mode was not turned on."), "{}", st.message);
+    assert!(!bot_mode_on(&layout));
+}
+
+#[test]
+fn a_failed_gameinfo_begin_reports_that_bot_mode_was_not_changed() {
+    let s = Scratch::new("bot-mode-begin-refused");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let (layout, _) = session_game(&s);
+    let probe = Scripted(|phase| phase == Phase::ChangeBegin);
+    let sys = FakeSystem::new();
+    sys.script(vec![vec![]]);
+    let st = session::supervise_session(&layout, &probe, &sys, Some(&steam), RunMode::Launch, "ours", &|_| Ok(()));
+    assert!(st.message.contains("Bot Mode was not changed"), "{}", st.message);
+    assert!(!st.message.contains("turned off again"), "{}", st.message);
     assert!(!bot_mode_on(&layout));
 }
 
