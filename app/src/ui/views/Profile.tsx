@@ -1,15 +1,19 @@
 // Profile: the player card (design-target-v2), then tabs. Overview: HLTV's attributes, Form, Where you
-// rank (or its change since the period before), Strongest and Records, round swing, multi-kill rounds,
+// rank (or its change since the period before), what moves with winning (profile/WinCorrelation.tsx),
+// Strongest and Records, round swing, multi-kill rounds,
 // clutches, highlights (profile/Highlights.tsx), Luck and maps. Duels: metric rows. Utility: Utility
 // rating, then metric rows. Economy: metric rows, buy classes and team-buy tiers. Aim and Weapons: Career aim's panels. Playstyle: role, where you play, style attributes, Aggression, Plays
 // like, role by spawn, the style compass and ranks by topic. The side switch in the app bar drives the
 // whole page: every summary is rolled up over that side's rounds. Performance is compared with that
-// side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts).
+// side's pros; style with the bot careers in the same matches on that side (worker/ranking.ts). The
+// player card and Firepower can also measure against the players you faced (worker opponents).
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AttributeScore, Percentile as Pct } from "../../stats/compare";
 import type { Measures } from "../../stats/facts";
 import type { RoleBlend } from "../../stats/identity";
 import type { Rating3 } from "../../stats/rating3";
+import type { VsOpponents } from "../../stats/opponents";
+import { opponentScore } from "../../stats/opponent-score";
 import { Delta, MapThumb, MultiBadge, Num } from "../components/bits";
 import { Card } from "../components/Card";
 import { Gauge } from "../components/charts";
@@ -21,7 +25,7 @@ import { DataTable } from "../components/DataTable";
 import { HoverCard } from "../components/overlay";
 import { AgentImg } from "../components/Agent";
 import {
-  botIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
+  botIds, opponentIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText,
   ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type SideKey,
 } from "../data/engine";
@@ -31,26 +35,31 @@ import { PANEL_TIP, tipOf } from "../data/tips";
 import { metric } from "../data/meta";
 import { useData } from "../data/provider";
 import type { AttributeBlock, ClutchRow, Query, Rolled, SideRatings, Values } from "../../worker/protocol";
-import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, plural } from "../lib/format";
+import { fmtAdr, fmtMatchDay, fmtDec, fmtPct, fmtRating, fmtSwing, mapName, ordinal, plural } from "../lib/format";
 import { ratingText } from "../lib/scale";
 import { BENCH, benchAround, VERDICT_LABEL, verdictOf, type Bench } from "../lib/verdict";
 import { go, matchHref, navWasPointer, profileHref, PROFILE_TAB_LABEL, PROFILE_TABS, scopeQuery, setQuery, tabSectionHref, useRoute, useSection, type ProfileTab } from "../router";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
-import { Empty, NeedsDemo, SectionAside } from "./shared";
-import { AttributesPanel, type PanelAttribute, type PanelMetric } from "./profile/AttributesPanel";
+import { Empty, FormToggles, NeedsDemo, SectionAside, useFormFilter } from "./shared";
+import { formDay, formWindow } from "../lib/form";
+import { AttributesPanel, type PanelAttribute, type PanelGroup, type PanelMetric } from "./profile/AttributesPanel";
 import { pctProps, PlaysLike, RatingTerms, RoleCard, SwingCard } from "./profile/parts";
 import { roleValueDescriptor } from "./profile/role-decision";
 import { AggressionCard } from "./profile/v2";
 import { HighlightsCard } from "./profile/Highlights";
+import { WinCorrelationCard } from "./profile/WinCorrelation";
 import { sampleOf, type Ranks as RankSet, AWP_ROWS, BuySplitsCard, CLUTCH_ROWS, ECONOMY_ROWS, EFFECT_ROWS, OPENING_ROWS, RoleBySpawnCard, StatCard, TAKEN_ROWS, THROW_ROWS, TRADE_ROWS, useRanks } from "./profile/tabs";
 import { BuyTiersCard, CareerRatingCard, LuckCard, RecordsCard, TopStatsCard, WhereYouRank } from "./profile/career";
 import { AttrIcon } from "../icons/attributes";
+import { BuyIcon } from "../icons/game";
 import CareerAim from "./CareerAim";
 import WeaponsTab from "./Weapons";
 import { Ranks, StyleCompass, WhereYouPlay } from "./Playstyle";
 
-type Compare = "bench" | "bots";
+/** What the player card's verdicts measure against: HLTV-style benchmarks, the bots in your matches, or the players you faced. */
+type Compare = "bench" | "bots" | "opponents";
+const COMPARES: readonly Compare[] = ["bench", "bots", "opponents"];
 
 /** Everything the page reads, loaded from the worker in two batches. */
 interface ProfileData {
@@ -166,9 +175,10 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   const { matches, you: ids, baselines, baselinesError } = useData();
   const { map, n, side } = useScope();
   const r = useRoute();
-  const [cmp, setCmp] = useState<Compare>(() => (r.query.get("cmp") as Compare) || "bench");
+  const [cmp, setCmp] = useState<Compare>(() => COMPARES.find((c) => c === r.query.get("cmp")) ?? "bench");
   const list = useMemo(() => { const f = careerEntries(matches, map); return n ? f.slice(0, n) : f; }, [matches, map, n]);
   const bots = useMemo(() => botIds(list), [list]);
+  const opponents = useMemo(() => opponentIds(list), [list]);
   const files = useMemo(() => list.map((e) => e.file), [list]);
   const qs = useMemo((): Query[] | null => (list.length && ids.length ? [
     { files, filter: { player: ids, ...sidesOf(side) } },
@@ -183,6 +193,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
   const cardRef = useSection("card");
   const openingsRef = useSection("openings");
   const highlightsRef = useSection("highlights");
+  const winsRef = useSection("wins");
   const rqs = useMemo(() => (qs ? [{ files, filter: { player: ids } }, ...(bots.length ? [{ files, filter: { player: bots } }] : [])] : null), [qs, files, ids, bots]);
   const rats = useRatings(rqs).data;
   const base = useMemo(() => ({ files, filter: { player: ids } }), [files, ids]);
@@ -218,7 +229,11 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
         <ProfileTabs tab={tab} meta={tabMeta(tab, p, side)}>
           {/* what the player card's verdicts measure against; the card is on every tab, so is this */}
           <Select label="Compared to" prefix="Compared to" value={cmp} onChange={(v) => { setCmp(v); setQuery("cmp", v === "bench" ? null : v); }}
-            options={[{ value: "bench", label: "HLTV-style benchmarks" }, { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots }]} />
+            options={[
+              { value: "bench", label: "HLTV-style benchmarks" },
+              { value: "bots", label: `Bots you played (${bots.length})`, disabled: !p.bots },
+              { value: "opponents", label: `Your opponents (${opponents.length})`, disabled: !opponents.length },
+            ]} />
         </ProfileTabs>
         <div id="profile-panel" role="tabpanel" aria-label={PROFILE_TAB_LABEL[tab]} className={`ptab ptab--${tab}`}>
           {tab === "overview" && (
@@ -230,6 +245,7 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
                 <FormRail p={p} side={side} />
                 <WhereYouRank ranks={ranks} q={sideQ} list={list} />
               </div>
+              <WinCorrelationCard q={sideQ} list={list} sectionRef={winsRef} />
               {baselines && (
                 <div className="profile__cols profile__cols--even">
                   <RecordsCard q={sideQ} list={list} />
@@ -309,7 +325,8 @@ export default function ProfileView({ tab = "overview" }: { tab?: ProfileTab }) 
 // ---------------------------------------------------------------- the card
 
 /** One hero stat; `metric` is its id in the engine, for its tooltip and its pro percentile. */
-interface CellDef { id: string; metric: string; label: string; bench: Bench; value: number | null; text: string }
+/** One hero stat; `bench` is null when the chosen population has no value for it yet (loading, failed or none), so no verdict is drawn. */
+interface CellDef { id: string; metric: string; label: string; bench: Bench | null; value: number | null; text: string }
 
 /**
  * A side's role for the card's pip (role-decision.ts's rule): the gated primary with its share, else
@@ -333,15 +350,35 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const key = ratingKey(side);
   const line = lineOf(p.you, p.ratings[key].value);
   const botLine = p.bots && p.botRatings ? lineOf(p.bots, p.botRatings[key].value) : null;
-  const bench = (b: Bench, botVal: number | null | undefined) => (cmp === "bots" && botVal !== null && botVal !== undefined ? benchAround(b, botVal) : b);
+  // the players you faced on the page's side, each over the matches you faced them in (worker opponents)
+  const sideQ = useMemo(() => ({ files: p.base.files, filter: { ...p.base.filter, ...sidesOf(side) } }), [p.base, side]);
+  const oppCall = useCall("opponents", cmp === "opponents" ? [sideQ] : null);
+  const oppReady = !!oppCall.data && !oppCall.stale;
+  const opp = useMemo(() => new Map((oppReady ? oppCall.data! : []).map((x) => [x.id, x])), [oppCall.data, oppReady]);
+  /** a verdict's reference for a stat: the bots' value or the opponents' mean, in the metric's units; null when that population has none (yet) */
+  const refOf = (metricId: string, botVal: number | null | undefined): number | null => (cmp === "bots" ? botVal ?? null : opp.get(metricId)?.opponents ?? null);
+  /**
+   * The bench a verdict reads: the benchmark itself, or the benchmark's bands around the chosen
+   * population's value. Without that value there is no verdict, never one against the benchmark
+   * worded as if it were the population.
+   */
+  const bench = (b: Bench, metricId: string, botVal: number | null | undefined): Bench | null => {
+    if (cmp === "bench") return b;
+    const x = refOf(metricId, botVal);
+    return x === null ? null : benchAround(b, x);
+  };
+  /** why a tile has no verdict against the chosen population */
+  const noRef = cmp === "opponents"
+    ? (oppCall.error && !oppCall.stale ? `Your opponents could not be loaded: ${oppCall.error}` : !oppReady ? "Loading your opponents." : "None of your opponents has a value for this.")
+    : "The bots you played have no value for this.";
   const swingPct = line.swing === null ? null : 100 * line.swing;
   const cells: CellDef[] = [
-    { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, text: fmtSwing(line.swing) },
-    { id: "dpr", metric: "dpr", label: "Deaths per round", bench: bench(BENCH.dpr, botLine?.dpr), value: line.dpr, text: fmtDec(line.dpr) },
-    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, botLine?.kast), value: line.kast, text: line.kast === null ? "–" : `${line.kast.toFixed(1)}%` },
-    { id: "multi", metric: "mk", label: "Multi-kill rounds", bench: bench(BENCH.multi, botLine?.mk), value: line.mk, text: line.mk === null ? "–" : `${line.mk.toFixed(1)}%` },
-    { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
-    { id: "kpr", metric: "kpr", label: "Kills per round", bench: bench(BENCH.kpr, botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
+    { id: "swing", metric: "swing", label: "Round swing", bench: bench(BENCH.swing, "swing", botLine?.swing === null || !botLine ? null : 100 * botLine.swing!), value: swingPct, text: fmtSwing(line.swing) },
+    { id: "dpr", metric: "dpr", label: "Deaths per round", bench: bench(BENCH.dpr, "dpr", botLine?.dpr), value: line.dpr, text: fmtDec(line.dpr) },
+    { id: "kast", metric: "kast", label: "KAST", bench: bench(BENCH.kast, "kast", botLine?.kast), value: line.kast, text: line.kast === null ? "–" : `${line.kast.toFixed(1)}%` },
+    { id: "multi", metric: "mk", label: "Multi-kill rounds", bench: bench(BENCH.multi, "mk", botLine?.mk), value: line.mk, text: line.mk === null ? "–" : `${line.mk.toFixed(1)}%` },
+    { id: "adr", metric: "adr", label: "ADR", bench: bench(BENCH.adr, "adr", botLine?.adr), value: line.adr, text: fmtAdr(line.adr) },
+    { id: "kpr", metric: "kpr", label: "Kills per round", bench: bench(BENCH.kpr, "kpr", botLine?.kpr), value: line.kpr, text: fmtDec(line.kpr) },
   ];
   // One rating definition (rating3.ts rating3Of): each side rated over its rated rounds, a side under
   // half rated left out, the total weighted by rated rounds, so it lies between the rated sides.
@@ -350,17 +387,21 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
   const r3: Rating3 = p.ratings[key];
   const gaugeV = r3.value;
   const botRating = p.botRatings?.[key].value ?? null;
-  const gaugeVerdict = verdictOf(gaugeV, cmp === "bots" && botRating !== null ? benchAround(BENCH.rating, botRating) : BENCH.rating);
+  const gaugeBench = bench(BENCH.rating, "rating3", botRating);
+  const gaugeVerdict = gaugeBench ? verdictOf(gaugeV, gaugeBench) : "na";
   const roles = useCall("roles", [p.base]).data;
   const { baselines } = useData();
   const pros = useCall("compare", baselines ? [p.base, { side: key }] : null).data;
-  const against = cmp === "bots" ? "the bots you played" : "HLTV-style benchmarks";
-  /** "Top 6% of pro riflers. Good against HLTV-style benchmarks. Win chance you add each round." */
+  const against = cmp === "bots" ? "the bots you played" : cmp === "opponents" ? "your opponents" : "HLTV-style benchmarks";
+  /** "Top 6% of pro riflers. Good against your opponents. 2nd of 9; they average 0.71. Win chance you add each round." */
   const cellTip = (c: CellDef) => {
     const pct = pros?.p[c.metric];
     const rank = pct && pct.pct !== null && !pct.reason ? `${rankText(pct.pct)} of ${proPoolName(pros!.role)}.` : null;
-    const v = verdictOf(c.value, c.bench);
-    return [rank, v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`, tipOf(c.metric)].filter(Boolean).join("\n");
+    const v = c.bench ? verdictOf(c.value, c.bench) : "na";
+    const o = cmp === "opponents" ? opp.get(c.metric) : undefined;
+    const field = o && o.rank !== null && o.opponents !== null ? `${ordinal(o.rank)} of ${o.of}; they average ${o.id === "swing" ? fmtSwing(o.opponents / 100) : fmtMetric(o.id, o.opponents)}.` : null;
+    const verdict = !c.bench ? noRef : v === "na" ? null : `${VERDICT_LABEL[v]} against ${against}.`;
+    return [rank, verdict, field, tipOf(c.metric)].filter(Boolean).join("\n");
   };
   const sides = [{ s: "T", r: topRole(roles?.T), rounds: roles?.T.rounds }, { s: "CT", r: topRole(roles?.CT), rounds: roles?.CT.rounds }] as const;
   const wins = p.list.filter((e) => e.result === "W").length;
@@ -441,11 +482,14 @@ const dayScore = (e: MatchEntry) => `${fmtMatchDay(e.match)}, ${e.score.us}:${e.
 /**
  * Form: the last ten matches' ratings on the page's side as a line plus dots, oldest first, with the
  * pooled rating dashed; beside it the pooled rating, the last match against it, and the best and
- * worst, each a link to its match.
+ * worst, each a link to its match. Home's two filters sit under it (lib/form.ts formWindow, the same
+ * rule and the same address keys as Home's Form); they thin the chart and its best and worst, while
+ * Pooled and Last match stay the page's.
  */
 function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
   const pooled = p.ratings[ratingKey(side)].value;
-  const recent = p.list.slice(0, 10).reverse();
+  const filter = useFormFilter();
+  const { shown: recent, hidden } = formWindow(p.list, (e) => p.perMatch(e).rating, formDay, filter);
   const last = p.list[0];
   const lastR = p.perMatch(last).rating;
   const best = extremeMatch(p, recent, 1);
@@ -465,6 +509,7 @@ function FormRail({ p, side }: { p: ProfileData; side: SideKey }) {
           {worst && worst.e !== best?.e && <Fig label="Worst" tone="poor" value={fmtRating(worst.r)} href={matchHref(worst.e.file)} sub={dayScore(worst.e)} />}
         </dl>
       </div>
+      <FormToggles filter={filter} hidden={hidden} />
     </Card>
   );
 }
@@ -495,12 +540,17 @@ function panelAttr(a: AttributeScore, kind: "performance" | "style", population:
 /** A careers pool name as a bot pool's role; null for a name the UI does not know. */
 const botRole = (p: string | undefined): BotPool["role"] | null => (p === "awper" || p === "rifler" || p === "all" ? p : null);
 
+type FirepowerPool = "pros" | "bots" | "opponents";
+
 function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Values; m: Measures }) {
   const r = useRoute();
   const focus = r.query.get("attr");
   const [pool, setPool] = useState<StylePool>("role");
-  const [against, setAgainst] = useState<"pros" | "bots">("pros");
+  const [against, setAgainst] = useState<FirepowerPool>("pros");
   const block = useCall("attributeBlock", [q, { side: ratingKey(side), pool }]);
+  const sideQ = useMemo(() => ({ files: q.files, filter: { ...q.filter, ...sidesOf(side) } }), [q, side]);
+  const opp = useCall("opponents", against === "opponents" ? [sideQ] : null);
+  const pistol = usePistolGroup(sideQ);
   const b: AttributeBlock | null = block.data;
   if (!b) return block.error ? <Card title="Attributes"><Empty text={block.error} /></Card> : <div className="skel" style={{ height: 320 }} />;
   const style = b.style;
@@ -508,10 +558,18 @@ function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Va
   const role = botRole(style.careers.pool) ?? (pool === "all" ? "all" : style.role);
   const peer = style.role === "awper" ? "AWPer" : "Rifler";
   const bots = botPopulation(style.careers, { n: style.n, role }).text;
-  const fpScore = against === "pros" ? b.firepower : style.firepower;
-  const fpPop = against === "pros" ? `${b.proPool} ${proPoolName(style.role)}` : bots;
-  const firepower = fpScore ? { ...panelAttr(fpScore, "performance", fpPop, m, { open: focus === "firepower", extra: extraSubs("firepower", values) }), note: `vs ${fpPop}` } : null;
-  if (firepower && against === "bots") firepower.metrics = firepower.metrics.map((x) => ({ ...x, population: fpPop }));
+  const extra = { open: focus === "firepower", extra: extraSubs("firepower", values), group: pistol };
+  let firepower: PanelAttribute | null;
+  if (against === "opponents") {
+    // while the opponents load, the block keeps its shape: the scores read "–" and the rows no track
+    const ids = (b.firepower ?? style.firepower)?.metrics.map((x) => x.id) ?? [];
+    firepower = { ...opponentAttribute(ids, opp.stale ? null : opp.data, m), ...extra };
+  } else {
+    const fpScore = against === "pros" ? b.firepower : style.firepower;
+    const fpPop = against === "pros" ? `${b.proPool} ${proPoolName(style.role)}` : bots;
+    firepower = fpScore ? { ...panelAttr(fpScore, "performance", fpPop, m, extra), note: `vs ${fpPop}` } : null;
+    if (firepower && against === "bots") firepower.metrics = firepower.metrics.map((x) => ({ ...x, population: fpPop }));
+  }
   const provisional = style.careers.provisional;
   const attrs = style.scores.map((a) => (a.id === "sniping"
     ? panelAttr(a, "style", botPoolName("all"), m, { note: pool === "role" ? "Compared to everyone" : undefined, open: focus === a.id, provisional, extra: extraSubs(a.id as PanelAttribute["id"], values) })
@@ -533,12 +591,50 @@ function HltvBlock({ q, side, values, m }: { q: Query; side: SideKey; values: Va
           {/* the page's own side, here too, as HLTV keeps it on the block: one state, the URL's side */}
           <Segmented label="Side" value={side} onChange={(v) => setQuery("side", v === "both" ? null : v)}
             options={[{ value: "both", label: "Both" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
-          <Segmented label="Firepower against" value={against} onChange={setAgainst} options={[{ value: "pros", label: "vs pros" }, { value: "bots", label: "vs bots" }]} />
+          <Segmented label="Firepower against" value={against} onChange={setAgainst}
+            options={[{ value: "pros", label: "vs pros" }, { value: "bots", label: "vs bots" }, { value: "opponents", label: "vs opponents", tip: "The players you faced, over the matches you faced them in" }]} />
           <Select options={pools} value={pool} onChange={setPool} label="Style compared to" prefix="Style vs" />
         </>
       )}
     />
   );
+}
+
+/**
+ * Firepower against the players you faced (worker opponents, stats/opponents.ts): each metric's share
+ * of opponents you beat as its percentile, and their average in the sample column; the score is
+ * the mean of those shares (opponentScore). `rows` is null while they load.
+ */
+function opponentAttribute(ids: string[], rows: VsOpponents[] | null, m: Measures): PanelAttribute {
+  const by = new Map((rows ?? []).map((x) => [x.id, x]));
+  const n = rows ? Math.max(0, ...rows.map((x) => x.of - 1)) : null;
+  const population = n === null ? "your opponents" : plural(n, "opponent");
+  const metrics = ids.map((id): PanelMetric => {
+    const x = by.get(id);
+    const p: Pct = { id, value: x?.mine ?? null, pct: x?.pct ?? null, pool: "opponents", n: null, reason: !rows ? "Loading your opponents" : x?.pct == null && x?.mine != null ? "Not compared: no opponent has a value" : null };
+    const s = sampleOf(id, p, m);
+    return { id, ...pctProps(id, p, p.value), kind: "performance", population, sample: x?.opponents == null ? null : `avg ${fmtMetric(id, x.opponents)}`, n: s.n };
+  });
+  return { id: "firepower", label: "Firepower", score: rows ? opponentScore(rows, ids) : null, metrics, note: `vs ${population}` };
+}
+
+/** Firepower's pistol-round rows (HLTV keeps pistol rounds inside Firepower): Rating 3.0, kills per round and rounds with a kill over your pistol rounds (buySplits own.pistol), the rows Economy's buy table splits too. */
+const PISTOL_ROWS: [string, string][] = [["rating3", "Rating 3.0"], ["kpr", "Kills per round"], ["killRounds", "Rounds with a kill"]];
+function usePistolGroup(q: Query): PanelGroup | undefined {
+  const splits = useCall("buySplits", [q]);
+  if (!splits.data) return undefined;
+  const s = splits.data.own.pistol;
+  const rounds = s?.m.rounds ?? 0;
+  return {
+    label: <><BuyIcon buy="pistol" size={14} beside />Pistol rounds</>,
+    sample: plural(rounds, "round"),
+    n: rounds,
+    rows: PISTOL_ROWS.map(([id, label]) => {
+      const v = s?.v[id] ?? null;
+      const meta = metric(id);
+      return { id: `pistol:${id}`, label, def: `${meta.tip} Pistol rounds only.`, value: v, text: fmtMetric(id, v), score: null, status: meta.status, reason: null };
+    }),
+  };
 }
 
 // ---------------------------------------------------------------- breakdowns

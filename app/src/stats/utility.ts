@@ -4,8 +4,18 @@
 // blind. Utility quality beyond usage (smokes) is utilq.ts.
 import { blindWindows } from "./blinds";
 import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
-import type { GrenadeFact } from "./facts";
+import { THROW_LOGGED, type GrenadeFact } from "./facts";
 import { classFromDisplay, isUtility, PRICE } from "./weapons";
+
+/**
+ * Copies each THROW_LOGGED numerator into its twin on the player-rounds of matches with a throw log
+ * (throwRounds). derive.ts runs it after every pass that counts a numerator (scoreboard's flash
+ * assists, utility's blinds, flash-to-kills and grenade damage), so the twin is the finished count.
+ */
+export function logThrowScoped(c: Ctx): void {
+  const pairs = Object.entries(THROW_LOGGED) as [keyof typeof THROW_LOGGED, (typeof THROW_LOGGED)[keyof typeof THROW_LOGGED]][];
+  for (const rows of c.pr) for (const p of rows) if (p && p.m.throwRounds) for (const [from, to] of pairs) p.m[to] = p.m[from];
+}
 
 /** Leetify: blind longer than this counts as flashed. */
 export const FLASHED_MIN_S = 1.1;
@@ -33,6 +43,10 @@ export function markUtility(c: Ctx): void {
 
 export function utility(c: Ctx): void {
   const g = c.t.grenade_throws;
+  // A throw table with no row for anyone is no log (the Valve imports, flashes.ts FlashTool.thrown):
+  // its rounds cannot say how many grenades anyone threw, so they stay out of throwRounds and of the
+  // thrown-per-round rates.
+  const logged = !!g && g.n > 0;
   const d = c.t.damages;
   // repeated blind rows joined, as every view counts them (blinds.ts)
   const windows = blindWindows(c.t);
@@ -42,6 +56,7 @@ export function utility(c: Ctx): void {
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rows = c.pr[ri];
     const row = (id: string | null) => { const p = c.idOf(id); return p === null ? null : rows[p]; };
+    if (logged) for (const p of rows) if (p) p.m.throwRounds = 1;
     const throws: [number, number, string][] = []; // [player, tick, class]
     if (g) for (const i of c.byRound("grenade_throws")[ri]) {
       const p = row(g.steamid[i]);

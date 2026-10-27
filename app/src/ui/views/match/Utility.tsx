@@ -10,6 +10,7 @@ import { frameFor, RadarView } from "../../components/MapArt";
 import { SIDE_OPTIONS, fmtMetric, type SideKey } from "../../data/engine";
 import type { MPlayer as PlayerRow } from "../../data/match";
 import { metric } from "../../data/meta";
+import { NO_THROW_LOG } from "../../data/tips";
 import { NADE_LABEL, NadeIcon, type Nade } from "../../icons/game";
 import { fmtSecs, plural } from "../../lib/format";
 import { PlayerName, SectionAside, Empty, NeedsDemo } from "../shared";
@@ -22,6 +23,13 @@ export default function Utility({ v }: TabProps) {
   const lines = v.b.lines[side];
   const sl = (p: PlayerRow): Measures => lines[p.pi].m;
   const val = (p: PlayerRow, id: string) => lines[p.pi].v[id];
+  // Thrown counts come from the throw log alone (stats/utility.ts); without one they are unknown, not 0.
+  // Blinds and grenade damage come from their own events and stay.
+  const noLog = v.facts.match.inputs.throws === null;
+  const thrown = (p: PlayerRow, key: "flashes" | "smokes") => (noLog ? null : sl(p)[key]);
+  // the reason is the cell's own screen-reader text; the tooltip shows it to a pointer, and the column's
+  // header tooltip (focusable) to the keyboard
+  const count = (p: PlayerRow, key: "flashes" | "smokes") => (noLog ? <span className="faint" data-tip={NO_THROW_LOG}><span aria-hidden>–</span><span className="sr-only">{NO_THROW_LOG}</span></span> : sl(p)[key]);
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
   const sum = (t: "us" | "them", f: (u: Measures) => number) => team(t).reduce((a, p) => a + f(sl(p)), 0);
   const maxDmg = Math.max(1, ...v.players.map((p) => sl(p).utilDmg));
@@ -43,7 +51,7 @@ export default function Utility({ v }: TabProps) {
           rowClass={(p) => (p.isHuman ? "is-you" : undefined)}
           columns={[
             { key: "name", label: "Player", align: "l", sticky: true, sort: (p) => p.name, render: (p) => <span className="name-cell"><PlayerName v={v} pi={p.pi} /></span>, width: 170 },
-            { key: "fl", label: <><NadeIcon type="flash" size={12} beside />Flashes thrown</>, tip: "Flashbangs thrown", sort: (p) => sl(p).flashes, render: (p) => sl(p).flashes },
+            { key: "fl", label: <><NadeIcon type="flash" size={12} beside />Flashes thrown</>, tip: noLog ? `Flashbangs thrown. ${NO_THROW_LOG}` : "Flashbangs thrown", sort: noLog ? undefined : (p) => thrown(p, "flashes"), render: (p) => count(p, "flashes") },
             { key: "ef", label: "Blinded", tip: "Enemies your flashes blinded, once per enemy per flash", sort: (p) => sl(p).enemiesFlashed, render: (p) => sl(p).enemiesFlashed },
             { key: "bt", label: "Blind time", tip: "Seconds of blindness your flashes caused on enemies", sort: (p) => sl(p).enemyBlindSecs, render: (p) => <span data-tip={`${fmtMetric("blindPerFlash", val(p, "blindPerFlash"))} per flash`}><Num v={fmtSecs(sl(p).enemyBlindSecs)} /></span> },
             { key: "pf", label: "Per flash", tip: metric("enemiesPerFlash").def, sort: (p) => val(p, "enemiesPerFlash"), render: (p) => fmtMetric("enemiesPerFlash", val(p, "enemiesPerFlash")) },
@@ -51,7 +59,7 @@ export default function Utility({ v }: TabProps) {
             { key: "tf", label: "Team flashed", tip: "Times your flashes blinded a teammate", sort: (p) => sl(p).teamFlashed, firstDir: "asc", render: (p) => <span className={sl(p).teamFlashed ? "poor-text" : undefined} data-tip={`${fmtSecs(sl(p).teamBlindSecs)} of teammate blindness, ${fmtMetric("teamFlashPR", val(p, "teamFlashPR"))} per round`}>{sl(p).teamFlashed}</span> },
             { key: "he", label: <><NadeIcon type="he" size={12} beside />HE damage</>, tip: "Damage from your HE grenades to enemies", sort: (p) => sl(p).heDmg, render: (p) => sl(p).heDmg },
             { key: "fire", label: <><NadeIcon type="molotov" size={12} beside />Fire damage</>, tip: "Fire damage from your molotovs and incendiaries to enemies", sort: (p) => sl(p).fireDmg, render: (p) => <span data-tip={`${fmtMetric("fireDmgPR", val(p, "fireDmgPR"))} per round`} tabIndex={0}>{sl(p).fireDmg}</span> },
-            { key: "sm", label: <><NadeIcon type="smoke" size={12} beside />Smokes thrown</>, tip: "Smokes thrown", sort: (p) => sl(p).smokes, render: (p) => sl(p).smokes },
+            { key: "sm", label: <><NadeIcon type="smoke" size={12} beside />Smokes thrown</>, tip: noLog ? `Smokes thrown. ${NO_THROW_LOG}` : "Smokes thrown", sort: noLog ? undefined : (p) => thrown(p, "smokes"), render: (p) => count(p, "smokes") },
             { key: "dmg", label: "Utility damage", tip: "All grenade and fire damage to enemies", sort: (p) => sl(p).utilDmg, render: (p) => (
               <span className="cellbar" data-tip={`${fmtMetric("utilDmgPR", val(p, "utilDmgPR"))} per round`}><span className="hbar"><i style={{ width: `${(sl(p).utilDmg / maxDmg) * 100}%`, background: p.team === "us" ? "var(--cream)" : "var(--ink2)" }} /></span><b className="num">{sl(p).utilDmg}</b></span>
             ), width: 150 },

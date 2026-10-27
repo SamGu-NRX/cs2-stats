@@ -28,6 +28,8 @@ import { decodeMatch } from "../../stats/plugin/decode";
 import type { MatchFile } from "../../stats/plugin/schema";
 import { rating3Of } from "../../stats/rating3";
 import { rollup } from "../../stats/rollup";
+import { WIN_CORRELATION_MIN } from "../../stats/correlation";
+import { matchValues, trend } from "../../stats/trends";
 import type { MatchTables } from "../../stats/tables";
 import type { Client } from "../../worker/client";
 import { matchCalls } from "../../worker/matchcalls";
@@ -142,6 +144,12 @@ const answers: Partial<Record<keyof Client, (...a: never[]) => unknown>> = {
   mapZones: (file: string, player: string) => mapZones(rosterTables(byFile.get(file)!.tables), player),
   flashes: (file: string, player: string) => flashTool(rosterTables(byFile.get(file)!.tables), byFile.get(file)!.facts, player),
   openingDuels: (file: string, player: string) => openingDuels(byFile.get(file)!.facts, player),
+  // Overview's "Moves with winning": each match's value from the engine, the sentinel match among
+  // them. The samples hold fewer decided matches than the card's minimum, so the correlation answer
+  // claims WIN_CORRELATION_MIN for every stat: the rows, the trend line and its match links render.
+  matchValues: (q: Query, id: string) => Object.fromEntries(q.files.map((f) => [f, matchValues(byFile.get(f)!.facts, q.filter, [id])?.[id] ?? null])),
+  winCorrelation: (q: Query, ids: string[]) => Object.fromEntries(ids.map((id, i) => [id, { r: 0.6 - 0.15 * i, n: WIN_CORRELATION_MIN, reason: null }])),
+  trends: (series: (number | null)[][]) => series.map((values) => trend(values.map((value, i) => ({ match: String(i), date: null, value, won: null })))),
   ratingBreakdown: (file: string, player: string) => {
     const f = byFile.get(file)!.facts;
     const match = rating3Of(rollup([f], { player }));
@@ -299,6 +307,17 @@ describe("Hide personal info", () => {
     expect(union).toContain(`href="${matchHref(imported.file)}"`);
     expect(union).toContain("&lt;file&gt;.dem");
   }, 120_000);
+
+  it("hides them in Overview's win correlation rows and its trend's match links", async () => {
+    // fails if the card's rows never render here, or its per-match line links a match by its file path
+    hidePersonal(true);
+    const { html } = await show(profileHref("overview"), dataWith());
+    expect(document.querySelectorAll(".wcor__row").length).toBeGreaterThan(0);
+    const links = Array.from(document.querySelectorAll(".wcor__panel a.ms__hit"), (a) => a.getAttribute("href")!);
+    expect(links.length).toBeGreaterThan(0);
+    expect(links.every((h) => /^#\/match\/m-[0-9a-f]+(-[0-9a-f]+)?\/overview$/.test(h)), links.join(" ")).toBe(true);
+    expect(found(html)).toEqual([]);
+  }, 30_000);
 
   it("hides them in the killfeeds read straight from a match's facts: the round drawer and the replay's sidebar", async () => {
     hidePersonal(true);
