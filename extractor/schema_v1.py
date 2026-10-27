@@ -530,7 +530,7 @@ NULLABLE: dict[str, list[str]] = {
 # Columns whose values identify one row; tables keyed only by row order have none.
 KEYS: dict[str, list[str]] = {
     "blinds": ["tick", "victim_steamid"],
-    "bomb": ["tick", "event"],
+    "bomb": ["tick", "event", "steamid"],
     "engagement_ticks": ["engagement_id", "tick"],
     "engagements": ["engagement_id"],
     "grenade_events": ["tick", "event", "entity_id"],
