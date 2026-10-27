@@ -195,6 +195,28 @@ button[data-tip], a[data-tip], [role="button"][data-tip], th [data-tip] { cursor
 .toast__text { flex: 1; padding-top: 1px; }
 .toast__close { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--r-chip); color: var(--ink3); flex: none; }
 @media (hover: hover) and (pointer: fine) { .toast__close:hover { color: var(--ink); background: var(--hover); } }
+/* a prompt: the text, then its answers under it */
+.toast__body { flex: 1; display: grid; gap: 10px; min-width: 0; }
+.toast__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* a prompt and its confirmation move only with the toast itself: their buttons have no press scale */
+.toast__actions .btn, .dialog .btn { transition: none; }
+.toast__actions .btn:active, .dialog .btn:active { transform: none; }
+
+/* ---------------------------------------------------------------- confirmation dialog */
+/* native <dialog> (modal: the page behind is inert, Escape cancels). It appears without motion. */
+.dialog {
+  width: min(480px, calc(100vw - 48px)); max-height: calc(100vh - 96px); padding: 20px; overflow: auto; overscroll-behavior: contain;
+  border: 0; border-radius: var(--r-card); background: var(--s2); color: var(--ink); box-shadow: var(--shadow-float);
+}
+.dialog[open] { display: grid; gap: 14px; }
+.dialog::backdrop { background: var(--scrim); }
+.dialog__title { margin: 0; font: 700 18px/1.25 var(--f); letter-spacing: -0.01em; }
+.dialog__body { display: grid; gap: 10px; font-size: 13px; line-height: 1.5; }
+.dialog__body p { margin: 0; }
+.dialog__file { margin: 0; padding: 8px 10px; border-radius: var(--r-ctl); background: var(--well); border: 1px solid var(--line); font-size: 11px; color: var(--ink2); overflow-wrap: anywhere; }
+.dialog__problem { margin: 0; padding: 8px 10px; border-radius: var(--r-ctl); background: var(--poor-soft); color: var(--poor-text); font-size: 12px; line-height: 1.45; }
+.dialog__foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.dialog__busy { margin-right: auto; }
 
 /* ---------------------------------------------------------------- skeleton and empty */
 .skel { background: var(--bg1); border-radius: var(--r-card); animation: skel 1.2s var(--ease-in-out) infinite; }
