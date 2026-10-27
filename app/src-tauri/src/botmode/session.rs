@@ -86,8 +86,8 @@ struct SessionMarker {
     /// "pending" or "committed". Recovery treats both alike.
     state: String,
     run_id: String,
-    /// Unix nanoseconds when the marker was written. Missing in markers from earlier builds of
-    /// this branch, which count as stale.
+    /// Unix nanoseconds when the marker was written; 0 in markers from earlier builds of this
+    /// branch, which then count as stale once Bot Mode has been seen off.
     #[serde(default)]
     written_at_ns: u64,
     before_hash: String,
@@ -110,7 +110,7 @@ pub(crate) fn marker_path(layout: &Layout) -> PathBuf {
     layout.data.join("bot-mode-session.json")
 }
 
-fn off_seen_path(layout: &Layout) -> PathBuf {
+pub(crate) fn off_seen_path(layout: &Layout) -> PathBuf {
     layout.data.join("bot-mode-off-seen.json")
 }
 
@@ -118,13 +118,38 @@ fn unix_now_ns() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
 }
 
-/// When CS2 Stats last saw Bot Mode off with a marker present; 0 when never.
-fn off_seen_ns(layout: &Layout) -> u64 {
-    std::fs::read_to_string(off_seen_path(layout))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("at_ns").and_then(serde_json::Value::as_u64))
-        .unwrap_or(0)
+/// What `bot-mode-off-seen.json` says about when CS2 Stats last saw Bot Mode off. Only `At` can
+/// make a marker stale. A missing or unusable record is unknown evidence, and unknown evidence
+/// must end in asking, never in hiding: a false prompt is safe, since the user can choose "Leave
+/// it on", while a hidden one leaves a dead session's Bot Mode on unannounced.
+enum OffSeen {
+    At(u64),
+    /// No record: Bot Mode was never seen off with a marker present.
+    Missing,
+    /// A record that cannot be trusted; why. [`cleanup`] logs it and deletes the file.
+    Invalid(String),
+}
+
+/// How far past the current time a recorded time may be and still count. A time further ahead
+/// would make every marker written until then read as stale. Five minutes allows ordinary clock
+/// corrections; the figure is a judgement, not a measurement.
+const OFF_SEEN_FUTURE_LIMIT: Duration = Duration::from_secs(5 * 60);
+
+fn off_seen(layout: &Layout) -> OffSeen {
+    let path = off_seen_path(layout);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return OffSeen::Missing,
+        Err(e) => return OffSeen::Invalid(format!("{}: {e}", path.display())),
+    };
+    let at = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("at_ns").and_then(serde_json::Value::as_u64));
+    match at {
+        None => OffSeen::Invalid(format!("{}: no numeric at_ns in it", path.display())),
+        Some(at) if at > unix_now_ns().saturating_add(OFF_SEEN_FUTURE_LIMIT.as_nanos() as u64) => {
+            OffSeen::Invalid(format!("{}: its time is more than {} minutes past the current time", path.display(), OFF_SEEN_FUTURE_LIMIT.as_secs() / 60))
+        }
+        Some(at) => OffSeen::At(at),
+    }
 }
 
 /// Records that Bot Mode is off now, which makes every marker written before it stale.
@@ -133,14 +158,18 @@ fn note_bot_mode_off(layout: &Layout) -> Result<(), String> {
     changes::write_atomic(&off_seen_path(layout), text.as_bytes())
 }
 
-/// The marker, when one is present, sound and newer than the last time Bot Mode was seen off.
-/// Any other marker is no evidence of a session in flight; [`cleanup`] deletes it.
+/// The marker, when one is present, sound, and not shown stale by a trusted record of Bot Mode
+/// seen off after it was written (see [`OffSeen`]). Any other marker is no evidence of a session
+/// in flight; [`cleanup`] deletes it.
 fn read_marker(layout: &Layout) -> Option<SessionMarker> {
-    let off_seen = off_seen_ns(layout);
+    let seen_off_at = match off_seen(layout) {
+        OffSeen::At(at) => Some(at),
+        OffSeen::Missing | OffSeen::Invalid(_) => None,
+    };
     std::fs::read_to_string(marker_path(layout))
         .ok()
         .and_then(|text| serde_json::from_str::<SessionMarker>(&text).ok())
-        .filter(|m| m.is_sound() && m.written_at_ns > off_seen)
+        .filter(|m| m.is_sound() && seen_off_at.is_none_or(|at| m.written_at_ns > at))
 }
 
 fn write_marker(layout: &Layout, marker: &SessionMarker) -> Result<(), String> {
@@ -793,6 +822,13 @@ pub fn cleanup(layout: &Layout, sys: &dyn System, start_adopter: &dyn Fn() -> Re
     let mode = bot_mode(layout);
     if let BotMode::Unknown(why) = &mode {
         return Cleanup::Problem { why: format!("Bot Mode's state could not be read: {why}") };
+    }
+    if let OffSeen::Invalid(why) = off_seen(layout) {
+        // Ignored from here on (markers count as live), and deleted so a valid record can follow.
+        eprintln!("Bot Mode: ignoring the record of when Bot Mode was last seen off ({why})");
+        if let Err(e) = std::fs::remove_file(off_seen_path(layout)) {
+            eprintln!("Bot Mode: deleting {}: {e}", off_seen_path(layout).display());
+        }
     }
     let marker_file = marker_path(layout).exists();
     let marker = read_marker(layout);

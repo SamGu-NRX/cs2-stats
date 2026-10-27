@@ -1261,6 +1261,32 @@ fn a_marker_that_cannot_be_deleted_never_prompts_for_the_panel_later() {
 }
 
 #[test]
+fn a_missing_malformed_or_future_off_record_ends_in_asking() {
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+    let s = Scratch::new("off-record");
+    let (layout, _) = session_game(&s);
+    dead_session_left_on(&layout, "committed");
+    let record = session::off_seen_path(&layout);
+    // A trusted record of Bot Mode seen off after the marker was written makes it stale.
+    write(&record, serde_json::json!({"at_ns": now() + 1_000_000_000}).to_string().as_bytes());
+    assert_eq!(session::recovery(&layout).unwrap(), None);
+    // Deleted: unknown, so the prompt shows.
+    fs::remove_file(&record).unwrap();
+    assert!(session::recovery(&layout).unwrap().is_some(), "deleted record");
+    // Malformed, non-numeric, or more than five minutes past the current time: not trusted, so the
+    // prompt shows, and cleanup deletes the record.
+    let hour_ahead = serde_json::json!({"at_ns": now() + 3_600_000_000_000}).to_string();
+    for bad in ["not json", r#"{"at_ns":"soon"}"#, r#"{"at":1}"#, hour_ahead.as_str()] {
+        write(&record, bad.as_bytes());
+        assert!(session::recovery(&layout).unwrap().is_some(), "{bad}");
+        let c = session::cleanup(&layout, &no_cs2(), NO_ADOPTER);
+        assert!(matches!(c, Cleanup::Recovery(_)), "{bad}: {c:?}");
+        assert!(!record.exists(), "{bad}: the untrusted record is deleted");
+    }
+    assert!(session::marker_path(&layout).is_file(), "the marker stays for the user's answer");
+}
+
+#[test]
 fn startup_drops_a_marker_that_cannot_restore_the_file() {
     // An earlier build recorded Bot Mode that was already on with an empty before-image.
     // Restoring that would empty gameinfo.gi, so it is not a marker at all.
