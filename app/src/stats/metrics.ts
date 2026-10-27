@@ -83,7 +83,7 @@ const WINDOW = "5.4 s, the window that reproduces HLTV's traded deaths best";
 const M: Metric[] = [
   // ---- rating and scoreboard (performance)
   { id: "rating3", label: "Rating 3.0 (approx.)", hltv: "Rating 3.0", kind: "performance", group: "rating", unit: "rating", status: "approx",
-    tip: "HLTV-style overall rating from kills, deaths, damage, survival and impact.", def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md): a linear model in eco-adjusted KPR, ADR, DPR and KAST, multi-kill rounds and swing, with params.json's coefficients.",
+    tip: "HLTV-style overall rating from kills, deaths, damage, survival and impact.", def: "HLTV Rating 3.02 as the rating agent reconstructs it (model/rating3/SPEC.md): rated per side from eco-adjusted KPR, ADR, DPR and KAST, 2K to 5K rounds and swing through params.json's curves; the total is the sides' mean weighted by rounds.",
     needs: ["model", "eco"], value: (s) => rating3Of(s).value, why: (s) => rating3Of(s).reason },
   { id: "kpr", label: "Kills per round", hltv: "Kills per round", kind: "performance", group: "rating", unit: "perRound", status: "exact",
     tip: "Enemies you kill per round.", def: "Enemy kills (killer and victim on different sides at the kill) per round.", value: (s) => per(s.m.kills, s.m.rounds) },

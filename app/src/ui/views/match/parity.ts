@@ -18,30 +18,20 @@ export const TERM_LABEL: Record<Feature, { label: string; tip: string }> = {
   swing: { label: "Swing", tip: "The change in your team's chance to win that you caused." },
 };
 
-export interface Term { input: Feature; coefficient: number }
-
-/** The engine's rating terms (Meta.rating.terms) with their inputs checked against the six this file names; an unknown input throws. */
-export function ratingTerms(terms: readonly { input: string; coefficient: number }[]): Term[] {
-  return terms.map((t) => {
-    if (!Object.hasOwn(TERM_LABEL, t.input)) throw new Error(`Rating 3.0 has an input "${t.input}" the rating breakdown cannot name`);
-    return { input: t.input as Feature, coefficient: t.coefficient };
+/** The engine's input order (Meta.rating.inputs) checked against the six this file names; an unknown input throws. */
+export function ratingOrder(inputs: readonly string[]): Feature[] {
+  return inputs.map((input) => {
+    if (!Object.hasOwn(TERM_LABEL, input)) throw new Error(`Rating 3.0 has an input "${input}" the rating breakdown cannot name`);
+    return input as Feature;
   });
 }
 
-/** One input's share of a rating: its coefficient times its value, in rating points. */
+/** One input's share of a rating, in rating points. */
 export interface Contribution { input: Feature; value: number }
 
-/**
- * A whole rating's split: each term's coefficient times the rating's input (Rating3.inputs). The rating
- * is the intercept plus these (rating3.ts rating3FromInputs), so they add back up to it.
- */
-export function matchContributions(terms: readonly Term[], inputs: Record<Feature, number>): Contribution[] {
-  return terms.map((t) => ({ input: t.input, value: t.coefficient * inputs[t.input] }));
-}
-
-/** One round's split (RoundRating.terms, already coefficient times value), in the terms' order. */
-export function roundContributions(terms: readonly Term[], roundTerms: Record<Feature, number>): Contribution[] {
-  return terms.map((t) => ({ input: t.input, value: roundTerms[t.input] }));
+/** A rating's split (Rating3.terms or RoundRating.terms, the engine's own) in the engine's input order. */
+export function contributions(order: readonly Feature[], terms: Record<Feature, number>): Contribution[] {
+  return order.map((input) => ({ input, value: terms[input] }));
 }
 
 export interface Step { key: string; label: string; value: number; from: number; to: number }

@@ -1,9 +1,11 @@
 """Fit every public Rating 3 parameter block from explicit private inputs.
 
-The command reads HLTV maps and the private strict-join result. It calls the
-repository's Swing and duel fit functions, fits the rating approximation,
-and writes only public constants and summary metadata. It does not read a
-base parameter file and it never writes derived rows or the private lookup.
+The command reads HLTV maps, the private strict-join result and the engine's
+rating dump (app: pnpm rating-dump). It fits the per-side rating
+(side_rating_fit.py), the swing credit weights (swing_credit_fit.py) and the
+duel block (eco_fit.py), and writes only public constants and summary
+metadata. It does not read a base parameter file and it never writes derived
+rows or the private lookup.
 
 Run with isolated Python and explicit paths, for example:
 
@@ -18,12 +20,11 @@ import json
 from pathlib import Path
 import sys
 
-import numpy as np
-from sklearn.model_selection import GroupKFold
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eco_fit import fit_model as fit_duel_model
-from swing_fit import fit_block as fit_swing_block
+from side_rating_fit import fit_block as fit_side_block
+from swing_credit_fit import fit_block as fit_swing_credit
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
@@ -31,8 +32,6 @@ from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_g
 PARAMS_PATH = Path(__file__).resolve().parent / "params.json"
 
 
-FEATURES = ("kpr_eco", "adr_eco", "dpr_eco", "kast_eco", "mk", "swing")
-OUTPUT_FEATURES = ("eKPR", "eADR", "eDPR", "eKAST", "MK", "Swing")
 INPUT_DEFINITIONS = {
     "eKPR": {
         "definition": "Eco-adjusted kills divided by played rounds",
@@ -50,10 +49,10 @@ INPUT_DEFINITIONS = {
         "definition": "Eco-adjusted KAST percentage",
         "unit": "percent, 0-100",
     },
-    "MK": {
-        "definition": "Rounds in which the player made at least two kills",
-        "unit": "percent of rounds, 0-100",
-    },
+    "K2": {"definition": "Rounds with exactly two kills", "unit": "share of the side's rounds, 0-1"},
+    "K3": {"definition": "Rounds with exactly three kills", "unit": "share of the side's rounds, 0-1"},
+    "K4": {"definition": "Rounds with exactly four kills", "unit": "share of the side's rounds, 0-1"},
+    "K5": {"definition": "Rounds with five kills", "unit": "share of the side's rounds, 0-1"},
     "Swing": {
         "definition": "Mean round swing credited to the player",
         "unit": "percentage points per round",
@@ -125,67 +124,6 @@ def map_rows(root: Path) -> list[dict]:
     return rows
 
 
-def design(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    x = np.array([[row[field] for field in FEATURES] for row in rows], dtype=float)
-    y = np.array([row["rating"] for row in rows], dtype=float)
-    groups = np.array([row["match"] for row in rows])
-    valid = np.isfinite(x).all(axis=1) & np.isfinite(y)
-    return x[valid], y[valid], groups[valid]
-
-
-def fit(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    matrix = np.column_stack((np.ones(len(x)), x))
-    return np.linalg.lstsq(matrix, y, rcond=None)[0]
-
-
-def predict(x: np.ndarray, coefficients: np.ndarray) -> np.ndarray:
-    return np.column_stack((np.ones(len(x)), x)) @ coefficients
-
-
-def score(y: np.ndarray, predicted: np.ndarray) -> dict:
-    error = np.abs(y - predicted)
-    return {
-        "n": int(len(error)),
-        "mae": float(error.mean()),
-        "p95": float(np.quantile(error, 0.95)),
-        "max": float(error.max()),
-        "r": float(np.corrcoef(y, predicted)[0, 1]),
-    }
-
-
-def fit_summary(x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> dict:
-    coefficients = fit(x, y)
-    folds = []
-    splitter = GroupKFold(n_splits=5)
-    for fold, (train, test) in enumerate(splitter.split(x, y, groups), start=1):
-        fold_predicted = predict(x[test], fit(x[train], y[train]))
-        folds.append({
-            "fold": fold,
-            "rows": int(len(test)),
-            "matches": int(len(set(groups[test]))),
-            "score": score(y[test], fold_predicted),
-        })
-    held_out_predicted = np.empty(len(y), dtype=float)
-    for train, test in splitter.split(x, y, groups):
-        held_out_predicted[test] = predict(x[test], fit(x[train], y[train]))
-    return {
-        "coefficients": coefficients,
-        "fit": score(y, predict(x, coefficients)),
-        "held_out": score(y, held_out_predicted),
-        "folds": folds,
-        "matches": int(len(set(groups))),
-    }
-
-
-def readable_formula(rating: dict) -> str:
-    expression = f"{rating['intercept']:.12f}"
-    for name in rating["features"]:
-        coefficient = rating["coefficients"][name]
-        sign = "+" if coefficient >= 0 else "-"
-        expression += f" {sign} {abs(coefficient):.12f}*{name}"
-    return expression
-
-
 def eco_adjustment_block(rows: list[dict], fit_date: str) -> dict:
     return {
         "source": {
@@ -243,53 +181,53 @@ def win_probability_source_block() -> dict:
     }
 
 
+def readable_formula(rating: dict) -> str:
+    curves = ", ".join(f"{name} (slope {c['slope']:.4f}, {len(c['knots'])} knots)" for name, c in rating["curves"].items())
+    kills = ", ".join(f"{name} {w:.4f}" for name, w in rating["kill_rounds"].items())
+    return (f"side rating = {rating['intercept']:.4f} + {rating['ct_offset']:.4f}*[CT] + curves: {curves}; "
+            f"kill rounds: {kills}; total = round-weighted mean of the sides")
+
+
 def public_parameters(
     output_path: Path,
-    rows: list[dict],
-    fit_result: dict,
+    side: dict,
     swing: dict,
     duel: dict,
     eco_adjustment: dict,
-    joins: dict,
     fit_date: str,
 ) -> dict:
-    coefficients = fit_result["coefficients"]
-    map_count = len({row["map"] for row in rows})
+    model, held = side["model"], side["held_out"]
     rating = {
         "version": "3.02",
         "status": "approximation",
-        "basis": "plain_linear_displayed_eco_inputs",
-        "features": list(OUTPUT_FEATURES),
+        "basis": "per_side_piecewise_linear",
         "inputs": INPUT_DEFINITIONS,
-        "intercept": float(coefficients[0]),
-        "coefficients": {
-            name: float(coefficient)
-            for name, coefficient in zip(OUTPUT_FEATURES, coefficients[1:])
-        },
-        "dataset": {
-            "maps": map_count,
-            "matches": fit_result["matches"],
-            "player_maps": int(fit_result["fit"]["n"]),
-            "date": fit_date,
-            "rounds": "regulation_and_overtime",
-        },
+        "intercept": model["intercept"],
+        "ct_offset": model["ct_offset"],
+        "curves": model["curves"],
+        "kill_rounds": model["kill_rounds"],
+        "dataset": {**side["dataset"], "date": fit_date, "rounds": "regulation_and_overtime"},
         "fit": {
-            "method": "ordinary_least_squares",
-            "held_out_split": "5-fold GroupKFold by match",
-            "held_out_mae": fit_result["held_out"]["mae"],
-            "held_out_p95": fit_result["held_out"]["p95"],
-            "held_out_max": fit_result["held_out"]["max"],
-            "held_out_r": fit_result["held_out"]["r"],
-            "folds": fit_result["folds"],
+            "method": "weighted_least_squares_per_side",
+            "held_out_split": held["split"],
+            "held_out_train_maps": held["train_maps"],
+            "held_out_test_maps": held["test_maps"],
+            "held_out_test_events": held["test_events"],
+            "held_out_test_dates": held["test_dates"],
+            "train_mae": held["train"]["mae"],
+            "held_out_mae": held["test"]["mae"],
+            "held_out_p95": held["test"]["p95"],
+            "held_out_max": held["test"]["max"],
+            "held_out_within_0_01": held["test"]["within_0_01"],
         },
     }
     result = {
         "version": 1,
         "rating": rating,
         "dataset": {
-            "hltv_maps": map_count,
-            "matches": fit_result["matches"],
-            "player_maps": int(fit_result["fit"]["n"]),
+            "hltv_maps": side["dataset"]["maps"],
+            "matches": side["dataset"]["matches"],
+            "player_maps": side["dataset"]["player_maps"],
             "fit_date": fit_date,
             "rounds": "regulation_and_overtime",
         },
@@ -303,9 +241,31 @@ def public_parameters(
     return result
 
 
+def swing_block(data: Path) -> dict:
+    credit = fit_swing_credit(data)
+    fit = credit.pop("fit")
+    gain = fit["gain"]
+    return {
+        "source": {"source": "fit", "script": "swing_credit_fit.py", "kills": fit["kills"],
+                   "gain_credits": gain["credits"], "gain_within_0_01": gain["within_0_01"], "gain_mae_points": gain["mae_points"],
+                   "flash_observations": fit["flash"]["observations"], "failed_trade_observations": fit["debit"]["observations"]},
+        "event_credit_model": "weighted_damage_kill_trade_flash",
+        # the trade-denial window scoreboard.ts reads; the credit weights carry their own window
+        "trade_window_seconds": 5.0,
+        "event_credit": credit,
+        "zero_rules": [
+            "unpreventable post-bomb kills have zero swing",
+            "kill credit is never negative",
+            "round with an unvalued probability event is unknown",
+            "unattributed, health-reconstructed, or ambiguous damage rows carry no damage weight",
+        ],
+        "fit_status": "kill shares fitted to HLTV per-kill credits; the winners' split of a detonation or time-out is not recovered",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", required=True, type=Path, help="Private data root containing hltv/ and demos/")
+    parser.add_argument("--data", required=True, type=Path, help="Private data root containing hltv/, demos/ and model-rating3/")
     parser.add_argument("--hltv", required=True, type=Path)
     parser.add_argument("--joins", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
@@ -313,23 +273,17 @@ def main() -> None:
     args = parser.parse_args()
     check_output(args.out, private=False, what="params.json", in_repo=PARAMS_PATH)
 
-    rows = map_rows(args.hltv)
-    if not rows:
-        raise ValueError(f"no v3 HLTV map rows found in {args.hltv}")
-    x, y, groups = design(rows)
-    if len(set(groups)) < 5:
-        raise ValueError("at least five match groups are required for held-out evaluation")
-    fit_result = fit_summary(x, y, groups)
+    side = fit_side_block(args.hltv)
     joins = json.loads(args.joins.read_text(encoding="utf-8"))
-    swing = fit_swing_block(args.data, args.joins)
+    swing = swing_block(args.data)
     duel = fit_duel_model(args.data, joins["accepted"])
-    eco_adjustment = eco_adjustment_block(rows, args.date)
-    parameters = public_parameters(args.out, rows, fit_result, swing, duel, eco_adjustment, joins, args.date)
+    eco_adjustment = eco_adjustment_block(map_rows(args.hltv), args.date)
+    parameters = public_parameters(args.out, side, swing, duel, eco_adjustment, args.date)
     print(json.dumps({
         "formula": readable_formula(parameters["rating"]),
         "dataset": parameters["dataset"],
-        "held_out": parameters["rating"]["fit"],
-        "swing_flash_credit_fraction": parameters["swing"]["flash_credit_fraction"],
+        "fit": parameters["rating"]["fit"],
+        "swing_event_credit": parameters["swing"]["event_credit"],
         "duel": {
             "strength": parameters["duel"]["strength"],
             "kill_points_scale": parameters["duel"]["kill_points_scale"],

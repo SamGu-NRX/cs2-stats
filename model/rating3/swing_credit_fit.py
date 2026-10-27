@@ -114,13 +114,19 @@ def events(data: Path) -> list[dict]:
     return out
 
 
-def gain_shares(e: dict, kill_w: float, trade_w: float, window: float) -> dict:
+def gain_weights(e: dict, kill_w: float, trade_w: float, window: float) -> dict:
+    """Each gaining player's weight: damage on the victim, plus the kill and trade weights."""
     w = {p: d for p, d in e["dmg"].items() if p != e["victim"]}
     w[e["killer"]] = w.get(e["killer"], 0) + kill_w
     for p, dt in e["traded"]:
         if dt <= window:
             w[p] = w.get(p, 0) + trade_w
             break
+    return w
+
+
+def gain_shares(e: dict, kill_w: float, trade_w: float, window: float) -> dict:
+    w = gain_weights(e, kill_w, trade_w, window)
     total = sum(w.values())
     return {p: e["change"] * x / total for p, x in w.items()}
 
@@ -157,11 +163,10 @@ def flash_weight(ev: list[dict], kill_w: float, trade_w: float, window: float) -
         extra = [p for p in pos if p not in e["dmg"] and p != e["killer"] and p not in {q for q, _ in e["traded"]}]
         if len(extra) != 1 or e["killer"] not in pos:
             continue
-        base = gain_shares(e, kill_w, trade_w, window)
-        killer_w = e["dmg"].get(e["killer"], 0) + kill_w
-        total = killer_w * e["change"] / pos[e["killer"]]
-        rest = total - sum(v * total / e["change"] for v in base.values())
-        ws.append(rest)
+        base = gain_weights(e, kill_w, trade_w, window)
+        # the killer's credit fixes the total weight; what the known weights leave is the flasher's
+        total = base[e["killer"]] * e["change"] / pos[e["killer"]]
+        ws.append(total - sum(base.values()))
     ws = np.array(ws)
     return {"flash_weight": float(np.median(ws)), "observations": int(len(ws)),
             "iqr": [float(np.quantile(ws, 0.25)), float(np.quantile(ws, 0.75))]}

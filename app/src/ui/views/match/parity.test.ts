@@ -1,38 +1,30 @@
 import { describe, expect, it } from "vitest";
 import type { HeadToHead, ZoneRow } from "../../../stats/matchviews";
-import { RATING3_INTERCEPT, RATING3_TERMS, rating3FromInputs } from "../../../stats/rating3";
+import { FEATURES, rating3Of } from "../../../stats/rating3";
+import { at } from "../../../stats/testing/summary";
 import { METRIC } from "../../../stats/metrics";
 import { fmtPct, fmtRating } from "../../lib/format";
 import {
-  matchContributions, measureOf, mostFought, orient, ratingDomain, ratingSteps, ratingTerms, relChange, roundContributions,
+  contributions, measureOf, mostFought, orient, ratingDomain, ratingOrder, ratingSteps, relChange,
   signedIn, situationGrid, takeHoldGap, weaponsByKills, YOUR_MATCH, zonesFor,
 } from "./parity";
 
-const TERMS = ratingTerms([
-  { input: "kpr_eco", coefficient: 0.5 }, { input: "adr_eco", coefficient: 0.01 }, { input: "dpr_eco", coefficient: -0.6 },
-  { input: "kast_eco", coefficient: 0.004 }, { input: "mk", coefficient: 0.002 }, { input: "swing", coefficient: 0.04 },
-]);
-
 describe("rating terms", () => {
   it("rejects an input the breakdown has no name for", () => {
-    expect(() => ratingTerms([{ input: "eKPR", coefficient: 1 }])).toThrow(/eKPR/);
+    expect(() => ratingOrder(["eKPR"])).toThrow(/eKPR/);
   });
 
-  it("splits a match rating into coefficient times input, in the engine's term order", () => {
-    const parts = matchContributions(TERMS, { kpr_eco: 1, adr_eco: 80, dpr_eco: 0.5, kast_eco: 75, mk: 20, swing: 2 });
-    expect(parts.map((p) => p.input)).toEqual(["kpr_eco", "adr_eco", "dpr_eco", "kast_eco", "mk", "swing"]);
-    [0.5, 0.8, -0.3, 0.3, 0.04, 0.08].forEach((x, i) => expect(parts[i].value).toBeCloseTo(x, 12));
+  it("lists the engine's own contributions in the engine's input order", () => {
+    const order = ratingOrder([...FEATURES].reverse());
+    const parts = contributions(order, { kpr_eco: 1.3, adr_eco: 0.9, dpr_eco: -0.35, kast_eco: 0.3, mk: 0.2, swing: -0.2 });
+    expect(parts.map((p) => p.input)).toEqual([...FEATURES].reverse());
+    expect(parts.map((p) => p.value)).toEqual([-0.2, 0.2, 0.3, -0.35, 0.9, 1.3]);
   });
 
-  it("adds back up to the engine's own rating for the same inputs", () => {
-    const q = { kpr_eco: 0.866, adr_eco: 86.4, dpr_eco: 0.636, kast_eco: 78.7, mk: 20.8, swing: 3.0 };
-    const { total } = ratingSteps(RATING3_INTERCEPT, matchContributions(ratingTerms(RATING3_TERMS), q));
-    expect(total).toBeCloseTo(rating3FromInputs(q), 12);
-  });
-
-  it("takes a round's terms as they are, already weighted", () => {
-    const parts = roundContributions(TERMS, { kpr_eco: 1.3, adr_eco: 0.9, dpr_eco: -0.35, kast_eco: 0.3, mk: 0.2, swing: -0.2 });
-    expect(parts.map((p) => p.value)).toEqual([1.3, 0.9, -0.35, 0.3, 0.2, -0.2]);
+  it("adds back up to the engine's own rating", () => {
+    const r = rating3Of(at({ kpr_eco: 0.866, adr_eco: 86.4, dpr_eco: 0.636, kast_eco: 78.7, mk: 20.8, swing: 3.0 }));
+    const { total } = ratingSteps(r.base!, contributions(ratingOrder(FEATURES), r.terms!));
+    expect(total).toBeCloseTo(r.value!, 12);
   });
 
   it("runs the waterfall from the intercept and ends at intercept plus every term", () => {

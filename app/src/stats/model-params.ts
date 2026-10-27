@@ -13,9 +13,11 @@ export interface RatingParams {
     status: string;
     /** which formula the coefficients belong to; rating3.ts implements only the basis it names */
     basis: string;
-    features: string[];
+    /** one side's rating: intercept, plus ct_offset on CT, plus each curve at its input, plus each kill-round weight times its share */
     intercept: number;
-    coefficients: Record<string, number>;
+    ct_offset: number;
+    curves: Record<"eKPR" | "eADR" | "eDPR" | "eKAST" | "Swing", { slope: number; knots: number[]; slope_changes: number[] }>;
+    kill_rounds: Record<"K2" | "K3" | "K4" | "K5", number>;
     /** what the coefficients were fitted on */
     dataset: { maps: number; player_maps: number; date: string };
     fit: { method: string; held_out_mae: number };

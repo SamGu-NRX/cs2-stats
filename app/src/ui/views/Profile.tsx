@@ -440,7 +440,7 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
           <div className="bd">
             <div className="bd__head"><span className="caps">{ratingHeadline()}{side !== "both" ? `, ${side.toUpperCase()}` : ""}</span><b className="num cream">{fmtRating(gaugeV)}</b></div>
             <p className="bd__def">{tipOf("rating3")}</p>
-            {r3.inputs && <RatingTerms inputs={r3.inputs} />}
+            {r3.inputs && r3.terms && r3.base !== null && <RatingTerms rating={{ inputs: r3.inputs, base: r3.base, terms: r3.terms }} />}
           </div>
         )}>
           <Gauge value={gaugeV} verdict={gaugeVerdict} label={ratingHeadline()} />
