@@ -541,7 +541,7 @@ def test_a_parse_starts_only_if_the_floor_holds_after_every_running_parses_table
     p = dp.Pipeline()
     p.worker_max, p.output_gb = (lambda: 4), deque([0.5])
     first, second = _jobs(2)
-    first.proc = _FakeProc()
+    first.proc, first.output_gb = _FakeProc(), 0.5
     p.running.append(first)
     p.jobs.append(second)
     p.dispatch()
@@ -549,6 +549,34 @@ def test_a_parse_starts_only_if_the_floor_holds_after_every_running_parses_table
     p.running.remove(first)
     p.dispatch()
     assert p.running == [second]
+
+
+def test_a_running_parse_keeps_the_reservation_it_started_with(tmp_path, monkeypatch):
+    # A run of small maps pushed a 1 GB sample out of the window, and every live reservation fell to 0.02 GB.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    p = dp.Pipeline()
+    p.worker_max, p.output_gb = (lambda: 4), deque([1.0])
+    (j,) = _jobs(1)
+    p.jobs.append(j)
+    p.dispatch()
+    p.output_gb.extend([0.02] * 20)
+    assert p.output_est_gb() == 0.02 and p.output_reserved_gb() == 1.0
+
+
+def test_downloads_get_no_room_that_running_parses_hold(tmp_path, monkeypatch):
+    # 46 GB free, a 45 GB floor, and a running parse holding 1 GB for its tables: nothing more fits.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MIN_FREE_GB", 45.0)
+    monkeypatch.setattr(dp, "lowest_free_gb", lambda: 46.0)
+    p = dp.Pipeline()
+    assert p.budget()[1] and p.room_gb() == pytest.approx(1.0)
+    (j,) = _jobs(1)
+    j.proc, j.output_gb = _FakeProc(), 1.0
+    p.running.append(j)
+    assert not p.budget()[1] and p.room_gb() <= 0
+    assert p.snapshot()["want"] == 0
 
 
 def test_the_table_estimate_is_the_p90_of_measured_maps_with_a_default_until_then(tmp_path, monkeypatch):

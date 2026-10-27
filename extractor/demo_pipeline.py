@@ -254,6 +254,7 @@ class Job:
     rss_gb: float = 0.0  # the worker's process tree, at the last poll
     kids: dict = field(default_factory=dict)  # pid -> psutil.Process the worker was seen to start
     peak_rss_gb: float = 0.0
+    output_gb: float = 0.0  # space held for the tables it writes, fixed when it starts and released when it ends
     killed: str | None = None
 
 
@@ -978,8 +979,9 @@ class Pipeline:
         return p90(self.output_gb, DEFAULT_OUTPUT_GB)
 
     def output_reserved_gb(self) -> float:
-        """Space held for the tables of the parses running now: one output estimate each, released as each ends."""
-        return len(self.running) * self.output_est_gb()
+        """Space held for the tables of the parses running now: each one's estimate as it stood when it started, so
+        a later change to the estimate shrinks no reservation of a parse still running."""
+        return sum(j.output_gb for j in self.running)
 
     def worker_max(self) -> int:
         est = self.parse_est_gb()
@@ -1013,6 +1015,7 @@ class Pipeline:
                        **{REPO_ENV: str(repo_root())}, **python_env)
             j.out_dir.parent.mkdir(parents=True, exist_ok=True)
             j.t0, j.rss_gb, j.peak_rss_gb, j.killed, j.kids = time.time(), 0.0, 0.0, None, {}
+            j.output_gb = self.output_est_gb()
             try:
                 with open(j.log_path, "w", encoding="utf-8") as lf:
                     j.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -1273,9 +1276,11 @@ class Pipeline:
         self._outputs = None
 
     def budget(self) -> tuple[float, bool]:
-        """(GB we use, whether a new extraction fits), read now; room_gb() is then what is left under both limits."""
+        """(GB we use, whether a new extraction fits), read now; room_gb() is then what is left under both limits.
+        Free space here is less what running extractions and running parses' tables still hold, so a download never
+        takes space reserved for either."""
         our, held = (b / 1e9 for b in self.disk_usage())
-        free = lowest_free_gb()
+        free = lowest_free_gb() - self.output_reserved_gb()
         self._room = min(MAX_OUR_GB - our - held, free - held - MIN_FREE_GB)
         return our, our + held < MAX_OUR_GB and free - held > MIN_FREE_GB  # at either limit, nothing more fits
 
