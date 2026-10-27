@@ -1,0 +1,272 @@
+"""Delete the second copy of a downloaded archive that the browser saves to the user's Downloads folder.
+
+The HLTV tab's browser saves each archive twice: into its own download folder, which the pipeline watches
+(CS2_DEMO_DOWNLOADS) and empties as archives finish, and into Windows Downloads under the archive's HLTV name.
+Nothing the browser records links the two (its copy traces carry no paths), so a copy is matched by what the
+pipeline measured of the download: the same size, the same SHA-256, and a creation time within COPY_WINDOW_S of
+the moment the pipeline saw the download reach its final size.
+
+A candidate is opened with no sharing, so nothing can write, rename or delete it while it is checked. Every
+check reads that handle: one hard link, no reparse point, the size, the creation time, the folder it resolves
+to, and the SHA-256. The deletion goes through the same handle, so the file deleted is the file checked.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+# A copy is created within COPY_WINDOW_S of the download's last size change, taken as the first poll that saw the
+# final size. Evidence: the live pipeline logged "pending archive" 10.8 to 13.3 s after the creation of each of the
+# 12 newest copies. That line comes 10 s (STABLE_SECONDS) after the first poll at the final size, plus at most
+# one loop (2 s of sleep plus the step), so each copy was created between 3.3 s before that poll and 1.2 s
+# plus one step's run time after it. 5 s leaves a margin on both sides; there are only 12 samples. It is far
+# below the 250 s between the two different archives of identical size seen so far, and the SHA-256 must match too.
+COPY_WINDOW_S = 5.0
+MODES = ("off", "dry-run", "delete")
+
+FILE_ATTRIBUTE_DIRECTORY = 0x10
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+FOLDERID_DOWNLOADS = uuid.UUID("374DE290-123F-4565-9164-39C4925E467B")
+
+
+class Refused(Exception):
+    """The folder is not one copies may be deleted from."""
+
+
+@dataclass(frozen=True)
+class Download:
+    """What the pipeline measured of one downloaded archive."""
+    id: str
+    size: int
+    sha256: str
+    finished: float  # epoch seconds of the first poll that saw the final size
+
+
+@dataclass(frozen=True)
+class FileInfo:
+    """What GetFileInformationByHandle and GetFinalPathNameByHandle report for an open file."""
+    attributes: int
+    links: int
+    size: int
+    created: float  # epoch seconds
+    final_path: str
+
+
+def _norm(p: Path | str) -> str:
+    return os.path.normcase(os.path.realpath(p))
+
+
+def _within(child: str, parent: str) -> bool:
+    try:
+        return os.path.commonpath([child, parent]) == parent
+    except ValueError:  # different drives
+        return False
+
+
+def check_folder(folder: Path, data_root: Path, watched: Path | None) -> Path:
+    """The folder, resolved, if copies may be deleted from it. Refuses a missing folder, a drive root, and any folder
+    inside or containing the data folder or the folder the pipeline watches (where the archives themselves are)."""
+    real = _norm(folder)
+    if not os.path.isdir(real):
+        raise Refused(f"{folder} is not a folder")
+    if os.path.dirname(real) == real:
+        raise Refused(f"{folder} is a drive root")
+    for what, other in (("the data folder", data_root), ("the folder the pipeline watches", watched)):
+        if other is None:
+            continue
+        o = _norm(other)
+        if _within(real, o) or _within(o, real):
+            raise Refused(f"{folder} is inside or contains {what} ({other})")
+    return Path(os.path.realpath(folder))
+
+
+def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
+    """Why an open file is not the copy of d in folder, from its handle's facts; None if every check passes. The
+    SHA-256 is checked after this, through the same handle."""
+    if info.attributes & FILE_ATTRIBUTE_DIRECTORY:
+        return "is a folder"
+    if info.attributes & FILE_ATTRIBUTE_REPARSE_POINT:
+        return "is a reparse point (a link, or a cloud placeholder)"
+    if info.links != 1:
+        return f"has {info.links} hard links; another name would keep the data"
+    if info.size != d.size:
+        return f"size {info.size} is not {d.size}"
+    if abs(info.created - d.finished) > COPY_WINDOW_S:
+        return f"created {info.created - d.finished:+.1f} s from the download's last size change"
+    if os.path.normcase(os.path.dirname(info.final_path)) != os.path.normcase(str(folder)):
+        return f"resolves to {info.final_path}, outside {folder}"
+    return None
+
+
+def candidates(folder: Path, d: Download) -> list[Path]:
+    """Plain files directly in folder whose size and creation time could make them d's copy. Read from the
+    folder listing; remove() checks both again through the file's handle."""
+    out = []
+    with os.scandir(folder) as it:
+        for e in it:
+            if not e.is_file(follow_symlinks=False):
+                continue
+            st = e.stat(follow_symlinks=False)
+            created = getattr(st, "st_birthtime", st.st_ctime)
+            if st.st_size == d.size and abs(created - d.finished) <= COPY_WINDOW_S:
+                out.append(Path(e.path))
+    return sorted(out)
+
+
+def remove(path: Path, d: Download, folder: Path, delete: bool) -> tuple[str, str | None]:
+    """("deleted" | "would_delete" | "kept", reason) for one candidate."""
+    try:
+        h = _open(path)
+    except OSError as e:
+        return "kept", f"could not open it alone: {e}"
+    try:
+        info = _info(h)
+        why = refusal(info, d, folder)
+        if why is None and _sha256(h) != d.sha256:
+            why = "SHA-256 differs"
+        if why is not None:
+            return "kept", why
+        if not delete:
+            return "would_delete", None
+        try:
+            _mark_deleted(h)
+        except OSError as e:
+            return "kept", f"deletion failed: {e}"
+        return "deleted", None
+    finally:
+        _close(h)  # a file marked for deletion goes when its last handle closes, which is this one
+
+
+def clean(folder: Path, d: Download, delete: bool, log_path: Path) -> list[dict]:
+    """Delete d's copy from folder (or, with delete False, say what would be deleted). Every candidate's outcome is
+    appended to log_path and returned."""
+    rows = []
+    for path in candidates(folder, d):
+        outcome, reason = remove(path, d, folder, delete)
+        rows.append(dict(time=time.strftime("%Y-%m-%dT%H:%M:%S%z"), archive=d.id, path=str(path), size=d.size,
+                         sha256=d.sha256, download_finished=d.finished, outcome=outcome, reason=reason))
+    if rows:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Win32
+# ---------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32")
+    _ole32 = ctypes.WinDLL("ole32")
+
+    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+        _fields_ = [("dwFileAttributes", wintypes.DWORD), ("ftCreationTime", wintypes.FILETIME),
+                    ("ftLastAccessTime", wintypes.FILETIME), ("ftLastWriteTime", wintypes.FILETIME),
+                    ("dwVolumeSerialNumber", wintypes.DWORD), ("nFileSizeHigh", wintypes.DWORD),
+                    ("nFileSizeLow", wintypes.DWORD), ("nNumberOfLinks", wintypes.DWORD),
+                    ("nFileIndexHigh", wintypes.DWORD), ("nFileIndexLow", wintypes.DWORD)]
+
+    class _FILE_DISPOSITION_INFO(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOLEAN)]
+
+    _GENERIC_READ, _DELETE = 0x80000000, 0x00010000
+    _OPEN_EXISTING = 3
+    _FILE_FLAG_OPEN_REPARSE_POINT, _FILE_FLAG_SEQUENTIAL_SCAN = 0x00200000, 0x08000000
+    _FILE_DISPOSITION_INFO_CLASS = 4  # FileDispositionInfo
+    _INVALID = wintypes.HANDLE(-1).value
+
+    _k32.CreateFileW.restype = wintypes.HANDLE
+    _k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                 wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    _k32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
+    _k32.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    _k32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    _k32.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                              wintypes.LPVOID]
+    _k32.SetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _shell32.SHGetKnownFolderPath.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE,
+                                              ctypes.POINTER(ctypes.c_void_p)]
+    _shell32.SHGetKnownFolderPath.restype = ctypes.c_long  # an HRESULT, checked here
+    _ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+
+    def _fail(what: str) -> OSError:
+        err = ctypes.get_last_error()
+        return OSError(0, f"{what}: {ctypes.FormatError(err).strip()}", None, err)
+
+    def _epoch(ft) -> float:
+        return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) / 1e7 - 11644473600.0
+
+    def _open(path: Path):
+        # No sharing: until the handle closes, no one else can open, write, rename or delete the file. The final
+        # component is opened as itself, never followed if it is a link, so refusal() sees its reparse attribute.
+        h = _k32.CreateFileW(str(path), _GENERIC_READ | _DELETE, 0, None, _OPEN_EXISTING,
+                             _FILE_FLAG_OPEN_REPARSE_POINT | _FILE_FLAG_SEQUENTIAL_SCAN, None)
+        if h == _INVALID or h is None:
+            raise _fail("CreateFileW")
+        return h
+
+    def _close(h) -> None:
+        _k32.CloseHandle(h)
+
+    def _info(h) -> FileInfo:
+        bhfi = _BY_HANDLE_FILE_INFORMATION()
+        if not _k32.GetFileInformationByHandle(h, ctypes.byref(bhfi)):
+            raise _fail("GetFileInformationByHandle")
+        buf = ctypes.create_unicode_buffer(32768)
+        n = _k32.GetFinalPathNameByHandleW(h, buf, len(buf), 0)
+        if not n or n >= len(buf):
+            raise _fail("GetFinalPathNameByHandleW")
+        final = buf.value[4:] if buf.value.startswith("\\\\?\\") else buf.value
+        return FileInfo(attributes=bhfi.dwFileAttributes, links=bhfi.nNumberOfLinks,
+                        size=(bhfi.nFileSizeHigh << 32) | bhfi.nFileSizeLow, created=_epoch(bhfi.ftCreationTime),
+                        final_path=final)
+
+    def _sha256(h) -> str:
+        sha, buf, got = hashlib.sha256(), ctypes.create_string_buffer(1 << 22), wintypes.DWORD()
+        while True:
+            if not _k32.ReadFile(h, buf, len(buf), ctypes.byref(got), None):
+                raise _fail("ReadFile")
+            if got.value == 0:
+                return sha.hexdigest()
+            sha.update(memoryview(buf)[:got.value])
+
+    def _mark_deleted(h) -> None:
+        info = _FILE_DISPOSITION_INFO(True)
+        if not _k32.SetFileInformationByHandle(h, _FILE_DISPOSITION_INFO_CLASS, ctypes.byref(info),
+                                               ctypes.sizeof(info)):
+            raise _fail("SetFileInformationByHandle(FileDispositionInfo)")
+
+    def downloads_folder() -> Path:
+        """The user's Downloads folder from the Known Folder API: it follows a moved or redirected folder, which
+        ~/Downloads does not."""
+        guid = (ctypes.c_byte * 16).from_buffer_copy(FOLDERID_DOWNLOADS.bytes_le)
+        p = ctypes.c_void_p()
+        hr = _shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(p))
+        try:
+            if hr != 0:
+                raise Refused(f"SHGetKnownFolderPath(FOLDERID_Downloads) failed: HRESULT {hr & 0xFFFFFFFF:#010x}")
+            return Path(ctypes.wstring_at(p.value))
+        finally:
+            _ole32.CoTaskMemFree(p)  # the API allocates the string even when it fails
+else:
+    def _unsupported(*_a):
+        raise OSError("the browser's Downloads copies are handled on Windows only")
+
+    _open = _close = _info = _sha256 = _mark_deleted = _unsupported
+
+    def downloads_folder() -> Path:
+        raise Refused("the Downloads known folder is read on Windows only")

@@ -437,6 +437,67 @@ def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path,
     assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
+def test_a_download_seen_in_progress_records_when_it_reached_its_final_size(tmp_path, monkeypatch):
+    # The browser's Downloads copy is created within seconds of this moment; a file already whole when first seen
+    # has no such moment, and its copy is never matched.
+    _isolate(tmp_path, monkeypatch)
+    growing, whole = dp.DOWNLOADS / "6b1c0d4e-growing", dp.DOWNLOADS / "6b1c0d4e-whole"
+    growing.write_bytes(dp.RAR_MAGIC)
+    whole.write_bytes(dp.RAR_MAGIC + b"whole")
+    p = dp.Pipeline()
+    p.scan(100.0)
+    growing.write_bytes(dp.RAR_MAGIC + b"rest of the archive")
+    p.scan(102.0)
+    p.scan(114.0)
+    assert p.archives[growing.name].download_finished == 102.0
+    assert p.archives[whole.name].download_finished is None
+
+
+def test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(dp.download_copies, "clean", lambda folder, d, delete, log_path: calls.append(d) or [])
+    rec = dict(id="a1", status="done", rar_bytes=10, rar_sha256="ab" * 32, download_finished=5.0)
+    p = dp.Pipeline(copies_folder=tmp_path)
+    p.clean_copies(rec)
+    p.clean_copies({**rec, "status": "failed"})  # its copy may be the last one once failed/ is trimmed
+    p.clean_copies({**rec, "download_finished": None})  # whole when first seen: nothing to match on
+    p.clean_copies({k: v for k, v in rec.items() if not k.startswith("rar_")})  # written before hashes existed
+    dp.Pipeline(copies_folder=None).clean_copies(rec)  # mode off, or the folder was refused
+    assert calls == [dp.download_copies.Download(id="a1", size=10, sha256="ab" * 32, finished=5.0)]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="deletes through a Win32 handle")
+def test_a_finished_archives_downloads_copy_is_deleted(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "COPIES_MODE", "delete")
+    copies = tmp_path / "user-downloads"  # _isolate made downloads/, the watched folder
+    copies.mkdir()
+    data = dp.RAR_MAGIC + b"payload" * 500
+    rar = dp.DOWNLOADS / "0d9f6a51-5d4e-4a8e-9a3e-3a1f0c2b7e11"
+    rar.write_bytes(data[:10])
+    p = dp.Pipeline(copies_folder=copies)
+    t0 = time.time()
+    p.scan(t0)
+    rar.write_bytes(data)
+    copy = copies / "event-team-a-vs-team-b-bo3-Xy12.rar"
+    copy.write_bytes(data)
+    other = copies / "same-size-other-archive.rar"
+    other.write_bytes(data[:-1] + b"!")
+    p.scan(t0 + 2)
+    p.scan(t0 + 14)
+    a = p.archives[rar.name]
+    a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-0d9f6a51", dp.WORK_DIR / "w"
+    a.work.mkdir()
+    a.dems, a.results = [a.work / "x-m1-nuke.dem"], {"x-m1-nuke.dem": {"ok": True, "map": "m1-nuke"}}
+    p.finish_archives()
+    assert p.ledger[rar.name]["download_finished"] == t0 + 2
+    assert not copy.exists() and other.exists()
+    rows = [json.loads(x) for x in dp.COPIES_LOG.read_text(encoding="utf-8").splitlines()]
+    assert sorted((Path(r["path"]).name, r["outcome"]) for r in rows) == [
+        (copy.name, "deleted"), (other.name, "kept")]
+
+
 def test_assist_on_own_teammate_is_not_credited():
     # A pro demo, tick 31391: a T player (C) hurt his teammate (D) for 38, a CT player (A) killed D, and
     # player_death names C as assister; the scoreboard does not count it (assists 1, not 2).
@@ -755,6 +816,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dp, "LEDGER", dp.DEMOS_DIR / "archives.jsonl")
     monkeypatch.setattr(dp, "DROPPED", dp.DEMOS_DIR / "failed_dropped.jsonl")
     monkeypatch.setattr(dp, "MANIFEST", dp.DEMOS_DIR / "manifest.jsonl")
+    monkeypatch.setattr(dp, "COPIES_LOG", dp.LOG_DIR / "download_copies.jsonl")
     # Free space is injected, never the machine's: the capacity tests failed whenever C: neared the 45 GB floor.
     # A test that needs another value sets free_gb itself.
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)

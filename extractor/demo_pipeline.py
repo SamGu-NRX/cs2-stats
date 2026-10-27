@@ -11,7 +11,9 @@ Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stop
       .venv\\Scripts\\python.exe -I demo_pipeline.py --once     (exit when idle)
       add --retry-failed to also pick up RARs in failed/ (each failed demo once per extractor version)
 Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
-CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest).
+CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest),
+CS2_PIPELINE_DOWNLOAD_COPIES (off, dry-run or delete; default dry-run): what to do with the copy of each finished
+archive that the browser also saves to Windows Downloads (download_copies.py).
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ import psutil
 
 ROOT = Path(__file__).resolve().parent  # code
 sys.path.insert(0, str(ROOT))  # -I drops the script dir from sys.path; extract.py lives next to this file
+import download_copies  # noqa: E402
 import extract  # noqa: E402
 from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, repo_root  # noqa: E402
 
@@ -56,6 +59,11 @@ MAPDATA = DATA_ROOT / "mapdata" / "2000935"
 MANIFEST = DEMOS_DIR / "manifest.jsonl"
 LEDGER = DEMOS_DIR / "archives.jsonl"  # one line per finished archive, done or failed
 DROPPED = DEMOS_DIR / "failed_dropped.jsonl"  # failed archives deleted because failed/ was full
+# The browser's second copy of each archive, in Windows Downloads. Only a finished archive's copy is deleted: a
+# failed archive's copy is kept, because failed/ deletes its oldest archives past MAX_FAILED_GB and the copy may
+# then be the only one left to diagnose the failure. dry-run, the default, logs what delete would remove.
+COPIES_MODE = os.environ.get("CS2_PIPELINE_DOWNLOAD_COPIES") or "dry-run"
+COPIES_LOG = LOG_DIR / "download_copies.jsonl"  # one line per candidate copy: deleted, would_delete or kept
 # Maps written by an older extractor; a re-downloaded copy extracted now replaces the old folder.
 NEEDS_REEXTRACT = DEMOS_DIR / "needs_reextract.jsonl"
 
@@ -161,6 +169,14 @@ class CompletenessTracker:
         self._seen.pop(path, None)
         self._first.pop(path, None)
 
+    def last_change(self, path: Path) -> float | None:
+        """When this run first saw the file at its current size, if its size changed while observed (a download
+        seen in progress). None for a file already whole when first seen."""
+        first, seen = self._first.get(path), self._seen.get(path)
+        if first is None or seen is None or seen[0] == first[0]:
+            return None
+        return seen[1]
+
     def first_seen(self, path: Path) -> float | None:
         first = self._first.get(path)
         return None if first is None else first[1]
@@ -212,6 +228,7 @@ class Archive:
     rar_bytes: int = 0  # the downloaded file as picked up: its size, SHA-256, and when its download began
     rar_sha256: str | None = None
     download_started: float = 0.0
+    download_finished: float | None = None  # the first poll at its final size, for a download seen in progress
     archive_gb_counted: bool = False
 
 
@@ -736,8 +753,9 @@ def read_ledger() -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 class Pipeline:
-    def __init__(self, retry_failed: bool = False):
+    def __init__(self, retry_failed: bool = False, copies_folder: Path | None = None):
         self.retry_failed = retry_failed
+        self.copies_folder = copies_folder  # checked by download_copies.check_folder; None: copies are left alone
         self.tracker = CompletenessTracker()
         self.archives: dict[str, Archive] = {}
         self.jobs: deque[Job] = deque()
@@ -827,7 +845,7 @@ class Pipeline:
                 took = self.tracker.download_s(f, now)
                 if took is not None:
                     self.download_s.append(took)
-            seen = self.tracker.first_seen(f)
+            seen, finished = self.tracker.first_seen(f), self.tracker.last_change(f)
             self.tracker.forget(f)
             if not is_rar(f):
                 self.ignored.add(f)
@@ -837,7 +855,8 @@ class Pipeline:
             # The download began no later than the file appeared: its creation time, or when this run first saw it.
             created = getattr(st, "st_birthtime", st.st_ctime)
             self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, rar_sha256=extract.file_sha256(f),
-                                         download_started=min(created, seen) if seen is not None else created)
+                                         download_started=min(created, seen) if seen is not None else created,
+                                         download_finished=finished)
             log.info("pending archive %s (%.0f MB)", f, f.stat().st_size / 1e6)
 
     # --- extraction
@@ -1082,6 +1101,7 @@ class Pipeline:
             self.ledger[a.id] = rec
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
+            self.clean_copies(rec)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
@@ -1133,10 +1153,27 @@ class Pipeline:
 
     @staticmethod
     def rar_facts(a: Archive) -> dict:
-        """The downloaded file's size, SHA-256 and download start, for its ledger record: what a later cleanup of
-        the browser's saved copies can match against."""
-        return dict(rar_bytes=a.rar_bytes, rar_sha256=a.rar_sha256, download_started=a.download_started) \
-            if a.rar_sha256 else {}
+        """The downloaded file's size, SHA-256, download start and finish, for its ledger record: what
+        clean_copies matches the browser's saved copy against."""
+        return dict(rar_bytes=a.rar_bytes, rar_sha256=a.rar_sha256, download_started=a.download_started,
+                    download_finished=a.download_finished) if a.rar_sha256 else {}
+
+    def clean_copies(self, rec: dict) -> None:
+        """Delete (or in dry-run, log) the browser's Downloads copy of a finished archive. A record without a
+        download seen in progress has no finish time to match on, and its copy is left alone."""
+        if self.copies_folder is None or rec.get("status") != "done" or not rec.get("rar_sha256") \
+                or rec.get("download_finished") is None:
+            return
+        d = download_copies.Download(id=rec["id"], size=rec["rar_bytes"], sha256=rec["rar_sha256"],
+                                     finished=rec["download_finished"])
+        try:
+            rows = download_copies.clean(self.copies_folder, d, delete=COPIES_MODE == "delete", log_path=COPIES_LOG)
+        except OSError as e:
+            log.error("could not clean the Downloads copy of %s: %s", rec["id"], e)
+            return
+        for r in rows:
+            log.info("Downloads copy %s of %s: %s%s", r["path"], rec["id"], r["outcome"],
+                     f" ({r['reason']})" if r["reason"] else "")
 
     def enforce_failed_cap(self) -> None:
         """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each."""
@@ -1363,6 +1400,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if DOWNLOADS is None:
         ap.error("set CS2_DEMO_DOWNLOADS to the folder the browser saves HLTV demo archives to")
+    if COPIES_MODE not in download_copies.MODES:
+        ap.error(f"CS2_PIPELINE_DOWNLOAD_COPIES is {COPIES_MODE!r}; use one of {', '.join(download_copies.MODES)}")
     try:
         # everything the pipeline writes (tables, ledgers, logs, failed archives) lives under DATA_ROOT
         check_output(DATA_ROOT, private=True, what="the pipeline's data folder (tables, ledgers, logs)")
@@ -1385,7 +1424,14 @@ def main(argv=None) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     freeze_code()
-    pipeline = Pipeline(retry_failed=a.retry_failed)
+    copies = None
+    if COPIES_MODE != "off":
+        try:
+            copies = download_copies.check_folder(download_copies.downloads_folder(), DATA_ROOT, DOWNLOADS)
+            log.info("Downloads copies of finished archives: %s in %s, logged to %s", COPIES_MODE, copies, COPIES_LOG)
+        except download_copies.Refused as e:
+            log.error("leaving the browser's Downloads copies alone: %s", e)
+    pipeline = Pipeline(retry_failed=a.retry_failed, copies_folder=copies)
     try:
         server = StatusServer((HOST, PORT), make_handler(pipeline))
     except OSError as e:
@@ -1401,6 +1447,8 @@ def main(argv=None) -> int:
     # place and get processed again.
     pipeline.sweep_work(force=True)
     tidy_demos()
+    for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
+        pipeline.clean_copies(rec)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")
