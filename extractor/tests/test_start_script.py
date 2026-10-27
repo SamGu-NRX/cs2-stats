@@ -25,8 +25,10 @@ def test_settings_reach_the_detached_process_byte_for_byte(tmp_path):
     command = f'"{sys.executable}" -I "{probe}" "{out}"'.replace("'", "''")
     ps = f". '{ROOT / 'start_detached.ps1'}'; Start-Detached -CommandLine '{command}' -Directory '{tmp_path}'"
     subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], check=True,
-                   env=dict(os.environ, CS2_TRICKY=tricky), capture_output=True, timeout=60)
-    deadline = time.time() + 30
+                   env=dict(os.environ, CS2_TRICKY=tricky), capture_output=True, timeout=180)
+    # The probe's output file is the signal; a busy machine has taken 28 s to start it through WMI, so the limit
+    # only bounds a hang.
+    deadline = time.time() + 120
     while not (out.exists() and out.stat().st_size) and time.time() < deadline:
         time.sleep(0.2)
     assert json.loads(out.read_text(encoding="utf-8"))["CS2_TRICKY"] == tricky

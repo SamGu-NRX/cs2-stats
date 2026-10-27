@@ -11,8 +11,7 @@ Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stop
       .venv\\Scripts\\python.exe -I demo_pipeline.py --once     (exit when idle)
       add --retry-failed to also pick up RARs in failed/ (each failed demo once per extractor version)
 Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
-CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest),
-CS2_PIPELINE_COPIES_DIR (optional: delete a finished archive's exact copies there).
+CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest).
 """
 
 from __future__ import annotations
@@ -47,10 +46,6 @@ from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, rep
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
 DOWNLOADS: Path | None = Path(os.environ["CS2_DEMO_DOWNLOADS"]) if os.environ.get("CS2_DEMO_DOWNLOADS") else None
 DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-stats-data")  # data; holds no code
-# The user's folder where T3's browser also saves a named copy of each finished download
-# (<event>-<teams>-bo3-<id>.rar), which the pipeline never reads; 146 of them once took 68 GB. Opt-in: with
-# CS2_PIPELINE_COPIES_DIR set, a finished archive's exact copies there are deleted (delete_copies).
-COPIES_DIR: Path | None = Path(os.environ["CS2_PIPELINE_COPIES_DIR"]) if os.environ.get("CS2_PIPELINE_COPIES_DIR") else None
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
 FAILED_DIR = DATA_ROOT / "failed"
@@ -229,6 +224,7 @@ class Job:
     proc: subprocess.Popen | None = None
     t0: float = 0.0
     rss_gb: float = 0.0  # the worker's process tree, at the last poll
+    kids: dict = field(default_factory=dict)  # pid -> psutil.Process the worker was seen to start
     peak_rss_gb: float = 0.0
     killed: str | None = None
 
@@ -380,6 +376,52 @@ def lowest_free_gb() -> float:
     return min(free_gb(p) for p in [p for p in (DATA_ROOT, DOWNLOADS) if p is not None and Path(p).exists()] or [DATA_ROOT])
 
 
+def worker_python() -> tuple[str, dict]:
+    """The interpreter a worker runs, and what to add to its environment. On Windows the venv's python.exe is a
+    launcher stub that starts the base interpreter as its child, so a worker was two processes, and the stub could
+    exit while the interpreter kept parsing (review of PR 55). Workers start the base interpreter directly,
+    told which venv it serves by __PYVENV_LAUNCHER__, as multiprocessing does on Windows: one process, so poll()
+    and a kill reach the parse itself."""
+    base = getattr(sys, "_base_executable", sys.executable)
+    if os.name == "nt" and base and Path(base) != Path(sys.executable):
+        return base, {"__PYVENV_LAUNCHER__": sys.executable}
+    return sys.executable, {}
+
+
+def worker_processes(j: "Job") -> list:
+    """The processes of a worker still running: the worker, and every process under it it was seen to start. A job
+    is finished only when this list is empty."""
+    alive = []
+    if j.proc.poll() is None:
+        try:
+            alive.append(psutil.Process(j.proc.pid))
+            for k in alive[0].children(recursive=True):
+                j.kids.setdefault(k.pid, k)
+        except psutil.Error:
+            pass
+    for k in j.kids.values():
+        try:
+            if k.is_running() and k.status() != psutil.STATUS_ZOMBIE:  # is_running also checks its creation time
+                alive.append(k)
+        except psutil.Error:
+            continue
+    return alive
+
+
+def kill_worker(j: "Job") -> list[int]:
+    """Kill a worker's stub and every process under it, remembered ones included; returns every pid it had."""
+    pids = kill_tree(j.proc) if j.proc.poll() is None else [j.proc.pid]
+    for k in list(j.kids.values()):
+        try:
+            if k.is_running():
+                k.kill()
+                k.wait(timeout=10)
+        except psutil.Error:
+            pass
+        pids.append(k.pid)
+    return sorted(set(pids))
+
+
 def free_gb(path: Path | None = None) -> float:
     # DATA_ROOT is read at call time, not bound as a default, so tests that move it are measured there
     return shutil.disk_usage(path or DATA_ROOT).free / 1e9
@@ -465,27 +507,6 @@ def _deletable(path: Path) -> Path:
         if r != root and root in r.parents:
             return r
     raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT} or {DOWNLOADS}")
-
-
-def delete_copies(copies: Path, size: int, sha256: str, started: float, what: str = "") -> list[Path]:
-    """Delete the copies of one downloaded archive from copies, the user's own folder: a *.rar file directly in
-    it (no link, nothing in a subfolder) with the archive's exact size and SHA-256, last modified after its
-    download began. Content is the only rule; nothing else there is touched. Each deletion is logged."""
-    gone = []
-    for f in sorted(copies.glob("*.rar")):
-        try:
-            if f.is_symlink() or not f.is_file() or f.parent.resolve() != copies.resolve():
-                continue
-            st = f.stat()
-            if st.st_size != size or st.st_mtime <= started or extract.file_sha256(f) != sha256:
-                continue
-            f.unlink()
-        except OSError as e:
-            log.warning("could not check or delete %s: %s", f, e)
-            continue
-        log.info("deleted %s: the same %d bytes (SHA-256 %s) as archive %s", f, size, sha256[:16], what)
-        gone.append(f)
-    return gone
 
 
 def safe_rmtree(path: Path, ignore_errors: bool = False) -> None:
@@ -734,7 +755,8 @@ class Pipeline:
         self.cs2 = False  # read once per step
         self.started = time.time()
         self.last_sweep = 0.0
-        self._budget: tuple[float, float, bool, float] = (0.0, 0.0, True, 0.0)  # (computed_at, ourGB, capacity, roomGB)
+        self._outputs: tuple[float, int] | None = None  # (read at, bytes in demos/ and failed/); None: read again
+        self._room = 0.0
         self._reextract: tuple[float, set[str]] = (-1.0, set())  # (needs_reextract mtime, ledger ids)
 
     def reextract_ids(self) -> set[str]:
@@ -930,16 +952,17 @@ class Pipeline:
             meta = dict(archive_rar=str(j.archive.rar), archive_slug=j.archive.slug,
                         dem_modified_in_archive=listing.get("modified"), dem_size_in_archive=listing.get("size"),
                         download_folder=j.archive.rar.parent.name)
-            cmd = [sys.executable, "-I", str(RUN_CODE / "extract.py"), str(j.dem), str(j.out_dir), "--source", "hltv",
+            python, python_env = worker_python()
+            cmd = [python, "-I", str(RUN_CODE / "extract.py"), str(j.dem), str(j.out_dir), "--source", "hltv",
                    "--mapdata", str(MAPDATA), "--archive", j.archive.id, "--meta", json.dumps(meta),
                    "--result", str(j.result_path)]
             env = dict(os.environ, RAYON_NUM_THREADS="4", POLARS_MAX_THREADS="4", PYTHONIOENCODING="utf-8",
-                       **{REPO_ENV: str(repo_root())})
+                       **{REPO_ENV: str(repo_root())}, **python_env)
             j.out_dir.parent.mkdir(parents=True, exist_ok=True)
             with open(j.log_path, "w", encoding="utf-8") as lf:
                 j.proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                           cwd=str(DATA_ROOT), env=env, creationflags=IDLE | NO_WINDOW)
-            j.t0, j.rss_gb, j.peak_rss_gb, j.killed = time.time(), 0.0, 0.0, None
+            j.t0, j.rss_gb, j.peak_rss_gb, j.killed, j.kids = time.time(), 0.0, 0.0, None, {}
             self.running.append(j)
             log.info("parsing %s/%s (%d running)", j.archive.slug, j.map_key, len(self.running))
 
@@ -948,9 +971,15 @@ class Pipeline:
         if self.running and avail < RAM_KILL_GB:
             self.requeue_newest(avail)
         for j in list(self.running):
-            rc = j.proc.poll()
-            if rc is None:
-                j.rss_gb = tree_rss_gb(j.proc.pid)
+            procs = worker_processes(j)
+            if procs:  # the stub or anything under it still runs: the job is not finished
+                rss = 0
+                for pr in procs:
+                    try:
+                        rss += pr.memory_info().rss
+                    except psutil.Error:
+                        continue
+                j.rss_gb = rss / 1e9
                 j.peak_rss_gb = max(j.peak_rss_gb, j.rss_gb)
                 if j.rss_gb > WORKER_RSS_LIMIT_GB:
                     j.killed = f"killed: worker RSS {j.rss_gb:.2f} GB > {WORKER_RSS_LIMIT_GB} GB"
@@ -958,7 +987,7 @@ class Pipeline:
                     j.killed = f"killed: worker ran longer than {WORKER_TIMEOUT_S} s"
                 if j.killed:
                     log.error("%s/%s %s", j.archive.slug, j.map_key, j.killed)
-                    kill_tree(j.proc)
+                    kill_worker(j)
                 else:
                     continue
             self.running.remove(j)
@@ -967,12 +996,12 @@ class Pipeline:
     def requeue_newest(self, avail: float) -> None:
         """Memory is nearly gone: kill the newest worker and queue its demo again. Only that worker's staging
         folder (<map>/.tmp-<pid>, extract.write_output) goes; a version it or any earlier run published stays."""
-        alive = [j for j in self.running if j.proc.poll() is None]
+        alive = [j for j in self.running if worker_processes(j)]
         if not alive:
             return  # every worker has exited; poll_workers finishes them
         j = alive[-1]
         self.running.remove(j)
-        pids = kill_tree(j.proc)
+        pids = kill_worker(j)
         for pid in pids:
             staging = j.out_dir / f".tmp-{pid}"
             if staging.exists():
@@ -983,6 +1012,7 @@ class Pipeline:
         self.jobs.appendleft(j)
 
     def finish_job(self, j: Job, rc: int) -> None:
+        self.outputs_changed()
         j.archive.worker_s += time.time() - j.t0
         res = None
         if j.result_path.exists():
@@ -1034,6 +1064,7 @@ class Pipeline:
                 self.fail_archive(a, json.dumps(bad, default=str)[:4000])
                 continue
             replace_old_extractions(a.results, a.out_dirs)
+            self.outputs_changed()
             # Every map is written and validated: the inputs can go.
             safe_rmtree(a.work, ignore_errors=True)
             if a.work.exists():
@@ -1047,12 +1078,12 @@ class Pipeline:
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
-            self.clear_copies(rec)
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
+        self.outputs_changed()
         log.error("archive %s failed: %s", a.id, reason[:500])
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         bad = {n: r for n, r in a.results.items() if not r.get("ok")}
@@ -1097,28 +1128,17 @@ class Pipeline:
         append_jsonl(LEDGER, rec)
         self.ledger[a.id] = rec
         self.archives.pop(a.id, None)
-        if kept:
-            self.clear_copies(rec)
 
     @staticmethod
     def rar_facts(a: Archive) -> dict:
-        """The downloaded file's size, SHA-256 and download start, for its ledger record."""
+        """The downloaded file's size, SHA-256 and download start, for its ledger record: what a later cleanup of
+        the browser's saved copies can match against."""
         return dict(rar_bytes=a.rar_bytes, rar_sha256=a.rar_sha256, download_started=a.download_started) \
             if a.rar_sha256 else {}
 
-    def clear_copies(self, rec: dict) -> list[Path]:
-        """Delete the browser's copies of a finished archive (ledger record rec) from COPIES_DIR, if set."""
-        if COPIES_DIR is None or not rec.get("rar_sha256"):
-            return []
-        return delete_copies(COPIES_DIR, int(rec["rar_bytes"]), rec["rar_sha256"], float(rec["download_started"]),
-                             rec.get("slug") or rec.get("id"))
-
-    def clear_copies_from_ledger(self) -> int:
-        """One pass at startup: every finished archive whose ledger record carries a hash."""
-        return sum(len(self.clear_copies(rec)) for rec in self.ledger.values())
-
     def enforce_failed_cap(self) -> None:
         """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each."""
+        self.outputs_changed()
         kept = sorted((d for d in FAILED_DIR.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
         sizes = {d: tree_bytes(d) for d in kept}
         total = sum(sizes.values())
@@ -1167,22 +1187,30 @@ class Pipeline:
             if a.state == "extracting" and a.listing:
                 listed = sum(int(e.get("size") or 0) for e in a.listing.values())
                 held += max(0, listed - (work.get(Path(a.work), 0) if a.work else 0))
-        # failed/ is held too (MAX_FAILED_GB caps it inside the budget), and so are split parts.
-        return (tree_bytes(DEMOS_DIR) + tree_bytes(FAILED_DIR) + sum(work.values()) + waiting + downloading, held)
+        return self.outputs_bytes() + sum(work.values()) + waiting + downloading, held
 
-    def budget(self, fresh: bool = False) -> tuple[float, bool]:
-        """(GB we use, whether a new extraction fits); room_gb() is what is left under both limits."""
-        t, our, ok, _ = self._budget
-        if fresh or time.time() - t > BUDGET_CACHE_S:
-            our, held = (b / 1e9 for b in self.disk_usage())
-            free = lowest_free_gb()
-            ok = our + held < MAX_OUR_GB and free - held > MIN_FREE_GB  # at either limit, nothing more fits
-            self._budget = (time.time(), our, ok, min(MAX_OUR_GB - our - held, free - held - MIN_FREE_GB))
-        return our, ok
+    def outputs_bytes(self) -> int:
+        """Bytes in demos/ and failed/ (MAX_FAILED_GB caps it inside the budget). Walking them took 0.55 s on the live
+        data folder, so the reading is kept for up to BUDGET_CACHE_S; the pipeline's own writes there drop it
+        (outputs_changed). Everything a download changes (waiting and in-progress archives, work/, space held by
+        extractions) is read fresh every time, so a download that just finished counts at once."""
+        if self._outputs is None or time.time() - self._outputs[0] > BUDGET_CACHE_S:
+            self._outputs = (time.time(), tree_bytes(DEMOS_DIR) + tree_bytes(FAILED_DIR))
+        return self._outputs[1]
+
+    def outputs_changed(self) -> None:
+        self._outputs = None
+
+    def budget(self) -> tuple[float, bool]:
+        """(GB we use, whether a new extraction fits), read now; room_gb() is then what is left under both limits."""
+        our, held = (b / 1e9 for b in self.disk_usage())
+        free = lowest_free_gb()
+        self._room = min(MAX_OUR_GB - our - held, free - held - MIN_FREE_GB)
+        return our, our + held < MAX_OUR_GB and free - held > MIN_FREE_GB  # at either limit, nothing more fits
 
     def room_gb(self) -> float:
-        self.budget()
-        return self._budget[3]
+        """What the last budget() reading left under the disk budget and the free-space floor."""
+        return self._room
 
     def sweep_work(self, force: bool = False) -> None:
         """Delete extraction folders in work/ older than STALE_WORK_S that no active archive owns."""
@@ -1245,9 +1273,11 @@ class Pipeline:
 
     def shutdown(self) -> None:
         """Kill every worker and 7-Zip with its children; the kill-on-close job may not exist."""
-        for proc in [j.proc for j in self.running] + [a.proc for a in self.archives.values()]:
-            if proc is not None and proc.poll() is None:
-                kill_tree(proc)
+        for j in self.running:
+            kill_worker(j)
+        for a in self.archives.values():
+            if a.proc is not None and a.proc.poll() is None:
+                kill_tree(a.proc)
 
 
 # ---------------------------------------------------------------------------
@@ -1369,8 +1399,6 @@ def main(argv=None) -> int:
     # place and get processed again.
     pipeline.sweep_work(force=True)
     tidy_demos()
-    if COPIES_DIR is not None:
-        log.info("copies folder %s: deleted %d copies of finished archives", COPIES_DIR, pipeline.clear_copies_from_ledger())
     threading.Thread(target=server.serve_forever, daemon=True).start()
     # The venv's pythonw.exe is a launcher stub; this pid is the real interpreter to stop.
     (LOG_DIR / "pipeline.pid").write_text(str(os.getpid()), encoding="utf-8")

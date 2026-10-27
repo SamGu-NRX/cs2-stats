@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 import time
@@ -416,61 +417,24 @@ def test_scan_waits_for_complete_file_before_judging_magic(tmp_path, monkeypatch
     assert junk in p.ignored and "notrar" not in p.archives
 
 
-def _copies_case(tmp_path):
-    """A copies folder holding one exact copy of an archive's bytes and every near miss."""
+def test_a_finished_archive_records_the_downloaded_files_size_and_hash(tmp_path, monkeypatch):
+    # The browser saves a named copy of each download elsewhere; its size and SHA-256 in the ledger let a later
+    # cleanup match those copies exactly.
     import hashlib
-    import os
-    data = dp.RAR_MAGIC + b"payload" * 100
-    copies = tmp_path / "copies"
-    (copies / "sub").mkdir(parents=True)
-    exact, old = copies / "event-a-vs-b-bo3-x.rar", copies / "event-a-vs-b-bo3-old.rar"
-    other, zipped, nested = copies / "same-size.rar", copies / "event-a-vs-b-bo3-x.zip", copies / "sub" / "x.rar"
-    for f in (exact, old, zipped, nested):
-        f.write_bytes(data)
-    other.write_bytes(dp.RAR_MAGIC + b"PAYLOAD" * 100)  # same size, other bytes
-    os.utime(old, (1000.0, 1000.0))  # saved before the download began
-    return copies, len(data), hashlib.sha256(data).hexdigest(), dict(exact=exact, old=old, other=other,
-                                                                       zipped=zipped, nested=nested)
-
-
-def test_only_an_exact_copy_saved_after_the_download_began_is_deleted(tmp_path):
-    # T3's browser saves a named copy of each finished download in Downloads; 146 took 68 GB. That folder is the
-    # user's: a file goes only if it is a *.rar directly in it with the archive's size and SHA-256, saved later.
-    copies, size, sha, f = _copies_case(tmp_path)
-    assert dp.delete_copies(copies, size, sha, started=5000.0, what="r") == [f["exact"]]
-    assert all(f[k].exists() for k in ("old", "other", "zipped", "nested")) and not f["exact"].exists()
-
-
-def test_a_finished_archive_records_its_hash_and_its_copy_goes(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
-    copies, size, sha, f = _copies_case(tmp_path)
-    monkeypatch.setattr(dp, "COPIES_DIR", copies)
+    data = dp.RAR_MAGIC + b"payload" * 100
     rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
-    rar.write_bytes(f["exact"].read_bytes())
+    rar.write_bytes(data)
     p = dp.Pipeline()
     p.scan(0.0)
     p.scan(16.0)
     a = p.archives[rar.name]
-    assert (a.rar_bytes, a.rar_sha256) == (size, sha) and a.download_started <= rar.stat().st_mtime
-    a.download_started = 5000.0  # the copies were written just now, after it
+    assert (a.rar_bytes, a.rar_sha256) == (len(data), hashlib.sha256(data).hexdigest())
+    assert a.download_started <= rar.stat().st_mtime
     a.slug, a.listing = "slug-r", {"x-m1-nuke.dem": {}}
     p.fail_archive(a, "7z listing failed: test")
     rec = json.loads(dp.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
-    assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", size, sha)
-    assert not f["exact"].exists() and f["old"].exists() and f["other"].exists()
-
-
-def test_startup_deletes_copies_of_archives_the_ledger_hashed(tmp_path, monkeypatch):
-    _isolate(tmp_path, monkeypatch)
-    copies, size, sha, f = _copies_case(tmp_path)
-    dp.append_jsonl(dp.LEDGER, dict(id="r", status="done", slug="s", rar_bytes=size, rar_sha256=sha,
-                                    download_started=5000.0))
-    dp.append_jsonl(dp.LEDGER, dict(id="older", status="done", slug="t"))  # recorded before hashes: nothing to match
-    p = dp.Pipeline()
-    monkeypatch.setattr(dp, "COPIES_DIR", None)
-    assert p.clear_copies_from_ledger() == 0 and f["exact"].exists()  # off unless set
-    monkeypatch.setattr(dp, "COPIES_DIR", copies)
-    assert p.clear_copies_from_ledger() == 1 and not f["exact"].exists() and f["other"].exists()
+    assert (rec["status"], rec["rar_bytes"], rec["rar_sha256"]) == ("failed", len(data), a.rar_sha256)
 
 
 def test_assist_on_own_teammate_is_not_credited():
@@ -538,6 +502,16 @@ class _FakeProc:
         return None
 
 
+class _FakePs:
+    def memory_info(self):
+        return type("mi", (), {"rss": int(0.5e9)})()
+
+
+def _fake_tree(monkeypatch):
+    """worker_processes over _FakeProc jobs: one process while poll() says running, none after."""
+    monkeypatch.setattr(dp, "worker_processes", lambda j: [_FakePs()] if j.proc.poll() is None else [])
+
+
 def _jobs(n):
     a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="slug-r")
     return [dp.Job(archive=a, dem=dp.WORK_DIR / f"d{i}.dem", out_dir=dp.DEMOS_DIR / "slug-r" / f"m{i}", map_key=f"m{i}",
@@ -569,6 +543,7 @@ def test_low_memory_requeues_the_newest_worker_and_keeps_published_tables(tmp_pa
     staging.mkdir()
     monkeypatch.setattr(dp, "kill_tree", lambda proc: [proc.pid, proc.pid + 1])
     monkeypatch.setattr(dp, "tree_rss_gb", lambda pid: 0.5)
+    _fake_tree(monkeypatch)
     p.available_gb = lambda: 0.8
     p.poll_workers()
     assert p.running == [old] and p.jobs[0] is new
@@ -596,7 +571,22 @@ def test_capacity_is_off_at_the_budget_itself(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 1000)
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1000 / 1e9)
-    assert dp.Pipeline().budget(fresh=True)[1] is False
+    assert dp.Pipeline().budget()[1] is False
+
+
+def test_a_download_that_just_finished_counts_at_the_next_status_read(tmp_path, monkeypatch):
+    # Review of PR 55: room_gb() came from a disk reading kept for 10 s, so an archive that finished downloading
+    # within it was missed and the tab was told to start one more past the budget.
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "MAX_OUR_GB", 3000 / 1e9)
+    p = dp.Pipeline()
+    assert p.snapshot()["capacity"] is True
+    rar = dp.DOWNLOADS / "f3a92631-1281-45b5-80bb-48725dbb136b"
+    rar.write_bytes(b"x" * 3000)
+    p.archives[rar.name] = dp.Archive(rar=rar, id=rar.name)  # picked up as pending, a second later
+    snap = p.snapshot()
+    # The tab starts one only while downloading + pending + extracting < want: here nothing new.
+    assert snap["capacity"] is False and snap["want"] <= snap["downloading"] + snap["pendingActual"] + snap["extracting"]
 
 
 def test_failed_archives_count_inside_the_budget(tmp_path, monkeypatch):
@@ -611,7 +601,7 @@ def test_the_fullest_volume_decides_capacity(tmp_path, monkeypatch):
     # Review of PR 55: only the data folder's volume was checked; archives land in the downloads folder.
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 100.0 if Path(path) == dp.DATA_ROOT else 40.0)
-    assert dp.Pipeline().budget(fresh=True)[1] is False
+    assert dp.Pipeline().budget()[1] is False
 
 
 def test_low_memory_never_requeues_a_worker_that_already_exited(tmp_path, monkeypatch):
@@ -625,6 +615,7 @@ def test_low_memory_never_requeues_a_worker_that_already_exited(tmp_path, monkey
     p.running = [older, newest]
     killed = []
     monkeypatch.setattr(dp, "kill_tree", lambda proc: killed.append(proc.pid) or [proc.pid])
+    _fake_tree(monkeypatch)
     p.requeue_newest(0.5)
     assert killed == [older.proc.pid] and p.running == [newest] and list(p.jobs) == [older]
 
@@ -652,6 +643,53 @@ def test_shutdown_kills_each_worker_with_its_children(tmp_path, monkeypatch):
     finally:
         for proc in psutil.Process().children(recursive=True):
             proc.kill()
+
+
+def test_a_worker_is_one_process_the_venvs_interpreter(tmp_path):
+    # Review of PR 55: started through the venv's python.exe, a worker was a launcher stub plus the interpreter under
+    # it, and poll() asked the stub, which could exit while the interpreter kept parsing. The started process must be
+    # the interpreter itself, running in this venv.
+    import subprocess as sp
+    python, extra = dp.worker_python()
+    out = tmp_path / "who.json"
+    code = f"import json, os, sys; json.dump([os.getpid(), sys.prefix], open({str(out)!r}, 'w'))"
+    proc = sp.Popen([python, "-I", "-c", code], env=dict(os.environ, **extra))
+    proc.wait(timeout=60)
+    pid, prefix = json.loads(out.read_text(encoding="utf-8"))
+    assert pid == proc.pid and Path(prefix) == Path(sys.prefix)
+
+
+def test_a_worker_is_running_while_a_process_it_started_still_runs(tmp_path, monkeypatch):
+    # A worker that exited is finished only once every process it was seen to start is gone too.
+    _isolate(tmp_path, monkeypatch)
+
+    class Kid:
+        pid, running = 4242, True
+
+        def is_running(self):
+            return self.running
+
+        def status(self):
+            return "running"
+
+        def memory_info(self):
+            return type("mi", (), {"rss": int(0.2e9)})()
+
+    job = _jobs(1)[0]
+    job.proc, job.t0 = _FakeProc(), time.time()
+    job.proc.poll, job.proc.returncode = (lambda: 0), 0
+    kid = Kid()
+    job.kids = {kid.pid: kid}
+    p = dp.Pipeline()
+    p.available_gb = lambda: 50.0
+    p.running = [job]
+    finished = []
+    monkeypatch.setattr(p, "finish_job", lambda j, rc: finished.append(j))
+    p.poll_workers()
+    assert p.running == [job] and finished == []
+    kid.running = False
+    p.poll_workers()
+    assert finished == [job] and p.running == []
 
 
 def test_parse_peak_is_the_p90_of_measured_peaks():
@@ -717,9 +755,10 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "MAX_OUR_GB", 1e-6)  # 1000 bytes
     p = dp.Pipeline()
-    assert p.budget(fresh=True)[1]
+    assert p.budget()[1]
     (dp.DEMOS_DIR / "x.parquet").write_bytes(b"x" * 2000)
-    our, ok = p.budget(fresh=True)
+    p.outputs_changed()  # what finish_job does when a map lands in demos/
+    our, ok = p.budget()
     assert not ok and our > 1e-6
     snap = p.snapshot()
     assert snap["capacity"] is False and snap["pending"] >= 2 and snap["pendingActual"] == 0
@@ -728,7 +767,7 @@ def test_capacity_turns_off_over_budget(tmp_path, monkeypatch):
 def test_capacity_respects_free_space(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 44.0)
-    assert not dp.Pipeline().budget(fresh=True)[1]
+    assert not dp.Pipeline().budget()[1]
 
 
 def test_sweep_removes_only_stale_unowned_work(tmp_path, monkeypatch):
