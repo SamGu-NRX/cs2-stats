@@ -206,7 +206,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         if (bind && (!KEY.test(bind.key) || !bind.knives.length)) throw `${JSON.stringify(bind.key)}: not a key name; use one character or a name such as mouse4 or kp_end`;
         if (patch.cosmetics) {
           const kit = patch.cosmetics.musicKit;
-          if (kit > 0 && !CATALOG.musicKits.some((k) => k.id === kit)) throw `music kit ${kit} is not in BotRandomizer's catalog`;
+          // as the backend: only a kit this change sets is checked against the catalog
+          if (kit > 0 && kit !== st.status.cosmetics.musicKit && !CATALOG.musicKits.some((k) => k.id === kit)) throw `music kit ${kit} is not in BotRandomizer's catalog`;
           st.status.cosmetics = { ...patch.cosmetics, cfgPresent: true };
         }
         if (patch.botAim) st.server.botAim = patch.botAim;

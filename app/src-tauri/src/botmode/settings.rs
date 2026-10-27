@@ -167,7 +167,6 @@ pub fn set_cosmetics(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics) ->
 pub fn set_cosmetics_from(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetics, seen: Option<Cosmetics>) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
-    check_music_kit(&layout.csgo, c.music_kit)?;
     let path = layout.confined(SERVER_CFG)?;
     let (text, read_hash) = match std::fs::read(&path) {
         Ok(b) => {
@@ -177,8 +176,12 @@ pub fn set_cosmetics_from(layout: &Layout, probe: &dyn ProcessProbe, c: Cosmetic
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (NEW_CFG_HEADER.to_string(), None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
+    let now = if read_hash.is_some() { cosmetics_in(&text) } else { Cosmetics::default() };
+    // only a kit this change sets is checked, as in set_server
+    if c.music_kit != now.music_kit {
+        check_music_kit(&layout.csgo, c.music_kit)?;
+    }
     if let Some(seen) = seen {
-        let now = if read_hash.is_some() { cosmetics_in(&text) } else { Cosmetics::default() };
         if now != seen {
             return Err(format!(
                 "{SERVER_CFG}: the Bot Mode cosmetics {} (now br_dropped_knife_skins {}, br_dropped_knife_premium {}, br_player_music_kit {}); nothing was written",
@@ -465,9 +468,6 @@ fn apply_patch(text: &str, now: &ServerSettings, patch: &ServerPatch) -> String 
 pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch, seen: ServerSettings) -> Result<Meta, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let lock = OpLock::acquire(layout)?;
-    if let Some(c) = patch.cosmetics {
-        check_music_kit(&layout.csgo, c.music_kit)?;
-    }
     if let Some(b) = &patch.knife_bind {
         b.check()?;
     }
@@ -483,6 +483,11 @@ pub fn set_server(layout: &Layout, probe: &dyn ProcessProbe, patch: ServerPatch,
     let now = if read_hash.is_some() { server_in(&text) } else { ServerSettings::default() };
     if now != seen {
         return Err(format!("{SERVER_CFG}: the Bot Mode settings {}; nothing was written", changes::CHANGED_SINCE_READ));
+    }
+    // only a kit this change sets is checked: one already in the cfg (from an older catalog, or
+    // with no catalog to check against) must not block a change to another setting
+    if let Some(c) = patch.cosmetics.filter(|c| c.music_kit != now.cosmetics.music_kit) {
+        check_music_kit(&layout.csgo, c.music_kit)?;
     }
     let merged = apply_patch(&text, &now, &patch);
     let (_, meta) = changes::run(layout, probe, &lock, "server-cfg", |cs| {

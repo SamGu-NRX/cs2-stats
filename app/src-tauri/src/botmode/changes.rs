@@ -321,6 +321,17 @@ impl<'p> ChangeSet<'p> {
         r
     }
 
+    /// A guarded write whose content comes from `fill`, which runs after the journal entry is
+    /// written and before the pre-rename check: tests use it to change the target in between.
+    #[cfg(test)]
+    pub fn put_guarded_with(&mut self, rel: &str, read_hash: &str, expected: &str, fill: impl FnOnce(&mut File) -> Result<(), String>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        self.guard = Some(Some(read_hash.to_string()));
+        let r = self.put_inner(rel, expected, fill);
+        self.guard = None;
+        r
+    }
+
     fn confine(&self, rel: &str) -> Result<PathBuf, String> {
         paths::confined(&self.layout.csgo, &self.root_canon, rel, true)
     }
@@ -355,6 +366,8 @@ impl<'p> ChangeSet<'p> {
         }
         let entry = Entry { path: rel.clone(), before, after: expected.to_string() };
         let line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
+        // where this entry starts, so a compare-and-swap that fails before the rename can take it back
+        let journal_len = self.log.metadata().map_err(|e| format!("reading the change journal: {e}"))?.len();
         writeln!(self.log, "{line}")
             .and_then(|_| self.log.sync_data())
             .map_err(|e| format!("writing the change journal: {e}"))?;
@@ -384,9 +397,22 @@ impl<'p> ChangeSet<'p> {
             let _ = fs::remove_file(&tmp);
             return Err(e);
         }
-        if let Some(guard) = &self.guard {
-            if hash::file_if_exists(&target)? != *guard {
+        if let Some(guard) = self.guard.clone() {
+            let now = hash::file_if_exists(&target).inspect_err(|_| {
                 let _ = fs::remove_file(&tmp);
+            })?;
+            if now != guard {
+                let _ = fs::remove_file(&tmp);
+                // Nothing was written: the entry comes back out of the journal, so the change is
+                // undone as one that wrote nothing, instead of rollback finding the other writer's
+                // content and refusing, which would leave every later change blocked.
+                self.entries.pop();
+                // the journal handle only appends, which Windows does not let truncate
+                OpenOptions::new()
+                    .write(true)
+                    .open(self.dir.join(ENTRIES))
+                    .and_then(|f| f.set_len(journal_len).and_then(|_| f.sync_data()))
+                    .map_err(|e| format!("writing the change journal: {e}"))?;
                 return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
             }
         }

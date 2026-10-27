@@ -243,8 +243,9 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
 }) {
   const shown = useShown();
   const supervised = session?.supervised ?? false;
-  const word = status.unfinished ? "Interrupted" : supervised ? "In session" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
-  const tone = status.unfinished ? "poor" : supervised ? "live" : status.cs2Running || state.kind === "missing" ? "idle" : "ready";
+  const unseen = status.cs2Running === null && !supervised;
+  const word = status.unfinished ? "Interrupted" : supervised ? "In session" : unseen ? "Can't check CS2" : status.cs2Running ? "CS2 is open" : state.kind === "missing" ? "Not installed" : "Ready";
+  const tone = status.unfinished ? "poor" : supervised ? "live" : unseen || status.cs2Running || state.kind === "missing" ? "idle" : "ready";
   const version = state.kind === "current" || state.kind === "behind" ? state.tag : state.kind === "byHand" ? state.reference : null;
   const launchWhy = state.kind === "missing" ? "Install the mod first." : pending?.invalid ?? blocker;
   const vac = vacState(status, running, supervised);
@@ -253,6 +254,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, onC
   const sub = status.unfinished
     ? `Change ${status.unfinished.operation} stopped part-way, so the game folder may be half-written. Roll it back before anything else.`
     : supervised ? shown(session?.status?.message ?? "A Bot Mode session is watching CS2.")
+    : unseen ? "The process list could not be read, so the app can't tell whether CS2 is open. It changes nothing and won't launch until it can; check again in a moment."
     : status.cs2Running ? "Close CS2, then launch Bot Mode, so the game starts with -insecure."
     : state.kind === "missing" ? "The mod's loaders, Metamod and CounterStrikeSharp, aren't in the CS2 folder. Install a release to play with bots."
     : "Bot Mode starts CS2 through Steam and turns itself off when the game exits.";

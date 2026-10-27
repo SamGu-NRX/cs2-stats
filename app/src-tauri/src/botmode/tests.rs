@@ -535,6 +535,48 @@ fn the_aim_and_grenade_presets_and_the_knife_bind_go_in_as_one_checked_change() 
 }
 
 #[test]
+fn a_compare_and_swap_that_fails_before_the_rename_leaves_nothing_to_roll_back() {
+    let s = Scratch::new("cas-late");
+    let layout = fake_game(&s);
+    let cfg = layout.target("cfg/gamemode_competitive_server.cfg");
+    let read_hash = hash::file(&cfg).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let path = cfg.clone();
+    // another program writes the cfg after the journal entry and before the rename
+    let err = changes::run(&layout, &CLOSED, &lock, "late", |cs| {
+        cs.put_guarded_with("cfg/gamemode_competitive_server.cfg", &read_hash, &hash::bytes(b"mine\r\n"), |f| {
+            fs::write(&path, "theirs\r\n").unwrap();
+            std::io::Write::write_all(f, b"mine\r\n").map_err(|e| e.to_string())
+        })
+    })
+    .unwrap_err();
+    assert!(err.contains(changes::CHANGED_SINCE_READ), "{err}");
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), "theirs\r\n", "the other program's write is kept");
+    let late = changes::list(&layout).unwrap().into_iter().find(|m| m.operation == "late").unwrap();
+    assert_eq!(late.status, Status::Failed, "closed as a change that wrote nothing, not left pending");
+    assert!(changes::unfinished(&layout).unwrap().is_none());
+    // and the next change goes through
+    changes::run(&layout, &CLOSED, &lock, "next", |cs| cs.put_bytes("cfg/next.cfg", b"x")).unwrap();
+}
+
+#[test]
+fn a_music_kit_already_in_the_cfg_does_not_block_another_setting() {
+    use settings::ServerPatch;
+    let s = Scratch::new("kit-kept");
+    let layout = fake_game(&s);
+    // the cfg holds kit 33, which this catalog no longer lists
+    write(&layout.target("addons/counterstrikesharp/plugins/BotRandomizer/cosmetic_catalog.json"), br#"{"musicKits": [3, 5]}"#);
+    let seen = settings::read_server(&layout.csgo).unwrap();
+    let off = Cosmetics { dropped_knife_skins: false, ..seen.cosmetics };
+    settings::set_server(&layout, &CLOSED, ServerPatch { cosmetics: Some(off), ..Default::default() }, seen.clone()).unwrap();
+    assert_eq!(settings::read_cosmetics(&layout.csgo).unwrap().cosmetics, off);
+    // setting a kit the catalog lacks is still refused
+    let now = settings::read_server(&layout.csgo).unwrap();
+    let err = settings::set_server(&layout, &CLOSED, ServerPatch { cosmetics: Some(Cosmetics { music_kit: 99, ..off }), ..Default::default() }, now).unwrap_err();
+    assert!(err.contains("not in BotRandomizer's catalog"), "{err}");
+}
+
+#[test]
 fn only_knife_bind_lines_this_app_wrote_are_read_or_replaced() {
     use settings::{KnifeBind, ServerPatch, KNIFE_MARK};
     let s = Scratch::new("knife-bind-own");

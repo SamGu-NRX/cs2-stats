@@ -187,6 +187,27 @@ describe("Bot Mode states", () => {
     expect(writes()).toEqual([]);
   });
 
+  it("a process list that can't be read: its own headline, no launch, no writes", async () => {
+    await render("installed");
+    backend.state.status.cs2Running = null;
+    await click(button(/Check again/));
+    expect(text("#bm-state")).toBe("Can't check CS2");
+    expect(button(/Launch Bot Mode/).disabled).toBe(true);
+    expect(text("#bm-launch-why")).toBe("The app could not check whether CS2 is running, so it changes nothing.");
+  });
+
+  it("a music kit the catalog no longer lists stays shown and does not block another setting", async () => {
+    await render("installed");
+    backend.state.status.cosmetics = { ...backend.state.status.cosmetics, musicKit: 41 };
+    await click(button(/Check again/));
+    expect(text(".bm-kit")).toBe("Kit 41");
+    await click(box("Give dropped knives"));
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    expect(dialog()).toBeNull();
+    expect(backend.state.status.cosmetics).toMatchObject({ droppedKnifeSkins: false, musicKit: 41 });
+  });
+
   it("an interrupted change: rollback first, its warning not repeated", async () => {
     await render("unfinished");
     expect(text("#bm-state")).toBe("Interrupted");
