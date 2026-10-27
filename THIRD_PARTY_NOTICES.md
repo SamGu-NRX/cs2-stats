@@ -42,12 +42,15 @@ The Rust side (`app/src-tauri/Cargo.toml`) depends directly on:
 | sha2 | MIT OR Apache-2.0 |
 | ureq | MIT OR Apache-2.0 |
 | zip | MIT |
+| tauri-plugin-dialog | Apache-2.0 OR MIT |
 | windows-sys | MIT OR Apache-2.0 |
 
-`cargo metadata` resolves 432 crates in all. Every one offers a permissive licence (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0 or Unlicense) except these:
+`cargo metadata --locked` resolves 447 crates besides the app's own. Every one offers a permissive licence (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0 or Unlicense) except these:
 
 - cssparser, cssparser-macros, dtoa-short, option-ext and selectors are MPL-2.0.
 - webpki-roots is CDLA-Permissive-2.0.
+
+tauri-plugin-dialog, the pro match library's folder picker, adds four crates: itself, rfd (MIT), and tauri-plugin and tauri-plugin-fs (both Apache-2.0 OR MIT).
 
 ## In the capture plugin
 
