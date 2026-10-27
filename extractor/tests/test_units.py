@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 import urllib.request
@@ -758,11 +759,32 @@ def test_a_split_maps_parts_are_stitched_or_held_and_recorded(tmp_path, monkeypa
     a = dp.Archive(rar=dp.DOWNLOADS / "r", id="r", slug="x-vs-y-r")
     a.out_dirs = {f"x-vs-y-m1-nuke-p{n}.dem": dp.PARTS_DIR / a.slug / f"m1-nuke-p{n}" for n in (1, 2)}
     a.out_dirs["x-vs-y-m2-dust2.dem"] = dp.DEMOS_DIR / a.slug / "m2-dust2"
+    for d in a.out_dirs.values():
+        d.mkdir(parents=True)
     p.stitch_parts(a)
     assert calls == [([1, 2], dp.DEMOS_DIR / a.slug / "m1-nuke")]
+    assert not (dp.PARTS_DIR / a.slug / "m1-nuke-p1").exists()  # stitched: the joined map holds what they did
     p.stitch_parts(a, failed="ValidationFailed: deaths 12!=13")
     rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["status"] for r in rows] == ["stitched", "held"] and "the archive failed" in rows[1]["reason"]
+
+
+def test_held_parts_count_in_the_budget_and_the_oldest_go_past_the_cap(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    for i, slug in enumerate(("old-vs-one-r", "new-vs-two-r")):
+        for n in (1, 2):
+            d = dp.PARTS_DIR / slug / f"m1-nuke-p{n}"
+            d.mkdir(parents=True)
+            (d / "kills.parquet").write_bytes(b"x" * 1000)
+            os.utime(d, (1000 + i, 1000 + i))
+    p = dp.Pipeline()
+    assert p.disk_usage()[0] == 4000
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 2500 / 1e9)
+    p.enforce_parts_cap()
+    assert not (dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1").exists()
+    assert (dp.PARTS_DIR / "new-vs-two-r" / "m1-nuke-p2").exists()
+    row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
+    assert (row["status"], row["bytes"], row["map"]) == ("expired", 2000, str(dp.DEMOS_DIR / "old-vs-one-r" / "m1-nuke"))
 
 
 def _failed_archive(tmp_path, name, dem_bytes=b"dem", reason="ValidationFailed: deaths 12!=13"):

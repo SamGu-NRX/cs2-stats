@@ -296,6 +296,8 @@ TYPES: dict[str, dict[str, str]] = {
         "dropped_attempts": "String",
         "excluded_players": "String",
         "parts": "String",
+        "departed": "String",
+        "scoreboard_taken": "String",
         "truncated": "Boolean",
         "velocity_source": "String",
     },

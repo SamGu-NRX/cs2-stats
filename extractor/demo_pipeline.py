@@ -63,12 +63,16 @@ RAR_MAGIC = b"Rar!\x1a\x07"  # shared prefix of RAR 4 (…\x00) and RAR 5 (…\x
 PARTIAL_SUFFIXES = (".crdownload", ".part", ".partial", ".download", ".tmp")
 STABLE_SECONDS = 10.0
 # Disk budget (set by the user, who has limited disk): no new extraction when free space is
-# below MIN_FREE_GB or when our own data (demos + work + waiting downloads) exceeds MAX_OUR_GB.
+# below MIN_FREE_GB or when our own data (demos + parts + work + waiting downloads) exceeds MAX_OUR_GB.
 # failed/ has its own cap: each failed archive is kept with its failing .dem files and their validation
 # reports so the failure can be diagnosed, up to MAX_FAILED_GB; beyond that the oldest is logged and deleted.
+# parts/ holds a split map's parts only while they are held back: a stitched map's parts are deleted, and beyond
+# MAX_PARTS_GB the oldest held map's parts are deleted, each with a parts.jsonl row. One HLTV map's two parts took
+# 1.3 and 4.4 MB, so the cap holds hundreds of held maps; it is not a measured need.
 MIN_FREE_GB = 45.0
 MAX_OUR_GB = 12.0
 MAX_FAILED_GB = 8.0
+MAX_PARTS_GB = 2.0
 TRUNCATED = "truncated_demo"  # fail_reason of a demo nothing can read to a complete round; never retried
 STALE_WORK_S = 2 * 3600
 WORK_SWEEP_S = 600
@@ -809,6 +813,28 @@ class Pipeline:
                                reason=f"stitching raised {type(e).__name__}: {e}"[:500])
             append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, row)
             log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
+            if row["status"] == "stitched":  # the joined map in demos/ holds everything its parts did
+                for d in parts.values():
+                    safe_rmtree(d, ignore_errors=True)
+        self.enforce_parts_cap()
+
+    def enforce_parts_cap(self) -> None:
+        """Delete the oldest held split map's parts while parts/ holds more than MAX_PARTS_GB, recording each."""
+        held = sorted(stitch.split_maps(PARTS_DIR).items(), key=lambda kv: max(d.stat().st_mtime for d in kv[1].values()))
+        sizes = {key: sum(tree_bytes(d) for d in ps.values()) for key, ps in held}
+        total = sum(sizes.values())
+        for key, ps in held:
+            if total <= MAX_PARTS_GB * 1e9:
+                return
+            for d in ps.values():
+                safe_rmtree(d, ignore_errors=True)
+            total -= sizes[key]
+            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
+                map=str(DEMOS_DIR / key[0] / key[1]), parts={str(n): str(d) for n, d in sorted(ps.items())},
+                status="expired", reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held map's parts were deleted",
+                bytes=sizes[key], checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            log.warning("parts/ over %.0f GB; deleted the held parts of %s/%s (%.1f MB)", MAX_PARTS_GB, key[0], key[1],
+                        sizes[key] / 1e6)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
@@ -907,7 +933,7 @@ class Pipeline:
             if a.state == "extracting" and a.listing:
                 listed = sum(int(e.get("size") or 0) for e in a.listing.values())
                 held += max(0, listed - (work.get(Path(a.work), 0) if a.work else 0))
-        return tree_bytes(DEMOS_DIR) + sum(work.values()) + waiting + downloading, held
+        return tree_bytes(DEMOS_DIR) + tree_bytes(PARTS_DIR) + sum(work.values()) + waiting + downloading, held
 
     def budget(self, fresh: bool = False) -> tuple[float, bool]:
         t, our, ok = self._budget
