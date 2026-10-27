@@ -36,7 +36,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 # Rust thread pools (demoparser2, awpy, polars) default to every core and read
-# these at import; the pipeline runs up to 4 workers, so cap each one first.
+# these at import; the pipeline runs several workers at once, so cap each one first.
 os.environ.setdefault("RAYON_NUM_THREADS", "4")
 os.environ.setdefault("POLARS_MAX_THREADS", "4")
 
