@@ -742,6 +742,18 @@ def test_workers_run_a_frozen_copy_of_the_extractor(tmp_path, monkeypatch):
 
 
 
+def test_the_frozen_copy_holds_every_module_the_extractor_imports():
+    # extract.py began importing repo_guard and the copy did not follow: every worker died on the import.
+    import ast
+    code = [n for n in dp.CODE_FILES if n.endswith(".py")]
+    for name in code:
+        for node in ast.walk(ast.parse((dp.ROOT / name).read_text(encoding="utf-8"))):
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else                 [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+            for m in mods:
+                if (dp.ROOT / f"{m.split('.')[0]}.py").exists():
+                    assert f"{m.split('.')[0]}.py" in code, f"{name} imports {m}, which the frozen copy lacks"
+
+
 def _failed_archive(tmp_path, name, dem_bytes=b"dem", reason="ValidationFailed: deaths 12!=13"):
     rar = dp.DOWNLOADS / name
     rar.write_bytes(dp.RAR_MAGIC + bytes(10))
