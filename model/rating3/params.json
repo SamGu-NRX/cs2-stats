@@ -238,7 +238,15 @@
       "defuser_weight": 1,
       "survivor_weight": 1
     },
-    "fit_status": "event split partially recovered; round-end remainder not yet fitted to player-map totals"
+    "fit_status": "event split partially recovered; round-end remainder not yet fitted to player-map totals",
+    "event_credit": {
+      "kill_weight": 57.142857142857146,
+      "flash_weight": 28.571428571428573,
+      "trade_weight": 100.0,
+      "victim_weight": 214.28571428571428,
+      "failed_trade_weight": 100.0,
+      "trade_window_seconds": 5.5
+    }
   },
   "duel": {
     "source": {

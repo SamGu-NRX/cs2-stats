@@ -10,7 +10,7 @@ import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 32;
+export const DERIVE_VERSION = 33;
 
 export interface MatchInfo {
   id: string;

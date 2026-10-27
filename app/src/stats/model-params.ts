@@ -22,9 +22,8 @@ export interface RatingParams {
   };
   swing: {
     trade_window_seconds: number;
-    /** the share of a kill's credit an eligible flash takes (SPEC.md "Swing credits") */
-    flash_credit_fraction: number;
-    round_end_remainder: { clutcher_weight: number; kill_swing_player_weight: number; defuser_weight: number; survivor_weight: number };
+    /** the weights a kill's credit and charge are shared by (SPEC.md "Swing credits") */
+    event_credit: { kill_weight: number; flash_weight: number; trade_weight: number; victim_weight: number; failed_trade_weight: number; trade_window_seconds: number };
   };
   duel: { groups: string[]; strength: Record<string, number>; ct_edge: number; kill_points_scale: number };
 }
