@@ -264,17 +264,40 @@ export type BotNades = "off" | "less" | "normal" | "more" | "max";
 /** This app's knife-drop bind: `key` spawns `knives` (item definition indexes) with subclass_create. */
 export interface KnifeBind { key: string; knives: number[] }
 
-/** Everything this app sets in cfg\gamemode_competitive_server.cfg, from botmode_server_cfg. */
+/**
+ * How the knife file (settings.rs KNIFE_CFG) stands: "none", no file and no exec line, so the
+ * mod's own key applies; "ok", run and read; "missing", run but gone, so which keys stay unbound
+ * is unknown; "unreadable"; "notRun", there but the server cfg no longer runs it.
+ */
+export type KnifeFileStatus = "none" | "ok" | "missing" | "unreadable" | "notRun";
+export interface KnifeFile { path: string; status: KnifeFileStatus; sha256: string | null; error: string | null }
+
+/** Everything this app sets for the game (the server cfg's convars and the knife file), from botmode_server_cfg. */
 export interface ServerSettings {
   cosmetics: Cosmetics;
   /** null: no line sets it, so the plugin's default applies */
   botAim: BotAim | null;
   botNades: BotNades | null;
-  /** null: no bind of this app's; the mod's own knife bind applies */
+  /** the knife file's bind; null: none, so the mod's own knife bind applies */
   knifeBind: KnifeBind | null;
-  /** keys Bot Mode keeps unbound on every map: each key the knife bind has left (settings.rs KnifeBind) */
+  /** the keys the knife file unbinds on every map: each key the knife bind has left (settings.rs Knife) */
   unboundKeys: string[];
+  knifeFile: KnifeFile;
 }
+
+/** What Undo of a settings change would write (settings.rs undo_plan). */
+export interface UndoPlan {
+  change: string;
+  /** the lines it sets in the server cfg */
+  serverLines: string[];
+  /** the knife file as it would write it, whole; null when the change did not write it */
+  knifeLines: string[] | null;
+  /** why Undo would refuse: a setting it wrote changed since; null when it can run */
+  refused: string | null;
+}
+
+/** What Repair writes for a missing knife file: the file as change `from` left it, or, with no such change, the mod's own key. */
+export interface RepairPlan { from: string | null; lines: string[] }
 
 /** One change to the server cfg; a field left out keeps what the cfg has. */
 export interface ServerPatch { cosmetics?: Cosmetics; botAim?: BotAim; botNades?: BotNades; knifeBind?: KnifeBind; /** keys the user takes back */ stopUnbinding?: string[] }
@@ -337,11 +360,14 @@ export function botmodeOver(call: Call) {
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
     serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
-    /**
-     * Undoing a server-cfg change as a change forward (settings.rs undo_patch): what to set back,
-     * through the same knife rules as any edit. Apply it with setServerCfg. Reads only.
-     */
-    serverUndo: (id: string, t: Target = {}) => call<ServerPatch>("botmode_server_undo", { ...t, id }),
+    /** What Undo of settings change `id` would write, or why it would refuse. Reads only. */
+    serverUndoPlan: (id: string, t: Target = {}) => call<UndoPlan>("botmode_server_undo_plan", { ...t, id }),
+    /** Undoes settings change `id` as a new change; refused when a setting it wrote has changed since. */
+    serverUndo: (id: string, t: Target = {}) => call<Change>("botmode_server_undo", { ...t, id }),
+    /** What Repair would write for a missing knife file. Reads only. */
+    knifeRepairPlan: (t: Target = {}) => call<RepairPlan>("botmode_knife_repair_plan", { ...t }),
+    /** Writes the missing knife file back; refused when it would no longer write `seen`. */
+    knifeRepair: (seen: RepairPlan, t: Target = {}) => call<Change>("botmode_knife_repair", { ...t, seen }),
     /** One change to the server cfg; refused, writing nothing, when it no longer holds `seen`. */
     setServerCfg: (patch: ServerPatch, seen: ServerSettings, t: Target = {}) => call<Change>("botmode_set_server_cfg", { ...t, patch, seen }),
     /** Each CS2 of this install running now, with its VAC state. Reads only; never ends one. */

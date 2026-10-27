@@ -13,10 +13,6 @@ pub struct State {
     pub official: Option<Official>,
     #[serde(default)]
     pub overlays: Vec<OverlayRecord>,
-    /// The keys of the marked `unbind` lines this app wrote into the server cfg
-    /// (`settings::KnifeBind`). A marked line for any other key is the user's own.
-    #[serde(default)]
-    pub knife_unbinds: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

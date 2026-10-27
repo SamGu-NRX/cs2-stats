@@ -8,7 +8,7 @@
 use super::changes::{self, Meta, RollbackReport};
 use super::monitor::Running;
 use super::overlay::OverlayPlan;
-use super::settings::{FileSeen, ServerPatch, ServerSettings};
+use super::settings::{FileSeen, RepairPlan, ServerPatch, ServerSettings, UndoPlan};
 use std::time::Duration;
 use super::install::{self, InstallReport, ReleaseIndex};
 use super::monitor;
@@ -252,17 +252,35 @@ pub async fn botmode_catalog(game: Option<String>) -> Result<Option<Catalog>, St
     reading(game, |ctx| settings::read_catalog(&ctx.layout.csgo)).await
 }
 
-/// What this app sets in the server cfg: cosmetics, the aim and grenade presets, the knife bind.
+/// What this app sets for the game: the server cfg's cosmetics and presets, and the knife file.
 #[tauri::command]
 pub async fn botmode_server_cfg(game: Option<String>) -> Result<ServerSettings, String> {
     reading(game, |ctx| settings::read_server(&ctx.layout)).await
 }
 
-/// Undoing a server-cfg change, as the change forward that `settings::undo_patch` describes.
-/// Reads only; the view previews the patch and applies it with botmode_set_server_cfg.
+/// What Undo of settings change `id` would write, or why it would refuse; reads only.
 #[tauri::command]
-pub async fn botmode_server_undo(game: Option<String>, id: String) -> Result<ServerPatch, String> {
-    reading(game, move |ctx| settings::undo_patch(&ctx.layout, &id)).await
+pub async fn botmode_server_undo_plan(game: Option<String>, id: String) -> Result<UndoPlan, String> {
+    reading(game, move |ctx| settings::undo_plan(&ctx.layout, &id)).await
+}
+
+/// Undoes settings change `id` as a new change (`settings::undo_server`), refused when a setting
+/// it wrote has changed since.
+#[tauri::command]
+pub async fn botmode_server_undo(game: Option<String>, id: String) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::undo_server(&ctx.layout, &SystemProbe, &id)).await
+}
+
+/// What Repair would write for a missing knife file; reads only.
+#[tauri::command]
+pub async fn botmode_knife_repair_plan(game: Option<String>) -> Result<RepairPlan, String> {
+    reading(game, |ctx| settings::knife_repair_plan(&ctx.layout)).await
+}
+
+/// Writes the missing knife file back; refused when it would no longer write `seen`.
+#[tauri::command]
+pub async fn botmode_knife_repair(game: Option<String>, seen: RepairPlan) -> Result<Meta, String> {
+    mutating(game, move |ctx| settings::repair_knife(&ctx.layout, &SystemProbe, &seen)).await
 }
 
 /// One change to the server cfg; refused, writing nothing, when it no longer holds `seen`.

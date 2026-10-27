@@ -7,9 +7,9 @@
 // or a session holds the game, and a cosmetics write whose `seen` no longer matches is refused as
 // a stale read. The releases and catalog entries are copied from the public GitHub release list
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
-import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status } from "./commands";
+import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type KnifeFileStatus, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RepairPlan, type RollbackReport, type RunningCs2, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status, type UndoPlan } from "./commands";
 
-export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery", "unknown-version"] as const;
+export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery", "unknown-version", "knife-missing"] as const;
 
 /** session.rs's notices (#50), as the backend sends them. */
 export const NOTICES = {
@@ -101,16 +101,48 @@ interface State {
   status: Status;
   session: SessionView;
   statusError: string | null;
-  /** the server cfg's other settings; its cosmetics are status.cosmetics */
-  server: Omit<ServerSettings, "cosmetics">;
+  /** the server cfg's presets; its cosmetics are status.cosmetics */
+  server: { botAim: ServerSettings["botAim"]; botNades: ServerSettings["botNades"] };
+  /** the knife file (settings.rs KNIFE_CFG): null when there is none */
+  knife: Knife | null;
+  /** whether the server cfg runs the knife file */
+  exec: boolean;
   running: RunningCs2[];
   /** what each recorded change wrote, by id */
   files: Record<string, string[]>;
   /** overlay.json's hash; a test changes it to stand in for an edit after the preview */
   manifestSha: string;
-  /** the server cfg's settings before each server-cfg change, by change id */
-  serverBefore: Record<string, ServerSettings>;
+  /** what each settings change wrote, by change id (settings.rs SettingsRecord) */
+  records: Record<string, SettingsRecord>;
 }
+
+/** The knife file's bind and unbound keys (settings.rs Knife). */
+interface Knife { bind: KnifeBind | null; unbound: string[] }
+interface SettingsRecord {
+  scalars: { name: string; before: string | null; after: string }[];
+  knife?: { before: Knife; after: Knife; afterSha256: string; afterText: string };
+}
+
+export const KNIFE_CFG = "cfg/cs2stats_knife.cfg";
+const KNIFE_EXEC_LINE = "exec cs2stats_knife // cs2-stats knife drop";
+const KNIFE_HEADER = [
+  "// Bot Mode's knife key, managed by CS2 Stats. The server cfg runs this file on every map",
+  "// (exec cs2stats_knife). CS2 Stats rewrites it whole when you change the knife key, keeping",
+  "// any line of yours it does not write.",
+];
+const bindLine = (b: KnifeBind) => `bind ${b.key} "${b.knives.map((k) => `subclass_create ${k}`).join(";")}"`;
+/** The knife file's text, as settings.rs Knife::text writes it. */
+const knifeText = (k: Knife) => [...KNIFE_HEADER, ...k.unbound.map((u) => `unbind ${u}`), ...(k.bind ? [bindLine(k.bind)] : [])].map((l) => `${l}\r\n`).join("");
+/** A stand-in SHA-256 of a text: FNV-1a with eight seeds, so any edit changes it. */
+const hashText = (t: string) => Array.from({ length: 8 }, (_, seed) => {
+  let h = 0x811c9dc5 ^ seed;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, "0");
+}).join("");
+const keyOf = (k: Knife) => k.bind?.key ?? "\\";
+const withKey = (keys: string[], key: string) => (keys.includes(key) ? keys : [...keys, key]);
+/** settings.rs SCALARS: each convar a change can touch, with the value the game uses without a line. */
+const SCALAR_DEFAULTS: Record<string, string> = { br_dropped_knife_skins: "0", br_dropped_knife_premium: "0", br_player_music_kit: "0", bot_aim: "mixed", bot_nades: "normal" };
 
 /** A few entries of the mod's Commands.txt, in its layout (the real list has 40 teams). */
 export const COMMANDS_TXT = [
@@ -127,10 +159,16 @@ export const COMMANDS_TXT = [
 /** The key names the backend accepts (settings.rs check_key). */
 const KEY = /^(?:[a-z0-9\\`[\]\-=,./']|[a-z0-9_]{2,16})$/;
 
+function knifeMissingRecord(): SettingsRecord {
+  const after: Knife = { bind: { key: "k", knives: [500, 507, 515] }, unbound: ["\\"] };
+  const text = knifeText(after);
+  return { scalars: [], knife: { before: { bind: null, unbound: [] }, after, afterSha256: hashText(text), afterText: text } };
+}
+
 function initial(s: Scenario): State {
   const installedTag = s === "outdated" ? "v1.4.6" : "v1.4.7";
   const installed = s !== "not-installed";
-  const backups = installed ? [change(9, "cosmetics", "2026-10-26T00:31:02Z", 1), change(8, "bot-mode-off", "2026-10-26T00:20:46Z", 1, "complete", "session"), change(6, "overlay", "2026-10-25T22:31:40Z", 18), change(5, `install-${installedTag}`, "2026-10-25T22:30:12Z", 551)] : [];
+  const backups = installed ? [change(9, "cosmetics", "2026-10-26T00:31:02Z", 1), change(8, "bot-mode-off", "2026-10-26T00:20:46Z", 1, "complete", "session"), ...(s === "knife-missing" ? [change(7, "server-cfg", "2026-10-26T00:02:17Z", 2)] : []), change(6, "overlay", "2026-10-25T22:31:40Z", 18), change(5, `install-${installedTag}`, "2026-10-25T22:30:12Z", 551)] : [];
   const status: Status = {
     csgo: CSGO, steam: String.raw`C:\Program Files (x86)\Steam`, buildId: "20577134",
     cs2Running: s === "session" || s === "cs2-running",
@@ -176,9 +214,15 @@ function initial(s: Scenario): State {
     : s === "cs2-running" ? [{ vac: "on", pid: 30112, why: "-insecure is missing" }] : [];
   return {
     status, session, files, running, manifestSha: sha("overlay.json"),
-    // the scripted "cosmetics" change set the music kit from off to Crimson Assault
-    serverBefore: installed ? { [backups[0].id]: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 0 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [] } } : {},
-    server: { botAim: null, botNades: installed ? "more" : null, knifeBind: null, unboundKeys: [] },
+    // the scripted "cosmetics" change set the music kit from off to Crimson Assault; in
+    // knife-missing, an earlier change moved the knife key to k and the file has since gone
+    records: installed ? {
+      [backups[0].id]: { scalars: [{ name: "br_player_music_kit", before: "0", after: "3" }] },
+      ...(s === "knife-missing" ? { [backups[2].id]: knifeMissingRecord() } : {}),
+    } : {},
+    server: { botAim: null, botNades: installed ? "more" : null },
+    knife: null,
+    exec: s === "knife-missing",
     statusError: s === "unreachable" ? `${UNREACHABLE}: reading the CS2 install took longer than 30 s. If CS2 is on a network or removable drive, check that it is connected, then check again.`
       : s === "no-steam" ? String.raw`C:\Program Files (x86)\Steam\steamapps\appmanifest_730.acf: The system cannot find the file specified. (os error 2). Bot Mode finds CS2 through Steam: check that Steam and CS2 are installed, and repair or reinstall CS2 in Steam if its appmanifest_730.acf is damaged` : null,
   };
@@ -197,7 +241,88 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
     st.files[c.id] = paths;
     return c;
   };
-  const serverOf = (): ServerSettings => ({ cosmetics: { droppedKnifeSkins: st.status.cosmetics.droppedKnifeSkins, droppedKnifePremium: st.status.cosmetics.droppedKnifePremium, musicKit: st.status.cosmetics.musicKit }, ...st.server });
+  const knifeStatus = (): KnifeFileStatus => (st.knife ? (st.exec ? "ok" : "notRun") : st.exec ? "missing" : "none");
+  const serverOf = (): ServerSettings => ({
+    cosmetics: { droppedKnifeSkins: st.status.cosmetics.droppedKnifeSkins, droppedKnifePremium: st.status.cosmetics.droppedKnifePremium, musicKit: st.status.cosmetics.musicKit },
+    ...st.server,
+    knifeBind: st.knife?.bind ?? null,
+    unboundKeys: st.knife?.unbound ?? [],
+    knifeFile: { path: KNIFE_CFG, status: knifeStatus(), sha256: st.knife ? hashText(knifeText(st.knife)) : null, error: null },
+  });
+  // the five convars, as settings.rs scalar_in reads them
+  const scalar = (name: string): string | null => {
+    const c = st.status.cosmetics;
+    switch (name) {
+      case "br_dropped_knife_skins": return c.cfgPresent ? String(+c.droppedKnifeSkins) : null;
+      case "br_dropped_knife_premium": return c.cfgPresent ? String(+c.droppedKnifePremium) : null;
+      case "br_player_music_kit": return c.cfgPresent ? String(c.musicKit) : null;
+      case "bot_aim": return st.server.botAim;
+      default: return st.server.botNades;
+    }
+  };
+  const setScalar = (name: string, v: string) => {
+    const c = st.status.cosmetics;
+    if (name === "br_dropped_knife_skins") st.status.cosmetics = { ...c, droppedKnifeSkins: v === "1", cfgPresent: true };
+    else if (name === "br_dropped_knife_premium") st.status.cosmetics = { ...c, droppedKnifePremium: v === "1", cfgPresent: true };
+    else if (name === "br_player_music_kit") st.status.cosmetics = { ...c, musicKit: Number(v), cfgPresent: true };
+    else if (name === "bot_aim") st.server.botAim = v as ServerSettings["botAim"];
+    else st.server.botNades = v as ServerSettings["botNades"];
+  };
+  /** settings.rs write_settings: sets the values and the knife file as one change, with its record. */
+  const writeSettings = (op: string, values: [string, string][], knife: Knife | null) => {
+    const rec: SettingsRecord = { scalars: [] };
+    for (const [name, after] of values) {
+      const before = scalar(name);
+      if ((before ?? SCALAR_DEFAULTS[name]) !== after) rec.scalars.push({ name, before, after });
+    }
+    const was = st.knife ?? { bind: null, unbound: [] };
+    if (knife && knifeText(knife) !== (st.knife && knifeText(st.knife))) {
+      const text = knifeText(knife);
+      rec.knife = { before: structuredClone(was), after: structuredClone(knife), afterSha256: hashText(text), afterText: text };
+    }
+    const paths = [...(rec.scalars.length || (knife && !st.exec) ? ["cfg/gamemode_competitive_server.cfg"] : []), ...(rec.knife ? [KNIFE_CFG] : [])];
+    for (const [name, v] of values) setScalar(name, v);
+    if (knife) { st.knife = knife; st.exec = true; }
+    const c = record(op, paths.length, paths);
+    if (rec.scalars.length || rec.knife) st.records[c.id] = rec;
+    return c;
+  };
+  const valuesOf = (p: ServerPatch): [string, string][] => [
+    ...(p.cosmetics ? [["br_dropped_knife_skins", String(+p.cosmetics.droppedKnifeSkins)], ["br_dropped_knife_premium", String(+p.cosmetics.droppedKnifePremium)], ["br_player_music_kit", String(p.cosmetics.musicKit)]] as [string, string][] : []),
+    ...(p.botAim ? [["bot_aim", p.botAim]] as [string, string][] : []),
+    ...(p.botNades ? [["bot_nades", p.botNades]] as [string, string][] : []),
+  ];
+  /** settings.rs prepare_undo */
+  const prepareUndo = (id: string) => {
+    const c = st.status.backups.find((b) => b.id === id);
+    if (!c) throw `${id}: no such change`;
+    if (c.status !== "complete") throw `${id} is not in effect, so there is nothing of it to undo`;
+    const rec = st.records[id];
+    if (!rec) throw `${id} kept no record of the settings it changed, so it can only be rolled back`;
+    const changed: string[] = [];
+    for (const s of rec.scalars) {
+      const now = scalar(s.name);
+      if ((now ?? SCALAR_DEFAULTS[s.name]) !== s.after) changed.push(`${s.name} (now ${now ?? `unset, so ${SCALAR_DEFAULTS[s.name]}`})`);
+    }
+    if (rec.knife && (st.knife ? hashText(knifeText(st.knife)) : null) !== rec.knife.afterSha256) changed.push(`${KNIFE_CFG} (${st.knife ? "edited since" : "now missing"})`);
+    const refused = changed.length ? `${changed.join(", ")} changed since this change, so Undo would overwrite ${changed.length === 1 ? "it" : "them"}. Nothing was written.` : null;
+    const values: [string, string][] = rec.scalars.map((s) => [s.name, s.before ?? SCALAR_DEFAULTS[s.name]]);
+    let knife: Knife | null = null;
+    if (rec.knife) {
+      const { before, after } = rec.knife;
+      knife = { bind: before.bind ?? { key: "\\", knives: CATALOG.knives }, unbound: withKey(before.unbound, keyOf(after)).filter((k) => k !== keyOf(before)) };
+    }
+    return { values, knife, refused };
+  };
+  /** settings.rs repair_source */
+  const repairPlan = (): RepairPlan => {
+    if (knifeStatus() !== "missing") throw `${KNIFE_CFG} is not missing; nothing to repair`;
+    for (const b of st.status.backups) {
+      const k = b.status === "complete" ? st.records[b.id]?.knife : undefined;
+      if (k) return { from: b.id, lines: k.afterText.split("\r\n").slice(0, -1) };
+    }
+    return { from: null, lines: knifeText({ bind: { key: "\\", knives: CATALOG.knives }, unbound: [] }).split("\r\n").slice(0, -1) };
+  };
   /** The backend's refusals for anything that writes the game folder. */
   const writable = () => {
     if (st.status.cs2Running) throw "CS2 is running. Close it first: Bot Mode never changes game files while the game is open.";
@@ -250,35 +375,41 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
           const kit = patch.cosmetics.musicKit;
           // as the backend: only a kit this change sets is checked against the catalog
           if (kit > 0 && kit !== st.status.cosmetics.musicKit && !CATALOG.musicKits.some((k) => k.id === kit)) throw `music kit ${kit} is not in BotRandomizer's catalog`;
-          st.status.cosmetics = { ...patch.cosmetics, cfgPresent: true };
         }
-        if (patch.botAim) st.server.botAim = patch.botAim;
-        if (patch.botNades) st.server.botNades = patch.botNades;
-        // as settings.rs apply_patch: the key the bind leaves joins the set; only the user takes one out
-        if (bind) {
-          const old = st.server.knifeBind?.key ?? "\\";
-          const keys = [...st.server.unboundKeys];
-          if (old !== bind.key && !keys.includes(old)) keys.push(old);
-          st.server.unboundKeys = keys.filter((k) => k !== bind.key);
-          st.server.knifeBind = bind;
+        // as settings.rs Knife::after: the key the bind leaves joins the set; only the user takes one out
+        let knife: Knife | null = null;
+        if (bind || patch.stopUnbinding?.length) {
+          if (knifeStatus() === "missing") throw `${KNIFE_CFG} is missing, so the keys Bot Mode keeps unbound are unknown; repair it first. Nothing was written.`;
+          const was = st.knife ?? { bind: null, unbound: [] };
+          let unbound = [...was.unbound];
+          if (bind && keyOf(was) !== bind.key) unbound = withKey(unbound, keyOf(was));
+          const next: Knife = { bind: bind ?? was.bind, unbound };
+          next.unbound = next.unbound.filter((k) => !patch.stopUnbinding?.includes(k) && k !== keyOf(next));
+          knife = next;
         }
-        if (patch.stopUnbinding?.length) st.server.unboundKeys = st.server.unboundKeys.filter((k) => !patch.stopUnbinding!.includes(k));
-        const c = record("server-cfg", 1, ["cfg/gamemode_competitive_server.cfg"]);
-        st.serverBefore[c.id] = seen;
-        return c;
+        return writeSettings("server-cfg", valuesOf(patch), knife);
+      }
+      case "botmode_server_undo_plan": {
+        const u = prepareUndo(a.id as string);
+        const serverLines = u.values.map(([n, v]) => `${n} ${v}`);
+        if (u.knife && !st.exec) serverLines.push(KNIFE_EXEC_LINE);
+        const plan: UndoPlan = { change: a.id as string, serverLines, knifeLines: u.knife ? knifeText(u.knife).split("\r\n").slice(0, -1) : null, refused: u.refused };
+        return plan;
       }
       case "botmode_server_undo": {
-        // as settings.rs undo_patch: each setting back to what the cfg held before the change
-        const was = st.serverBefore[a.id as string];
-        if (!was) throw `change ${a.id as string} did not write cfg/gamemode_competitive_server.cfg`;
-        const now = serverOf();
-        const patch: ServerPatch = {};
-        if (JSON.stringify(was.cosmetics) !== JSON.stringify(now.cosmetics)) patch.cosmetics = was.cosmetics;
-        if ((was.botAim ?? "mixed") !== (now.botAim ?? "mixed")) patch.botAim = was.botAim ?? "mixed";
-        if ((was.botNades ?? "normal") !== (now.botNades ?? "normal")) patch.botNades = was.botNades ?? "normal";
-        const eff = (b: KnifeBind | null): KnifeBind => b ?? { key: "\\", knives: CATALOG.knives };
-        if (JSON.stringify(eff(was.knifeBind)) !== JSON.stringify(eff(now.knifeBind))) patch.knifeBind = eff(was.knifeBind);
-        return patch;
+        writable();
+        const u = prepareUndo(a.id as string);
+        if (u.refused) throw u.refused;
+        return writeSettings("server-cfg-undo", u.values, u.knife);
+      }
+      case "botmode_knife_repair_plan": return repairPlan();
+      case "botmode_knife_repair": {
+        writable();
+        const plan = repairPlan();
+        if (JSON.stringify(plan) !== JSON.stringify(a.seen)) throw `${KNIFE_CFG}: what Repair would write changed since it was read; nothing was written`;
+        const from = plan.from ? st.records[plan.from].knife!.after : { bind: { key: "\\", knives: CATALOG.knives }, unbound: [] };
+        st.knife = structuredClone(from);
+        return record("knife-repair", 1, [KNIFE_CFG]);
       }
       case "botmode_releases": return RELEASES;
       case "botmode_catalog": return st.status.components.length ? CATALOG : null;
@@ -344,9 +475,8 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         if (seen && !sameCosmetics(seen, now)) {
           throw `cfg/gamemode_competitive_server.cfg: the Bot Mode cosmetics changed since it was read (now br_dropped_knife_skins ${+now.droppedKnifeSkins}, br_dropped_knife_premium ${+now.droppedKnifePremium}, br_player_music_kit ${now.musicKit}); nothing was written`;
         }
-        if (want.musicKit > 0 && !CATALOG.musicKits.some((k) => k.id === want.musicKit)) throw `music kit ${want.musicKit} is not in BotRandomizer's catalog`;
-        st.status.cosmetics = { ...want, cfgPresent: true };
-        return record("cosmetics", 1, ["cfg/gamemode_competitive_server.cfg"]);
+        if (want.musicKit > 0 && want.musicKit !== now.musicKit && !CATALOG.musicKits.some((k) => k.id === want.musicKit)) throw `music kit ${want.musicKit} is not in BotRandomizer's catalog`;
+        return writeSettings("cosmetics", valuesOf({ cosmetics: want }), null);
       }
       case "botmode_set_launch_options": {
         const options = a.options as string;

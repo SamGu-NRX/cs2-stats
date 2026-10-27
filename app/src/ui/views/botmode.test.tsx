@@ -86,7 +86,7 @@ const box = (label: string) => {
   return l.querySelector("input")!;
 };
 const click = async (b: HTMLElement) => { act(() => b.click()); await settle(); };
-const READS = ["botmode_status", "botmode_session", "botmode_catalog", "botmode_releases", "botmode_server_cfg", "botmode_running", "botmode_overlay_plan", "botmode_change_files", "botmode_mod_commands"];
+const READS = ["botmode_status", "botmode_session", "botmode_catalog", "botmode_releases", "botmode_server_cfg", "botmode_running", "botmode_overlay_plan", "botmode_change_files", "botmode_mod_commands", "botmode_server_undo_plan", "botmode_knife_repair_plan"];
 const writes = () => calls.map(([c]) => c).filter((c) => !READS.includes(c));
 const sent = (cmd: string) => calls.filter(([c]) => c === cmd).at(-1)![1];
 function type(input: HTMLInputElement, value: string) {
@@ -97,6 +97,15 @@ function type(input: HTMLInputElement, value: string) {
 }
 const key = (target: Element, k: string) => act(() => { target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true })); });
 const dialog = () => $<HTMLDialogElement>("dialog.bm-dialog");
+/** The open dialog's listed lines. */
+const knifeList = () => Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent);
+const unboundShown = () => Array.from(document.querySelectorAll(".bm-unbound li .kbd"), (k) => k.textContent);
+/** Types a knife key and applies it through the dialog. */
+async function applyKey(k: string) {
+  type($<HTMLInputElement>(".bm-key")!, k);
+  await click(button("Apply changes…"));
+  await click(button("Apply"));
+}
 /** Applies High, so the newest change is a bot profile copy, which Undo rolls back from its backup. */
 async function applyDifficulty() {
   await click(button("High"));
@@ -270,9 +279,10 @@ describe("settings", () => {
 
     await click(button("Apply changes…"));
     expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual([
-      "br_dropped_knife_skins 1", "br_dropped_knife_premium 1", "br_player_music_kit 4", "bot_aim head", "bot_nades max",
+      "br_dropped_knife_skins 1", "br_dropped_knife_premium 1", "br_player_music_kit 4", "bot_aim head", "bot_nades max", "exec cs2stats_knife // cs2-stats knife drop",
       "unbind \\", 'bind kp_end "subclass_create 507;subclass_create 515"',
     ]);
+    expect(text("dialog .bm-facts")).toContain("cfg/cs2stats_knife.cfg, written by this app");
     expect(text("dialog .bm-facts")).toContain("overrides/botprofile.vpk with the mod's high profile (overrides/High/botprofile.vpk); it is medium now");
     expect(text("dialog .bm-facts")).toContain("Launch options after -insecure: +exec botmode -novid");
     expect(writes()).toEqual([]);
@@ -280,7 +290,7 @@ describe("settings", () => {
     expect(calls.filter(([c]) => writes().includes(c))).toEqual([
       ["botmode_set_server_cfg", {
         patch: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: true, musicKit: 4 }, botAim: "head", botNades: "max", knifeBind: { key: "kp_end", knives: [507, 515] } },
-        seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [] },
+        seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null } },
       }],
       ["botmode_set_difficulty", { level: "high", seen: { sha256: sha256Before } }],
       ["botmode_set_launch_options", { options: "+exec botmode -novid", seen: "+exec botmode" }],
@@ -314,7 +324,7 @@ describe("settings", () => {
     await click(button("Apply"));
     expect(sent("botmode_set_server_cfg")).toEqual({
       patch: { cosmetics: { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 5 } },
-      seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 5 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [] },
+      seen: { cosmetics: { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 5 }, botAim: null, botNades: "more", knifeBind: null, unboundKeys: [], knifeFile: { path: "cfg/cs2stats_knife.cfg", status: "none", sha256: null, error: null } },
     });
     expect(backend.state.status.cosmetics.droppedKnifeSkins).toBe(false);
   });
@@ -771,10 +781,10 @@ describe("re-review at 94ed3ec", () => {
     await click(button("Apply"));
     await click(button("Undo…"));
     const all = "subclass_create 500;subclass_create 503;subclass_create 505;subclass_create 506;subclass_create 507;subclass_create 508;subclass_create 509;subclass_create 512;subclass_create 514;subclass_create 515;subclass_create 516;subclass_create 517;subclass_create 518;subclass_create 519;subclass_create 520;subclass_create 521;subclass_create 522;subclass_create 523;subclass_create 525;subclass_create 526";
-    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["unbind \\", "unbind j", `bind k "${all}"`]);
+    expect(knifeList()).toEqual(["unbind \\", "unbind j", `bind k "${all}"`]);
     await click(button("Undo"));
     expect(calls.some(([c]) => c === "botmode_rollback")).toBe(false);
-    expect(sent("botmode_set_server_cfg")).toMatchObject({ patch: { knifeBind: { key: "k" } } });
+    expect(sent("botmode_server_undo")).toEqual({ id: backend.state.status.backups[1].id });
     expect(Array.from(document.querySelectorAll(".bm-unbound li .kbd"), (k) => k.textContent)).toEqual(["\\", "j"]);
     expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
   });
@@ -804,13 +814,123 @@ describe("re-review at 94ed3ec", () => {
   });
 });
 
+describe("the knife file, and Undo from each change's record (re-review at 97aa841)", () => {
+  it("a knife change writes the knife file; the server cfg gets only the line that runs it", async () => {
+    // fails if knife lines go into the server cfg, where the app had to guess which were its own
+    await render("installed");
+    expect(text(".bm-knifefile")).toContain("A knife key you apply is saved in cfg/cs2stats_knife.cfg");
+    type($<HTMLInputElement>(".bm-key")!, "k");
+    await click(button("Apply changes…"));
+    const facts = Array.from(dialog()!.querySelectorAll(".bm-facts dd"), (d) => d.textContent ?? "");
+    expect(facts[0]).toBe("cfg/gamemode_competitive_server.cfg, these lines; your other lines stay:exec cs2stats_knife // cs2-stats knife drop");
+    expect(facts[1]).toMatch(/^cfg\/cs2stats_knife\.cfg, written by this app: its header, any line of yours in it, thenunbind \\bind k "/);
+    await click(button("Apply"));
+    expect(text(".bm-knifefile")).toContain("Saved in cfg/cs2stats_knife.cfg, which the server cfg runs on every map");
+  });
+
+  it("Undo refuses, and says which setting, once another tool changed what the change wrote", async () => {
+    // fails if Undo writes the old value over a later edit (mixed -> head, then another tool sets body)
+    await render("installed");
+    await click(button("Head"));
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    backend.state.server.botAim = "body";
+    await click(button(/Check again/));
+    await click(button("Undo…"));
+    expect(text("dialog [role=alert]")).toBe("bot_aim (now body) changed since this change, so Undo would overwrite it. Nothing was written.");
+    expect(button("Undo").disabled).toBe(true);
+    expect(calls.some(([c]) => c === "botmode_server_undo")).toBe(false);
+    expect(backend.state.server.botAim).toBe("body");
+  });
+
+  it("a change that only stopped unbinding a key can be undone: the key is unbound again", async () => {
+    // fails if Undo ignores the unbound set and finds nothing to do
+    await render("installed");
+    await applyKey("k");
+    await applyKey("l");
+    await click($<HTMLButtonElement>("button[aria-label='Stop unbinding k']")!);
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    expect(unboundShown()).toEqual(["\\"]);
+    await click(button("Undo…"));
+    expect(knifeList()).toEqual(["unbind \\", "unbind k", 'bind l "' + backend.state.knife!.bind!.knives.map((k) => `subclass_create ${k}`).join(";") + '"']);
+    await click(button("Undo"));
+    expect(unboundShown()).toEqual(["\\", "k"]);
+  });
+
+  it("a hand edit of the knife file is what the page shows and builds on", async () => {
+    // fails if a record kept beside the file drifts from it: here the user deleted `unbind \`
+    await render("installed");
+    await applyKey("k");
+    await applyKey("l");
+    backend.state.knife = { ...backend.state.knife!, unbound: ["k"] };
+    await click(button(/Check again/));
+    expect(unboundShown()).toEqual(["k"]);
+    expect(text(".bm-knifefile")).toBe("Saved in cfg/cs2stats_knife.cfg, which the server cfg runs on every map. This page reads whatever that file holds, hand edits included.");
+    type($<HTMLInputElement>(".bm-key")!, "m");
+    await click(button("Apply changes…"));
+    expect(knifeList().filter((l) => l?.startsWith("unbind"))).toEqual(["unbind k", "unbind l"]);
+  });
+
+  it("the knife key moved \\ → k → l, then undone twice: back to k, then forward to l again", async () => {
+    await render("installed");
+    await applyKey("k");
+    await applyKey("l");
+    await click(button("Undo…"));
+    await click(button("Undo"));
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
+    expect(unboundShown()).toEqual(["\\", "l"]);
+    // the newest change is now that undo: undoing it is a redo
+    expect(text(".bm-hist__what b")).toBe("Settings undone");
+    await click(button("Undo…"));
+    expect(text(".bm-dialog__title")).toBe("Redo settings?");
+    await click(button("Redo"));
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("l");
+    expect(unboundShown()).toEqual(["\\", "k"]);
+  });
+
+  it("undo of an undo: bot aim head, undone to mixed, then back to head", async () => {
+    await render("installed");
+    await click(button("Head"));
+    await click(button("Apply changes…"));
+    await click(button("Apply"));
+    await click(button("Undo…"));
+    expect(knifeList()).toEqual(["bot_aim mixed"]);
+    await click(button("Undo"));
+    expect(backend.state.server.botAim).toBe("mixed");
+    await click(button("Undo…"));
+    expect(knifeList()).toEqual(["bot_aim head"]);
+    await click(button("Redo"));
+    expect(backend.state.server.botAim).toBe("head");
+  });
+
+  it("a missing knife file is said, blocks Launch and knife edits, and Repair puts it back", async () => {
+    // fails if a missing file reads as an empty set, so a key the knife left would spawn knives again
+    await render("knife-missing");
+    const from = backend.state.status.backups[2].id;
+    expect(text(".bm-setup [role=alert]")).toMatch(/^Knife key file missing: the server cfg runs cfg\/cs2stats_knife\.cfg, but it is gone/);
+    expect($(".bm-key")).toBeNull();
+    expect(button(/Launch Bot Mode/).disabled).toBe(true);
+    expect(text("#bm-launch-why")).toMatch(/^Knife key file missing.*Launch waits until then\.$/);
+    await click(button("Repair…"));
+    expect(text("dialog .bm-facts")).toContain(`as change ${from} wrote it`);
+    expect(knifeList()).toEqual(["unbind \\", 'bind k "subclass_create 500;subclass_create 507;subclass_create 515"']);
+    expect(writes()).toEqual([]);
+    await click(button("Repair"));
+    expect(sent("botmode_knife_repair")).toMatchObject({ seen: { from } });
+    expect($<HTMLInputElement>(".bm-key")!.value).toBe("k");
+    expect(unboundShown()).toEqual(["\\"]);
+    expect(button(/Launch Bot Mode/).disabled).toBe(false);
+  });
+});
+
 describe("keys Bot Mode keeps unbound", () => {
   it("moving the knife key off \\ keeps \\ unbound; Stop unbinding takes a key back, previewed first", async () => {
     await render("installed");
     expect($(".bm-unbound")).toBeNull();
     type($<HTMLInputElement>(".bm-key")!, "k");
     await click(button("Apply changes…"));
-    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["unbind \\", 'bind k "' + Array.from({ length: 20 }, (_, i) => `subclass_create ${[500, 503, 505, 506, 507, 508, 509, 512, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 525, 526][i]}`).join(";") + '"']);
+    expect(Array.from(dialog()!.querySelectorAll(".bm-files li"), (li) => li.textContent)).toEqual(["exec cs2stats_knife // cs2-stats knife drop", "unbind \\", 'bind k "' + Array.from({ length: 20 }, (_, i) => `subclass_create ${[500, 503, 505, 506, 507, 508, 509, 512, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 525, 526][i]}`).join(";") + '"']);
     await click(button("Apply"));
     expect(Array.from(document.querySelectorAll(".bm-unbound li .kbd"), (k) => k.textContent)).toEqual(["\\"]);
     // k -> l: k joins, \ stays

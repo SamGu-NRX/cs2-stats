@@ -87,6 +87,24 @@ fn mentions(line: &str, name: &str) -> bool {
     commands(line).0.iter().any(|c| words(c).first().is_some_and(|w| w.eq_ignore_ascii_case(name)))
 }
 
+/// The words of a line that holds exactly one command (a comment after it allowed); `None`
+/// for an empty line, a comment, or a line with several commands.
+pub fn line_words(line: &str) -> Option<Vec<&str>> {
+    let (cmds, _) = commands(line);
+    match cmds.iter().filter(|c| !c.trim().is_empty()).collect::<Vec<_>>().as_slice() {
+        [only] => Some(words(only)),
+        _ => None,
+    }
+}
+
+/// Whether any command in `text` is `exec <file>`, with or without `.cfg`.
+pub fn execs(text: &str, file: &str) -> bool {
+    text.lines().flat_map(|l| commands(l).0).any(|c| match words(c).as_slice() {
+        [cmd, arg] => cmd.eq_ignore_ascii_case("exec") && (arg.eq_ignore_ascii_case(file) || arg.strip_suffix(".cfg").is_some_and(|a| a.eq_ignore_ascii_case(file))),
+        _ => false,
+    })
+}
+
 /// Every value-setting command in `text`, in the order the game runs them.
 fn settings(text: &str) -> impl Iterator<Item = (&str, &str)> {
     text.lines().flat_map(|l| commands(l).0).filter_map(setting)

@@ -279,6 +279,25 @@ impl<'p> ChangeSet<'p> {
         r
     }
 
+    /// Writes a file this app owns whole (the knife file), as a compare-and-swap: refused unless
+    /// it still hashes to `read_hash` (`None`: still absent), checked as in
+    /// [`put_bytes_if_unchanged`](Self::put_bytes_if_unchanged).
+    pub fn put_app_file_if_unchanged(&mut self, rel: &str, data: &[u8], read_hash: Option<&str>) -> Result<bool, String> {
+        let rel = paths::rel(rel)?;
+        if paths::protection(&rel) != Protection::None {
+            return Err(format!("{rel}: a protected user file; Bot Mode never replaces it"));
+        }
+        let path = paths::confined(&self.layout.csgo, &self.root_canon, &rel, false)?;
+        if hash::file_if_exists(&path)?.as_deref() != read_hash {
+            return Err(format!("{rel}: {CHANGED_SINCE_READ}"));
+        }
+        let expected = hash::bytes(data);
+        self.guard = Some(read_hash.map(str::to_string));
+        let r = self.put_inner(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()));
+        self.guard = None;
+        r
+    }
+
     pub fn put_bytes(&mut self, rel: &str, data: &[u8]) -> Result<bool, String> {
         let expected = hash::bytes(data);
         self.put(rel, &expected, |f| f.write_all(data).map_err(|e| e.to_string()))
@@ -599,26 +618,6 @@ fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
         }
     }
     Ok(out)
-}
-
-/// What `rel` held before change `id` wrote it, from the change's backup, checked against the
-/// hash its journal recorded; `None` when the change created the file.
-pub fn before_bytes(layout: &Layout, id: &str, rel: &str) -> Result<Option<Vec<u8>>, String> {
-    if !list(layout)?.iter().any(|m| m.id == id) {
-        return Err(format!("{id}: no such change"));
-    }
-    let dir = layout.backups().join(id);
-    let entry = read_entries(&dir)?
-        .into_iter()
-        .find(|e| e.path.eq_ignore_ascii_case(rel))
-        .ok_or_else(|| format!("change {id} did not write {rel}"))?;
-    let Some(before) = entry.before else { return Ok(None) };
-    let saved = backup_path(&dir, &entry.path);
-    let bytes = fs::read(&saved).map_err(|e| format!("{}: {e}", saved.display()))?;
-    if hash::bytes(&bytes) != before {
-        return Err(format!("{}: the backup does not match the hash its change recorded", saved.display()));
-    }
-    Ok(Some(bytes))
 }
 
 /// The game paths a recorded change wrote, as its journal lists them, for the view's rollback
