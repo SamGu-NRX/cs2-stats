@@ -33,6 +33,9 @@ export interface PatternShot {
 /** A recoil index within this of a whole number is that bullet; a partly recovered index is left out. */
 export const WHOLE_INDEX_EPS = 0.01;
 
+/** A bullet needs this many independent kick samples before it enters the exported pattern. */
+export const MIN_KICK_SAMPLES = 10;
+
 /** Per weapon and bullet (index 0 is bullet 1): the kick samples, and over sprays from a reset the view's change from bullet 1. */
 export interface PatternSamples {
   kick: Record<string, { p: number[]; y: number[] }[]>;

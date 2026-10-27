@@ -1,6 +1,7 @@
 // Per-match series in the v2 language (design-target-v2/SYSTEM.md, data-viz policy). Data decides the
 // width: every match takes PITCH pixels and the chart left-aligns, so eight matches never stretch
-// across a card. Under each match its W or L, under the axis the first, middle and last dates.
+// across a card. Under each match its W or L, under the axis the first, middle and last dates, as
+// many of those as fit.
 // - MatchLine: a line plus dots (Form, Rating by match), the pooled value as a dashed cream line, a
 //   reference as a dotted grey one, the best and worst labelled and the last point ringed.
 // - MatchLollipops: diverging values (round swing) as vertical lollipops from a dotted zero axis, on a
@@ -28,7 +29,8 @@ const DATE_H = 16;
 /** The W/L pips and the dates under a series; `x` places match i. */
 function Foot({ points, x, top }: { points: MatchPoint[]; x: (i: number) => number; top: number }) {
   const n = points.length;
-  const dated = n > 2 ? [0, Math.floor((n - 1) / 2), n - 1] : n === 2 ? [0, 1] : [0];
+  // a date is about one PITCH wide: the middle one needs five matches and the last one three, or they overlap
+  const dated = n >= 5 ? [0, Math.floor((n - 1) / 2), n - 1] : n >= 3 ? [0, n - 1] : [0];
   return (
     <g aria-hidden>
       {points.map((p, i) => p.result && (

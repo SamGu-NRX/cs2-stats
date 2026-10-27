@@ -10,7 +10,10 @@ import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
 /** Bump when a definition changes, so cached facts are rebuilt. */
-export const DERIVE_VERSION = 33;
+// 33: throwRounds, the player-rounds of matches with a throw log, which the thrown-per-round rates divide by
+// 34: the THROW_LOGGED numerators, so the per-grenade-thrown ratios count both sides over the same matches
+// 35: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
+export const DERIVE_VERSION = 35;
 
 export interface MatchInfo {
   id: string;
@@ -239,6 +242,10 @@ export const MEASURES = [
   "enemiesFlashed", "enemyBlindSecs", "teamFlashed", "teamBlindSecs", "utilDmg", "fireDmg", "molotovHits",
   // row coverage of the inputs some metrics need (INPUT_COVERAGE)
   "loadoutRounds", "deathsHandKnown", "deathsHandTotal", "ecoEventsKnown", "ecoEvents", "sightRounds", "utilityRounds",
+  // player-rounds of matches whose source logs grenade throws (utility.ts), the thrown counts' rounds
+  "throwRounds",
+  // the per-grenade-thrown ratios' numerators over those player-rounds only (THROW_LOGGED)
+  "flashAssistsLogged", "enemiesFlashedLogged", "enemyBlindSecsLogged", "flashKillsLogged", "heDmgLogged", "molotovHitsLogged", "fireDmgLogged",
   // buying (buying.ts): equipment against the side's mean, and what a save carried into the next round
   "buyDevSum", "buyDevRounds", "saveEvents", "saveCarryKnown", "saveCarrySum",
   // grenades bought (purchases table): money, and the rounds where purchases were recorded
@@ -262,6 +269,19 @@ export const MEASURES = [
 ] as const;
 export type Measure = (typeof MEASURES)[number];
 export type Measures = Record<Measure, number>;
+
+/**
+ * The numerators of the ratios per grenade thrown, each with its twin counted over only the
+ * player-rounds of matches with a throw log (throwRounds). A thrown count exists only in those
+ * matches, while blinds, damage and the game's flash assists exist in every match; a ratio of the
+ * plain numerator to a thrown count would divide one set of matches by another. utility.ts
+ * logThrowScoped fills the twins, and metrics.ts perThrown is the one way a metric divides by a
+ * thrown count. A new per-thrown ratio adds its numerator here.
+ */
+export const THROW_LOGGED = {
+  flashAssists: "flashAssistsLogged", enemiesFlashed: "enemiesFlashedLogged", enemyBlindSecs: "enemyBlindSecsLogged", flashKills: "flashKillsLogged",
+  heDmg: "heDmgLogged", molotovHits: "molotovHitsLogged", fireDmg: "fireDmgLogged",
+} as const satisfies Partial<Record<Measure, Measure>>;
 
 export interface PlayerRound {
   ri: number;

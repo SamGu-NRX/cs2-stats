@@ -1,7 +1,7 @@
 // Home: the last match as the hero, form, headline stats with trends, recent matches, highlights
 // from the data (the latest from profile/Highlights.tsx, linking to Profile's full list), and what
 // to work on: Firepower, the focus areas with their tips, the weakest numbers.
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { Rating3 } from "../../stats/rating3";
 import type { Query, Rolled } from "../../worker/protocol";
 import { ClutchBadge, Delta, FirstPip, MapThumb, MultiBadge, Num, ScoreCell, SourceBadge } from "../components/bits";
@@ -22,9 +22,9 @@ import { sourceOf } from "../data/sources";
 import { seriesOf, tileDelta, tileValue, TILES } from "../data/series";
 import { ATTR_ICON, AttrIcon } from "../icons/attributes";
 import { BuyIcon, FlagIcon, WeaponIcon } from "../icons/game";
-import { firstOfDay, insideFences } from "../lib/form";
+import { firstOfDay, FORM_WINDOW, formDay, formWindow } from "../lib/form";
 import { AimIcon, ChevronRightIcon, TrendIcon } from "../icons/ui";
-import { fmtAdr, fmtMatchDay, matchDayKey, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
+import { fmtAdr, fmtMatchDay, fmtDec, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName, plural, signed } from "../lib/format";
 import { roundSwingScore, scoreFill, scoreText, swingScore, ratingText, toScore } from "../lib/scale";
 import { BENCH, verdictOf } from "../lib/verdict";
 import { matchHref, matchKey, openMatch, pageHref, profileHref, scopeQuery, tabSectionHref, useRoute } from "../router";
@@ -33,7 +33,7 @@ import { HighlightsShort } from "./profile/Highlights";
 import { TAB_METRICS } from "./profile/tabs";
 import { BarContent } from "../shell/Bar";
 import { useScope } from "../shell/filters";
-import { BreakRows, Empty, NeedsDemo, SectionAside, StatTile, swingSumTip } from "./shared";
+import { BreakRows, Empty, FormToggles, NeedsDemo, SectionAside, StatTile, swingSumTip, useFormFilter } from "./shared";
 import { RoundRail } from "./match/RoundRail";
 import type { AttributeId } from "../data/proPack";
 
@@ -162,14 +162,11 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
 // ---------------------------------------------------------------- form
 
 function FormCard({ list }: { list: MatchEntry[] }) {
-  const [noOutliers, setNoOutliers] = useState(false);
-  const [noFirst, setNoFirst] = useState(false);
-  const firsts = useMemo(() => firstOfDay(list.map((e) => ({ file: e.file, date: matchDayKey(e.match) }))), [list]);
-  let pool = list.slice(0, 10).reverse().filter((s) => entryRating(s) !== null);
-  if (noFirst) pool = pool.filter((s) => !firsts.has(s.file));
-  const keep = insideFences(pool.map((s) => entryRating(s)!));
-  const shown = noOutliers ? pool.filter((_, i) => keep.has(i)) : pool;
-  const hidden = list.slice(0, 10).length - shown.length;
+  const filter = useFormFilter();
+  const firsts = useMemo(() => firstOfDay(list.map(formDay)), [list]);
+  const win = formWindow(list, entryRating, formDay, filter);
+  const shown = win.shown.filter((s) => entryRating(s) !== null);
+  const hidden = list.slice(0, FORM_WINDOW).length - shown.length;
   // the same pooled rating as the Rating 3.0 tile when Form shows the same matches; otherwise say which
   const same = shown.length === list.length;
   // the reference line is the pooled rating of the matches shown, the same definition as the profile
@@ -187,11 +184,7 @@ function FormCard({ list }: { list: MatchEntry[] }) {
           onClick: () => openMatch(matchHref(s.file)), tip: `${mapName(s.match.map)} ${s.score.us}:${s.score.them}, ${fmtMatchDay(s.match)}: ${fmtRating(entryRating(s))}${firsts.has(s.file) ? ", first match of the day" : ""}`,
         }))}
       />
-      <div className="form-card__toggles">
-        <label className="check" data-tip="Leaves out ratings more than 1.5 interquartile ranges beyond the middle half"><input type="checkbox" checked={noOutliers} onChange={(e) => setNoOutliers(e.target.checked)} /><span>Hide outliers</span></label>
-        <label className="check" data-tip="Leaves out the first match you played each day, often a warm-up"><input type="checkbox" checked={noFirst} onChange={(e) => setNoFirst(e.target.checked)} /><span>Skip first game of the day</span></label>
-        {hidden > 0 && <span className="meta">{plural(hidden, "match", "matches")} hidden</span>}
-      </div>
+      <FormToggles filter={filter} hidden={hidden} />
       <div className="form-card__foot">
         <span><b className="num">{w}</b><span className="faint">–</span><b className="num">{shown.length - w}</b> <span className="meta">in {plural(shown.length, "match", "matches")}</span></span>
         <span className="meta">Bars grow from 1.00</span>

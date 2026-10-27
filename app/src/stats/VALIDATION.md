@@ -358,13 +358,14 @@ where that is said.
 ## Spray patterns: `pnpm recoil <weapons_out>`
 
 The in-game spray pattern is each bullet's direction (fire_bullets) minus the view at weapon_fire, the
-median over every pro shot with its gun's normal recoil (`shot-state.ts`: unscoped, the M4A1-S
-silenced, unrecorded states left out) at that whole recoil index (`recoil-build.ts`). No user shot
-enters it. The kick at one index
-is nearly fixed: over 489 pro maps its middle half is at most 0.16 degrees wide for every gun in the
-table below, and up to 0.30 for the short patterns (UMP-45 0.30, CZ75-Auto 0.26, MP5-SD 0.17, AUG 0.14). The ideal pull is minus the kick. The check: how far the pros' median view movement over
-steady sprays from a reset sits from the ideal pull, per bullet (2026-10-25, rebuilt from pro demos
-only after review of #34):
+median over every pro shot with its gun's normal recoil (`shot-state.ts`: known unscoped shots, the
+M4A1-S silenced, and unrecorded states left out) at that whole recoil index (`recoil-build.ts`). No
+user shot enters it. A row needs 10 kick samples, and the generated prefix stops at the first bullet
+below that count. The kick at one index is nearly fixed: over 489 pro maps its middle half is at most
+0.16 degrees wide for every gun in the table below, and up to 0.30 for the short patterns (UMP-45
+0.30, CZ75-Auto 0.26, MP5-SD 0.17, AUG 0.14). The ideal pull is minus the kick. The check: how far
+the pros' median view movement over steady sprays from a reset sits from the ideal pull, per bullet
+(2026-10-25, rebuilt from pro demos only after review of #34):
 
 | Gun | Pattern bullets | Pro band bullets (sprays) | Mean residual, bullets 2 on | Largest |
 |---|---|---|---|---|
@@ -377,11 +378,30 @@ only after review of #34):
 | MP9 | 30 | 14 (1,125) | 0.94 | 2.44 at 12 |
 | MP7 | 24 | 9 (180) | 0.86 | 1.82 at 9 |
 
+The nine guns tracked for ENG-AIM-03 stop at these measured prefixes. The numbers in parentheses are
+kick samples for the last published bullet. A dash means that even bullet 1 has fewer than 10 samples.
+
+| Gun | Pattern bullets | Last published sample count | Why it stops |
+|---|---:|---:|---|
+| AUG | 7 | 13 | Unscoped samples fall below 10 at bullet 8. Scoped shots stay out of this unscoped reference, as they do in `shot-state.ts`, because zoom is a separate recoil state. |
+| SG 553 | 0 | - | No normal-recoil SG 553 shot reaches the 10-sample threshold. |
+| MP5-SD | 7 | 11 | Samples fall below 10 at bullet 8. |
+| UMP-45 | 6 | 10 | Samples fall below 10 at bullet 7. |
+| P90 | 0 | - | The first three bullets have only 4, 3, and 3 samples. |
+| PP-Bizon | 0 | - | Only one sample exists at each of the first three indices. |
+| M249 | 0 | - | No normal-recoil M249 shot exists in the pro tables. |
+| Negev | 0 | - | No normal-recoil Negev shot exists in the pro tables. |
+| CZ75-Auto | 7 | 10 | Samples fall below 10 at bullet 8. |
+
+AUG and SG 553 use the same mode rule as the M4A1-S: the reference has one known firing state,
+not a mixture of modes. For the M4A1-S that state is silenced. For scoped guns this app's normal
+state is known unscoped fire, so scoped shots are excluded rather than combined with unscoped shots.
+The plugin's v1.2.0 per-shot angles can add user evidence later, but they do not fill this pro-only
+reference.
+
 AK-47 bullets 2 to 9 sit within 0.6 degrees of the ideal pull in both axes, and the largest residual is
 on the last bullets, where few sprays remain and the target has usually moved. The residual also holds
-whatever the pros' view did besides fighting recoil. AUG (7 bullets), MP5-SD (7), UMP-45 (6) and
-CZ75-Auto (7) have short patterns and no pro band, and SG 553, P90, PP-Bizon, M249 and Negev have none: pro demos
-hold too few normal-recoil shots of them, and the user's own shots are never used to fill a
+whatever the pros' view did besides fighting recoil. The user's own shots are never used to fill a
 reference. No game cfg sets `weapon_recoil_scale`, and no demo checked
 changes it in `server_cvar`, so the kick is at the game's default scale.
 

@@ -22,7 +22,7 @@ import { sniping } from "./sniping";
 import { swing } from "./swing";
 import { modelFingerprint, type WinProbSource } from "./model-params";
 import type { MatchTables, Side } from "./tables";
-import { grenadeFacts, markUtility, utility } from "./utility";
+import { grenadeFacts, logThrowScoped, markUtility, utility } from "./utility";
 import { derivePresence } from "./positions";
 import { deriveUtilQ } from "./utilq";
 
@@ -421,6 +421,8 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   markSight(c);
   handling(c);
   luck(c);
+  // last of the measure passes: it copies counts the passes above finish (utility.ts logThrowScoped)
+  logThrowScoped(c);
   const weapons = guns(c);
 
   const counted: [number, number] = [0, 0];
