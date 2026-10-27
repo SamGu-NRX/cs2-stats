@@ -50,6 +50,8 @@
 .clip__meta { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .clip__best { color: var(--tan); }
 .clip__feed { display: inline-flex; align-items: center; gap: 8px; color: var(--ink2); }
+/* why a kill the moment counts is not in its video (moments.ts clipNote): plain --ink2 text, like the meta line, wrapping */
+.clip__note { font-size: 12px; line-height: 1.4; color: var(--ink2); text-wrap: pretty; }
 .clip__go { display: inline-flex; gap: 4px; justify-content: flex-end; }
 .clip__go .link { min-height: 32px; padding: 0 6px; }
 

@@ -95,18 +95,19 @@ function useClipTools(names: string[], hlae: string | null): Tools & { recheck: 
 
 // ---------------------------------------------------------------- one moment
 
-/** The clip as a track: its length, the pre-roll and post-roll dimmed, a mark at each of your kills. */
+/** The clip as a track: its length, the pre-roll and post-roll dimmed, a mark at each of your kills the clip shows (MomentRow.kills inClip). */
 function ClipTrack({ r }: { r: MomentRow }) {
   const len = r.endTick - r.startTick;
   const at = (tick: number) => Math.min(100, Math.max(0, (100 * (tick - r.startTick)) / len));
-  const first = r.kills.length ? at(r.kills[0].tick) : 0, last = r.kills.length ? at(r.kills[r.kills.length - 1].tick) : 100;
-  const secs = r.kills.map((k) => Math.round((k.tick - r.startTick) / r.tickRate));
+  const kills = r.kills.filter((k) => k.inClip);
+  const first = kills.length ? at(kills[0].tick) : 0, last = kills.length ? at(kills[kills.length - 1].tick) : 100;
+  const secs = kills.map((k) => Math.round((k.tick - r.startTick) / r.tickRate));
   const label = `${clock(len / r.tickRate)} clip${secs.length ? `, ${plural(secs.length, "kill")} at ${secs.map((s) => `${s} s`).join(", ")}` : ""}`;
   return (
     <span className="ctrack" role="img" aria-label={label} data-tip={label}>
       <span className="ctrack__bar">
         <i className="ctrack__core" style={{ left: `${first}%`, width: `${Math.max(0, last - first)}%` }} />
-        {r.kills.map((k, i) => <i key={i} className="ctrack__kill" data-hs={k.headshot || undefined} style={{ left: `${at(k.tick)}%` }} />)}
+        {kills.map((k, i) => <i key={i} className="ctrack__kill" data-hs={k.headshot || undefined} style={{ left: `${at(k.tick)}%` }} />)}
       </span>
       <span className="ctrack__len mono">{clock(len / r.tickRate)}</span>
     </span>
@@ -116,11 +117,11 @@ function ClipTrack({ r }: { r: MomentRow }) {
 const BEFORE = [{ key: "blind", id: "blind", label: "Killer was flashed" }, { key: "inAir", id: "inair", label: "Killer was in the air" }] as const;
 const AFTER = [{ key: "noscope", id: "noscope", label: "No scope" }, { key: "smoke", id: "smoke", label: "Through smoke" }, { key: "wallbang", id: "wallbang", label: "Through a wall" }, { key: "headshot", id: "headshot", label: "Headshot" }] as const;
 
-/** Your kills as the killfeed draws them, in the game's own icons. */
+/** Your kills in the clip as the killfeed draws them, in the game's own icons. */
 function Feed({ r }: { r: MomentRow }) {
   return (
     <span className="clip__feed" aria-hidden>
-      {r.kills.map((k, i) => (
+      {r.kills.filter((k) => k.inClip).map((k, i) => (
         <span key={i} className="hlr__kill">
           {BEFORE.filter((f) => k[f.key] === true).map((f) => <FlagIcon key={f.key} id={f.id} label={f.label} size={12} />)}
           <WeaponIcon name={k.weapon} height={12} />
@@ -184,6 +185,8 @@ function ClipRow({ it, chosen, onChoose, clipsDir }: { it: Item; chosen: boolean
           {r.matchRank === 1 ? <span className="clip__best">Best in match</span> : <span>#{r.matchRank} in match</span>}
           <Feed r={r} />
         </span>
+        {/* the badge and reason count the whole round; the clip stops at the death or disconnect */}
+        {r.clipNote && <span className="clip__note">{r.clipNote}</span>}
       </span>
       <ClipTrack r={r} />
       <StateCell s={s} clipsDir={clipsDir} />
@@ -243,6 +246,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
     return () => { alive = false; };
   }, [env, request, tools.host]);
   const show = (s: string) => (hide ? hideClipText(s) : s);
+  const noteOf = useMemo(() => new Map(ready.map((i) => [i.row.id, i.row.clipNote])), [ready]);
   const total = ready.reduce((s, i) => s + durationOf(i.row), 0);
 
   const run = async (what: "save" | "launch") => {
@@ -311,7 +315,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
               <h3 className="caps">Clips</h3>
               <ol className="rdlg__clips">
                 {p.demos.flatMap((d) => d.clips.map((c) => (
-                  <li key={c.id}><span>{show(c.reason)}</span><span className="meta mono">{show(d.path.slice(d.path.search(/[^\\/]+$/)))} · ticks {c.start}–{c.end} · {clock((c.end - c.start) / d.tickRate)}</span></li>
+                  <li key={c.id}><span>{show(c.reason)}</span><span className="meta mono">{show(d.path.slice(d.path.search(/[^\\/]+$/)))} · ticks {c.start}–{c.end} · {clock((c.end - c.start) / d.tickRate)}</span>{noteOf.get(c.id) && <span className="clip__note">{noteOf.get(c.id)}</span>}</li>
                 )))}
               </ol>
             </section>

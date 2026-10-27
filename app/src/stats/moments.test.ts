@@ -2,7 +2,7 @@
 // player with 4000 of equipment so the round is valued, unless a test says otherwise.
 import { describe, expect, it } from "vitest";
 import type { SightFact } from "./aim";
-import { bestMomentFirst, momentReason, POINTS, POST_ROLL_S, PRE_ROLL_S, scoreMoments, type Moment } from "./moments";
+import { bestMomentFirst, DEATH_TAIL_S, momentReason, POINTS, POST_ROLL_S, PRE_ROLL_S, scoreMoments, type Moment } from "./moments";
 import { FREEZE_END, oneRound, ROUND_END, type OneRound } from "./testing/match";
 
 const RATE = 64;
@@ -58,6 +58,48 @@ describe("scoreMoments", () => {
     expect(scoreMoments(near, { player: "a" }).map((m) => m.endTick)).toEqual([ROUND_END]);
     const after = round({ kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(20), killer: "a", victim: "d" }, { tick: ROUND_END + 2 * RATE, killer: "a", victim: "e" }] });
     expect(scoreMoments(after, { player: "a" }).map((m) => [m.kinds[0], m.endTick])).toEqual([["3k", ROUND_END + 2 * RATE]]);
+  });
+
+  it("ends the clip half a second after the player dies, when they are traded right after their last kill", () => {
+    // fails if the clip runs on past a's death, where CS2's demo camera leaves a and the director stops
+    // with camera_lost, so the moment could never be rendered. a kills c, d and e; f trades a 0.5 s after
+    // the third kill. In the second round f kills a 10 s after the third kill, past the post-roll.
+    const players = { ...five, f: "T" as const };
+    const kills = [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(11), killer: "a", victim: "d" }, { tick: t(12), killer: "a", victim: "e" }];
+    const traded = round({ players, kills: [...kills, { tick: t(12.5), killer: "f", victim: "a" }] });
+    const [m] = scoreMoments(traded, { player: "a" });
+    expect([m.kinds[0], m.startTick, m.endTick]).toEqual(["3k", t(10) - PRE_ROLL_S * RATE, t(12.5) + DEATH_TAIL_S * RATE]);
+    expect([m.kills.every((k) => k.inClip), m.clipNote]).toEqual([true, null]);
+    const late = round({ players, kills: [...kills, { tick: t(22), killer: "f", victim: "a" }] });
+    expect(scoreMoments(late, { player: "a" }).map((x) => x.endTick)).toEqual([t(12) + POST_ROLL_S * RATE]);
+  });
+
+  it("keeps a kill made after the player's death in the moment's count but marks it out of the clip, and says why", () => {
+    // fails if the 4K drops to a 3K, if the kill after the clip's end is drawn as in the clip, or if no
+    // note says why the video holds three kills. a kills c, d and e, f kills a, then a's grenade kills
+    // f 2.1 s after a died.
+    const players = { ...five, f: "T" as const };
+    const f = round({
+      players,
+      kills: [
+        { tick: t(10), killer: "a", victim: "c" }, { tick: t(11), killer: "a", victim: "d" }, { tick: t(12), killer: "a", victim: "e" },
+        { tick: t(12.5), killer: "f", victim: "a" }, { tick: t(14.6), killer: "a", victim: "f" },
+      ],
+    });
+    const [m] = scoreMoments(f, { player: "a" });
+    expect([m.kinds[0], m.endTick, m.kills.map((k) => k.inClip)]).toEqual(["4k", t(12.5) + DEATH_TAIL_S * RATE, [true, true, true, false]]);
+    expect(m.clipNote).toBe("The 4th kill came 2.1 s after they died. The clip ends 0.5 s after the death, so it isn't in the video.");
+  });
+
+  it("ends the clip when the player disconnects alive before its planned end", () => {
+    // fails if the clip runs on after a has left, where the camera has no player to follow. a kills c,
+    // d and e, then disconnects 1 s after the third kill.
+    const f = round({
+      kills: [{ tick: t(10), killer: "a", victim: "c" }, { tick: t(11), killer: "a", victim: "d" }, { tick: t(12), killer: "a", victim: "e" }],
+      leaves: [{ tick: t(13), steamid: "a", alive: true }],
+    });
+    const [m] = scoreMoments(f, { player: "a" });
+    expect([m.kinds[0], m.endTick, m.clipNote]).toEqual(["3k", t(13), null]);
   });
 
   it("starts no clip before freeze end", () => {
