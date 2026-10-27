@@ -1,7 +1,7 @@
 // Rating 3.0 round by round (worker ratingBreakdown): each round's rating as a lollipop from your match
 // rating, which the counted rounds average to, with 1.00 and your usual rating (your recent matches,
 // worker yourMatch) as reference lines. Beside it, a waterfall of where a rating came from: the
-// intercept, then each input's coefficient times its value, ending at the rating. It shows the whole
+// base, then each input's contribution (the engine's split), ending at the rating. It shows the whole
 // match until a round is hovered or focused; a click opens the round in the drawer.
 // No motion: the panel swaps at once, since it follows the pointer across rounds.
 import { useMemo, useState } from "react";
@@ -16,7 +16,7 @@ import { ratingText, scoreText, toScore } from "../../lib/scale";
 import { matchHref, setQuery } from "../../router";
 import { Hint } from "./glyphs";
 import { LoadFailed } from "./LoadFailed";
-import { matchContributions, ratingDomain, ratingSteps, ratingTerms, roundContributions, signedIn, TERM_LABEL, type Step } from "./parity";
+import { contributions, ratingDomain, ratingOrder, ratingSteps, signedIn, TERM_LABEL, type Step } from "./parity";
 import { useRoving } from "./roving";
 
 const PITCH = 24;
@@ -72,11 +72,10 @@ function ExtLabel({ x, y, up, text }: { x: number; y: number; up: boolean; text:
   return <text x={x + 8} y={y + 4} className="ax ms__ext">{text}</text>;
 }
 
-/** A round's waterfall from its engine terms; null when the round is not rated. */
+/** A round's waterfall from its engine base and terms; null when the round is not rated. */
 export function roundSteps(r: RoundRating) {
-  if (!r.terms) return null;
-  const info = ratingInfo();
-  return ratingSteps(info.intercept, roundContributions(ratingTerms(info.terms), r.terms));
+  if (!r.terms || r.base === null) return null;
+  return ratingSteps(r.base, contributions(ratingOrder(ratingInfo().inputs), r.terms));
 }
 
 export function RatingByRound({ v, file, rb, error, selected }: { v: MatchModel; file: string; rb: RatingBreakdown | null; error: string | null; selected: number | null }) {
@@ -87,9 +86,8 @@ export function RatingByRound({ v, file, rb, error, selected }: { v: MatchModel;
   const rows = rb?.rows ?? [];
   const roving = useRoving(rows.length);
   const matchSteps = useMemo(() => {
-    if (!rb?.match.inputs) return null;
-    const info = ratingInfo();
-    return ratingSteps(info.intercept, matchContributions(ratingTerms(info.terms), rb.match.inputs));
+    if (!rb?.match.terms || rb.match.base === null) return null;
+    return ratingSteps(rb.match.base, contributions(ratingOrder(ratingInfo().inputs), rb.match.terms));
   }, [rb]);
 
   const n = usual?.recent.length ?? 0;

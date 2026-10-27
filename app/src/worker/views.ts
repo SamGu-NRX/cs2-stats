@@ -9,7 +9,7 @@ import { ROLE_SIGNALS, STYLE } from "../stats/identity";
 import { AWPER_MIN_AWP_KPR } from "../stats/compare";
 import { ATTRIBUTES, METRICS } from "../stats/metrics";
 import type { WinProbSource } from "../stats/model-params";
-import { RATING3_INTERCEPT, RATING3_LABEL, RATING3_STATUS, RATING3_TERMS, RATING3_WEIGHTS, rating3Of } from "../stats/rating3";
+import { FEATURES, RATING3_LABEL, RATING3_STATUS, RATING3_WEIGHTS, rating3Of } from "../stats/rating3";
 import { grenadesOf, keptRounds, rollup, type Filter, type Summary } from "../stats/rollup";
 import { spawnPosition } from "../stats/positions";
 import { swingSources } from "../stats/swing";
@@ -25,7 +25,7 @@ export function metaOf(wp: WinProbSource): Meta {
   return {
     metrics: METRICS.map(({ value: _value, why: _why, sample, ...m }) => (sample ? { ...m, sample: { unit: sample.unit, min: sample.min } } : m)),
     attributes: ATTRIBUTES,
-    rating: { label: RATING3_LABEL, status: RATING3_STATUS, intercept: RATING3_INTERCEPT, terms: RATING3_TERMS, weights: RATING3_WEIGHTS },
+    rating: { label: RATING3_LABEL, status: RATING3_STATUS, inputs: [...FEATURES], weights: RATING3_WEIGHTS },
     winProb: { kind: wp.kind, label: wp.label },
     style: [...STYLE],
     signals: ROLE_SIGNALS,

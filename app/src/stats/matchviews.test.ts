@@ -2,12 +2,11 @@
 // T c and d unless a test says otherwise.
 import { describe, expect, it } from "vitest";
 import { addSituations, bombsites, headToHead, mapZones, openingDuels, roundRatings, yourMatch, type Situations } from "./matchviews";
-import { RATING3_INTERCEPT } from "./rating3";
-import { rating3Of } from "./rating3";
+import { rating3Of, sideRating3 } from "./rating3";
 import { emptySummary, rollup } from "./rollup";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 import { derive } from "./derive";
-import { CS2RB, PARAMS } from "./model-params";
+import { CS2RB } from "./model-params";
 import { rosterTables } from "./roster";
 
 const t = (s: number) => FREEZE_END + 64 * s;
@@ -35,14 +34,15 @@ describe("rating by round", () => {
     expect(counted.reduce((a, r) => a + r.rating!, 0) / counted.length).toBeCloseTo(rating3Of(rollup([f], { player: "a" })).value!, 12);
   });
 
-  it("splits a round's rating into each input's coefficient times its value", () => {
+  it("gives a round whose inputs are its side's the side's own split", () => {
     // fails if an input is read on the wrong scale: 2 eco kills, 150 eco damage, no death, KAST and no
-    // multi-kill as 100 and 0, and swing 0.1 as 10 points, each times params.json's coefficient
+    // multi-kill as 100 and 0, and swing 0.1 as 10 points. Every CT round is alike, so each is CT's rating
     const f = sixRounds(() => rated(2, 150, 0.1));
-    const c = PARAMS.rating.coefficients;
-    expect(roundRatings(f, "a", null)[0].terms).toEqual({
-      kpr_eco: c.eKPR * 2, adr_eco: c.eADR * 150, dpr_eco: c.eDPR * 0, kast_eco: c.eKAST * 100, mk: c.MK * 0, swing: c.Swing * 10,
-    });
+    const q = { kpr_eco: 2, adr_eco: 150, dpr_eco: 0, kast_eco: 100, mk: 0, swing: 10, k2: 0, k3: 0, k4: 0, k5: 0 };
+    const side = sideRating3(q, "CT");
+    const [r] = roundRatings(f, "a", null);
+    for (const [k, v] of Object.entries(side.terms)) expect(r.terms![k as keyof typeof side.terms]).toBeCloseTo(v, 12);
+    expect(r.base).toBeCloseTo(side.base, 12);
   });
 
   it("gives each rated round the rating of that round alone, split by input", () => {
@@ -51,7 +51,7 @@ describe("rating by round", () => {
     const f = oneRound({ players: { a: "CT", c: "T" }, player_rounds: { a: equip, c: equip }, kills: [{ tick: t(1), killer: "a", victim: "c" }] });
     const [r] = roundRatings(f, "a", 1);
     expect(r.rating).toBeCloseTo(rating3Of(rollup([f], { player: "a" })).value!, 12);
-    expect(RATING3_INTERCEPT + Object.values(r.terms!).reduce((x, y) => x + y, 0)).toBeCloseTo(r.rating!, 12);
+    expect(r.base! + Object.values(r.terms!).reduce((x, y) => x + y, 0)).toBeCloseTo(r.rating!, 12);
     expect(r.vsAverage).toBeCloseTo(r.rating! - 1, 12);
     expect(r.swing).not.toBeNull();
   });
