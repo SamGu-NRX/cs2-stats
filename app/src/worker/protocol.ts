@@ -10,6 +10,7 @@ import type { EconomyView } from "../stats/economy";
 import type { GrenadeFact, MatchFacts, Measure, Measures } from "../stats/facts";
 import type { GunProficiency } from "../stats/guns";
 import type { HighlightKind } from "../stats/highlights";
+import type { Moment } from "../stats/moments";
 import type { FlashTool } from "../stats/flashes";
 import type { OverallRole, RoleBlend, RoleSignal, StylePoint } from "../stats/identity";
 import type { Kind, Status, Unit } from "../stats/metrics";
@@ -75,6 +76,13 @@ export interface HighlightRow {
   won: boolean | null;
   feed: HighlightKill[];
 }
+
+/**
+ * One moment worth a POV clip (stats/moments.ts) in the match `file`. `id` names its clip files
+ * (clips/ids.ts clipId); `matchRank` is its place among the same match's moments, 1 the best; `start`
+ * is the match's start (ms since the epoch, 0 when unknown).
+ */
+export type MomentRow = Omit<Moment, "ri" | "pi"> & { id: string; file: string; map: string; start: number; matchRank: number };
 
 export interface Line {
   m: Measures;
@@ -357,6 +365,8 @@ export interface Api {
   multiKills(q: Query): MultiKillRow[];
   /** the player's 3K-or-better rounds and won clutches in the query's matches (the rows its filter keeps), newest first */
   highlights(q: Query): HighlightRow[];
+  /** the player's moments for POV clips in the query's matches (the rows its filter keeps), best first across them */
+  moments(q: Query): MomentRow[];
   /** the player's flashbangs in the match: where each detonated, whom it blinded and for how long, and the kills it led to */
   flashes(file: string, player: string): FlashTool;
 }

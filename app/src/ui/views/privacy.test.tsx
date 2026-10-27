@@ -17,7 +17,9 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ClipsHost, FinishRequest } from "../../clips/host";
+import type { JobRequest, RenderPlan } from "../../clips/plan";
 import type { Host, ValveFolder } from "../../host/host";
 import type { ImportStatus, ImportStore } from "../../host/import-store";
 import type { Baselines } from "../../stats/compare";
@@ -36,13 +38,13 @@ import { matchValues, trend } from "../../stats/trends";
 import type { MatchTables } from "../../stats/tables";
 import type { Client } from "../../worker/client";
 import { matchCalls } from "../../worker/matchcalls";
-import type { Query } from "../../worker/protocol";
+import type { MomentRow, Query } from "../../worker/protocol";
 import { addCareerMatch, botPopulation, rankingCalls, sideQuery } from "../../worker/ranking";
 import { entryOf, matchBundle, metaOf, ratingsOf, roundBundle, rolled } from "../../worker/views";
 import { Shell } from "../App";
 import type { MatchEntry } from "../data/match";
 import { setMeta } from "../data/meta";
-import { setHidePersonal } from "../data/privacy";
+import { hideText, setHidePersonal } from "../data/privacy";
 import { dismissToast, toast } from "../components/overlay";
 import { DataValue, type Data } from "../data/provider";
 import { go, knownMatchFiles, MATCH_TABS, matchHref, matchId, PAGES, pageHref, PROFILE_TABS, profileHref, type Page } from "../router";
@@ -179,6 +181,13 @@ const client = new Proxy({} as Client, {
 
 // ---------------------------------------------------------------- the host
 
+/**
+ * The desktop app's clips commands, for the test that renders the Render dialog and finishes a clip;
+ * null elsewhere, as in a browser. Its folders, demos and command carry the sentinel path.
+ */
+let clipsStandIn: ClipsHost | null = null;
+vi.mock("../../clips/host", async (orig) => ({ ...(await orig<object>()), clipsHost: async () => clipsStandIn }));
+
 const failedImport: ImportStatus = { running: false, at: null, error: null, last: { code: 2, summary: null, error: `valve_import.py: cannot read ${VALVE_FOLDER}\\demo.dem for ${ID}` } };
 // an import whose demos failed validation, which names them
 const failedDemos: ImportStatus = {
@@ -247,6 +256,9 @@ HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElemen
 Element.prototype.scrollTo ??= () => {};
 globalThis.PointerEvent ??= class extends MouseEvent {} as unknown as typeof PointerEvent;
 Element.prototype.scrollIntoView ??= () => {};
+// jsdom has <dialog> without the modal methods (the Clips page's Render dialog)
+HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) { this.setAttribute("open", ""); };
+HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new Event("close")); };
 setMeta(metaOf(CS2RB));
 
 // The replay asks its worker for a round's positions; this one never answers, so the replay stays on
@@ -316,6 +328,35 @@ async function show(href: string, data: Data) {
 }
 
 const found = (text: string) => SENTINELS.filter((s) => text.includes(s));
+
+/** A clips host on a machine whose user folder is the sentinel's, as the Rust host would answer there. */
+function clipsOnSentinelMachine(takeOf: string, finished: FinishRequest[]): ClipsHost {
+  const clipsDir = `${HOME_DIR}\\AppData\\Roaming\\BotMatchStats\\clips`;
+  const hlae = `${HOME_DIR}\\Tools\\HLAE\\HLAE.exe`;
+  const cs2 = `${HOME_DIR}\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\bin\\win64\\cs2.exe`;
+  const plan = (request: JobRequest): RenderPlan => {
+    const jobDir = `${clipsDir}\\jobs\\job-20261026T180405123Z-a1b2c3`;
+    const argv = [hlae, "-noGui", "-autoStart", "-noConfig", "-afxDisableSteamStorage", "-customLoader", "-hookDllPath", `${HOME_DIR}\\Tools\\HLAE\\x64\\AfxHookSource2.dll`, "-programPath", cs2, "-cmdLine", "-insecure +exec cs2stats_clips"];
+    return {
+      version: 2, id: "job-20261026T180405123Z-a1b2c3", created: "2026-10-26T18:04:05.123Z", settings: { width: 1920, height: 1080, fps: 60 }, jobDir, hlaeExe: hlae, hookDll: argv[7], cs2Exe: cs2, argv,
+      powershell: ["&", ...argv.map((a) => `'${a}'`)].join(" "), cfgFile: "cs2stats_clips.cfg", cfgText: `mirv_script_load "${jobDir.replaceAll("\\", "/")}/director.js"\n`,
+      directorFile: `${jobDir}\\director.js`, outputs: [], request, review: "0".repeat(64),
+      demos: request.clips.map((c) => ({ path: `${HOME_DIR}\\replays\\${c.demo}`, tickRate: c.tickRate, clips: [{ id: c.id, steamid: c.steamid, start: c.startTick, end: c.endTick, reason: c.reason }] })),
+    };
+  };
+  return {
+    env: async () => ({
+      clipsDir, font: "C:/Windows/Fonts/seguisb.ttf", cs2: { path: cs2, error: null }, replays: { path: `${HOME_DIR}\\replays`, error: null },
+      hlae: { path: hlae, error: null }, ffmpeg: { path: `${HOME_DIR}\\scoop\\shims\\ffmpeg.exe`, error: null },
+    }),
+    demos: async (names) => names.map((name) => ({ name, path: `${HOME_DIR}\\replays\\${name}`, size: 1 })),
+    scan: async () => ({ finished: [], reels: [], takes: [{ id: takeOf, job: "job-20261026T180405123Z-a1b2c3", take: "take0000", video: `${clipsDir}\\jobs\\x\\video.mp4`, audio: null, mtime: 1 }], waiting: 0 }),
+    plan: async (request) => plan(request),
+    launch: async () => { throw new Error("the sentinel test never launches"); },
+    finish: async (r) => { finished.push(r); return { code: 0, error: null, output: `${clipsDir}\\${r.id}.mp4` }; },
+    reel: async () => ({ code: 0, error: null, output: `${clipsDir}\\reels\\r.mp4` }),
+  };
+}
 
 describe("Hide personal info", () => {
   it("finds the lazily loaded views to load", () => {
@@ -533,5 +574,48 @@ describe("Hide personal info", () => {
     hidePersonal(true);
     expect(await figures()).toEqual(shown);
     expect(shown.length).toBeGreaterThan(20);
+  }, 30_000);
+
+  it("hides them in the Clips page's Render dialog and in the lower third's text a clip is finished with", async () => {
+    // fails if the dialog shows the command, folders or demo paths of a user whose folder carries a
+    // sentinel, or the lower third burns a name or path into the video. One of the Valve match's
+    // moments names a path in its reason (a place name is the map maker's text), and that moment
+    // has a take to finish; another is ready to render.
+    const all = (perMatch.moments as (q: Query) => Promise<MomentRow[]>);
+    const rows = await all({ files: [valve.file], filter: { player: ID } });
+    expect(rows.length, "the Valve match has two moments or more").toBeGreaterThanOrEqual(2);
+    const [taken, ready] = rows;
+    const named = `${taken.reason}, from ${HOME_DIR}\\x`;
+    const before = answers.moments;
+    answers.moments = (async (q: Query) => (await all(q)).map((m) => (m.id === taken.id ? { ...m, reason: named } : m))) as never;
+    const finished: FinishRequest[] = [];
+    clipsStandIn = clipsOnSentinelMachine(taken.id, finished);
+    try {
+      hidePersonal(true);
+      await show(pageHref("clips"), dataWith());
+      const rowOf = (id: string) => document.querySelector<HTMLElement>(`.clip[data-clip="${id}"]`)!;
+      // the list shows the reason through the layer too
+      expect(rowOf(taken.id).querySelector(".clip__reason")!.textContent).toBe(hideText(named));
+      await act(async () => { rowOf(ready.id).querySelector<HTMLInputElement>("input")!.click(); });
+      await act(async () => { Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.startsWith("Render 1 clip"))!.click(); });
+      await settle();
+      const dlg = document.querySelector("dialog.rdlg");
+      expect(dlg?.querySelector(".rdlg__cmd")?.textContent, "the dialog shows the plan").toMatch(/-insecure/);
+      expect(found(dlg!.outerHTML)).toEqual([]);
+      expect(dlg!.outerHTML).toContain("&lt;path&gt;");
+      await act(async () => { Array.from(dlg!.querySelectorAll("button")).find((b) => b.textContent === "Cancel")!.click(); });
+      await act(async () => { rowOf(ready.id).querySelector<HTMLInputElement>("input")!.click(); });
+      await act(async () => { rowOf(taken.id).querySelector<HTMLInputElement>("input")!.click(); });
+      await act(async () => { Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.startsWith("Finish 1 clip"))!.click(); });
+      await settle();
+      expect(finished.map((f) => f.id)).toEqual([taken.id]);
+      expect(found(JSON.stringify(finished))).toEqual([]);
+      expect(finished[0].reason).toBe(hideText(named));
+      expect(finished[0].reason).toContain("<path>");
+      expect(found(document.body.innerHTML)).toEqual([]);
+    } finally {
+      answers.moments = before;
+      clipsStandIn = null;
+    }
   }, 30_000);
 });

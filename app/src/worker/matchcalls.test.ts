@@ -48,3 +48,14 @@ it("builds sessions from the matches the query's filters keep", async () => {
   expect(sessions.map((s) => [s.files, s.kills, s.wins + s.losses + s.ties])).toEqual([[["d1"], 1, 1], [["d2"], 2, 1]]);
   expect((await calls.sessions({ files: ["d1", "m", "d2"], filter: { player: "a" } })).map((s) => s.files)).toEqual([["d1", "m", "d2"]]);
 });
+
+it("ranks moments across matches and within each, and names each clip by match, player and round", async () => {
+  // fails if moments lose their file, the cross-match order ignores the score, the in-match rank is
+  // off, or two files' clips share an id. a starts alone against three and wins: a.json holds a 3K in
+  // that 1v3, b.json a single kill in it.
+  const calls = callsOver({ "a.json": match(3, "2026-10-24T20:00:00Z"), "b.json": match(1, "2026-10-24T21:00:00Z") });
+  const rows = await calls.moments({ files: ["b.json", "a.json"], filter: { player: "a" } });
+  expect(rows.map((r) => [r.file, r.kinds.join(" "), r.matchRank, r.round])).toEqual([["a.json", "3k clutch opening", 1, 1], ["b.json", "clutch opening", 1, 1]]);
+  expect(rows[0].id).toMatch(/^c-[0-9a-f]{16}-r1$/);
+  expect(rows[0].id).not.toBe(rows[1].id);
+});

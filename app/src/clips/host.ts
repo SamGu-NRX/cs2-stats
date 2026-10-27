@@ -1,0 +1,77 @@
+// Typed calls to the clips commands in src-tauri/src/clips/mod.rs; the types mirror the Rust structs'
+// JSON. The web view sends typed requests only: clip ids, demo file names, ticks and the lower third's
+// text; the host builds every command and path. Only the desktop app has these: the browser build
+// lists moments but cannot check demos or render.
+import { isTauri } from "../host/host";
+import type { JobRequest, RenderPlan } from "./plan";
+
+/** Where a tool is, or why it was not found. */
+export interface Found { path: string | null; error: string | null }
+export interface ClipsEnv { clipsDir: string; cs2: Found; replays: Found; hlae: Found; ffmpeg: Found; font: string | null }
+export interface DemoOnDisk { name: string; path: string | null; size: number }
+export interface Finished { id: string; path: string; size: number; mtime: number }
+/** HLAE's newest complete recording of a clip: the job, its take folder (take0000 and up), and the video and sound in it. */
+export interface Take { id: string; job: string; take: string; video: string; audio: string | null; mtime: number }
+/** `waiting`: launches whose HLAE or CS2 still runs; their takes are listed once those exit. */
+export interface ClipsScan { finished: Finished[]; takes: Take[]; reels: Finished[]; waiting: number }
+/** `damaged`: HLAE started but the launch could not record it, so none of its takes will count. */
+export interface Launched { pid: number; cfg: string; ffmpegIni: string | null; damaged: string | null }
+/** An FFmpeg run: its exit code, the end of what it wrote to stderr when it failed, and the file it wrote. */
+export interface FfmpegRun { code: number | null; error: string | null; output: string }
+/** A take to finish: the clip, the job and take folder that recorded it, the lower third's two lines (personal info already hidden when the setting is on) and the clip's length. */
+export interface FinishRequest { id: string; job: string; take: string; reason: string; subline: string; durationS: number }
+
+export interface ClipsHost {
+  /** `hlae`: the HLAE.exe the user chose, if any */
+  env(hlae: string | null): Promise<ClipsEnv>;
+  demos(names: string[]): Promise<DemoOnDisk[]>;
+  scan(): Promise<ClipsScan>;
+  /**
+   * builds the job for the chosen clips. With `save`, the review value of the plan the user was shown,
+   * it also saves the job as a new folder, and the host refuses when the plan it builds now differs.
+   * Touches nothing outside the clips folder.
+   */
+  plan(request: JobRequest, save: string | null): Promise<RenderPlan>;
+  /** starts CS2 through HLAE for a saved job, only after the user confirms; refused when the job is not the plan with this review value */
+  launch(job: string, review: string): Promise<Launched>;
+  finish(r: FinishRequest, hlae: string | null): Promise<FfmpegRun>;
+  /** joins finished clips, in order, into a new reel */
+  reel(ids: string[], hlae: string | null): Promise<FfmpegRun>;
+}
+
+async function tauriClips(): Promise<ClipsHost> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return {
+    env: (hlae) => invoke("clips_env", { hlae }),
+    demos: (names) => invoke("clips_demos", { names }),
+    scan: () => invoke("clips_scan"),
+    plan: (request, save) => invoke("clips_plan", { request, save }),
+    launch: (job, review) => invoke("clips_launch", { job, review }),
+    finish: (r, hlae) => invoke("clips_finish", { id: r.id, job: r.job, take: r.take, reason: r.reason, subline: r.subline, durationS: r.durationS, hlae }),
+    reel: (ids, hlae) => invoke("clips_reel", { ids, hlae }),
+  };
+}
+
+/**
+ * The desktop app's clips commands; null in the browser. `vite dev` and `pnpm capture` with
+ * ?clips=<scenario> get the stand-in host in mock.ts instead, for screenshots; the import is dynamic and
+ * DEV-only, so a release build carries none of it.
+ */
+export async function clipsHost(): Promise<ClipsHost | null> {
+  if (isTauri()) return tauriClips();
+  const scenario = import.meta.env.DEV ? new URLSearchParams(location.search).get("clips") : null;
+  if (scenario) {
+    const { mockClipsHost } = await import("./mock");
+    return mockClipsHost(scenario);
+  }
+  return null;
+}
+
+const HLAE_KEY = "cs2stats.hlae";
+/** The HLAE.exe the user chose last; null when none was saved or storage is blocked. */
+export function savedHlae(): string | null {
+  try { return localStorage.getItem(HLAE_KEY) || null; } catch { return null; }
+}
+export function saveHlae(path: string): void {
+  try { localStorage.setItem(HLAE_KEY, path); } catch { /* kept for this session only */ }
+}

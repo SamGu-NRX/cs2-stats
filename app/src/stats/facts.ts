@@ -14,7 +14,8 @@ import type { Side } from "./tables";
 // 34: the THROW_LOGGED numerators, so the per-grenade-thrown ratios count both sides over the same matches
 // 35: swing shares each kill by HLTV's per-kill weights (params.json swing.event_credit); eco-adjusted KAST
 // counts survival only in a won round; the vK3-5Rounds measures for the per-side Rating 3.0
-export const DERIVE_VERSION = 35;
+// 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
+export const DERIVE_VERSION = 36;
 
 export interface MatchInfo {
   id: string;
@@ -196,6 +197,8 @@ export interface KillFact {
   /** world position of killer and victim, [x, y] */
   kpos: [number, number] | null;
   vpos: [number, number] | null;
+  /** the killer's place name at the kill (kills.a_place, raw: "BombsiteB"); null when the source has none */
+  place: string | null;
   /** an enemy kill: a killer on the other side (not a team kill, suicide or world death) */
   enemy: boolean;
   /** first enemy kill of the round */

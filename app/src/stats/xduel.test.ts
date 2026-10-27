@@ -32,7 +32,7 @@ describe("duel difficulty", () => {
     const a = emptyAim();
     for (let i = 0; i < n; i++) {
       const f: SightFact = {
-        k: "sight", ri: 0, pi: 0, weapon: null, place: 0, ttd: null, ttk: null, moved: null, react: null, shot: null, over: null, micro: null, trackN: 0, trackSum: 0,
+        k: "sight", ri: 0, pi: 0, weapon: null, place: 0, ttd: null, ttk: null, killTick: null, moved: null, react: null, shot: null, over: null, micro: null, trackN: 0, trackSum: 0,
         dist: 0, travel: null, shotSpeed: null, shotErr: null, stopBuf: null, first: null, duelS: 1, duelWon: i < wins, xf: [...XDUEL.mean],
       };
       foldAim(a, f);

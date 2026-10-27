@@ -16,6 +16,7 @@ import "./ui/styles/career-parity.css";
 import "./ui/styles/match-parity.css";
 import "./ui/styles/parity-round2.css";
 import "./ui/styles/insights.css";
+import "./ui/styles/clips.css";
 import "./ui/styles/leetify.css";
 import "./ui/styles/botmode.css";
 
