@@ -36,6 +36,7 @@ it("gives each scoreboard line its eco-adjusted values from the rating's own inp
   const m = await decodeMatch(readFileSync(path.resolve(import.meta.dirname, "../../public/samples", file)), file);
   const e = entryOf(file, "", derive(pluginToTables(m), CS2RB));
   const l = e.line;
+  if (!l) throw new Error("a recording has the recording player's line");
   expect(l.eco).not.toBeNull();
   expect(l.eco!.ek).toBeCloseTo(l.m.vEcoKills, 9);
   expect(l.eco!.eadr).toBeCloseTo(l.m.vEcoDmg / l.m.ratedRounds, 9);

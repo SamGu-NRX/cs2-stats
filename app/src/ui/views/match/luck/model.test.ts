@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyMeasures, type KillFact, type Measures, type PlayerRound } from "../../../../stats/facts";
 import { LUCK_METRICS } from "../../../../stats/luck";
-import type { MatchModel, MRound } from "../../../data/match";
+import type { MRound, ViewedMatch } from "../../../data/match";
 import {
   flagsOf, fmtLuck, inputOf, lobbyLuck, LUCK_GROUPS, LUCK_INPUTS, luckHeadline, luckMoments, luckSentence, missingInputs, missingLine,
   roundLuck, tally,
@@ -28,14 +28,14 @@ interface R { kills?: KillFact[]; me?: Partial<Measures> | null; winner?: "us" |
  * A match model holding what the luck model reads: players, rounds (number, winner, kills, rows) and
  * the per-player lines. Everything else a MatchModel carries is left out.
  */
-function model(rounds: R[], lines: Record<number, Record<string, number | null>> = {}): MatchModel {
+function model(rounds: R[], lines: Record<number, Record<string, number | null>> = {}): ViewedMatch {
   const players = [ME, MATE, FOE, FOE2].map((pi) => ({ pi, key: `p${pi}`, name: `P${pi}`, bot: false, team: pi < 2 ? "us" : "them", isHuman: pi === ME }));
   const rs = rounds.map((r, ri) => ({
     ri, number: ri + 1, winner: r.winner === undefined ? "us" : r.winner, halfStart: r.halfStart ?? false, kills: r.kills ?? [],
     pr: players.map((p) => (p.pi === ME && r.me !== null ? row(ri, ME, r.me ?? {}) : null)),
   })) as Partial<MRound>[] as MRound[];
   const both = players.map((p) => ({ v: lines[p.pi] ?? {} }));
-  return { human: ME, players, rounds: rs, b: { lines: { both } } } as unknown as MatchModel;
+  return { human: ME, players, rounds: rs, b: { lines: { both } } } as unknown as ViewedMatch;
 }
 
 describe("the luck score in words", () => {

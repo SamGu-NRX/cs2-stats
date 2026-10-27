@@ -15,6 +15,7 @@ import { spawnPosition } from "../stats/positions";
 import { swingSources } from "../stats/swing";
 import type { Side } from "../stats/tables";
 import { startMs, type MatchEntry } from "../ui/data/match";
+import { isProFile } from "../ui/data/sources";
 import { highlightKinds } from "../stats/highlights";
 import { playedMatch } from "../stats/roster";
 import type {
@@ -67,17 +68,20 @@ function pov(file: string, f: MatchFacts): { you: number; usTeam: 0 | 1 } {
 const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them ? "W" : us < them ? "L" : "T");
 
 
+/**
+ * A match's entry in the list. A pro demo (isProFile) has no recording player whatever its file
+ * says: `you` and `line` are null, and the team that started CT stands in as "us" for the layout.
+ */
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
-  const { you, usTeam } = pov(file, f);
-  const id = f.players[you].id;
-  const s = rollup([f], { player: id });
+  const { you, usTeam } = isProFile(file) ? { you: null, usTeam: 0 as const } : pov(file, f);
+  const s = you === null ? null : rollup([f], { player: f.players[you].id });
   const us = f.match.score[usTeam];
   const them = f.match.score[1 - usTeam];
   return {
     file, origin, match: f.match, players: f.players, you, usTeam, usStartSide: usTeam === 0 ? "CT" : "T",
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
-    shots: s.aim.shots, kills: f.kills.length, line: lineOf(s), played: f.players.map((p) => p.id).filter((id) => playedMatch(f, id)),
+    shots: s ? s.aim.shots : 0, kills: f.kills.length, line: s && lineOf(s), played: f.players.map((p) => p.id).filter((id) => playedMatch(f, id)),
     activity: f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0),
   };
 }
@@ -89,10 +93,15 @@ const SIDES = { both: {}, t: { sides: ["T" as const] }, ct: { sides: ["CT" as co
 /** Hits on the head with guns: HIT_GROUPS[0] summed over the guns of a summary. */
 export const gunHeadHits = (s: Summary) => Object.entries(s.weapons).reduce((a, [w, t]) => a + (isGun(w) ? t.groups[0] : 0), 0);
 
-export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
+/**
+ * One match for the match views. `viewer` is the player the per-player parts (yourRounds, presence)
+ * are for: a player picked on a pro demo's scoreboard, else the recording player; with neither, as on
+ * a pro demo before a pick, those parts are empty.
+ */
+export function matchBundle(entry: MatchEntry, f: MatchFacts, viewer: string | null): MatchBundle {
   const usIds = f.players.filter((p) => p.team === entry.usTeam).map((p) => p.id);
   const themIds = f.players.filter((p) => p.team !== entry.usTeam).map((p) => p.id);
-  const you = f.players[entry.you].id;
+  const you = viewer ?? (entry.you === null ? null : f.players[entry.you].id);
   const lines = Object.fromEntries(Object.entries(SIDES).map(([k, side]) =>
     [k, f.players.map((p) => lineOf(rollup([f], { player: p.id, ...side })))])) as MatchBundle["lines"];
   const team = (ids: string[]) => lineOf(rollup([f], { player: ids }));
@@ -103,9 +112,9 @@ export function matchBundle(entry: MatchEntry, f: MatchFacts): MatchBundle {
     teams: { us: team(usIds), them: team(themIds) },
     economy: economyOf(f, entry.usTeam),
     teamSwing: f.rounds.map((r) => { const m = byRound(usIds, r.number).m; return m.swingRounds ? m.swing : null; }),
-    yourRounds: f.rounds.map((r) => valuesOf(byRound(you, r.number))),
+    yourRounds: you === null ? [] : f.rounds.map((r) => valuesOf(byRound(you, r.number))),
     grenades: grenadesOf([f], { player: f.players.map((p) => p.id) }).map((x) => x.g),
-    presence: rollup([f], { player: you }).presence[f.match.map] ?? null,
+    presence: you === null ? null : rollup([f], { player: you }).presence[f.match.map] ?? null,
   };
 }
 

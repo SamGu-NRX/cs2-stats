@@ -12,14 +12,14 @@ import { CloseIcon } from "../../icons/ui";
 import { plural } from "../../lib/format";
 import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
 import { Hint } from "./glyphs";
-import type { TabProps } from "./MatchView";
+import type { ViewedTabProps } from "./MatchView";
 import { useCall } from "../../data/hooks";
 import { zonesFor, type Zone } from "./parity";
 import { ZonesCard } from "./Zones";
 
 type Who = "you" | "team" | "all";
 
-export default function Positions({ v }: TabProps) {
+export default function Positions({ v }: ViewedTabProps) {
   const [who, setWho] = useState<Who>("you");
   const [side, setSide] = useState<"both" | "t" | "ct">("both");
   const [lines, setLines] = useState(true);
@@ -142,7 +142,7 @@ function ZoneMarks({ zone, to }: { zone: Zone; to: (x: number, y: number) => [nu
 }
 
 /** Your top places over the match: seconds alive per place name (your presence, rolled up). */
-function PlacesCard({ v }: { v: TabProps["v"] }) {
+function PlacesCard({ v }: { v: ViewedTabProps["v"] }) {
   const places = useMemo(() => placesNamed(v.b.presence?.places ?? {}), [v]);
   return (
     <Card title={<>Top places <Hint tip="Each round's places are in the round panel on Rounds." /></>} aside={Object.keys(places).length ? <span className="meta">Seconds alive</span> : undefined}>

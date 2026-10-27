@@ -319,7 +319,7 @@ const api: Impl = {
     }
     const missing = rows.flatMap((r, i) => (r === null ? [i] : []));
     // derive workers only for a scan with more than one file to build (derive-pool.ts)
-    const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1) : 0;
+    const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1, (navigator as { deviceMemory?: number }).deviceMemory ?? null) : 0;
     const pool: DerivePool | null = size >= 2 ? derivePool(size, wpPack, bytes) : null;
     try {
       await mapLimit(missing, pool ? size : 1, async (i) => {
@@ -332,7 +332,8 @@ const api: Impl = {
           try {
             entry = entryOf(e.file, c.origin, c.facts);
           } catch (err) {
-            // a record that fails to save only costs the next sync a derive
+            // the record stands until the file's key changes: a re-published file has a new size or
+            // mtime, so it is derived again. A record that fails to save only costs the next sync a derive
             if (await idbPut("entries", ekey, { noEntry: (err as Error).message } satisfies NoEntry).then(() => true, () => false)) noEntryKeys.add(ekey);
             throw err;
           }
@@ -371,18 +372,20 @@ const api: Impl = {
     listSent = true;
     return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors };
   },
-  async match(file) {
+  async match(file, viewer) {
     if (openTables && openTables.file !== file) openTables = null;
-    return matchBundle(entryOfFile(file), await factsOf(file, true));
+    return matchBundle(entryOfFile(file), await factsOf(file, true), viewer);
   },
   async rounds(file) {
     const f = await factsOf(file, true);
     return f.rounds.map((r) => roundBundle(f, r.number));
   },
-  async places(file) {
+  async places(file, viewer) {
     const e = entryOfFile(file);
+    const id = viewer ?? (e.you === null ? null : e.players[e.you].id);
+    if (id === null) return {};
     const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
-    return Object.fromEntries(f.rounds.map((r) => [r.number, roundPlaces(t, r.number, e.players[e.you].id)]));
+    return Object.fromEntries(f.rounds.map((r) => [r.number, roundPlaces(t, r.number, id)]));
   },
   async rollup(qs) {
     return Promise.all(qs.map(async (q) => rolled(await summaryOf(q))));

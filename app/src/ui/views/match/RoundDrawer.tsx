@@ -191,16 +191,19 @@ function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: 
   const rd = all?.[ri] ?? null;
   const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const team = (t: "us" | "them") => v.players.filter((p) => p.team === t);
-  const feed = useMemo(() => feedFor(v.facts, ri, v.human), [v, ri]);
+  const feed = useMemo(() => feedFor(v.facts, ri, v.human, v.entry.usTeam), [v, ri]);
   const m = (pi: number) => rd?.players[pi]?.m ?? null;
   const dmgMax = Math.max(1, ...v.players.map((p) => m(p.pi)?.dmg ?? 0));
   const sideCls = (pi: number) => (sideOf(v, r, pi) === "T" ? "t" : "ct");
   const thrown = (pi: number) => NADES.filter(([, k]) => (m(pi)?.[k] ?? 0) > 0);
   const anyNades = v.players.some((p) => thrown(p.pi).length > 0);
   const econ = v.b.economy.rounds[ri];
-  const you = rd?.players[v.human] ?? null;
+  const you = v.human === null ? null : rd?.players[v.human] ?? null;
+  // a pro demo seen through a picked player names them; before a pick the per-player sections are left out
+  const viewer = v.human !== null && v.pro ? v.players[v.human].name : null;
+  const whose = viewer ? `${viewer}'s` : "Your";
   // one round's places come from the match's tables, which the worker reads again for the open match
-  const raw = useCall("places", v.entry.hasPos ? [v.file] : null).data?.[r.number];
+  const raw = useCall("places", v.entry.hasPos && v.human !== null ? [v.file, v.players[v.human].key] : null).data?.[r.number];
   const spent = useMemo(() => placesNamed(raw ?? {}), [raw]);
   const f = r.fact;
   const name = (pi: number | null) => (pi === null ? "someone" : v.players[pi].name);
@@ -302,16 +305,16 @@ function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: 
           )}
         </Section>
 
-        <YourRating rb={rb} error={rbError} number={r.number} />
+        {v.human !== null && <YourRating rb={rb} error={rbError} number={r.number} />}
 
         {Object.keys(spent).length > 0 && (
-          <Section title="Where you spent the round" aside="Seconds alive">
+          <Section title={viewer ? `Where ${viewer} spent the round` : "Where you spent the round"} aside="Seconds alive">
             <PlaceList places={spent} n={5} />
           </Section>
         )}
 
-        <Section title="Your aim this round">
-          {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">You have no stats this round.</p> : (
+        {v.human !== null && <Section title={`${whose} aim this round`}>
+          {!v.entry.hasAim ? <p className="meta"><NeedsDemo detail="This match has no shot data." /></p> : !rd ? <SkeletonLines n={2} /> : !you ? <p className="meta">{viewer ? `${viewer} has` : "You have"} no stats this round.</p> : (
             <>
               <div className="daim">
                 <div className="stat"><span className="stat__l">Shots</span><span className="stat__v num">{you.aim.shots}</span></div>
@@ -332,7 +335,7 @@ function RoundDetail({ v, ri, rb, rbError, first, last, onClose, onStep }: { v: 
               )}
             </>
           )}
-        </Section>
+        </Section>}
       </div>
     </div>
   );

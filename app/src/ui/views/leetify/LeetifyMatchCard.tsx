@@ -25,8 +25,10 @@ export function LeetifyMatchCard({ v }: { v: MatchModel }) {
     );
   }
   const hit = j?.joined.byFile.get(v.file);
-  if (!j || !hit || phase !== "ready") return null;
-  const line = (side: "both" | "t" | "ct") => v.b.lines[side][v.human];
+  // Leetify joins only the user's own matches, which always have a recording player
+  const human = v.human;
+  if (!j || !hit || phase !== "ready" || human === null) return null;
+  const line = (side: "both" | "t" | "ct") => v.b.lines[side][human];
   const ours: OursSource = { both: line("both"), t: line("t"), ct: line("ct") };
   const rule = RULE[hit.rule];
   return (

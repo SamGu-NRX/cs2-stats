@@ -116,7 +116,8 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
 /** "You" after the user's name, unless the name already reads You (personal info hidden, data/privacy.ts). */
 export function YouTag({ v, pi, className }: { v: MatchModel; pi: number; className?: string }) {
   const p = v.players[pi];
-  return p.isHuman && p.name !== YOU ? <small className={className}>You</small> : null;
+  // a pro demo's viewer is a picked player, not the user: the row is marked (is-you) but never labelled "You"
+  return p.isHuman && !v.pro && p.name !== YOU ? <small className={className}>You</small> : null;
 }
 
 export function PlayerName({ v, pi, children }: { v: MatchModel; pi: number; children?: ReactNode }) {
@@ -132,8 +133,9 @@ export function PlayerName({ v, pi, children }: { v: MatchModel; pi: number; chi
 export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
   const side = r.winSide === "T" ? "t" : r.winSide === "CT" ? "ct" : null;
   const human = v.human;
-  const hSide = sideOf(v, r, human);
-  const you = roundSwing(r.pr[human]);
+  const hSide = human === null ? null : sideOf(v, r, human);
+  const you = human === null ? null : roundSwing(r.pr[human]);
+  const who = human === null ? null : v.pro ? v.players[human].name : "You";
   const top = r.pr.map((row, pi) => ({ s: roundSwing(row), pi })).filter((x): x is { s: number; pi: number } => x.s !== null).sort((a, b) => b.s - a.s)[0] ?? null;
   return (
     <div className="rcard">
@@ -163,9 +165,9 @@ export function RoundCardBody({ v, r }: { v: MatchModel; r: MRound }) {
         </ol>
       ) : <p className="meta">No kills recorded.</p>}
       <div className="rcard__foot">
-        {you !== null && <span>You <b className="num" style={{ color: scoreText(roundSwingScore(you)) }}>{fmtSwing(you)}</b></span>}
+        {you !== null && <span>{who} <b className="num" style={{ color: scoreText(roundSwingScore(you)) }}>{fmtSwing(you)}</b></span>}
         {top && top.s > 0 && <span>Top swing <b>{v.players[top.pi].name}</b> <b className="num good-text">{fmtSwing(top.s)}</b></span>}
-        <span className={hSide === "T" ? "t-text" : "ct-text"}>You on {hSide}</span>
+        {hSide && <span className={hSide === "T" ? "t-text" : "ct-text"}>{who} on {hSide}</span>}
       </div>
     </div>
   );

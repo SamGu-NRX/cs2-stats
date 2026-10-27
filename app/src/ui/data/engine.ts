@@ -52,13 +52,13 @@ export const loggedText = (m: { nRounds: number; roundsPlayed: number }) => `${m
  * match's result in Matches, the Home hero and the match header.
  */
 export function coverEntry(e: MatchEntry): MatchEntry {
-  if (ratedMatch(e.match)) return e;
+  if (!e.line || ratedMatch(e.match)) return e;
   const v: Values = {};
   for (const k of Object.keys(e.line.v)) v[k] = null;
   return { ...e, line: { ...e.line, v, eco: null, rating: null } };
 }
 /** A match entry's own rating, null under the coverage rule. */
-export const entryRating = (e: MatchEntry) => e.line.rating;
+export const entryRating = (e: OwnEntry) => e.line.rating;
 
 /** Rating 3.0's six inputs, as the breakdown card lists them. */
 export const R3_INPUT_LABEL: Record<string, { label: string; fmt: (v: number) => string }> = {
@@ -153,7 +153,7 @@ export function pooledRates(ms: Measures[]): { adr: number | null; kast: number 
 export const statLine = (l: Line) => lineOf(l, l.rating);
 
 /** A match entry's line for the recording player, both sides. */
-export const entryLine = (e: MatchEntry) => statLine(e.line);
+export const entryLine = (e: OwnEntry) => statLine(e.line);
 
 /**
  * The match header's two teams, from the file's players: how many teammates you had, and the
@@ -163,7 +163,7 @@ export const entryLine = (e: MatchEntry) => statLine(e.line);
  * side to tell the teams apart, `opponents` is null and the header says the file does not have them.
  */
 export function teamsOf(e: Pick<MatchEntry, "players" | "you">): { mates: number; opponents: string | null } {
-  const mine = e.players[e.you]?.team ?? null;
+  const mine = e.you === null ? null : e.players[e.you]?.team ?? null;
   if (mine === null) return { mates: 0, opponents: null };
   const sided = e.players.filter((p, i) => i !== e.you && p.team !== null);
   const them = sided.filter((p) => p.team !== mine);
@@ -311,8 +311,13 @@ export function filterEntries(all: MatchEntry[], map: string | null): MatchEntry
 
 // Which matches count. Matches lists every match; each rule below is shared by every view.
 
-/** The user's own match: anything but a pro demo (data/sources.ts). Pro demos open from Matches, labelled, and count nowhere. */
-export const isOwn = (e: MatchEntry) => sourceOf(e).id !== "pro";
+/** A match of the user's own, which has a recording player and that player's line. */
+export type OwnEntry = MatchEntry & { you: number; line: Line };
+/**
+ * The user's own match: anything but a pro demo (data/sources.ts). Pro demos open from Matches' Pro
+ * view and count nowhere; every career list starts from this test.
+ */
+export const isOwn = (e: MatchEntry): e is OwnEntry => sourceOf(e).id !== "pro" && e.you !== null && e.line !== null;
 /** Played to its end. An abandoned match opens normally but is in no W-L and no career total. */
 export const isFinished = (e: MatchEntry) => e.match.complete;
 /**
@@ -338,17 +343,17 @@ export const isLogged = (e: MatchEntry) => ratedMatch(e.match);
  * neither appear in a career list nor move an average, so the sidebar, the Rating 3.0 tile and Form's
  * pooled line agree.
  */
-export const careerEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && isFinished(s) && isLogged(s) && !isWingman(s));
+export const careerEntries = (all: MatchEntry[], map: string | null): OwnEntry[] => listedEntries(all, map).filter(isOwn).filter((s) => isFinished(s) && isLogged(s) && !isWingman(s));
 
 /**
  * The matches Career aim reads: every one of the user's own matches that holds shots, wingman and
  * unfinished ones included. Aim does not depend on team size, the round limit, the result or the
  * kill-by-kill coverage that keep a match out of career totals (careerEntries).
  */
-export const aimEntries = (all: MatchEntry[], map: string | null) => listedEntries(all, map).filter((s) => isOwn(s) && s.hasAim);
+export const aimEntries = (all: MatchEntry[], map: string | null): OwnEntry[] => listedEntries(all, map).filter(isOwn).filter((s) => s.hasAim);
 
 /** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
-export const recordEntries = (list: MatchEntry[]) => list.filter((s) => isOwn(s) && isFinished(s) && hasKnownResult(s));
+export const recordEntries = (list: MatchEntry[]): OwnEntry[] => list.filter(isOwn).filter((s) => isFinished(s) && hasKnownResult(s));
 
 /** Why a match is left out of the career, for its row's tooltip; null when it counts. */
 export function notCountedText(e: MatchEntry): string | null {
@@ -382,7 +387,7 @@ export function mapsIn(all: MatchEntry[]): string[] {
  * player played no round of.
  */
 export const opponentIds = (list: MatchEntry[]) => [...new Set(list.flatMap((e) => {
-  const me = e.players[e.you];
+  const me = e.you === null ? undefined : e.players[e.you];
   if (!me || !e.played.includes(me.id)) return [];
   return e.players.filter((p) => p.team !== null && p.team !== me.team && e.played.includes(p.id)).map((p) => p.id);
 }))];

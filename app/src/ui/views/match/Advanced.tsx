@@ -15,6 +15,7 @@ import { scoreText, toScore } from "../../lib/scale";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { BombsitesCard, SituationsCard } from "./Situations";
+import { Viewed } from "./Viewer";
 import { ClutchList } from "./ClutchList";
 
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
@@ -120,8 +121,7 @@ export default function Advanced({ v, file }: TabProps) {
           </ul>
         </Card>
         <ClutchList v={v} file={file} />
-        <SituationsCard v={v} file={file} />
-        <BombsitesCard v={v} file={file} />
+        <Viewed v={v} what="their situations and bombsite play" pad={false}>{(w) => <><SituationsCard v={w} file={file} /><BombsitesCard v={w} file={file} /></>}</Viewed>
       </div>
     </div>
   );

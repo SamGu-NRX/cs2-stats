@@ -16,7 +16,7 @@ import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import {
-  careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
+  careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries, type OwnEntry,
 } from "../data/engine";
 import { useCall, useRatings, useYourQuery } from "../data/hooks";
 import { startMs, type MatchEntry } from "../data/match";
@@ -169,10 +169,10 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
 }
 
 /** A table row: one of the user's matches here, or a Leetify match with no demo here (data/leetify/join.ts). */
-type ListRow = { kind: "local"; e: MatchEntry } | { kind: "leetify"; l: LeetifyMatch };
+type ListRow = { kind: "local"; e: OwnEntry } | { kind: "leetify"; l: LeetifyMatch };
 const rowKeyOf = (r: ListRow) => (r.kind === "local" ? r.e.file : `leetify:${r.l.id}`);
 /** A cell or sort value from whichever kind the row is. */
-const by = <V,>(local: (s: MatchEntry) => V, leetify: (l: LeetifyMatch) => V) => (r: ListRow): V => (r.kind === "local" ? local(r.e) : leetify(r.l));
+const by = <V,>(local: (s: OwnEntry) => V, leetify: (l: LeetifyMatch) => V) => (r: ListRow): V => (r.kind === "local" ? local(r.e) : leetify(r.l));
 
 const NO_DEMO = "No demo of this match here, so this number is not available. Import the demo to see it.";
 const lResult = (l: LeetifyMatch): "W" | "L" | "T" | null => (l.score === null ? null : l.score.us > l.score.them ? "W" : l.score.us < l.score.them ? "L" : "T");
@@ -200,7 +200,8 @@ export function MatchesView() {
   const rows = useMemo(() => {
     // a recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled
     const inSession = session ? new Set(session.files) : null;
-    return listedEntries(all, map).filter((s) => {
+    // pro demos have their own view (ProMatches.tsx)
+    return listedEntries(all, map).filter(isOwn).filter((s) => {
       if (inSession && !inSession.has(s.file)) return false;
       // an unfinished match is neither a win nor a loss
       if (result !== "all" && (!isFinished(s) || s.result !== result)) return false;
@@ -227,7 +228,7 @@ export function MatchesView() {
   })), [leetify, session, map, result, terms]);
   const table = useMemo((): ListRow[] => [...rows.map((e) => ({ kind: "local" as const, e })), ...leetifyRows.map((l) => ({ kind: "leetify" as const, l }))], [rows, leetifyRows]);
   const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [rows]);
-  const line = (s: MatchEntry) => lines.get(s.file)!;
+  const line = (s: OwnEntry) => lines.get(s.file)!;
 
   const record = recordEntries(rows);
   const wins = record.filter((s) => s.result === "W").length;

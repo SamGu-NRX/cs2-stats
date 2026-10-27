@@ -12,16 +12,17 @@ import { HoverCard } from "../../components/overlay";
 import { multiKillRows, pooledRates, RATING_LABEL, SIDE_OPTIONS, statLine, type SideKey, type StatLine } from "../../data/engine";
 import { decidingRounds } from "../../data/rounds";
 import { useCall } from "../../data/hooks";
-import { deathOf, killsBy, roundSwing, type MatchModel, type MRound, type Team } from "../../data/match";
+import { deathOf, killsBy, roundSwing, teamLabel, type MatchModel, type MRound, type Team, type ViewedMatch } from "../../data/match";
 import { WeaponIcon, WIN_LABEL, WinIcon } from "../../icons/game";
 import { fmtAdr, fmtDiff, fmtPct, fmtRating, fmtSwing } from "../../lib/format";
 import { diffScore, roundSwingScore, scoreFill, scoreText, swingScore, toScore, ratingText } from "../../lib/scale";
 import type { SortState } from "../../lib/sort";
-import { matchHref } from "../../router";
+import { matchHref, setQuery } from "../../router";
 import { NeedsDemo, PlayerName, RoundCardBody, swingSumTip, YouTag } from "../shared";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { YourMatch } from "./YourMatch";
+import { Viewed, viewerName } from "./Viewer";
 import { LeetifyMatchCard } from "../leetify/LeetifyMatchCard";
 
 type Multi = Record<2 | 3 | 4 | 5, number>;
@@ -76,12 +77,13 @@ export default function Overview({ v, file }: TabProps) {
     const rows = rowsOf(t);
     return (
       <Card
-        title={<>{t === "us" ? "Your team" : "Opponents"} <span className={`chip ${first === "T" ? "chip--t" : "chip--ct"}`}>{first} first</span></>}
+        title={<>{teamLabel(v, t)} <span className={`chip ${first === "T" ? "chip--t" : "chip--ct"}`}>{first} first</span></>}
         aside={<span className="board-score num" data-team={t}>{t === "us" ? v.entry.score.us : v.entry.score.them}</span>}
         flush
         className="board"
       >
-        <DataTable label={t === "us" ? "Your team scoreboard" : "Opponents scoreboard"} rows={rows} foot={[teamRow(v, t, rows, side)]} rowKey={(r) => r.key} columns={columns} sortKey={sort} onSort={setSort} rowClass={(r) => (r.isHuman ? "is-you" : undefined)} />
+        <DataTable label={`${teamLabel(v, t)} scoreboard`} rows={rows} foot={[teamRow(v, t, rows, side)]} rowKey={(r) => r.key} columns={columns} sortKey={sort} onSort={setSort} rowClass={(r) => (r.isHuman ? "is-you" : undefined)}
+          onOpen={v.pro ? (r) => setQuery("as", r.isHuman ? null : r.key) : undefined} />
       </Card>
     );
   };
@@ -90,7 +92,9 @@ export default function Overview({ v, file }: TabProps) {
     <div className="tabpad overview">
       <div className="overview__bar toolbar">
         <Segmented label="Side" value={side} onChange={setSide} options={SIDE_OPTIONS.map((o) => ({ ...o, label: o.value === "both" ? "Both sides" : o.label, side: o.value === "both" ? undefined : o.value }))} />
-        <span className="meta">{side === "both" ? `${lines[v.human].rounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
+        <span className="meta">{v.human === null
+          ? "Pick a player on the scoreboard to see the match through them"
+          : side === "both" ? `${lines[v.human].rounds} rounds with stats` : `${lines[v.human].rounds} rounds on ${side.toUpperCase()}`}</span>
       </div>
       <div className="boards">
         {board("us")}
@@ -107,11 +111,13 @@ export default function Overview({ v, file }: TabProps) {
               })}
             />
           </Card>
-          <YourMatch v={v} file={file} />
+          {!v.pro && <Viewed v={v} what="this match against your recent ones" pad={false}>{(w) => <YourMatch v={w} file={file} />}</Viewed>}
         </div>
         <div className="overview__side">
-          <Lobby lines={lines} human={v.human} />
-          <DecidingRounds v={v} file={file} side={side} />
+          <Viewed v={v} what="how they did against the lobby, and the rounds they decided" pad={false}>{(w) => <>
+            <Lobby lines={lines} human={w.human} who={viewerName(w)} />
+            <DecidingRounds v={w} file={file} side={side} />
+          </>}</Viewed>
         </div>
       </div>
       <LeetifyMatchCard v={v} />
@@ -122,7 +128,7 @@ export default function Overview({ v, file }: TabProps) {
 const DECIDING = 5;
 
 /** Your rounds with the largest swing either way, each with what you did in it; a row opens the round. */
-function DecidingRounds({ v, file, side }: { v: MatchModel; file: string; side: SideKey }) {
+function DecidingRounds({ v, file, side }: { v: ViewedMatch; file: string; side: SideKey }) {
   const human = v.human;
   const clutches = useCall("clutches", [{ files: [file], filter: { player: v.players[human].key } }]).data;
   const rows = useMemo(() => decidingRounds(v.rounds, (r: MRound) => roundSwing(r.pr[human]), side, DECIDING), [v, human, side]);
@@ -173,7 +179,7 @@ function MultiChips({ c }: { c: Multi }) {
 }
 
 /** You against the lobby: where your number sits between the worst and best of the ten players. */
-function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
+function Lobby({ lines, human, who }: { lines: StatLine[]; human: number; who: string }) {
   const rows: { label: string; get: (l: StatLine) => number | null; fmt: (x: number | null) => string; lower?: boolean }[] = [
     { label: "Rating", get: (l) => l.rating, fmt: fmtRating },
     { label: "ADR", get: (l) => l.adr, fmt: fmtAdr },
@@ -183,7 +189,7 @@ function Lobby({ lines, human }: { lines: StatLine[]; human: number }) {
     { label: "Deaths per round", get: (l) => l.dpr, fmt: (x) => (x === null ? "–" : x.toFixed(2)), lower: true },
   ];
   return (
-    <Card title={<>You against the lobby <Hint tip="Bar spans the lobby's lowest to highest; the tick is the average." /></>} aside={<span className="meta">All ten players</span>}>
+    <Card title={<>{who} against the lobby <Hint tip="Bar spans the lobby's lowest to highest; the tick is the average." /></>} aside={<span className="meta">All ten players</span>}>
       <ul className="lobby">
         {rows.map((r) => {
           const vals = lines.map(r.get).filter((x): x is number => x !== null);

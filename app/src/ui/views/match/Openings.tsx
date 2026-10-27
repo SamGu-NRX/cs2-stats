@@ -7,7 +7,7 @@ import { Card } from "../../components/Card";
 import { DeathMark } from "../../components/bits";
 import { Fig } from "../../components/MatchSeries";
 import { useCall } from "../../data/hooks";
-import type { MatchModel, MPlayer, Team } from "../../data/match";
+import type { MPlayer, Team, ViewedMatch } from "../../data/match";
 import { WeaponIcon } from "../../icons/game";
 import { weaponLabel } from "../../../stats/weapons";
 import { fmtClock, plural } from "../../lib/format";
@@ -16,7 +16,7 @@ import { Hint } from "./glyphs";
 import { LoadFailed } from "./LoadFailed";
 import { useRoving } from "./roving";
 
-export function Openings({ v, file }: { v: MatchModel; file: string }) {
+export function Openings({ v, file }: { v: ViewedMatch; file: string }) {
   const me = v.players[v.human];
   const call = useCall("openingDuels", [file, me.key]);
   const o = call.data;

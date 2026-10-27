@@ -9,7 +9,8 @@ import { TradingGlyph } from "./glyphs";
 import { HeadToHead } from "./HeadToHead";
 import { Openings } from "./Openings";
 import { fmtMetric } from "../../data/engine";
-import { deathOf, killsBy, type MPlayer as PlayerRow } from "../../data/match";
+import { deathOf, killsBy, type MPlayer as PlayerRow, type ViewedMatch } from "../../data/match";
+import { Viewed } from "./Viewer";
 import { metric as meta } from "../../data/meta";
 import { useData } from "../../data/provider";
 import { FlagIcon, WinIcon } from "../../icons/game";
@@ -27,7 +28,7 @@ export default function Duels({ v }: TabProps) {
   return (
     <div className="tabpad duels">
       <HeadToHead v={v} />
-      <YourRounds v={v} />
+      <Viewed v={v} what="their kills and deaths round by round" pad={false}>{(w) => <YourRounds v={w} />}</Viewed>
       <div className="grid-2">
         <Card title="Opening duels" icon={<FirstPip />} aside={<SectionAside label="First kills" value={<><span className="cream">{fk("us")}</span><span className="faint">–</span>{fk("them")}</>} />} flush>
           <DataTable<PlayerRow>
@@ -62,7 +63,7 @@ export default function Duels({ v }: TabProps) {
           />
         </Card>
       </div>
-      <Openings v={v} file={v.file} />
+      <Viewed v={v} what="their opening duels" pad={false}>{(w) => <Openings v={w} file={v.file} />}</Viewed>
       <Clutches v={v} file={v.file} />
     </div>
   );
@@ -115,7 +116,7 @@ function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
 
 /** Your fights round by round: who you killed, who killed you, and how you shot. Time to damage and
  *  reaction need mesh visibility, which plugin recordings do not carry. */
-function YourRounds({ v }: { v: TabProps["v"] }) {
+function YourRounds({ v }: { v: ViewedMatch }) {
   const gated = !v.visibility;
   const gate = `${NEEDS_DEMO}: this file lacks view angles and line of sight`;
   const human = v.human;

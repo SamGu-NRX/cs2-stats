@@ -9,7 +9,7 @@ import type { RatingBreakdown } from "../../../worker/protocol";
 import type { RoundRating } from "../../../stats/matchviews";
 import { Card } from "../../components/Card";
 import { useCall } from "../../data/hooks";
-import type { MatchModel } from "../../data/match";
+import type { ViewedMatch } from "../../data/match";
 import { ratingInfo } from "../../data/meta";
 import { fmtRating } from "../../lib/format";
 import { ratingText, scoreText, toScore } from "../../lib/scale";
@@ -78,7 +78,7 @@ export function roundSteps(r: RoundRating) {
   return ratingSteps(r.base, contributions(ratingOrder(ratingInfo().inputs), r.terms));
 }
 
-export function RatingByRound({ v, file, rb, error, selected }: { v: MatchModel; file: string; rb: RatingBreakdown | null; error: string | null; selected: number | null }) {
+export function RatingByRound({ v, file, rb, error, selected }: { v: ViewedMatch; file: string; rb: RatingBreakdown | null; error: string | null; selected: number | null }) {
   const me = v.players[v.human];
   const usual = useCall("yourMatch", [file, me.key, 10]).data;
   const recent = usual?.rows.find((r) => r.id === "rating3")?.average ?? null;

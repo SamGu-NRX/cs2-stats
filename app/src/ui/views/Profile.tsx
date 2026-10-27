@@ -27,7 +27,7 @@ import { AgentImg } from "../components/Agent";
 import {
   botIds, opponentIds, botPoolName, botPopulation, proPopulation, clutchRows, entryRating, careerEntries, extraSubs, fmtMetric, lineOf, mapsIn, multiKillRows, proPoolName,
   rankText, thinPoolText,
-  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type SideKey,
+  ratingHeadline, RATING_LABEL, ratingKey, sidesOf, type BotPool, type OwnEntry, type SideKey,
 } from "../data/engine";
 import { useCall, useRatings, useRollups } from "../data/hooks";
 import type { MatchEntry } from "../data/match";
@@ -64,7 +64,7 @@ const COMPARES: readonly Compare[] = ["bench", "bots", "opponents"];
 
 /** Everything the page reads, loaded from the worker in two batches. */
 interface ProfileData {
-  list: MatchEntry[];
+  list: OwnEntry[];
   name: string;
   /** you over every kept round, for the identity questions (role, plays like), which pick their sides */
   base: Query;
@@ -76,7 +76,7 @@ interface ProfileData {
   ratings: SideRatings;
   botRatings: SideRatings | null;
   /** each match's rating and swing (a fraction) on the page's side, for the per-match charts */
-  perMatch: (e: MatchEntry) => MatchOnSide;
+  perMatch: (e: OwnEntry) => MatchOnSide;
 }
 
 /** One match on the page's side: its Rating 3.0 and its swing per round, a fraction; null where it has none. */
@@ -86,14 +86,14 @@ export interface MatchOnSide { rating: number | null; swing: number | null }
  * Each career match on the page's side. Both sides is the match entry itself; T or CT rolls up and
  * rates each match on that side (the worker batches the calls). Null while those load.
  */
-function usePerMatch(list: MatchEntry[], ids: string[], side: SideKey): ((e: MatchEntry) => MatchOnSide) | null {
+function usePerMatch(list: OwnEntry[], ids: string[], side: SideKey): ((e: OwnEntry) => MatchOnSide) | null {
   const one = side !== "both";
   const qs = useMemo(() => (one ? list.map((e) => ({ files: [e.file], filter: { player: ids, ...sidesOf(side) } })) : null), [one, list, ids, side]);
   const rq = useMemo(() => (one ? list.map((e) => ({ files: [e.file], filter: { player: ids } })) : null), [one, list, ids]);
   const sums = useRollups(qs).data;
   const rats = useRatings(rq).data;
   return useMemo(() => {
-    if (!one) return (e: MatchEntry) => ({ rating: entryRating(e), swing: e.line.v.swing === null ? null : e.line.v.swing / 100 });
+    if (!one) return (e: OwnEntry) => ({ rating: entryRating(e), swing: e.line.v.swing === null ? null : e.line.v.swing / 100 });
     if (!sums || !rats || sums.length !== list.length || rats.length !== list.length) return null;
     const at = new Map(list.map((e, i) => [e.file, i]));
     const key = ratingKey(side);
@@ -469,8 +469,8 @@ function PlayerCard({ p, side, cmp }: { p: ProfileData; side: SideKey; cmp: Comp
 }
 
 /** The rated match with the highest (or lowest) rating among `list`, or null without one. */
-function extremeMatch(p: ProfileData, list: MatchEntry[], sign: 1 | -1) {
-  let out: { e: MatchEntry; r: number } | null = null;
+function extremeMatch(p: ProfileData, list: OwnEntry[], sign: 1 | -1) {
+  let out: { e: OwnEntry; r: number } | null = null;
   for (const e of list) {
     const r = p.perMatch(e).rating;
     if (r !== null && (!out || sign * (r - out.r) > 0)) out = { e, r };

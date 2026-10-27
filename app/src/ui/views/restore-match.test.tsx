@@ -42,7 +42,7 @@ const samples: Sample[] = await Promise.all(readdirSync(SAMPLES).filter((f) => f
 const byName = (part: string) => samples.find((s) => s.file.includes(part))!;
 const factsOf = new Map(samples.map((s) => [s.file, s.facts]));
 const summary = (q: Query) => rollup(q.files.map((f) => factsOf.get(f)!), q.filter);
-const modelOf = (s: Sample): MatchModel => matchModel(s.entry, matchBundle(s.entry, s.facts));
+const modelOf = (s: Sample): MatchModel => matchModel(s.entry, matchBundle(s.entry, s.facts, null));
 
 let data: Pick<Data, "matches" | "you"> = { matches: [], you: [] };
 /** a test's own rollup answers; by default the real engine answers */
@@ -319,9 +319,9 @@ describe("the match header's teams", () => {
     const bots = samples.find((x) => x.entry.players.filter((p) => !p.bot).length === 1 && x.entry.players.length === 10)!;
     use([bots]);
     render(<MatchView file={bots.file} tab="overview" />);
-    expect(team()).toEqual([`${bots.entry.players[bots.entry.you].name} + 4`, "5 bots"]);
+    expect(team()).toEqual([`${bots.entry.players[bots.entry.you!].name} + 4`, "5 bots"]);
     // a pro match: ten people, no team names in the file
-    const me = bots.entry.players[bots.entry.you];
+    const me = bots.entry.players[bots.entry.you!];
     const pro: Sample = { ...bots, file: "samples/pro-like", entry: { ...bots.entry, file: "samples/pro-like", players: bots.entry.players.map((p) => ({ ...p, bot: false, name: p === me ? me.name : `pro${p.id.slice(-3)}` })) } };
     use([pro]);
     render(<MatchView file={pro.file} tab="overview" />);

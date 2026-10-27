@@ -2,13 +2,15 @@
 //! `read_match` returns one file's gzip bytes, `import_match` copies a picked file into
 //! `matches\imported\`, and `read_pack` reads the optional packs folder (pro scores, agent art).
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
-//! `import_valve` runs the importer that writes them.
+//! `import_valve` runs the importer that writes them. The pro match library, a folder the user picks
+//! and the app only reads, is in `pro`.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
 //! launcher is in `botmode`; the optional Leetify import is in `leetify`. `open_external` opens the app's
 //! outside links in the system browser.
 
 pub mod botmode;
 mod leetify;
+mod pro;
 
 use serde::Serialize;
 use std::fs;
@@ -647,6 +649,8 @@ fn hide_status_bar(webview: &tauri::Webview) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // the folder picker for the pro match library (pro.rs choose_pro_library), called from Rust only
+        .plugin(tauri_plugin_dialog::init())
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
         .setup(|_app| {
             botmode::commands::on_app_start();
@@ -673,6 +677,11 @@ pub fn run() {
             import_valve,
             valve_import_state,
             open_external,
+            pro::pro_library,
+            pro::choose_pro_library,
+            pro::forget_pro_library,
+            pro::list_pro,
+            pro::read_pro,
             leetify::leetify_status,
             leetify::leetify_save_key,
             leetify::leetify_clear_key,

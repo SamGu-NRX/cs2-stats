@@ -16,6 +16,7 @@ import { fmtSecs, plural } from "../../lib/format";
 import { PlayerName, SectionAside, Empty, NeedsDemo } from "../shared";
 import { Hint } from "./glyphs";
 import { FlashCard } from "./FlashTool";
+import { Viewed } from "./Viewer";
 import type { TabProps } from "./MatchView";
 
 export default function Utility({ v }: TabProps) {
@@ -67,7 +68,7 @@ export default function Utility({ v }: TabProps) {
         />
       </Card>
       {/* keyed by file: a new match starts with no flash picked and no round filter */}
-      <FlashCard key={v.file} v={v} />
+      <Viewed v={v} what="their flashbangs" pad={false}>{(w) => <FlashCard key={v.file} v={w} />}</Viewed>
       <Landing v={v} />
     </div>
   );

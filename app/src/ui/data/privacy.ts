@@ -96,8 +96,8 @@ export const useSavedHidePersonal = () => useSyncExternalStore(subscribe, savedH
 export const YOU = "You";
 
 interface Seat {
-  /** index of the recording player */
-  you: number;
+  /** index of the recording player; null for a pro demo */
+  you: number | null;
   usTeam: 0 | 1;
   /** a pro demo: every player is a public figure */
   pro: boolean;

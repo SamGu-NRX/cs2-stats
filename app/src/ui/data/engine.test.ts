@@ -10,20 +10,22 @@ import { derive } from "../../stats/derive";
 import { pluginToTables } from "../../stats/plugin/adapter";
 import { decodeMatch } from "../../stats/plugin/decode";
 import { entryOf, matchBundle } from "../../worker/views";
-import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, opponentIds, recordEntries, teamsOf } from "./engine";
+import { botPopulation, careerEntries, coverEntry, entryLine, filterEntries, opponentIds, recordEntries, teamsOf, type OwnEntry } from "./engine";
 import { opponentsIn } from "../../stats/opponents";
 import { FREEZE_END, oneRound } from "../../stats/testing/match";
-import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type MatchModel } from "./match";
+import { byNewest, matchModel, roundMatrix, sideOf, type MatchEntry, type ViewedMatch } from "./match";
 import { sourceOf } from "./sources";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 const FILES = readdirSync(SAMPLES).filter((f) => f.endsWith(".json.gz"));
 
-async function load(file: string): Promise<MatchModel> {
+async function load(file: string): Promise<ViewedMatch> {
   const m = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
   const facts = derive(pluginToTables(m), CS2RB);
   const entry = entryOf(`samples/${file}`, m.env.plugin ?? "", facts);
-  return matchModel(entry, matchBundle(entry, facts));
+  const v = matchModel(entry, matchBundle(entry, facts, null));
+  if (v.human === null) throw new Error(`${file} has a recording player`);
+  return { ...v, human: v.human };
 }
 
 describe("match model", async () => {
@@ -73,10 +75,10 @@ describe("match model", async () => {
     expect(thin.length).toBeGreaterThan(0);
     expect(full.length).toBeGreaterThan(0);
     for (const v of thin) {
-      expect(entryLine(v.entry).rating, v.file).toBeNull();
+      expect(entryLine(v.entry as OwnEntry).rating, v.file).toBeNull();
       expect(v.b.lines.both[v.human].rating, v.file).toBeNull();
     }
-    for (const v of full) expect(entryLine(v.entry).rating, v.file).not.toBeNull();
+    for (const v of full) expect(entryLine(v.entry as OwnEntry).rating, v.file).not.toBeNull();
   });
 
   it("shows no T or CT rating either for a converted log with one logged round", () => {
@@ -112,9 +114,9 @@ it("keeps unfinished matches and partial logs out of career views but in the mat
   expect(recordEntries([done, left, partial, pro]).map((e) => e.file)).toEqual(["done", "partial"]);
   // the adapter keeps a thin log's counts but none of its per-round values, so no view shows its few rounds as the match
   const thin = coverEntry(partial);
-  expect(thin.line.m.kills).toBe(partial.line.m.kills);
-  expect(Object.values(thin.line.v).every((v) => v === null)).toBe(true);
-  expect(thin.line.eco).toBeNull();
+  expect(thin.line!.m.kills).toBe(partial.line!.m.kills);
+  expect(Object.values(thin.line!.v).every((v) => v === null)).toBe(true);
+  expect(thin.line!.eco).toBeNull();
   expect(coverEntry(done)).toBe(done);
 });
 

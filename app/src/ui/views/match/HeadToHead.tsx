@@ -33,9 +33,10 @@ export function HeadToHead({ v }: { v: MatchModel }) {
   const loaded = useCall("headToHead", [v.file]);
   const h2h = loaded.data;
   const [measure, setMeasure] = useState<PairMeasure>("kills");
-  const me = v.players[v.human];
+  // the viewer's most-fought enemy opens the pair; a pro demo seen through nobody opens on none
+  const me = v.human === null ? null : v.players[v.human];
   const [pick, setPick] = useState<{ x: string; y: string } | null>(null);
-  const pair = pick ?? (h2h ? (() => { const y = mostFought(h2h, me.key, them.map((q) => q.key)); return y ? { x: me.key, y } : null; })() : null);
+  const pair = pick ?? (h2h && me ? (() => { const y = mostFought(h2h, me.key, them.map((q) => q.key)); return y ? { x: me.key, y } : null; })() : null);
   const live = measure === "kills" || !!h2h;
   const cell = (p: MPlayer, q: MPlayer): [number, number] | null => {
     if (measure === "kills") return [km[p.pi][q.pi], km[q.pi][p.pi]];

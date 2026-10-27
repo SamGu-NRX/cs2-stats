@@ -286,11 +286,12 @@ export interface Api {
    * focus, sends nothing back and the views keep what they show.
    */
   sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[] };
-  match(file: string): MatchBundle;
+  /** `viewer`: the steamid the per-player parts are for; null for the recording player, or none on a pro demo */
+  match(file: string, viewer: string | null): MatchBundle;
   /** every round of the match, in round row order */
   rounds(file: string): RoundBundle[];
   /** seconds the recording player spent alive per place name, by round number (positions.ts roundPlaces) */
-  places(file: string): Record<number, Record<string, number>>;
+  places(file: string, viewer: string | null): Record<number, Record<string, number>>;
   rollup(qs: Query[]): Rolled[];
   ratings(qs: Query[]): SideRatings[];
   guns(q: Query): GunProficiency[];

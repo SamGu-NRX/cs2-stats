@@ -18,9 +18,12 @@ export function teamSwing(f: RoundFacts, k: KillFact, team: 0 | 1): number | nul
   return f.players[k.victim]?.team === team ? loss : -loss;
 }
 
-/** The round's killfeed as the viewer's team sees it. */
-export function feedFor(f: RoundFacts, ri: number, viewer: number): FeedKill[] {
-  const team = f.players[viewer].team as 0 | 1;
+/**
+ * The round's killfeed as the viewer's team sees it; with no viewer (a pro demo before a pick), as
+ * team `usTeam` sees it, the team the match layout puts first.
+ */
+export function feedFor(f: RoundFacts, ri: number, viewer: number | null, usTeam: 0 | 1 = 0): FeedKill[] {
+  const team = viewer === null ? usTeam : (f.players[viewer].team as 0 | 1);
   return f.kills.filter((k) => k.ri === ri).map((k) => ({
     t: k.t,
     killer: k.killer === null || !k.killerSide ? null : { pi: k.killer, name: f.players[k.killer].name, side: k.killerSide },

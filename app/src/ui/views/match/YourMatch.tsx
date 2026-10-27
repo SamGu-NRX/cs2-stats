@@ -5,7 +5,7 @@
 import { Card } from "../../components/Card";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
-import type { MatchModel } from "../../data/match";
+import type { ViewedMatch } from "../../data/match";
 import { metric } from "../../data/meta";
 import { Num } from "../../components/bits";
 import { plural } from "../../lib/format";
@@ -43,7 +43,7 @@ function Row({ row, n }: { row: YourMatchRow; n: number }) {
   );
 }
 
-export function YourMatch({ v, file }: { v: MatchModel; file: string }) {
+export function YourMatch({ v, file }: { v: ViewedMatch; file: string }) {
   const me = v.players[v.human];
   const r = useCall("yourMatch", [file, me.key, RECENT]);
   const n = r.data?.recent.length ?? 0;

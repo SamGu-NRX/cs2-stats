@@ -4,7 +4,7 @@
 // the views.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { entryRating } from "../data/engine";
+import { entryRating, isOwn } from "../data/engine";
 import { usePros } from "../data/packs";
 import { useData } from "../data/provider";
 import { sourceOf } from "../data/sources";
@@ -63,7 +63,7 @@ export function Palette({ open, onClose, actions }: { open: boolean; onClose: ()
     for (const s of matches) {
       const src = sourceOf(s);
       const result = !s.match.complete ? "unfinished" : s.result;
-      const r = entryRating(s);
+      const r = isOwn(s) ? entryRating(s) : null;
       out.push({
         id: `m:${s.file}`, group: "Matches", label: `${mapName(s.match.map)} ${s.score.us}:${s.score.them} ${result}`,
         hint: [fmtWhen(s.match), src.id === "recorded" ? null : src.label, r === null ? null : `Rating ${fmtRating(r)}`].filter(Boolean).join(" · "),
