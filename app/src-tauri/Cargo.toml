@@ -42,4 +42,4 @@ webview2-com = "0.38"
 # the Leetify API key in Windows Credential Manager (leetify.rs KeyStore); 3.6 is the last line whose
 # rust-version (1.75) the machine's Rust 1.85 meets
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
-windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem", "Wdk_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem", "Wdk_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Security_Cryptography"] }

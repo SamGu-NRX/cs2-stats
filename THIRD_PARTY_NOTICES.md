@@ -14,7 +14,7 @@ Every licence listed below lets its code or data be used in a GPL-3.0-only proje
 - CounterStrikeSharp.API is GPL-3.0-only, the same licence. This is why the repository is version 3 only.
 - The two fonts are under OFL-1.1. OFL does not let the fonts themselves be relicensed under the GPL, but it allows them to be bundled with software under any licence, so the app ships them as separate font files that stay under OFL-1.1.
 
-Two things the app uses are not distributed with it, so their licences place no conditions on this repository: Bot Mode downloads CS2-Bot-Improver (AGPL-3.0, which GPL-3.0 section 13 would also allow combining with), and the icon pack script runs Source2Viewer-CLI (MIT). Both are listed under "Used at run time, not included".
+Several things the app uses are not distributed with it, so their licences place no conditions on this repository: Bot Mode downloads CS2-Bot-Improver (AGPL-3.0, which GPL-3.0 section 13 would also allow combining with), the icon pack script runs Source2Viewer-CLI (MIT), and the clips render through HLAE (MIT) and FFmpeg, which you install yourself. They are listed under "Used at run time, not included".
 
 ## In the desktop app
 
@@ -28,6 +28,8 @@ These are bundled into the app that `pnpm tauri build` produces.
 | hyparquet-compressors | 1.1.2 | MIT |
 | @fontsource-variable/schibsted-grotesk (Schibsted Grotesk, Copyright 2023 The Schibsted-Grotesk Project Authors) | 5.3.0 | OFL-1.1 |
 | @fontsource/ibm-plex-mono (IBM Plex Mono, Copyright 2017 IBM Corp.) | 5.3.0 | OFL-1.1 |
+
+`app/src/clips/director.template.js`, the script HLAE runs inside CS2 to record the clips, is adapted from [CS2-povforge](https://github.com/Chester-chs/CS2-povforge)'s `povforge/director.js` (MIT, Copyright (c) 2026 Chester-chs); `app/src-tauri/src/clips/job.rs` follows its HLAE launch command (`povforge/hlae.py`). The notice is in the script's header.
 
 `app/src/ui/icons/ui.tsx` copies path data from Lucide 1.61.0 (ISC, Copyright 2026 Lucide Icons and Contributors) and Feather (MIT, Copyright 2013-present Cole Bemis). Both notices are in that file.
 
@@ -151,3 +153,4 @@ These values are Counter-Strike 2's own, read from Valve's game files or from a 
 
 - `scripts/extract-icon-pack.cjs` runs Source2Viewer-CLI from [ValveResourceFormat](https://github.com/ValveResourceFormat/ValveResourceFormat) (MIT), which you download yourself. The art it extracts is Valve's and stays in your packs folder.
 - Bot Mode downloads [ed0ard/CS2-Bot-Improver](https://github.com/ed0ard/CS2-Bot-Improver) (AGPL-3.0) from GitHub onto your machine. The app does not redistribute it.
+- The clips (`app/src/clips`) record through [HLAE](https://github.com/advancedfx/advancedfx) (advancedfx, MIT), which you download and choose in the app, and edit with [FFmpeg](https://ffmpeg.org), which you install yourself (its licence depends on the build: LGPL-2.1-or-later or GPL). The app runs both as separate programs and bundles neither.

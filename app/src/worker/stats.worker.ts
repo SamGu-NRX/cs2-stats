@@ -468,6 +468,7 @@ const api: Impl = {
   clutches: perMatch.clutches,
   multiKills: perMatch.multiKills,
   highlights: perMatch.highlights,
+  moments: perMatch.moments,
   async flashes(file, player) {
     const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
     return flashTool(t, f, player);

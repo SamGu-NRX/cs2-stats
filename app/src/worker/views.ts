@@ -17,9 +17,11 @@ import type { Side } from "../stats/tables";
 import { startMs, type MatchEntry } from "../ui/data/match";
 import { isProFile } from "../ui/data/sources";
 import { highlightKinds } from "../stats/highlights";
+import { bestMomentFirst, scoreMoments } from "../stats/moments";
+import { clipId } from "../clips/ids";
 import { playedMatch } from "../stats/roster";
 import type {
-  ClutchRow, HighlightRow, Line, MatchBundle, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
+  ClutchRow, HighlightRow, Line, MatchBundle, MomentRow, MultiKillRow, Meta, PositionsResult, Rolled, RoundBundle, SideRatings, SpawnRow, Values,
 } from "./protocol";
 
 export function metaOf(wp: WinProbSource): Meta {
@@ -224,6 +226,16 @@ export function addHighlightRows(out: HighlightRow[], file: string, f: MatchFact
     });
   }
 }
+
+/** Adds the moments of one match (its `file`) among the player-rounds `filter` keeps, each with its rank in the match. */
+export function addMomentRows(out: MomentRow[], file: string, f: MatchFacts, filter: Filter): void {
+  const start = startMs(f.match);
+  const ranked = scoreMoments(f, filter).sort(bestMomentFirst);
+  ranked.forEach(({ ri: _ri, pi: _pi, ...m }, i) => out.push({ ...m, id: clipId(file, m.player, m.round), file, map: f.match.map, start, matchRank: i + 1 }));
+}
+
+/** Best first across matches (bestMomentFirst), then the newer match, so equal moments keep one order. */
+export const bestMomentRowFirst = (a: MomentRow, b: MomentRow) => bestMomentFirst(a, b) || b.start - a.start || a.file.localeCompare(b.file);
 
 /** Newest match first, then the later round first; files that share a start time keep one order. */
 export const newestHighlightFirst = (a: HighlightRow, b: HighlightRow) => b.start - a.start || b.file.localeCompare(a.file) || b.round - a.round;

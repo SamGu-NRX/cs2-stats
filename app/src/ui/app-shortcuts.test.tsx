@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { App } from "./App";
 import { go, parseHash, PROFILE_TABS } from "./router";
+import { NAV } from "./shell/Sidebar";
 
 vi.mock("./data/provider", () => ({
   DataProvider: ({ children }: { children: ReactNode }) => children,
@@ -23,6 +24,9 @@ vi.mock("./views/Home", () => ({ HomeView: () => <p data-home /> }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
+Element.prototype.scrollTo ??= function () {};
+// jsdom has no PointerEvent; the tooltip layer checks for one on every focus (components/overlay.tsx)
+globalThis.PointerEvent ??= class extends MouseEvent {} as unknown as typeof PointerEvent;
 globalThis.matchMedia ??= ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia;
 
 let host: HTMLDivElement;
@@ -51,6 +55,24 @@ describe("Alt+1 to Alt+7 on Profile", () => {
   });
 });
 
+describe("a new page", () => {
+  it("moves focus to the pane, named for the page, and leaves focus alone on the first page", async () => {
+    // fails if keyboard and screen-reader users stay on the sidebar link after a page change, or the
+    // first page load takes focus away from where the browser put it
+    const before = document.body.appendChild(document.createElement("button"));
+    before.focus();
+    await act(async () => root.render(<App />));
+    expect(document.activeElement).toBe(before);
+    const side = host.querySelector<HTMLElement>('a[data-page="profile"]')!;
+    side.focus();
+    expect(document.activeElement).toBe(side);
+    await act(async () => { go("#/profile/overview"); });
+    const pane = host.querySelector("main.pane");
+    expect(document.activeElement).toBe(pane);
+    expect(pane?.getAttribute("aria-label")).toBe("Profile");
+  });
+});
+
 describe("shortcuts while a confirmation is open", () => {
   it("navigate nowhere until the dialog closes", async () => {
     Element.prototype.scrollTo ??= () => {};
@@ -69,5 +91,17 @@ describe("shortcuts while a confirmation is open", () => {
     dialog.remove();
     ctrl("1");
     expect(parseHash(location.hash).page).toBe("home");
+  });
+});
+
+describe("Ctrl and a digit", () => {
+  it("opens each sidebar page by its key, Clips on Ctrl+5 after Bot Mode's Ctrl+4", async () => {
+    // fails if Clips and Bot Mode share a key, or Ctrl+5 is not handled
+    Element.prototype.scrollTo ??= () => {};
+    act(() => go("#/profile/overview"));
+    await act(async () => root.render(<App />));
+    expect(NAV.map((n) => [n.page, n.key])).toEqual([["home", "1"], ["matches", "2"], ["profile", "3"], ["botmode", "4"], ["clips", "5"]]);
+    act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "5", ctrlKey: true, bubbles: true })); });
+    expect(parseHash(location.hash).page).toBe("clips");
   });
 });

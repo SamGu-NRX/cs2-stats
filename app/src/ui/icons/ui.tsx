@@ -44,6 +44,10 @@ export const ProfileIcon = (p: IconProps) => (
 export const AimIcon = (p: IconProps) => (
   <Svg {...p}><circle cx="12" cy="12" r="10" /><line x1="22" x2="18" y1="12" y2="12" /><line x1="6" x2="2" y1="12" y2="12" /><line x1="12" x2="12" y1="6" y2="2" /><line x1="12" x2="12" y1="22" y2="18" /></Svg>
 );
+/** Lucide clapperboard: Clips. */
+export const ClipsIcon = (p: IconProps) => (
+  <Svg {...p}><path d="m12.296 3.464 3.02 3.956" /><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z" /><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="m6.18 5.276 3.1 3.899" /></Svg>
+);
 /** Lucide settings-2. */
 export const SettingsIcon = (p: IconProps) => (
   <Svg {...p}><path d="M14 17H5" /><path d="M19 7h-9" /><circle cx="17" cy="17" r="3" /><circle cx="7" cy="7" r="3" /></Svg>

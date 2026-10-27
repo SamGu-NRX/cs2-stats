@@ -2,13 +2,14 @@
 //! `read_match` returns one file's gzip bytes, `import_match` copies a picked file into
 //! `matches\imported\`, and `read_pack` reads the optional packs folder (pro scores, agent art).
 //! `list_valve` and `read_valve` serve the user's imported Valve matches from `valve\`, and
-//! `import_valve` runs the importer that writes them. The pro match library, a folder the user picks
-//! and the app only reads, is in `pro`.
+//! `import_valve` runs the importer that writes them. The clipping service's commands are in `clips`.
+//! The pro match library, a folder the user picks and the app only reads, is in `pro`.
 //! Decompression and every statistic run in the web view. The Bot Mode installer and
 //! launcher is in `botmode`; the optional Leetify import is in `leetify`. `open_external` opens the app's
 //! outside links in the system browser.
 
 pub mod botmode;
+pub mod clips;
 mod leetify;
 mod pro;
 
@@ -654,6 +655,8 @@ pub fn run() {
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
         .setup(|_app| {
             botmode::commands::on_app_start();
+            // FFmpeg part files a crashed finish left behind; off the UI's start path
+            std::thread::spawn(clips::on_app_start);
             Ok(())
         })
         // every webview, the first window's and any opened later, as its page starts loading
@@ -676,6 +679,13 @@ pub fn run() {
             read_valve,
             import_valve,
             valve_import_state,
+            clips::clips_env,
+            clips::clips_demos,
+            clips::clips_scan,
+            clips::clips_plan,
+            clips::clips_launch,
+            clips::clips_finish,
+            clips::clips_reel,
             open_external,
             pro::pro_library,
             pro::choose_pro_library,

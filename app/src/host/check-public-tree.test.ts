@@ -1,7 +1,7 @@
 // scripts/check-public-tree.mjs, the CI backstop: a clean tree passes, and each kind of finding planted
 // into a scratch git tree fails it.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -39,8 +39,17 @@ function check(files: Record<string, string | Buffer>) {
   return { code: r.status, out: r.stdout + r.stderr };
 }
 
+/**
+ * The script lists tracked files with git, so the repository's own tree can be checked only inside a
+ * git checkout. An exported archive has no git metadata: that test skips and says so; the scratch-tree
+ * tests below make their own git trees and need only the git program.
+ */
+// .git is a folder in a clone and a file in a worktree; an archive unpacked inside another checkout has neither here
+const inGit = existsSync(path.join(REPO, ".git"));
+if (!inGit) console.warn("check-public-tree.test.ts: skipping \"passes this repository's tree\": the repository has no git metadata (an exported archive?), and the script lists tracked files with git");
+
 describe("check-public-tree", () => {
-  it("passes this repository's tree", () => {
+  it.skipIf(!inGit)("passes this repository's tree", () => {
     const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8" });
     expect([r.status, r.stdout]).toEqual([0, expect.stringMatching(/nothing private/)]);
   });

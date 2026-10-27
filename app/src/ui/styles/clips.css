@@ -1,0 +1,149 @@
+/* Clips (views/Clips.tsx): the ranked moments, each with its clip drawn as a track, the chosen-moments
+   bar and the render dialog. Tokens only (tokens.css); motion per design/shell-and-motion.md: the bar
+   and the dialog enter with opacity and a small move or scale, and --mo removes the movement under
+   reduced motion. Small text is --ink2 or brighter: --ink3 on --s1 is 3.13:1, under WCAG's 4.5:1, and
+   --ink2 is 6.68:1 (measured 2026-10-26). Every control's hit area is 24 px or more. */
+
+.clips { gap: 12px; }
+.clips__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.clips__title { font: 600 16px/1.3 var(--f); letter-spacing: -0.01em; color: var(--ink); margin: 0 0 4px; }
+.clips__head .meta { max-width: 68ch; text-wrap: pretty; }
+.clips__tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ctool { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); cursor: default; }
+.ctool i { width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--ink3); }
+.ctool[data-ok] i { background: var(--good-text); box-shadow: none; }
+
+.clips__bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.clips__whys { display: grid; gap: 4px; margin: 0; padding: 10px 12px; list-style: none; border-radius: var(--r-ctl); background: var(--well); font-size: 12px; color: var(--ink2); text-wrap: pretty; }
+.clips__whys .num { color: var(--ink); font-weight: 600; }
+/* a render's CS2 still runs: said once, quietly, in the same well as the whys; no motion, since it can stay for minutes */
+.clips__waiting { margin: 0; padding: 10px 12px; border-radius: var(--r-ctl); background: var(--well); font-size: 12px; color: var(--ink2); text-wrap: pretty; }
+.clips__waiting strong { color: var(--ink); font-weight: 600; }
+
+/* the list: one row per moment, a hairline between, the rank first so the order reads as the ranking */
+.clips__list { display: grid; margin: 0; padding: 0; list-style: none; background: var(--s1); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
+.clip {
+  display: grid; align-items: center; column-gap: 12px; min-height: 56px; padding: 8px var(--pad-panel);
+  grid-template-columns: 32px 24px 64px minmax(0, 1fr) 156px 128px 132px;
+  grid-template-areas: "pick rank kinds main track state go";
+}
+.clip__pick { grid-area: pick; }
+.clip__rank { grid-area: rank; }
+.clip__kinds { grid-area: kinds; }
+.clip__main { grid-area: main; }
+.clip .ctrack { grid-area: track; }
+.clip__state { grid-area: state; }
+.clip__go { grid-area: go; }
+.clip + .clip { border-top: 1px solid var(--line); }
+@media (hover: hover) and (pointer: fine) { .clip:hover { background: var(--hover); } }
+.clip[data-chosen] { background: rgba(255, 215, 173, 0.05); }
+.clip:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+.clip:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
+/* the label is the checkbox's hit area: 32 px square around the 14 px box */
+.clip__pick { display: grid; place-items: center; width: 32px; height: 32px; margin: -4px 0; }
+.clip__rank { font: 600 13px/1 var(--f); color: var(--ink2); text-align: right; }
+.clip:nth-child(-n + 3) .clip__rank { color: var(--cream); }
+.clip__kinds { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.clip__main { display: grid; gap: 4px; min-width: 0; }
+.clip__reason { font: 600 13px/1.3 var(--f); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip[data-s="no-demo"] .clip__reason, .clip[data-s="unchecked"] .clip__reason { color: var(--ink2); }
+.clip__meta { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.clip__best { color: var(--tan); }
+.clip__feed { display: inline-flex; align-items: center; gap: 8px; color: var(--ink2); }
+.clip__go { display: inline-flex; gap: 4px; justify-content: flex-end; }
+.clip__go .link { min-height: 32px; padding: 0 6px; }
+
+/* the signature: the clip as an editor's track. The pre-roll and post-roll are the dim ends, the
+   stretch from your first kill to your last is lit, and each kill is a mark (cream for a headshot). */
+.ctrack { display: inline-flex; align-items: center; gap: 8px; }
+.ctrack__bar { position: relative; flex: 1; height: 14px; border-radius: 3px; background: var(--s3); overflow: hidden; }
+.ctrack__core { position: absolute; top: 0; bottom: 0; background: rgba(255, 215, 173, 0.16); }
+.ctrack__kill { position: absolute; top: 2px; bottom: 2px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--ink2); }
+.ctrack__kill[data-hs] { background: var(--cream); }
+.ctrack__len { font-size: 11px; color: var(--ink2); min-width: 30px; text-align: right; }
+
+.clip__state { display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.cstate { display: inline-flex; align-items: center; height: 24px; padding: 0 7px; border-radius: var(--r-chip); font: 500 11px/1 var(--f); white-space: nowrap; color: var(--ink2); box-shadow: inset 0 0 0 1px var(--line2); }
+.cstate[data-s="no-demo"], .cstate[data-s="unchecked"] { color: var(--ink2); cursor: help; }
+.cstate[data-s="ready"] { color: var(--cream); box-shadow: inset 0 0 0 1px rgba(255, 215, 173, 0.4); }
+.cstate[data-s="recorded"] { color: var(--ink); background: var(--s3); box-shadow: none; }
+.cstate[data-s="rendered"] { color: var(--bg0); background: var(--good-text); box-shadow: none; font-weight: 600; }
+.cstate:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.clip__path { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 24px; padding: 0 4px; margin-left: -4px; border: 0; background: none; color: var(--ink2); font-size: 11px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--r-chip); }
+@media (hover: hover) and (pointer: fine) { .clip__path:hover { color: var(--ink); } }
+.clip__path:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+
+/* the chosen-moments bar: sticks to the bottom of the pane, rises 8 px into place */
+.clips__act {
+  position: sticky; bottom: 16px; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 8px 8px 8px 16px; border-radius: var(--r-card); background: var(--s3); box-shadow: var(--shadow-float);
+  transition: opacity var(--d-launch) var(--ease-out), transform var(--d-launch) var(--ease-out);
+}
+@starting-style { .clips__act { opacity: 0; transform: translateY(calc(8px * var(--mo))); } }
+.clips__act.is-instant { transition: none; }
+.clips__act-n { font-size: 13px; color: var(--ink); }
+.clips__act-why { flex: 1; min-width: 12ch; text-align: right; text-wrap: pretty; }
+.clips__more { justify-self: start; }
+
+/* the render dialog: a modal, so it stays centred; opacity and a 0.96 scale in over 200 ms, out in
+   120 ms (about 60 % of the enter); opened from the keyboard it appears without motion */
+.rdlg {
+  width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 96px); padding: 0; border: 0; border-radius: var(--r-palette);
+  background: var(--s2); color: var(--ink); box-shadow: var(--shadow-float); overflow: hidden;
+  display: none; flex-direction: column;
+  opacity: 0; transform: scale(calc(1 - 0.04 * var(--mo)));
+  transition: opacity var(--d-press) var(--ease-out), transform var(--d-press) var(--ease-out), overlay var(--d-press) allow-discrete, display var(--d-press) allow-discrete;
+}
+.rdlg[open] { display: flex; opacity: 1; transform: none; transition-duration: var(--d-tab); }
+.rdlg.is-instant, .rdlg.is-instant::backdrop { transition: none; }
+@starting-style { .rdlg[open] { opacity: 0; transform: scale(calc(1 - 0.04 * var(--mo))); } }
+.rdlg::backdrop { background: var(--scrim); }
+.rdlg__head { display: flex; align-items: center; gap: 12px; padding: 14px 12px 14px 20px; border-bottom: 1px solid var(--line); }
+.rdlg__head h2 { margin: 0; font: 600 16px/1.3 var(--f); letter-spacing: -0.01em; }
+.rdlg__head .meta { flex: 1; }
+/* a scroll that reaches the body's end stops there rather than scrolling the page behind the dialog */
+.rdlg__body { display: grid; gap: 16px; padding: 16px 20px; overflow: auto; overscroll-behavior: contain; }
+.rdlg__warn { padding: 12px 14px; border-radius: var(--r-ctl); background: rgba(255, 215, 173, 0.07); box-shadow: inset 3px 0 0 var(--cream); }
+.rdlg__warn strong { font: 600 13px/1.3 var(--f); color: var(--cream); }
+.rdlg__warn p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--ink2); text-wrap: pretty; }
+.rtools { display: grid; gap: 8px; margin: 0; }
+.rtool { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: start; font-size: 12px; }
+.rtool dt { color: var(--ink2); padding-top: 2px; }
+.rtool dd { display: grid; gap: 6px; margin: 0; min-width: 0; }
+.rtool dd > span { overflow-wrap: anywhere; padding-top: 2px; }
+.rtool__err { color: var(--poor-text); }
+.rtool__pick { display: flex; gap: 8px; }
+.rtool__pick .input { flex: 1; min-width: 0; font-size: 12px; }
+.rdlg__sec { display: grid; gap: 8px; justify-items: start; }
+.rdlg__sec h3 { margin: 0; }
+.rdlg__cmd { margin: 0; width: 100%; padding: 10px 12px; border-radius: var(--r-ctl); background: var(--well); font-size: 11px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rdlg__files, .rdlg__clips { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; width: 100%; font-size: 12px; }
+.rdlg__files li, .rdlg__clips li { display: grid; gap: 2px; }
+.rdlg__files .mono { overflow-wrap: anywhere; }
+.rdlg__files code { font-size: 11px; overflow-wrap: anywhere; }
+.rdlg__problem { margin: 0; color: var(--poor-text); font-size: 12px; overflow-wrap: anywhere; }
+.rdlg__done { margin: 0; color: var(--good-text); font-size: 12px; }
+.rdlg__note { margin: 0; font-size: 12px; }
+.rdlg__foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
+
+/* narrower panes, such as a 1024 px window: the links move under the reason */
+@media (max-width: 1280px) {
+  .clip {
+    grid-template-columns: 32px 24px 64px minmax(0, 1fr) 140px 120px;
+    grid-template-areas: "pick rank kinds main track state" ". . . go go go";
+  }
+  .clip__go { justify-content: flex-start; }
+}
+
+/* a narrow pane, such as 200 % zoom: each row stacks, and the reason and its line wrap rather than clip */
+@media (max-width: 900px) {
+  .clip {
+    grid-template-columns: 32px 24px minmax(0, 1fr) auto;
+    grid-template-areas: "pick rank kinds kinds" ". . main main" ". . track state" ". . go go";
+    row-gap: 6px;
+  }
+  .clip__reason { white-space: normal; }
+  .clip__meta { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+  .clip__go { justify-content: flex-start; }
+  .clips__act-why { text-align: left; flex-basis: 100%; order: 3; }
+}
