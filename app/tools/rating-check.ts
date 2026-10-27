@@ -42,5 +42,5 @@ const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
 console.log(`joined ${maps} maps, ${cols.rating[0].length} player-maps`);
 for (const [c, [ours, theirs]] of Object.entries(cols)) {
   const mae = mean(ours.map((x, i) => Math.abs(x - theirs[i])));
-  console.log(`${c.padEnd(9)} MAE ${mae.toFixed(4)}  r ${pearson(ours, theirs).toFixed(4)}  mean ours ${mean(ours).toFixed(3)} HLTV ${mean(theirs).toFixed(3)}`);
+  console.log(`${c.padEnd(9)} MAE ${mae.toFixed(4)}  r ${pearson(ours, theirs)?.toFixed(4) ?? "– (no spread)"}  mean ours ${mean(ours).toFixed(3)} HLTV ${mean(theirs).toFixed(3)}`);
 }

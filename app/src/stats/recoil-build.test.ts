@@ -1,6 +1,7 @@
 // The spray pattern builder on hand-built shots with known answers.
 import { expect, it } from "vitest";
-import { addShots, emptySamples, patternOf, quantile, residualOf, type PatternShot } from "./recoil-build";
+import { addShots, emptySamples, MIN_KICK_SAMPLES, patternOf, quantile, residualOf, type PatternShot } from "./recoil-build";
+import { RECOIL } from "./recoil";
 
 const W = new Set(["ak47"]);
 /** One player's AK spray from a reset: bullet j's view and its kick (bullet minus view). */
@@ -74,4 +75,28 @@ it("unwraps yaw across 180 degrees in the kick and the view path", () => {
   const pat = patternOf(acc, "ak47", 1, 1);
   expect(pat.kick.map(([, y]) => y)).toEqual([0, 0.2, 0.3]);
   expect(pat.pro.map((r) => r[1])).toEqual([0, 0.1, 0.3]);
+});
+
+it("publishes only contiguous target-gun prefixes with enough kick samples", () => {
+  const expectedLengths: Record<string, number> = {
+    aug: 7, sg556: 0, mp5sd: 7, ump45: 6, p90: 0, bizon: 0, m249: 0, negev: 0, cz75a: 7,
+  };
+  for (const [weapon, length] of Object.entries(expectedLengths)) {
+    const pattern = RECOIL[weapon];
+    expect(pattern.kick.length, weapon).toBe(length);
+    expect(pattern.ideal.length, weapon).toBe(length);
+    expect(pattern.n.length, weapon).toBe(length);
+    expect(pattern.n.every((samples) => samples >= MIN_KICK_SAMPLES), weapon).toBe(true);
+    if (length) expect(pattern.kick[0], weapon).toEqual([0, 0]);
+    if (length < pattern.mag) {
+      expect(pattern.n[length] ?? MIN_KICK_SAMPLES - 1, weapon).toBeLessThan(MIN_KICK_SAMPLES);
+    }
+  }
+});
+
+it("keeps the rising pitch of the short rifle and SMG curves monotone", () => {
+  for (const weapon of ["aug", "mp5sd", "ump45"]) {
+    const pitch = RECOIL[weapon].kick.map(([p]) => Math.abs(p));
+    expect(pitch.every((value, i) => i === 0 || value >= pitch[i - 1]), weapon).toBe(true);
+  }
 });

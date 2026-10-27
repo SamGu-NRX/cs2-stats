@@ -1,6 +1,7 @@
 // Utility usage on hand-built rounds: who a flash blinded, grenade damage by kind, and thrown grenades.
-import { expect, it } from "vitest";
-import { METRIC } from "./metrics";
+import { describe, expect, it } from "vitest";
+import { MEASURES, THROW_LOGGED } from "./facts";
+import { METRIC, METRICS } from "./metrics";
 import { emptySummary, rollup } from "./rollup";
 import { derive } from "./derive";
 import { CS2RB } from "./model-params";
@@ -46,7 +47,7 @@ it("counts money spent on grenades, less refunds, over rounds with purchases onl
 it("rates flash-to-kills per flash and unused utility per death", () => {
   // fails if either is divided by rounds, which ranks a player by how much he flashes or how early he dies
   const s = emptySummary();
-  Object.assign(s.m, { rounds: 10, flashes: 4, flashKills: 1, deaths: 5, utilDeaths: 2, utilUnused: 600 });
+  Object.assign(s.m, { rounds: 10, throwRounds: 10, flashes: 4, flashKills: 1, flashKillsLogged: 1, deaths: 5, utilDeaths: 2, utilUnused: 600 });
   expect([METRIC.flashKillsPerFlash.value(s), METRIC.utilUnused.value(s)]).toEqual([0.25, 300]);
 });
 
@@ -85,4 +86,89 @@ it("marks utility coverage round by round, not for the whole match", () => {
   for (let i = 0, n = tables.player_rounds.n; i < n; i++) pushRow(tables.player_rounds, { ...rowOf(tables.player_rounds, i), round: 2 } as Parameters<typeof pushRow<"player_rounds">>[1]);
   const s = rollup([derive(tables, CS2RB)], { player: ["a", "c"] });
   expect([s.m.utilityRounds, s.m.rounds]).toEqual([2, 4]);
+});
+
+it("rates grenades thrown per round over the rounds of matches with a throw log only", () => {
+  // fails if a match without a throw log (the Valve imports) counts as rounds with no throws: a throws
+  // two flashbangs in a logged one-round match and plays one round of a match with no throw log.
+  // Over both, 2 flashbangs in 1 logged round is 2.00 a round, not 1.00; over the unlogged match alone
+  // there is no rate, and the metric says why
+  const logged = oneRound({ players: { a: "CT", c: "T" }, grenade_throws: [
+    { tick: FREEZE_END + 100, steamid: "a", weapon: "flashbang" }, { tick: FREEZE_END + 300, steamid: "a", weapon: "flashbang" },
+  ] });
+  const unlogged = oneRound({ players: { a: "CT", c: "T" } });
+  const both = rollup([logged, unlogged], { player: "a" });
+  expect([both.m.rounds, both.m.throwRounds, both.m.flashes]).toEqual([2, 1, 2]);
+  expect(METRIC.flashesPR.value(both)).toBe(2);
+  expect(METRIC.smokesPR.value(both)).toBe(0);
+  const none = rollup([unlogged], { player: "a" });
+  expect([METRIC.flashesPR.value(none), METRIC.hesPR.value(none), METRIC.molotovsPR.value(none), METRIC.smokesPR.value(none)]).toEqual([null, null, null, null]);
+  expect(METRIC.flashesPR.why!(none)).toBe("none of these matches logs grenade throws");
+  expect(METRIC.flashesPR.why!(both)).toBeNull();
+});
+
+describe("ratios per grenade thrown", () => {
+  // One round each: a throws two flashbangs, an HE and a molotov; one flash blinds c for 2.5 s, b kills
+  // the blind c with a's flash assist, the HE deals 40 and the fire 8 to c. Only the logged match has
+  // the throw log. Each ratio over both matches must read the logged match alone: the unlogged one has
+  // the same blinds, damage and assist but no thrown count to divide them by.
+  const match = (logged: boolean) => oneRound({
+    players: { a: "CT", b: "CT", c: "T" },
+    ...(logged ? { grenade_throws: ["flashbang", "flashbang", "hegrenade", "molotov"].map((weapon, i) => ({ tick: FREEZE_END + 100 + i, steamid: "a", weapon })) } : {}),
+    blinds: [{ tick: FREEZE_END + 300, attacker_steamid: "a", victim_steamid: "c", duration: 2.5 }],
+    damages: [
+      { tick: FREEZE_END + 305, attacker_steamid: "a", victim_steamid: "c", weapon: "hegrenade", dmg_health: 40, dmg_health_capped: 40, health_before: 100 },
+      { tick: FREEZE_END + 310, attacker_steamid: "a", victim_steamid: "c", weapon: "inferno", dmg_health: 8, dmg_health_capped: 8, health_before: 60, grenade_entity_id: 7 },
+    ],
+    kills: [{ tick: FREEZE_END + 320, killer: "b", victim: "c", assister: "a", at: { assistedflash: true } }],
+  });
+  const both = rollup([match(true), match(false)], { player: "a" });
+  const ids = ["assistsPerFlash", "flashKillsPerFlash", "enemiesPerFlash", "blindPerFlash", "dmgPerHe", "molotovEnemiesHit", "molotovDmg"];
+
+  it("counts every numerator in both matches, so the match views keep the unlogged match's blinds and damage", () => {
+    expect([both.m.flashAssists, both.m.flashKills, both.m.enemiesFlashed, both.m.enemyBlindSecs, both.m.heDmg, both.m.molotovHits, both.m.fireDmg]).toEqual([2, 2, 2, 5, 80, 2, 16]);
+    expect([both.m.flashes, both.m.hes, both.m.molotovs]).toEqual([2, 1, 1]);
+  });
+
+  it("divides the flash, HE and molotov ratios over the logged match only", () => {
+    // fails if a ratio adds the unlogged match's numerator to the logged match's thrown count: mixed,
+    // they would read 1, 1, 1, 2.5, 80, 2 and 16
+    expect(ids.map((id) => METRIC[id].value(both))).toEqual([0.5, 0.5, 0.5, 1.25, 40, 1, 8]);
+    expect(ids.map((id) => METRIC[id].why!(both))).toEqual(ids.map(() => null));
+  });
+
+  it("has no ratio, and says why, with no logged match in scope", () => {
+    const none = rollup([match(false)], { player: "a" });
+    expect(ids.map((id) => METRIC[id].value(none))).toEqual(ids.map(() => null));
+    expect(ids.map((id) => METRIC[id].why!(none))).toEqual(ids.map(() => "none of these matches logs grenade throws"));
+  });
+});
+
+it("lets no metric read a thrown count without the throw-log rule", () => {
+  // fails if a metric added later divides by flashes, HEs, molotovs or smokes some other way than
+  // perThrown or over throwRounds: a metric whose value moves with a thrown count must say it has no
+  // value when no match in scope logs throws
+  const base = emptySummary();
+  for (const k of MEASURES) base.m[k] = 3;
+  base.m.rounds = 6;
+  const reading: string[] = [];
+  for (const m of METRICS) {
+    const moved = (["flashes", "hes", "molotovs", "smokes"] as const).some((k) => {
+      const a = structuredClone(base), b = structuredClone(base);
+      b.m[k] = 7;
+      return m.value(a) !== m.value(b);
+    });
+    if (!moved) continue;
+    reading.push(m.id);
+    const none = structuredClone(base);
+    none.m.throwRounds = 0;
+    expect(m.why?.(none), m.id).toBe("none of these matches logs grenade throws");
+  }
+  expect(reading.sort()).toEqual(["assistsPerFlash", "blindPerFlash", "dmgPerHe", "enemiesPerFlash", "flashKillsPerFlash", "flashesPR", "hesPR", "molotovDmg", "molotovEnemiesHit", "molotovsPR", "smokesPR"]);
+  // and none of them reads a numerator over every match: only its twin over the logged ones (THROW_LOGGED)
+  for (const id of reading) for (const k of Object.keys(THROW_LOGGED) as (keyof typeof THROW_LOGGED)[]) {
+    const b = structuredClone(base);
+    b.m[k] = 11;
+    expect(METRIC[id].value(b), `${id} reads ${k}`).toBe(METRIC[id].value(base));
+  }
 });

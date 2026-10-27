@@ -72,11 +72,14 @@ export function scopeQuery(q: URLSearchParams): Record<string, string> {
 }
 
 /**
- * Every query key Profile reads: its scope and a tab's own section, attribute and pro. A Profile link
- * loses any other key (a legacy #/aim?guns=rifle&result=W), so the URL never claims a filter the
- * page does not apply; publish() writes the trimmed query back.
+ * Every query key Profile reads: its scope and a tab's own keys: section, attribute, pro, Overview's
+ * Form filters (outliers, first: views/shared.tsx useFormFilter) and the stat whose trend Overview's
+ * win correlation shows (trend). The Form filters and the trend are Overview's own, not scope: no
+ * other tab reads them, so a tab switch leaves them behind. A Profile link loses any other key (a
+ * legacy #/aim?guns=rifle&result=W), so the URL never claims a filter the page does not apply;
+ * publish() writes the trimmed query back.
  */
-const PROFILE_KEYS = new Set<string>([...SCOPE_KEYS, "sec", "attr", "pro"]);
+const PROFILE_KEYS = new Set<string>([...SCOPE_KEYS, "sec", "attr", "pro", "outliers", "first", "trend"]);
 function profileRoute(ptab: ProfileTab, query: URLSearchParams): Route {
   for (const k of [...query.keys()]) if (!PROFILE_KEYS.has(k)) query.delete(k);
   return { page: "profile", ptab, query };

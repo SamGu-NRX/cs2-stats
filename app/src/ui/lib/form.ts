@@ -1,4 +1,35 @@
-// Filters for the form chart.
+// Filters for the form chart: Home's Form and Profile's Form share them (formWindow), and the shared
+// control (views/shared.tsx FormToggles) sets them.
+import { matchDayKey } from "./format";
+
+/** A match's day for the first-of-day filter (firstOfDay). */
+export const formDay = (e: { file: string; match: { date: string | null; startedAt: string | null } }) => ({ file: e.file, date: matchDayKey(e.match) });
+
+/** What the form chart leaves out. */
+export interface FormFilter { noOutliers: boolean; noFirst: boolean }
+
+/** Matches a form chart shows. */
+export const FORM_WINDOW = 10;
+
+/**
+ * The form chart's matches, oldest first: the last FORM_WINDOW of a newest-first list, less the first
+ * match of each day (firstOfDay over the whole list) when noFirst, then less the ratings outside
+ * Tukey's fences (insideFences, over the rated matches left) when noOutliers. A match without a rating
+ * is never an outlier. `hidden` is how many of the window the filters left out.
+ */
+export function formWindow<T>(newestFirst: T[], rating: (x: T) => number | null, dayOf: (x: T) => { file: string; date: string | null }, f: FormFilter): { shown: T[]; hidden: number } {
+  const window = newestFirst.slice(0, FORM_WINDOW).reverse();
+  const firsts = f.noFirst ? firstOfDay(newestFirst.map(dayOf)) : new Set<string>();
+  const pool = window.filter((x) => !firsts.has(dayOf(x).file));
+  let shown = pool;
+  if (f.noOutliers) {
+    const rated = pool.flatMap((x) => { const r = rating(x); return r === null ? [] : [{ x, r }]; });
+    const keep = insideFences(rated.map((y) => y.r));
+    const out = new Set(rated.filter((_, i) => !keep.has(i)).map((y) => y.x));
+    shown = pool.filter((x) => !out.has(x));
+  }
+  return { shown, hidden: window.length - shown.length };
+}
 
 /**
  * Indexes of values inside Tukey's fences (1.5 × the interquartile range beyond the quartiles).

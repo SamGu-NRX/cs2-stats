@@ -373,5 +373,17 @@ export function mapsIn(all: MatchEntry[]): string[] {
   return [...n].sort((a, b) => b[1] - a[1]).map(([m]) => m);
 }
 
+/**
+ * The players the recording player faced in a list of matches, by steamid: the "your opponents"
+ * comparison. The rule of the worker's opponents call (stats/opponents.ts opponentsIn): on the other
+ * team, and each played a round of the match (MatchEntry.played); none from a match the recording
+ * player played no round of.
+ */
+export const opponentIds = (list: MatchEntry[]) => [...new Set(list.flatMap((e) => {
+  const me = e.players[e.you];
+  if (!me || !e.played.includes(me.id)) return [];
+  return e.players.filter((p) => p.team !== null && p.team !== me.team && e.played.includes(p.id)).map((p) => p.id);
+}))];
+
 /** Bots in a list of matches, by steamid: the "bots you played" comparison. */
 export const botIds = (list: MatchEntry[]) => [...new Set(list.flatMap((e) => e.players.filter((p) => p.bot).map((p) => p.id)))];

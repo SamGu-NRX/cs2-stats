@@ -35,6 +35,18 @@ export interface PanelAttribute {
   provisional?: boolean;
   /** rows after the scored metrics with a value only: not part of the score (engine.ts EXTRA_SUBS) */
   extra?: Sub[];
+  /** a titled group of value-only rows after those, over a subset of rounds (Firepower's pistol rounds) */
+  group?: PanelGroup;
+}
+
+/** Value-only rows over a subset of the rounds, under their own heading with that subset's size. */
+export interface PanelGroup {
+  label: ReactNode;
+  /** the rounds the rows rest on: "14 pistol rounds" */
+  sample: string;
+  /** that count, for a thin sample (MetricRow THIN) */
+  n: number;
+  rows: Sub[];
 }
 
 /** A scored metric as a metric row; a value that cannot exist shows a dash and says why. */
@@ -46,8 +58,8 @@ export function PanelRow({ m, rank }: { m: PanelMetric; rank?: boolean }) {
 }
 
 /** A metric with its value only, under an attribute's scored metrics (main's unscored rows): no track, since nothing ranks it. */
-export function ValueRow({ s, rank }: { s: Sub; rank?: boolean }) {
-  return <MetricRow label={s.label} value={s.value === null ? null : s.text} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra />;
+export function ValueRow({ s, rank, n }: { s: Sub; rank?: boolean; n?: number }) {
+  return <MetricRow label={s.label} value={s.value === null ? null : s.text} n={n} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra />;
 }
 
 /** The metric ranked highest, shown beside a closed attribute so its row says what drives the score. */
@@ -98,6 +110,12 @@ export function Attribute({ a, performance = false, wide = false, rank = false }
           <MetricList label={`${a.label} metrics`} rank={rank}>
             {a.metrics.map((m) => <PanelRow key={m.id} m={m} rank={rank} />)}
             {a.extra?.map((s) => <ValueRow key={s.id} s={s} rank={rank} />)}
+            {a.group && (
+              <>
+                <li className="mrows__group"><span className="mrows__group-l">{a.group.label}</span><span className="meta">{a.group.sample}</span></li>
+                {a.group.rows.map((s) => <ValueRow key={s.id} s={s} rank={rank} n={a.group!.n} />)}
+              </>
+            )}
           </MetricList>
         </div>
       </div>

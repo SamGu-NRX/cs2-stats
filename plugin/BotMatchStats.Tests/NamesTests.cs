@@ -125,9 +125,9 @@ public class PlaceTests
         t.SetMap("de_dust2");
         var raw = Raw("LongDoors");
         t.Lookup(raw);
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        var meter = AllocMeter.Start(exact: true);
         for (int i = 0; i < 1000; i++) t.Lookup(raw);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocMeter.AssertNone(meter.Read());
     }
 
     [Fact]
