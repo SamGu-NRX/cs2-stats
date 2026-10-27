@@ -1079,6 +1079,41 @@ def test_a_finished_round_a_later_restore_rolled_back_is_not_a_round():
     assert ex.assign_rounds(pd.Series([95000, 104349, 111771, 119492]), rounds, voided).tolist() == [0, 0, 0, 2]
 
 
+def test_a_lower_count_after_the_last_round_does_not_drop_it():
+    # Review of PR 59: a winnerless round_end after the last round with a lower total_rounds_played (a server reset)
+    # is no restore that replays a round. Taking the final round (a timeout win, no kills) off would read the
+    # score one round early and pass every check one round short; the map keeps the round, or is refused.
+    ends = pd.DataFrame(dict(tick=[900, 2000, 3000, 3100], total_rounds_played=[1, 2, 3, 2],
+                             winner=["CT", "T", "CT", None], reason=["t_killed", "ct_killed", "target_saved", None]))
+    rounds, voided = ex.build_round_windows([1, 1000, 2100], [200, 1100, 2200], ends, 0)
+    assert rounds.end_tick.tolist() == [900, 2000, 3000]
+    with pytest.raises(RuntimeError, match="covers round 3"):
+        ex.check_dropped_attempts(rounds, voided)
+
+
+def test_round_ends_without_a_round_count_are_refused_by_name():
+    ends = pd.DataFrame(dict(tick=[900], winner=["CT"], reason=["t_killed"]))
+    with pytest.raises(ValueError, match="no total_rounds_played"):
+        ex.build_round_windows([1], [200], ends, 0)
+
+
+def test_entity_not_found_in_any_parser_pass_refuses_as_parser_unreadable():
+    # Review of PR 59: only the first event pass named the parser; the same fault in a tick pass surfaced as a bare
+    # "Exception: EntityNotFound".
+    class Parser:
+        def parse_ticks(self, props, ticks=None):
+            raise Exception("EntityNotFound")
+
+        def parse_header(self):
+            raise Exception("something else")
+
+    p = ex.ReadableParser(Parser(), "awpy's own parser read all of it")
+    with pytest.raises(RuntimeError, match=r"^parser_unreadable: .*EntityNotFound in parse_ticks"):
+        p.parse_ticks(["X"], ticks=[1])
+    with pytest.raises(Exception, match="^something else$"):
+        p.parse_header()
+
+
 def test_a_restore_before_begin_new_match_is_found_by_its_world_deaths():
     # An HLTV split recording's second part: round_start at 0, ten "world" deaths and two bomb pickups with no
     # player on 0, begin_new_match at 1. The pickups shared a (tick, event) key and failed the bomb table.
@@ -2131,6 +2166,8 @@ def test_a_demo_stored_without_its_extension_is_extracted_and_parsed(tmp_path, m
     with zipfile.ZipFile(archive, "w") as z:
         z.writestr("x-vs-y-m1-dust2", b"PBDEMS2\x00" + bytes(64))
         z.writestr("readme", b"not a demo")
+    # Only the demo is listed, so only it counts toward the disk budget (review of PR 59).
+    assert sorted(dp.list_archive(archive)) == ["x-vs-y-m1-dust2"]
     a = dp.Archive(rar=archive, id="a")
     p = dp.Pipeline()
     p.archives[a.id] = a
