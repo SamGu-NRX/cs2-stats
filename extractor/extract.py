@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.16.0"
+EXTRACTOR_VERSION = "1.17.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -1369,6 +1369,25 @@ THROW_TYPES = {"flashbang": {"flashbang"}, "hegrenade": {"he"}, "smokegrenade": 
                "decoy": {"decoy"}}
 
 
+def skipped_flash_detonations(proj: pd.DataFrame, recorded: np.ndarray) -> pd.DataFrame:
+    """Where each flashbang's blinds show when its detonation event is missing: (tick, entity_id, steamid, x, y, z),
+    tick the first recorded tick at or after the detonation, the tick after the projectile's last position.
+
+    A flashbang's last position is one tick before its flashbang_detonate (every detonation of an OpenCS2 Ancient
+    demo). On that demo the recording skipped tick 90371: one flashbang's last position is 90370, no detonation
+    event exists, and three players' flash durations changed on 90372, the next recorded tick; nothing else was
+    thrown then. proj: projectile rows (type, entity_id, steamid of the thrower, last_tick, end_x, end_y, end_z);
+    recorded: the demo's recorded ticks, sorted.
+    """
+    f = proj[proj.type == "flashbang"]
+    at = np.searchsorted(recorded, f.last_tick.to_numpy(dtype=np.int64) + 1, side="left")
+    found = at < len(recorded)
+    tick = np.where(found, recorded[np.minimum(at, len(recorded) - 1)], -1) if len(recorded) else np.full(len(f), -1)
+    out = pd.DataFrame({"tick": tick, "entity_id": f.entity_id.to_numpy(), "steamid": f.steamid.array,
+                        "x": f.end_x.to_numpy(), "y": f.end_y.to_numpy(), "z": f.end_z.to_numpy()})
+    return out[out.tick >= 0].reset_index(drop=True)
+
+
 def link_throws(throws: pd.DataFrame, proj: pd.DataFrame, rate: float):
     """Match each grenade_thrown event to a projectile of the same type that appears within 0.5 s,
     choosing the one whose first position is nearest the thrower's eye. Each projectile is used once."""
@@ -2019,9 +2038,15 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         side_of = {}
         for r in econ.itertuples():
             side_of[(int(r.round), int(r.steamid))] = r.side
+        # A blind on a tick with no detonation event is the flash whose detonation the demo skipped just before it.
+        recorded = np.unique(np.concatenate([p.tick.to_numpy(dtype=np.int64) for p in state_parts])) \
+            if state_parts else np.array([], dtype=np.int64)
+        skipped = skipped_flash_detonations(proj, recorded)
         brow = []
         for t_, sid, dur, vx, vy, vz in blinds:
             c = fd[fd.tick == t_]
+            if c.empty:
+                c = skipped[skipped.tick == t_]
             amb = len(c) > 1
             if len(c) == 0:
                 att, ent = None, None

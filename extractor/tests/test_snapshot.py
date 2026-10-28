@@ -142,3 +142,17 @@ def test_an_abandoned_map_is_refused_as_unplayed_instead_of_crashing(tmp_path):
     res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
     assert not res["ok"] and res["errors"][0].startswith("RuntimeError: unplayed_round: round 17 never left freeze time")
     assert ex.resolve_map_dir(tmp_path / "out") is None
+
+
+def test_blinds_after_a_detonation_the_recording_skipped_are_credited_to_that_flash(tmp_path):
+    # Fixture G (an OpenCS2 Ancient map, 20 rounds): the recording skipped tick 90371, where a flashbang (entity 93)
+    # detonated, and its event went with the tick. Three players' flash durations changed on 90372, and with no
+    # detonation event to credit them the map failed: nulls in blinds.flash_entity_id.
+    src = FIXTURES / "fixture-g.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; blinds of a skipped detonation are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    blinds = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "blinds.parquet").filter(pl.col("tick") == 90372)
+    # The throw was lost too, so no attacker is known.
+    assert blinds["flash_entity_id"].to_list() == [93, 93, 93] and blinds["attacker_steamid"].null_count() == 3

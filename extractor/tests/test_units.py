@@ -2747,3 +2747,15 @@ def test_a_test_file_that_cannot_import_fails_collection(tmp_path):
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
                        cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert r.returncode == 2 and "ERROR collecting" in r.stdout, r.stdout[-2000:]
+
+
+def test_a_flash_whose_detonation_the_recording_skipped_lands_on_the_next_recorded_tick():
+    # An OpenCS2 demo skipped tick 90371, where a flashbang detonated, and lost its event; the blinds showed on 90372
+    # and failed the map with no flash to credit. A flashbang's last position is the tick before its detonation.
+    proj = pd.DataFrame(dict(type=["flashbang", "flashbang", "smoke"], entity_id=[93, 411, 190],
+                             steamid=pd.array([None, 7, 8], dtype="UInt64"), last_tick=[90370, 90307, 90370],
+                             end_x=[1.0, 2.0, 3.0], end_y=[0.0, 0.0, 0.0], end_z=[0.0, 0.0, 0.0]))
+    recorded = np.array([90306, 90307, 90308, 90369, 90370, 90372, 90373])
+    got = ex.skipped_flash_detonations(proj, recorded)
+    assert got[["tick", "entity_id"]].values.tolist() == [[90372, 93], [90308, 411]]  # no smoke
+    assert got.steamid.isna().tolist() == [True, False]

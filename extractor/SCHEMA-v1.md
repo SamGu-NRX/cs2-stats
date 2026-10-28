@@ -71,7 +71,7 @@ awpy refuses a demo cut off mid-file ("unexpected end of data"). demoparser2 rea
 - **Penetration** for non-fatal hits: `player_hurt` has none (`kills.penetrated` covers kill shots).
 - **Aim punch:** `m_aimPunchAngle` is not networked to GOTV.
 - **Inferno extent:** only the origin and lifetime are stored.
-- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick.
+- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick, or, when the recording skipped the tick a flashbang detonated on (and its event with it), on the next recorded tick, credited to that flashbang (its last position is the tick before its detonation).
 - **Weapon max speed:** no verified per-weapon table is bundled; join a cited table in the engine.
 
 ## Tables
