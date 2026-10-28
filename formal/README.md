@@ -9,8 +9,13 @@ findings and assumptions; their counts are in RESULTS.md with the rest.
   `clips.lock`, crashes at every launch step, HLAE and CS2 outside the app, the watcher, scans, a normal CS2
   session replacing `console.log`, and take ownership inferred from launch records.
 - `Archive.tla` checks the demo pipeline's archive lifecycle from scan to the ledger: stitching or holding
-  split maps, the unaccounted check, failure and `--retry-failed`, the parts cap, and a crash between any
-  two steps.
+  split maps, the unaccounted check, each step of a failure, `--retry-failed`, the parts cap, the
+  failed-folder cap's eviction, re-downloads, and a crash between any two steps.
+
+Neither model covers double publication: in `Archive.tla` a map's publication is one boolean, and versions,
+CURRENT and replacement are checked by `Publish.tla` and `Pipeline.tla` below. `EvidenceKept` in
+`ClipsLaunch.tla` is a safety property (what a settled result says), not liveness. The other exclusions are
+listed in CLIPS_AND_ARCHIVES.md.
 
 ```text
 python -I formal/check_models.py --while-gaming ClipsLaunchSafety ArchiveSafety

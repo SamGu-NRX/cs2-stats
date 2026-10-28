@@ -1,6 +1,6 @@
 # Clips launch protocol and pipeline archive lifecycle
 
-Two state machines with real concurrency risk, model-checked at main `b5868a2`: the app's clips launch, settle and lock protocol (`ClipsLaunch.tla`) and the demo pipeline's archive lifecycle (`Archive.tla`). Exact counts for every configuration are in [RESULTS.md](RESULTS.md); counterexample traces are in [WITNESSES.md](WITNESSES.md). Each `.cfg` states its bounds; `make_configs.py` generates them. No application or extractor code changed.
+Two state machines with real concurrency risk, model-checked at main `b5868a2`: the app's clips launch, settle and lock protocol (`ClipsLaunch.tla`) and the demo pipeline's archive lifecycle (`Archive.tla`). Exact counts for every configuration are in [RESULTS.md](RESULTS.md); counterexample traces are in [WITNESSES.md](WITNESSES.md). Each `.cfg` states its bounds; `make_configs.py` generates them. No application or extractor code changed. Proposed fixes appear in the models as switches that are off for the shipped code.
 
 ## ClipsLaunch
 
@@ -31,7 +31,7 @@ Abstractions:
 - `ResultTruthful`: a result says `ended` only when that launch's director wrote it.
 - `OwnerIsCreator`: the owner the app infers for a take is the launch that made it.
 - `OneLaunchAtATime`: at most one launch's HLAE or CS2 runs at a time.
-- `EvidenceKept` (completeness): a launch whose director recorded the clip settles as `ended`.
+- `EvidenceKept`: a launch whose director recorded the clip, once settled, settles as `ended`. It is a state invariant about what a settled result says, not liveness. It doesn't claim that a launch settles at all, only that a settled one doesn't lose the director's evidence.
 
 ### Results
 
@@ -60,39 +60,58 @@ Two counterexamples are findings:
 
 ### What it models
 
-The pipeline is one process, and the HTTP port admits one instance. Its main loop runs archive steps one at a time, and it can crash between any two. A restart forgets `self.archives` and `self.retried`, deletes leftover work folders and scans again. Each archive holds one whole map and one map recorded as two parts.
+The pipeline is one process, and the HTTP port admits one instance. Its main loop is single-threaded:
 
-| Model action | Code |
+- `finish_archives` and `fail_archive` each run one archive's block to its end before touching another archive, and `enforce_parts_cap` and `enforce_failed_cap` run inside such a block.
+- Only the waiting phases (hashing, pending, extracting, parsing) interleave across archives.
+- A crash can come between any two steps. It loses `self.archives`, `self.retried` and any cap in progress; a restart deletes leftover work folders and scans again.
+- The user may download a deleted archive again.
+
+Each archive holds one whole map and one map recorded as two parts.
+
+| Model action | Code (main `b5868a2`) |
 | --- | --- |
-| `Scan` | [demo_pipeline.py:967](../extractor/demo_pipeline.py#L967) `scan` |
+| `Scan`: a downloads RAR whose last row is not done or failed; with `--retry-failed`, a `failed/` RAR not yet tried in this run, even before its ledger row exists | [demo_pipeline.py:974-982](../extractor/demo_pipeline.py#L974) |
 | `Hash`, `Extract`, `Parse` | [1010](../extractor/demo_pipeline.py#L1010) `poll_hashes`, extraction and `finish_job` |
-| `Stitch` | [1325](../extractor/demo_pipeline.py#L1325) `stitch_parts` |
-| `Check` | [1302](../extractor/demo_pipeline.py#L1302), [1358](../extractor/demo_pipeline.py#L1358) `unaccounted` |
+| `Stitch`, `Check` | [1325](../extractor/demo_pipeline.py#L1325) `stitch_parts`, [1302](../extractor/demo_pipeline.py#L1302), [1358](../extractor/demo_pipeline.py#L1358) `unaccounted` |
 | `RemoveWork`, `RemoveRar`, `LedgerDone` | [1289](../extractor/demo_pipeline.py#L1289) `finish_archives`, [1314](../extractor/demo_pipeline.py#L1314), [1319](../extractor/demo_pipeline.py#L1319) |
-| `Fail` | [1404](../extractor/demo_pipeline.py#L1404) `fail_archive` |
-| `Cap` | [1376](../extractor/demo_pipeline.py#L1376) `enforce_parts_cap` |
+| `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1404-1458](../extractor/demo_pipeline.py#L1404) `fail_archive`, [1450](../extractor/demo_pipeline.py#L1450) |
+| `CapFirst`, `CapSecond`: delete the held parts, then write the expired row | [1376-1403](../extractor/demo_pipeline.py#L1376) `enforce_parts_cap`, [1390](../extractor/demo_pipeline.py#L1390), [1397](../extractor/demo_pipeline.py#L1397) |
+| `EvictRecord`, `EvictDelete`: the `failed_dropped.jsonl` row, then the folder goes; the ledger keeps saying failed | [1492-1510](../extractor/demo_pipeline.py#L1492) `enforce_failed_cap` |
+
+Three proposed fixes are switches, off for the shipped code:
+
+- `LedgerFirst`: the done row before the RAR goes, and a start deletes a done archive's leftover RAR.
+- `ExpiryRowFirst`: the expired row before the parts go.
+- `EvictionFixed`: `enforce_failed_cap` skips kept failures still in flight and writes a ledger row before deleting.
 
 ### Invariants
 
-- `NoUnaccountedDeletion`: once an archive's RAR is gone (and it wasn't dropped as truncated), its whole map is published. Its split map is either stitched, held with its parts, or expired by the cap with a row saying so.
-- `ExpiredRecorded`: every deletion of held parts has an `expired` row.
-- `CapSparesActive`: the cap never deletes the parts of an archive in flight.
-- `FailedKept` (without crashes): an idle archive whose ledger says failed still has its RAR in `failed/`.
-- `DeletedRecorded`: an archive whose RAR is gone has a done or dropped ledger row.
+- `NoUnaccountedDeletion`: an archive whose RAR is gone has its whole map published and its split map stitched, expired with a row, or held with its parts. The exception is an archive deleted on purpose with its maps unaccounted, which `failed_dropped.jsonl` must record: a truncated failure, or a kept failure evicted by the cap.
+- `ExpiredRecorded`: deleted held parts always have their expired row, except between the cap's two steps.
+- `CapSparesActive`: the parts cap never touches an archive in flight.
+- `FailedKept`: a failure whose last row says failed still has its RAR, unless `failed_dropped.jsonl` records its deletion.
+- `DeletedRecorded`: an archive whose RAR is gone has a done row or a `failed_dropped.jsonl` record. No archive ends up published with no row.
+- `EvictedRedownloadable`: after the cap evicts a kept failure, a new download of that archive is extracted, not skipped because its last ledger row says failed.
 
 ### Results
 
-`ArchiveSafety` (two archives, one crash, `--retry-failed`, parts-cap pressure, failing and truncated parses, stitches that leave no complete map) and `ArchiveWide` (three archives, one crash, with symmetry reduction) pass `NoUnaccountedDeletion`, `ExpiredRecorded` and `CapSparesActive`. `ArchiveNoCrash` also passes `FailedKept` and `DeletedRecorded`.
+`ArchiveSafety` (shipped code, two archives, no crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash.
 
-`ArchiveCrashLedger` violates `DeletedRecorded`. A crash between deleting the RAR ([1314](../extractor/demo_pipeline.py#L1314), or a retried failure's folder at [1312](../extractor/demo_pipeline.py#L1312)) and appending the done row ([1319](../extractor/demo_pipeline.py#L1319)) leaves the maps published but no done row. For a retried failure, the last row even says failed. No data is lost; the ledger is wrong about that archive. Writing the done row before deleting the RAR would close it, with the restart then treating a done archive whose RAR is still present as finished.
+These counterexamples are findings in the shipped code:
 
-`ArchiveLegacyNoCheck` skips the unaccounted check and violates `NoUnaccountedDeletion`: a stitch that left no complete map gets its RAR deleted. This shows the check carries the invariant.
+- **`ArchiveEviction` violates `EvictedRedownloadable`.** `enforce_failed_cap` deletes a kept failure but leaves its ledger saying failed, so a later download of the same archive is skipped forever. The proposed fix also skips kept failures that are in flight. Without that, a retry in flight can lose its folder, fail again, and leave the same state; TLC found that case with only the ledger row added.
+- **`ArchiveCrashLedger` violates `DeletedRecorded`.** A crash between deleting the RAR ([1314](../extractor/demo_pipeline.py#L1314), or a retried failure's folder at [1312](../extractor/demo_pipeline.py#L1312)) and appending the done row ([1319](../extractor/demo_pipeline.py#L1319)) leaves the maps published with no done row.
+- **`ArchiveCrashExpiry` violates `ExpiredRecorded`.** A crash between deleting held parts ([1390](../extractor/demo_pipeline.py#L1390)) and writing their expired row ([1397](../extractor/demo_pipeline.py#L1397)) leaves the parts gone and `parts.jsonl` still saying held, with no record of the deletion.
 
-### Bounds and assumptions
+`ArchiveFixed` turns on all three proposed fixes, with one crash, and passes every invariant. `ArchiveWide` checks the same with three archives and symmetry reduction. `ArchiveLegacyNoCheck` skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
 
-- Two or three archives and at most one crash.
+### Bounds, assumptions and exclusions
+
+- Two archives (three in `ArchiveWide`), at most one crash and one re-download.
 - A worker's outcome is one value per archive.
 - An ok whole map is published by its worker before the archive finishes.
-- `due_for_retry` is assumed true for a failed archive.
-- `replace_old_extractions`, version folders, CURRENT and readers are left out; `Publish.tla` and `Pipeline.tla` cover them.
-- The cap may run whenever any archive is in flight, which is more often than the code (only inside `stitch_parts`), so its safety results are stronger than needed.
+- `due_for_retry` is assumed true for a kept failure.
+- The ledger is keyed by archive, though the code keys a retried failure by its `failed/` folder name.
+- Recovery at a start is modelled as possible whenever the archive is not in flight, a superset of "at a start". The code also deletes only a file matching the done row's size and SHA-256.
+- **Double publication is not covered:** "published" is one boolean per map. Versions, CURRENT, readers and replacing older extractions are in `Publish.tla` and `Pipeline.tla`, not here.

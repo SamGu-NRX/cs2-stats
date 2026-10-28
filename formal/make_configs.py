@@ -113,18 +113,22 @@ def main():
     config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, UserSessions=1), safety)
     config("ClipsLaunchLegacyHlaeCheck", clips | dict(SpawnFails=False, HlaeCheck=False), ["OneLaunchAtATime"])
     # The pipeline's archive lifecycle (Archive.tla)
-    archive = dict(Archives={1, 2}, Crashes=1, RetryFailed=True, CapPressure=True, WorkerFails=True, CheckFirst=True,
-                   LedgerFirst=True)
-    config("ArchiveSafety", archive, ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive",
-                                      "FailedKept", "DeletedRecorded"])
-    config("ArchiveNoCrash", archive | dict(Crashes=0),
-           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded"])
+    # Shipped code: CheckFirst and all three fixes (LedgerFirst, ExpiryRowFirst, EvictionFixed). Each Legacy
+    # configuration turns one of them off and must keep finding the gap it closed.
+    archive = dict(Archives={1, 2}, Crashes=1, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
+                   WorkerFails=True, CheckFirst=True, LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True)
+    every = ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded",
+             "EvictedRedownloadable"]
+    config("ArchiveSafety", archive, every)
+    config("ArchiveEviction", archive | dict(Crashes=0), ["EvictedRedownloadable"])
     config("ArchiveCrashLedger", archive, ["DeletedRecorded"])
-    config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
-    config("ArchiveLegacyLedgerOrder", archive | dict(LedgerFirst=False), ["DeletedRecorded"])
-    config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1),
-           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "DeletedRecorded"],
+    config("ArchiveCrashExpiry", archive, ["ExpiredRecorded"])
+    config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Redownloads=0), every,
            symmetry="Symmetry")
+    config("ArchiveLegacyEviction", archive | dict(Crashes=0, EvictionFixed=False), ["EvictedRedownloadable"])
+    config("ArchiveLegacyLedgerOrder", archive | dict(LedgerFirst=False), ["DeletedRecorded"])
+    config("ArchiveLegacyExpiry", archive | dict(ExpiryRowFirst=False), ["ExpiredRecorded"])
+    config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
     # the HLAE check now covers this schedule too, so both checks come off to show the watcher check's own case
     config("ClipsLaunchLegacyWatcherCheck", clips | dict(Crashes=0, SpawnFails=False, WatcherCheck=False, HlaeCheck=False),
            ["OneLaunchAtATime"])

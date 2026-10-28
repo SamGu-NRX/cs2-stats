@@ -25,6 +25,7 @@ FAIL = {
     "ClipsLaunchUserSession": "EvidenceKept", "ClipsLaunchLegacyWatcherCheck": "OneLaunchAtATime",
     "ClipsLaunchLegacyHlaeCheck": "OneLaunchAtATime",
     "ArchiveLegacyNoCheck": "NoUnaccountedDeletion", "ArchiveLegacyLedgerOrder": "DeletedRecorded",
+    "ArchiveLegacyExpiry": "ExpiredRecorded", "ArchiveLegacyEviction": "EvictedRedownloadable",
 }
 MODULES = ("Capture", "Calls", "Publish", "MapGate", "Plugin", "Pipeline", "ClipsLaunch", "Archive")
 
