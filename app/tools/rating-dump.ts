@@ -1,15 +1,19 @@
 // Writes the engine's per-player-round rows for every pro map joined to HLTV, beside HLTV's own
-// per-round swing, for the Rating 3.0 fits in model/rating3 (fit_params.py, swing_credit_fit.py). Four
+// per-round swing, for the Rating 3.0 fits in model/rating3 (fit_params.py, swing_credit_fit.py). The joins
+// are model/rating3/join_demos.py's (<data>/model-rating3/demo_joins.json, or CS2_DEMO_JOINS): its HLTV page,
+// map_*.json or ocs_map_*.json, and its pairing of SteamIDs with HLTV players, so a renamed player pairs. Four
 // private JSONL files land in <cs2-stats-data>/model-rating3: player-round rows (every measure the
 // engine fills), kill rows (both players' economy state and the swing credits), enemy-hit rows (damage
 // per hit) and each round's win-probability path. Each is written beside its final name and renamed
 // into place at the end, so a reader never sees a half-written file.
 // Usage: pnpm rating-dump
-import { createWriteStream, mkdirSync, renameSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from "node:fs";
 import path from "node:path";
 import { derive, enemyHit, hitDamage } from "../src/stats/derive";
 import { rosterTables } from "../src/stats/roster";
-import { hltvMaps, joinHltv } from "./hltv";
+import { acceptedJoins, joinFromRecord } from "./demo-joins";
+import { HLTV_DIR, parseHltvMap } from "./hltv";
+import { finishPartials } from "./partial-files";
 import { checkOutput } from "./outputs";
 import { DATA_DIR, WINPROB, mapLabel, proMaps } from "./node-read";
 
@@ -28,13 +32,21 @@ const kills = open("rating-kills.private.jsonl");
 const hits = open("rating-hits.private.jsonl");
 const paths = open("rating-winprob.private.jsonl");
 
+const joinsFile = process.env.CS2_DEMO_JOINS ?? path.join(OUT, "demo_joins.json");
+const joins = acceptedJoins(JSON.parse(readFileSync(joinsFile, "utf-8")));
+const found = new Set<string>();
+
 let maps = 0;
 let n = 0;
-console.log(`win probability: ${WINPROB.label}`);
+console.log(`win probability: ${WINPROB.label}; joins: ${joinsFile} (${joins.size} accepted)`);
 for await (const { dir, t } of proMaps()) {
+  const rec = joins.get(mapLabel(dir));
+  if (!rec) continue;
+  found.add(mapLabel(dir));
+  const page = parseHltvMap(path.join(HLTV_DIR, rec.hltv));
+  if (!page) throw new Error(`${rec.hltv}: not a v3 HLTV map page`);
   const f = derive(t, WINPROB);
-  const j = joinHltv(f, hltvMaps());
-  if (!j) continue;
+  const j = joinFromRecord(f.players, rec, page);
   maps++;
   // let the write streams open and drain: derive is synchronous, so without a turn of the event loop
   // every row would wait in memory until the end
@@ -89,8 +101,9 @@ for await (const { dir, t } of proMaps()) {
     }) + "\n");
   }
 }
-await Promise.all(files.map(([s, file]) => new Promise<void>((done, fail) => {
-  s.on("error", fail);
-  s.end(() => { renameSync(`${file}.partial`, file); done(); });
-})));
+// no joined map (a wrong CS2_DEMO_JOINS, an empty demos folder) must not replace the last dump with nothing
+await finishPartials(files, path.join(OUT, "rating-rounds.private.jsonl"),
+  `the rating dump (${maps} of ${joins.size} accepted joins read, no player-round written)`);
+const missing = [...joins.keys()].filter((k) => !found.has(k));
+if (missing.length) console.error(`${missing.length} accepted joins have no complete tables folder now: ${missing.slice(0, 5).join(", ")}`);
 console.log(`joined ${maps} maps, ${n} player-rounds -> ${OUT}`);

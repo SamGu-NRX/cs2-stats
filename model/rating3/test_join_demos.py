@@ -159,5 +159,26 @@ class DateWindowTrust(unittest.TestCase):
                                       "with player id pid-elsewhere"])
 
 
+class PlayerIds(unittest.TestCase):
+    def test_a_page_without_a_players_id_is_not_joined(self):
+        # Review of PR 77: a scoreboard row with no pid was paired as "", which the fits and the learned map read as
+        # an HLTV player, pairing him with nobody. The candidate is refused, naming who has no id.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            t, ct = [f"t{i}" for i in range(1, 6)], [f"c{i}" for i in range(1, 6)]
+            (root / "hltv").mkdir()
+            page = root / "hltv" / "map_8.json"
+            _hltv(page, "8", 1, "Inferno", t, ct, ["t1 killed c1", "c2 killed t2"])
+            data = json.loads(page.read_text(encoding="utf-8"))
+            data["scoreboards"][0]["rows"][2]["pid"] = ""  # t3
+            page.write_text(json.dumps(data), encoding="utf-8")
+            _copy(root, "x-1", "1.16.0")
+            metrics = root / "metrics.json"
+            metrics.write_text(json.dumps({"source_audit": {"sources": [{"file": "map_8.json"}]}}), encoding="utf-8")
+            result = join_demos.join(root, metrics)
+        self.assertEqual(result["accepted"], [])
+        self.assertEqual([n["players"] for r in result["rejected"] for n in r["near"]], ["HLTV lists no player id for ['t3']"])
+
+
 if __name__ == "__main__":
     unittest.main()

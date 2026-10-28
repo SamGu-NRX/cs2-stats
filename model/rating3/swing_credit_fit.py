@@ -29,6 +29,8 @@ import sys
 import numpy as np
 from scipy.optimize import least_squares
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hltv_pages import hltv_pages  # noqa: E402
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
@@ -191,7 +193,7 @@ def defuse_events(hltv: Path) -> list[dict]:
     """Every defuse HLTV credits: its change, the defuser, and the winners' positive credits from the
     events after the plant that moved the round the defusers' way, from HLTV's map files alone."""
     out = []
-    for path in sorted(hltv.glob("map_*.json")):
+    for path in hltv_pages(hltv):
         d = json.loads(path.read_text(encoding="utf-8"))
         if d.get("v") != 3:
             continue

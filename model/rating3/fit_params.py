@@ -23,6 +23,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eco_fit import fit_model as fit_duel_model
+from hltv_pages import hltv_pages
 from side_rating_fit import fit_block as fit_side_block
 from swing_credit_fit import fit_block as fit_swing_credit
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
@@ -81,7 +82,7 @@ def parse_kd(value: str) -> tuple[float, float]:
 def map_rows(root: Path) -> list[dict]:
     """Read displayed total scoreboard values from v3 HLTV map files."""
     rows = []
-    for path in sorted(root.glob("map_*.json")):
+    for path in hltv_pages(root):
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("v") != 3:
             continue
