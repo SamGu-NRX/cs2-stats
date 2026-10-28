@@ -96,7 +96,7 @@ Three proposed fixes are switches, off for the shipped code:
 
 ### Results
 
-`ArchiveSafety` (shipped code, two archives, re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash.
+`ArchiveSafety` (shipped code, two archives, no crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash.
 
 These counterexamples are findings in the shipped code:
 
