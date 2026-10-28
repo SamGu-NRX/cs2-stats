@@ -1,8 +1,11 @@
 // Minimal IndexedDB store for derived match facts and the match list built from them. The cache is
 // rebuildable: deleting it only costs one re-derivation pass.
 const DB = "cs2-stats-cache";
-/** facts: MatchFacts and the file's origin label, by file key; entries: the MatchEntry of the same file. */
-export const STORES = ["facts", "entries"] as const;
+/**
+ * facts: MatchFacts and the file's origin label, by file key; entries: the MatchEntry of the same file;
+ * presence: the worker's presence answers (a map's sampled shape), with the file keys they were folded from.
+ */
+export const STORES = ["facts", "entries", "presence"] as const;
 type Store = (typeof STORES)[number];
 
 let dbp: Promise<IDBDatabase> | null = null;
@@ -10,9 +13,10 @@ let dbp: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    // Version 3 adds the entries store, so a sync reads small entries instead of every match's facts.
-    // Version 2 cached MatchFacts; version 1's summary and position stores held the old engine's output.
-    const req = indexedDB.open(DB, 3);
+    // Version 4 adds the presence store. Version 3 added the entries store, so a sync reads small
+    // entries instead of every match's facts. Version 2 cached MatchFacts; version 1's summary and
+    // position stores held the old engine's output.
+    const req = indexedDB.open(DB, 4);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const s of [...db.objectStoreNames]) if (!(STORES as readonly string[]).includes(s)) db.deleteObjectStore(s);

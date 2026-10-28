@@ -61,7 +61,8 @@ vi.mock("../data/icons", async (orig) => {
 vi.mock("../data/hooks", async (orig) => ({
   ...(await orig<object>()),
   useRollups: (qs: Query[] | null) => done(qs?.length ? qs.map((q) => (rollupOf ? rollupOf(q) : rolled(summary(q)))) : null),
-  useCall: (_method: Method, _args: unknown[] | null) => done(null),
+  // the radar's sampled shape asks for presence (MapArt.tsx); the real engine answers it
+  useCall: (method: Method, args: unknown[] | null) => done(method === "presence" && args ? summary(args[0] as Query).presence : null),
   useMatch: () => done(null),
 }));
 

@@ -1,6 +1,6 @@
 // The dev and preview servers' pro match library (tools/pro-folder.ts): what is listed and what can be
 // read. src-tauri/src/pro.rs has the same rules for the desktop app, with its own tests.
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
@@ -29,6 +29,8 @@ it("lists a map only when every table its COMPLETE names is there, not empty, at
   const l = listPro(lib, null);
   expect(l.files.map((f) => f.file)).toEqual([`pro/s-1/whole/${V}`]);
   expect(l.incomplete).toBe(2);
+  // the library's resolved path, which keys its maps' caches apart from another library's
+  expect(l.library).toBe(realpathSync.native(lib));
 });
 
 it("refuses junctions that lead out of the library, and the app's own data folder", () => {

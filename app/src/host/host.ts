@@ -24,6 +24,11 @@ export interface FileEntry {
   mtime: number;
   /** the user's SteamID64, for an extracted match whose tables do not say which player recorded it */
   pov?: string;
+  /**
+   * the pro library a pro map was listed from (its resolved path): two libraries can hold a map at the
+   * same path, size and time, and the worker's caches must not take one for the other (keys.ts factsKey)
+   */
+  library?: string;
 }
 
 /** One line of an import's progress: a demo starting or ending (extractor/valve_import.py --progress). */
@@ -59,13 +64,15 @@ export interface ProFolder {
   /** how many of the skipped maps are not whole yet: a table missing, empty or short of its listed size */
   incomplete: number;
 }
-interface ProListing extends ProFolder { files: FileEntry[] }
+interface ProListing extends ProFolder { files: FileEntry[]; library: string | null }
 
 /** Lists the pro library without letting it fail the whole match list, as listValveSafely does. */
 async function listProSafely(list: () => Promise<ProListing | null>): Promise<{ folder: ProFolder | null; files: FileEntry[] }> {
   try {
     const p = await list();
-    return p ? { folder: { folder: p.folder, error: p.error, skipped: p.skipped, incomplete: p.incomplete }, files: p.files } : { folder: null, files: [] };
+    if (!p) return { folder: null, files: [] };
+    const library = p.library ?? undefined;
+    return { folder: { folder: p.folder, error: p.error, skipped: p.skipped, incomplete: p.incomplete }, files: p.files.map((f) => ({ ...f, library })) };
   } catch (e) {
     return { folder: { folder: null, error: e instanceof Error ? e.message : String(e), skipped: [], incomplete: 0 }, files: [] };
   }

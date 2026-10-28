@@ -10,8 +10,11 @@ import { DERIVE_VERSION } from "../stats/facts";
 // line null); a version-3 store holds a NoEntry record for every pro map, which must not stand
 export const ENTRY_VERSION = 4;
 
-// A Valve match's facts are derived from the user's point of view (FileEntry.pov), so a different user is a different key.
-export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}${e.pov ? `|pov${e.pov}` : ""}`;
+// A Valve match's facts are derived from the user's point of view (FileEntry.pov), so a different user is a
+// different key; a pro map's come from the library it was listed from (FileEntry.library), so another
+// library's map at the same path, size and time is too. Adding the library changed every pro map's key,
+// which needs no version bump: no older key can match, and a sync deletes records no listed file names.
+export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}${e.pov ? `|pov${e.pov}` : ""}${e.library ? `|lib${e.library}` : ""}`;
 export const entryKey = (factsKey: string, baselinesHash: string) => `${factsKey}|e${ENTRY_VERSION}|b${baselinesHash}`;
 
 /** Whether a match entry held in memory is still the one these keys name: same facts and same baselines. */

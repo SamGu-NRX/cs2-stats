@@ -173,12 +173,26 @@ export function addMatch(s: Summary, f: MatchFacts, filter: Filter): void {
   keep(f.aggression, (x) => foldAggro(s.aggression, x));
   keep(f.information, (x) => foldInfo(s.information, x));
   keep(f.utilq, (x) => foldUtilQ(s.utilq, x));
-  if (!(filter.ownBuy || filter.oppBuy || filter.ownTier || filter.spawns || filter.weapons || filter.rounds)) {
-    const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
-    for (const x of f.presence) {
-      if (ids.has(f.players[x.pi].id) && (!filter.sides || filter.sides.includes(x.side))) foldPresence((s.presence[f.match.map] ??= { cells: {}, places: {} }), x);
-    }
+  foldMatchPresence(s.presence, f, filter);
+}
+
+/** Where the filter's players stood alive in one match, by map: addMatch's last step. */
+function foldMatchPresence(presence: Summary["presence"], f: MatchFacts, filter: Filter): void {
+  if (filter.ownBuy || filter.oppBuy || filter.ownTier || filter.spawns || filter.weapons || filter.rounds) return;
+  const ids = new Set(Array.isArray(filter.player) ? filter.player : [filter.player]);
+  for (const x of f.presence) {
+    if (ids.has(f.players[x.pi].id) && (!filter.sides || filter.sides.includes(x.side))) foldPresence((presence[f.match.map] ??= { cells: {}, places: {} }), x);
   }
+}
+
+/**
+ * The presence addMatch would add for one match, and nothing else: a Summary's `presence` without
+ * folding the rest. A radar background needs only this. Its query names every player on the map, so
+ * a whole rollup for it folded every player's aim and movement, then sorted them for medians it never
+ * showed: 0.3 to 0.6 s of worker time on opening a pro match, in CPU profiles of the release build.
+ */
+export function addPresence(presence: Summary["presence"], f: MatchFacts, filter: Filter): void {
+  if (keptRounds(f, filter).length) foldMatchPresence(presence, f, filter);
 }
 
 /** The grenades a filter keeps, with their match's map: the landing map's points. */
