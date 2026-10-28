@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.16.0"
+EXTRACTOR_VERSION = "1.17.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -1369,6 +1369,75 @@ THROW_TYPES = {"flashbang": {"flashbang"}, "hegrenade": {"he"}, "smokegrenade": 
                "decoy": {"decoy"}}
 
 
+def projectiles(g: pd.DataFrame) -> tuple[pd.Series, pd.DataFrame]:
+    """Split grenade trajectory rows (tick, entity_id, entity_serial, type, x, y, z, sorted by entity, serial and
+    tick) into projectiles: a new one where the entity or serial changes or a tick is missing. Sets g["projectile"];
+    returns (the rows that start a projectile, one row per projectile with its first and last tick and position)."""
+    key = ["entity_id", "entity_serial"]
+    newp = ((g[key] != g[key].shift()).any(axis=1)) | (g.tick - g.tick.shift() > 1)
+    g["projectile"] = newp.cumsum().astype("int32")
+    proj = g.groupby("projectile").agg(entity_id=("entity_id", "first"), entity_serial=("entity_serial", "first"),
+                                       type=("type", "first"),
+                                       first_tick=("tick", "min"), last_tick=("tick", "max"),
+                                       start_x=("x", "first"), start_y=("y", "first"), start_z=("z", "first"),
+                                       end_x=("x", "last"), end_y=("y", "last"),
+                                       end_z=("z", "last")).reset_index()
+    return newp, proj
+
+
+def recovered_flash_detonations(proj: pd.DataFrame, recorded: np.ndarray) -> pd.DataFrame:
+    """Flashbang detonations the recording skipped: (tick, blind_tick, entity_id, steamid, x, y, z), tick the skipped
+    detonation tick, blind_tick the next recorded tick, where the flash's blinds show.
+
+    A flashbang's last position is the tick before its flashbang_detonate (every detonation of an OpenCS2 Ancient
+    demo). On that demo the recording skipped tick 90371: flashbang 93's last position is 90370, no detonation event
+    exists, and three players' flash durations changed on 90372. A flashbang qualifies only if its trajectory ends
+    there for good, the last segment of its entity (id and serial): trajectories split where ticks are missing, so a
+    flash still flying after the gap has a later segment and did not detonate. Its detonation tick must be one the
+    recording skipped. proj: projectile rows (projectile, type, entity_id, entity_serial, steamid of the linked thrower
+    or null, last_tick, end_x, end_y, end_z); recorded: the demo's recorded ticks, sorted.
+    """
+    f = proj[proj.type == "flashbang"]
+    f = f[f.projectile.to_numpy() == f.groupby(["entity_id", "entity_serial"]).projectile.transform("max").to_numpy()]
+    det = f.last_tick.to_numpy(dtype=np.int64) + 1
+    at = np.searchsorted(recorded, det, side="left")
+    nxt = recorded[np.minimum(at, len(recorded) - 1)] if len(recorded) else np.full(len(f), -1)
+    skipped = (at < len(recorded)) & (nxt != det)
+    return pd.DataFrame({"tick": det, "blind_tick": nxt, "entity_id": f.entity_id.to_numpy(), "steamid": f.steamid.array,
+                         "x": f.end_x.to_numpy(), "y": f.end_y.to_numpy(), "z": f.end_z.to_numpy()})[skipped] \
+        .reset_index(drop=True)
+
+
+def credit_blinds(blinds: list[tuple], detonations: pd.DataFrame, recovered: pd.DataFrame) -> tuple[list[dict], pd.DataFrame]:
+    """(blind rows, the recovered detonations they use) for the rebuilt blinds (tick, victim, duration, x, y, z).
+
+    A blind goes to the flashbang detonation on its tick nearest the victim (ambiguous when there are several). With
+    none on its tick, it goes to the one flashbang whose detonation the recording skipped just before it
+    (recovered_flash_detonations); the blinds table then names that flash, and its detonation is added to
+    grenade_events, flagged recovered, so a blind is never linked to an older flash of the same entity id. With no
+    such flash, or several, which flash blinded the player is unknown, and this raises with the reason.
+    detonations: flash_detonate rows (tick, entity_id, steamid, x, y, z).
+    """
+    rows, used = [], set()
+    for t_, sid, dur, vx, vy, vz in blinds:
+        c = detonations[detonations.tick == t_]
+        amb = len(c) > 1
+        if c.empty:
+            c = recovered[recovered.blind_tick == t_]
+            if len(c) != 1:
+                raise RuntimeError(f"a blind of {sid} on tick {t_} has no flashbang detonation on its tick, and "
+                                   f"{len(c)} flashbangs ({sorted(int(e) for e in c.entity_id)}) detonated on a tick the "
+                                   "recording skipped just before it; which flash blinded him is unknown")
+            used.add(c.index[0])
+        dist = np.sqrt((c.x - vx) ** 2 + (c.y - vy) ** 2 + (c.z - vz) ** 2)
+        i = int(np.argmin(dist.to_numpy()))
+        # Column access keeps the UInt64 steamid exact; a mixed-dtype row could upcast it to float.
+        att, ent = c.steamid.iloc[i], c.entity_id.iloc[i]
+        rows.append(dict(tick=t_, attacker_steamid=None if pd.isna(att) else int(att), victim_steamid=sid,
+                         duration=dur, flash_entity_id=ent, ambiguous=amb, v_x=vx, v_y=vy, v_z=vz))
+    return rows, recovered.loc[sorted(used)]
+
+
 def link_throws(throws: pd.DataFrame, proj: pd.DataFrame, rate: float):
     """Match each grenade_thrown event to a projectile of the same type that appears within 0.5 s,
     choosing the one whose first position is nearest the thrower's eye. Each projectile is used once."""
@@ -1856,14 +1925,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         else:
             g = (ctx.tables["awpy"]["grenades"].select(["tick", "entity_id", "entity_serial", "type", "x", "y", "z"])
                  .sort(["entity_id", "entity_serial", "tick"]).to_pandas())
-        key = ["entity_id", "entity_serial"]
-        newp = ((g[key] != g[key].shift()).any(axis=1)) | (g.tick - g.tick.shift() > 1)
-        g["projectile"] = newp.cumsum().astype("int32")
-        proj = g.groupby("projectile").agg(entity_id=("entity_id", "first"), type=("type", "first"),
-                                           first_tick=("tick", "min"), last_tick=("tick", "max"),
-                                           start_x=("x", "first"), start_y=("y", "first"), start_z=("z", "first"),
-                                           end_x=("x", "last"), end_y=("y", "last"),
-                                           end_z=("z", "last")).reset_index()
+        newp, proj = projectiles(g)
 
         thr = stamp(ev("grenade_thrown"))
         thr = thr[thr["round"] > 0].reset_index(drop=True)
@@ -1907,7 +1969,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                                      "x": col(d_, "x"), "y": col(d_, "y"), "z": col(d_, "z")}))
         gev = stamp(pd.concat(gev, ignore_index=True).sort_values("tick")) if gev else stamp(
             pd.DataFrame(columns=["tick", "event", "entity_id", "steamid", "x", "y", "z"]))
-        gev = gev[gev["round"] > 0]
+        gev = gev[gev["round"] > 0].assign(recovered=False)
         T["grenade_events"] = gev
 
         def lifetimes(start_ev, end_evs):
@@ -2019,20 +2081,15 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         side_of = {}
         for r in econ.itertuples():
             side_of[(int(r.round), int(r.steamid))] = r.side
-        brow = []
-        for t_, sid, dur, vx, vy, vz in blinds:
-            c = fd[fd.tick == t_]
-            amb = len(c) > 1
-            if len(c) == 0:
-                att, ent = None, None
-            else:
-                dist = np.sqrt((c.x - vx) ** 2 + (c.y - vy) ** 2 + (c.z - vz) ** 2)
-                i = int(np.argmin(dist.to_numpy()))
-                # Column access keeps the UInt64 steamid exact; a mixed-dtype row could upcast it to float.
-                att, ent = c.steamid.iloc[i], c.entity_id.iloc[i]
-                att = None if pd.isna(att) else int(att)
-            brow.append(dict(tick=t_, attacker_steamid=att, victim_steamid=sid, duration=dur,
-                             flash_entity_id=ent, ambiguous=amb, v_x=vx, v_y=vy, v_z=vz))
+        recorded = np.unique(np.concatenate([p.tick.to_numpy(dtype=np.int64) for p in state_parts])) \
+            if state_parts else np.array([], dtype=np.int64)
+        brow, recovered = credit_blinds(blinds, fd, recovered_flash_detonations(proj, recorded))
+        if len(recovered):  # their detonations, which the event stream lost with the skipped tick
+            back = stamp(pd.DataFrame({"tick": recovered.tick, "event": "flash_detonate", "entity_id": recovered.entity_id,
+                                       "steamid": recovered.steamid.array, "x": recovered.x, "y": recovered.y,
+                                       "z": recovered.z, "recovered": True}))
+            T["grenade_events"] = pd.concat([T["grenade_events"], back], ignore_index=True) \
+                .sort_values("tick", kind="stable").reset_index(drop=True)
         bl = stamp(pd.DataFrame(brow, columns=["tick", "attacker_steamid", "victim_steamid", "duration",
                                                "flash_entity_id", "ambiguous", "v_x", "v_y", "v_z"]))
         # From the Python values, not the frame columns: a None attacker (no detonation on that tick)
