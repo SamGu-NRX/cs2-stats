@@ -1611,6 +1611,67 @@ def test_failed_dir_drops_the_oldest_beyond_its_cap(tmp_path, monkeypatch):
     assert [json.loads(x)["slug"] for x in dp.DROPPED.read_text().splitlines()] == ["slug-old"]
 
 
+def test_an_evicted_failure_is_extracted_when_downloaded_again(tmp_path, monkeypatch):
+    # The cap deleted the kept failure but left its last ledger row saying failed, so scan skipped a new download
+    # of the same archive forever (formal/ArchiveLegacyEviction).
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    a = _failed_archive(tmp_path, "r1")
+    p.archives[a.id] = a
+    p.fail_archive(a, "deaths")
+    monkeypatch.setattr(dp, "MAX_FAILED_GB", 1e-12)
+    p.enforce_failed_cap()
+    assert list(dp.FAILED_DIR.iterdir()) == []
+    (dp.DOWNLOADS / "r1").write_bytes(dp.RAR_MAGIC + bytes(10))
+    p = dp.Pipeline()  # a restart reads the ledger back
+    p.scan(0.0)
+    p.scan(16.0)
+    _hashed(p)
+    assert list(p.archives) == ["r1"]
+
+
+def test_the_failed_cap_never_deletes_a_failure_being_retried(tmp_path, monkeypatch):
+    # Deleting the folder under a retry fails the retry again, and its ledger row then names a deleted folder.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline(retry_failed=True)
+    for name in ("r0", "r1"):
+        a = _failed_archive(tmp_path, name)
+        p.archives[a.id] = a
+        p.fail_archive(a, "deaths")
+    os.utime(dp.FAILED_DIR / "slug-r1", (1000, 1000))  # the retried one is the oldest
+    retry = dp.FAILED_DIR / "slug-r1" / "archive.rar"
+    p.archives["slug-r1"] = dp.Archive(rar=retry, id="slug-r1", slug="slug-r1", state="parsing")
+    monkeypatch.setattr(dp, "MAX_FAILED_GB", 1e-12)
+    p.enforce_failed_cap()
+    assert retry.exists() and not (dp.FAILED_DIR / "slug-r0").exists()
+    assert p.ledger["r0"]["status"] == "dropped" and p.ledger["r1"]["status"] == "failed"
+
+
+def test_held_parts_are_recorded_as_expired_before_they_are_deleted(tmp_path, monkeypatch):
+    # Deleting first, a crash before the row left the parts gone and parts.jsonl still saying held
+    # (formal/ArchiveLegacyExpiry).
+    import shutil
+
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    (d / "kills.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p = dp.Pipeline()
+
+    class Crash(BaseException):
+        pass
+
+    def crash(*args, **kwargs):
+        raise Crash
+
+    monkeypatch.setattr(shutil, "rmtree", crash)
+    with pytest.raises(Crash):
+        p.enforce_parts_cap()
+    row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
+    assert (row["status"], row["parts"]) == ("expired", [str(d)])
+
+
 def test_a_truncated_demo_is_logged_and_never_kept_or_retried(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     p = dp.Pipeline(retry_failed=True)
@@ -2768,7 +2829,7 @@ def _finished_archive(tmp_path, monkeypatch, name="1f2e3d4c-5b6a-4978-8a9b-0c1d2
 
 def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_deletes_a_leftover(tmp_path, monkeypatch):
     # fails if the RAR is deleted before the done row is written (a crash between them left the maps published
-    # and no row; formal/Archive.tla ArchiveCrashLedger), or if a restart leaves a done archive's RAR in place
+    # and no row; formal/ArchiveLegacyLedgerOrder), or if a restart leaves a done archive's RAR in place
     p, rar = _finished_archive(tmp_path, monkeypatch)
     real = dp.remove_finished_rar
 

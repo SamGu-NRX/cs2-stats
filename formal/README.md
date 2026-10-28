@@ -21,6 +21,11 @@ listed in CLIPS_AND_ARCHIVES.md.
 python -I formal/check_models.py --while-gaming ClipsLaunchSafety ArchiveSafety
 ```
 
+CI's "Formal models (TLC)" job downloads the pinned jar, checks its SHA-256 and runs
+`python -I formal/check_models.py --all`: every configuration of every module. A configuration listed in
+`check_models.py`'s `FAIL` must produce a counterexample on the property named there, so a model that can no
+longer fail breaks the job like one that fails unexpectedly.
+
 ## Publication, readers, pipeline recovery and engine callbacks
 
 The audit is in [AUDIT.md](AUDIT.md): every requested invariant has a bounded

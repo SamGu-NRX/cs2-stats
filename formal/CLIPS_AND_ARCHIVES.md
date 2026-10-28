@@ -1,6 +1,6 @@
 # Clips launch protocol and pipeline archive lifecycle
 
-Two state machines with real concurrency risk, model-checked at main `b5868a2`: the app's clips launch, settle and lock protocol (`ClipsLaunch.tla`) and the demo pipeline's archive lifecycle (`Archive.tla`). Exact counts for every configuration are in [RESULTS.md](RESULTS.md); counterexample traces are in [WITNESSES.md](WITNESSES.md). Each `.cfg` states its bounds; `make_configs.py` generates them. No application or extractor code changed. Proposed fixes appear in the models as switches that are off for the shipped code.
+Two state machines with real concurrency risk, model-checked: the app's clips launch, settle and lock protocol (`ClipsLaunch.tla`) and the demo pipeline's archive lifecycle (`Archive.tla`). Exact counts for every configuration are in [RESULTS.md](RESULTS.md); counterexample traces are in [WITNESSES.md](WITNESSES.md). Each `.cfg` states its bounds; `make_configs.py` generates them. The models first ran against main `b5868a2` and found five gaps. The code now closes them. Each fix is a switch in its model, on for the shipped code, and a `Legacy` configuration turns it off and must still produce the counterexample. CI runs every configuration and fails if a `Legacy` one stops failing.
 
 ## ClipsLaunch
 
@@ -19,11 +19,11 @@ Abstractions:
 
 | Model action | Code |
 | --- | --- |
-| `LaunchBegin` (settle earlier launches, refuse while one is pending, CS2 runs or a watcher runs) | [mod.rs:606](../app/src-tauri/src/clips/mod.rs#L606) `prepare_launch`, [612](../app/src-tauri/src/clips/mod.rs#L612), [618](../app/src-tauri/src/clips/mod.rs#L618) |
+| `LaunchBegin` (settle earlier launches, refuse while one is pending, a watcher runs, CS2 runs or HLAE runs) | [mod.rs:606](../app/src-tauri/src/clips/mod.rs#L606) `prepare_launch`, [612](../app/src-tauri/src/clips/mod.rs#L612), [618](../app/src-tauri/src/clips/mod.rs#L618), [624](../app/src-tauri/src/clips/mod.rs#L624) |
 | `LaunchRecord`, `LaunchSpawn`, `LaunchPids`, `LaunchHandoff` | [mod.rs:652](../app/src-tauri/src/clips/mod.rs#L652) `start_launch` |
-| `WatcherEnd` | [launch.rs:232](../app/src-tauri/src/clips/launch.rs#L232) `watch` |
+| `WatcherEnd` | [launch.rs:237](../app/src-tauri/src/clips/launch.rs#L237) `watch` |
 | `Scan` (settle, then accept proven takes) | [mod.rs:438](../app/src-tauri/src/clips/mod.rs#L438) `settle_launches`, [426](../app/src-tauri/src/clips/mod.rs#L426) `newest_proven_take` |
-| `SettledResult`, `Runs`, `Owner`, `Proven` | [launch.rs:496](../app/src-tauri/src/clips/launch.rs#L496) `settle`, [474](../app/src-tauri/src/clips/launch.rs#L474) `running`, [533](../app/src-tauri/src/clips/launch.rs#L533) `owner`, [539](../app/src-tauri/src/clips/launch.rs#L539) `take_proven` |
+| `SettledResult`, `Runs`, `Owner`, `Proven` | [launch.rs:501](../app/src-tauri/src/clips/launch.rs#L501) `settle`, [479](../app/src-tauri/src/clips/launch.rs#L479) `running`, [538](../app/src-tauri/src/clips/launch.rs#L538) `owner`, [544](../app/src-tauri/src/clips/launch.rs#L544) `take_proven` |
 
 ### Invariants
 
@@ -35,17 +35,12 @@ Abstractions:
 
 ### Results
 
-The shipped code (`WatcherCheck` and `WatcherSettles` on, `HlaeCheck` off) passes every safety invariant without crashes. That holds with HLAE failing to start, `pids.json` failing to publish, two instances, and a user session; `ClipsLaunchSafety`, `TwoInstances` and `UserSessionSafety` pass.
+The shipped code (`WatcherCheck`, `WatcherSettles` and `HlaeCheck` on) passes every safety invariant with an instance crash at any step, HLAE failing to start, `pids.json` failing to publish, two instances, and a user session. `ClipsLaunchSafety`, `TwoInstances`, `UserSessionSafety`, `CrashGap` and `Wide` pass.
 
-Two counterexamples are findings:
+- **`ClipsLaunchCrashGap` passes since the HLAE check.** Before it, launch 1 could start HLAE and the app crash before publishing `pids.json`. The next launch settled launch 1 as damaged; nothing was pending, no CS2 ran yet and no watcher survived, so launch 2 started beside launch 1's HLAE. `prepare_launch` now refuses while any `HLAE.exe` runs, as it does for `cs2.exe`. `ClipsLaunchLegacyHlaeCheck` turns the check off and keeps finding that trace.
+- **`ClipsLaunchUserSession` violates `EvidenceKept`, by design.** The director records the clip to its end tick, CS2 and HLAE exit, and the user starts CS2 before the watcher's next two-second poll. That session replaces `console.log`, so the launch settles as stopped and the take never counts. The take is lost, never misattributed: `NoTakeWithoutEvidence` and `OwnerIsCreator` hold in the same configuration. The Clips page's render dialog and its waiting note tell the user to keep CS2 closed until the page stops waiting.
 
-- **`ClipsLaunchCrashGap` violates `OneLaunchAtATime`.**
-  - **The trace:** launch 1 starts HLAE, and the app crashes before it publishes `pids.json`. The next launch settles launch 1 as damaged (no recorded HLAE, by design). Nothing is pending, no CS2 runs yet, and the restarted app has no watchers, so launch 2 starts while launch 1's HLAE runs.
-  - **The window:** the crash must land between `spawn()` and the `pids.json` rename, and the relaunch must come before that HLAE starts CS2.
-  - **Proposed fix (not applied):** also refuse while any `HLAE.exe` runs, as `prepare_launch` already does for `cs2.exe`. `ClipsLaunchHlaeCheck`, `ClipsLaunchHlaeCheckTwoInstances` and `ClipsLaunchWide` model that fix, and every invariant holds.
-- **`ClipsLaunchUserSession` violates `EvidenceKept`.** The director records the clip to its end tick, CS2 and HLAE exit, and the user starts CS2 before the watcher's next two-second poll. That session replaces `console.log`, so the launch settles as stopped and the take never counts. The take is lost, never misattributed: `NoTakeWithoutEvidence` and `OwnerIsCreator` hold in the same configuration.
-
-`ClipsLaunchLegacyWatcherCheck` turns off the check that #62 added (refusing a launch while a watcher runs) and reproduces the regression found in that PR's review: a launch whose `pids.json` failed is already settled as damaged, and a second launch starts beside its HLAE.
+`ClipsLaunchLegacyWatcherCheck` turns off both the HLAE check and the check that #62 added (refusing a launch while a watcher runs), without a crash, and reproduces the regression found in that PR's review: a launch whose `pids.json` failed is already settled as damaged, and a second launch starts beside its HLAE. The HLAE check alone also catches that schedule, so it comes off too.
 
 ### Bounds and assumptions
 
@@ -69,21 +64,22 @@ The pipeline is one process, and the HTTP port admits one instance. Its main loo
 
 Each archive holds one whole map and one map recorded as two parts.
 
-| Model action | Code (main `b5868a2`) |
+| Model action | Code |
 | --- | --- |
-| `Scan`: a downloads RAR whose last row is not done or failed; with `--retry-failed`, a `failed/` RAR not yet tried in this run, even before its ledger row exists | [demo_pipeline.py:974-982](../extractor/demo_pipeline.py#L974) |
-| `Hash`, `Extract`, `Parse` | [1010](../extractor/demo_pipeline.py#L1010) `poll_hashes`, extraction and `finish_job` |
-| `Stitch`, `Check` | [1325](../extractor/demo_pipeline.py#L1325) `stitch_parts`, [1302](../extractor/demo_pipeline.py#L1302), [1358](../extractor/demo_pipeline.py#L1358) `unaccounted` |
-| `RemoveWork`, `RemoveRar`, `LedgerDone` | [1289](../extractor/demo_pipeline.py#L1289) `finish_archives`, [1314](../extractor/demo_pipeline.py#L1314), [1319](../extractor/demo_pipeline.py#L1319) |
-| `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1404-1458](../extractor/demo_pipeline.py#L1404) `fail_archive`, [1450](../extractor/demo_pipeline.py#L1450) |
-| `CapFirst`, `CapSecond`: delete the held parts, then write the expired row | [1376-1403](../extractor/demo_pipeline.py#L1376) `enforce_parts_cap`, [1390](../extractor/demo_pipeline.py#L1390), [1397](../extractor/demo_pipeline.py#L1397) |
-| `EvictRecord`, `EvictDelete`: the `failed_dropped.jsonl` row, then the folder goes; the ledger keeps saying failed | [1492-1510](../extractor/demo_pipeline.py#L1492) `enforce_failed_cap` |
+| `Scan`: a downloads RAR whose last row is not done or failed; with `--retry-failed`, a `failed/` RAR not yet tried in this run, even before its ledger row exists | [demo_pipeline.py:984-992](../extractor/demo_pipeline.py#L984) |
+| `Hash`, `Extract`, `Parse` | [1020](../extractor/demo_pipeline.py#L1020) `poll_hashes`, extraction and `finish_job` |
+| `Stitch`, `Check` | [1369](../extractor/demo_pipeline.py#L1369) `stitch_parts`, [1312](../extractor/demo_pipeline.py#L1312), [1402](../extractor/demo_pipeline.py#L1402) `unaccounted` |
+| `RemoveWork`, `LedgerDone`, `RemoveRar` | [1299](../extractor/demo_pipeline.py#L1299) `finish_archives`, the row at [1328](../extractor/demo_pipeline.py#L1328), then the RAR at [1331](../extractor/demo_pipeline.py#L1331) |
+| `Recover`: a done archive's leftover RAR is deleted at a start, if its size and SHA-256 match the row | [1339](../extractor/demo_pipeline.py#L1339) `recover_finished` |
+| `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1461-1515](../extractor/demo_pipeline.py#L1461) `fail_archive`, [1507](../extractor/demo_pipeline.py#L1507) |
+| `CapFirst`, `CapSecond`: write the expired row, then delete the held parts | [1420](../extractor/demo_pipeline.py#L1420) `enforce_parts_cap`, the row at [1446](../extractor/demo_pipeline.py#L1446), the parts at [1451](../extractor/demo_pipeline.py#L1451) |
+| `EvictRecord`, `EvictDelete`: skip a failure being retried; write the `failed_dropped.jsonl` row and a `dropped` ledger row, then delete the folder | [1549](../extractor/demo_pipeline.py#L1549) `enforce_failed_cap`, [1557](../extractor/demo_pipeline.py#L1557), [1574](../extractor/demo_pipeline.py#L1574), [1579](../extractor/demo_pipeline.py#L1579) |
 
-Three proposed fixes are switches, off for the shipped code:
+Three fixes are switches, on for the shipped code:
 
 - `LedgerFirst`: the done row before the RAR goes, and a start deletes a done archive's leftover RAR.
 - `ExpiryRowFirst`: the expired row before the parts go.
-- `EvictionFixed`: `enforce_failed_cap` skips kept failures still in flight and writes a ledger row before deleting.
+- `EvictionFixed`: `enforce_failed_cap` skips a kept failure being retried (except the archive failing now, which is no longer in flight) and writes a `dropped` ledger row before deleting.
 
 ### Invariants
 
@@ -96,15 +92,14 @@ Three proposed fixes are switches, off for the shipped code:
 
 ### Results
 
-`ArchiveSafety` (shipped code, two archives, no crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash.
+The shipped code (`ArchiveSafety`: two archives, one crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant, and so does `ArchiveWide` with three archives and symmetry reduction. `ArchiveEviction`, `ArchiveCrashLedger` and `ArchiveCrashExpiry` check the property each gap broke.
 
-These counterexamples are findings in the shipped code:
+Each `Legacy` configuration turns one fix off and must keep failing, on the code as it was at `b5868a2`:
 
-- **`ArchiveEviction` violates `EvictedRedownloadable`.** `enforce_failed_cap` deletes a kept failure but leaves its ledger saying failed, so a later download of the same archive is skipped forever. The proposed fix also skips kept failures that are in flight. Without that, a retry in flight can lose its folder, fail again, and leave the same state; TLC found that case with only the ledger row added.
-- **`ArchiveCrashLedger` violates `DeletedRecorded`.** A crash between deleting the RAR ([1314](../extractor/demo_pipeline.py#L1314), or a retried failure's folder at [1312](../extractor/demo_pipeline.py#L1312)) and appending the done row ([1319](../extractor/demo_pipeline.py#L1319)) leaves the maps published with no done row.
-- **`ArchiveCrashExpiry` violates `ExpiredRecorded`.** A crash between deleting held parts ([1390](../extractor/demo_pipeline.py#L1390)) and writing their expired row ([1397](../extractor/demo_pipeline.py#L1397)) leaves the parts gone and `parts.jsonl` still saying held, with no record of the deletion.
-
-`ArchiveFixed` turns on all three proposed fixes, with one crash, and passes every invariant. `ArchiveWide` checks the same with three archives and symmetry reduction. `ArchiveLegacyNoCheck` skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
+- **`ArchiveLegacyEviction` violates `EvictedRedownloadable`, without a crash.** `enforce_failed_cap` deleted a kept failure but left its ledger saying failed, so a later download of the same archive was skipped forever. A ledger row alone isn't enough: TLC then found the cap evicting a retried failure still in flight, which fails again and leaves the same state. Hence both halves of the fix.
+- **`ArchiveLegacyLedgerOrder` violates `DeletedRecorded`.** A crash between deleting the RAR and appending the done row left the maps published with no done row.
+- **`ArchiveLegacyExpiry` violates `ExpiredRecorded`.** A crash between deleting held parts and writing their expired row left the parts gone and `parts.jsonl` still saying held.
+- **`ArchiveLegacyNoCheck`** skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
 
 ### Bounds, assumptions and exclusions
 
@@ -114,4 +109,5 @@ These counterexamples are findings in the shipped code:
 - `due_for_retry` is assumed true for a kept failure.
 - The ledger is keyed by archive, though the code keys a retried failure by its `failed/` folder name.
 - Recovery at a start is modelled as possible whenever the archive is not in flight, a superset of "at a start". The code also deletes only a file matching the done row's size and SHA-256.
+- The eviction's two appends (`failed_dropped.jsonl`, then the ledger) are one model step. A crash between them leaves the folder in place, and a later pass over the cap evicts it again.
 - **Double publication is not covered:** "published" is one boolean per map. Versions, CURRENT, readers and replacing older extractions are in `Publish.tla` and `Pipeline.tla`, not here.

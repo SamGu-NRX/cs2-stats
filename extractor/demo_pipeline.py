@@ -19,6 +19,7 @@ archive that the browser also saves to Windows Downloads (download_copies.py).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import logging.handlers
@@ -1323,7 +1324,7 @@ class Pipeline:
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
             # The done row goes before the RAR: a crash between them leaves a done archive whose RAR is still
             # there, which recover_finished deletes at the next start. The other order left the maps published
-            # with no row for the archive (formal/Archive.tla, ArchiveCrashLedger).
+            # with no row for the archive (formal/ArchiveLegacyLedgerOrder).
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
             try:
@@ -1430,17 +1431,30 @@ class Pipeline:
                 return
             if d.name in active:
                 continue
-            removed = [m for m in sorted(x for x in d.iterdir() if x.is_dir()) if stitch.delete_part(m)]
-            if not removed:
-                continue
+            # The expired row is written under the parts' locks before they go: deleting first, a crash before
+            # the row left the parts gone and parts.jsonl still saying held (formal/ArchiveLegacyExpiry).
+            with contextlib.ExitStack() as locks:
+                taken = []
+                for m in sorted(x for x in d.iterdir() if x.is_dir()):
+                    try:
+                        locks.enter_context(extract.map_lock(m, wait=False))
+                    except extract.MapLocked:
+                        continue
+                    taken.append(m)
+                if not taken:
+                    continue
+                append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
+                    map=str(DEMOS_DIR / d.name), parts=[str(m) for m in taken], status="expired",
+                    reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
+                    checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                for m in taken:
+                    shutil.rmtree(m, ignore_errors=True)
+                    if m.exists():
+                        log.error("could not delete all of the expired part %s; the next pass tries again", m)
             if not any(x.is_dir() for x in d.iterdir()):
                 safe_rmtree(d, ignore_errors=True)
             self.outputs_changed()
             total -= sizes[d]
-            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
-                map=str(DEMOS_DIR / d.name), parts=[str(m) for m in removed], status="expired",
-                reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
-                checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
             log.warning("parts/ over %.0f GB; deleted the held parts of %s (%.1f MB)", MAX_PARTS_GB, d.name,
                         sizes[d] / 1e6)
 
@@ -1533,20 +1547,35 @@ class Pipeline:
                      f" ({r['reason']})" if r["reason"] else "")
 
     def enforce_failed_cap(self) -> None:
-        """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each."""
+        """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each.
+
+        A failure being retried right now is skipped: deleting its folder under it would fail the retry again and
+        record the deleted folder as kept (TLC found this with only the ledger row below added). Before a folder
+        goes, every archive whose last ledger row is a failure kept there gets a "dropped" row, so scan extracts a
+        new download of it instead of skipping it as failed forever (formal/ArchiveLegacyEviction)."""
         self.outputs_changed()
-        kept = sorted((d for d in FAILED_DIR.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
+        in_flight = {a.rar.parent for a in self.archives.values() if a.rar.parent.parent == FAILED_DIR}
+        kept = sorted((d for d in FAILED_DIR.iterdir() if d.is_dir() and d not in in_flight),
+                      key=lambda d: d.stat().st_mtime)
         sizes = {d: tree_bytes(d) for d in kept}
-        total = sum(sizes.values())
+        total = sum(sizes.values()) + sum(tree_bytes(d) for d in in_flight if d.exists())
         for d in kept:
             if total <= MAX_FAILED_GB * 1e9:
                 return
             info = {}
             if (d / "reason.json").exists():
                 info = json.loads((d / "reason.json").read_text(encoding="utf-8"))
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             append_jsonl(DROPPED, dict(id=info.get("id", d.name), slug=info.get("slug", d.name),
                                        dems=info.get("dems"), bytes=sizes[d], reason=str(info.get("reason"))[:4000],
-                                       dropped_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                                       dropped_utc=now))
+            for aid in [aid for aid, rec in self.ledger.items()
+                        if rec.get("status") == "failed" and rec.get("kept") and Path(rec["kept"]) == d]:
+                rec = dict(id=aid, status="dropped", slug=self.ledger[aid].get("slug"), kept=None, retry=False,
+                           reason=f"failed/ over {MAX_FAILED_GB:.0f} GB; the kept failure was deleted",
+                           finished_utc=now)
+                append_jsonl(LEDGER, rec)
+                self.ledger[aid] = rec
             safe_rmtree(d, ignore_errors=True)
             total -= sizes[d]
             log.warning("failed/ over %.0f GB; deleted the oldest kept failure %s (%.0f MB)", MAX_FAILED_GB, d.name,
