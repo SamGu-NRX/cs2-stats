@@ -135,5 +135,29 @@ class OneDemoPerHltvMap(unittest.TestCase):
                 self.assertEqual((result["counts"]["accepted"], result["counts"]["duplicates"]), (1, 1))
 
 
+class DateWindowTrust(unittest.TestCase):
+    def test_a_wrong_match_identical_in_every_kill_is_refused_only_by_a_learned_pair(self):
+        # Review 2 of PR 70: a demo with no HLTV match id joins by the date window. With its own scoreboard not saved,
+        # another match's page with the same rosters, round winners and kills passes every check. A learned pair that
+        # puts a known player on another HLTV player refuses it; with no learned evidence it is accepted, the residual
+        # SPEC.md states.
+        cases = (({"1": "pid-elsewhere"}, []), ({"1": "pid-t1"}, ["map_8.json"]), ({}, ["map_8.json"]))
+        for learned, accepted in cases:
+            with self.subTest(learned=learned), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                t, ct = [f"t{i}" for i in range(1, 6)], [f"c{i}" for i in range(1, 6)]
+                (root / "hltv").mkdir()
+                _hltv(root / "hltv" / "map_8.json", "8", 1, "Inferno", t, ct, ["t1 killed c1", "c2 killed t2"])
+                _copy(root, "x-1", "1.16.0")
+                metrics = root / "metrics.json"
+                metrics.write_text(json.dumps({"source_audit": {"sources": [{"file": "map_8.json"}]}}), encoding="utf-8")
+                result = join_demos.join(root, metrics, learned)
+                self.assertEqual([a["hltv"] for a in result["accepted"]], accepted)
+                if not accepted:
+                    self.assertEqual([n["players"] for r in result["rejected"] for n in r["near"]],
+                                     ["t1 would be HLTV t1 (player id pid-t1), but an earlier join paired that SteamID "
+                                      "with player id pid-elsewhere"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -199,6 +199,20 @@ def ids_index(root: Path, by_map: dict) -> tuple[dict, list[dict]]:
     return out, unreadable
 
 
+def learned_contradiction(pairs: dict[int, str], names: dict[int, str], candidate: dict,
+                          learned: dict[str, str]) -> str | None:
+    """Why a date-window candidate is refused by learned pairs, or None: a player whose SteamID an earlier join paired
+    with one HLTV player id would be another HLTV player here. Without the HLTV match id, the date window and the
+    kills are the only evidence a page is this demo's game, so a known player who disagrees refuses it. Learned pairs
+    only narrow this path; their absence accepts nothing that the kills did not."""
+    for sid, nick in sorted(pairs.items()):
+        pid, known = candidate["players"][nick]["pid"], learned.get(str(sid))
+        if pid and known and known != pid:
+            return (f"{names.get(sid)} would be HLTV {nick} (player id {pid}), but an earlier join paired that SteamID "
+                    f"with player id {known}")
+    return None
+
+
 def version_key(version: str | None) -> tuple[int, ...]:
     """An extractor version ("1.16.0") as numbers, so 1.16 sorts after 1.9; () when the map does not record one."""
     try:
@@ -289,6 +303,9 @@ def join(root: Path, metrics: Path, learned: dict[str, str] | None = None) -> di
                 near.append({"hltv": candidate["file"], "winners_match": False})
                 continue
             pairs, why = structural_mapping(sequences, teams, names, kill_counts, candidate, learned)
+            if pairs is not None and not named:
+                why = learned_contradiction(pairs, names, candidate, learned)
+                pairs = None if why else pairs
             if pairs is None:
                 near.append({"hltv": candidate["file"], "winners_match": True, "players": why})
             else:
