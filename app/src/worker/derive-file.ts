@@ -21,18 +21,19 @@ export const isFolder = (file: string) => !file.endsWith(".json.gz");
  * An extracted folder's tables; reading the folder's path returns its table file names. `pov` is the
  * user's SteamID64 for a Valve match. `optional` and `columns`: what to read (loadTables).
  */
-async function folderTables(file: string, bytes: Bytes, pov: string | undefined, optional?: readonly TableName[], columns?: Partial<Record<TableName, readonly string[]>>): Promise<MatchTables> {
+async function folderTables(file: string, bytes: Bytes, pov: string | undefined, optional?: readonly TableName[], columns?: Partial<Record<TableName, readonly string[]>>, between?: () => Promise<void>): Promise<MatchTables> {
   const names = new Set(JSON.parse(new TextDecoder().decode(await bytes(file))) as string[]);
-  const t = await loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)), optional, columns);
+  const t = await loadTables((name) => (names.has(name) ? bytes(`${file}/${name}`) : Promise.resolve(null)), optional, columns, between);
   return pov ? withPov(t, pov) : t;
 }
 
 /**
  * A file's tables, whichever kind of file it is. `optional` and `columns` narrow an extracted folder's
- * tables (loadTables); a plugin file is decoded whole either way, so it gets them all.
+ * tables, and `between` runs between their decodes (loadTables); a plugin file is decoded whole either
+ * way, so it gets them all.
  */
-export async function fileTables(file: string, bytes: Bytes, pov: string | undefined, optional?: readonly TableName[], columns?: Partial<Record<TableName, readonly string[]>>): Promise<MatchTables> {
-  return isFolder(file) ? folderTables(file, bytes, pov, optional, columns) : pluginToTables(await decodeMatch(await bytes(file), file));
+export async function fileTables(file: string, bytes: Bytes, pov: string | undefined, optional?: readonly TableName[], columns?: Partial<Record<TableName, readonly string[]>>, between?: () => Promise<void>): Promise<MatchTables> {
+  return isFolder(file) ? folderTables(file, bytes, pov, optional, columns, between) : pluginToTables(await decodeMatch(await bytes(file), file));
 }
 
 export async function deriveFile(file: string, bytes: Bytes, pov: string | undefined, wp: WinProbSource): Promise<Cached> {

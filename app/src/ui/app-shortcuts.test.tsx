@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { App } from "./App";
-import { go, parseHash, PROFILE_TABS } from "./router";
+import { go, openMatch, parseHash, PROFILE_TABS } from "./router";
 import { NAV } from "./shell/Sidebar";
 
 vi.mock("./data/provider", () => ({
@@ -24,6 +24,7 @@ vi.mock("./views/Home", () => ({ HomeView: () => <p data-home /> }));
 // every page a test here opens is a stub: a real lazy page (App.tsx) would keep loading its modules after
 // the test ends, into the next test file's fresh module registry, before that file's vi.mock calls apply
 vi.mock("./views/Clips", () => ({ default: () => <p data-clips /> }));
+vi.mock("./views/match/MatchView", () => ({ default: () => <p data-match /> }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
@@ -73,6 +74,35 @@ describe("a new page", () => {
     const pane = host.querySelector("main.pane");
     expect(document.activeElement).toBe(pane);
     expect(pane?.getAttribute("aria-label")).toBe("Profile");
+  });
+});
+
+describe("a click while a match opens", () => {
+  it("reaches its target while the match page is still fading in", async () => {
+    // fails if opening a match hands the page to a View Transition: the browser drops every click on the
+    // page while one runs, and the stub here, like the browser, holds the new page back until it ends
+    const transition = vi.fn(() => ({ finished: new Promise(() => {}) }));
+    Object.assign(document, { startViewTransition: transition });
+    // motion allowed: with reduced motion the old morph never ran, so it would not show here
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+    try {
+      await act(async () => root.render(<App />));
+      // the match page's code is loaded once, as it is after the first match a session opens
+      await act(async () => { go("#/match/a.json.gz/overview"); });
+      await act(async () => { go("#/"); });
+      window.dispatchEvent(new Event("pointerdown"));
+      act(() => openMatch("#/match/a.json.gz/overview"));
+      expect(transition).not.toHaveBeenCalled();
+      // the page is there and its fade is running
+      expect(host.querySelector("[data-match]")?.closest(".view-in")).not.toBeNull();
+      const changed = new Promise((r) => addEventListener("hashchange", r, { once: true }));
+      await act(async () => { host.querySelector<HTMLAnchorElement>('a[data-page="profile"]')!.click(); await changed; });
+      expect(parseHash(location.hash).page).toBe("profile");
+      expect(host.querySelector("[data-profile]")).not.toBeNull();
+    } finally {
+      delete (document as { startViewTransition?: unknown }).startViewTransition;
+      vi.unstubAllGlobals();
+    }
   });
 });
 

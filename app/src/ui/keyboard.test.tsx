@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DataTable } from "./components/DataTable";
 import { MenuLayer, openMenu } from "./components/overlay";
-import { MATCH_TABS, matchTabOfKey, navWasInstant, openMatch, PROFILE_TABS } from "./router";
+import { MATCH_TABS, matchTabOfKey, navWasInstant, navWasPointer, openMatch, PROFILE_TABS } from "./router";
 import type { Data } from "./data/provider";
 import { Palette, SHORTCUTS } from "./shell/Palette";
 import { NAV } from "./shell/Sidebar";
@@ -165,11 +165,8 @@ describe("opening a match", () => {
   beforeEach(() => {
     transition.mockClear();
     Object.assign(document, { startViewTransition: transition });
-    // stubbed for this block only: the test files share one process, and a stub without addEventListener
-    // left behind broke the Replay tab in files that run later
-    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
   });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { delete (document as { startViewTransition?: unknown }).startViewTransition; });
   it("from the keyboard is instant: no view transition, no view fade", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     openMatch("#/match/a.json.gz/overview");
@@ -177,11 +174,14 @@ describe("opening a match", () => {
     expect(transition).not.toHaveBeenCalled();
     expect(navWasInstant()).toBe(true);
   });
-  it("from a click morphs through a view transition", () => {
+  it("from a click opens at once with the page's fade, never through a view transition", () => {
+    // fails if opening a match goes back to a View Transition, during which the browser drops every
+    // click on the page, or defers the navigation
     window.dispatchEvent(new Event("pointerdown"));
     openMatch("#/match/b.json.gz/overview");
     expect(location.hash).toBe("#/match/b.json.gz/overview");
-    expect(transition).toHaveBeenCalledOnce();
+    expect(transition).not.toHaveBeenCalled();
+    expect([navWasInstant(), navWasPointer()]).toEqual([false, true]);
   });
 });
 

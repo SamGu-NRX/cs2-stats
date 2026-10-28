@@ -128,7 +128,7 @@ function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | 
           {s.match.durationS !== null && <span className="meta">{fmtDuration(s.match.durationS)}</span>}
           <SourceBadge s={src} />
         </div>
-        <div className="hero__score" data-vt="score">
+        <div className="hero__score">
           <span className={`hero__n ${s.result === "W" ? "cream" : "faint"}`}>{s.score.us}</span>
           <span className="hero__res">
             <span className={`res res--${s.result}`}>{s.result === "W" ? "Win" : s.result === "L" ? "Loss" : "Tie"}</span>
@@ -150,7 +150,7 @@ function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | 
         </div>
         {v && <div className="hero__rail"><RoundRail v={v} compact selected={null} onPick={(number) => openMatch(matchHref(s.file, "rounds", { round: number }))} /></div>}
         <div className="hero__actions">
-          <button className="btn btn--primary press" onClick={(e) => openMatch(matchHref(s.file), e.currentTarget.closest(".hero"))}>Open match <ChevronRightIcon size={14} /></button>
+          <button className="btn btn--primary press" onClick={() => openMatch(matchHref(s.file))}>Open match <ChevronRightIcon size={14} /></button>
           <a className="btn btn--ghost" href={matchHref(s.file, "rounds")}>Rounds</a>
           <a className="btn btn--ghost" href={matchHref(s.file, "economy")}>Economy</a>
         </div>
@@ -280,11 +280,11 @@ function RecentMatches({ list }: { list: OwnEntry[] }) {
         rows={rows}
         rowKey={(s) => s.file}
         defaultSort={null}
-        onOpen={(s) => openMatch(matchHref(s.file), document.querySelector(`[data-file="${CSS.escape(matchKey(s.file))}"]`)?.closest("tr"))}
+        onOpen={(s) => openMatch(matchHref(s.file))}
         onRowContext={(s, at) => openMenu(at, [{ label: "Open", run: () => openMatch(matchHref(s.file)) }, { label: "Open rounds", run: () => openMatch(matchHref(s.file, "rounds")) }, { label: "Copy file name", run: () => copyText(s.file, "File name copied", hideFile(s.file)) }])}
         columns={[
-          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={matchKey(s.file)}><MapThumb map={s.match.map} size={24} /><span className="two"><b data-vt="map">{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
-          { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span> },
+          { key: "map", label: "Map", align: "l", sort: (s) => s.match.map, render: (s) => <span className="mapcell" data-file={matchKey(s.file)}><MapThumb map={s.match.map} size={24} /><span className="two"><b>{mapName(s.match.map)}</b><small>{fmtMatchDay(s.match)}</small></span></span> },
+          { key: "score", label: "Score", align: "l", sort: (s) => s.score.us - s.score.them, render: (s) => <ScoreCell us={s.score.us} them={s.score.them} result={s.result} /> },
           { key: "kd", label: "K–D", sort: (s) => line(s).diff, render: (s) => <span className="num">{line(s).kills}–{line(s).deaths}</span> },
           { key: "adr", label: "ADR", sort: (s) => line(s).adr, render: (s) => fmtAdr(line(s).adr) },
           { key: "swing", label: "Swing", colored: true, sort: (s) => line(s).swing, render: (s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }} data-tip={swingSumTip(s.line.m)}>{fmtSwing(x)}</span>; } },

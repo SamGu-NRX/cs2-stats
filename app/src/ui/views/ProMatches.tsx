@@ -17,7 +17,6 @@ import { matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "..
 import { Empty, SectionAside } from "./shared";
 
 const ANY = "";
-const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(matchKey(file))}"]`)?.closest("tr") ?? null;
 
 /** The library's maps that make a match entry, from the match list. */
 export const proEntries = (all: MatchEntry[]) => listedEntries(all, null).filter((e) => !isOwn(e));
@@ -77,7 +76,7 @@ export function ProMatches({ switcher }: { switcher: JSX.Element }) {
             rows={rows}
             rowKey={(e) => e.file}
             defaultSort={{ key: "date", dir: "desc" }}
-            onOpen={(e) => openMatch(matchHref(e.file), rowOf(e.file))}
+            onOpen={(e) => openMatch(matchHref(e.file))}
             columns={[
               {
                 key: "date", label: "Date", align: "l", sticky: true, width: 120, firstDir: "desc", sort: (e) => startMs(e.match),
