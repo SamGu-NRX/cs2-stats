@@ -1127,14 +1127,16 @@ def test_children_die_with_the_pipeline(tmp_path):
             "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
             "print(c.pid, flush=True); time.sleep(60)") % ROOT
     parent = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-    child = int(parent.stdout.readline())
-    assert psutil.pid_exists(child)
+    # Captured while alive: is_running() compares the creation time too, so a process that later gets the dead
+    # child's pid (Windows reuses pids soon under load) does not count as the child, as in the pipeline's kill_tree.
+    child = psutil.Process(int(parent.stdout.readline()))
+    assert child.is_running()
     parent.kill()
     parent.wait()
     deadline = time.time() + 10
-    while psutil.pid_exists(child) and time.time() < deadline:
+    while child.is_running() and time.time() < deadline:
         time.sleep(0.2)
-    assert not psutil.pid_exists(child)
+    assert not child.is_running()
 
 
 def test_restore_in_round_one_is_voided():
