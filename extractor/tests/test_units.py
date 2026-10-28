@@ -205,6 +205,22 @@ def _fatal_failures(checks):
     return [c for c in checks if c["fatal"] and not c["ok"]]
 
 
+def test_a_player_who_left_before_his_counters_were_set_has_no_departed_reading():
+    # Four OpenCS2 maps failed on int(NaN): a player who took a slot and left before the game set his counters read
+    # null on every one at his disconnect. That is no reading (he is checked as a player with no departed row);
+    # a reading with some counters null is not explained and fails.
+    def departed(rows):
+        df = pd.DataFrame(rows, columns=["tick", "steamid", "name", *ex.BASELINE_PROPS])
+        df["steamid"] = pd.array(df.steamid, dtype="UInt64")
+        return df
+
+    nan = float("nan")
+    read = departed([(500, A, "a", 3, 2, 1, 250, 1, 4), (700, B, "b", *[nan] * 6)])
+    assert ex.with_counters(read)[["tick", "steamid"]].values.tolist() == [[500, A]]
+    with pytest.raises(RuntimeError, match=f"counters partly unset at the disconnect of \\[{C}\\]"):
+        ex.with_counters(departed([(500, A, "a", 3, 2, 1, 250, 1, 4), (900, C, "c", 1, nan, 0, 90, 0, 2)]))
+
+
 def test_scoreboard_validation_passes():
     assert _fatal_failures(ex.validate_scoreboard(*_base())) == []
 

@@ -220,6 +220,20 @@ def counted_events(kills: pd.DataFrame) -> dict[int, dict[str, int]]:
     return out
 
 
+def with_counters(departed: pd.DataFrame) -> pd.DataFrame:
+    """The departed rows (BASELINE_PROPS read at a player's disconnect) that hold a reading.
+
+    A player who left before the game set his counters reads null on every one: no reading, so he is checked as a
+    player with no departed row (noted, not failed). One OpenCS2 demo: he took a T slot as round 3 started and left
+    4 s later, in its freeze time, with no kill, death or damage. Some counters null and others set is not
+    explained, and raises."""
+    unset = departed.reindex(columns=BASELINE_PROPS).isna()
+    partly = departed.steamid[unset.any(axis=1) & ~unset.all(axis=1)]
+    if len(partly):
+        raise RuntimeError(f"counters partly unset at the disconnect of {sorted(int(s_) for s_ in partly)}")
+    return departed[~unset.all(axis=1)]
+
+
 def validate_scoreboard(kills: pd.DataFrame, game_damage: dict[int, int], scoreboard: pd.DataFrame,
                         departed: pd.DataFrame | None = None, players=()) -> list[dict]:
     """Compare event-derived K/D/A, and the per-round damage counter, with the final-tick scoreboard.
@@ -1901,11 +1915,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         a_side, v_side = col(h, "attacker_team_num"), col(h, "user_team_num")
         dmg["is_self"] = (dmg.attacker_steamid == dmg.victim_steamid).fillna(False).astype(bool)
         dmg["is_team_damage"] = ((a_side == v_side) & dmg.attacker_steamid.notna()).astype(bool)
-        for p_, src in (("a", "attacker"), ("v", "user")):
-            dmg[f"{p_}_side"] = col(h, f"{src}_team_num").map(SIDE)
+        for p_, who in (("a", "attacker"), ("v", "user")):
+            dmg[f"{p_}_side"] = col(h, f"{who}_team_num").map(SIDE)
             for c, s in (("x", "X"), ("y", "Y"), ("z", "Z")):
-                dmg[f"{p_}_{c}"] = col(h, f"{src}_{s}")
-            dmg[f"{p_}_place"] = col(h, f"{src}_last_place_name")
+                dmg[f"{p_}_{c}"] = col(h, f"{who}_{s}")
+            dmg[f"{p_}_place"] = col(h, f"{who}_last_place_name")
         dmg["distance"] = np.sqrt((dmg.a_x - dmg.v_x) ** 2 + (dmg.a_y - dmg.v_y) ** 2 + (dmg.a_z - dmg.v_z) ** 2)
         dmg["source"] = "event"
 
@@ -1937,9 +1951,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         throws["projectile"], throws["link_distance"] = link_throws(throws, proj, rate)
         pmap = proj.set_index("projectile")
         lk = throws.projectile.dropna().astype(int)
-        for cname, src in (("entity_id", "entity_id"), ("land_tick", "last_tick"), ("land_x", "end_x"),
-                           ("land_y", "end_y"), ("land_z", "end_z")):
-            throws[cname] = lk.map(pmap[src]).reindex(throws.index)
+        for cname, pcol in (("entity_id", "entity_id"), ("land_tick", "last_tick"), ("land_x", "end_x"),
+                            ("land_y", "end_y"), ("land_z", "end_z")):
+            throws[cname] = lk.map(pmap[pcol]).reindex(throws.index)
         thrower = dict(zip(lk, throws.loc[lk.index, "steamid"]))
         # Plain lookup: Series.map would turn missing keys into NaN and the u64 steamids into float64.
         thrower_of = lambda ps: to_u64(pd.Series([thrower.get(int(x)) for x in ps], index=ps.index, dtype=object))
@@ -2251,6 +2265,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     departed["steamid"] = resolve_ids(departed.steamid, departed.name, bots)
     departed = departed.loc[np.array([not pd.isna(s_) and gone_at.get(int(s_)) == int(t_)
                                       for s_, t_ in zip(departed.steamid, departed.tick)], dtype=bool)].copy()
+    departed = with_counters(departed)
     # Kept as read, with each player's baseline, so a stitched map can check its parts' join (stitch.py).
     departed_rows = [dict(steamid=int(r.steamid), tick=int(r.tick), **{c: int(getattr(r, c)) for c in BASELINE_PROPS},
                           **{f"{c}_at_start": baseline.get(int(r.steamid), {}).get(c, 0) for c in BASELINE_PROPS})
