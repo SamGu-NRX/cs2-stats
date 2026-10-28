@@ -116,14 +116,20 @@ def main():
     config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, Crashes=1, UserSessions=1, HlaeCheck=True),
            safety)
     # The pipeline's archive lifecycle (Archive.tla)
-    archive = dict(Archives={1, 2}, Crashes=1, RetryFailed=True, CapPressure=True, WorkerFails=True, CheckFirst=True)
-    config("ArchiveSafety", archive, ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive"])
-    config("ArchiveNoCrash", archive | dict(Crashes=0),
-           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded"])
-    config("ArchiveCrashLedger", archive, ["DeletedRecorded"])
-    config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
-    config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1),
-           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive"], symmetry="Symmetry")
+    # The shipped code has CheckFirst and none of the three proposed fixes; "fixed" turns all three on.
+    archive = dict(Archives={1, 2}, Crashes=0, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
+                   WorkerFails=True, CheckFirst=True, LedgerFirst=False, ExpiryRowFirst=False, EvictionFixed=False)
+    fixed = dict(LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True)
+    every = ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded",
+             "EvictedRedownloadable"]
+    config("ArchiveSafety", archive, every[:-1])
+    config("ArchiveEviction", archive, ["EvictedRedownloadable"])
+    config("ArchiveCrashLedger", archive | dict(Crashes=1, ExpiryRowFirst=True, EvictionFixed=True), ["DeletedRecorded"])
+    config("ArchiveCrashExpiry", archive | dict(Crashes=1, LedgerFirst=True, EvictionFixed=True), ["ExpiredRecorded"])
+    config("ArchiveFixed", archive | fixed | dict(Crashes=1), every)
+    config("ArchiveLegacyNoCheck", archive | dict(CheckFirst=False), ["NoUnaccountedDeletion"])
+    config("ArchiveWide", archive | fixed | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1,
+           Redownloads=0), every, symmetry="Symmetry")
     config("ClipsLaunchLegacyWatcherCheck", clips | dict(SpawnFails=False, WatcherCheck=False), ["OneLaunchAtATime"])
 
 

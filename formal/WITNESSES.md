@@ -4,6 +4,30 @@ Generated state differences from the retained TLC logs, with unchanged fields om
 
 Writer `pc`: 0 not started; 1 mkdir; 2 first table; 3 remaining tables; 4 schema reads passed; 5 manifest listing captured; 6 COMPLETE written; 7 folder renamed; 8 pointer staged; 9 CURRENT replaced; 11 RETIRED unlinked / finished; -1 failed. `ppc`/`cached`/`pending` are each pruner's independent state.
 
+## ArchiveCrashExpiry
+
+Violated `ExpiredRecorded`. [Bounds](ArchiveCrashExpiry.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"idle", "hashing">>
+3. Scan: phase=<<"hashing", "hashing">>
+4. Hash: phase=<<"pending", "hashing">>
+5. Extract: phase=<<"extracting", "hashing">>; work=<<TRUE, FALSE>>
+6. Parse: phase=<<"parsing", "hashing">>; outcome=<<"bad", "none">>
+7. Hash: phase=<<"parsing", "pending">>
+8. Extract: phase=<<"parsing", "extracting">>; work=<<TRUE, TRUE>>
+9. Parse: phase=<<"parsing", "parsing">>; outcome=<<"bad", "ok">>; parts=<<FALSE, TRUE>>; whole=<<FALSE, TRUE>>
+10. Stitch: phase=<<"parsing", "check">>; rows=<<{}, {"held"}>>; split=<<"none", "held">>
+11. Check: phase=<<"parsing", "work">>
+12. RemoveWork: phase=<<"parsing", "ledger">>; work=<<TRUE, FALSE>>
+13. LedgerDone: phase=<<"parsing", "rar">>; ledger=<<"none", "done">>
+14. RemoveRar: phase=<<"parsing", "idle">>; rar=<<"downloads", "gone">>
+15. ToFail: phase=<<"fhold", "idle">>
+16. CapFirst: parts=<<FALSE, FALSE>>; capPending={2}; unrecorded={2}
+17. Crash: phase=<<"idle", "idle">>; work=<<FALSE, FALSE>>; capPending={}; crashes=1
+```
+
 ## ArchiveCrashLedger
 
 Violated `DeletedRecorded`. [Bounds](ArchiveCrashLedger.cfg).
@@ -19,6 +43,26 @@ Violated `DeletedRecorded`. [Bounds](ArchiveCrashLedger.cfg).
 8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
 9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
 10. Crash: phase=<<"idle", "idle">>; crashes=1
+```
+
+## ArchiveEviction
+
+Violated `EvictedRedownloadable`. [Bounds](ArchiveEviction.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"bad", "none">>
+6. ToFail: phase=<<"fhold", "idle">>
+7. FailHold: phase=<<"fmove", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+8. FailMove: phase=<<"fwrite", "idle">>; rar=<<"failed", "downloads">>
+9. FailWrite: phase=<<"fledger", "idle">>; work=<<FALSE, FALSE>>; retried={1}
+10. FailLedger: phase=<<"fcap", "idle">>; ledger=<<"failed", "none">>
+11. EvictRecord: dropped=<<TRUE, FALSE>>; evictPending={1}
+12. EvictDelete: rar=<<"gone", "downloads">>; evicted=<<TRUE, FALSE>>; evictPending={}
+13. FailDone: phase=<<"idle", "idle">>
 ```
 
 ## ArchiveLegacyNoCheck
@@ -83,8 +127,8 @@ Violated `EvidenceKept`. [Bounds](ClipsLaunchUserSession.cfg).
 8. Record: director=<<"recording", "idle">>; takes={1}
 9. EndClip: log=[owner |-> 1, ended |-> TRUE]; director=<<"ended", "idle">>
 10. Cs2Exit: cs2=<<"exited", "none">>
-11. HlaeExit: hlae=<<"exited", "none">>
-12. UserStart: log=[owner |-> 0, ended |-> FALSE]; userCs2=TRUE; sessions=1
+11. UserStart: log=[owner |-> 0, ended |-> FALSE]; userCs2=TRUE; sessions=1
+12. HlaeExit: hlae=<<"exited", "none">>
 13. UserQuit: userCs2=FALSE
 14. LaunchBegin: result=<<"stopped", "none">>
 ```

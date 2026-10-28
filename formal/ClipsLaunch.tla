@@ -287,7 +287,8 @@ OwnerIsCreator == \A t \in takes : Owner(t) = t
 OneLaunchAtATime ==
   \A n, m \in Launches : (n # m /\ (hlae[n] = "running" \/ cs2[n] = "running"))
                          => ~(hlae[m] = "running" \/ cs2[m] = "running")
-\* completeness: a launch whose director recorded the clip to the end tick settles as ended. Expected to
+\* a launch whose director recorded the clip to the end tick, once settled, settles as ended. A state
+\* invariant (safety): it doesn't claim a launch ever settles, only that settling keeps the evidence. Expected to
 \* fail whenever the user may start CS2: a normal session that starts after the launch's CS2 exits and
 \* before it settles replaces console.log, and the take never counts (it is lost, never misattributed)
 EvidenceKept == \A n \in Launches : (director[n] = "ended" /\ result[n] \notin {"none", "damaged"}) => result[n] = "ended"

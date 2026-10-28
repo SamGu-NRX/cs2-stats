@@ -18,7 +18,8 @@ FAIL = {
     "PublishManual", "PublishPruneOneShot", "PublishPruneDangling",
     "PluginLateFreeze", "PluginAfterWin", "PluginHotReload",
     "PipelineLegacyIdentity", "PipelineLegacyInPlace",
-    "ClipsLaunchUserSession", "ClipsLaunchLegacyWatcherCheck", "ClipsLaunchCrashGap", "ArchiveCrashLedger", "ArchiveLegacyNoCheck",
+    "ClipsLaunchUserSession", "ClipsLaunchLegacyWatcherCheck", "ClipsLaunchCrashGap",
+    "ArchiveCrashLedger", "ArchiveCrashExpiry", "ArchiveEviction", "ArchiveLegacyNoCheck",
 }
 
 
