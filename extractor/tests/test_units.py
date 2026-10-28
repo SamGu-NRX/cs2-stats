@@ -2747,3 +2747,51 @@ def test_a_test_file_that_cannot_import_fails_collection(tmp_path):
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
                        cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert r.returncode == 2 and "ERROR collecting" in r.stdout, r.stdout[-2000:]
+
+
+def _finished_archive(tmp_path, monkeypatch, name="1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b"):
+    """A pipeline with one downloaded archive hashed and parsed, ready for finish_archives."""
+    _isolate(tmp_path, monkeypatch)
+    rar = dp.DOWNLOADS / name
+    rar.write_bytes(dp.RAR_MAGIC + b"payload" * 500)
+    p = dp.Pipeline()
+    t0 = time.time()
+    p.scan(t0)
+    p.scan(t0 + 14)
+    _hashed(p)
+    a = p.archives[rar.name]
+    a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-1f2e3d4c", dp.WORK_DIR / "w"
+    a.work.mkdir()
+    a.dems, a.results = [a.work / "x-m1-nuke.dem"], {"x-m1-nuke.dem": {"ok": True, "map": "m1-nuke"}}
+    return p, rar
+
+
+def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_deletes_a_leftover(tmp_path, monkeypatch):
+    # fails if the RAR is deleted before the done row is written (a crash between them left the maps published
+    # and no row; formal/Archive.tla ArchiveCrashLedger), or if a restart leaves a done archive's RAR in place
+    p, rar = _finished_archive(tmp_path, monkeypatch)
+    real = dp.remove_finished_rar
+
+    def stops_here(path):
+        raise OSError("the pipeline stopped here")
+    monkeypatch.setattr(dp, "remove_finished_rar", stops_here)
+    p.finish_archives()
+    assert rar.exists() and not p.archives
+    rows = [json.loads(x) for x in dp.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [(r["id"], r["status"]) for r in rows] == [(rar.name, "done")]
+    monkeypatch.setattr(dp, "remove_finished_rar", real)
+    restarted = dp.Pipeline()
+    assert restarted.recover_finished() == [rar] and not rar.exists()
+    # the restart then has nothing left to process
+    restarted.scan(time.time())
+    assert not restarted.archives
+
+
+def test_recovery_leaves_a_file_that_is_not_the_recorded_archive(tmp_path, monkeypatch):
+    # fails if a restart deletes a file in downloads only because its name matches a done archive: a new download
+    # under that name, with other bytes, is the user's
+    p, rar = _finished_archive(tmp_path, monkeypatch)
+    p.finish_archives()
+    assert not rar.exists()
+    rar.write_bytes(dp.RAR_MAGIC + b"another archive" * 300)
+    assert dp.Pipeline().recover_finished() == [] and rar.exists()

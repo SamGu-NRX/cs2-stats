@@ -101,30 +101,33 @@ def main():
     config("PipelineLegacyInPlace", pipeline | dict(Fixed=False, SameDir=True, Invalidated=True, Crashes=False),
            ["InPlaceVersionSafe"])
     # The clips launch protocol (ClipsLaunch.tla): two launches of one job, at most one instance crash
-    # Shipped code is WatcherCheck and WatcherSettles TRUE, HlaeCheck FALSE.
-    clips = dict(Instances={"A"}, N=2, Crashes=0, UserSessions=0, SpawnFails=True, PidsFail=True,
-                 WatcherCheck=True, WatcherSettles=True, HlaeCheck=False)
+    # Shipped code: WatcherCheck, WatcherSettles and HlaeCheck all TRUE.
+    clips = dict(Instances={"A"}, N=2, Crashes=1, UserSessions=0, SpawnFails=True, PidsFail=True,
+                 WatcherCheck=True, WatcherSettles=True, HlaeCheck=True)
     safety = ["TypeOK", "NoTakeWithoutEvidence", "ResultTruthful", "OwnerIsCreator", "OneLaunchAtATime"]
-    config("ClipsLaunchSafety", clips, safety)
-    config("ClipsLaunchTwoInstances", clips | dict(Instances={"A", "B"}), [*safety, "EvidenceKept"])
-    config("ClipsLaunchUserSession", clips | dict(UserSessions=1), [*safety, "EvidenceKept"])
+    config("ClipsLaunchSafety", clips, [*safety, "EvidenceKept"])
+    config("ClipsLaunchTwoInstances", clips | dict(Instances={"A", "B"}, SpawnFails=False), [*safety, "EvidenceKept"])
+    config("ClipsLaunchUserSession", clips | dict(Crashes=0, UserSessions=1), [*safety, "EvidenceKept"])
     config("ClipsLaunchUserSessionSafety", clips | dict(UserSessions=1), safety)
-    config("ClipsLaunchCrashGap", clips | dict(Crashes=1), ["OneLaunchAtATime"])
-    config("ClipsLaunchHlaeCheck", clips | dict(Crashes=1, HlaeCheck=True), [*safety, "EvidenceKept"])
-    config("ClipsLaunchHlaeCheckTwoInstances", clips | dict(Instances={"A", "B"}, Crashes=1, HlaeCheck=True,
-           SpawnFails=False), [*safety, "EvidenceKept"])
-    config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, Crashes=1, UserSessions=1, HlaeCheck=True),
-           safety)
+    config("ClipsLaunchCrashGap", clips | dict(SpawnFails=False), ["OneLaunchAtATime"])
+    config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, UserSessions=1), safety)
+    config("ClipsLaunchLegacyHlaeCheck", clips | dict(SpawnFails=False, HlaeCheck=False), ["OneLaunchAtATime"])
     # The pipeline's archive lifecycle (Archive.tla)
-    archive = dict(Archives={1, 2}, Crashes=1, RetryFailed=True, CapPressure=True, WorkerFails=True, CheckFirst=True)
-    config("ArchiveSafety", archive, ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive"])
+    archive = dict(Archives={1, 2}, Crashes=1, RetryFailed=True, CapPressure=True, WorkerFails=True, CheckFirst=True,
+                   LedgerFirst=True)
+    config("ArchiveSafety", archive, ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive",
+                                      "FailedKept", "DeletedRecorded"])
     config("ArchiveNoCrash", archive | dict(Crashes=0),
            ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded"])
     config("ArchiveCrashLedger", archive, ["DeletedRecorded"])
     config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
+    config("ArchiveLegacyLedgerOrder", archive | dict(LedgerFirst=False), ["DeletedRecorded"])
     config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1),
-           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive"], symmetry="Symmetry")
-    config("ClipsLaunchLegacyWatcherCheck", clips | dict(SpawnFails=False, WatcherCheck=False), ["OneLaunchAtATime"])
+           ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "DeletedRecorded"],
+           symmetry="Symmetry")
+    # the HLAE check now covers this schedule too, so both checks come off to show the watcher check's own case
+    config("ClipsLaunchLegacyWatcherCheck", clips | dict(Crashes=0, SpawnFails=False, WatcherCheck=False, HlaeCheck=False),
+           ["OneLaunchAtATime"])
 
 
 if __name__ == "__main__":

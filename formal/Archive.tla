@@ -25,7 +25,9 @@ CONSTANTS
   RetryFailed,   \* the run uses --retry-failed
   CapPressure,   \* parts/ can pass MAX_PARTS_GB, so enforce_parts_cap deletes held parts
   WorkerFails,   \* a parse can fail or be truncated, and a stitch can leave no complete map
-  CheckFirst     \* finish_archives runs unaccounted() before deleting anything; FALSE skips it (a regression)
+  CheckFirst,    \* finish_archives runs unaccounted() before deleting anything; FALSE skips it (a regression)
+  LedgerFirst    \* the done row is written before the RAR goes, and a start deletes a done archive's leftover
+                 \* RAR (recover_finished); FALSE is the order before, RAR first and no recovery
 
 Phases == {"idle", "hashing", "pending", "extracting", "parsing", "stitch", "check", "work", "rar", "ledger"}
 
@@ -123,14 +125,22 @@ Check(a) ==
           /\ work' = Set(work, a, FALSE) /\ phase' = Set(phase, a, "idle")
   /\ UNCHANGED <<outcome, whole, split, parts, rows, retried, capActive, crashes>>
 
-RemoveWork(a) == /\ phase[a] = "work" /\ work' = Set(work, a, FALSE) /\ phase' = Set(phase, a, "rar")
+RemoveWork(a) == /\ phase[a] = "work" /\ work' = Set(work, a, FALSE)
+                 /\ phase' = Set(phase, a, IF LedgerFirst THEN "ledger" ELSE "rar")
                  /\ UNCHANGED <<rar, ledger, outcome, whole, split, parts, rows, retried, capActive, crashes>>
 \* the RAR goes (a retried failure's whole failed/ folder with it)
-RemoveRar(a) == /\ phase[a] = "rar" /\ rar' = Set(rar, a, "gone") /\ phase' = Set(phase, a, "ledger")
+RemoveRar(a) == /\ phase[a] = "rar" /\ rar' = Set(rar, a, "gone")
+                /\ phase' = Set(phase, a, IF LedgerFirst THEN "idle" ELSE "ledger")
                 /\ UNCHANGED <<ledger, outcome, whole, split, parts, rows, work, retried, capActive, crashes>>
-\* the ledger's done row; the archive leaves self.archives
-LedgerDone(a) == /\ phase[a] = "ledger" /\ ledger' = Set(ledger, a, "done") /\ phase' = Set(phase, a, "idle")
+\* the ledger's done row (with LedgerFirst, before the RAR goes)
+LedgerDone(a) == /\ phase[a] = "ledger" /\ ledger' = Set(ledger, a, "done")
+                 /\ phase' = Set(phase, a, IF LedgerFirst THEN "rar" ELSE "idle")
                  /\ UNCHANGED <<rar, outcome, whole, split, parts, rows, work, retried, capActive, crashes>>
+\* recover_finished, at a start: a done archive whose RAR is still there loses it. Modelled as possible
+\* whenever the archive is not in flight, a superset of "at a start"
+Recover(a) == /\ LedgerFirst /\ phase[a] = "idle" /\ ledger[a] = "done" /\ rar[a] # "gone"
+              /\ rar' = Set(rar, a, "gone")
+              /\ UNCHANGED <<phase, ledger, outcome, whole, split, parts, rows, work, retried, capActive, crashes>>
 
 \* enforce_parts_cap, run inside any archive's stitch_parts: delete a held map's parts unless its archive is
 \* in flight, with an expired row
@@ -151,7 +161,7 @@ Crash ==
 
 Next ==
   \/ \E a \in Archives : Scan(a) \/ Hash(a) \/ Extract(a) \/ Parse(a) \/ Fail(a) \/ Stitch(a) \/ Check(a)
-                         \/ RemoveWork(a) \/ RemoveRar(a) \/ LedgerDone(a) \/ Cap(a)
+                         \/ RemoveWork(a) \/ RemoveRar(a) \/ LedgerDone(a) \/ Cap(a) \/ Recover(a)
   \/ Crash
 
 Spec == Init /\ [][Next]_vars
@@ -174,7 +184,8 @@ ExpiredRecorded == \A a \in Archives : split[a] = "expired" => "expired" \in row
 CapSparesActive == ~capActive
 \* a retryable failure keeps its RAR in failed/ (checked without crashes; DeletedRecorded covers the crash)
 FailedKept == \A a \in Archives : (ledger[a] = "failed" /\ phase[a] = "idle") => rar[a] = "failed"
-\* an archive whose RAR is gone is in the ledger, as done or dropped. Expected to fail with crashes: a crash
-\* between deleting the RAR and appending the done row leaves its maps published but no ledger row
+\* an archive whose RAR is gone is in the ledger, as done or dropped: no archive has its maps published and its
+\* RAR deleted without a row. Before LedgerFirst, a crash between deleting the RAR and appending the done row
+\* broke it (ArchiveLegacyLedgerOrder)
 DeletedRecorded == \A a \in Archives : (rar[a] = "gone" /\ phase[a] # "ledger") => ledger[a] \in {"done", "dropped"}
 =============================================================================

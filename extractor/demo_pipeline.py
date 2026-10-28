@@ -673,6 +673,15 @@ def safe_unlink(path: Path, missing_ok: bool = False) -> None:
     _deletable(path).unlink(missing_ok=missing_ok)
 
 
+def remove_finished_rar(rar: Path) -> None:
+    """Delete a finished archive's RAR: from downloads, or a retried failure's whole failed/ folder, whose kept
+    demos and reports go with it."""
+    if rar.parent.parent == FAILED_DIR:
+        safe_rmtree(rar.parent)
+    else:
+        safe_unlink(rar, missing_ok=True)
+
+
 def append_jsonl(path: Path, obj: dict) -> None:
     """Append one JSON line in a single write, flushed and fsynced. A torn tail left by a crash is cut first,
     so the new line never lands in the middle of a broken one."""
@@ -1308,19 +1317,53 @@ class Pipeline:
             if a.work.exists():
                 log.error("could not remove %s; keeping RAR %s", a.work, a.rar)
                 continue
-            if a.rar.parent.parent == FAILED_DIR:
-                safe_rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
-            else:
-                safe_unlink(a.rar)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
                              if row["status"] != "stitched"],
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
+            # The done row goes before the RAR: a crash between them leaves a done archive whose RAR is still
+            # there, which recover_finished deletes at the next start. The other order left the maps published
+            # with no row for the archive (formal/Archive.tla, ArchiveCrashLedger).
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
+            try:
+                remove_finished_rar(a.rar)
+            except OSError as e:
+                log.error("archive %s is done but its RAR %s could not be deleted (%s); the next start deletes it",
+                          a.id, a.rar, e)
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
             self.clean_copies(rec)
+
+    def recover_finished(self) -> list[Path]:
+        """At start: delete the RAR of each archive the ledger records as done, left by a crash between its done
+        row and its deletion (finish_archives writes the row first), and log it. Only the recorded file goes:
+        same size and SHA-256 as its done row. An archive that needs_reextract asks for again stays, to be
+        extracted. Returns the RARs deleted."""
+        reextract = self.reextract_ids()
+        rars = set(self.candidates())
+        if FAILED_DIR.exists():
+            rars |= {f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file()}
+        deleted = []
+        for f in sorted(rars):
+            aid = f.parent.name if f.parent.parent == FAILED_DIR else f.name
+            rec = self.ledger.get(aid) or {}
+            if rec.get("status") != "done" or aid in reextract or has_partial_marker(f):
+                continue
+            try:
+                same = (f.stat().st_size == rec.get("rar_bytes") and rec.get("rar_sha256")
+                        and extract.file_sha256(f) == rec["rar_sha256"])
+            except OSError as e:
+                log.warning("archive %s is done but its RAR %s could not be read (%s); left in place", aid, f, e)
+                continue
+            if not same:
+                log.warning("archive %s is done, but %s is not the file it recorded; left in place", aid, f)
+                continue
+            remove_finished_rar(f)
+            log.warning("archive %s is done in the ledger but its RAR %s was still there (the pipeline stopped "
+                        "before deleting it); deleted it", aid, f)
+            deleted.append(f)
+        return deleted
 
     def stitch_parts(self, a: Archive, failed: str | None = None) -> dict[str, dict]:
         """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so. Returns
@@ -1769,6 +1812,7 @@ def main(argv=None) -> int:
     # picked up again re-extracts into a clean folder) and partial outputs. Their RARs are still in
     # place and get processed again.
     pipeline.sweep_work(force=True)
+    pipeline.recover_finished()
     tidy_demos()
     for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
         pipeline.clean_copies(rec)

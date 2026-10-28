@@ -33,7 +33,7 @@ CONSTANTS
   PidsFail,       \* publishing pids.json can fail once HLAE runs
   WatcherCheck,   \* prepare_launch refuses while a watcher runs (832ce39); FALSE is d0345ae
   WatcherSettles, \* the watcher settles its launch before letting the lock go (d0345ae); FALSE is 44f4312
-  HlaeCheck       \* proposed, not in the code: prepare_launch also refuses while any HLAE.exe runs
+  HlaeCheck       \* prepare_launch also refuses while any HLAE.exe runs (the fix for ClipsLaunchCrashGap); FALSE is before it
 
 Launches == 1..N
 Results == {"none", "ended", "stopped", "damaged", "notstarted"}
