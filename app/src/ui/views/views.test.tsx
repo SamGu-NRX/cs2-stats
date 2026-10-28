@@ -81,7 +81,7 @@ const summary = (q: Query) => {
   return s;
 };
 const converted = samples.filter((s) => sourceOf(s.entry).id === "converted");
-const modelOf = (s: Sample): MatchModel => matchModel(s.entry, matchBundle(s.entry, s.facts));
+const modelOf = (s: Sample): MatchModel => matchModel(s.entry, matchBundle(s.entry, s.facts, null));
 
 const callsWith = (pros: Baselines) => rankingCalls({
   summary: async (q) => summary(q),
@@ -684,7 +684,7 @@ describe("review round 1 (PR #28)", () => {
     expect(row).toBeTruthy();
     const kd = Array.from(row.querySelectorAll("[data-tip^='Partial']"));
     expect(kd.length).toBeGreaterThan(0);
-    expect(text(kd[0])).toBe(`${thin.line.m.kills}–${thin.line.m.deaths}`);
+    expect(text(kd[0])).toBe(`${thin.line!.m.kills}–${thin.line!.m.deaths}`);
   });
 
   it("brings back main's Weapons columns and advice, and Career aim's head accuracy trend", () => {
@@ -862,7 +862,7 @@ it("shows the round grid's swing per round, as the scoreboard does, with the sum
   const s = converted.find((x) => rollup([x.facts], { player: x.facts.match.pov! }).m.swingRounds > 1)!;
   const v = modelOf(s);
   render(<Rounds v={v} file={v.file} round={null} />);
-  const line = v.b.lines.both[v.human];
+  const line = v.b.lines.both[v.human!];
   const cell = host.querySelector(".ig__row.is-you .ig__total")!;
   expect(fmtSwing(statLine(line).swing)).not.toBe(fmtSwing(line.m.swing));
   expect(text(cell)).toBe(fmtSwing(statLine(line).swing));
@@ -891,7 +891,7 @@ describe("match views", () => {
     expect(total.children[D].textContent).toBe(`${sum((m) => m.deaths)} (${sum((m) => m.tradedDeaths)})`);
     expect(total.children[A].textContent).toBe(`${sum((m) => m.assists)} (${sum((m) => m.flashAssists)})`);
     const you = board.querySelector("tbody tr.is-you")!;
-    const m = v.b.lines.both[v.human].m;
+    const m = v.b.lines.both[v.human!].m;
     expect(you.children[D].textContent).toBe(`${m.deaths} (${m.tradedDeaths})`);
   });
 
@@ -1116,7 +1116,7 @@ describe("parity round 2: flashes, clutches and highlights", () => {
   it("lists every clutch with its save, kills and time left, the clock's absence explained", () => {
     // fails if a save reads as a loss, the clock shows a number it does not have, or a row links
     // anywhere but its round
-    const you = v.players[v.human];
+    const you = v.players[v.human!];
     const row = (round: number, more: Partial<ClutchRow>): ClutchRow => ({ file: v.file, round, side: "T", player: you.key, opponents: 2, won: false, kills: 0, saved: false, t: 50, afterPlant: false, left: null, ...more });
     answers = { clutches: [row(5, { saved: true, kills: 1, left: 40, afterPlant: true }), row(9, { won: true, kills: 2, left: 65 }), row(12, {})] };
     render(<ClutchList v={v} file={v.file} />);

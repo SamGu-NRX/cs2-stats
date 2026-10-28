@@ -5,9 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { Filter } from "../../stats/rollup";
 import type { Client } from "../../worker/client";
 import type { Api, MatchBundle, Method, Query, Result } from "../../worker/protocol";
-import { careerEntries } from "./engine";
+import { careerEntries, type OwnEntry } from "./engine";
 import { matchModel, type MatchEntry, type MatchModel } from "./match";
-import { hideBundle, hideTextAndFiles, useHidePersonal } from "./privacy";
+import { hideBundle, hideTextAndFiles, teamNames, useHidePersonal } from "./privacy";
 import { useData } from "./provider";
 
 export interface Loaded<T> {
@@ -56,11 +56,11 @@ export function useCall<K extends Method>(method: K, args: Parameters<Api[K]> | 
 // the same match). At most BUNDLES are kept; the worker holds the facts themselves.
 const BUNDLES = 3;
 const bundles = new Map<string, Promise<MatchBundle>>();
-export function bundleOf(client: Client, version: number, file: string): Promise<MatchBundle> {
-  const k = `${version}|${file}`;
+export function bundleOf(client: Client, version: number, file: string, viewer: string | null = null): Promise<MatchBundle> {
+  const k = `${version}|${file}|${viewer ?? ""}`;
   let p = bundles.get(k);
   if (p) { bundles.delete(k); bundles.set(k, p); return p; }
-  p = client.match(file);
+  p = client.match(file, viewer);
   p.catch(() => bundles.delete(k));
   bundles.set(k, p);
   while (bundles.size > BUNDLES) bundles.delete(bundles.keys().next().value!);
@@ -68,18 +68,31 @@ export function bundleOf(client: Client, version: number, file: string): Promise
 }
 
 /**
+ * The SteamID a match is seen through from its ?as= address value, the picked player's position on a
+ * pro demo's scoreboard. Null on the user's own matches, which are always seen through the user, and for
+ * a value that is no position on this scoreboard (a SteamID among them).
+ */
+export function viewerOf(entry: Pick<MatchEntry, "you" | "players"> | null, at: string | null): string | null {
+  if (!entry || entry.you !== null || at === null || !/^\d+$/.test(at)) return null;
+  return entry.players[Number(at)]?.id ?? null;
+}
+
+/**
  * One match shaped for the match views. The entry must be in the match list. Its players are named as
  * the match list names them, so with personal info hidden every view of the match uses the same
- * placeholders (privacy.ts).
+ * placeholders (privacy.ts). `at`: the ?as= address value (viewerOf).
  */
-export function useMatch(file: string | null): Loaded<MatchModel> {
+export function useMatch(file: string | null, at: string | null = null): Loaded<MatchModel> {
   const { client, version, matches } = useData();
   const hide = useHidePersonal();
   const entry = file ? matches.find((m) => m.file === file) ?? null : null;
-  return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}` : null, async () => {
+  const as = viewerOf(entry, at);
+  return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}:${as ?? ""}` : null, async () => {
     if (!entry) throw new Error(`${file} is not in the match folder`);
-    const b = await bundleOf(client!, version, file!);
-    return matchModel(entry, hide ? hideBundle(b, entry) : b);
+    const b = await bundleOf(client!, version, file!, as);
+    const v = matchModel(entry, hide ? hideBundle(b, entry) : b, as);
+    const [us, them] = teamNames(entry, hide);
+    return { ...v, teamName: entry.usTeam === 0 ? { us, them } : { us: them, them: us } };
   }, { file });
 }
 
@@ -107,7 +120,7 @@ export function useScoped(q: Query, extra: Omit<Filter, "player">[]) {
  * Every block on a career view reads this one list, so a filter reaches all of them. `all` is the
  * same set before the last-N cut (what "All 8" counts).
  */
-export function useCareer(scope: { map: string | null; n: number | null }): { list: MatchEntry[]; all: MatchEntry[] } {
+export function useCareer(scope: { map: string | null; n: number | null }): { list: OwnEntry[]; all: OwnEntry[] } {
   const { matches } = useData();
   return useMemo(() => {
     const all = careerEntries(matches, scope.map);

@@ -4,19 +4,21 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { MapThumb, Num, SourceBadge } from "../../components/bits";
 import { MapAtmosphere } from "../../components/MapArt";
-import { entryLine, ratingHeadline, teamsOf } from "../../data/engine";
+import { entryLine, isOwn, ratingHeadline, statLine, teamsOf, type OwnEntry } from "../../data/engine";
 import { useMatch } from "../../data/hooks";
 import { mapAccent } from "../../data/maps";
-import type { MatchEntry, MatchModel } from "../../data/match";
+import type { MatchEntry, MatchModel, Team, ViewedMatch } from "../../data/match";
 import { useData } from "../../data/provider";
 import { sourceOf } from "../../data/sources";
+import { teamNames, useHidePersonal } from "../../data/privacy";
 import { ChevronLeftIcon, ChevronRightIcon } from "../../icons/ui";
 import { fmtAdr, fmtMatchDay, fmtDuration, fmtPct, fmtRating, fmtSwing, fmtWhen, mapName } from "../../lib/format";
 import { scoreText, swingScore, ratingText } from "../../lib/scale";
-import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, matchTabKey, navWasInstant, pageHref, useRoute, type MatchTab } from "../../router";
+import { go, matchHref, MATCH_TAB_LABEL, MATCH_TABS, matchTabKey, navWasInstant, pageHref, setQuery, useRoute, type MatchTab } from "../../router";
 import { BarContent } from "../../shell/Bar";
 import { Empty, NEEDS_DEMO, swingSumTip } from "../shared";
 import { RoundRail } from "./RoundRail";
+import { Viewed } from "./Viewer";
 import Overview from "./Overview";
 import { replayUnavailable } from "./replay/support";
 import type { OffRoster } from "../../../stats/roster";
@@ -42,27 +44,37 @@ const Replay = lazy(() => import("./replay/Replay"));
 
 /** round: the selected round's row (ri), found from the round number in the URL */
 export interface TabProps { v: MatchModel; file: string; round: number | null }
+/** A tab that reads one player: it renders only once the match has a viewer (Viewer.tsx). */
+export type ViewedTabProps = Omit<TabProps, "v"> & { v: ViewedMatch };
 
 export default function MatchView({ file, tab }: { file: string; tab: MatchTab }) {
   const { matches, status } = useData();
   const r = useRoute();
   const s = matches.find((x) => x.file === file) ?? null;
-  const loaded = useMatch(file);
+  const hide = useHidePersonal();
+  // a pro demo is seen through the player picked on its scoreboard (Viewer.tsx), if any
+  const loaded = useMatch(file, r.query.get("as"));
   const v = loaded.data;
   // before the first scan finishes the match list is empty, so "not in the folder" is not yet an answer
   const error = status === "starting" || (status === "syncing" && !matches.length) ? null : loaded.error;
   const n = r.query.get("round") ? Number(r.query.get("round")) : null;
   const ri = v && n !== null ? v.rounds.findIndex((x) => x.number === n) : -1;
   const round = ri >= 0 ? ri : null;
-  const i = matches.findIndex((x) => x.file === file);
-  const older = matches[i + 1];
-  const newer = matches[i - 1];
+  // the pager steps within the match's own list: the user's matches, or the pro demos
+  const pro = s ? !isOwn(s) : false;
+  const group = matches.filter((x) => !isOwn(x) === pro);
+  const i = group.findIndex((x) => x.file === file);
+  const older = group[i + 1];
+  const newer = group[i - 1];
   const map = v?.map ?? s?.match.map ?? "";
 
   return (
     <div className="view view--flush match" style={{ ["--map-accent" as string]: mapAccent(map) }}>
       <BarContent
-        crumbs={[{ label: s ? s.players[s.you].name : "You", href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }, { label: s ? `${mapName(s.match.map)}, ${fmtMatchDay(s.match)}` : "Match" }]}
+        crumbs={[
+          ...(s && isOwn(s) ? [{ label: s.players[s.you].name, href: pageHref("profile") }, { label: "Matches", href: pageHref("matches") }] : [{ label: "Pro matches", href: pageHref("matches", { view: "pro" }) }]),
+          { label: s ? (pro ? `${teamNames(s, hide).join(" vs ")}, ${mapName(s.match.map)}` : `${mapName(s.match.map)}, ${fmtMatchDay(s.match)}`) : "Match" },
+        ]}
         tools={
           <span className="pager">
             <button className="btn btn--ghost btn--icon btn--sm press" disabled={!older} onClick={() => older && go(matchHref(older.file, tab))} data-tip="Older match  [" aria-label="Older match"><ChevronLeftIcon size={16} /></button>
@@ -74,7 +86,7 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
         <div style={{ padding: "20px var(--gutter)" }}><div className="error-box" role="alert"><h2>This match could not be read</h2><p className="muted selectable">{error}</p></div></div>
       ) : (
         <>
-          <Hero s={s} v={v} />
+          {s && !isOwn(s) ? <ProHero s={s} v={v} /> : <Hero s={s && isOwn(s) ? s : null} v={v} />}
           <Sticky v={v} file={file} tab={tab} selected={n} />
           <section className="match__panel" id="match-panel" aria-label={MATCH_TAB_LABEL[tab]}>
             {!v ? <TabSkeleton tab={tab} /> : (
@@ -84,10 +96,10 @@ export default function MatchView({ file, tab }: { file: string; tab: MatchTab }
                 {tab === "economy" && <Economy v={v} file={file} round={round} />}
                 {tab === "duels" && <Duels v={v} file={file} round={round} />}
                 {tab === "utility" && <Utility v={v} file={file} round={round} />}
-                {tab === "aim" && <Aim v={v} file={file} round={round} />}
-                {tab === "positions" && <Positions v={v} file={file} round={round} />}
+                {tab === "aim" && <Viewed v={v} what="their aim">{(w) => <Aim v={w} file={file} round={round} />}</Viewed>}
+                {tab === "positions" && <Viewed v={v} what="where they played">{(w) => <Positions v={w} file={file} round={round} />}</Viewed>}
                 {tab === "advanced" && <Advanced v={v} file={file} round={round} />}
-                {tab === "luck" && <Luck v={v} file={file} round={round} />}
+                {tab === "luck" && <Viewed v={v} what="their luck">{(w) => <Luck v={w} file={file} round={round} />}</Viewed>}
                 {tab === "replay" && <Replay v={v} file={file} round={round} />}
               </Suspense>
             )}
@@ -109,30 +121,15 @@ function TabSkeleton({ tab }: { tab: MatchTab }) {
   );
 }
 
-function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
-  const e = v?.entry ?? s;
+function Hero({ s, v }: { s: OwnEntry | null; v: MatchModel | null }) {
+  const e = s;
   if (!e) return <div className="mhero"><div className="skel" style={{ height: 96, margin: "16px var(--gutter)" }} /></div>;
   const { score, result } = e;
   const map = e.match.map;
   const src = sourceOf(e);
   const line = entryLine(e);
-  const usStart = e.usStartSide;
   const teams = teamsOf(e);
-  const halves = (team: "us" | "them") => {
-    if (!v) return null;
-    const firstSide = team === "us" ? usStart : usStart === "T" ? "CT" : "T";
-    const max = v.maxRounds;
-    const h1 = v.rounds.filter((r) => r.number <= max / 2 && r.winner === team).length;
-    const h2 = v.rounds.filter((r) => r.number > max / 2 && r.number <= max && r.winner === team).length;
-    const ot = v.rounds.filter((r) => r.number > max && r.winner === team).length;
-    return (
-      <span className="mhero__halves num">
-        <span className={firstSide === "T" ? "t-text" : "ct-text"}>{firstSide} <b>{h1}</b></span>
-        <span className={firstSide === "T" ? "ct-text" : "t-text"}>{firstSide === "T" ? "CT" : "T"} <b>{h2}</b></span>
-        {v.rounds.some((r) => r.number > max) && <span className="muted">OT <b>{ot}</b></span>}
-      </span>
-    );
-  };
+  const halves = (team: "us" | "them") => <Halves v={v} team={team} usStart={e.usStartSide} />;
   return (
     <header className="mhero">
       <MapAtmosphere map={map} />
@@ -177,6 +174,77 @@ function Hero({ s, v }: { s: MatchEntry | null; v: MatchModel | null }) {
         <span className="mhero__stat"><span className="meta">KAST</span><b className="num"><Num v={fmtPct(line.kast)} /></b></span>
         <span className="mhero__stat"><span className="meta">HS%</span><b className="num"><Num v={fmtPct(line.hs)} /></b></span>
       </div>
+    </header>
+  );
+}
+
+/** A team's rounds won in each half and in overtime, each half marked with the side it played. */
+function Halves({ v, team, usStart }: { v: MatchModel | null; team: Team; usStart: "CT" | "T" }) {
+  if (!v) return null;
+  const firstSide = team === "us" ? usStart : usStart === "T" ? "CT" : "T";
+  const max = v.maxRounds;
+  const h1 = v.rounds.filter((r) => r.number <= max / 2 && r.winner === team).length;
+  const h2 = v.rounds.filter((r) => r.number > max / 2 && r.number <= max && r.winner === team).length;
+  const ot = v.rounds.filter((r) => r.number > max && r.winner === team).length;
+  return (
+    <span className="mhero__halves num">
+      <span className={firstSide === "T" ? "t-text" : "ct-text"}>{firstSide} <b>{h1}</b></span>
+      <span className={firstSide === "T" ? "ct-text" : "t-text"}>{firstSide === "T" ? "CT" : "T"} <b>{h2}</b></span>
+      {v.rounds.some((r) => r.number > max) && <span className="muted">OT <b>{ot}</b></span>}
+    </span>
+  );
+}
+
+/**
+ * A pro demo's hero: both teams by name and the final score, with no side of it called yours. Below,
+ * the line of the player the match is seen through, or how to pick one.
+ */
+function ProHero({ s, v }: { s: MatchEntry; v: MatchModel | null }) {
+  const map = s.match.map;
+  const [a, b] = teamNames(s, useHidePersonal());
+  const { us, them } = s.score;
+  const viewer = v && v.human !== null ? { name: v.players[v.human].name, line: statLine(v.b.lines.both[v.human]) } : null;
+  return (
+    <header className="mhero mhero--pro">
+      <MapAtmosphere map={map} />
+      <div className="mhero__in">
+        <div className="mhero__team">
+          <span className="caps">{s.usStartSide} first</span>
+          <b className="mhero__name">{a}</b>
+          <Halves v={v} team="us" usStart={s.usStartSide} />
+        </div>
+        <div className="mhero__center">
+          <div className="mhero__score num" aria-label={`${a} ${us}, ${b} ${them}`}>
+            <span className={us >= them ? "cream" : "lose"}>{us}</span>
+            <span className="res res--final">{us === them ? "Tie" : "Final"}</span>
+            <span className={them >= us ? "cream" : "lose"}>{them}</span>
+          </div>
+          <div className="mhero__meta">
+            <span className="mhero__map"><MapThumb map={map} size={18} /><b>{mapName(map)}</b></span>
+            <span>{fmtWhen(s.match)}</span>
+            {s.match.durationS !== null && <span data-tip="From the first round's start to the last round's end" tabIndex={0}>{fmtDuration(s.match.durationS)}</span>}
+            <SourceBadge s={sourceOf(s)} />
+          </div>
+        </div>
+        <div className="mhero__team mhero__team--them">
+          <span className="caps">{s.usStartSide === "CT" ? "T" : "CT"} first</span>
+          <b className="mhero__name">{b}</b>
+          <Halves v={v} team="them" usStart={s.usStartSide} />
+        </div>
+      </div>
+      {viewer ? (
+        <div className="mhero__you">
+          <span className="caps">Seen as</span>
+          <b className="mhero__viewer">{viewer.name}</b>
+          <span className="mhero__stat"><span className="meta">{ratingHeadline()}</span><b className="num" style={{ color: ratingText(viewer.line.rating ?? 1) }}>{fmtRating(viewer.line.rating)}</b></span>
+          <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{viewer.line.kills}<span className="faint">–</span>{viewer.line.deaths}</b></span>
+          <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(viewer.line.adr)}</b></span>
+          <span className="mhero__stat"><span className="meta">KAST</span><b className="num"><Num v={fmtPct(viewer.line.kast)} /></b></span>
+          <button type="button" className="btn btn--ghost btn--sm press mhero__clear" onClick={() => setQuery("as", null)}>See the whole match</button>
+        </div>
+      ) : (
+        <p className="mhero__you mhero__pick meta">Pick a player on the scoreboard to see the match through them.</p>
+      )}
     </header>
   );
 }

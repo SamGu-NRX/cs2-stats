@@ -9,7 +9,8 @@ import { TradingGlyph } from "./glyphs";
 import { HeadToHead } from "./HeadToHead";
 import { Openings } from "./Openings";
 import { fmtMetric } from "../../data/engine";
-import { deathOf, killsBy, type MPlayer as PlayerRow } from "../../data/match";
+import { deathOf, killsBy, sideWord, teamLabel, type MPlayer as PlayerRow, type ViewedMatch } from "../../data/match";
+import { Viewed } from "./Viewer";
 import { metric as meta } from "../../data/meta";
 import { useData } from "../../data/provider";
 import { FlagIcon, WinIcon } from "../../icons/game";
@@ -27,7 +28,7 @@ export default function Duels({ v }: TabProps) {
   return (
     <div className="tabpad duels">
       <HeadToHead v={v} />
-      <YourRounds v={v} />
+      <Viewed v={v} what="their kills and deaths round by round" pad={false}>{(w) => <YourRounds v={w} />}</Viewed>
       <div className="grid-2">
         <Card title="Opening duels" icon={<FirstPip />} aside={<SectionAside label="First kills" value={<><span className="cream">{fk("us")}</span><span className="faint">–</span>{fk("them")}</>} />} flush>
           <DataTable<PlayerRow>
@@ -62,7 +63,7 @@ export default function Duels({ v }: TabProps) {
           />
         </Card>
       </div>
-      <Openings v={v} file={v.file} />
+      <Viewed v={v} what="their opening duels" pad={false}>{(w) => <Openings v={w} file={v.file} />}</Viewed>
       <Clutches v={v} file={v.file} />
     </div>
   );
@@ -85,12 +86,12 @@ function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
   const of = (t: "us" | "them") => (rows ?? []).filter((c) => v.players[c.pi].team === t);
   const score = (t: "us" | "them") => <>{of(t).filter((c) => c.won).length}<span className="faint">/{of(t).length}</span></>;
   return (
-    <Card title="Clutches" icon={<span className="cream"><WinIcon how="defuse" size={16} beside /></span>} aside={<><SectionAside label="You" value={score("us")} color="var(--cream)" /><SectionAside label="Them" value={score("them")} /></>}>
+    <Card title="Clutches" icon={<span className="cream"><WinIcon how="defuse" size={16} beside /></span>} aside={<><SectionAside label={sideWord(v, "us")} value={score("us")} color="var(--cream)" /><SectionAside label={sideWord(v, "them")} value={score("them")} /></>}>
       {rows === null ? <div className="skel" style={{ height: 120 }} /> : (
         <div className="clutches">
           {(["us", "them"] as const).map((t) => (
-            <section key={t} aria-label={t === "us" ? "Your team's clutches" : "Opponents' clutches"}>
-              <h3 className="caps clutches__h">{t === "us" ? "Your team" : "Opponents"}</h3>
+            <section key={t} aria-label={`Clutches: ${teamLabel(v, t)}`}>
+              <h3 className="caps clutches__h">{teamLabel(v, t)}</h3>
               {of(t).length ? (
                 <ul className="clutches__list">
                   {of(t).map((c) => (
@@ -115,7 +116,7 @@ function Clutches({ v, file }: { v: TabProps["v"]; file: string }) {
 
 /** Your fights round by round: who you killed, who killed you, and how you shot. Time to damage and
  *  reaction need mesh visibility, which plugin recordings do not carry. */
-function YourRounds({ v }: { v: TabProps["v"] }) {
+function YourRounds({ v }: { v: ViewedMatch }) {
   const gated = !v.visibility;
   const gate = `${NEEDS_DEMO}: this file lacks view angles and line of sight`;
   const human = v.human;
@@ -124,7 +125,7 @@ function YourRounds({ v }: { v: TabProps["v"] }) {
   })), [v, human]);
   const metric = (s: (typeof rows)[number]["s"], id: string) => fmtMetric(id, s[id]);
   return (
-    <Card title="Your duels, round by round" aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
+    <Card title={v.pro ? `${v.players[v.human].name}, round by round` : "Your duels, round by round"} aside={<span className="meta">{rows.length} rounds with a fight</span>} collapsible id="duels-rounds" flush>
       <div className="tbl-wrap">
         <table className="tbl yrounds">
           <thead><tr>

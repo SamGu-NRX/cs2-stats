@@ -2,8 +2,9 @@
 // - recorded: written by the capture plugin (aim, movement positions, economy, utility purchases);
 // - converted: an older console log converted to the plugin format (no aim, no movement;
 //   rounds held as totals only are left out);
-// - pro: a pro match demo, extracted to tables. Today these arrive only as "dev/<folder>" paths, which
-//   `vite dev` serves when CS2_DEV_MATCHES is set (host.ts). They open from Matches like any match but
+// - pro: a pro match demo, extracted to tables: a map from the pro match library folder the user picks
+//   in Data & settings ("pro/..." paths, host.ts), or in `vite dev` a folder of CS2_DEV_MATCHES
+//   ("dev/<folder>"). They open from Matches' Pro view like any match, with no recording player, and
 //   are never part of the user's career (data/engine.ts isOwn);
 // - synthetic: the generated demo match (?demo=synthetic);
 // - valve: one of the user's Valve matchmaking demos, extracted by extractor/valve_import.py
@@ -19,11 +20,17 @@ export interface SourceInfo {
   missing: string[];
 }
 
+/**
+ * A pro demo: an extracted map from the pro match library (host.ts, "pro/<archive>/<map>...") or a
+ * dev match folder ("dev/<folder>"). Nobody recorded it, so it has no recording player (MatchEntry.you).
+ */
+export const isProFile = (file: string) => file.startsWith("pro/") || file.startsWith("dev/");
+
 export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic", valve: "Valve" };
 
 /** From the file's path (a pro demo), the match's source (a Valve demo), the plugin's own label for the file (env.plugin), and whether it holds shots and positions. */
 export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "hasPos" | "match">): SourceInfo {
-  if (e.file.startsWith("dev/")) return { id: "pro", label: SOURCE_LABEL.pro, missing: [] };
+  if (isProFile(e.file)) return { id: "pro", label: SOURCE_LABEL.pro, missing: [] };
   const id: SourceId = e.match.source === "valve" ? "valve" : e.origin === "legacy-convert" ? "converted" : e.origin === "synthetic-demo" ? "synthetic" : "recorded";
   if (id === "converted") return { id, label: SOURCE_LABEL[id], missing: ["aim", "movement"] };
   const missing: string[] = [];

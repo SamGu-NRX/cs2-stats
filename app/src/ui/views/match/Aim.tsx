@@ -4,9 +4,9 @@ import { AimIcon } from "../../icons/ui";
 import { profileHref } from "../../router";
 import { AimPanels } from "../aim/AimPanels";
 import { Empty, NeedsDemo } from "../shared";
-import type { TabProps } from "./MatchView";
+import type { ViewedTabProps } from "./MatchView";
 
-export default function Aim({ v }: TabProps) {
+export default function Aim({ v }: ViewedTabProps) {
   const query = useMemo(() => ({ files: [v.file], filter: { player: v.players[v.human].key } }), [v]);
   if (!v.entry.hasAim) {
     return (

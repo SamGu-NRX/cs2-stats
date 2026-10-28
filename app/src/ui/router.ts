@@ -220,9 +220,21 @@ const qs = (q?: Record<string, string | number | null | undefined>) => {
   return s ? `?${s}` : "";
 };
 
+/**
+ * The player picked on a pro demo's scoreboard (?as=, their position on it) stays on every link within that
+ * match, so a tab or round link keeps seeing it through the same player. A link that names `as`
+ * itself, null included, decides.
+ */
+function withViewer(file: string, q?: Record<string, string | number | null | undefined>) {
+  if (q && "as" in q) return q;
+  const c = current;
+  const as = c.page === "match" && c.file && matchFile(c.file) === file ? c.query.get("as") : null;
+  return as ? { ...q, as } : q;
+}
+
 /** A match's address: its file path, or its id while personal info is hidden (matchId). */
 export const matchHref = (file: string, tab: MatchTab = "overview", q?: Record<string, string | number | null | undefined>) =>
-  `#/match/${hidingPersonal() ? matchId(file) : file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(q)}`;
+  `#/match/${hidingPersonal() ? matchId(file) : file.split("/").map(encodeURIComponent).join("/")}/${tab}${qs(withViewer(file, q))}`;
 export const pageHref = (page: Exclude<Page, "match">, q?: Record<string, string | number | null | undefined>) => `#/${page === "home" ? "" : page}${qs(q)}`;
 export const profileHref = (tab: ProfileTab = "overview", q?: Record<string, string | number | null | undefined>) => `#/profile/${tab}${qs(q)}`;
 
@@ -253,7 +265,8 @@ function tidyProfileUrl() {
 function tidyMatchUrl() {
   if (current.page !== "match" || !current.file || isMatchId(current.file)) return;
   const q = current.query.toString();
-  const canon = matchHref(current.file, current.tab) + (q ? `?${q}` : "");
+  // the query is appended whole, so matchHref must not carry the picked player in it a second time
+  const canon = matchHref(current.file, current.tab, { as: null }) + (q ? `?${q}` : "");
   if (location.hash !== canon) history.replaceState(null, "", canon);
 }
 if (typeof location !== "undefined") {

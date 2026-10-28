@@ -10,7 +10,7 @@ import { Delta, Initials, Num, RemoteImg } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { AttrRadar } from "../../components/charts";
 import { Fig, MatchLollipops, symmetricMax } from "../../components/MatchSeries";
-import { attrsOf, fmtMetric, ratingTerms, type RatingSplit, type SideKey } from "../../data/engine";
+import { attrsOf, fmtMetric, ratingTerms, type OwnEntry, type RatingSplit, type SideKey } from "../../data/engine";
 import { useCall, useRollups } from "../../data/hooks";
 import { PANEL_TIP, PROVISIONAL_TIP, tipOf } from "../../data/tips";
 import { metric, styleIds } from "../../data/meta";
@@ -68,7 +68,7 @@ const swingOf = (v: Values) => (v.swing === null ? null : v.swing / 100);
  * the worst beside them and the bots' swing in the same matches, then where it comes from (the
  * engine's per-source split, Rolled.swingSources, as a waterfall that ends at the total).
  */
-export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: MatchEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: MatchEntry) => number | null }) {
+export function SwingCard({ you, list, bots, swingOf: matchSwing }: { you: Rolled; list: OwnEntry[]; bots: Rolled | null; /** a match's swing per round on the page's side, a fraction */ swingOf: (e: OwnEntry) => number | null }) {
   const swing = swingOf(you.v);
   const botSwing = bots ? swingOf(bots.v) : null;
   const per = [...list].reverse().map((s) => ({ s, v: matchSwing(s) }));

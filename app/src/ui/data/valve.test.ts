@@ -23,7 +23,7 @@ it("sees a Valve match from the user's SteamID64, which the host passes, not fro
   const t = valveTables({ 1: "CT", 2: "CT", 3: "T", 4: "T" }, 16);
   expect(() => entryOf("valve/a/v-1-00000000", "", derive(t, CS2RB))).toThrow(/recording player/);
   const e = entryOf("valve/a/v-1-00000000", "", derive(withPov(t, "3"), CS2RB));
-  expect([e.players[e.you].id, e.result, sourceOf(e).id]).toEqual(["3", "L", "valve"]);
+  expect([e.players[e.you!].id, e.result, sourceOf(e).id]).toEqual(["3", "L", "valve"]);
 });
 
 it("re-derives a Valve match when the user changes", () => {

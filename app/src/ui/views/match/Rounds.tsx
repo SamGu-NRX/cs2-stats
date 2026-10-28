@@ -9,7 +9,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useCall } from "../../data/hooks";
 import { HoverCard } from "../../components/overlay";
-import { roundColumns, roundMatrix, selectedColumn, type MatchModel as MatchView, type RoundCell, type RoundColumn } from "../../data/match";
+import { roundColumns, roundMatrix, selectedColumn, teamLabel, type MatchModel as MatchView, type RoundCell, type RoundColumn } from "../../data/match";
 import { statLine } from "../../data/engine";
 import { WIN_LABEL, WinIcon } from "../../icons/game";
 import { DeathMark } from "../../components/bits";
@@ -23,9 +23,10 @@ import type { Line } from "../../../worker/protocol";
 import type { TabProps } from "./MatchView";
 import { RatingByRound } from "./RatingByRound";
 import { RoundDrawer } from "./RoundDrawer";
+import { Viewed } from "./Viewer";
 
 export default function Rounds({ v, file, round }: TabProps) {
-  const rating = useCall("ratingBreakdown", [file, v.players[v.human].key, null]);
+  const rating = useCall("ratingBreakdown", v.human === null ? null : [file, v.players[v.human].key, null]);
   const rb = rating.data;
   const matrix = useMemo(() => roundMatrix(v), [v]);
   const cols = useMemo(() => roundColumns(v), [v]);
@@ -54,7 +55,7 @@ export default function Rounds({ v, file, round }: TabProps) {
       <RoundDrawer v={v} cols={cols} col={sel} rb={rb} rbError={rating.error} onClose={() => open(null)} onStep={(d) => sel !== null && open(Math.max(0, Math.min(n - 1, sel + d)))}>
         <Inspector v={v} cols={cols} matrix={matrix} sel={sel} onOpen={open} />
         <Legend />
-        <RatingByRound v={v} file={file} rb={rb} error={rating.error} selected={sel === null ? null : cols[sel].number} />
+        <Viewed v={v} what="their rating round by round" pad={false}>{(w) => <RatingByRound v={w} file={file} rb={rb} error={rating.error} selected={sel === null ? null : cols[sel].number} />}</Viewed>
       </RoundDrawer>
     </div>
   );
@@ -162,7 +163,7 @@ function Inspector({ v, cols, matrix, sel, onOpen }: { v: MatchView; cols: Round
     return (
       <div className="ig__row ig__row--team" role="row">
         <div className="ig__name ig__name--team" role="rowheader">
-          <b>{t === "us" ? "Your team" : "Opponents"}</b>
+          <b>{teamLabel(v, t)}</b>
           <span className={`ig__first ${firstSide === "T" ? "t-text" : "ct-text"}`}>{firstSide} first</span>
           <span className="num cream">{t === "us" ? v.entry.score.us : v.entry.score.them}</span>
         </div>

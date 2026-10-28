@@ -5,6 +5,7 @@ import { ClutchBadge } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { DataTable, type Column } from "../../components/DataTable";
 import { useCall } from "../../data/hooks";
+import { teamLabel } from "../../data/match";
 import { WeaponIcon } from "../../icons/game";
 import { fmtClock } from "../../lib/format";
 import { go, matchHref } from "../../router";
@@ -49,8 +50,8 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
   ];
   return (
     <Card title="Every clutch" className="clutchtbl" flush id="match-clutch-list" collapsible
-      aside={<>
-        <SectionAside label="You won" value={<>{mine.filter((c) => c.won).length}<span className="faint">/{mine.length}</span></>} color="var(--cream)" />
+      aside={v.human === null ? undefined : <>
+        <SectionAside label={v.pro ? `${v.players[v.human].name} won` : "You won"} value={<>{mine.filter((c) => c.won).length}<span className="faint">/{mine.length}</span></>} color="var(--cream)" />
         <SectionAside label="Saved" value={mine.filter((c) => c.saved).length} />
       </>}>
       {call.error && !call.stale ? <div className="tabpad"><LoadFailed what="The clutches" error={call.error} /></div> : !call.data || call.stale ? <div className="skel" style={{ height: 160, margin: 12 }} /> : !rows.length ? (
@@ -58,11 +59,11 @@ export function ClutchList({ v, file }: { v: TabProps["v"]; file: string }) {
       ) : (
         <div className="clutchtbl__cols">
           {(["us", "them"] as const).map((t) => (
-            <section key={t} aria-label={t === "us" ? "Your team's clutches" : "Opponents' clutches"}>
-              <h3 className="caps clutchtbl__h">{t === "us" ? "Your team" : "Opponents"}</h3>
+            <section key={t} aria-label={`Clutches: ${teamLabel(v, t)}`}>
+              <h3 className="caps clutchtbl__h">{teamLabel(v, t)}</h3>
               {of(t).length ? (
                 <DataTable<Row>
-                  label={t === "us" ? "Your team's clutches" : "Opponents' clutches"}
+                  label={`Clutches: ${teamLabel(v, t)}`}
                   rows={of(t)}
                   rowKey={(c) => `${c.round}-${c.pi}`}
                   defaultSort={{ key: "round", dir: "asc" }}

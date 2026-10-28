@@ -22,11 +22,15 @@ export interface DerivePool {
 }
 
 /**
- * Workers for a machine with `cores` logical cores: half of them less one, at most 4, so the UI, the
- * game and the rest of the system keep the other half. Each worker holds one match's tables and facts
- * at a time. Under 2 there is no pool, and the stats worker derives in its own thread.
+ * Workers for a machine with `cores` logical cores and `memoryGB` of memory (navigator.deviceMemory,
+ * which Chromium rounds and caps at 8; null when the runtime does not say, read as 4). By cores: half
+ * of them less one, so the UI, the game and the rest of the system keep the other half. By memory: one
+ * per 2 GB, since a worker holds one match's tables and facts at a time and four of them peaked at
+ * 1.1 GB of heap together over the 1,091-map library. At most 4. Under 2 there is no pool, and the
+ * stats worker derives in its own thread.
  */
-export const poolSize = (cores: number) => Math.max(0, Math.min(4, Math.floor(cores / 2) - 1));
+export const poolSize = (cores: number, memoryGB: number | null) =>
+  Math.max(0, Math.min(4, Math.floor(cores / 2) - 1, Math.floor((memoryGB ?? 4) / 2)));
 
 /** `size` workers deriving with the win-probability pack's bytes (null: the CS2RB model), reading through `bytes`. */
 export function derivePool(size: number, winprobPack: ArrayBuffer | null, bytes: Bytes): DerivePool {

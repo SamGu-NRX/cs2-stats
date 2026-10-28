@@ -13,7 +13,7 @@ import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import { AgentImg } from "../components/Agent";
-import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline } from "../data/engine";
+import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { hasMetric, metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
@@ -95,7 +95,7 @@ export function HomeView() {
 
 // ---------------------------------------------------------------- last match hero
 
-function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Totals | null }) {
+function LastMatch({ s, list, t }: { s: OwnEntry; list: OwnEntry[]; t: Totals | null }) {
   const v = useMatch(s.file).data;
   const line = entryLine(s);
   const avg = t ? lineOf(t.both, t.rating.value) : null;
@@ -161,7 +161,7 @@ function LastMatch({ s, list, t }: { s: MatchEntry; list: MatchEntry[]; t: Total
 
 // ---------------------------------------------------------------- form
 
-function FormCard({ list }: { list: MatchEntry[] }) {
+function FormCard({ list }: { list: OwnEntry[] }) {
   const filter = useFormFilter();
   const firsts = useMemo(() => firstOfDay(list.map(formDay)), [list]);
   const win = formWindow(list, entryRating, formDay, filter);
@@ -195,7 +195,7 @@ function FormCard({ list }: { list: MatchEntry[] }) {
 
 // ---------------------------------------------------------------- tiles
 
-function Tiles({ list, t }: { list: MatchEntry[]; t: Totals | null }) {
+function Tiles({ list, t }: { list: OwnEntry[]; t: Totals | null }) {
   const aimMatches = list.filter((e) => e.hasAim).length;
   const visibility = list.some((e) => e.match.visibility === "ok");
   return (
@@ -269,10 +269,10 @@ function KastSplit({ s }: { s: Rolled }) {
 
 // ---------------------------------------------------------------- recent matches
 
-function RecentMatches({ list }: { list: MatchEntry[] }) {
+function RecentMatches({ list }: { list: OwnEntry[] }) {
   const rows = list.slice(0, 8);
   const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [list]); // eslint-disable-line react-hooks/exhaustive-deps
-  const line = (s: MatchEntry) => lines.get(s.file)!;
+  const line = (s: OwnEntry) => lines.get(s.file)!;
   return (
     <Card title="Recent matches" aside={<a href={pageHref("matches")} className="link">All {plural(list.length, "match", "matches")} <ChevronRightIcon size={12} /></a>} flush>
       <DataTable
@@ -298,13 +298,13 @@ function RecentMatches({ list }: { list: MatchEntry[] }) {
 
 // ---------------------------------------------------------------- highlights
 
-function Highlights({ list, last, t }: { list: MatchEntry[]; last: MatchEntry; t: Totals | null }) {
+function Highlights({ list, last, t }: { list: OwnEntry[]; last: OwnEntry; t: Totals | null }) {
   const v = useMatch(last.file).data;
   // Home's map and match count carry over to Profile's full list
   const scope = scopeQuery(useRoute().query);
   // the round where your swing was highest, kills breaking ties
   const best = useMemo(() => {
-    if (!v) return null;
+    if (!v || v.human === null) return null;
     const cells = roundMatrix(v)[v.human].filter((c) => !c.empty);
     const score = (c: (typeof cells)[number]) => (c.swing ?? 0) * 100 + c.kills.length * 0.01;
     return cells.reduce<(typeof cells)[number] | null>((b, c) => (!b || score(c) > score(b) ? c : b), null);

@@ -1,0 +1,23 @@
+/* The pro match library: Matches' Pro view, a pro demo's hero, and the picker for seeing a pro demo
+   through one player. No motion of its own: filtering and picking are frequent, so the list and the
+   panels change in place; the buttons keep the shared press feedback (.press). */
+
+.res--final { box-shadow: inset 0 0 0 1px var(--ink3); color: var(--ink2); }
+.mhero__viewer { font: 700 15px/1 var(--f); color: var(--cream); }
+.mhero__clear { margin-left: auto; }
+.mhero__pick { color: var(--ink2); }
+
+.viewer-need { display: grid; gap: 12px; padding: 16px; border-radius: var(--r-card); background: var(--bg2); }
+.viewer-need__lead { margin: 0; color: var(--ink); font: 500 14px/1.4 var(--f); }
+.viewer-need__team { display: grid; gap: 6px; }
+.viewer-need__players { display: flex; flex-wrap: wrap; gap: 6px; }
+.viewer-need__players .chip { height: 28px; padding: 0 10px; cursor: pointer; color: var(--ink); font-size: 13px; }
+.viewer-need__players .chip:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .viewer-need__players .chip:hover { box-shadow: inset 0 0 0 1px var(--ink3); }
+}
+
+.pro-player .input { width: 180px; }
+.pro-teams { white-space: nowrap; }
+.source__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.rail__team { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

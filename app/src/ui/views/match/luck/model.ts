@@ -8,7 +8,7 @@
 import { INPUT_COVERAGE, type Input, type KillFact, type Measures } from "../../../../stats/facts";
 import { MAX_SPEED } from "../../../../stats/aim-ref";
 import { CLOSE_CALL_HP, LOW_HP } from "../../../../stats/luck";
-import { deathOf, killsBy, type MatchModel, type Team } from "../../../data/match";
+import { deathOf, killsBy, type MatchModel, type Team, type ViewedMatch } from "../../../data/match";
 import { DASH, plural, signed } from "../../../lib/format";
 
 export { CLOSE_CALL_HP, LOW_HP };
@@ -156,7 +156,7 @@ const isGun = (k: KillFact) => MAX_SPEED[k.weapon] !== undefined;
 const named = (count: number, candidates: KillFact[]) => (count > 0 && count === candidates.length ? candidates : []);
 
 /** Every lucky moment of player `pi`, yours and the enemies' on you, in round order. */
-export function luckMoments(v: MatchModel, pi: number = v.human): Moment[] {
+export function luckMoments(v: ViewedMatch, pi: number = v.human): Moment[] {
   const out: Moment[] = [];
   for (const r of v.rounds) {
     const row = r.pr[pi];
@@ -205,7 +205,7 @@ export interface RoundLuck { ri: number; round: number; won: boolean | null; hal
  * Each round's luck for player `pi`: their hits beyond the expected minus the enemies' beyond the
  * expected on them, in hits (not per 24 rounds). Null where the round's shots lack an input.
  */
-export function roundLuck(v: MatchModel, pi: number = v.human): RoundLuck[] {
+export function roundLuck(v: ViewedMatch, pi: number = v.human): RoundLuck[] {
   return v.rounds.map((r) => {
     // a round row leaves out its measures that are 0 (PlayerRound.m)
     const m = r.pr[pi]?.m;

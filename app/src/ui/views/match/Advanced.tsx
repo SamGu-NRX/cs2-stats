@@ -6,7 +6,7 @@ import { useMemo, type ReactNode } from "react";
 import { ClutchBadge, FirstPip } from "../../components/bits";
 import { Card } from "../../components/Card";
 import { BUY_CLASSES, BUY_CLASS_LABEL, clutchRows } from "../../data/engine";
-import type { MatchModel, Team } from "../../data/match";
+import { sideWord, teamLabel, type MatchModel, type Team } from "../../data/match";
 import { metric } from "../../data/meta";
 import { BuyIcon, WeaponIcon, WinIcon } from "../../icons/game";
 import { TradingIcon } from "../../icons/attributes";
@@ -15,6 +15,7 @@ import { scoreText, toScore } from "../../lib/scale";
 import { Hint } from "./glyphs";
 import type { TabProps } from "./MatchView";
 import { BombsitesCard, SituationsCard } from "./Situations";
+import { Viewed } from "./Viewer";
 import { ClutchList } from "./ClutchList";
 
 const pct = (a: number, b: number) => (b > 0 ? (100 * a) / b : null);
@@ -52,9 +53,9 @@ function Pair({ label, tip, us, them, fmt, good }: { label: string; tip: string;
   );
 }
 
-function Block({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
+function Block({ v, title, icon, children }: { v: MatchModel; title: string; icon: ReactNode; children: ReactNode }) {
   return (
-    <Card title={<span className="adv__title">{icon}{title}</span>} aside={<span className="adv__legend"><span className="cream">You</span><span className="faint">Them</span></span>}>
+    <Card title={<span className="adv__title">{icon}{title}</span>} aside={<span className="adv__legend"><span className="cream">{sideWord(v, "us")}</span><span className="faint">{sideWord(v, "them")}</span></span>}>
       <div className="pairs">{children}</div>
     </Card>
   );
@@ -71,20 +72,20 @@ export default function Advanced({ v, file }: TabProps) {
   return (
     <div className="tabpad advanced">
       <div className="grid-2">
-        <Block title="Opening duels" icon={<FirstPip />}>
+        <Block v={v} title="Opening duels" icon={<FirstPip />}>
           <Pair label="Opening kills" tip="Rounds where the team made the first kill" us={a.fk} them={b.fk} fmt={n} />
           <Pair label="Rounds won after the opening kill" tip="Of the rounds a team opened, the share it won" us={pct(a.fkWon, a.fk)} them={pct(b.fkWon, b.fk)} fmt={p} good={(x) => toScore(x, 65, 25)} />
         </Block>
-        <Block title="Trading" icon={<TradingIcon size={15} />}>
+        <Block v={v} title="Trading" icon={<TradingIcon size={15} />}>
           <Pair label="Trade kills" tip="Kills on an enemy who had just killed a teammate" us={a.tradeKills} them={b.tradeKills} fmt={n} />
           <Pair label="Deaths traded" tip={metric("deathsTradedPct").def} us={a.deathsTraded} them={b.deathsTraded} fmt={p} good={(x) => toScore(x, 25, 20)} />
         </Block>
-        <Block title="Sides" icon={<span className="adv__sides"><i className="t-dot" /><i className="ct-dot" /></span>}>
+        <Block v={v} title="Sides" icon={<span className="adv__sides"><i className="t-dot" /><i className="ct-dot" /></span>}>
           <Pair label="T rounds won" tip="Rounds won on T, of those played on T" us={pct(a.tWon, a.tRounds)} them={pct(b.tWon, b.tRounds)} fmt={p} good={(x) => toScore(x, 50, 30)} />
           <Pair label="CT rounds won" tip="Rounds won on CT, of those played on CT" us={pct(a.ctWon, a.ctRounds)} them={pct(b.ctWon, b.ctRounds)} fmt={p} good={(x) => toScore(x, 50, 30)} />
           <Pair label="Average winning round" tip="Seconds from freeze end to the end of rounds the team won" us={a.avgWin} them={b.avgWin} fmt={(x) => fmtSecs(x, 0)} />
         </Block>
-        <Block title="The bomb" icon={<WeaponIcon name="c4" height={15} beside />}>
+        <Block v={v} title="The bomb" icon={<WeaponIcon name="c4" height={15} beside />}>
           <Pair label="Plants as T" tip="Rounds the team planted on T" us={a.plants} them={b.plants} fmt={n} />
           <Pair label="Plants that exploded" tip="Share of a team's plants that exploded" us={pct(a.exploded, a.plants)} them={pct(b.exploded, b.plants)} fmt={p} />
           <Pair label="Defuses as CT" tip="Rounds the team defused" us={a.defused} them={b.defused} fmt={n} />
@@ -108,7 +109,7 @@ export default function Advanced({ v, file }: TabProps) {
             })}
           </ul>
         </Card>
-        <Card title={<span className="adv__title"><WinIcon how="defuse" size={15} beside />Clutches <Hint tip="Your team's 1vX situations by enemies left." /></span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> you, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> them</span>}>
+        <Card title={<span className="adv__title"><WinIcon how="defuse" size={15} beside />Clutches <Hint tip={`${teamLabel(v, "us")}: 1vX situations by enemies left.`} /></span>} aside={<span className="meta"><span className="cream num">{won(a.clutches)}/{played(a.clutches)}</span> {sideWord(v, "us")}, <span className="num">{won(b.clutches)}/{played(b.clutches)}</span> {sideWord(v, "them")}</span>}>
           <ul className="clist">
             {a.clutches.map((c) => (
               <li key={c.vs}>
@@ -120,8 +121,7 @@ export default function Advanced({ v, file }: TabProps) {
           </ul>
         </Card>
         <ClutchList v={v} file={file} />
-        <SituationsCard v={v} file={file} />
-        <BombsitesCard v={v} file={file} />
+        <Viewed v={v} what="their situations and bombsite play" pad={false}>{(w) => <><SituationsCard v={w} file={file} /><BombsitesCard v={w} file={file} /></>}</Viewed>
       </div>
     </div>
   );

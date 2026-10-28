@@ -1,7 +1,7 @@
 // Sortable table. Headers are buttons inside <th aria-sort>; a click sorts (numbers start
 // descending, text ascending) and a second click flips. Sorting never animates. Rows move with
 // J/K or the arrow keys when the table body has focus, Enter opens the active row, and Shift+F10
-// or the menu key opens its row menu. Missing values sort last. Past 200 rows only the visible
+// or the menu key opens its row menu. Missing values sort last. Past 300 rows only the visible
 // window renders (fixed 36 px rows).
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { SortIcon } from "../icons/ui";
@@ -27,7 +27,13 @@ export interface Column<T> {
 
 export interface Group<T> { label: ReactNode; rows: T[]; key: string }
 
-const VIRTUAL_FROM = 200;
+/**
+ * Rows from which only the visible window renders. A windowed table hides its other rows from the
+ * browser's find in page and from a screen reader's table navigation, so ordinary lists (a career of
+ * a few hundred matches, every scoreboard) stay whole; a list past this, such as the pro library, gets
+ * a search box of its own. Windowed rows carry aria-rowindex against the table's aria-rowcount.
+ */
+const VIRTUAL_FROM = 300;
 const ROW_H = 36;
 
 export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort, onOpen, rowClass, label, caption, sortKey, onSort, maxHeight, fixed, activeKey, onRowContext }: {
@@ -125,7 +131,7 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
 
   let index = 0;
   const renderRow = (r: T, i: number) => (
-    <Row key={rowKey(r)} r={r} i={i} active={i === active} cls={rowClass?.(r)} columns={columns} sortKey={sort?.key ?? null} onOpen={onOpen} setActive={setActive} />
+    <Row key={rowKey(r)} r={r} i={i} active={i === active} cls={rowClass?.(r)} columns={columns} sortKey={sort?.key ?? null} onOpen={onOpen} setActive={setActive} rowIndex={virtual ? i + 2 : undefined} />
   );
 
   let window: { start: number; end: number } | null = null;
@@ -142,7 +148,7 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
         {caption && <caption className="sr-only">{caption}</caption>}
         <colgroup>{columns.map((c) => <col key={c.key} style={c.width ? { width: c.width } : undefined} />)}</colgroup>
         <thead>
-          <tr>
+          <tr aria-rowindex={virtual ? 1 : undefined}>
             {columns.map((c) => {
               const on = sort?.key === c.key && !!c.sort;
               const aria = on ? (sort!.dir === "asc" ? "ascending" : "descending") : c.sort ? "none" : undefined;
@@ -196,13 +202,16 @@ export function DataTable<T>({ columns, rows, groups, foot, rowKey, defaultSort,
  * One body row. Memoized: scrolling a long table re-renders the table on every scroll event, and the
  * rows still in view keep their props, so only the rows that scroll in are drawn.
  */
-const Row = memo(function Row<T>({ r, i, active, cls, columns, sortKey, onOpen, setActive }: {
+const Row = memo(function Row<T>({ r, i, active, cls, columns, sortKey, onOpen, setActive, rowIndex }: {
   r: T; i: number; active: boolean; cls: string | undefined; columns: Column<T>[]; sortKey: string | null;
   onOpen?: (row: T) => void; setActive: (i: number) => void;
+  /** the row's place in the whole table (the header is 1), set when only a window of rows renders */
+  rowIndex?: number;
 }) {
   return (
     <tr
       data-i={i}
+      aria-rowindex={rowIndex}
       data-link={onOpen ? "" : undefined}
       data-active={active}
       className={cls}
@@ -218,4 +227,4 @@ const Row = memo(function Row<T>({ r, i, active, cls, columns, sortKey, onOpen, 
       ))}
     </tr>
   );
-}) as <T>(p: { r: T; i: number; active: boolean; cls: string | undefined; columns: Column<T>[]; sortKey: string | null; onOpen?: (row: T) => void; setActive: (i: number) => void; key?: string }) => JSX.Element;
+}) as <T>(p: { r: T; i: number; active: boolean; cls: string | undefined; columns: Column<T>[]; sortKey: string | null; onOpen?: (row: T) => void; setActive: (i: number) => void; rowIndex?: number; key?: string }) => JSX.Element;
