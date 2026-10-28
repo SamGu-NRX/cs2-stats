@@ -71,7 +71,7 @@ awpy refuses a demo cut off mid-file ("unexpected end of data"). demoparser2 rea
 - **Penetration** for non-fatal hits: `player_hurt` has none (`kills.penetrated` covers kill shots).
 - **Aim punch:** `m_aimPunchAngle` is not networked to GOTV.
 - **Inferno extent:** only the origin and lifetime are stored.
-- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick. When the recording skipped the tick a flashbang detonated on, and its event with it, the change lands on the next recorded tick: it is credited to the one flashbang whose trajectory ended for good just before the skipped tick (its last position is the tick before its detonation), and that detonation is added to `grenade_events` with `recovered` true. With no such flashbang, or several, the map fails.
+- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick. When the recording skipped the tick a flashbang detonated on, and its event with it, the change lands on the next recorded tick: it is credited to the one flashbang whose trajectory ended for good just before the skipped tick (its last position is the tick before its detonation), and that detonation is added to `grenade_events` with `recovered` true. With no such flashbang, or several, the map fails. A blind outside the counted rounds (inside a backup-restored attempt, say) is dropped with that attempt's detonations before any of this, as every row there is.
 - **Weapon max speed:** no verified per-weapon table is bundled; join a cited table in the engine.
 
 ## Tables

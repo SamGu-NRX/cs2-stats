@@ -2089,6 +2089,12 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         sp = stamp(sp)
         T["spotted"] = sp[sp["round"] > 0]
         bl_raw = pd.concat(blind_parts, ignore_index=True).sort_values(["tick", "steamid"], kind="stable")
+        # A blind outside the counted rounds goes with the detonations there, which gev left out (round 0): inside
+        # a voided attempt, crediting it first found no detonation on its tick and failed the map (26 OpenCS2 maps:
+        # a flashbang_detonate on the blind's own tick, in an attempt a backup restore rolled back).
+        bl_raw = bl_raw[(assign_rounds(bl_raw.tick, rounds, voided, final_tick) > 0).to_numpy()]
+        blinds = list(zip(bl_raw.tick, bl_raw.steamid.astype("int64").astype(object), bl_raw.flash_duration.astype(float),
+                          bl_raw.X, bl_raw.Y, bl_raw.Z))
         blinds = list(zip(bl_raw.tick, bl_raw.steamid.astype("int64").astype(object), bl_raw.flash_duration.astype(float),
                           bl_raw.X, bl_raw.Y, bl_raw.Z))
 

@@ -177,3 +177,20 @@ def test_a_player_who_left_before_his_counters_were_set_does_not_fail_the_map(tm
     match = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet").row(0, named=True)
     # He has no reading, so no departed row; the two who left on the last tick are on the final scoreboard.
     assert (match["n_rounds"], match["departed"]) == (19, "[]")
+
+def test_blinds_inside_a_voided_attempt_go_with_its_detonations(tmp_path):
+    # Fixture I (an OpenCS2 Ancient map, 42 rounds): a backup restore voided ticks 208751-228731. A flashbang
+    # detonated on tick 210634 inside it and blinded three players there. The detonation was left out with the
+    # attempt, and the blinds were credited first: no detonation on their tick, and the map failed. 26 OpenCS2
+    # maps failed this way.
+    src = FIXTURES / "fixture-i.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; blinds in a voided attempt are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    match = pl.read_parquet(d / "match.parquet").row(0, named=True)
+    assert json.loads(match["voided_windows"]) == [[208751, 228731]]
+    blinds = pl.read_parquet(d / "blinds.parquet")
+    assert blinds.filter((pl.col("tick") >= 208751) & (pl.col("tick") <= 228731)).height == 0
+    assert pl.read_parquet(d / "grenade_events.parquet").filter(pl.col("recovered")).height == 0
