@@ -174,7 +174,7 @@ function proFolder(): Plugin {
     };
     const root = proRoot();
     try {
-      if (url.pathname === "/__pro/list") return send(200, JSON.stringify(root ? listPro(root) : { folder: null, files: [], skipped: [], incomplete: 0, error: null }));
+      if (url.pathname === "/__pro/list") return send(200, JSON.stringify(root ? listPro(root) : { folder: null, library: null, files: [], skipped: [], incomplete: 0, error: null }));
       if (url.pathname === "/__pro/file") {
         if (!root) return send(404, JSON.stringify({ error: "CS2_PRO_LIBRARY is not set" }));
         const rel = fileParam(url.search, "f");

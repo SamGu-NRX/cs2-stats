@@ -11,6 +11,8 @@ export interface ProEntry { file: string; size: number; mtime: number }
 export interface ProListing {
   /** the library folder; null when none is set */
   folder: string | null;
+  /** the library's resolved path once the folder opens (pro.rs ProListing.library): part of every listed map's cache key */
+  library: string | null;
   files: ProEntry[];
   /** map folders left out, and why */
   skipped: { file: string; why: string }[];
@@ -132,10 +134,11 @@ function mapAnswer(dir: string, rel: string): Answer {
 
 /** Every whole map of the library; a folder that cannot be listed is reported in `error`. */
 export function listPro(folder: string, app: string | null = appDir()): ProListing {
-  const out: ProListing = { folder, files: [], skipped: [], incomplete: 0, error: null };
+  const out: ProListing = { folder, library: null, files: [], skipped: [], incomplete: 0, error: null };
   let lib: Library, series: Dirent[];
   try {
     lib = openLibrary(folder, app);
+    out.library = lib.canon;
     series = readdirSync(lib.series, { withFileTypes: true });
   } catch (e) {
     return { ...out, error: (e as Error).message };

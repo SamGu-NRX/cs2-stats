@@ -170,6 +170,9 @@ fn resolve(map: &Path, rel: &str) -> Map {
 pub struct ProListing {
     /// the folder the user picked; None when none is set
     folder: Option<String>,
+    /// the library's canonical path, once the folder opens: part of every listed map's cache key, so a map
+    /// at the same path, size and time in another library is not mistaken for this one
+    library: Option<String>,
     files: Vec<FileEntry>,
     /// map folders left out, and why
     skipped: Vec<Skipped>,
@@ -182,7 +185,7 @@ pub struct ProListing {
 /// Every whole map of the library. A folder that cannot be listed is reported in `error`, not returned as
 /// an error, so the user's own matches still load. A series or map folder that is a link is left out.
 pub fn list_in(folder: &Path, app: Option<&Path>) -> ProListing {
-    let mut out = ProListing { folder: Some(folder.display().to_string()), files: Vec::new(), skipped: Vec::new(), incomplete: 0, error: None };
+    let mut out = ProListing { folder: Some(folder.display().to_string()), library: None, files: Vec::new(), skipped: Vec::new(), incomplete: 0, error: None };
     let lib = match open(folder, app) {
         Ok(l) => l,
         Err(e) => {
@@ -190,6 +193,7 @@ pub fn list_in(folder: &Path, app: Option<&Path>) -> ProListing {
             return out;
         }
     };
+    out.library = Some(lib.canon.display().to_string());
     let series = match fs::read_dir(&lib.series) {
         Ok(s) => s,
         Err(e) => {
@@ -316,7 +320,7 @@ pub async fn forget_pro_library() -> Result<(), String> {
 pub async fn list_pro() -> Result<ProListing, String> {
     Ok(match library_folder()? {
         Some(f) => list_in(&f, app_dir().as_deref()),
-        None => ProListing { folder: None, files: Vec::new(), skipped: Vec::new(), incomplete: 0, error: None },
+        None => ProListing { folder: None, library: None, files: Vec::new(), skipped: Vec::new(), incomplete: 0, error: None },
     })
 }
 
@@ -389,6 +393,8 @@ mod tests {
         skipped.sort();
         assert_eq!(skipped, ["pro/a-vs-b-1/m3-inferno", "pro/c-vs-d-2/m1-mirage"]);
         assert_eq!(l.incomplete, 1);
+        // the library's resolved path, which keys its maps' caches apart from another library's
+        assert_eq!(l.library, Some(fs::canonicalize(&lib.0).unwrap().display().to_string()));
         assert_eq!(list_in(&lib.0.join("demos"), None).files.len(), 2);
     }
 
