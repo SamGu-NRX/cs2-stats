@@ -83,7 +83,7 @@ describe("the Leetify attribution", () => {
     const unused = async (): Promise<never> => { throw new Error("not used by Attribution"); };
     const bridge: LeetifyBridge = { status: unused, saveKey: unused, clearKey: unused, connect: unused, disconnect: unused, load: unused, discard: unused, badge: async () => { calls.n++; return badge(); } };
     const host: Host = {
-      kind: "tauri", folder: null, valve: null, leetify: bridge,
+      kind: "tauri", folder: null, valve: null, pro: null, leetify: bridge,
       imports: { get: () => ({ running: false, at: null, last: null, error: null }), subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} },
       list: async () => [], read: unused, importFiles: unused, readPack: async () => null,
     };

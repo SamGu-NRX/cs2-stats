@@ -10,14 +10,14 @@ import { GameIcon } from "../../components/GameIcon";
 import { Fig, symmetricMax } from "../../components/MatchSeries";
 import { MetricList, MetricRow } from "../../components/MetricRow";
 import { fmtMetric } from "../../data/engine";
-import type { MatchModel } from "../../data/match";
+import { teamLabel, type ViewedMatch } from "../../data/match";
 import { metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
 import { WeaponIcon } from "../../icons/game";
 import { matchHref, navWasPointer } from "../../router";
 import { SectionAside } from "../shared";
 import { useRoving } from "./roving";
-import type { TabProps } from "./MatchView";
+import type { ViewedTabProps } from "./MatchView";
 import {
   CLOSE_CALL_HP, fmtLuck, inputOf, LOW_HP, lobbyLuck, LUCK_GROUPS, luckHeadline, luckMoments, missingInputs,
   missingLine, roundLuck, tally, type FlagId, type Moment, type MomentKind, type RoundLuck,
@@ -26,7 +26,7 @@ import {
 /** Moment rows shown before "Show all". */
 const FIRST_ROWS = 8;
 
-export default function Luck({ v, file }: TabProps) {
+export default function Luck({ v, file }: ViewedTabProps) {
   // the strip draws in only when a click opened the tab; Enter on a tab, Alt and a digit, a deep link or
   // a reload renders the end state (SYSTEM.md, motion)
   const [enter] = useState(() => navWasPointer());
@@ -52,7 +52,7 @@ export default function Luck({ v, file }: TabProps) {
 
 // ---------------------------------------------------------------- hero
 
-function Hero({ v, file, missing, mine, theirs }: { v: MatchModel; file: string; missing: Input[]; mine: Moment[]; theirs: Moment[] }) {
+function Hero({ v, file, missing, mine, theirs }: { v: ViewedMatch; file: string; missing: Input[]; mine: Moment[]; theirs: Moment[] }) {
   const vals = v.b.lines.both[v.human].v;
   const score = vals.luckScore;
   const headline = luckHeadline(score);
@@ -264,7 +264,7 @@ function Mark({ x }: { x: Moment }) {
 }
 
 /** Who it was: your victims, or your killer, each with the gun; the side colours the name. */
-function Who({ v, x }: { v: MatchModel; x: Moment }) {
+function Who({ v, x }: { v: ViewedMatch; x: Moment }) {
   if (x.kind === "closeCall") return <span className="lk-who faint">Survived on {CLOSE_CALL_HP} HP or less</span>;
   // the round's count covers some kills but not all of them, so no kill is named (luck/model.ts)
   if (!x.kills.length) return <span className="lk-who" />;
@@ -282,7 +282,7 @@ function Who({ v, x }: { v: MatchModel; x: Moment }) {
   );
 }
 
-function Moments({ title, empty, v, file, rows, against }: { title: string; empty: string; v: MatchModel; file: string; rows: Moment[]; against?: boolean }) {
+function Moments({ title, empty, v, file, rows, against }: { title: string; empty: string; v: ViewedMatch; file: string; rows: Moment[]; against?: boolean }) {
   const [all, setAll] = useState(false);
   const t = tally(rows);
   const total = rows.reduce((a, x) => a + x.count, 0);
@@ -336,12 +336,12 @@ function Moments({ title, empty, v, file, rows, against }: { title: string; empt
 
 // ---------------------------------------------------------------- the lobby and the numbers
 
-function Lobby({ v }: { v: MatchModel }) {
+function Lobby({ v }: { v: ViewedMatch }) {
   const rows = lobbyLuck(v);
   const max = symmetricMax(rows.map((r) => r.score));
   const us = v.b.teams.us.v.luckScore;
   return (
-    <Card title="Luck in the lobby" tip="Every player's luck score in this match, luckiest first." aside={us === null ? undefined : <SectionAside label="Your team" value={fmtLuck(us)} color="var(--cream)" />}>
+    <Card title="Luck in the lobby" tip="Every player's luck score in this match, luckiest first." aside={us === null ? undefined : <SectionAside label={teamLabel(v, "us")} value={fmtLuck(us)} color="var(--cream)" />}>
       {rows.length ? (
         <ul className="lk-lobby" aria-label="Luck score by player">
           {rows.map((r) => (
@@ -362,7 +362,7 @@ function Lobby({ v }: { v: MatchModel }) {
  * Every luck metric the source gives, grouped. A metric whose input the file lacks is left out, and
  * the card's foot says why, once per input; the luck score's reason is the hero's, so it is not repeated.
  */
-function Numbers({ v, missing }: { v: MatchModel; missing: Input[] }) {
+function Numbers({ v, missing }: { v: ViewedMatch; missing: Input[] }) {
   const line = v.b.lines.both[v.human];
   const groups = LUCK_GROUPS.map((g) => ({ ...g, rows: g.rows.filter((r) => { const i = inputOf(r.id); return i === null || !missing.includes(i); }) })).filter((g) => g.rows.length);
   const gone = missing.filter((i) => i !== "spread");

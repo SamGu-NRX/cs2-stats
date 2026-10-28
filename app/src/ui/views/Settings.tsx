@@ -120,8 +120,8 @@ export default function Settings() {
               <button className="btn press" onClick={() => input.current?.click()}><UploadIcon size={14} />Choose match files</button>
             </div>
             <ValveSource n={counts.valve} />
+            <ProSource n={counts.pro} />
           </div>
-          {counts.pro > 0 && <p className="meta settings__pro">{plural(counts.pro, "pro demo is", "pro demos are")} listed in Matches from the development folder. They open like any match and never count toward your career.</p>}
         </Card>
 
         <LeetifyConnect />
@@ -250,6 +250,63 @@ function ValveSource({ n }: { n: number }) {
         {status.error && !status.running ? <span className="poor-text">{shown(status.error)}</span>
           : outcome && <span className={outcome.tone === "good" ? "good-text" : "poor-text"}>{shown(outcome.text, outcome.demos)}</span>}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The pro match library: a folder of extracted pro demos (the extractor's demos folder) that Matches
+ * lists in its Pro view. The app reads it and never writes to it. On the desktop the user picks it; the
+ * dev server takes it from CS2_PRO_LIBRARY.
+ */
+function ProSource({ n }: { n: number }) {
+  const { host, refresh } = useData();
+  const hide = useHidePersonal();
+  const [busy, setBusy] = useState(false);
+  const folder = host?.pro?.folder ?? null;
+  const choose = async () => {
+    if (!host?.chooseProLibrary) return;
+    setBusy(true);
+    try {
+      if (await host.chooseProLibrary()) refresh();
+    } catch (e) {
+      toast(`The folder could not be set: ${(e as Error).message}`, "poor");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const forget = async () => {
+    await host?.forgetProLibrary?.();
+    refresh();
+  };
+  return (
+    <div className="source" id="settings-pro">
+      <div className="source__head"><SourceBadge s={{ id: "pro", label: "Pro match library", missing: [] }} compact /><b className="num source__n">{folder || n ? n : "–"}</b></div>
+      <p className="meta">Extracted pro demos, listed in Matches under Pro matches. They open like any match, read only, and never count toward your career.</p>
+      {folder ? (
+        <div className="source__path">
+          <FolderIcon size={14} />
+          <span className="mono selectable">{hide ? FOLDER_HIDDEN.pro : folder}</span>
+          <button className="btn btn--ghost btn--icon btn--sm" onClick={() => copyText(folder, "Folder path copied", FOLDER_HIDDEN.pro)} aria-label="Copy the pro library folder path"><CopyIcon size={14} /></button>
+        </div>
+      ) : (
+        <p className="meta">Point it at the extractor's demos folder, the one holding a folder per series.</p>
+      )}
+      {/* a map is listed only when every table its COMPLETE names is whole; the rest wait for the extractor */}
+      {(host?.pro?.error || host?.pro?.incomplete) ? (
+        <p className="meta">
+          {host.pro.error ? <span className="poor-text selectable">{hide ? hideTextAndFiles(host.pro.error, []) : host.pro.error}</span>
+            : <span data-tip="A table the extractor listed is missing, empty or short. The map lists once it is whole." tabIndex={0}>{plural(host.pro.incomplete, "map")} skipped: incomplete</span>}
+        </p>
+      ) : null}
+      {host?.chooseProLibrary ? (
+        <div className="source__actions">
+          <button className="btn press" onClick={choose} disabled={busy} aria-busy={busy}><FolderIcon size={14} />{folder ? "Change folder" : "Choose folder"}</button>
+          {folder && <button className="btn btn--ghost press" onClick={forget}>Stop using this folder</button>}
+        </div>
+      ) : (
+        !folder && <p className="meta">In the browser build, start the dev server with CS2_PRO_LIBRARY set to that folder.</p>
+      )}
     </div>
   );
 }

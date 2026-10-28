@@ -16,7 +16,7 @@ import { DataTable } from "../components/DataTable";
 import { copyText, openMenu } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import {
-  careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries,
+  careerEntries, entryLine, entryRating, isFinished, isWingman, listedEntries, isLogged, isOwn, loggedText, notCountedText, RATING_LABEL, ratingHeadline, recordEntries, type OwnEntry,
 } from "../data/engine";
 import { useCall, useRatings, useYourQuery } from "../data/hooks";
 import { startMs, type MatchEntry } from "../data/match";
@@ -27,6 +27,8 @@ import { fmtAdr, fmtDate, fmtDiff, fmtMatchDay, fmtPct, fmtRating, fmtSwing, fmt
 import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
+import { Segmented } from "../components/controls";
+import { ProMatches } from "./ProMatches";
 import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
 import { lf, sourceName } from "../data/leetify/present";
 import { leetifyPhase, useLeetify, useLeetifyJoin } from "../data/leetify/store";
@@ -169,10 +171,10 @@ function SessionStrip({ sessions, error, selected }: { sessions: SessionRow[] | 
 }
 
 /** A table row: one of the user's matches here, or a Leetify match with no demo here (data/leetify/join.ts). */
-type ListRow = { kind: "local"; e: MatchEntry } | { kind: "leetify"; l: LeetifyMatch };
+type ListRow = { kind: "local"; e: OwnEntry } | { kind: "leetify"; l: LeetifyMatch };
 const rowKeyOf = (r: ListRow) => (r.kind === "local" ? r.e.file : `leetify:${r.l.id}`);
 /** A cell or sort value from whichever kind the row is. */
-const by = <V,>(local: (s: MatchEntry) => V, leetify: (l: LeetifyMatch) => V) => (r: ListRow): V => (r.kind === "local" ? local(r.e) : leetify(r.l));
+const by = <V,>(local: (s: OwnEntry) => V, leetify: (l: LeetifyMatch) => V) => (r: ListRow): V => (r.kind === "local" ? local(r.e) : leetify(r.l));
 
 const NO_DEMO = "No demo of this match here, so this number is not available. Import the demo to see it.";
 const lResult = (l: LeetifyMatch): "W" | "L" | "T" | null => (l.score === null ? null : l.score.us > l.score.them ? "W" : l.score.us < l.score.them ? "L" : "T");
@@ -181,7 +183,31 @@ const NoDemo = () => <span className="faint" data-tip={NO_DEMO}>{DASH}</span>;
 
 const openLeetify = (l: LeetifyMatch) => openOutside(matchUrl(l));
 
+/**
+ * Matches: the user's own history, and beside it the pro match library (ProMatches.tsx) once a library
+ * folder is set or a pro demo is listed. The two never mix, so a library of a thousand maps does not
+ * bury the user's games. ?view=pro picks the library.
+ */
 export function MatchesView() {
+  const { matches, host } = useData();
+  const r = useRoute();
+  const hasPro = !!host?.pro?.folder || matches.some((e) => !isOwn(e));
+  const switcher = (view: "own" | "pro") => (
+    <Segmented label="Which matches" value={view} onChange={(v) => setQuery("view", v === "pro" ? "pro" : null)}
+      options={[{ value: "own", label: "Your matches" }, { value: "pro", label: "Pro matches" }]} />
+  );
+  if (hasPro && r.query.get("view") === "pro") {
+    return (
+      <div className="view view--flush matches">
+        <BarContent crumbs={[{ label: "Matches", href: pageHref("matches") }, { label: "Pro" }]} />
+        <ProMatches switcher={switcher("pro")} />
+      </div>
+    );
+  }
+  return <OwnMatches switcher={hasPro ? switcher("own") : null} />;
+}
+
+function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
   const { matches: all } = useData();
   const r = useRoute();
   const { map, result } = useScope();
@@ -200,7 +226,8 @@ export function MatchesView() {
   const rows = useMemo(() => {
     // a recording with no round won and no kill is not listed (engine.ts isListed); unfinished ones are labelled
     const inSession = session ? new Set(session.files) : null;
-    return listedEntries(all, map).filter((s) => {
+    // pro demos have their own view (ProMatches.tsx)
+    return listedEntries(all, map).filter(isOwn).filter((s) => {
       if (inSession && !inSession.has(s.file)) return false;
       // an unfinished match is neither a win nor a loss
       if (result !== "all" && (!isFinished(s) || s.result !== result)) return false;
@@ -227,7 +254,7 @@ export function MatchesView() {
   })), [leetify, session, map, result, terms]);
   const table = useMemo((): ListRow[] => [...rows.map((e) => ({ kind: "local" as const, e })), ...leetifyRows.map((l) => ({ kind: "leetify" as const, l }))], [rows, leetifyRows]);
   const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [rows]);
-  const line = (s: MatchEntry) => lines.get(s.file)!;
+  const line = (s: OwnEntry) => lines.get(s.file)!;
 
   const record = recordEntries(rows);
   const wins = record.filter((s) => s.result === "W").length;
@@ -237,12 +264,15 @@ export function MatchesView() {
   const left = rows.length - rated.length;
   const open = (x: ListRow) => (x.kind === "local" ? openMatch(matchHref(x.e.file), rowOf(x.e.file)) : openLeetify(x.l));
 
-  const nothing = !all.length && !leetify?.joined.only.length;
+  // the user's own matches: pro demos are the Pro view's
+  const own = all.some(isOwn);
+  const nothing = !own && !leetify?.joined.only.length;
   return (
     <div className="view view--flush matches">
       <BarContent crumbs={[{ label: "Matches" }]} scope={{ controls: ["map", "result"], maps: "all", off: nothing ? { map: "No matches yet", result: "No matches yet" } : undefined }} />
       {!nothing && (
         <div className="matches__toolbar toolbar">
+          {switcher}
           <label className="search-field">
             <SearchIcon size={14} />
             <input className="input" data-filter placeholder="Search map, date or bot name" value={q} onChange={(e) => setQuery("q", e.target.value)} aria-label="Search matches" aria-keyshortcuts="/" />
@@ -264,7 +294,8 @@ export function MatchesView() {
           <LeetifyPending phase={leetifyNow} error={leetifyState?.fetchError ?? leetifyState?.error ?? null} hasKey={leetifyState?.status?.hasKey ?? false} retry={() => void leetifyLive?.store.refresh()} />
         </div>
       )}
-      {all.length > 0 && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
+      {nothing && switcher && <div className="matches__toolbar toolbar">{switcher}</div>}
+      {own && <SessionStrip sessions={sessions} error={sessionsError} selected={session} />}
       {table.length === 0 ? (
         <div className="matches__empty">
           {nothing ? (

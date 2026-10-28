@@ -12,14 +12,14 @@ import { CloseIcon } from "../../icons/ui";
 import { plural } from "../../lib/format";
 import { Empty, NeedsDemo, PlaceList, SectionAside } from "../shared";
 import { Hint } from "./glyphs";
-import type { TabProps } from "./MatchView";
+import type { ViewedTabProps } from "./MatchView";
 import { useCall } from "../../data/hooks";
 import { zonesFor, type Zone } from "./parity";
 import { ZonesCard } from "./Zones";
 
 type Who = "you" | "team" | "all";
 
-export default function Positions({ v }: TabProps) {
+export default function Positions({ v }: ViewedTabProps) {
   const [who, setWho] = useState<Who>("you");
   const [side, setSide] = useState<"both" | "t" | "ct">("both");
   const [lines, setLines] = useState(true);
@@ -55,7 +55,7 @@ export default function Positions({ v }: TabProps) {
   return (
     <div className="tabpad positions">
       <div className="toolbar">
-        <Segmented label="Whose" value={who} onChange={setWho} options={[{ value: "you", label: "You" }, { value: "team", label: "Your team" }, { value: "all", label: "All kills" }]} />
+        <Segmented label="Whose" value={who} onChange={setWho} options={[{ value: "you", label: v.pro ? v.players[v.human].name : "You" }, { value: "team", label: v.pro ? "Their team" : "Your team" }, { value: "all", label: "All kills" }]} />
         <Segmented label="Side" value={side} onChange={setSide} options={[{ value: "both", label: "Both sides" }, { value: "t", label: "T", side: "t" }, { value: "ct", label: "CT", side: "ct" }]} />
         <label className="check"><input type="checkbox" checked={lines} onChange={(e) => setLines(e.target.checked)} /><span>Killer to victim</span></label>
         {cells.length > 0 && <label className="check"><input type="checkbox" checked={heat} onChange={(e) => setHeat(e.target.checked)} /><span>Where you moved</span></label>}
@@ -142,7 +142,7 @@ function ZoneMarks({ zone, to }: { zone: Zone; to: (x: number, y: number) => [nu
 }
 
 /** Your top places over the match: seconds alive per place name (your presence, rolled up). */
-function PlacesCard({ v }: { v: TabProps["v"] }) {
+function PlacesCard({ v }: { v: ViewedTabProps["v"] }) {
   const places = useMemo(() => placesNamed(v.b.presence?.places ?? {}), [v]);
   return (
     <Card title={<>Top places <Hint tip="Each round's places are in the round panel on Rounds." /></>} aside={Object.keys(places).length ? <span className="meta">Seconds alive</span> : undefined}>

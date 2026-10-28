@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { Card } from "../../components/Card";
 import { Segmented } from "../../components/controls";
 import { useCall } from "../../data/hooks";
-import { killMatrix, type MatchModel, type MPlayer } from "../../data/match";
+import { killMatrix, teamLabel, type MatchModel, type MPlayer } from "../../data/match";
 import { WeaponClassIcon } from "../../icons/game";
 import { fmtDiff, fmtSecs, plural } from "../../lib/format";
 import { diffScore, scoreText, scoreTint, toScore } from "../../lib/scale";
@@ -33,9 +33,10 @@ export function HeadToHead({ v }: { v: MatchModel }) {
   const loaded = useCall("headToHead", [v.file]);
   const h2h = loaded.data;
   const [measure, setMeasure] = useState<PairMeasure>("kills");
-  const me = v.players[v.human];
+  // the viewer's most-fought enemy opens the pair; a pro demo seen through nobody opens on none
+  const me = v.human === null ? null : v.players[v.human];
   const [pick, setPick] = useState<{ x: string; y: string } | null>(null);
-  const pair = pick ?? (h2h ? (() => { const y = mostFought(h2h, me.key, them.map((q) => q.key)); return y ? { x: me.key, y } : null; })() : null);
+  const pair = pick ?? (h2h && me ? (() => { const y = mostFought(h2h, me.key, them.map((q) => q.key)); return y ? { x: me.key, y } : null; })() : null);
   const live = measure === "kills" || !!h2h;
   const cell = (p: MPlayer, q: MPlayer): [number, number] | null => {
     if (measure === "kills") return [km[p.pi][q.pi], km[q.pi][p.pi]];
@@ -60,7 +61,7 @@ export function HeadToHead({ v }: { v: MatchModel }) {
         <table className="tbl h2h">
           <thead>
             <tr>
-              <th className="l"><span className="th">Your team ↓ vs →</span></th>
+              <th className="l"><span className="th">{teamLabel(v, "us")} ↓ vs →</span></th>
               {them.map((q) => <th key={q.key}><span className="th"><PlayerName v={v} pi={q.pi} /></span></th>)}
               <th><span className="th">Total</span></th>
             </tr>

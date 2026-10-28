@@ -17,8 +17,12 @@ export interface MatchEntry {
   origin: string;
   match: MatchInfo;
   players: PlayerInfo[];
-  /** index of the recording player (match.pov) in players */
-  you: number;
+  /**
+   * index of the recording player (match.pov) in players; null for a pro demo (data/sources.ts
+   * isProFile), which nobody recorded: its teams stand in "us" (the team that started CT) and "them"
+   * only for the match views' layout, and nothing labels either one as yours
+   */
+  you: number | null;
   usTeam: 0 | 1;
   usStartSide: Side;
   score: { us: number; them: number };
@@ -30,10 +34,10 @@ export interface MatchEntry {
   kills: number;
   /** anything happened: a completed round, a kill or a damage event; a recording without any is not listed (engine.ts isListed) */
   activity: boolean;
-  /** gun shots by the recording player */
+  /** gun shots by the recording player; 0 for a pro demo */
   shots: number;
-  /** the recording player over the whole match, both sides; its rating is under the coverage rule */
-  line: Line;
+  /** the recording player over the whole match, both sides, its rating under the coverage rule; null for a pro demo */
+  line: Line | null;
   /** ids of the players who played a round of the match (stats/roster.ts playedMatch) */
   played: string[];
 }
@@ -87,8 +91,16 @@ export interface MatchModel {
   map: string;
   maxRounds: number;
   nRounds: number;
-  /** pi of the recording player */
-  human: number;
+  /**
+   * pi of the player the match is seen through: the recording player, or on a pro demo the player
+   * picked on its scoreboard (?as=); null on a pro demo before a pick, where the per-player panels ask
+   * for one (views/match/shared ViewerNeeded)
+   */
+  human: number | null;
+  /** a pro demo: nobody recorded it, and its teams are named rather than "your team" and "opponents" */
+  pro: boolean;
+  /** each side of the layout's team name, from the file (match.teams; team 0 is "us") */
+  teamName: Record<Team, string>;
   usStartSide: Side;
   players: MPlayer[];
   rounds: MRound[];
@@ -106,11 +118,23 @@ function howOf(reason: string | null): RoundHow | null {
   return null;
 }
 
-export function matchModel(entry: MatchEntry, b: MatchBundle): MatchModel {
+/** A match seen through one player: the per-player panels take only this (views/match/Viewer.tsx Viewed). */
+export type ViewedMatch = MatchModel & { human: number };
+
+/** A side of the layout as the page names it: the team's name on a pro demo, else "Your team" and "Opponents". */
+export const teamLabel = (v: Pick<MatchModel, "pro" | "teamName">, t: Team) => (v.pro ? v.teamName[t] : t === "us" ? "Your team" : "Opponents");
+
+/** A side of the layout in a word, for asides and chart labels: a pro demo's team name, else "You" and "Them". */
+export const sideWord = (v: Pick<MatchModel, "pro" | "teamName">, t: Team) => (v.pro ? v.teamName[t] : t === "us" ? "You" : "Them");
+
+/** `viewer`: the steamid picked on a pro demo's scoreboard; ignored for the user's own matches, which are seen through the recording player. */
+export function matchModel(entry: MatchEntry, b: MatchBundle, viewer: string | null = null): MatchModel {
   const facts = b.core;
   const usTeam = entry.usTeam;
   const teamOf = (t: 0 | 1 | null): Team => (t === usTeam ? "us" : "them");
-  const players: MPlayer[] = facts.players.map((p, pi) => ({ pi, key: p.id, name: p.name, bot: p.bot, team: teamOf(p.team), isHuman: pi === entry.you }));
+  const picked = entry.you === null && viewer !== null ? facts.players.findIndex((p) => p.id === viewer) : -1;
+  const human = entry.you ?? (picked >= 0 ? picked : null);
+  const players: MPlayer[] = facts.players.map((p, pi) => ({ pi, key: p.id, name: p.name, bot: p.bot, team: teamOf(p.team), isHuman: pi === human }));
   const kills = facts.rounds.map(() => [] as KillFact[]);
   for (const k of facts.kills) kills[k.ri].push(k);
   const pr = facts.rounds.map(() => players.map((): PlayerRound | null => null));
@@ -135,7 +159,8 @@ export function matchModel(entry: MatchEntry, b: MatchBundle): MatchModel {
   });
   return {
     entry, file: entry.file, b, facts, map: facts.match.map, maxRounds: facts.match.maxRounds, nRounds: facts.rounds.length,
-    human: entry.you, usStartSide: entry.usStartSide, players, rounds, visibility: facts.match.visibility === "ok",
+    human, pro: entry.you === null, teamName: { us: facts.match.teams[usTeam], them: facts.match.teams[1 - usTeam] },
+    usStartSide: entry.usStartSide, players, rounds, visibility: facts.match.visibility === "ok",
   };
 }
 

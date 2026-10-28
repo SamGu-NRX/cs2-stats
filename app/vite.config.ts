@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react";
 import { packsFolder } from "./tools/packs-folder";
 import { fileParam, requestUrl } from "./tools/request-param";
 import { importerCommand, listValve, readValve, ValvePathError, valveRoot } from "./tools/valve-folder";
+import { listPro, proRoot, ProPathError, readPro } from "./tools/pro-folder";
 
 
 // Tauri expects a fixed dev port and must not watch the Rust sources.
@@ -155,6 +156,44 @@ function valveFolder(): Plugin {
 }
 
 /**
+ * The pro match library (tools/pro-folder.ts) for `vite dev` and `vite preview`, from the folder named by
+ * CS2_PRO_LIBRARY; the desktop app has the same commands in Rust, over a folder the user picks. GET
+ * /__pro/list lists its maps ({ folder: null } without the setting); GET /__pro/file?f=<series>/<map>...
+ * returns a map's table names or one table. Read-only.
+ */
+function proFolder(): Plugin {
+  const handler: Connect.NextHandleFunction = async (req, res, next) => {
+    const url = requestUrl(req);
+    if (!url) { res.statusCode = 400; return res.end(); }
+    if (!url.pathname.startsWith("/__pro/")) return next();
+    const send = (code: number, body: string | Buffer, type = "application/json") => {
+      res.statusCode = code;
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "no-store");
+      res.end(body);
+    };
+    const root = proRoot();
+    try {
+      if (url.pathname === "/__pro/list") return send(200, JSON.stringify(root ? listPro(root) : { folder: null, files: [], skipped: [], incomplete: 0, error: null }));
+      if (url.pathname === "/__pro/file") {
+        if (!root) return send(404, JSON.stringify({ error: "CS2_PRO_LIBRARY is not set" }));
+        const rel = fileParam(url.search, "f");
+        if (rel === null) return send(400, JSON.stringify({ error: "malformed file name" }));
+        return send(200, readPro(root, rel), rel.endsWith(".parquet") ? "application/octet-stream" : "application/json");
+      }
+      return send(404, JSON.stringify({ error: "unknown endpoint" }));
+    } catch (e) {
+      return send(e instanceof ProPathError ? 400 : 500, JSON.stringify({ error: (e as Error).message }));
+    }
+  };
+  return {
+    name: "cs2-pro-folder",
+    configureServer: (s) => { s.middlewares.use(handler); },
+    configurePreviewServer: (s) => { s.middlewares.use(handler); },
+  };
+}
+
+/**
  * Development only: extracted match folders (schema v1 parquet, one folder per map) from the folder
  * named by CS2_DEV_MATCHES, such as cs2-stats-data/dev-matches, so views can be checked on demo data
  * before local recordings come through the extractor. Never the user's match folder: matches there
@@ -207,7 +246,7 @@ function devMatches(): Plugin {
 
 export default defineConfig({
   // packsFolder serves the private packs to `vite dev` only, never to `vite preview` (tools/packs-folder.ts)
-  plugins: [react(), matchFolder(), packsFolder(), valveFolder(), devMatches()],
+  plugins: [react(), matchFolder(), packsFolder(), valveFolder(), proFolder(), devMatches()],
   clearScreen: false,
   server: {
     port: 1420,

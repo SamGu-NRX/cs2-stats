@@ -7,7 +7,7 @@ import { useWidth } from "../../components/charts";
 import { rovingIndex } from "../../components/controls";
 import { HoverCard } from "../../components/overlay";
 import { BUY_CLASSES, BUY_CLASS_LABEL } from "../../data/engine";
-import type { MatchModel as MatchView } from "../../data/match";
+import { sideWord, teamLabel, type MatchModel as MatchView } from "../../data/match";
 import { BuyIcon } from "../../icons/game";
 import { fmtMoney, fmtMoneyShort, fmtPct, plural } from "../../lib/format";
 import { roundColumns } from "../../lib/layout";
@@ -29,27 +29,27 @@ const teamRound = (who: string, t: EconRound["us"]) =>
   `${who}: ${t.buy ? BUY_CLASS_LABEL[t.buy].toLowerCase() : "buy unknown"}, ${fmtMoney(t.equip)} equipment, ${fmtMoney(t.spent)} spent, ${fmtMoney(t.money)} left${t.saves ? `, ${plural(t.saves, "save")}` : ""}`;
 
 /** A round column in words: its tooltip, its accessible name and the line under the chart while it has focus. */
-const roundWords = (r: EconRound) =>
-  `Round ${r.number}, ${r.winner === "us" ? "won" : r.winner === "them" ? "lost" : "winner not recorded"}. ${teamRound("You", r.us)}. ${teamRound("Them", r.them)}.`;
+const roundWords = (r: EconRound, v: MatchView) =>
+  `Round ${r.number}, ${r.winner === null ? "winner not recorded" : v.pro ? `won by ${v.teamName[r.winner]}` : r.winner === "us" ? "won" : "lost"}. ${teamRound(sideWord(v, "us"), r.us)}. ${teamRound(sideWord(v, "them"), r.them)}.`;
 
 export default function Economy({ v, file }: TabProps) {
   const e = v.b.economy;
   return (
     <div className="tabpad economy">
-      <Card title="Equipment per round" aside={<><SectionAside label="Your average" value={fmtMoneyShort(e.avgEquip.us)} color="var(--cream)" /><SectionAside label="Theirs" value={fmtMoneyShort(e.avgEquip.them)} /></>}>
+      <Card title="Equipment per round" aside={<><SectionAside label={v.pro ? v.teamName.us : "Your average"} value={fmtMoneyShort(e.avgEquip.us)} color="var(--cream)" /><SectionAside label={v.pro ? v.teamName.them : "Theirs"} value={fmtMoneyShort(e.avgEquip.them)} /></>}>
         <EquipChart v={v} file={file} />
       </Card>
       <div className="grid-3">
-        <Card title={<>Win rate by buy <Hint tip="The tick is the opponents' rate on the same buy." /></>} aside={e.unknown ? <span className="meta">{plural(e.unknown, "round")} unclassified</span> : undefined}>
+        <Card title={<>Win rate by buy <Hint tip={v.pro ? `Bars are ${v.teamName.us}; the tick is ${v.teamName.them} on the same buy.` : "The tick is the opponents' rate on the same buy."} /></>} aside={e.unknown ? <span className="meta">{plural(e.unknown, "round")} unclassified</span> : undefined}>
           <BuyRates v={v} />
         </Card>
-        <Card title="Your buy against theirs" aside={<span className="meta">Won / played</span>}>
+        <Card title={v.pro ? "Buy against buy" : "Your buy against theirs"} aside={<span className="meta">Won / played</span>}>
           <BuyMatrix v={v} />
         </Card>
         <Card title="Saves" aside={<span className="meta">Lost rounds, alive at the end</span>}>
           <dl className="facts">
-            <dt>Your team</dt><dd><b className="num">{e.saves.us.players}</b><span className="meta">players, {fmtMoney(e.saves.us.equip)} of equipment kept</span></dd>
-            <dt>Opponents</dt><dd><b className="num">{e.saves.them.players}</b><span className="meta">players, {fmtMoney(e.saves.them.equip)} of equipment kept</span></dd>
+            <dt>{teamLabel(v, "us")}</dt><dd><b className="num">{e.saves.us.players}</b><span className="meta">players, {fmtMoney(e.saves.us.equip)} of equipment kept</span></dd>
+            <dt>{teamLabel(v, "them")}</dt><dd><b className="num">{e.saves.them.players}</b><span className="meta">players, {fmtMoney(e.saves.them.equip)} of equipment kept</span></dd>
           </dl>
         </Card>
       </div>
@@ -116,9 +116,9 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
           const x = left + c.x;
           const won = r.winner === "us";
           return (
-            <g key={c.ri} data-j={j} className="echart__col" role="link" tabIndex={j === Math.min(stop, cols.length - 1) ? 0 : -1} aria-label={roundWords(r)}
+            <g key={c.ri} data-j={j} className="echart__col" role="link" tabIndex={j === Math.min(stop, cols.length - 1) ? 0 : -1} aria-label={roundWords(r, v)}
               onClick={() => open(r.number)} onKeyDown={(ev) => onKey(ev, j)} onFocus={() => { setStop(j); setFocused(c.ri); }} onBlur={() => setFocused(null)}>
-              <title>{roundWords(r)}</title>
+              <title>{roundWords(r, v)}</title>
               <rect x={x - gap / 2} y={top} width={cell + gap} height={ih + bottom} fill="transparent" />
               <rect className="echart__ring" x={x - gap / 2 + 1} y={top - 9} width={cell + gap - 2} height={ih + bottom + 8} rx="4" />
               {r.us.equip !== null && <rect x={x} y={Y(r.us.equip)} width={bw} height={Math.max(1, top + ih - Y(r.us.equip))} rx="1.5" fill={usFill} opacity={won ? 1 : 0.5} />}
@@ -143,12 +143,12 @@ function EquipChart({ v, file }: { v: MatchView; file: string }) {
           );
         })}
       </div>
-      <p className="meta echart__readout" aria-hidden>{focused === null ? "" : `${roundWords(e.rounds[focused])} Enter opens it.`}</p>
+      <p className="meta echart__readout" aria-hidden>{focused === null ? "" : `${roundWords(e.rounds[focused], v)} Enter opens it.`}</p>
       <div className="legend" style={{ marginTop: 6 }}>
         <span><i className="swatch" style={{ background: "var(--t)" }} />T</span>
         <span><i className="swatch" style={{ background: "var(--ct)" }} />CT</span>
-        <span>Left bar yours, right theirs, bright when it won</span>
-        <span><svg width="18" height="6" aria-hidden><line x1="0" y1="3" x2="18" y2="3" stroke="var(--cream)" strokeDasharray="3 3" /></svg>Your bank after buying</span>
+        <span>{v.pro ? `Left bar ${v.teamName.us}, right ${v.teamName.them}` : "Left bar yours, right theirs"}, bright when it won</span>
+        <span><svg width="18" height="6" aria-hidden><line x1="0" y1="3" x2="18" y2="3" stroke="var(--cream)" strokeDasharray="3 3" /></svg>{v.pro ? `Bank after buying, ${v.teamName.us}` : "Your bank after buying"}</span>
         <span className="legend__icons">{BUY_CLASSES.map((b) => <span key={b} data-tip={BUY_DEF[b]} tabIndex={0}><BuyIcon buy={b} size={12} beside />{BUY_CLASS_LABEL[b]}</span>)}</span>
       </div>
     </div>
@@ -186,7 +186,7 @@ function BuyMatrix({ v }: { v: MatchView }) {
   return (
     <table className="tbl bmatrix">
       <thead>
-        <tr><th className="l"><span className="th">You \ them</span></th>{cols.map(({ b }) => <th key={b}><span className="th" data-tip={`Opponents on ${BUY_CLASS_LABEL[b].toLowerCase()}`} tabIndex={0} aria-label={`Opponents on ${BUY_CLASS_LABEL[b].toLowerCase()}`}><BuyIcon buy={b} size={12} compact /></span></th>)}</tr>
+        <tr><th className="l"><span className="th">{v.pro ? `${v.teamName.us} \\ ${v.teamName.them}` : "You \\ them"}</span></th>{cols.map(({ b }) => <th key={b}><span className="th" data-tip={`${v.pro ? v.teamName.them : "Opponents"} on ${BUY_CLASS_LABEL[b].toLowerCase()}`} tabIndex={0} aria-label={`${v.pro ? v.teamName.them : "Opponents"} on ${BUY_CLASS_LABEL[b].toLowerCase()}`}><BuyIcon buy={b} size={12} compact /></span></th>)}</tr>
       </thead>
       <tbody>
         {rows.map(({ b, i }) => (

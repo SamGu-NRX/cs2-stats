@@ -93,11 +93,19 @@ describe("table rows from the keyboard", () => {
     expect(e.defaultPrevented).toBe(true);
     expect(onRowContext).toHaveBeenCalledWith({ id: "r3" }, { x: 40, y: 50 });
   });
-  it("a table of 1,000 rows draws only the rows in view", () => {
-    // fails if the table stops windowing: Matches would draw every match of a 1,000-map pro library
+  it("a table of 1,000 rows draws only the rows in view, each with its place in the whole table", () => {
+    // fails if the table stops windowing (the pro library would draw 1,000+ rows), or if the rows it
+    // draws lose aria-rowindex, so a screen reader cannot tell where in the table they are
     render(table(rows(1000), vi.fn()));
-    expect(host.querySelectorAll("tr[data-i]").length).toBeLessThan(50);
+    const drawn = [...host.querySelectorAll("tr[data-i]")];
+    expect(drawn.length).toBeLessThan(50);
     expect(host.querySelector("table")!.getAttribute("aria-rowcount")).toBe("1001");
+    expect(drawn.map((tr) => Number(tr.getAttribute("aria-rowindex")))).toEqual(drawn.map((tr) => Number(tr.getAttribute("data-i")) + 2));
+  });
+  it("a table of 250 rows draws every row, so find in page reaches all of them", () => {
+    // fails if windowing starts below a few hundred rows: an ordinary match list would hide rows from Ctrl+F
+    render(table(rows(250), vi.fn()));
+    expect(host.querySelectorAll("tr[data-i]").length).toBe(250);
   });
 });
 
@@ -157,8 +165,11 @@ describe("opening a match", () => {
   beforeEach(() => {
     transition.mockClear();
     Object.assign(document, { startViewTransition: transition });
-    window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+    // stubbed for this block only: the test files share one process, and a stub without addEventListener
+    // left behind broke the Replay tab in files that run later
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
   });
+  afterEach(() => { vi.unstubAllGlobals(); });
   it("from the keyboard is instant: no view transition, no view fade", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     openMatch("#/match/a.json.gz/overview");

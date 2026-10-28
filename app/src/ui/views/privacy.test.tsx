@@ -151,7 +151,7 @@ const perMatch = matchCalls(async (files, visit) => { for (const f of files) vis
 const answers: Partial<Record<keyof Client, (...a: never[]) => unknown>> = {
   ...ranking,
   ...perMatch,
-  match: (file: string) => matchBundle(byFile.get(file)!.entry, byFile.get(file)!.facts),
+  match: (file: string, viewer: string | null) => matchBundle(byFile.get(file)!.entry, byFile.get(file)!.facts, viewer),
   rounds: (file: string) => byFile.get(file)!.facts.rounds.map((r) => roundBundle(byFile.get(file)!.facts, r.number)),
   rollup: (qs: Query[]) => qs.map((q) => rolled(summary(q))),
   ratings: (qs: Query[]) => qs.map((q) => ratingsOf({ both: summary(sideQuery(q, "both")), T: summary(sideQuery(q, "T")), CT: summary(sideQuery(q, "CT")) })),
@@ -210,7 +210,7 @@ const LEETIFY: LeetifyBridge = {
 function hostWith(valve: ValveFolder, status = failedDemos): Host {
   const imports: ImportStore = { get: () => status, subscribe: () => () => {}, onFinish: () => () => {}, start: async () => {}, sync: async () => {} };
   return {
-    kind: "web", folder: DATA_FOLDER, valve, imports, leetify: LEETIFY,
+    kind: "web", folder: DATA_FOLDER, valve, pro: null, imports, leetify: LEETIFY,
     list: async () => [],
     read: async (file) => { throw new Error(`${DATA_FOLDER}\\${file} could not be read`); },
     importFiles: async () => ({ imported: [], skipped: [] }),
@@ -281,6 +281,9 @@ function routesOf(page: Page): string[] {
       ];
     case "profile":
       return PROFILE_TABS.map((t) => profileHref(t));
+    // Matches' Pro view lists the development folder's scrim: its players and teams are not public
+    case "matches":
+      return [pageHref(page), pageHref(page, { view: "pro" })];
     default:
       return [pageHref(page)];
   }

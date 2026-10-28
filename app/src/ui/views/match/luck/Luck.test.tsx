@@ -14,7 +14,7 @@ import { CS2RB } from "../../../../stats/model-params";
 import { pluginToTables } from "../../../../stats/plugin/adapter";
 import { decodeMatch } from "../../../../stats/plugin/decode";
 import { entryOf, matchBundle, metaOf } from "../../../../worker/views";
-import { matchModel, type MatchModel } from "../../../data/match";
+import { matchModel, type ViewedMatch } from "../../../data/match";
 import { setMeta } from "../../../data/meta";
 import Luck from "../Luck";
 import { luckMoments } from "./model";
@@ -31,11 +31,13 @@ const raw = await decodeMatch(gunzipSync(readFileSync(path.resolve(import.meta.d
 const baseFacts = derive(pluginToTables(raw), CS2RB);
 
 /** A fresh model per test, so a test that writes measures leaves the others alone. */
-function modelOf(edit?: (f: MatchFacts) => void): MatchModel {
+function modelOf(edit?: (f: MatchFacts) => void): ViewedMatch {
   const facts = structuredClone(baseFacts);
   edit?.(facts);
   const entry = entryOf(`samples/${FILE}`, raw.env.plugin ?? "", facts);
-  return matchModel(entry, matchBundle(entry, facts));
+  const v = matchModel(entry, matchBundle(entry, facts, null));
+  if (v.human === null) throw new Error("the sample has a recording player");
+  return { ...v, human: v.human };
 }
 
 let host: HTMLDivElement;
@@ -48,7 +50,7 @@ afterEach(() => {
   act(() => root.unmount());
   document.body.innerHTML = "";
 });
-const render = (v: MatchModel) => act(() => root.render(<Luck v={v} file={v.file} round={null} />));
+const render = (v: ViewedMatch) => act(() => root.render(<Luck v={v} file={v.file} round={null} />));
 const texts = (sel: string) => Array.from(host.querySelectorAll(sel)).map((e) => e.textContent ?? "");
 
 describe("the Luck tab on a plugin file", () => {

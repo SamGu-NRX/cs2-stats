@@ -18,7 +18,7 @@ import { fmtClock, fmtSecs, plural } from "../../lib/format";
 import { matchHref } from "../../router";
 import { Empty, PlayerName } from "../shared";
 import { LoadFailed } from "./LoadFailed";
-import type { TabProps } from "./MatchView";
+import type { ViewedMatch } from "../../data/match";
 
 export const NO_MAP_FLASHES = "This map has no radar calibration, so its flashes can't be placed.";
 const KILL_RULE = `A flash led to a kill when the game gave you a flash assist on it, or an enemy it blinded for over ${FLASHED_MIN_S} s died to your team before the blindness wore off.`;
@@ -32,7 +32,7 @@ const matesOf = (f: FlashRow) => f.blinded.filter((b) => b.team && b.flashed);
 /** The dot's outcome: a kill beats an enemy blinded beats a teammate blinded. */
 const outcome = (f: FlashRow) => (f.kills.length ? "kill" : enemiesOf(f).length ? "enemy" : matesOf(f).length ? "team" : "none");
 
-export function FlashCard({ v }: { v: TabProps["v"] }) {
+export function FlashCard({ v }: { v: ViewedMatch }) {
   const call = useCall("flashes", [v.file, v.players[v.human].key]);
   // an answer for another match never shows, not even while this one loads
   const tool = call.stale ? null : call.data;
@@ -132,7 +132,7 @@ export function FlashCard({ v }: { v: TabProps["v"] }) {
  * shows its ring and its tooltip.
  */
 function FlashRadar({ v, frame, shown, focus, picked, onPick, onHover }: {
-  v: TabProps["v"]; frame: Frame; shown: { f: FlashRow; i: number }[]; focus: number | null; picked: number | null; onPick: (i: number) => void; onHover: (i: number | null) => void;
+  v: ViewedMatch; frame: Frame; shown: { f: FlashRow; i: number }[]; focus: number | null; picked: number | null; onPick: (i: number) => void; onHover: (i: number | null) => void;
 }) {
   const placed = shown.filter(({ f }) => f.at);
   const on = placed.find(({ i }) => i === focus) ?? null;
@@ -172,7 +172,7 @@ function FlashRadar({ v, frame, shown, focus, picked, onPick, onHover }: {
 }
 
 /** The picked flash over the dimmed rest: a ray to each blinded player where they stood, with the seconds. */
-function FlashRays({ v, f, to }: { v: TabProps["v"]; f: FlashRow; to: Frame["to"] }) {
+function FlashRays({ v, f, to }: { v: ViewedMatch; f: FlashRow; to: Frame["to"] }) {
   const [x, y] = to(...f.at!);
   return (
     <g className="fl-rays" aria-hidden>
@@ -193,7 +193,7 @@ function FlashRays({ v, f, to }: { v: TabProps["v"]; f: FlashRow; to: Frame["to"
 }
 
 function FlashItem({ v, f, i, open, lit, onToggle, onHover }: {
-  v: TabProps["v"]; f: FlashRow; i: number; open: boolean; lit: boolean; onToggle: () => void; onHover: (i: number | null) => void;
+  v: ViewedMatch; f: FlashRow; i: number; open: boolean; lit: boolean; onToggle: () => void; onHover: (i: number | null) => void;
 }) {
   const en = enemiesOf(f);
   const mates = matesOf(f);

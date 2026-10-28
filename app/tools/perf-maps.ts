@@ -46,7 +46,7 @@ for (const dir of dirs) {
   // a pro map has no recording player (match.pov); its first player stands in for the entry and bundle
   const ff = f.players.some((p) => p.id === f.match.pov) ? f : { ...f, match: { ...f.match, pov: f.players[0].id } };
   const [e, entry] = time(() => entryOf("dev/map", "", ff));
-  const [mb, bundle] = time(() => matchBundle(e, ff));
+  const [mb, bundle] = time(() => matchBundle(e, ff, null));
   const [rb, rounds] = time(() => ff.rounds.map((r) => roundBundle(ff, r.number)));
   if (hashOut) {
     const key = path.relative(DATA_DIR, dir);

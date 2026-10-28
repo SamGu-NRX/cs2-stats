@@ -9,6 +9,9 @@
 // vite.config.ts devMatches). A path not ending in .json.gz is an extracted folder.
 // The user's imported Valve matches come from %APPDATA%\BotMatchStats\valve (tools/valve-folder.ts;
 // lib.rs on the desktop) as "valve/<demo>/<version folder>", each carrying the user's SteamID64 as pov.
+// The pro match library, a folder the user picks in Data & settings (CS2_PRO_LIBRARY for the dev
+// server), lists as "pro/<series>/<map>[/<version folder>]" (tools/pro-folder.ts; pro.rs on the
+// desktop). The app only reads it.
 
 import { importStore, type ImportQuery, type ImportStore } from "./import-store";
 import { tauriLeetify, type LeetifyBridge } from "./leetify";
@@ -44,6 +47,29 @@ export interface ValveFolder {
 
 export const VALVE_FOLDER = String.raw`%APPDATA%\BotMatchStats\valve`;
 export const isValve = (f: string) => f.startsWith("valve/");
+const isProLibrary = (f: string) => f.startsWith("pro/");
+
+/** The pro match library as last listed. */
+export interface ProFolder {
+  /** the folder; null when none is set */
+  folder: string | null;
+  /** why it could not be listed at all; the other matches are still listed */
+  error: string | null;
+  skipped: { file: string; why: string }[];
+  /** how many of the skipped maps are not whole yet: a table missing, empty or short of its listed size */
+  incomplete: number;
+}
+interface ProListing extends ProFolder { files: FileEntry[] }
+
+/** Lists the pro library without letting it fail the whole match list, as listValveSafely does. */
+async function listProSafely(list: () => Promise<ProListing | null>): Promise<{ folder: ProFolder | null; files: FileEntry[] }> {
+  try {
+    const p = await list();
+    return p ? { folder: { folder: p.folder, error: p.error, skipped: p.skipped, incomplete: p.incomplete }, files: p.files } : { folder: null, files: [] };
+  } catch (e) {
+    return { folder: { folder: null, error: e instanceof Error ? e.message : String(e), skipped: [], incomplete: 0 }, files: [] };
+  }
+}
 
 export interface ImportResult { imported: string[]; skipped: { name: string; reason: string }[] }
 
@@ -62,6 +88,16 @@ export interface Host {
   readPack(name: string): Promise<ArrayBuffer | null>;
   /** The Valve folder from the last list(), or null when this host has none. */
   readonly valve: ValveFolder | null;
+  /** The pro match library from the last list(), or null when this host has none. */
+  readonly pro: ProFolder | null;
+  /**
+   * Picks the pro match library with the system's folder picker and keeps it for later starts; resolves
+   * the folder, or null when the user cancels. Absent where the folder comes from the environment (the
+   * dev server's CS2_PRO_LIBRARY).
+   */
+  chooseProLibrary?(): Promise<string | null>;
+  /** Stops reading the pro match library. */
+  forgetProLibrary?(): Promise<void>;
   /** The Valve importer over the CS2 replays folder: one import at a time, its state outliving any page. */
   readonly imports: ImportStore;
   /** The optional Leetify import (host/leetify.ts); absent where the host cannot reach Leetify. */
@@ -119,6 +155,7 @@ async function tauriHost(): Promise<Host> {
   const { listen } = await import("@tauri-apps/api/event");
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
+  let pro: ProFolder | null = null;
   const imports = importStore(async (onProgress) => {
     const stop = await listen<ValveProgress>("valve-import-progress", (e) => onProgress(e.payload));
     try {
@@ -131,6 +168,9 @@ async function tauriHost(): Promise<Host> {
     kind: "tauri",
     get folder() { return folder; },
     get valve() { return valve; },
+    get pro() { return pro; },
+    chooseProLibrary: () => invoke<string | null>("choose_pro_library"),
+    forgetProLibrary: () => invoke<void>("forget_pro_library"),
     imports,
     leetify: tauriLeetify(invoke),
     async list() {
@@ -138,11 +178,14 @@ async function tauriHost(): Promise<Host> {
       folder = l.folder;
       const v = await listValveSafely(() => invoke<ValveListing>("list_valve"));
       valve = v.folder;
-      const files = [...l.files, ...v.files];
+      const p = await listProSafely(() => invoke<ProListing>("list_pro"));
+      pro = p.folder;
+      const files = [...l.files, ...v.files, ...p.files];
       return samplesShown() ? [...files, ...(await sampleEntries())] : files;
     },
     read: (file) => (isSample(file) ? readSample(file)
       : isValve(file) ? invoke<ArrayBuffer>("read_valve", { path: file.slice("valve/".length) })
+      : isProLibrary(file) ? invoke<ArrayBuffer>("read_pro", { path: file.slice("pro/".length) })
       : invoke<ArrayBuffer>("read_match", { file })),
     async readPack(name) {
       const r = await invoke<ArrayBuffer | null>("read_pack", { name });
@@ -174,6 +217,15 @@ async function devEntries(): Promise<FileEntry[]> {
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(((await res.json()) as { error: string }).error);
   return ((await res.json()) as { files: FileEntry[] }).files;
+}
+
+/** The pro library from the dev or preview server; none without the endpoint (a static build). */
+async function webPro(): Promise<ProListing | null> {
+  let res: Response;
+  try { res = await fetch("/__pro/list"); } catch { return null; }
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(((await res.json()) as { error: string }).error);
+  return (await res.json()) as ProListing;
 }
 
 /** The Valve folder from the dev or preview server; none without one (404) or before any import. */
@@ -217,11 +269,13 @@ async function webImportState(): ReturnType<ImportQuery> {
 function webHost(): Host {
   let folder: string | null = null;
   let valve: ValveFolder | null = null;
+  let pro: ProFolder | null = null;
   const imports = importStore(webImportValve, webImportState);
   return {
     kind: "web",
     get folder() { return folder; },
     get valve() { return valve; },
+    get pro() { return pro; },
     imports,
     async list() {
       const local = [...picked].map(([file, f]) => ({ file, size: f.size, mtime: f.lastModified }));
@@ -242,13 +296,16 @@ function webHost(): Host {
       if (failed) throw new Error(failed);
       const v = await listValveSafely(webValve);
       valve = v.folder;
-      return [...local, ...recorded, ...v.files, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
+      const p = await listProSafely(webPro);
+      pro = p.folder;
+      return [...local, ...recorded, ...v.files, ...p.files, ...(await devEntries()), ...(samplesShown() ? await sampleEntries() : [])];
     },
     async read(file) {
       const p = picked.get(file);
       if (p) return p.arrayBuffer();
       if (isSample(file)) return readSample(file);
       if (isValve(file)) return fetchBytes(`/__valve/file?f=${encodeURIComponent(file.slice("valve/".length))}`, file);
+      if (isProLibrary(file)) return fetchBytes(`/__pro/file?f=${encodeURIComponent(file.slice("pro/".length))}`, file);
       if (file.startsWith("dev/")) return fetchBytes(`/__dev-matches/file?f=${encodeURIComponent(file.slice(4))}`, file);
       return fetchBytes(`/__matches/file?f=${encodeURIComponent(file)}`, file);
     },

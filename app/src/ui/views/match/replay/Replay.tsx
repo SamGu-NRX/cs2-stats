@@ -110,7 +110,7 @@ function ReplayView({ v, file, round }: TabProps) {
   const [level, setLevel] = useState<Level>("upper");
   const [names, setNames] = useState(false);
   const levels = hasLevels(v.map);
-  const you = v.players[v.human]?.key ?? null;
+  const you = v.human === null ? null : v.players[v.human].key;
 
   const root = useRef<HTMLDivElement>(null);
   const well = useRef<HTMLDivElement>(null);
@@ -123,7 +123,7 @@ function ReplayView({ v, file, round }: TabProps) {
   const feed = useRef<HTMLOListElement>(null);
 
   const sprites = useMemo(() => new Sprites(typeof devicePixelRatio === "number" ? devicePixelRatio : 1), []);
-  const feedKills = useMemo(() => feedFor(v.facts, ri, v.human), [v, ri]);
+  const feedKills = useMemo(() => feedFor(v.facts, ri, v.human, v.entry.usTeam), [v, ri]);
   const killTicks = useMemo(() => v.facts.kills.filter((k) => k.ri === ri).map((k) => k.tick), [v, ri]);
 
   // the map's overview transform (replayUnavailable guarantees the map has one)

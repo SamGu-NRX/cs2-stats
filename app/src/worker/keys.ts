@@ -6,7 +6,9 @@ import type { FileEntry } from "../host/host";
 import { DERIVE_VERSION } from "../stats/facts";
 
 /** Bump when MatchEntry's shape or what entryOf computes into it changes, so cached entries are rebuilt. */
-export const ENTRY_VERSION = 3; // 2: MatchEntry.kills, 3: MatchEntry.activity
+// 2: MatchEntry.kills, 3: MatchEntry.activity, 4: a pro demo's entry has no recording player (you and
+// line null); a version-3 store holds a NoEntry record for every pro map, which must not stand
+export const ENTRY_VERSION = 4;
 
 // A Valve match's facts are derived from the user's point of view (FileEntry.pov), so a different user is a different key.
 export const factsKey = (e: FileEntry, model: string) => `${e.file}|${e.size}|${e.mtime}|v${DERIVE_VERSION}|${model}${e.pov ? `|pov${e.pov}` : ""}`;

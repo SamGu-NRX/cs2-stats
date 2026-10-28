@@ -6,7 +6,7 @@
 import { useState, type KeyboardEvent } from "react";
 import { Card } from "../../components/Card";
 import { useCall } from "../../data/hooks";
-import type { MatchModel } from "../../data/match";
+import type { ViewedMatch } from "../../data/match";
 import { fmtPct } from "../../lib/format";
 import { scoreTint, toScore } from "../../lib/scale";
 import { Hint } from "./glyphs";
@@ -15,7 +15,7 @@ import { situationGrid, SITE_ROWS, sitesOf, takeHoldGap } from "./parity";
 
 const pct = (won: number, n: number) => (n ? (100 * won) / n : null);
 
-export function SituationsCard({ v, file }: { v: MatchModel; file: string }) {
+export function SituationsCard({ v, file }: { v: ViewedMatch; file: string }) {
   const call = useCall("situations", [{ files: [file], filter: { player: v.players[v.human].key } }]);
   const s = call.data;
   const [at, setAt] = useState<[number, number]>([0, 0]);
@@ -72,7 +72,7 @@ export function SituationsCard({ v, file }: { v: MatchModel; file: string }) {
   );
 }
 
-export function BombsitesCard({ v, file }: { v: MatchModel; file: string }) {
+export function BombsitesCard({ v, file }: { v: ViewedMatch; file: string }) {
   const call = useCall("bombsites", [file, v.players[v.human].key]);
   const b = call.data;
   const title = <>Bombsites <Hint tip="Your side's rounds at each site: taking and planting it on T, holding and retaking it on CT." /></>;

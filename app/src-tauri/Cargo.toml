@@ -23,6 +23,8 @@ serde_json = "1.0.154"
 sha2 = "0.10"
 zip = { version = "7.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 ureq = "3.5.0"
+# the system folder picker for the pro match library (src/pro.rs), used from Rust only
+tauri-plugin-dialog = "2"
 
 [profile.release]
 codegen-units = 1
