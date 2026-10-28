@@ -3076,6 +3076,69 @@ def test_a_recovered_flash_reusing_an_entity_id_gets_its_own_detonation():
     assert [(r["tick"], r["flash_entity_id"]) for r in rows] == [(90200, 93), (90372, 93)]
     assert recovered[["tick", "entity_id", "x"]].values.tolist() == [[90371, 93, 900.0]]
 
+
+MOVER = 98
+
+
+def _mover_case(t_side=5):
+    """_slot_case's two rounds without the coach (CT 1-5, T t_side players), plus MOVER: on T at both freeze ends
+    (team_tick 300 and 1300) by his team_num, though a player_team event took him to the spectators on tick 250,
+    a move that killed him."""
+    case = _slot_case(t_side=t_side + 1)
+    for k in ("spawns", "sides"):
+        case[k] = case[k][case[k].steamid != COACH]
+    case["hurts"] = case["hurts"][case["hurts"].victim_steamid != COACH]
+    case["bomb"] = case["bomb"][case["bomb"].steamid != COACH]
+    case["rounds"] = case["rounds"].assign(team_tick=[300, 1300])
+    case["sides"] = pd.concat([case["sides"], pd.DataFrame(dict(round=[1, 2], steamid=MOVER, side="T"))], ignore_index=True)
+    case["deaths"] = pd.DataFrame(dict(tick=[400, 500, 250], attacker_steamid=[1, 6, MOVER],
+                                       victim_steamid=[6, 2, MOVER], assister_steamid=[None, None, None]))
+    case["hurts"] = case["hurts"].assign(tick=[400, 500])
+    case["moves"] = pd.DataFrame(dict(tick=[50, 250], steamid=[MOVER, MOVER], team=[2, 1]))
+    return case
+
+
+def test_a_sixth_player_who_left_for_the_spectators_before_freeze_end_is_left_out():
+    # Fixture J's case: the move to the spectators killed him, so he is in a player_death row, and the coach rule
+    # refused him. The game's player_team event decides his side, not his stale team_num.
+    out = ex.non_combatants(**_mover_case())
+    assert list(out) == [MOVER] and out[MOVER].startswith("a sixth slot that left the teams")
+
+
+@pytest.mark.parametrize("change, why", [
+    (lambda c: c["acts"].loc.__setitem__(len(c["acts"]), [MOVER]), "fired, threw or bought"),
+    (lambda c: c["deaths"].loc.__setitem__(len(c["deaths"]), [700, 6, MOVER, None]), "player_death"),
+    (lambda c: c["moves"].loc.__setitem__(len(c["moves"]), [900, MOVER, 2]), "player_death"),
+])
+def test_a_sixth_player_who_played_or_came_back_refuses_the_map(change, why):
+    # A substitute who bought or died in a live round, or one who moved back onto T before round 2's freeze end,
+    # took part: the map is refused, naming what he did, as for a coach who does.
+    case = _mover_case()
+    change(case)
+    with pytest.raises(RuntimeError, match=why):
+        ex.non_combatants(**case)
+
+
+def test_a_sixth_player_who_left_the_server_with_the_c4_is_left_out_too():
+    # Two more OpenCS2 demos: one sixth player left the server in freeze time (a disconnect, not a player_team
+    # event); another was handed the C4 at spawn, and it dropped as he left. Neither took part.
+    case = _mover_case()
+    case["moves"] = pd.DataFrame(dict(tick=[50, 250], steamid=[MOVER, MOVER], team=[2, 0]))
+    case["spawns"] = pd.concat([case["spawns"], pd.DataFrame(dict(tick=[100], steamid=[MOVER]))], ignore_index=True)
+    case["bomb"] = pd.concat([case["bomb"], pd.DataFrame(dict(tick=[100, 250], event=["bomb_pickup", "bomb_dropped"],
+                                                                steamid=[MOVER, MOVER]))], ignore_index=True)
+    assert list(ex.non_combatants(**case)) == [MOVER]
+    # a C4 he picked up later, in play, is taking part
+    case["bomb"].loc[len(case["bomb"])] = [500, "bomb_pickup", MOVER]
+    with pytest.raises(RuntimeError, match="bomb event"):
+        ex.non_combatants(**case)
+
+
+def test_a_player_who_left_is_kept_when_his_team_has_no_one_else():
+    # Leaving him out would leave T with four: as today, he stays, and the map is not refused for it.
+    assert ex.non_combatants(**_mover_case(t_side=4)) == {}
+
+
 def test_a_hit_on_a_rounds_start_tick_goes_to_the_round_before():
     # Fixture K's case: a post-round hit on round 11's start tick is in the counter the game commits there, which is
     # round 10's game_damage. A hit on round 1's start tick has no round before it; one a tick later stays.

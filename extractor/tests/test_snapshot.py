@@ -178,6 +178,7 @@ def test_a_player_who_left_before_his_counters_were_set_does_not_fail_the_map(tm
     # He has no reading, so no departed row; the two who left on the last tick are on the final scoreboard.
     assert (match["n_rounds"], match["departed"]) == (19, "[]")
 
+
 def test_blinds_inside_a_voided_attempt_go_with_its_detonations(tmp_path):
     # Fixture I (an OpenCS2 Ancient map, 42 rounds): a backup restore voided ticks 208751-228731. A flashbang
     # detonated on tick 210634 inside it and blinded three players there. The detonation was left out with the
@@ -194,6 +195,25 @@ def test_blinds_inside_a_voided_attempt_go_with_its_detonations(tmp_path):
     blinds = pl.read_parquet(d / "blinds.parquet")
     assert blinds.filter((pl.col("tick") >= 208751) & (pl.col("tick") <= 228731)).height == 0
     assert pl.read_parquet(d / "grenade_events.parquet").filter(pl.col("recovered")).height == 0
+
+
+def test_a_sixth_player_who_left_for_the_spectators_before_freeze_end_is_left_out(tmp_path):
+    # Fixture J (an OpenCS2 Inferno map, 29 rounds): a sixth player took a T slot during round 3's long freeze
+    # time and moved to the spectators 25 s before it ended; the move killed him. His team_num read T at that
+    # freeze end and every later one, so side T had six players and the map failed. 12 OpenCS2 maps failed so.
+    src = FIXTURES / "fixture-j.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; a sixth player who left before freeze end is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    match = pl.read_parquet(d / "match.parquet").row(0, named=True)
+    excluded = json.loads(match["excluded_players"])
+    assert match["n_rounds"] == 29 and len(excluded) == 1
+    assert excluded[0]["reason"].startswith("a sixth slot that left the teams")
+    sides = pl.read_parquet(d / "player_rounds.parquet").group_by(["round", "side"]).len()
+    assert sides["len"].max() == 5
+
 
 def test_a_hit_on_a_rounds_start_tick_counts_in_the_round_before(tmp_path):
     # Fixture K (an OpenCS2 Mirage map, 20 rounds): a post-round hit (26 HP) landed on round 11's start tick,

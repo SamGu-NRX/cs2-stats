@@ -688,7 +688,8 @@ TEAM_SIZE = 5  # HLTV lists five players a team
 
 
 def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
-                   sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame) -> dict[int, str]:
+                   sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame,
+                   moves: pd.DataFrame | None = None) -> dict[int, str]:
     """{steamid: reason} for each team's sixth slot that takes no part in the match: a coach the server
     spawns every round and then kills with damage from no weapon (three HLTV archives of one team: spawned
     in all 19-22 rounds, 17-23 such deaths, no player_death, no kill, no hit on anyone, no shot, grenade or
@@ -704,6 +705,12 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
       and item_purchase);
     - has no bomb event but a pickup on a spawn tick on which another player picks the C4 up too (the
       handoff; bomb: tick, event, steamid).
+    A sixth slot that left the teams before the round went live is left out too (left_before_freeze_end): on one
+    OpenCS2 demo a player took a T slot during a long freeze time and moved to the spectators 25 s before it
+    ended; on others a player left the server in freeze time. His team_num still read his side at that freeze end
+    and later ones, where sides are read, and leaving killed him. moves: tick, steamid, team of each player_team
+    event, and of each disconnect as team 0. He is left out only if that leaves no side short; otherwise he stays,
+    as before.
     Excluding the qualifiers must leave every side of every round exactly TEAM_SIZE players or fewer, with none
     under TEAM_SIZE that was not already (sides: round, steamid, side); otherwise this raises, naming each
     extra player and the conditions he failed, and nobody is excluded.
@@ -741,7 +748,18 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
     out = {s_: "a sixth slot that spawns every round and dies only to its own damage from no weapon, with no kill, "
                "death, hit, shot, grenade, purchase or bomb event (a coach)" for s_ in sorted(players) if not failed[s_]}
     full = sides.groupby(["round", "side"]).steamid.nunique()
-    left = sides[~sides.steamid.isin(list(out))].groupby(["round", "side"]).steamid.nunique().reindex(full.index, fill_value=0)
+    remaining = lambda gone: sides[~sides.steamid.isin(list(gone))].groupby(["round", "side"]).steamid.nunique() \
+        .reindex(full.index, fill_value=0)
+    movers = left_before_freeze_end(rounds, spawns, deaths, hurts, sides, acts, bomb, moves, players - set(out))
+    for s_ in movers:
+        failed[s_] = []
+    if movers:
+        with_movers = remaining(set(out) | movers)
+        if not len(with_movers[(with_movers < TEAM_SIZE) & (with_movers < full)]):
+            out.update({s_: "a sixth slot that left the teams (for the spectators, or the server) before freeze end "
+                            "in every round it held a side, with no kill, hit, shot, grenade or purchase; its only "
+                            "death is its leaving" for s_ in sorted(movers)})
+    left = remaining(set(out))
     short = left[(left < TEAM_SIZE) & (left < full)]
     if len(short):
         (rnd, side), n = next(iter(short.items()))
@@ -754,6 +772,45 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
         detail = {s_: failed.get(s_) for s_ in extra if s_ not in out}
         raise RuntimeError(f"side {side} of round {rnd} has {int(n)} players and no sixth slot qualifies to be left out: "
                            + "; ".join(f"{s_}: {', '.join(f) or 'qualifies'}" for s_, f in detail.items()))
+    return out
+
+
+def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
+                           sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame, moves: pd.DataFrame | None,
+                           candidates: set[int]) -> set[int]:
+    """The candidates whose latest move at or before each counted round's team_tick took them off both teams (a
+    team other than 2 or 3; a disconnect counts as team 0), in every round sides counts them, and who did nothing
+    else: no kill or assist, no hit on anyone, no shot, grenade or purchase, and no death or hit taken but their
+    own on a move's tick. Their only bomb events may be the C4 the game hands a T at spawn, picked up on their own
+    spawn tick, and its drop on a move's tick, as it leaves with them. The game's events decide, not team_num: on
+    one OpenCS2 demo it read T at every freeze end from the move on (rounds 3 to 29). deaths and hurts need their
+    tick column; without moves or rounds.team_tick, nobody qualifies."""
+    if moves is None or not len(moves) or "team_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
+        return set()
+    ids = lambda col: set(col.dropna().astype("int64"))
+    moves = moves[moves.steamid.notna()].sort_values("tick", kind="stable")
+    at = {int(r.round): r.team_tick for r in rounds.itertuples()}
+    acted = ids(acts.steamid) | ids(deaths.attacker_steamid[deaths.attacker_steamid != deaths.victim_steamid]) \
+        | ids(deaths.assister_steamid) | ids(hurts.attacker_steamid[hurts.attacker_steamid != hurts.victim_steamid])
+    out = set()
+    for s_ in candidates - acted:
+        mine = moves[moves.steamid.astype("int64") == s_]
+        on_side = set(sides["round"][sides.steamid.astype("int64") == s_].astype(int))
+        if mine.empty or not on_side or any(r not in at or pd.isna(at[r]) for r in on_side):
+            continue
+        team_then = lambda t: mine.team[mine.tick <= t].iloc[-1] if (mine.tick <= t).any() else None
+        if any(team_then(at[r]) in (2, 3, None) for r in on_side):
+            continue
+        ticks = set(mine.tick[~mine.team.isin([2, 3])].astype("int64"))
+        spawned = set(spawns.tick[(spawns.steamid == s_).fillna(False).to_numpy()].astype("int64"))
+        b = bomb[(bomb.steamid == s_).fillna(False).to_numpy()]
+        if not all((e in ("pickup", "bomb_pickup") and int(t) in spawned) or (e == "bomb_dropped" and int(t) in ticks)
+                   for e, t in zip(b.event, b.tick)):
+            continue
+        died = deaths.tick[(deaths.victim_steamid == s_).fillna(False).to_numpy()]
+        hit = hurts.tick[(hurts.victim_steamid == s_).fillna(False).to_numpy()]
+        if set(died.astype("int64")) <= ticks and set(hit.astype("int64")) <= ticks:
+            out.add(s_)
     return out
 
 
@@ -1667,19 +1724,24 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     d_, h_, sp_ = in_match(ev("player_death")), in_match(ev("player_hurt")), ev("player_spawn")
     team_rows = econ_raw[econ_raw.team_num.isin([2, 3]) & econ_raw.steamid.notna()]
     tick_round = dict(zip(rounds.team_tick, rounds["round"]))
+    pt_, dc_ = ev("player_team"), ev("player_disconnect")
     excluded = non_combatants(
-        rounds[["round", "start_tick", "end_tick"]],
+        rounds[["round", "start_tick", "end_tick", "team_tick"]],
         pd.DataFrame({"tick": sp_.tick, "steamid": pid(sp_, "user")}),
-        pd.DataFrame({c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"), ("victim_steamid", "user"),
-                                                 ("assister_steamid", "assister"))}),
-        pd.DataFrame({"attacker_steamid": pid(h_, "attacker"), "victim_steamid": pid(h_, "user"),
+        pd.DataFrame({"tick": d_.tick, **{c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"),
+                                                                     ("victim_steamid", "user"),
+                                                                     ("assister_steamid", "assister"))}}),
+        pd.DataFrame({"tick": h_.tick, "attacker_steamid": pid(h_, "attacker"), "victim_steamid": pid(h_, "user"),
                       "weapon": col(h_, "weapon", None)}),
         pd.DataFrame({"round": team_rows.tick.map(tick_round), "steamid": team_rows.steamid.astype("int64"),
                       "side": team_rows.team_num.map(SIDE)}).dropna(subset=["round"]),
         pd.DataFrame({"steamid": acting_players({n: in_match(ev(n)) for n in ACTING_EVENTS}, pid)}),
         pd.concat([pd.DataFrame({"tick": in_match(ev(n)).tick, "event": n, "steamid": pid(in_match(ev(n)), "user")})
                    for n in ("bomb_pickup", "bomb_dropped", "bomb_beginplant", "bomb_planted", "bomb_abortplant",
-                             "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True))
+                             "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True),
+        # leaving the server leaves the teams as a move to the spectators does: team 0
+        pd.concat([pd.DataFrame({"tick": pt_.tick, "steamid": pid(pt_, "user"), "team": col(pt_, "team", None)}),
+                   pd.DataFrame({"tick": dc_.tick, "steamid": pid(dc_, "user"), "team": 0})], ignore_index=True))
     drop_ids = list(excluded)
     if excluded:
         names_ = pos.dropna(subset=["steamid"]).groupby("steamid").name.last()
@@ -2106,8 +2168,6 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         # a voided attempt, crediting it first found no detonation on its tick and failed the map (26 OpenCS2 maps:
         # a flashbang_detonate on the blind's own tick, in an attempt a backup restore rolled back).
         bl_raw = bl_raw[(assign_rounds(bl_raw.tick, rounds, voided, final_tick) > 0).to_numpy()]
-        blinds = list(zip(bl_raw.tick, bl_raw.steamid.astype("int64").astype(object), bl_raw.flash_duration.astype(float),
-                          bl_raw.X, bl_raw.Y, bl_raw.Z))
         blinds = list(zip(bl_raw.tick, bl_raw.steamid.astype("int64").astype(object), bl_raw.flash_duration.astype(float),
                           bl_raw.X, bl_raw.Y, bl_raw.Z))
 
