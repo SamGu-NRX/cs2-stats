@@ -120,6 +120,9 @@ jobs:
           tests/test_units.py::test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined
           tests/test_units.py::test_the_parts_cap_never_deletes_through_a_junction
           tests/test_opencs2.py::test_a_finished_loose_demo_left_by_a_crash_is_deleted_at_the_next_start
+          tests/test_opencs2.py::test_a_sidecar_left_by_a_stop_between_the_demo_and_its_deletion_goes_at_the_next_start
+          tests/test_opencs2.py::test_a_sidecar_whose_demo_is_still_downloading_or_was_written_after_the_start_stays
+          tests/test_opencs2.py::test_a_sidecar_too_deep_or_too_large_to_read_is_left_and_the_start_goes_on
       - name: Fail if any of those tests was skipped
         shell: python
         run: |
