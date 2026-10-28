@@ -226,14 +226,14 @@ export default defineConfig({
     sourcemap: false,
     reportCompressedSize: true,
   },
-  // One test process at a time, files in sequence, which keeps the suite light on a machine that may be
-  // running the game. Each file gets a fresh process (forks with isolate, no singleFork), so nothing a
-  // file leaves running, such as a render, timer or module load, can reach the next file (#63).
+  // One test process, files in sequence: the suite takes about a second, and this keeps it light
+  // on a machine that may be running the game.
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["src/settle-imports.setup.ts"],
     environment: "node",
     pool: "forks",
+    poolOptions: { forks: { singleFork: true } },
     fileParallelism: false,
   },
 });
