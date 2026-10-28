@@ -29,7 +29,8 @@ import { idbDelete, idbGet, idbGetMany, idbKeys, idbPut } from "./idb";
 import type { Api, Call, FromWorker, Method, PositionsResult, Query, Rolled, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
-import { deriveFile, fileTables, type Cached } from "./derive-file";
+import { deriveFile, fileTables, isFolder, type Cached } from "./derive-file";
+import { idle, readWhenIdle } from "./idle";
 import { toolLoad } from "./tool-tables";
 import { presenceThroughStore, storedStale, type StoredPresence } from "./stored-presence";
 import { genCache } from "./gen-cache";
@@ -126,6 +127,16 @@ const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), sou
  * (tool-tables.ts), and calls arriving together share one load.
  */
 const TOOL_LOAD = toolLoad();
+/**
+ * Decoding the open match's tool tables was most of Utility's first open on a pro match: 189 to 285 ms,
+ * against 51 to 86 ms once decoded (release build). It runs ahead once the worker has had no call for
+ * QUIET_MS, so it takes nothing from the overview's own calls; a call arriving during the read waits for
+ * at most one table's decode. QUIET_MS is a guess meant to outlast a page's follow-up calls; no other
+ * value was measured.
+ */
+const QUIET_MS = 150;
+const quiet = idle(QUIET_MS);
+const readOpened = readWhenIdle(quiet, (file) => index.get(file)?.key, (file) => { tablesOf(file).catch(() => {}); });
 let openTables: { file: string; key: string; tables: Promise<RosterTables> } | null = null;
 function tablesOf(file: string): Promise<RosterTables> {
   const ix = index.get(file);
@@ -418,6 +429,9 @@ const api: Impl = {
   },
   async match(file, viewer) {
     if (openTables && openTables.file !== file) openTables = null;
+    // an extracted match's tool tables are decoded once nothing else is asked, so Utility, Advanced and
+    // Positions find them ready (idle.ts readWhenIdle)
+    readOpened(file, isFolder(file));
     return matchBundle(entryOfFile(file), await factsOf(file, true), viewer);
   },
   async rounds(file) {
@@ -559,11 +573,14 @@ const api: Impl = {
 };
 
 async function run(c: Call) {
+  quiet.begin();
   try {
     const fn = api[c.method] as (...a: unknown[]) => Promise<unknown>;
     post({ id: c.id, result: await fn(...c.args) });
   } catch (e) {
     post({ id: c.id, error: (e as Error).message });
+  } finally {
+    quiet.end();
   }
 }
 

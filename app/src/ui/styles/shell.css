@@ -108,7 +108,8 @@
 /* view change: out 80 ms opacity; in 180 ms opacity + 6 px rise */
 .view-in { animation: view-in var(--d-view) var(--ease-out) both; }
 @keyframes view-in { from { opacity: 0; transform: translateY(calc(6px * var(--mo))); } }
-/* with reduced motion a new page appears at once: a fade on every page change is motion too */
+/* Product decision: no route entrance under reduced motion, so a new page appears at once. This is
+   stricter than the rest of the app, which keeps opacity changes under reduced motion (--mo). */
 @media (prefers-reduced-motion: reduce) { .view-in { animation: none; } }
 .launch-in { animation: view-in var(--d-launch) var(--ease-out) both; }
 
