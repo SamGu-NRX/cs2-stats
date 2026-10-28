@@ -39,7 +39,6 @@ import { useScope } from "../shell/filters";
 import { LoadFailed } from "./match/LoadFailed";
 import { Empty, SectionAside, swingSumTip } from "./shared";
 
-const rowOf = (file: string) => document.querySelector(`[data-file="${CSS.escape(matchKey(file))}"]`)?.closest("tr") ?? null;
 const DASH = "–";
 
 /** A per-round value, or a dash that says why when the match's log is too thin to have one. */
@@ -262,7 +261,7 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
   const query = useYourQuery(rated);
   const avg = useRatings(useMemo(() => (query ? [query] : null), [query])).data?.[0].both.value ?? null;
   const left = rows.length - rated.length;
-  const open = (x: ListRow) => (x.kind === "local" ? openMatch(matchHref(x.e.file), rowOf(x.e.file)) : openLeetify(x.l));
+  const open = (x: ListRow) => (x.kind === "local" ? openMatch(matchHref(x.e.file)) : openLeetify(x.l));
 
   // the user's own matches: pro demos are the Pro view's
   const own = all.some(isOwn);
@@ -317,7 +316,7 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
             defaultSort={{ key: "date", dir: "desc" }}
             onOpen={open}
             onRowContext={(x, at) => openMenu(at, x.kind === "local" ? [
-              { label: "Open", hint: "Enter", run: () => openMatch(matchHref(x.e.file), rowOf(x.e.file)) },
+              { label: "Open", hint: "Enter", run: () => openMatch(matchHref(x.e.file)) },
               { label: "Open rounds", run: () => openMatch(matchHref(x.e.file, "rounds")) },
               { label: "Open economy", run: () => openMatch(matchHref(x.e.file, "economy")) },
               { label: "Copy file name", run: () => copyText(x.e.file, "File name copied", hideFile(x.e.file)) },
@@ -345,7 +344,7 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
                       <span className="mapcell">
                         <MapThumb map={s.match.map} size={26} />
                         <span className="two">
-                          <b data-vt="map">{mapName(s.match.map)}</b>
+                          <b>{mapName(s.match.map)}</b>
                           {(src.id !== "recorded" || isWingman(s) || joined) && (
                             <small className={joined ? "lt-srcline" : undefined} data-tip={src.id === "pro" || isWingman(s) ? notCountedText(s) ?? undefined : src.missing.length ? `No ${src.missing.join(" or ")} data.` : undefined}>
                               {joined && <span className="lt-src" data-tip="Leetify has this match too: its numbers sit beside ours on the match's Overview.">Leetify</span>}
@@ -373,9 +372,9 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
                 key: "score", label: "Score", align: "l", width: 150, sort: by((s) => s.score.us - s.score.them, (l) => (l.score ? l.score.us - l.score.them : null)),
                 render: by(
                   (s) => (isFinished(s)
-                    ? <span data-vt="score"><ScoreCell us={s.score.us} them={s.score.them} result={s.result} /></span>
+                    ? <ScoreCell us={s.score.us} them={s.score.them} result={s.result} />
                     : (
-                      <span className="scorecell scorecell--open" data-vt="score" data-tip={notCountedText(s) ?? undefined}>
+                      <span className="scorecell scorecell--open" data-tip={notCountedText(s) ?? undefined}>
                         <span className="chip chip--outline">Unfinished</span>
                         <span className="num">{s.score.us}<span className="faint">:</span>{s.score.them}</span>
                       </span>

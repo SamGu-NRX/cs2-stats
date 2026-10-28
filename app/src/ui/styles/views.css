@@ -195,11 +195,11 @@ canvas.radar-img { image-rendering: auto; }
 .mhero__halves { display: inline-flex; gap: 12px; font-size: 12px; }
 .mhero__halves b { font-weight: 800; margin-left: 2px; }
 .mhero__center { display: grid; justify-items: center; gap: 6px; }
-.mhero__score { display: flex; align-items: center; gap: 18px; font: 800 56px/1 var(--f); letter-spacing: -0.03em; view-transition-name: match-score; }
+.mhero__score { display: flex; align-items: center; gap: 18px; font: 800 56px/1 var(--f); letter-spacing: -0.03em; }
 .mhero__score .lose { color: var(--ink3); }
 .mhero__score .res { font-size: 11px; letter-spacing: 0.06em; }
 .mhero__meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--ink2); }
-.mhero__map { display: inline-flex; align-items: center; gap: 6px; view-transition-name: match-map; }
+.mhero__map { display: inline-flex; align-items: center; gap: 6px; }
 .mhero__map b { color: var(--map-accent); font-weight: 700; }
 .mhero__you { position: relative; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 22px; padding: 8px var(--gutter) 12px; }
 .mhero__stat { display: inline-flex; align-items: baseline; gap: 6px; }
@@ -558,10 +558,6 @@ button.clist__row[aria-expanded="true"] .clist__chev::before { transform: transl
 .keys__row { display: flex; justify-content: space-between; align-items: center; height: 28px; border-bottom: 1px solid var(--line); }
 .keys__row dt { color: var(--ink2); }
 .keys__row dd { margin: 0; }
-
-/* ================================================================ view transition: the score hand-off */
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; animation-timing-function: var(--ease-out); }
-::view-transition-group(match-score), ::view-transition-group(match-map) { animation-duration: var(--d-handoff); animation-timing-function: var(--ease-drawer); }
 
 /* ================================================================ narrower windows */
 @media (max-width: 1380px) {

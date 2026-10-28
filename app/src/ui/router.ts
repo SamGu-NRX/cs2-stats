@@ -328,25 +328,15 @@ export function go(href: string, opts?: { instant?: boolean }) {
 }
 
 /**
- * Opens a match. On a pointer activation, where View Transitions exist and motion is allowed, the
- * clicked row's score and map label morph into the hero (the row carries data-vt="score" and
- * data-vt="map" children).
+ * Opens a match: at once, as any page opens, with a click's view fade (App.tsx view-in) and none from
+ * the keyboard. It used to morph the clicked row's score and map into the hero through a View
+ * Transition, and the browser drops every click on the page while one runs: 280 ms after each open,
+ * for an action taken tens of times a session. Done on the live page instead, the score clipped at
+ * the hero's edge and ran over its text mid-flight; keeping it meant flying clones in an overlay, more
+ * motion code than the move was worth.
  */
-export function openMatch(href: string, row?: Element | null) {
-  if (keyboardLast) return go(href, { instant: true });
-  const doc = document as Document & { startViewTransition?: (cb: () => void) => { finished: Promise<void> } };
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!doc.startViewTransition || reduce) return go(href);
-  const named: HTMLElement[] = [];
-  row?.querySelectorAll<HTMLElement>("[data-vt]").forEach((el) => {
-    el.style.viewTransitionName = `match-${el.dataset.vt}`;
-    named.push(el);
-  });
-  const t = doc.startViewTransition(() => {
-    named.forEach((el) => (el.style.viewTransitionName = ""));
-    go(href);
-  });
-  t.finished.finally(() => named.forEach((el) => (el.style.viewTransitionName = "")));
+export function openMatch(href: string) {
+  go(href, { instant: keyboardLast });
 }
 
 /** Updates query parameters in place (replaceState: filters do not fill the back history). */

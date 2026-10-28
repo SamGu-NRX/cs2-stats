@@ -86,9 +86,10 @@ const LEGACY: Partial<Record<TableName, (read: ReadFile) => Promise<Table<TableN
  * tables that are absent or not asked for are null. A scoreboard needs none of them, and positions,
  * shots and engagement ticks are most of a match's size. `columns` narrows a v1 table to the named
  * SCHEMA columns: the table then carries only those, and reading another gives undefined, so it is
- * for callers whose reads are known (worker/tool-tables.ts).
+ * for callers whose reads are known (worker/tool-tables.ts). `between` runs before each table's decode
+ * but the first (eachInTurn), for a read nobody is waiting on.
  */
-export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES, columns: Partial<Record<TableName, readonly string[]>> = {}): Promise<MatchTables> {
+export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES, columns: Partial<Record<TableName, readonly string[]>> = {}, between?: () => Promise<void>): Promise<MatchTables> {
   const out: Record<string, unknown> = {};
   // A folder is v1 when it has match.parquet (SCHEMA-v1.md, "Versions"); those bytes are the match table's.
   const matchFile = read("match.parquet");
@@ -104,8 +105,8 @@ export async function loadTables(read: ReadFile, optional: readonly TableName[] 
     p.catch(() => {});
     files.set(name, p);
   }
-  for (const name of [...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]) {
-    if (!names.includes(name)) { out[name] = null; continue; }
+  for (const name of [...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]) if (!names.includes(name)) out[name] = null;
+  await eachInTurn(([...REQUIRED_TABLES, ...OPTIONAL_TABLES] as TableName[]).filter((name) => names.includes(name)), async (name) => {
     let t: Table<TableName> | null;
     if (!v1 && LEGACY[name]) t = await LEGACY[name]!(read);
     else {
@@ -114,8 +115,20 @@ export async function loadTables(read: ReadFile, optional: readonly TableName[] 
     }
     if (!t && (REQUIRED_TABLES as readonly string[]).includes(name)) throw new TableError(`table "${name}" is missing (${name}.parquet)`);
     out[name] = t;
-  }
+  }, between);
   return out as unknown as MatchTables;
+}
+
+/**
+ * Runs `step` for each item in turn. Once a match's bytes are in, its decodes run back to back through
+ * microtasks, so a worker message waits for all of them; `between`, a macrotask, runs before every step
+ * but the first and lets messages queued meanwhile go first.
+ */
+export async function eachInTurn<T>(items: readonly T[], step: (item: T) => Promise<void>, between?: () => Promise<void>): Promise<void> {
+  for (const [i, item] of items.entries()) {
+    if (i > 0 && between) await between();
+    await step(item);
+  }
 }
 
 /** Decodes the SCHEMA columns of one table, or only `only` of them. */

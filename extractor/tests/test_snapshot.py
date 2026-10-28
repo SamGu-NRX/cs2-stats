@@ -161,3 +161,19 @@ def test_blinds_after_a_detonation_the_recording_skipped_are_credited_to_that_fl
     events = pl.read_parquet(d / "grenade_events.parquet")
     recovered = events.filter(pl.col("recovered")).select(["tick", "event", "entity_id", "steamid"]).rows()
     assert recovered == [(90371, "flash_detonate", 93, None)]
+
+
+def test_a_player_who_left_before_his_counters_were_set_does_not_fail_the_map(tmp_path):
+    # Fixture H (an OpenCS2 Ancient map, 19 rounds): a player took a T slot as round 3 started and left 4 s later,
+    # with no kill, death or damage, and is not on the final scoreboard. Reading the counters of players who left
+    # failed twice: the read went to a loop variable that had reused the name of the tick reader (AttributeError:
+    # 'str' object has no attribute 'parse_ticks'), and his counters, never set, read null (int(NaN)). Four
+    # OpenCS2 maps failed this way.
+    src = FIXTURES / "fixture-h.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; players who left before the end are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    match = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet").row(0, named=True)
+    # He has no reading, so no departed row; the two who left on the last tick are on the final scoreboard.
+    assert (match["n_rounds"], match["departed"]) == (19, "[]")
