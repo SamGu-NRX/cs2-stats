@@ -71,7 +71,7 @@ awpy refuses a demo cut off mid-file ("unexpected end of data"). demoparser2 rea
 - **Penetration** for non-fatal hits: `player_hurt` has none (`kills.penetrated` covers kill shots).
 - **Aim punch:** `m_aimPunchAngle` is not networked to GOTV.
 - **Inferno extent:** only the origin and lifetime are stored.
-- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick.
+- **player_blind:** GOTV omits it; `blinds` is rebuilt from flash-duration changes, and every change lands on a flashbang detonation tick. When the recording skipped the tick a flashbang detonated on, and its event with it, the change lands on the next recorded tick: it is credited to the one flashbang whose trajectory ended for good just before the skipped tick (its last position is the tick before its detonation), and that detonation is added to `grenade_events` with `recovered` true. With no such flashbang, or several, the map fails.
 - **Weapon max speed:** no verified per-weapon table is bundled; join a cited table in the engine.
 
 ## Tables
@@ -565,6 +565,7 @@ Detonations, smoke and inferno start and end. Key: (tick, event, entity_id).
 |---|---|---|---|
 | `entity_id` | Int32 | no |  |
 | `event` | String | no | he_detonate | flash_detonate | smoke_detonate | smoke_expired | inferno_start | inferno_expire | ... |
+| `recovered` | Boolean | no | true for a flash_detonate the event stream lost with a tick the recording skipped, added because a blind needs it (see `blinds` in Not in the demo): tick is the skipped tick, x/y/z the flashbang's last position, steamid its linked thrower or null; false for every event read from the demo |
 | `round` | Int16 | no |  |
 | `steamid` | UInt64 | yes | player id (see Conventions); null when the event names no player that resolves (seen on an inferno_expire) |
 | `tick` | Int32 | no | tick |

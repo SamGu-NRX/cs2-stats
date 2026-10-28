@@ -122,6 +122,7 @@ TYPES: dict[str, dict[str, str]] = {
     "grenade_events": {
         "entity_id": "Int32",
         "event": "String",
+        "recovered": "Boolean",
         "round": "Int16",
         "steamid": "UInt64",
         "tick": "Int32",

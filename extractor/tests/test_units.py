@@ -2956,3 +2956,49 @@ def test_a_leftover_that_cannot_be_deleted_is_logged_and_startup_goes_on(tmp_pat
         assert "could not be checked or deleted" in caplog.text
     finally:
         os.chmod(stuck, stat.S_IREAD | stat.S_IWRITE)
+
+
+def _credit_blinds(trajectories, blinds, recorded, detonations=()):
+    """Blinds credited the way the extraction does it, from raw trajectory rows: (entity, serial, first, last, end x)
+    per flight, each a flashbang flying from x 0 to its end x; recorded: the demo's recorded ticks; detonations:
+    flash_detonate events (tick, entity, x). Returns (blind rows, recovered detonations)."""
+    rows = [dict(tick=t, entity_id=e, entity_serial=s_, type="flashbang", x=float(x), y=0.0, z=0.0)
+            for e, s_, a, b, x in trajectories for t in range(a, b + 1)]
+    g = pd.DataFrame(rows).sort_values(["entity_id", "entity_serial", "tick"]).reset_index(drop=True)
+    _, proj = ex.projectiles(g)
+    proj["steamid"] = pd.array([None] * len(proj), dtype="UInt64")
+    det = pd.DataFrame([dict(tick=t, entity_id=e, steamid=None, x=float(x), y=0.0, z=0.0) for t, e, x in detonations],
+                       columns=["tick", "entity_id", "steamid", "x", "y", "z"])
+    return ex.credit_blinds(blinds, det, ex.recovered_flash_detonations(proj, np.array(sorted(recorded))))
+
+
+# The recording skipped tick 90371 (as an OpenCS2 demo did); a flashbang whose last position is 90370 detonated on it.
+RECORDED = [t for t in range(90300, 90400) if t != 90371]
+
+
+def test_a_blind_after_a_skipped_detonation_goes_to_the_flash_that_ended_there_for_good():
+    # Review of PR 68: flash 94 is cut by the same missing tick but keeps flying (positions again from 90372), so it
+    # did not detonate there; it was nearer the blinded player, and crediting it named the wrong flash and thrower.
+    rows, recovered = _credit_blinds([(93, 1, 90300, 90370, 900), (94, 1, 90300, 90370, 10), (94, 1, 90372, 90390, 20)],
+                                     [(90372, 7, 1.5, 0.0, 0.0, 0.0)], RECORDED)
+    assert [(r["tick"], r["flash_entity_id"], r["attacker_steamid"]) for r in rows] == [(90372, 93, None)]
+    assert recovered[["tick", "entity_id"]].values.tolist() == [[90371, 93]]
+
+
+def test_a_blind_two_flashes_could_have_caused_refuses_the_map():
+    # Two flashbangs ended for good just before the skipped tick: which one blinded the player is unknown, and the
+    # nearer one is a guess.
+    with pytest.raises(RuntimeError, match=r"2 flashbangs \(\[93, 95\]\) detonated on a tick the recording skipped"):
+        _credit_blinds([(93, 1, 90300, 90370, 900), (95, 1, 90300, 90370, 10)], [(90372, 7, 1.5, 0.0, 0.0, 0.0)], RECORDED)
+
+
+def test_a_recovered_flash_reusing_an_entity_id_gets_its_own_detonation():
+    # Review of PR 68: with only the entity id, the app linked the blind to the latest earlier detonation of that id,
+    # an older flashbang (serial 1, detonated at 90200) thrown by someone else, and merged the 0.2 s blind into that
+    # player's 3.5 s one. The recovered detonation, on the skipped tick, is the one it must link to.
+    rows, recovered = _credit_blinds([(93, 1, 90150, 90199, 500), (93, 2, 90300, 90370, 900)],
+                                     [(90200, 8, 3.5, 500.0, 0.0, 0.0), (90372, 7, 0.2, 0.0, 0.0, 0.0)], RECORDED,
+                                     detonations=[(90200, 93, 500)])
+    assert [(r["tick"], r["flash_entity_id"]) for r in rows] == [(90200, 93), (90372, 93)]
+    assert recovered[["tick", "entity_id", "x"]].values.tolist() == [[90371, 93, 900.0]]
+
