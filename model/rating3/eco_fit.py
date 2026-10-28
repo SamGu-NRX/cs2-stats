@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import load_demo_tables
+from join_demos import joined_players
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
@@ -80,7 +81,8 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None):
 
         provenance["consumed_joins"] += 1
         provenance["layouts"][layout.format] += 1
-        names = {row["steamid"]: norm(row["name"]) for row in economy}
+        # {steamid: HLTV name} as the join paired them; an in-game name often differs from HLTV's.
+        names = {int(sid): name for sid, name in joined_players(join).items()}
         starts = {
             (row["round"], row["steamid"]): weapon_group(row.get("best_primary") or row.get("best_secondary"))
             or ("pistolPlus" if row.get("armor") else "pistol")

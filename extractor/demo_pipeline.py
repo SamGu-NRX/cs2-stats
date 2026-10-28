@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
 import logging
 import logging.handlers
@@ -814,6 +815,20 @@ def _deletable(path: Path) -> Path:
 
 def safe_rmtree(path: Path, ignore_errors: bool = False) -> None:
     shutil.rmtree(_deletable(path), ignore_errors=ignore_errors)
+
+
+def new_failed_dir(name: str) -> Path:
+    """A new, empty folder in FAILED_DIR for a failure: <name>, else <name>-<unix seconds>, else that plus -2, -3...
+    Each is made with exist_ok=False, so two failures of one map in the same second never share a folder."""
+    FAILED_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time())
+    for n in itertools.count():
+        d = FAILED_DIR / (name if n == 0 else f"{name}-{stamp}" if n == 1 else f"{name}-{stamp}-{n}")
+        try:
+            d.mkdir()
+            return d
+        except FileExistsError:
+            continue
 
 
 def safe_unlink(path: Path, missing_ok: bool = False) -> None:
@@ -1886,9 +1901,7 @@ class Pipeline:
                 safe_rmtree(a.work, ignore_errors=True)
             self._record_failure(a, reason, kept=None, retry=False)
             return
-        dest = a.rar.parent if retried else FAILED_DIR / (a.slug or a.id)
-        if not retried and dest.exists():
-            dest = FAILED_DIR / f"{a.slug or a.id}-{int(time.time())}"
+        dest = a.rar.parent if retried else new_failed_dir(a.slug or a.id)
         dest.mkdir(parents=True, exist_ok=True)
         kept_input = dest / (a.rar.name if a.loose is not None else "archive.rar")
         if a.rar.exists() and not retried:

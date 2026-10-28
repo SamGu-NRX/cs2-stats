@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import load_demo_tables
+from join_demos import joined_players
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
@@ -62,8 +63,8 @@ def joined_events(root: Path, joins: list[dict], provenance: dict | None = None)
         provenance["consumed_joins"] += 1
         provenance["layouts"][layout.format] += 1
         provenance["unattributed_damage_hp"] += int(match.get("unattributed_damage_hp", 0) or 0)
-        names = {r["steamid"]: nickname(r["name"]) for r in economy}
-        sid_by_name = {name: sid for sid, name in names.items()}
+        # HLTV's names to SteamIDs as the join paired them; an in-game name often differs from HLTV's.
+        sid_by_name = {name: int(sid) for sid, name in joined_players(join).items()}
         data = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
         match_id = str(data.get("match", {}).get("matchId", match.get("match_id", join["hltv"])))
         players = data["performance"]["players"]
