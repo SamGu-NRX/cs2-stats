@@ -265,7 +265,8 @@ function tidyProfileUrl() {
 function tidyMatchUrl() {
   if (current.page !== "match" || !current.file || isMatchId(current.file)) return;
   const q = current.query.toString();
-  const canon = matchHref(current.file, current.tab) + (q ? `?${q}` : "");
+  // the query is appended whole, so matchHref must not carry the picked player in it a second time
+  const canon = matchHref(current.file, current.tab, { as: null }) + (q ? `?${q}` : "");
   if (location.hash !== canon) history.replaceState(null, "", canon);
 }
 if (typeof location !== "undefined") {

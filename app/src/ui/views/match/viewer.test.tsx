@@ -31,8 +31,10 @@ describe("seeing a pro demo through a player", () => {
   });
 
   it("keeps the pick on links within the match and drops it on a link to another match", () => {
-    // fails if a tab link loses the player the match is seen through, or another match opens through them
+    // fails if a tab link loses the player the match is seen through, another match opens through them,
+    // or the address names the pick twice
     go(matchHref(PRO, "overview", { as: 1 }), { instant: true });
+    expect(location.hash.match(/as=/g)).toHaveLength(1);
     expect(new URLSearchParams(matchHref(PRO, "rounds", { round: 4 }).split("?")[1]).get("as")).toBe("1");
     expect(matchHref(OTHER, "overview")).not.toContain("as=");
     expect(matchHref(PRO, "overview", { as: null })).not.toContain("as=");
