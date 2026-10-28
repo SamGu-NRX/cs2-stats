@@ -3089,7 +3089,7 @@ def _mover_case(t_side=5):
         case[k] = case[k][case[k].steamid != COACH]
     case["hurts"] = case["hurts"][case["hurts"].victim_steamid != COACH]
     case["bomb"] = case["bomb"][case["bomb"].steamid != COACH]
-    case["rounds"] = case["rounds"].assign(team_tick=[300, 1300])
+    case["rounds"] = case["rounds"].assign(team_tick=[300, 1300], freeze_end_tick=[300, 1300])
     case["sides"] = pd.concat([case["sides"], pd.DataFrame(dict(round=[1, 2], steamid=MOVER, side="T"))], ignore_index=True)
     case["deaths"] = pd.DataFrame(dict(tick=[400, 500, 250], attacker_steamid=[1, 6, MOVER],
                                        victim_steamid=[6, 2, MOVER], assister_steamid=[None, None, None]))
@@ -3132,6 +3132,28 @@ def test_a_sixth_player_who_left_the_server_with_the_c4_is_left_out_too():
     case["bomb"].loc[len(case["bomb"])] = [500, "bomb_pickup", MOVER]
     with pytest.raises(RuntimeError, match="bomb event"):
         ex.non_combatants(**case)
+
+
+def test_a_round_recorded_already_live_lets_no_one_qualify_as_having_left_before_freeze_end():
+    # Review of PR 79 (CodeRabbit): a round with no recorded freeze end reads sides at end_tick - 1, so a sixth player
+    # who left mid-round would pass the check and be stripped from every table though he played. Without a freeze
+    # end nobody qualifies, and the map is refused as before.
+    case = _mover_case()
+    case["rounds"] = case["rounds"].assign(freeze_end_tick=[float("nan"), 1300], team_tick=[899, 1300])
+    with pytest.raises(RuntimeError, match="no sixth slot qualifies"):
+        ex.non_combatants(**case)
+
+
+def test_a_moved_start_tick_hit_takes_the_sides_of_its_round():
+    # Review of PR 79 (CodeRabbit): a hit on round 13's start tick, right after halftime, moved to round 12 kept the
+    # event's sides, the new half's. Moved rows take the round's freeze-end sides; without a snapshot row the event
+    # side stays, and unmoved rows keep theirs.
+    rounds_of = pd.Series([12, 12, 13])
+    ids = pd.Series([A, B, A])
+    event = pd.Series(["T", "CT", "T"])
+    snapshot = {(12, A): "CT", (13, A): "T"}
+    out = ex.moved_hit_sides([True, True, False], rounds_of, ids, event, snapshot)
+    assert out.tolist() == ["CT", "CT", "T"]
 
 
 def test_a_player_who_left_is_kept_when_his_team_has_no_one_else():

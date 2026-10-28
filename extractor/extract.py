@@ -783,13 +783,15 @@ def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: p
     else: no kill or assist, no hit on anyone, no shot, grenade or purchase, and no death or hit taken but their
     own on a move's tick. Their only bomb events may be the C4 the game hands a T at spawn, picked up on their own
     spawn tick, and its drop on a move's tick, as it leaves with them. The game's events decide, not team_num: on
-    one OpenCS2 demo it read T at every freeze end from the move on (rounds 3 to 29). deaths and hurts need their
-    tick column; without moves or rounds.team_tick, nobody qualifies."""
-    if moves is None or not len(moves) or "team_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
+    one OpenCS2 demo it read T at every freeze end from the move on (rounds 3 to 29). The moment is the round's
+    recorded freeze_end_tick: a round recorded already live has none (its team_tick falls back to end_tick - 1),
+    and a player who left during it played, so nobody qualifies there. deaths and hurts need their tick column;
+    without moves or rounds.freeze_end_tick, nobody qualifies."""
+    if moves is None or not len(moves) or "freeze_end_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
         return set()
     ids = lambda col: set(col.dropna().astype("int64"))
     moves = moves[moves.steamid.notna()].sort_values("tick", kind="stable")
-    at = {int(r.round): r.team_tick for r in rounds.itertuples()}
+    at = {int(r.round): r.freeze_end_tick for r in rounds.itertuples()}
     acted = ids(acts.steamid) | ids(deaths.attacker_steamid[deaths.attacker_steamid != deaths.victim_steamid]) \
         | ids(deaths.assister_steamid) | ids(hurts.attacker_steamid[hurts.attacker_steamid != hurts.victim_steamid])
     out = set()
@@ -1079,6 +1081,20 @@ def hit_rounds(ticks: pd.Series, rounds_of: pd.Series, rounds: pd.DataFrame) -> 
     prev = ticks.astype("int64").map(before)
     move = prev.notna() & (rounds_of == prev + 1)
     return rounds_of.where(~move, prev).astype(rounds_of.dtype)
+
+
+def moved_hit_sides(moved, rounds_of: pd.Series, ids: pd.Series, event_side: pd.Series, snapshot: dict) -> pd.Series:
+    """Each hit's player side: the event's, except on a hit hit_rounds moved to the round before (moved: bool per
+    row), which takes the player's side in that round from the freeze-end snapshot ({(round, steamid): side}). On
+    a start tick right after halftime the event already has the new half's side. Without a snapshot row, the
+    event side stays."""
+    out = event_side.astype(object).copy()
+    for i in np.flatnonzero(moved):
+        sid = ids.iloc[i]
+        s_ = None if pd.isna(sid) else snapshot.get((int(rounds_of.iloc[i]), int(sid)))
+        if s_ is not None:
+            out.iloc[i] = s_
+    return out
 
 
 def hit_table_checks(dmg: pd.DataFrame, player_rounds: pd.DataFrame) -> tuple[list[dict], int]:
@@ -1732,7 +1748,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     tick_round = dict(zip(rounds.team_tick, rounds["round"]))
     pt_, dc_ = ev("player_team"), ev("player_disconnect")
     excluded = non_combatants(
-        rounds[["round", "start_tick", "end_tick", "team_tick"]],
+        rounds[["round", "start_tick", "end_tick", "freeze_end_tick"]],
         pd.DataFrame({"tick": sp_.tick, "steamid": pid(sp_, "user")}),
         pd.DataFrame({"tick": d_.tick, **{c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"),
                                                                      ("victim_steamid", "user"),
@@ -1972,6 +1988,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     with Timer(ctx, "dp_damages"):
         h = stamp(ev("player_hurt"))
         h = h[h["round"] > 0].reset_index(drop=True)
+        stamped = h["round"].copy()
         h["round"] = hit_rounds(h.tick, h["round"], rounds)
         dmg = pd.DataFrame({"tick": h.tick, "round": h["round"],
                             "attacker_steamid": pid(h, "attacker"),
@@ -2001,6 +2018,10 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
             for c, s in (("x", "X"), ("y", "Y"), ("z", "Z")):
                 dmg[f"{p_}_{c}"] = col(h, f"{who}_{s}")
             dmg[f"{p_}_place"] = col(h, f"{who}_last_place_name")
+        snapshot = dict(zip(zip(player_rounds["round"].astype(int), player_rounds.steamid.astype("int64")), player_rounds.side))
+        moved = (h["round"] != stamped).to_numpy()
+        dmg["a_side"] = moved_hit_sides(moved, dmg["round"], dmg.attacker_steamid, dmg.a_side, snapshot)
+        dmg["v_side"] = moved_hit_sides(moved, dmg["round"], dmg.victim_steamid, dmg.v_side, snapshot)
         dmg["distance"] = np.sqrt((dmg.a_x - dmg.v_x) ** 2 + (dmg.a_y - dmg.v_y) ** 2 + (dmg.a_z - dmg.v_z) ** 2)
         dmg["source"] = "event"
 
