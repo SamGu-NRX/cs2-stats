@@ -3144,6 +3144,31 @@ def test_a_round_recorded_already_live_lets_no_one_qualify_as_having_left_before
         ex.non_combatants(**case)
 
 
+def _killed_by_another_on_the_move_tick(case):
+    case["deaths"].loc[case["deaths"].victim_steamid == MOVER, "attacker_steamid"] = 6
+
+
+def _hit_by_another_on_the_move_tick(case):
+    case["hurts"].loc[len(case["hurts"])] = [6, MOVER, "ak47", 250]
+
+
+def _left_on_the_freeze_end_tick(case):
+    case["moves"].loc[case["moves"].team == 1, "tick"] = 300
+    case["deaths"].loc[case["deaths"].victim_steamid == MOVER, "tick"] = 300
+
+
+@pytest.mark.parametrize("change", [_killed_by_another_on_the_move_tick, _hit_by_another_on_the_move_tick,
+                                    _left_on_the_freeze_end_tick])
+def test_a_player_who_left_but_was_killed_or_hit_by_someone_or_left_as_the_round_went_live_is_kept(change):
+    # Review of PR 79 (Codex): a death or hit on the departure tick counted as the move's own, whoever dealt it, so a
+    # player another player killed or hit as he left was stripped from every table. Only his own death (attacker
+    # himself or no one) qualifies; and the departure must come strictly before the freeze end.
+    case = _mover_case()
+    change(case)
+    with pytest.raises(RuntimeError, match="no sixth slot qualifies"):
+        ex.non_combatants(**case)
+
+
 def test_a_moved_start_tick_hit_takes_the_sides_of_its_round():
     # Review of PR 79 (CodeRabbit): a hit on round 13's start tick, right after halftime, moved to round 12 kept the
     # event's sides, the new half's. Moved rows take the round's freeze-end sides; without a snapshot row the event

@@ -778,40 +778,65 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
 def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
                            sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame, moves: pd.DataFrame | None,
                            candidates: set[int]) -> set[int]:
-    """The candidates whose latest move at or before each counted round's team_tick took them off both teams (a
-    team other than 2 or 3; a disconnect counts as team 0), in every round sides counts them, and who did nothing
-    else: no kill or assist, no hit on anyone, no shot, grenade or purchase, and no death or hit taken but their
-    own on a move's tick. Their only bomb events may be the C4 the game hands a T at spawn, picked up on their own
-    spawn tick, and its drop on a move's tick, as it leaves with them. The game's events decide, not team_num: on
-    one OpenCS2 demo it read T at every freeze end from the move on (rounds 3 to 29). The moment is the round's
-    recorded freeze_end_tick: a round recorded already live has none (its team_tick falls back to end_tick - 1),
-    and a player who left during it played, so nobody qualifies there. deaths and hurts need their tick column;
-    without moves or rounds.freeze_end_tick, nobody qualifies."""
+    """The candidates who left the teams before every counted round they held a side in went live, and did nothing
+    in the match. An allowlist of positive evidence: a candidate qualifies only if all of these hold, and anything
+    else keeps him (non_combatants then refuses the map, as before).
+    - Every round sides counts him in has a recorded freeze_end_tick, and his latest move strictly before it took
+      him off both teams. A move is a player_team event (moves: tick, steamid, team) to a team other than 2 or 3,
+      or a disconnect (team 0); a departure is such a move. sides reads team_num at freeze end, and it lags the
+      move (on one OpenCS2 demo it read T at every freeze end from the move on, rounds 3 to 29).
+    - Every death naming him is the one the game records for his departure: on a departure tick, with him as both
+      victim and attacker, and no assister. The game writes a team switch and a disconnect alike as a suicide by
+      "world" with the player as attacker (every departure death in fixtures J and L-P), never with no attacker.
+    - Every hit naming him is the same: taken on a departure tick, from himself. He hits no one, and no other
+      player hits him, at any tick; no kill and no assist.
+    - He fires, throws and buys nothing (acts: weapon_fire, grenade_thrown, item_purchase), so he flashes no one.
+    - His only bomb events are the C4 the game hands him at spawn (a pickup on his own spawn tick) and its drop on
+      a departure tick.
+    Two holes in an earlier form of this rule, each tested: a round recorded already live (its sides read at
+    end_tick - 1, after a player who left mid-round had played), and a death or hit from another player on the
+    departure tick. deaths and hurts need their tick column; without moves or rounds.freeze_end_tick, nobody
+    qualifies."""
     if moves is None or not len(moves) or "freeze_end_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
         return set()
-    ids = lambda col: set(col.dropna().astype("int64"))
+    is_ = lambda col, s_: (col.astype("Int64") == s_).fillna(False).to_numpy()
     moves = moves[moves.steamid.notna()].sort_values("tick", kind="stable")
-    at = {int(r.round): r.freeze_end_tick for r in rounds.itertuples()}
-    acted = ids(acts.steamid) | ids(deaths.attacker_steamid[deaths.attacker_steamid != deaths.victim_steamid]) \
-        | ids(deaths.assister_steamid) | ids(hurts.attacker_steamid[hurts.attacker_steamid != hurts.victim_steamid])
+    live = {int(r.round): r.freeze_end_tick for r in rounds.itertuples()}
     out = set()
-    for s_ in candidates - acted:
-        mine = moves[moves.steamid.astype("int64") == s_]
-        on_side = set(sides["round"][sides.steamid.astype("int64") == s_].astype(int))
-        if mine.empty or not on_side or any(r not in at or pd.isna(at[r]) for r in on_side):
+    for s_ in candidates:
+        mine = moves[is_(moves.steamid, s_)]
+        gone = set(mine.tick[~mine.team.isin([2, 3])].astype("int64"))
+        on_side = set(sides["round"][is_(sides.steamid, s_)].astype(int))
+        if not gone or not on_side:
             continue
-        team_then = lambda t: mine.team[mine.tick <= t].iloc[-1] if (mine.tick <= t).any() else None
-        if any(team_then(at[r]) in (2, 3, None) for r in on_side):
+
+        def left_before(r: int) -> bool:
+            fe = live.get(r)
+            if fe is None or pd.isna(fe):
+                return False
+            before = mine[mine.tick < fe]
+            return len(before) > 0 and before.team.iloc[-1] not in (2, 3)
+
+        if not all(left_before(r) for r in on_side):
             continue
-        ticks = set(mine.tick[~mine.team.isin([2, 3])].astype("int64"))
-        spawned = set(spawns.tick[(spawns.steamid == s_).fillna(False).to_numpy()].astype("int64"))
-        b = bomb[(bomb.steamid == s_).fillna(False).to_numpy()]
-        if not all((e in ("pickup", "bomb_pickup") and int(t) in spawned) or (e == "bomb_dropped" and int(t) in ticks)
-                   for e, t in zip(b.event, b.tick)):
+        if is_(acts.steamid, s_).any():
             continue
-        died = deaths.tick[(deaths.victim_steamid == s_).fillna(False).to_numpy()]
-        hit = hurts.tick[(hurts.victim_steamid == s_).fillna(False).to_numpy()]
-        if set(died.astype("int64")) <= ticks and set(hit.astype("int64")) <= ticks:
+        kills = is_(deaths.attacker_steamid, s_) & ~is_(deaths.victim_steamid, s_)
+        if kills.any() or is_(deaths.assister_steamid, s_).any():
+            continue
+        died = deaths[is_(deaths.victim_steamid, s_)]
+        if not (died.tick.astype("int64").isin(gone).all() and is_(died.attacker_steamid, s_).all()
+                and died.assister_steamid.isna().all()):
+            continue
+        if (is_(hurts.attacker_steamid, s_) & ~is_(hurts.victim_steamid, s_)).any():
+            continue
+        hit = hurts[is_(hurts.victim_steamid, s_)]
+        if not (hit.tick.astype("int64").isin(gone).all() and is_(hit.attacker_steamid, s_).all()):
+            continue
+        spawned = set(spawns.tick[is_(spawns.steamid, s_)].astype("int64"))
+        c4 = bomb[is_(bomb.steamid, s_)]
+        if all((e in ("pickup", "bomb_pickup") and int(t) in spawned) or (e == "bomb_dropped" and int(t) in gone)
+               for e, t in zip(c4.event, c4.tick)):
             out.add(s_)
     return out
 
