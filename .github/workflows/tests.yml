@@ -91,7 +91,8 @@ jobs:
     # The Downloads cleanup deletes files through Win32 handles; on Linux those tests skip. Here they must run:
     # the exclusive open, the link and reparse checks, the sharing refusal and the delete through the handle.
     # Startup recovery deletes a done archive's leftover the same way, and the parts cap's partial deletion
-    # (a table held open) happens only on Windows; their tests skip on Linux too and run here.
+    # (a table held open) happens only on Windows; their tests skip on Linux too and run here, with the junction
+    # tests (on Linux they use symlinks).
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -117,6 +118,8 @@ jobs:
           tests/test_units.py::test_recovery_deletes_the_file_it_checked_even_if_another_is_swapped_in
           tests/test_units.py::test_a_leftover_that_cannot_be_deleted_is_logged_and_startup_goes_on
           tests/test_units.py::test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined
+          tests/test_units.py::test_the_parts_cap_never_deletes_through_a_junction
+          tests/test_opencs2.py::test_a_finished_loose_demo_left_by_a_crash_is_deleted_at_the_next_start
       - name: Fail if any of those tests was skipped
         shell: python
         run: |

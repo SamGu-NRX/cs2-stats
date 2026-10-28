@@ -1674,6 +1674,43 @@ def test_held_parts_are_recorded_as_expired_before_they_are_deleted(tmp_path, mo
     assert (row["status"], row["parts"]) == ("expired", [str(d)])
 
 
+def _link_folder(link: Path, target: Path) -> None:
+    """link, a junction to target on Windows (no privilege needed), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+@pytest.mark.parametrize("level", ["part", "archive", "parts root"])
+def test_the_parts_cap_never_deletes_through_a_junction(tmp_path, monkeypatch, level):
+    # Reproduced in review: is_dir() follows a junction, so a junction as a part folder, or as the archive folder
+    # above it, let the cap delete a file outside parts/. Every folder on the way down is checked by lstat and
+    # against the parts root before anything in it is touched.
+    _isolate(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    if level == "part":
+        (dp.PARTS_DIR / "old-vs-one-r").mkdir()
+        sentinel = outside / "kills.parquet"
+        link = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    elif level == "archive":
+        sentinel = outside / "m1-nuke-p1" / "kills.parquet"
+        link = dp.PARTS_DIR / "old-vs-one-r"
+    else:
+        sentinel = outside / "old-vs-one-r" / "m1-nuke-p1" / "kills.parquet"
+        link = tmp_path / "parts-link"
+        monkeypatch.setattr(dp, "PARTS_DIR", link)
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"x" * 1000)
+    _link_folder(link, sentinel.parent if level == "part" else outside)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-12)
+    dp.Pipeline().enforce_parts_cap()
+    assert sentinel.read_bytes() == b"x" * 1000
+    manifest = link / "parts.jsonl" if level == "parts root" else dp.PARTS_DIR / "parts.jsonl"
+    assert not manifest.exists()  # nothing recorded as expired either
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a file another handle holds "
                     "open, the partial deletion recorded here; the Windows CI job runs this")
 def test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined(tmp_path, monkeypatch):

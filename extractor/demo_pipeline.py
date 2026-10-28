@@ -1603,16 +1603,25 @@ class Pipeline:
         row and its deletion (finish_archives writes the row first), and log it. Only the recorded file goes:
         download_copies.delete_verified checks its size and SHA-256 through a handle opened with no sharing and
         deletes through that handle, so a file put there after the check cannot be the one deleted. An archive
-        that needs_reextract asks for again stays, to be extracted. A loose demo's leftover is not recovered here:
-        scan_loose finds it done and leaves it. Nothing here stops the start: a file that cannot be checked or
-        deleted is logged and left. Returns the RARs deleted."""
+        that needs_reextract asks for again stays, to be extracted. A loose demo is recovered the same way, found
+        by its sidecar's ids, and its sidecar goes with it: scan_loose skips a done one, so it stayed for good while
+        the disk budget kept counting it. Nothing here stops the start: a file that cannot be checked or deleted is
+        logged and left. Returns the files deleted."""
         reextract = self.reextract_ids()
-        rars = {f for f in self.candidates() if f.suffix.lower() != ".dem"}
+        rars = set(self.candidates())
         if FAILED_DIR.exists():
             rars |= {f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file()}
+            rars |= {f for f in FAILED_DIR.glob("*/*.dem") if f.is_file() and sidecar_path(f).is_file()}
         deleted = []
         for f in sorted(rars):
-            aid = f.parent.name if f.parent.parent == FAILED_DIR else f.name
+            loose = f.suffix.lower() == ".dem"
+            if loose:
+                try:
+                    aid = loose_id(read_sidecar(f))
+                except ValueError:
+                    continue  # no valid sidecar: not a demo this pipeline took in
+            else:
+                aid = f.parent.name if f.parent.parent == FAILED_DIR else f.name
             rec = self.ledger.get(aid) or {}
             if rec.get("status") != "done" or aid in reextract or has_partial_marker(f):
                 continue
@@ -1629,12 +1638,14 @@ class Pipeline:
             if why:
                 log.warning("archive %s is done, but %s is not the file it recorded (%s); left in place", aid, f, why)
                 continue
-            if f.parent.parent == FAILED_DIR:  # a retried failure: its kept demos and reports go too
-                try:
-                    safe_rmtree(f.parent)
-                except OSError as e:
-                    log.error("archive %s is done; its RAR is deleted but the rest of %s could not be (%s)", aid,
-                              f.parent, e)
+            rest = f.parent if f.parent.parent == FAILED_DIR else sidecar_path(f) if loose else None
+            try:  # a retried failure's kept demos and reports, or a loose demo's sidecar
+                if rest == f.parent:
+                    safe_rmtree(rest)
+                elif rest is not None:
+                    safe_unlink(rest, missing_ok=True)
+            except OSError as e:
+                log.error("archive %s is done; %s is deleted but %s could not be (%s)", aid, f, rest, e)
             log.warning("archive %s is done in the ledger but its RAR %s was still there (the pipeline stopped "
                         "before deleting it); deleted it", aid, f)
             deleted.append(f)
@@ -1668,7 +1679,7 @@ class Pipeline:
             log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
             if row["status"] == "stitched":  # the joined map in demos/ holds everything its parts did
                 for d in parts.values():
-                    stitch.delete_part(d)
+                    stitch.delete_part(d, PARTS_DIR)
             rows[base] = row
         self.enforce_parts_cap()
         return rows
@@ -1696,8 +1707,19 @@ class Pipeline:
         MAX_PARTS_GB, recording each. An archive still in flight is never touched: its finished parts wait for its
         other parts. A part folder whose map lock another process holds is skipped."""
         active = {a.slug for a in self.archives.values() if a.slug}
-        folders = sorted((d for d in PARTS_DIR.iterdir() if d.is_dir()), key=lambda d: newest_mtime(d)) \
-            if PARTS_DIR.exists() else []
+        if not PARTS_DIR.exists():
+            return
+        # Every folder on the way down is checked by lstat and against the canonical parts root before anything
+        # in it is read or deleted: is_dir() follows a junction, and a junction at the archive or the part level
+        # let the cap delete files outside parts/.
+        try:
+            folders, refused = stitch.plain_subfolders(PARTS_DIR, PARTS_DIR)
+        except (stitch.NotPlainFolder, OSError) as e:
+            log.error("parts cap skipped: %s", e)
+            return
+        for why in refused:
+            log.error("parts cap: left alone, %s", why)
+        folders.sort(key=newest_mtime)
         sizes = {d: tree_bytes(d) for d in folders}
         total = sum(sizes.values())
         for d in folders:
@@ -1705,14 +1727,25 @@ class Pipeline:
                 return
             if d.name in active:
                 continue
+            try:
+                parts, refused = stitch.plain_subfolders(d, PARTS_DIR)
+            except (stitch.NotPlainFolder, OSError) as e:
+                log.error("parts cap: left alone, %s", e)
+                continue
+            for why in refused:
+                log.error("parts cap: left alone, %s", why)
+            damaged = [m for m in parts if (m / stitch.DAMAGED).exists()]
+            for m in damaged:
+                try:
+                    if not stitch.remove_tree(m, PARTS_DIR)[1]:  # recorded damaged before; the rest could go now
+                        log.info("deleted the rest of the damaged part %s", m)
+                except stitch.NotPlainFolder as e:
+                    log.error("parts cap: left alone, %s", e)
             # The expired row is written under the parts' locks before they go: deleting first, a crash before
             # the row left the parts gone and parts.jsonl still saying held (formal/ArchiveLegacyExpiry).
-            for m in sorted(x for x in d.iterdir() if x.is_dir() and (x / stitch.DAMAGED).exists()):
-                if not stitch.remove_tree(m)[1]:  # recorded damaged before; the rest of it could go this time
-                    log.info("deleted the rest of the damaged part %s", m)
             with contextlib.ExitStack() as locks:
                 taken = []
-                for m in sorted(x for x in d.iterdir() if x.is_dir() and not (x / stitch.DAMAGED).exists()):
+                for m in [m for m in parts if m not in damaged]:
                     try:
                         locks.enter_context(extract.map_lock(m, wait=False))
                     except extract.MapLocked:
@@ -1725,11 +1758,18 @@ class Pipeline:
                     reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
                     checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
                 for m in taken:
-                    removed, left = stitch.remove_tree(m)
+                    try:
+                        removed, left = stitch.remove_tree(m, PARTS_DIR)
+                    except stitch.NotPlainFolder as e:  # swapped for a link since it was listed
+                        log.error("parts cap: left alone, %s", e)
+                        continue
                     if left:
                         self.record_damaged(d, m, removed, left)
-            if not any(x.is_dir() for x in d.iterdir()):
-                safe_rmtree(d, ignore_errors=True)
+            try:
+                if not stitch.plain_subfolders(d, PARTS_DIR)[0]:  # only the parts' lock files are left
+                    stitch.remove_tree(d, PARTS_DIR)
+            except (stitch.NotPlainFolder, OSError) as e:
+                log.error("parts cap: could not remove %s: %s", d, e)
             self.outputs_changed()
             total -= sizes[d]
             log.warning("parts/ over %.0f GB; deleted the held parts of %s (%.1f MB)", MAX_PARTS_GB, d.name,
