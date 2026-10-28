@@ -20,7 +20,7 @@
 (* versions and double publication are Publish.tla's and Pipeline.tla's,    *)
 (* not checked here. The ledger is keyed by archive, though the code keys a *)
 (* retried failure by its failed/ folder name; due_for_retry is assumed     *)
-(* true. The three proposed fixes are switches, FALSE in the shipped code.  *)
+(* true. The four proposed fixes are switches, FALSE in the shipped code.   *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -30,13 +30,16 @@ CONSTANTS
   Redownloads,      \* times the user may download a deleted archive again
   RetryFailed,      \* the run uses --retry-failed
   CapPressure,      \* parts/ can pass MAX_PARTS_GB, so enforce_parts_cap deletes held parts
+  PartialDelete,    \* deleting a part folder can fail part way (a table held open on Windows): some tables go,
+                    \* the folder stays, and stitch.delete_part reports it as not deleted
   FailedPressure,   \* failed/ can pass MAX_FAILED_GB, so enforce_failed_cap evicts kept failures
   WorkerFails,      \* a parse can fail or be truncated, and a stitch can leave no complete map
   CheckFirst,       \* finish_archives runs unaccounted() before deleting anything (shipped); FALSE skips it
   LedgerFirst,      \* proposed: the done row before the RAR goes, and a start deletes a done archive's RAR
   ExpiryRowFirst,   \* proposed: enforce_parts_cap writes the expired row before deleting the parts
-  EvictionFixed     \* proposed: enforce_failed_cap leaves kept failures in flight alone, and writes a ledger row
+  EvictionFixed,    \* proposed: enforce_failed_cap leaves kept failures in flight alone, and writes a ledger row
                     \* before deleting, so a later download of the archive is not skipped as failed
+  DamageRecorded    \* proposed: a part deletion that fails part way is recorded in parts.jsonl as damaged
 
 VARIABLES
   phase,      \* phase[a]: where the main loop has it; "idle" when not in self.archives
@@ -46,15 +49,15 @@ VARIABLES
   evicted,    \* ghost: enforce_failed_cap deleted the archive's kept failure
   outcome,    \* outcome[a] \in {"none", "ok", "bad", "truncated"}: this attempt's worker results
   whole,      \* whole[a]: the whole map is published (resolves)
-  split,      \* split[a] \in {"none", "stitched", "broken", "held", "expired"}: the split map, per parts.jsonl;
-              \* "broken" is a stitch that reported success but left no complete map
+  split,      \* split[a] \in {"none", "stitched", "broken", "held", "expired", "damaged"}: the split map, per
+              \* parts.jsonl; "broken" is a stitch that reported success but left no complete map
   parts,      \* parts[a]: the split map's part folders hold their tables
   rows,       \* rows[a]: parts.jsonl statuses written for the archive
   work,       \* work[a]: the archive's extracted demos are on disk
   retried,    \* self.retried: failed/ archives tried, or freshly failed, in this run
   capPending, \* in memory: archives enforce_parts_cap is between its two steps on
   evictPending, \* in memory: kept failures enforce_failed_cap has recorded and not yet deleted
-  unrecorded, \* on disk: archives whose held parts are deleted with no expired row
+  unrecorded, \* on disk: archives whose held parts are deleted, whole or part way, with no row saying so
   capActive,  \* ghost: the cap deleted parts of an archive in flight
   crashes,
   downloads   \* re-downloads so far
@@ -231,17 +234,26 @@ Recover(a) == /\ ~Busy /\ Alone(a) /\ LedgerFirst /\ phase[a] = "idle" /\ ledger
 \* ---------------------------------------------------------------- enforce_parts_cap (1376-1403)
 
 \* inside any archive's stitch_parts, for a held map whose archive is not in flight: the code deletes the parts,
-\* then writes the expired row; ExpiryRowFirst swaps the two
+\* then writes the expired row; ExpiryRowFirst swaps the two. With PartialDelete the deletion can fail part way:
+\* the folder survives with some tables gone, stitch.delete_part returns False, and the code leaves the part out
+\* of the deleted list. When none of the map's parts went, it writes no row (1391-1392), so parts.jsonl still
+\* says held. DamageRecorded records such a part as damaged instead.
 CapFirst(x) ==
   /\ ~Busy
   /\ CapPressure /\ \E b \in Archives : phase[b] \in InCall
   /\ split[x] = "held" /\ parts[x] /\ x \notin Active /\ x \notin capPending
-  /\ capPending' = capPending \cup {x}
   /\ IF ExpiryRowFirst
-     THEN /\ rows' = Set(rows, x, rows[x] \cup {"expired"}) /\ split' = Set(split, x, "expired")
+     THEN /\ capPending' = capPending \cup {x}
+          /\ rows' = Set(rows, x, rows[x] \cup {"expired"}) /\ split' = Set(split, x, "expired")
           /\ UNCHANGED <<parts, unrecorded>>
-     ELSE /\ parts' = Set(parts, x, FALSE) /\ unrecorded' = unrecorded \cup {x}
-          /\ UNCHANGED <<rows, split>>
+     ELSE \/ /\ capPending' = capPending \cup {x}
+             /\ parts' = Set(parts, x, FALSE) /\ unrecorded' = unrecorded \cup {x}
+             /\ UNCHANGED <<rows, split>>
+          \/ /\ PartialDelete /\ parts' = Set(parts, x, FALSE) /\ UNCHANGED capPending
+             /\ IF DamageRecorded
+                THEN /\ rows' = Set(rows, x, rows[x] \cup {"damaged"}) /\ split' = Set(split, x, "damaged")
+                     /\ UNCHANGED unrecorded
+                ELSE /\ unrecorded' = unrecorded \cup {x} /\ UNCHANGED <<rows, split>>
   /\ capActive' = capActive \/ (x \in Active)
   /\ UNCHANGED <<phase, rar, ledger, dropped, evicted, outcome, whole, work, retried, evictPending, crashes,
                  downloads>>
@@ -249,7 +261,10 @@ CapSecond(x) ==
   /\ x \in capPending
   /\ capPending' = capPending \ {x}
   /\ IF ExpiryRowFirst
-     THEN /\ parts' = Set(parts, x, FALSE) /\ UNCHANGED <<rows, split, unrecorded>>
+     THEN /\ parts' = Set(parts, x, FALSE) /\ UNCHANGED unrecorded
+          /\ \/ UNCHANGED <<rows, split>>
+             \/ /\ PartialDelete /\ DamageRecorded
+                /\ rows' = Set(rows, x, rows[x] \cup {"damaged"}) /\ split' = Set(split, x, "damaged")
      ELSE /\ rows' = Set(rows, x, rows[x] \cup {"expired"}) /\ split' = Set(split, x, "expired")
           /\ unrecorded' = unrecorded \ {x} /\ UNCHANGED parts
   /\ UNCHANGED <<phase, rar, ledger, dropped, evicted, outcome, whole, work, retried, evictPending, capActive,
@@ -293,15 +308,17 @@ Symmetry == Permutations(Archives)
 TypeOK == /\ phase \in [Archives -> Phases]
           /\ rar \in [Archives -> {"downloads", "failed", "gone"}]
           /\ ledger \in [Archives -> {"none", "done", "failed", "evicted"}]
-          /\ split \in [Archives -> {"none", "stitched", "broken", "held", "expired"}]
+          /\ split \in [Archives -> {"none", "stitched", "broken", "held", "expired", "damaged"}]
 
 \* no archive is deleted with a map unaccounted unless failed_dropped.jsonl records it: once its RAR is gone, its
-\* whole map is published and its split map is stitched, expired with a row, or held with its parts (or the cap is
-\* between its two steps on it)
+\* whole map is published and its split map is stitched, expired or damaged with a row, or held with its parts (or
+\* the cap is between its two steps on it)
 NoUnaccountedDeletion ==
   \A a \in Archives : (rar[a] = "gone" /\ ~dropped[a])
-    => whole[a] /\ (split[a] \in {"stitched", "expired"} \/ (split[a] = "held" /\ (parts[a] \/ a \in capPending)))
-\* every deletion of held parts has its expired row, but for the moment between the cap's two steps
+    => whole[a] /\ (split[a] \in {"stitched", "expired", "damaged"}
+                    \/ (split[a] = "held" /\ (parts[a] \/ a \in capPending)))
+\* every deletion of held parts, whole or part way, has its expired (or damaged) row, but for the moment between
+\* the cap's two steps
 ExpiredRecorded == \A a \in Archives : a \in unrecorded => a \in capPending
 \* the cap never deletes the parts of an archive still in flight
 CapSparesActive == ~capActive

@@ -10,21 +10,21 @@ Violated `ExpiredRecorded`. [Bounds](ArchiveCrashExpiry.cfg).
 
 ```text
 1. Initial (see the module's Init)
-2. Scan: phase=<<"idle", "hashing">>
-3. Scan: phase=<<"hashing", "hashing">>
-4. Hash: phase=<<"pending", "hashing">>
-5. Extract: phase=<<"extracting", "hashing">>; work=<<TRUE, FALSE>>
-6. Parse: phase=<<"parsing", "hashing">>; outcome=<<"bad", "none">>
-7. Hash: phase=<<"parsing", "pending">>
-8. Extract: phase=<<"parsing", "extracting">>; work=<<TRUE, TRUE>>
-9. Parse: phase=<<"parsing", "parsing">>; outcome=<<"bad", "ok">>; parts=<<FALSE, TRUE>>; whole=<<FALSE, TRUE>>
-10. Stitch: phase=<<"parsing", "check">>; rows=<<{}, {"held"}>>; split=<<"none", "held">>
-11. Check: phase=<<"parsing", "work">>
-12. RemoveWork: phase=<<"parsing", "ledger">>; work=<<TRUE, FALSE>>
-13. LedgerDone: phase=<<"parsing", "rar">>; ledger=<<"none", "done">>
-14. RemoveRar: phase=<<"parsing", "idle">>; rar=<<"downloads", "gone">>
-15. ToFail: phase=<<"fhold", "idle">>
-16. CapFirst: parts=<<FALSE, FALSE>>; capPending={2}; unrecorded={2}
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
+9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
+10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
+11. Scan: phase=<<"idle", "hashing">>
+12. Hash: phase=<<"idle", "pending">>
+13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
+14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
+16. CapFirst: parts=<<FALSE, FALSE>>; capPending={1}; unrecorded={1}
 17. Crash: phase=<<"idle", "idle">>; work=<<FALSE, FALSE>>; capPending={}; crashes=1
 ```
 
@@ -79,6 +79,29 @@ Violated `NoUnaccountedDeletion`. [Bounds](ArchiveLegacyNoCheck.cfg).
 7. Check: phase=<<"work", "idle">>
 8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
 9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
+```
+
+## ArchivePartialDelete
+
+Violated `ExpiredRecorded`. [Bounds](ArchivePartialDelete.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
+9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
+10. LedgerDone: phase=<<"idle", "idle">>; ledger=<<"done", "none">>
+11. Scan: phase=<<"idle", "hashing">>
+12. Hash: phase=<<"idle", "pending">>
+13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
+14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "broken">>
+16. CapFirst: parts=<<FALSE, FALSE>>; unrecorded={1}
 ```
 
 ## ClipsLaunchCrashGap

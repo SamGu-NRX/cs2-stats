@@ -19,7 +19,7 @@ FAIL = {
     "PluginLateFreeze", "PluginAfterWin", "PluginHotReload",
     "PipelineLegacyIdentity", "PipelineLegacyInPlace",
     "ClipsLaunchUserSession", "ClipsLaunchLegacyWatcherCheck", "ClipsLaunchCrashGap",
-    "ArchiveCrashLedger", "ArchiveCrashExpiry", "ArchiveEviction", "ArchiveLegacyNoCheck",
+    "ArchiveCrashLedger", "ArchiveCrashExpiry", "ArchiveEviction", "ArchiveLegacyNoCheck", "ArchivePartialDelete",
 }
 
 

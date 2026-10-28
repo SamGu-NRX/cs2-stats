@@ -116,10 +116,12 @@ def main():
     config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, Crashes=1, UserSessions=1, HlaeCheck=True),
            safety)
     # The pipeline's archive lifecycle (Archive.tla)
-    # The shipped code has CheckFirst and none of the three proposed fixes; "fixed" turns all three on.
+    # The shipped code has CheckFirst and none of the four proposed fixes; "fixed" turns them all on, with part
+    # deletions that can fail part way.
     archive = dict(Archives={1, 2}, Crashes=0, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
-                   WorkerFails=True, CheckFirst=True, LedgerFirst=False, ExpiryRowFirst=False, EvictionFixed=False)
-    fixed = dict(LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True)
+                   WorkerFails=True, CheckFirst=True, LedgerFirst=False, ExpiryRowFirst=False, EvictionFixed=False,
+                   PartialDelete=False, DamageRecorded=False)
+    fixed = dict(LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True, PartialDelete=True, DamageRecorded=True)
     every = ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded",
              "EvictedRedownloadable"]
     config("ArchiveSafety", archive, every[:-1])
@@ -127,6 +129,8 @@ def main():
     config("ArchiveCrashLedger", archive | dict(Crashes=1, ExpiryRowFirst=True, EvictionFixed=True), ["DeletedRecorded"])
     config("ArchiveCrashExpiry", archive | dict(Crashes=1, LedgerFirst=True, EvictionFixed=True), ["ExpiredRecorded"])
     config("ArchiveFixed", archive | fixed | dict(Crashes=1), every)
+    # a part deletion that fails part way, on the shipped code: the damaged part stays listed as held
+    config("ArchivePartialDelete", archive | dict(PartialDelete=True), ["ExpiredRecorded"])
     config("ArchiveLegacyNoCheck", archive | dict(CheckFirst=False), ["NoUnaccountedDeletion"])
     config("ArchiveWide", archive | fixed | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1,
            Redownloads=0), every, symmetry="Symmetry")

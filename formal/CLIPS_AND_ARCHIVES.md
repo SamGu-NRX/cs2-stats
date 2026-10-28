@@ -76,19 +76,22 @@ Each archive holds one whole map and one map recorded as two parts.
 | `Stitch`, `Check` | [1325](../extractor/demo_pipeline.py#L1325) `stitch_parts`, [1302](../extractor/demo_pipeline.py#L1302), [1358](../extractor/demo_pipeline.py#L1358) `unaccounted` |
 | `RemoveWork`, `RemoveRar`, `LedgerDone` | [1289](../extractor/demo_pipeline.py#L1289) `finish_archives`, [1314](../extractor/demo_pipeline.py#L1314), [1319](../extractor/demo_pipeline.py#L1319) |
 | `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1404-1458](../extractor/demo_pipeline.py#L1404) `fail_archive`, [1450](../extractor/demo_pipeline.py#L1450) |
-| `CapFirst`, `CapSecond`: delete the held parts, then write the expired row | [1376-1403](../extractor/demo_pipeline.py#L1376) `enforce_parts_cap`, [1390](../extractor/demo_pipeline.py#L1390), [1397](../extractor/demo_pipeline.py#L1397) |
+| `CapFirst`, `CapSecond`: delete the held parts, then write the expired row. With `PartialDelete`, the deletion can fail part way: `stitch.delete_part` returns False, the part is left out of the deleted list, and with none deleted the code writes no row | [1376-1403](../extractor/demo_pipeline.py#L1376) `enforce_parts_cap`, [1390-1392](../extractor/demo_pipeline.py#L1390), [1397](../extractor/demo_pipeline.py#L1397); [stitch.py:427](../extractor/stitch.py#L427) `delete_part` |
 | `EvictRecord`, `EvictDelete`: the `failed_dropped.jsonl` row, then the folder goes; the ledger keeps saying failed | [1492-1510](../extractor/demo_pipeline.py#L1492) `enforce_failed_cap` |
 
-Three proposed fixes are switches, off for the shipped code:
+Four proposed fixes are switches, off for the shipped code:
 
 - `LedgerFirst`: the done row before the RAR goes, and a start deletes a done archive's leftover RAR.
 - `ExpiryRowFirst`: the expired row before the parts go.
 - `EvictionFixed`: `enforce_failed_cap` skips kept failures still in flight and writes a ledger row before deleting.
+- `DamageRecorded`: a part deletion that fails part way is recorded in `parts.jsonl` as damaged.
+
+`PartialDelete` isn't a fix but a behaviour of the file system: on Windows a table held open by another process can't be deleted, while the rest of the folder's tables go. It's off in `ArchiveSafety` and on in `ArchivePartialDelete`, `ArchiveFixed` and `ArchiveWide`.
 
 ### Invariants
 
 - `NoUnaccountedDeletion`: an archive whose RAR is gone has its whole map published and its split map stitched, expired with a row, or held with its parts. The exception is an archive deleted on purpose with its maps unaccounted, which `failed_dropped.jsonl` must record: a truncated failure, or a kept failure evicted by the cap.
-- `ExpiredRecorded`: deleted held parts always have their expired row, except between the cap's two steps.
+- `ExpiredRecorded`: deleted held parts, whether all their tables went or only some, always have a row saying so (expired or damaged), except between the cap's two steps.
 - `CapSparesActive`: the parts cap never touches an archive in flight.
 - `FailedKept`: a failure whose last row says failed still has its RAR, unless `failed_dropped.jsonl` records its deletion.
 - `DeletedRecorded`: an archive whose RAR is gone has a done row or a `failed_dropped.jsonl` record. No archive ends up published with no row.
@@ -96,15 +99,16 @@ Three proposed fixes are switches, off for the shipped code:
 
 ### Results
 
-`ArchiveSafety` (shipped code, two archives, no crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash.
+`ArchiveSafety` (shipped code, two archives, no crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant except `EvictedRedownloadable`, which fails without any crash. Its PASS assumes every part deletion completes, which the code doesn't guarantee: with partial deletion, `ArchivePartialDelete` breaks the same no-crash guarantees.
 
 These counterexamples are findings in the shipped code:
 
 - **`ArchiveEviction` violates `EvictedRedownloadable`.** `enforce_failed_cap` deletes a kept failure but leaves its ledger saying failed, so a later download of the same archive is skipped forever. The proposed fix also skips kept failures that are in flight. Without that, a retry in flight can lose its folder, fail again, and leave the same state; TLC found that case with only the ledger row added.
 - **`ArchiveCrashLedger` violates `DeletedRecorded`.** A crash between deleting the RAR ([1314](../extractor/demo_pipeline.py#L1314), or a retried failure's folder at [1312](../extractor/demo_pipeline.py#L1312)) and appending the done row ([1319](../extractor/demo_pipeline.py#L1319)) leaves the maps published with no done row.
+- **`ArchivePartialDelete` violates `ExpiredRecorded`, without a crash.** The second review reproduced it on Windows: a held-open `rounds.parquet` stopped `rmtree(ignore_errors=True)` from removing the part folder, while `match.parquet` went. `delete_part` reported the part as not deleted, `enforce_parts_cap` left it out and wrote no row, and `parts.jsonl` still says held. In the trace, archive 1 finishes with its split map held and its RAR deleted; during archive 2's stitch, the cap tears archive 1's parts and records nothing. A held map can be joined later, so the damaged part looks intact; and since archive 1's RAR is gone, its split map is also unaccounted. The proposed fix writes the expired row first and records a part deletion that fails part way as damaged.
 - **`ArchiveCrashExpiry` violates `ExpiredRecorded`.** A crash between deleting held parts ([1390](../extractor/demo_pipeline.py#L1390)) and writing their expired row ([1397](../extractor/demo_pipeline.py#L1397)) leaves the parts gone and `parts.jsonl` still saying held, with no record of the deletion.
 
-`ArchiveFixed` turns on all three proposed fixes, with one crash, and passes every invariant. `ArchiveWide` checks the same with three archives and symmetry reduction. `ArchiveLegacyNoCheck` skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
+`ArchiveFixed` turns on all four proposed fixes, with one crash and partial deletion, and passes every invariant. `ArchiveWide` checks the same with three archives and symmetry reduction. `ArchiveLegacyNoCheck` skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
 
 ### Bounds, assumptions and exclusions
 
