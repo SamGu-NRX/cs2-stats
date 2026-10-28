@@ -36,6 +36,19 @@ The snapshot tests in `tests/test_snapshot.py` need the private fixture demos an
 
 The tables land in `out/v-<version>-<hash>/`, and `out/CURRENT` names that folder (see "Finding a map's tables" in `SCHEMA-v1.md`). Without `--mapdata` the map still extracts, but `match.visibility_status` is `no_mapdata`, mesh visibility is null, and only damage and kills open engagements.
 
+## Pro demos from OpenCS2
+
+The OpenCS2 dataset (`blanchon/opencs2_dataset_demo` on Hugging Face, CC BY 4.0) holds HLTV pro maps as loose `.dem` files. The pipeline takes them from a second folder, `CS2_DEMO_INBOX` (off when unset). It deletes demos there, so it uses only a folder made for that: one holding `.cs2-stats-inbox`, which the pipeline and the fetcher write into a missing or empty folder. It refuses a drive root, the user profile, Desktop, Documents and Downloads, and anything inside or containing the data or downloads folder, and runs without the inbox then. Each `<match id>/<name>.dem` there needs a sidecar `<name>.meta.json` naming its `source` (`opencs2`), `hltv_match_id`, `hltv_map_index`, `map_name`, `dataset_file`, `dem_bytes` and `sha256`. The ids must match the dataset's metadata row for `dataset_file` (`CS2_OPENCS2_META`, default `<data>/external/opencs2-meta/data`), and the demo must match its size, SHA-256 and the map its sidecar names. A file the dataset lists twice with different facts matches no row. A demo that fails any of these is refused with a ledger row saying why and left where it is: the pipeline moves or deletes an inbox demo only once its sidecar is bound to it. The scan skips links and junctions, and if the metadata cannot be read, the pipeline logs it once and takes no loose demos until it restarts. A bound demo skips extraction and is parsed under the same disk budget, free-space floor, ledger and retry rules as an archive. Its map is published as `<team1>-vs-<team2>-opencs2-<match id>-m<index>/<map>`, with the sidecar in `match.extra`, which is how `model/rating3/join_demos.py` joins it to its HLTV scoreboard.
+
+`fetch_opencs2.py` fills the inbox. It picks the maps whose HLTV scoreboard is saved in `<data>/hltv`, leaves out those the ledger already holds, and downloads the rest, two at a time at most, while the pipeline's `/pending` has room and the inbox's volume stays above the free-space floor after what the downloads in progress still have to write. Each file must match the size and SHA-256 Hugging Face names for it, and the fetcher never writes past that size: a response that is longer, or says it is, fails the attempt. A resumed download that does not is fetched again once, then given up. A failed download is retried after 1, 2, 4 and 8 minutes:
+
+```sh
+.venv/Scripts/python -I fetch_opencs2.py --inbox <folder> --dry-run      # list what it would fetch
+.venv/Scripts/python -I fetch_opencs2.py --inbox <folder> --limit 3      # fetch three maps
+```
+
+A demo appears in the inbox, with its sidecar, only once it is whole. Ctrl+C stops it; the next run resumes the partial files. `CS2_PIPELINE_PORT` moves the pipeline's status port (default 8766), and `--status` points the fetcher at it.
+
 ## Import Valve matchmaking demos
 
 `valve_import.py` extracts the user's own matchmaking demos (`match730_*.dem`) with source `valve`. The app runs it from Data & settings, "Import Valve matches", into `%APPDATA%\BotMatchStats\valve` (see "The app" below).

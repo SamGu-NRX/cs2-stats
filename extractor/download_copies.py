@@ -45,6 +45,8 @@ MODES = ("off", "dry-run", "delete")
 FILE_ATTRIBUTE_DIRECTORY = 0x10
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 FOLDERID_DOWNLOADS = uuid.UUID("374DE290-123F-4565-9164-39C4925E467B")
+FOLDERID_DESKTOP = uuid.UUID("B4BFCC3A-DB2C-424C-B029-7FE99A87C641")
+FOLDERID_DOCUMENTS = uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7")
 
 
 class Refused(Exception):
@@ -306,18 +308,26 @@ if sys.platform == "win32":
                                                ctypes.sizeof(info)):
             raise _fail("SetFileInformationByHandle(FileDispositionInfo)")
 
-    def downloads_folder() -> Path:
-        """The user's Downloads folder from the Known Folder API: it follows a moved or redirected folder, which
-        ~/Downloads does not."""
-        guid = (ctypes.c_byte * 16).from_buffer_copy(FOLDERID_DOWNLOADS.bytes_le)
+    def known_folder(folder_id: uuid.UUID) -> Path:
+        """A Known Folder's path from the Known Folder API: it follows a moved or redirected folder, which a path
+        under the user profile does not."""
+        guid = (ctypes.c_byte * 16).from_buffer_copy(folder_id.bytes_le)
         p = ctypes.c_void_p()
         hr = _shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(p))
         try:
             if hr != 0:
-                raise Refused(f"SHGetKnownFolderPath(FOLDERID_Downloads) failed: HRESULT {hr & 0xFFFFFFFF:#010x}")
+                raise Refused(f"SHGetKnownFolderPath({folder_id}) failed: HRESULT {hr & 0xFFFFFFFF:#010x}")
             return Path(ctypes.wstring_at(p.value))
         finally:
             _ole32.CoTaskMemFree(p)  # the API allocates the string even when it fails
+
+    def downloads_folder() -> Path:
+        """The user's Downloads folder (known_folder)."""
+        return known_folder(FOLDERID_DOWNLOADS)
+
+    def known_folders() -> list[Path]:
+        """The user's Desktop, Documents and Downloads folders, wherever they are."""
+        return [known_folder(f) for f in (FOLDERID_DESKTOP, FOLDERID_DOCUMENTS, FOLDERID_DOWNLOADS)]
 else:
     def _unsupported(*_a):
         raise OSError("the browser's Downloads copies are handled on Windows only")
@@ -326,3 +336,7 @@ else:
 
     def downloads_folder() -> Path:
         raise Refused("the Downloads known folder is read on Windows only")
+
+    def known_folders() -> list[Path]:
+        home = Path.home()
+        return [home / "Desktop", home / "Documents", home / "Downloads"]
