@@ -303,6 +303,9 @@ def join(root: Path, metrics: Path, learned: dict[str, str] | None = None) -> di
                 near.append({"hltv": candidate["file"], "winners_match": False})
                 continue
             pairs, why = structural_mapping(sequences, teams, names, kill_counts, candidate, learned)
+            blank = sorted(nick for nick in (pairs or {}).values() if not candidate["players"][nick]["pid"])
+            if blank:  # the fits and the learned map key players by it; "" would pair them with nobody
+                pairs, why = None, f"HLTV lists no player id for {blank}"
             if pairs is not None and not named:
                 why = learned_contradiction(pairs, names, candidate, learned)
                 pairs = None if why else pairs

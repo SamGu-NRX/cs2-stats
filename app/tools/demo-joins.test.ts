@@ -36,6 +36,20 @@ describe("joins from join_demos.py", () => {
     expect(() => joinFromRecord([player("11", "ghost", 0)], rec, page)).toThrow("HLTV player id 999, who is not on ocs_map_9.json");
   });
 
+  it("refuses a record that pairs a SteamID the tables don't have", () => {
+    // Review of PR 77: a stale record (another extraction of the map) silently dropped the player it named.
+    const rec: DemoJoin = { demo: "demos\\x\\m1-nuke", hltv: "ocs_map_9.json", players: { "11": { hltv: "device", pid: "7592" }, "12": { hltv: "other", pid: "100" } } };
+    expect(() => joinFromRecord([player("11", "dev", 0)], rec, page)).toThrow("pairs players these tables don't have (HLTV other)");
+    // a player the record doesn't pair (a coach) is still allowed
+    expect([...joinFromRecord([player("11", "dev", 0), player("99", "coach", null)], { ...rec, players: { "11": rec.players["11"] } }, page).player.keys()]).toEqual([0]);
+  });
+
+  it("refuses a join file whose pairing has no HLTV player id", () => {
+    // Review of PR 77: an empty id paired the player with nobody on the page and dropped his rows.
+    const blank = { accepted: [{ demo: "demos\\x\\m1-nuke", hltv: "map_1.json", players: { "11": { hltv: "device", pid: "" } } }] };
+    expect(() => acceptedJoins(blank)).toThrow("pairs players with no HLTV player id (device)");
+  });
+
   it("refuses a join file written before the join recorded its pairing", () => {
     const old = { accepted: [{ demo: "demos\\x\\m1-nuke", hltv: "map_1.json" }] };
     expect(() => acceptedJoins(old)).toThrow("records no player pairing; run join_demos.py again");

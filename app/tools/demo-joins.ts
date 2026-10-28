@@ -23,12 +23,15 @@ export function joinLabel(demo: string): string {
 
 /**
  * The accepted joins of a demo_joins.json, by joinLabel. A record with no pairing was written before
- * join_demos.py recorded one, and throws: run the join again.
+ * join_demos.py recorded one, and throws: run the join again. So does a pair with no HLTV player id, which
+ * would pair the player with nobody on the page.
  */
 export function acceptedJoins(file: { accepted: (Omit<DemoJoin, "players"> & Partial<Pick<DemoJoin, "players">>)[] }): Map<string, DemoJoin> {
   const out = new Map<string, DemoJoin>();
   for (const { players, ...rec } of file.accepted) {
     if (!players) throw new Error(`${rec.demo}: this join records no player pairing; run join_demos.py again`);
+    const blank = Object.values(players).filter((p) => !p.pid).map((p) => p.hltv);
+    if (blank.length) throw new Error(`${rec.demo}: the join pairs players with no HLTV player id (${blank.join(", ")}); run join_demos.py again`);
     out.set(joinLabel(rec.demo), { ...rec, players });
   }
   return out;
@@ -45,9 +48,13 @@ export function hltvTeams(players: readonly PlayerInfo[], player: Map<number, Hl
 /**
  * The HltvJoin a join record gives: each demo player paired by SteamID with the HLTV player of the id the
  * join recorded. A demo player the record doesn't pair (a coach or caster with rows) stays unpaired. A
- * recorded id missing from the page throws: the record and the page disagree.
+ * paired SteamID missing from the tables, or a recorded id missing from the page, throws: the record was made
+ * from other tables or another page, and would drop or misplace a player without a word.
  */
 export function joinFromRecord(players: readonly PlayerInfo[], rec: DemoJoin, page: HltvMap): HltvJoin {
+  const here = new Set(players.map((p) => p.id));
+  const gone = Object.entries(rec.players).filter(([id]) => !here.has(id)).map(([, p]) => p.hltv);
+  if (gone.length) throw new Error(`${rec.demo}: the join pairs players these tables don't have (HLTV ${gone.join(", ")}); run join_demos.py again`);
   const byPid = new Map(page.players.map((p) => [p.pid, p]));
   const player = new Map<number, HltvPlayer>();
   players.forEach((p, i) => {
