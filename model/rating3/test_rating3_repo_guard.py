@@ -1,7 +1,9 @@
 """Each model/rating3 writer refuses a private output inside the repository before it reads any data, and
 lets it through outside; params.json, the one public output, may take only its own path.
 
-    python -I -m unittest model/rating3/test_repo_guard.py     (or pytest)
+    python -I -m unittest model/rating3/test_rating3_repo_guard.py     (or pytest)
+
+Named apart from extractor/tests/test_repo_guard.py so one pytest run can collect both.
 """
 
 from __future__ import annotations
@@ -11,6 +13,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+try:
+    import scipy  # noqa: F401 - several fit scripts need it
+except ModuleNotFoundError:
+    # Only this missing package skips: install model/rating3/requirements.txt to run these tests (CI's model job does).
+    raise unittest.SkipTest("scipy is not installed; pip install -r model/rating3/requirements.txt") from None
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]

@@ -138,6 +138,12 @@ These run only when someone refits a model. Nothing ships with them.
 
 Source: https://github.com/Jamie-Packer/cs2-playstyle-dataset-2024
 
+**HLTV CS2 Demos Dataset (OpenCS2), `blanchon/opencs2_dataset_demo`.** `extractor/fetch_opencs2.py` downloads its demos to the user's own data folder, where the pipeline parses them for the rating fit. The repository holds no demos, rows or names from it. Licence CC BY 4.0, from the dataset card. The card gives no citation text, so this is the attribution:
+
+> HLTV CS2 Demos Dataset, published by blanchon on Hugging Face, licensed under CC BY 4.0. https://huggingface.co/datasets/blanchon/opencs2_dataset_demo
+
+The card notes that the demos are mirrored from HLTV, which hosts recordings provided by tournament organizers, and that users are responsible for respecting those tournaments' terms.
+
 ## Numbers taken from the game: not covered by the GPL
 
 These values are Counter-Strike 2's own, read from Valve's game files or from a copy of them. The GPL grants no right to them. They are here so the code can interpret match data from the game.
