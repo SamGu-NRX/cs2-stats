@@ -6,6 +6,7 @@ using BotMatchStats.Core;
 namespace BotMatchStats.Tests;
 
 /// <summary>Regression tests for the independent review findings and the TLA+ traces.</summary>
+[Collection(AllocMeter.Collection)]
 public class ReviewFixTests
 {
     private static (Recorder rec, ListSink sink, FrameSet frames) NewRound(int ri = 0, bool freezeEnd = true)

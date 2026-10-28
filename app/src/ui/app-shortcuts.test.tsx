@@ -21,6 +21,9 @@ vi.mock("./data/hooks", async (orig) => ({
 }));
 vi.mock("./views/Profile", () => ({ default: ({ tab }: { tab: string }) => <p data-profile={tab} /> }));
 vi.mock("./views/Home", () => ({ HomeView: () => <p data-home /> }));
+// every page a test here opens is a stub: a real lazy page (App.tsx) would keep loading its modules after
+// the test ends, into the next test file's fresh module registry, before that file's vi.mock calls apply
+vi.mock("./views/Clips", () => ({ default: () => <p data-clips /> }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as unknown as typeof ResizeObserver;
@@ -101,7 +104,8 @@ describe("Ctrl and a digit", () => {
     act(() => go("#/profile/overview"));
     await act(async () => root.render(<App />));
     expect(NAV.map((n) => [n.page, n.key])).toEqual([["home", "1"], ["matches", "2"], ["profile", "3"], ["botmode", "4"], ["clips", "5"]]);
-    act(() => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "5", ctrlKey: true, bubbles: true })); });
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "5", ctrlKey: true, bubbles: true })); });
     expect(parseHash(location.hash).page).toBe("clips");
+    expect(host.querySelector("[data-clips]")).not.toBeNull();
   });
 });
