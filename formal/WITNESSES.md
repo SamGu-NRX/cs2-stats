@@ -4,6 +4,159 @@ Generated state differences from the retained TLC logs, with unchanged fields om
 
 Writer `pc`: 0 not started; 1 mkdir; 2 first table; 3 remaining tables; 4 schema reads passed; 5 manifest listing captured; 6 COMPLETE written; 7 folder renamed; 8 pointer staged; 9 CURRENT replaced; 11 RETIRED unlinked / finished; -1 failed. `ppc`/`cached`/`pending` are each pruner's independent state.
 
+## ArchiveLegacyEviction
+
+Violated `EvictedRedownloadable`. [Bounds](ArchiveLegacyEviction.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"bad", "none">>
+6. ToFail: phase=<<"fhold", "idle">>
+7. FailHold: phase=<<"fmove", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+8. FailMove: phase=<<"fwrite", "idle">>; rar=<<"failed", "downloads">>
+9. FailWrite: phase=<<"fledger", "idle">>; work=<<FALSE, FALSE>>; retried={1}
+10. FailLedger: phase=<<"fcap", "idle">>; ledger=<<"failed", "none">>
+11. EvictRecord: dropped=<<TRUE, FALSE>>; evictPending={1}
+12. EvictDelete: rar=<<"gone", "downloads">>; evicted=<<TRUE, FALSE>>; evictPending={}
+13. FailDone: phase=<<"idle", "idle">>
+```
+
+## ArchiveLegacyExpiry
+
+Violated `ExpiredRecorded`. [Bounds](ArchiveLegacyExpiry.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Scan: phase=<<"pending", "hashing">>
+5. Extract: phase=<<"extracting", "hashing">>; work=<<TRUE, FALSE>>
+6. Parse: phase=<<"parsing", "hashing">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+7. Stitch: phase=<<"check", "hashing">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+8. Check: phase=<<"work", "hashing">>
+9. RemoveWork: phase=<<"ledger", "hashing">>; work=<<FALSE, FALSE>>
+10. LedgerDone: phase=<<"rar", "hashing">>; ledger=<<"done", "none">>
+11. RemoveRar: phase=<<"idle", "hashing">>; rar=<<"gone", "downloads">>
+12. Hash: phase=<<"idle", "pending">>
+13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
+14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
+16. CapFirst: parts=<<FALSE, FALSE>>; capPending={1}; unrecorded={1}
+17. Crash: phase=<<"idle", "idle">>; work=<<FALSE, FALSE>>; capPending={}; crashes=1
+```
+
+## ArchiveLegacyLedgerOrder
+
+Violated `DeletedRecorded`. [Bounds](ArchiveLegacyLedgerOrder.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
+9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
+10. Crash: phase=<<"idle", "idle">>; crashes=1
+```
+
+## ArchiveLegacyNoCheck
+
+Violated `NoUnaccountedDeletion`. [Bounds](ArchiveLegacyNoCheck.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; parts=<<FALSE, FALSE>>; rows=<<{"stitched"}, {}>>; split=<<"broken", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
+9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
+10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
+```
+
+## ArchiveLegacyPartialDelete
+
+Violated `ExpiredRecorded`. [Bounds](ArchiveLegacyPartialDelete.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
+9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
+10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
+11. Scan: phase=<<"idle", "hashing">>
+12. Hash: phase=<<"idle", "pending">>
+13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
+14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
+16. CapFirst: parts=<<FALSE, FALSE>>; unrecorded={1}
+```
+
+## ClipsLaunchLegacyHlaeCheck
+
+Violated `OneLaunchAtATime`. [Bounds](ClipsLaunchLegacyHlaeCheck.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. LaunchBegin: osLock="A"; lpc=[A |-> [step |-> "record", n |-> 1]]; busy=[A |-> "launch"]
+3. LaunchRecord: lpc=[A |-> [step |-> "spawn", n |-> 1]]; rec=<<TRUE, FALSE>>
+4. LaunchSpawn: lpc=[A |-> [step |-> "pids", n |-> 1]]; hlae=<<"running", "none">>
+5. Crash: osLock="none"; lpc=[A |-> [step |-> "idle", n |-> 0]]; crashes=1; busy=[A |-> "idle"]
+6. LaunchBegin: osLock="A"; lpc=[A |-> [step |-> "record", n |-> 2]]; result=<<"damaged", "none">>; busy=[A |-> "launch"]
+7. LaunchRecord: lpc=[A |-> [step |-> "spawn", n |-> 2]]; rec=<<TRUE, TRUE>>
+8. LaunchSpawn: lpc=[A |-> [step |-> "pids", n |-> 2]]; hlae=<<"running", "running">>
+```
+
+## ClipsLaunchLegacyWatcherCheck
+
+Violated `OneLaunchAtATime`. [Bounds](ClipsLaunchLegacyWatcherCheck.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. LaunchBegin: osLock="A"; lpc=[A |-> [step |-> "record", n |-> 1]]; busy=[A |-> "launch"]
+3. LaunchRecord: lpc=[A |-> [step |-> "spawn", n |-> 1]]; rec=<<TRUE, FALSE>>
+4. LaunchSpawn: lpc=[A |-> [step |-> "pids", n |-> 1]]; hlae=<<"running", "none">>
+5. LaunchPids: lpc=[A |-> [step |-> "handoff", n |-> 1]]; result=<<"damaged", "none">>; damage={1}
+6. LaunchHandoff: running=[A |-> 1]; lpc=[A |-> [step |-> "idle", n |-> 0]]; watchers=[A |-> {1}]; busy=[A |-> "idle"]
+7. LaunchBegin: lpc=[A |-> [step |-> "record", n |-> 2]]; busy=[A |-> "launch"]
+8. LaunchRecord: lpc=[A |-> [step |-> "spawn", n |-> 2]]; rec=<<TRUE, TRUE>>
+9. LaunchSpawn: lpc=[A |-> [step |-> "pids", n |-> 2]]; hlae=<<"running", "running">>
+```
+
+## ClipsLaunchUserSession
+
+Violated `EvidenceKept`. [Bounds](ClipsLaunchUserSession.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. LaunchBegin: osLock="A"; lpc=[A |-> [step |-> "record", n |-> 1]]; busy=[A |-> "launch"]
+3. LaunchRecord: lpc=[A |-> [step |-> "spawn", n |-> 1]]; rec=<<TRUE, FALSE>>
+4. LaunchSpawn: lpc=[A |-> [step |-> "pids", n |-> 1]]; hlae=<<"running", "none">>
+5. LaunchPids: lpc=[A |-> [step |-> "handoff", n |-> 1]]; pids=<<TRUE, FALSE>>
+6. LaunchHandoff: running=[A |-> 1]; lpc=[A |-> [step |-> "idle", n |-> 0]]; watchers=[A |-> {1}]; busy=[A |-> "idle"]
+7. Cs2Start: log=[owner |-> 1, ended |-> FALSE]; cs2=<<"running", "none">>
+8. Record: director=<<"recording", "idle">>; takes={1}
+9. EndClip: log=[owner |-> 1, ended |-> TRUE]; director=<<"ended", "idle">>
+10. Cs2Exit: cs2=<<"exited", "none">>
+11. UserStart: log=[owner |-> 0, ended |-> FALSE]; userCs2=TRUE; sessions=1
+12. HlaeExit: hlae=<<"exited", "none">>
+13. UserQuit: userCs2=FALSE
+14. LaunchBegin: result=<<"stopped", "none">>
+```
+
 ## PipelineLegacyIdentity
 
 Violated `ReplacementBeforeDelete`. [Bounds](PipelineLegacyIdentity.cfg).
@@ -95,8 +248,8 @@ Violated `temporal`. [Bounds](PublishPruneDangling.cfg).
 
 ```text
 1. Initial: loc=(0 :> "version" @@ 1 :> "version"); marker="none"; current=1; pc=<<11>>
-2. locks={}
-3. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
+2. loc=(0 :> "version" @@ 1 :> "none"); files=(0 :> {"match", "other", "COMPLETE"} @@ 1 :> {}); manual=TRUE
+3. locks={}
 4. owner=2; ppc=<<"branch">>
 5. ppc=<<"cache">>
 6. ppc=<<"idle">>

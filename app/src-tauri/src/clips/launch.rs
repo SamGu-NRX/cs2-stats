@@ -54,6 +54,8 @@ pub trait Procs {
     fn alive(&self, p: &ProcId) -> bool;
     /// Any cs2.exe is running.
     fn cs2_running(&self) -> Result<bool, String>;
+    /// Any HLAE.exe is running.
+    fn hlae_running(&self) -> Result<bool, String>;
 }
 
 /// The real system: Windows process handles; elsewhere every check reports nothing running.
@@ -65,6 +67,9 @@ impl Procs for System {
     }
     fn cs2_running(&self) -> Result<bool, String> {
         Ok(!crate::botmode::process::cs2_listed()?.is_empty())
+    }
+    fn hlae_running(&self) -> Result<bool, String> {
+        crate::botmode::process::running_named("HLAE.exe")
     }
 }
 
@@ -575,10 +580,11 @@ pub(crate) mod fake {
     pub(crate) struct Fake {
         pub alive: RefCell<Vec<ProcId>>,
         pub cs2: RefCell<bool>,
+        pub hlae: RefCell<bool>,
     }
     impl Fake {
         pub fn new() -> Fake {
-            Fake { alive: RefCell::new(vec![]), cs2: RefCell::new(false) }
+            Fake { alive: RefCell::new(vec![]), cs2: RefCell::new(false), hlae: RefCell::new(false) }
         }
     }
     impl Procs for Fake {
@@ -587,6 +593,9 @@ pub(crate) mod fake {
         }
         fn cs2_running(&self) -> Result<bool, String> {
             Ok(*self.cs2.borrow())
+        }
+        fn hlae_running(&self) -> Result<bool, String> {
+            Ok(*self.hlae.borrow())
         }
     }
 

@@ -102,6 +102,11 @@ pub fn cs2_listed() -> Result<Vec<Listed>, String> {
     Ok(out)
 }
 
+/// Whether any process with this image name (such as `HLAE.exe`) is in the process list.
+pub fn running_named(exe: &str) -> Result<bool, String> {
+    Ok(!imp::pids(exe)?.is_empty())
+}
+
 /// The current time as a Windows FILETIME.
 pub fn file_time_now() -> u64 {
     imp::file_time_now()

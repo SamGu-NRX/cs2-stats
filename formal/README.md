@@ -1,5 +1,31 @@
 # TLA+ model checks
 
+## Clips launch protocol and pipeline archive lifecycle
+
+[CLIPS_AND_ARCHIVES.md](CLIPS_AND_ARCHIVES.md) covers two later models, with code mappings, bounds,
+findings and assumptions; their counts are in RESULTS.md with the rest.
+
+- `ClipsLaunch.tla` checks the app's clips launch, settle and lock protocol: two app instances on
+  `clips.lock`, crashes at every launch step, HLAE and CS2 outside the app, the watcher, scans, a normal CS2
+  session replacing `console.log`, and take ownership inferred from launch records.
+- `Archive.tla` checks the demo pipeline's archive lifecycle from scan to the ledger: stitching or holding
+  split maps, the unaccounted check, each step of a failure, `--retry-failed`, the parts cap, the
+  failed-folder cap's eviction, re-downloads, and a crash between any two steps.
+
+Neither model covers double publication: in `Archive.tla` a map's publication is one boolean, and versions,
+CURRENT and replacement are checked by `Publish.tla` and `Pipeline.tla` below. `EvidenceKept` in
+`ClipsLaunch.tla` is a safety property (what a settled result says), not liveness. The other exclusions are
+listed in CLIPS_AND_ARCHIVES.md.
+
+```text
+python -I formal/check_models.py --while-gaming ClipsLaunchSafety ArchiveSafety
+```
+
+CI's "Formal models (TLC)" job downloads the pinned jar, checks its SHA-256 and runs
+`python -I formal/check_models.py --all`: every configuration of every module. A configuration listed in
+`check_models.py`'s `FAIL` must produce a counterexample on the property named there, so a model that can no
+longer fail breaks the job like one that fails unexpectedly.
+
 ## Publication, readers, pipeline recovery and engine callbacks
 
 The audit is in [AUDIT.md](AUDIT.md): every requested invariant has a bounded

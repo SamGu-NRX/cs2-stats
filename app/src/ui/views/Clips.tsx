@@ -282,7 +282,7 @@ function RenderDialog({ items, tools, hlae, setHlae, instant, onClose }: { items
       <div className="rdlg__body">
         <div className="rdlg__warn" role="note">
           <strong>This starts CS2 with -insecure.</strong>
-          <p>HLAE needs it to record, and it keeps VAC off for that session. CS2 opens, plays each demo, records the clips from your view, then quits by itself. Close CS2 first, and leave the game alone until it quits.</p>
+          <p>HLAE needs it to record, and it keeps VAC off for that session. CS2 opens, plays each demo, records the clips from your view, then quits by itself. Close CS2 first and leave the game alone until it quits, then keep it closed until this page stops waiting for it. If CS2 starts sooner, the clips that render recorded won't be listed.</p>
         </div>
 
         <dl className="rtools">
@@ -484,7 +484,7 @@ export default function ClipsView() {
         {tools.error && <p className="rdlg__problem clips__error" role="alert">Checking the clips folder and tools failed: {hide ? hideText(tools.error) : tools.error}</p>}
         {waiting > 0 && (
           <p className="clips__waiting" role="status">
-            <strong>Waiting for CS2 to close.</strong> The clips the last render recorded are read once CS2 and HLAE have exited; this page checks again every few seconds.
+            <strong>Waiting for CS2 to close.</strong> The clips the last render recorded are read once CS2 and HLAE have exited; this page checks again every few seconds. Keep CS2 closed until this note goes away: a game started sooner replaces the log the render left, and the render's clips won't be listed.
           </p>
         )}
 

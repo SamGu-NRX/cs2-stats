@@ -4,15 +4,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def config(name, constants, invariants, properties=(), spec="Spec"):
+class Model(str):
+    """A TLC model value: written bare, not quoted."""
+
+
+def config(name, constants, invariants, properties=(), spec="Spec", symmetry=None):
     def value(v):
         if isinstance(v, bool):
             return str(v).upper()
+        if isinstance(v, Model):
+            return str(v)
         if isinstance(v, str):
             return '"' + v + '"'
+        if isinstance(v, (set, frozenset)):
+            return "{" + ", ".join(value(x) for x in sorted(v)) + "}"
         return str(v)
     lines = ["SPECIFICATION " + spec, "CONSTANTS"]
     lines += [f"{k} = {value(v)}" for k, v in constants.items()]
+    if symmetry:
+        lines += ["SYMMETRY " + symmetry]
     if invariants:
         lines += ["INVARIANTS", *invariants]
     if properties:
@@ -90,6 +100,44 @@ def main():
            ["InPlaceVersionSafe"])
     config("PipelineLegacyInPlace", pipeline | dict(Fixed=False, SameDir=True, Invalidated=True, Crashes=False),
            ["InPlaceVersionSafe"])
+    # The clips launch protocol (ClipsLaunch.tla): two launches of one job, at most one instance crash
+    # Shipped code: WatcherCheck, WatcherSettles and HlaeCheck all TRUE.
+    clips = dict(Instances={"A"}, N=2, Crashes=1, UserSessions=0, SpawnFails=True, PidsFail=True,
+                 WatcherCheck=True, WatcherSettles=True, HlaeCheck=True)
+    safety = ["TypeOK", "NoTakeWithoutEvidence", "ResultTruthful", "OwnerIsCreator", "OneLaunchAtATime"]
+    config("ClipsLaunchSafety", clips, [*safety, "EvidenceKept"])
+    config("ClipsLaunchTwoInstances", clips | dict(Instances={"A", "B"}, SpawnFails=False), [*safety, "EvidenceKept"])
+    config("ClipsLaunchUserSession", clips | dict(Crashes=0, UserSessions=1), [*safety, "EvidenceKept"])
+    config("ClipsLaunchUserSessionSafety", clips | dict(UserSessions=1), safety)
+    config("ClipsLaunchCrashGap", clips | dict(SpawnFails=False), ["OneLaunchAtATime"])
+    config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, UserSessions=1), safety)
+    config("ClipsLaunchLegacyHlaeCheck", clips | dict(SpawnFails=False, HlaeCheck=False), ["OneLaunchAtATime"])
+    # The pipeline's archive lifecycle (Archive.tla)
+    # Shipped code: CheckFirst and all four fixes (LedgerFirst, ExpiryRowFirst, EvictionFixed, DamageRecorded),
+    # with part deletions that can fail part way. Each Legacy configuration turns a fix off and must keep finding
+    # the gap it closed.
+    archive = dict(Archives={1, 2}, Crashes=1, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
+                   WorkerFails=True, CheckFirst=True, LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True,
+                   PartialDelete=True, DamageRecorded=True)
+    every = ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded",
+             "EvictedRedownloadable"]
+    config("ArchiveSafety", archive, every)
+    config("ArchiveEviction", archive | dict(Crashes=0), ["EvictedRedownloadable"])
+    config("ArchiveCrashLedger", archive, ["DeletedRecorded"])
+    config("ArchiveCrashExpiry", archive, ["ExpiredRecorded"])
+    config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Redownloads=0), every,
+           symmetry="Symmetry")
+    config("ArchiveLegacyEviction", archive | dict(Crashes=0, EvictionFixed=False), ["EvictedRedownloadable"])
+    config("ArchiveLegacyLedgerOrder", archive | dict(LedgerFirst=False), ["DeletedRecorded"])
+    config("ArchiveLegacyExpiry", archive | dict(ExpiryRowFirst=False), ["ExpiredRecorded"])
+    config("ArchivePartialDelete", archive | dict(Crashes=0), ["ExpiredRecorded"])
+    # the code at b5868a2 deleted first and recorded nothing when a part survived
+    config("ArchiveLegacyPartialDelete", archive | dict(Crashes=0, ExpiryRowFirst=False, DamageRecorded=False),
+           ["ExpiredRecorded"])
+    config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
+    # the HLAE check now covers this schedule too, so both checks come off to show the watcher check's own case
+    config("ClipsLaunchLegacyWatcherCheck", clips | dict(Crashes=0, SpawnFails=False, WatcherCheck=False, HlaeCheck=False),
+           ["OneLaunchAtATime"])
 
 
 if __name__ == "__main__":

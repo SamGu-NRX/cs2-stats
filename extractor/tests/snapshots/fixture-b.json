@@ -446,6 +446,10 @@
      "String",
      "8d96dd7e8e7cfbe6"
     ],
+    "recovered": [
+     "Boolean",
+     "b3f4622444578ea7"
+    ],
     "round": [
      "Int16",
      "fcb18e42997e00b9"
@@ -985,7 +989,7 @@
     ],
     "extractor_version": [
      "String",
-     "3bb12d6887771bd6"
+     "93871547b1e76c62"
     ],
     "final_tick": [
      "Int32",

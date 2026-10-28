@@ -124,6 +124,123 @@ def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatc
     assert not dem.exists() and not dp.sidecar_path(dem).exists()  # the inputs go once the map is published
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery checks and deletes through a Win32 handle "
+                    "(download_copies.delete_verified); the Windows CI job runs this")
+def test_a_finished_loose_demo_left_by_a_crash_is_deleted_at_the_next_start(tmp_path, monkeypatch, caplog):
+    # A crash between the done row and the deletion left the demo and its sidecar in the inbox for good: scan_loose
+    # skips a done demo, recovery skipped every .dem, and the disk budget kept counting it.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "123", 1, "de_cache", "team-a-vs-team-b-m1-cache.dem", b"demo bytes" * 100)
+    meta = dp.read_sidecar(dem)
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dem, id=dp.loose_id(meta), rar_bytes=dem.stat().st_size, rar_sha256=meta["sha256"], loose=meta,
+                   state="parsing", slug="team-a-vs-team-b-123", work=dp.WORK_DIR / "w")
+    a.work.mkdir()
+    a.dems, a.results = [dem], {dem.name: {"ok": True, "map": "m1-cache"}}
+    p.archives[a.id] = a
+
+    def stops_here(path, **kwargs):
+        raise OSError("the pipeline stopped here")
+    monkeypatch.setattr(dp, "remove_finished_rar", stops_here)
+    p.finish_archives()
+    assert [(r["id"], r["status"]) for r in _ledger()] == [("opencs2-123-m1", "done")]
+    assert dem.exists() and dp.sidecar_path(dem).exists()
+    assert dp.Pipeline().recover_finished() == [dem]  # the restart
+    assert not dem.exists() and not dp.sidecar_path(dem).exists()
+    assert "was still there" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery reads and deletes through a Win32 handle "
+                    "(download_copies.delete_small_if); the Windows CI job runs this")
+def test_a_sidecar_left_by_a_stop_between_the_demo_and_its_deletion_goes_at_the_next_start(tmp_path, monkeypatch):
+    # A stop after the finished demo was deleted and before its sidecar was left the sidecar for good: recovery
+    # looked only for demos. A sidecar whose ids have no ledger row is someone else's and stays.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "123", 1, "de_cache", "team-a-vs-team-b-m1-cache.dem", b"demo bytes" * 100)
+    stranger = _loose(inbox, "456", 1, "de_nuke", "team-c-vs-team-d-m1-nuke.dem", b"other demo" * 100)
+    stranger.unlink()
+    meta = dp.read_sidecar(dem)
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dem, id=dp.loose_id(meta), rar_bytes=dem.stat().st_size, rar_sha256=meta["sha256"], loose=meta,
+                   state="parsing", slug="team-a-vs-team-b-123", work=dp.WORK_DIR / "w")
+    a.work.mkdir()
+    a.dems, a.results = [dem], {dem.name: {"ok": True, "map": "m1-cache"}}
+    p.archives[a.id] = a
+    real = dp.safe_unlink
+
+    def stops_at_the_sidecar(path, missing_ok=False):
+        if str(path).endswith(".meta.json"):
+            raise OSError("the pipeline stopped here")
+        real(path, missing_ok=missing_ok)
+    monkeypatch.setattr(dp, "safe_unlink", stops_at_the_sidecar)
+    p.finish_archives()
+    monkeypatch.setattr(dp, "safe_unlink", real)
+    assert not dem.exists() and dp.sidecar_path(dem).exists()
+    assert dp.Pipeline().recover_finished() == [dp.sidecar_path(dem)]  # the restart
+    assert not dp.sidecar_path(dem).exists() and dp.sidecar_path(stranger).exists()
+
+
+def _orphan(inbox: Path, name: str = "team-a-vs-team-b-m1-cache.dem", sidecar: str | None = None) -> Path:
+    """A finished loose demo's sidecar, its demo gone and its done row written: what recovery may delete."""
+    dem = _loose(inbox, "123", 1, "de_cache", name, b"demo bytes" * 100)
+    meta = dp.read_sidecar(dem)
+    dem.unlink()
+    dp.append_jsonl(dp.LEDGER, dict(id=dp.loose_id(meta), status="done", rar_sha256=meta["sha256"]))
+    if sidecar is not None:
+        dp.sidecar_path(dem).write_text(sidecar, encoding="utf-8")
+    hour_ago = time.time() - 3600  # older than any pipeline the test starts, whatever the clock's resolution
+    os.utime(dp.sidecar_path(dem), (hour_ago, hour_ago))
+    return dp.sidecar_path(dem)
+
+
+def test_a_sidecar_that_vanishes_during_recovery_never_stops_the_start(tmp_path, monkeypatch, caplog):
+    # Review of PR 72: the lstat of a sidecar listed a moment earlier ran outside every handler, so one deleted in
+    # between (the fetcher, or the user) raised FileNotFoundError out of recover_finished and the pipeline never
+    # started.
+    inbox = _isolate(tmp_path, monkeypatch)
+    (inbox / "123").mkdir()
+    real = Path.glob
+
+    def glob(self, pattern):
+        found = list(real(self, pattern))
+        return found + [self / "gone-m1-cache.meta.json"] if pattern.endswith(".meta.json") else found
+    monkeypatch.setattr(Path, "glob", glob)
+    assert dp.Pipeline().recover_finished() == []
+    assert "gone-m1-cache.meta.json could not be checked or deleted (FileNotFoundError" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery reads and deletes through a Win32 handle "
+                    "(download_copies.delete_small_if); the Windows CI job runs this")
+def test_a_sidecar_whose_demo_is_still_downloading_or_was_written_after_the_start_stays(tmp_path, monkeypatch):
+    # Review of PR 72: the fetcher writes the sidecar before it renames <name>.dem.part to <name>.dem, so a demo
+    # mid-download looked like an orphan and lost its sidecar. A sidecar written after the pipeline started may be
+    # a running fetcher's, mid-way, and stays too.
+    inbox = _isolate(tmp_path, monkeypatch)
+    downloading = _orphan(inbox)
+    part = downloading.with_name("team-a-vs-team-b-m1-cache.dem.part")
+    part.write_bytes(b"half a demo")
+    p = dp.Pipeline()
+    late = _orphan(inbox, name="team-a-vs-team-b-m2-cache.dem")
+    os.utime(late, (p.started + 1, p.started + 1))
+    assert p.recover_finished() == []
+    assert downloading.exists() and late.exists()
+    part.unlink()  # the same sidecar, its demo gone in both forms, is an orphan at the next start
+    assert dp.Pipeline().recover_finished() == [downloading]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery reads and deletes through a Win32 handle "
+                    "(download_copies.delete_small_if); the Windows CI job runs this")
+def test_a_sidecar_too_deep_or_too_large_to_read_is_left_and_the_start_goes_on(tmp_path, monkeypatch, caplog):
+    # Review of PR 72: JSON nested 20,000 deep made json.loads raise RecursionError, which nothing caught.
+    caplog.set_level(logging.INFO, logger="demo_pipeline")
+    inbox = _isolate(tmp_path, monkeypatch)
+    deep = _orphan(inbox, sidecar="[" * 20000 + "]" * 20000)
+    large = _orphan(inbox, name="team-a-vs-team-b-m2-cache.dem", sidecar=" " * (dp.SIDECAR_MAX_BYTES + 1))
+    assert dp.Pipeline().recover_finished() == []
+    assert deep.exists() and large.exists()
+    assert "RecursionError" in caplog.text and f"more than {dp.SIDECAR_MAX_BYTES}" in caplog.text
+
+
 def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
     # Without its HLTV ids a map cannot be joined to its scoreboard; it must not be parsed as an anonymous map.
     inbox = _isolate(tmp_path, monkeypatch)
@@ -489,3 +606,8 @@ def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_pa
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="failed"))
     todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
     assert [(m.match_id, m.map_index) for m in todo] == [("1", 2)]
+    # the pipeline later deletes the kept failure under its failed/ cap: its last row says dropped, and the map is
+    # fetched again; skipping it as recorded would lose it for good
+    dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="dropped"))
+    todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
+    assert [(m.match_id, m.map_index) for m in todo] == [("1", 2), ("2", 1)]

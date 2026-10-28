@@ -20,8 +20,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
-import shutil
+import stat
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +38,9 @@ PART = re.compile(r"^(?P<base>.+)-p(?P<n>\d+)$")
 # Counters that must carry over from one part's end to the next part's start, per player.
 CARRIED = ["kills_total", "deaths_total", "assists_total", "damage_total", "headshot_kills_total"]
 PARTS_MANIFEST = "parts.jsonl"  # in the parts folder
+# In a part folder whose deletion failed part way: JSON naming the files lost and those left. Such a part is never
+# joined (split_maps skips it); it is deleted last of the folder's files, so it stays while anything else does.
+DAMAGED = "DAMAGED"
 # match columns every part must share: one map, one recording setup, one match between the same two teams, and
 # one way of judging visibility (the stitched map has one visibility_status, so parts that differ are held).
 IDENTITY = ("map", "tick_rate", "source", "archive", "team1_file", "team2_file", "visibility_status", "mesh_sha256",
@@ -409,6 +413,8 @@ def split_maps(root: Path) -> dict[tuple[str, str], dict[int, list[Path]]]:
     out: dict[tuple[str, str], dict[int, list[Path]]] = {}
     for archive in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
         for m in sorted(p for p in archive.iterdir() if p.is_dir()):
+            if (m / DAMAGED).exists():
+                continue
             dup = DUP.match(m.name)
             k = split_key(dup["key"] if dup else m.name)
             if k:
@@ -424,13 +430,111 @@ def readable(map_dir: Path) -> bool:
     return any((map_dir / f).exists() for f in (extract.CURRENT, "match.parquet", "meta.parquet"))
 
 
-def delete_part(map_dir: Path) -> bool:
-    """Delete a staged part's folder in parts/ under its map lock; False, leaving it, while another process holds
-    the lock."""
+class NotPlainFolder(OSError):
+    """A folder deletion must not go into: a link, junction or other reparse point, or one whose resolved path is
+    outside the root it was found under."""
+
+
+def is_reparse(p: Path) -> bool:
+    """Whether p itself (lstat, never followed) is a link, a junction or another reparse point."""
+    st = os.lstat(p)
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def plain_folder(p: Path, within: Path) -> Path:
+    """p, if it is a real folder (by lstat: no link, junction or other reparse point) whose resolved path lies under
+    within's; within itself must be one too. Raises NotPlainFolder otherwise. Path.is_dir follows a junction, so a
+    junction among the folders the parts cap walked let it delete files outside parts/."""
+    for q in (within, p):
+        if is_reparse(q):
+            raise NotPlainFolder(f"{q} is a link, junction or other reparse point")
+        if not stat.S_ISDIR(os.lstat(q).st_mode):
+            raise NotPlainFolder(f"{q} is not a folder")
+    real, base = p.resolve(strict=True), within.resolve(strict=True)
+    if real != base and base not in real.parents:
+        raise NotPlainFolder(f"{p} resolves to {real}, outside {base}")
+    return p
+
+
+def plain_subfolders(parent: Path, within: Path) -> tuple[list[Path], list[str]]:
+    """The folders directly in parent that plain_folder accepts under within, sorted, and why each other folder-like
+    entry (a link or junction included) was refused."""
+    ok, refused = [], []
+    with os.scandir(plain_folder(parent, within)) as it:
+        entries = sorted(it, key=lambda e: e.name)
+    for e in entries:
+        p = Path(e.path)
+        if not (e.is_dir(follow_symlinks=False) or is_reparse(p)):
+            continue
+        try:
+            ok.append(plain_folder(p, within))
+        except NotPlainFolder as err:
+            refused.append(str(err))
+    return ok, refused
+
+
+def remove_tree(root: Path, within: Path) -> tuple[list[str], dict[str, str]]:
+    """Delete root and everything in it, file by file. Returns the files removed and {file: why} for each that
+    stayed, as paths relative to root; root stays while anything in it does. A DAMAGED marker in root goes only
+    once everything else has. root must pass plain_folder under within (NotPlainFolder otherwise), and a link or
+    junction inside it is removed itself, never followed. shutil.rmtree(ignore_errors=True) said none of this: on
+    Windows a table held open by another process stays while the other tables go."""
+    plain_folder(root, within)
+    removed: list[str] = []
+    failed: dict[str, str] = {}
+
+    def gone(p: Path, delete) -> bool:
+        rel = p.relative_to(root).as_posix()
+        try:
+            delete(p)
+        except OSError as e:
+            failed[rel] = f"{type(e).__name__}: {e}"
+            return False
+        removed.append(rel)
+        return True
+
+    def unlink_link(p: Path) -> None:
+        try:
+            os.unlink(p)
+        except OSError:
+            os.rmdir(p)  # a directory symlink or junction on Windows
+
+    def empty(d: Path) -> None:
+        with os.scandir(d) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        for e in entries:
+            p = Path(e.path)
+            if is_reparse(p):
+                gone(p, unlink_link)
+            elif e.is_dir(follow_symlinks=False):
+                empty(p)
+                try:
+                    p.rmdir()
+                except OSError:
+                    pass  # it still holds a file that stayed, named in failed
+            elif not (d == root and e.name == DAMAGED):
+                gone(p, os.unlink)
+
+    empty(root)
+    if not failed and (root / DAMAGED).exists():
+        gone(root / DAMAGED, os.unlink)
+    try:
+        root.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        if not failed:
+            failed["."] = f"the folder stayed: {type(e).__name__}: {e}"
+    return removed, failed
+
+
+def delete_part(map_dir: Path, parts_root: Path) -> bool:
+    """Delete a staged part's folder in parts_root under its map lock; False, leaving it, while another process
+    holds the lock, a file in it cannot be deleted, or it is not a plain folder under parts_root."""
     try:
         with extract.map_lock(map_dir, wait=False):
-            shutil.rmtree(map_dir, ignore_errors=True)
-    except extract.MapLocked:
+            remove_tree(map_dir, parts_root)
+    except (extract.MapLocked, NotPlainFolder):
         return False
     return not map_dir.exists()
 
@@ -460,7 +564,7 @@ def main(argv=None) -> int:
             for d in [d for ds in by_n.values() for d in ds]:
                 if d.parent.parent == parts_root:
                     if row["status"] == "stitched":
-                        delete_part(d)  # staged; the stitched map holds it now, so a later run cannot join it again
+                        delete_part(d, parts_root)  # staged; the stitched map holds it now, so a later run cannot join it again
                     continue
                 if not readable(d):
                     continue  # already out of readers' sight
