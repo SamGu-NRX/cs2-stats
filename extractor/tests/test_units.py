@@ -1597,6 +1597,25 @@ def test_a_failure_keeps_its_archive_failing_demo_and_report_together(tmp_path, 
     assert not a.work.exists() and not a.rar.exists()
 
 
+def test_failures_of_one_map_in_one_second_each_keep_their_own_folder(tmp_path, monkeypatch):
+    # Review of PR 70: a repeat failure's folder was <slug>-<unix seconds>, made with exist_ok=True, so a third
+    # failure of the map in the same second went into the second's folder and overwrote its report.
+    import types
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "time", types.SimpleNamespace(time=lambda: 1_800_000_000.0, sleep=time.sleep,
+                                                          monotonic=time.monotonic))
+    p = dp.Pipeline()
+    for name in ("d1", "d2", "d3"):
+        a = _failed_archive(tmp_path, name)
+        a.slug = "slug-dup"
+        p.archives[a.id] = a
+        p.fail_archive(a, f"deaths in {name}")
+    kept = {d.name: json.loads((d / "reason.json").read_text())["id"] for d in dp.FAILED_DIR.iterdir()}
+    assert kept == {"slug-dup": "d1", "slug-dup-1800000000": "d2", "slug-dup-1800000000-2": "d3"}
+    ledger = {r["id"]: Path(r["kept"]).name for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert ledger == {i: n for n, i in kept.items()}
+
+
 def test_failed_dir_drops_the_oldest_beyond_its_cap(tmp_path, monkeypatch):
     import os
     _isolate(tmp_path, monkeypatch)
