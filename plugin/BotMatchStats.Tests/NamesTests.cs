@@ -72,6 +72,7 @@ public class WeaponNameTests
     public void NadeSource(string name, int expected) => Assert.Equal(expected, WeaponNames.NadeSourceOf(name));
 }
 
+[Collection(AllocMeter.Collection)]
 public class PlaceTests
 {
     private static readonly (string place, int area)[] Dust2 =

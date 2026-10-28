@@ -22,6 +22,7 @@ internal sealed class ListSink : IRecorderSink
     }
 }
 
+[Collection(AllocMeter.Collection)]
 public class RecorderTests
 {
     private readonly ListSink _sink = new();

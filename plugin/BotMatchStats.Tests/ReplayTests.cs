@@ -15,6 +15,7 @@ namespace BotMatchStats.Tests;
 /// fixtures/de_dust2_20261024_180954_match_end.json. Events are parsed before the replay so the
 /// timings and allocation counts cover only recorder work.
 /// </summary>
+[Collection(AllocMeter.Collection)]
 public class ReplayTests
 {
     private readonly ITestOutputHelper _out;
