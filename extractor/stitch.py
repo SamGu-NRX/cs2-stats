@@ -20,8 +20,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
-import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +37,9 @@ PART = re.compile(r"^(?P<base>.+)-p(?P<n>\d+)$")
 # Counters that must carry over from one part's end to the next part's start, per player.
 CARRIED = ["kills_total", "deaths_total", "assists_total", "damage_total", "headshot_kills_total"]
 PARTS_MANIFEST = "parts.jsonl"  # in the parts folder
+# In a part folder whose deletion failed part way: JSON naming the files lost and those left. Such a part is never
+# joined (split_maps skips it); it is deleted last of the folder's files, so it stays while anything else does.
+DAMAGED = "DAMAGED"
 # match columns every part must share: one map, one recording setup, one match between the same two teams, and
 # one way of judging visibility (the stitched map has one visibility_status, so parts that differ are held).
 IDENTITY = ("map", "tick_rate", "source", "archive", "team1_file", "team2_file", "visibility_status", "mesh_sha256",
@@ -409,6 +412,8 @@ def split_maps(root: Path) -> dict[tuple[str, str], dict[int, list[Path]]]:
     out: dict[tuple[str, str], dict[int, list[Path]]] = {}
     for archive in sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
         for m in sorted(p for p in archive.iterdir() if p.is_dir()):
+            if (m / DAMAGED).exists():
+                continue
             dup = DUP.match(m.name)
             k = split_key(dup["key"] if dup else m.name)
             if k:
@@ -424,12 +429,65 @@ def readable(map_dir: Path) -> bool:
     return any((map_dir / f).exists() for f in (extract.CURRENT, "match.parquet", "meta.parquet"))
 
 
+def remove_tree(root: Path) -> tuple[list[str], dict[str, str]]:
+    """Delete root and everything in it, file by file. Returns the files removed and {file: why} for each that
+    stayed, as paths relative to root; root stays while anything in it does. A DAMAGED marker in root goes only
+    once everything else has. A link or junction is removed itself, never followed. shutil.rmtree(ignore_errors=
+    True) said none of this: on Windows a table held open by another process stays while the other tables go."""
+    removed: list[str] = []
+    failed: dict[str, str] = {}
+
+    def gone(p: Path, delete) -> bool:
+        rel = p.relative_to(root).as_posix()
+        try:
+            delete(p)
+        except OSError as e:
+            failed[rel] = f"{type(e).__name__}: {e}"
+            return False
+        removed.append(rel)
+        return True
+
+    def unlink_link(p: Path) -> None:
+        try:
+            os.unlink(p)
+        except OSError:
+            os.rmdir(p)  # a directory symlink or junction on Windows
+
+    def empty(d: Path) -> None:
+        with os.scandir(d) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        for e in entries:
+            p = Path(e.path)
+            if e.is_symlink() or os.path.isjunction(p):
+                gone(p, unlink_link)
+            elif e.is_dir(follow_symlinks=False):
+                empty(p)
+                try:
+                    p.rmdir()
+                except OSError:
+                    pass  # it still holds a file that stayed, named in failed
+            elif not (d == root and e.name == DAMAGED):
+                gone(p, os.unlink)
+
+    empty(root)
+    if not failed and (root / DAMAGED).exists():
+        gone(root / DAMAGED, os.unlink)
+    try:
+        root.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        if not failed:
+            failed["."] = f"the folder stayed: {type(e).__name__}: {e}"
+    return removed, failed
+
+
 def delete_part(map_dir: Path) -> bool:
     """Delete a staged part's folder in parts/ under its map lock; False, leaving it, while another process holds
-    the lock."""
+    the lock or a file in it cannot be deleted."""
     try:
         with extract.map_lock(map_dir, wait=False):
-            shutil.rmtree(map_dir, ignore_errors=True)
+            remove_tree(map_dir)
     except extract.MapLocked:
         return False
     return not map_dir.exists()

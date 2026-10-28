@@ -489,3 +489,8 @@ def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_pa
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="failed"))
     todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
     assert [(m.match_id, m.map_index) for m in todo] == [("1", 2)]
+    # the pipeline later deletes the kept failure under its failed/ cap: its last row says dropped, and the map is
+    # fetched again; skipping it as recorded would lose it for good
+    dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="dropped"))
+    todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
+    assert [(m.match_id, m.map_index) for m in todo] == [("1", 2), ("2", 1)]

@@ -109,9 +109,12 @@ def dataset_maps(meta_dir: Path) -> list[Map]:
 
 def plan(maps: list[Map], held: set[tuple[str, str]], ledger: dict[str, dict], inbox: Path) -> list[Map]:
     """The maps to download: their HLTV scoreboard is held, the ledger has no record of their id (published, failed
-    or refused), and the inbox does not hold them."""
+    or refused), and the inbox does not hold them. A "dropped" row counts as no record: the pipeline wrote it when it
+    deleted a kept failure to stay under its cap, so the demo is gone and is to be fetched again."""
+    def recorded(aid: str) -> bool:
+        return aid in ledger and ledger[aid].get("status") != "dropped"
     return [m for m in maps if (m.match_id, m.map_name.lower().removeprefix("de_")) in held
-            and dp.loose_id(m.ids) not in ledger and not m.target(inbox).exists()]
+            and not recorded(dp.loose_id(m.ids)) and not m.target(inbox).exists()]
 
 
 def room(status: dict, ours: int, need_gb: float, inbox: Path, floor_gb: float, reserved_gb: float = 0.0) -> str | None:

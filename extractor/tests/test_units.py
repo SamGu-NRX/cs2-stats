@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -1665,11 +1666,38 @@ def test_held_parts_are_recorded_as_expired_before_they_are_deleted(tmp_path, mo
     def crash(*args, **kwargs):
         raise Crash
 
-    monkeypatch.setattr(shutil, "rmtree", crash)
+    monkeypatch.setattr(shutil, "rmtree", crash)  # how the parts went before the row came first
+    monkeypatch.setattr(dp.stitch, "remove_tree", crash)
     with pytest.raises(Crash):
         p.enforce_parts_cap()
     row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
     assert (row["status"], row["parts"]) == ("expired", [str(d)])
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a file another handle holds "
+                    "open, the partial deletion recorded here; the Windows CI job runs this")
+def test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined(tmp_path, monkeypatch):
+    # Reproduced on Windows: a held-open rounds.parquet kept the part folder while match.parquet went, and
+    # rmtree(ignore_errors=True) said nothing. The part was left out of the expired row, so parts.jsonl still
+    # said held and the damaged part looked intact (formal/ArchiveLegacyPartialDelete).
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    for name in ("match.parquet", "rounds.parquet"):
+        (d / name).write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p = dp.Pipeline()
+    with open(d / "rounds.parquet", "rb"):
+        p.enforce_parts_cap()
+    rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["status"] for r in rows] == ["expired", "damaged"]
+    assert rows[1]["lost"] == ["match.parquet"] and list(rows[1]["left"]) == ["rounds.parquet"]
+    assert json.loads((d / dp.stitch.DAMAGED).read_text(encoding="utf-8"))["lost"] == ["match.parquet"]
+    assert dp.stitch.split_maps(dp.PARTS_DIR) == {}  # never offered for joining again
+    # closed now: the next pass deletes the rest, marker last, and records nothing more
+    p.enforce_parts_cap()
+    assert not d.exists()
+    assert len((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_a_truncated_demo_is_logged_and_never_kept_or_retried(tmp_path, monkeypatch):
@@ -2827,6 +2855,11 @@ def _finished_archive(tmp_path, monkeypatch, name="1f2e3d4c-5b6a-4978-8a9b-0c1d2
     return p, rar
 
 
+WIN32_HANDLES = pytest.mark.skipif(sys.platform != "win32", reason="recovery checks and deletes through a Win32 handle "
+                                   "(download_copies.delete_verified); the Windows CI job runs these")
+
+
+@WIN32_HANDLES
 def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_deletes_a_leftover(tmp_path, monkeypatch):
     # fails if the RAR is deleted before the done row is written (a crash between them left the maps published
     # and no row; formal/ArchiveLegacyLedgerOrder), or if a restart leaves a done archive's RAR in place
@@ -2848,6 +2881,7 @@ def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_d
     assert not restarted.archives
 
 
+@WIN32_HANDLES
 def test_recovery_leaves_a_file_that_is_not_the_recorded_archive(tmp_path, monkeypatch):
     # fails if a restart deletes a file in downloads only because its name matches a done archive: a new download
     # under that name, with other bytes, is the user's
@@ -2856,3 +2890,69 @@ def test_recovery_leaves_a_file_that_is_not_the_recorded_archive(tmp_path, monke
     assert not rar.exists()
     rar.write_bytes(dp.RAR_MAGIC + b"another archive" * 300)
     assert dp.Pipeline().recover_finished() == [] and rar.exists()
+
+
+def _done_leftover(name: str, data: bytes) -> Path:
+    """A RAR in downloads whose done row records its size and SHA-256: what a crash after the row leaves."""
+    rar = dp.DOWNLOADS / name
+    rar.write_bytes(data)
+    dp.append_jsonl(dp.LEDGER, dict(id=name, status="done", rar_bytes=len(data),
+                                    rar_sha256=hashlib.sha256(data).hexdigest()))
+    return rar
+
+
+@WIN32_HANDLES
+def test_recovery_keeps_a_same_size_file_whose_hash_differs(tmp_path, monkeypatch):
+    # fails if recovery deletes on a size match alone: a new download under the same name with the same size is
+    # the user's, and only the SHA-256 tells them apart
+    _isolate(tmp_path, monkeypatch)
+    data = dp.RAR_MAGIC + b"payload" * 500
+    rar = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", data)
+    rar.write_bytes(dp.RAR_MAGIC + b"PAYLOAD" * 500)
+    assert dp.Pipeline().recover_finished() == [] and rar.exists()
+
+
+@WIN32_HANDLES
+def test_recovery_deletes_the_file_it_checked_even_if_another_is_swapped_in(tmp_path, monkeypatch):
+    # Hashing a path and then deleting the path deleted a file swapped in between. The swap is tried while the
+    # file is being hashed; with the check and the deletion on one unshared handle it is refused, and the
+    # swapped-in file survives.
+    import download_copies as dc
+
+    _isolate(tmp_path, monkeypatch)
+    rar = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", dp.RAR_MAGIC + b"payload" * 500)
+    other = tmp_path / "other"
+    other.write_bytes(b"the user's file")
+    swaps = []
+
+    def swapping(real):
+        def hash_(*args):
+            try:
+                os.replace(other, rar)
+                swaps.append("done")
+            except PermissionError:
+                swaps.append("refused")
+            return real(*args)
+        return hash_
+    monkeypatch.setattr(dc, "_sha256", swapping(dc._sha256))
+    monkeypatch.setattr(ex, "file_sha256", swapping(ex.file_sha256))  # the hash the path-based recovery used
+    assert dp.Pipeline().recover_finished() == [rar]
+    assert swaps == ["refused"] and other.read_bytes() == b"the user's file" and not rar.exists()
+
+
+@WIN32_HANDLES
+def test_a_leftover_that_cannot_be_deleted_is_logged_and_startup_goes_on(tmp_path, monkeypatch, caplog):
+    # A leftover that could be read but not deleted raised out of recovery, before the main loop: the pipeline
+    # never started. It is logged and left, and the next leftover is still recovered.
+    import stat
+
+    _isolate(tmp_path, monkeypatch)
+    stuck = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", dp.RAR_MAGIC + b"one" * 500)
+    fine = _done_leftover("2a3b4c5d-6e7f-4801-9a2b-3c4d5e6f7a8b", dp.RAR_MAGIC + b"two" * 500)
+    os.chmod(stuck, stat.S_IREAD)  # read-only: readable, and Windows refuses to delete it
+    try:
+        assert dp.Pipeline().recover_finished() == [fine]
+        assert stuck.exists() and not fine.exists()
+        assert "could not be checked or deleted" in caplog.text
+    finally:
+        os.chmod(stuck, stat.S_IREAD | stat.S_IWRITE)

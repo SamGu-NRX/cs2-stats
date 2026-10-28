@@ -66,25 +66,28 @@ Each archive holds one whole map and one map recorded as two parts.
 
 | Model action | Code |
 | --- | --- |
-| `Scan`: a downloads RAR whose last row is not done or failed; with `--retry-failed`, a `failed/` RAR not yet tried in this run, even before its ledger row exists | [demo_pipeline.py:984-992](../extractor/demo_pipeline.py#L984) |
-| `Hash`, `Extract`, `Parse` | [1020](../extractor/demo_pipeline.py#L1020) `poll_hashes`, extraction and `finish_job` |
-| `Stitch`, `Check` | [1369](../extractor/demo_pipeline.py#L1369) `stitch_parts`, [1312](../extractor/demo_pipeline.py#L1312), [1402](../extractor/demo_pipeline.py#L1402) `unaccounted` |
-| `RemoveWork`, `LedgerDone`, `RemoveRar` | [1299](../extractor/demo_pipeline.py#L1299) `finish_archives`, the row at [1328](../extractor/demo_pipeline.py#L1328), then the RAR at [1331](../extractor/demo_pipeline.py#L1331) |
-| `Recover`: a done archive's leftover RAR is deleted at a start, if its size and SHA-256 match the row | [1339](../extractor/demo_pipeline.py#L1339) `recover_finished` |
-| `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1461-1515](../extractor/demo_pipeline.py#L1461) `fail_archive`, [1507](../extractor/demo_pipeline.py#L1507) |
-| `CapFirst`, `CapSecond`: write the expired row, then delete the held parts | [1420](../extractor/demo_pipeline.py#L1420) `enforce_parts_cap`, the row at [1446](../extractor/demo_pipeline.py#L1446), the parts at [1451](../extractor/demo_pipeline.py#L1451) |
-| `EvictRecord`, `EvictDelete`: skip a failure being retried; write the `failed_dropped.jsonl` row and a `dropped` ledger row, then delete the folder | [1549](../extractor/demo_pipeline.py#L1549) `enforce_failed_cap`, [1557](../extractor/demo_pipeline.py#L1557), [1574](../extractor/demo_pipeline.py#L1574), [1579](../extractor/demo_pipeline.py#L1579) |
+| `Scan`: a downloads RAR whose last row is not done or failed; with `--retry-failed`, a `failed/` RAR not yet tried in this run, even before its ledger row exists | [demo_pipeline.py:1140-1148](../extractor/demo_pipeline.py#L1140) |
+| `Hash`, `Extract`, `Parse` | [1235](../extractor/demo_pipeline.py#L1235) `poll_hashes`, extraction and `finish_job` |
+| `Stitch`, `Check` | [1643](../extractor/demo_pipeline.py#L1643) `stitch_parts`, [1571](../extractor/demo_pipeline.py#L1571), [1676](../extractor/demo_pipeline.py#L1676) `unaccounted` |
+| `RemoveWork`, `LedgerDone`, `RemoveRar` | [1560](../extractor/demo_pipeline.py#L1560) `finish_archives`, the row at [1590](../extractor/demo_pipeline.py#L1590), then the RAR at [1593](../extractor/demo_pipeline.py#L1593) |
+| `Recover`: a done archive's leftover RAR is deleted at a start, checked (size, SHA-256) and deleted through one unshared handle | [1601](../extractor/demo_pipeline.py#L1601) `recover_finished`; [download_copies.py:128](../extractor/download_copies.py#L128) `delete_verified` |
+| `FailHold`, `FailDrop`, `FailDelete`, `FailMove`, `FailWrite` (a fresh failure joins `self.retried`), `FailLedger` | [1754](../extractor/demo_pipeline.py#L1754) `fail_archive`, [1805](../extractor/demo_pipeline.py#L1805) |
+| `CapFirst`, `CapSecond`: write the expired row, then delete the held parts file by file; a deletion that fails part way is recorded as damaged | [1694](../extractor/demo_pipeline.py#L1694) `enforce_parts_cap`, the row at [1724](../extractor/demo_pipeline.py#L1724), the parts at [1728](../extractor/demo_pipeline.py#L1728), [1738](../extractor/demo_pipeline.py#L1738) `record_damaged`; [stitch.py:432](../extractor/stitch.py#L432) `remove_tree` |
+| `EvictRecord`, `EvictDelete`: skip a failure being retried; write the `failed_dropped.jsonl` row and a `dropped` ledger row, then delete the folder | [1854](../extractor/demo_pipeline.py#L1854) `enforce_failed_cap`, [1862](../extractor/demo_pipeline.py#L1862), [1879](../extractor/demo_pipeline.py#L1879), [1884](../extractor/demo_pipeline.py#L1884) |
 
-Three fixes are switches, on for the shipped code:
+Four fixes are switches, on for the shipped code:
 
 - `LedgerFirst`: the done row before the RAR goes, and a start deletes a done archive's leftover RAR.
 - `ExpiryRowFirst`: the expired row before the parts go.
 - `EvictionFixed`: `enforce_failed_cap` skips a kept failure being retried (except the archive failing now, which is no longer in flight) and writes a `dropped` ledger row before deleting.
+- `DamageRecorded`: a part deletion that fails part way is recorded as damaged. `stitch.remove_tree` deletes file by file and reports every file it removed and every one that stayed. `record_damaged` then writes a `DAMAGED` file into the part folder and a `damaged` row into `parts.jsonl`, both naming the files lost and those left. `split_maps` skips a folder with that marker, so the part is never joined, and each later pass of the cap tries to delete the rest.
+
+`PartialDelete` is not a fix but what Windows does to a table another process holds open: it stays while the folder's other files go. It is on in every configuration here.
 
 ### Invariants
 
-- `NoUnaccountedDeletion`: an archive whose RAR is gone has its whole map published and its split map stitched, expired with a row, or held with its parts. The exception is an archive deleted on purpose with its maps unaccounted, which `failed_dropped.jsonl` must record: a truncated failure, or a kept failure evicted by the cap.
-- `ExpiredRecorded`: deleted held parts always have their expired row, except between the cap's two steps.
+- `NoUnaccountedDeletion`: an archive whose RAR is gone has its whole map published and its split map stitched, expired or damaged with a row, or held with its parts. The exception is an archive deleted on purpose with its maps unaccounted, which `failed_dropped.jsonl` must record: a truncated failure, or a kept failure evicted by the cap.
+- `ExpiredRecorded`: deleted held parts, whether all their tables went or only some, always have a row saying so (expired or damaged), except between the cap's two steps.
 - `CapSparesActive`: the parts cap never touches an archive in flight.
 - `FailedKept`: a failure whose last row says failed still has its RAR, unless `failed_dropped.jsonl` records its deletion.
 - `DeletedRecorded`: an archive whose RAR is gone has a done row or a `failed_dropped.jsonl` record. No archive ends up published with no row.
@@ -92,13 +95,14 @@ Three fixes are switches, on for the shipped code:
 
 ### Results
 
-The shipped code (`ArchiveSafety`: two archives, one crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant, and so does `ArchiveWide` with three archives and symmetry reduction. `ArchiveEviction`, `ArchiveCrashLedger` and `ArchiveCrashExpiry` check the property each gap broke.
+The shipped code (`ArchiveSafety`: two archives, one crash, one re-download, `--retry-failed`, both caps under pressure, failing, truncated and broken stitches) passes every invariant with part deletions that can fail part way, and so does `ArchiveWide` with three archives and symmetry reduction. `ArchiveEviction`, `ArchiveCrashLedger`, `ArchiveCrashExpiry` and `ArchivePartialDelete` check the property each gap broke.
 
 Each `Legacy` configuration turns one fix off and must keep failing, on the code as it was at `b5868a2`:
 
 - **`ArchiveLegacyEviction` violates `EvictedRedownloadable`, without a crash.** `enforce_failed_cap` deleted a kept failure but left its ledger saying failed, so a later download of the same archive was skipped forever. A ledger row alone isn't enough: TLC then found the cap evicting a retried failure still in flight, which fails again and leaves the same state. Hence both halves of the fix.
 - **`ArchiveLegacyLedgerOrder` violates `DeletedRecorded`.** A crash between deleting the RAR and appending the done row left the maps published with no done row.
 - **`ArchiveLegacyExpiry` violates `ExpiredRecorded`.** A crash between deleting held parts and writing their expired row left the parts gone and `parts.jsonl` still saying held.
+- **`ArchiveLegacyPartialDelete` violates `ExpiredRecorded`, without a crash.** It turns off both the row-first order and the damaged record. A table held open kept the part folder while other tables went, `stitch.delete_part` reported the part as not deleted, and the cap wrote no row, so `parts.jsonl` still said held. The second review reproduced this on Windows. In the model, the row-first order alone already keeps the deletion recorded (as expired); the damaged row and the marker add which files were lost and keep the remnant from being joined.
 - **`ArchiveLegacyNoCheck`** skips the unaccounted check and violates `NoUnaccountedDeletion`, which shows that check carries the invariant.
 
 ### Bounds, assumptions and exclusions
@@ -109,5 +113,6 @@ Each `Legacy` configuration turns one fix off and must keep failing, on the code
 - `due_for_retry` is assumed true for a kept failure.
 - The ledger is keyed by archive, though the code keys a retried failure by its `failed/` folder name.
 - Recovery at a start is modelled as possible whenever the archive is not in flight, a superset of "at a start". The code also deletes only a file matching the done row's size and SHA-256.
+- A partial deletion is modelled as one outcome for the whole held map; the code records each part folder that fails part way on its own row.
 - The eviction's two appends (`failed_dropped.jsonl`, then the ledger) are one model step. A crash between them leaves the folder in place, and a later pass over the cap evicts it again.
 - **Double publication is not covered:** "published" is one boolean per map. Versions, CURRENT, readers and replacing older extractions are in `Publish.tla` and `Pipeline.tla`, not here.

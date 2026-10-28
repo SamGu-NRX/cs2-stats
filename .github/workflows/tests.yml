@@ -90,6 +90,8 @@ jobs:
     name: Download-copy deletion guards (pytest, Windows)
     # The Downloads cleanup deletes files through Win32 handles; on Linux those tests skip. Here they must run:
     # the exclusive open, the link and reparse checks, the sharing refusal and the delete through the handle.
+    # Startup recovery deletes a done archive's leftover the same way, and the parts cap's partial deletion
+    # (a table held open) happens only on Windows; their tests skip on Linux too and run here.
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -109,6 +111,12 @@ jobs:
           python -m pytest -q -rs --junitxml=download-copies.xml tests/test_download_copies.py
           tests/test_units.py::test_a_finished_archives_downloads_copy_is_deleted
           tests/test_units.py::test_only_a_finished_archive_with_a_download_seen_in_progress_has_its_copy_cleaned
+          tests/test_units.py::test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_deletes_a_leftover
+          tests/test_units.py::test_recovery_leaves_a_file_that_is_not_the_recorded_archive
+          tests/test_units.py::test_recovery_keeps_a_same_size_file_whose_hash_differs
+          tests/test_units.py::test_recovery_deletes_the_file_it_checked_even_if_another_is_swapped_in
+          tests/test_units.py::test_a_leftover_that_cannot_be_deleted_is_logged_and_startup_goes_on
+          tests/test_units.py::test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined
       - name: Fail if any of those tests was skipped
         shell: python
         run: |
