@@ -1034,7 +1034,8 @@ def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: l
     return rise
 
 
-def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> pd.DataFrame:
+def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict,
+                      rounds: pd.DataFrame | None = None) -> pd.DataFrame:
     """Damage rows for health drops that have no player_hurt event on that tick. They never name an attacker.
 
     GOTV demos can lose a stretch of events: on one pro demo, ticks 9168-9184 have no
@@ -1044,8 +1045,13 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> 
     would rule a player in or out (weapon_fire, grenade detonations) can be lost in the same gap. Every row
     has a null attacker and reconstructed_ambiguous = true; its HP shows up in the hit-table shortfall
     (hit_table_checks). Kills still come from player_death.
-    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass.
+    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass. With rounds (round,
+    start_tick), a drop on a later round's start tick is counted in the round before, as a recorded hit is
+    (hit_rounds). No published map has one: every player respawns at 100 HP on the start tick, which hides a hit
+    there from the networked health.
     """
+    if rounds is not None:
+        drops = drops.assign(round=hit_rounds(drops.tick, drops["round"], rounds))
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
     lost = drops[(drops["round"] > 0).to_numpy() & unexplained]
@@ -2212,7 +2218,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # ----- hits the demo's event stream lost, rebuilt from networked health
     drops = stamp(pd.concat(drop_parts, ignore_index=True))
     dmg["reconstructed_ambiguous"] = False
-    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of)], ignore_index=True)
+    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of, rounds)], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
     # not negation; every filter below relies on real booleans.
     dmg = dmg.astype({"is_self": bool, "is_team_damage": bool, "reconstructed_ambiguous": bool}) \

@@ -3146,3 +3146,17 @@ def test_a_hit_on_a_rounds_start_tick_goes_to_the_round_before():
     ticks = pd.Series([100, 91599, 91619, 91620])
     stamped = pd.Series([1, 10, 11, 11], dtype="int16")
     assert ex.hit_rounds(ticks, stamped, rounds).tolist() == [1, 10, 10, 11]
+
+
+def test_a_lost_hit_on_a_rounds_start_tick_is_rebuilt_in_the_round_before():
+    # Review of PR 79 (Codex): rebuilt hits kept stamp()'s round, so a lost hit on a round's start tick would stay in
+    # the new round while game_damage counts it in the round before. No real demo has one to test with: every player
+    # respawns at 100 HP on the start tick (fixture K: 46 HP on 91618, 100 on 91619), so the drop never shows there.
+    rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 2000]))
+    drops = pd.DataFrame(dict(tick=[2000, 2500], steamid=[A, A], health_before=[46, 100], health_after=[20, 70],
+                              round=[2, 2]))
+    dmg = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.array([], dtype="UInt64")))
+    side = {(1, A): "CT", (2, A): "T"}
+    out = ex.rebuild_lost_hits(drops, dmg, side, rounds)
+    assert out[["tick", "round", "v_side", "dmg_health_capped"]].values.tolist() == [[2000, 1, "CT", 26], [2500, 2, "T", 30]]
+
