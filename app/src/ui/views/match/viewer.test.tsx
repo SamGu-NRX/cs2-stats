@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-// Seeing a pro demo through a picked player (Viewer.tsx, router.ts withViewer): what the address holds.
+// Seeing a pro demo through a picked player (Viewer.tsx, router.ts withViewer, hooks.ts viewerOf): what the address holds.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
-import type { MatchModel } from "../../data/match";
+import { viewerOf } from "../../data/hooks";
+import type { MatchEntry, MatchModel } from "../../data/match";
 import { currentRoute, go, matchHref } from "../../router";
 import { ViewerNeeded } from "./Viewer";
 
@@ -38,5 +39,13 @@ describe("seeing a pro demo through a player", () => {
     expect(new URLSearchParams(matchHref(PRO, "rounds", { round: 4 }).split("?")[1]).get("as")).toBe("1");
     expect(matchHref(OTHER, "overview")).not.toContain("as=");
     expect(matchHref(PRO, "overview", { as: null })).not.toContain("as=");
+  });
+
+  it("sees a pro demo through the player at that position, and the user's own match only through the user", () => {
+    // fails if ?as= changes whose match the user's own match shows, or if a SteamID in the address is honoured
+    const players = STEAMIDS.map((id) => ({ id })) as MatchEntry["players"];
+    expect(viewerOf({ you: null, players }, "1")).toBe(STEAMIDS[1]);
+    expect(viewerOf({ you: 0, players }, "1")).toBeNull();
+    for (const at of [STEAMIDS[1], "3", "-1", "1.0", "", null]) expect(viewerOf({ you: null, players }, at)).toBeNull();
   });
 });

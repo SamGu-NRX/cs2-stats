@@ -68,17 +68,25 @@ export function bundleOf(client: Client, version: number, file: string, viewer: 
 }
 
 /**
+ * The SteamID a match is seen through from its ?as= address value, the picked player's position on a
+ * pro demo's scoreboard. Null on the user's own matches, which are always seen through the user, and for
+ * a value that is no position on this scoreboard (a SteamID among them).
+ */
+export function viewerOf(entry: Pick<MatchEntry, "you" | "players"> | null, at: string | null): string | null {
+  if (!entry || entry.you !== null || at === null || !/^\d+$/.test(at)) return null;
+  return entry.players[Number(at)]?.id ?? null;
+}
+
+/**
  * One match shaped for the match views. The entry must be in the match list. Its players are named as
  * the match list names them, so with personal info hidden every view of the match uses the same
- * placeholders (privacy.ts). `at`: the ?as= address value, the position on a pro demo's scoreboard of the
- * player picked there (MatchModel.human); the address never holds the player's SteamID.
+ * placeholders (privacy.ts). `at`: the ?as= address value (viewerOf).
  */
 export function useMatch(file: string | null, at: string | null = null): Loaded<MatchModel> {
   const { client, version, matches } = useData();
   const hide = useHidePersonal();
   const entry = file ? matches.find((m) => m.file === file) ?? null : null;
-  const pi = at !== null && /^\d+$/.test(at) ? Number(at) : null;
-  const as = entry && entry.you === null && pi !== null ? entry.players[pi]?.id ?? null : null;
+  const as = viewerOf(entry, at);
   return useAsync(client && file ? `${version}|m:${file}:${entry ? "" : "missing"}:${hide}:${as ?? ""}` : null, async () => {
     if (!entry) throw new Error(`${file} is not in the match folder`);
     const b = await bundleOf(client!, version, file!, as);
