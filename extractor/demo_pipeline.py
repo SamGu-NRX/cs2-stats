@@ -54,8 +54,10 @@ from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, rep
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
 DOWNLOADS: Path | None = Path(os.environ["CS2_DEMO_DOWNLOADS"]) if os.environ.get("CS2_DEMO_DOWNLOADS") else None
 # A second input, off unless CS2_DEMO_INBOX is set: loose .dem files, in the folder or one subfolder down, each with a
-# sidecar <name>.meta.json (read_sidecar). They skip extraction and go straight to parsing.
+# sidecar <name>.meta.json (read_sidecar). They skip extraction and go straight to parsing. The folder must be one made
+# for this (claim_inbox); main() runs without it otherwise.
 INBOX: Path | None = Path(os.environ["CS2_DEMO_INBOX"]) if os.environ.get("CS2_DEMO_INBOX") else None
+INBOX_MARKER = ".cs2-stats-inbox"
 DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-stats-data")  # data; holds no code
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
@@ -67,6 +69,8 @@ LOG_DIR = DATA_ROOT / "logs"
 # awpy-data release 2000935 was built from CS2 1.41.9.2 (Steam build 26144732), the build installed
 # locally; extract.py withholds mesh visibility for any map whose mesh disagrees with the demo.
 MAPDATA = DATA_ROOT / "mapdata" / "2000935"
+# The OpenCS2 dataset's metadata parquet: a loose demo's sidecar must agree with its row (opencs2_row).
+OPENCS2_META = Path(os.environ.get("CS2_OPENCS2_META") or DATA_ROOT / "external" / "opencs2-meta" / "data")
 MANIFEST = DEMOS_DIR / "manifest.jsonl"
 LEDGER = DEMOS_DIR / "archives.jsonl"  # one line per finished archive, done or failed
 DROPPED = DEMOS_DIR / "failed_dropped.jsonl"  # failed archives deleted because failed/ was full
@@ -354,10 +358,65 @@ def sidecar_path(dem: Path) -> Path:
     return dem.with_name(dem.stem + ".meta.json")
 
 
+def claim_inbox(inbox: Path, data_root: Path, downloads: Path | None) -> str | None:
+    """Why inbox may not be the loose-demo inbox, or None once it may. The pipeline deletes demos there, so it must be
+    a folder made for that: one holding INBOX_MARKER, which this writes only into a missing or empty folder
+    (fetch_opencs2.py does the same). A drive root, the user profile, the Desktop, Documents and Downloads folders,
+    and anything inside or containing the data folder or the watched downloads folder are refused outright."""
+    norm = lambda p: os.path.normcase(os.path.realpath(p))
+
+    def within(child: str, parent: str) -> bool:
+        try:
+            return os.path.commonpath([child, parent]) == parent
+        except ValueError:  # different drives
+            return False
+
+    real = norm(inbox)
+    if os.path.dirname(real) == real:
+        return "it is a drive root"
+    try:
+        known = [("the user profile", Path.home()), *(("a known folder", k) for k in download_copies.known_folders())]
+    except (OSError, download_copies.Refused) as e:
+        return f"the Known Folders cannot be read to rule them out: {e}"
+    for what, folder in known:
+        if within(norm(folder), real):
+            return f"it is or contains {what} ({folder})"
+    for what, other in (("the data folder", data_root), ("the downloads folder", downloads)):
+        if other is not None and (within(real, norm(other)) or within(norm(other), real)):
+            return f"it is inside or contains {what} ({other})"
+    marker = Path(real) / INBOX_MARKER
+    if marker.is_file():
+        return None
+    if Path(real).exists() and any(Path(real).iterdir()):
+        return f"it holds files but no {INBOX_MARKER}; only an empty folder is claimed"
+    Path(real).mkdir(parents=True, exist_ok=True)
+    marker.write_text("The CS2 stats pipeline takes and deletes the .dem files in this folder.\n", encoding="utf-8")
+    return None
+
+
+_opencs2_rows: dict[str, dict] | None = None
+
+
+def opencs2_row(dataset_file: str) -> dict | None:
+    """The OpenCS2 metadata row of a dataset file (match_id, map_index, map_name, demo_bytes), or None. Raises
+    FileNotFoundError when the metadata is not there."""
+    global _opencs2_rows
+    if _opencs2_rows is None:
+        import polars as pl
+        files = sorted(OPENCS2_META.glob("*.parquet"))
+        if not files:
+            raise FileNotFoundError(f"no OpenCS2 metadata parquet in {OPENCS2_META}")
+        df = pl.read_parquet(files, columns=["file_name", "match_id", "map_index", "map_name", "demo_bytes"])
+        _opencs2_rows = {r["file_name"]: r for r in df.iter_rows(named=True)}
+    return _opencs2_rows.get(dataset_file)
+
+
 def read_sidecar(dem: Path) -> dict:
     """The sidecar of a loose demo: <name>.meta.json beside <name>.dem, a JSON object with source (one of
-    LOOSE_SOURCES), hltv_match_id (digits), hltv_map_index (1 or more) and map_name (de_...), and optionally
-    dataset_file and match_date. Raises ValueError saying what is missing or wrong; such a demo is refused."""
+    LOOSE_SOURCES), hltv_match_id (digits), hltv_map_index (1 or more), map_name (de_...), dataset_file (the file's
+    path in the dataset), dem_bytes and sha256 (of the demo), and optionally match_date. Raises ValueError saying what
+    is missing or wrong; such a demo is refused. The ids are checked against the dataset (opencs2_row) and the demo
+    against the size and hash when it is taken in."""
     side = sidecar_path(dem)
     try:
         meta = json.loads(side.read_text(encoding="utf-8"))
@@ -367,14 +426,18 @@ def read_sidecar(dem: Path) -> dict:
         raise ValueError(f"sidecar {side.name} cannot be read: {e}") from None
     if not isinstance(meta, dict):
         raise ValueError(f"sidecar {side.name} is not a JSON object")
-    index = meta.get("hltv_map_index")
+    index, size = meta.get("hltv_map_index"), meta.get("dem_bytes")
+    whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
     bad = [k for k, ok in (("source", meta.get("source") in LOOSE_SOURCES),
                            ("hltv_match_id", str(meta.get("hltv_match_id", "")).isdigit()),
-                           ("hltv_map_index", isinstance(index, int) and not isinstance(index, bool) and index >= 1),
-                           ("map_name", str(meta.get("map_name", "")).startswith("de_"))) if not ok]
+                           ("hltv_map_index", whole(index) and index >= 1),
+                           ("map_name", str(meta.get("map_name", "")).lower().startswith("de_")),
+                           ("dataset_file", isinstance(meta.get("dataset_file"), str) and bool(meta.get("dataset_file"))),
+                           ("dem_bytes", whole(size) and size > 0),
+                           ("sha256", re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", ""))) is not None)) if not ok]
     if bad:
         raise ValueError(f"sidecar {side.name}: missing or invalid {', '.join(bad)}")
-    keep = ("source", "hltv_match_id", "hltv_map_index", "map_name", "dataset_file", "match_date")
+    keep = ("source", "hltv_match_id", "hltv_map_index", "map_name", "dataset_file", "dem_bytes", "sha256", "match_date")
     return {k: (str(meta[k]) if k == "hltv_match_id" else meta[k]) for k in keep if k in meta}
 
 
@@ -1005,7 +1068,7 @@ class Pipeline:
                             yield f
                 elif d.is_file() and is_candidate_name(d):
                     yield d
-        if INBOX is not None and INBOX.exists():
+        if INBOX is not None and (INBOX / INBOX_MARKER).is_file():
             for f in [*INBOX.glob("*.dem"), *INBOX.glob("*/*.dem")]:
                 if f.is_file() and not f.name.startswith("."):
                     yield f
@@ -1059,20 +1122,33 @@ class Pipeline:
             self.hasher.submit(f)
             log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
 
+    def refuse_loose(self, f: Path, reason: str) -> None:
+        """Refuse a loose demo: a ledger row says why, and the file stays where it is, skipped for the rest of the run."""
+        self.ignored.add(f)
+        log.error("refusing loose demo %s: %s", f, reason)
+        rec = dict(id=f"inbox:{f.name}", status="failed", reason=f"refused: {reason}", kept=str(f), retry=False,
+                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        append_jsonl(LEDGER, rec)
+        self.ledger[rec["id"]] = rec
+
     def scan_loose(self, f: Path) -> None:
-        """Take in a loose demo from the inbox, or one kept in failed/ when retrying: pending at once, with no hash
-        (no browser copy to match) and no extraction. A demo whose sidecar is missing or wrong is refused: a ledger
-        row says why, and the file stays where it is, skipped for the rest of the run."""
+        """Take in a loose demo from the inbox, or one kept in failed/ when retrying, with no extraction. It is refused
+        (refuse_loose) unless its sidecar is valid, agrees with the dataset's row for its file (ids, map and size) and
+        the demo has that size; then it is hashed (Hasher), and poll_hashes checks the SHA-256 against the sidecar's.
+        Nothing is published under ids that were not checked."""
         in_failed = f.parent.parent == FAILED_DIR
         try:
             meta = read_sidecar(f)
-        except ValueError as e:
-            self.ignored.add(f)
-            log.error("refusing loose demo %s: %s", f, e)
-            rec = dict(id=f"inbox:{f.name}", status="failed", reason=f"refused: {e}", kept=str(f), retry=False,
-                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-            append_jsonl(LEDGER, rec)
-            self.ledger[rec["id"]] = rec
+            row = opencs2_row(meta["dataset_file"])
+        except (ValueError, OSError) as e:
+            self.refuse_loose(f, str(e))
+            return
+        size = f.stat().st_size
+        want = row and (str(row["match_id"]), row["map_index"], str(row["map_name"]).lower(), row["demo_bytes"])
+        have = (meta["hltv_match_id"], meta["hltv_map_index"], meta["map_name"].lower(), meta["dem_bytes"])
+        if want != have or size != meta["dem_bytes"]:
+            self.refuse_loose(f, f"the sidecar says {have} for {meta['dataset_file']}, the dataset "
+                                 f"{want or 'has no such file'}, and the demo has {size} bytes")
             return
         aid = loose_id(meta)
         status = self.ledger.get(aid, {}).get("status")
@@ -1087,9 +1163,10 @@ class Pipeline:
         if aid in self.archives:
             return  # another copy of this map is in hand
         st = f.stat()
-        self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, loose=meta,
+        self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, loose=meta, state="hashing",
                                      download_started=getattr(st, "st_birthtime", st.st_ctime))
-        log.info("pending loose demo %s as %s (%.0f MB)", f, aid, st.st_size / 1e6)
+        self.hasher.submit(f)
+        log.info("found loose demo %s as %s (%.0f MB); hashing it", f, aid, st.st_size / 1e6)
 
     def poll_hashes(self) -> None:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
@@ -1111,6 +1188,10 @@ class Pipeline:
             if not isinstance(sha, str):
                 self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}"
                                      + (f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""))
+                continue
+            if a.loose is not None and sha != a.loose["sha256"]:
+                del self.archives[a.id]
+                self.refuse_loose(a.rar, f"its SHA-256 is {sha}, its sidecar says {a.loose['sha256']}")
                 continue
             a.rar_sha256 = sha
             if a.rar.parent.parent == FAILED_DIR:
@@ -1185,7 +1266,7 @@ class Pipeline:
         except Exception as e:  # noqa: BLE001 - demoparser2 raises a bare Exception
             self.fail_archive(a, f"cannot read the demo header: {type(e).__name__}: {e}")
             return
-        if header_map != a.loose["map_name"]:
+        if str(header_map).lower() != a.loose["map_name"].lower():
             self.fail_archive(a, f"the sidecar names {a.loose['map_name']}, the demo's header {header_map}")
             return
         a.listing = {a.rar.name: dict(size=a.rar_bytes, modified=None)}
@@ -1649,8 +1730,10 @@ class Pipeline:
         Held is each extracting archive's listed .dem bytes minus what its work folder holds. Reading the
         work folders once for both keeps a 7-Zip write between two readings from counting in neither.
         """
+        # The inbox counts whole, partial downloads included; its demos are not counted again as waiting archives.
         waiting = sum(a.rar.stat().st_size for a in self.archives.values()
-                      if a.rar.exists() and a.rar.parent.parent != FAILED_DIR)
+                      if a.rar.exists() and a.rar.parent.parent != FAILED_DIR and a.loose is None)
+        waiting += tree_bytes(INBOX) if INBOX is not None and INBOX.exists() else 0
         downloading = 0
         for f in self.tracker.tracked():
             try:
@@ -1864,6 +1947,12 @@ def main(argv=None) -> int:
     except OutputRefused as e:
         ap.error(str(e))
     setup_logging()
+    global INBOX
+    if INBOX is not None:
+        why = claim_inbox(INBOX, DATA_ROOT, DOWNLOADS)
+        if why:
+            log.error("not using CS2_DEMO_INBOX %s: %s; running without loose demos", INBOX, why)
+            INBOX = None
     # An earlier instance died without a log line; leave evidence of any future death.
     import atexit
     import faulthandler

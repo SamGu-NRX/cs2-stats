@@ -90,7 +90,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `demo_sha256` | String | no | SHA-256 of the .dem file |
 | `demo_version_guid` | String | no | demo header GUID |
 | `demoparser2_version` | String | no | parser version |
-| `extra` | String | no | JSON from the caller. From an HLTV archive the pipeline writes `archive_rar`, `archive_slug`, `dem_modified_in_archive`, `dem_size_in_archive` and `download_folder`; from a loose demo (OpenCS2) it writes the demo's sidecar, `source`, `hltv_match_id`, `hltv_map_index`, `map_name`, `dataset_file` and `match_date`, with `archive_slug` and `dem_size`. `model/rating3/join_demos.py` joins a map that names `hltv_match_id` and `hltv_map_index` to that HLTV map, and any other map by `dem_modified_in_archive` |
+| `extra` | String | no | JSON from the caller. From an HLTV archive the pipeline writes `archive_rar`, `archive_slug`, `dem_modified_in_archive`, `dem_size_in_archive` and `download_folder`; from a loose demo (OpenCS2) it writes the demo's sidecar, `source`, `hltv_match_id`, `hltv_map_index` (the dataset's, which can differ from HLTV's), `map_name`, `dataset_file`, `dem_bytes`, `sha256` and `match_date`, with `archive_slug` and `dem_size`; the pipeline published it only after the ids matched the dataset's row for `dataset_file` and the demo matched `dem_bytes` and `sha256`. `model/rating3/join_demos.py` joins a map that names `hltv_match_id` and `hltv_map_index` to that HLTV map, and any other map by `dem_modified_in_archive` |
 | `extractor_version` | String | no | version of this extractor (semver) |
 | `final_tick` | Int32 | no | tick the final scoreboard was read (win panel, or last round end + 1) |
 | `map` | String | no | map name from the demo header, e.g. de_dust2 |

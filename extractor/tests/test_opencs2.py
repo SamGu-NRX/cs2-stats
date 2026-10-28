@@ -1,6 +1,7 @@
 """Loose demos (OpenCS2) through the pipeline's inbox, and the fetcher that fills it. Synthetic except one private
-fixture demo, which the test needing it copies under a made-up name and skips without."""
+fixture demo, which the tests needing it copy under a made-up name and skip without."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -25,8 +26,8 @@ FIXTURE = DATA / "fixtures" / "fixture-d-vs-split-m1-cache-p1.dem"  # an HLTV Ca
 
 
 def _isolate(tmp_path, monkeypatch) -> Path:
-    """Every folder and file the pipeline writes, under tmp_path/data; the inbox beside it, outside the data folder as
-    in use (a finished demo there was refused deletion when only the data folder was allowed)."""
+    """Every folder and file the pipeline writes, under tmp_path/data; the inbox beside it, claimed, outside the data
+    folder as in use; the OpenCS2 metadata at tmp_path/meta (_meta writes its rows)."""
     data = tmp_path / "data"
     monkeypatch.setattr(dp, "DATA_ROOT", data)
     for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "PARTS_DIR"):
@@ -37,25 +38,49 @@ def _isolate(tmp_path, monkeypatch) -> Path:
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)
+    (dp.INBOX / dp.INBOX_MARKER).write_text("", encoding="utf-8")
     for name, file in (("LEDGER", "archives.jsonl"), ("DROPPED", "failed_dropped.jsonl"), ("MANIFEST", "manifest.jsonl"),
                        ("NEEDS_REEXTRACT", "needs_reextract.jsonl")):
         monkeypatch.setattr(dp, name, dp.DEMOS_DIR / file)
     monkeypatch.setattr(dp, "COPIES_LOG", dp.LOG_DIR / "download_copies.jsonl")
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
+    monkeypatch.setattr(dp, "OPENCS2_META", tmp_path / "meta")
+    monkeypatch.setattr(dp, "_opencs2_rows", None)
     return dp.INBOX
 
 
-def _loose(inbox: Path, match_id: str, name: str, data: bytes, sidecar: dict | None) -> Path:
+def _meta(folder: Path, rows: list[dict]) -> None:
+    folder.mkdir(exist_ok=True)
+    pl.DataFrame(rows).with_columns(pl.col("map_index").cast(pl.Int32), pl.col("demo_bytes").cast(pl.Int64)) \
+        .write_parquet(folder / "metadata-x.parquet")
+
+
+def _loose(inbox: Path, match_id: str, index: int, map_name: str, name: str, data: bytes | Path,
+           sidecar_changes: dict | None = None, meta_changes: dict | None = None) -> Path:
+    """A loose demo with its dataset row and a sidecar that agrees with both, unless changed."""
     dem = inbox / match_id / name
     dem.parent.mkdir(parents=True, exist_ok=True)
-    dem.write_bytes(data)
-    if sidecar is not None:
-        dp.sidecar_path(dem).write_text(json.dumps(sidecar), encoding="utf-8")
+    shutil.copyfile(data, dem) if isinstance(data, Path) else dem.write_bytes(data)
+    file_name = f"demos/shard-x/{match_id}/{name}"
+    size, sha = dem.stat().st_size, hashlib.sha256(dem.read_bytes()).hexdigest()
+    _meta(dp.OPENCS2_META, [{**dict(file_name=file_name, match_id=match_id, map_index=index, map_name=map_name,
+                                    demo_bytes=size), **(meta_changes or {})}])
+    side = {**dict(source="opencs2", hltv_match_id=match_id, hltv_map_index=index, map_name=map_name,
+                   dataset_file=file_name, dem_bytes=size, sha256=sha), **(sidecar_changes or {})}
+    dp.sidecar_path(dem).write_text(json.dumps(side), encoding="utf-8")
     return dem
 
 
 def _ledger() -> list[dict]:
     return [json.loads(x) for x in dp.LEDGER.read_text(encoding="utf-8").splitlines()] if dp.LEDGER.exists() else []
+
+
+def _until(p, done, timeout=600.0):
+    deadline = time.time() + timeout
+    while not done():
+        assert time.time() < deadline, "the pipeline never got there"
+        p.step()
+        time.sleep(0.2)
 
 
 def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatch):
@@ -64,20 +89,12 @@ def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatc
     if not FIXTURE.exists():
         pytest.skip(f"PRIVATE FIXTURE MISSING: {FIXTURE}; publishing a loose demo is not being checked")
     inbox = _isolate(tmp_path, monkeypatch)
-    dem = inbox / "123" / "team-a-vs-team-b-m1-cache.dem"
-    dem.parent.mkdir()
-    shutil.copyfile(FIXTURE, dem)
-    dp.sidecar_path(dem).write_text(json.dumps(dict(source="opencs2", hltv_match_id="123", hltv_map_index=1,
-                                                    map_name="de_cache", match_date="2026-04-01T12:00:00")))
+    dem = _loose(inbox, "123", 1, "de_cache", "team-a-vs-team-b-m1-cache.dem", FIXTURE)
     monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "data" / "run")
     dp.freeze_code()
     p = dp.Pipeline()
     p.available_gb = lambda: 20.0
-    deadline = time.time() + 600
-    while "opencs2-123-m1" not in p.ledger:
-        assert time.time() < deadline, "the loose demo was never finished"
-        p.step()
-        time.sleep(0.5)
+    _until(p, lambda: "opencs2-123-m1" in p.ledger)
     rec = p.ledger["opencs2-123-m1"]
     assert rec["status"] == "done", rec
     assert (rec["source"], rec["hltv_match_id"], rec["hltv_map_index"]) == ("opencs2", "123", 1)
@@ -92,7 +109,9 @@ def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatc
 def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
     # Without its HLTV ids a map cannot be joined to its scoreboard; it must not be parsed as an anonymous map.
     inbox = _isolate(tmp_path, monkeypatch)
-    dem = _loose(inbox, "456", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64), None)
+    dem = inbox / "456" / "team-a-vs-team-b-m1-nuke.dem"
+    dem.parent.mkdir()
+    dem.write_bytes(dp.DEM_MAGIC + bytes(64))
     p = dp.Pipeline()
     p.scan(0.0)
     p.scan(0.0)  # skipped from then on, not refused again
@@ -101,20 +120,49 @@ def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
         [("inbox:team-a-vs-team-b-m1-nuke.dem", "failed", "refused: no sidecar team-a-vs-team-b-m1-nuke.meta.json")]
 
 
+@pytest.mark.parametrize("sidecar, meta, reason", [
+    (dict(hltv_match_id="999"), None, "the sidecar says ('999', 1, 'de_nuke', "),  # ids of another match
+    (None, dict(map_index=2), "the dataset ('77', 2, 'de_nuke', "),  # the dataset puts the file at map 2
+    (dict(dataset_file="demos/shard-x/77/other.dem"), None, "the dataset has no such file"),
+])
+def test_a_sidecar_that_disagrees_with_the_dataset_is_refused(tmp_path, monkeypatch, sidecar, meta, reason):
+    # Review of PR 67: ids were only syntax-checked, so a sidecar with another map's ids would publish this demo
+    # under them. The dataset's row for the sidecar's file must say the same ids, map and size.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "77", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64), sidecar, meta)
+    p = dp.Pipeline()
+    p.scan(0.0)
+    assert p.archives == {} and dem.exists()
+    assert reason in _ledger()[0]["reason"]
+
+
+def test_a_loose_demo_whose_sha256_differs_from_its_sidecar_is_refused(tmp_path, monkeypatch):
+    # Review of PR 67: the sidecar must be bound to its file; a different demo under a right sidecar would publish
+    # under ids that are not its own.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "88", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64),
+                 dict(sha256="0" * 64))
+    p = dp.Pipeline()
+    p.scan(0.0)
+    deadline = time.time() + 30
+    while p.archives:
+        assert time.time() < deadline, "the hash never came back"
+        p.poll_hashes()
+        time.sleep(0.01)
+    assert not p.jobs and dem.exists()
+    assert f"its SHA-256 is {hashlib.sha256(dem.read_bytes()).hexdigest()}, its sidecar says {'0' * 64}" in \
+        _ledger()[0]["reason"]
+
+
 def test_a_loose_demo_whose_sidecar_names_another_map_fails(tmp_path, monkeypatch):
     # Published under the sidecar's ids, a Cache demo labelled as a Dust2 map would be joined to the wrong HLTV map,
     # or block the right demo of those ids.
     if not FIXTURE.exists():
         pytest.skip(f"PRIVATE FIXTURE MISSING: {FIXTURE}; the map check of a loose demo is not being checked")
     inbox = _isolate(tmp_path, monkeypatch)
-    dem = inbox / "789" / "team-a-vs-team-b-m1-dust2.dem"
-    dem.parent.mkdir()
-    shutil.copyfile(FIXTURE, dem)
-    dp.sidecar_path(dem).write_text(json.dumps(dict(source="opencs2", hltv_match_id="789", hltv_map_index=1,
-                                                    map_name="de_dust2")))
+    dem = _loose(inbox, "789", 1, "de_dust2", "team-a-vs-team-b-m1-dust2.dem", FIXTURE)
     p = dp.Pipeline()
-    p.scan(0.0)
-    p.start_extractions()
+    _until(p, lambda: "opencs2-789-m1" in p.ledger, timeout=60)
     rec = p.ledger["opencs2-789-m1"]
     assert rec["status"] == "failed" and "names de_dust2, the demo's header de_cache" in rec["reason"]
     assert not p.jobs and not dem.exists()
@@ -122,22 +170,85 @@ def test_a_loose_demo_whose_sidecar_names_another_map_fails(tmp_path, monkeypatc
     assert (kept / dem.name).exists() and dp.sidecar_path(kept / dem.name).exists()  # kept for a retry, sidecar too
 
 
-class _Server:
-    """Serves one demo with Range support; the first ranged request pauses after its first block until released."""
+def test_the_inbox_must_be_a_folder_made_for_it(tmp_path, monkeypatch):
+    # Review of PR 67: the pipeline deletes the demos in the inbox, and any folder was accepted, so CS2_DEMO_INBOX set
+    # to a drive root or the user profile could delete unrelated .dem files.
+    data, downloads = tmp_path / "data", tmp_path / "downloads"
+    data.mkdir()
+    downloads.mkdir()
+    claim = lambda inbox: dp.claim_inbox(inbox, data, downloads)
+    assert "drive root" in claim(Path(tmp_path.anchor))
+    assert "the user profile" in claim(Path.home())
+    assert "the data folder" in claim(data / "inbox") and "the data folder" in claim(tmp_path)
+    assert "the downloads folder" in claim(downloads / "inbox")
+    used = tmp_path / "used"
+    used.mkdir()
+    (used / "match.dem").write_bytes(b"x")
+    assert "holds files but no .cs2-stats-inbox" in claim(used) and not (used / dp.INBOX_MARKER).exists()
+    new = tmp_path / "new" / "inbox"
+    assert claim(new) is None and (new / dp.INBOX_MARKER).is_file()  # a missing folder is made and claimed
+    (new / "123").mkdir()
+    assert claim(new) is None  # claimed already, whatever it holds now
 
-    def __init__(self, data: bytes):
-        self.data, self.ranges, self.paused, self.release = data, [], threading.Event(), threading.Event()
+
+def test_the_disk_budget_counts_the_inbox_and_its_partial_downloads(tmp_path, monkeypatch):
+    # Review of PR 67: half-written downloads in the inbox were in no budget, so extractions and parses planned
+    # against space the fetcher was filling.
+    inbox = _isolate(tmp_path, monkeypatch)
+    (inbox / "1").mkdir()
+    (inbox / "1" / "a-vs-b-m1-nuke.dem.part").write_bytes(b"x" * 5000)
+    assert dp.Pipeline().disk_usage()[0] >= 5000
+
+
+def test_the_fetcher_keeps_the_floor_after_what_downloads_in_progress_still_write(tmp_path, monkeypatch):
+    # Review of PR 67: each start checked only its own size against the free space, so two starts in a row could
+    # together pass the floor.
+    status = dict(capacity=True, want=4, pending=0, extracting=0)
+    monkeypatch.setattr(fo.shutil, "disk_usage", lambda p: shutil._ntuple_diskusage(0, 0, int(50e9)))
+    assert fo.room(status, 1, 2.0, tmp_path, 45.0, reserved_gb=0.0) is None
+    assert "still to come" in fo.room(status, 1, 2.0, tmp_path, 45.0, reserved_gb=4.0)
+
+
+class _HuggingFace:
+    """Serves one stored file the way Hugging Face does: resolve/<path> redirects (302) to the blob with the file's
+    SHA-256 and size in X-Linked-ETag and X-Linked-Size; the blob honours Range. bad: blob bodies to send wrong,
+    one per request, before right ones; fail: blob requests to answer 500 first. The first ranged blob request pauses
+    after its first 100 bytes until release is set."""
+
+    def __init__(self, data: bytes, bad: list[bytes] = (), fail: int = 0):
+        self.data, self.bad, self.fail = data, list(bad), fail
+        self.ranges, self.paused, self.release = [], threading.Event(), threading.Event()
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802 - http.server naming
+            def _redirect(self):
+                self.send_response(302)
+                self.send_header("Location", "/blob")
+                self.send_header("X-Linked-ETag", f'"{hashlib.sha256(outer.data).hexdigest()}"')
+                self.send_header("X-Linked-Size", str(len(outer.data)))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_HEAD(self):  # noqa: N802 - http.server naming
+                self._redirect()
+
+            def do_GET(self):  # noqa: N802
+                if self.path != "/blob":
+                    return self._redirect()
+                if outer.fail:
+                    outer.fail -= 1
+                    self.send_response(500)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                data = outer.bad.pop(0) if outer.bad else outer.data
                 rng = self.headers.get("Range")
                 outer.ranges.append(rng)
                 start = int(rng.removeprefix("bytes=").split("-")[0]) if rng else 0
-                body = outer.data[start:]
+                body = data[start:]
                 self.send_response(206 if rng else 200)
                 if rng:
-                    self.send_header("Content-Range", f"bytes {start}-{len(outer.data) - 1}/{len(outer.data)}")
+                    self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body[:100])
@@ -152,23 +263,25 @@ class _Server:
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/resolve/"
+
+
+DEMO = dp.DEM_MAGIC + bytes(range(256)) * 40
+MAP = fo.Map("2390001", 1, "de_nuke", "demos/shard-x/2390001/team-a-vs-team-b-m1-nuke.dem", len(DEMO), None)
 
 
 def test_a_resumed_download_completes_and_only_then_appears_in_the_inbox(tmp_path):
     # The pipeline takes any .dem in the inbox at once: a partial demo, or one whose sidecar is not written yet, would
     # be parsed broken or refused. A stopped download resumes from where its .part ends.
-    data = dp.DEM_MAGIC + bytes(range(256)) * 40
-    m = fo.Map("2390001", 1, "de_nuke", "demos/shard-x/2390001/team-a-vs-team-b-m1-nuke.dem", len(data), None)
     inbox = tmp_path / "inbox"
-    final = m.target(inbox)
+    final = MAP.target(inbox)
     final.parent.mkdir(parents=True)
     part = final.with_name(final.name + ".part")
-    part.write_bytes(data[:1000])  # what a stopped run left
-    server = _Server(data)
+    part.write_bytes(DEMO[:1000])  # what a stopped run left
+    server = _HuggingFace(DEMO)
     try:
         done = []
-        t = threading.Thread(target=lambda: done.append(fo.download(m, server.url + m.file_name, inbox,
+        t = threading.Thread(target=lambda: done.append(fo.download(MAP, server.url + MAP.file_name, inbox,
                                                                        threading.Event())))
         t.start()
         assert server.paused.wait(10), "the download never asked the server"
@@ -179,9 +292,47 @@ def test_a_resumed_download_completes_and_only_then_appears_in_the_inbox(tmp_pat
         server.release.set()
         server.httpd.shutdown()
     assert done == [True] and server.ranges == ["bytes=1000-"]
-    assert final.read_bytes() == data and not part.exists()
+    assert final.read_bytes() == DEMO and not part.exists()
     assert dp.read_sidecar(final) == dict(source="opencs2", hltv_match_id="2390001", hltv_map_index=1,
-                                          map_name="de_nuke", dataset_file=m.file_name, match_date=None)
+                                          map_name="de_nuke", dataset_file=MAP.file_name, dem_bytes=len(DEMO),
+                                          sha256=hashlib.sha256(DEMO).hexdigest(), match_date=None)
+
+
+def test_a_partial_download_that_does_not_hash_right_is_fetched_again_then_given_up(tmp_path):
+    # Review of PR 67: resume checked only where the range began, so a .part with wrong bytes (another file under the
+    # same name, a broken write) became a demo. The whole file must hash to the SHA-256 Hugging Face names.
+    inbox = tmp_path / "inbox"
+    final = MAP.target(inbox)
+    final.parent.mkdir(parents=True)
+    final.with_name(final.name + ".part").write_bytes(b"wrong" * 200)  # what a broken run left
+    server = _HuggingFace(DEMO)
+    server.release.set()
+    try:
+        assert fo.download(MAP, server.url + MAP.file_name, inbox, threading.Event())
+        assert server.ranges == ["bytes=1000-", None] and final.read_bytes() == DEMO
+        final.unlink()
+        dp.sidecar_path(final).unlink()
+        server.bad = [DEMO[:-1] + b"!", DEMO[:-1] + b"?"]  # the same size, other bytes, twice
+        with pytest.raises(ValueError, match="downloaded twice, and the SHA-256 is"):
+            fo.download(MAP, server.url + MAP.file_name, inbox, threading.Event())
+    finally:
+        server.httpd.shutdown()
+    assert not final.exists() and not dp.sidecar_path(final).exists()
+
+
+def test_a_failed_download_is_tried_again_after_a_growing_wait(tmp_path, monkeypatch):
+    # A transient server error gave the map up for the run; retrying at once would hammer a struggling server.
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    server = _HuggingFace(DEMO, fail=2)
+    server.release.set()
+    monkeypatch.setattr(fo, "pipeline_status", lambda url: dict(capacity=True, want=4, pending=0, extracting=0))
+    try:
+        results = fo.run([MAP], inbox, "unused", 1, 0.0, threading.Event(), base_url=server.url, wait_s=0.01,
+                         retry_s=0.05)
+    finally:
+        server.httpd.shutdown()
+    assert results == {"opencs2-2390001-m1": "done"} and MAP.target(inbox).read_bytes() == DEMO
 
 
 def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_path):
