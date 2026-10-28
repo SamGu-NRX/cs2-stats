@@ -102,7 +102,8 @@ for await (const { dir, t } of proMaps()) {
   }
 }
 // no joined map (a wrong CS2_DEMO_JOINS, an empty demos folder) must not replace the last dump with nothing
-await finishPartials(files, maps, `the rating dump (${joins.size} accepted joins, none with a complete tables folder)`);
+await finishPartials(files, path.join(OUT, "rating-rounds.private.jsonl"),
+  `the rating dump (${maps} of ${joins.size} accepted joins read, no player-round written)`);
 const missing = [...joins.keys()].filter((k) => !found.has(k));
 if (missing.length) console.error(`${missing.length} accepted joins have no complete tables folder now: ${missing.slice(0, 5).join(", ")}`);
 console.log(`joined ${maps} maps, ${n} player-rounds -> ${OUT}`);
