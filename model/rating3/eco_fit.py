@@ -4,44 +4,18 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import json
-import re
 from pathlib import Path
 import sys
 
 import numpy as np
 from scipy.optimize import least_squares
-import pyarrow.parquet as pq
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from demo_paths import load_demo_tables
-from join_demos import joined_players
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
 
 GROUPS = ("sniper", "rifle1", "rifle2", "smg", "pistolPlus", "pistol")
 INDEX = {group: index for index, group in enumerate(GROUPS)}
-
-
-def norm(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value).lower())
-
-
-def weapon_group(weapon: str | None) -> str | None:
-    value = norm(weapon)
-    if any(item in value for item in ("awp", "g3sg1", "scar20")):
-        return "sniper"
-    if any(item in value for item in ("ak47", "m4a1", "aug", "sg556")):
-        return "rifle1"
-    if any(item in value for item in ("galilar", "famas", "ssg08")):
-        return "rifle2"
-    if any(item in value for item in ("mac10", "mp9", "mp7", "mp5sd", "ump45", "p90", "bizon", "nova", "xm1014", "sawedoff", "mag7", "m249", "negev")):
-        return "smg"
-    if any(item in value for item in ("deagle", "revolver", "p250", "fiveseven", "tec9", "cz75", "dualberetta")):
-        return "pistolPlus"
-    if any(item in value for item in ("glock", "hkp2000", "usps", "usp")):
-        return "pistol"
-    return None
 
 
 def sigmoid(value: float) -> float:
@@ -57,131 +31,81 @@ def empty_provenance() -> dict:
     }
 
 
+DUMP = ("rating-kills.private.jsonl", "rating-hits.private.jsonl", "rating-winprob.private.jsonl")
+
+
+def jsonl(path: Path):
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                yield json.loads(line)
+
+
 def collect(root: Path, joins: list[dict], provenance: dict | None = None):
-    rows = []
-    duels = []
+    """(rows, duels, provenance) for the duel fit, from the engine's rating dump (app: pnpm rating-dump, in
+    <root>/model-rating3) for the joined maps given. Each kill and hit there carries the economy groups derive
+    valued it with (aGroup, vGroup: the best primary held at the kill, else the equipment value, else the
+    freeze-end group; a hit uses the freeze-end groups), so the fit trains on the groups the app computes with,
+    never a second definition: working out its own groups (active weapon, round-start loadout), the fit gave a duel
+    block that scored worse in the app (rating MAE 0.0467 against 0.0429 on 1,610 joined maps). A kill or hit
+    whose groups the app did not know is left out, as the app leaves it. Players are keyed by HLTV player id, as
+    the dump keys them; targets are their HLTV eco-adjusted cells. A joined map missing from the dump is skipped,
+    named in provenance."""
     provenance = provenance if provenance is not None else empty_provenance()
-    for join in joins:
-        try:
-            layout, tables = load_demo_tables(
-                root,
-                join["demo"],
-                ("match", "player_rounds", "kills", "damages"),
-                pq.read_table,
-            )
-            hltv = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
-            metadata = tables["match"].to_pylist()[0]
-            economy = tables["player_rounds"].to_pylist()
-            kills = tables["kills"].to_pylist()
-            damages = tables["damages"].to_pylist()
-        except FileNotFoundError as error:
+    folder = root / "model-rating3"
+    missing = [n for n in DUMP if not (folder / n).exists()]
+    if missing:
+        raise FileNotFoundError(f"the rating dump is missing {missing} in {folder}: run pnpm rating-dump in app/ first")
+    wanted = {j["hltv"]: j for j in joins}
+    rounds: dict[str, int] = defaultdict(int)
+    for r in jsonl(folder / "rating-winprob.private.jsonl"):
+        if r["hltv"] in wanted:
+            rounds[r["hltv"]] += 1
+    match_of = {}
+    for file in wanted:
+        if file not in rounds:
             provenance["skipped_joins"] += 1
-            provenance["skipped"].append({"demo": join["demo"], "reason": str(error)})
+            provenance["skipped"].append({"demo": wanted[file]["demo"], "reason": "not in the rating dump"})
             continue
-
         provenance["consumed_joins"] += 1
-        provenance["layouts"][layout.format] += 1
-        # {steamid: HLTV name} as the join paired them; an in-game name often differs from HLTV's.
-        names = {int(sid): name for sid, name in joined_players(join).items()}
-        starts = {
-            (row["round"], row["steamid"]): weapon_group(row.get("best_primary") or row.get("best_secondary"))
-            or ("pistolPlus" if row.get("armor") else "pistol")
-            for row in economy
-        }
-        map_rows = {
-            norm(row["player"]): row
-            for board in hltv["scoreboards"]
-            if "totalstats" in board["cls"].split()
-            for row in board["rows"]
-        }
-        rounds = max(row["round"] for row in economy)
-        match_id = str(hltv.get("match", {}).get("matchId", metadata.get("match_id", join["hltv"])))
-        for kill in kills:
-            if (
-                kill["is_suicide"]
-                or kill["is_teamkill"]
-                or not kill["attacker_steamid"]
-                or kill["attacker_steamid"] not in names
-                or kill["victim_steamid"] not in names
-            ):
+        provenance["layouts"]["schema_v1"] += 1
+        match_of[file] = str(json.loads((root / "hltv" / file).read_text(encoding="utf-8")).get("match", {}).get("matchId", file))
+    rows, duels = [], []
+    known = lambda r: r["aGroup"] in INDEX and r["vGroup"] in INDEX
+    for k in jsonl(folder / "rating-kills.private.jsonl"):
+        if k["hltv"] not in match_of or not k["enemy"] or k["killer"] is None or k["victim"] is None or not known(k):
+            continue
+        base = {"a": k["aGroup"], "v": k["vGroup"], "side": k["killerSide"], "map": k["hltv"], "match": match_of[k["hltv"]]}
+        duels.append(base)
+        rows.append({**base, "player": k["killer"], "victim": k["victim"], "dmg": None, "kill": True})
+    for h in jsonl(folder / "rating-hits.private.jsonl"):
+        if h["hltv"] not in match_of or h["attacker"] is None or h["victim"] is None or not h["aSide"] or not known(h):
+            continue
+        rows.append({"a": h["aGroup"], "v": h["vGroup"], "side": h["aSide"], "map": h["hltv"], "match": match_of[h["hltv"]],
+                     "player": h["attacker"], "victim": h["victim"], "dmg": float(h["dmg"]), "kill": False})
+    for file, match_id in match_of.items():
+        page = json.loads((root / "hltv" / file).read_text(encoding="utf-8"))
+        paired = {p["pid"] for p in wanted[file]["players"].values()}
+        for board in page["scoreboards"]:
+            if "totalstats" not in board["cls"].split():
                 continue
-            attacker_group = weapon_group(kill.get("a_active_weapon")) or starts.get((kill["round"], kill["attacker_steamid"]))
-            victim_group = weapon_group(kill.get("v_active_weapon")) or starts.get((kill["round"], kill["victim_steamid"]))
-            if attacker_group and victim_group:
-                duels.append({
-                    "a": attacker_group,
-                    "v": victim_group,
-                    "side": kill["a_side"],
-                    "map": join["hltv"],
-                    "match": match_id,
-                })
-        for damage in damages:
-            if (
-                damage["is_self"]
-                or damage["is_team_damage"]
-                or damage.get("attacker_steamid") not in names
-                or damage.get("victim_steamid") not in names
-            ):
-                continue
-            attacker_group = weapon_group(damage.get("weapon")) or starts.get((damage["round"], damage["attacker_steamid"]))
-            victim_group = starts.get((damage["round"], damage["victim_steamid"]))
-            if attacker_group and victim_group:
+            for row in board["rows"]:
+                if str(row["pid"]) not in paired:
+                    continue
+
+                def cell(prefix: str, eco: bool = False) -> str:
+                    for classes, value in row["cells"]:
+                        if prefix in classes and ("eco-adjusted-data" in classes) == eco:
+                            return value
+                    raise KeyError(f"{file}: missing {prefix} eco={eco}")
+
                 rows.append({
-                    "map": join["hltv"],
-                    "match": match_id,
-                    "player": names[damage["attacker_steamid"]],
-                    "victim": names[damage["victim_steamid"]],
-                    "a": attacker_group,
-                    "v": victim_group,
-                    "side": damage["a_side"],
-                    "dmg": float(damage["dmg_health_capped"]),
-                    "kill": False,
+                    "target": "player", "map": file, "match": match_id, "player": str(row["pid"]),
+                    "ek": float(cell("st-kills", True).split()[0].split(":")[0]),
+                    "ed": float(cell("st-deaths", True).split()[0].split(":")[0]),
+                    "eadr": float(cell("st-adr", True).replace("%", "").replace("+", "")),
+                    "rounds": rounds[file],
                 })
-        for kill in kills:
-            if (
-                kill["is_suicide"]
-                or kill["is_teamkill"]
-                or kill.get("attacker_steamid") not in names
-                or kill.get("victim_steamid") not in names
-            ):
-                continue
-            attacker_group = weapon_group(kill.get("a_active_weapon")) or starts.get((kill["round"], kill["attacker_steamid"]))
-            victim_group = weapon_group(kill.get("v_active_weapon")) or starts.get((kill["round"], kill["victim_steamid"]))
-            if attacker_group and victim_group:
-                rows.append({
-                    "map": join["hltv"],
-                    "match": match_id,
-                    "player": names[kill["attacker_steamid"]],
-                    "victim": names[kill["victim_steamid"]],
-                    "a": attacker_group,
-                    "v": victim_group,
-                    "side": kill["a_side"],
-                    "dmg": None,
-                    "kill": True,
-                })
-        for name, row in map_rows.items():
-            def cell(prefix: str, eco: bool = False) -> str:
-                for classes, value in row["cells"]:
-                    if prefix in classes and ("eco-adjusted-data" in classes) == eco:
-                        return value
-                raise KeyError(f"{join['hltv']}: missing {prefix} eco={eco}")
-
-            def number(value: str) -> float:
-                return float(value.replace("%", "").replace("+", ""))
-
-            def kd(value: str) -> float:
-                return float(value.split()[0].split(":")[0])
-
-            rows.append({
-                "target": "player",
-                "map": join["hltv"],
-                "match": match_id,
-                "player": name,
-                "ek": kd(cell("st-kills", True)),
-                "ed": kd(cell("st-deaths", True)),
-                "eadr": number(cell("st-adr", True)),
-                "rounds": rounds,
-            })
     return rows, duels, provenance
 
 

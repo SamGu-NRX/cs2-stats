@@ -84,9 +84,11 @@ class FitsUseTheJoinsPairing(unittest.TestCase):
             events, _ = demo_round_fit.build_duel_events(root, [JOIN])
         self.assertEqual([(e["attacker"], e["victim"], e["attacker_group"]) for e in events], [("ana", "bob", "rifle1")])
 
-    def test_eco_fit_rows_include_a_renamed_players_kills_and_damage(self):
-        # Review of PR 70: eco_fit, whose duel model fit_params.py publishes, matched players by in-game name too, so a
-        # renamed player's kills and damage were left out of the rows its fit compares with HLTV's eco-adjusted cells.
+    def test_eco_fit_trains_on_the_groups_the_app_valued_each_duel_with(self):
+        # Review of PR 80: eco_fit worked out its own weapon groups (active weapon, round-start loadout), unlike the
+        # app (best primary held at the kill, else equipment value), and the duel block it fitted made the app's rating
+        # worse. It now reads the groups the rating dump wrote, keyed by HLTV player id (the join's pairing), and
+        # leaves out a duel whose groups the app did not know.
         try:
             import eco_fit
         except ImportError as error:
@@ -94,10 +96,23 @@ class FitsUseTheJoinsPairing(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _map(root)
-            rows, duels, _ = eco_fit.collect(root, [JOIN])
-        self.assertEqual(sorted((r["player"], r["victim"], r["kill"]) for r in rows if "victim" in r),
-                         [("ana", "bob", False), ("ana", "bob", True)])
-        self.assertEqual(len(duels), 1)
+            dump = root / "model-rating3"
+            dump.mkdir()
+            write = lambda name, rows: (dump / name).write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+            kill = lambda **k: {"hltv": "map_1.json", "enemy": True, "killer": "1", "victim": "2", "killerSide": "T",
+                                "aGroup": "sniper", "vGroup": "rifle1", **k}
+            write("rating-kills.private.jsonl", [kill(), kill(aGroup=None), kill(enemy=False), kill(hltv="map_9.json")])
+            hit = lambda **k: {"hltv": "map_1.json", "attacker": "1", "victim": "2", "aSide": "T", "dmg": 100,
+                               "aGroup": "sniper", "vGroup": "rifle1", **k}
+            write("rating-hits.private.jsonl", [hit(), hit(vGroup=None, dmg=40)])
+            write("rating-winprob.private.jsonl", [{"hltv": "map_1.json", "ri": 0}, {"hltv": "map_9.json", "ri": 0}])
+            rows, duels, provenance = eco_fit.collect(root, [JOIN])
+        self.assertEqual([(d["a"], d["v"], d["side"]) for d in duels], [("sniper", "rifle1", "T")])
+        self.assertEqual(sorted((r["player"], r["victim"], r["a"], r["v"], r["kill"]) for r in rows if "victim" in r),
+                         [("1", "2", "sniper", "rifle1", False), ("1", "2", "sniper", "rifle1", True)])
+        self.assertEqual(sorted((r["player"], r["ek"], r["eadr"], r["rounds"]) for r in rows if r.get("target")),
+                         [("1", 1.0, 100.0, 1), ("2", 1.0, 100.0, 1)])
+        self.assertEqual(provenance["consumed_joins"], 1)
 
     def test_postplant_rows_place_a_renamed_players_kill(self):
         # Review of PR 70: the post-plant analysis found an HLTV kill in the demo by in-game name, so a renamed
