@@ -19,6 +19,10 @@ class HltvPages(unittest.TestCase):
                                ("map_4.json", "12"), ("demo_feed.jsonl", None)):
                 (root / name).write_text(json.dumps({"v": 3, "mapstatsid": msid}), encoding="utf-8")
             self.assertEqual([p.name for p in hltv_pages(root)], ["map_1.json", "map_4.json", "ocs_map_3.json"])
+            # Review of PR 77 (Codex): a legacy page with no mapstatsid aborted the whole refit, though every caller
+            # skips pages that are not v3. It is skipped first.
+            (root / "map_6.json").write_text(json.dumps({"v": 2}), encoding="utf-8")
+            self.assertEqual([p.name for p in hltv_pages(root)], ["map_1.json", "map_4.json", "ocs_map_3.json"])
             (root / "ocs_map_5.json").write_text(json.dumps({"v": 3}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "ocs_map_5.json: no mapstatsid"):
                 hltv_pages(root)
