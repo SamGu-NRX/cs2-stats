@@ -13,7 +13,9 @@ Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stop
 Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
 CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest),
 CS2_PIPELINE_DOWNLOAD_COPIES (off, dry-run or delete; default dry-run): what to do with the copy of each finished
-archive that the browser also saves to Windows Downloads (download_copies.py).
+archive that the browser also saves to Windows Downloads (download_copies.py), CS2_DEMO_INBOX (optional): a folder of
+loose .dem files, each with a sidecar naming its source and HLTV ids (read_sidecar; fetch_opencs2.py fills it),
+CS2_PIPELINE_PORT (the status port, default 8766).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import os
 import queue
 import re
 import shutil
+import stat
 import socket
 import subprocess
 import sys
@@ -52,6 +55,11 @@ from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, rep
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
 DOWNLOADS: Path | None = Path(os.environ["CS2_DEMO_DOWNLOADS"]) if os.environ.get("CS2_DEMO_DOWNLOADS") else None
+# A second input, off unless CS2_DEMO_INBOX is set: loose .dem files, in the folder or one subfolder down, each with a
+# sidecar <name>.meta.json (read_sidecar). They skip extraction and go straight to parsing. The folder must be one made
+# for this (claim_inbox); main() runs without it otherwise.
+INBOX: Path | None = Path(os.environ["CS2_DEMO_INBOX"]) if os.environ.get("CS2_DEMO_INBOX") else None
+INBOX_MARKER = ".cs2-stats-inbox"
 DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-stats-data")  # data; holds no code
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
@@ -63,6 +71,8 @@ LOG_DIR = DATA_ROOT / "logs"
 # awpy-data release 2000935 was built from CS2 1.41.9.2 (Steam build 26144732), the build installed
 # locally; extract.py withholds mesh visibility for any map whose mesh disagrees with the demo.
 MAPDATA = DATA_ROOT / "mapdata" / "2000935"
+# The OpenCS2 dataset's metadata parquet: a loose demo's sidecar must agree with its row (opencs2_row).
+OPENCS2_META = Path(os.environ.get("CS2_OPENCS2_META") or DATA_ROOT / "external" / "opencs2-meta" / "data")
 MANIFEST = DEMOS_DIR / "manifest.jsonl"
 LEDGER = DEMOS_DIR / "archives.jsonl"  # one line per finished archive, done or failed
 DROPPED = DEMOS_DIR / "failed_dropped.jsonl"  # failed archives deleted because failed/ was full
@@ -151,7 +161,7 @@ WORKER_RSS_LIMIT_GB = 3.5
 WORKER_TIMEOUT_S = 45 * 60
 TRUNCATION_GRACE_S = 300  # a RAR that 7z calls truncated is re-watched if modified this recently
 POLL_S = 2.0
-HOST, PORT = "127.0.0.1", 8766
+HOST, PORT = "127.0.0.1", int(os.environ.get("CS2_PIPELINE_PORT") or 8766)
 ALLOWED_ORIGIN = "https://www.hltv.org"
 
 IDLE = getattr(subprocess, "IDLE_PRIORITY_CLASS", 0)
@@ -252,6 +262,7 @@ class Archive:
     rar: Path
     id: str
     state: str = "pending"  # (hashing ->) pending -> extracting -> parsing -> (done | failed)
+    loose: dict | None = None  # a loose demo from the inbox (rar is the .dem): its sidecar, as read_sidecar returns it
     slug: str | None = None
     work: Path | None = None
     dems: list[Path] = field(default_factory=list)
@@ -340,6 +351,135 @@ class Job:
     peak_rss_gb: float = 0.0
     output_gb: float = 0.0  # space held for the tables it writes, fixed when it starts and released when it ends
     killed: str | None = None
+
+
+LOOSE_SOURCES = ("opencs2",)  # where a loose demo may come from (its sidecar's source)
+
+
+def sidecar_path(dem: Path) -> Path:
+    return dem.with_name(dem.stem + ".meta.json")
+
+
+def claim_inbox(inbox: Path, data_root: Path, downloads: Path | None) -> str | None:
+    """Why inbox may not be the loose-demo inbox, or None once it may. The pipeline deletes demos there, so it must be
+    a folder made for that: one holding INBOX_MARKER, which this writes only into a missing or empty folder
+    (fetch_opencs2.py does the same). A drive root, the user profile, the Desktop, Documents and Downloads folders,
+    and anything inside or containing the data folder or the watched downloads folder are refused outright."""
+    norm = lambda p: os.path.normcase(os.path.realpath(p))
+
+    def within(child: str, parent: str) -> bool:
+        try:
+            return os.path.commonpath([child, parent]) == parent
+        except ValueError:  # different drives
+            return False
+
+    real = norm(inbox)
+    if os.path.dirname(real) == real:
+        return "it is a drive root"
+    try:
+        known = [("the user profile", Path.home()), *(("a known folder", k) for k in download_copies.known_folders())]
+    except (OSError, download_copies.Refused) as e:
+        return f"the Known Folders cannot be read to rule them out: {e}"
+    for what, folder in known:
+        if within(norm(folder), real):
+            return f"it is or contains {what} ({folder})"
+    for what, other in (("the data folder", data_root), ("the downloads folder", downloads)):
+        if other is not None and (within(real, norm(other)) or within(norm(other), real)):
+            return f"it is inside or contains {what} ({other})"
+    marker = Path(real) / INBOX_MARKER
+    if marker.is_file():
+        return None
+    if Path(real).exists() and any(Path(real).iterdir()):
+        return f"it holds files but no {INBOX_MARKER}; only an empty folder is claimed"
+    Path(real).mkdir(parents=True, exist_ok=True)
+    marker.write_text("The CS2 stats pipeline takes and deletes the .dem files in this folder.\n", encoding="utf-8")
+    return None
+
+
+_opencs2: tuple[dict[str, dict], set[str]] | None = None
+
+
+def load_opencs2() -> tuple[dict[str, dict], set[str]]:
+    """({dataset file: its OpenCS2 metadata row}, the files with conflicting rows), read once. Raises whatever reading
+    the metadata raises (scan_loose then takes no loose demo for the rest of the run)."""
+    global _opencs2
+    if _opencs2 is None:
+        import polars as pl
+        files = sorted(OPENCS2_META.glob("*.parquet"))
+        if not files:
+            raise FileNotFoundError(f"no OpenCS2 metadata parquet in {OPENCS2_META}")
+        df = pl.read_parquet(files, columns=["file_name", "match_id", "map_index", "map_name", "demo_bytes"])
+        rows, facts, conflicts = {}, {}, set()
+        for r in df.iter_rows(named=True):
+            fact = (str(r["match_id"]), r["map_index"], str(r["map_name"]).lower(), r["demo_bytes"])
+            if facts.setdefault(r["file_name"], fact) != fact:
+                conflicts.add(r["file_name"])
+            rows.setdefault(r["file_name"], r)
+        _opencs2 = (rows, conflicts)
+    return _opencs2
+
+
+def opencs2_row(dataset_file: str) -> dict | None:
+    """The OpenCS2 metadata row of a dataset file (match_id, map_index, map_name, demo_bytes), or None. A file listed
+    twice with different facts raises ValueError: which row is right is unknown, so its demo is refused. Identical
+    duplicates are one row."""
+    rows, conflicts = load_opencs2()
+    if dataset_file in conflicts:
+        raise ValueError(f"the dataset lists {dataset_file} more than once with different ids, map or size")
+    return rows.get(dataset_file)
+
+
+def plain_entries(folder: Path):
+    """(path, lstat) of each entry of folder that is no link or junction: the inbox never follows one out of itself."""
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    try:
+        entries = list(folder.iterdir())
+    except OSError:  # gone or unreadable since it was listed; the next scan sees it again
+        return
+    for p in entries:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & reparse:
+            log.warning("skipping %s in the inbox: a link or junction", p)
+            continue
+        yield p, st
+
+
+def read_sidecar(dem: Path) -> dict:
+    """The sidecar of a loose demo: <name>.meta.json beside <name>.dem, a JSON object with source (one of
+    LOOSE_SOURCES), hltv_match_id (digits), hltv_map_index (1 or more), map_name (de_...), dataset_file (the file's
+    path in the dataset), dem_bytes and sha256 (of the demo), and optionally match_date. Raises ValueError saying what
+    is missing or wrong; such a demo is refused. The ids are checked against the dataset (opencs2_row) and the demo
+    against the size and hash when it is taken in."""
+    side = sidecar_path(dem)
+    try:
+        meta = json.loads(side.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"no sidecar {side.name}") from None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"sidecar {side.name} cannot be read: {e}") from None
+    if not isinstance(meta, dict):
+        raise ValueError(f"sidecar {side.name} is not a JSON object")
+    index, size = meta.get("hltv_map_index"), meta.get("dem_bytes")
+    whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
+    bad = [k for k, ok in (("source", meta.get("source") in LOOSE_SOURCES),
+                           ("hltv_match_id", str(meta.get("hltv_match_id", "")).isdigit()),
+                           ("hltv_map_index", whole(index) and index >= 1),
+                           ("map_name", str(meta.get("map_name", "")).lower().startswith("de_")),
+                           ("dataset_file", isinstance(meta.get("dataset_file"), str) and bool(meta.get("dataset_file"))),
+                           ("dem_bytes", whole(size) and size > 0),
+                           ("sha256", re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", ""))) is not None)) if not ok]
+    if bad:
+        raise ValueError(f"sidecar {side.name}: missing or invalid {', '.join(bad)}")
+    keep = ("source", "hltv_match_id", "hltv_map_index", "map_name", "dataset_file", "dem_bytes", "sha256", "match_date")
+    return {k: (str(meta[k]) if k == "hltv_match_id" else meta[k]) for k in keep if k in meta}
+
+
+def loose_id(meta: dict) -> str:
+    """A loose demo's archive id, one per HLTV map: <source>-<match id>-m<map index>."""
+    return f"{meta['source']}-{meta['hltv_match_id']}-m{meta['hltv_map_index']}"
 
 
 def slug_for(dem_names: list[str], archive_id: str, legacy: bool = False) -> str:
@@ -658,12 +798,13 @@ def bind_children_to_this_process() -> None:
 
 
 def _deletable(path: Path) -> Path:
-    """The resolved path, if it lies strictly inside DATA_ROOT, or inside DOWNLOADS (a finished RAR)."""
+    """The resolved path, if it lies strictly inside DATA_ROOT, inside DOWNLOADS (a finished RAR) or inside INBOX (a
+    finished loose demo and its sidecar)."""
     r = Path(path).resolve()
-    for root in (DATA_ROOT.resolve(), *([DOWNLOADS.resolve()] if DOWNLOADS else [])):
+    for root in (DATA_ROOT.resolve(), *(d.resolve() for d in (DOWNLOADS, INBOX) if d)):
         if r != root and root in r.parents:
             return r
-    raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT} or {DOWNLOADS}")
+    raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT}, {DOWNLOADS} or {INBOX}")
 
 
 def safe_rmtree(path: Path, ignore_errors: bool = False) -> None:
@@ -674,13 +815,15 @@ def safe_unlink(path: Path, missing_ok: bool = False) -> None:
     _deletable(path).unlink(missing_ok=missing_ok)
 
 
-def remove_finished_rar(rar: Path) -> None:
-    """Delete a finished archive's RAR: from downloads, or a retried failure's whole failed/ folder, whose kept
-    demos and reports go with it."""
+def remove_finished_rar(rar: Path, loose: bool = False) -> None:
+    """Delete a finished archive's RAR (or loose demo, with its sidecar): from downloads or the inbox, or a retried
+    failure's whole failed/ folder, whose kept demos and reports go with it."""
     if rar.parent.parent == FAILED_DIR:
         safe_rmtree(rar.parent)
     else:
         safe_unlink(rar, missing_ok=True)
+        if loose:
+            safe_unlink(sidecar_path(rar), missing_ok=True)
 
 
 def append_jsonl(path: Path, obj: dict) -> None:
@@ -896,8 +1039,9 @@ def output_seed(rows: list[dict]) -> list[float]:
     return [float(r["output_bytes"]) / 1e9 for r in rows if r.get("ok") and r.get("output_bytes")][-TIMING_SAMPLES:]
 
 
-def read_ledger() -> dict[str, dict]:
-    return {rec["id"]: rec for rec in read_jsonl(LEDGER)}
+def read_ledger(path: Path | None = None) -> dict[str, dict]:
+    """{archive id: its latest record} from the ledger (LEDGER unless path is given)."""
+    return {rec["id"]: rec for rec in read_jsonl(path or LEDGER)}
 
 
 # ---------------------------------------------------------------------------
@@ -919,6 +1063,7 @@ class Pipeline:
         self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
         self.hasher = Hasher()
         self.hash_errors: dict[Path, int] = {}  # OSErrors hashing each archive in this run (HASH_ATTEMPTS)
+        self.inbox_off: str | None = None  # why loose demos are not taken in this run (the metadata cannot be read)
         rows = read_jsonl(MANIFEST)
         peaks, parse_s = manifest_seed(rows)
         self.output_gb: deque[float] = deque(output_seed(rows), maxlen=TIMING_SAMPLES)
@@ -971,8 +1116,16 @@ class Pipeline:
                             yield f
                 elif d.is_file() and is_candidate_name(d):
                     yield d
+        if INBOX is not None and not self.inbox_off and (INBOX / INBOX_MARKER).is_file():
+            demo = lambda p, st: stat.S_ISREG(st.st_mode) and p.suffix.lower() == ".dem" and not p.name.startswith(".")
+            for p, st in plain_entries(INBOX):
+                if stat.S_ISDIR(st.st_mode):
+                    yield from (f for f, fst in plain_entries(p) if demo(f, fst))
+                elif demo(p, st):
+                    yield p
         if self.retry_failed and FAILED_DIR.exists():
             yield from (f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file())
+            yield from (f for f in FAILED_DIR.glob("*/*.dem") if f.is_file() and sidecar_path(f).is_file())
 
     def scan(self, now: float) -> None:
         for gone in [p for p in self.tracker.tracked() if not p.exists()]:
@@ -980,6 +1133,9 @@ class Pipeline:
         busy = {a.rar for a in self.archives.values()}
         for f in self.candidates():
             if f in busy or f in self.ignored:
+                continue
+            if f.suffix.lower() == ".dem":
+                self.scan_loose(f)
                 continue
             in_failed = f.parent.parent == FAILED_DIR
             aid = f.parent.name if in_failed else f.name
@@ -1017,11 +1173,71 @@ class Pipeline:
             self.hasher.submit(f)
             log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
 
+    def refuse_loose(self, f: Path, reason: str) -> None:
+        """Refuse a loose demo: a ledger row says why, and the file stays where it is, skipped for the rest of the run.
+        The pipeline moves or deletes an inbox demo only once its sidecar is valid and bound (its ids match one dataset
+        row and its SHA-256 the demo's); every refusal, whatever the reason, leaves it alone."""
+        self.ignored.add(f)
+        log.error("refusing loose demo %s: %s", f, reason)
+        rec = dict(id=f"inbox:{f.name}", status="failed", reason=f"refused: {reason}", kept=str(f), retry=False,
+                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        append_jsonl(LEDGER, rec)
+        self.ledger[rec["id"]] = rec
+
+    def scan_loose(self, f: Path) -> None:
+        """Take in a loose demo from the inbox, or one kept in failed/ when retrying, with no extraction. It is refused
+        (refuse_loose) unless its sidecar is valid, agrees with the dataset's row for its file (ids, map and size) and
+        the demo has that size; then it is hashed (Hasher), and poll_hashes checks the SHA-256 against the sidecar's.
+        Nothing is published under ids that were not checked."""
+        if self.inbox_off:
+            return
+        in_failed = f.parent.parent == FAILED_DIR
+        try:
+            load_opencs2()
+        except BaseException as e:  # noqa: BLE001 - any failure to read it turns the inbox off once, not every loop
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            # BaseException too: a panic in polars' Rust reader arrives as pyo3's PanicException, a BaseException.
+            self.inbox_off = f"the OpenCS2 metadata in {OPENCS2_META} cannot be read: {type(e).__name__}: {e}"
+            log.error("taking no loose demos for the rest of this run: %s", self.inbox_off)
+            return
+        try:
+            meta = read_sidecar(f)
+            row = opencs2_row(meta["dataset_file"])
+        except (ValueError, OSError) as e:
+            self.refuse_loose(f, str(e))
+            return
+        size = f.stat().st_size
+        want = row and (str(row["match_id"]), row["map_index"], str(row["map_name"]).lower(), row["demo_bytes"])
+        have = (meta["hltv_match_id"], meta["hltv_map_index"], meta["map_name"].lower(), meta["dem_bytes"])
+        if want != have or size != meta["dem_bytes"]:
+            self.refuse_loose(f, f"the sidecar says {have} for {meta['dataset_file']}, the dataset "
+                                 f"{want or 'has no such file'}, and the demo has {size} bytes")
+            return
+        aid = loose_id(meta)
+        status = self.ledger.get(aid, {}).get("status")
+        if (status == "done" and aid not in self.reextract_ids()) or (status == "failed" and not in_failed):
+            self.ignored.add(f)
+            log.info("loose demo %s is %s already as %s; left alone", f, status, aid)
+            return
+        if in_failed:
+            if f in self.retried or not due_for_retry(f.parent, extract.EXTRACTOR_VERSION):
+                return
+            self.retried.add(f)
+        if aid in self.archives:
+            return  # another copy of this map is in hand
+        st = f.stat()
+        self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, loose=meta, state="hashing",
+                                     download_started=getattr(st, "st_birthtime", st.st_ctime))
+        self.hasher.submit(f)
+        log.info("found loose demo %s as %s (%.0f MB); hashing it", f, aid, st.st_size / 1e6)
+
     def poll_hashes(self) -> None:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
         record, when that record is of the same file. An OSError (the file held by a scan, or gone) drops the
         archive for a later scan to find again, up to HASH_ATTEMPTS times in a run, then fails it; any other error
-        fails it at once. A failed archive is kept for a retry."""
+        fails it at once. A failed archive is kept for a retry; a loose demo, not bound to its sidecar until its hash
+        is checked, is refused instead and left where it is."""
         for a in [a for a in self.archives.values() if a.state == "hashing"]:
             sha = self.hasher.take(a.rar)
             if sha is None:
@@ -1035,8 +1251,17 @@ class Pipeline:
                     self.retried.discard(a.rar)  # a retry from failed/ is picked up again too
                     continue
             if not isinstance(sha, str):
-                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}"
-                                     + (f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""))
+                err = f"{type(sha).__name__}: {sha}"
+                err += f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""
+                if a.loose is not None:  # not bound yet: refused, left where it is
+                    del self.archives[a.id]
+                    self.refuse_loose(a.rar, f"hashing it failed: {err}")
+                else:
+                    self.fail_archive(a, f"hashing the archive failed: {err}")
+                continue
+            if a.loose is not None and sha != a.loose["sha256"]:
+                del self.archives[a.id]
+                self.refuse_loose(a.rar, f"its SHA-256 is {sha}, its sidecar says {a.loose['sha256']}")
                 continue
             a.rar_sha256 = sha
             if a.rar.parent.parent == FAILED_DIR:
@@ -1054,6 +1279,9 @@ class Pipeline:
     def start_extractions(self) -> None:
         for a in sorted((a for a in self.archives.values() if a.state == "pending"), key=lambda a: a.rar.stat().st_mtime
                         if a.rar.exists() else 0):
+            if a.loose is not None:  # already a demo on disk: nothing to extract, so no extraction slot
+                self.start_loose(a)
+                continue
             if self.extracted_count() >= MAX_EXTRACTED:
                 return
             if not a.listing:
@@ -1099,6 +1327,58 @@ class Pipeline:
             a.state, a.t_extract = "extracting", time.time()
             log.info("extracting %s -> %s (%d dem)", a.id, a.work, len(a.listing))
 
+    def start_loose(self, a: Archive) -> None:
+        """Queue a loose demo's parse. Its header must name the map its sidecar does, or the HLTV ids it would be
+        published under belong to another map, and it is refused, left where it is."""
+        from demoparser2 import DemoParser
+        try:
+            header_map = DemoParser(str(a.rar)).parse_header().get("map_name")
+            why = None if str(header_map).lower() == a.loose["map_name"].lower() else \
+                f"the sidecar names {a.loose['map_name']}, the demo's header {header_map}"
+        except Exception as e:  # noqa: BLE001 - demoparser2 raises a bare Exception
+            why = f"cannot read the demo header: {type(e).__name__}: {e}"
+        if why:
+            del self.archives[a.id]
+            self.refuse_loose(a.rar, why)
+            return
+        a.listing = {a.rar.name: dict(size=a.rar_bytes, modified=None)}
+        if not a.archive_gb_counted:
+            self.archive_gb.append(a.rar_bytes / 1e9)
+            a.archive_gb_counted = True
+        a.slug = self.slug_of(a)
+        a.work = WORK_DIR / a.slug  # the parse's result file; the demo stays where it is
+        if a.work.exists():
+            safe_rmtree(a.work)
+        a.work.mkdir(parents=True)
+        a.dems = [a.rar]
+        a.state = "parsing"
+        self.queue_jobs(a)
+
+    def queue_jobs(self, a: Archive) -> None:
+        """A parse job per demo of a, each with its map folder. A retried failure parses only the demos that failed
+        under another extractor version; one that already failed under this one keeps that result."""
+        keys: set[str] = set()
+        failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
+        for dem in a.dems:
+            key = extract.map_key_for(dem, dem.stem)
+            part = stitch.split_key(key)
+            if part:
+                a.split[dem.name] = part
+            while key in keys:
+                key += "_dup"
+            keys.add(key)
+            jd = LOG_DIR / "jobs"
+            jd.mkdir(parents=True, exist_ok=True)
+            a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
+            if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
+                a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
+                log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
+                         extract.EXTRACTOR_VERSION)
+                continue
+            self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
+                                 result_path=a.work / f"{dem.stem}.result.json",
+                                 log_path=jd / f"{a.slug}-{key}.log"))
+
     def poll_extractions(self) -> None:
         for a in [a for a in self.archives.values() if a.state == "extracting"]:
             rc = a.proc.poll()
@@ -1123,29 +1403,7 @@ class Pipeline:
                 continue
             safe_unlink(a.extract_log, missing_ok=True)
             a.state = "parsing"
-            keys: set[str] = set()
-            # A retried failure parses only the demos that failed under another extractor version; one that
-            # already failed under this one keeps that result.
-            failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
-            for dem in a.dems:
-                key = extract.map_key_for(dem, dem.stem)
-                part = stitch.split_key(key)
-                if part:
-                    a.split[dem.name] = part
-                while key in keys:
-                    key += "_dup"
-                keys.add(key)
-                jd = LOG_DIR / "jobs"
-                jd.mkdir(parents=True, exist_ok=True)
-                a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
-                if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
-                    a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
-                    log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
-                             extract.EXTRACTOR_VERSION)
-                    continue
-                self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
-                                     result_path=a.work / f"{dem.stem}.result.json",
-                                     log_path=jd / f"{a.slug}-{key}.log"))
+            self.queue_jobs(a)
             log.info("extracted %s in %.1fs: %s", a.id, a.t_extract_s, [d.name for d in a.dems])
 
     # --- parsing
@@ -1181,9 +1439,12 @@ class Pipeline:
             self._floor_waiting = False
             j = self.jobs.popleft()
             listing = j.archive.listing.get(j.dem.name, {})
-            meta = dict(archive_rar=str(j.archive.rar), archive_slug=j.archive.slug,
-                        dem_modified_in_archive=listing.get("modified"), dem_size_in_archive=listing.get("size"),
-                        download_folder=j.archive.rar.parent.name)
+            if j.archive.loose is not None:  # match.extra: the source and HLTV ids the join reads (join_demos)
+                meta = dict(j.archive.loose, archive_slug=j.archive.slug, dem_size=j.archive.rar_bytes)
+            else:
+                meta = dict(archive_rar=str(j.archive.rar), archive_slug=j.archive.slug,
+                            dem_modified_in_archive=listing.get("modified"), dem_size_in_archive=listing.get("size"),
+                            download_folder=j.archive.rar.parent.name)
             python, python_env = worker_python()
             cmd = [python, "-I", str(RUN_CODE / "extract.py"), str(j.dem), str(j.out_dir), "--source", "hltv",
                    "--mapdata", str(MAPDATA), "--archive", j.archive.id, "--meta", json.dumps(meta),
@@ -1321,14 +1582,15 @@ class Pipeline:
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
                              if row["status"] != "stitched"],
-                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
+                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a),
+                       **self.loose_facts(a))
             # The done row goes before the RAR: a crash between them leaves a done archive whose RAR is still
             # there, which recover_finished deletes at the next start. The other order left the maps published
             # with no row for the archive (formal/ArchiveLegacyLedgerOrder).
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
             try:
-                remove_finished_rar(a.rar)
+                remove_finished_rar(a.rar, loose=a.loose is not None)
             except OSError as e:
                 log.error("archive %s is done but its RAR %s could not be deleted (%s); the next start deletes it",
                           a.id, a.rar, e)
@@ -1474,6 +1736,8 @@ class Pipeline:
                 safe_rmtree(a.rar.parent, ignore_errors=True)
             elif a.rar.exists():
                 safe_unlink(a.rar)
+                if a.loose is not None:
+                    safe_unlink(sidecar_path(a.rar), missing_ok=True)
             if a.work and a.work.exists():
                 safe_rmtree(a.work, ignore_errors=True)
             self._record_failure(a, reason, kept=None, retry=False)
@@ -1482,8 +1746,11 @@ class Pipeline:
         if not retried and dest.exists():
             dest = FAILED_DIR / f"{a.slug or a.id}-{int(time.time())}"
         dest.mkdir(parents=True, exist_ok=True)
+        kept_input = dest / (a.rar.name if a.loose is not None else "archive.rar")
         if a.rar.exists() and not retried:
-            shutil.move(str(a.rar), dest / "archive.rar")
+            shutil.move(str(_deletable(a.rar)), kept_input)
+            if a.loose is not None:  # kept with its sidecar, which --retry-failed needs to take it in again
+                shutil.move(str(_deletable(sidecar_path(a.rar))), sidecar_path(kept_input))
         if retried:
             # Only the demos failing now stay on record. One that passed this time is published; its old record,
             # from an older version, kept the archive due for retry (due_for_retry) on every scan.
@@ -1495,7 +1762,7 @@ class Pipeline:
         for name, res in bad.items():
             dem = a.work / name if a.work else None
             if dem and dem.exists():
-                shutil.move(str(dem), dest / name)
+                shutil.move(str(_deletable(dem)), dest / name)
             (dest / f"{Path(name).stem}.result.json").write_text(json.dumps(res, default=str, indent=1),
                                                                  encoding="utf-8")
         (dest / "reason.json").write_text(json.dumps(dict(id=a.id, original_path=str(a.rar), slug=a.slug,
@@ -1504,13 +1771,15 @@ class Pipeline:
                                                      default=str, indent=1), encoding="utf-8")
         if a.work and a.work.exists():
             safe_rmtree(a.work, ignore_errors=True)
-        self.retried.add(dest / "archive.rar")  # a fresh failure is not retried again in this run
-        self._record_failure(a, reason, kept=str(dest), retry=True, ledger_id=dest.name if retried else a.id)
+        self.retried.add(kept_input)  # a fresh failure is not retried again in this run
+        self._record_failure(a, reason, kept=str(dest), retry=True,
+                             ledger_id=dest.name if retried and a.loose is None else a.id)
         self.enforce_failed_cap()
 
     def _record_failure(self, a: Archive, reason: str, kept: str | None, retry: bool, ledger_id: str | None = None):
         rec = dict(id=ledger_id or a.id, status="failed", slug=a.slug, reason=reason[:2000], kept=kept, retry=retry,
-                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
+                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a),
+                   **self.loose_facts(a))
         append_jsonl(LEDGER, rec)
         self.ledger[a.id] = rec
         self.archives.pop(a.id, None)
@@ -1521,6 +1790,11 @@ class Pipeline:
         recs = [r for r in self.ledger.values() if r.get("kept") and Path(r["kept"]) == kept
                 and r.get("rar_sha256") == sha256]
         return max(recs, key=lambda r: r.get("finished_utc") or "") if recs else None
+
+    @staticmethod
+    def loose_facts(a: Archive) -> dict:
+        """A loose demo's source, HLTV ids and size, for its ledger record (fetch_opencs2.py skips what it holds)."""
+        return dict(a.loose, dem_bytes=a.rar_bytes) if a.loose is not None else {}
 
     @staticmethod
     def rar_facts(a: Archive) -> dict:
@@ -1588,8 +1862,10 @@ class Pipeline:
         Held is each extracting archive's listed .dem bytes minus what its work folder holds. Reading the
         work folders once for both keeps a 7-Zip write between two readings from counting in neither.
         """
+        # The inbox counts whole, partial downloads included; its demos are not counted again as waiting archives.
         waiting = sum(a.rar.stat().st_size for a in self.archives.values()
-                      if a.rar.exists() and a.rar.parent.parent != FAILED_DIR)
+                      if a.rar.exists() and a.rar.parent.parent != FAILED_DIR and a.loose is None)
+        waiting += tree_bytes(INBOX) if INBOX is not None and INBOX.exists() else 0
         downloading = 0
         for f in self.tracker.tracked():
             try:
@@ -1803,6 +2079,12 @@ def main(argv=None) -> int:
     except OutputRefused as e:
         ap.error(str(e))
     setup_logging()
+    global INBOX
+    if INBOX is not None:
+        why = claim_inbox(INBOX, DATA_ROOT, DOWNLOADS)
+        if why:
+            log.error("not using CS2_DEMO_INBOX %s: %s; running without loose demos", INBOX, why)
+            INBOX = None
     # An earlier instance died without a log line; leave evidence of any future death.
     import atexit
     import faulthandler

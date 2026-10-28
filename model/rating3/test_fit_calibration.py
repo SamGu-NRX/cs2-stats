@@ -11,6 +11,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+try:
+    import scipy  # noqa: F401 - several fit scripts need it
+except ModuleNotFoundError:
+    # Only this missing package skips: install model/rating3/requirements.txt to run these tests (CI's model job does).
+    raise unittest.SkipTest("scipy is not installed; pip install -r model/rating3/requirements.txt") from None
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

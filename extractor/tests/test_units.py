@@ -2833,7 +2833,7 @@ def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_d
     p, rar = _finished_archive(tmp_path, monkeypatch)
     real = dp.remove_finished_rar
 
-    def stops_here(path):
+    def stops_here(path, **kwargs):
         raise OSError("the pipeline stopped here")
     monkeypatch.setattr(dp, "remove_finished_rar", stops_here)
     p.finish_archives()
