@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,52 @@ class JoinByHltvMatch(unittest.TestCase):
         self.assertEqual(result["accepted"], [])
         self.assertEqual([(r["reason"], r["hltv"]) for r in result["rejected"]],
                          [("HLTV scoreboard not captured", ("9", "inferno"))])
+
+
+def _copy(root: Path, slug: str, version: str) -> None:
+    """A published Inferno map from an HLTV archive (archive date 2026-04-01 13:00) under demos/<slug>, extracted by
+    version, matching the HLTV page _hltv writes with t1 killed c1 and c2 killed t2."""
+    t, ct = [f"t{i}" for i in range(1, 6)], [f"c{i}" for i in range(1, 6)]
+    d = root / "demos" / slug / "m1-inferno"
+    d.mkdir(parents=True)
+    pq.write_table(pa.table({"map": ["de_inferno"], "extractor_version": [version],
+                             "extra": [json.dumps(dict(dem_modified_in_archive="2026-04-01 13:00:00"))]}),
+                   d / "match.parquet")
+    pq.write_table(pa.table({"round": [1, 2], "winner_side": ["T", "CT"], "end_tick": [100, 200]}), d / "rounds.parquet")
+    ids = {name: n for n, name in enumerate(t + ct, 1)}
+    pq.write_table(pa.table({"round": [1] * 10, "steamid": list(ids.values()), "name": list(ids),
+                             "side": ["T"] * 5 + ["CT"] * 5}), d / "player_rounds.parquet")
+    pq.write_table(pa.table({"round": [1, 2], "tick": [50, 150], "is_suicide": [False, False],
+                             "is_teamkill": [False, False], "attacker_steamid": [ids["t1"], ids["c2"]],
+                             "victim_steamid": [ids["c1"], ids["t2"]]}), d / "kills.parquet")
+
+
+def slug(demo: str) -> str:
+    """The slug of a joined demo folder, recorded as demos\\<slug>\\<map> whatever the OS."""
+    return re.split(r"[\\/]+", demo)[1]
+
+
+class OneDemoPerHltvMap(unittest.TestCase):
+    def test_two_copies_of_one_map_count_once_the_newer_extraction_kept(self):
+        # Review of PR 70: one archive published under two slugs joined the same two HLTV maps twice, so the fits
+        # counted those maps twice. The newer extraction stays (1.16.0 over 1.9.0: by number, not as text); with equal
+        # versions, the first folder.
+        for versions, kept in (({"x-1": "1.9.0", "x-2": "1.16.0"}, "x-2"), ({"x-2": "1.16.0", "x-1": "1.16.0"}, "x-1")):
+            with self.subTest(versions=versions), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                t, ct = [f"t{i}" for i in range(1, 6)], [f"c{i}" for i in range(1, 6)]
+                (root / "hltv").mkdir()
+                _hltv(root / "hltv" / "map_7.json", "7", 1, "Inferno", t, ct, ["t1 killed c1", "c2 killed t2"])
+                for name, version in versions.items():
+                    _copy(root, name, version)
+                metrics = root / "metrics.json"
+                metrics.write_text(json.dumps({"source_audit": {"sources": [{"file": "map_7.json"}]}}), encoding="utf-8")
+                result = join_demos.join(root, metrics)
+                other = ({"x-1", "x-2"} - {kept}).pop()
+                self.assertEqual([slug(a["demo"]) for a in result["accepted"]], [kept])
+                self.assertEqual([(slug(d["demo"]), slug(d["kept"]), d["reason"])
+                                  for d in result["duplicates"]], [(other, kept, "duplicate")])
+                self.assertEqual((result["counts"]["accepted"], result["counts"]["duplicates"]), (1, 1))
 
 
 if __name__ == "__main__":

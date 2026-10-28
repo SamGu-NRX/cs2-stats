@@ -83,7 +83,8 @@ def hltv_index(root: Path, sources: list[dict]) -> dict:
             kill_sequences[number] = kills
         by_map[map_name].append({"file": path.name, "date": date, "rosters": rosters, "players": players,
                                  "winner_sides": winner_sides, "kills": kill_sequences, "map": map_name,
-                                 "ids": (str(data.get("match", {}).get("matchId")), data.get("mapIndex"))})
+                                 "ids": (str(data.get("match", {}).get("matchId")), data.get("mapIndex")),
+                                 "mapstatsid": str(data.get("mapstatsid") or path.name)})
     return by_map
 
 
@@ -198,6 +199,29 @@ def ids_index(root: Path, by_map: dict) -> tuple[dict, list[dict]]:
     return out, unreadable
 
 
+def version_key(version: str | None) -> tuple[int, ...]:
+    """An extractor version ("1.16.0") as numbers, so 1.16 sorts after 1.9; () when the map does not record one."""
+    try:
+        return tuple(int(x) for x in str(version).split("."))
+    except ValueError:
+        return ()
+
+
+def one_per_hltv_map(accepted: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(accepted, duplicates): of the published maps joined to one HLTV map (mapstatsid), only the one with the newest
+    extractor version is kept, the first by demo folder when equal. The others go to duplicates, naming the one kept,
+    so the fits count each HLTV map once. Two copies of one archive published under two slugs (astralis-vs-alliance
+    -2029146f and -a7ac677d on 2026-10-27) both passed every check and were counted twice."""
+    best = {}
+    for r in sorted(accepted, key=lambda r: r["demo"]):
+        if r["mapstatsid"] not in best or version_key(r["extractor_version"]) >                 version_key(best[r["mapstatsid"]]["extractor_version"]):
+            best[r["mapstatsid"]] = r
+    kept = [r for r in accepted if best[r["mapstatsid"]] is r]
+    duplicates = [{"demo": r["demo"], "reason": "duplicate", "hltv": r["hltv"], "mapstatsid": r["mapstatsid"],
+                   "kept": best[r["mapstatsid"]]["demo"]} for r in accepted if best[r["mapstatsid"]] is not r]
+    return kept, duplicates
+
+
 def join(root: Path, metrics: Path, learned: dict[str, str] | None = None) -> dict:
     """learned: {steamid: HLTV player id} from earlier joins (the --player-ids file), tiebreak evidence only."""
     import pyarrow.parquet as pq
@@ -271,7 +295,8 @@ def join(root: Path, metrics: Path, learned: dict[str, str] | None = None) -> di
                 matches.append((candidate, pairs))
         if len(matches) == 1:
             candidate, pairs = matches[0]
-            accepted.append({"demo": entry["out_dir"], "hltv": candidate["file"], "rounds": len(rounds),
+            accepted.append({"demo": entry["out_dir"], "hltv": candidate["file"], "mapstatsid": candidate["mapstatsid"],
+                             "extractor_version": meta.get("extractor_version"), "rounds": len(rounds),
                              "kills": sum(len(v) for v in sequences.values()),
                              **({"hltv_match_map": named} if named else
                                 {"timestamp_difference_hours": (demo_date - candidate["date"]).total_seconds() / 3600}),
@@ -282,8 +307,9 @@ def join(root: Path, metrics: Path, learned: dict[str, str] | None = None) -> di
         else:
             rejected.append({"demo": entry["out_dir"], "reason": "ambiguous" if len(matches) > 1 else "no exact join",
                              "near": near})
-    return {"accepted": accepted, "rejected": rejected,
-            "counts": {"accepted": len(accepted), "rejected": len(rejected),
+    accepted, duplicates = one_per_hltv_map(accepted)
+    return {"accepted": accepted, "rejected": rejected, "duplicates": duplicates,
+            "counts": {"accepted": len(accepted), "rejected": len(rejected), "duplicates": len(duplicates),
                        "rounds": sum(r["rounds"] for r in accepted), "kills": sum(r["kills"] for r in accepted),
                        "renamed_players": sum(p["renamed"] for r in accepted for p in r["players"].values()),
                        "joined_by_hltv_match": sum("hltv_match" in r["checks"] for r in accepted),
