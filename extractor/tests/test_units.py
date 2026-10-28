@@ -1128,14 +1128,16 @@ def test_children_die_with_the_pipeline(tmp_path):
             "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
             "print(c.pid, flush=True); time.sleep(60)") % ROOT
     parent = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-    child = int(parent.stdout.readline())
-    assert psutil.pid_exists(child)
+    # Captured while alive: is_running() compares the creation time too, so a process that later gets the dead
+    # child's pid (Windows reuses pids soon under load) does not count as the child, as in the pipeline's kill_tree.
+    child = psutil.Process(int(parent.stdout.readline()))
+    assert child.is_running()
     parent.kill()
     parent.wait()
     deadline = time.time() + 10
-    while psutil.pid_exists(child) and time.time() < deadline:
+    while child.is_running() and time.time() < deadline:
         time.sleep(0.2)
-    assert not psutil.pid_exists(child)
+    assert not child.is_running()
 
 
 def test_restore_in_round_one_is_voided():
@@ -1594,6 +1596,25 @@ def test_a_failure_keeps_its_archive_failing_demo_and_report_together(tmp_path, 
                                                       "u1-m1-nuke.result.json"]
     assert json.loads((kept / "u1-m1-nuke.result.json").read_text())["errors"] == ["ValidationFailed: deaths 12!=13"]
     assert not a.work.exists() and not a.rar.exists()
+
+
+def test_failures_of_one_map_in_one_second_each_keep_their_own_folder(tmp_path, monkeypatch):
+    # Review of PR 70: a repeat failure's folder was <slug>-<unix seconds>, made with exist_ok=True, so a third
+    # failure of the map in the same second went into the second's folder and overwrote its report.
+    import types
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp, "time", types.SimpleNamespace(time=lambda: 1_800_000_000.0, sleep=time.sleep,
+                                                          monotonic=time.monotonic))
+    p = dp.Pipeline()
+    for name in ("d1", "d2", "d3"):
+        a = _failed_archive(tmp_path, name)
+        a.slug = "slug-dup"
+        p.archives[a.id] = a
+        p.fail_archive(a, f"deaths in {name}")
+    kept = {d.name: json.loads((d / "reason.json").read_text())["id"] for d in dp.FAILED_DIR.iterdir()}
+    assert kept == {"slug-dup": "d1", "slug-dup-1800000000": "d2", "slug-dup-1800000000-2": "d3"}
+    ledger = {r["id"]: Path(r["kept"]).name for r in map(json.loads, dp.LEDGER.read_text(encoding="utf-8").splitlines())}
+    assert ledger == {i: n for n, i in kept.items()}
 
 
 def test_failed_dir_drops_the_oldest_beyond_its_cap(tmp_path, monkeypatch):

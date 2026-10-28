@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import demo_layout
+from join_demos import joined_players
 sys.path.append(str(Path(__file__).resolve().parents[2] / "extractor"))
 from repo_guard import check_output, write_json  # noqa: E402  (extractor/repo_guard.py: where outputs may land)
 
@@ -24,7 +25,8 @@ def read_join(root: Path, join: dict) -> list[dict]:
     layout = demo_layout(root, join["demo"])
     hltv = json.loads((root / "hltv" / join["hltv"]).read_text(encoding="utf-8"))
     players_rounds = pq.read_table(layout.table("player_rounds")).to_pylist()
-    names = {row["steamid"]: norm(row["name"]) for row in players_rounds}
+    # {steamid: HLTV name} as the join paired them; an in-game name often differs from HLTV's.
+    names = {int(sid): name for sid, name in joined_players(join).items()}
     rounds = {row["round"]: row for row in pq.read_table(layout.table("rounds")).to_pylist()}
     kills = defaultdict(list)
     for kill in sorted(pq.read_table(layout.table("kills")).to_pylist(), key=lambda row: row["tick"]):
