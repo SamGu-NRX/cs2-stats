@@ -51,7 +51,7 @@ model\.venv\Scripts\python.exe -I model\rating3\swing_credit_fit.py --data <cs2-
 ### Shipped fit
 
 ```text
-model\.venv\Scripts\python.exe -I model\rating3\fit_params.py --data <cs2-stats-data> --hltv <cs2-stats-data>\hltv --joins <cs2-stats-data>\model-rating3\demo_joins.json --out model\rating3\params.json --date 2026-10-25
+model\.venv\Scripts\python.exe -I model\rating3\fit_params.py --data <cs2-stats-data> --hltv <cs2-stats-data>\hltv --joins <cs2-stats-data>\model-rating3\demo_joins.json --out model\rating3\params.json --date 2026-10-28
 ```
 
 ### Held-out hypothesis fits
@@ -80,7 +80,7 @@ The separate post-plant join analysis produces **13,577 aligned event rows over 
 
 ## Swing credits
 
-For a valued event, `delta` is the change in the probability of the side helped by the event. HLTV's map page lists every player's credit for every kill to 0.01 percentage points, so the split is fitted to those credits (`swing_credit_fit.py`, 45,034 kills of the joined maps with a change of at least 2 points).
+For a valued event, `delta` is the change in the probability of the side helped by the event. HLTV's map page lists every player's credit for every kill to 0.01 percentage points, so the split is fitted to those credits (`swing_credit_fit.py`, 196,022 kills of the 1,610 joined maps with a change of at least 2 points; the fit of 2026-10-25 had 45,034).
 
 A kill's gain is shared among the gaining side by weight:
 
@@ -93,7 +93,7 @@ The victim is charged the whole change, unless the same killer kills a teammate 
 
 The round's end is shared by how it ended:
 
-- A defuse: the defuser takes the defuse share, 0.60, and the winners' positive credits from the events after the plant that moved the round their way take the rest. The losers alive at the plant share the charge equally (90% of their charges exact). The share is fitted on 1,903 defuses with such events (credit MAE 0.24 points; 0.55 and 0.65 fit worse).
+- A defuse: the defuser takes the defuse share, 0.50, and the winners' positive credits from the events after the plant that moved the round their way take the rest. The losers alive at the plant share the charge equally (90% of their charges exact). The share is fitted on 8,832 defuses with such events, from every saved HLTV page. On five folds grouped by match, the held-out credit MAE is 0.245 points at 0.50 and 0.268 at 0.60, which the fit of 2026-10-25 picked from 1,903 defuses. 0.50 is better on all five folds, by 0.023 on average, against a fold-to-fold SD of 0.012, and a grid fit on each fold's training defuses picks 0.50.
 - A detonation: the winners' positive credits from the events after the plant take it all, else the winners alive share it equally; the losers alive share the charge equally. Replaying the events after the plant cuts the winners' credit error from 1.12 to 0.63 points against an equal split.
 - The clock running out: each side's living players share it equally. HLTV's split among the winners is not recovered.
 - What an elimination leaves replays the round's events.
@@ -106,7 +106,7 @@ Against HLTV's per-round swing on 80,950 player-rounds, the engine's error falls
 
 The duel fit groups weapons as `sniper`, `rifle1`, `rifle2`, `smg`, `pistolPlus`, and `pistol`, strongest first. It fits fractional kill and death points to HLTV eco-adjusted K/D/ADR cells using a Bradley-Terry-style probability and a side edge. Published anchors remain marked as published in `params.json`; fit-derived strengths and scale remain marked as fit-derived.
 
-The final refreshed duel fit consumes **304 joins** (**301 schema-v1**, **3 legacy**) with no skipped joins, producing **43,387 recognized duel events** and **3,040 HLTV target rows**. It predicts HLTV eco-adjusted kills, deaths, and ADR cells per player-map. Kills and deaths are **kills or deaths per map**; ADR is **HP per round**. The residual weights are **0.2** for kill and death errors and **0.05** for ADR errors, so every reported MAE is in **weighted residual units**, not kills, deaths, or HP. Its fitted strengths are `sniper=0.765624192288676`, `rifle1=0.6028113291326643`, `rifle2=0.2988708070663434`, `smg=0.4258512403690258`, `pistolPlus=0.23895079722688078`, and `pistol=0`; the kill-points scale is **2.0250745163650965**. Full-fit objective MAE is **0.17693824100640804**. Match-disjoint held-out error is **MAE 0.18501190527342595**, **p95 0.39309350845304275**, and **maximum 5.054612324100318** over **3,040 targets and 161 matches**. The no-duel baseline predicts the training-fold mean of each target under the same five-fold match-grouped split. Its held-out error is **MAE 0.7251211422305132**, **p95 1.8612345679012348**, and **maximum 6.9497119341563796**, in the same weighted residual units. The previous 318-join fit reported **MAE 0.803752909530498** in those units, but its 14 unavailable demo inputs make it stale. These values come from `eco_fit.py` and `eco_metrics.json`.
+The duel fit of 2026-10-28 consumes **1,610 joins** (**1,609 schema-v1**, **1 legacy**; 1,045 OpenCS2 maps joined by HLTV match id) with no skipped joins, producing **229,584 recognized duel events** and **16,100 HLTV target rows**. Players are read through each join's pairing, so a player whose in-game name differs from HLTV's counts. It predicts HLTV eco-adjusted kills, deaths, and ADR cells per player-map. Kills and deaths are **kills or deaths per map**; ADR is **HP per round**. The residual weights are **0.2** for kill and death errors and **0.05** for ADR errors, so every reported MAE is in **weighted residual units**, not kills, deaths, or HP. Its fitted strengths are `sniper=1.011850800375798`, `rifle1=0.8098778049187076`, `rifle2=0.6671933715660029`, `smg=0.5831191831038486`, `pistolPlus=0.4449530149974468`, and `pistol=0`; the kill-points scale is **2.087320296193556**. Full-fit objective MAE is **0.11741227486602049**. Match-disjoint held-out error is **MAE 0.11746071005335856**, **p95 0.30476276536932123**, and **maximum 0.9743037310433906** over **16,100 targets and 885 matches**. The no-duel baseline predicts the training-fold mean of each target under the same five-fold match-grouped split. Its held-out error is **MAE 0.7220296648631096**, **p95 1.8512267080745344**, and **maximum 7.5623447204968945**, in the same weighted residual units. The fit of 2026-10-25 (304 joins, players matched by name) had held-out MAE 0.184. Scored on the same targets, its parameters give MAE 0.139 on its own 302 maps and 0.136 on the 1,308 joined since, against 0.118 and 0.117 for this fit. These values come from `eco_fit.py` and `params.json`.
 
 ## Shipped approximation
 
@@ -119,7 +119,7 @@ intercept + ct_offset * [CT] + curve(eKPR) + curve(eADR) + curve(eDPR) + curve(e
 
 Each curve is piecewise linear: a slope, plus a change of slope at six knots placed at the 5th to 95th percentiles of the training inputs. K2 to K5 are the shares of the side's rounds with exactly two, three or four kills, and five. The curves bend upward for every positive input, which a straight line cannot follow. On HLTV's own displayed inputs, a linear model leaves held-out MAE 0.047, and the curves reach 0.025.
 
-The fit (`side_rating_fit.py`, weighted by side rounds) uses 733 HLTV maps, 503 matches and 14,660 player-map sides. The held-out split is by event and date. The 16 latest events by first map date (185 maps, 15 to 24 October) are held out, and the other 548 maps are fitted. On HLTV's displayed inputs, the held-out total rating has MAE 0.0250, p95 0.0643 and 25.5% within 0.01; the training maps have MAE 0.0251. The shipped coefficients are refitted on all maps. The block is labelled `approximation`, because this is not a recovered HLTV formula.
+The fit (`side_rating_fit.py`, weighted by side rounds) uses 3,430 HLTV maps, 1,525 matches and 68,598 player-map sides: the HLTV tab's pages and those saved for the OpenCS2 demos (`hltv_pages.py`, one per `mapstatsid`). The held-out split is by event and date. The 22 latest events by first map date (871 maps, 14 to 26 October) are held out, and the other 2,559 maps are fitted. On HLTV's displayed inputs, the held-out total rating has MAE 0.0254, p95 0.0636 and 25.0% within 0.01; the training maps have MAE 0.0254. On the 616 of those maps saved after the fit of 2026-10-25, which neither fit saw, that fit (733 maps) has MAE 0.02587 and this one 0.02581: four times the maps barely move the block, whose error is the formula's, not the sample's. The shipped coefficients are refitted on all maps. The block is labelled `approximation`, because this is not a recovered HLTV formula.
 
 The engine rates a round by its side's split: each curve's value at the side's inputs, plus the curve's slope there times how far the round's input is from them. These average over the side's rated rounds to the side's rating exactly.
 

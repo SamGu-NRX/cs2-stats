@@ -108,7 +108,7 @@ it("splits a side's rating over its rated rounds so the rounds average to it", (
 
 /** Inputs, side and side_rating_fit.side_rating's value with the committed params.json. */
 const GOLDEN: [R3Inputs, "CT" | "T", number][] = [
-  [{kpr_eco: 0.25, adr_eco: 40, dpr_eco: 0.85, kast_eco: 50, swing: -8, k2: 4, k3: 0, k4: 0, k5: 0, mk: 4}, "CT", 0.3322858289694561],
-  [{kpr_eco: 0.72, adr_eco: 76, dpr_eco: 0.62, kast_eco: 72, swing: 0.5, k2: 12, k3: 4, k4: 1, k5: 0, mk: 17}, "T", 1.1572221333936923],
-  [{kpr_eco: 1.35, adr_eco: 130, dpr_eco: 0.35, kast_eco: 95, swing: 12, k2: 20, k3: 10, k4: 5, k5: 2, mk: 37}, "CT", 2.527024901017537],
+  [{kpr_eco: 0.25, adr_eco: 40, dpr_eco: 0.85, kast_eco: 50, swing: -8, k2: 4, k3: 0, k4: 0, k5: 0, mk: 4}, "CT", 0.33122479136268834],
+  [{kpr_eco: 0.72, adr_eco: 76, dpr_eco: 0.62, kast_eco: 72, swing: 0.5, k2: 12, k3: 4, k4: 1, k5: 0, mk: 17}, "T", 1.1614074947872601],
+  [{kpr_eco: 1.35, adr_eco: 130, dpr_eco: 0.35, kast_eco: 95, swing: 12, k2: 20, k3: 10, k4: 5, k5: 2, mk: 37}, "CT", 2.5286685691903834],
 ];
