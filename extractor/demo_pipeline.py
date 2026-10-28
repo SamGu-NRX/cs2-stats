@@ -29,6 +29,7 @@ import os
 import queue
 import re
 import shutil
+import stat
 import socket
 import subprocess
 import sys
@@ -394,21 +395,55 @@ def claim_inbox(inbox: Path, data_root: Path, downloads: Path | None) -> str | N
     return None
 
 
-_opencs2_rows: dict[str, dict] | None = None
+_opencs2: tuple[dict[str, dict], set[str]] | None = None
 
 
-def opencs2_row(dataset_file: str) -> dict | None:
-    """The OpenCS2 metadata row of a dataset file (match_id, map_index, map_name, demo_bytes), or None. Raises
-    FileNotFoundError when the metadata is not there."""
-    global _opencs2_rows
-    if _opencs2_rows is None:
+def load_opencs2() -> tuple[dict[str, dict], set[str]]:
+    """({dataset file: its OpenCS2 metadata row}, the files with conflicting rows), read once. Raises whatever reading
+    the metadata raises (scan_loose then takes no loose demo for the rest of the run)."""
+    global _opencs2
+    if _opencs2 is None:
         import polars as pl
         files = sorted(OPENCS2_META.glob("*.parquet"))
         if not files:
             raise FileNotFoundError(f"no OpenCS2 metadata parquet in {OPENCS2_META}")
         df = pl.read_parquet(files, columns=["file_name", "match_id", "map_index", "map_name", "demo_bytes"])
-        _opencs2_rows = {r["file_name"]: r for r in df.iter_rows(named=True)}
-    return _opencs2_rows.get(dataset_file)
+        rows, facts, conflicts = {}, {}, set()
+        for r in df.iter_rows(named=True):
+            fact = (str(r["match_id"]), r["map_index"], str(r["map_name"]).lower(), r["demo_bytes"])
+            if facts.setdefault(r["file_name"], fact) != fact:
+                conflicts.add(r["file_name"])
+            rows.setdefault(r["file_name"], r)
+        _opencs2 = (rows, conflicts)
+    return _opencs2
+
+
+def opencs2_row(dataset_file: str) -> dict | None:
+    """The OpenCS2 metadata row of a dataset file (match_id, map_index, map_name, demo_bytes), or None. A file listed
+    twice with different facts raises ValueError: which row is right is unknown, so its demo is refused. Identical
+    duplicates are one row."""
+    rows, conflicts = load_opencs2()
+    if dataset_file in conflicts:
+        raise ValueError(f"the dataset lists {dataset_file} more than once with different ids, map or size")
+    return rows.get(dataset_file)
+
+
+def plain_entries(folder: Path):
+    """(path, lstat) of each entry of folder that is no link or junction: the inbox never follows one out of itself."""
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    try:
+        entries = list(folder.iterdir())
+    except OSError:  # gone or unreadable since it was listed; the next scan sees it again
+        return
+    for p in entries:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & reparse:
+            log.warning("skipping %s in the inbox: a link or junction", p)
+            continue
+        yield p, st
 
 
 def read_sidecar(dem: Path) -> dict:
@@ -1016,6 +1051,7 @@ class Pipeline:
         self.retried: set[Path] = set()  # a failure kept in this run is not retried in it
         self.hasher = Hasher()
         self.hash_errors: dict[Path, int] = {}  # OSErrors hashing each archive in this run (HASH_ATTEMPTS)
+        self.inbox_off: str | None = None  # why loose demos are not taken in this run (the metadata cannot be read)
         rows = read_jsonl(MANIFEST)
         peaks, parse_s = manifest_seed(rows)
         self.output_gb: deque[float] = deque(output_seed(rows), maxlen=TIMING_SAMPLES)
@@ -1068,10 +1104,13 @@ class Pipeline:
                             yield f
                 elif d.is_file() and is_candidate_name(d):
                     yield d
-        if INBOX is not None and (INBOX / INBOX_MARKER).is_file():
-            for f in [*INBOX.glob("*.dem"), *INBOX.glob("*/*.dem")]:
-                if f.is_file() and not f.name.startswith("."):
-                    yield f
+        if INBOX is not None and not self.inbox_off and (INBOX / INBOX_MARKER).is_file():
+            demo = lambda p, st: stat.S_ISREG(st.st_mode) and p.suffix.lower() == ".dem" and not p.name.startswith(".")
+            for p, st in plain_entries(INBOX):
+                if stat.S_ISDIR(st.st_mode):
+                    yield from (f for f, fst in plain_entries(p) if demo(f, fst))
+                elif demo(p, st):
+                    yield p
         if self.retry_failed and FAILED_DIR.exists():
             yield from (f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file())
             yield from (f for f in FAILED_DIR.glob("*/*.dem") if f.is_file() and sidecar_path(f).is_file())
@@ -1123,7 +1162,9 @@ class Pipeline:
             log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
 
     def refuse_loose(self, f: Path, reason: str) -> None:
-        """Refuse a loose demo: a ledger row says why, and the file stays where it is, skipped for the rest of the run."""
+        """Refuse a loose demo: a ledger row says why, and the file stays where it is, skipped for the rest of the run.
+        The pipeline moves or deletes an inbox demo only once its sidecar is valid and bound (its ids match one dataset
+        row and its SHA-256 the demo's); every refusal, whatever the reason, leaves it alone."""
         self.ignored.add(f)
         log.error("refusing loose demo %s: %s", f, reason)
         rec = dict(id=f"inbox:{f.name}", status="failed", reason=f"refused: {reason}", kept=str(f), retry=False,
@@ -1136,7 +1177,18 @@ class Pipeline:
         (refuse_loose) unless its sidecar is valid, agrees with the dataset's row for its file (ids, map and size) and
         the demo has that size; then it is hashed (Hasher), and poll_hashes checks the SHA-256 against the sidecar's.
         Nothing is published under ids that were not checked."""
+        if self.inbox_off:
+            return
         in_failed = f.parent.parent == FAILED_DIR
+        try:
+            load_opencs2()
+        except BaseException as e:  # noqa: BLE001 - any failure to read it turns the inbox off once, not every loop
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            # BaseException too: a panic in polars' Rust reader arrives as pyo3's PanicException, a BaseException.
+            self.inbox_off = f"the OpenCS2 metadata in {OPENCS2_META} cannot be read: {type(e).__name__}: {e}"
+            log.error("taking no loose demos for the rest of this run: %s", self.inbox_off)
+            return
         try:
             meta = read_sidecar(f)
             row = opencs2_row(meta["dataset_file"])
@@ -1172,7 +1224,8 @@ class Pipeline:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
         record, when that record is of the same file. An OSError (the file held by a scan, or gone) drops the
         archive for a later scan to find again, up to HASH_ATTEMPTS times in a run, then fails it; any other error
-        fails it at once. A failed archive is kept for a retry."""
+        fails it at once. A failed archive is kept for a retry; a loose demo, not bound to its sidecar until its hash
+        is checked, is refused instead and left where it is."""
         for a in [a for a in self.archives.values() if a.state == "hashing"]:
             sha = self.hasher.take(a.rar)
             if sha is None:
@@ -1186,8 +1239,13 @@ class Pipeline:
                     self.retried.discard(a.rar)  # a retry from failed/ is picked up again too
                     continue
             if not isinstance(sha, str):
-                self.fail_archive(a, f"hashing the archive failed: {type(sha).__name__}: {sha}"
-                                     + (f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""))
+                err = f"{type(sha).__name__}: {sha}"
+                err += f" ({HASH_ATTEMPTS} attempts)" if isinstance(sha, OSError) else ""
+                if a.loose is not None:  # not bound yet: refused, left where it is
+                    del self.archives[a.id]
+                    self.refuse_loose(a.rar, f"hashing it failed: {err}")
+                else:
+                    self.fail_archive(a, f"hashing the archive failed: {err}")
                 continue
             if a.loose is not None and sha != a.loose["sha256"]:
                 del self.archives[a.id]
@@ -1259,15 +1317,17 @@ class Pipeline:
 
     def start_loose(self, a: Archive) -> None:
         """Queue a loose demo's parse. Its header must name the map its sidecar does, or the HLTV ids it would be
-        published under belong to another map, and it fails."""
+        published under belong to another map, and it is refused, left where it is."""
         from demoparser2 import DemoParser
         try:
             header_map = DemoParser(str(a.rar)).parse_header().get("map_name")
+            why = None if str(header_map).lower() == a.loose["map_name"].lower() else \
+                f"the sidecar names {a.loose['map_name']}, the demo's header {header_map}"
         except Exception as e:  # noqa: BLE001 - demoparser2 raises a bare Exception
-            self.fail_archive(a, f"cannot read the demo header: {type(e).__name__}: {e}")
-            return
-        if str(header_map).lower() != a.loose["map_name"].lower():
-            self.fail_archive(a, f"the sidecar names {a.loose['map_name']}, the demo's header {header_map}")
+            why = f"cannot read the demo header: {type(e).__name__}: {e}"
+        if why:
+            del self.archives[a.id]
+            self.refuse_loose(a.rar, why)
             return
         a.listing = {a.rar.name: dict(size=a.rar_bytes, modified=None)}
         if not a.archive_gb_counted:
@@ -1631,9 +1691,9 @@ class Pipeline:
         dest.mkdir(parents=True, exist_ok=True)
         kept_input = dest / (a.rar.name if a.loose is not None else "archive.rar")
         if a.rar.exists() and not retried:
-            shutil.move(str(a.rar), kept_input)
+            shutil.move(str(_deletable(a.rar)), kept_input)
             if a.loose is not None:  # kept with its sidecar, which --retry-failed needs to take it in again
-                shutil.move(str(sidecar_path(a.rar)), sidecar_path(kept_input))
+                shutil.move(str(_deletable(sidecar_path(a.rar))), sidecar_path(kept_input))
         if retried:
             # Only the demos failing now stay on record. One that passed this time is published; its old record,
             # from an older version, kept the archive due for retry (due_for_retry) on every scan.
@@ -1645,7 +1705,7 @@ class Pipeline:
         for name, res in bad.items():
             dem = a.work / name if a.work else None
             if dem and dem.exists():
-                shutil.move(str(dem), dest / name)
+                shutil.move(str(_deletable(dem)), dest / name)
             (dest / f"{Path(name).stem}.result.json").write_text(json.dumps(res, default=str, indent=1),
                                                                  encoding="utf-8")
         (dest / "reason.json").write_text(json.dumps(dict(id=a.id, original_path=str(a.rar), slug=a.slug,

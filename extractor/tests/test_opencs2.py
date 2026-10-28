@@ -3,6 +3,7 @@ fixture demo, which the tests needing it copy under a made-up name and skip with
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -45,7 +46,7 @@ def _isolate(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(dp, "COPIES_LOG", dp.LOG_DIR / "download_copies.jsonl")
     monkeypatch.setattr(dp, "free_gb", lambda path=None: 1000.0)
     monkeypatch.setattr(dp, "OPENCS2_META", tmp_path / "meta")
-    monkeypatch.setattr(dp, "_opencs2_rows", None)
+    monkeypatch.setattr(dp, "_opencs2", None)
     return dp.INBOX
 
 
@@ -69,6 +70,23 @@ def _loose(inbox: Path, match_id: str, index: int, map_name: str, name: str, dat
                    dataset_file=file_name, dem_bytes=size, sha256=sha), **(sidecar_changes or {})}
     dp.sidecar_path(dem).write_text(json.dumps(side), encoding="utf-8")
     return dem
+
+
+def _link_folder(link: Path, target: Path) -> None:
+    """link, a junction to target on Windows (no privilege needed), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def _hashed(p) -> None:
+    deadline = time.time() + 30
+    while any(a.state == "hashing" for a in p.archives.values()):
+        assert time.time() < deadline, "the hash never came back"
+        p.poll_hashes()
+        time.sleep(0.01)
 
 
 def _ledger() -> list[dict]:
@@ -112,6 +130,8 @@ def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
     dem = inbox / "456" / "team-a-vs-team-b-m1-nuke.dem"
     dem.parent.mkdir()
     dem.write_bytes(dp.DEM_MAGIC + bytes(64))
+    _meta(dp.OPENCS2_META, [dict(file_name="demos/shard-x/1/other.dem", match_id="1", map_index=1, map_name="de_nuke",
+                                 demo_bytes=72)])
     p = dp.Pipeline()
     p.scan(0.0)
     p.scan(0.0)  # skipped from then on, not refused again
@@ -154,20 +174,98 @@ def test_a_loose_demo_whose_sha256_differs_from_its_sidecar_is_refused(tmp_path,
         _ledger()[0]["reason"]
 
 
-def test_a_loose_demo_whose_sidecar_names_another_map_fails(tmp_path, monkeypatch):
+def test_a_loose_demo_whose_header_names_another_map_is_refused_in_place(tmp_path, monkeypatch):
     # Published under the sidecar's ids, a Cache demo labelled as a Dust2 map would be joined to the wrong HLTV map,
-    # or block the right demo of those ids.
+    # or block the right demo of those ids. Review 3 of PR 67: it was moved to failed/ though its sidecar is not bound
+    # to it; a refused inbox file is never moved.
     if not FIXTURE.exists():
         pytest.skip(f"PRIVATE FIXTURE MISSING: {FIXTURE}; the map check of a loose demo is not being checked")
     inbox = _isolate(tmp_path, monkeypatch)
     dem = _loose(inbox, "789", 1, "de_dust2", "team-a-vs-team-b-m1-dust2.dem", FIXTURE)
     p = dp.Pipeline()
-    _until(p, lambda: "opencs2-789-m1" in p.ledger, timeout=60)
-    rec = p.ledger["opencs2-789-m1"]
-    assert rec["status"] == "failed" and "names de_dust2, the demo's header de_cache" in rec["reason"]
-    assert not p.jobs and not dem.exists()
-    kept = Path(rec["kept"])
-    assert (kept / dem.name).exists() and dp.sidecar_path(kept / dem.name).exists()  # kept for a retry, sidecar too
+    _until(p, lambda: _ledger(), timeout=60)
+    assert [(r["id"], r["status"]) for r in _ledger()] == [("inbox:team-a-vs-team-b-m1-dust2.dem", "failed")]
+    assert "the sidecar names de_dust2, the demo's header de_cache" in _ledger()[0]["reason"]
+    assert not p.jobs and not p.archives and dem.exists() and dp.sidecar_path(dem).exists()
+    assert not any(dp.FAILED_DIR.iterdir())
+
+
+def test_a_loose_demo_whose_hash_fails_is_refused_in_place(tmp_path, monkeypatch):
+    # Review 3 of PR 67: a hashing error failed the archive, which moved the demo out of the inbox before its sidecar
+    # was bound to it.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "91", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64))
+    p = dp.Pipeline()
+    p.hasher.take = lambda f: RuntimeError("the disk said no")
+    p.scan(0.0)
+    p.poll_hashes()
+    assert not p.archives and dem.exists() and dp.sidecar_path(dem).exists() and not any(dp.FAILED_DIR.iterdir())
+    assert [(r["id"], r["reason"]) for r in _ledger()] == \
+        [("inbox:team-a-vs-team-b-m1-nuke.dem", "refused: hashing it failed: RuntimeError: the disk said no")]
+
+
+def test_the_inbox_scan_skips_links_and_junctions(tmp_path, monkeypatch):
+    # Review 3 of PR 67: the scan globbed through a junction, so a valid demo and sidecar elsewhere on the disk were
+    # taken in, and deleted once published.
+    inbox = _isolate(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    dem = _loose(outside, "92", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64))
+    _link_folder(inbox / "92", outside / "92")
+    try:
+        os.symlink(dem, inbox / dem.name)
+        os.symlink(dp.sidecar_path(dem), dp.sidecar_path(inbox / dem.name))
+    except OSError:  # Windows without the symlink privilege: the junction is the case that matters there
+        pass
+    p = dp.Pipeline()
+    p.scan(0.0)
+    assert p.archives == {} and _ledger() == [] and dem.exists()
+
+
+def test_a_failure_never_moves_a_file_from_outside_the_inbox(tmp_path, monkeypatch):
+    # Review 3 of PR 67: failing moved the demo with a raw shutil.move, so a path into the inbox that leads out of it
+    # (a junction made after the scan) moved a file from anywhere into failed/.
+    inbox = _isolate(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    dem = _loose(outside, "93", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64))
+    _link_folder(inbox / "93", outside / "93")
+    p = dp.Pipeline()
+    via = inbox / "93" / dem.name
+    a = dp.Archive(rar=via, id="opencs2-93-m1", loose=dp.read_sidecar(via), rar_bytes=dem.stat().st_size)
+    p.archives[a.id] = a
+    with pytest.raises(ValueError, match="refusing to delete"):
+        p.fail_archive(a, "the parse failed")
+    assert dem.exists() and dp.sidecar_path(dem).exists()
+
+
+def test_unreadable_metadata_turns_the_inbox_off_for_the_run(tmp_path, monkeypatch, caplog):
+    # Review 3 of PR 67: a metadata read error refused every demo in the inbox, each with a ledger row, and the
+    # metadata was read again on every loop.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "94", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64))
+    (dp.OPENCS2_META / "metadata-x.parquet").write_bytes(b"not a parquet file")
+    p = dp.Pipeline()
+    with caplog.at_level(logging.ERROR, logger=dp.log.name):
+        p.scan(0.0)
+        p.scan(0.0)
+    assert p.archives == {} and _ledger() == [] and dem.exists()
+    assert "cannot be read" in p.inbox_off
+    assert sum("taking no loose demos" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.parametrize("first, taken", [(dict(map_index=1), True), (dict(map_index=2), False)])
+def test_a_file_the_dataset_lists_twice_is_taken_only_if_both_rows_agree(tmp_path, monkeypatch, first, taken):
+    # Review 3 of PR 67: rows were keyed by file name, the last one silently winning, so a conflicting earlier row
+    # (another map index here) was ignored and the demo published under ids the dataset disputes.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "95", 1, "de_nuke", "team-a-vs-team-b-m1-nuke.dem", dp.DEM_MAGIC + bytes(64))
+    row = pl.read_parquet(dp.OPENCS2_META / "metadata-x.parquet").row(0, named=True)
+    _meta(dp.OPENCS2_META, [{**row, **first}, row])
+    p = dp.Pipeline()
+    p.scan(0.0)
+    assert list(p.archives) == (["opencs2-95-m1"] if taken else []) and dem.exists()
+    assert [r["reason"] for r in _ledger()] == ([] if taken else [
+        "refused: the dataset lists demos/shard-x/95/team-a-vs-team-b-m1-nuke.dem more than once with different ids, "
+        "map or size"])
 
 
 def test_the_inbox_must_be_a_folder_made_for_it(tmp_path, monkeypatch):
@@ -212,11 +310,12 @@ def test_the_fetcher_keeps_the_floor_after_what_downloads_in_progress_still_writ
 class _HuggingFace:
     """Serves one stored file the way Hugging Face does: resolve/<path> redirects (302) to the blob with the file's
     SHA-256 and size in X-Linked-ETag and X-Linked-Size; the blob honours Range. bad: blob bodies to send wrong,
-    one per request, before right ones; fail: blob requests to answer 500 first. The first ranged blob request pauses
-    after its first 100 bytes until release is set."""
+    one per request, before right ones; fail: blob requests to answer 500 first; extra: bytes sent after the file,
+    with no Content-Length if length is False. The first ranged blob request pauses after its first 100 bytes until
+    release is set."""
 
-    def __init__(self, data: bytes, bad: list[bytes] = (), fail: int = 0):
-        self.data, self.bad, self.fail = data, list(bad), fail
+    def __init__(self, data: bytes, bad: list[bytes] = (), fail: int = 0, extra: bytes = b"", length: bool = True):
+        self.data, self.bad, self.fail, self.extra, self.length = data, list(bad), fail, extra, length
         self.ranges, self.paused, self.release = [], threading.Event(), threading.Event()
         outer = self
 
@@ -245,11 +344,12 @@ class _HuggingFace:
                 rng = self.headers.get("Range")
                 outer.ranges.append(rng)
                 start = int(rng.removeprefix("bytes=").split("-")[0]) if rng else 0
-                body = data[start:]
+                body = data[start:] + outer.extra
                 self.send_response(206 if rng else 200)
                 if rng:
                     self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
-                self.send_header("Content-Length", str(len(body)))
+                if outer.length:
+                    self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body[:100])
                 self.wfile.flush()
@@ -320,19 +420,51 @@ def test_a_partial_download_that_does_not_hash_right_is_fetched_again_then_given
     assert not final.exists() and not dp.sidecar_path(final).exists()
 
 
-def test_a_failed_download_is_tried_again_after_a_growing_wait(tmp_path, monkeypatch):
-    # A transient server error gave the map up for the run; retrying at once would hammer a struggling server.
+def test_a_failed_download_is_tried_again_after_1_2_4_and_8_minutes(tmp_path, monkeypatch):
+    # A transient server error gave the map up for the run; retrying at once would hammer a struggling server. The
+    # clock is fake and moves only while the fetcher waits, so the starts are exact.
     inbox = tmp_path / "inbox"
     inbox.mkdir()
-    server = _HuggingFace(DEMO, fail=2)
+    server = _HuggingFace(DEMO, fail=4)
     server.release.set()
     monkeypatch.setattr(fo, "pipeline_status", lambda url: dict(capacity=True, want=4, pending=0, extracting=0))
+    now, starts, real = [0.0], [], fo.download
+    monkeypatch.setattr(fo, "download", lambda *a: (starts.append(now[0]), real(*a))[1])
     try:
-        results = fo.run([MAP], inbox, "unused", 1, 0.0, threading.Event(), base_url=server.url, wait_s=0.01,
-                         retry_s=0.05)
+        results = fo.run([MAP], inbox, "unused", 1, 0.0, threading.Event(), base_url=server.url,
+                         clock=lambda: now[0], wait=lambda s: now.__setitem__(0, now[0] + s))
     finally:
         server.httpd.shutdown()
     assert results == {"opencs2-2390001-m1": "done"} and MAP.target(inbox).read_bytes() == DEMO
+    assert [b - a for a, b in zip(starts, starts[1:])] == [60.0, 120.0, 240.0, 480.0]
+
+
+@pytest.mark.parametrize("length", [True, False])
+def test_a_download_never_writes_past_the_files_size(tmp_path, length):
+    # Review 3 of PR 67: the fetcher wrote whatever the server sent, so a server sending more (with no length, or a
+    # wrong one) could fill the disk past the floor the fetcher keeps.
+    inbox = tmp_path / "inbox"
+    server = _HuggingFace(DEMO, extra=b"x" * 50_000, length=length)
+    server.release.set()
+    try:
+        with pytest.raises(ValueError, match=f"not the {len(DEMO)} left" if length else "sent more than"):
+            fo.download(MAP, server.url + MAP.file_name, inbox, threading.Event())
+    finally:
+        server.httpd.shutdown()
+    final = MAP.target(inbox)
+    part = final.with_name(final.name + ".part")
+    assert not final.exists() and (part.stat().st_size if part.exists() else 0) <= len(DEMO)
+
+
+def test_the_fetcher_never_claims_a_folder_that_holds_files(tmp_path):
+    # The pipeline deletes the demos in a folder holding the marker; the fetcher, the other writer of the inbox, must
+    # not write it into a folder that is in use.
+    used = tmp_path / "used"
+    used.mkdir()
+    (used / "match.dem").write_bytes(b"x")
+    with pytest.raises(SystemExit):
+        fo.main(["--inbox", str(used), "--dry-run"])
+    assert not (used / dp.INBOX_MARKER).exists()
 
 
 def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_path):

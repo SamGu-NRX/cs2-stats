@@ -185,14 +185,20 @@ def fetch_rest(url: str, part: Path, size: int, stop: threading.Event) -> bool:
             if r.status == 206:  # another range or another total: nothing of it can be appended
                 raise ValueError(f"{part.name}: asked for bytes {have}- of {size}, got {r.headers.get('Content-Range')}")
             have = 0  # the server sent the whole file: start over
-        if not have and r.headers.get("Content-Length") not in (None, str(size)):
-            raise ValueError(f"{part.name}: the server sends {r.headers.get('Content-Length')} bytes, not {size}")
+        left = size - have
+        if r.headers.get("Content-Length") not in (None, str(left)):
+            raise ValueError(f"{part.name}: the server sends {r.headers.get('Content-Length')} bytes, "
+                             f"not the {left} left")
+        written = 0
         with open(part, "ab" if have else "wb") as f:
-            while not stop.is_set():
-                block = r.read(CHUNK)
+            while not stop.is_set() and written < left:  # never past the file's size, whatever the server sends
+                block = r.read(min(CHUNK, left - written))
                 if not block:
                     break
                 f.write(block)
+                written += len(block)
+        if not stop.is_set() and written == left and r.read(1):
+            raise ValueError(f"{part.name}: the server sent more than the {left} bytes left")
     return not stop.is_set()
 
 
@@ -227,9 +233,12 @@ def download(m: Map, url: str, inbox: Path, stop: threading.Event) -> bool:
 
 
 def run(todo: list[Map], inbox: Path, status_url: str, concurrency: int, floor_gb: float, stop: threading.Event,
-        base_url: str = BASE_URL, wait_s: float = WAIT_S, retry_s: float = RETRY_S) -> dict[str, str]:
+        base_url: str = BASE_URL, wait_s: float = WAIT_S, retry_s: float = RETRY_S, clock=None,
+        wait=None) -> dict[str, str]:
     """Download todo in order, paced by room(); {loose id: done | stopped | error: ...}. A failed map is queued again
-    after retry_s, doubling, up to ATTEMPTS downloads."""
+    after retry_s, doubling, up to ATTEMPTS downloads. clock and wait (seconds) default to the monotonic clock and the
+    stop event's wait."""
+    clock, wait = clock or time.monotonic, wait or stop.wait
     results: dict[str, str] = {}
     running: dict[str, tuple[threading.Thread, Map]] = {}
     tries: dict[str, int] = {}
@@ -249,7 +258,7 @@ def run(todo: list[Map], inbox: Path, status_url: str, concurrency: int, floor_g
         part = m.target(inbox).with_name(m.target(inbox).name + ".part")
         return max(0, m.demo_bytes - (part.stat().st_size if part.exists() else 0))
 
-    queue = [(0.0, m) for m in todo]  # (not before, map)
+    queue = [(clock(), m) for m in todo]  # (not before, map)
     try:
         while (queue or running) and not stop.is_set():
             for key in [k for k, (t, _) in running.items() if not t.is_alive()]:
@@ -258,8 +267,9 @@ def run(todo: list[Map], inbox: Path, status_url: str, concurrency: int, floor_g
                 if results.get(key, "").startswith("error") and tries[key] < ATTEMPTS:
                     delay = retry_s * 2 ** (tries[key] - 1)
                     log.info("%s: trying again in %.0f s (attempt %d of %d)", key, delay, tries[key] + 1, ATTEMPTS)
-                    queue.append((time.monotonic() + delay, m))
-            ready = [i for i, (t0, _) in enumerate(queue) if t0 <= time.monotonic()]
+                    queue.append((clock() + delay, m))
+            now = clock()
+            ready = [i for i, (t0, _) in enumerate(queue) if t0 <= now]
             if ready and len(running) < concurrency:
                 m = queue[ready[0]][1]
                 reserved = sum(left_to_write(r) for _, r in running.values()) / 1e9
@@ -272,7 +282,10 @@ def run(todo: list[Map], inbox: Path, status_url: str, concurrency: int, floor_g
                     running[key][0].start()
                     continue
                 log.info("waiting: %s", why)
-            stop.wait(wait_s if ready else 1.0)
+            if running:  # a download's end is what can change; wait for it, up to a while
+                next(iter(running.values()))[0].join(wait_s if ready else 1.0)
+            else:  # until the next retry is due, or a while if room was what lacked
+                wait(wait_s if ready else min((t0 - now for t0, _ in queue), default=wait_s))
     except KeyboardInterrupt:
         log.info("stopping; partial downloads stay for the next run to resume")
         stop.set()
