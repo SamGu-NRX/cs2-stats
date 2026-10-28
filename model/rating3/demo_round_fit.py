@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from demo_paths import column, demo_layout
+from join_demos import joined_players
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -273,7 +274,7 @@ def build_duel_events(root: Path, joins: list[dict]) -> tuple[list[dict], list[d
         if not player_rounds:
             continue
         kills = pq.read_table(directory / "kills.parquet").to_pylist()
-        names = {str(row["steamid"]): normalize(row["name"]) for row in player_rounds}
+        names = joined_players(join)  # {steamid: HLTV name} as the join paired them, not the in-game names
         round_players = {(int(row["round"]), str(row["steamid"])): row for row in player_rounds}
         for name, target in target_by_name.items():
             for side in (None, "ct", "t"):
@@ -322,7 +323,7 @@ def build_round_rows(root: Path, joins: list[dict], duel_model: dict) -> list[di
     output = []
     for join in joins:
         directory = demo_layout(root, join["demo"]).directory
-        required = ("rounds.parquet", "kills.parquet", "damages.parquet", "players.parquet")
+        required = ("rounds.parquet", "kills.parquet", "damages.parquet")
         if not all((directory / name).exists() for name in required):
             continue
         player_rounds, exact_game_damage = load_player_rounds(directory)
@@ -332,10 +333,9 @@ def build_round_rows(root: Path, joins: list[dict], duel_model: dict) -> list[di
         targets = parse_targets(hltv)
         swing = load_hltv_round_swing(hltv)
         rounds = {int(row["round"]): row for row in pq.read_table(directory / "rounds.parquet").to_pylist()}
-        players = pq.read_table(directory / "players.parquet").to_pylist()
         kills = pq.read_table(directory / "kills.parquet").to_pylist()
         damages = pq.read_table(directory / "damages.parquet").to_pylist()
-        names = {str(row["steamid"]): normalize(row["name"]) for row in players}
+        names = joined_players(join)  # {steamid: HLTV name} as the join paired them, not the in-game names
         round_player = {(int(row["round"]), str(row["steamid"])): row for row in player_rounds}
         valid_players = {
             (round_number, steamid): target
