@@ -150,6 +150,36 @@ def test_a_finished_loose_demo_left_by_a_crash_is_deleted_at_the_next_start(tmp_
     assert "was still there" in caplog.text
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery reads and deletes through a Win32 handle "
+                    "(download_copies.delete_small_if); the Windows CI job runs this")
+def test_a_sidecar_left_by_a_stop_between_the_demo_and_its_deletion_goes_at_the_next_start(tmp_path, monkeypatch):
+    # A stop after the finished demo was deleted and before its sidecar was left the sidecar for good: recovery
+    # looked only for demos. A sidecar whose ids have no ledger row is someone else's and stays.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "123", 1, "de_cache", "team-a-vs-team-b-m1-cache.dem", b"demo bytes" * 100)
+    stranger = _loose(inbox, "456", 1, "de_nuke", "team-c-vs-team-d-m1-nuke.dem", b"other demo" * 100)
+    stranger.unlink()
+    meta = dp.read_sidecar(dem)
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dem, id=dp.loose_id(meta), rar_bytes=dem.stat().st_size, rar_sha256=meta["sha256"], loose=meta,
+                   state="parsing", slug="team-a-vs-team-b-123", work=dp.WORK_DIR / "w")
+    a.work.mkdir()
+    a.dems, a.results = [dem], {dem.name: {"ok": True, "map": "m1-cache"}}
+    p.archives[a.id] = a
+    real = dp.safe_unlink
+
+    def stops_at_the_sidecar(path, missing_ok=False):
+        if str(path).endswith(".meta.json"):
+            raise OSError("the pipeline stopped here")
+        real(path, missing_ok=missing_ok)
+    monkeypatch.setattr(dp, "safe_unlink", stops_at_the_sidecar)
+    p.finish_archives()
+    monkeypatch.setattr(dp, "safe_unlink", real)
+    assert not dem.exists() and dp.sidecar_path(dem).exists()
+    assert dp.Pipeline().recover_finished() == [dp.sidecar_path(dem)]  # the restart
+    assert not dp.sidecar_path(dem).exists() and dp.sidecar_path(stranger).exists()
+
+
 def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
     # Without its HLTV ids a map cannot be joined to its scoreboard; it must not be parsed as an anonymous map.
     inbox = _isolate(tmp_path, monkeypatch)

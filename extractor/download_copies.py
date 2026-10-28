@@ -125,22 +125,40 @@ def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
     return None
 
 
-def delete_verified(path: Path, size: int, sha256: str) -> str | None:
-    """Delete path only if it is the file described: one plain file of this size and SHA-256. It is opened with no
-    sharing, every check reads that handle, and the deletion goes through it, so the file deleted is the file
-    checked; nothing can replace it in between. Returns why the file was kept, or None once it is deleted. Raises
-    OSError if it cannot be opened alone or the deletion is refused (on other systems than Windows, always)."""
+def _delete_through(path: Path, check) -> str | None:
+    """Open path with no sharing, refuse it unless it is one plain file and check(info, handle) returns None, and
+    delete it through that handle. Returns why it was kept, or None once deleted."""
     h = _open(path)
     try:
         info = _info(h)
-        why = not_plain(info) or (f"size {info.size} is not {size}" if info.size != size else None)
-        if why is None and _sha256(h) != sha256:
-            why = "SHA-256 differs"
+        why = not_plain(info) or check(info, h)
         if why is None:
             _mark_deleted(h)
         return why
     finally:
         _close(h)
+
+
+def delete_verified(path: Path, size: int, sha256: str) -> str | None:
+    """Delete path only if it is the file described: one plain file of this size and SHA-256. It is opened with no
+    sharing, every check reads that handle, and the deletion goes through it, so the file deleted is the file
+    checked; nothing can replace it in between. Returns why the file was kept, or None once it is deleted. Raises
+    OSError if it cannot be opened alone or the deletion is refused (on other systems than Windows, always)."""
+    def check(info: FileInfo, h) -> str | None:
+        if info.size != size:
+            return f"size {info.size} is not {size}"
+        return "SHA-256 differs" if _sha256(h) != sha256 else None
+    return _delete_through(path, check)
+
+
+def delete_small_if(path: Path, accept, max_bytes: int = 1 << 16) -> str | None:
+    """Delete path, a small file, only if accept(its bytes) returns None, the bytes read through the same unshared
+    handle the deletion goes through (as delete_verified). Returns why it was kept, or None once deleted."""
+    def check(info: FileInfo, h) -> str | None:
+        if info.size > max_bytes:
+            return f"{info.size} bytes, more than {max_bytes}"
+        return accept(_read(h, info.size))
+    return _delete_through(path, check)
 
 
 def candidates(folder: Path, d: Download) -> list[Path]:
@@ -327,6 +345,16 @@ if sys.platform == "win32":
                 return sha.hexdigest()
             sha.update(memoryview(buf)[:got.value])
 
+    def _read(h, size: int) -> bytes:
+        buf, got, out = ctypes.create_string_buffer(max(size, 1)), wintypes.DWORD(), bytearray()
+        while len(out) < size:
+            if not _k32.ReadFile(h, buf, size - len(out), ctypes.byref(got), None):
+                raise _fail("ReadFile")
+            if got.value == 0:
+                break
+            out += memoryview(buf)[:got.value]
+        return bytes(out)
+
     def _mark_deleted(h) -> None:
         info = _FILE_DISPOSITION_INFO(True)
         if not _k32.SetFileInformationByHandle(h, _FILE_DISPOSITION_INFO_CLASS, ctypes.byref(info),
@@ -357,7 +385,7 @@ else:
     def _unsupported(*_a):
         raise OSError("the browser's Downloads copies are handled on Windows only")
 
-    _open = _close = _info = _sha256 = _mark_deleted = _unsupported
+    _open = _close = _info = _sha256 = _read = _mark_deleted = _unsupported
 
     def downloads_folder() -> Path:
         raise Refused("the Downloads known folder is read on Windows only")

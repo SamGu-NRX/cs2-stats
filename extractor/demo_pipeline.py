@@ -356,8 +356,11 @@ class Job:
 LOOSE_SOURCES = ("opencs2",)  # where a loose demo may come from (its sidecar's source)
 
 
+SIDECAR_SUFFIX = ".meta.json"
+
+
 def sidecar_path(dem: Path) -> Path:
-    return dem.with_name(dem.stem + ".meta.json")
+    return dem.with_name(dem.stem + SIDECAR_SUFFIX)
 
 
 def claim_inbox(inbox: Path, data_root: Path, downloads: Path | None) -> str | None:
@@ -1649,6 +1652,57 @@ class Pipeline:
             log.warning("archive %s is done in the ledger but its RAR %s was still there (the pipeline stopped "
                         "before deleting it); deleted it", aid, f)
             deleted.append(f)
+        return deleted + self.recover_orphan_sidecars()
+
+    def recover_orphan_sidecars(self) -> list[Path]:
+        """At start: delete each loose demo's sidecar left without its demo, in the inbox (or one folder down) or in
+        a failed/ folder, by a crash or a refused deletion between the demo and the sidecar. One goes only if the
+        ledger's last row for the ids it names is done or failed, and it names that row's SHA-256 when the row has
+        one; its bytes are read and it is deleted through one unshared handle (download_copies.delete_small_if).
+        Each folder is checked as stitch.plain_folder: no link, junction or other reparse point, and it resolves
+        under its root. Errors are logged per file. Returns the sidecars deleted."""
+        roots = [FAILED_DIR] if FAILED_DIR.exists() else []
+        if INBOX is not None and (INBOX / INBOX_MARKER).is_file():
+            roots.append(INBOX)
+        folders: list[Path] = []
+        for root in roots:
+            try:
+                subs, refused = stitch.plain_subfolders(root, root)
+            except (stitch.NotPlainFolder, OSError) as e:
+                log.error("orphan sidecars: %s left alone: %s", root, e)
+                continue
+            folders += ([root] if root == INBOX else []) + subs
+            for why in refused:
+                log.warning("orphan sidecars: left alone, %s", why)
+        deleted = []
+        for folder in folders:
+            for side in sorted(folder.glob("*" + SIDECAR_SUFFIX)):
+                dem = side.with_name(side.name[:-len(SIDECAR_SUFFIX)] + ".dem")
+                if os.path.lexists(dem) or not stat.S_ISREG(os.lstat(side).st_mode):
+                    continue
+
+                def accept(data: bytes) -> str | None:
+                    try:
+                        meta = json.loads(data.decode("utf-8"))
+                        aid = loose_id(meta)
+                    except (ValueError, KeyError, TypeError) as e:
+                        return f"not a sidecar this pipeline reads: {e}"
+                    rec = self.ledger.get(aid) or {}
+                    if rec.get("status") not in ("done", "failed"):
+                        return f"the ledger's last row for {aid} is not done or failed"
+                    if rec.get("rar_sha256") and meta.get("sha256") != rec["rar_sha256"]:
+                        return f"it names SHA-256 {meta.get('sha256')}, the row for {aid} {rec['rar_sha256']}"
+                    return None
+                try:
+                    why = download_copies.delete_small_if(_deletable(side), accept)
+                except (OSError, ValueError) as e:
+                    log.error("orphan sidecar %s could not be checked or deleted (%s); left in place", side, e)
+                    continue
+                if why:
+                    log.info("sidecar %s has no demo but stays: %s", side, why)
+                    continue
+                log.warning("deleted sidecar %s: its demo was gone, left by a stop between the two deletions", side)
+                deleted.append(side)
         return deleted
 
     def stitch_parts(self, a: Archive, failed: str | None = None) -> dict[str, dict]:
