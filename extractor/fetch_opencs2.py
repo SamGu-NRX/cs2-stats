@@ -108,13 +108,13 @@ def dataset_maps(meta_dir: Path) -> list[Map]:
 
 
 def plan(maps: list[Map], held: set[tuple[str, str]], ledger: dict[str, dict], inbox: Path) -> list[Map]:
-    """The maps to download: their HLTV scoreboard is held, the ledger has no record of their id (published, failed
-    or refused), and the inbox does not hold them. A "dropped" row counts as no record: the pipeline wrote it when it
-    deleted a kept failure to stay under its cap, so the demo is gone and is to be fetched again."""
-    def recorded(aid: str) -> bool:
-        return aid in ledger and ledger[aid].get("status") != "dropped"
+    """The maps to download: their HLTV scoreboard is held, the ledger has no record of their id (published, failed,
+    refused or dropped), and the inbox does not hold them. A "dropped" row (a kept failure the pipeline deleted to
+    stay under its cap) counts as a record like a failed one: fetched again, most would fail again (10 of the 42 the
+    overnight fetch dropped). --refetch-fixed (refetch_plan) brings back those whose failure a later extractor
+    fixes."""
     return [m for m in maps if (m.match_id, m.map_name.lower().removeprefix("de_")) in held
-            and not recorded(dp.loose_id(m.ids)) and not m.target(inbox).exists()]
+            and dp.loose_id(m.ids) not in ledger and not m.target(inbox).exists()]
 
 
 # Failure messages a later extractor fixes, and which: a map whose demo the pipeline deleted after one of these
