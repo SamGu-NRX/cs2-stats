@@ -25,9 +25,15 @@ FIXTURE = DATA / "fixtures" / "fixture-d-vs-split-m1-cache-p1.dem"  # an HLTV Ca
 
 
 def _isolate(tmp_path, monkeypatch) -> Path:
-    """Every folder and file the pipeline writes, under tmp_path; the inbox at tmp_path/inbox."""
-    monkeypatch.setattr(dp, "DATA_ROOT", tmp_path)
-    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "DOWNLOADS", "PARTS_DIR", "INBOX"):
+    """Every folder and file the pipeline writes, under tmp_path/data; the inbox beside it, outside the data folder as
+    in use (a finished demo there was refused deletion when only the data folder was allowed)."""
+    data = tmp_path / "data"
+    monkeypatch.setattr(dp, "DATA_ROOT", data)
+    for name in ("DEMOS_DIR", "WORK_DIR", "FAILED_DIR", "LOG_DIR", "PARTS_DIR"):
+        d = data / name.lower()
+        d.mkdir(parents=True)
+        monkeypatch.setattr(dp, name, d)
+    for name in ("DOWNLOADS", "INBOX"):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(dp, name, d)
@@ -63,7 +69,7 @@ def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatc
     shutil.copyfile(FIXTURE, dem)
     dp.sidecar_path(dem).write_text(json.dumps(dict(source="opencs2", hltv_match_id="123", hltv_map_index=1,
                                                     map_name="de_cache", match_date="2026-04-01T12:00:00")))
-    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "run")
+    monkeypatch.setattr(dp, "RUN_CODE", tmp_path / "data" / "run")
     dp.freeze_code()
     p = dp.Pipeline()
     p.available_gb = lambda: 20.0

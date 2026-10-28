@@ -699,12 +699,13 @@ def bind_children_to_this_process() -> None:
 
 
 def _deletable(path: Path) -> Path:
-    """The resolved path, if it lies strictly inside DATA_ROOT, or inside DOWNLOADS (a finished RAR)."""
+    """The resolved path, if it lies strictly inside DATA_ROOT, inside DOWNLOADS (a finished RAR) or inside INBOX (a
+    finished loose demo and its sidecar)."""
     r = Path(path).resolve()
-    for root in (DATA_ROOT.resolve(), *([DOWNLOADS.resolve()] if DOWNLOADS else [])):
+    for root in (DATA_ROOT.resolve(), *(d.resolve() for d in (DOWNLOADS, INBOX) if d)):
         if r != root and root in r.parents:
             return r
-    raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT} or {DOWNLOADS}")
+    raise ValueError(f"refusing to delete {r}: not inside {DATA_ROOT}, {DOWNLOADS} or {INBOX}")
 
 
 def safe_rmtree(path: Path, ignore_errors: bool = False) -> None:
