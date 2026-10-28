@@ -1,9 +1,9 @@
 // The optional packs folder (%APPDATA%\BotMatchStats\packs: pro scores, agent art, the CS2 icon pack,
 // the win-probability pack and a local pro pool), served to `vite dev` as GET /__packs/file?f=<rel>,
-// the way the desktop app's read_pack command serves it. Only the dev server gets this route: a
-// `vite preview` of a production build must not serve private files. The dev server can listen beyond
-// this machine (TAURI_DEV_HOST=0.0.0.0, for a phone on the LAN), so the route answers loopback
-// clients only.
+// the way the desktop app's read_pack command serves it. Only the dev server serves the packs: a
+// `vite preview` of a production build must not serve private files, so it answers 404, the app's
+// "no such pack". The dev server can listen beyond this machine (TAURI_DEV_HOST=0.0.0.0, for a phone
+// on the LAN), so the route answers loopback clients only.
 import { existsSync, promises as fs, realpathSync } from "node:fs";
 import path from "node:path";
 import type { Connect, Plugin } from "vite";
@@ -57,5 +57,12 @@ export function packsFolder(root: string | null = process.env.APPDATA ? path.joi
     res.setHeader("Cache-Control", "no-store");
     return res.end(a.bytes);
   };
-  return { name: "cs2-packs-folder", configureServer: (s) => { s.middlewares.use(handler); } };
+  // preview answers that there are no packs: without this the route falls through to the build's index page,
+  // whose 200 the app reads as a pack and fails to start on
+  const absent: Connect.NextHandleFunction = (req, res, next) => {
+    if (requestUrl(req)?.pathname !== "/__packs/file") return next();
+    res.statusCode = 404;
+    return res.end();
+  };
+  return { name: "cs2-packs-folder", configureServer: (s) => { s.middlewares.use(handler); }, configurePreviewServer: (s) => { s.middlewares.use(absent); } };
 }

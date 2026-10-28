@@ -69,11 +69,16 @@ describe("the packs route", () => {
     expect(["::2", "::ffff:10.0.0.1", "1.127.0.0", "localhost", ""].some(isLoopback)).toBe(false);
   });
 
-  it("exists for `vite dev` only, never for `vite preview` of a production build", () => {
+  it("serves the packs to `vite dev` only; `vite preview` of a production build answers that there are none", async () => {
     // fails if the private packs are served by preview again
     const p = packsFolder(root);
     expect(typeof p.configureServer).toBe("function");
-    expect(p.configurePreviewServer).toBeUndefined();
+    let preview: Connect.NextHandleFunction | null = null;
+    (p.configurePreviewServer as (s: unknown) => void)({ middlewares: { use: (h: Connect.NextHandleFunction) => { preview = h; } } });
+    const res = { statusCode: 0, body: undefined as unknown, setHeader() {}, end(b?: unknown) { this.body = b; } };
+    const req = { url: "/__packs/file?f=pros.json", headers: { host: "localhost" }, socket: { remoteAddress: "127.0.0.1" } };
+    await preview!(req as never, res as never, () => { throw new Error("passed on"); });
+    expect([res.statusCode, res.body]).toEqual([404, undefined]);
     const config = readFileSync(path.resolve(import.meta.dirname, "../../vite.config.ts"), "utf8");
     expect(config).not.toContain('"/__packs');
   });

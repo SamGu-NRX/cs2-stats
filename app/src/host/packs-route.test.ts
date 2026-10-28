@@ -39,11 +39,11 @@ const url = (s: { httpServer: { address(): unknown } | null }, p: string) => `ht
 
 describe("/__packs on real servers", () => {
   it("answers on the dev server and not on the preview server", async () => {
-    // fails if configurePreviewServer serves the private packs again
+    // fails if configurePreviewServer serves the private packs again, or answers with the build's index
+    // page, which the app reads as a pack and fails to start on
     const d = await fetch(url(dev, "/__packs/file?f=pros.json"));
     expect([d.status, await d.text()]).toEqual([200, '{"pros":[]}']);
     const p = await fetch(url(prev, "/__packs/file?f=pros.json"));
-    expect(await p.text()).not.toContain('"pros"');
-    expect(p.headers.get("content-type") ?? "").not.toContain("application/json");
+    expect([p.status, await p.text()]).toEqual([404, ""]);
   });
 });
