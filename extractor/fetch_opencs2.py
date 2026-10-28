@@ -117,6 +117,36 @@ def plan(maps: list[Map], held: set[tuple[str, str]], ledger: dict[str, dict], i
             and not recorded(dp.loose_id(m.ids)) and not m.target(inbox).exists()]
 
 
+# Failure messages a later extractor fixes, and which: a map whose demo the pipeline deleted after one of these
+# (ledger status "dropped" after a "failed" row naming it) is fetched again by --refetch-fixed. Each is a substring
+# of the failure's own message, as the ledger row's reason holds it.
+FIXED_FAILURES = {
+    "'str' object has no attribute 'parse_ticks'": "#76: the departed players' read went to a string",
+    "has no flashbang detonation on its tick": "1.18: blinds inside a voided attempt",
+    "and no sixth slot qualifies to be left out": "1.18: a sixth player who left for the spectators before freeze end",
+    "hit_table_over_game_damage": "1.18: a hit on a round's start tick",
+}
+
+
+def refetch_plan(maps: list[Map], rows: list[dict], inbox: Path) -> tuple[list[Map], list[str]]:
+    """(the maps to fetch again, the ids still kept in failed/) among those whose last failure is one
+    FIXED_FAILURES names. rows: every ledger row, oldest first (the "dropped" row a cap deletion writes holds
+    no reason, so the failure is the last "failed" row before it). A map whose latest row is "dropped" lost its
+    demo and is fetched again unless the inbox holds it; one whose latest row is "failed" is still kept in
+    failed/, where the pipeline's --retry-failed takes it once the extractor version changes, and a fresh copy
+    in the inbox would be skipped as failed already."""
+    latest, reason = {}, {}
+    for r in rows:
+        latest[r["id"]] = r.get("status")
+        if r.get("status") == "failed":
+            reason[r["id"]] = str(r.get("reason") or "")
+    fixed = lambda aid: any(k in reason.get(aid, "") for k in FIXED_FAILURES)
+    todo = [m for m in maps if latest.get(dp.loose_id(m.ids)) == "dropped" and fixed(dp.loose_id(m.ids))
+            and not m.target(inbox).exists()]
+    kept = sorted(aid for aid, st in latest.items() if st == "failed" and aid.startswith("opencs2-") and fixed(aid))
+    return todo, kept
+
+
 def room(status: dict, ours: int, need_gb: float, inbox: Path, floor_gb: float, reserved_gb: float = 0.0) -> str | None:
     """Why a download may not start now, or None. ours: downloads of this fetcher in progress; reserved_gb: what they
     still have to write."""
@@ -309,6 +339,9 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="download at most this many maps (0: all that qualify)")
     ap.add_argument("--concurrency", type=int, default=MAX_CONCURRENCY, choices=range(1, MAX_CONCURRENCY + 1))
     ap.add_argument("--dry-run", action="store_true", help="list what would be downloaded, and stop")
+    ap.add_argument("--refetch-fixed", action="store_true",
+                    help="fetch only the maps whose demo was deleted after a failure a later extractor fixes "
+                         "(FIXED_FAILURES), instead of the usual plan")
     a = ap.parse_args(argv)
     if a.inbox is None:
         ap.error("set CS2_DEMO_INBOX or pass --inbox")
@@ -317,7 +350,12 @@ def main(argv=None) -> int:
     why = dp.claim_inbox(a.inbox, dp.DATA_ROOT, dp.DOWNLOADS)
     if why:
         ap.error(f"{a.inbox} cannot be the inbox: {why}")
-    todo = plan(dataset_maps(a.meta), held_scoreboards(a.hltv), dp.read_ledger(a.ledger), a.inbox)
+    if a.refetch_fixed:
+        todo, kept = refetch_plan(dataset_maps(a.meta), dp.read_jsonl(a.ledger), a.inbox)
+        log.info("%d failures of a fixed kind are kept in failed/; the pipeline retries them with --retry-failed: %s",
+                 len(kept), ", ".join(kept))
+    else:
+        todo = plan(dataset_maps(a.meta), held_scoreboards(a.hltv), dp.read_ledger(a.ledger), a.inbox)
     if a.limit:
         todo = todo[:a.limit]
     log.info("%d maps to download, %.1f GB", len(todo), sum(m.demo_bytes for m in todo) / 1e9)
