@@ -12,6 +12,18 @@ export interface Idle {
   cancel(): void;
 }
 
+/**
+ * One macrotask turn: a call posted to the worker in the meantime runs before this resolves. A
+ * MessageChannel message, since setTimeout clamps nested calls to 4 ms.
+ */
+export function macrotask(): Promise<void> {
+  return new Promise((resolve) => {
+    const c = new MessageChannel();
+    c.port1.onmessage = () => { c.port1.close(); resolve(); };
+    c.port2.postMessage(null);
+  });
+}
+
 export function idle(quietMs: number, timers: { set: (f: () => void, ms: number) => unknown; clear: (t: unknown) => void } = { set: (f, ms) => setTimeout(f, ms), clear: (t) => clearTimeout(t as number) }): Idle {
   let running = 0;
   let next: (() => void) | null = null;

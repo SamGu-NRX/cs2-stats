@@ -30,7 +30,7 @@ import type { Api, Call, FromWorker, Method, PositionsResult, Query, Rolled, ToW
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
 import { deriveFile, fileTables, isFolder, type Cached } from "./derive-file";
-import { idle, readWhenIdle } from "./idle";
+import { idle, macrotask, readWhenIdle } from "./idle";
 import { toolLoad } from "./tool-tables";
 import { presenceThroughStore, storedStale, type StoredPresence } from "./stored-presence";
 import { genCache } from "./gen-cache";
@@ -130,19 +130,21 @@ const TOOL_LOAD = toolLoad();
 /**
  * Decoding the open match's tool tables was most of Utility's first open on a pro match: 189 to 285 ms,
  * against 51 to 86 ms once decoded (release build). It runs ahead once the worker has had no call for
- * QUIET_MS, so it takes nothing from the overview's own calls; a call arriving during the read waits for
- * at most one table's decode. QUIET_MS is a guess meant to outlast a page's follow-up calls; no other
- * value was measured.
+ * QUIET_MS, so it takes nothing from the overview's own calls. It yields a turn between tables
+ * (loadTables between), so a call that arrives meanwhile waits for at most the table being decoded; a
+ * tool call that needs these tables waits for the read. QUIET_MS is a guess meant to outlast a page's
+ * follow-up calls; no other value was measured.
  */
 const QUIET_MS = 150;
 const quiet = idle(QUIET_MS);
-const readOpened = readWhenIdle(quiet, (file) => index.get(file)?.key, (file) => { tablesOf(file).catch(() => {}); });
+const readOpened = readWhenIdle(quiet, (file) => index.get(file)?.key, (file) => { tablesOf(file, macrotask).catch(() => {}); });
 let openTables: { file: string; key: string; tables: Promise<RosterTables> } | null = null;
-function tablesOf(file: string): Promise<RosterTables> {
+/** `between`: a turn between table decodes (loadTables), for the idle read only; a tool call's read runs straight through. */
+function tablesOf(file: string, between?: () => Promise<void>): Promise<RosterTables> {
   const ix = index.get(file);
   if (!ix) return Promise.reject(new Error(`${file} is not in the match folder; rescan it`));
   if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
-  const tables = fileTables(file, bytes, povs.get(file), TOOL_LOAD.optional, TOOL_LOAD.columns).then(rosterTables);
+  const tables = fileTables(file, bytes, povs.get(file), TOOL_LOAD.optional, TOOL_LOAD.columns, between).then(rosterTables);
   const mine = { file, key: ix.key, tables };
   openTables = mine;
   tables.catch(() => { if (openTables === mine) openTables = null; });
