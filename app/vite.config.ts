@@ -269,6 +269,7 @@ export default defineConfig({
   // on a machine that may be running the game.
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    setupFiles: ["src/settle-imports.setup.ts"],
     environment: "node",
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
