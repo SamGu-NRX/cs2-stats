@@ -30,7 +30,7 @@ def main():
         ).stdout
         if '"cs2.exe"' in processes.lower() and not args.while_gaming:
             parser.error("CS2 is running. Close it before model checking.")
-    modules = ("Capture", "Calls", "Publish", "MapGate", "Plugin", "Pipeline")
+    modules = ("Capture", "Calls", "Publish", "MapGate", "Plugin", "Pipeline", "ClipsLaunch", "Archive")
     module = next((m for m in modules if name.startswith(m)), None)
     if module is None:
         parser.error("configuration must start with a supported module name: " + ", ".join(modules))

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 def main():
     results = json.loads((ROOT / "results" / "protocol-summary.json").read_text())
-    required = {p.stem for prefix in ("Publish","MapGate","Plugin","Pipeline")
+    required = {p.stem for prefix in ("Publish","MapGate","Plugin","Pipeline","ClipsLaunch","Archive")
                 for p in ROOT.glob(prefix + "*.cfg")}
     if missing := required - results.keys():
         raise ValueError("missing configurations: " + ", ".join(sorted(missing)))
@@ -30,7 +30,7 @@ def main():
                  "11 RETIRED unlinked / finished; -1 failed. `ppc`/`cached`/`pending` are each pruner's independent state.", ""]
     for name, result in sorted(results.items()):
         config = ROOT / (name + ".cfg")
-        module = next(m for m in ("Capture","Calls","Publish","MapGate","Plugin","Pipeline") if name.startswith(m))
+        module = next(m for m in ("Capture","Calls","Publish","MapGate","Plugin","Pipeline","ClipsLaunch","Archive") if name.startswith(m))
         for key, path in (("model_sha256",ROOT / (module + ".tla")),("config_sha256",config)):
             if result.get(key) != hashlib.sha256(path.read_bytes()).hexdigest():
                 raise ValueError(f"stale or unbound result: rerun {name}")
@@ -47,6 +47,18 @@ def main():
         for i in range(1, len(blocks), 3):
             number, action, body = blocks[i:i+3]
             state = re.search(r"s = \[ (.*?) \]\n", body, re.S)
+            if not state and module in ("ClipsLaunch", "Archive"):
+                # these models keep one TLA+ variable per field; TLC prints each as "/\ name = value"
+                values = {m.group(1): " ".join(m.group(2).split()) for m in
+                          re.finditer(r"(?ms)^/\\ (\w+) = (.*?)(?=^/\\ |^\s*$|\Z)", body)}
+                step = action.lstrip("<").split(" line ")[0]
+                if number == "1":
+                    witnesses.append("1. Initial (see the module's Init)")
+                else:
+                    changes = {k: v for k, v in values.items() if previous.get(k) != v}
+                    witnesses.append(f"{number}. {step}: " + "; ".join(f"{k}={v}" for k, v in changes.items()))
+                previous = values
+                continue
             if not state:
                 witnesses.append(f"{number}. {action.strip()}")
                 continue
