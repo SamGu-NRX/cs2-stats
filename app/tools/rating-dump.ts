@@ -7,12 +7,13 @@
 // per hit) and each round's win-probability path. Each is written beside its final name and renamed
 // into place at the end, so a reader never sees a half-written file.
 // Usage: pnpm rating-dump
-import { createWriteStream, mkdirSync, readFileSync, renameSync, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from "node:fs";
 import path from "node:path";
 import { derive, enemyHit, hitDamage } from "../src/stats/derive";
 import { rosterTables } from "../src/stats/roster";
 import { acceptedJoins, joinFromRecord } from "./demo-joins";
 import { HLTV_DIR, parseHltvMap } from "./hltv";
+import { finishPartials } from "./partial-files";
 import { checkOutput } from "./outputs";
 import { DATA_DIR, WINPROB, mapLabel, proMaps } from "./node-read";
 
@@ -100,10 +101,8 @@ for await (const { dir, t } of proMaps()) {
     }) + "\n");
   }
 }
-await Promise.all(files.map(([s, file]) => new Promise<void>((done, fail) => {
-  s.on("error", fail);
-  s.end(() => { renameSync(`${file}.partial`, file); done(); });
-})));
+// no joined map (a wrong CS2_DEMO_JOINS, an empty demos folder) must not replace the last dump with nothing
+await finishPartials(files, maps, `the rating dump (${joins.size} accepted joins, none with a complete tables folder)`);
 const missing = [...joins.keys()].filter((k) => !found.has(k));
 if (missing.length) console.error(`${missing.length} accepted joins have no complete tables folder now: ${missing.slice(0, 5).join(", ")}`);
 console.log(`joined ${maps} maps, ${n} player-rounds -> ${OUT}`);
