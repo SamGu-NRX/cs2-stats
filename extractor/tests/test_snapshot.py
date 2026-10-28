@@ -194,3 +194,16 @@ def test_blinds_inside_a_voided_attempt_go_with_its_detonations(tmp_path):
     blinds = pl.read_parquet(d / "blinds.parquet")
     assert blinds.filter((pl.col("tick") >= 208751) & (pl.col("tick") <= 228731)).height == 0
     assert pl.read_parquet(d / "grenade_events.parquet").filter(pl.col("recovered")).height == 0
+
+def test_a_hit_on_a_rounds_start_tick_counts_in_the_round_before(tmp_path):
+    # Fixture K (an OpenCS2 Mirage map, 20 rounds): a post-round hit (26 HP) landed on round 11's start tick,
+    # 91619. The game committed it into the damage counter read there, round 10's game_damage; the hit table put
+    # it in round 11, 26 HP over round 11's counter, and the map failed. 5 OpenCS2 maps failed this way.
+    src = FIXTURES / "fixture-k.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; a hit on a round's start tick is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    hits = pl.read_parquet(d / "damages.parquet").filter(pl.col("tick") == 91619)
+    assert hits.select(["round", "dmg_health_capped"]).rows() == [(10, 26)]

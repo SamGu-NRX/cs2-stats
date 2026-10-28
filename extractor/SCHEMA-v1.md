@@ -285,7 +285,7 @@ Every player_death in a counted round. a_* is the attacker, v_* the victim, both
 | `weapon` | String | no | weapon class without weapon_, e.g. ak47 |
 
 ### `damages`
-Every player_hurt in a counted round, plus hits rebuilt from health drops the event stream lost. Key: (tick, attacker_steamid, victim_steamid, row order).
+Every player_hurt in a counted round, plus hits rebuilt from health drops the event stream lost. Key: (tick, attacker_steamid, victim_steamid, row order). A hit on a round's start tick (post-round shooting that lands as the next round starts) has the round before as its `round`: the game commits it into `damage_total` on that tick, which is the earlier round's `player_rounds.game_damage`.
 
 | field | type | null | meaning, units |
 |---|---|---|---|

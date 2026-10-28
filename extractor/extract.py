@@ -1006,6 +1006,18 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> 
     return out
 
 
+def hit_rounds(ticks: pd.Series, rounds_of: pd.Series, rounds: pd.DataFrame) -> pd.Series:
+    """The round each hit is counted in: its stamped round, except a hit on a later round's start tick, which goes
+    to the round before. The game commits post-round damage into damage_total on the next round's start tick, and
+    that read is the previous round's game_damage (game_damage_by_round): one OpenCS2 map's post-round hit on
+    round 11's start tick was in round 10's counter and in round 11's hits, 26 HP over round 11's game_damage."""
+    first = int(rounds["round"].min())
+    before = {int(t): int(r) - 1 for t, r in zip(rounds.start_tick, rounds["round"]) if int(r) > first and not pd.isna(t)}
+    prev = ticks.astype("int64").map(before)
+    move = prev.notna() & (rounds_of == prev + 1)
+    return rounds_of.where(~move, prev).astype(rounds_of.dtype)
+
+
 def hit_table_checks(dmg: pd.DataFrame, player_rounds: pd.DataFrame) -> tuple[list[dict], int]:
     """The hit table against the game's per-round damage counter. (checks, unattributed HP)
 
@@ -1892,6 +1904,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     with Timer(ctx, "dp_damages"):
         h = stamp(ev("player_hurt"))
         h = h[h["round"] > 0].reset_index(drop=True)
+        h["round"] = hit_rounds(h.tick, h["round"], rounds)
         dmg = pd.DataFrame({"tick": h.tick, "round": h["round"],
                             "attacker_steamid": pid(h, "attacker"),
                             "victim_steamid": pid(h, "user"),

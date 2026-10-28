@@ -3076,3 +3076,10 @@ def test_a_recovered_flash_reusing_an_entity_id_gets_its_own_detonation():
     assert [(r["tick"], r["flash_entity_id"]) for r in rows] == [(90200, 93), (90372, 93)]
     assert recovered[["tick", "entity_id", "x"]].values.tolist() == [[90371, 93, 900.0]]
 
+def test_a_hit_on_a_rounds_start_tick_goes_to_the_round_before():
+    # Fixture K's case: a post-round hit on round 11's start tick is in the counter the game commits there, which is
+    # round 10's game_damage. A hit on round 1's start tick has no round before it; one a tick later stays.
+    rounds = pd.DataFrame(dict(round=[1, 10, 11], start_tick=[100, 82713, 91619]))
+    ticks = pd.Series([100, 91599, 91619, 91620])
+    stamped = pd.Series([1, 10, 11, 11], dtype="int16")
+    assert ex.hit_rounds(ticks, stamped, rounds).tolist() == [1, 10, 10, 11]
