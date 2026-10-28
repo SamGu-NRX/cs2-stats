@@ -74,7 +74,11 @@ export function ecoAdjust(c: Ctx): void {
     const prim = pr.best_primary[i] === null ? null : weaponGroup(classFromDisplay(pr.best_primary[i]!));
     const g = prim ?? (pr.equip_value_game[i] === null ? null : groupFromEquip(pr.equip_value_game[i]!));
     const ri = c.riOf(pr.round[i]);
-    if (g && ri !== undefined) freeze.set(ri * 1024 + p, g);
+    if (g && ri !== undefined) {
+      freeze.set(ri * 1024 + p, g);
+      const r = c.pr[ri]?.[p];
+      if (r) r.ecoGroup = g;
+    }
   }
   const groupAt = (ri: number, p: number, primary: string | null, equip: number | null): EcoGroup | null => {
     const prim = primary === null ? null : weaponGroup(classFromDisplay(primary));
@@ -107,6 +111,8 @@ export function ecoAdjust(c: Ctx): void {
       const ga = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
       const gb = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);
       kf.ecoPoints = ga && gb ? killPoints(ga, gb, kf.killerSide!) : null;
+      kf.aGroup = ga;
+      kf.vGroup = gb;
       if (kf.ecoPoints === null) {
         unknown.add(kf.killer!).add(kf.victim);
         if (kf.assister !== null && !kf.flashAssist) unknown.add(kf.assister);

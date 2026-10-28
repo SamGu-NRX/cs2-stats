@@ -9,11 +9,11 @@
 // Usage: pnpm rating-dump
 import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from "node:fs";
 import path from "node:path";
-import { derive, enemyHit, hitDamage } from "../src/stats/derive";
-import { rosterTables } from "../src/stats/roster";
+import { derive } from "../src/stats/derive";
 import { acceptedJoins, joinFromRecord } from "./demo-joins";
 import { HLTV_DIR, parseHltvMap } from "./hltv";
 import { finishPartials } from "./partial-files";
+import { hitRows, killRows } from "./rating-rows";
 import { checkOutput } from "./outputs";
 import { DATA_DIR, WINPROB, mapLabel, proMaps } from "./node-read";
 
@@ -66,40 +66,11 @@ for await (const { dir, t } of proMaps()) {
     }) + "\n");
     n++;
   }
-  // the kills table's economy columns, by (tick, victim), for every enemy kill
-  const rt = rosterTables(t);
-  const k = rt.kills;
-  const at = new Map<string, number>();
-  for (let i = 0; i < k.n; i++) at.set(`${k.tick[i]}:${k.victim_steamid[i]}`, i);
-  for (const kf of f.kills) {
-    const i = at.get(`${kf.tick}:${f.players[kf.victim].id}`);
-    if (i === undefined) continue;
-    kills.write(JSON.stringify({
-      hltv: j.hltv.file, ri: kf.ri, tick: kf.tick, t: kf.t, killer: pid(kf.killer), victim: pid(kf.victim), assister: pid(kf.assister),
-      flashAssist: kf.flashAssist, enemy: kf.enemy, killerSide: kf.killerSide, victimSide: kf.victimSide, weapon: kf.weapon,
-      opening: kf.opening, traded: kf.traded, tradeKill: kf.tradeKill, ecoPoints: kf.ecoPoints, headshot: kf.headshot,
-      aPrimary: k.a_best_primary[i], vPrimary: k.v_best_primary[i], aEquip: k.a_equip_value_game[i], vEquip: k.v_equip_value_game[i],
-      aHealth: k.a_health[i], vActive: k.v_active_weapon[i], aActive: k.a_active_weapon[i], aArmor: k.a_armor[i], vArmor: k.v_armor[i],
-      aHelmet: k.a_helmet[i], vHelmet: k.v_helmet[i],
-      postEnd: kf.tick > f.rounds[kf.ri].endTick,
-      credits: kf.credits.map(([p, v]) => [pid(p), v]),
-    }) + "\n");
-  }
   for (const rf of f.rounds) {
     paths.write(JSON.stringify({ hltv: j.hltv.file, ri: rf.ri, number: rf.number, winner: rf.winner, reason: rf.reason, ctTeam: rf.ctTeam, endTick: rf.endTick, plantTick: rf.plantTick, buy: rf.buy, equip: rf.equip, path: rf.winProb }) + "\n");
   }
-  const d = rt.damages;
-  const riOf = new Map(f.rounds.map((r) => [r.number, r.ri]));
-  const idx = new Map(f.players.map((p, i) => [p.id, i]));
-  for (let i = 0; i < d.n; i++) {
-    if (!enemyHit(rt, i)) continue;
-    const ri = riOf.get(d.round[i]);
-    if (ri === undefined) continue;
-    hits.write(JSON.stringify({
-      hltv: j.hltv.file, ri, tick: d.tick[i], attacker: pid(idx.get(d.attacker_steamid[i]!) ?? null), victim: pid(idx.get(d.victim_steamid[i]) ?? null),
-      dmg: hitDamage(rt, i), hpBefore: d.health_before[i], weapon: d.weapon[i], aSide: d.a_side[i], postEnd: d.tick[i] > f.rounds[ri].endTick,
-    }) + "\n");
-  }
+  for (const row of killRows(f, t, j)) kills.write(JSON.stringify(row) + "\n");
+  for (const row of hitRows(f, t, j)) hits.write(JSON.stringify(row) + "\n");
 }
 // no joined map (a wrong CS2_DEMO_JOINS, an empty demos folder) must not replace the last dump with nothing
 await finishPartials(files, path.join(OUT, "rating-rounds.private.jsonl"),

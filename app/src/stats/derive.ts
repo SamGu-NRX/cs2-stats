@@ -275,7 +275,7 @@ function killFacts(c: Ctx): KillFact[][] {
         killerBlind: k.attackerblind[i], killerInAir: k.attackerinair[i],
         kpos: xy(k.a_x[i], k.a_y[i]), vpos: xy(k.v_x[i], k.v_y[i]), place: k.a_place[i] || null,
         enemy: killer !== null && killer !== victim && killerSide !== null && victimSide !== null && killerSide !== victimSide,
-        opening: false, tradeKill: false, traded: false, ecoPoints: null, credits: [],
+        opening: false, tradeKill: false, traded: false, ecoPoints: null, aGroup: null, vGroup: null, credits: [],
       };
     });
     out.sort((a, b) => a.tick - b.tick);
@@ -369,7 +369,7 @@ function playerRounds(c: Ctx): (WorkRound | null)[][] {
       ownBuy: rf.buy[side], oppBuy: rf.buy[side === "CT" ? "T" : "CT"], ownTier: rf.tier[side], oppTier: rf.tier[side === "CT" ? "T" : "CT"],
       aliveAtStart: i === undefined ? null : t.alive_at_start[i],
       equip: i === undefined ? null : t.equip_value_game[i], moneyStart: i === undefined ? null : t.money_start[i],
-      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ...spawnOf(c, rf.ri, p), m,
+      money: i === undefined ? null : t.money[i], spent: i === undefined ? null : t.cash_spent[i], primary: i === undefined ? null : t.best_primary[i], ecoGroup: null, ...spawnOf(c, rf.ri, p), m,
     };
   }));
 }

@@ -9,7 +9,7 @@ const kill = (tick: number, killer: number, victim: number, credits: [number, nu
   ri: 0, tick, t: tick / 64, killer, victim, assister: null, flashAssist: false,
   killerSide: killer < 2 ? "T" : "CT", victimSide: victim < 2 ? "T" : "CT", weapon: "ak47", victimWeapon: null,
   headshot: false, wallbang: false, smoke: false, noscope: false, killerBlind: false, killerInAir: false, kpos: null, vpos: null, place: null, enemy: true, opening,
-  tradeKill: false, traded: false, ecoPoints: null, credits,
+  tradeKill: false, traded: false, ecoPoints: null, aGroup: null, vGroup: null, credits,
 });
 const facts = {
   players: [0, 1, 2, 3].map((pi) => ({ id: `p${pi}`, name: `p${pi}`, team: pi < 2 ? 0 : 1, bot: true })),
