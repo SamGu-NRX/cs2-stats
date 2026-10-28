@@ -5,7 +5,7 @@
 // the same radar coordinates, so marks land in the same place either way.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CELL, cellCentre, GRID, type Presence } from "../../stats/positions";
-import { useRollups } from "../data/hooks";
+import { useCall } from "../data/hooks";
 import { useGameIcon } from "../data/icons";
 import { mapInfo, radarIcon, toRadar } from "../data/maps";
 import { useData } from "../data/provider";
@@ -35,12 +35,12 @@ export function frameFor(map: string, points: [number, number][] = []): Frame | 
  */
 function useMapPresence(map: string): Presence | null {
   const { matches } = useData();
-  const qs = useMemo(() => {
+  const q = useMemo(() => {
     const on = matches.filter((m) => m.match.map === map);
     const ids = [...new Set(on.flatMap((m) => m.players.map((p) => p.id)))];
-    return on.length && ids.length ? [{ files: on.map((m) => m.file), filter: { player: ids, maps: [map] } }] : null;
+    return on.length && ids.length ? { files: on.map((m) => m.file), filter: { player: ids, maps: [map] } } : null;
   }, [matches, map]);
-  const p = useRollups(qs).data?.[0]?.presence[map] ?? null;
+  const p = useCall("presence", q ? [q] : null).data?.[map] ?? null;
   return p && Object.keys(p.cells).length ? p : null;
 }
 

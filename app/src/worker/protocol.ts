@@ -301,6 +301,8 @@ export interface Api {
   /** seconds the recording player spent alive per place name, by round number (positions.ts roundPlaces) */
   places(file: string, viewer: string | null): Record<number, Record<string, number>>;
   rollup(qs: Query[]): Rolled[];
+  /** where the query's players stood alive, by map: a rollup's `presence` alone (rollup.ts addPresence) */
+  presence(q: Query): Summary["presence"];
   ratings(qs: Query[]): SideRatings[];
   guns(q: Query): GunProficiency[];
   positions(q: Query): PositionsResult;

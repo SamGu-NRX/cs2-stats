@@ -1,6 +1,6 @@
 // rollup's round filter and presence folding.
 import { expect, it } from "vitest";
-import { rollup } from "./rollup";
+import { addPresence, rollup, type Filter, type Summary } from "./rollup";
 import { roundPlaces } from "./positions";
 import { FREEZE_END, oneRound, oneRoundTables } from "./testing/match";
 import { rosterTables } from "./roster";
@@ -25,6 +25,25 @@ it("adds up seconds alive per place and grid cell, leaving out dead samples", ()
   expect(Object.values(p.cells).sort()).toEqual([0.25, 0.5]);
   // presence is per side, so a round-level filter cannot honour it and leaves it out
   expect(rollup([f], { player: "a", rounds: [1] }).presence).toEqual({});
+});
+
+it("folds presence alone exactly as a rollup folds it", () => {
+  // fails if the presence call (the radar background) differs from the rollup presence it stands in for:
+  // a filter that drops a match, a side, a player or a round-level filter must drop the same samples
+  const at = (tick: number, steamid: string, x: number, place: string) => ({ tick, steamid, x, y: 0, place, is_alive: true });
+  const positions = [at(1000, "a", 10, "BombsiteA"), at(1016, "a", 20, "BombsiteA"), at(1000, "b", 10, "Mid"), at(1016, "b", 700, "Long"), at(1000, "c", 300, "Cat")];
+  const one = oneRound({ players: { a: "CT", b: "T", c: "CT" }, positions });
+  const other = { ...oneRound({ round: 4, players: { a: "T", b: "CT", c: "T" }, positions }), match: { ...one.match, map: "de_other" } };
+  const filters: Filter[] = [
+    { player: ["a", "b", "c"] }, { player: "a" }, { player: ["a", "b"], sides: ["CT"] }, { player: ["a", "b", "c"], maps: ["de_other"] },
+    { player: "a", rounds: [1] }, { player: "a", weapons: ["ak47"] }, { player: "nobody" },
+  ];
+  for (const filter of filters) {
+    const alone: Summary["presence"] = {};
+    for (const f of [one, other]) addPresence(alone, f, filter);
+    expect(alone, JSON.stringify(filter)).toEqual(rollup([one, other], filter).presence);
+  }
+  expect(Object.keys(rollup([one, other], { player: ["a", "b", "c"] }).presence).sort()).toEqual(["de_other", "de_test"]);
 });
 
 it("reads one round's places from the tables", () => {

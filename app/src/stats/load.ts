@@ -84,9 +84,11 @@ const LEGACY: Partial<Record<TableName, (read: ReadFile) => Promise<Table<TableN
 /**
  * Loads every required table and the optional ones named in `optional` (all by default); optional
  * tables that are absent or not asked for are null. A scoreboard needs none of them, and positions,
- * shots and engagement ticks are most of a match's size.
+ * shots and engagement ticks are most of a match's size. `columns` narrows a v1 table to the named
+ * SCHEMA columns: the table then carries only those, and reading another gives undefined, so it is
+ * for callers whose reads are known (worker/tool-tables.ts).
  */
-export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES): Promise<MatchTables> {
+export async function loadTables(read: ReadFile, optional: readonly TableName[] = OPTIONAL_TABLES, columns: Partial<Record<TableName, readonly string[]>> = {}): Promise<MatchTables> {
   const out: Record<string, unknown> = {};
   // A folder is v1 when it has match.parquet (SCHEMA-v1.md, "Versions"); those bytes are the match table's.
   const matchFile = read("match.parquet");
@@ -108,7 +110,7 @@ export async function loadTables(read: ReadFile, optional: readonly TableName[] 
     if (!v1 && LEGACY[name]) t = await LEGACY[name]!(read);
     else {
       const bytes = await files.get(name)!;
-      t = bytes ? await readTable(bytes, name) : null;
+      t = bytes ? await readTable(bytes, name, columns[name]) : null;
     }
     if (!t && (REQUIRED_TABLES as readonly string[]).includes(name)) throw new TableError(`table "${name}" is missing (${name}.parquet)`);
     out[name] = t;
@@ -116,9 +118,12 @@ export async function loadTables(read: ReadFile, optional: readonly TableName[] 
   return out as unknown as MatchTables;
 }
 
-/** Decodes the SCHEMA columns of one table. */
-async function readTable<N extends TableName>(bytes: ArrayBuffer, name: N): Promise<Table<N>> {
+/** Decodes the SCHEMA columns of one table, or only `only` of them. */
+async function readTable<N extends TableName>(bytes: ArrayBuffer, name: N, only?: readonly string[]): Promise<Table<N>> {
   const cols = Object.keys(SCHEMA[name]);
+  const unknown = only?.find((c) => !cols.includes(c));
+  if (unknown !== undefined) throw new TableError(`${name}: "${unknown}" is not one of its columns`);
+  if (only) cols.splice(0, cols.length, ...cols.filter((c) => only.includes(c)));
   const raw = await readRaw(bytes, name, cols, SOURCE_COLUMNS[name] ?? []);
   const t: Record<string, unknown> = { n: raw.__n };
   for (const c of cols) {

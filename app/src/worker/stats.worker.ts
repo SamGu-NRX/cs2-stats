@@ -22,14 +22,16 @@ import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from
 import { choosePool, type ChosenPool } from "./baselines-pool";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
 import { roundPlaces } from "../stats/positions";
-import { addMatch, emptySummary, rollup, type Summary } from "../stats/rollup";
+import { addMatch, addPresence, emptySummary, rollup, type Summary } from "../stats/rollup";
 import { rosterTables, type RosterTables } from "../stats/roster";
 import { byNewest, type MatchEntry } from "../ui/data/match";
 import { idbDelete, idbGet, idbGetMany, idbKeys, idbPut } from "./idb";
-import type { Api, Call, FromWorker, Method, PositionsResult, Query, ToWorker } from "./protocol";
+import type { Api, Call, FromWorker, Method, PositionsResult, Query, Rolled, ToWorker } from "./protocol";
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
 import { deriveFile, fileTables, type Cached } from "./derive-file";
+import { loadArgs, tablesToLoad, type Loaded, type Tool } from "./tool-tables";
+import { PRESENCE_FORMAT, storedFits, storedKey, storedStale, type StoredPresence } from "./stored-presence";
 import { derivePool, poolSize, type DerivePool } from "./derive-pool";
 import { mapLimit } from "./map-limit";
 import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
@@ -119,16 +121,22 @@ const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), sou
  * The open match's tables, for what facts do not keep (one round's places). Decoded again on demand;
  * only one match's tables are held, and they are dropped when another match opens. The roster is
  * applied to them as derive applies it to the tables it reads (roster.ts), so a view of them shows the
- * same events as the facts.
+ * same events as the facts. Only the optional tables and columns `tool` reads are decoded
+ * (tool-tables.ts); a later tool that needs one not yet read loads the match again with both tools'
+ * tables, and calls arriving together share one load.
  */
-let openTables: { file: string; key: string; tables: RosterTables } | null = null;
-async function tablesOf(file: string): Promise<RosterTables> {
+let openTables: { file: string; key: string; have: Loaded; tables: Promise<RosterTables> } | null = null;
+function tablesOf(file: string, tool: Tool): Promise<RosterTables> {
   const ix = index.get(file);
-  if (!ix) throw new Error(`${file} is not in the match folder; rescan it`);
-  if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
-  openTables = null;
-  const tables = rosterTables(await fileTables(file, bytes, povs.get(file)));
-  openTables = { file, key: ix.key, tables };
+  if (!ix) return Promise.reject(new Error(`${file} is not in the match folder; rescan it`));
+  const open = openTables?.file === file && openTables.key === ix.key ? openTables : null;
+  const have = tablesToLoad(open?.have ?? null, tool);
+  if (!have) return open!.tables;
+  const { optional, columns } = loadArgs(have);
+  const tables = fileTables(file, bytes, povs.get(file), optional, columns).then(rosterTables);
+  const mine = { file, key: ix.key, have, tables };
+  openTables = mine;
+  tables.catch(() => { if (openTables === mine) openTables = null; });
   return tables;
 }
 
@@ -199,6 +207,33 @@ async function pass() {
 }
 
 const summaries = new Map<string, Promise<Summary>>();
+/** presence() answers not taken from a summary, by the same key as summaries */
+const presences = new Map<string, Promise<Summary["presence"]>>();
+/**
+ * Each summary's metric values, worked out once: a view asks for the same rollup again on every
+ * visit, and the values of a summary over many matches (sorting its aim samples for medians) cost
+ * hundreds of ms each time.
+ */
+const rolledCache = new WeakMap<Summary, Rolled>();
+function rolledOf(s: Summary): Rolled {
+  let r = rolledCache.get(s);
+  if (!r) rolledCache.set(s, (r = rolled(s)));
+  return r;
+}
+
+/** presence() from IndexedDB when the same question was folded before (stored-presence.ts), else folded now and kept. */
+async function storedPresence(q: Query): Promise<Summary["presence"]> {
+  const files = q.files.map((f) => index.get(f)?.key ?? f);
+  const filter = JSON.stringify(q.filter);
+  const key = storedKey(files, filter);
+  const hit = await idbGet<StoredPresence>("presence", key).catch(() => undefined);
+  if (storedFits(hit, files, filter)) return hit.presence;
+  const out: Summary["presence"] = {};
+  await stream(q.files, (f) => addPresence(out, f, q.filter));
+  // a failed write only costs the next launch a fold
+  await idbPut("presence", key, { format: PRESENCE_FORMAT, files, filter, presence: out } satisfies StoredPresence).catch(() => {});
+  return out;
+}
 
 function summaryOf(q: Query): Promise<Summary> {
   const k = `${gen}|${JSON.stringify(q)}`;
@@ -263,6 +298,21 @@ const careersOf = (q: Query) => botsOf(q).then((b) => b.pop);
 
 const ranking = rankingCalls({ summary: summaryOf, pros: baselines, careers: careersOf, mapRounds, spawns });
 const perMatch = matchCalls(stream, summaryOf);
+/**
+ * Sessions answers by question, until the index changes: the Matches page asks on every visit, and
+ * each answer rolls up every listed match on its own (read from IndexedDB) before grouping them.
+ */
+const sessionAnswers = new Map<string, ReturnType<typeof perMatch.sessions>>();
+function sessionsOf(q: Query, gapHours?: number): ReturnType<typeof perMatch.sessions> {
+  const k = `${gen}|${JSON.stringify([q, gapHours ?? null])}`;
+  let p = sessionAnswers.get(k);
+  if (p) { sessionAnswers.delete(k); sessionAnswers.set(k, p); return p; }
+  p = perMatch.sessions(q, gapHours);
+  p.catch(() => sessionAnswers.delete(k));
+  sessionAnswers.set(k, p);
+  while (sessionAnswers.size > SUMMARY_CACHE) sessionAnswers.delete(sessionAnswers.keys().next().value!);
+  return p;
+}
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -358,6 +408,8 @@ const api: Impl = {
     if (next.size !== index.size || [...next].some(([f, x]) => index.get(f)?.key !== x.key)) {
       gen++;
       summaries.clear();
+      presences.clear();
+      sessionAnswers.clear();
       careerSets.clear();
     }
     // until this sync returns, the UI has not seen this index: a failure below must not let the next sync call it unchanged
@@ -369,6 +421,10 @@ const api: Impl = {
     await idbDelete("facts", (await idbKeys("facts")).filter((k) => !live.has(k)));
     const liveEntries = new Set([...[...live].map(entryKey), ...noEntryKeys]);
     await idbDelete("entries", (await idbKeys("entries")).filter((k) => !liveEntries.has(k)));
+    // presence answers folded from a file that is gone or changed are never asked for again
+    const presenceKeys = await idbKeys("presence");
+    const stored = await idbGetMany<StoredPresence>("presence", presenceKeys);
+    await idbDelete("presence", presenceKeys.filter((_, i) => storedStale(stored[i], live)));
     listSent = true;
     return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors };
   },
@@ -384,11 +440,25 @@ const api: Impl = {
     const e = entryOfFile(file);
     const id = viewer ?? (e.you === null ? null : e.players[e.you].id);
     if (id === null) return {};
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "places")]);
     return Object.fromEntries(f.rounds.map((r) => [r.number, roundPlaces(t, r.number, id)]));
   },
   async rollup(qs) {
-    return Promise.all(qs.map(async (q) => rolled(await summaryOf(q))));
+    return Promise.all(qs.map(async (q) => rolledOf(await summaryOf(q))));
+  },
+  async presence(q) {
+    // a summary already folded for this query has it; otherwise only the presence is folded
+    const k = `${gen}|${JSON.stringify(q)}`;
+    const whole = summaries.get(k);
+    if (whole) return (await whole).presence;
+    let p = presences.get(k);
+    if (!p) {
+      p = storedPresence(q);
+      p.catch(() => presences.delete(k));
+      presences.set(k, p);
+      while (presences.size > SUMMARY_CACHE) presences.delete(presences.keys().next().value!);
+    }
+    return p;
   },
   async ratings(qs) {
     return Promise.all(qs.map(async (q) => {
@@ -439,7 +509,7 @@ const api: Impl = {
   focusAreas: ranking.focusAreas,
   periodCompare: ranking.periodCompare,
   personalBests: perMatch.personalBests,
-  sessions: perMatch.sessions,
+  sessions: sessionsOf,
   async opponents(q) {
     const me = new Set(Array.isArray(q.filter.player) ? q.filter.player : [q.filter.player]);
     // each opponent over the matches they faced the player in (opponents.ts opponentMatches)
@@ -470,7 +540,7 @@ const api: Impl = {
   highlights: perMatch.highlights,
   moments: perMatch.moments,
   async flashes(file, player) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "flashes")]);
     return flashTool(t, f, player);
   },
   async ratingBreakdown(file, player, reference) {
@@ -480,11 +550,11 @@ const api: Impl = {
     return { rows: roundRatings(f, player, average), match, average };
   },
   async headToHead(file) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "headToHead")]);
     return headToHead(t, f);
   },
   async mapZones(file, player) {
-    return mapZones(await tablesOf(file), player);
+    return mapZones(await tablesOf(file, "mapZones"), player);
   },
   async yourMatch(file, player, n) {
     const recent = recentFiles([...index.values()].map((x) => x.entry), file, player, n);
@@ -500,7 +570,7 @@ const api: Impl = {
     return out;
   },
   async bombsites(file, player) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "bombsites")]);
     return bombsites(t, f, player);
   },
   async trends(series) {

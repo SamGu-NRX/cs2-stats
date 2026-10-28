@@ -1,15 +1,25 @@
 // Per-map cost of the stats worker's path over the pro library, and a hash of what it produces:
-//   pnpm perf-maps [--n 60 | --all] [--of 2 --shard 0] [--hashes out.json]
+//   pnpm perf-maps [--n 60 | --all] [--of 2 --shard 0] [--hashes out.json] [--tools]
 // Each map is read, derived and turned into its match entry, match bundle and round bundles, as the
 // worker does (worker/stats.worker.ts, views.ts). The table gives each step's median, 90th percentile,
 // maximum and sum: times in ms, sizes in MB ("clone" is v8.serialize of the facts, close to what
 // IndexedDB's structured clone costs). --hashes writes the sha256 of every output's JSON per map, so
 // two builds can be compared output for output: a change meant only to make the app faster must
-// leave every hash the same. --of and --shard split the maps between processes.
+// leave every hash the same. --of and --shard split the maps between processes. --tools also runs each
+// per-match tool the stats worker answers from tables (flashes, head to head, zones, bombsites, places)
+// for every player, once with every table and once with only that tool's tables and columns (worker/tool-tables.ts),
+// and exits non-zero naming each map where the two answers differ.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { deserialize, serialize } from "node:v8";
+import { flashTool } from "../src/stats/flashes";
+import { bombsites, headToHead, mapZones } from "../src/stats/matchviews";
+import { roundPlaces } from "../src/stats/positions";
+import { rosterTables, type RosterTables } from "../src/stats/roster";
+import type { MatchFacts } from "../src/stats/facts";
+import { loadArgs, TOOL_TABLES, type Columns, type OptionalTable, type Tool } from "../src/worker/tool-tables";
 import { derive } from "../src/stats/derive";
 import { loadTables } from "../src/stats/load";
 import { entryOf, matchBundle, roundBundle } from "../src/worker/views";
@@ -26,6 +36,20 @@ const hashes: Record<string, string> = {};
 const sha = (x: string) => createHash("sha256").update(x).digest("hex");
 const rows: Record<string, number>[] = [];
 const time = <T>(f: () => T): [T, number] => { const t0 = performance.now(); const r = f(); return [r, performance.now() - t0]; };
+const tools = process.argv.includes("--tools");
+/** Every answer the worker gives from one tool over a match: per player, and per round for places. */
+const toolAnswers = (tool: Tool, t: RosterTables, f: MatchFacts): unknown[] => {
+  const ids = f.players.map((p) => p.id);
+  switch (tool) {
+    case "flashes": return ids.map((id) => flashTool(t, f, id));
+    case "headToHead": return [headToHead(t, f)];
+    case "mapZones": return ids.map((id) => mapZones(t, id));
+    case "bombsites": return ids.map((id) => bombsites(t, f, id));
+    case "places": return ids.map((id) => f.rounds.map((r) => roundPlaces(t, r.number, id)));
+  }
+};
+const differ: string[] = [];
+let compared = 0;
 
 for (const dir of dirs) {
   let reads = 0, bytes = 0;
@@ -55,6 +79,15 @@ for (const dir of dirs) {
     hashes[`${key}#bundle`] = sha(JSON.stringify(mb));
     hashes[`${key}#rounds`] = sha(JSON.stringify(rb));
   }
+  if (tools) {
+    const full = rosterTables(t);
+    for (const tool of Object.keys(TOOL_TABLES) as Tool[]) {
+      const { optional, columns } = loadArgs(new Map(Object.entries(TOOL_TABLES[tool]) as [OptionalTable, Columns][]));
+      const sub = rosterTables(await loadTables((name) => Promise.resolve(existsSync(path.join(dir, name)) ? (({ buffer, byteOffset, byteLength }) => buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer)(readFileSync(path.join(dir, name))) : null), optional, columns));
+      compared++;
+      if (!isDeepStrictEqual(toolAnswers(tool, full, f), toolAnswers(tool, sub, f))) differ.push(`${path.relative(DATA_DIR, dir)} ${tool}`);
+    }
+  }
   rows.push({ reads, readMB: bytes / 1e6, load, derive: deriveMs, factsMB: json.length / 1e6, cloneOut, cloneIn, entry, bundle, rounds });
 }
 
@@ -66,3 +99,8 @@ for (const k of Object.keys(rows[0] ?? {})) {
   console.log(k.padEnd(9), q(xs, 0.5).toFixed(2).padStart(9), q(xs, 0.9).toFixed(2).padStart(9), Math.max(...xs).toFixed(2).padStart(9), xs.reduce((a, b) => a + b, 0).toFixed(1).padStart(10));
 }
 if (hashOut) writeFileSync(hashOut, JSON.stringify(hashes, null, 1));
+if (tools) {
+  console.log(`tools: ${compared} map and tool pairs compared, ${differ.length} differ`);
+  for (const d of differ) console.log(`  differs: ${d}`);
+  if (differ.length) process.exitCode = 1;
+}
