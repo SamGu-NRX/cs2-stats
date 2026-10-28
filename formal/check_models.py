@@ -18,6 +18,8 @@ FAIL = {
     "PublishManual", "PublishPruneOneShot", "PublishPruneDangling",
     "PluginLateFreeze", "PluginAfterWin", "PluginHotReload",
     "PipelineLegacyIdentity", "PipelineLegacyInPlace",
+    "ClipsLaunchUserSession", "ClipsLaunchLegacyWatcherCheck", "ClipsLaunchCrashGap",
+    "ArchiveCrashLedger", "ArchiveCrashExpiry", "ArchiveEviction", "ArchiveLegacyNoCheck", "ArchivePartialDelete",
 }
 
 
@@ -26,7 +28,7 @@ def main():
     parser.add_argument("configs", nargs="*")
     parser.add_argument("--while-gaming", action="store_true")
     args = parser.parse_args()
-    configs = args.configs or sorted(p.stem for prefix in ("Publish", "MapGate", "Plugin", "Pipeline")
+    configs = args.configs or sorted(p.stem for prefix in ("Publish", "MapGate", "Plugin", "Pipeline", "ClipsLaunch", "Archive")
                                     for p in ROOT.glob(prefix + "*.cfg"))
     result_path = ROOT / "results" / "protocol-summary.json"
     results = json.loads(result_path.read_text()) if result_path.exists() else {}
@@ -45,7 +47,7 @@ def main():
                   "generated": int(counts[-1][0].replace(",", "")) if counts else None,
                   "distinct": int(counts[-1][1].replace(",", "")) if counts else None,
                   "expected": "COUNTEREXAMPLE" if name in FAIL else "PASS"}
-        module = next(prefix for prefix in ("Capture","Calls","Publish","MapGate","Plugin","Pipeline")
+        module = next(prefix for prefix in ("Capture","Calls","Publish","MapGate","Plugin","Pipeline","ClipsLaunch","Archive")
                       if name.startswith(prefix))
         result["model_sha256"] = hashlib.sha256((ROOT / (module + ".tla")).read_bytes()).hexdigest()
         result["config_sha256"] = hashlib.sha256((ROOT / (name + ".cfg")).read_bytes()).hexdigest()
