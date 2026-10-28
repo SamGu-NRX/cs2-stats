@@ -3,6 +3,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { MatchFacts } from "../src/stats/facts";
+import { hltvTeams } from "./demo-joins";
 import { DATA_DIR } from "./node-read";
 
 export const HLTV_DIR = path.join(DATA_DIR, "hltv");
@@ -139,11 +140,7 @@ export function joinHltv(f: MatchFacts, maps = hltvMaps()): HltvJoin | null {
     const m = [...left].find((x) => normName(x.nick) === names[i]);
     if (m) { player.set(i, m); left.delete(m); }
   });
-  // The HLTV team of each facts team: where most of its joined players are.
-  const team: [number, number] = [0, 1].map((ti) => {
-    const votes = h.teams.map(([name]) => [...player].filter(([pi, hp]) => f.players[pi].team === ti && hp.team === name).length);
-    return votes[0] >= votes[1] ? 0 : 1;
-  }) as [number, number];
+  const team = hltvTeams(f.players, player, h);
   for (const ti of [0, 1] as const) {
     const ours = f.players.map((p, i) => ({ p, i })).filter(({ p, i }) => p.team === ti && !player.has(i) && f.pr.some((r) => r.pi === i));
     const theirs = [...left].filter((x) => x.team === h.teams[team[ti]][0]);

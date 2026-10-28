@@ -23,8 +23,12 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hltv_pages import hltv_pages  # noqa: E402
 
 CURVES = ("eKPR", "eADR", "eDPR", "eKAST", "Swing")
 KILL_ROUNDS = ("K2", "K3", "K4", "K5")
@@ -117,7 +121,7 @@ def map_side_rows(path: Path) -> list[dict]:
 
 def side_rows(hltv: Path) -> list[dict]:
     rows = []
-    for path in sorted(hltv.glob("map_*.json")):
+    for path in hltv_pages(hltv):
         rows.extend(map_side_rows(path))
     rows = [r for r in rows if all(np.isfinite(r[f]) for f in (*CURVES, *KILL_ROUNDS, "rating"))]
     # a player-map counts only when its sides cover every round of the map
@@ -130,7 +134,7 @@ def side_rows(hltv: Path) -> list[dict]:
 def total_ratings(hltv: Path) -> dict:
     """(map, pid) -> HLTV's displayed total rating."""
     out = {}
-    for path in sorted(hltv.glob("map_*.json")):
+    for path in hltv_pages(hltv):
         d = json.loads(path.read_text(encoding="utf-8"))
         if d.get("v") != 3:
             continue

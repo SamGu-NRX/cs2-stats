@@ -268,7 +268,7 @@ export default defineConfig({
   // One test process, files in sequence: the suite takes about a second, and this keeps it light
   // on a machine that may be running the game.
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tools/**/*.test.ts"],
     setupFiles: ["src/settle-imports.setup.ts"],
     environment: "node",
     pool: "forks",
