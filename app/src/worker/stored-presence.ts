@@ -21,3 +21,33 @@ export function storedFits(r: StoredPresence | undefined, files: string[], filte
 
 /** Whether a kept record can never be asked for again: another format, or folded from a file no longer listed as it was. */
 export const storedStale = (r: StoredPresence | undefined, live: ReadonlySet<string>) => !r || r.format !== PRESENCE_FORMAT || r.files.some((f) => !live.has(f));
+
+/** What presenceThroughStore needs from the worker: the index as it stands, IndexedDB, and the fold. */
+export interface PresenceSource {
+  /** the match index's generation (stats.worker.ts gen), raised whenever a sync changes a file's facts key */
+  gen(): number;
+  /** a file's facts key in the index now */
+  keyOf(file: string): string;
+  get(key: string): Promise<StoredPresence | undefined>;
+  put(key: string, r: StoredPresence): Promise<void>;
+  /** folds the presence of `files` under `filter`, reading each file's facts from the index as it stands then */
+  fold(): Promise<Summary["presence"]>;
+}
+
+/**
+ * A presence answer from IndexedDB when the same files and filter were folded before, else folded now and
+ * kept. A sync that changes the index while the fold reads can mix two versions of a file into it, so
+ * an answer folded across a generation change is returned once and never stored: stored, it would stand
+ * under the keys of files it was not folded from.
+ */
+export async function presenceThroughStore(files: string[], filter: string, s: PresenceSource): Promise<Summary["presence"]> {
+  const at = s.gen();
+  const keys = files.map((f) => s.keyOf(f));
+  const key = storedKey(keys, filter);
+  const hit = await s.get(key).catch(() => undefined);
+  if (storedFits(hit, keys, filter)) return hit.presence;
+  const presence = await s.fold();
+  // a failed write only costs the next launch a fold
+  if (s.gen() === at) await s.put(key, { format: PRESENCE_FORMAT, files: keys, filter, presence }).catch(() => {});
+  return presence;
+}

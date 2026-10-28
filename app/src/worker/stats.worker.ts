@@ -31,7 +31,8 @@ import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, si
 import { matchCalls } from "./matchcalls";
 import { deriveFile, fileTables, type Cached } from "./derive-file";
 import { toolLoad } from "./tool-tables";
-import { PRESENCE_FORMAT, storedFits, storedKey, storedStale, type StoredPresence } from "./stored-presence";
+import { presenceThroughStore, storedStale, type StoredPresence } from "./stored-presence";
+import { genCache } from "./gen-cache";
 import { derivePool, poolSize, type DerivePool } from "./derive-pool";
 import { mapLimit } from "./map-limit";
 import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
@@ -205,7 +206,7 @@ async function pass() {
 
 const summaries = new Map<string, Promise<Summary>>();
 /** presence() answers not taken from a summary, by the same key as summaries */
-const presences = new Map<string, Promise<Summary["presence"]>>();
+const presences = genCache<Summary["presence"]>(SUMMARY_CACHE, () => gen);
 /**
  * Each summary's metric values, worked out once: a view asks for the same rollup again on every
  * visit, and the values of a summary over many matches (sorting its aim samples for medians) cost
@@ -218,19 +219,18 @@ function rolledOf(s: Summary): Rolled {
   return r;
 }
 
-/** presence() from IndexedDB when the same question was folded before (stored-presence.ts), else folded now and kept. */
-async function storedPresence(q: Query): Promise<Summary["presence"]> {
-  const files = q.files.map((f) => index.get(f)?.key ?? f);
-  const filter = JSON.stringify(q.filter);
-  const key = storedKey(files, filter);
-  const hit = await idbGet<StoredPresence>("presence", key).catch(() => undefined);
-  if (storedFits(hit, files, filter)) return hit.presence;
-  const out: Summary["presence"] = {};
-  await stream(q.files, (f) => addPresence(out, f, q.filter));
-  // a failed write only costs the next launch a fold
-  await idbPut("presence", key, { format: PRESENCE_FORMAT, files, filter, presence: out } satisfies StoredPresence).catch(() => {});
-  return out;
-}
+/** presence() from IndexedDB when the same question was folded before (stored-presence.ts), else folded now. */
+const storedPresence = (q: Query) => presenceThroughStore(q.files, JSON.stringify(q.filter), {
+  gen: () => gen,
+  keyOf: (f) => index.get(f)?.key ?? f,
+  get: (k) => idbGet<StoredPresence>("presence", k),
+  put: (k, r) => idbPut("presence", k, r),
+  fold: async () => {
+    const out: Summary["presence"] = {};
+    await stream(q.files, (f) => addPresence(out, f, q.filter));
+    return out;
+  },
+});
 
 function summaryOf(q: Query): Promise<Summary> {
   const k = `${gen}|${JSON.stringify(q)}`;
@@ -299,17 +299,8 @@ const perMatch = matchCalls(stream, summaryOf);
  * Sessions answers by question, until the index changes: the Matches page asks on every visit, and
  * each answer rolls up every listed match on its own (read from IndexedDB) before grouping them.
  */
-const sessionAnswers = new Map<string, ReturnType<typeof perMatch.sessions>>();
-function sessionsOf(q: Query, gapHours?: number): ReturnType<typeof perMatch.sessions> {
-  const k = `${gen}|${JSON.stringify([q, gapHours ?? null])}`;
-  let p = sessionAnswers.get(k);
-  if (p) { sessionAnswers.delete(k); sessionAnswers.set(k, p); return p; }
-  p = perMatch.sessions(q, gapHours);
-  p.catch(() => sessionAnswers.delete(k));
-  sessionAnswers.set(k, p);
-  while (sessionAnswers.size > SUMMARY_CACHE) sessionAnswers.delete(sessionAnswers.keys().next().value!);
-  return p;
-}
+const sessionAnswers = genCache<Awaited<ReturnType<typeof perMatch.sessions>>>(SUMMARY_CACHE, () => gen);
+const sessionsOf = (q: Query, gapHours?: number) => sessionAnswers.get(JSON.stringify([q, gapHours ?? null]), () => perMatch.sessions(q, gapHours));
 
 function entryOfFile(file: string): MatchEntry {
   const e = index.get(file)?.entry;
@@ -445,17 +436,9 @@ const api: Impl = {
   },
   async presence(q) {
     // a summary already folded for this query has it; otherwise only the presence is folded
-    const k = `${gen}|${JSON.stringify(q)}`;
-    const whole = summaries.get(k);
+    const whole = summaries.get(`${gen}|${JSON.stringify(q)}`);
     if (whole) return (await whole).presence;
-    let p = presences.get(k);
-    if (!p) {
-      p = storedPresence(q);
-      p.catch(() => presences.delete(k));
-      presences.set(k, p);
-      while (presences.size > SUMMARY_CACHE) presences.delete(presences.keys().next().value!);
-    }
-    return p;
+    return presences.get(JSON.stringify(q), () => storedPresence(q));
   },
   async ratings(qs) {
     return Promise.all(qs.map(async (q) => {
