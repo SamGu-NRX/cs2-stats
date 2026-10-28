@@ -1,9 +1,10 @@
 """Download OpenCS2 demos of maps whose HLTV scoreboard we hold into the pipeline's loose-demo inbox.
 
 The OpenCS2 dataset (blanchon/opencs2_dataset_demo on Hugging Face, CC BY 4.0; THIRD_PARTY_NOTICES.md) holds HLTV
-pro maps as loose .dem files. This picks the maps whose HLTV scoreboard is saved in <data>/hltv (ocs_map_*.json and
-map_*.json carry the HLTV match id and map index), leaves out those the pipeline's ledger already holds (published,
-failed or refused) and those already in the inbox, and downloads the rest, oldest first.
+pro maps as loose .dem files. This picks the maps whose HLTV scoreboard is saved in <data>/hltv, matched by HLTV
+match id and map name (a map is played once in a match; the dataset's map index names another map than HLTV's on 6 of
+the 1,148 saved scoreboards), leaves out those the pipeline's ledger already holds (published, failed or refused) and
+those already in the inbox, and downloads the rest, oldest first.
 
 Each demo goes to <inbox>/<match id>/<dataset file name>.part, resumed with an HTTP Range request after a stop.
 When it is whole (its size is the metadata's demo_bytes and it starts with the demo magic bytes), its sidecar
@@ -23,6 +24,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import threading
@@ -64,8 +66,11 @@ class Map:
         return inbox / self.match_id / Path(self.file_name).name
 
 
-def held_scoreboards(hltv_dir: Path) -> set[tuple[str, int]]:
-    """(HLTV match id, map index) of every saved HLTV map that names both."""
+HLTV_MAP = re.compile(r"Map(Ancient|Anubis|Cache|Dust2|Inferno|Mirage|Nuke|Overpass|Train|Vertigo)")
+
+
+def held_scoreboards(hltv_dir: Path) -> set[tuple[str, str]]:
+    """(HLTV match id, map name without de_) of every saved HLTV map, from its match block and its info line."""
     held = set()
     for path in [*hltv_dir.glob("ocs_map_*.json"), *hltv_dir.glob("map_*.json")]:
         try:
@@ -73,9 +78,10 @@ def held_scoreboards(hltv_dir: Path) -> set[tuple[str, int]]:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
             log.warning("cannot read %s: %s", path.name, e)
             continue
-        match_id, index = (data.get("match") or {}).get("matchId"), data.get("mapIndex")
-        if match_id and isinstance(index, int):
-            held.add((str(match_id), index))
+        match_id = (data.get("match") or {}).get("matchId")
+        found = HLTV_MAP.search(str((data.get("info") or [""])[0]))
+        if match_id and found:
+            held.add((str(match_id), found[1].lower()))
     return held
 
 
@@ -90,10 +96,10 @@ def dataset_maps(meta_dir: Path) -> list[Map]:
             for r in df.sort(["match_date", "match_id", "map_index"], nulls_last=True).iter_rows(named=True)]
 
 
-def plan(maps: list[Map], held: set[tuple[str, int]], ledger: dict[str, dict], inbox: Path) -> list[Map]:
+def plan(maps: list[Map], held: set[tuple[str, str]], ledger: dict[str, dict], inbox: Path) -> list[Map]:
     """The maps to download: their HLTV scoreboard is held, the ledger has no record of their id (published, failed
     or refused), and the inbox does not hold them."""
-    return [m for m in maps if (m.match_id, m.map_index) in held
+    return [m for m in maps if (m.match_id, m.map_name.removeprefix("de_")) in held
             and dp.loose_id(m.sidecar) not in ledger and not m.target(inbox).exists()]
 
 

@@ -5,11 +5,12 @@ start, both five-player rosters, every round winner, and every enemy-kill pair
 in order. The timestamp window permits a local archive timestamp and long
 series, but is not enough to accept a join without the event checks.
 
-A map whose match.extra names its HLTV match and map (hltv_match_id and
-hltv_map_index, as the pipeline records for a loose OpenCS2 demo) is joined to
-that HLTV map alone, among the fit's sources and the ocs_map_*.json scoreboards
-saved for OpenCS2, instead of by timestamp; the map, roster, round-winner and
-kill checks still decide.
+A map whose match.extra names its HLTV match (hltv_match_id, as the pipeline
+records for a loose OpenCS2 demo) is joined to that match's HLTV map of the same
+map name, among the fit's sources and the ocs_map_*.json scoreboards saved for
+OpenCS2, instead of by timestamp; the roster, round-winner and kill checks still
+decide. A map is played once in a match, and the map index OpenCS2 gives
+(hltv_map_index) names another map than HLTV's on 6 of 1,148 saved scoreboards.
 """
 from __future__ import annotations
 import argparse
@@ -71,8 +72,8 @@ def hltv_index(root: Path, sources: list[dict]) -> dict:
 
 
 def ids_index(root: Path, by_map: dict) -> tuple[dict, list[dict]]:
-    """{(HLTV match id, map index): HLTV map} over the fit's indexed maps and every ocs_map_*.json, and the files
-    that could not be read. A file without a map index is left out: it cannot be named by one."""
+    """{(HLTV match id, map name): HLTV map} over the fit's indexed maps and every ocs_map_*.json, and the files
+    that could not be read."""
     out, unreadable = {}, []
     for path in sorted(root.glob("ocs_map_*.json")):
         try:
@@ -82,11 +83,11 @@ def ids_index(root: Path, by_map: dict) -> tuple[dict, list[dict]]:
             continue
         for maps in extra.values():
             for m in maps:
-                out[m["ids"]] = m
+                out[(m["ids"][0], m["map"])] = m
     for maps in by_map.values():
         for m in maps:
-            out.setdefault(m["ids"], m)
-    return {k: v for k, v in out.items() if k[1] is not None}, unreadable
+            out.setdefault((m["ids"][0], m["map"]), m)
+    return out, unreadable
 
 
 def join(root: Path, metrics: Path) -> dict:
@@ -106,7 +107,8 @@ def join(root: Path, metrics: Path) -> dict:
         metadata_path = entry["layout"].table("match")
         meta = pq.read_table(metadata_path).to_pylist()[0]
         extra = json.loads(meta["extra"])
-        named = (str(extra["hltv_match_id"]), int(extra["hltv_map_index"])) if extra.get("hltv_match_id") else None
+        map_name = meta["map_name"] if "map_name" in meta else meta["map"]
+        named = (str(extra["hltv_match_id"]), map_name.removeprefix("de_")) if extra.get("hltv_match_id") else None
         archive_date = extra.get("dem_modified_in_archive")
         if not named and not archive_date:
             rejected.append({"demo": entry["out_dir"], "reason": "no archive date"})
@@ -129,14 +131,12 @@ def join(root: Path, metrics: Path) -> dict:
             if k["tick"] > end_ticks[k["round"]] or k["is_suicide"] or k["is_teamkill"] or not k["attacker_steamid"]:
                 continue
             sequences[k["round"]].append((names.get(k["attacker_steamid"], "unknown"), names.get(k["victim_steamid"], "unknown")))
-        map_name = meta["map_name"] if "map_name" in meta else meta["map"]
         if named:
             if by_ids is None:
                 by_ids, unreadable = ids_index(root / "hltv", by_map)
-            named_map = by_ids.get(named)
-            candidates = [named_map] if named_map and named_map["map"] == map_name.removeprefix("de_") else []
+            candidates = [by_ids[named]] if named in by_ids else []
             if not candidates:
-                rejected.append({"demo": entry["out_dir"], "reason": "no HLTV map with its ids", "hltv_ids": named})
+                rejected.append({"demo": entry["out_dir"], "reason": "no HLTV map of its match and map", "hltv": named})
                 continue
         else:
             candidates = [c for c in by_map[map_name.removeprefix("de_")]
@@ -157,9 +157,9 @@ def join(root: Path, metrics: Path) -> dict:
             candidate = matches[0]
             accepted.append({"demo": entry["out_dir"], "hltv": candidate["file"], "rounds": len(rounds),
                              "kills": sum(len(v) for v in sequences.values()),
-                             **({"hltv_ids": named} if named else
+                             **({"hltv_match_map": named} if named else
                                 {"timestamp_difference_hours": (demo_date - candidate["date"]).total_seconds() / 3600}),
-                             "checks": ["map", "hltv_ids" if named else "archive_date", "both_team_rosters",
+                             "checks": ["map", "hltv_match" if named else "archive_date", "both_team_rosters",
                                         "all_round_winners", "all_enemy_kills_in_order"]})
         else:
             rejected.append({"demo": entry["out_dir"], "reason": "ambiguous" if len(matches) > 1 else "no exact join",

@@ -186,7 +186,8 @@ def test_a_resumed_download_completes_and_only_then_appears_in_the_inbox(tmp_pat
 
 def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_path):
     # Fetching a map the pipeline already published (or failed) costs half a gigabyte for nothing; one with no saved
-    # HLTV scoreboard cannot be joined, so it is no rating data.
+    # HLTV scoreboard cannot be joined, so it is no rating data. A scoreboard is matched by match and map name: the
+    # dataset's map index named another map than HLTV's on 6 of 1,148 saved scoreboards.
     meta, hltv, inbox = tmp_path / "meta", tmp_path / "hltv", tmp_path / "inbox"
     for d in (meta, hltv, inbox):
         d.mkdir()
@@ -195,8 +196,11 @@ def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_pa
             (("1", 1, "de_nuke"), ("1", 2, "de_dust2"), ("2", 1, "de_mirage"), ("3", 1, "de_ancient"))]
     pl.DataFrame(rows).with_columns(pl.col("map_index").cast(pl.Int32), pl.col("match_date").cast(pl.Datetime("ms", "UTC"))) \
         .write_parquet(meta / "metadata-x.parquet")
-    for n, (mid, i) in enumerate([("1", 1), ("1", 2), ("2", 1)]):  # match 3 has no saved scoreboard
-        (hltv / f"ocs_map_{n}.json").write_text(json.dumps(dict(mapIndex=i, match=dict(matchId=mid))), encoding="utf-8")
+    # match 3 has no saved scoreboard; match 1's second map is saved under index 3, as HLTV numbered it
+    for n, (mid, i, mp) in enumerate([("1", 1, "Nuke"), ("1", 3, "Dust2"), ("2", 1, "Mirage")]):
+        (hltv / f"ocs_map_{n}.json").write_text(json.dumps(dict(mapIndex=i, match=dict(matchId=mid),
+                                                                info=[f"Event2026-04-01 12:00Map{mp}a13b7"])),
+                                                encoding="utf-8")
     ledger = tmp_path / "archives.jsonl"
     dp.append_jsonl(ledger, dict(id="opencs2-1-m1", status="done"))
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="failed"))
