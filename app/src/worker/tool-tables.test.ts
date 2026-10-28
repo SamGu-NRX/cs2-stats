@@ -1,26 +1,16 @@
-// Which tables and columns the open match is read with for each tool (tool-tables.ts tablesToLoad, loadArgs).
+// The tables and columns the stats worker reads a match's tools from (tool-tables.ts toolLoad).
 import { expect, it } from "vitest";
-import { loadArgs, tablesToLoad, type Columns, type OptionalTable } from "./tool-tables";
+import { toolLoad } from "./tool-tables";
 
-const sorted = (m: ReadonlyMap<OptionalTable, Columns>) => Object.fromEntries([...m].sort(([a], [b]) => a.localeCompare(b)).map(([t, c]) => [t, c === "all" ? c : [...c].sort()]));
-
-it("reloads only for a table or column not yet read, and keeps what earlier tools read", () => {
-  // fails if a tool is answered from tables missing a table or column it reads, or a reload drops
-  // another tool's
-  const first = tablesToLoad(null, "places")!;
-  expect(sorted(first)).toEqual({ leaves: "all", positions: ["is_alive", "place", "round", "steamid", "tick"] });
-  expect(tablesToLoad(first, "places")).toBeNull();
-  expect(tablesToLoad(first, "bombsites")).toBeNull();
-  // the flash tool needs x and y as well: a reload with both tools' columns
-  const both = tablesToLoad(first, "flashes")!;
-  expect(sorted(both)).toEqual({ grenade_events: "all", grenade_throws: "all", leaves: "all", positions: ["is_alive", "place", "round", "steamid", "tick", "x", "y"] });
-  for (const tool of ["flashes", "headToHead", "mapZones", "bombsites", "places"] as const) expect(tablesToLoad(both, tool)).toBeNull();
-  // a table read whole holds any columns of it
-  expect(tablesToLoad(new Map<OptionalTable, Columns>([["positions", "all"], ["leaves", "all"]]), "places")).toBeNull();
-});
-
-it("hands loadTables the tables, and columns only for the tables narrowed", () => {
-  // fails if a table meant whole is narrowed, or a narrowed one is read whole
-  const a = loadArgs(new Map<OptionalTable, Columns>([["positions", ["tick", "x"]], ["leaves", "all"]]));
-  expect(a).toEqual({ optional: ["positions", "leaves"], columns: { positions: ["tick", "x"] } });
+it("reads every table any tool reads, whole unless every tool reading it names its columns", () => {
+  // fails if a tool's table or column is left out of the shared load, or a table read whole by one tool
+  // is narrowed for another
+  const one = toolLoad(["flashes", "places"]);
+  expect([...one.optional].sort()).toEqual(["grenade_events", "grenade_throws", "leaves", "positions"]);
+  expect([...one.columns.positions!].sort()).toEqual(["is_alive", "place", "round", "steamid", "tick", "x", "y"]);
+  expect(Object.keys(one.columns)).toEqual(["positions"]);
+  expect(toolLoad(["headToHead"])).toEqual({ optional: ["grenade_events", "leaves"], columns: {} });
+  const all = toolLoad();
+  expect([...all.optional].sort()).toEqual(["grenade_events", "grenade_throws", "leaves", "positions"]);
+  expect(all.optional).not.toContain("engagement_ticks");
 });

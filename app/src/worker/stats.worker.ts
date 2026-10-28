@@ -30,7 +30,7 @@ import type { Api, Call, FromWorker, Method, PositionsResult, Query, Rolled, ToW
 import { addCareerMatch, botPopulation, careerScope, compassOf, rankingCalls, sideQuery, type BotPopulation } from "./ranking";
 import { matchCalls } from "./matchcalls";
 import { deriveFile, fileTables, type Cached } from "./derive-file";
-import { loadArgs, tablesToLoad, type Loaded, type Tool } from "./tool-tables";
+import { toolLoad } from "./tool-tables";
 import { PRESENCE_FORMAT, storedFits, storedKey, storedStale, type StoredPresence } from "./stored-presence";
 import { derivePool, poolSize, type DerivePool } from "./derive-pool";
 import { mapLimit } from "./map-limit";
@@ -121,20 +121,17 @@ const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), sou
  * The open match's tables, for what facts do not keep (one round's places). Decoded again on demand;
  * only one match's tables are held, and they are dropped when another match opens. The roster is
  * applied to them as derive applies it to the tables it reads (roster.ts), so a view of them shows the
- * same events as the facts. Only the optional tables and columns `tool` reads are decoded
- * (tool-tables.ts); a later tool that needs one not yet read loads the match again with both tools'
- * tables, and calls arriving together share one load.
+ * same events as the facts. Only the optional tables and columns the tools read are decoded
+ * (tool-tables.ts), and calls arriving together share one load.
  */
-let openTables: { file: string; key: string; have: Loaded; tables: Promise<RosterTables> } | null = null;
-function tablesOf(file: string, tool: Tool): Promise<RosterTables> {
+const TOOL_LOAD = toolLoad();
+let openTables: { file: string; key: string; tables: Promise<RosterTables> } | null = null;
+function tablesOf(file: string): Promise<RosterTables> {
   const ix = index.get(file);
   if (!ix) return Promise.reject(new Error(`${file} is not in the match folder; rescan it`));
-  const open = openTables?.file === file && openTables.key === ix.key ? openTables : null;
-  const have = tablesToLoad(open?.have ?? null, tool);
-  if (!have) return open!.tables;
-  const { optional, columns } = loadArgs(have);
-  const tables = fileTables(file, bytes, povs.get(file), optional, columns).then(rosterTables);
-  const mine = { file, key: ix.key, have, tables };
+  if (openTables?.file === file && openTables.key === ix.key) return openTables.tables;
+  const tables = fileTables(file, bytes, povs.get(file), TOOL_LOAD.optional, TOOL_LOAD.columns).then(rosterTables);
+  const mine = { file, key: ix.key, tables };
   openTables = mine;
   tables.catch(() => { if (openTables === mine) openTables = null; });
   return tables;
@@ -440,7 +437,7 @@ const api: Impl = {
     const e = entryOfFile(file);
     const id = viewer ?? (e.you === null ? null : e.players[e.you].id);
     if (id === null) return {};
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "places")]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
     return Object.fromEntries(f.rounds.map((r) => [r.number, roundPlaces(t, r.number, id)]));
   },
   async rollup(qs) {
@@ -540,7 +537,7 @@ const api: Impl = {
   highlights: perMatch.highlights,
   moments: perMatch.moments,
   async flashes(file, player) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "flashes")]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
     return flashTool(t, f, player);
   },
   async ratingBreakdown(file, player, reference) {
@@ -550,11 +547,11 @@ const api: Impl = {
     return { rows: roundRatings(f, player, average), match, average };
   },
   async headToHead(file) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "headToHead")]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
     return headToHead(t, f);
   },
   async mapZones(file, player) {
-    return mapZones(await tablesOf(file, "mapZones"), player);
+    return mapZones(await tablesOf(file), player);
   },
   async yourMatch(file, player, n) {
     const recent = recentFiles([...index.values()].map((x) => x.entry), file, player, n);
@@ -570,7 +567,7 @@ const api: Impl = {
     return out;
   },
   async bombsites(file, player) {
-    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file, "bombsites")]);
+    const [f, t] = await Promise.all([factsOf(file, true), tablesOf(file)]);
     return bombsites(t, f, player);
   },
   async trends(series) {

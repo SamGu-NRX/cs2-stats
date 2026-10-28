@@ -7,7 +7,7 @@
 // two builds can be compared output for output: a change meant only to make the app faster must
 // leave every hash the same. --of and --shard split the maps between processes. --tools also runs each
 // per-match tool the stats worker answers from tables (flashes, head to head, zones, bombsites, places)
-// for every player, once with every table and once with only that tool's tables and columns (worker/tool-tables.ts),
+// for every player, once with every table and once with the tables and columns the worker reads for its tools (worker/tool-tables.ts),
 // and exits non-zero naming each map where the two answers differ.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -19,7 +19,7 @@ import { bombsites, headToHead, mapZones } from "../src/stats/matchviews";
 import { roundPlaces } from "../src/stats/positions";
 import { rosterTables, type RosterTables } from "../src/stats/roster";
 import type { MatchFacts } from "../src/stats/facts";
-import { loadArgs, TOOL_TABLES, type Columns, type OptionalTable, type Tool } from "../src/worker/tool-tables";
+import { TOOL_TABLES, toolLoad, type Tool } from "../src/worker/tool-tables";
 import { derive } from "../src/stats/derive";
 import { loadTables } from "../src/stats/load";
 import { entryOf, matchBundle, roundBundle } from "../src/worker/views";
@@ -81,9 +81,10 @@ for (const dir of dirs) {
   }
   if (tools) {
     const full = rosterTables(t);
+    // the tables as the worker reads them for its tools (tool-tables.ts toolLoad)
+    const { optional, columns } = toolLoad();
+    const sub = rosterTables(await loadTables((name) => Promise.resolve(existsSync(path.join(dir, name)) ? (({ buffer, byteOffset, byteLength }) => buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer)(readFileSync(path.join(dir, name))) : null), optional, columns));
     for (const tool of Object.keys(TOOL_TABLES) as Tool[]) {
-      const { optional, columns } = loadArgs(new Map(Object.entries(TOOL_TABLES[tool]) as [OptionalTable, Columns][]));
-      const sub = rosterTables(await loadTables((name) => Promise.resolve(existsSync(path.join(dir, name)) ? (({ buffer, byteOffset, byteLength }) => buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer)(readFileSync(path.join(dir, name))) : null), optional, columns));
       compared++;
       if (!isDeepStrictEqual(toolAnswers(tool, full, f), toolAnswers(tool, sub, f))) differ.push(`${path.relative(DATA_DIR, dir)} ${tool}`);
     }
