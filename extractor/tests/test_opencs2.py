@@ -188,6 +188,8 @@ def _orphan(inbox: Path, name: str = "team-a-vs-team-b-m1-cache.dem", sidecar: s
     dp.append_jsonl(dp.LEDGER, dict(id=dp.loose_id(meta), status="done", rar_sha256=meta["sha256"]))
     if sidecar is not None:
         dp.sidecar_path(dem).write_text(sidecar, encoding="utf-8")
+    hour_ago = time.time() - 3600  # older than any pipeline the test starts, whatever the clock's resolution
+    os.utime(dp.sidecar_path(dem), (hour_ago, hour_ago))
     return dp.sidecar_path(dem)
 
 
