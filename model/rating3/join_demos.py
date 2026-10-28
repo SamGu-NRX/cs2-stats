@@ -4,6 +4,12 @@ Requires matching map, an archive timestamp within 36 hours of HLTV's match
 start, both five-player rosters, every round winner, and every enemy-kill pair
 in order. The timestamp window permits a local archive timestamp and long
 series, but is not enough to accept a join without the event checks.
+
+A map whose match.extra names its HLTV match and map (hltv_match_id and
+hltv_map_index, as the pipeline records for a loose OpenCS2 demo) is joined to
+that HLTV map alone, among the fit's sources and the ocs_map_*.json scoreboards
+saved for OpenCS2, instead of by timestamp; the map, roster, round-winner and
+kill checks still decide.
 """
 from __future__ import annotations
 import argparse
@@ -31,7 +37,7 @@ def hltv_index(root: Path, sources: list[dict]) -> dict:
         path = root / source["file"]
         data = json.loads(path.read_text(encoding="utf-8"))
         info = data["info"][0]
-        map_name = re.search(r"Map(Ancient|Anubis|Cache|Dust2|Inferno|Mirage|Nuke)", info)[1].lower()
+        map_name = re.search(r"Map(Ancient|Anubis|Cache|Dust2|Inferno|Mirage|Nuke|Overpass|Train)", info)[1].lower()
         date = datetime.strptime(re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", info)[0], "%Y-%m-%d %H:%M")
         total_tables = [s for s in data["scoreboards"] if "totalstats" in s["cls"].split()]
         rosters = [{nickname(p["player"]) for p in table["rows"]} for table in total_tables]
@@ -59,8 +65,28 @@ def hltv_index(root: Path, sources: list[dict]) -> dict:
                 kills.append((a, v))
             kill_sequences[number] = kills
         by_map[map_name].append({"file": path.name, "date": date, "rosters": rosters,
-                                 "winner_sides": winner_sides, "kills": kill_sequences})
+                                 "winner_sides": winner_sides, "kills": kill_sequences, "map": map_name,
+                                 "ids": (str(data.get("match", {}).get("matchId")), data.get("mapIndex"))})
     return by_map
+
+
+def ids_index(root: Path, by_map: dict) -> tuple[dict, list[dict]]:
+    """{(HLTV match id, map index): HLTV map} over the fit's indexed maps and every ocs_map_*.json, and the files
+    that could not be read. A file without a map index is left out: it cannot be named by one."""
+    out, unreadable = {}, []
+    for path in sorted(root.glob("ocs_map_*.json")):
+        try:
+            extra = hltv_index(root, [{"file": path.name}])
+        except (ValueError, KeyError, TypeError, IndexError) as error:
+            unreadable.append({"hltv": path.name, "reason": f"{type(error).__name__}: {error}"})
+            continue
+        for maps in extra.values():
+            for m in maps:
+                out[m["ids"]] = m
+    for maps in by_map.values():
+        for m in maps:
+            out.setdefault(m["ids"], m)
+    return {k: v for k, v in out.items() if k[1] is not None}, unreadable
 
 
 def join(root: Path, metrics: Path) -> dict:
@@ -74,15 +100,18 @@ def join(root: Path, metrics: Path) -> dict:
         for relative, layout in iter_demo_roots(root)
     ]
     accepted, rejected = [], []
+    by_ids, unreadable = None, []
     for entry in entries:
         directory = entry["layout"].directory
         metadata_path = entry["layout"].table("match")
         meta = pq.read_table(metadata_path).to_pylist()[0]
-        archive_date = json.loads(meta["extra"]).get("dem_modified_in_archive")
-        if not archive_date:
+        extra = json.loads(meta["extra"])
+        named = (str(extra["hltv_match_id"]), int(extra["hltv_map_index"])) if extra.get("hltv_match_id") else None
+        archive_date = extra.get("dem_modified_in_archive")
+        if not named and not archive_date:
             rejected.append({"demo": entry["out_dir"], "reason": "no archive date"})
             continue
-        demo_date = datetime.strptime(archive_date[:19], "%Y-%m-%d %H:%M:%S")
+        demo_date = datetime.strptime(archive_date[:19], "%Y-%m-%d %H:%M:%S") if not named else None
         rounds = pq.read_table(directory / "rounds.parquet").to_pylist()
         roster_rows = pq.read_table(
             entry["layout"].table("player_rounds"),
@@ -101,8 +130,17 @@ def join(root: Path, metrics: Path) -> dict:
                 continue
             sequences[k["round"]].append((names.get(k["attacker_steamid"], "unknown"), names.get(k["victim_steamid"], "unknown")))
         map_name = meta["map_name"] if "map_name" in meta else meta["map"]
-        candidates = [c for c in by_map[map_name.removeprefix("de_")]
-                      if abs((c["date"] - demo_date).total_seconds()) <= 36 * 3600]
+        if named:
+            if by_ids is None:
+                by_ids, unreadable = ids_index(root / "hltv", by_map)
+            named_map = by_ids.get(named)
+            candidates = [named_map] if named_map and named_map["map"] == map_name.removeprefix("de_") else []
+            if not candidates:
+                rejected.append({"demo": entry["out_dir"], "reason": "no HLTV map with its ids", "hltv_ids": named})
+                continue
+        else:
+            candidates = [c for c in by_map[map_name.removeprefix("de_")]
+                          if abs((c["date"] - demo_date).total_seconds()) <= 36 * 3600]
         candidates = [c for c in candidates if len(c["winner_sides"]) == len(rounds)]
         matches = []
         near = []
@@ -119,15 +157,17 @@ def join(root: Path, metrics: Path) -> dict:
             candidate = matches[0]
             accepted.append({"demo": entry["out_dir"], "hltv": candidate["file"], "rounds": len(rounds),
                              "kills": sum(len(v) for v in sequences.values()),
-                             "timestamp_difference_hours": (demo_date - candidate["date"]).total_seconds() / 3600,
-                             "checks": ["map", "archive_date", "both_team_rosters", "all_round_winners", "all_enemy_kills_in_order"]})
+                             **({"hltv_ids": named} if named else
+                                {"timestamp_difference_hours": (demo_date - candidate["date"]).total_seconds() / 3600}),
+                             "checks": ["map", "hltv_ids" if named else "archive_date", "both_team_rosters",
+                                        "all_round_winners", "all_enemy_kills_in_order"]})
         else:
             rejected.append({"demo": entry["out_dir"], "reason": "ambiguous" if len(matches) > 1 else "no exact join",
                              "near": near})
     return {"accepted": accepted, "rejected": rejected,
             "counts": {"accepted": len(accepted), "rejected": len(rejected),
                        "rounds": sum(r["rounds"] for r in accepted), "kills": sum(r["kills"] for r in accepted)},
-            "reasons": dict(Counter(r["reason"] for r in rejected))}
+            "reasons": dict(Counter(r["reason"] for r in rejected)), "unreadable_hltv": unreadable}
 
 
 def main() -> None:

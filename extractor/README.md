@@ -36,6 +36,19 @@ The snapshot tests in `tests/test_snapshot.py` need the private fixture demos an
 
 The tables land in `out/v-<version>-<hash>/`, and `out/CURRENT` names that folder (see "Finding a map's tables" in `SCHEMA-v1.md`). Without `--mapdata` the map still extracts, but `match.visibility_status` is `no_mapdata`, mesh visibility is null, and only damage and kills open engagements.
 
+## Pro demos from OpenCS2
+
+The OpenCS2 dataset (`blanchon/opencs2_dataset_demo` on Hugging Face, CC BY 4.0) holds HLTV pro maps as loose `.dem` files. The pipeline takes them from a second folder, `CS2_DEMO_INBOX` (off when unset): each `<match id>/<name>.dem` there needs a sidecar `<name>.meta.json` naming its `source` (`opencs2`), `hltv_match_id`, `hltv_map_index` and `map_name`, or it is refused with a ledger row saying why. Such a demo skips extraction, must have the map its sidecar names, and is parsed under the same disk budget, free-space floor, ledger and retry rules as an archive. Its map is published as `<team1>-vs-<team2>-opencs2-<match id>-m<index>/<map>`, with the sidecar in `match.extra`, which is how `model/rating3/join_demos.py` joins it to its HLTV scoreboard.
+
+`fetch_opencs2.py` fills the inbox. It picks the maps whose HLTV scoreboard is saved in `<data>/hltv`, leaves out those the ledger already holds, and downloads the rest with resume, two at a time at most, while the pipeline's `/pending` has room and the inbox's volume stays above the free-space floor:
+
+```sh
+.venv/Scripts/python -I fetch_opencs2.py --inbox <folder> --dry-run      # list what it would fetch
+.venv/Scripts/python -I fetch_opencs2.py --inbox <folder> --limit 3      # fetch three maps
+```
+
+A demo appears in the inbox, with its sidecar, only once it is whole. Ctrl+C stops it; the next run resumes the partial files. `CS2_PIPELINE_PORT` moves the pipeline's status port (default 8766), and `--status` points the fetcher at it.
+
 ## Import Valve matchmaking demos
 
 `valve_import.py` extracts the user's own matchmaking demos (`match730_*.dem`) with source `valve`. The app runs it from Data & settings, "Import Valve matches", into `%APPDATA%\BotMatchStats\valve` (see "The app" below).

@@ -80,7 +80,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 
 | field | type | null | meaning, units |
 |---|---|---|---|
-| `archive` | String | no | archive id the demo came from |
+| `archive` | String | no | archive id the demo came from; for a loose demo from the pipeline's inbox, `<source>-<HLTV match id>-m<map index>`, e.g. `opencs2-2393397-m1` |
 | `awpy_convars` | String | no | JSON of convars as awpy read them |
 | `awpy_version` | String | no | parser version |
 | `build_num` | Int32 | yes | demo header build number; null for a truncated demo, which has no playback header |
@@ -90,7 +90,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `demo_sha256` | String | no | SHA-256 of the .dem file |
 | `demo_version_guid` | String | no | demo header GUID |
 | `demoparser2_version` | String | no | parser version |
-| `extra` | String | no | JSON from the caller (archive metadata) |
+| `extra` | String | no | JSON from the caller. From an HLTV archive the pipeline writes `archive_rar`, `archive_slug`, `dem_modified_in_archive`, `dem_size_in_archive` and `download_folder`; from a loose demo (OpenCS2) it writes the demo's sidecar, `source`, `hltv_match_id`, `hltv_map_index`, `map_name`, `dataset_file` and `match_date`, with `archive_slug` and `dem_size`. `model/rating3/join_demos.py` joins a map that names `hltv_match_id` and `hltv_map_index` to that HLTV map, and any other map by `dem_modified_in_archive` |
 | `extractor_version` | String | no | version of this extractor (semver) |
 | `final_tick` | Int32 | no | tick the final scoreboard was read (win panel, or last round end + 1) |
 | `map` | String | no | map name from the demo header, e.g. de_dust2 |

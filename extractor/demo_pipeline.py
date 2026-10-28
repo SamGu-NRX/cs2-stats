@@ -13,7 +13,9 @@ Run:  .venv\\Scripts\\python.exe -I demo_pipeline.py            (runs until stop
 Environment: CS2_DEMO_DOWNLOADS (required), CS2_STATS_DATA, CS2_PIPELINE_MAX_GB (disk budget, default 30),
 CS2_PIPELINE_MAX_WORKERS (optional cap on parse workers; memory and cpu_count - 2 set the rest),
 CS2_PIPELINE_DOWNLOAD_COPIES (off, dry-run or delete; default dry-run): what to do with the copy of each finished
-archive that the browser also saves to Windows Downloads (download_copies.py).
+archive that the browser also saves to Windows Downloads (download_copies.py), CS2_DEMO_INBOX (optional): a folder of
+loose .dem files, each with a sidecar naming its source and HLTV ids (read_sidecar; fetch_opencs2.py fills it),
+CS2_PIPELINE_PORT (the status port, default 8766).
 """
 
 from __future__ import annotations
@@ -51,6 +53,9 @@ from repo_guard import FROZEN_MARKER, REPO_ENV, OutputRefused, check_output, rep
 # The browser's download folder the HLTV tab saves archives to (CS2_DEMO_DOWNLOADS); main() refuses
 # to start without it. The data folder (CS2_STATS_DATA) defaults to cs2-stats-data beside the repo.
 DOWNLOADS: Path | None = Path(os.environ["CS2_DEMO_DOWNLOADS"]) if os.environ.get("CS2_DEMO_DOWNLOADS") else None
+# A second input, off unless CS2_DEMO_INBOX is set: loose .dem files, in the folder or one subfolder down, each with a
+# sidecar <name>.meta.json (read_sidecar). They skip extraction and go straight to parsing.
+INBOX: Path | None = Path(os.environ["CS2_DEMO_INBOX"]) if os.environ.get("CS2_DEMO_INBOX") else None
 DATA_ROOT = Path(os.environ.get("CS2_STATS_DATA") or ROOT.parent.parent / "cs2-stats-data")  # data; holds no code
 DEMOS_DIR = DATA_ROOT / "demos"
 WORK_DIR = DATA_ROOT / "work"
@@ -150,7 +155,7 @@ WORKER_RSS_LIMIT_GB = 3.5
 WORKER_TIMEOUT_S = 45 * 60
 TRUNCATION_GRACE_S = 300  # a RAR that 7z calls truncated is re-watched if modified this recently
 POLL_S = 2.0
-HOST, PORT = "127.0.0.1", 8766
+HOST, PORT = "127.0.0.1", int(os.environ.get("CS2_PIPELINE_PORT") or 8766)
 ALLOWED_ORIGIN = "https://www.hltv.org"
 
 IDLE = getattr(subprocess, "IDLE_PRIORITY_CLASS", 0)
@@ -251,6 +256,7 @@ class Archive:
     rar: Path
     id: str
     state: str = "pending"  # (hashing ->) pending -> extracting -> parsing -> (done | failed)
+    loose: dict | None = None  # a loose demo from the inbox (rar is the .dem): its sidecar, as read_sidecar returns it
     slug: str | None = None
     work: Path | None = None
     dems: list[Path] = field(default_factory=list)
@@ -339,6 +345,42 @@ class Job:
     peak_rss_gb: float = 0.0
     output_gb: float = 0.0  # space held for the tables it writes, fixed when it starts and released when it ends
     killed: str | None = None
+
+
+LOOSE_SOURCES = ("opencs2",)  # where a loose demo may come from (its sidecar's source)
+
+
+def sidecar_path(dem: Path) -> Path:
+    return dem.with_name(dem.stem + ".meta.json")
+
+
+def read_sidecar(dem: Path) -> dict:
+    """The sidecar of a loose demo: <name>.meta.json beside <name>.dem, a JSON object with source (one of
+    LOOSE_SOURCES), hltv_match_id (digits), hltv_map_index (1 or more) and map_name (de_...), and optionally
+    dataset_file and match_date. Raises ValueError saying what is missing or wrong; such a demo is refused."""
+    side = sidecar_path(dem)
+    try:
+        meta = json.loads(side.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"no sidecar {side.name}") from None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"sidecar {side.name} cannot be read: {e}") from None
+    if not isinstance(meta, dict):
+        raise ValueError(f"sidecar {side.name} is not a JSON object")
+    index = meta.get("hltv_map_index")
+    bad = [k for k, ok in (("source", meta.get("source") in LOOSE_SOURCES),
+                           ("hltv_match_id", str(meta.get("hltv_match_id", "")).isdigit()),
+                           ("hltv_map_index", isinstance(index, int) and not isinstance(index, bool) and index >= 1),
+                           ("map_name", str(meta.get("map_name", "")).startswith("de_"))) if not ok]
+    if bad:
+        raise ValueError(f"sidecar {side.name}: missing or invalid {', '.join(bad)}")
+    keep = ("source", "hltv_match_id", "hltv_map_index", "map_name", "dataset_file", "match_date")
+    return {k: (str(meta[k]) if k == "hltv_match_id" else meta[k]) for k in keep if k in meta}
+
+
+def loose_id(meta: dict) -> str:
+    """A loose demo's archive id, one per HLTV map: <source>-<match id>-m<map index>."""
+    return f"{meta['source']}-{meta['hltv_match_id']}-m{meta['hltv_map_index']}"
 
 
 def slug_for(dem_names: list[str], archive_id: str, legacy: bool = False) -> str:
@@ -886,8 +928,9 @@ def output_seed(rows: list[dict]) -> list[float]:
     return [float(r["output_bytes"]) / 1e9 for r in rows if r.get("ok") and r.get("output_bytes")][-TIMING_SAMPLES:]
 
 
-def read_ledger() -> dict[str, dict]:
-    return {rec["id"]: rec for rec in read_jsonl(LEDGER)}
+def read_ledger(path: Path | None = None) -> dict[str, dict]:
+    """{archive id: its latest record} from the ledger (LEDGER unless path is given)."""
+    return {rec["id"]: rec for rec in read_jsonl(path or LEDGER)}
 
 
 # ---------------------------------------------------------------------------
@@ -961,8 +1004,13 @@ class Pipeline:
                             yield f
                 elif d.is_file() and is_candidate_name(d):
                     yield d
+        if INBOX is not None and INBOX.exists():
+            for f in [*INBOX.glob("*.dem"), *INBOX.glob("*/*.dem")]:
+                if f.is_file() and not f.name.startswith("."):
+                    yield f
         if self.retry_failed and FAILED_DIR.exists():
             yield from (f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file())
+            yield from (f for f in FAILED_DIR.glob("*/*.dem") if f.is_file() and sidecar_path(f).is_file())
 
     def scan(self, now: float) -> None:
         for gone in [p for p in self.tracker.tracked() if not p.exists()]:
@@ -970,6 +1018,9 @@ class Pipeline:
         busy = {a.rar for a in self.archives.values()}
         for f in self.candidates():
             if f in busy or f in self.ignored:
+                continue
+            if f.suffix.lower() == ".dem":
+                self.scan_loose(f)
                 continue
             in_failed = f.parent.parent == FAILED_DIR
             aid = f.parent.name if in_failed else f.name
@@ -1006,6 +1057,38 @@ class Pipeline:
                                          download_started=started, download_finished=finished)
             self.hasher.submit(f)
             log.info("found archive %s (%.0f MB); hashing it", f, st.st_size / 1e6)
+
+    def scan_loose(self, f: Path) -> None:
+        """Take in a loose demo from the inbox, or one kept in failed/ when retrying: pending at once, with no hash
+        (no browser copy to match) and no extraction. A demo whose sidecar is missing or wrong is refused: a ledger
+        row says why, and the file stays where it is, skipped for the rest of the run."""
+        in_failed = f.parent.parent == FAILED_DIR
+        try:
+            meta = read_sidecar(f)
+        except ValueError as e:
+            self.ignored.add(f)
+            log.error("refusing loose demo %s: %s", f, e)
+            rec = dict(id=f"inbox:{f.name}", status="failed", reason=f"refused: {e}", kept=str(f), retry=False,
+                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            append_jsonl(LEDGER, rec)
+            self.ledger[rec["id"]] = rec
+            return
+        aid = loose_id(meta)
+        status = self.ledger.get(aid, {}).get("status")
+        if (status == "done" and aid not in self.reextract_ids()) or (status == "failed" and not in_failed):
+            self.ignored.add(f)
+            log.info("loose demo %s is %s already as %s; left alone", f, status, aid)
+            return
+        if in_failed:
+            if f in self.retried or not due_for_retry(f.parent, extract.EXTRACTOR_VERSION):
+                return
+            self.retried.add(f)
+        if aid in self.archives:
+            return  # another copy of this map is in hand
+        st = f.stat()
+        self.archives[aid] = Archive(rar=f, id=aid, rar_bytes=st.st_size, loose=meta,
+                                     download_started=getattr(st, "st_birthtime", st.st_ctime))
+        log.info("pending loose demo %s as %s (%.0f MB)", f, aid, st.st_size / 1e6)
 
     def poll_hashes(self) -> None:
         """Make each archive whose SHA-256 is done pending. A retry takes its download's times from its failure
@@ -1044,6 +1127,9 @@ class Pipeline:
     def start_extractions(self) -> None:
         for a in sorted((a for a in self.archives.values() if a.state == "pending"), key=lambda a: a.rar.stat().st_mtime
                         if a.rar.exists() else 0):
+            if a.loose is not None:  # already a demo on disk: nothing to extract, so no extraction slot
+                self.start_loose(a)
+                continue
             if self.extracted_count() >= MAX_EXTRACTED:
                 return
             if not a.listing:
@@ -1089,6 +1175,56 @@ class Pipeline:
             a.state, a.t_extract = "extracting", time.time()
             log.info("extracting %s -> %s (%d dem)", a.id, a.work, len(a.listing))
 
+    def start_loose(self, a: Archive) -> None:
+        """Queue a loose demo's parse. Its header must name the map its sidecar does, or the HLTV ids it would be
+        published under belong to another map, and it fails."""
+        from demoparser2 import DemoParser
+        try:
+            header_map = DemoParser(str(a.rar)).parse_header().get("map_name")
+        except Exception as e:  # noqa: BLE001 - demoparser2 raises a bare Exception
+            self.fail_archive(a, f"cannot read the demo header: {type(e).__name__}: {e}")
+            return
+        if header_map != a.loose["map_name"]:
+            self.fail_archive(a, f"the sidecar names {a.loose['map_name']}, the demo's header {header_map}")
+            return
+        a.listing = {a.rar.name: dict(size=a.rar_bytes, modified=None)}
+        if not a.archive_gb_counted:
+            self.archive_gb.append(a.rar_bytes / 1e9)
+            a.archive_gb_counted = True
+        a.slug = self.slug_of(a)
+        a.work = WORK_DIR / a.slug  # the parse's result file; the demo stays where it is
+        if a.work.exists():
+            safe_rmtree(a.work)
+        a.work.mkdir(parents=True)
+        a.dems = [a.rar]
+        a.state = "parsing"
+        self.queue_jobs(a)
+
+    def queue_jobs(self, a: Archive) -> None:
+        """A parse job per demo of a, each with its map folder. A retried failure parses only the demos that failed
+        under another extractor version; one that already failed under this one keeps that result."""
+        keys: set[str] = set()
+        failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
+        for dem in a.dems:
+            key = extract.map_key_for(dem, dem.stem)
+            part = stitch.split_key(key)
+            if part:
+                a.split[dem.name] = part
+            while key in keys:
+                key += "_dup"
+            keys.add(key)
+            jd = LOG_DIR / "jobs"
+            jd.mkdir(parents=True, exist_ok=True)
+            a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
+            if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
+                a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
+                log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
+                         extract.EXTRACTOR_VERSION)
+                continue
+            self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
+                                 result_path=a.work / f"{dem.stem}.result.json",
+                                 log_path=jd / f"{a.slug}-{key}.log"))
+
     def poll_extractions(self) -> None:
         for a in [a for a in self.archives.values() if a.state == "extracting"]:
             rc = a.proc.poll()
@@ -1113,29 +1249,7 @@ class Pipeline:
                 continue
             safe_unlink(a.extract_log, missing_ok=True)
             a.state = "parsing"
-            keys: set[str] = set()
-            # A retried failure parses only the demos that failed under another extractor version; one that
-            # already failed under this one keeps that result.
-            failed_under, _ = failure_versions(a.rar.parent) if a.rar.parent.parent == FAILED_DIR else ({}, None)
-            for dem in a.dems:
-                key = extract.map_key_for(dem, dem.stem)
-                part = stitch.split_key(key)
-                if part:
-                    a.split[dem.name] = part
-                while key in keys:
-                    key += "_dup"
-                keys.add(key)
-                jd = LOG_DIR / "jobs"
-                jd.mkdir(parents=True, exist_ok=True)
-                a.out_dirs[dem.name] = (PARTS_DIR if part else DEMOS_DIR) / a.slug / key
-                if failed_under.get(dem.name) == extract.EXTRACTOR_VERSION:
-                    a.results[dem.name] = json.loads((a.rar.parent / f"{dem.stem}.result.json").read_text(encoding="utf-8"))
-                    log.info("%s/%s already failed under extractor %s; not parsed again", a.slug, key,
-                             extract.EXTRACTOR_VERSION)
-                    continue
-                self.jobs.append(Job(archive=a, dem=dem, out_dir=a.out_dirs[dem.name], map_key=key,
-                                     result_path=a.work / f"{dem.stem}.result.json",
-                                     log_path=jd / f"{a.slug}-{key}.log"))
+            self.queue_jobs(a)
             log.info("extracted %s in %.1fs: %s", a.id, a.t_extract_s, [d.name for d in a.dems])
 
     # --- parsing
@@ -1171,9 +1285,12 @@ class Pipeline:
             self._floor_waiting = False
             j = self.jobs.popleft()
             listing = j.archive.listing.get(j.dem.name, {})
-            meta = dict(archive_rar=str(j.archive.rar), archive_slug=j.archive.slug,
-                        dem_modified_in_archive=listing.get("modified"), dem_size_in_archive=listing.get("size"),
-                        download_folder=j.archive.rar.parent.name)
+            if j.archive.loose is not None:  # match.extra: the source and HLTV ids the join reads (join_demos)
+                meta = dict(j.archive.loose, archive_slug=j.archive.slug, dem_size=j.archive.rar_bytes)
+            else:
+                meta = dict(archive_rar=str(j.archive.rar), archive_slug=j.archive.slug,
+                            dem_modified_in_archive=listing.get("modified"), dem_size_in_archive=listing.get("size"),
+                            download_folder=j.archive.rar.parent.name)
             python, python_env = worker_python()
             cmd = [python, "-I", str(RUN_CODE / "extract.py"), str(j.dem), str(j.out_dir), "--source", "hltv",
                    "--mapdata", str(MAPDATA), "--archive", j.archive.id, "--meta", json.dumps(meta),
@@ -1312,10 +1429,13 @@ class Pipeline:
                 safe_rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
             else:
                 safe_unlink(a.rar)
+                if a.loose is not None:
+                    safe_unlink(sidecar_path(a.rar), missing_ok=True)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
                              if row["status"] != "stitched"],
-                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
+                       finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a),
+                       **self.loose_facts(a))
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
             del self.archives[a.id]
@@ -1417,6 +1537,8 @@ class Pipeline:
                 safe_rmtree(a.rar.parent, ignore_errors=True)
             elif a.rar.exists():
                 safe_unlink(a.rar)
+                if a.loose is not None:
+                    safe_unlink(sidecar_path(a.rar), missing_ok=True)
             if a.work and a.work.exists():
                 safe_rmtree(a.work, ignore_errors=True)
             self._record_failure(a, reason, kept=None, retry=False)
@@ -1425,8 +1547,11 @@ class Pipeline:
         if not retried and dest.exists():
             dest = FAILED_DIR / f"{a.slug or a.id}-{int(time.time())}"
         dest.mkdir(parents=True, exist_ok=True)
+        kept_input = dest / (a.rar.name if a.loose is not None else "archive.rar")
         if a.rar.exists() and not retried:
-            shutil.move(str(a.rar), dest / "archive.rar")
+            shutil.move(str(a.rar), kept_input)
+            if a.loose is not None:  # kept with its sidecar, which --retry-failed needs to take it in again
+                shutil.move(str(sidecar_path(a.rar)), sidecar_path(kept_input))
         if retried:
             # Only the demos failing now stay on record. One that passed this time is published; its old record,
             # from an older version, kept the archive due for retry (due_for_retry) on every scan.
@@ -1447,13 +1572,15 @@ class Pipeline:
                                                      default=str, indent=1), encoding="utf-8")
         if a.work and a.work.exists():
             safe_rmtree(a.work, ignore_errors=True)
-        self.retried.add(dest / "archive.rar")  # a fresh failure is not retried again in this run
-        self._record_failure(a, reason, kept=str(dest), retry=True, ledger_id=dest.name if retried else a.id)
+        self.retried.add(kept_input)  # a fresh failure is not retried again in this run
+        self._record_failure(a, reason, kept=str(dest), retry=True,
+                             ledger_id=dest.name if retried and a.loose is None else a.id)
         self.enforce_failed_cap()
 
     def _record_failure(self, a: Archive, reason: str, kept: str | None, retry: bool, ledger_id: str | None = None):
         rec = dict(id=ledger_id or a.id, status="failed", slug=a.slug, reason=reason[:2000], kept=kept, retry=retry,
-                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a))
+                   finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a),
+                   **self.loose_facts(a))
         append_jsonl(LEDGER, rec)
         self.ledger[a.id] = rec
         self.archives.pop(a.id, None)
@@ -1464,6 +1591,11 @@ class Pipeline:
         recs = [r for r in self.ledger.values() if r.get("kept") and Path(r["kept"]) == kept
                 and r.get("rar_sha256") == sha256]
         return max(recs, key=lambda r: r.get("finished_utc") or "") if recs else None
+
+    @staticmethod
+    def loose_facts(a: Archive) -> dict:
+        """A loose demo's source, HLTV ids and size, for its ledger record (fetch_opencs2.py skips what it holds)."""
+        return dict(a.loose, dem_bytes=a.rar_bytes) if a.loose is not None else {}
 
     @staticmethod
     def rar_facts(a: Archive) -> dict:
