@@ -114,9 +114,9 @@ Tokens: `--ease-out: cubic-bezier(.23,1,.32,1)` (enter), `--ease-in-out: cubic-b
 | App launch | First paint | Content pane opacity 0→1, translateY 6→0 (shell is static) | 160 ms | `--ease-out` | n/a | Opacity only |
 | Sidebar collapse | Button click | Sidebar `width`; labels opacity 100 ms | 180 ms | `--ease-in-out` | Retargets | Instant |
 | Sidebar collapse | Ctrl+B | Nothing | 0 | – | – | – |
-| View change | Nav click | Out: opacity 80 ms. In: opacity + translateY 6→0. Active bar translateY between items | 180 / 200 ms | `--ease-out` / `--ease-in-out` | New route skips pending | Crossfade; bar jumps |
+| View change | Nav click | Out: opacity 80 ms. In: opacity + translateY 6→0. Active bar translateY between items | 180 / 200 ms | `--ease-out` / `--ease-in-out` | New route skips pending | Page appears at once; bar jumps |
 | Tab switch | Click | Underline translateX + scaleX only; panel swaps instantly; charts do not replay reveals | 200 ms | `--ease-in-out` | Retargets | Jump |
-| Open match | Row click | View Transition: `view-transition-name` `match-score` and `match-map` set on the clicked row only, morph into the hero; root crossfade 160 ms. Feature-detect `startViewTransition` (WebView2 ≥ 111), else crossfade | 280 ms | `--ease-drawer` | `skipTransition()` on new nav | Crossfade only |
+| Open match | Row click | As a view change: the page is there at once and fades in. No score morph (see Signature moments 1) | 180 ms | `--ease-out` | New route replaces it | None |
 | Round drawer open | Cell click | translateX 100 %→0 over the grid; grid width set after the transition ends behind the opaque edge | 320 ms | spring .45 / .08 | Spring reverses | Opacity 120 ms |
 | Round drawer close | Close button | translateX 0→100 % | 200 ms | `--ease-out` | Reverses | Opacity |
 | Any keyboard action | Ctrl+N, Alt+N, Enter, Esc, arrows, palette commands | Nothing: the change is instant | 0 | – | – | – |
@@ -143,7 +143,7 @@ Performance: transform and opacity only, with these named exceptions: sidebar `w
 
 ## 4. Signature moments
 
-1. **Score handoff.** Clicking a match carries its score and map label from the row into the hero as one object, the radar ghost fades in behind, and the round rail draws left to right (`clip-path: inset(0 100% 0 0)` → `0`, 400 ms, same curve as the gauge), once per match open. Home, Matches and Match become one surface.
+1. **Match open.** Clicking a match opens it at once; the radar ghost fades in behind the hero, and the round rail draws left to right (`clip-path: inset(0 100% 0 0)` → `0`, 400 ms, same curve as the gauge), once per match open. The score no longer morphs from the row into the hero: as a View Transition it blocked every click on the page for its 280 ms, and on the live page it clipped at the hero's edge and crossed its text. A match is opened tens of times a session, which is too often for a 280 ms move (router.ts openMatch).
 2. **The round rail is the spine.** The round-history strip from direction-h sits under the hero on every match tab, with a 2 px cream playhead on the selected round. Clicking a round anywhere switches to Rounds and opens that round's drawer; `← →` step the playhead with no animation; the Rounds grid's column highlight is the same cream, so rail and grid read as one cursor.
 3. **The card wakes once, then lights per side.** The HLTV gauge draws, the rating counts up, six bars extend in a 40 ms cascade, then everything is still for the rest of the session. Switching T/CT is a lighting change: numbers, bars and the ghosted head recolour together in 200 ms, numbers themselves swap instantly.
 
@@ -169,7 +169,7 @@ Performance: transform and opacity only, with these named exceptions: sidebar `w
 1. 1440 × 900 screenshot: 232 px sidebar, content runs to 24 px of the right edge, no centred column.
 2. Title bar: 46 px caption buttons, close hover `#C42B1C`, drag and double-click maximise work.
 3. Profile first open: gauge draws and rating counts up; leave and return: nothing replays.
-4. Recording: match row click → score morphs into the hero within 300 ms, hero never empty.
+4. Match row click → the match is there at once, hero never empty; a click on any tab or the sidebar during the fade lands.
 5. Drawer opens in 320 ms with no grid jump; resize handle tracks the pointer 1:1; Esc closes in 200 ms.
 6. Ctrl+K and Ctrl+B produce no motion; the sidebar button animates 180 ms.
 7. Sorting any column reorders rows in one frame.
