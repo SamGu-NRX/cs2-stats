@@ -446,6 +446,10 @@
      "String",
      "a4a709c2c75bd345"
     ],
+    "recovered": [
+     "Boolean",
+     "eb8389f5bb8f8a58"
+    ],
     "round": [
      "Int16",
      "100c79a4eb297249"

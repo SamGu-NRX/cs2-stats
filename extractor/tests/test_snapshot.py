@@ -153,6 +153,11 @@ def test_blinds_after_a_detonation_the_recording_skipped_are_credited_to_that_fl
         pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; blinds of a skipped detonation are not being checked")
     res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
     assert res["ok"], res["errors"]
-    blinds = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "blinds.parquet").filter(pl.col("tick") == 90372)
+    d = ex.resolve_map_dir(tmp_path / "out")
+    blinds = pl.read_parquet(d / "blinds.parquet").filter(pl.col("tick") == 90372)
     # The throw was lost too, so no attacker is known.
     assert blinds["flash_entity_id"].to_list() == [93, 93, 93] and blinds["attacker_steamid"].null_count() == 3
+    # Its detonation is added on the skipped tick, flagged, so the blinds link to it and not to an older flash 93.
+    events = pl.read_parquet(d / "grenade_events.parquet")
+    recovered = events.filter(pl.col("recovered")).select(["tick", "event", "entity_id", "steamid"]).rows()
+    assert recovered == [(90371, "flash_detonate", 93, None)]
