@@ -124,6 +124,32 @@ def test_a_loose_demo_with_a_sidecar_publishes_with_its_ids(tmp_path, monkeypatc
     assert not dem.exists() and not dp.sidecar_path(dem).exists()  # the inputs go once the map is published
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="recovery checks and deletes through a Win32 handle "
+                    "(download_copies.delete_verified); the Windows CI job runs this")
+def test_a_finished_loose_demo_left_by_a_crash_is_deleted_at_the_next_start(tmp_path, monkeypatch, caplog):
+    # A crash between the done row and the deletion left the demo and its sidecar in the inbox for good: scan_loose
+    # skips a done demo, recovery skipped every .dem, and the disk budget kept counting it.
+    inbox = _isolate(tmp_path, monkeypatch)
+    dem = _loose(inbox, "123", 1, "de_cache", "team-a-vs-team-b-m1-cache.dem", b"demo bytes" * 100)
+    meta = dp.read_sidecar(dem)
+    p = dp.Pipeline()
+    a = dp.Archive(rar=dem, id=dp.loose_id(meta), rar_bytes=dem.stat().st_size, rar_sha256=meta["sha256"], loose=meta,
+                   state="parsing", slug="team-a-vs-team-b-123", work=dp.WORK_DIR / "w")
+    a.work.mkdir()
+    a.dems, a.results = [dem], {dem.name: {"ok": True, "map": "m1-cache"}}
+    p.archives[a.id] = a
+
+    def stops_here(path, **kwargs):
+        raise OSError("the pipeline stopped here")
+    monkeypatch.setattr(dp, "remove_finished_rar", stops_here)
+    p.finish_archives()
+    assert [(r["id"], r["status"]) for r in _ledger()] == [("opencs2-123-m1", "done")]
+    assert dem.exists() and dp.sidecar_path(dem).exists()
+    assert dp.Pipeline().recover_finished() == [dem]  # the restart
+    assert not dem.exists() and not dp.sidecar_path(dem).exists()
+    assert "was still there" in caplog.text
+
+
 def test_a_loose_demo_without_a_sidecar_is_refused(tmp_path, monkeypatch):
     # Without its HLTV ids a map cannot be joined to its scoreboard; it must not be parsed as an anonymous map.
     inbox = _isolate(tmp_path, monkeypatch)
@@ -489,3 +515,8 @@ def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_pa
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="failed"))
     todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
     assert [(m.match_id, m.map_index) for m in todo] == [("1", 2)]
+    # the pipeline later deletes the kept failure under its failed/ cap: its last row says dropped, and the map is
+    # fetched again; skipping it as recorded would lose it for good
+    dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="dropped"))
+    todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
+    assert [(m.match_id, m.map_index) for m in todo] == [("1", 2), ("2", 1)]

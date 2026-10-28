@@ -618,6 +618,12 @@ fn prepare_launch(g: &launch::Guard, env: &job::JobEnv, csgo: &Path, id: &str, r
     if procs.cs2_running()? {
         return Err("CS2 is running. Close it, then render again.".into());
     }
+    // An earlier launch's HLAE can outlive every record of it: if the app stopped between starting HLAE and
+    // publishing its pids.json, that launch settles as damaged and no watcher remains. Any HLAE.exe running
+    // therefore refuses a launch, as any cs2.exe does (formal/ClipsLaunch.tla, ClipsLaunchCrashGap).
+    if procs.hlae_running()? {
+        return Err("HLAE is running, from an earlier render or opened by hand. Close it, then render again.".into());
+    }
     let nonce = launch::new_nonce()?;
     let job_dir = folder_in(&env.clips_root, &["jobs", id])?;
     let clips: Vec<String> = plan.demos.iter().flat_map(|d| d.clips.iter().map(|c| c.id.clone())).collect();
@@ -1003,6 +1009,13 @@ mod tests {
         let procs = launch::fake::Fake::new();
         let clip = plan.demos[0].clips[0].id.clone();
         fs::create_dir_all(env.clips_root.join("jobs").join(JOB).join("raw").join(&clip).join("take0000")).unwrap();
+        // an HLAE.exe left running, such as a launch whose pids.json the app never wrote, refuses a launch
+        // before anything is written
+        *procs.hlae.borrow_mut() = true;
+        let e = prepare_launch(&launch::guard(&env.clips_root).unwrap(), &env, &csgo, JOB, &plan.review, &procs).err().unwrap();
+        assert!(e.contains("HLAE is running"), "{e}");
+        assert!(launch::launches(&env.clips_root.join("jobs").join(JOB)).is_empty());
+        *procs.hlae.borrow_mut() = false;
         let g = launch::guard(&env.clips_root).unwrap();
         // a job that is not the plan the user reviewed is refused before anything is written
         let e = prepare_launch(&g, &env, &csgo, JOB, &"0".repeat(64), &procs).err().unwrap();

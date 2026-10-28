@@ -189,6 +189,9 @@ describe("the Clips page", () => {
     const dlg = document.querySelector("dialog.rdlg")!;
     expect(dlg.hasAttribute("open")).toBe(true);
     expect(dlg.querySelector(".rdlg__warn")!.textContent).toMatch(/This starts CS2 with -insecure/);
+    // a normal CS2 session started before the render settles replaces console.log, and the take is never
+    // counted (formal/ClipsLaunchUserSession): the dialog and the waiting note both say to keep CS2 closed
+    expect(dlg.querySelector(".rdlg__warn")!.textContent).toContain("keep it closed until this page stops waiting for it");
     expect(dlg.querySelector(".rdlg__cmd")!.textContent).toMatch(/^& '.*HLAE\.exe' '-noGui' .* '-cmdLine' '-insecure /);
     expect(planned).toEqual([{ save: null, request: { hlae: HLAE, clips: [{ id: READY, demo: "match730_0001.dem", steamid: ME, round: 3, startTick: 1000, endTick: 1960, tickRate: 64, reason: "3K on B Site, +30% round impact" }] } }]);
     expect(launched).toEqual([]);
@@ -249,6 +252,7 @@ describe("the Clips page", () => {
       waiting = 1;
       await render();
       expect(el.querySelector(".clips__waiting")!.textContent).toMatch(/^Waiting for CS2 to close\./);
+      expect(el.querySelector(".clips__waiting")!.textContent).toContain("Keep CS2 closed until this note goes away");
       expect(el.querySelector(".clips__tools")!.textContent).toContain("Check again");
       await act(async () => { rowOf("3K on B Site, +30% round impact").querySelector<HTMLInputElement>("input")!.click(); });
       expect((button(el, "Render 1 clip") as HTMLButtonElement).disabled).toBe(true);

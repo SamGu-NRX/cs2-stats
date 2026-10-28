@@ -100,15 +100,22 @@ def check_folder(folder: Path, data_root: Path, watched: Path | None) -> Path:
     return Path(os.path.realpath(folder))
 
 
-def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
-    """Why an open file is not the copy of d in folder, from its handle's facts; None if every check passes. The
-    SHA-256 is checked after this, through the same handle."""
+def not_plain(info: FileInfo) -> str | None:
+    """Why an open file is not one plain file whose deletion frees its data; None if it is."""
     if info.attributes & FILE_ATTRIBUTE_DIRECTORY:
         return "is a folder"
     if info.attributes & FILE_ATTRIBUTE_REPARSE_POINT:
         return "is a reparse point (a link, or a cloud placeholder)"
     if info.links != 1:
         return f"has {info.links} hard links; another name would keep the data"
+    return None
+
+
+def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
+    """Why an open file is not the copy of d in folder, from its handle's facts; None if every check passes. The
+    SHA-256 is checked after this, through the same handle."""
+    if why := not_plain(info):
+        return why
     if info.size != d.size:
         return f"size {info.size} is not {d.size}"
     if abs(info.created - d.finished) > COPY_WINDOW_S:
@@ -116,6 +123,24 @@ def refusal(info: FileInfo, d: Download, folder: Path) -> str | None:
     if os.path.normcase(os.path.dirname(info.final_path)) != os.path.normcase(str(folder)):
         return f"resolves to {info.final_path}, outside {folder}"
     return None
+
+
+def delete_verified(path: Path, size: int, sha256: str) -> str | None:
+    """Delete path only if it is the file described: one plain file of this size and SHA-256. It is opened with no
+    sharing, every check reads that handle, and the deletion goes through it, so the file deleted is the file
+    checked; nothing can replace it in between. Returns why the file was kept, or None once it is deleted. Raises
+    OSError if it cannot be opened alone or the deletion is refused (on other systems than Windows, always)."""
+    h = _open(path)
+    try:
+        info = _info(h)
+        why = not_plain(info) or (f"size {info.size} is not {size}" if info.size != size else None)
+        if why is None and _sha256(h) != sha256:
+            why = "SHA-256 differs"
+        if why is None:
+            _mark_deleted(h)
+        return why
+    finally:
+        _close(h)
 
 
 def candidates(folder: Path, d: Download) -> list[Path]:

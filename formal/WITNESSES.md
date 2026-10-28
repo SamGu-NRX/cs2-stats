@@ -4,50 +4,9 @@ Generated state differences from the retained TLC logs, with unchanged fields om
 
 Writer `pc`: 0 not started; 1 mkdir; 2 first table; 3 remaining tables; 4 schema reads passed; 5 manifest listing captured; 6 COMPLETE written; 7 folder renamed; 8 pointer staged; 9 CURRENT replaced; 11 RETIRED unlinked / finished; -1 failed. `ppc`/`cached`/`pending` are each pruner's independent state.
 
-## ArchiveCrashExpiry
+## ArchiveLegacyEviction
 
-Violated `ExpiredRecorded`. [Bounds](ArchiveCrashExpiry.cfg).
-
-```text
-1. Initial (see the module's Init)
-2. Scan: phase=<<"hashing", "idle">>
-3. Hash: phase=<<"pending", "idle">>
-4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
-5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
-6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
-7. Check: phase=<<"work", "idle">>
-8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
-9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
-10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
-11. Scan: phase=<<"idle", "hashing">>
-12. Hash: phase=<<"idle", "pending">>
-13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
-14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
-15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
-16. CapFirst: parts=<<FALSE, FALSE>>; capPending={1}; unrecorded={1}
-17. Crash: phase=<<"idle", "idle">>; work=<<FALSE, FALSE>>; capPending={}; crashes=1
-```
-
-## ArchiveCrashLedger
-
-Violated `DeletedRecorded`. [Bounds](ArchiveCrashLedger.cfg).
-
-```text
-1. Initial (see the module's Init)
-2. Scan: phase=<<"hashing", "idle">>
-3. Hash: phase=<<"pending", "idle">>
-4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
-5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
-6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
-7. Check: phase=<<"work", "idle">>
-8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
-9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
-10. Crash: phase=<<"idle", "idle">>; crashes=1
-```
-
-## ArchiveEviction
-
-Violated `EvictedRedownloadable`. [Bounds](ArchiveEviction.cfg).
+Violated `EvictedRedownloadable`. [Bounds](ArchiveLegacyEviction.cfg).
 
 ```text
 1. Initial (see the module's Init)
@@ -65,6 +24,47 @@ Violated `EvictedRedownloadable`. [Bounds](ArchiveEviction.cfg).
 13. FailDone: phase=<<"idle", "idle">>
 ```
 
+## ArchiveLegacyExpiry
+
+Violated `ExpiredRecorded`. [Bounds](ArchiveLegacyExpiry.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Scan: phase=<<"pending", "hashing">>
+5. Extract: phase=<<"extracting", "hashing">>; work=<<TRUE, FALSE>>
+6. Parse: phase=<<"parsing", "hashing">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+7. Stitch: phase=<<"check", "hashing">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+8. Check: phase=<<"work", "hashing">>
+9. RemoveWork: phase=<<"ledger", "hashing">>; work=<<FALSE, FALSE>>
+10. LedgerDone: phase=<<"rar", "hashing">>; ledger=<<"done", "none">>
+11. RemoveRar: phase=<<"idle", "hashing">>; rar=<<"gone", "downloads">>
+12. Hash: phase=<<"idle", "pending">>
+13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
+14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
+16. CapFirst: parts=<<FALSE, FALSE>>; capPending={1}; unrecorded={1}
+17. Crash: phase=<<"idle", "idle">>; work=<<FALSE, FALSE>>; capPending={}; crashes=1
+```
+
+## ArchiveLegacyLedgerOrder
+
+Violated `DeletedRecorded`. [Bounds](ArchiveLegacyLedgerOrder.cfg).
+
+```text
+1. Initial (see the module's Init)
+2. Scan: phase=<<"hashing", "idle">>
+3. Hash: phase=<<"pending", "idle">>
+4. Extract: phase=<<"extracting", "idle">>; work=<<TRUE, FALSE>>
+5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
+6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
+7. Check: phase=<<"work", "idle">>
+8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
+9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
+10. Crash: phase=<<"idle", "idle">>; crashes=1
+```
+
 ## ArchiveLegacyNoCheck
 
 Violated `NoUnaccountedDeletion`. [Bounds](ArchiveLegacyNoCheck.cfg).
@@ -77,13 +77,14 @@ Violated `NoUnaccountedDeletion`. [Bounds](ArchiveLegacyNoCheck.cfg).
 5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
 6. Stitch: phase=<<"check", "idle">>; parts=<<FALSE, FALSE>>; rows=<<{"stitched"}, {}>>; split=<<"broken", "none">>
 7. Check: phase=<<"work", "idle">>
-8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
-9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
+8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
+9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
+10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
 ```
 
-## ArchivePartialDelete
+## ArchiveLegacyPartialDelete
 
-Violated `ExpiredRecorded`. [Bounds](ArchivePartialDelete.cfg).
+Violated `ExpiredRecorded`. [Bounds](ArchiveLegacyPartialDelete.cfg).
 
 ```text
 1. Initial (see the module's Init)
@@ -93,20 +94,20 @@ Violated `ExpiredRecorded`. [Bounds](ArchivePartialDelete.cfg).
 5. Parse: phase=<<"parsing", "idle">>; outcome=<<"ok", "none">>; parts=<<TRUE, FALSE>>; whole=<<TRUE, FALSE>>
 6. Stitch: phase=<<"check", "idle">>; rows=<<{"held"}, {}>>; split=<<"held", "none">>
 7. Check: phase=<<"work", "idle">>
-8. RemoveWork: phase=<<"rar", "idle">>; work=<<FALSE, FALSE>>
-9. RemoveRar: phase=<<"ledger", "idle">>; rar=<<"gone", "downloads">>
-10. LedgerDone: phase=<<"idle", "idle">>; ledger=<<"done", "none">>
+8. RemoveWork: phase=<<"ledger", "idle">>; work=<<FALSE, FALSE>>
+9. LedgerDone: phase=<<"rar", "idle">>; ledger=<<"done", "none">>
+10. RemoveRar: phase=<<"idle", "idle">>; rar=<<"gone", "downloads">>
 11. Scan: phase=<<"idle", "hashing">>
 12. Hash: phase=<<"idle", "pending">>
 13. Extract: phase=<<"idle", "extracting">>; work=<<FALSE, TRUE>>
 14. Parse: phase=<<"idle", "parsing">>; outcome=<<"ok", "ok">>; parts=<<TRUE, TRUE>>; whole=<<TRUE, TRUE>>
-15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "broken">>
+15. Stitch: phase=<<"idle", "check">>; parts=<<TRUE, FALSE>>; rows=<<{"held"}, {"stitched"}>>; split=<<"held", "stitched">>
 16. CapFirst: parts=<<FALSE, FALSE>>; unrecorded={1}
 ```
 
-## ClipsLaunchCrashGap
+## ClipsLaunchLegacyHlaeCheck
 
-Violated `OneLaunchAtATime`. [Bounds](ClipsLaunchCrashGap.cfg).
+Violated `OneLaunchAtATime`. [Bounds](ClipsLaunchLegacyHlaeCheck.cfg).
 
 ```text
 1. Initial (see the module's Init)

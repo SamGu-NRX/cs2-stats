@@ -21,6 +21,7 @@ CS2_PIPELINE_PORT (the status port, default 8766).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import logging.handlers
@@ -814,6 +815,17 @@ def safe_unlink(path: Path, missing_ok: bool = False) -> None:
     _deletable(path).unlink(missing_ok=missing_ok)
 
 
+def remove_finished_rar(rar: Path, loose: bool = False) -> None:
+    """Delete a finished archive's RAR (or loose demo, with its sidecar): from downloads or the inbox, or a retried
+    failure's whole failed/ folder, whose kept demos and reports go with it."""
+    if rar.parent.parent == FAILED_DIR:
+        safe_rmtree(rar.parent)
+    else:
+        safe_unlink(rar, missing_ok=True)
+        if loose:
+            safe_unlink(sidecar_path(rar), missing_ok=True)
+
+
 def append_jsonl(path: Path, obj: dict) -> None:
     """Append one JSON line in a single write, flushed and fsynced. A torn tail left by a crash is cut first,
     so the new line never lands in the middle of a broken one."""
@@ -1567,22 +1579,77 @@ class Pipeline:
             if a.work.exists():
                 log.error("could not remove %s; keeping RAR %s", a.work, a.rar)
                 continue
-            if a.rar.parent.parent == FAILED_DIR:
-                safe_rmtree(a.rar.parent)  # a retried failure: its kept demos and reports go too
-            else:
-                safe_unlink(a.rar)
-                if a.loose is not None:
-                    safe_unlink(sidecar_path(a.rar), missing_ok=True)
             rec = dict(id=a.id, status="done", slug=a.slug, maps=sorted(r.get("map") or "" for r in a.results.values()),
                        held=[dict(map=base, reason=row.get("reason")) for base, row in sorted(rows.items())
                              if row["status"] != "stitched"],
                        finished_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"), **self.rar_facts(a),
                        **self.loose_facts(a))
+            # The done row goes before the RAR: a crash between them leaves a done archive whose RAR is still
+            # there, which recover_finished deletes at the next start. The other order left the maps published
+            # with no row for the archive (formal/ArchiveLegacyLedgerOrder).
             append_jsonl(LEDGER, rec)
             self.ledger[a.id] = rec
+            try:
+                remove_finished_rar(a.rar, loose=a.loose is not None)
+            except OSError as e:
+                log.error("archive %s is done but its RAR %s could not be deleted (%s); the next start deletes it",
+                          a.id, a.rar, e)
             del self.archives[a.id]
             log.info("archive %s done; deleted %d dem files and %s", a.slug, len(a.dems), a.rar)
             self.clean_copies(rec)
+
+    def recover_finished(self) -> list[Path]:
+        """At start: delete the RAR of each archive the ledger records as done, left by a crash between its done
+        row and its deletion (finish_archives writes the row first), and log it. Only the recorded file goes:
+        download_copies.delete_verified checks its size and SHA-256 through a handle opened with no sharing and
+        deletes through that handle, so a file put there after the check cannot be the one deleted. An archive
+        that needs_reextract asks for again stays, to be extracted. A loose demo is recovered the same way, found
+        by its sidecar's ids, and its sidecar goes with it: scan_loose skips a done one, so it stayed for good while
+        the disk budget kept counting it. Nothing here stops the start: a file that cannot be checked or deleted is
+        logged and left. Returns the files deleted."""
+        reextract = self.reextract_ids()
+        rars = set(self.candidates())
+        if FAILED_DIR.exists():
+            rars |= {f for f in FAILED_DIR.glob("*/archive.rar") if f.is_file()}
+            rars |= {f for f in FAILED_DIR.glob("*/*.dem") if f.is_file() and sidecar_path(f).is_file()}
+        deleted = []
+        for f in sorted(rars):
+            loose = f.suffix.lower() == ".dem"
+            if loose:
+                try:
+                    aid = loose_id(read_sidecar(f))
+                except ValueError:
+                    continue  # no valid sidecar: not a demo this pipeline took in
+            else:
+                aid = f.parent.name if f.parent.parent == FAILED_DIR else f.name
+            rec = self.ledger.get(aid) or {}
+            if rec.get("status") != "done" or aid in reextract or has_partial_marker(f):
+                continue
+            if not rec.get("rar_sha256") or rec.get("rar_bytes") is None:
+                log.warning("archive %s is done, but its row records no size and SHA-256 to check %s against; left "
+                            "in place", aid, f)
+                continue
+            try:
+                why = download_copies.delete_verified(_deletable(f), rec["rar_bytes"], rec["rar_sha256"])
+            except (OSError, ValueError) as e:
+                log.error("archive %s is done but its RAR %s could not be checked or deleted (%s); left in place",
+                          aid, f, e)
+                continue
+            if why:
+                log.warning("archive %s is done, but %s is not the file it recorded (%s); left in place", aid, f, why)
+                continue
+            rest = f.parent if f.parent.parent == FAILED_DIR else sidecar_path(f) if loose else None
+            try:  # a retried failure's kept demos and reports, or a loose demo's sidecar
+                if rest == f.parent:
+                    safe_rmtree(rest)
+                elif rest is not None:
+                    safe_unlink(rest, missing_ok=True)
+            except OSError as e:
+                log.error("archive %s is done; %s is deleted but %s could not be (%s)", aid, f, rest, e)
+            log.warning("archive %s is done in the ledger but its RAR %s was still there (the pipeline stopped "
+                        "before deleting it); deleted it", aid, f)
+            deleted.append(f)
+        return deleted
 
     def stitch_parts(self, a: Archive, failed: str | None = None) -> dict[str, dict]:
         """Join each split map of the archive into demos/, or hold it back; either way parts.jsonl says so. Returns
@@ -1612,7 +1679,7 @@ class Pipeline:
             log.info("%s/%s %s%s", a.slug, base, row["status"], f": {row['reason']}" if row.get("reason") else "")
             if row["status"] == "stitched":  # the joined map in demos/ holds everything its parts did
                 for d in parts.values():
-                    stitch.delete_part(d)
+                    stitch.delete_part(d, PARTS_DIR)
             rows[base] = row
         self.enforce_parts_cap()
         return rows
@@ -1640,8 +1707,19 @@ class Pipeline:
         MAX_PARTS_GB, recording each. An archive still in flight is never touched: its finished parts wait for its
         other parts. A part folder whose map lock another process holds is skipped."""
         active = {a.slug for a in self.archives.values() if a.slug}
-        folders = sorted((d for d in PARTS_DIR.iterdir() if d.is_dir()), key=lambda d: newest_mtime(d)) \
-            if PARTS_DIR.exists() else []
+        if not PARTS_DIR.exists():
+            return
+        # Every folder on the way down is checked by lstat and against the canonical parts root before anything
+        # in it is read or deleted: is_dir() follows a junction, and a junction at the archive or the part level
+        # let the cap delete files outside parts/.
+        try:
+            folders, refused = stitch.plain_subfolders(PARTS_DIR, PARTS_DIR)
+        except (stitch.NotPlainFolder, OSError) as e:
+            log.error("parts cap skipped: %s", e)
+            return
+        for why in refused:
+            log.error("parts cap: left alone, %s", why)
+        folders.sort(key=newest_mtime)
         sizes = {d: tree_bytes(d) for d in folders}
         total = sum(sizes.values())
         for d in folders:
@@ -1649,19 +1727,69 @@ class Pipeline:
                 return
             if d.name in active:
                 continue
-            removed = [m for m in sorted(x for x in d.iterdir() if x.is_dir()) if stitch.delete_part(m)]
-            if not removed:
+            try:
+                parts, refused = stitch.plain_subfolders(d, PARTS_DIR)
+            except (stitch.NotPlainFolder, OSError) as e:
+                log.error("parts cap: left alone, %s", e)
                 continue
-            if not any(x.is_dir() for x in d.iterdir()):
-                safe_rmtree(d, ignore_errors=True)
+            for why in refused:
+                log.error("parts cap: left alone, %s", why)
+            damaged = [m for m in parts if (m / stitch.DAMAGED).exists()]
+            for m in damaged:
+                try:
+                    if not stitch.remove_tree(m, PARTS_DIR)[1]:  # recorded damaged before; the rest could go now
+                        log.info("deleted the rest of the damaged part %s", m)
+                except stitch.NotPlainFolder as e:
+                    log.error("parts cap: left alone, %s", e)
+            # The expired row is written under the parts' locks before they go: deleting first, a crash before
+            # the row left the parts gone and parts.jsonl still saying held (formal/ArchiveLegacyExpiry).
+            with contextlib.ExitStack() as locks:
+                taken = []
+                for m in [m for m in parts if m not in damaged]:
+                    try:
+                        locks.enter_context(extract.map_lock(m, wait=False))
+                    except extract.MapLocked:
+                        continue
+                    taken.append(m)
+                if not taken:
+                    continue
+                append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
+                    map=str(DEMOS_DIR / d.name), parts=[str(m) for m in taken], status="expired",
+                    reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
+                    checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                for m in taken:
+                    try:
+                        removed, left = stitch.remove_tree(m, PARTS_DIR)
+                    except stitch.NotPlainFolder as e:  # swapped for a link since it was listed
+                        log.error("parts cap: left alone, %s", e)
+                        continue
+                    if left:
+                        self.record_damaged(d, m, removed, left)
+            try:
+                if not stitch.plain_subfolders(d, PARTS_DIR)[0]:  # only the parts' lock files are left
+                    stitch.remove_tree(d, PARTS_DIR)
+            except (stitch.NotPlainFolder, OSError) as e:
+                log.error("parts cap: could not remove %s: %s", d, e)
             self.outputs_changed()
             total -= sizes[d]
-            append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, dict(
-                map=str(DEMOS_DIR / d.name), parts=[str(m) for m in removed], status="expired",
-                reason=f"parts/ over {MAX_PARTS_GB:.0f} GB; the oldest held parts were deleted", bytes=sizes[d],
-                checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
             log.warning("parts/ over %.0f GB; deleted the held parts of %s (%.1f MB)", MAX_PARTS_GB, d.name,
                         sizes[d] / 1e6)
+
+    def record_damaged(self, d: Path, m: Path, removed: list[str], left: dict[str, str]) -> None:
+        """A held part whose deletion failed part way: some of its tables are gone. It is marked DAMAGED, which
+        keeps it from ever being joined, and parts.jsonl gets a damaged row naming the files lost and those left,
+        so the archive's split map is accounted as damaged, never as held. Each later pass of the cap tries to
+        delete the rest (formal/ArchiveLegacyPartialDelete)."""
+        row = dict(map=str(DEMOS_DIR / d.name), part=str(m), status="damaged", lost=removed, left=left,
+                   reason="deleting the expired part failed part way: the files in lost are gone, those in left stayed",
+                   checked_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        try:
+            (m / stitch.DAMAGED).write_text(json.dumps(row, indent=1), encoding="utf-8")
+        except OSError as e:
+            log.error("could not mark %s as damaged: %s", m, e)
+        append_jsonl(PARTS_DIR / stitch.PARTS_MANIFEST, row)
+        log.error("the expired part %s is damaged: %d files deleted, %d left (%s); recorded in %s", m, len(removed),
+                  len(left), ", ".join(sorted(left)), stitch.PARTS_MANIFEST)
 
     def fail_archive(self, a: Archive, reason: str) -> None:
         """Keep a failed archive with its failing .dem files and validation reports in failed/<slug>/."""
@@ -1764,20 +1892,35 @@ class Pipeline:
                      f" ({r['reason']})" if r["reason"] else "")
 
     def enforce_failed_cap(self) -> None:
-        """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each."""
+        """Delete the oldest kept failures while failed/ holds more than MAX_FAILED_GB, logging each.
+
+        A failure being retried right now is skipped: deleting its folder under it would fail the retry again and
+        record the deleted folder as kept (TLC found this with only the ledger row below added). Before a folder
+        goes, every archive whose last ledger row is a failure kept there gets a "dropped" row, so scan extracts a
+        new download of it instead of skipping it as failed forever (formal/ArchiveLegacyEviction)."""
         self.outputs_changed()
-        kept = sorted((d for d in FAILED_DIR.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
+        in_flight = {a.rar.parent for a in self.archives.values() if a.rar.parent.parent == FAILED_DIR}
+        kept = sorted((d for d in FAILED_DIR.iterdir() if d.is_dir() and d not in in_flight),
+                      key=lambda d: d.stat().st_mtime)
         sizes = {d: tree_bytes(d) for d in kept}
-        total = sum(sizes.values())
+        total = sum(sizes.values()) + sum(tree_bytes(d) for d in in_flight if d.exists())
         for d in kept:
             if total <= MAX_FAILED_GB * 1e9:
                 return
             info = {}
             if (d / "reason.json").exists():
                 info = json.loads((d / "reason.json").read_text(encoding="utf-8"))
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             append_jsonl(DROPPED, dict(id=info.get("id", d.name), slug=info.get("slug", d.name),
                                        dems=info.get("dems"), bytes=sizes[d], reason=str(info.get("reason"))[:4000],
-                                       dropped_utc=datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                                       dropped_utc=now))
+            for aid in [aid for aid, rec in self.ledger.items()
+                        if rec.get("status") == "failed" and rec.get("kept") and Path(rec["kept"]) == d]:
+                rec = dict(id=aid, status="dropped", slug=self.ledger[aid].get("slug"), kept=None, retry=False,
+                           reason=f"failed/ over {MAX_FAILED_GB:.0f} GB; the kept failure was deleted",
+                           finished_utc=now)
+                append_jsonl(LEDGER, rec)
+                self.ledger[aid] = rec
             safe_rmtree(d, ignore_errors=True)
             total -= sizes[d]
             log.warning("failed/ over %.0f GB; deleted the oldest kept failure %s (%.0f MB)", MAX_FAILED_GB, d.name,
@@ -2051,6 +2194,7 @@ def main(argv=None) -> int:
     # picked up again re-extracts into a clean folder) and partial outputs. Their RARs are still in
     # place and get processed again.
     pipeline.sweep_work(force=True)
+    pipeline.recover_finished()
     tidy_demos()
     for rec in list(pipeline.ledger.values()):  # copies of archives finished before a restart
         pipeline.clean_copies(rec)

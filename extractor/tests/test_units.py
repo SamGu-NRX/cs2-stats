@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -1611,6 +1612,131 @@ def test_failed_dir_drops_the_oldest_beyond_its_cap(tmp_path, monkeypatch):
     assert [json.loads(x)["slug"] for x in dp.DROPPED.read_text().splitlines()] == ["slug-old"]
 
 
+def test_an_evicted_failure_is_extracted_when_downloaded_again(tmp_path, monkeypatch):
+    # The cap deleted the kept failure but left its last ledger row saying failed, so scan skipped a new download
+    # of the same archive forever (formal/ArchiveLegacyEviction).
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline()
+    a = _failed_archive(tmp_path, "r1")
+    p.archives[a.id] = a
+    p.fail_archive(a, "deaths")
+    monkeypatch.setattr(dp, "MAX_FAILED_GB", 1e-12)
+    p.enforce_failed_cap()
+    assert list(dp.FAILED_DIR.iterdir()) == []
+    (dp.DOWNLOADS / "r1").write_bytes(dp.RAR_MAGIC + bytes(10))
+    p = dp.Pipeline()  # a restart reads the ledger back
+    p.scan(0.0)
+    p.scan(16.0)
+    _hashed(p)
+    assert list(p.archives) == ["r1"]
+
+
+def test_the_failed_cap_never_deletes_a_failure_being_retried(tmp_path, monkeypatch):
+    # Deleting the folder under a retry fails the retry again, and its ledger row then names a deleted folder.
+    _isolate(tmp_path, monkeypatch)
+    p = dp.Pipeline(retry_failed=True)
+    for name in ("r0", "r1"):
+        a = _failed_archive(tmp_path, name)
+        p.archives[a.id] = a
+        p.fail_archive(a, "deaths")
+    os.utime(dp.FAILED_DIR / "slug-r1", (1000, 1000))  # the retried one is the oldest
+    retry = dp.FAILED_DIR / "slug-r1" / "archive.rar"
+    p.archives["slug-r1"] = dp.Archive(rar=retry, id="slug-r1", slug="slug-r1", state="parsing")
+    monkeypatch.setattr(dp, "MAX_FAILED_GB", 1e-12)
+    p.enforce_failed_cap()
+    assert retry.exists() and not (dp.FAILED_DIR / "slug-r0").exists()
+    assert p.ledger["r0"]["status"] == "dropped" and p.ledger["r1"]["status"] == "failed"
+
+
+def test_held_parts_are_recorded_as_expired_before_they_are_deleted(tmp_path, monkeypatch):
+    # Deleting first, a crash before the row left the parts gone and parts.jsonl still saying held
+    # (formal/ArchiveLegacyExpiry).
+    import shutil
+
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    (d / "kills.parquet").write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p = dp.Pipeline()
+
+    class Crash(BaseException):
+        pass
+
+    def crash(*args, **kwargs):
+        raise Crash
+
+    monkeypatch.setattr(shutil, "rmtree", crash)  # how the parts went before the row came first
+    monkeypatch.setattr(dp.stitch, "remove_tree", crash)
+    with pytest.raises(Crash):
+        p.enforce_parts_cap()
+    row = json.loads((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8"))
+    assert (row["status"], row["parts"]) == ("expired", [str(d)])
+
+
+def _link_folder(link: Path, target: Path) -> None:
+    """link, a junction to target on Windows (no privilege needed), a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+@pytest.mark.parametrize("level", ["part", "archive", "parts root"])
+def test_the_parts_cap_never_deletes_through_a_junction(tmp_path, monkeypatch, level):
+    # Reproduced in review: is_dir() follows a junction, so a junction as a part folder, or as the archive folder
+    # above it, let the cap delete a file outside parts/. Every folder on the way down is checked by lstat and
+    # against the parts root before anything in it is touched.
+    _isolate(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    if level == "part":
+        (dp.PARTS_DIR / "old-vs-one-r").mkdir()
+        sentinel = outside / "kills.parquet"
+        link = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    elif level == "archive":
+        sentinel = outside / "m1-nuke-p1" / "kills.parquet"
+        link = dp.PARTS_DIR / "old-vs-one-r"
+    else:
+        sentinel = outside / "old-vs-one-r" / "m1-nuke-p1" / "kills.parquet"
+        link = tmp_path / "parts-link"
+        monkeypatch.setattr(dp, "PARTS_DIR", link)
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"x" * 1000)
+    _link_folder(link, sentinel.parent if level == "part" else outside)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-12)
+    dp.Pipeline().enforce_parts_cap()
+    assert sentinel.read_bytes() == b"x" * 1000
+    manifest = link / "parts.jsonl" if level == "parts root" else dp.PARTS_DIR / "parts.jsonl"
+    assert not manifest.exists()  # nothing recorded as expired either
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a file another handle holds "
+                    "open, the partial deletion recorded here; the Windows CI job runs this")
+def test_a_part_whose_deletion_fails_part_way_is_recorded_damaged_and_never_joined(tmp_path, monkeypatch):
+    # Reproduced on Windows: a held-open rounds.parquet kept the part folder while match.parquet went, and
+    # rmtree(ignore_errors=True) said nothing. The part was left out of the expired row, so parts.jsonl still
+    # said held and the damaged part looked intact (formal/ArchiveLegacyPartialDelete).
+    _isolate(tmp_path, monkeypatch)
+    d = dp.PARTS_DIR / "old-vs-one-r" / "m1-nuke-p1"
+    d.mkdir(parents=True)
+    for name in ("match.parquet", "rounds.parquet"):
+        (d / name).write_bytes(b"x" * 1000)
+    monkeypatch.setattr(dp, "MAX_PARTS_GB", 1e-9)
+    p = dp.Pipeline()
+    with open(d / "rounds.parquet", "rb"):
+        p.enforce_parts_cap()
+    rows = [json.loads(x) for x in (dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["status"] for r in rows] == ["expired", "damaged"]
+    assert rows[1]["lost"] == ["match.parquet"] and list(rows[1]["left"]) == ["rounds.parquet"]
+    assert json.loads((d / dp.stitch.DAMAGED).read_text(encoding="utf-8"))["lost"] == ["match.parquet"]
+    assert dp.stitch.split_maps(dp.PARTS_DIR) == {}  # never offered for joining again
+    # closed now: the next pass deletes the rest, marker last, and records nothing more
+    p.enforce_parts_cap()
+    assert not d.exists()
+    assert len((dp.PARTS_DIR / "parts.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+
+
 def test_a_truncated_demo_is_logged_and_never_kept_or_retried(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     p = dp.Pipeline(retry_failed=True)
@@ -2747,6 +2873,126 @@ def test_a_test_file_that_cannot_import_fails_collection(tmp_path):
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
                        cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert r.returncode == 2 and "ERROR collecting" in r.stdout, r.stdout[-2000:]
+
+
+def _finished_archive(tmp_path, monkeypatch, name="1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b"):
+    """A pipeline with one downloaded archive hashed and parsed, ready for finish_archives."""
+    _isolate(tmp_path, monkeypatch)
+    rar = dp.DOWNLOADS / name
+    rar.write_bytes(dp.RAR_MAGIC + b"payload" * 500)
+    p = dp.Pipeline()
+    t0 = time.time()
+    p.scan(t0)
+    p.scan(t0 + 14)
+    _hashed(p)
+    a = p.archives[rar.name]
+    a.state, a.slug, a.work = "parsing", "team-a-vs-team-b-1f2e3d4c", dp.WORK_DIR / "w"
+    a.work.mkdir()
+    a.dems, a.results = [a.work / "x-m1-nuke.dem"], {"x-m1-nuke.dem": {"ok": True, "map": "m1-nuke"}}
+    return p, rar
+
+
+WIN32_HANDLES = pytest.mark.skipif(sys.platform != "win32", reason="recovery checks and deletes through a Win32 handle "
+                                   "(download_copies.delete_verified); the Windows CI job runs these")
+
+
+@WIN32_HANDLES
+def test_a_finished_archive_is_in_the_ledger_before_its_rar_goes_and_a_restart_deletes_a_leftover(tmp_path, monkeypatch):
+    # fails if the RAR is deleted before the done row is written (a crash between them left the maps published
+    # and no row; formal/ArchiveLegacyLedgerOrder), or if a restart leaves a done archive's RAR in place
+    p, rar = _finished_archive(tmp_path, monkeypatch)
+    real = dp.remove_finished_rar
+
+    def stops_here(path, **kwargs):
+        raise OSError("the pipeline stopped here")
+    monkeypatch.setattr(dp, "remove_finished_rar", stops_here)
+    p.finish_archives()
+    assert rar.exists() and not p.archives
+    rows = [json.loads(x) for x in dp.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [(r["id"], r["status"]) for r in rows] == [(rar.name, "done")]
+    monkeypatch.setattr(dp, "remove_finished_rar", real)
+    restarted = dp.Pipeline()
+    assert restarted.recover_finished() == [rar] and not rar.exists()
+    # the restart then has nothing left to process
+    restarted.scan(time.time())
+    assert not restarted.archives
+
+
+@WIN32_HANDLES
+def test_recovery_leaves_a_file_that_is_not_the_recorded_archive(tmp_path, monkeypatch):
+    # fails if a restart deletes a file in downloads only because its name matches a done archive: a new download
+    # under that name, with other bytes, is the user's
+    p, rar = _finished_archive(tmp_path, monkeypatch)
+    p.finish_archives()
+    assert not rar.exists()
+    rar.write_bytes(dp.RAR_MAGIC + b"another archive" * 300)
+    assert dp.Pipeline().recover_finished() == [] and rar.exists()
+
+
+def _done_leftover(name: str, data: bytes) -> Path:
+    """A RAR in downloads whose done row records its size and SHA-256: what a crash after the row leaves."""
+    rar = dp.DOWNLOADS / name
+    rar.write_bytes(data)
+    dp.append_jsonl(dp.LEDGER, dict(id=name, status="done", rar_bytes=len(data),
+                                    rar_sha256=hashlib.sha256(data).hexdigest()))
+    return rar
+
+
+@WIN32_HANDLES
+def test_recovery_keeps_a_same_size_file_whose_hash_differs(tmp_path, monkeypatch):
+    # fails if recovery deletes on a size match alone: a new download under the same name with the same size is
+    # the user's, and only the SHA-256 tells them apart
+    _isolate(tmp_path, monkeypatch)
+    data = dp.RAR_MAGIC + b"payload" * 500
+    rar = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", data)
+    rar.write_bytes(dp.RAR_MAGIC + b"PAYLOAD" * 500)
+    assert dp.Pipeline().recover_finished() == [] and rar.exists()
+
+
+@WIN32_HANDLES
+def test_recovery_deletes_the_file_it_checked_even_if_another_is_swapped_in(tmp_path, monkeypatch):
+    # Hashing a path and then deleting the path deleted a file swapped in between. The swap is tried while the
+    # file is being hashed; with the check and the deletion on one unshared handle it is refused, and the
+    # swapped-in file survives.
+    import download_copies as dc
+
+    _isolate(tmp_path, monkeypatch)
+    rar = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", dp.RAR_MAGIC + b"payload" * 500)
+    other = tmp_path / "other"
+    other.write_bytes(b"the user's file")
+    swaps = []
+
+    def swapping(real):
+        def hash_(*args):
+            try:
+                os.replace(other, rar)
+                swaps.append("done")
+            except PermissionError:
+                swaps.append("refused")
+            return real(*args)
+        return hash_
+    monkeypatch.setattr(dc, "_sha256", swapping(dc._sha256))
+    monkeypatch.setattr(ex, "file_sha256", swapping(ex.file_sha256))  # the hash the path-based recovery used
+    assert dp.Pipeline().recover_finished() == [rar]
+    assert swaps == ["refused"] and other.read_bytes() == b"the user's file" and not rar.exists()
+
+
+@WIN32_HANDLES
+def test_a_leftover_that_cannot_be_deleted_is_logged_and_startup_goes_on(tmp_path, monkeypatch, caplog):
+    # A leftover that could be read but not deleted raised out of recovery, before the main loop: the pipeline
+    # never started. It is logged and left, and the next leftover is still recovered.
+    import stat
+
+    _isolate(tmp_path, monkeypatch)
+    stuck = _done_leftover("1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b", dp.RAR_MAGIC + b"one" * 500)
+    fine = _done_leftover("2a3b4c5d-6e7f-4801-9a2b-3c4d5e6f7a8b", dp.RAR_MAGIC + b"two" * 500)
+    os.chmod(stuck, stat.S_IREAD)  # read-only: readable, and Windows refuses to delete it
+    try:
+        assert dp.Pipeline().recover_finished() == [fine]
+        assert stuck.exists() and not fine.exists()
+        assert "could not be checked or deleted" in caplog.text
+    finally:
+        os.chmod(stuck, stat.S_IREAD | stat.S_IWRITE)
 
 
 def _credit_blinds(trajectories, blinds, recorded, detonations=()):

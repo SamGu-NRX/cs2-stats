@@ -20,7 +20,8 @@
 (* versions and double publication are Publish.tla's and Pipeline.tla's,    *)
 (* not checked here. The ledger is keyed by archive, though the code keys a *)
 (* retried failure by its failed/ folder name; due_for_retry is assumed     *)
-(* true. The four proposed fixes are switches, FALSE in the shipped code.   *)
+(* true. The four fixes are switches, TRUE in the shipped code; FALSE is    *)
+(* the code before them (main b5868a2).                                     *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -35,11 +36,11 @@ CONSTANTS
   FailedPressure,   \* failed/ can pass MAX_FAILED_GB, so enforce_failed_cap evicts kept failures
   WorkerFails,      \* a parse can fail or be truncated, and a stitch can leave no complete map
   CheckFirst,       \* finish_archives runs unaccounted() before deleting anything (shipped); FALSE skips it
-  LedgerFirst,      \* proposed: the done row before the RAR goes, and a start deletes a done archive's RAR
-  ExpiryRowFirst,   \* proposed: enforce_parts_cap writes the expired row before deleting the parts
-  EvictionFixed,    \* proposed: enforce_failed_cap leaves kept failures in flight alone, and writes a ledger row
+  LedgerFirst,      \* shipped: the done row before the RAR goes, and a start deletes a done archive's RAR
+  ExpiryRowFirst,   \* shipped: enforce_parts_cap writes the expired row before deleting the parts
+  EvictionFixed,    \* shipped: enforce_failed_cap leaves kept failures in flight alone, and writes a ledger row
                     \* before deleting, so a later download of the archive is not skipped as failed
-  DamageRecorded    \* proposed: a part deletion that fails part way is recorded in parts.jsonl as damaged
+  DamageRecorded    \* shipped: a part deletion that fails part way is recorded in parts.jsonl as damaged
 
 VARIABLES
   phase,      \* phase[a]: where the main loop has it; "idle" when not in self.archives

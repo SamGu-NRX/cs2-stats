@@ -101,40 +101,43 @@ def main():
     config("PipelineLegacyInPlace", pipeline | dict(Fixed=False, SameDir=True, Invalidated=True, Crashes=False),
            ["InPlaceVersionSafe"])
     # The clips launch protocol (ClipsLaunch.tla): two launches of one job, at most one instance crash
-    # Shipped code is WatcherCheck and WatcherSettles TRUE, HlaeCheck FALSE.
-    clips = dict(Instances={"A"}, N=2, Crashes=0, UserSessions=0, SpawnFails=True, PidsFail=True,
-                 WatcherCheck=True, WatcherSettles=True, HlaeCheck=False)
+    # Shipped code: WatcherCheck, WatcherSettles and HlaeCheck all TRUE.
+    clips = dict(Instances={"A"}, N=2, Crashes=1, UserSessions=0, SpawnFails=True, PidsFail=True,
+                 WatcherCheck=True, WatcherSettles=True, HlaeCheck=True)
     safety = ["TypeOK", "NoTakeWithoutEvidence", "ResultTruthful", "OwnerIsCreator", "OneLaunchAtATime"]
-    config("ClipsLaunchSafety", clips, safety)
-    config("ClipsLaunchTwoInstances", clips | dict(Instances={"A", "B"}), [*safety, "EvidenceKept"])
-    config("ClipsLaunchUserSession", clips | dict(UserSessions=1), [*safety, "EvidenceKept"])
+    config("ClipsLaunchSafety", clips, [*safety, "EvidenceKept"])
+    config("ClipsLaunchTwoInstances", clips | dict(Instances={"A", "B"}, SpawnFails=False), [*safety, "EvidenceKept"])
+    config("ClipsLaunchUserSession", clips | dict(Crashes=0, UserSessions=1), [*safety, "EvidenceKept"])
     config("ClipsLaunchUserSessionSafety", clips | dict(UserSessions=1), safety)
-    config("ClipsLaunchCrashGap", clips | dict(Crashes=1), ["OneLaunchAtATime"])
-    config("ClipsLaunchHlaeCheck", clips | dict(Crashes=1, HlaeCheck=True), [*safety, "EvidenceKept"])
-    config("ClipsLaunchHlaeCheckTwoInstances", clips | dict(Instances={"A", "B"}, Crashes=1, HlaeCheck=True,
-           SpawnFails=False), [*safety, "EvidenceKept"])
-    config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, Crashes=1, UserSessions=1, HlaeCheck=True),
-           safety)
+    config("ClipsLaunchCrashGap", clips | dict(SpawnFails=False), ["OneLaunchAtATime"])
+    config("ClipsLaunchWide", clips | dict(Instances={"A", "B"}, N=3, UserSessions=1), safety)
+    config("ClipsLaunchLegacyHlaeCheck", clips | dict(SpawnFails=False, HlaeCheck=False), ["OneLaunchAtATime"])
     # The pipeline's archive lifecycle (Archive.tla)
-    # The shipped code has CheckFirst and none of the four proposed fixes; "fixed" turns them all on, with part
-    # deletions that can fail part way.
-    archive = dict(Archives={1, 2}, Crashes=0, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
-                   WorkerFails=True, CheckFirst=True, LedgerFirst=False, ExpiryRowFirst=False, EvictionFixed=False,
-                   PartialDelete=False, DamageRecorded=False)
-    fixed = dict(LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True, PartialDelete=True, DamageRecorded=True)
+    # Shipped code: CheckFirst and all four fixes (LedgerFirst, ExpiryRowFirst, EvictionFixed, DamageRecorded),
+    # with part deletions that can fail part way. Each Legacy configuration turns a fix off and must keep finding
+    # the gap it closed.
+    archive = dict(Archives={1, 2}, Crashes=1, Redownloads=1, RetryFailed=True, CapPressure=True, FailedPressure=True,
+                   WorkerFails=True, CheckFirst=True, LedgerFirst=True, ExpiryRowFirst=True, EvictionFixed=True,
+                   PartialDelete=True, DamageRecorded=True)
     every = ["TypeOK", "NoUnaccountedDeletion", "ExpiredRecorded", "CapSparesActive", "FailedKept", "DeletedRecorded",
              "EvictedRedownloadable"]
-    config("ArchiveSafety", archive, every[:-1])
-    config("ArchiveEviction", archive, ["EvictedRedownloadable"])
-    config("ArchiveCrashLedger", archive | dict(Crashes=1, ExpiryRowFirst=True, EvictionFixed=True), ["DeletedRecorded"])
-    config("ArchiveCrashExpiry", archive | dict(Crashes=1, LedgerFirst=True, EvictionFixed=True), ["ExpiredRecorded"])
-    config("ArchiveFixed", archive | fixed | dict(Crashes=1), every)
-    # a part deletion that fails part way, on the shipped code: the damaged part stays listed as held
-    config("ArchivePartialDelete", archive | dict(PartialDelete=True), ["ExpiredRecorded"])
-    config("ArchiveLegacyNoCheck", archive | dict(CheckFirst=False), ["NoUnaccountedDeletion"])
-    config("ArchiveWide", archive | fixed | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Crashes=1,
-           Redownloads=0), every, symmetry="Symmetry")
-    config("ClipsLaunchLegacyWatcherCheck", clips | dict(SpawnFails=False, WatcherCheck=False), ["OneLaunchAtATime"])
+    config("ArchiveSafety", archive, every)
+    config("ArchiveEviction", archive | dict(Crashes=0), ["EvictedRedownloadable"])
+    config("ArchiveCrashLedger", archive, ["DeletedRecorded"])
+    config("ArchiveCrashExpiry", archive, ["ExpiredRecorded"])
+    config("ArchiveWide", archive | dict(Archives={Model("a1"), Model("a2"), Model("a3")}, Redownloads=0), every,
+           symmetry="Symmetry")
+    config("ArchiveLegacyEviction", archive | dict(Crashes=0, EvictionFixed=False), ["EvictedRedownloadable"])
+    config("ArchiveLegacyLedgerOrder", archive | dict(LedgerFirst=False), ["DeletedRecorded"])
+    config("ArchiveLegacyExpiry", archive | dict(ExpiryRowFirst=False), ["ExpiredRecorded"])
+    config("ArchivePartialDelete", archive | dict(Crashes=0), ["ExpiredRecorded"])
+    # the code at b5868a2 deleted first and recorded nothing when a part survived
+    config("ArchiveLegacyPartialDelete", archive | dict(Crashes=0, ExpiryRowFirst=False, DamageRecorded=False),
+           ["ExpiredRecorded"])
+    config("ArchiveLegacyNoCheck", archive | dict(Crashes=0, CheckFirst=False), ["NoUnaccountedDeletion"])
+    # the HLAE check now covers this schedule too, so both checks come off to show the watcher check's own case
+    config("ClipsLaunchLegacyWatcherCheck", clips | dict(Crashes=0, SpawnFails=False, WatcherCheck=False, HlaeCheck=False),
+           ["OneLaunchAtATime"])
 
 
 if __name__ == "__main__":
