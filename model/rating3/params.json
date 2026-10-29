@@ -213,16 +213,16 @@
     "source": {
       "source": "fit",
       "script": "eco_fit.py",
-      "accepted_joins": 304,
-      "consumed_joins": 304,
+      "accepted_joins": 1610,
+      "consumed_joins": 1610,
       "skipped_joins": 0,
       "layouts": {
-        "schema_v1": 301,
-        "legacy": 3
+        "schema_v1": 1609,
+        "legacy": 1
       },
       "skipped": [],
-      "duels": 43387,
-      "targets": 3040
+      "duels": 229584,
+      "targets": 16100
     },
     "groups": [
       "sniper",
@@ -233,129 +233,130 @@
       "pistol"
     ],
     "strength": {
-      "sniper": 0.7656242339129168,
-      "rifle1": 0.6028113650108352,
-      "rifle2": 0.29887087079652275,
-      "smg": 0.4258512863113765,
-      "pistolPlus": 0.23895081639395405,
+      "sniper": 0.9500559845418323,
+      "rifle1": 0.7985820449728466,
+      "rifle2": 0.6690949952077244,
+      "smg": 0.5305667431230878,
+      "pistolPlus": 0.14287245058373932,
       "pistol": 0.0
     },
     "ct_edge": 0.0800427076735365,
-    "kill_points_scale": 2.025074518643711,
-    "duels": 43387,
-    "targets": 3040,
-    "objective_mae": 0.1769382405825162,
+    "kill_points_scale": 2.0602307711490817,
+    "duels": 229584,
+    "targets": 16100,
+    "objective_mae": 0.01086132828160666,
     "target_definition": {
-      "predicted": "HLTV eco-adjusted kills, deaths, and ADR cells per player-map",
-      "units": {
-        "kills": "kills per map",
-        "deaths": "deaths per map",
-        "adr": "HP per round"
-      },
-      "error_scale": "0.2 times kill/death error and 0.05 times ADR error; MAE is in weighted residual units"
+      "predicted": "HLTV eco-adjusted kills and deaths per round, ADR and KAST per player-map, as rating3.ts computes each over the rated rounds of the sides it rates",
+      "error_scale": "each input's error times the rating curve's slope at HLTV's value (params.json rating.curves); MAE is in rating points"
     },
     "held_out": {
       "split": "5-fold GroupKFold by match",
-      "targets": 3040,
-      "matches": 161,
-      "mae": 0.18444344846499908,
-      "p95": 0.39415520733475556,
-      "max": 5.050978982903178,
+      "player_maps": 16100,
+      "matches": 885,
+      "mae": 0.01086413595234748,
+      "p95": 0.031134188136625763,
+      "max": 0.14658402565501374,
       "folds": [
         {
           "fold": 1,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.31833726450856287,
-          "p95": 2.3449487658254826,
-          "max": 5.050978982903178
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.010604821016833847,
+          "p95": 0.030653609443923337,
+          "max": 0.14658402565501374
         },
         {
           "fold": 2,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.14373267412383256,
-          "p95": 0.37016118586190255,
-          "max": 0.8480792546547378
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.010867531888593502,
+          "p95": 0.030896336487254542,
+          "max": 0.11225116682586415
         },
         {
           "fold": 3,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.15797081981264502,
-          "p95": 0.3949812476284603,
-          "max": 0.7905412862183128
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.011159267798575187,
+          "p95": 0.03241133605221248,
+          "max": 0.09090836971977351
         },
         {
           "fold": 4,
-          "targets": 610,
-          "matches": 33,
-          "mae": 0.15130212577096908,
-          "p95": 0.3681189605947601,
-          "max": 0.9052911959497799
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.01089967561274292,
+          "p95": 0.030970437235111496,
+          "max": 0.10527586015375448
         },
         {
           "fold": 5,
-          "targets": 600,
-          "matches": 32,
-          "mae": 0.15031487326971898,
-          "p95": 0.372489537378649,
-          "max": 0.8049583045014913
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.010789383444991956,
+          "p95": 0.031175912290311213,
+          "max": 0.11821153741317993
         }
-      ]
+      ],
+      "inputs_mae": {
+        "ekpr": 0.02357442431732652,
+        "edpr": 0.03028703729276574,
+        "eadr": 1.5296285972586605,
+        "ekast": 4.135763027201627
+      }
     },
     "held_out_baseline": {
-      "model": "training-fold target mean; no duel features",
+      "model": "training-fold mean of each input; no duel features",
       "split": "5-fold GroupKFold by match",
-      "targets": 3040,
-      "matches": 161,
-      "mae": 0.7257465953403672,
-      "p95": 1.8646090534979427,
-      "max": 6.935390946502058,
+      "player_maps": 16100,
+      "matches": 885,
+      "mae": 0.049170319755146186,
+      "p95": 0.13398313452181246,
+      "max": 0.5700465187006476,
       "folds": [
         {
           "fold": 1,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.6803082484427354,
-          "p95": 1.7384362139917695,
-          "max": 3.73843621399177
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.04884581841433696,
+          "p95": 0.1304726745554439,
+          "max": 0.5532135549439557
         },
         {
           "fold": 2,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.7244475904562728,
-          "p95": 1.8589896090534974,
-          "max": 6.935390946502058
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.04934408843767289,
+          "p95": 0.13430742345750615,
+          "max": 0.4942635850426628
         },
         {
           "fold": 3,
-          "targets": 610,
-          "matches": 32,
-          "mae": 0.7428965369133553,
-          "p95": 1.9792592592592593,
-          "max": 5.57925925925926
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.04941067209159348,
+          "p95": 0.1359321911855092,
+          "max": 0.5700465187006476
         },
         {
           "fold": 4,
-          "targets": 610,
-          "matches": 33,
-          "mae": 0.7170873394949291,
-          "p95": 1.8531152263374475,
-          "max": 4.337366255144033
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.048697170342181295,
+          "p95": 0.13299799141020383,
+          "max": 0.5349230149467498
         },
         {
           "fold": 5,
-          "targets": 600,
-          "matches": 32,
-          "mae": 0.7646307058287797,
-          "p95": 2.0418852459016392,
-          "max": 5.340163934426229
+          "player_maps": 3220,
+          "matches": 177,
+          "mae": 0.04955384948994631,
+          "p95": 0.13615897796038637,
+          "max": 0.4751059534807527
         }
       ]
     },
-    "status": "joint fit to eK/eD/eADR; validate exact display rounding before shipping",
+    "status": "joint fit to eKPR, eDPR, eADR and eKAST weighted by the rating's slopes",
     "published_anchors": {
       "t_rifle_vs_ct_rifle": {
         "value": 0.48,
