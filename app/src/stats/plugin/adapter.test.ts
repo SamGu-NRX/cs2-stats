@@ -13,6 +13,8 @@ import { rollup } from "../rollup";
 import { pluginToTables } from "./adapter";
 import { decodeMatch } from "./decode";
 import type { Env, MatchFile } from "./schema";
+import { entryOf } from "../../worker/views";
+import { listedEntries } from "../../ui/data/engine";
 
 const SAMPLES = path.resolve(import.meta.dirname, "../../../public/samples");
 
@@ -44,6 +46,22 @@ it("gives a converted log its whole match's score, not the score of the rounds i
     expect(f.match.score[0] + f.match.score[1], file).toBe(m.rounds.winSide.filter((w) => w !== null).length);
     expect(f.match.complete, file).toBe(m.status === "complete");
   }
+});
+
+it("sets aside a file in which no match was played, instead of failing it", async () => {
+  // Fails if a plugin file where no player ever had a side and no round has a winner (a map loaded and left,
+  // or a deathmatch: 20261028T024855Z_de_dust2_6f326db6, saved "complete") is reported as unreadable ("the
+  // recording player never had a side"), gets a recording player, or is listed; or if a played file loses its own.
+  const file = readdirSync(SAMPLES).find((f) => f.endsWith(".json.gz"))!;
+  const played = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
+  const blank = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
+  blank.players.startSide = blank.players.startSide.map(() => null);
+  blank.rounds.winSide = blank.rounds.winSide.map(() => null);
+  blank.rounds.side = blank.rounds.side.map((r) => r.map(() => null));
+  const entry = (m: MatchFile) => entryOf(`local/${file}`, "local", derive(pluginToTables(m), CS2RB));
+  const empty = entry(blank);
+  expect([empty.you, empty.activity, listedEntries([empty], null).length]).toEqual([null, false, 0]);
+  expect(entry(played).you).not.toBeNull();
 });
 
 it("marks throws rebuilt from detonations as such, and logged throws as logged", async () => {

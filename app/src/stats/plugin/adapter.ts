@@ -41,7 +41,7 @@ const HITGROUP: Record<number, string> = { 1: "head", 2: "chest", 3: "stomach", 
 
 /** Rounds won over every round of the file, [team that started CT, team that started T]; the facts cover only some rounds. */
 function finalScore(m: MatchFile): [number, number] {
-  const humanStart = SIDE[m.players.startSide[m.human]];
+  const humanStart = SIDE[m.players.startSide[m.human] ?? -1];
   const out: [number, number] = [0, 0];
   m.rounds.winSide.forEach((w, ri) => {
     const win = SIDE[w ?? -1];
@@ -112,7 +112,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
   const human = key[m.human];
   const humanTeam = `Team ${m.players.name[m.human]}`;
   const sideOf = (ri: number, pi: number | null): Side | null => (pi === null ? null : SIDE[m.rounds.side[ri]?.[pi] ?? -1] ?? null);
-  const humanStart = SIDE[m.players.startSide[m.human]];
+  const humanStart = SIDE[m.players.startSide[m.human] ?? -1];
   const teamOf = (pi: number) => (m.players.startSide[pi] === m.players.startSide[m.human] ? humanTeam : "Opponents");
   const partial = new Set(m.recon?.partial ?? []);
   const covered = (ri: number) => ri >= m.firstFullRound && !partial.has(ri) && ri < m.rounds.winSide.length;
