@@ -48,6 +48,49 @@ Each candidate scored against HLTV on 3,950 player-maps (395 joined maps); bold 
 | KAST assist rule | the game's non-flash assister: **3,679**; the assister or 40+ enemy damage on the victim: 3,650; 40+ damage only: 2,771; 41+ damage only: 2,737 |
 | KAST deaths | every death: **3,679**; team kills and suicides not deaths: 3,607 |
 
+The trade window and KAST's deaths were revisited on the 1,610 maps joined to their HLTV pages through
+their demos (16,100 player-maps, the rating dump; issue #18). Raw KAST is exact (HLTV's display rounding)
+on 15,089 under the rules above:
+
+| Rule | KAST exact | Traded deaths exact |
+|---|---:|---:|
+| 5.4 s, every death a death | 15,089 | 14,798 |
+| **5.4 s, a world death (a fall or a map hazard, credited to the player) no death** | **15,134** | **14,798** |
+| the same, every suicide no death | 15,117 | |
+| the same, a bomb death no death | 14,919 | |
+| the same, a death after the round's end no death | 14,650 | |
+| the same, a kill after the round's end no kill | 14,888 | |
+| 5.5 s, a world death no death | 15,187 | 14,868 |
+| 5.45 s / 5.52 s / 5.6 s, the same | | 14,840 / 14,856 / 14,837 |
+| 5.6 s / 6.0 s, the same | 15,163 / 14,723 | |
+| 5.5 s, every avenged death traded | 13,072 | |
+| whole seconds of the round clock, 5 apart at most | 15,064 | 14,519 |
+
+HLTV's D leaves a world death out on 120 of the 123 player-maps that have one, and counts other suicides
+(by a player's own grenade or fire) on all 37. Its per-round kill feed lists every round we count (no
+player-map's rounds differ). The engine keeps 5.4 s: 5.5 s moves five player-maps of the pinned gate maps
+(hltv-exact.test.ts) one KAST round off HLTV, four of them by a trade HLTV does not credit, so a change of
+window waits for the gate to be re-pinned on this evidence. Under 5.5 s, of the 913 player-maps still off,
+895 are one round out (18 are two or more); the classes, each
+with an example round:
+
+| Class | Player-maps | Example (HLTV page, player, round) |
+|---|---:|---|
+| HLTV higher; the player's death was avenged, but more than 5.5 s later | 232 | ocs_map_224885, device, 2 |
+| HLTV lower; the round's KAST rests on a traded death alone | 99 | map_241565, CacaNito, 12 |
+| HLTV lower; the round's KAST rests on a damage assist alone | 73 | map_240476, jottAAA, 8 |
+| HLTV lower; several rounds could account for it | 347 | ocs_map_225361, dwushka, 1 |
+| HLTV higher; no candidate round | 78 | |
+| HLTV higher; several candidates | 45 | ocs_map_224901, sirah, 4 |
+| HLTV higher; a flash assist alone | 12 | ocs_map_224489, walleN, 12 |
+| HLTV higher; died after the round's end | 5 | map_240813, Kurama, 19 |
+| HLTV higher; killed by the bomb | 4 | ocs_map_224038, millert, 17 |
+
+No single window, pairing or assist rule moves these without losing more elsewhere (the tables above), and
+HLTV publishes no per-round trade or assist, so they are left as HLTV's own rule: the trade it credits
+beyond 5.5 s, and an assist count that differs from the game's on 1,193 player-maps (HLTV's A minus its
+flash assists against our non-flash assists).
+
 HLTV's round buy labels over every HLTV map: PISTOL $3,000 to $4,700 (2,932 team-rounds), ECO $800 to
 $4,950 (1,794), HALF $5,000 to $16,200 (3,773), FULL $16,250 to $38,100 (23,469). The engine's cuts,
 $1,000 and $3,250 per player, are those bands for five players.
