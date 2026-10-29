@@ -52,7 +52,7 @@ export interface ValveFolder {
 
 export const VALVE_FOLDER = String.raw`%APPDATA%\BotMatchStats\valve`;
 export const isValve = (f: string) => f.startsWith("valve/");
-export const isProLibrary = (f: string) => f.startsWith("pro/");
+const isProLibrary = (f: string) => f.startsWith("pro/");
 
 /** The pro match library as last listed. */
 export interface ProFolder {

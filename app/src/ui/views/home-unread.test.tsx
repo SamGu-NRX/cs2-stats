@@ -28,6 +28,9 @@ it("counts the user's unread match files only when none of their own matches was
   expect(unreadOwnFiles([career], failed("2026/bad.json.gz"))).toBe(0);
   expect(unreadOwnFiles([outside], failed("2026/bad.json.gz"))).toBe(0);
   expect(unreadOwnFiles([pro], failed("pro/s-1/m1-dust2"))).toBe(0);
+  // a dev match folder is a pro demo too (sources.ts isProFile), in the dev server's runtime
+  expect(unreadOwnFiles([pro], failed("dev/faze-vs-sangal-m2"))).toBe(0);
+  expect(unreadOwnFiles([], failed("dev/faze-vs-sangal-m2", "pro/s-1/m1-dust2"))).toBe(0);
   expect(unreadOwnFiles([pro], failed("pro/s-1/m1-dust2", "2026/bad.json.gz"))).toBe(1);
   expect(unreadOwnFiles([], failed("2026/a.json.gz", "2026/b.json.gz"))).toBe(2);
   expect(unreadOwnFiles([], [])).toBe(0);
