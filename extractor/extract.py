@@ -775,6 +775,10 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
     return out
 
 
+# Move codes beside player_team's team numbers (left_before_freeze_end): a disconnect, and a player_connect_full.
+DISCONNECTED, CONNECTED = -2, -1
+
+
 def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
                            sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame, moves: pd.DataFrame | None,
                            candidates: set[int]) -> set[int]:
@@ -782,9 +786,13 @@ def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: p
     in the match. An allowlist of positive evidence: a candidate qualifies only if all of these hold, and anything
     else keeps him (non_combatants then refuses the map, as before).
     - Every round sides counts him in has a recorded freeze_end_tick, and his latest move strictly before it took
-      him off both teams. A move is a player_team event (moves: tick, steamid, team) to a team other than 2 or 3,
-      or a disconnect (team 0); a departure is such a move. sides reads team_num at freeze end, and it lags the
-      move (on one OpenCS2 demo it read T at every freeze end from the move on, rounds 3 to 29).
+      him off both teams. moves: tick, steamid, team of each player_team event, each disconnect as DISCONNECTED
+      and each player_connect_full as CONNECTED; a departure is a move off teams 2 and 3 (a player_team event to
+      0 or 1, or a disconnect). sides reads team_num at freeze end, and it lags the move (on one OpenCS2 demo it
+      read T at every freeze end from the move on, rounds 3 to 29).
+    - He never comes back: after the departure before his first counted round, no move puts him on team 2 or 3
+      while he is connected. A team change the game logs for a disconnected player (a halftime swap of the slot
+      he left, fixture O) is no return.
     - Every death naming him is the one the game records for his departure: on a departure tick, with him as both
       victim and attacker, and no assister. The game writes a team switch and a disconnect alike as a suicide by
       "world" with the player as attacker (every departure death in fixtures J and L-P), never with no attacker.
@@ -793,9 +801,9 @@ def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: p
     - He fires, throws and buys nothing (acts: weapon_fire, grenade_thrown, item_purchase), so he flashes no one.
     - His only bomb events are the C4 the game hands him at spawn (a pickup on his own spawn tick) and its drop on
       a departure tick.
-    Two holes in an earlier form of this rule, each tested: a round recorded already live (its sides read at
-    end_tick - 1, after a player who left mid-round had played), and a death or hit from another player on the
-    departure tick. deaths and hurts need their tick column; without moves or rounds.freeze_end_tick, nobody
+    Holes in earlier forms of this rule, each tested: a round recorded already live (its sides read at end_tick - 1,
+    after a player who left mid-round had played), a death or hit from another player on the departure tick, and a
+    return after the freeze end. deaths and hurts need their tick column; without moves or rounds.freeze_end_tick, nobody
     qualifies."""
     if moves is None or not len(moves) or "freeze_end_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
         return set()
@@ -805,7 +813,7 @@ def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: p
     out = set()
     for s_ in candidates:
         mine = moves[is_(moves.steamid, s_)]
-        gone = set(mine.tick[~mine.team.isin([2, 3])].astype("int64"))
+        gone = set(mine.tick[~mine.team.isin([2, 3, CONNECTED])].astype("int64"))
         on_side = set(sides["round"][is_(sides.steamid, s_)].astype(int))
         if not gone or not on_side:
             continue
@@ -814,10 +822,22 @@ def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: p
             fe = live.get(r)
             if fe is None or pd.isna(fe):
                 return False
-            before = mine[mine.tick < fe]
+            before = mine[(mine.tick < fe) & (mine.team != CONNECTED)]
             return len(before) > 0 and before.team.iloc[-1] not in (2, 3)
 
         if not all(left_before(r) for r in on_side):
+            continue
+        first = live[min(on_side)]
+        departed = mine.tick[(mine.tick < first) & ~mine.team.isin([2, 3, CONNECTED])].max()
+        connected, back = True, False
+        for t, team in zip(mine.tick, mine.team):
+            if team == DISCONNECTED:
+                connected = False
+            elif team == CONNECTED:
+                connected = True
+            elif t > departed and team in (2, 3) and connected:
+                back = True
+        if back:
             continue
         if is_(acts.steamid, s_).any():
             continue
@@ -1771,7 +1791,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     d_, h_, sp_ = in_match(ev("player_death")), in_match(ev("player_hurt")), ev("player_spawn")
     team_rows = econ_raw[econ_raw.team_num.isin([2, 3]) & econ_raw.steamid.notna()]
     tick_round = dict(zip(rounds.team_tick, rounds["round"]))
-    pt_, dc_ = ev("player_team"), ev("player_disconnect")
+    pt_, dc_, cn_ = ev("player_team"), ev("player_disconnect"), ev("player_connect_full")
     excluded = non_combatants(
         rounds[["round", "start_tick", "end_tick", "freeze_end_tick"]],
         pd.DataFrame({"tick": sp_.tick, "steamid": pid(sp_, "user")}),
@@ -1786,9 +1806,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         pd.concat([pd.DataFrame({"tick": in_match(ev(n)).tick, "event": n, "steamid": pid(in_match(ev(n)), "user")})
                    for n in ("bomb_pickup", "bomb_dropped", "bomb_beginplant", "bomb_planted", "bomb_abortplant",
                              "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True),
-        # leaving the server leaves the teams as a move to the spectators does: team 0
         pd.concat([pd.DataFrame({"tick": pt_.tick, "steamid": pid(pt_, "user"), "team": col(pt_, "team", None)}),
-                   pd.DataFrame({"tick": dc_.tick, "steamid": pid(dc_, "user"), "team": 0})], ignore_index=True))
+                   pd.DataFrame({"tick": dc_.tick, "steamid": pid(dc_, "user"), "team": DISCONNECTED}),
+                   pd.DataFrame({"tick": cn_.tick, "steamid": pid(cn_, "user"), "team": CONNECTED})], ignore_index=True))
     drop_ids = list(excluded)
     if excluded:
         names_ = pos.dropna(subset=["steamid"]).groupby("steamid").name.last()
