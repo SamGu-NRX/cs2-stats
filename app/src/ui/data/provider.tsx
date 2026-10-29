@@ -75,7 +75,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const force = forced.current;
       forced.current = false;
       const entries = await r.host.list();
-      const synced = await r.client.sync(entries);
+      // the desktop smoke test reads its fixtures through a derive pool even on a small CI machine, which
+      // would otherwise derive in one thread: the pool is the part that only failed in the desktop app (#85)
+      const synced = await r.client.sync(entries, r.host.smoke ? { derivers: 2 } : undefined);
       if (synced.matches === null) {
         // the list is unchanged: a focus rescan leaves the views' data alone; a forced one makes them ask again
         setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, oneAtATime: !!s.oneAtATime || synced.oneAtATime, progress: null, version: force ? s.version + 1 : s.version, lastSync: Date.now() }));
