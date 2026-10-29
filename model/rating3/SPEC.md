@@ -112,7 +112,7 @@ The refit of 2026-10-28 does not replace it, because the duel block it gives mak
 
 | duel block | rating MAE | rating r | mean (HLTV 1.088) | eKPR MAE | eDPR MAE | eADR MAE | eKAST MAE |
 |---|---|---|---|---|---|---|---|
-| 2026-10-25 (shipped) | **0.0429** | 0.9901 | 1.102 | 0.0292 | 0.0363 | 1.92 | 3.89 |
+| 2026-10-25 (shipped) | **0.0428** | 0.9901 | 1.102 | 0.0292 | 0.0363 | 1.92 | 3.89 |
 | refit, `eco_fit`'s own weapon groups | 0.0466 | 0.9910 | 1.117 | 0.0242 | 0.0254 | 2.04 | 4.46 |
 | refit, the app's groups (from the rating dump) | 0.0454 | 0.9916 | 1.118 | 0.0198 | 0.0248 | 1.92 | 4.78 |
 
