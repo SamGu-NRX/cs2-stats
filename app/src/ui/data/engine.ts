@@ -12,6 +12,7 @@ import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs, plural } from "../lib/format";
 import type { MatchEntry } from "./match";
 import { sourceOf } from "./sources";
+import { isProLibrary } from "../../host/host";
 import { metric, ratingInfo, winProbInfo } from "./meta";
 import type { AttributeId } from "./proPack";
 
@@ -369,6 +370,17 @@ export function notCountedText(e: MatchEntry): string | null {
  * A wingman match: a 16-round limit (MR8) with at most two players a side, as Valve's wingman demos are.
  * The rating and win-probability models and the pro baselines are all 5v5, so career views leave it out.
  */
+/**
+ * How many of the user's own match files could not be read when none of their matches was read at all,
+ * else 0: what Home and the sidebar say instead of "No matches yet". Any own match read, one left out of
+ * career views included, is something to show; a pro library map is not the user's, so its failure never
+ * counts.
+ */
+export function unreadOwnFiles(all: MatchEntry[], failed: { file: string }[]): number {
+  return all.some(isOwn) ? 0 : failed.filter((e) => !isProLibrary(e.file)).length;
+}
+export const unreadText = (n: number) => `${plural(n, "match file")} could not be read`;
+
 export const isWingman = (s: MatchEntry) => s.match.maxRounds === 16 && ([0, 1] as const).every((t) => s.players.filter((p) => p.team === t).length <= 2);
 
 export const WINGMAN_TIP = "Wingman (2v2): left out of career views (Home, Profile, Playstyle, Weapons), whose models and baselines are 5v5. Career aim counts it: aim does not depend on team size.";

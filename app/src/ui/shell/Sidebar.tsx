@@ -6,7 +6,7 @@ import { AgentImg } from "../components/Agent";
 import { useRatings, useYourQuery } from "../data/hooks";
 import { useData } from "../data/provider";
 import { BotIcon, ClipsIcon, HomeIcon, MatchesIcon, PanelCloseIcon, ProfileIcon, SettingsIcon } from "../icons/ui";
-import { careerEntries, isOwn, ratingHeadline } from "../data/engine";
+import { careerEntries, isOwn, ratingHeadline, unreadOwnFiles, unreadText } from "../data/engine";
 import { scanErrorText } from "../data/sources";
 import { fmtRating, plural } from "../lib/format";
 import { navWasInstant, pageHref, useRoute, type Page } from "../router";
@@ -57,6 +57,8 @@ export function useRail() {
 export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: boolean; onToggle: () => void }) {
   const route = useRoute();
   const { matches, status, error, lastSync, refresh, fileErrors } = useData();
+  // the same count Home shows when none of the user's own match files could be read (engine.ts)
+  const unread = unreadOwnFiles(matches, fileErrors);
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
   const career$ = useMemo(() => careerEntries(matches, null), [matches]);
@@ -90,7 +92,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
               <span className="side__rating"><span>Rating</span>{fmtRating(me.rating)}</span>
             </>
           ) : (
-            <span className="side__name side__name--none">{scanning ? "Reading matches…" : fileErrors.length ? "Files could not be read" : "No matches yet"}</span>
+            <span className="side__name side__name--none">{scanning ? "Reading matches…" : unread ? unreadText(unread) : "No matches yet"}</span>
           )}
         </div>
       </div>

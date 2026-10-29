@@ -13,7 +13,7 @@ import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import { AgentImg } from "../components/Agent";
-import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
+import { attrsOf, clutchRows, unreadOwnFiles, unreadText, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { hasMetric, metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
@@ -48,14 +48,6 @@ function useTotals(list: MatchEntry[]): Totals | null {
   return q && s?.length === 3 && r ? { q, both: s[0], t: s[1], ct: s[2], rating: r[0].both } : null;
 }
 
-/**
- * Home's empty state when match files were found but none of the user's could be read: what happened,
- * instead of "No matches yet", which told the user to play a match. Null when some were read or none failed.
- */
-export function unread(matches: MatchEntry[], failed: number): string | null {
-  return failed > 0 && !careerEntries(matches, null).length ? `${plural(failed, "match file")} could not be read. Data & settings lists them with the reason.` : null;
-}
-
 export function HomeView() {
   const { matches, status, fileErrors } = useData();
   const { map, n } = useScope();
@@ -64,6 +56,8 @@ export function HomeView() {
     return n ? f.slice(0, n) : f;
   }, [matches, map, n]);
   const last = list[0] ?? null;
+  // files failed and none of the user's matches was read: say so rather than "No matches yet"
+  const unread = unreadOwnFiles(matches, fileErrors);
   const t = useTotals(list);
 
   if (status !== "ready" && !matches.length) {
@@ -79,7 +73,7 @@ export function HomeView() {
       <BarContent crumbs={[{ label: "Home" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in home">
         {!last ? (
-          <Card><Empty text={unread(matches, fileErrors.length) ?? "No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings."} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+          <Card><Empty text={unread ? `${unreadText(unread)}. Data & settings lists them with the reason.` : "No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings."} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="home__top">

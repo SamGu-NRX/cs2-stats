@@ -43,7 +43,7 @@ const onJob = async (ev: MessageEvent<ToDeriver>) => {
 };
 
 // the page's one message: the port to the stats worker. The code has loaded, so jobs are taken from
-// here on (derive-pool.ts PoolUnavailable)
+// here on (derive-pool.ts PoolOptions.here)
 self.onmessage = (ev: MessageEvent<FromPage>) => {
   port = ev.data.port;
   port.onmessage = onJob;

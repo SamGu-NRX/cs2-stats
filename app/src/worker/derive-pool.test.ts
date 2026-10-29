@@ -1,52 +1,79 @@
-// What the derive pool does when its workers cannot start, and what the stats worker does then
-// (derive-pool.ts PoolUnavailable, throughPool).
-import { expect, it, vi } from "vitest";
+// What the derive pool does with files its workers cannot take (derive-pool.ts PoolOptions.here).
+import { afterEach, expect, it, vi } from "vitest";
 import type { Cached } from "./derive-file";
-import { derivePool, PoolUnavailable, throughPool, type DerivePool, type Deriver } from "./derive-pool";
+import { derivePool, type Deriver } from "./derive-pool";
 
-/** Derive workers that never load (as one started from a worker in the desktop app's WebView2), or that load and crash on their first file. */
-function derivers(n: number, mode: "never-loads" | "loads-then-crashes"): Deriver[] {
-  return Array.from({ length: n }, () => {
-    const d: Deriver = {
-      onmessage: null,
-      onfail: null,
-      post(m) {
-        if ("init" in m) setTimeout(() => (mode === "never-loads" ? d.onfail?.("failed to load") : d.onmessage?.({ ready: true })), 0);
-        if ("job" in m) setTimeout(() => d.onfail?.("boom"), 0);
-      },
-      close() {},
-    };
-    return d;
+type Mode = "never-loads" | "loads-then-crashes";
+
+/** Derive workers as the pool reaches them: never loading (as one started from a worker in the desktop app's WebView2), or loading and then crashing on their first file. */
+const derivers = (mode: Mode) => (): Deriver => {
+  const d: Deriver = {
+    onmessage: null,
+    onfail: null,
+    post(m) {
+      if ("init" in m) setTimeout(() => (mode === "never-loads" ? d.onfail?.("failed to load") : d.onmessage?.({ ready: true })), 0);
+      if ("job" in m) setTimeout(() => d.onfail?.("boom"), 0);
+    },
+    close() {},
+  };
+  return d;
+};
+
+/**
+ * The same workers as Worker objects. A pool that starts its workers itself (the one before the page
+ * started them) gets these, so this test fails there for what it does with the files, not for how the
+ * pool is called.
+ */
+function stubWorkers(mode: Mode) {
+  vi.stubGlobal("Worker", class {
+    onmessage: ((ev: MessageEvent) => void) | null = null;
+    onerror: ((ev: ErrorEvent) => void) | null = null;
+    postMessage(m: object) {
+      if ("init" in m) setTimeout(() => (mode === "never-loads" ? this.onerror?.({ message: "failed to load", preventDefault() {} } as ErrorEvent) : this.onmessage?.({ data: { ready: true } } as MessageEvent)), 0);
+      if ("job" in m) setTimeout(() => this.onerror?.({ message: "boom", preventDefault() {} } as ErrorEvent), 0);
+    }
+    terminate() {}
   });
 }
 
-it("hands every file back when its workers never start, and fails a file only for a worker that started", async () => {
-  // fails if derive workers that could not load make every file a file error: the desktop app then
-  // showed no matches and no error, as Sam's install did
-  const pool = derivePool(derivers(2, "never-loads"), null, async () => new ArrayBuffer(0));
-  const results = await Promise.allSettled(["a", "b", "c"].map((f) => pool.derive(f, undefined)));
-  expect(results.map((r) => r.status === "rejected" && r.reason instanceof PoolUnavailable)).toEqual([true, true, true]);
+afterEach(() => vi.unstubAllGlobals());
+
+const fact = (file: string) => ({ facts: {}, origin: file }) as unknown as Cached;
+
+it("derives the files its workers cannot take in this thread, one at a time, in order", async () => {
+  // fails if derive workers that never load turn every file into a file error (the desktop app then
+  // showed no matches and no error, as Sam's install did), or if those files are derived side by side
+  // while Data & settings says one at a time
+  stubWorkers("never-loads");
+  let active = 0, most = 0;
+  const started: string[] = [];
+  const here = async (file: string) => {
+    active++;
+    most = Math.max(most, active);
+    started.push(file);
+    await new Promise((r) => setTimeout(r, 5));
+    active--;
+    return fact(file);
+  };
+  const fellBack = vi.fn();
+  const pool = derivePool(2, null, async () => new ArrayBuffer(0), { deriver: derivers("never-loads"), here, fellBack });
+  const settled: string[] = [];
+  const all = ["a", "b", "c", "d"].map((f) => pool.derive(f, undefined).then((c) => { settled.push(f); return c.origin; }));
+  expect(await Promise.all(all)).toEqual(["a", "b", "c", "d"]);
+  expect([started, settled, most, fellBack.mock.calls.length]).toEqual([["a", "b", "c", "d"], ["a", "b", "c", "d"], 1, 4]);
   pool.close();
-  // no workers at all (the page could start none): every file comes back too
-  const none = derivePool([], null, async () => new ArrayBuffer(0));
-  await expect(none.derive("a", undefined)).rejects.toBeInstanceOf(PoolUnavailable);
-  // a worker that started and then crashed on a file: that file's error, as before
-  const started = derivePool(derivers(1, "loads-then-crashes"), null, async () => new ArrayBuffer(0));
-  await new Promise((r) => setTimeout(r, 5));
-  const [first] = await Promise.allSettled([started.derive("a", undefined)]);
-  expect(first.status === "rejected" && !(first.reason instanceof PoolUnavailable) && String(first.reason)).toContain("a derive worker stopped");
-  started.close();
+  // no workers at all: the same
+  const none = derivePool(0, null, async () => new ArrayBuffer(0), { deriver: derivers("never-loads"), here, fellBack });
+  await expect(none.derive("e", undefined)).resolves.toMatchObject({ origin: "e" });
 });
 
-it("derives a file the pool hands back in the stats worker, says it did, and keeps a file's own error", async () => {
-  // fails if the stats worker passes the pool's PoolUnavailable on as the file's error instead of
-  // deriving the file itself, or if it hides a real derive error behind a second try
-  const cached = { facts: {}, origin: "here" } as unknown as Cached;
-  const here = vi.fn(async () => cached);
-  const fellBack = vi.fn();
-  const pool = (e: Error): DerivePool => ({ derive: () => Promise.reject(e), close() {} });
-  await expect(throughPool(pool(new PoolUnavailable("did not start")), here, fellBack)("a", undefined)).resolves.toBe(cached);
-  expect([here.mock.calls, fellBack.mock.calls.length]).toEqual([[["a"]], 1]);
-  await expect(throughPool(pool(new Error("never had a side")), here, fellBack)("b", undefined)).rejects.toThrow("never had a side");
-  expect([here.mock.calls.length, fellBack.mock.calls.length]).toEqual([1, 1]);
+it("keeps the error of a file whose worker had started", async () => {
+  // fails if a crash on a file is retried in this thread, hiding the file's own failure
+  stubWorkers("loads-then-crashes");
+  const here = vi.fn(async (file: string) => fact(file));
+  const pool = derivePool(1, null, async () => new ArrayBuffer(0), { deriver: derivers("loads-then-crashes"), here, fellBack() {} });
+  await new Promise((r) => setTimeout(r, 5));
+  await expect(pool.derive("a", undefined)).rejects.toThrow("a derive worker stopped: boom");
+  expect(here).not.toHaveBeenCalled();
+  pool.close();
 });
