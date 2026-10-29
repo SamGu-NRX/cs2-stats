@@ -2,6 +2,7 @@
 // logs (public/samples) carry the game's per-player, per-round kills, deaths, assists, damage and
 // headshot kills in rounds.basic, recorded by the server, independent of the event log.
 import { readdirSync, readFileSync } from "node:fs";
+import { gunzipSync, gzipSync } from "node:zlib";
 import path from "node:path";
 import { CS2RB } from "../model-params";
 import { RECOIL } from "../recoil-ref";
@@ -48,20 +49,44 @@ it("gives a converted log its whole match's score, not the score of the rounds i
   }
 });
 
-it("sets aside a file in which no match was played, instead of failing it", async () => {
-  // Fails if a plugin file where no player ever had a side and no round has a winner (a map loaded and left,
-  // or a deathmatch: 20261028T024855Z_de_dust2_6f326db6, saved "complete") is reported as unreadable ("the
-  // recording player never had a side"), gets a recording player, or is listed; or if a played file loses its own.
+/** A sample plugin file as raw JSON, changed by `edit`, written back and decoded as the app reads any file. */
+type Raw = { env: { maxrounds: number }; players: { startSide: (number | null)[]; isBot: boolean[] }; rounds: { winSide: (number | null)[]; side: (number | null)[][] } };
+async function editedSample(edit: (raw: Raw) => void): Promise<{ file: string; m: MatchFile }> {
   const file = readdirSync(SAMPLES).find((f) => f.endsWith(".json.gz"))!;
-  const played = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
-  const blank = await decodeMatch(readFileSync(path.join(SAMPLES, file)), file);
-  blank.players.startSide = blank.players.startSide.map(() => null);
-  blank.rounds.winSide = blank.rounds.winSide.map(() => null);
-  blank.rounds.side = blank.rounds.side.map((r) => r.map(() => null));
-  const entry = (m: MatchFile) => entryOf(`local/${file}`, "local", derive(pluginToTables(m), CS2RB));
-  const empty = entry(blank);
-  expect([empty.you, empty.activity, listedEntries([empty], null).length]).toEqual([null, false, 0]);
-  expect(entry(played).you).not.toBeNull();
+  const raw = JSON.parse(gunzipSync(readFileSync(path.join(SAMPLES, file))).toString("utf-8")) as Raw;
+  edit(raw);
+  return { file, m: await decodeMatch(gzipSync(JSON.stringify(raw)), file) };
+}
+
+it("sets aside a file in which no match was played, instead of failing it", async () => {
+  // Fails if a plugin file shaped like 20261028T024855Z_de_dust2_6f326db6 (saved "complete": no player ever
+  // had a side, maxrounds 0, kills, no round won) is reported as unreadable ("the recording player never had a
+  // side"), gives a player a team, gets a recording player, or is listed; or if a played file loses its own.
+  const { file, m: empty } = await editedSample((raw) => {
+    raw.env.maxrounds = 0;
+    raw.players.startSide = raw.players.startSide.map(() => null);
+    raw.rounds.winSide = raw.rounds.winSide.map(() => null);
+    raw.rounds.side = raw.rounds.side.map((r) => r.map(() => null));
+  });
+  expect(empty.kills.ri.length).toBeGreaterThan(0);
+  const f = derive(pluginToTables(empty), CS2RB);
+  const e = entryOf(`local/${file}`, "local", f);
+  expect([[...new Set(f.players.map((p) => p.team))], e.you, e.activity, listedEntries([e], null).length]).toEqual([[null], null, false, 0]);
+  const { m: played } = await editedSample(() => {});
+  expect(entryOf(`local/${file}`, "local", derive(pluginToTables(played), CS2RB)).you).not.toBeNull();
+});
+
+it("puts a player who never had a side on no team, beside a recording player who had one", async () => {
+  // Fails if the adapter compares a null start side as a side: a bot with none was put on the opponents' team.
+  let bot = -1;
+  const { m } = await editedSample((raw) => {
+    bot = raw.players.isBot.indexOf(true);
+    raw.players.startSide[bot] = null;
+    for (const r of raw.rounds.side) r[bot] = null;
+  });
+  const f = derive(pluginToTables(m), CS2RB);
+  expect(f.players.find((p) => p.id === m.players.key[bot])!.team).toBeNull();
+  expect(f.players.find((p) => p.id === m.players.key[m.human])!.team).not.toBeNull();
 });
 
 it("marks throws rebuilt from detonations as such, and logged throws as logged", async () => {

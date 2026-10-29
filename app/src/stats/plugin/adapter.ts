@@ -113,7 +113,13 @@ export function pluginToTables(m: MatchFile): MatchTables {
   const humanTeam = `Team ${m.players.name[m.human]}`;
   const sideOf = (ri: number, pi: number | null): Side | null => (pi === null ? null : SIDE[m.rounds.side[ri]?.[pi] ?? -1] ?? null);
   const humanStart = SIDE[m.players.startSide[m.human] ?? -1];
-  const teamOf = (pi: number) => (m.players.startSide[pi] === m.players.startSide[m.human] ? humanTeam : "Opponents");
+  // A player who never had a side is on no team. null is no side, not one two players share: compared as
+  // a side it put such a player on the opponents' team beside a recording player who had one.
+  const teamOf = (pi: number) => {
+    const start = m.players.startSide[pi];
+    if (start === null) return null;
+    return start === m.players.startSide[m.human] ? humanTeam : "Opponents";
+  };
   const partial = new Set(m.recon?.partial ?? []);
   const covered = (ri: number) => ri >= m.firstFullRound && !partial.has(ri) && ri < m.rounds.winSide.length;
   const weapon = (i: number) => m.weapons[i] ?? "unknown";
