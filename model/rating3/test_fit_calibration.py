@@ -1,4 +1,4 @@
-"""Synthetic checks for flash calibration and duel baseline units.
+"""Synthetic checks for flash calibration and the duel fit's held-out baseline.
 
 Run with python -I test_fit_calibration.py; no private data is needed.
 """
@@ -18,6 +18,7 @@ except ModuleNotFoundError:
     raise unittest.SkipTest("scipy is not installed; pip install -r model/rating3/requirements.txt") from None
 
 import numpy as np
+from scipy import sparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import eco_fit
@@ -123,44 +124,38 @@ class FlashCalibrationTests(unittest.TestCase):
 
 
 class DuelBaselineTests(unittest.TestCase):
-    def test_target_errors_accept_adr_as_rate_not_total_damage(self):
-        target = {"ek": 12.0, "ed": 8.0, "eadr": 75.0, "rounds": 20}
-        self.assertEqual(eco_fit.target_errors(target, kills=12, deaths=8, adr=75), [0, 0, 0])
-        np.testing.assert_allclose(
-            eco_fit.target_errors(target, kills=17, deaths=3, adr=95), [1, -1, 1],
-        )
+    def test_a_duel_fit_stopped_at_the_evaluation_cap_publishes_nothing(self):
+        # Review of PR 84: solve returned least_squares' vector without reading success, so a fit stopped at the
+        # 400-evaluation cap would reach params.json as if it had converged. Fails if that vector is returned.
+        stopped = SimpleNamespace(success=False, x=eco_fit.INITIAL,
+                                  message="The maximum number of function evaluations is exceeded.")
+        with patch.object(eco_fit, "least_squares", return_value=stopped):
+            with self.assertRaisesRegex(RuntimeError, "did not converge: The maximum number"):
+                eco_fit.solve(None, {})
 
-    def test_baseline_uses_training_means_with_no_second_adr_division(self):
-        targets = [
-            {
-                "target": "player", "match": str(match),
-                "map": f"map-{match}-{map_index}", "player": "player",
-                "ek": 10.0 + match * 2, "ed": 15.0 - match,
-                "eadr": 40.0 + match * 10, "rounds": 12 + map_index * 18,
-            }
-            for match in range(5)
-            for map_index in range(2)
-        ]
-        expected = []
-        for target in targets:
-            train = [row for row in targets if row["match"] != target["match"]]
-            expected.extend([
-                abs(np.mean([row["ek"] for row in train]) - target["ek"]) * 0.2,
-                abs(np.mean([row["ed"] for row in train]) - target["ed"]) * 0.2,
-                abs(np.mean([row["eadr"] for row in train]) - target["eadr"]) * 0.05,
-            ])
-        with patch.object(eco_fit, "collect", return_value=(targets, [], eco_fit.empty_provenance())):
-            with patch.object(eco_fit, "least_squares", side_effect=lambda fun, initial, **kw: SimpleNamespace(x=initial)):
-                result = eco_fit.fit_model(Path("unused"), [])
-        baseline = result["held_out_baseline"]
-        self.assertEqual(baseline["targets"], 10)
-        self.assertEqual(baseline["matches"], 5)
+    def test_baseline_predicts_each_input_at_its_training_mean_in_rating_points(self):
+        # Fails if the held-out baseline is scored on anything but each input's training-fold mean, weighed by the
+        # rating curve's slope at HLTV's value as the fit's own errors are, so the two are in the same units.
+        n = 10
+        targets = {"ekpr": np.linspace(0.5, 0.9, n), "edpr": np.linspace(0.8, 0.6, n),
+                   "eadr": np.linspace(60, 90, n), "ekast": np.linspace(62, 80, n)}
+        match = np.array([str(i // 2) for i in range(n)])
+        none = sparse.csr_matrix((n, eco_fit.CELLS))
+        d = eco_fit.Duels(kills=none, deaths=none, damage=none, kast_rounds=sparse.csr_matrix((n, 1)),
+                          kast_floor=np.zeros(1), kast_cells=np.full((1, 1), eco_fit.CELLS), rated=np.ones(n),
+                          players=sparse.identity(n, format="csr"), targets=targets, match=match, duels=0)
+        slope = {"ekpr": 0.2, "edpr": 0.3, "eadr": 0.001, "ekast": 0.002}
+        curves = {curve: {"slope": slope[name] * (-1 if name == "edpr" else 1), "knots": [], "slope_changes": []}
+                  for name, curve in eco_fit.INPUTS.items()}
+        expected = [slope[k] * abs(targets[k][match != match[i]].mean() - targets[k][i]) for i in range(n) for k in slope]
+        with patch.object(eco_fit, "collect", return_value=(d, eco_fit.empty_provenance())), \
+                patch.object(eco_fit, "solve", return_value=eco_fit.INITIAL):
+            baseline = eco_fit.fit_model(Path("unused"), [], curves)["held_out_baseline"]
+        self.assertEqual((baseline["player_maps"], baseline["matches"]), (10, 5))
         self.assertAlmostEqual(baseline["mae"], float(np.mean(expected)))
         self.assertAlmostEqual(baseline["p95"], float(np.quantile(expected, 0.95)))
         self.assertAlmostEqual(baseline["max"], max(expected))
-        for fold in baseline["folds"]:
-            self.assertEqual(fold["matches"], 1)
-            self.assertEqual(fold["targets"], 2)
+        self.assertEqual([(f["matches"], f["player_maps"]) for f in baseline["folds"]], [(1, 2)] * 5)
 
 
 if __name__ == "__main__":
