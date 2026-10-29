@@ -92,17 +92,28 @@ def _kill(**k) -> dict:
             "flashAssist": False, "traded": False, "killerSide": "T", "aGroup": "sniper", "vGroup": "rifle1", **k}
 
 
+def _hit(**h) -> dict:
+    """A rating-dump hit row (rating-rows.ts hitRows): ana's 100 damage to bob in round 0."""
+    return {"hltv": "map_1.json", "ri": 0, "attacker": "1", "victim": "2", "aSide": "T", "dmg": 100,
+            "aGroup": "sniper", "vGroup": "rifle1", **h}
+
+
 def _two_players(root: Path, **join) -> None:
-    """map_1.json's dump: one rated round of ana (T, won) and bob (CT). ana's AWP kill on bob's rifle counts; a kill
-    with an unknown group, a team kill, another map's kill and a hit with an unknown group do not."""
+    """map_1.json's dump: two rated rounds of ana (T) and bob (CT). In round 0 ana's AWP kill on bob's rifle and her
+    hit count; a team kill and another map's kill do not. Round 1 holds a kill and a hit with an unknown group, so
+    the app leaves round 1 out for both players."""
     _map(root)
     write = _dump(root)
     write("rating-joins.private.jsonl", [_dumped_join(**join), {**_dumped_join(), "hltv": "map_9.json"}])
-    write("rating-rounds.private.jsonl", [_round("1", 0, "T", won=True, survived=1), _round("2", 0, "CT", deaths=1)])
-    write("rating-kills.private.jsonl", [_kill(), _kill(aGroup=None), _kill(enemy=False), _kill(hltv="map_9.json")])
-    hit = lambda **h: {"hltv": "map_1.json", "ri": 0, "attacker": "1", "victim": "2", "aSide": "T", "dmg": 100,
-                       "aGroup": "sniper", "vGroup": "rifle1", **h}
-    write("rating-hits.private.jsonl", [hit(), hit(vGroup=None, dmg=40)])
+    write("rating-rounds.private.jsonl", [_round("1", 0, "T", won=True, survived=1), _round("2", 0, "CT", deaths=1),
+                                          _round("1", 1, "T"), _round("2", 1, "CT", deaths=1)])
+    write("rating-kills.private.jsonl", [_kill(), _kill(enemy=False), _kill(hltv="map_9.json"), _kill(ri=1, aGroup=None)])
+    write("rating-hits.private.jsonl", [_hit(), _hit(ri=1, vGroup=None, dmg=40)])
+
+
+def _cells(ek: int, ed: int, adr: float, kast: float) -> list:
+    return [["st-kills eco-adjusted-data", f"{ek} ({ek})"], ["st-deaths eco-adjusted-data", f"{ed} (0)"],
+            ["st-adr eco-adjusted-data", f"{adr}"], ["st-kast eco-adjusted-data", f"{kast}%"]]
 
 
 class FitsUseTheJoinsPairing(unittest.TestCase):
@@ -146,8 +157,66 @@ class FitsUseTheJoinsPairing(unittest.TestCase):
         ours = eco_fit.eco_inputs(d, points)
         np.testing.assert_allclose([ours["ekpr"], ours["edpr"], ours["eadr"]], [[kill, 0], [0, kill], [100 * kill, 0]])
         self.assertEqual({k: v.tolist() for k, v in d.targets.items()},
-                         {"ekpr": [1.0, 1.0], "edpr": [0.0, 0.0], "eadr": [100.0, 100.0], "ekast": [50.0, 50.0]})
-        self.assertEqual((d.duels, provenance["consumed_joins"]), (1, 1))
+                         {"ekpr": [0.5, 0.5], "edpr": [0.0, 0.0], "eadr": [100.0, 100.0], "ekast": [50.0, 50.0]})
+        self.assertEqual((d.duels, provenance["consumed_joins"], provenance["unknown_group_rounds"]), (1, 1, 2))
+
+    def test_eco_fit_leaves_out_a_round_with_an_unknown_group_as_the_app_does(self):
+        # Review of PR 84: eco_fit skipped a kill or hit whose group was unknown but kept its player-round in the
+        # inputs and their rounds, where rating3.ts ecoAdjust leaves the whole player-round out of every eco input.
+        # Fails if such a round stays in a numerator or a denominator, or if a flash assist leaves a round out.
+        eco_fit = _eco_fit(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _map(root)
+            write = _dump(root)
+            write("rating-joins.private.jsonl", [_dumped_join()])
+            write("rating-rounds.private.jsonl", [_round("1", ri, "T") for ri in range(4)])
+            write("rating-kills.private.jsonl", [
+                _kill(ri=0),                                                          # counts
+                _kill(ri=1, killer=None, assister="1", aGroup=None),                  # her assist: round 1 left out
+                _kill(ri=2, killer=None, assister="1", flashAssist=True, aGroup=None),  # a flash assist: round 2 stays
+            ])
+            write("rating-hits.private.jsonl", [_hit(ri=3, vGroup=None)])          # her hit: round 3 left out
+            d, provenance = eco_fit.collect(root, [JOIN])
+        points = np.full(eco_fit.CELLS, 0.5)
+        points[eco_fit.cell("sniper", "rifle1", "T")] = 1.7
+        ours = eco_fit.eco_inputs(d, points)
+        np.testing.assert_allclose([ours["ekpr"][0], ours["eadr"][0], ours["ekast"][0]], [1.7 / 2, 0, 100 * 1.7 / 2])
+        self.assertEqual(provenance["unknown_group_rounds"], 2)
+
+    def test_eco_fit_compares_with_hltv_over_the_sides_the_app_rates(self):
+        # Review of PR 84: eco_fit's targets were HLTV's map totals over every round, while its predictions average the
+        # rated rounds of the sides rating3Of rates. A player-map with a side or a round the app does not rate now
+        # takes HLTV's side cells for the rated sides, weighted by their rated rounds; one with every round rated keeps
+        # the totals, which HLTV rounds once. Fails if a side the app does not rate (ana's CT, none of 2 rounds rated)
+        # or the rated-round weights (bob's 2 and 3) are lost, or if carol's totals give way to her rounded sides.
+        eco_fit = _eco_fit(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _map(root)
+            boards = {"totalstats": {"1": _cells(9, 7, 80.0, 70.0), "2": _cells(5, 3, 65.0, 70.0), "3": _cells(5, 2, 75.0, 72.5)},
+                      "ctstats hidden": {"1": _cells(1, 3, 50.0, 40.0), "2": _cells(2, 1, 60.0, 75.0), "3": _cells(3, 1, 80.0, 75.0)},
+                      "tstats hidden": {"1": _cells(8, 4, 95.0, 85.0), "2": _cells(3, 2, 70.0, 65.0), "3": _cells(3, 1, 70.0, 70.0)}}
+            (root / "hltv" / "map_1.json").write_text(json.dumps({"match": {"matchId": "5"}, "scoreboards": [
+                {"cls": f"stats-table {cls}", "rows": [{"player": f"p{pid}", "pid": pid, "cells": c} for pid, c in rows.items()]}
+                for cls, rows in boards.items()]}), encoding="utf-8")
+            write = _dump(root)
+            carol = {"33": {"hltv": "carol", "pid": "3", "renamed": False}}
+            write("rating-joins.private.jsonl", [_dumped_join(players={**JOIN["players"], **carol})])
+            write("rating-rounds.private.jsonl", [
+                *[_round("1", ri, "CT", rated=False) for ri in (0, 1)],
+                *[_round("1", ri, "T", rated=ri != 5) for ri in (2, 3, 4, 5)],
+                *[_round("2", ri, "CT") for ri in (0, 1)],
+                *[_round("2", ri, "T", rated=ri != 5) for ri in (2, 3, 4, 5)],
+                *[_round("3", ri, side) for ri, side in ((0, "CT"), (1, "CT"), (2, "T"), (3, "T"))],
+            ])
+            write("rating-kills.private.jsonl", [])
+            write("rating-hits.private.jsonl", [])
+            d, _ = eco_fit.collect(root, [{**JOIN, "players": {**JOIN["players"], **carol}}])
+        np.testing.assert_allclose(
+            [d.targets["ekpr"], d.targets["edpr"], d.targets["eadr"], d.targets["ekast"]],
+            [[8 / 4, 0.4 * 2 / 2 + 0.6 * 3 / 4, 5 / 4], [4 / 4, 0.4 * 1 / 2 + 0.6 * 2 / 4, 2 / 4],
+             [95.0, 0.4 * 60 + 0.6 * 70, 75.0], [85.0, 0.4 * 75 + 0.6 * 65, 72.5]])
 
     def test_eco_fit_values_a_rounds_eco_kast_by_the_apps_rule(self):
         # Issue 81: eco_fit fitted eKPR, eDPR and eADR only, so a refit could inflate eco KAST unchecked and the
@@ -199,7 +268,7 @@ class FitsUseTheJoinsPairing(unittest.TestCase):
         points = np.arange(1, eco_fit.CELLS + 1) / 10
         ours = eco_fit.eco_inputs(d, points)
         got = eco_fit.residuals(d, points, eco_fit.rating_weights(d, curves))
-        expected = np.concatenate([0.2 * (ours["ekpr"] - 1), 0.3 * ours["edpr"], 0.003 * (ours["eadr"] - 100),
+        expected = np.concatenate([0.2 * (ours["ekpr"] - 0.5), 0.3 * ours["edpr"], 0.003 * (ours["eadr"] - 100),
                                    0.003 * (ours["ekast"] - 50)])
         np.testing.assert_allclose(got, expected)
         # every slope change from a knot on, the second eKAST knot's too

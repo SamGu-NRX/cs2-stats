@@ -38,6 +38,10 @@ def empty_provenance() -> dict:
         "skipped_joins": 0,
         "layouts": {"schema_v1": 0, "legacy": 0},
         "skipped": [],
+        # rated player-rounds left out because an event in them has a group the app could not work out
+        "unknown_group_rounds": 0,
+        # rated player-maps left out because HLTV's page has no row for them on a board their target needs
+        "no_side_row": 0,
     }
 
 
@@ -87,9 +91,15 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None) -> tu
     <root>/model-rating3) for the joined maps given. Each kill and hit there carries the economy groups derive
     valued it with, so the fit trains on the groups the app computes with: working out its own groups (active
     weapon, round-start loadout), the fit gave a duel block that scored worse in the app (rating MAE 0.0467 against
-    0.0429 on 1,610 joined maps). A kill or hit whose groups the app did not know is left out, as the app leaves it.
-    Only rated rounds count, and a player-map counts on its rated sides, as pnpm rating-check rates it. Players are
-    keyed by HLTV player id, as the dump keys them; targets are their HLTV eco-adjusted cells. A joined map missing
+    0.0429 on 1,610 joined maps). Only rated rounds count, and a player-map counts on its rated sides, as pnpm
+    rating-check rates it. As rating3.ts ecoAdjust does, an enemy kill or hit whose groups are unknown leaves out the
+    player-round of each player it would value, from every input and its rounds. Players are keyed by HLTV player id,
+    as the dump keys them. Targets are HLTV's eco-adjusted cells over the rounds the predictions average: its totals
+    when the rated sides cover every round the player played, which is nearly always. Otherwise they are its side
+    cells for the sides the app rates, weighted by each side's rated rounds. Within a side HLTV counts every round,
+    rated or not, and no cell gives the rated rounds alone. HLTV rounds each side's cells on its own, so its side
+    cells add up to its totals only to within that rounding (0.23 eco kills a player-map on average); that is why a
+    fully rated player-map uses the totals. A joined map missing
     from the dump is skipped, named in provenance. The dump records the join (demo folder, pairing) and table layout
     each map's rows came from; a map dumped under another join than the one given raises, since its rows would pair
     other players."""
@@ -115,7 +125,7 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None) -> tu
         match_of[file] = str(json.loads((root / "hltv" / file).read_text(encoding="utf-8")).get("match", {}).get("matchId", file))
 
     side_of: dict[tuple, int] = {}
-    rounds, rated = [], []
+    rounds: list[int] = []
     played: dict[tuple, dict] = {}
     for r in jsonl(folder / "rating-rounds.private.jsonl"):
         if r["hltv"] not in match_of:
@@ -124,85 +134,113 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None) -> tu
         if key not in side_of:
             side_of[key] = len(side_of)
             rounds.append(0)
-            rated.append(0)
-        i = side_of[key]
         m = r["m"]
-        rounds[i] += m.get("rounds", 0)
+        rounds[side_of[key]] += m.get("rounds", 0)
         if m.get("ratedRounds"):
-            rated[i] += 1
             floor = 1 if (r["won"] and m.get("survived")) or m.get("tradedDeaths") else 0
-            played[(r["hltv"], r["pid"], r["ri"])] = {"side": i, "floor": floor, "kast": set()}
+            played[(r["hltv"], r["pid"], r["ri"])] = {"side": side_of[key], "floor": floor, "kills": [], "deaths": [],
+                                                      "kast": set(), "hits": []}
 
-    kills, deaths, damage = [], [], []
+    unknown: set[tuple] = set()
     duels = 0
     known = lambda row: row["aGroup"] in INDEX and row["vGroup"] in INDEX
     for k in jsonl(folder / "rating-kills.private.jsonl"):
-        if k["hltv"] not in match_of or not k["enemy"] or not known(k):
+        if k["hltv"] not in match_of or not k["enemy"]:
+            continue
+        at = lambda pid: (k["hltv"], pid, k["ri"])
+        if not known(k):
+            unknown.update(at(pid) for pid in (k["killer"], k["victim"]) + (() if k["flashAssist"] else (k["assister"],)))
             continue
         c = cell(k["aGroup"], k["vGroup"], k["killerSide"])
         # duels, as the fit has always reported it: enemy kills with both groups known between paired players. A kill
         # in a round neither player had rated counts here but enters no input below.
         duels += k["killer"] is not None and k["victim"] is not None
-        if (p := played.get((k["hltv"], k["killer"], k["ri"]))) is not None:
-            kills.append((p["side"], c))
+        if (p := played.get(at(k["killer"]))) is not None:
+            p["kills"].append(c)
             p["kast"].add(c)
-        if (p := played.get((k["hltv"], k["victim"], k["ri"]))) is not None:
-            deaths.append((p["side"], c))
-        if not k["flashAssist"] and (p := played.get((k["hltv"], k["assister"], k["ri"]))) is not None:
+        if (p := played.get(at(k["victim"]))) is not None:
+            p["deaths"].append(c)
+        if not k["flashAssist"] and (p := played.get(at(k["assister"]))) is not None:
             p["kast"].add(c)
     for h in jsonl(folder / "rating-hits.private.jsonl"):
-        if h["hltv"] not in match_of or not h["aSide"] or not known(h):
+        if h["hltv"] not in match_of or not h["aSide"]:
             continue
-        if (p := played.get((h["hltv"], h["attacker"], h["ri"]))) is not None:
-            damage.append((p["side"], cell(h["aGroup"], h["vGroup"], h["aSide"]), float(h["dmg"])))
+        key = (h["hltv"], h["attacker"], h["ri"])
+        if not known(h):
+            unknown.add(key)
+        elif (p := played.get(key)) is not None:
+            p["hits"].append((cell(h["aGroup"], h["vGroup"], h["aSide"]), float(h["dmg"])))
+    dropped = unknown & played.keys()
+    provenance["unknown_group_rounds"] += len(dropped)
+    for key in dropped:
+        del played[key]
 
+    sides = len(side_of)
+    rated_a = np.zeros(sides)
+    kills, deaths, damage, kast = [], [], [], []
     outcome_of: dict[tuple, int] = {}
-    kast = []
     for p in played.values():
-        outcome = (p["floor"], tuple(sorted(p["kast"])))
-        kast.append((p["side"], outcome_of.setdefault(outcome, len(outcome_of))))
+        i = p["side"]
+        rated_a[i] += 1
+        kills.extend((i, c) for c in p["kills"])
+        deaths.extend((i, c) for c in p["deaths"])
+        damage.extend((i, c, v) for c, v in p["hits"])
+        kast.append((i, outcome_of.setdefault((p["floor"], tuple(sorted(p["kast"]))), len(outcome_of))))
     width = max([len(o[1]) for o in outcome_of] + [1])
     kast_cells = np.full((len(outcome_of), width), CELLS)  # padded with CELLS, a slot worth 0
     for (floor, cells), j in outcome_of.items():
         kast_cells[j, :len(cells)] = cells
-    sides = len(side_of)
     counts = lambda pairs, columns: sparse.csr_matrix(
         (np.ones(len(pairs)), ([a for a, _ in pairs], [b for _, b in pairs])), shape=(sides, columns))
 
-    rounds_a, rated_a = np.asarray(rounds, dtype=float), np.asarray(rated, dtype=float)
+    rounds_a = np.asarray(rounds, dtype=float)
     by_player = defaultdict(list)
-    for (file, pid, _), i in side_of.items():
+    side_name = {}
+    for (file, pid, side), i in side_of.items():
         by_player[(file, pid)].append(i)
-    cells_of = {}
+        side_name[i] = side
+    side_rows = {}
     for file in match_of:
         page = json.loads((root / "hltv" / file).read_text(encoding="utf-8"))
         for board in page["scoreboards"]:
-            if "totalstats" not in board["cls"].split():
+            tokens = board["cls"].split()
+            side = "total" if "totalstats" in tokens else "CT" if "ctstats" in tokens else "T" if "tstats" in tokens else None
+            if side is None:
                 continue
             for row in board["rows"]:
-                cells_of[(file, str(row["pid"]))] = row["cells"]
+                side_rows[(file, str(row["pid"]), side)] = row["cells"]
+
+    def value(cells: list, prefix: str, file: str) -> str:
+        for classes, v in cells:
+            if prefix in classes and "eco-adjusted-data" in classes:
+                return v
+        raise KeyError(f"{file}: missing the eco-adjusted {prefix} cell")
+
     links, targets, match = [], defaultdict(list), []
     for (file, pid), ids in by_player.items():
-        cells = cells_of.get((file, str(pid)))
-        if cells is None:
-            continue
         rated_sides = [i for i in ids if rounds_a[i] > 0 and rated_a[i] >= MIN_RATED_SHARE * rounds_a[i]]
-        total = rounds_a[ids].sum()
-        if not rated_sides or rated_a[rated_sides].sum() < MIN_RATED_SHARE * total:
+        if not rated_sides or rated_a[rated_sides].sum() < MIN_RATED_SHARE * rounds_a[ids].sum():
             continue
-
-        def value(prefix: str) -> str:
-            for classes, v in cells:
-                if prefix in classes and "eco-adjusted-data" in classes:
-                    return v
-            raise KeyError(f"{file}: missing the eco-adjusted {prefix} cell")
-
+        if rated_a[rated_sides].sum() == rounds_a[ids].sum():
+            # every round rated: HLTV's totals cover exactly the rounds ours average
+            rows, played_rounds, weight = [side_rows.get((file, str(pid), "total"))], [rounds_a[ids].sum()], np.ones(1)
+        else:
+            # each rated side's HLTV value, averaged by its rated rounds, as eco_inputs averages ours
+            rows = [side_rows.get((file, str(pid), side_name[i])) for i in rated_sides]
+            played_rounds, weight = rounds_a[rated_sides], rated_a[rated_sides] / rated_a[rated_sides].sum()
+        if any(cells is None for cells in rows):
+            provenance["no_side_row"] += 1
+            continue
+        side_values = {
+            "ekpr": [float(value(c, "st-kills", file).split()[0]) / n for c, n in zip(rows, played_rounds)],
+            "edpr": [float(value(c, "st-deaths", file).split()[0]) / n for c, n in zip(rows, played_rounds)],
+            "eadr": [float(value(c, "st-adr", file).replace("%", "").replace("+", "")) for c in rows],
+            "ekast": [float(value(c, "st-kast", file).replace("%", "")) for c in rows],
+        }
+        for name, values in side_values.items():
+            targets[name].append(float(weight @ np.asarray(values)))
         row = len(match)
         links.extend((row, i) for i in rated_sides)
-        targets["ekpr"].append(float(value("st-kills").split()[0]) / total)
-        targets["edpr"].append(float(value("st-deaths").split()[0]) / total)
-        targets["eadr"].append(float(value("st-adr").replace("%", "").replace("+", "")))
-        targets["ekast"].append(float(value("st-kast").replace("%", "")))
         match.append(match_of[file])
     duels_out = Duels(
         kills=counts(kills, CELLS), deaths=counts(deaths, CELLS),
@@ -311,6 +349,8 @@ def fit_model(root: Path, joins: list[dict], curves: dict) -> dict:
             "skipped_joins": provenance["skipped_joins"],
             "layouts": provenance["layouts"],
             "skipped": provenance["skipped"],
+            "unknown_group_rounds": provenance["unknown_group_rounds"],
+            "no_side_row": provenance["no_side_row"],
             "duels": d.duels,
             "targets": len(d.match),
         },
@@ -322,8 +362,9 @@ def fit_model(root: Path, joins: list[dict], curves: dict) -> dict:
         "targets": len(d.match),
         "objective_mae": float(np.mean(np.abs(residuals(d, points, weights)))),
         "target_definition": {
-            "predicted": "HLTV eco-adjusted kills and deaths per round, ADR and KAST per player-map, as rating3.ts "
-                         "computes each over the rated rounds of the sides it rates",
+            "predicted": "eco-adjusted kills and deaths per round, ADR and KAST per player-map, as rating3.ts computes "
+                         "each over the rated rounds of the sides it rates, against HLTV's totals when those cover every "
+                         "round, else its side cells for those sides weighted by their rated rounds",
             "error_scale": "each input's error times the rating curve's slope at HLTV's value (params.json "
                            "rating.curves); MAE is in rating points",
         },
