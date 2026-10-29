@@ -177,3 +177,73 @@ def test_a_player_who_left_before_his_counters_were_set_does_not_fail_the_map(tm
     match = pl.read_parquet(ex.resolve_map_dir(tmp_path / "out") / "match.parquet").row(0, named=True)
     # He has no reading, so no departed row; the two who left on the last tick are on the final scoreboard.
     assert (match["n_rounds"], match["departed"]) == (19, "[]")
+
+
+def test_blinds_inside_a_voided_attempt_go_with_its_detonations(tmp_path):
+    # Fixture I (an OpenCS2 Ancient map, 42 rounds): a backup restore voided ticks 208751-228731. A flashbang
+    # detonated on tick 210634 inside it and blinded three players there. The detonation was left out with the
+    # attempt, and the blinds were credited first: no detonation on their tick, and the map failed. 26 OpenCS2
+    # maps failed this way.
+    src = FIXTURES / "fixture-i.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; blinds in a voided attempt are not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    match = pl.read_parquet(d / "match.parquet").row(0, named=True)
+    assert json.loads(match["voided_windows"]) == [[208751, 228731]]
+    blinds = pl.read_parquet(d / "blinds.parquet")
+    assert blinds.filter((pl.col("tick") >= 208751) & (pl.col("tick") <= 228731)).height == 0
+    assert pl.read_parquet(d / "grenade_events.parquet").filter(pl.col("recovered")).height == 0
+
+
+@pytest.mark.parametrize("fixture", ["fixture-j", "fixture-l", "fixture-m", "fixture-n", "fixture-o", "fixture-p"])
+def test_a_sixth_player_who_left_the_teams_before_freeze_end_is_left_out(tmp_path, fixture):
+    # Fixtures J and L-P: OpenCS2 maps kept failed with "side T of round N has 6 players and no sixth slot qualifies to
+    # be left out". In each, a sixth player left the teams before a freeze end (J: to the spectators 25 s before round
+    # 3's ended; others: off the server). His team_num still read his side at that freeze end, where sides are read,
+    # and leaving killed him, so the coach rule refused him. 12 OpenCS2 maps failed so; these are the 6 kept.
+    src = FIXTURES / f"{fixture}.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; a sixth player who left before freeze end is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    excluded = json.loads(pl.read_parquet(d / "match.parquet").row(0, named=True)["excluded_players"])
+    assert len(excluded) == 1 and excluded[0]["reason"].startswith("a sixth slot that left the teams")
+    assert pl.read_parquet(d / "player_rounds.parquet").group_by(["round", "side"]).len()["len"].max() <= 5
+
+
+def test_a_hit_on_a_rounds_start_tick_counts_in_the_round_before(tmp_path):
+    # Fixture K (an OpenCS2 Mirage map, 20 rounds): a post-round hit (26 HP) landed on round 11's start tick,
+    # 91619. The game committed it into the damage counter read there, round 10's game_damage; the hit table put
+    # it in round 11, 26 HP over round 11's counter, and the map failed. 5 OpenCS2 maps failed this way.
+    src = FIXTURES / "fixture-k.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; a hit on a round's start tick is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    hits = pl.read_parquet(d / "damages.parquet").filter(pl.col("tick") == 91619)
+    assert hits.select(["round", "dmg_health_capped"]).rows() == [(10, 26)]
+
+
+@pytest.mark.parametrize("fixture", ["fixture-a", "fixture-i", "fixture-j", "fixture-k"])
+def test_every_damage_row_lies_in_its_rounds_damage_window(tmp_path, fixture):
+    # Review of PR 79 (CodeRabbit): moving start-tick hits to the round before after stamping broke consumers that
+    # take a row's tick to lie in its round (rebuilt hits, sides, engagements). The invariant now holds by
+    # construction: every damage row's tick is in its round's damage window (damage_windows), on a normal map (A) and
+    # on the three 1.18 fixtures (I, J, K; K has a hit on round 11's start tick).
+    src = FIXTURES / f"{fixture}.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; the damage window invariant is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    final_tick = pl.read_parquet(d / "match.parquet").row(0, named=True)["final_tick"]
+    windows = pl.from_pandas(ex.damage_windows(pl.read_parquet(d / "rounds.parquet").to_pandas(), final_tick))
+    dmg = pl.read_parquet(d / "damages.parquet").join(windows, on="round", how="left")
+    assert dmg.height > 0 and dmg["damage_from_tick"].null_count() == 0
+    outside = dmg.filter((pl.col("tick") < pl.col("damage_from_tick")) | (pl.col("tick") > pl.col("damage_to_tick")))
+    assert outside.select(["round", "tick"]).rows() == []
+

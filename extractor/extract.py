@@ -56,7 +56,7 @@ from engagements import (EYE_STANDING, SMOKE_HEIGHT, SMOKE_RADIUS, bot_id, eye_z
                          in_view_cone, mesh_visible, smoke_blocked, visibility_onsets, window_ticks)
 
 SCHEMA_VERSION = 1
-EXTRACTOR_VERSION = "1.17.0"
+EXTRACTOR_VERSION = "1.18.0"
 SOURCES = ("local", "valve", "faceit", "hltv")
 # Mesh visibility is withheld for a map whose mesh disagrees with the demo: at kills that were not
 # wallbangs, the attacker must have mesh line of sight to the victim at least this often. Measured:
@@ -688,7 +688,8 @@ TEAM_SIZE = 5  # HLTV lists five players a team
 
 
 def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
-                   sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame) -> dict[int, str]:
+                   sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame,
+                   moves: pd.DataFrame | None = None) -> dict[int, str]:
     """{steamid: reason} for each team's sixth slot that takes no part in the match: a coach the server
     spawns every round and then kills with damage from no weapon (three HLTV archives of one team: spawned
     in all 19-22 rounds, 17-23 such deaths, no player_death, no kill, no hit on anyone, no shot, grenade or
@@ -704,6 +705,12 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
       and item_purchase);
     - has no bomb event but a pickup on a spawn tick on which another player picks the C4 up too (the
       handoff; bomb: tick, event, steamid).
+    A sixth slot that left the teams before the round went live is left out too (left_before_freeze_end): on one
+    OpenCS2 demo a player took a T slot during a long freeze time and moved to the spectators 25 s before it
+    ended; on others a player left the server in freeze time. His team_num still read his side at that freeze end
+    and later ones, where sides are read, and leaving killed him. moves: tick, steamid, team of each player_team
+    event, and of each disconnect as team 0. He is left out only if that leaves no side short; otherwise he stays,
+    as before.
     Excluding the qualifiers must leave every side of every round exactly TEAM_SIZE players or fewer, with none
     under TEAM_SIZE that was not already (sides: round, steamid, side); otherwise this raises, naming each
     extra player and the conditions he failed, and nobody is excluded.
@@ -741,7 +748,18 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
     out = {s_: "a sixth slot that spawns every round and dies only to its own damage from no weapon, with no kill, "
                "death, hit, shot, grenade, purchase or bomb event (a coach)" for s_ in sorted(players) if not failed[s_]}
     full = sides.groupby(["round", "side"]).steamid.nunique()
-    left = sides[~sides.steamid.isin(list(out))].groupby(["round", "side"]).steamid.nunique().reindex(full.index, fill_value=0)
+    remaining = lambda gone: sides[~sides.steamid.isin(list(gone))].groupby(["round", "side"]).steamid.nunique() \
+        .reindex(full.index, fill_value=0)
+    movers = left_before_freeze_end(rounds, spawns, deaths, hurts, sides, acts, bomb, moves, players - set(out))
+    for s_ in movers:
+        failed[s_] = []
+    if movers:
+        with_movers = remaining(set(out) | movers)
+        if not len(with_movers[(with_movers < TEAM_SIZE) & (with_movers < full)]):
+            out.update({s_: "a sixth slot that left the teams (for the spectators, or the server) before freeze end "
+                            "in every round it held a side, with no kill, hit, shot, grenade or purchase; its only "
+                            "death is its leaving" for s_ in sorted(movers)})
+    left = remaining(set(out))
     short = left[(left < TEAM_SIZE) & (left < full)]
     if len(short):
         (rnd, side), n = next(iter(short.items()))
@@ -754,6 +772,92 @@ def non_combatants(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFr
         detail = {s_: failed.get(s_) for s_ in extra if s_ not in out}
         raise RuntimeError(f"side {side} of round {rnd} has {int(n)} players and no sixth slot qualifies to be left out: "
                            + "; ".join(f"{s_}: {', '.join(f) or 'qualifies'}" for s_, f in detail.items()))
+    return out
+
+
+# Move codes beside player_team's team numbers (left_before_freeze_end): a disconnect, and a player_connect_full.
+DISCONNECTED, CONNECTED = -2, -1
+
+
+def left_before_freeze_end(rounds: pd.DataFrame, spawns: pd.DataFrame, deaths: pd.DataFrame, hurts: pd.DataFrame,
+                           sides: pd.DataFrame, acts: pd.DataFrame, bomb: pd.DataFrame, moves: pd.DataFrame | None,
+                           candidates: set[int]) -> set[int]:
+    """The candidates who left the teams before every counted round they held a side in went live, and did nothing
+    in the match. An allowlist of positive evidence: a candidate qualifies only if all of these hold, and anything
+    else keeps him (non_combatants then refuses the map, as before).
+    - Every round sides counts him in has a recorded freeze_end_tick, and his latest move strictly before it took
+      him off both teams. moves: tick, steamid, team of each player_team event, each disconnect as DISCONNECTED
+      and each player_connect_full as CONNECTED; a departure is a move off teams 2 and 3 (a player_team event to
+      0 or 1, or a disconnect). sides reads team_num at freeze end, and it lags the move (on one OpenCS2 demo it
+      read T at every freeze end from the move on, rounds 3 to 29).
+    - He never comes back: after the departure before his first counted round, no move puts him on team 2 or 3
+      while he is connected. A team change the game logs for a disconnected player (a halftime swap of the slot
+      he left, fixture O) is no return.
+    - Every death naming him is the one the game records for his departure: on a departure tick, with him as both
+      victim and attacker, and no assister. The game writes a team switch and a disconnect alike as a suicide by
+      "world" with the player as attacker (every departure death in fixtures J and L-P), never with no attacker.
+    - Every hit naming him is the same: taken on a departure tick, from himself. He hits no one, and no other
+      player hits him, at any tick; no kill and no assist.
+    - He fires, throws and buys nothing (acts: weapon_fire, grenade_thrown, item_purchase), so he flashes no one.
+    - His only bomb events are the C4 the game hands him at spawn (a pickup on his own spawn tick) and its drop on
+      a departure tick.
+    Holes in earlier forms of this rule, each tested: a round recorded already live (its sides read at end_tick - 1,
+    after a player who left mid-round had played), a death or hit from another player on the departure tick, and a
+    return after the freeze end. deaths and hurts need their tick column; without moves or rounds.freeze_end_tick, nobody
+    qualifies."""
+    if moves is None or not len(moves) or "freeze_end_tick" not in rounds or "tick" not in deaths or "tick" not in hurts:
+        return set()
+    is_ = lambda col, s_: (col.astype("Int64") == s_).fillna(False).to_numpy()
+    moves = moves[moves.steamid.notna()].sort_values("tick", kind="stable")
+    live = {int(r.round): r.freeze_end_tick for r in rounds.itertuples()}
+    out = set()
+    for s_ in candidates:
+        mine = moves[is_(moves.steamid, s_)]
+        gone = set(mine.tick[~mine.team.isin([2, 3, CONNECTED])].astype("int64"))
+        on_side = set(sides["round"][is_(sides.steamid, s_)].astype(int))
+        if not gone or not on_side:
+            continue
+
+        def left_before(r: int) -> bool:
+            fe = live.get(r)
+            if fe is None or pd.isna(fe):
+                return False
+            before = mine[(mine.tick < fe) & (mine.team != CONNECTED)]
+            return len(before) > 0 and before.team.iloc[-1] not in (2, 3)
+
+        if not all(left_before(r) for r in on_side):
+            continue
+        first = live[min(on_side)]
+        departed = mine.tick[(mine.tick < first) & ~mine.team.isin([2, 3, CONNECTED])].max()
+        connected, back = True, False
+        for t, team in zip(mine.tick, mine.team):
+            if team == DISCONNECTED:
+                connected = False
+            elif team == CONNECTED:
+                connected = True
+            elif t > departed and team in (2, 3) and connected:
+                back = True
+        if back:
+            continue
+        if is_(acts.steamid, s_).any():
+            continue
+        kills = is_(deaths.attacker_steamid, s_) & ~is_(deaths.victim_steamid, s_)
+        if kills.any() or is_(deaths.assister_steamid, s_).any():
+            continue
+        died = deaths[is_(deaths.victim_steamid, s_)]
+        if not (died.tick.astype("int64").isin(gone).all() and is_(died.attacker_steamid, s_).all()
+                and died.assister_steamid.isna().all()):
+            continue
+        if (is_(hurts.attacker_steamid, s_) & ~is_(hurts.victim_steamid, s_)).any():
+            continue
+        hit = hurts[is_(hurts.victim_steamid, s_)]
+        if not (hit.tick.astype("int64").isin(gone).all() and is_(hit.attacker_steamid, s_).all()):
+            continue
+        spawned = set(spawns.tick[is_(spawns.steamid, s_)].astype("int64"))
+        c4 = bomb[is_(bomb.steamid, s_)]
+        if all((e in ("pickup", "bomb_pickup") and int(t) in spawned) or (e == "bomb_dropped" and int(t) in gone)
+               for e, t in zip(c4.event, c4.tick)):
+            out.add(s_)
     return out
 
 
@@ -954,6 +1058,51 @@ def assign_rounds(ticks: pd.Series, rounds: pd.DataFrame, voided: list[tuple[int
     return pd.Series(idx.astype(np.int16), index=ticks.index)
 
 
+def damage_windows(rounds: pd.DataFrame, final_tick: int) -> pd.DataFrame:
+    """Each counted round's damage window, (round, damage_from_tick, damage_to_tick), both inclusive: the ticks
+    whose damage the game credits to that round. damage_total commits a round's damage on the next round's start
+    tick, where game_damage_by_round reads it, so the counter read there holds every hit up to and including that
+    tick: a round's window runs from the tick after its own start tick (round 1: from its start tick) through the
+    next round's start tick (the last round: through final_tick). The windows tile the match, and every damage
+    row's tick lies in its round's window (one OpenCS2 map: a post-round hit on round 11's start tick, 91619, is in
+    round 10's counter). Every damage consumer reads this: damage_rounds (player_hurt and the health drops
+    rebuild_lost_hits rebuilds), the counter boundaries, and the engagements' live bounds, which lie inside it."""
+    starts = rounds.start_tick.to_numpy(dtype=np.int64)
+    return pd.DataFrame({"round": rounds["round"].to_numpy(),
+                         "damage_from_tick": np.r_[starts[:1], starts[1:] + 1],
+                         "damage_to_tick": np.r_[starts[1:], np.int64(final_tick)]})
+
+
+def damage_rounds(ticks: pd.Series, windows: pd.DataFrame, voided: list[tuple[int, int]],
+                  game_over: int | None = None) -> pd.Series:
+    """The round whose damage window (damage_windows) holds each tick; 0 before round 1, in a voided restore
+    window ([a, b], as assign_rounds) or after game over."""
+    to = windows.damage_to_tick.to_numpy(dtype=np.int64)
+    frm = windows.damage_from_tick.to_numpy(dtype=np.int64)
+    rnd = windows["round"].to_numpy()
+    t = ticks.to_numpy(dtype=np.int64)
+    i = np.searchsorted(to, t, side="left")
+    inside = (i < len(to)) & (t >= frm[np.minimum(i, len(to) - 1)])
+    out = np.where(inside, rnd[np.minimum(i, len(rnd) - 1)], 0)
+    for a, b in voided:
+        out[(t >= a) & (t <= b)] = 0
+    if game_over is not None:
+        out[t > game_over] = 0
+    return pd.Series(out.astype(np.int16), index=ticks.index)
+
+
+def damage_sides(rounds_of: pd.Series, ids: pd.Series, event_side: pd.Series, snapshot: dict) -> pd.Series:
+    """Each damage row's player side: his side in the row's round from the freeze-end snapshot ({(round, steamid):
+    side}), else the event's. A post-round hit after a halftime switch carries the new half's side in its event;
+    the round it counts in is still the old half (3 rows on the 2,181 published maps differ)."""
+    out = event_side.astype(object).copy()
+    for i, (r, sid) in enumerate(zip(rounds_of, ids)):
+        s_ = None if pd.isna(sid) else snapshot.get((int(r), int(sid)))
+        if s_ is not None:
+            out.iloc[i] = s_
+    return out
+
+
 def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: list[int],
                          baseline: dict[int, int]) -> dict[tuple[int, int], int]:
     """The game's own damage per (round, player), the exact ADR input.
@@ -987,7 +1136,9 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> 
     would rule a player in or out (weapon_fire, grenade detonations) can be lost in the same gap. Every row
     has a null attacker and reconstructed_ambiguous = true; its HP shows up in the hit-table shortfall
     (hit_table_checks). Kills still come from player_death.
-    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass.
+    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass, round from damage_rounds,
+    as a recorded hit's. (No published map has a drop on a start tick: every player respawns at 100 HP there,
+    which hides a hit on it from the networked health.)
     """
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
@@ -1594,6 +1745,13 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         df["round"] = assign_rounds(df.tick, rounds, voided, final_tick)
         return df
 
+    windows = damage_windows(rounds, final_tick)
+
+    def stamp_damage(df: pd.DataFrame) -> pd.DataFrame:
+        """A damage row's round is the one whose damage window holds its tick (damage_windows)."""
+        df["round"] = damage_rounds(df.tick, windows, voided, final_tick) if len(df) else pd.Series([], dtype="int16")
+        return df
+
     # ----- tick samples: positions (4 Hz), freeze ends, final tick
     last_tick = int(ah.get("playback_ticks") or 0)
     with Timer(ctx, "dp_ticks"):
@@ -1635,7 +1793,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         score_at = read_at(src, score_props, [last_end + 1], after=True, guard=guard, rate=rate)
         # The game's damage counter at each round boundary (see game_damage below).
         # A round's damage is committed on the next round's start tick (the last round's by the final tick).
-        boundary = starts[1:] + [final_tick]
+        boundary = [int(t) for t in windows.damage_to_tick]  # starts[1:] + [final_tick]: each window's end
         dmg_counter = pd.concat([read_at(src, ["damage_total"], starts[1:], after=True, guard=guard, rate=rate),
                                  read_at(src, ["damage_total"], [final_tick], after=final_after, guard=guard,
                                          rate=rate)], ignore_index=True).drop_duplicates(["tick", "steamid"])
@@ -1655,19 +1813,24 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     d_, h_, sp_ = in_match(ev("player_death")), in_match(ev("player_hurt")), ev("player_spawn")
     team_rows = econ_raw[econ_raw.team_num.isin([2, 3]) & econ_raw.steamid.notna()]
     tick_round = dict(zip(rounds.team_tick, rounds["round"]))
+    pt_, dc_, cn_ = ev("player_team"), ev("player_disconnect"), ev("player_connect_full")
     excluded = non_combatants(
-        rounds[["round", "start_tick", "end_tick"]],
+        rounds[["round", "start_tick", "end_tick", "freeze_end_tick"]],
         pd.DataFrame({"tick": sp_.tick, "steamid": pid(sp_, "user")}),
-        pd.DataFrame({c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"), ("victim_steamid", "user"),
-                                                 ("assister_steamid", "assister"))}),
-        pd.DataFrame({"attacker_steamid": pid(h_, "attacker"), "victim_steamid": pid(h_, "user"),
+        pd.DataFrame({"tick": d_.tick, **{c: pid(d_, p) for c, p in (("attacker_steamid", "attacker"),
+                                                                     ("victim_steamid", "user"),
+                                                                     ("assister_steamid", "assister"))}}),
+        pd.DataFrame({"tick": h_.tick, "attacker_steamid": pid(h_, "attacker"), "victim_steamid": pid(h_, "user"),
                       "weapon": col(h_, "weapon", None)}),
         pd.DataFrame({"round": team_rows.tick.map(tick_round), "steamid": team_rows.steamid.astype("int64"),
                       "side": team_rows.team_num.map(SIDE)}).dropna(subset=["round"]),
         pd.DataFrame({"steamid": acting_players({n: in_match(ev(n)) for n in ACTING_EVENTS}, pid)}),
         pd.concat([pd.DataFrame({"tick": in_match(ev(n)).tick, "event": n, "steamid": pid(in_match(ev(n)), "user")})
                    for n in ("bomb_pickup", "bomb_dropped", "bomb_beginplant", "bomb_planted", "bomb_abortplant",
-                             "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True))
+                             "bomb_begindefuse", "bomb_defused", "bomb_abortdefuse")], ignore_index=True),
+        pd.concat([pd.DataFrame({"tick": pt_.tick, "steamid": pid(pt_, "user"), "team": col(pt_, "team", None)}),
+                   pd.DataFrame({"tick": dc_.tick, "steamid": pid(dc_, "user"), "team": DISCONNECTED}),
+                   pd.DataFrame({"tick": cn_.tick, "steamid": pid(cn_, "user"), "team": CONNECTED})], ignore_index=True))
     drop_ids = list(excluded)
     if excluded:
         names_ = pos.dropna(subset=["steamid"]).groupby("steamid").name.last()
@@ -1890,7 +2053,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
 
     # ----- damages
     with Timer(ctx, "dp_damages"):
-        h = stamp(ev("player_hurt"))
+        h = stamp_damage(ev("player_hurt"))
         h = h[h["round"] > 0].reset_index(drop=True)
         dmg = pd.DataFrame({"tick": h.tick, "round": h["round"],
                             "attacker_steamid": pid(h, "attacker"),
@@ -1920,6 +2083,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
             for c, s in (("x", "X"), ("y", "Y"), ("z", "Z")):
                 dmg[f"{p_}_{c}"] = col(h, f"{who}_{s}")
             dmg[f"{p_}_place"] = col(h, f"{who}_last_place_name")
+        snapshot = dict(zip(zip(player_rounds["round"].astype(int), player_rounds.steamid.astype("int64")), player_rounds.side))
+        dmg["a_side"] = damage_sides(dmg["round"], dmg.attacker_steamid, dmg.a_side, snapshot)
+        dmg["v_side"] = damage_sides(dmg["round"], dmg.victim_steamid, dmg.v_side, snapshot)
         dmg["distance"] = np.sqrt((dmg.a_x - dmg.v_x) ** 2 + (dmg.a_y - dmg.v_y) ** 2 + (dmg.a_z - dmg.v_z) ** 2)
         dmg["source"] = "event"
 
@@ -2089,6 +2255,10 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         sp = stamp(sp)
         T["spotted"] = sp[sp["round"] > 0]
         bl_raw = pd.concat(blind_parts, ignore_index=True).sort_values(["tick", "steamid"], kind="stable")
+        # A blind outside the counted rounds goes with the detonations there, which gev left out (round 0): inside
+        # a voided attempt, crediting it first found no detonation on its tick and failed the map (26 OpenCS2 maps:
+        # a flashbang_detonate on the blind's own tick, in an attempt a backup restore rolled back).
+        bl_raw = bl_raw[(assign_rounds(bl_raw.tick, rounds, voided, final_tick) > 0).to_numpy()]
         blinds = list(zip(bl_raw.tick, bl_raw.steamid.astype("int64").astype(object), bl_raw.flash_duration.astype(float),
                           bl_raw.X, bl_raw.Y, bl_raw.Z))
 
@@ -2131,7 +2301,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     checker, vis = checked_mesh(S, kills, ctx.mapdata, header.get("map_name"))
 
     # ----- hits the demo's event stream lost, rebuilt from networked health
-    drops = stamp(pd.concat(drop_parts, ignore_index=True))
+    drops = stamp_damage(pd.concat(drop_parts, ignore_index=True))
     dmg["reconstructed_ambiguous"] = False
     dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of)], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
@@ -2184,7 +2354,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # ----- engagement tables
     with Timer(ctx, "dp_engagements"):
         T["engagements"], T["engagement_ticks"] = engagement_tables(
-            S, rounds, shots, dmg, kills, T["smokes"], steam_bit, ctx.velocity, checker, rate)
+            S, rounds.merge(windows[["round", "damage_from_tick"]], on="round"), shots, dmg, kills, T["smokes"], steam_bit,
+            ctx.velocity, checker, rate)
         del S
         ctx.info["visibility"] = vis
 
@@ -2779,7 +2950,9 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
     key = ["tick", "steamid"]
     eyes = _eyes
 
-    bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.start_tick),
+    # Live bounds: freeze end (or, with none recorded, the damage window's first tick) to round end. They lie inside
+    # the round's damage window (damage_windows), so a trigger kept here is a damage row of this round.
+    bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.damage_from_tick),
                              int(r.end_tick)) for r in rounds.itertuples()}
     pair = ENGAGEMENT_PAIR
     d = dmg[dmg.attacker_steamid.notna() & dmg.victim_steamid.notna() & ~dmg.is_team_damage & ~dmg.is_self]
