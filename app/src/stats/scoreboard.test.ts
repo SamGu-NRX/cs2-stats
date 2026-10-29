@@ -27,6 +27,24 @@ it("credits each KAST round to one of kill, assist, survival or trade, in that o
   expect(parts("sv")).toEqual([0, 0, 1, 0, 1]);
 });
 
+it("keeps KAST's survival for a player the world killed, as HLTV counts it", () => {
+  // Issue 18: HLTV counts no death the world dealt, such as a fall: its D leaves one out on 120 of the 123
+  // joined player-maps that have one, and its KAST treats the player as alive. Fails if a world death ends
+  // KAST's survival, in the scoreboard's KAST or in the eco-adjusted one, or stops being a death of ours.
+  const gun = (best_primary: string) => ({ best_primary, equip_value_game: 4000 });
+  const f = oneRound({
+    players: { f: "CT", g: "CT", e: "T" },
+    player_rounds: { f: gun("M4A1-S"), g: gun("M4A1-S"), e: gun("AK-47") },
+    kills: [
+      { tick: t(5), killer: "f", victim: "f", at: { weapon: "world", is_suicide: true } },
+      { tick: t(9), killer: "g", victim: "e" },
+    ],
+  });
+  const m = (id: string, k: "kast" | "kastS" | "deaths" | "survived" | "ecoKast") => f.pr.find((r) => f.players[r.pi].id === id)!.m[k] ?? 0;
+  expect((["kast", "kastS", "deaths", "survived", "ecoKast"] as const).map((k) => m("f", k))).toEqual([1, 1, 1, 0, 1]);
+  expect([m("e", "kast"), m("e", "ecoKast")]).toEqual([0, 0]);
+});
+
 it("counts damage to teammates apart from ADR damage", () => {
   // fails if team damage leaks into dmg or is not recorded
   const hit = (victim: string, team: boolean) => ({ tick: t(3), attacker_steamid: "a", victim_steamid: victim, weapon: "ak47", dmg_health: 27, dmg_health_capped: 27, health_before: 100, is_team_damage: team });
