@@ -8,7 +8,7 @@
 import { contextOf } from "../src/stats/derive";
 import { calibrated, CALIBRATION, CHANCE_FLOOR, hitChance, HIT_AREA_SCALE, projectBox, shotChances, type ShotChance } from "../src/stats/luck";
 import { fitXDuel } from "../src/stats/xduel";
-import { proMaps, WINPROB } from "./node-read";
+import { proMaps } from "./node-read";
 
 /** Shots the bisection sums over: every n-th fitting shot, which keeps each step a few seconds. */
 const FIT_EVERY = 5;
@@ -16,7 +16,7 @@ const FIT_EVERY = 5;
 const fit: ShotChance[] = [], check: ShotChance[] = [];
 let maps = 0;
 for await (const { t } of proMaps()) {
-  const found = shotChances(contextOf(t, WINPROB));
+  const found = shotChances(contextOf(t));
   const shots = found ? found.shots.filter((x) => found.covered.has(x.ri)) : [];
   (maps % 2 === 0 ? fit : check).push(...shots);
   maps++;

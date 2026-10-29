@@ -25,7 +25,7 @@ it("gives a map at the same path, size and time in another library another cache
   const keyOf = async (library: string | null) => {
     serve(library);
     const entry = (await (await createHost()).list()).find((e) => e.file === MAP.file)!;
-    return factsKey(entry, "model");
+    return factsKey(entry);
   };
   const a = await keyOf("C:\\libraries\\a\\demos");
   const b = await keyOf("D:\\libraries\\b\\demos");

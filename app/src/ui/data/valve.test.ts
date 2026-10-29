@@ -3,7 +3,7 @@
 import { expect, it } from "vitest";
 import { derive } from "../../stats/derive";
 import { withPov } from "../../stats/load";
-import { CS2RB, modelFingerprint } from "../../stats/model-params";
+import { CS2RB } from "../../stats/model-params";
 import type { MatchTables } from "../../stats/tables";
 import { oneRoundTables } from "../../stats/testing/match";
 import { factsKey } from "../../worker/keys";
@@ -29,9 +29,8 @@ it("sees a Valve match from the user's SteamID64, which the host passes, not fro
 it("re-derives a Valve match when the user changes", () => {
   // fails if facts derived for one user are served to another from the cache
   const f = { file: "valve/a/v-1-00000000", size: 3, mtime: 1 };
-  const m = modelFingerprint(CS2RB);
-  expect(factsKey({ ...f, pov: "1" }, m)).not.toBe(factsKey({ ...f, pov: "3" }, m));
-  expect(factsKey(f, m)).toBe(factsKey({ ...f }, m));
+  expect(factsKey({ ...f, pov: "1" })).not.toBe(factsKey({ ...f, pov: "3" }));
+  expect(factsKey(f)).toBe(factsKey({ ...f }));
 });
 
 /** An entry from the tables, marked finished (one round cannot finish a match) unless said otherwise. */

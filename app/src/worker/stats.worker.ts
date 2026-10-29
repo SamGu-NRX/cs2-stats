@@ -21,6 +21,8 @@ import { gunProficiency } from "../stats/guns";
 import { contentHash, modelFingerprint, winProbSource, type WinProbSource } from "../stats/model-params";
 import { choosePool, type ChosenPool } from "./baselines-pool";
 import { entryKey as entryKeyOf, factsKey as factsKeyOf, sameEntry } from "./keys";
+import { cachedFacts } from "./cached-facts";
+import { rate } from "../stats/rate";
 import { roundPlaces } from "../stats/positions";
 import { addMatch, addPresence, emptySummary, rollup, type Summary } from "../stats/rollup";
 import { rosterTables, type RosterTables } from "../stats/roster";
@@ -86,7 +88,7 @@ function baselines(): Promise<Baselines> {
 
 // ---- the index, the facts cache and the passes
 
-/** The round win-probability source, set by meta() before any match is derived; facts depend on it. */
+/** The round win-probability source, set by meta() before any match is derived; the facts' ratings depend on it. */
 let wp: WinProbSource | null = null;
 /** The pack wp was read from, for the derive workers (derive-pool.ts), which read it the same way. */
 let wpPack: ArrayBuffer | null = null;
@@ -94,10 +96,10 @@ const source = () => {
   if (!wp) throw new Error("the stats worker derived a match before meta() chose the win-probability source");
   return wp;
 };
-const factsKey = (e: FileEntry) => factsKeyOf(e, modelFingerprint(source()));
+const factsKey = (e: FileEntry) => factsKeyOf(e);
 /** The content hash of the baselines the entries were shown with; set by sync once they load ("none" when they fail). */
 let baselinesHash = "none";
-const entryKey = (k: string) => entryKeyOf(k, baselinesHash);
+const entryKey = (k: string) => entryKeyOf(k, modelFingerprint(source()), baselinesHash);
 
 let index = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
 /**
@@ -167,13 +169,14 @@ function tablesOf(file: string, between?: () => Promise<void>): Promise<RosterTa
   return tables;
 }
 
-async function cached(file: string, key: string, derive: (file: string) => Promise<Cached> = deriveHere): Promise<Cached> {
-  const c = await idbGet<Cached>("facts", key);
-  if (c) return c;
-  const d = await derive(file);
-  await idbPut("facts", key, d);
-  return d;
-}
+/** A file's facts rated with the model in use (cached-facts.ts). */
+const cached = (file: string, key: string, derive: (file: string) => Promise<Cached> = deriveHere): Promise<Cached> => cachedFacts(key, {
+  model: modelFingerprint(source()),
+  get: (k) => idbGet<Cached>("facts", k),
+  put: (k, c) => idbPut("facts", k, c),
+  rate: (c) => rate(c.facts, c.inputs, source()),
+  derive: () => derive(file),
+});
 
 /** One file's facts. `keep` puts them in the in-memory cache (the match views); a pass does not. */
 async function factsOf(file: string, keep: boolean): Promise<MatchFacts> {
