@@ -56,7 +56,7 @@ function Support({ v }: { v: boolean | string }) {
 
 const capitalised = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
 export default function Settings() {
-  const { host, matches, fileErrors, baselines, baselinesError, refresh, lastSync, status, error } = useData();
+  const { host, matches, fileErrors, oneAtATime, baselines, baselinesError, refresh, lastSync, status, error } = useData();
   const input = useRef<HTMLInputElement>(null);
   const [showSamples, setShow] = useState(samplesShown());
   const hide = useHidePersonal();
@@ -91,6 +91,8 @@ export default function Settings() {
               {error && <details><summary>Details</summary><p className="mono selectable">{error}</p></details>}
             </div>
           )}
+          {/* the reason a first scan is slow when the derive workers could not start (derive-pool.ts) */}
+          {oneAtATime && <p className="meta">Parallel reading is unavailable here; matches are read one at a time.</p>}
           <div className="sources">
             <div className="source">
               <div className="source__head"><SourceBadge s={{ id: "recorded", label: SOURCE_LABEL.recorded, missing: [] }} compact /><b className="num source__n">{count("recorded")}</b></div>

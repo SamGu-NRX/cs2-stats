@@ -5,6 +5,7 @@
 // answer every career question of a page from a single pass over the stored matches.
 import type { Host } from "../host/host";
 import type { Api, Call, FromWorker, Method, Result, ToWorker } from "./protocol";
+import { spawnDerivers } from "./derive-spawn";
 
 export type Client = { [K in Method]: (...a: Parameters<Api[K]>) => Promise<Result<K>> } & {
   onProgress(fn: (p: { done: number; total: number }) => void): void;
@@ -31,9 +32,22 @@ export function createClient(host: Host): Client {
   worker.onerror = (e) => fail(e.message || "failed to load");
   worker.onmessageerror = () => fail("a message could not be read");
 
+  // derive workers the stats worker asked for, by request (derive-spawn.ts)
+  const derivers = new Map<number, { stop(): void }>();
   worker.onmessage = async (ev: MessageEvent<FromWorker>) => {
     const m = ev.data;
     if ("progress" in m) return progress(m.progress);
+    if ("spawn" in m) {
+      const team = spawnDerivers(m.n, () => new Worker(new URL("./derive.worker.ts", import.meta.url), { type: "module" }), (i, why) => send({ deriverFailed: m.spawn, i, why }));
+      derivers.set(m.spawn, team);
+      send({ spawned: m.spawn, ports: team.ports }, team.ports);
+      return;
+    }
+    if ("despawn" in m) {
+      derivers.get(m.despawn)?.stop();
+      derivers.delete(m.despawn);
+      return;
+    }
     if ("need" in m) {
       try {
         const bytes = await host.read(m.need);

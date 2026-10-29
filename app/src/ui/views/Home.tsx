@@ -13,7 +13,7 @@ import { MapAtmosphere } from "../components/MapArt";
 import { openMenu, copyText } from "../components/overlay";
 import { hideFile } from "../data/privacy";
 import { AgentImg } from "../components/Agent";
-import { attrsOf, clutchRows, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
+import { attrsOf, clutchRows, unreadOwnFiles, unreadText, entryLine, entryRating, careerEntries, fmtMetric, lineOf, multiKillRows, proPopulation, rankText, ratingHeadline, type OwnEntry } from "../data/engine";
 import { useCall, useMatch, useRatings, useRollups, useYourQuery } from "../data/hooks";
 import { hasMetric, metric, metrics } from "../data/meta";
 import { killSwing, roundMatrix, type MatchEntry } from "../data/match";
@@ -49,13 +49,15 @@ function useTotals(list: MatchEntry[]): Totals | null {
 }
 
 export function HomeView() {
-  const { matches, status } = useData();
+  const { matches, status, fileErrors } = useData();
   const { map, n } = useScope();
   const list = useMemo(() => {
     const f = careerEntries(matches, map);
     return n ? f.slice(0, n) : f;
   }, [matches, map, n]);
   const last = list[0] ?? null;
+  // files failed and none of the user's matches was read: say so rather than "No matches yet"
+  const unread = unreadOwnFiles(matches, fileErrors);
   const t = useTotals(list);
 
   if (status !== "ready" && !matches.length) {
@@ -71,7 +73,7 @@ export function HomeView() {
       <BarContent crumbs={[{ label: "Home" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in home">
         {!last ? (
-          <Card><Empty text="No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+          <Card><Empty text={unread ? `${unreadText(unread)}. Data & settings lists them with the reason.` : "No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings."} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="home__top">

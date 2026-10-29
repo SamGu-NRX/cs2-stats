@@ -299,7 +299,8 @@ export interface Api {
    * returned (the same files with the same entries), so a rescan that finds nothing new, one per window
    * focus, sends nothing back and the views keep what they show.
    */
-  sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[] };
+  /** `oneAtATime`: the derive workers could not start in this runtime, so files are derived one at a time (derive-pool.ts) */
+  sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[]; oneAtATime: boolean };
   /** `viewer`: the steamid the per-player parts are for; null for the recording player, or none on a pro demo */
   match(file: string, viewer: string | null): MatchBundle;
   /** every round of the match, in round row order */
@@ -387,9 +388,16 @@ export interface Call { id: number; method: Method; args: unknown[] }
 
 export type ToWorker =
   | { batch: Call[] }
-  | { rid: number; bytes?: ArrayBuffer; error?: string };
+  | { rid: number; bytes?: ArrayBuffer; error?: string }
+  /** the derive workers the page started for request `spawned` (derive-spawn.ts), a port to each */
+  | { spawned: number; ports: MessagePort[] }
+  /** derive worker `i` of request `deriverFailed` failed to load or crashed */
+  | { deriverFailed: number; i: number; why: string };
 
 export type FromWorker =
   | { id: number; result?: unknown; error?: string }
   | { rid: number; need: string }
-  | { progress: { done: number; total: number } };
+  | { progress: { done: number; total: number } }
+  /** asks the page for `n` derive workers (derive-spawn.ts); `despawn` ends request `spawn`'s */
+  | { spawn: number; n: number }
+  | { despawn: number };

@@ -34,7 +34,7 @@ import { idle, macrotask, readWhenIdle } from "./idle";
 import { toolLoad } from "./tool-tables";
 import { presenceThroughStore, storedStale, type StoredPresence } from "./stored-presence";
 import { genCache } from "./gen-cache";
-import { derivePool, poolSize, type DerivePool } from "./derive-pool";
+import { derivePool, portDeriver, poolSize, type DerivePool, type Deriver } from "./derive-pool";
 import { mapLimit } from "./map-limit";
 import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
 
@@ -115,6 +115,22 @@ const lru = new Map<string, { key: string; facts: MatchFacts }>();
 
 /** The user's SteamID64 for each listed folder that carries one (the user's Valve matches), from the last sync. */
 const povs = new Map<string, string>();
+
+/** The derive workers could not start here, so files were derived in this thread (derive-pool.ts PoolOptions.here). */
+let oneAtATime = false;
+
+/** Derive workers the page started for this worker (derive-spawn.ts), by request, until stopped. */
+let spawnId = 0;
+const spawning = new Map<number, (ports: MessagePort[]) => void>();
+const teams = new Map<number, (Deriver & { fail(why: string): void })[]>();
+/** `n` derive workers from the page, a port to each; `stop` ends them. */
+async function startDerivers(n: number): Promise<{ derivers: Deriver[]; stop(): void }> {
+  const id = ++spawnId;
+  const ports = await new Promise<MessagePort[]>((resolve) => { spawning.set(id, resolve); post({ spawn: id, n }); });
+  const derivers = ports.map(portDeriver);
+  teams.set(id, derivers);
+  return { derivers, stop: () => { teams.delete(id); post({ despawn: id }); } };
+}
 
 /** Derives one file in this thread. */
 const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), source());
@@ -371,7 +387,10 @@ const api: Impl = {
     const missing = rows.flatMap((r, i) => (r === null ? [i] : []));
     // derive workers only for a scan with more than one file to build (derive-pool.ts)
     const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1, (navigator as { deviceMemory?: number }).deviceMemory ?? null) : 0;
-    const pool: DerivePool | null = size >= 2 ? derivePool(size, wpPack, bytes) : null;
+    const team = size >= 2 ? await startDerivers(size) : null;
+    const pool: DerivePool | null = team
+      ? derivePool(team.derivers.length, wpPack, bytes, { deriver: (i) => team.derivers[i], here: deriveHere, fellBack: () => { oneAtATime = true; } })
+      : null;
     try {
       await mapLimit(missing, pool ? size : 1, async (i) => {
         const e = entries[i];
@@ -397,6 +416,7 @@ const api: Impl = {
       });
     } finally {
       pool?.close();
+      team?.stop();
     }
     const errors: { file: string; message: string }[] = [];
     const next = new Map<string, { key: string; ekey: string; entry: MatchEntry }>();
@@ -427,7 +447,7 @@ const api: Impl = {
     const stored = await idbGetMany<StoredPresence>("presence", presenceKeys);
     await idbDelete("presence", presenceKeys.filter((_, i) => storedStale(stored[i], live)));
     listSent = true;
-    return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors };
+    return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors, oneAtATime };
   },
   async match(file, viewer) {
     if (openTables && openTables.file !== file) openTables = null;
@@ -588,6 +608,15 @@ async function run(c: Call) {
 
 self.onmessage = (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
+  if ("spawned" in msg) {
+    spawning.get(msg.spawned)?.(msg.ports);
+    spawning.delete(msg.spawned);
+    return;
+  }
+  if ("deriverFailed" in msg) {
+    teams.get(msg.deriverFailed)?.[msg.i]?.fail(msg.why);
+    return;
+  }
   if ("rid" in msg) {
     const p = pending.get(msg.rid);
     pending.delete(msg.rid);
