@@ -226,3 +226,24 @@ def test_a_hit_on_a_rounds_start_tick_counts_in_the_round_before(tmp_path):
     d = ex.resolve_map_dir(tmp_path / "out")
     hits = pl.read_parquet(d / "damages.parquet").filter(pl.col("tick") == 91619)
     assert hits.select(["round", "dmg_health_capped"]).rows() == [(10, 26)]
+
+
+@pytest.mark.parametrize("fixture", ["fixture-a", "fixture-i", "fixture-j", "fixture-k"])
+def test_every_damage_row_lies_in_its_rounds_damage_window(tmp_path, fixture):
+    # Review of PR 79 (CodeRabbit): moving start-tick hits to the round before after stamping broke consumers that
+    # take a row's tick to lie in its round (rebuilt hits, sides, engagements). The invariant now holds by
+    # construction: every damage row's tick is in its round's damage window (damage_windows), on a normal map (A) and
+    # on the three 1.18 fixtures (I, J, K; K has a hit on round 11's start tick).
+    src = FIXTURES / f"{fixture}.dem"
+    if not src.exists() or not MAPDATA.exists():
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src}; the damage window invariant is not being checked")
+    res = ex.extract_demo(src, tmp_path / "out", source="hltv", mapdata=MAPDATA, archive="fixture")
+    assert res["ok"], res["errors"]
+    d = ex.resolve_map_dir(tmp_path / "out")
+    final_tick = pl.read_parquet(d / "match.parquet").row(0, named=True)["final_tick"]
+    windows = pl.from_pandas(ex.damage_windows(pl.read_parquet(d / "rounds.parquet").to_pandas(), final_tick))
+    dmg = pl.read_parquet(d / "damages.parquet").join(windows, on="round", how="left")
+    assert dmg.height > 0 and dmg["damage_from_tick"].null_count() == 0
+    outside = dmg.filter((pl.col("tick") < pl.col("damage_from_tick")) | (pl.col("tick") > pl.col("damage_to_tick")))
+    assert outside.select(["round", "tick"]).rows() == []
+

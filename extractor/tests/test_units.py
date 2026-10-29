@@ -3176,16 +3176,15 @@ def test_a_player_who_left_but_was_killed_or_hit_by_someone_or_left_as_the_round
         ex.non_combatants(**case)
 
 
-def test_a_moved_start_tick_hit_takes_the_sides_of_its_round():
-    # Review of PR 79 (CodeRabbit): a hit on round 13's start tick, right after halftime, moved to round 12 kept the
-    # event's sides, the new half's. Moved rows take the round's freeze-end sides; without a snapshot row the event
-    # side stays, and unmoved rows keep theirs.
+def test_a_start_tick_hit_takes_the_sides_of_the_round_it_counts_in():
+    # Review of PR 79 (CodeRabbit): a hit on round 13's start tick, right after halftime, counts in round 12 but its
+    # event carries the new half's sides. A damage row takes its round's freeze-end side; without a snapshot row the
+    # event side stays.
     rounds_of = pd.Series([12, 12, 13])
     ids = pd.Series([A, B, A])
     event = pd.Series(["T", "CT", "T"])
     snapshot = {(12, A): "CT", (13, A): "T"}
-    out = ex.moved_hit_sides([True, True, False], rounds_of, ids, event, snapshot)
-    assert out.tolist() == ["CT", "CT", "T"]
+    assert ex.damage_sides(rounds_of, ids, event, snapshot).tolist() == ["CT", "CT", "T"]
 
 
 def test_a_team_change_logged_for_a_player_who_left_the_server_is_no_return():
@@ -3206,22 +3205,23 @@ def test_a_player_who_left_is_kept_when_his_team_has_no_one_else():
 
 def test_a_hit_on_a_rounds_start_tick_goes_to_the_round_before():
     # Fixture K's case: a post-round hit on round 11's start tick is in the counter the game commits there, which is
-    # round 10's game_damage. A hit on round 1's start tick has no round before it; one a tick later stays.
+    # round 10's game_damage. Each round's damage window runs from the tick after its start through the next start;
+    # round 1's opens on its start tick, the last closes on the final tick, and a voided window stamps 0.
     rounds = pd.DataFrame(dict(round=[1, 10, 11], start_tick=[100, 82713, 91619]))
-    ticks = pd.Series([100, 91599, 91619, 91620])
-    stamped = pd.Series([1, 10, 11, 11], dtype="int16")
-    assert ex.hit_rounds(ticks, stamped, rounds).tolist() == [1, 10, 10, 11]
-
+    windows = ex.damage_windows(rounds, 99000)
+    assert windows[["damage_from_tick", "damage_to_tick"]].values.tolist() == [[100, 82713], [82714, 91619], [91620, 99000]]
+    ticks = pd.Series([99, 100, 91599, 91619, 91620, 95000, 99001])
+    assert ex.damage_rounds(ticks, windows, [(94000, 96000)], 99000).tolist() == [0, 1, 10, 10, 11, 0, 0]
 
 def test_a_lost_hit_on_a_rounds_start_tick_is_rebuilt_in_the_round_before():
     # Review of PR 79 (Codex): rebuilt hits kept stamp()'s round, so a lost hit on a round's start tick would stay in
     # the new round while game_damage counts it in the round before. No real demo has one to test with: every player
     # respawns at 100 HP on the start tick (fixture K: 46 HP on 91618, 100 on 91619), so the drop never shows there.
     rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 2000]))
-    drops = pd.DataFrame(dict(tick=[2000, 2500], steamid=[A, A], health_before=[46, 100], health_after=[20, 70],
-                              round=[2, 2]))
+    drops = pd.DataFrame(dict(tick=[2000, 2500], steamid=[A, A], health_before=[46, 100], health_after=[20, 70]))
+    drops["round"] = ex.damage_rounds(drops.tick, ex.damage_windows(rounds, 3000), [], 3000)
     dmg = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.array([], dtype="UInt64")))
     side = {(1, A): "CT", (2, A): "T"}
-    out = ex.rebuild_lost_hits(drops, dmg, side, rounds)
+    out = ex.rebuild_lost_hits(drops, dmg, side)
     assert out[["tick", "round", "v_side", "dmg_health_capped"]].values.tolist() == [[2000, 1, "CT", 26], [2500, 2, "T", 30]]
 

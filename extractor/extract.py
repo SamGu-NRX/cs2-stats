@@ -1058,6 +1058,51 @@ def assign_rounds(ticks: pd.Series, rounds: pd.DataFrame, voided: list[tuple[int
     return pd.Series(idx.astype(np.int16), index=ticks.index)
 
 
+def damage_windows(rounds: pd.DataFrame, final_tick: int) -> pd.DataFrame:
+    """Each counted round's damage window, (round, damage_from_tick, damage_to_tick), both inclusive: the ticks
+    whose damage the game credits to that round. damage_total commits a round's damage on the next round's start
+    tick, where game_damage_by_round reads it, so the counter read there holds every hit up to and including that
+    tick: a round's window runs from the tick after its own start tick (round 1: from its start tick) through the
+    next round's start tick (the last round: through final_tick). The windows tile the match, and every damage
+    row's tick lies in its round's window (one OpenCS2 map: a post-round hit on round 11's start tick, 91619, is in
+    round 10's counter). Every damage consumer reads this: damage_rounds (player_hurt and the health drops
+    rebuild_lost_hits rebuilds), the counter boundaries, and the engagements' live bounds, which lie inside it."""
+    starts = rounds.start_tick.to_numpy(dtype=np.int64)
+    return pd.DataFrame({"round": rounds["round"].to_numpy(),
+                         "damage_from_tick": np.r_[starts[:1], starts[1:] + 1],
+                         "damage_to_tick": np.r_[starts[1:], np.int64(final_tick)]})
+
+
+def damage_rounds(ticks: pd.Series, windows: pd.DataFrame, voided: list[tuple[int, int]],
+                  game_over: int | None = None) -> pd.Series:
+    """The round whose damage window (damage_windows) holds each tick; 0 before round 1, in a voided restore
+    window ([a, b], as assign_rounds) or after game over."""
+    to = windows.damage_to_tick.to_numpy(dtype=np.int64)
+    frm = windows.damage_from_tick.to_numpy(dtype=np.int64)
+    rnd = windows["round"].to_numpy()
+    t = ticks.to_numpy(dtype=np.int64)
+    i = np.searchsorted(to, t, side="left")
+    inside = (i < len(to)) & (t >= frm[np.minimum(i, len(to) - 1)])
+    out = np.where(inside, rnd[np.minimum(i, len(rnd) - 1)], 0)
+    for a, b in voided:
+        out[(t >= a) & (t <= b)] = 0
+    if game_over is not None:
+        out[t > game_over] = 0
+    return pd.Series(out.astype(np.int16), index=ticks.index)
+
+
+def damage_sides(rounds_of: pd.Series, ids: pd.Series, event_side: pd.Series, snapshot: dict) -> pd.Series:
+    """Each damage row's player side: his side in the row's round from the freeze-end snapshot ({(round, steamid):
+    side}), else the event's. A post-round hit after a halftime switch carries the new half's side in its event;
+    the round it counts in is still the old half (3 rows on the 2,181 published maps differ)."""
+    out = event_side.astype(object).copy()
+    for i, (r, sid) in enumerate(zip(rounds_of, ids)):
+        s_ = None if pd.isna(sid) else snapshot.get((int(r), int(sid)))
+        if s_ is not None:
+            out.iloc[i] = s_
+    return out
+
+
 def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: list[int],
                          baseline: dict[int, int]) -> dict[tuple[int, int], int]:
     """The game's own damage per (round, player), the exact ADR input.
@@ -1081,8 +1126,7 @@ def game_damage_by_round(counter: pd.DataFrame, rounds: list[int], boundaries: l
     return rise
 
 
-def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict,
-                      rounds: pd.DataFrame | None = None) -> pd.DataFrame:
+def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict) -> pd.DataFrame:
     """Damage rows for health drops that have no player_hurt event on that tick. They never name an attacker.
 
     GOTV demos can lose a stretch of events: on one pro demo, ticks 9168-9184 have no
@@ -1092,13 +1136,10 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict,
     would rule a player in or out (weapon_fire, grenade detonations) can be lost in the same gap. Every row
     has a null attacker and reconstructed_ambiguous = true; its HP shows up in the hit-table shortfall
     (hit_table_checks). Kills still come from player_death.
-    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass. With rounds (round,
-    start_tick), a drop on a later round's start tick is counted in the round before, as a recorded hit is
-    (hit_rounds). No published map has one: every player respawns at 100 HP on the start tick, which hides a hit
-    there from the networked health.
+    drops: (tick, steamid, health_before, health_after, round) from the every-tick pass, round from damage_rounds,
+    as a recorded hit's. (No published map has a drop on a start tick: every player respawns at 100 HP there,
+    which hides a hit on it from the networked health.)
     """
-    if rounds is not None:
-        drops = drops.assign(round=hit_rounds(drops.tick, drops["round"], rounds))
     have = set(zip(dmg.tick.astype(int), dmg.victim_steamid.astype("Int64")))
     unexplained = np.array([(int(t), int(v)) not in have for t, v in zip(drops.tick, drops.steamid)], dtype=bool)
     lost = drops[(drops["round"] > 0).to_numpy() & unexplained]
@@ -1113,32 +1154,6 @@ def rebuild_lost_hits(drops: pd.DataFrame, dmg: pd.DataFrame, side_of: dict,
                                       "is_team_damage", "a_side", "v_side", "source", "reconstructed_ambiguous"])
     for c in ("attacker_steamid", "victim_steamid"):
         out[c] = to_u64(pd.Series([r[c] for r in rows], index=out.index, dtype=object))
-    return out
-
-
-def hit_rounds(ticks: pd.Series, rounds_of: pd.Series, rounds: pd.DataFrame) -> pd.Series:
-    """The round each hit is counted in: its stamped round, except a hit on a later round's start tick, which goes
-    to the round before. The game commits post-round damage into damage_total on the next round's start tick, and
-    that read is the previous round's game_damage (game_damage_by_round): one OpenCS2 map's post-round hit on
-    round 11's start tick was in round 10's counter and in round 11's hits, 26 HP over round 11's game_damage."""
-    first = int(rounds["round"].min())
-    before = {int(t): int(r) - 1 for t, r in zip(rounds.start_tick, rounds["round"]) if int(r) > first and not pd.isna(t)}
-    prev = ticks.astype("int64").map(before)
-    move = prev.notna() & (rounds_of == prev + 1)
-    return rounds_of.where(~move, prev).astype(rounds_of.dtype)
-
-
-def moved_hit_sides(moved, rounds_of: pd.Series, ids: pd.Series, event_side: pd.Series, snapshot: dict) -> pd.Series:
-    """Each hit's player side: the event's, except on a hit hit_rounds moved to the round before (moved: bool per
-    row), which takes the player's side in that round from the freeze-end snapshot ({(round, steamid): side}). On
-    a start tick right after halftime the event already has the new half's side. Without a snapshot row, the
-    event side stays."""
-    out = event_side.astype(object).copy()
-    for i in np.flatnonzero(moved):
-        sid = ids.iloc[i]
-        s_ = None if pd.isna(sid) else snapshot.get((int(rounds_of.iloc[i]), int(sid)))
-        if s_ is not None:
-            out.iloc[i] = s_
     return out
 
 
@@ -1730,6 +1745,13 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         df["round"] = assign_rounds(df.tick, rounds, voided, final_tick)
         return df
 
+    windows = damage_windows(rounds, final_tick)
+
+    def stamp_damage(df: pd.DataFrame) -> pd.DataFrame:
+        """A damage row's round is the one whose damage window holds its tick (damage_windows)."""
+        df["round"] = damage_rounds(df.tick, windows, voided, final_tick) if len(df) else pd.Series([], dtype="int16")
+        return df
+
     # ----- tick samples: positions (4 Hz), freeze ends, final tick
     last_tick = int(ah.get("playback_ticks") or 0)
     with Timer(ctx, "dp_ticks"):
@@ -1771,7 +1793,7 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         score_at = read_at(src, score_props, [last_end + 1], after=True, guard=guard, rate=rate)
         # The game's damage counter at each round boundary (see game_damage below).
         # A round's damage is committed on the next round's start tick (the last round's by the final tick).
-        boundary = starts[1:] + [final_tick]
+        boundary = [int(t) for t in windows.damage_to_tick]  # starts[1:] + [final_tick]: each window's end
         dmg_counter = pd.concat([read_at(src, ["damage_total"], starts[1:], after=True, guard=guard, rate=rate),
                                  read_at(src, ["damage_total"], [final_tick], after=final_after, guard=guard,
                                          rate=rate)], ignore_index=True).drop_duplicates(["tick", "steamid"])
@@ -2031,10 +2053,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
 
     # ----- damages
     with Timer(ctx, "dp_damages"):
-        h = stamp(ev("player_hurt"))
+        h = stamp_damage(ev("player_hurt"))
         h = h[h["round"] > 0].reset_index(drop=True)
-        stamped = h["round"].copy()
-        h["round"] = hit_rounds(h.tick, h["round"], rounds)
         dmg = pd.DataFrame({"tick": h.tick, "round": h["round"],
                             "attacker_steamid": pid(h, "attacker"),
                             "victim_steamid": pid(h, "user"),
@@ -2064,9 +2084,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
                 dmg[f"{p_}_{c}"] = col(h, f"{who}_{s}")
             dmg[f"{p_}_place"] = col(h, f"{who}_last_place_name")
         snapshot = dict(zip(zip(player_rounds["round"].astype(int), player_rounds.steamid.astype("int64")), player_rounds.side))
-        moved = (h["round"] != stamped).to_numpy()
-        dmg["a_side"] = moved_hit_sides(moved, dmg["round"], dmg.attacker_steamid, dmg.a_side, snapshot)
-        dmg["v_side"] = moved_hit_sides(moved, dmg["round"], dmg.victim_steamid, dmg.v_side, snapshot)
+        dmg["a_side"] = damage_sides(dmg["round"], dmg.attacker_steamid, dmg.a_side, snapshot)
+        dmg["v_side"] = damage_sides(dmg["round"], dmg.victim_steamid, dmg.v_side, snapshot)
         dmg["distance"] = np.sqrt((dmg.a_x - dmg.v_x) ** 2 + (dmg.a_y - dmg.v_y) ** 2 + (dmg.a_z - dmg.v_z) ** 2)
         dmg["source"] = "event"
 
@@ -2282,9 +2301,9 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     checker, vis = checked_mesh(S, kills, ctx.mapdata, header.get("map_name"))
 
     # ----- hits the demo's event stream lost, rebuilt from networked health
-    drops = stamp(pd.concat(drop_parts, ignore_index=True))
+    drops = stamp_damage(pd.concat(drop_parts, ignore_index=True))
     dmg["reconstructed_ambiguous"] = False
-    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of, rounds)], ignore_index=True)
+    dmg = pd.concat([dmg, rebuild_lost_hits(drops, dmg, side_of)], ignore_index=True)
     # The concat can leave these as object columns of Python bools, where ~ is integer inversion (-2/-1),
     # not negation; every filter below relies on real booleans.
     dmg = dmg.astype({"is_self": bool, "is_team_damage": bool, "reconstructed_ambiguous": bool}) \
@@ -2335,7 +2354,8 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     # ----- engagement tables
     with Timer(ctx, "dp_engagements"):
         T["engagements"], T["engagement_ticks"] = engagement_tables(
-            S, rounds, shots, dmg, kills, T["smokes"], steam_bit, ctx.velocity, checker, rate)
+            S, rounds.merge(windows[["round", "damage_from_tick"]], on="round"), shots, dmg, kills, T["smokes"], steam_bit,
+            ctx.velocity, checker, rate)
         del S
         ctx.info["visibility"] = vis
 
@@ -2930,7 +2950,9 @@ def engagement_tables(S, rounds, shots, dmg, kills, smokes, steam_bit, velocity,
     key = ["tick", "steamid"]
     eyes = _eyes
 
-    bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.start_tick),
+    # Live bounds: freeze end (or, with none recorded, the damage window's first tick) to round end. They lie inside
+    # the round's damage window (damage_windows), so a trigger kept here is a damage row of this round.
+    bounds = {int(r.round): (int(r.freeze_end_tick) if not pd.isna(r.freeze_end_tick) else int(r.damage_from_tick),
                              int(r.end_tick)) for r in rounds.itertuples()}
     pair = ENGAGEMENT_PAIR
     d = dmg[dmg.attacker_steamid.notna() & dmg.victim_steamid.notna() & ~dmg.is_team_damage & ~dmg.is_self]
