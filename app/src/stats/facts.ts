@@ -428,3 +428,6 @@ const ZERO_MEASURES = Object.freeze(Object.fromEntries(MEASURES.map((k) => [k, 0
  * and adds into every key (creating and filling one was about 4 times slower under node).
  */
 export const emptyMeasures = (): Measures => ({ ...ZERO_MEASURES });
+
+/** The measures that are not 0, in MEASURES order: how facts keep a player-round's measures. */
+export const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));

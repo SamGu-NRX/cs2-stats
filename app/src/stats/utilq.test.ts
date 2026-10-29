@@ -1,6 +1,5 @@
 // Smoke crediting on a hand-built one-round match: CT player "a" (team A) and T player "b" (team B),
 // whose mesh line of sight opens through smoke at tick 500 (by default in both directions).
-import { CS2RB } from "./model-params";
 import { expect, it } from "vitest";
 import { buildCtx } from "./derive";
 import { emptyTable, SCHEMA, type MatchTables, type Table, type TableName } from "./tables";
@@ -36,7 +35,7 @@ function facts(smokes: Record<string, unknown>[], dirs: ("ab" | "ba")[] = ["ba",
     engagements: table("engagements", dirs.map((d, id) => eng(id, d[0] as "a" | "b", d[1] as "a" | "b"))),
     engagement_ticks: table("engagement_ticks", dirs.flatMap((d, id) => Array.from({ length: ticks }, (_, k) => tick(id, d[0] as "a" | "b", d[1] as "a" | "b", k)))), purchases: null, leaves: null,
   };
-  return deriveUtilQ(buildCtx(rosterTables(t), CS2RB));
+  return deriveUtilQ(buildCtx(rosterTables(t)));
 }
 const sights = (smokes: Record<string, unknown>[], dirs?: ("ab" | "ba")[]) => facts(smokes, dirs).map((f) => f.sights);
 

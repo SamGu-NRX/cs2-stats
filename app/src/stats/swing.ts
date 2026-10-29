@@ -6,10 +6,9 @@
 // The kill shares and the defuse share follow params.json swing.event_credit, fitted to HLTV's own
 // credits by model/rating3/swing_credit_fit.py. The winners' split of a time-out is ours (HLTV's is
 // not recovered). VALIDATION.md compares the result with HLTV's per-player swing.
-import { blindWindows } from "./blinds";
 import { PARAMS as params } from "./model-params";
-import { enemyHit, hitDamage, type Ctx } from "./derive";
 import type { KillFact, Measures } from "./facts";
+import type { RateCtx } from "./rate";
 import { roundPopulation } from "./rules";
 import type { Side } from "./tables";
 import { pTWins, type RoundState } from "./winprob";
@@ -19,7 +18,8 @@ const E = params.swing.event_credit;
 /** P(the side) wins, from P(T wins). */
 const pSide = (pT: number, s: Side) => (s === "T" ? pT : 1 - pT);
 
-export function swing(c: Ctx): void {
+export function swing(c: RateCtx): void {
+  const D = c.inputs.damages;
   for (let ri = 0; ri < c.nRounds; ri++) {
     const rf = c.rounds[ri];
     const rows = c.pr[ri];
@@ -30,14 +30,13 @@ export function swing(c: Ctx): void {
     // health of the living, from the round's damage up to each event (CS2RB reads it)
     const hp = new Map<number, number>();
     rows.forEach((p) => { if (p) hp.set(p.pi, 100); });
-    const dmgRows = c.byRound("damages")[ri];
+    const dmgRows = c.damagesBy[ri];
     let nextDmg = 0;
     const hpUntil = (tick: number) => {
-      const d = c.t.damages;
-      for (; nextDmg < dmgRows.length && d.tick[dmgRows[nextDmg]] <= tick; nextDmg++) {
+      for (; nextDmg < dmgRows.length && D.tick[dmgRows[nextDmg]] <= tick; nextDmg++) {
         const i = dmgRows[nextDmg];
-        const v = c.pi.get(d.victim_steamid[i])!;
-        if (hp.has(v)) hp.set(v, Math.max(0, d.health_after[i] ?? hp.get(v)! - d.dmg_health_capped[i]));
+        const v = D.victim[i];
+        if (v !== null && hp.has(v)) hp.set(v, Math.max(0, D.healthAfter[i] ?? hp.get(v)! - D.healthCapped[i]));
       }
       const sum = (s: Side) => [...alive[s]].reduce((t, p) => t + Math.min(100, hp.get(p) ?? 100), 0);
       state.hpT = sum("T"); state.hpCT = sum("CT");
@@ -56,7 +55,7 @@ export function swing(c: Ctx): void {
     };
     let pT = at(fe ?? 0);
     if (pT === null) continue;
-    const path: NonNullable<typeof rf.winProb> = [{ tick: fe ?? c.t.rounds.start_tick[ri] ?? 0, event: "start", pT }];
+    const path: NonNullable<typeof rf.winProb> = [{ tick: fe ?? c.inputs.startTick[ri] ?? 0, event: "start", pT }];
     const credit = new Map<number, number>();
     const add = (p: number, v: number) => credit.set(p, (credit.get(p) ?? 0) + v);
     const part = { opening: new Map<number, number>(), clutch: new Map<number, number>(), awp: new Map<number, number>(), flash: new Map<number, number>() };
@@ -143,10 +142,10 @@ export function swing(c: Ctx): void {
       // within the trade window the trade weight.
       const shares: { pl: number; w: number; to: Map<number, number> }[] = [];
       for (const i of dmgRows) {
-        if (c.t.damages.tick[i] > k.tick || c.t.damages.victim_steamid[i] !== c.players[k.victim].id || !enemyHit(c.t, i)) continue;
-        const a = c.idOf(c.t.damages.attacker_steamid[i]);
-        if (a === null || c.side[ri][a] !== gainer) continue;
-        shares.push({ pl: a, w: hitDamage(c.t, i), to: a === k.killer ? own : source.damage });
+        if (D.tick[i] > k.tick || D.victim[i] !== k.victim || !D.enemy[i]) continue;
+        const a = D.attacker[i];
+        if (a === null || c.inputs.side[ri][a] !== gainer) continue;
+        shares.push({ pl: a, w: D.dmg[i], to: a === k.killer ? own : source.damage });
       }
       let failed: KillFact | undefined;
       if (k.enemy && k.killer !== null) {
@@ -241,15 +240,19 @@ function evenly(players: Iterable<number>, total: number): [number, number][] {
   return list.map((p) => [p, total / list.length]);
 }
 
-/** Players on the gaining side whose flash was blinding the victim at the kill (SPEC.md's eligible flashes). */
-function flashersOf(c: Ctx, ri: number, k: KillFact, gainer: Side): number[] {
+/**
+ * Players on the gaining side whose flash was blinding the victim at the kill (SPEC.md's eligible
+ * flashes), from the blinds blinds.ts joined, so a duplicated row does not count its flasher twice
+ * (rate.ts RatingInputs.blinds).
+ */
+function flashersOf(c: RateCtx, ri: number, k: KillFact, gainer: Side): number[] {
+  const B = c.inputs.blinds;
   const out: number[] = [];
-  // repeated blind rows joined (blinds.ts), so a duplicated row does not count its flasher twice
-  for (const b of blindWindows(c.t).get(c.rounds[ri].number) ?? []) {
-    if (b.team || b.self || b.ambiguous || b.tick > k.tick || k.tick > b.tick + b.secs * c.tickRate) continue;
-    if (c.pi.get(b.victim) !== k.victim) continue;
-    const a = c.idOf(b.attacker);
-    if (a !== null && a !== k.killer && c.side[ri][a] === gainer) out.push(a);
+  for (const i of c.blindsBy[ri]) {
+    if (B.tick[i] > k.tick || k.tick > B.tick[i] + B.secs[i] * c.tickRate) continue;
+    if (B.victim[i] !== k.victim) continue;
+    const a = B.attacker[i];
+    if (a !== null && a !== k.killer && c.inputs.side[ri][a] === gainer) out.push(a);
   }
   return out;
 }
