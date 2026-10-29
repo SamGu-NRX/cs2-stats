@@ -350,7 +350,7 @@ const api: Impl = {
     const b = await baselines();
     return { source: b.source, built: b.built, n: b.n, model: b.model ?? "", pool: chosen!.pool, localError: chosen!.localError };
   },
-  async sync(entries) {
+  async sync(entries, opts) {
     // entries are keyed by the baselines they were shown against
     await baselines().catch(() => undefined);
     povs.clear();
@@ -386,7 +386,7 @@ const api: Impl = {
     }
     const missing = rows.flatMap((r, i) => (r === null ? [i] : []));
     // derive workers only for a scan with more than one file to build (derive-pool.ts)
-    const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1, (navigator as { deviceMemory?: number }).deviceMemory ?? null) : 0;
+    const size = missing.length > 1 ? opts?.derivers ?? poolSize(navigator.hardwareConcurrency || 1, (navigator as { deviceMemory?: number }).deviceMemory ?? null) : 0;
     const team = size >= 2 ? await startDerivers(size) : null;
     const pool: DerivePool | null = team
       ? derivePool(team.derivers.length, wpPack, bytes, { deriver: (i) => team.derivers[i], here: deriveHere, fellBack: () => { oneAtATime = true; } })
