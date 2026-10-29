@@ -483,6 +483,79 @@ public class WriterTests
         }
     }
 
+    // A session of 20261028T024855Z_de_dust2_6f326db6: the map loaded, no match began, and the capture was
+    // ended "complete" with one round sealed open: no winner, no player ever on a side, no kill.
+    private static MatchMeta EmptySession(int recorderSide) => new()
+    {
+        Id = "6f326db6-0000-0000-0000-000000000000", Map = "de_dust2", StartUtc = "2026-10-28T02:48:55Z", Status = "complete",
+        Players = new[]
+        {
+            new PlayerInfo { Key = "76561190000000001", Name = "me", IsBot = false, StartSide = recorderSide },
+            new PlayerInfo { Key = "B:damyo", Name = "damyo", IsBot = true, StartSide = Nil.V },
+        },
+    };
+
+    private static void SubmitSession(MatchWriter w, MatchMeta meta, JobKind kind)
+    {
+        var buf = w.Rent();
+        var round = new RoundRow();
+        round.Reset(0);
+        buf.AddRound(round);
+        w.Submit(new WriteJob { Kind = kind, Buffer = buf, Meta = meta.Clone() });
+        Assert.True(w.Drain(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public void WritesNoMatchForASessionInWhichNothingWasPlayed()
+    {
+        // Fails if a capture with no round won and no player ever on a side is written as a finished match
+        // (the app read it and failed "the recording player never had a side"), if its in-progress file is
+        // left behind, or if a capture with a player on a side is no longer written.
+        string root = Path.Combine(Path.GetTempPath(), "bms-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var w = new MatchWriter(root, null);
+            var empty = EmptySession(Nil.V);
+            SubmitSession(w, empty, JobKind.InProgress);
+            string inprog = Path.Combine(w.InProgressDir, empty.BaseName + ".json.gz");
+            Assert.True(File.Exists(inprog));
+            SubmitSession(w, empty, JobKind.Final);
+            Assert.False(File.Exists(inprog));
+            Assert.False(File.Exists(Path.Combine(w.MatchesDir, "2026", empty.BaseName + ".json.gz")));
+            Assert.Contains(Drain(w), m => m.Text.Contains("nothing written"));
+
+            var played = EmptySession(3); // the recording player started CT
+            played.Id = "0badf00d-0000-0000-0000-000000000000";
+            SubmitSession(w, played, JobKind.Final);
+            Assert.True(File.Exists(Path.Combine(w.MatchesDir, "2026", played.BaseName + ".json.gz")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void DiscardsAStaleInProgressSessionInWhichNothingWasPlayed()
+    {
+        // Fails if a stale in-progress file of such a session is written out as an abandoned match.
+        string root = Path.Combine(Path.GetTempPath(), "bms-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var w = new MatchWriter(root, null);
+            var empty = EmptySession(Nil.V);
+            SubmitSession(w, empty, JobKind.InProgress);
+            w.RequestScan(empty.Map, empty.GameStart + 100, 1);
+            Assert.True(w.Drain(TimeSpan.FromSeconds(10)));
+            Assert.False(File.Exists(Path.Combine(w.InProgressDir, empty.BaseName + ".json.gz")));
+            Assert.False(File.Exists(Path.Combine(w.MatchesDir, "2026", empty.BaseName + ".json.gz")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private static List<WorkerMessage> Drain(MatchWriter w)
     {
         var l = new List<WorkerMessage>();

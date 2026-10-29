@@ -69,13 +69,23 @@ function pov(file: string, f: MatchFacts): { you: number; usTeam: 0 | 1 } {
 
 const resultOf = (us: number, them: number): MatchEntry["result"] => (us > them ? "W" : us < them ? "L" : "T");
 
+/**
+ * No match was played: no player ever had a side and no round has a winner, as in a session the plugin
+ * saved before any match began (a map loaded and left, or a deathmatch). Such a file has no recording
+ * player's side to show it from. Its entry is nobody's and has no activity, so no list and no career
+ * number counts it, and it is not reported as unreadable. The plugin no longer writes one (MatchStore
+ * NothingPlayed); files saved earlier stay on disk.
+ */
+const noMatch = (f: MatchFacts) => f.players.every((p) => p.team === null) && !f.rounds.some((r) => r.winner !== null);
+
 
 /**
  * A match's entry in the list. A pro demo (isProFile) has no recording player whatever its file
  * says: `you` and `line` are null, and the team that started CT stands in as "us" for the layout.
  */
 export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry {
-  const { you, usTeam } = isProFile(file) ? { you: null, usTeam: 0 as const } : pov(file, f);
+  const empty = !isProFile(file) && noMatch(f);
+  const { you, usTeam } = isProFile(file) || empty ? { you: null, usTeam: 0 as const } : pov(file, f);
   const s = you === null ? null : rollup([f], { player: f.players[you].id });
   const us = f.match.score[usTeam];
   const them = f.match.score[1 - usTeam];
@@ -84,7 +94,7 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     score: { us, them }, result: resultOf(us, them),
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
     shots: s ? s.aim.shots : 0, kills: f.kills.length, line: s && lineOf(s), played: f.players.map((p) => p.id).filter((id) => playedMatch(f, id)),
-    activity: f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0),
+    activity: !empty && (f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0)),
   };
 }
 

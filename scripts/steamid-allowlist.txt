@@ -2,7 +2,7 @@
 # is not a real person's: a bot in a plugin fixture, a synthetic test id, or a named constant. Any other
 # SteamID64 fails the check. Add one only with a reason that holds.
 
-76561190000000001 synthetic test id (account numbers 1 to 99 below the public universe's range) in app/public/samples/synthetic-demo.json.gz, app/src/stats/plugin/adapter.test.ts
+76561190000000001 synthetic test id (account numbers 1 to 99 below the public universe's range) in app/public/samples/synthetic-demo.json.gz, app/src/stats/plugin/adapter.test.ts, plugin/BotMatchStats.Tests/RecorderTests.cs
 76561190000000002 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_engagements.py, extractor/tests/test_units.py
 76561190000000011 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py, app/src/ui/views/match/viewer.test.tsx
 76561190000000012 synthetic test id (account numbers 1 to 99 below the public universe's range) in extractor/tests/test_units.py, app/src/ui/views/match/viewer.test.tsx
