@@ -15,7 +15,7 @@ function kill(ri: number, killer: number | null, victim: number, over: Partial<K
   return {
     ri, tick: 1000 + victim, t: 10, killer, victim, assister: null, flashAssist: false, killerSide: "T", victimSide: "CT", weapon: "ak47", victimWeapon: "m4a1",
     headshot: false, wallbang: false, smoke: false, noscope: false, killerBlind: false, killerInAir: false, kpos: null, vpos: null, place: null,
-    enemy: true, opening: false, tradeKill: false, traded: false, ecoPoints: null, credits: [], ...over,
+    enemy: true, opening: false, tradeKill: false, traded: false, ecoPoints: null, aGroup: null, vGroup: null, credits: [], ...over,
   };
 }
 

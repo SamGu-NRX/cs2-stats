@@ -6,6 +6,7 @@ import type { BuyClass, BuyTier } from "./economy";
 import type { InfoFact } from "./information";
 import type { MoveFact } from "./movement";
 import type { UtilQFact } from "./utilq";
+import type { EcoGroup } from "./rating3";
 import type { OffRoster } from "./roster";
 import type { Side } from "./tables";
 
@@ -15,7 +16,8 @@ import type { Side } from "./tables";
 // 35: swing shares each kill by HLTV's per-kill weights (params.json swing.event_credit); eco-adjusted KAST
 // counts survival only in a won round; the vK3-5Rounds measures for the per-side Rating 3.0
 // 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
-export const DERIVE_VERSION = 36;
+// 37: kill facts carry their duel groups (aGroup, vGroup) and player-rounds their freeze-end group (ecoGroup)
+export const DERIVE_VERSION = 37;
 
 export interface MatchInfo {
   id: string;
@@ -209,6 +211,11 @@ export interface KillFact {
   traded: boolean;
   /** eco-adjusted value of the kill (rating3.ts killPoints); null when a duel group is unknown */
   ecoPoints: number | null;
+  /** the killer's and victim's economy groups ecoPoints used (rating3.ts ecoAdjust: the best primary held at the
+   * kill, else the equipment value, else the freeze-end group); null on a kill that is not an enemy kill or whose
+   * group is unknown. The rating dump exports them, so model/rating3/eco_fit.py fits on the app's groups. */
+  aGroup: EcoGroup | null;
+  vGroup: EcoGroup | null;
   /** swing credits [player, win-probability points]; empty when the round is not valued */
   credits: [number, number][];
 }
@@ -307,6 +314,9 @@ export interface PlayerRound {
   aliveAtStart: boolean | null;
   /** the primary in hand at freeze end */
   primary: string | null;
+  /** the freeze-end economy group the round's eco-adjusted damage uses (best primary, else equipment value); null
+   * when unknown (rating3.ts ecoAdjust) */
+  ecoGroup: EcoGroup | null;
   /** spawn point, "x,y" rounded to 16 units (players cannot move before freeze end); null without positions */
   spawn: string | null;
   /** the map's place name at the spawn point ("TSpawn"; positions.place), null when the sample has none */

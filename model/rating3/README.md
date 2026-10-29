@@ -7,7 +7,7 @@ This directory contains the public Rating 3.02 approximation, its fitting entry 
 Use the model virtual environment and isolated Python mode. The fitter reads the private HLTV files, the strict joins and the engine's rating dump (run `pnpm rating-dump` in `app/` first), then emits every public block in `params.json`; it does not read a base parameter file. Run the commands from the repository root; `<cs2-stats-data>` is the private data folder.
 
 ```text
-model\.venv\Scripts\python.exe -I model\rating3\fit_params.py --data <cs2-stats-data> --hltv <cs2-stats-data>\hltv --joins <cs2-stats-data>\model-rating3\demo_joins.json --out model\rating3\params.json --date 2026-10-25
+model\.venv\Scripts\python.exe -I model\rating3\fit_params.py --data <cs2-stats-data> --hltv <cs2-stats-data>\hltv --joins <cs2-stats-data>\model-rating3\demo_joins.json --out model\rating3\params.json --date 2026-10-28
 ```
 
 The command fits the per-side rating block (`side_rating_fit.py`), the Swing kill-credit weights (`swing_credit_fit.py`), the duel/economy block, dataset metadata, input definitions, and win-probability source declaration. It prints a readable formula from the emitted coefficients; the formula is not duplicated as a string in `params.json`.
