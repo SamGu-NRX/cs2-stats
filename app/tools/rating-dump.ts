@@ -1,11 +1,12 @@
 // Writes the engine's per-player-round rows for every pro map joined to HLTV, beside HLTV's own
 // per-round swing, for the Rating 3.0 fits in model/rating3 (fit_params.py, swing_credit_fit.py). The joins
 // are model/rating3/join_demos.py's (<data>/model-rating3/demo_joins.json, or CS2_DEMO_JOINS): its HLTV page,
-// map_*.json or ocs_map_*.json, and its pairing of SteamIDs with HLTV players, so a renamed player pairs. Four
+// map_*.json or ocs_map_*.json, and its pairing of SteamIDs with HLTV players, so a renamed player pairs. Five
 // private JSONL files land in <cs2-stats-data>/model-rating3: player-round rows (every measure the
 // engine fills), kill rows (both players' economy state and the swing credits), enemy-hit rows (damage
-// per hit) and each round's win-probability path. Each is written beside its final name and renamed
-// into place at the end, so a reader never sees a half-written file.
+// per hit), each round's win-probability path, and each map's join record and table layout. Each is
+// written beside its final name and renamed into place at the end, so a reader never sees a half-written
+// file.
 // Usage: pnpm rating-dump
 import { createWriteStream, mkdirSync, readFileSync, type WriteStream } from "node:fs";
 import path from "node:path";
@@ -13,7 +14,7 @@ import { derive } from "../src/stats/derive";
 import { acceptedJoins, joinFromRecord } from "./demo-joins";
 import { HLTV_DIR, parseHltvMap } from "./hltv";
 import { finishPartials } from "./partial-files";
-import { hitRows, killRows } from "./rating-rows";
+import { hitRows, joinRow, killRows } from "./rating-rows";
 import { checkOutput } from "./outputs";
 import { DATA_DIR, WINPROB, mapLabel, proMaps } from "./node-read";
 
@@ -31,6 +32,7 @@ const rows = open("rating-rounds.private.jsonl");
 const kills = open("rating-kills.private.jsonl");
 const hits = open("rating-hits.private.jsonl");
 const paths = open("rating-winprob.private.jsonl");
+const joined = open("rating-joins.private.jsonl");
 
 const joinsFile = process.env.CS2_DEMO_JOINS ?? path.join(OUT, "demo_joins.json");
 const joins = acceptedJoins(JSON.parse(readFileSync(joinsFile, "utf-8")));
@@ -69,6 +71,7 @@ for await (const { dir, t } of proMaps()) {
   for (const rf of f.rounds) {
     paths.write(JSON.stringify({ hltv: j.hltv.file, ri: rf.ri, number: rf.number, winner: rf.winner, reason: rf.reason, ctTeam: rf.ctTeam, endTick: rf.endTick, plantTick: rf.plantTick, buy: rf.buy, equip: rf.equip, path: rf.winProb }) + "\n");
   }
+  joined.write(JSON.stringify(joinRow(rec, j, dir)) + "\n");
   for (const row of killRows(f, t, j)) kills.write(JSON.stringify(row) + "\n");
   for (const row of hitRows(f, t, j)) hits.write(JSON.stringify(row) + "\n");
 }

@@ -31,7 +31,8 @@ def empty_provenance() -> dict:
     }
 
 
-DUMP = ("rating-kills.private.jsonl", "rating-hits.private.jsonl", "rating-winprob.private.jsonl")
+DUMP = ("rating-joins.private.jsonl", "rating-kills.private.jsonl", "rating-hits.private.jsonl",
+        "rating-winprob.private.jsonl")
 
 
 def jsonl(path: Path):
@@ -50,7 +51,8 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None):
     block that scored worse in the app (rating MAE 0.0467 against 0.0429 on 1,610 joined maps). A kill or hit
     whose groups the app did not know is left out, as the app leaves it. Players are keyed by HLTV player id, as
     the dump keys them; targets are their HLTV eco-adjusted cells. A joined map missing from the dump is skipped,
-    named in provenance."""
+    named in provenance. The dump records the join (demo folder, pairing) and table layout each map's rows came
+    from; a map dumped under another join than the one given raises, since its rows would pair other players."""
     provenance = provenance if provenance is not None else empty_provenance()
     folder = root / "model-rating3"
     missing = [n for n in DUMP if not (folder / n).exists()]
@@ -61,14 +63,19 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None):
     for r in jsonl(folder / "rating-winprob.private.jsonl"):
         if r["hltv"] in wanted:
             rounds[r["hltv"]] += 1
+    dumped = {r["hltv"]: r for r in jsonl(folder / "rating-joins.private.jsonl")}
     match_of = {}
-    for file in wanted:
-        if file not in rounds:
+    for file, join in wanted.items():
+        d = dumped.get(file)
+        if d is None:
             provenance["skipped_joins"] += 1
-            provenance["skipped"].append({"demo": wanted[file]["demo"], "reason": "not in the rating dump"})
+            provenance["skipped"].append({"demo": join["demo"], "reason": "not in the rating dump"})
             continue
+        if d["demo"] != join["demo"] or d["players"] != join["players"]:
+            raise ValueError(f"{file}: the rating dump holds it from another join (demo {d['demo']}, or another "
+                             f"pairing) than {join['demo']}'s; run pnpm rating-dump in app/ again")
         provenance["consumed_joins"] += 1
-        provenance["layouts"]["schema_v1"] += 1
+        provenance["layouts"][d["layout"]] += 1
         match_of[file] = str(json.loads((root / "hltv" / file).read_text(encoding="utf-8")).get("match", {}).get("matchId", file))
     rows, duels = [], []
     known = lambda r: r["aGroup"] in INDEX and r["vGroup"] in INDEX

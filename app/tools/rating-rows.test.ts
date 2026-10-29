@@ -1,8 +1,11 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { killPoints, type EcoGroup } from "../src/stats/rating3";
 import { FREEZE_END, oneRound, oneRoundTables, type OneRound } from "../src/stats/testing/match";
 import type { HltvJoin, HltvLine, HltvMap, HltvPlayer } from "./hltv";
-import { hitRows, killRows } from "./rating-rows";
+import { hitRows, joinRow, killRows, tablesLayout } from "./rating-rows";
 
 // One round: CT a (AWP at freeze end) and d, T b (AK-47 at freeze end) and c (no primary, $900 of equipment).
 // Kill groups come from the best primary held at the kill (a), from the equipment value at the kill (c), or from
@@ -59,5 +62,31 @@ describe("the rating dump's duel groups", () => {
       expect(ecoDmg.get(`pid-${f.players[r.pi].id}`) ?? 0).toBeCloseTo(r.m.ecoDmg ?? 0, 9);
     }
     expect(Math.max(...f.pr.map((r) => r.m.ecoDmg ?? 0))).toBeGreaterThan(0);
+  });
+});
+
+describe("the rating dump's join record", () => {
+  it("names the join and the table layout the map's rows came from", () => {
+    // Review of PR 80: eco_fit matched dump rows to joins by HLTV file only and counted every map as schema v1. The
+    // dump now records each map's join and layout, by demo_paths.demo_layout's rule; fails if either is lost.
+    const root = mkdtempSync(path.join(tmpdir(), "rating-rows-"));
+    try {
+      const make = (name: string, files: string[]) => {
+        const dir = path.join(root, name);
+        mkdirSync(dir);
+        for (const f of files) writeFileSync(path.join(dir, f), "");
+        return dir;
+      };
+      const v1 = make("v1", ["match.parquet", "player_rounds.parquet"]);
+      const legacy = make("legacy", ["meta.parquet", "economy.parquet"]);
+      const half = make("half", ["match.parquet", "economy.parquet"]);
+      expect([tablesLayout(v1), tablesLayout(legacy)]).toEqual(["schema_v1", "legacy"]);
+      expect(() => tablesLayout(half)).toThrow(/neither schema v1/);
+      const rec = { demo: "demos\\a-vs-b\\m1-nuke", hltv: "map_1.json", players: { "11": { hltv: "ana", pid: "1" } } };
+      const j: HltvJoin = { hltv: page([]), player: new Map(), team: [0, 1], unmatched: [] };
+      expect(joinRow(rec, j, legacy)).toEqual({ hltv: "map_1.json", demo: rec.demo, players: rec.players, layout: "legacy" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

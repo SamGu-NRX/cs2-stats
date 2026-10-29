@@ -1,11 +1,30 @@
 // The kill and hit rows the rating dump writes (rating-dump.ts), from one derived map and its HLTV join. Each row
 // carries the economy groups derive used for its eco value (KillFact.aGroup/vGroup, PlayerRound.ecoGroup), so the
 // duel fit (model/rating3/eco_fit.py) trains on the app's own groups, with no second definition to drift.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { enemyHit, hitDamage } from "../src/stats/derive";
 import type { MatchFacts } from "../src/stats/facts";
 import { rosterTables } from "../src/stats/roster";
 import type { MatchTables } from "../src/stats/tables";
+import type { DemoJoin } from "./demo-joins";
 import type { HltvJoin } from "./hltv";
+
+/** A tables folder's layout, by the rule model/rating3/demo_paths.demo_layout applies. */
+export function tablesLayout(dir: string): "schema_v1" | "legacy" {
+  const has = (f: string) => existsSync(path.join(dir, f));
+  if (has("match.parquet") && has("player_rounds.parquet")) return "schema_v1";
+  if (has("meta.parquet") && has("economy.parquet")) return "legacy";
+  throw new Error(`${dir}: neither schema v1 (match.parquet + player_rounds.parquet) nor legacy (meta.parquet + economy.parquet)`);
+}
+
+/**
+ * The join and tables layout one map's rows came from. eco_fit compares it with the join it is given, so a
+ * dump written before demo_joins.json changed is refused instead of pairing the old players.
+ */
+export function joinRow(rec: DemoJoin, j: HltvJoin, dir: string): Record<string, unknown> {
+  return { hltv: j.hltv.file, demo: rec.demo, players: rec.players, layout: tablesLayout(dir) };
+}
 
 /** One row per enemy kill the kills table holds, with both players' economy state and the swing credits. */
 export function killRows(f: MatchFacts, t: MatchTables, j: HltvJoin): Record<string, unknown>[] {
