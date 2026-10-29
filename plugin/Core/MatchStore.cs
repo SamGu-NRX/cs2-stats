@@ -37,6 +37,22 @@ public sealed class MatchStore
 
     public RoundRow Round(int ri) => _rounds[ri];
 
+    /// <summary>
+    /// No match was played: no round, or no round with a winner while no player ever had a side, as when a
+    /// map loads and is left before a match begins. The writer writes no finished file for it: the app has
+    /// no side to show it from, and a status would still make it a file to read and set aside.
+    /// </summary>
+    public bool NothingPlayed
+    {
+        get
+        {
+            if (RoundCount == 0) return true;
+            foreach (var p in Meta.Players) if (p.StartSide != Nil.V) return false;
+            for (int i = 0; i < RoundCount; i++) if (_rounds[i].WinSide != Nil.V) return false;
+            return true;
+        }
+    }
+
     public void SetRound(RoundRow src)
     {
         int ri = src.Ri;
