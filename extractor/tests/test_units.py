@@ -3076,3 +3076,152 @@ def test_a_recovered_flash_reusing_an_entity_id_gets_its_own_detonation():
     assert [(r["tick"], r["flash_entity_id"]) for r in rows] == [(90200, 93), (90372, 93)]
     assert recovered[["tick", "entity_id", "x"]].values.tolist() == [[90371, 93, 900.0]]
 
+
+MOVER = 98
+
+
+def _mover_case(t_side=5):
+    """_slot_case's two rounds without the coach (CT 1-5, T t_side players), plus MOVER: on T at both freeze ends
+    (team_tick 300 and 1300) by his team_num, though a player_team event took him to the spectators on tick 250,
+    a move that killed him."""
+    case = _slot_case(t_side=t_side + 1)
+    for k in ("spawns", "sides"):
+        case[k] = case[k][case[k].steamid != COACH]
+    case["hurts"] = case["hurts"][case["hurts"].victim_steamid != COACH]
+    case["bomb"] = case["bomb"][case["bomb"].steamid != COACH]
+    case["rounds"] = case["rounds"].assign(team_tick=[300, 1300], freeze_end_tick=[300, 1300])
+    case["sides"] = pd.concat([case["sides"], pd.DataFrame(dict(round=[1, 2], steamid=MOVER, side="T"))], ignore_index=True)
+    case["deaths"] = pd.DataFrame(dict(tick=[400, 500, 250], attacker_steamid=[1, 6, MOVER],
+                                       victim_steamid=[6, 2, MOVER], assister_steamid=[None, None, None]))
+    case["hurts"] = case["hurts"].assign(tick=[400, 500])
+    case["moves"] = pd.DataFrame(dict(tick=[50, 250], steamid=[MOVER, MOVER], team=[2, 1]))
+    return case
+
+
+def test_a_sixth_player_who_left_for_the_spectators_before_freeze_end_is_left_out():
+    # Fixture J's case: the move to the spectators killed him, so he is in a player_death row, and the coach rule
+    # refused him. The game's player_team event decides his side, not his stale team_num.
+    out = ex.non_combatants(**_mover_case())
+    assert list(out) == [MOVER] and out[MOVER].startswith("a sixth slot that left the teams")
+
+
+@pytest.mark.parametrize("change, why", [
+    (lambda c: c["acts"].loc.__setitem__(len(c["acts"]), [MOVER]), "fired, threw or bought"),
+    (lambda c: c["deaths"].loc.__setitem__(len(c["deaths"]), [700, 6, MOVER, None]), "player_death"),
+    (lambda c: c["moves"].loc.__setitem__(len(c["moves"]), [900, MOVER, 2]), "player_death"),
+])
+def test_a_sixth_player_who_played_or_came_back_refuses_the_map(change, why):
+    # A substitute who bought or died in a live round, or one who moved back onto T before round 2's freeze end,
+    # took part: the map is refused, naming what he did, as for a coach who does.
+    case = _mover_case()
+    change(case)
+    with pytest.raises(RuntimeError, match=why):
+        ex.non_combatants(**case)
+
+
+def test_a_sixth_player_who_left_the_server_with_the_c4_is_left_out_too():
+    # Two more OpenCS2 demos: one sixth player left the server in freeze time (a disconnect, not a player_team
+    # event); another was handed the C4 at spawn, and it dropped as he left. Neither took part.
+    case = _mover_case()
+    case["moves"] = pd.DataFrame(dict(tick=[50, 250], steamid=[MOVER, MOVER], team=[2, ex.DISCONNECTED]))
+    case["spawns"] = pd.concat([case["spawns"], pd.DataFrame(dict(tick=[100], steamid=[MOVER]))], ignore_index=True)
+    case["bomb"] = pd.concat([case["bomb"], pd.DataFrame(dict(tick=[100, 250], event=["bomb_pickup", "bomb_dropped"],
+                                                                steamid=[MOVER, MOVER]))], ignore_index=True)
+    assert list(ex.non_combatants(**case)) == [MOVER]
+    # a C4 he picked up later, in play, is taking part
+    case["bomb"].loc[len(case["bomb"])] = [500, "bomb_pickup", MOVER]
+    with pytest.raises(RuntimeError, match="bomb event"):
+        ex.non_combatants(**case)
+
+
+def test_a_round_recorded_already_live_lets_no_one_qualify_as_having_left_before_freeze_end():
+    # Review of PR 79 (CodeRabbit): a round with no recorded freeze end reads sides at end_tick - 1, so a sixth player
+    # who left mid-round would pass the check and be stripped from every table though he played. Without a freeze
+    # end nobody qualifies, and the map is refused as before.
+    case = _mover_case()
+    case["rounds"] = case["rounds"].assign(freeze_end_tick=[float("nan"), 1300], team_tick=[899, 1300])
+    with pytest.raises(RuntimeError, match="no sixth slot qualifies"):
+        ex.non_combatants(**case)
+
+
+def _killed_by_another_on_the_move_tick(case):
+    case["deaths"].loc[case["deaths"].victim_steamid == MOVER, "attacker_steamid"] = 6
+
+
+def _hit_by_another_on_the_move_tick(case):
+    case["hurts"].loc[len(case["hurts"])] = [6, MOVER, "ak47", 250]
+
+
+def _left_on_the_freeze_end_tick(case):
+    case["moves"].loc[case["moves"].team == 1, "tick"] = 300
+    case["deaths"].loc[case["deaths"].victim_steamid == MOVER, "tick"] = 300
+
+
+def _came_back_after_the_freeze_end(case):
+    # Codex's example: counted on T in round 1 only, left at 250, back on T at 350 after the freeze end at 300, and
+    # nothing else. Only the last move before each counted freeze end was checked, so he qualified.
+    case["sides"] = case["sides"][~((case["sides"].steamid == MOVER) & (case["sides"]["round"] == 2))]
+    case["moves"].loc[len(case["moves"])] = [350, MOVER, 2]
+
+
+@pytest.mark.parametrize("change", [_killed_by_another_on_the_move_tick, _hit_by_another_on_the_move_tick,
+                                    _left_on_the_freeze_end_tick, _came_back_after_the_freeze_end])
+def test_a_player_who_left_but_was_killed_or_hit_by_someone_or_left_as_the_round_went_live_is_kept(change):
+    # Review of PR 79 (Codex): a death or hit on the departure tick counted as the move's own, whoever dealt it, so a
+    # player another player killed or hit as he left was stripped from every table. Only his own death (attacker
+    # himself or no one) qualifies; and the departure must come strictly before the freeze end.
+    case = _mover_case()
+    change(case)
+    with pytest.raises(RuntimeError, match="no sixth slot qualifies"):
+        ex.non_combatants(**case)
+
+
+def test_a_start_tick_hit_takes_the_sides_of_the_round_it_counts_in():
+    # Review of PR 79 (CodeRabbit): a hit on round 13's start tick, right after halftime, counts in round 12 but its
+    # event carries the new half's sides. A damage row takes its round's freeze-end side; without a snapshot row the
+    # event side stays.
+    rounds_of = pd.Series([12, 12, 13])
+    ids = pd.Series([A, B, A])
+    event = pd.Series(["T", "CT", "T"])
+    snapshot = {(12, A): "CT", (13, A): "T"}
+    assert ex.damage_sides(rounds_of, ids, event, snapshot).tolist() == ["CT", "CT", "T"]
+
+
+def test_a_team_change_logged_for_a_player_who_left_the_server_is_no_return():
+    # Fixture O: the game swapped the slot of a player who had left the server at halftime, a move onto a team while
+    # he was disconnected. He did not come back, and is still left out; reconnected, the same move is a return.
+    case = _mover_case()
+    case["moves"] = pd.DataFrame(dict(tick=[50, 250, 1600], steamid=[MOVER] * 3, team=[2, ex.DISCONNECTED, 3]))
+    assert list(ex.non_combatants(**case)) == [MOVER]
+    case["moves"].loc[len(case["moves"])] = [1500, MOVER, ex.CONNECTED]
+    with pytest.raises(RuntimeError, match="no sixth slot qualifies"):
+        ex.non_combatants(**case.copy() | {"moves": case["moves"].sort_values("tick")})
+
+
+def test_a_player_who_left_is_kept_when_his_team_has_no_one_else():
+    # Leaving him out would leave T with four: as today, he stays, and the map is not refused for it.
+    assert ex.non_combatants(**_mover_case(t_side=4)) == {}
+
+
+def test_a_hit_on_a_rounds_start_tick_goes_to_the_round_before():
+    # Fixture K's case: a post-round hit on round 11's start tick is in the counter the game commits there, which is
+    # round 10's game_damage. Each round's damage window runs from the tick after its start through the next start;
+    # round 1's opens on its start tick, the last closes on the final tick, and a voided window stamps 0.
+    rounds = pd.DataFrame(dict(round=[1, 10, 11], start_tick=[100, 82713, 91619]))
+    windows = ex.damage_windows(rounds, 99000)
+    assert windows[["damage_from_tick", "damage_to_tick"]].values.tolist() == [[100, 82713], [82714, 91619], [91620, 99000]]
+    ticks = pd.Series([99, 100, 91599, 91619, 91620, 95000, 99001])
+    assert ex.damage_rounds(ticks, windows, [(94000, 96000)], 99000).tolist() == [0, 1, 10, 10, 11, 0, 0]
+
+def test_a_lost_hit_on_a_rounds_start_tick_is_rebuilt_in_the_round_before():
+    # Review of PR 79 (Codex): rebuilt hits kept stamp()'s round, so a lost hit on a round's start tick would stay in
+    # the new round while game_damage counts it in the round before. No real demo has one to test with: every player
+    # respawns at 100 HP on the start tick (fixture K: 46 HP on 91618, 100 on 91619), so the drop never shows there.
+    rounds = pd.DataFrame(dict(round=[1, 2], start_tick=[100, 2000]))
+    drops = pd.DataFrame(dict(tick=[2000, 2500], steamid=[A, A], health_before=[46, 100], health_after=[20, 70]))
+    drops["round"] = ex.damage_rounds(drops.tick, ex.damage_windows(rounds, 3000), [], 3000)
+    dmg = pd.DataFrame(dict(tick=pd.Series([], dtype="int64"), victim_steamid=pd.array([], dtype="UInt64")))
+    side = {(1, A): "CT", (2, A): "T"}
+    out = ex.rebuild_lost_hits(drops, dmg, side)
+    assert out[["tick", "round", "v_side", "dmg_health_capped"]].values.tolist() == [[2000, 1, "CT", 26], [2500, 2, "T", 30]]
+

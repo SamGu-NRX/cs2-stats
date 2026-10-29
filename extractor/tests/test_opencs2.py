@@ -606,8 +606,29 @@ def test_the_fetcher_skips_maps_already_published_or_without_a_scoreboard(tmp_pa
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="failed"))
     todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
     assert [(m.match_id, m.map_index) for m in todo] == [("1", 2)]
-    # the pipeline later deletes the kept failure under its failed/ cap: its last row says dropped, and the map is
-    # fetched again; skipping it as recorded would lose it for good
+    # Review of PR 79: the pipeline later deletes the kept failure under its failed/ cap and its last row says
+    # dropped. A plain run fetched it again, though most such maps fail again; it is skipped like a failed one, and
+    # only --refetch-fixed (refetch_plan) brings back those a later extractor fixes.
     dp.append_jsonl(ledger, dict(id="opencs2-2-m1", status="dropped"))
     todo = fo.plan(fo.dataset_maps(meta), fo.held_scoreboards(hltv), dp.read_ledger(ledger), inbox)
-    assert [(m.match_id, m.map_index) for m in todo] == [("1", 2), ("2", 1)]
+    assert [(m.match_id, m.map_index) for m in todo] == [("1", 2)]
+
+
+def test_refetch_fixed_takes_only_deleted_demos_whose_failure_a_later_extractor_fixes(tmp_path):
+    # The overnight fetch left 42 maps dropped and 15 kept failed; #76 and 1.18 fix 47 of them. --refetch-fixed
+    # must fetch only the dropped ones whose own failure is fixed: refetching all would bring back the 10 that fail
+    # again (a kill lost on a skipped tick, a parser crash), and a kept one is the pipeline's to retry.
+    maps = [fo.Map(str(i), 1, "de_nuke", f"demos/s/{i}/a-vs-b-m1-nuke.dem", 100, None) for i in range(1, 6)]
+    failed = lambda i, why: dict(id=f"opencs2-{i}-m1", status="failed", reason=why)
+    dropped = lambda i: dict(id=f"opencs2-{i}-m1", status="dropped", reason="failed/ over 8 GB; the kept failure was deleted")
+    rows = [failed(1, """{"a.dem": ["AttributeError: 'str' object has no attribute 'parse_ticks'"]}"""), dropped(1),
+            failed(2, "ValidationFailed: 3 fatal validation checks failed: [{'check': 'kills'}]"), dropped(2),
+            failed(3, "RuntimeError: side T of round 3 has 6 players and no sixth slot qualifies to be left out: x"),
+            failed(4, "RuntimeError: a blind of 1 on tick 5 has no flashbang detonation on its tick, and 0 ..."), dropped(4),
+            dict(id="opencs2-5-m1", status="done")]
+    inbox = tmp_path / "inbox"
+    maps[3].target(inbox).parent.mkdir(parents=True)
+    maps[3].target(inbox).write_bytes(b"x")  # map 4 is in the inbox already
+    todo, kept = fo.refetch_plan(maps, rows, inbox)
+    assert [m.match_id for m in todo] == ["1"] and kept == ["opencs2-3-m1"]
+
