@@ -40,11 +40,18 @@ if (cmd !== "run" || !arg) {
   process.exit(2);
 }
 if (typeof WebSocket === "undefined") throw new Error("no global WebSocket: use Node 22, or Node 20 with --experimental-websocket");
+// with no fixture the count check would pass on the bundled samples alone
+if (!FIXTURES.length) throw new Error("no sample match in public/samples matches the fixture name pattern");
 
 const dir = mkdtempSync(path.join(tmpdir(), "cs2-smoke-"));
 const matches = path.join(dir, "appdata", "BotMatchStats", "matches", "2026");
-mkdirSync(matches, { recursive: true });
-for (const f of FIXTURES) copyFileSync(path.join(APP, "public/samples", f), path.join(matches, f));
+try {
+  mkdirSync(matches, { recursive: true });
+  for (const f of FIXTURES) copyFileSync(path.join(APP, "public/samples", f), path.join(matches, f));
+} catch (e) {
+  rmSync(dir, { recursive: true, force: true });
+  throw e;
+}
 const app = spawn(path.resolve(arg), [], {
   env: { ...process.env, APPDATA: path.join(dir, "appdata"), WEBVIEW2_USER_DATA_FOLDER: path.join(dir, "webview2"), CS2_STATS_SMOKE: "1" },
   stdio: "ignore",
