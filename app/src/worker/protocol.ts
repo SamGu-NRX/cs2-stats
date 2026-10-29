@@ -25,6 +25,12 @@ import type { Filter, Summary } from "../stats/rollup";
 import type { SwingSources } from "../stats/swing";
 import type { MatchEntry } from "../ui/data/match";
 
+/**
+ * The cache error when a newer build upgraded the IndexedDB cache and this one cannot open it (idb.ts).
+ * Shown as is on Home and in the scan status (sources.ts scanErrorText).
+ */
+export const CACHE_TOO_NEW = "This app's cache was written by a newer CS2 Stats. Install the latest version; your matches are safe on disk.";
+
 /** Which matches a question covers (the map and time filters, resolved to files) and whose rounds. */
 export interface Query { files: string[]; filter: Filter }
 

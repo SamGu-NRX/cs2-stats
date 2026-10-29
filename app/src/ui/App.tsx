@@ -219,7 +219,8 @@ function ScanFailed({ title, error, onRetry }: { title: string; error: string; o
           <a className="btn" href={pageHref("settings")}>Open Data & settings</a>
         </div>
         <p className="meta">Your packs and settings are unaffected.</p>
-        {error && (
+        {/* the raw error, when it says more than the line above */}
+        {error && error !== scanErrorText(error) && (
           <details className="scan-failed__raw">
             <summary>Details</summary>
             <p className="mono selectable">{error}</p>
