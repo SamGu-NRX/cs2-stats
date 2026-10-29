@@ -11,7 +11,7 @@ import { NAV } from "./shell/Sidebar";
 
 vi.mock("./data/provider", () => ({
   DataProvider: ({ children }: { children: ReactNode }) => children,
-  useData: () => ({ status: "ready", error: null, matches: [], you: [], refresh() {}, meta: {}, progress: null, lastSync: null }),
+  useData: () => ({ status: "ready", error: null, matches: [], you: [], fileErrors: [], refresh() {}, meta: {}, progress: null, lastSync: null }),
 }));
 vi.mock("./data/packs", () => ({ usePros: () => ({ state: "missing" }), useAgents: () => null }));
 vi.mock("./data/hooks", async (orig) => ({

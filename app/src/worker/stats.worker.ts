@@ -34,7 +34,7 @@ import { idle, macrotask, readWhenIdle } from "./idle";
 import { toolLoad } from "./tool-tables";
 import { presenceThroughStore, storedStale, type StoredPresence } from "./stored-presence";
 import { genCache } from "./gen-cache";
-import { derivePool, poolSize, type DerivePool } from "./derive-pool";
+import { derivePool, poolSize, throughPool, type DerivePool } from "./derive-pool";
 import { mapLimit } from "./map-limit";
 import { addMapRounds, addPositions, addSpawns, emptySpawns, entryOf, matchBundle, metaOf, ratingsOf, recentFiles, rolled, roundBundle, type SpawnIndex } from "./views";
 
@@ -115,6 +115,9 @@ const lru = new Map<string, { key: string; facts: MatchFacts }>();
 
 /** The user's SteamID64 for each listed folder that carries one (the user's Valve matches), from the last sync. */
 const povs = new Map<string, string>();
+
+/** The derive workers could not start here, so files were derived in this thread (derive-pool.ts PoolUnavailable). */
+let oneAtATime = false;
 
 /** Derives one file in this thread. */
 const deriveHere = (file: string) => deriveFile(file, bytes, povs.get(file), source());
@@ -372,13 +375,14 @@ const api: Impl = {
     // derive workers only for a scan with more than one file to build (derive-pool.ts)
     const size = missing.length > 1 ? poolSize(navigator.hardwareConcurrency || 1, (navigator as { deviceMemory?: number }).deviceMemory ?? null) : 0;
     const pool: DerivePool | null = size >= 2 ? derivePool(size, wpPack, bytes) : null;
+    const viaPool = pool ? throughPool(pool, deriveHere, () => { oneAtATime = true; }) : null;
     try {
       await mapLimit(missing, pool ? size : 1, async (i) => {
         const e = entries[i];
         const key = factsKey(e);
         const ekey = entryKey(key);
         try {
-          const c = await cached(e.file, key, pool ? (file) => pool.derive(file, povs.get(file)) : deriveHere);
+          const c = await cached(e.file, key, viaPool ? (file) => viaPool(file, povs.get(file)) : deriveHere);
           let entry: MatchEntry;
           try {
             entry = entryOf(e.file, c.origin, c.facts);
@@ -427,7 +431,7 @@ const api: Impl = {
     const stored = await idbGetMany<StoredPresence>("presence", presenceKeys);
     await idbDelete("presence", presenceKeys.filter((_, i) => storedStale(stored[i], live)));
     listSent = true;
-    return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors };
+    return { matches: sameList ? null : [...index.values()].map((x) => x.entry).sort(byNewest), errors, oneAtATime };
   },
   async match(file, viewer) {
     if (openTables && openTables.file !== file) openTables = null;

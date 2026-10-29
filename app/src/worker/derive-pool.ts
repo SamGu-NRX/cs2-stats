@@ -12,8 +12,18 @@ export type ToDeriver =
   | { rid: number; bytes?: ArrayBuffer; error?: string };
 
 export type FromDeriver =
+  /** the worker's code loaded and it takes jobs */
+  | { ready: true }
   | { job: number; result?: Cached; error?: string }
   | { rid: number; need: string };
+
+/**
+ * The pool cannot derive a file: its workers did not start, or all stopped before reaching it. Nothing
+ * is wrong with the file, so the caller derives it itself (throughPool). A worker that loads in a
+ * browser can fail to load in the desktop app's WebView2, where every file then failed and the scan
+ * showed no matches.
+ */
+export class PoolUnavailable extends Error {}
 
 export interface DerivePool {
   derive(file: string, pov: string | undefined): Promise<Cached>;
@@ -35,7 +45,7 @@ export const poolSize = (cores: number, memoryGB: number | null) =>
 /** `size` workers deriving with the win-probability pack's bytes (null: the CS2RB model), reading through `bytes`. */
 export function derivePool(size: number, winprobPack: ArrayBuffer | null, bytes: Bytes): DerivePool {
   interface Job { id: number; file: string; pov?: string; resolve: (c: Cached) => void; reject: (e: Error) => void }
-  interface Slot { w: Worker; job: Job | null; dead: boolean }
+  interface Slot { w: Worker; job: Job | null; dead: boolean; ready: boolean }
   const queue: Job[] = [];
   let id = 0;
 
@@ -46,16 +56,17 @@ export function derivePool(size: number, winprobPack: ArrayBuffer | null, bytes:
       s.job = j;
       s.w.postMessage({ job: j.id, file: j.file, pov: j.pov } satisfies ToDeriver);
     }
-    if (slots.every((s) => s.dead)) for (const j of queue.splice(0)) j.reject(new Error("every derive worker stopped"));
+    if (slots.every((s) => s.dead)) for (const j of queue.splice(0)) j.reject(new PoolUnavailable("every derive worker stopped"));
   };
 
   const slots: Slot[] = Array.from({ length: size }, () => {
     const w = new Worker(new URL("./derive.worker.ts", import.meta.url), { type: "module" });
-    const s: Slot = { w, job: null, dead: false };
+    const s: Slot = { w, job: null, dead: false, ready: false };
     // a copy: each worker parses its own
     w.postMessage({ init: winprobPack ? winprobPack.slice(0) : null } satisfies ToDeriver);
     w.onmessage = async (ev: MessageEvent<FromDeriver>) => {
       const m = ev.data;
+      if ("ready" in m) { s.ready = true; return; }
       if ("need" in m) {
         try {
           const b = await bytes(m.need);
@@ -73,11 +84,13 @@ export function derivePool(size: number, winprobPack: ArrayBuffer | null, bytes:
       }
       pump();
     };
-    // a worker that fails to load or crashes fails its file and takes no more; the others carry on
+    // A worker that crashes fails its file and takes no more; the others carry on. One that never
+    // loaded hands its file back (PoolUnavailable), since nothing about the file stopped it.
     w.onerror = (e) => {
       e.preventDefault();
       s.dead = true;
-      s.job?.reject(new Error(`a derive worker stopped: ${e.message || "failed to load"}`));
+      const why = e.message || "failed to load";
+      s.job?.reject(s.ready ? new Error(`a derive worker stopped: ${why}`) : new PoolUnavailable(`a derive worker did not start: ${why}`));
       s.job = null;
       pump();
     };
@@ -95,3 +108,15 @@ export function derivePool(size: number, winprobPack: ArrayBuffer | null, bytes:
     },
   };
 }
+
+/**
+ * Derives through `pool`, and in this thread (`here`) a file the pool hands back (PoolUnavailable),
+ * calling `fellBack` each time it does. Any other error is the file's.
+ */
+export const throughPool = (pool: DerivePool, here: (file: string) => Promise<Cached>, fellBack: () => void) =>
+  (file: string, pov: string | undefined): Promise<Cached> =>
+    pool.derive(file, pov).catch((e: unknown) => {
+      if (!(e instanceof PoolUnavailable)) throw e;
+      fellBack();
+      return here(file);
+    });

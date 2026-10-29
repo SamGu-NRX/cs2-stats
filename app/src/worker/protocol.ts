@@ -299,7 +299,8 @@ export interface Api {
    * returned (the same files with the same entries), so a rescan that finds nothing new, one per window
    * focus, sends nothing back and the views keep what they show.
    */
-  sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[] };
+  /** `oneAtATime`: the derive workers could not start in this runtime, so files are derived one at a time (derive-pool.ts) */
+  sync(entries: FileEntry[]): { matches: MatchEntry[] | null; errors: { file: string; message: string }[]; oneAtATime: boolean };
   /** `viewer`: the steamid the per-player parts are for; null for the recording player, or none on a pro demo */
   match(file: string, viewer: string | null): MatchBundle;
   /** every round of the match, in round row order */

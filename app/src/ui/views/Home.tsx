@@ -48,8 +48,16 @@ function useTotals(list: MatchEntry[]): Totals | null {
   return q && s?.length === 3 && r ? { q, both: s[0], t: s[1], ct: s[2], rating: r[0].both } : null;
 }
 
+/**
+ * Home's empty state when match files were found but none of the user's could be read: what happened,
+ * instead of "No matches yet", which told the user to play a match. Null when some were read or none failed.
+ */
+export function unread(matches: MatchEntry[], failed: number): string | null {
+  return failed > 0 && !careerEntries(matches, null).length ? `${plural(failed, "match file")} could not be read. Data & settings lists them with the reason.` : null;
+}
+
 export function HomeView() {
-  const { matches, status } = useData();
+  const { matches, status, fileErrors } = useData();
   const { map, n } = useScope();
   const list = useMemo(() => {
     const f = careerEntries(matches, map);
@@ -71,7 +79,7 @@ export function HomeView() {
       <BarContent crumbs={[{ label: "Home" }]} scope={{ controls: ["map", "matches"] }} />
       <div className="view__in home">
         {!last ? (
-          <Card><Empty text="No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings." action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
+          <Card><Empty text={unread(matches, fileErrors.length) ?? "No matches yet. Play a match with the capture plugin loaded, or import a match file in Data & settings."} action={<a className="btn" href={pageHref("settings")}>Open Data & settings</a>} /></Card>
         ) : (
           <>
             <div className="home__top">

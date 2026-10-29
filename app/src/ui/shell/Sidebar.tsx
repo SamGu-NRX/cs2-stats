@@ -56,7 +56,7 @@ export function useRail() {
 
 export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: boolean; onToggle: () => void }) {
   const route = useRoute();
-  const { matches, status, error, lastSync, refresh } = useData();
+  const { matches, status, error, lastSync, refresh, fileErrors } = useData();
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
   const career$ = useMemo(() => careerEntries(matches, null), [matches]);
@@ -90,7 +90,7 @@ export function Sidebar({ rail, instant, onToggle }: { rail: boolean; instant: b
               <span className="side__rating"><span>Rating</span>{fmtRating(me.rating)}</span>
             </>
           ) : (
-            <span className="side__name side__name--none">{scanning ? "Reading matches…" : "No matches yet"}</span>
+            <span className="side__name side__name--none">{scanning ? "Reading matches…" : fileErrors.length ? "Files could not be read" : "No matches yet"}</span>
           )}
         </div>
       </div>

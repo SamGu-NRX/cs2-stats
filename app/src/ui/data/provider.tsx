@@ -30,6 +30,8 @@ export interface Data {
   /** steamids of the user across their own matches (one per account); pro demos' recording players are not "you" */
   you: string[];
   fileErrors: { file: string; message: string }[];
+  /** parallel reading is unavailable in this runtime: a first scan derives one match at a time (derive-pool.ts); absent until a sync says */
+  oneAtATime?: boolean;
   progress: { done: number; total: number } | null;
   /** what the anonymous pro percentiles (public/baselines.json, read by the worker) cover */
   baselines: BaselineInfo | null;
@@ -55,7 +57,7 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<Omit<Data, "refresh">>({
-    status: "starting", error: null, host: null, client: null, meta: false, matches: [], you: [], fileErrors: [], progress: null,
+    status: "starting", error: null, host: null, client: null, meta: false, matches: [], you: [], fileErrors: [], oneAtATime: false, progress: null,
     baselines: null, baselinesError: null, version: 0, lastSync: null,
   });
   const ref = useRef<{ host: Host; client: Client } | null>(null);
@@ -76,12 +78,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const synced = await r.client.sync(entries);
       if (synced.matches === null) {
         // the list is unchanged: a focus rescan leaves the views' data alone; a forced one makes them ask again
-        setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, progress: null, version: force ? s.version + 1 : s.version, lastSync: Date.now() }));
+        setState((s) => ({ ...s, status: "ready", error: null, fileErrors: synced.errors, oneAtATime: !!s.oneAtATime || synced.oneAtATime, progress: null, version: force ? s.version + 1 : s.version, lastSync: Date.now() }));
         return;
       }
       const matches = synced.matches.map(coverEntry);
       const you = [...new Set(matches.filter(isOwn).map((m) => m.players[m.you].id))];
-      setState((s) => ({ ...s, status: "ready", error: null, matches, you, fileErrors: synced.errors, progress: null, version: s.version + 1, lastSync: Date.now() }));
+      setState((s) => ({ ...s, status: "ready", error: null, matches, you, fileErrors: synced.errors, oneAtATime: !!s.oneAtATime || synced.oneAtATime, progress: null, version: s.version + 1, lastSync: Date.now() }));
     } catch (e) {
       setState((s) => ({ ...s, status: "error", error: errorText(e) }));
     }

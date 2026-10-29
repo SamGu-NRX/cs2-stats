@@ -39,3 +39,6 @@ self.onmessage = async (ev: MessageEvent<ToDeriver>) => {
     post({ job: m.job, error: (e as Error).message });
   }
 };
+
+// the code loaded and the handler is set: jobs from here on are taken (derive-pool.ts PoolUnavailable)
+post({ ready: true });
