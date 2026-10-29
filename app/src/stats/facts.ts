@@ -17,7 +17,8 @@ import type { Side } from "./tables";
 // counts survival only in a won round; the vK3-5Rounds measures for the per-side Rating 3.0
 // 36: kill facts carry the killer's place and sightings the kill tick, for clip moments (stats/moments.ts)
 // 37: kill facts carry their duel groups (aGroup, vGroup) and player-rounds their freeze-end group (ecoGroup)
-export const DERIVE_VERSION = 37;
+// 38: KAST's survival (the scoreboard's and the eco-adjusted) does not end at a world death (rules.ts worldDeath)
+export const DERIVE_VERSION = 38;
 
 export interface MatchInfo {
   id: string;

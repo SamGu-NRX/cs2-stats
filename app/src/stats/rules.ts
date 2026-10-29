@@ -10,6 +10,12 @@ import type { Side } from "./tables";
  * KAST exact of 3,950 player-maps; 5 s: 3,349 and 3,576; VALIDATION.md, pnpm scoreboard-variants).
  * CS Demo Manager uses 5 s, and so does the extractor's internal kills.extractor_trade_kill_5s column
  * (for model/rating3's round fit), which the engine does not read.
+ *
+ * On the 1,610 maps joined to their HLTV pages through their demos (16,100 player-maps), 5.5 s
+ * reproduces more of HLTV: traded deaths exact on 14,868 against 14,798, KAST on 15,187 against 15,134
+ * (with world deaths not counted), and the swing credit fit finds 5.5 s too. It also moves five
+ * player-maps of the pinned gate maps (hltv-exact.test.ts) one KAST round off HLTV, so the window stays
+ * until the gate is re-pinned on that evidence (issue #18; VALIDATION.md).
  */
 export const TRADE_WINDOW_S = 5.4;
 
@@ -67,8 +73,22 @@ export function kastRound(kills: KillFact[], pi: number, left: boolean): boolean
   return survives(kills, pi, left);
 }
 
-/** KAST's S: the player was not killed in the round and did not disconnect in its live part (`left`). The scoreboard's KAST and the eco-adjusted KAST (rating3.ts) both read it. */
-export const survives = (kills: readonly KillFact[], pi: number, left: boolean) => !left && !kills.some((k) => k.victim === pi);
+/**
+ * A death the world dealt: a fall or a map hazard. A demo credits it to the player themself; the
+ * capture plugin records a suicide with no killer (Recorder.Kill). HLTV's scoreboard does not count it
+ * as a death: its D leaves it out on 120 of the 123 joined player-maps that have one (other suicides,
+ * by a player's own grenade or fire, it counts on all 37), and its KAST treats the player as alive
+ * (VALIDATION.md).
+ */
+export const worldDeath = (k: KillFact) => k.weapon === "world" && (k.killer === k.victim || k.killer === null);
+
+/**
+ * KAST's S: the player was not killed in the round, a world death aside (worldDeath), and did not
+ * disconnect in its live part (`left`). The scoreboard's KAST and the eco-adjusted KAST (rating3.ts)
+ * both read it.
+ */
+export const survives = (kills: readonly KillFact[], pi: number, left: boolean) =>
+  !left && !kills.some((k) => k.victim === pi && !worldDeath(k));
 
 export interface Clutch {
   pi: number;
