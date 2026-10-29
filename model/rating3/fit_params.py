@@ -277,7 +277,8 @@ def main() -> None:
     side = fit_side_block(args.hltv)
     joins = json.loads(args.joins.read_text(encoding="utf-8"))
     swing = swing_block(args.data)
-    duel = fit_duel_model(args.data, joins["accepted"])
+    # the duel fit weighs each eco input's error by the new rating curves' slopes
+    duel = fit_duel_model(args.data, joins["accepted"], side["model"]["curves"])
     eco_adjustment = eco_adjustment_block(map_rows(args.hltv), args.date)
     parameters = public_parameters(args.out, side, swing, duel, eco_adjustment, args.date)
     print(json.dumps({
