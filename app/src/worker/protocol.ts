@@ -388,9 +388,16 @@ export interface Call { id: number; method: Method; args: unknown[] }
 
 export type ToWorker =
   | { batch: Call[] }
-  | { rid: number; bytes?: ArrayBuffer; error?: string };
+  | { rid: number; bytes?: ArrayBuffer; error?: string }
+  /** the derive workers the page started for request `spawned` (derive-spawn.ts), a port to each */
+  | { spawned: number; ports: MessagePort[] }
+  /** derive worker `i` of request `deriverFailed` failed to load or crashed */
+  | { deriverFailed: number; i: number; why: string };
 
 export type FromWorker =
   | { id: number; result?: unknown; error?: string }
   | { rid: number; need: string }
-  | { progress: { done: number; total: number } };
+  | { progress: { done: number; total: number } }
+  /** asks the page for `n` derive workers (derive-spawn.ts); `despawn` ends request `spawn`'s */
+  | { spawn: number; n: number }
+  | { despawn: number };

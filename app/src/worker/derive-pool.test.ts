@@ -1,41 +1,38 @@
 // What the derive pool does when its workers cannot start, and what the stats worker does then
 // (derive-pool.ts PoolUnavailable, throughPool).
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { Cached } from "./derive-file";
-import { derivePool, PoolUnavailable, throughPool, type DerivePool, type FromDeriver } from "./derive-pool";
+import { derivePool, PoolUnavailable, throughPool, type DerivePool, type Deriver } from "./derive-pool";
 
-/** A Worker whose code never loads (as a nested worker in the desktop app's WebView2), or that loads and then crashes. */
-function stubWorkers(mode: "never-loads" | "loads-then-crashes") {
-  class W {
-    onmessage: ((ev: MessageEvent<FromDeriver>) => void) | null = null;
-    onerror: ((ev: ErrorEvent) => void) | null = null;
-    constructor() {
-      queueMicrotask(() => {
-        if (mode === "loads-then-crashes") this.onmessage?.({ data: { ready: true } } as MessageEvent<FromDeriver>);
-      });
-    }
-    postMessage(m: unknown) {
-      if (typeof m === "object" && m && "job" in m) setTimeout(() => this.onerror?.({ message: "boom", preventDefault() {} } as ErrorEvent), 0);
-      if (mode === "never-loads" && typeof m === "object" && m && "init" in m) setTimeout(() => this.onerror?.({ message: "", preventDefault() {} } as ErrorEvent), 0);
-    }
-    terminate() {}
-  }
-  vi.stubGlobal("Worker", W);
+/** Derive workers that never load (as one started from a worker in the desktop app's WebView2), or that load and crash on their first file. */
+function derivers(n: number, mode: "never-loads" | "loads-then-crashes"): Deriver[] {
+  return Array.from({ length: n }, () => {
+    const d: Deriver = {
+      onmessage: null,
+      onfail: null,
+      post(m) {
+        if ("init" in m) setTimeout(() => (mode === "never-loads" ? d.onfail?.("failed to load") : d.onmessage?.({ ready: true })), 0);
+        if ("job" in m) setTimeout(() => d.onfail?.("boom"), 0);
+      },
+      close() {},
+    };
+    return d;
+  });
 }
-
-afterEach(() => vi.unstubAllGlobals());
 
 it("hands every file back when its workers never start, and fails a file only for a worker that started", async () => {
   // fails if derive workers that could not load make every file a file error: the desktop app then
   // showed no matches and no error, as Sam's install did
-  stubWorkers("never-loads");
-  const pool = derivePool(2, null, async () => new ArrayBuffer(0));
+  const pool = derivePool(derivers(2, "never-loads"), null, async () => new ArrayBuffer(0));
   const results = await Promise.allSettled(["a", "b", "c"].map((f) => pool.derive(f, undefined)));
   expect(results.map((r) => r.status === "rejected" && r.reason instanceof PoolUnavailable)).toEqual([true, true, true]);
   pool.close();
+  // no workers at all (the page could start none): every file comes back too
+  const none = derivePool([], null, async () => new ArrayBuffer(0));
+  await expect(none.derive("a", undefined)).rejects.toBeInstanceOf(PoolUnavailable);
   // a worker that started and then crashed on a file: that file's error, as before
-  stubWorkers("loads-then-crashes");
-  const started = derivePool(2, null, async () => new ArrayBuffer(0));
+  const started = derivePool(derivers(1, "loads-then-crashes"), null, async () => new ArrayBuffer(0));
+  await new Promise((r) => setTimeout(r, 5));
   const [first] = await Promise.allSettled([started.derive("a", undefined)]);
   expect(first.status === "rejected" && !(first.reason instanceof PoolUnavailable) && String(first.reason)).toContain("a derive worker stopped");
   started.close();
