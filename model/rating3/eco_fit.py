@@ -140,6 +140,8 @@ def collect(root: Path, joins: list[dict], provenance: dict | None = None) -> tu
         if k["hltv"] not in match_of or not k["enemy"] or not known(k):
             continue
         c = cell(k["aGroup"], k["vGroup"], k["killerSide"])
+        # duels, as the fit has always reported it: enemy kills with both groups known between paired players. A kill
+        # in a round neither player had rated counts here but enters no input below.
         duels += k["killer"] is not None and k["victim"] is not None
         if (p := played.get((k["hltv"], k["killer"], k["ri"]))) is not None:
             kills.append((p["side"], c))
@@ -259,8 +261,12 @@ def solve(d: Duels, weights: dict, rows=None) -> np.ndarray:
     def fun(x):
         strength, scale = unpack(x)
         return residuals(d, kill_points(strength, scale), weights, rows)
-    return least_squares(fun, INITIAL, bounds=BOUNDS, diff_step=1e-4, ftol=1e-10, xtol=1e-10, gtol=1e-10,
-                         max_nfev=400).x
+    result = least_squares(fun, INITIAL, bounds=BOUNDS, diff_step=1e-4, ftol=1e-10, xtol=1e-10, gtol=1e-10,
+                           max_nfev=400)
+    if not result.success:
+        # stopped at the evaluation cap: the vector is not a fit, and must not reach params.json
+        raise RuntimeError(f"the duel fit did not converge: {result.message}")
+    return result.x
 
 
 def error_summary(errors: np.ndarray) -> dict:

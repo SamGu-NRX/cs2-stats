@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -123,6 +124,15 @@ class FlashCalibrationTests(unittest.TestCase):
 
 
 class DuelBaselineTests(unittest.TestCase):
+    def test_a_duel_fit_stopped_at_the_evaluation_cap_publishes_nothing(self):
+        # Review of PR 84: solve returned least_squares' vector without reading success, so a fit stopped at the
+        # 400-evaluation cap would reach params.json as if it had converged. Fails if that vector is returned.
+        stopped = SimpleNamespace(success=False, x=eco_fit.INITIAL,
+                                  message="The maximum number of function evaluations is exceeded.")
+        with patch.object(eco_fit, "least_squares", return_value=stopped):
+            with self.assertRaisesRegex(RuntimeError, "did not converge: The maximum number"):
+                eco_fit.solve(None, {})
+
     def test_baseline_predicts_each_input_at_its_training_mean_in_rating_points(self):
         # Fails if the held-out baseline is scored on anything but each input's training-fold mean, weighed by the
         # rating curve's slope at HLTV's value as the fit's own errors are, so the two are in the same units.

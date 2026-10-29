@@ -202,6 +202,8 @@ class FitsUseTheJoinsPairing(unittest.TestCase):
         expected = np.concatenate([0.2 * (ours["ekpr"] - 1), 0.3 * ours["edpr"], 0.003 * (ours["eadr"] - 100),
                                    0.003 * (ours["ekast"] - 50)])
         np.testing.assert_allclose(got, expected)
+        # every slope change from a knot on, the second eKAST knot's too
+        np.testing.assert_allclose(eco_fit.slope_at(curves["eKAST"], np.array([59.9, 60.0, 70.0])), [0.003, 9.003, 9.003])
 
     def test_eco_fit_counts_each_join_by_the_table_layout_the_dump_read(self):
         # Review of PR 80: once eco_fit read the dump instead of the tables, it counted every join as schema v1, so a
