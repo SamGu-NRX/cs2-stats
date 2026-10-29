@@ -74,12 +74,13 @@ export function kastRound(kills: KillFact[], pi: number, left: boolean): boolean
 }
 
 /**
- * A death the world dealt, credited to the player themself: a fall or a map hazard. HLTV's scoreboard
- * does not count it as a death: its D leaves it out on 120 of the 123 joined player-maps that have one
- * (other suicides, by a player's own grenade or fire, it counts on all 37), and its KAST treats the
- * player as alive (VALIDATION.md).
+ * A death the world dealt: a fall or a map hazard. A demo credits it to the player themself; the
+ * capture plugin records a suicide with no killer (Recorder.Kill). HLTV's scoreboard does not count it
+ * as a death: its D leaves it out on 120 of the 123 joined player-maps that have one (other suicides,
+ * by a player's own grenade or fire, it counts on all 37), and its KAST treats the player as alive
+ * (VALIDATION.md).
  */
-export const worldDeath = (k: KillFact) => k.killer === k.victim && k.weapon === "world";
+export const worldDeath = (k: KillFact) => k.weapon === "world" && (k.killer === k.victim || k.killer === null);
 
 /**
  * KAST's S: the player was not killed in the round, a world death aside (worldDeath), and did not
