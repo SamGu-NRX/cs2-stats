@@ -10,6 +10,7 @@
 // - valve: one of the user's Valve matchmaking demos, extracted by extractor/valve_import.py
 //   (match.source "valve").
 import type { MatchEntry } from "./match";
+import { CACHE_TOO_NEW } from "../../worker/protocol";
 
 export type SourceId = "recorded" | "converted" | "pro" | "synthetic" | "valve";
 
@@ -62,6 +63,7 @@ export const SUPPORT_NOTE: Record<string, string> = {
  * disclosure. Reads Node's and Rust's error codes for the common causes.
  */
 export function scanErrorText(raw: string): string {
+  if (raw === CACHE_TOO_NEW) return raw;
   const path = /'([^']+)'/.exec(raw)?.[1] ?? /"([^"]+)"/.exec(raw)?.[1] ?? null;
   const at = path ? `: ${path}` : "";
   if (/ENOTDIR|not a directory/i.test(raw)) return `The match folder is a file, not a folder${at}. Move or rename that file, then try again.`;

@@ -1,5 +1,7 @@
 // Minimal IndexedDB store for derived match facts and the match list built from them. The cache is
 // rebuildable: deleting it only costs one re-derivation pass.
+import { CACHE_TOO_NEW } from "./protocol";
+
 const DB = "cs2-stats-cache";
 /**
  * facts: MatchFacts and the file's origin label, by file key; entries: the MatchEntry of the same file;
@@ -23,8 +25,12 @@ function open(): Promise<IDBDatabase> {
       for (const s of STORES) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    // A newer build upgraded the cache past this version: say so, and leave the cache as it is. It
+    // stays readable to the newer build, and the matches it was derived from are on disk.
+    req.onerror = () => reject(req.error?.name === "VersionError" ? new Error(CACHE_TOO_NEW) : req.error);
   });
+  // a failed open is tried again on the next call (Try again), not kept
+  dbp.catch(() => { dbp = null; });
   return dbp;
 }
 
