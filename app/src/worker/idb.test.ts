@@ -11,9 +11,9 @@ const at = (version?: number, upgrade?: (db: IDBDatabase) => void) => new Promis
   q.onerror = () => reject(q.error);
 });
 
-it("says a newer build's cache cannot be opened, in words, and leaves that cache as it is", async () => {
-  // fails if an older build shows IndexedDB's raw VersionError on Home and in the scan status, or
-  // deletes or rebuilds the newer build's cache to get past it
+it("says a newer build's cache cannot be opened, in words, leaves that cache as it is, and tries again on the next call", async () => {
+  // fails if an older build shows IndexedDB's raw VersionError on Home and in the scan status, deletes
+  // or rebuilds the newer build's cache to get past it, or keeps the failed open so Try again cannot work
   globalThis.indexedDB = new IDBFactory();
   (await at(99, (db) => db.createObjectStore("facts"))).close();
   const { idbKeys } = await import("./idb");
@@ -22,4 +22,7 @@ it("says a newer build's cache cannot be opened, in words, and leaves that cache
   const db = await at();
   expect([db.version, [...db.objectStoreNames]]).toEqual([99, ["facts"]]);
   db.close();
+  // once the cache can be opened (here: a fresh one), the next call opens it rather than failing again
+  globalThis.indexedDB = new IDBFactory();
+  await expect(idbKeys("facts")).resolves.toEqual([]);
 });
