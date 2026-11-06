@@ -3178,13 +3178,16 @@ def _extract(dem: Path, out_dir: Path, source: str, mapdata: Path | None, archiv
     named = Path(name) if name else dem
     team1, team2 = teams_from_filename(named)
     result = dict(archive=archive, extractor_version=EXTRACTOR_VERSION, dem_file=named.name,
-                  dem_bytes=dem.stat().st_size, map=None, team1_file=team1,
+                  dem_bytes=None, map=None, team1_file=team1,
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
     try:
-        for name, fn in STAGES:
-            with Timer(ctx, f"stage_{name}"):
-                ctx.tables[name] = fn(ctx)
+        # Every read of the file is inside the try: an error from it names the path, and a recorded demo's
+        # path ends in a Steam name, which extract_demo scrubs only from a result it returns.
+        result["dem_bytes"] = dem.stat().st_size
+        for stage, fn in STAGES:
+            with Timer(ctx, f"stage_{stage}"):
+                ctx.tables[stage] = fn(ctx)
         info = ctx.info
         info["awpy_checks"] = cross_check_awpy(ctx.tables["demoparser2"], ctx.tables["awpy"]) if not ctx.truncated \
             else [dict(check="truncated", expected=None, actual=info["rounds"], ok=True, fatal=False,
@@ -3202,6 +3205,8 @@ def _extract(dem: Path, out_dir: Path, source: str, mapdata: Path | None, archiv
         vis = info["visibility"]
         result["visibility"] = vis
         demo_sha256 = file_sha256(dem)
+        # A listen server's hostname convar is the host's Steam name, like its header server_name.
+        cvars = lambda d: {k: v for k, v in d.items() if not (source == "local" and str(k).lower() == "hostname")}
         if extra_from_players:
             ctx.meta_extra.update(extra_from_players(ctx.tables["demoparser2"]["players"]))
         match = dict(match_id=demo_sha256[:16], source=source, map=header.get("map_name"), tick_rate=ctx.tick_rate,
@@ -3232,7 +3237,7 @@ def _extract(dem: Path, out_dir: Path, source: str, mapdata: Path | None, archiv
                     dropped_attempts=json.dumps(info["dropped_attempts"]),
                     excluded_players=json.dumps(info["excluded_players"], default=str), parts="[]",
                     departed=json.dumps(info["departed"]), scoreboard_taken=json.dumps(info["scoreboard_taken"]),
-                    convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
+                    convars=json.dumps(cvars(info["convars"])), awpy_convars=json.dumps(cvars(info.get("awpy_convars", {}))),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
                         **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "
                                                         "this demo's own player_blind events are the check "

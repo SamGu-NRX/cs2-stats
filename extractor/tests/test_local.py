@@ -21,6 +21,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import extract as ex  # noqa: E402
 import local_import as li  # noqa: E402
+import schema_v1  # noqa: E402
 import valve_import as vi  # noqa: E402
 
 DATA = Path(os.environ.get("CS2_STATS_DATA") or HERE.parents[2] / "cs2-stats-data")
@@ -28,9 +29,13 @@ U1, U2 = vi.STEAMID64_MIN + 1000, vi.STEAMID64_MIN + 2000
 BOT_A, BOT_B = ex.bot_id(3, "Ringo"), ex.bot_id(4, "Vitaliy")
 # tv_autorecord's name shape: the server name, on a listen server the host's Steam name, comes last. This one
 # also parses as "<team1>-vs-<team2>-<map>", so a team name read from it would carry it.
-HOST = "Some-vs-the-persona"
-AUTO = f"auto-20261025-0335-de_dust2-{HOST}.dem"
-SECRET = "persona"
+HOST = "Zz-vs-the-zzpersonaqx"
+AUTO = f"auto-20261106-0000-de_dust2-{HOST}.dem"
+
+
+def leaks(text: str) -> list[str]:
+    """What of AUTO's name a text holds, without regard to case: its distinctive persona, or its whole stem."""
+    return [s for s in ("zzpersonaqx", Path(AUTO).stem.lower()) if s in text.lower()]
 
 
 def _players(*ids):
@@ -130,13 +135,20 @@ def test_the_original_name_reaches_no_result_summary_progress_line_or_log(tmp_pa
     assert row["reason"] == "extract_failed" and row["demo"] in row["errors"][0], row["errors"]
     printed = capsys.readouterr()
     for text in (printed.out, printed.err, json.dumps(summary), caplog.text):
-        assert SECRET not in text
+        assert not leaks(text)
 
     # the core itself: the result, its traceback included, and the team names read from the name it stores
     res = ex.extract_demo(dem, tmp_path / "core", "local", name=f"{row['demo']}.dem")
-    assert SECRET not in json.dumps(res, default=str)
+    assert not leaks(json.dumps(res, default=str))
     assert (res["dem_file"], res["team1_file"], res["team2_file"]) == (f"{row['demo']}.dem", None, None)
     assert ex.teams_from_filename(dem) != (None, None)  # what the stored name would have given
+
+
+def test_a_recorded_demo_gone_before_the_core_reads_it_fails_without_its_name(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG)
+    res = ex.extract_demo(tmp_path / AUTO, tmp_path / "out", "local", name="20261106T0600Z_de_dust2_abcdef12.dem")
+    assert res["ok"] is False and res["errors"][0].startswith("FileNotFoundError"), res["errors"]
+    assert not leaks(json.dumps(res, default=str)) and not leaks(caplog.text)
 
 
 def test_the_core_refuses_a_recorded_demo_without_an_id_name(tmp_path, capsys):
@@ -144,10 +156,10 @@ def test_the_core_refuses_a_recorded_demo_without_an_id_name(tmp_path, capsys):
     for name in (None, AUTO, "anything.dem"):
         with pytest.raises(ValueError, match="source local needs name=") as e:
             ex.extract_demo(dem, tmp_path / "out", "local", name=name)
-        assert SECRET not in str(e.value)
+        assert not leaks(str(e.value))
     with pytest.raises(SystemExit) as e:
         ex.main([str(dem), str(tmp_path / "out"), "--source", "local"])
-    assert e.value.code == 2 and SECRET not in capsys.readouterr().err
+    assert e.value.code == 2 and not leaks(capsys.readouterr().err)
     assert not (tmp_path / "out").exists()
 
 
@@ -165,7 +177,7 @@ def test_an_unreadable_demo_is_reported_by_place_and_the_batch_goes_on(tmp_path,
     code, summary = _run([bad, good], tmp_path / "out")
     assert [(r["demo"], r["ok"], r["reason"]) for r in summary["results"]][0] == ("unreadable-1", False, "unreadable")
     assert summary["results"][1]["ok"] and len(calls) == 1 and code == 1
-    assert SECRET not in json.dumps(summary)
+    assert not leaks(json.dumps(summary))
 
 
 def test_the_id_is_the_creation_time_the_header_map_and_the_hash_and_a_named_demo_keeps_its_own(
@@ -279,6 +291,55 @@ def test_a_truncated_demo_cut_off_before_its_second_freeze_end_still_gets_a_tick
     assert ex.truncated_tick_rate(Frozen(), [2488, 9000], 64.0) == 64.0
 
 
+def _row(table: str, **values) -> dict:
+    """One row of a schema v1 table with a neutral value in every column, then `values`."""
+    neutral = {"Boolean": False, "String": "", "List(String)": [], "List(UInt64)": [], "Float32": 0.0}
+    return {c: neutral.get(t, 0) for c, t in schema_v1.TYPES[table].items()} | values
+
+
+@pytest.fixture
+def parsed_match(monkeypatch):
+    """Both parsing stages replaced by what they hand on for a one-round bot match on a listen server named
+    after its host: the header with that server name, the round, three players. Everything after them is
+    the real extraction: the match row, the result and the published tables."""
+    def awpy(ctx):
+        ctx.truncated = True  # skips the cross-check against awpy's own tables
+        ctx.info.update(awpy_error="stand-in", awpy_header={})
+        return {}
+
+    def demoparser2(ctx):
+        ctx.info.update(
+            header={"map_name": "de_dust2", "server_name": HOST, "patch_version": "14109", "demo_version_guid": "g"},
+            rounds=1, final_score={"ct_start": 1, "t_start": 0}, match_start_tick=1113, unattributed_damage_hp=0,
+            final_tick=9000, voided_windows=[], dropped_attempts=[], excluded_players=[], departed=[],
+            scoreboard_taken={}, convars={"hostname": HOST}, checks=[], equip_value_mismatch_rows=0, economy_rows=0,
+            visibility=dict(status="ok", release="2000935", patch_version="1.41.9.2", buildid="26144732",
+                            mesh_sha256="0" * 64, kill_agreement=1.0))
+        return {"rounds": pd.DataFrame([_row("rounds", round=1, ct_team="ct_start", t_team="t_start")]),
+                "players": pd.DataFrame([_row("players", steamid=s, name=n, is_bot=s < 2 ** 40, team=t)
+                                         for s, n, t in ((U1, "Player", "ct_start"), (BOT_A, "Ringo", "t_start"),
+                                                         (BOT_B, "Vitaliy", "ct_start"))])}
+    monkeypatch.setattr(ex, "STAGES", [("awpy", awpy), ("demoparser2", demoparser2)])
+    monkeypatch.setattr(li, "demo_map", lambda dem: "de_dust2")
+
+
+def test_a_published_import_holds_no_part_of_the_original_name(tmp_path, parsed_match, capsys, caplog):
+    caplog.set_level(logging.DEBUG)
+    code, summary = _run([_demo(tmp_path / "replays"), "--progress"], tmp_path / "out")
+    row = summary["results"][0]
+    assert (code, row["ok"], row["pov"]) == (0, True, str(U1)), row["errors"]
+    tables = sorted(ex.resolve_map_dir(Path(row["out"])).glob("*.parquet"))
+    assert [t.stem for t in tables] == ["match", "players", "rounds"]
+    for t in tables:
+        assert not leaks(_strings(t)), t.name
+    printed = capsys.readouterr()
+    for text in (json.dumps(summary), printed.out, printed.err, caplog.text):
+        assert not leaks(text)
+    m = pl.read_parquet(tables[0]).row(0, named=True)
+    assert (m["source"], m["dem_file"], m["server_name"], m["team1_file"], m["team2_file"]) == (
+        "local", f"{row['demo']}.dem", "", None, None)
+
+
 # --- a real demo from the private data folder ----------------------------------
 
 def _strings(path: Path) -> str:
@@ -289,12 +350,14 @@ def _strings(path: Path) -> str:
 
 
 def test_a_real_demo_through_the_local_path_writes_no_part_of_its_original_name(tmp_path, caplog):
+    # The same check on every table a real demo produces; it needs the private fixtures, and the synthetic
+    # test above enforces the rule without them.
     src = DATA / "fixtures" / "fixture-d-vs-split-m1-cache-p1.dem"  # an HLTV Cache map's first part, 4 rounds
     mapdata = DATA / "mapdata" / "2000935"
     if not src.exists() or not mapdata.exists():
         pytest.skip(f"PRIVATE FIXTURE MISSING: {src} or {mapdata}; the tables of a real demo are not grepped")
     caplog.set_level(logging.DEBUG)
-    dem = tmp_path / "replays" / f"auto-20261025-0335-de_cache-{HOST}.dem"
+    dem = tmp_path / "replays" / f"auto-20261106-0000-de_cache-{HOST}.dem"
     dem.parent.mkdir()
     shutil.copyfile(src, dem)
     code, summary = _run([dem, "--user", str(U1), "--mapdata", mapdata], tmp_path / "out")
@@ -302,8 +365,8 @@ def test_a_real_demo_through_the_local_path_writes_no_part_of_its_original_name(
     assert (code, row["ok"], row["pov"]) == (0, True, None), (row["errors"], row.get("failed_checks"))  # ten humans, none of them the user
     tables = ex.resolve_map_dir(Path(row["out"]))
     for t in sorted(tables.glob("*.parquet")):
-        assert SECRET not in _strings(t), t.name
-    assert SECRET not in json.dumps(summary) and SECRET not in caplog.text
+        assert not leaks(_strings(t)), t.name
+    assert not leaks(json.dumps(summary)) and not leaks(caplog.text)
     m = pl.read_parquet(tables / "match.parquet").row(0, named=True)
     assert (m["source"], m["dem_file"], m["server_name"], m["team1_file"], m["team2_file"]) == (
         "local", f"{row['demo']}.dem", "", None, None)
