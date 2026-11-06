@@ -10,6 +10,7 @@
 
 pub mod botmode;
 pub mod clips;
+pub mod demos;
 mod leetify;
 mod pro;
 
@@ -279,13 +280,13 @@ fn table_name(t: &str) -> bool {
 /// The version folder's COMPLETE list (file name to bytes), when it lies inside `root`, every name it lists
 /// is a plain table name, and every table resolves inside `root` at its listed size. Each check comes
 /// before the open it guards, so nothing outside `root` is read.
-fn complete_tables(root: &Path, dir: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
+fn complete_tables(root: &Path, dir: &Path, what: &str) -> Result<std::collections::BTreeMap<String, u64>, String> {
     let complete = dir.join("COMPLETE");
     if !complete.exists() {
         return Err("no COMPLETE file yet".into());
     }
     if !inside(root, &complete) {
-        return Err("its version folder resolves outside the Valve folder".into());
+        return Err(format!("its version folder resolves outside the {what} folder"));
     }
     let text = fs::read_to_string(&complete).map_err(|e| format!("COMPLETE: {e}"))?;
     let sizes: std::collections::BTreeMap<String, u64> =
@@ -299,7 +300,7 @@ fn complete_tables(root: &Path, dir: &Path) -> Result<std::collections::BTreeMap
             return Err(format!("{f} is missing"));
         }
         if !inside(root, &p) {
-            return Err(format!("{f} resolves outside the Valve folder"));
+            return Err(format!("{f} resolves outside the {what} folder"));
         }
         if fs::metadata(&p).map(|m| m.len()).ok() != Some(*n) {
             return Err(format!("{f} is not at its listed {n} bytes"));
@@ -329,11 +330,9 @@ struct ValveListing {
 /// listed in `skipped` with the reason. A missing folder lists nothing.
 fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
     let mut out = ValveListing { folder: root.display().to_string(), user: None, user_error: None, files: Vec::new(), skipped: Vec::new() };
-    let top = match fs::read_dir(root) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(format!("{}: {e}", root.display())),
-    };
+    if !root.exists() {
+        return Ok(out);
+    }
     // Read a second time 50 ms after a failure, as something else may be writing the file. Still unreadable,
     // it is reported rather than returned as an error, so one bad file does not hide every match.
     match valve_user(root).or_else(|_| {
@@ -343,6 +342,20 @@ fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
         Ok(u) => out.user = u,
         Err(e) => out.user_error = Some(e),
     }
+    (out.files, out.skipped) = list_tables_in(root, "valve", "Valve")?;
+    Ok(out)
+}
+
+/// The match folders under `root` in the extractor's versioned layout whose CURRENT version is complete,
+/// as `<prefix>/<folder>/<version>`, newest folder name first, and the folders skipped with the reason.
+/// `what` names the folder in messages.
+fn list_tables_in(root: &Path, prefix: &str, what: &str) -> Result<(Vec<FileEntry>, Vec<Skipped>), String> {
+    let (mut files, mut skipped) = (Vec::new(), Vec::new());
+    let top = match fs::read_dir(root) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((files, skipped)),
+        Err(e) => return Err(format!("{}: {e}", root.display())),
+    };
     for item in top {
         let item = item.map_err(|e| format!("{}: {e}", root.display()))?;
         let Some(name) = item.file_name().to_str().map(str::to_owned) else { continue };
@@ -350,35 +363,35 @@ fn list_valve_in(root: &Path) -> Result<ValveListing, String> {
         if !map.is_dir() || !plain_name(&name) || !map.join("CURRENT").exists() {
             continue;
         }
-        let skip = |why: String| Skipped { file: format!("valve/{name}"), why };
+        let skip = |why: String| Skipped { file: format!("{prefix}/{name}"), why };
         if map.join("RETIRED").exists() {
-            out.skipped.push(skip("retired".into()));
+            skipped.push(skip("retired".into()));
             continue;
         }
         if !inside(root, &map.join("CURRENT")) {
-            out.skipped.push(skip("CURRENT resolves outside the Valve folder".into()));
+            skipped.push(skip(format!("CURRENT resolves outside the {what} folder")));
             continue;
         }
         let current = fs::read_to_string(map.join("CURRENT")).unwrap_or_default().trim().to_string();
         if !version_dir(&current) {
-            out.skipped.push(skip(format!("CURRENT names \"{current}\", which is not a version folder")));
+            skipped.push(skip(format!("CURRENT names \"{current}\", which is not a version folder")));
             continue;
         }
         let dir = map.join(&current);
-        match complete_tables(root, &dir) {
+        match complete_tables(root, &dir, what) {
             Ok(sizes) => {
                 let mtime = fs::metadata(dir.join("COMPLETE"))
                     .and_then(|m| m.modified())
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map_or(0, |d| d.as_millis() as u64);
-                out.files.push(FileEntry { file: format!("valve/{name}/{current}"), size: sizes.values().sum(), mtime });
+                files.push(FileEntry { file: format!("{prefix}/{name}/{current}"), size: sizes.values().sum(), mtime });
             }
-            Err(why) => out.skipped.push(skip(format!("{current}: {why}"))),
+            Err(why) => skipped.push(skip(format!("{current}: {why}"))),
         }
     }
-    out.files.sort_by(|a, b| b.file.cmp(&a.file));
-    Ok(out)
+    files.sort_by(|a, b| b.file.cmp(&a.file));
+    Ok((files, skipped))
 }
 
 #[tauri::command]
@@ -386,16 +399,20 @@ async fn list_valve() -> Result<ValveListing, String> {
     list_valve_in(&valve_dir()?)
 }
 
-/// "<demo>/<version>" returns the version's table file names as JSON; "<demo>/<version>/<table>.parquet"
-/// returns that table, only if the version's COMPLETE list names it at its size.
 fn read_valve_in(root: &Path, path: &str) -> Result<Vec<u8>, String> {
+    read_tables_in(root, path, "Valve")
+}
+
+/// "<demo>/<version>" returns the version's table file names as JSON; "<demo>/<version>/<table>.parquet"
+/// returns that table, only if the version's COMPLETE list names it at its size. `what` names the folder.
+fn read_tables_in(root: &Path, path: &str, what: &str) -> Result<Vec<u8>, String> {
     let parts: Vec<&str> = path.split('/').collect();
     let ok = matches!(parts.len(), 2 | 3) && plain_name(parts[0]) && version_dir(parts[1]) && parts.get(2).is_none_or(|t| table_name(t));
     if !ok {
-        return Err(format!("{path}: not a Valve match path (<demo>/<version folder>[/<table>.parquet])"));
+        return Err(format!("{path}: not a {what} match path (<demo>/<version folder>[/<table>.parquet])"));
     }
     let dir = root.join(parts[0]).join(parts[1]);
-    let outside = || format!("{path}: resolves outside the Valve folder");
+    let outside = || format!("{path}: resolves outside the {what} folder");
     if !dir.join("COMPLETE").exists() {
         return Err(format!("{path}: this version is gone; rescan"));
     }
@@ -492,43 +509,74 @@ fn valve_import_state() -> ImportState {
 /// the importer writes to stderr is sent as a "valve-import-progress" event.
 #[tauri::command]
 async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
-    use std::io::BufRead;
     use tauri::Emitter;
-    let dir = env_path("CS2_EXTRACTOR_DIR")?
-        .ok_or("The importer is not installed: set CS2_EXTRACTOR_DIR to the extractor folder (extractor/README.md)")?;
-    let script = dir.join("valve_import.py");
-    if !script.is_file() {
-        return Err(format!("no importer at {}", script.display()));
-    }
-    let python = env_path("CS2_EXTRACTOR_PYTHON")?
-        .unwrap_or_else(|| dir.join(".venv").join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" }));
-    let mapdata = env_path("CS2_MAPDATA")?;
-    if !python.is_file() {
-        return Err(format!("no Python at {}; create the extractor's .venv or set CS2_EXTRACTOR_PYTHON", python.display()));
-    }
+    let x = Extractor::find("valve_import.py")?;
     let out = valve_dir()?;
     IMPORT.begin()?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(&python);
-        cmd.arg("-I").arg(&script).arg("--progress").arg("--out").arg(&out).current_dir(&dir);
-        if let Some(m) = &mapdata {
-            cmd.arg("--mapdata").arg(m);
+        let mut args: Vec<std::ffi::OsString> = vec!["--out".into(), out.into()];
+        if let Some(m) = &x.mapdata {
+            args.extend(["--mapdata".into(), m.clone().into_os_string()]);
         }
-        let mut child = cmd
+        x.run(&args, &|ev| {
+            IMPORT.progress(ev.clone());
+            let _ = app.emit("valve-import-progress", ev);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    IMPORT.end(result.as_ref().ok().cloned());
+    result
+}
+
+/// One of the extractor's importer scripts and the Python that runs it: CS2_EXTRACTOR_DIR (the extractor
+/// folder) and its .venv Python, which CS2_EXTRACTOR_PYTHON overrides. CS2_MAPDATA, when set, is the mesh
+/// folder. The extractor is not packaged as a sidecar binary yet.
+struct Extractor {
+    dir: PathBuf,
+    script: PathBuf,
+    python: PathBuf,
+    mapdata: Option<PathBuf>,
+}
+
+impl Extractor {
+    fn find(script: &str) -> Result<Extractor, String> {
+        let dir = env_path("CS2_EXTRACTOR_DIR")?
+            .ok_or("The importer is not installed: set CS2_EXTRACTOR_DIR to the extractor folder (extractor/README.md)")?;
+        let script = dir.join(script);
+        if !script.is_file() {
+            return Err(format!("no importer at {}", script.display()));
+        }
+        let python = env_path("CS2_EXTRACTOR_PYTHON")?
+            .unwrap_or_else(|| dir.join(".venv").join(if cfg!(windows) { "Scripts\\python.exe" } else { "bin/python" }));
+        if !python.is_file() {
+            return Err(format!("no Python at {}; create the extractor's .venv or set CS2_EXTRACTOR_PYTHON", python.display()));
+        }
+        Ok(Extractor { dir, script, python, mapdata: env_path("CS2_MAPDATA")? })
+    }
+
+    /// Runs the script with `--progress` and `args`, handing each JSON progress line it writes to stderr
+    /// to `progress`; its stdout is the JSON summary.
+    fn run(&self, args: &[std::ffi::OsString], progress: &dyn Fn(serde_json::Value)) -> Result<ValveImport, String> {
+        use std::io::BufRead;
+        let mut child = std::process::Command::new(&self.python)
+            .arg("-I")
+            .arg(&self.script)
+            .arg("--progress")
+            .args(args)
+            .current_dir(&self.dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| format!("{}: {e}", python.display()))?;
+            .map_err(|e| format!("{}: {e}", self.python.display()))?;
         let stdout = child.stdout.take().expect("piped stdout");
         let reader = std::thread::spawn(move || std::io::read_to_string(stdout).unwrap_or_default());
         let mut tail = String::new();
         for line in std::io::BufReader::new(child.stderr.take().expect("piped stderr")).lines() {
             let line = line.map_err(|e| e.to_string())?;
             match serde_json::from_str::<serde_json::Value>(&line) {
-                Ok(ev) if ev.get("event").is_some() => {
-                    IMPORT.progress(ev.clone());
-                    let _ = app.emit("valve-import-progress", ev);
-                }
+                Ok(ev) if ev.get("event").is_some() => progress(ev),
                 _ if !line.trim().is_empty() => {
                     tail.push_str(&line);
                     tail.push('\n');
@@ -543,12 +591,23 @@ async fn import_valve(app: tauri::AppHandle) -> Result<ValveImport, String> {
         let tail: Vec<char> = tail.trim().chars().collect();
         let error = (code != Some(0) && !tail.is_empty()).then(|| tail[tail.len().saturating_sub(2000)..].iter().collect());
         Ok(ValveImport { code, summary, error })
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r);
-    IMPORT.end(result.as_ref().ok().cloned());
-    result
+    }
+
+    /// The extractor version the script reports with `--version`.
+    fn version(&self) -> Result<String, String> {
+        let out = std::process::Command::new(&self.python)
+            .arg("-I")
+            .arg(&self.script)
+            .arg("--version")
+            .current_dir(&self.dir)
+            .output()
+            .map_err(|e| format!("{}: {e}", self.python.display()))?;
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !out.status.success() || v.is_empty() {
+            return Err(format!("{} --version failed: {}", self.script.display(), String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(v)
+    }
 }
 
 // ---------------------------------------------------------------- outside links
@@ -754,6 +813,16 @@ pub fn run() {
             botmode::commands::botmode_change_files,
             botmode::commands::botmode_mod_commands,
             botmode::commands::botmode_set_launch_options,
+            botmode::commands::botmode_set_recording,
+            demos::demos_status,
+            demos::demos_set_policy,
+            demos::demos_pin,
+            demos::demos_delete,
+            demos::demos_sweep,
+            demos::list_local,
+            demos::read_local,
+            demos::import_local,
+            demos::local_import_state,
         ]))
         .run(tauri::generate_context!())
         .expect("error while running CS2 Stats");

@@ -2830,3 +2830,25 @@ fn manual_rollback_waits_while_a_session_holds_the_lease() {
     assert!(err.contains("session is running"), "{err}");
     assert_eq!(snapshot(&layout.csgo), before);
 }
+
+#[test]
+fn a_recorded_launch_adds_gotv_after_the_users_options_and_a_floor_breach_drops_only_the_tokens() {
+    let s = Scratch::new("launch-record");
+    let steam = fake_steam_config(&s, Some("-novid"));
+    let layout = installed(&s);
+    settings::set_launch_options(&layout, "+exec botmode", None).unwrap();
+    let limits = |floor_gb: f64| settings::DemoPolicy { cap_gb: 20.0, floor_gb, keep_last: 10 };
+    settings::set_demo_policy(&layout, limits(0.0), None).unwrap();
+    {
+        let lock = OpLock::acquire(&layout).unwrap();
+        let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+        assert_eq!(plan.args, ["-applaunch", "730", "-insecure", "+exec", "botmode", "+tv_enable", "1", "+tv_autorecord", "1", "+tv_maxclients", "0"]);
+        launch::check_start(&plan, &layout, &CLOSED, &steam).unwrap();
+    }
+    // a floor no disk meets: the launch goes ahead without recording, and says why
+    settings::set_demo_policy(&layout, limits(1e9), None).unwrap();
+    let lock = OpLock::acquire(&layout).unwrap();
+    let plan = launch::prepare(&layout, &CLOSED, &steam, &lock).unwrap();
+    assert_eq!(plan.args, ["-applaunch", "730", "-insecure", "+exec", "botmode"]);
+    assert!(plan.recording.blocked.as_deref().is_some_and(|b| b.starts_with("Recording off this time: ")), "{:?}", plan.recording);
+}

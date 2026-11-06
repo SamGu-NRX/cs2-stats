@@ -330,6 +330,12 @@ pub async fn botmode_set_launch_options(game: Option<String>, options: String, s
     blocking(game, move |ctx| settings::set_launch_options(&ctx.layout, &options, seen.as_deref())).await
 }
 
+/// App settings only. `seen` is the switch as the view showed it; refused when it has changed since.
+#[tauri::command]
+pub async fn botmode_set_recording(game: Option<String>, on: bool, seen: Option<bool>) -> Result<AppSettings, String> {
+    blocking(game, move |ctx| settings::set_recording(&ctx.layout, on, seen)).await
+}
+
 /// At app start: session cleanup, which closes interrupted session toggles and starts watching
 /// a CS2 that runs with Bot Mode on and no supervisor. It never turns Bot Mode off; a session
 /// that died with Bot Mode on shows as `SessionView::recovery`. Runs off the UI thread; its

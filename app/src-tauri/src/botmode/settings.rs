@@ -1362,17 +1362,52 @@ pub fn repair_knife(layout: &Layout, probe: &dyn ProcessProbe, seen: &RepairPlan
 }
 
 /// Settings that live in the app, not the game folder.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     /// Added after `-insecure` when Bot Mode starts CS2, on top of the launch options set in
     /// Steam, which Steam adds itself.
-    #[serde(default)]
     pub launch_options: String,
+    /// Bot Mode starts CS2 with GOTV recording each match (`demos::TOKENS`). On by default: the
+    /// user asked for every match to be recorded (design/recording.md).
+    pub record_demos: bool,
+    /// The most the kept demos may take, in GB (2^30 bytes, as Windows counts them).
+    pub demo_cap_gb: f64,
+    /// Recording stops while the disk has less than this free, in GB.
+    pub demo_floor_gb: f64,
+    /// The newest demos kept whatever else holds.
+    pub demo_keep_last: u32,
+}
+
+/// The user's choices (design/recording.md): a 20 GB cap, a 10 GB free-disk floor, the last 10 kept.
+impl Default for AppSettings {
+    fn default() -> Self {
+        AppSettings { launch_options: String::new(), record_demos: true, demo_cap_gb: 20.0, demo_floor_gb: 10.0, demo_keep_last: 10 }
+    }
+}
+
+/// How the demos are kept, as the Data & settings card sets them.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoPolicy {
+    pub cap_gb: f64,
+    pub floor_gb: f64,
+    pub keep_last: u32,
+}
+
+impl AppSettings {
+    pub fn demo_policy(&self) -> DemoPolicy {
+        DemoPolicy { cap_gb: self.demo_cap_gb, floor_gb: self.demo_floor_gb, keep_last: self.demo_keep_last }
+    }
 }
 
 pub fn load_app(layout: &Layout) -> Result<AppSettings, String> {
-    let path = layout.settings_file();
+    load_app_in(&layout.data)
+}
+
+/// The app settings in the Bot Mode folder `data`, for a reader with no game folder at hand.
+pub fn load_app_in(data: &Path) -> Result<AppSettings, String> {
+    let path = data.join("settings.json");
     match std::fs::read_to_string(&path) {
         Ok(t) => serde_json::from_str(&t).map_err(|e| format!("{}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppSettings::default()),
@@ -1385,15 +1420,56 @@ pub fn load_app(layout: &Layout) -> Result<AppSettings, String> {
 /// write happen under the operation lock.
 pub fn set_launch_options(layout: &Layout, options: &str, seen: Option<&str>) -> Result<AppSettings, String> {
     super::launch::steam_args(options)?;
+    update_app(layout, |s| {
+        if seen.is_some_and(|seen| seen != s.launch_options) {
+            return Err(format!("the app's launch options {} (now {:?}); nothing was written", changes::CHANGED_SINCE_READ, s.launch_options));
+        }
+        s.launch_options = options.to_string();
+        Ok(())
+    })
+}
+
+/// Reads, checks and writes the app settings under the operation lock: `change` returns an error
+/// (nothing written) when what the caller showed is no longer what the file holds.
+fn update_app(layout: &Layout, change: impl FnOnce(&mut AppSettings) -> Result<(), String>) -> Result<AppSettings, String> {
     let _lock = OpLock::acquire(layout)?;
     let mut s = load_app(layout)?;
-    if seen.is_some_and(|seen| seen != s.launch_options) {
-        return Err(format!("the app's launch options {} (now {:?}); nothing was written", changes::CHANGED_SINCE_READ, s.launch_options));
-    }
-    s.launch_options = options.to_string();
+    change(&mut s)?;
     let text = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
     write_atomic(&layout.settings_file(), text.as_bytes())?;
     Ok(s)
+}
+
+/// Turns recording on or off, refused when it is no longer `seen`, what the view showed.
+pub fn set_recording(layout: &Layout, on: bool, seen: Option<bool>) -> Result<AppSettings, String> {
+    update_app(layout, |s| {
+        if seen.is_some_and(|seen| seen != s.record_demos) {
+            return Err(format!("recording {} (now {}); nothing was written", changes::CHANGED_SINCE_READ, if s.record_demos { "on" } else { "off" }));
+        }
+        s.record_demos = on;
+        Ok(())
+    })
+}
+
+/// Sets the cap, floor and keep-last, refused when they are no longer `seen`. The cap must be at
+/// least 1 GB, the floor at least 0, and keep-last at most 1000.
+pub fn set_demo_policy(layout: &Layout, p: DemoPolicy, seen: Option<DemoPolicy>) -> Result<AppSettings, String> {
+    if !(p.cap_gb.is_finite() && p.cap_gb >= 1.0) {
+        return Err(format!("a cap of {} GB is not allowed; it must be at least 1 GB", p.cap_gb));
+    }
+    if !(p.floor_gb.is_finite() && p.floor_gb >= 0.0) {
+        return Err(format!("a floor of {} GB is not allowed; it must be 0 or more", p.floor_gb));
+    }
+    if p.keep_last > 1000 {
+        return Err(format!("keeping the last {} is not allowed; at most 1000", p.keep_last));
+    }
+    update_app(layout, |s| {
+        if seen.is_some_and(|seen| seen != s.demo_policy()) {
+            return Err(format!("the demo settings {}; nothing was written", changes::CHANGED_SINCE_READ));
+        }
+        (s.demo_cap_gb, s.demo_floor_gb, s.demo_keep_last) = (p.cap_gb, p.floor_gb, p.keep_last);
+        Ok(())
+    })
 }
 
 pub fn save_app(layout: &Layout, s: &AppSettings) -> Result<(), String> {

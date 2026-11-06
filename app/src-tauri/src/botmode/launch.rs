@@ -76,6 +76,25 @@ pub fn steam_args(options: &str) -> Result<Vec<String>, String> {
 pub struct LaunchPlan {
     pub steam_exe: String,
     pub args: Vec<String>,
+    /// Whether this launch records the match; its tokens are the end of `args`.
+    pub recording: crate::demos::Recording,
+}
+
+/// Before a launch that records: the demo sweep, leaving room for this match
+/// (`demos::RESERVE`), then the free-space check. A sweep that fails turns recording off for this
+/// launch, so the store never grows past its cap unchecked; the launch itself goes ahead.
+fn pre_launch(layout: &Layout, lock: &OpLock, app: &settings::AppSettings) -> crate::demos::Recording {
+    use crate::demos;
+    if !app.record_demos {
+        return demos::recording(app, Ok(0));
+    }
+    let swept = demos::Store::of(layout).and_then(|store| {
+        demos::sweep(&store, lock, &demos::Policy::of(app), None, demos::RESERVE, demos::game_build(layout).as_deref(), None)
+    });
+    match swept {
+        Ok(_) => demos::recording(app, demos::launch_free(layout)),
+        Err(e) => demos::recording(app, Err(format!("the demos folder could not be swept: {e}"))),
+    }
 }
 
 /// What the check on the started game found.
@@ -118,7 +137,7 @@ fn check_closed(probe: &dyn ProcessProbe, phase: Phase, running: &str) -> Result
 /// options must not turn VAC on, the mod must be installed, and `gameinfo.gi` must be readable.
 /// Turning Bot Mode on is the session's job (`session::begin`), right before the spawn. The
 /// caller holds `lock` until the game has been handed to Steam.
-pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _lock: &OpLock) -> Result<LaunchPlan, String> {
+pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, lock: &OpLock) -> Result<LaunchPlan, String> {
     check_closed(probe, Phase::LaunchPrepare, "CS2 is already running. Close it, then launch Bot Mode, so the game starts with -insecure.")?;
     check_no_unfinished(layout)?;
     settings::check_knife_file(layout)?;
@@ -132,7 +151,10 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _
     if !missing.is_empty() {
         return Err(format!("the mod is not installed ({} missing); run `botmode install <tag>` first", missing.join(", ")));
     }
-    let args = steam_args(&settings::load_app(layout)?.launch_options)?;
+    let app = settings::load_app(layout)?;
+    let mut args = steam_args(&app.launch_options)?;
+    let recording = pre_launch(layout, lock, &app);
+    args.extend(recording.tokens.iter().cloned());
     let gi_path = layout.confined("gameinfo.gi")?;
     let text = std::fs::read_to_string(&gi_path).map_err(|e| format!("{}: {e}", gi_path.display()))?;
     gameinfo::enable(&text)?;
@@ -140,7 +162,7 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _
     if !steam_exe.is_file() {
         return Err(format!("{} not found", steam_exe.display()));
     }
-    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args })
+    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args, recording })
 }
 
 /// The last checks before Steam is asked to start the game: CS2 has not started meanwhile, no

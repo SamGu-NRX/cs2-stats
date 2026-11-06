@@ -7,9 +7,9 @@
 // or a session holds the game, and a cosmetics write whose `seen` no longer matches is refused as
 // a stale read. The releases and catalog entries are copied from the public GitHub release list
 // and the BotRandomizer catalog; the game folder, hashes and the session are made up.
-import { botmodeOver, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type KnifeFileStatus, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RepairPlan, type RollbackReport, type RunningCs2, type Preview, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status, type UndoPlan } from "./commands";
+import { botmodeOver, RECORD_TOKENS, UNREACHABLE, type BotModeApi, type Call, type Catalog, type Change, type Component, type Cosmetics, type Difficulty, type GithubRelease, type InstallReport, type KnifeBind, type KnifeFileStatus, type OverlayPlan, type OverlayReport, type PlannedEntry, type ReleaseIndex, type RepairPlan, type RollbackReport, type RunningCs2, type Preview, type ServerPatch, type ServerSettings, type SessionStatus, type SessionView, type SourceLink, type Status, type UndoPlan } from "./commands";
 
-export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery", "unknown-version", "knife-missing"] as const;
+export const SCENARIOS = ["installed", "outdated", "not-installed", "session", "cs2-running", "unfinished", "no-steam", "unreachable", "managed", "recovery", "unknown-version", "knife-missing", "low-disk"] as const;
 
 /** session.rs's notices (#50), as the backend sends them. */
 export const NOTICES = {
@@ -21,6 +21,8 @@ export const NOTICES = {
 const BOT_LINES = ["\t\t\tGame\tcsgo/addons", "\t\t\tGame\tcsgo_bots"];
 export type Scenario = (typeof SCENARIOS)[number];
 
+/** 2^30 bytes, the GB the host counts in (src-tauri demos.rs GB) */
+const GB = 2 ** 30;
 const CSGO = String.raw`C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo`;
 const CS2_EXE = String.raw`C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe`;
 const OFFICIAL = "https://github.com/ed0ard/CS2-Bot-Improver";
@@ -274,6 +276,10 @@ function initial(s: Scenario): State {
     cosmetics: installed ? { droppedKnifeSkins: true, droppedKnifePremium: false, musicKit: 3, cfgPresent: true } : { droppedKnifeSkins: false, droppedKnifePremium: false, musicKit: 0, cfgPresent: false },
     steamLaunchOptions: "-novid -fullscreen -w 1280 -h 960",
     launchOptions: installed ? "+exec botmode" : "",
+    // low-disk: recording is on, but the disk is under the 10 GB floor, so this launch won't record
+    recording: s === "low-disk"
+      ? { on: true, tokens: [], blocked: "Recording off this time: 9.4 GB free, floor 10 GB.", free: 9.4 * GB, floor: 10 * GB }
+      : { on: true, tokens: [...RECORD_TOKENS], blocked: null, free: 41.2 * GB, floor: 10 * GB },
     components: installed ? components(true) : [],
     protected: installed ? { "cfg/autoexec.cfg": sha("autoexec"), "cfg/gamemode_competitive_server.cfg": sha("server") } : {},
     overlays: installed ? Object.entries(FORKS).map(([name, [repo, ref, commit, target]]) => ({ name, target, files: { [`${target}/${name}.dll`]: sha(name) }, source: link(repo, ref, commit), appliedAt: "2026-10-25T22:31:40Z" })) : [],
@@ -630,6 +636,15 @@ export function mockCall(scenario: Scenario, delay = 0): Call & { state: State }
         if ((options.match(/"/g) ?? []).length % 2) throw `${options}: unbalanced quote`;
         st.status.launchOptions = options;
         return { launchOptions: options };
+      }
+      case "botmode_set_recording": {
+        const r = st.status.recording;
+        if (typeof a.seen === "boolean" && a.seen !== r.on) throw `recording changed since it was read (now ${r.on ? "on" : "off"}); nothing was written`;
+        const on = a.on as boolean;
+        st.status.recording = on
+          ? { ...r, on, tokens: r.free !== null && r.free >= r.floor + GB ? [...RECORD_TOKENS] : [] }
+          : { ...r, on, tokens: [] };
+        return { launchOptions: st.status.launchOptions, recordDemos: on, demoCapGb: 20, demoFloorGb: r.floor / GB, demoKeepLast: 10 };
       }
       case "botmode_launch": {
         writable();
