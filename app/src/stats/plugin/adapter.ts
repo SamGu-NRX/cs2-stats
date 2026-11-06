@@ -278,6 +278,10 @@ export function pluginToTables(m: MatchFile): MatchTables {
       a_equip_value_game: killer === null ? null : m.rounds.equip[ri][killer],
       v_side: vs, v_x: vp?.[0] ?? null, v_y: vp?.[1] ?? null, v_z: vp?.[2] ?? null, v_equip_value_game: m.rounds.equip[ri][victim],
       is_suicide: suicide, is_teamkill: !suicide && killer !== null && ks !== null && ks === vs,
+      // the controllers the event names, beside the bodies credited above, so a view can credit a
+      // takeover to the human driving it instead (facts.ts takeover measures); none when the killer is
+      // in no known body, so that kill is credited to no one either way
+      attacker_controller_steamid: killer === null || named === null ? null : key[named], victim_controller_steamid: key[k.victim[i]],
     });
   }
 
@@ -297,7 +301,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
       // the plugin stores each hit's damage already capped at the victim's health
       dmg_health: d.dmg[i], dmg_health_capped: d.dmg[i], dmg_armor: d.dmgArmor[i], hitgroup: d.hitgroup[i] === null ? null : HITGROUP[d.hitgroup[i]!] ?? "generic",
       a_side: sideOf(ri, a), v_side: sideOf(ri, v), is_team_damage: a !== null && a !== v && sideOf(ri, a) === sideOf(ri, v),
-      is_self: a === v, grenade_entity_id: nade,
+      is_self: a === v, grenade_entity_id: nade, attacker_controller_steamid: a === null || by === null ? null : key[by],
     });
   }
 

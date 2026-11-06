@@ -5,6 +5,7 @@
 import { Card } from "../../components/Card";
 import { fmtMetric } from "../../data/engine";
 import { useCall } from "../../data/hooks";
+import { creditedRow, useCredit } from "../../data/credit";
 import type { ViewedMatch } from "../../data/match";
 import { metric } from "../../data/meta";
 import { Num } from "../../components/bits";
@@ -17,13 +18,17 @@ const RECENT = 10;
 /** A change of this share of your usual value reaches the track's end; a drawing scale only. */
 const CAP = 0.5;
 
-function Row({ row, n }: { row: YourMatchRow; n: number }) {
+function Row({ row: game, n }: { row: YourMatchRow; n: number }) {
+  // under "You", the takeover-credited figures where the worker gave them (YourMatchRow.you)
+  const row = creditedRow(game, useCredit());
   const m = metric(row.id);
   const fmt = (x: number | null) => fmtMetric(row.id, x);
   const rel = relChange(row.value, row.average);
   const at = rel === null ? null : 50 + (50 * Math.max(-CAP, Math.min(CAP, rel))) / CAP;
   const tone = row.direction === "better" ? "q5" : row.direction === "worse" ? "q1" : "q3";
-  const tip = [m.tip, row.average === null ? "Not in your earlier matches." : `This match ${fmt(row.value)}; your last ${plural(n, "match", "matches")} ${fmt(row.average)}.`].join("\n");
+  const moved = row.moved ? `Includes your play in bots you took over; the game's figures are ${fmt(game.value)} this match and ${fmt(game.average)} usually.` : null;
+  const tip = [m.tip, row.average === null ? "Not in your earlier matches." : `This match ${fmt(row.value)}; your last ${plural(n, "match", "matches")} ${fmt(row.average)}.`, moved].filter(Boolean).join("\n");
+  const mark = row.moved ? "moved moved--on" : undefined;
   return (
     <li className="ymr" data-tip={tip} tabIndex={0}>
       <span className="ymr__l">{m.label}</span>
@@ -34,8 +39,8 @@ function Row({ row, n }: { row: YourMatchRow; n: number }) {
           <i className="trk__dot" style={{ left: `${at}%` }} />
         </>}
       </span>
-      <b className="num ymr__v"><Num v={fmt(row.value)} /></b>
-      <span className="num ymr__avg"><Num v={fmt(row.average)} /></span>
+      <b className="num ymr__v"><span className={mark}><Num v={fmt(row.value)} /></span></b>
+      <span className="num ymr__avg"><span className={mark}><Num v={fmt(row.average)} /></span></span>
       <span className={`num ymr__d ${row.direction === "better" ? "good-text" : row.direction === "worse" ? "poor-text" : "faint"}`}>
         {row.delta === null ? "–" : <Num v={signedIn((x) => fmt(x), row.delta)} />}
       </span>

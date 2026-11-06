@@ -24,7 +24,9 @@ import type { Side } from "./tables";
 // 41: plugin files credit what a human does in a takeover bot's body to the bot, through one body
 // timeline with a no-body state (plugin/bodies.ts), and rebuild the null winners of overtime and unknown
 // result codes from the scores (plugin/results.ts)
-export const DERIVE_VERSION = 41;
+// 42: kill facts name the human driving a takeover body (killerController, victimController), and
+// player-rounds count the kills, deaths and damage moved by a takeover (the takeover and driven measures)
+export const DERIVE_VERSION = 42;
 
 export interface MatchInfo {
   id: string;
@@ -188,6 +190,13 @@ export interface KillFact {
   t: number | null;
   killer: number | null;
   victim: number;
+  /**
+   * The human driving the killer's or the victim's body when it is not his own (a takeover,
+   * plugin/bodies.ts); killer and victim are the bodies, which the game credits. Null in a player's
+   * own body, for a killer in no known body, and for sources that do not record control.
+   */
+  killerController: number | null;
+  victimController: number | null;
   assister: number | null;
   /** the assist was a flash assist */
   flashAssist: boolean;
@@ -240,6 +249,11 @@ export const MEASURES = [
   "tradeKills", "tradedDeaths", "openingKills", "openingDeaths", "openingTraded", "openingWins",
   "killRounds", "multiKillRounds", "k3Rounds", "k4Rounds", "k5Rounds", "killsInWins", "dmgInWins", "teamKills",
   "perfectKills", "tradeDenials", "failedTrades", "assistedKills", "savedTeammate", "savedByTeammate", "baitKills",
+  // takeovers (scoreboard.ts): enemy kills, their headshots, deaths and enemy damage the player made
+  // while driving a bot's body, which the measures above credit to the bot; and the same made in this
+  // player's body by a human driving it. The views' takeover switch (ui/data/credit.ts) moves them to
+  // the driver; Rating 3.0, KAST and the other per-round measures always stay with the body.
+  "takeoverKills", "takeoverHsKills", "takeoverDeaths", "takeoverDmg", "drivenKills", "drivenHsKills", "drivenDeaths", "drivenDmg",
   // closing (closing.ts)
   "aliveSecs", "lastAlive", "postPlantRounds", "aliveAtPlant", "saves", "lostRounds",
   "clutch1", "clutch2", "clutch3", "clutch4", "clutch5", "clutchWon1", "clutchWon2", "clutchWon3", "clutchWon4", "clutchWon5",

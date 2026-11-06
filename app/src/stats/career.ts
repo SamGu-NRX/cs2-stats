@@ -7,6 +7,7 @@ import { inputKnown } from "./facts";
 import { METRICS, type Need } from "./metrics";
 import { BEST_COUNTS, COMPOSITES, type CompositePart } from "./career-lists";
 import type { Summary } from "./rollup";
+import { moved, YOU_MOVES, youSummary } from "./takeover";
 
 export { BEST_COUNTS, COMPOSITES, type CompositePart };
 
@@ -50,11 +51,30 @@ export interface MetricDelta {
   delta: number | null;
   /** performance metrics: better or worse (lowerIsBetter flips it); identity metrics: higher or lower; same when equal */
   direction: "better" | "worse" | "higher" | "lower" | "same" | null;
+  /** the same under the takeover credit "You" (takeover.ts YOU_MOVES); absent where "You" changes neither value */
+  you?: Omit<MetricDelta, "id" | "you">;
 }
 
-/** Every metric over `now` against the same metric over `before`. */
+/**
+ * Every metric over `now` against the same metric over `before`, and for a metric the takeover credit
+ * moves, the same under "You" where it changes either value, so a view can show either credit.
+ */
 export function metricDeltas(now: Summary, before: Summary): MetricDelta[] {
-  return METRICS.map((m) => {
+  const game = deltasOf(now, before, METRICS);
+  // the "You" pass reads only the metrics it moves, and only when a takeover moved something: a metric
+  // over the aim samples would copy and sort them again for nothing
+  if (!moved(now.m) && !moved(before.m)) return game;
+  const you = new Map(deltasOf(youSummary(now), youSummary(before), YOU_METRICS).map((d) => [d.id, d]));
+  return game.map((d) => {
+    const y = YOU_MOVES.has(d.id) ? you.get(d.id) : undefined;
+    return y && (y.value !== d.value || y.before !== d.before) ? { ...d, you: { value: y.value, before: y.before, delta: y.delta, direction: y.direction } } : d;
+  });
+}
+
+const YOU_METRICS = METRICS.filter((m) => YOU_MOVES.has(m.id));
+
+function deltasOf(now: Summary, before: Summary, metrics: readonly (typeof METRICS)[number][]): MetricDelta[] {
+  return metrics.map((m) => {
     const value = m.value(now), prev = m.value(before);
     if (value === null || prev === null) return { id: m.id, value, before: prev, delta: null, direction: null };
     const delta = value - prev;
@@ -68,7 +88,18 @@ export function metricDeltas(now: Summary, before: Summary): MetricDelta[] {
 /** A match must have this many rounds for its rates to stand as a personal best. Ours, no fit. */
 export const BEST_MIN_ROUNDS = 10;
 
-export interface Best { id: string; value: number; file: string }
+export interface Best {
+  id: string;
+  value: number;
+  file: string;
+  /** the best under the takeover credit "You" (takeover.ts YOU_MOVES), which may be another match; absent where "You" leaves the best as it is */
+  you?: { value: number; file: string };
+  /**
+   * There is no best under the game's credit, only under "You" (a headshot share over takeover kills
+   * alone, say): `value` and `file` are the "You" best, and the views show it under "You" only.
+   */
+  onlyYou?: true;
+}
 
 /**
  * The match recorded every input in `needs` in full. "model" chooses the pro pool and "eco" gates only
@@ -83,14 +114,16 @@ const recordedIn = (s: Summary, needs: readonly Need[] = []) => needs.every((n) 
  * not record in full has no best from it, rather than a zero or a value over some of its rows. A tie
  * keeps the earlier match.
  */
-export function addBests(acc: Record<string, Best>, file: string, s: Summary): void {
+export function addBests(acc: Record<string, Best>, file: string, s: Summary, only?: ReadonlySet<string>): void {
   const keep = (id: string, value: number, better: (a: number, b: number) => boolean) => {
     const cur = acc[id];
     if (!cur || better(value, cur.value)) acc[id] = { id, value, file };
   };
-  for (const c of BEST_COUNTS) if (s.m.rounds && recordedIn(s, c.needs)) keep(c.id, c.of(s.m), (a, b) => a > b);
+  // `only`: the ids to consider, so a pass over a takeover's credit evaluates just the bests it moves
+  for (const c of BEST_COUNTS) if ((!only || only.has(c.id)) && s.m.rounds && recordedIn(s, c.needs)) keep(c.id, c.of(s.m), (a, b) => a > b);
   if (s.m.rounds < BEST_MIN_ROUNDS) return;
   for (const m of METRICS) {
+    if (only && !only.has(m.id)) continue;
     if (m.kind !== "performance" || !recordedIn(s, m.needs) || (m.sample?.min !== undefined && m.sample.n(s) < m.sample.min)) continue;
     const v = m.value(s);
     if (v !== null && Number.isFinite(v)) keep(m.id, v, m.lowerIsBetter ? (a, b) => a < b : (a, b) => a > b);

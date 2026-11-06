@@ -217,6 +217,8 @@ export interface Sub {
   id: string; label: string; def: string; value: number | null; text: string; score: number | null; status: Status;
   /** why the value has no percentile (compare.ts Percentile.reason); null when it has one or has no value */
   reason: string | null;
+  /** the game's figure when the takeover credit "You" moved this one (data/credit.ts); absent otherwise */
+  moved?: string;
 }
 export interface Attr { id: AttributeId; label: string; kind: Kind; score: number | null; subs: Sub[] }
 
