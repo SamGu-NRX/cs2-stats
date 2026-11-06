@@ -81,10 +81,10 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | field | type | null | meaning, units |
 |---|---|---|---|
 | `archive` | String | no | archive id the demo came from; for a loose demo from the pipeline's inbox, `<source>-<HLTV match id>-m<map index>`, e.g. `opencs2-2393397-m1` |
-| `awpy_convars` | String | no | JSON of convars as awpy read them |
+| `awpy_convars` | String | no | JSON of convars as awpy read them; without `hostname` for a `local` demo, as in `convars` |
 | `awpy_version` | String | no | parser version |
 | `build_num` | Int32 | yes | demo header build number; null for a truncated demo, which has no playback header |
-| `convars` | String | no | JSON of server convars from the demo |
+| `convars` | String | no | JSON of server convars from the demo; for a `local` demo without `hostname`, which on a listen server is the host's Steam name |
 | `dem_bytes` | Int64 | no | demo size, bytes |
 | `dem_file` | String | no | demo file name |
 | `demo_sha256` | String | no | SHA-256 of the .dem file |
@@ -116,7 +116,7 @@ One row. Identity, provenance and visibility status of this extraction. Key: mat
 | `schema_version` | Int16 | no | 1 |
 | `score_ct_start` | Int16 | no | final score of team_ct_start |
 | `score_t_start` | Int16 | no | final score of team_t_start |
-| `server_name` | String | no | server name |
+| `server_name` | String | no | server name; empty for a `local` demo, whose listen server is named after the player hosting it |
 | `smoke_model` | String | no | how smoke_blocked is computed (an approximation) |
 | `source` | String | no | local | valve | faceit | hltv |
 | `team1_file` | String | yes | first team slug in the file name; null when the file name does not start `<team1>-vs-<team2>-` |
