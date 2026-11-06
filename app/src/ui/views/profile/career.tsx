@@ -15,6 +15,7 @@ import { GameIcon } from "../../components/GameIcon";
 import { MetricList, MetricRow, ShareTrack, THIN } from "../../components/MetricRow";
 import { Segmented } from "../../components/controls";
 import { fmtMetric } from "../../data/engine";
+import { CreditedRate } from "../../components/Takeover";
 import { useCall } from "../../data/hooks";
 import type { MatchEntry } from "../../data/match";
 import { hasMetric, metric } from "../../data/meta";
@@ -421,7 +422,7 @@ export function BuyTiersCard({ q }: { q: Query }) {
                   <td className="num">{s.m.rounds}</td>
                   <td className="l"><span className="tiers__wbar"><ShareTrack value={won} max={100} hollow={s.m.rounds < THIN} /><b className="num"><Num v={fmtPct(won, 0)} /></b></span></td>
                   <td className="num">{fmtRating(s.v.rating3 ?? null)}</td>
-                  <td className="num">{fmtAdr(s.v.adr ?? null)}</td>
+                  <td className="num"><CreditedRate s={s} id="adr" fmt={fmtAdr} /></td>
                   <td className="num"><Num v={fmtPct(s.v.kast ?? null)} /></td>
                 </tr>
               );

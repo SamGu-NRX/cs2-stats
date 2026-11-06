@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import { Delta, Num, Spark, VerdictLabel } from "../components/bits";
 import { HoverCard } from "../components/overlay";
 import { BOTS_TIP, provisionalText, ratingHeadline, statLine } from "../data/engine";
+import { credited, useCredit } from "../data/credit";
+import { Moved } from "../components/Takeover";
 import type { Careers } from "../../worker/protocol";
 import { roundSwing, sideOf, totalsWinner, type MatchModel, type MRound, type RoundColumn } from "../data/match";
 import { YOU } from "../data/privacy";
@@ -23,9 +25,11 @@ import type { FormFilter } from "../lib/form";
 const SPARK_MIN_POINTS = 3;
 
 /** A pooled headline stat; `delta` is the last match against it (Home's tiles). */
-export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color }: {
+export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdown, def, color, mark }: {
   label: string;
   value: string;
+  /** wraps the value, as the takeover credit's mark does (components/Takeover.tsx Moved) */
+  mark?: (value: ReactNode) => ReactNode;
   sub?: ReactNode;
   /** the last match against the average, beside the sparkline */
   delta?: ReactNode;
@@ -44,7 +48,7 @@ export function StatTile({ label, value, sub, delta, spark, bench, raw, breakdow
         <span className="stat__l">{label}</span>
         {bench && <VerdictLabel v={v} />}
       </div>
-      <div className="tile__v num" style={color ? { color } : undefined}><Num v={value} /></div>
+      <div className="tile__v num" style={color ? { color } : undefined}>{mark ? mark(<Num v={value} />) : <Num v={value} />}</div>
       {(delta || (spark && points >= SPARK_MIN_POINTS)) && (
         <div className="tile__foot">
           {delta && <span className="tile__delta">{delta}</span>}
@@ -87,7 +91,8 @@ export function BreakRows({ rows }: { rows: { label: ReactNode; value: ReactNode
 
 export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
   const p = v.players[pi];
-  const [both, t, ct] = (["both", "t", "ct"] as const).map((k) => statLine(v.b.lines[k][pi]));
+  const credit = useCredit();
+  const [both, t, ct] = (["both", "t", "ct"] as const).map((k) => credited(statLine(v.b.lines[k][pi]), credit));
   return (
     <div className="pcard">
       <div className="pcard__head">
@@ -100,8 +105,8 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
         <span className="pcard__rating num" style={{ color: ratingText(both.rating ?? 1) }}>{fmtRating(both.rating)}</span>
       </div>
       <div className="pcard__grid">
-        <span className="caps">K–D</span><b className="num">{both.kills}–{both.deaths}</b>
-        <span className="caps">ADR</span><b className="num">{fmtAdr(both.adr)}</b>
+        <span className="caps">K–D</span><b className="num"><Moved l={both} f="kills" game="" quiet>{both.kills}</Moved>–<Moved l={both} f="deaths" game="" quiet>{both.deaths}</Moved></b>
+        <span className="caps">ADR</span><b className="num"><Moved l={both} f="adr" game="" quiet>{fmtAdr(both.adr)}</Moved></b>
         <span className="caps">KAST</span><b className="num">{fmtPct(both.kast)}</b>
         <span className="caps">Swing</span><b className="num" style={{ color: both.swing === null ? undefined : scoreText(swingScore(both.swing)) }}>{fmtSwing(both.swing)}</b>
       </div>
@@ -110,6 +115,8 @@ export function PlayerCardBody({ v, pi }: { v: MatchModel; pi: number }) {
         <div><span className="ct-text caps">CT</span><b className="num">{fmtRating(ct.rating)}</b><small className="meta">{ct.kills}–{ct.deaths}</small></div>
       </div>
       <div className="meta">{ratingHeadline()}</div>
+      {/* the card is itself a tooltip, so the game's figures are said here rather than in a tooltip of their own */}
+      {both.moved && <div className="meta">Underlined: takeover play counted for you. The game's count: {both.game.kills}–{both.game.deaths}, {fmtAdr(both.game.adr)} ADR.</div>}
     </div>
   );
 }

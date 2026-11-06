@@ -341,3 +341,12 @@ button[data-tip], a[data-tip], [role="button"][data-tip], th [data-tip] { cursor
 .settings .keys { padding-top: 0; }
 /* installed is system state, not performance: a filled neutral dot rather than green */
 .packline .packdot.is-on { background: var(--ink2); }
+
+/* ---------------------------------------------------------------- takeover credit (components/Takeover.tsx) */
+.credit { display: inline-flex; align-items: center; gap: 8px; }
+/* a figure the takeover credit changed: cream like the app's own figures of note, dotted like a definition */
+.moved--on { color: var(--cream); text-decoration: underline dotted rgba(255, 215, 173, 0.55); text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: help; border-radius: 2px; }
+/* the switch flipped: the figures that moved fade in, so they are the ones the eye catches changing.
+   Opacity only, so reduced motion keeps it; it plays on the switch alone, never when a page opens. */
+.moved--fade { animation: moved-in var(--d-color) var(--ease-out); }
+@keyframes moved-in { from { opacity: 0.2; } }

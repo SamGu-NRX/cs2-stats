@@ -28,6 +28,8 @@ import type { Session } from "../../worker/protocol";
 import { diffScore, swingScore, scoreText, ratingText } from "../lib/scale";
 import { go, matchHref, matchKey, openMatch, pageHref, setQuery, useRoute } from "../router";
 import { Segmented } from "../components/controls";
+import { Moved, TakeoverSwitch } from "../components/Takeover";
+import { credited, hasTakeover, useCredit } from "../data/credit";
 import { ProMatches } from "./ProMatches";
 import { matchUrl, type LeetifyMatch } from "../data/leetify/api";
 import { lf, sourceName } from "../data/leetify/present";
@@ -252,7 +254,9 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
     return terms.every((t) => hay.includes(t));
   })), [leetify, session, map, result, terms]);
   const table = useMemo((): ListRow[] => [...rows.map((e) => ({ kind: "local" as const, e })), ...leetifyRows.map((l) => ({ kind: "leetify" as const, l }))], [rows, leetifyRows]);
-  const lines = useMemo(() => new Map(rows.map((s) => [s.file, entryLine(s)])), [rows]);
+  const credit = useCredit();
+  const lines = useMemo(() => new Map(rows.map((s) => [s.file, credited(entryLine(s), credit)])), [rows, credit]);
+  const takeovers = useMemo(() => rows.some((s) => hasTakeover(s.line.m)), [rows]);
   const line = (s: OwnEntry) => lines.get(s.file)!;
 
   const record = recordEntries(rows);
@@ -278,6 +282,7 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
             {!q && <span className="kbd search-field__key" aria-hidden><kbd>/</kbd></span>}
           </label>
           <div className="toolbar__end">
+            {takeovers && <TakeoverSwitch />}
             <SectionAside label="Shown" value={table.length} />
             {leetifyRows.length > 0 && <span data-tip="Matches Leetify has analysed that have no demo here: Leetify's summary only. They count in no number on this page."><SectionAside label="Leetify only" value={leetifyRows.length} /></span>}
             <span data-tip="Your finished matches here; pro demos, unfinished matches and Leetify-only rows are left out."><SectionAside label="W–L" value={`${wins}–${record.length - wins}`} /></span>
@@ -385,22 +390,22 @@ function OwnMatches({ switcher }: { switcher: JSX.Element | null }) {
               // kills and deaths are counts, so a thin log still shows the ones it recorded, marked partial
               {
                 key: "kd", label: "K–D", tip: "Kills and deaths", sort: by((s) => line(s).kills, (l) => l.me.total_kills),
-                render: by((s) => <Counted s={s}>{line(s).kills}<span className="faint">–</span>{line(s).deaths}</Counted>, (l) => <span className="num">{lf.count(l.me.total_kills)}<span className="faint">–</span>{lf.count(l.me.total_deaths)}</span>),
+                render: by((s) => <Counted s={s}><Moved l={line(s)} f="kills" game={String(line(s).game.kills)}>{line(s).kills}</Moved><span className="faint">–</span><Moved l={line(s)} f="deaths" game={String(line(s).game.deaths)}>{line(s).deaths}</Moved></Counted>, (l) => <span className="num">{lf.count(l.me.total_kills)}<span className="faint">–</span>{lf.count(l.me.total_deaths)}</span>),
               },
               {
                 key: "diff", label: "+/−", colored: true, tip: "Kills minus deaths",
                 sort: by((s) => line(s).kills - line(s).deaths, (l) => (l.me.total_kills === null || l.me.total_deaths === null ? null : l.me.total_kills - l.me.total_deaths)),
                 render: by(
-                  (s) => { const d = line(s).kills - line(s).deaths; return <span style={{ color: isLogged(s) ? scoreText(diffScore(d)) : undefined }}><Counted s={s}>{fmtDiff(d)}</Counted></span>; },
+                  (s) => { const d = line(s).diff; return <span style={{ color: isLogged(s) ? scoreText(diffScore(d)) : undefined }}><Counted s={s}><Moved l={line(s)} f="diff" game={fmtDiff(line(s).game.diff)}>{fmtDiff(d)}</Moved></Counted></span>; },
                   (l) => { const k = l.me.total_kills, d = l.me.total_deaths; return k === null || d === null ? <NoDemo /> : <span className="num" style={{ color: scoreText(diffScore(k - d)) }}>{fmtDiff(k - d)}</span>; },
                 ),
               },
               {
                 key: "adr", label: "ADR", tip: "Damage per round", sort: by((s) => line(s).adr, (l) => l.me.dpr),
-                render: by((s) => <Val s={s} text={fmtAdr(line(s).adr)} />, (l) => <span className="num has-def" data-tip="Leetify's ADR for this match">{lf.dmg(l.me.dpr)}</span>),
+                render: by((s) => <Moved l={line(s)} f="adr" game={fmtAdr(line(s).game.adr)}><Val s={s} text={fmtAdr(line(s).adr)} /></Moved>, (l) => <span className="num has-def" data-tip="Leetify's ADR for this match">{lf.dmg(l.me.dpr)}</span>),
               },
               { key: "kast", label: "KAST", tip: "Share of rounds with a kill, assist, survival or traded death", sort: by((s) => line(s).kast, () => null), render: by((s) => <Val s={s} text={fmtPct(line(s).kast)} />, () => <NoDemo />) },
-              { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: by((s) => line(s).hs, () => null), render: by((s) => <Val s={s} text={fmtPct(line(s).hs)} />, () => <NoDemo />) },
+              { key: "hs", label: "HS%", tip: "Headshot kills as a share of kills", sort: by((s) => line(s).hs, () => null), render: by((s) => <Moved l={line(s)} f="hs" game={fmtPct(line(s).game.hs)}><Val s={s} text={fmtPct(line(s).hs)} /></Moved>, () => <NoDemo />) },
               {
                 key: "swing", label: "Swing", colored: true, tip: "Average change in your team's round-win chance you caused, per round", sort: by((s) => line(s).swing, () => null),
                 render: by((s) => { const x = line(s).swing; return <span style={{ color: x === null ? undefined : scoreText(swingScore(x)) }}><Val s={s} text={fmtSwing(x)} tip={swingSumTip(s.line.m)} /></span>; }, () => <NoDemo />),

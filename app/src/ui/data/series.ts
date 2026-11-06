@@ -3,7 +3,8 @@
 import type { Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtMs, fmtPct, fmtRating, fmtSwing } from "../lib/format";
 import type { BenchId } from "../lib/verdict";
-import type { OwnEntry } from "./engine";
+import { credited, type Credit } from "./credit";
+import { entryLine, type OwnEntry } from "./engine";
 
 export interface TileDef {
   /** metric id */
@@ -41,14 +42,14 @@ export const TILES: TileDef[] = [
 /** A tile's value over a filter; its rating is the pooled one the caller passes (under the coverage rule). */
 export const tileValue = (t: TileDef, v: Values | null, rating: number | null) => (!v ? null : t.id === "rating3" ? rating : v[t.id]);
 
-/** One match's value; a match under the rating coverage rule has no rating. */
-export const entryTile = (t: TileDef, e: OwnEntry) => tileValue(t, e.line.v, e.line.rating);
+/** One match's value under a takeover credit (credit.ts); a match under the rating coverage rule has no rating. */
+export const entryTile = (t: TileDef, e: OwnEntry, c: Credit) => tileValue(t, credited(entryLine(e), c).v, e.line.rating);
 
 /** The last match's value minus the value over the filter; null when either is missing. */
-export const tileDelta = (t: TileDef, last: OwnEntry | null, pooled: number | null) => {
-  const x = last ? entryTile(t, last) : null;
+export const tileDelta = (t: TileDef, last: OwnEntry | null, pooled: number | null, c: Credit) => {
+  const x = last ? entryTile(t, last, c) : null;
   return x === null || pooled === null ? null : x - pooled;
 };
 
 /** Per-match values, oldest first. */
-export const seriesOf = (t: TileDef, list: OwnEntry[]) => [...list].reverse().map((e) => ({ e, v: entryTile(t, e) }));
+export const seriesOf = (t: TileDef, list: OwnEntry[], c: Credit) => [...list].reverse().map((e) => ({ e, v: entryTile(t, e, c) }));
