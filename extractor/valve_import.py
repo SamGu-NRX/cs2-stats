@@ -223,8 +223,12 @@ def already_done(map_dir: Path, dem: Path, importer: str, importer_version: int)
     if d is None:
         return False
     m = pl.read_parquet(d / "match.parquet", columns=["demo_sha256", "extractor_version", "extra"]).row(0, named=True)
-    extra = json.loads(m["extra"])
-    return (m["extractor_version"] == extract.EXTRACTOR_VERSION and m["demo_sha256"] == extract.file_sha256(dem)
+    try:
+        extra = json.loads(m["extra"] or "")
+    except ValueError:
+        return False  # not JSON: written by something else, so extracted again
+    return (isinstance(extra, dict) and m["extractor_version"] == extract.EXTRACTOR_VERSION
+            and m["demo_sha256"] == extract.file_sha256(dem)
             and extra.get("importer") == importer and extra.get("importer_version") == importer_version)
 
 

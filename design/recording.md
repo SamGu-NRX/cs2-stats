@@ -71,7 +71,7 @@ local\<id>\v-<ver>-<nonce>\  schema v1 tables, with CURRENT and COMPLETE as in v
 
 **Retention.** The host enforces it, and the app's engine decides what to keep, because only the engine scores moments (`scoreMoments` in `app/src/stats/moments.ts`).
 - Cap: 20 GB of demos. Floor: 10 GB free. Below the floor nothing is recorded. The launch goes ahead without the `+tv_*` tokens, and the dialog says why.
-- Pre-launch reserve: 1 GB, so a match never fills the disk.
+- Pre-launch reserve: 1 GB, so the match being recorded does not take the disk under the floor. It is checked once, before the launch; see Failure modes for what it cannot prevent.
 - Kept, in this order: pinned (never evicted); a demo with an unrendered moment scoring at least a 3k; among the last 10.
 - Eviction takes demos from an older game build first, because CS2 refuses to play them, so they cannot make clips. The build comes from `steam.inf`'s ClientVersion at import. After that, oldest first.
 - A demo whose extraction failed is kept until the extractor version changes once.
@@ -110,7 +110,7 @@ local\<id>\v-<ver>-<nonce>\  schema v1 tables, with CURRENT and COMPLETE as in v
 
 ## Failure modes
 
-- **Disk full mid-match:** the reserve check makes it unlikely, not impossible. It runs once, before the launch; another program can fill the disk during the match, and nothing in the app can stop that. The demo is then cut off where the disk ran out, and the extractor's truncated-demo path reads what it holds. With free space near zero, a truncated demo gets `disk_full_suspected` in the ledger. When its plugin file is complete, the plugin entry serves the match. When the plugin file is cut off too, each entry holds the rounds it recorded and shows as unfinished; nothing can recover the rest of that match.
+- **Disk full mid-match:** the reserve check makes it unlikely, not impossible. It runs once, before the launch; another program can fill the disk during the match, and nothing in the app can stop that. The demo is then cut off where the disk ran out, and the extractor's truncated-demo path reads what it holds. With free space near zero, a truncated demo gets `disk_full_suspected` in the ledger. The plugin is hit by the same full disk. It rewrites its match file after every round through a temporary file and a rename (`plugin/Core/MatchWriter.cs`), so a write that fails leaves its last successful write in place: the rounds up to the one before the disk filled, in its in-progress folder until the match ends. If even its first write failed, there is no plugin file at all. Whatever survives on either side is listed with the rounds it holds and shown as unfinished; nothing can recover the rest of that match.
 - **Crash:** the truncated-demo path.
 - **GOTV did not start:** no new `auto-*.dem` after a session with recording on. The app says so and names the console fallback.
 - **Extraction fails:** the ledger records the reason, the demo is kept, and the plugin entry serves the match.

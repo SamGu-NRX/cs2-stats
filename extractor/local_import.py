@@ -70,8 +70,10 @@ def demo_map(dem: Path) -> str:
 
 
 def demo_id(dem: Path, sha256: str) -> str:
-    """<yyyymmddThhmmZ>_<map>_<sha8>; the stem of a demo already named that way."""
-    if ID_RE.match(dem.stem):
+    """<yyyymmddThhmmZ>_<map>_<sha8>; the stem of a demo already named that way, when that name's hash part is
+    this file's. A stale one (a file renamed by hand, or overwritten) would extract into another demo's folder
+    and replace its tables, so it gets an id of its own."""
+    if ID_RE.match(dem.stem) and dem.stem.endswith(f"_{sha256[:8]}"):
         return dem.stem
     slug = re.sub(r"[^a-z0-9_]+", "_", demo_map(dem).lower()).strip("_") or "unknown"
     return f"{created_utc(dem):%Y%m%dT%H%MZ}_{slug}_{sha256[:8]}"
@@ -113,53 +115,54 @@ def import_local(demos: list[Path], out: Path, mapdata: Path | None, user_of, fo
                  progress=None) -> list[dict]:
     """Extract each demo into out/<id>/. user_of() returns the user's SteamID64, or raises when it cannot be
     found; it is asked only for a demo with more than one human. progress(event) hears each start and end.
-    Every row is scrubbed of the demo's original name (extract.private_name_parts), and a demo that cannot
-    be read is reported by its place in the list, as unreadable-<i>, and the batch goes on."""
+    Every row is scrubbed of the demo's original name (extract.scrub_private). A demo that cannot be read
+    at any step (it vanished after its hash, say) gets reason "unreadable" and an error holding only the
+    exception's type, under its id when it has one and else as unreadable-<its place>; the batch goes on."""
     rows = []
     for i, dem in enumerate(demos, 1):
+        did = None
         try:
             sha = extract.file_sha256(dem)
             did = existing_id(out, sha) or demo_id(dem, sha)
-        except Exception as e:  # noqa: BLE001 - its message may hold the path, whose name ends in a Steam name
-            rows.append(dict(demo=f"unreadable-{i}", ok=False, reason="unreadable", pov=None,
-                             errors=[f"{type(e).__name__}: the demo could not be read"]))
             if progress:
-                progress(dict(event="done", i=i, n=len(demos), demo=f"unreadable-{i}", ok=False, skipped=False))
-            continue
-        map_dir = out / did
+                progress(dict(event="start", i=i, n=len(demos), demo=did))
+            row = _import_one(dem, out / did, did, mapdata, user_of, force)
+        except Exception as e:  # noqa: BLE001 - its message and traceback may hold the path, which ends in a Steam name
+            row = dict(demo=did or f"unreadable-{i}", ok=False, reason="unreadable", pov=None,
+                       errors=[f"{type(e).__name__}: the demo could not be read"])
+        rows.append(extract.scrub_private(row, dem, f"{did or f'unreadable-{i}'}.dem"))
         if progress:
-            progress(dict(event="start", i=i, n=len(demos), demo=did))
-
-        def extra_from_players(players: pd.DataFrame) -> dict:
-            humans = int((~players.is_bot.astype(bool)).sum())
-            user, why = None, None
-            if humans > 1:
-                try:
-                    user = user_of()
-                except Exception as e:  # noqa: BLE001 - reported in the result; the tables are still written
-                    why = f"{type(e).__name__}: {e}"
-            found = pov_of(players, user)
-            if "pov" not in found:
-                found["pov_error"] = why or f"{humans} human players and the user is not among them"
-            return found
-
-        def meta() -> dict:
-            at = created_utc(dem).isoformat(timespec="seconds")
-            return dict(date=at, started_at=at, date_source="file creation time")
-
-        row = dict(demo=did, out=str(map_dir))
-        row.update(vi.extract_into(dem, map_dir, "local", mapdata, "local_import", IMPORTER_VERSION, meta,
-                                   force=force, archive=did, name=f"{did}.dem", extra_from_players=extra_from_players))
-        row["reason"] = None if row["ok"] else (
-            "no_rounds" if any(NO_ROUNDS in e for e in row["errors"]) else "extract_failed")
-        if row["ok"]:
-            row.update({"pov": None, **stored_pov(map_dir)})
-        else:
-            row["pov"] = None
-        rows.append(extract.scrub(row, extract.private_name_parts(dem), did))
-        if progress:
-            progress(dict(event="done", i=i, n=len(demos), demo=did, ok=row["ok"], skipped="skipped" in row))
+            progress(dict(event="done", i=i, n=len(demos), demo=row["demo"], ok=row["ok"], skipped="skipped" in row))
     return rows
+
+
+def _import_one(dem: Path, map_dir: Path, did: str, mapdata: Path | None, user_of, force: bool) -> dict:
+    """One demo's summary row: extracted into map_dir under its id, or skipped as up to date."""
+
+    def extra_from_players(players: pd.DataFrame) -> dict:
+        humans = int((~players.is_bot.astype(bool)).sum())
+        user, why = None, None
+        if humans > 1:
+            try:
+                user = user_of()
+            except Exception as e:  # noqa: BLE001 - reported in the result; the tables are still written
+                why = f"{type(e).__name__}: {e}"
+        found = pov_of(players, user)
+        if "pov" not in found:
+            found["pov_error"] = why or f"{humans} human players and the user is not among them"
+        return found
+
+    def meta() -> dict:
+        at = created_utc(dem).isoformat(timespec="seconds")
+        return dict(date=at, started_at=at, date_source="file creation time")
+
+    row = dict(demo=did, out=str(map_dir))
+    row.update(vi.extract_into(dem, map_dir, "local", mapdata, "local_import", IMPORTER_VERSION, meta,
+                               force=force, archive=did, name=f"{did}.dem", extra_from_players=extra_from_players))
+    row["reason"] = None if row["ok"] else (
+        "no_rounds" if any(NO_ROUNDS in e for e in row["errors"]) else "extract_failed")
+    row.update({"pov": None, **(stored_pov(map_dir) if row["ok"] else {})})
+    return row
 
 
 def main(argv=None) -> int:
