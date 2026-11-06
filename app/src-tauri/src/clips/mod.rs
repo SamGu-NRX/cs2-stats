@@ -15,7 +15,7 @@ pub mod launch;
 
 use crate::botmode::paths::is_reparse;
 use crate::botmode::steam::{find_cs2, steam_root};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -267,10 +267,26 @@ fn cs2_paths() -> Result<(PathBuf, PathBuf), String> {
     Ok((install.csgo, exe))
 }
 
+/// The demos store, `%APPDATA%\BotMatchStats\demos`, refused through a junction (demos.rs Store).
+fn demos_dir() -> Result<PathBuf, String> {
+    let data = crate::botmode::paths::default_data_dir()?;
+    let base = data.parent().ok_or("the Bot Mode folder has no parent")?;
+    Ok(crate::demos::Store::in_base(base)?.root)
+}
+
+/// Each demo folder: CS2's replays folder and the demos store, the ones that exist.
+fn demo_roots(csgo: &Path) -> Vec<(job::DemoRoot, PathBuf)> {
+    let mut out = vec![(job::DemoRoot::Replays, csgo.join("replays"))];
+    if let Some(d) = demos_dir().ok().filter(|d| d.is_dir()) {
+        out.push((job::DemoRoot::Demos, d));
+    }
+    out
+}
+
 /// The paths a render job needs on this machine.
 fn job_env() -> Result<(job::JobEnv, PathBuf), String> {
     let (csgo, cs2_exe) = cs2_paths()?;
-    Ok((job::JobEnv { clips_root: clips_root()?, replays: csgo.join("replays"), cs2_exe }, csgo))
+    Ok((job::JobEnv { clips_root: clips_root()?, demo_roots: demo_roots(&csgo), cs2_exe }, csgo))
 }
 
 /// One tool's state: where it is, or why it was not found.
@@ -324,35 +340,48 @@ pub async fn clips_env(hlae: Option<String>) -> Result<ClipsEnv, String> {
 
 // ---------------------------------------------------------------- demos and outputs
 
+/// A demo the app asks about: its file name and the folder it should be in.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct DemoRef {
+    root: job::DemoRoot,
+    name: String,
+}
+
 #[derive(Serialize)]
 pub struct DemoOnDisk {
+    root: job::DemoRoot,
     name: String,
-    /// the resolved demo, when it is a regular file in the replays folder; null otherwise
+    /// the resolved demo, when it is a regular file in its folder; null otherwise
     path: Option<String>,
     size: u64,
 }
 
-fn demos_in(replays: &Path, names: &[String]) -> Result<Vec<DemoOnDisk>, String> {
-    names
-        .iter()
-        .map(|n| {
-            if !job::demo_name_ok(n) {
-                return Err(format!("{n:?} is not a demo file name"));
+fn demos_in(roots: &[(job::DemoRoot, PathBuf)], refs: &[DemoRef]) -> Result<Vec<DemoOnDisk>, String> {
+    refs.iter()
+        .map(|r| {
+            if !job::demo_name_ok(&r.name) {
+                return Err(format!("{:?} is not a demo file name", r.name));
             }
-            Ok(match job::resolve_demo(replays, n) {
-                Ok(p) => DemoOnDisk { name: n.clone(), size: file_info(&p).map_or(0, |i| i.0), path: Some(p.display().to_string()) },
-                Err(_) => DemoOnDisk { name: n.clone(), path: None, size: 0 },
+            let at = roots.iter().find(|(k, _)| *k == r.root).ok_or_else(|| format!("{} was not found on this machine", r.root.what()));
+            Ok(match at.and_then(|(k, dir)| job::resolve_demo(*k, dir, &r.name)) {
+                Ok(p) => DemoOnDisk { root: r.root, name: r.name.clone(), size: file_info(&p).map_or(0, |i| i.0), path: Some(p.display().to_string()) },
+                Err(_) => DemoOnDisk { root: r.root, name: r.name.clone(), path: None, size: 0 },
             })
         })
         .collect()
 }
 
-/// Which of these demos are in CS2's replays folder, as regular files reached without a link. Reads only.
+/// Which of these demos are in their folders, as regular files reached without a link. Reads only.
 #[tauri::command]
-pub async fn clips_demos(names: Vec<String>) -> Result<Vec<DemoOnDisk>, String> {
+pub async fn clips_demos(demos: Vec<DemoRef>) -> Result<Vec<DemoOnDisk>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (csgo, _) = cs2_paths()?;
-        demos_in(&csgo.join("replays"), &names)
+        // without CS2 the demos store still answers; a replays demo is then not on disk
+        let roots = match cs2_paths() {
+            Ok((csgo, _)) => demo_roots(&csgo),
+            Err(_) => demos_dir().ok().filter(|d| d.is_dir()).map(|d| vec![(job::DemoRoot::Demos, d)]).unwrap_or_default(),
+        };
+        demos_in(&roots, &demos)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1371,9 +1400,9 @@ mod tests {
         fs::write(hlae.parent().unwrap().join("x64").join("AfxHookSource2.dll"), b"").unwrap();
         let clips = root.join("clips");
         fs::create_dir_all(&clips).unwrap();
-        let env = job::JobEnv { clips_root: clips, replays, cs2_exe: cs2 };
+        let env = job::JobEnv { clips_root: clips, demo_roots: vec![(job::DemoRoot::Replays, replays)], cs2_exe: cs2 };
         let req = job::JobReq {
-            clips: vec![job::ClipReq { id: job::clip_id_for("match730_0001.dem", "76561190000000001", 3).unwrap(), demo: "match730_0001.dem".into(), steamid: "76561190000000001".into(), round: 3, start_tick: 1000, end_tick: 2000, tick_rate: 64.0, reason: "r".into() }],
+            clips: vec![job::ClipReq { id: job::clip_id_for(job::DemoRoot::Replays, "match730_0001.dem", "76561190000000001", 3).unwrap(), demo: "match730_0001.dem".into(), root: job::DemoRoot::Replays, steamid: "76561190000000001".into(), round: 3, start_tick: 1000, end_tick: 2000, tick_rate: 64.0, reason: "r".into() }],
             hlae: hlae.display().to_string(),
         };
         let (plan, script) = job::build(&req, &env, JOB, "2026-10-26T18:04:05.123Z").unwrap();
@@ -1418,5 +1447,24 @@ mod tests {
         let ini = ensure_ffmpeg_ini(&hlae, &ff).unwrap().unwrap();
         assert_eq!(fs::read_to_string(&ini).unwrap(), format!("[Ffmpeg]\nPath={}\n", ff.display()));
         assert_eq!(ensure_ffmpeg_ini(&hlae, &ff).unwrap(), None);
+    }
+
+    #[test]
+    fn a_demo_is_looked_up_in_the_folder_its_root_names() {
+        // fails if every demo is looked up in the replays folder: a recorded Bot Mode demo would read
+        // as missing, and its moments as needing a demo they have
+        let s = scratch("demo-roots");
+        let (replays, store) = (s.0.join("replays"), s.0.join("demos"));
+        fs::create_dir_all(&replays).unwrap();
+        fs::create_dir_all(&store).unwrap();
+        fs::write(replays.join("match730_0001.dem"), b"v").unwrap();
+        fs::write(store.join("20261106T2010Z_de_dust2_abababab.dem"), b"local").unwrap();
+        let r = |root, name: &str| DemoRef { root, name: name.into() };
+        let roots = vec![(job::DemoRoot::Replays, replays), (job::DemoRoot::Demos, store)];
+        let got = demos_in(&roots, &[r(job::DemoRoot::Demos, "20261106T2010Z_de_dust2_abababab.dem"), r(job::DemoRoot::Replays, "20261106T2010Z_de_dust2_abababab.dem"), r(job::DemoRoot::Replays, "match730_0001.dem")]).unwrap();
+        assert_eq!(got.iter().map(|d| (d.path.is_some(), d.size)).collect::<Vec<_>>(), [(true, 5), (false, 0), (true, 1)]);
+        // a machine without the store answers that its demos are not on disk
+        assert!(demos_in(&roots[..1], &[r(job::DemoRoot::Demos, "20261106T2010Z_de_dust2_abababab.dem")]).unwrap()[0].path.is_none());
+        assert!(demos_in(&roots, &[r(job::DemoRoot::Demos, "../x.dem")]).is_err());
     }
 }

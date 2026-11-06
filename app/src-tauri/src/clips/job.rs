@@ -1,6 +1,7 @@
-//! A render job, built here and only here from a typed request: the clips (id, demo file name,
-//! SteamID64, ticks), and the HLAE.exe the user chose. The web view sends no command, path or script.
-//! This module checks the request, finds each demo in CS2's replays folder, and builds HLAE's exact
+//! A render job, built here and only here from a typed request: the clips (id, demo file name and the
+//! folder it is in, SteamID64, ticks), and the HLAE.exe the user chose. The web view sends no command,
+//! path or script. This module checks the request, finds each demo in its folder (CS2's replays folder
+//! for a Valve match, the demos store for a recorded Bot Mode match), and builds HLAE's exact
 //! command from a fixed template, the director script (src/clips/director.template.js) and the plan
 //! the user reads before anything starts. The launch builds the job again from the request in
 //! plan.json and refuses when the saved plan differs, so an edited plan or director cannot run.
@@ -33,8 +34,12 @@ const PLACEHOLDER: &str = "__CS2STATS_JOB__";
 pub struct ClipReq {
     /// the clip id, which must be the one clip_id_for gives the demo, player and round below
     pub id: String,
-    /// the demo's file name in CS2's replays folder
+    /// the demo's file name in the folder `root` names
     pub demo: String,
+    /// which folder the demo is in; a plan saved before recorded demos existed names none, and its demos
+    /// are in CS2's replays folder
+    #[serde(default)]
+    pub root: DemoRoot,
     pub steamid: String,
     /// the round's number in the match
     pub round: u32,
@@ -52,12 +57,49 @@ pub struct JobReq {
     pub hlae: String,
 }
 
-/// Where things are on this machine: the clips folder, CS2's replays folder and cs2.exe.
+/// A folder a clip's demo can be in.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DemoRoot {
+    /// CS2's `game\csgo\replays`: the user's Valve matchmaking demos.
+    #[default]
+    Replays,
+    /// `%APPDATA%\BotMatchStats\demos`: the demos CS2 recorded of Bot Mode matches (demos.rs).
+    Demos,
+}
+
+impl DemoRoot {
+    /// The folder as messages name it.
+    pub fn what(self) -> &'static str {
+        match self {
+            DemoRoot::Replays => "CS2's replays folder",
+            DemoRoot::Demos => "the demos folder",
+        }
+    }
+    /// The first part of the app's match key for a demo here (clips/ids.ts matchKey): the source whose
+    /// folder holds the extracted tables.
+    fn source(self) -> &'static str {
+        match self {
+            DemoRoot::Replays => "valve",
+            DemoRoot::Demos => "local",
+        }
+    }
+}
+
+/// Where things are on this machine: the clips folder, each folder a demo can be in, and cs2.exe.
 #[derive(Clone)]
 pub struct JobEnv {
     pub clips_root: PathBuf,
-    pub replays: PathBuf,
+    /// Each demo folder this machine has; one it lacks (no CS2 found, no demos recorded yet) is left out,
+    /// and a clip whose demo is there is refused.
+    pub demo_roots: Vec<(DemoRoot, PathBuf)>,
     pub cs2_exe: PathBuf,
+}
+
+impl JobEnv {
+    pub fn root(&self, r: DemoRoot) -> Result<&Path, String> {
+        self.demo_roots.iter().find(|(k, _)| *k == r).map(|(_, p)| p.as_path()).ok_or_else(|| format!("{} was not found on this machine", r.what()))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -188,21 +230,22 @@ fn fwd(p: &str) -> String {
     p.replace('\\', "/")
 }
 
-/// A demo file name the replays folder can hold: a plain name ending in .dem.
+/// A demo file name a demo folder can hold: a plain name ending in .dem.
 pub fn demo_name_ok(s: &str) -> bool {
     s.len() > 4 && s.to_ascii_lowercase().ends_with(".dem") && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
 }
 
-/// The demo `name` in `replays`: a regular file reached without a link, directly inside the folder
-/// once every link on the way is resolved. A junction or link named like a demo is refused.
-pub fn resolve_demo(replays: &Path, name: &str) -> Result<PathBuf, String> {
+/// The demo `name` in the folder `dir` (`root` names which): a regular file reached without a link,
+/// directly inside the folder once every link on the way is resolved. A junction or link named like a
+/// demo is refused.
+pub fn resolve_demo(root: DemoRoot, dir: &Path, name: &str) -> Result<PathBuf, String> {
     if !demo_name_ok(name) {
         return Err(format!("{name:?} is not a demo file name"));
     }
-    let p = file_inside(replays, &replays.join(name)).map_err(|e| format!("demo {name}: {e}"))?;
-    let root = plain(&replays.canonicalize().map_err(|e| format!("{}: {e}", replays.display()))?);
-    if p.parent() != Some(root.as_path()) {
-        return Err(format!("demo {name} resolves outside CS2's replays folder"));
+    let p = file_inside(dir, &dir.join(name)).map_err(|e| format!("demo {name}: {e}"))?;
+    let canon = plain(&dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?);
+    if p.parent() != Some(canon.as_path()) {
+        return Err(format!("demo {name} resolves outside {}", root.what()));
     }
     Ok(p)
 }
@@ -217,17 +260,18 @@ pub fn fnv64(text: &str) -> String {
     format!("{h:016x}")
 }
 
-/// The clip id the app gives a moment of `player` in `round` of the Valve match whose demo is `demo`:
-/// clips/ids.ts clipId over the match key `valve/<demo name without .dem>` (ids.ts matchKey). Valve
-/// matches are the only ones with a demo on disk (clips/state.ts demoSource).
-pub fn clip_id_for(demo: &str, player: &str, round: u32) -> Result<String, String> {
+/// The clip id the app gives a moment of `player` in `round` of the match whose demo is `demo` in
+/// `root`: clips/ids.ts clipId over the match key `<source>/<demo name without .dem>` (ids.ts
+/// matchKey), "valve" for CS2's replays folder and "local" for the demos store (clips/state.ts
+/// demoSource).
+pub fn clip_id_for(root: DemoRoot, demo: &str, player: &str, round: u32) -> Result<String, String> {
     if !demo_name_ok(demo) {
         return Err(format!("{demo:?} is not a demo file name"));
     }
     if !(1..=999).contains(&round) {
         return Err(format!("round {round} is not a round number"));
     }
-    Ok(format!("c-{}-r{round}", fnv64(&format!("valve/{}|{player}", &demo[..demo.len() - 4]))))
+    Ok(format!("c-{}-r{round}", fnv64(&format!("{}/{}|{player}", root.source(), &demo[..demo.len() - 4]))))
 }
 
 /// The demo's length in ticks, from its file info (CDemoFileInfo.playback_ticks): a CS2 demo starts
@@ -330,7 +374,7 @@ fn steamid_ok(s: &str) -> bool {
 /// Checks the request and builds the job `id` (created at `created`): the plan and the director script.
 /// Refuses, naming the clip, an id that is not a clip id or comes twice, ticks that are not a forward
 /// range of at most MAX_CLIP_S, a player without a SteamID64 (the director finds the player by it;
-/// bots have none), a demo not in the replays folder, and clips of one demo that disagree on the tick rate.
+/// bots have none), a demo not in its folder, and clips of one demo that disagree on the tick rate.
 pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Plan, String), String> {
     if !job_id_ok(id) {
         return Err(format!("{id:?} is not a job id"));
@@ -372,10 +416,10 @@ pub fn build(req: &JobReq, env: &JobEnv, id: &str, created: &str) -> Result<(Pla
         if c.reason.chars().count() > 300 || c.reason.chars().any(char::is_control) {
             return Err(at("the reason is not one line of at most 300 characters"));
         }
-        let path = resolve_demo(&env.replays, &c.demo).map_err(|e| at(&e))?;
+        let path = env.root(c.root).and_then(|dir| resolve_demo(c.root, dir, &c.demo)).map_err(|e| at(&e))?;
         // the clip id names the match (its demo), the player and the round, so a request cannot pair one
         // moment's id with another demo, player or round: the output would be filed as the wrong moment
-        let want = clip_id_for(&c.demo, &c.steamid, c.round)?;
+        let want = clip_id_for(c.root, &c.demo, &c.steamid, c.round)?;
         if c.id != want {
             return Err(at(&format!("the id does not match its demo, player and round {} (expected {want})", c.round)));
         }
@@ -616,12 +660,15 @@ mod tests {
     const D1: &str = "match730_0001.dem";
     const D2: &str = "match730_0002.dem";
     /// the moments' ids, as the app gives them (clip_id_for): demo 1 rounds 3 and 9, demo 2 round 1
-    fn a1() -> String { clip_id_for(D1, ME, 3).unwrap() }
-    fn a2() -> String { clip_id_for(D1, ME, 9).unwrap() }
-    fn b1() -> String { clip_id_for(D2, ME, 1).unwrap() }
+    fn a1() -> String { clip_id_for(DemoRoot::Replays, D1, ME, 3).unwrap() }
+    fn a2() -> String { clip_id_for(DemoRoot::Replays, D1, ME, 9).unwrap() }
+    fn b1() -> String { clip_id_for(DemoRoot::Replays, D2, ME, 1).unwrap() }
+    /// a recorded Bot Mode demo, as the demos store names it (demos.rs demo_id)
+    const L1: &str = "20261106T2010Z_de_dust2_abababab.dem";
     const ID: &str = "job-20261026T180405123Z-a1b2c3";
 
-    /// A scratch machine: a clips folder, CS2's replays folder with two demos, cs2.exe and an HLAE folder.
+    /// A scratch machine: a clips folder, CS2's replays folder with two demos, the demos store with one,
+    /// cs2.exe and an HLAE folder.
     struct Machine {
         root: PathBuf,
         env: JobEnv,
@@ -641,6 +688,9 @@ mod tests {
         for d in [D1, D2] {
             fs::write(replays.join(d), fake_demo(100_000)).unwrap();
         }
+        let store = root.join("BotMatchStats").join("demos");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(store.join(L1), fake_demo(100_000)).unwrap();
         let cs2 = game.join("bin").join("win64").join("cs2.exe");
         fs::create_dir_all(cs2.parent().unwrap()).unwrap();
         fs::write(&cs2, b"").unwrap();
@@ -651,11 +701,20 @@ mod tests {
         let clips = root.join("clips");
         fs::create_dir_all(&clips).unwrap();
         let canon = |p: &Path| plain(&p.canonicalize().unwrap());
-        Machine { env: JobEnv { clips_root: canon(&clips), replays: canon(&replays), cs2_exe: canon(&cs2) }, hlae: canon(&hlae), root }
+        let demo_roots = vec![(DemoRoot::Replays, canon(&replays)), (DemoRoot::Demos, canon(&store))];
+        Machine { env: JobEnv { clips_root: canon(&clips), demo_roots, cs2_exe: canon(&cs2) }, hlae: canon(&hlae), root }
+    }
+    impl Machine {
+        fn replays(&self) -> &Path {
+            self.env.root(DemoRoot::Replays).unwrap()
+        }
+        fn store(&self) -> &Path {
+            self.env.root(DemoRoot::Demos).unwrap()
+        }
     }
     fn clip(demo: &str, round: u32, start: i64, end: i64) -> ClipReq {
-        let id = clip_id_for(demo, ME, round).unwrap();
-        ClipReq { reason: format!("reason {id}"), id, demo: demo.into(), steamid: ME.into(), round, start_tick: start, end_tick: end, tick_rate: 64.0 }
+        let id = clip_id_for(DemoRoot::Replays, demo, ME, round).unwrap();
+        ClipReq { reason: format!("reason {id}"), id, demo: demo.into(), root: DemoRoot::Replays, steamid: ME.into(), round, start_tick: start, end_tick: end, tick_rate: 64.0 }
     }
     fn req(m: &Machine, clips: Vec<ClipReq>) -> JobReq {
         JobReq { clips, hlae: m.hlae.display().to_string() }
@@ -688,7 +747,7 @@ mod tests {
         // line is read with lines(), which takes either.
         let job = script.split("const JOB = ").nth(1).unwrap().lines().next().unwrap().trim_end().trim_end_matches(';');
         let v: serde_json::Value = serde_json::from_str(job).unwrap();
-        assert_eq!(v["demos"][0]["path"], m.env.replays.join("match730_0001.dem").display().to_string().replace('\\', "/"));
+        assert_eq!(v["demos"][0]["path"], m.replays().join("match730_0001.dem").display().to_string().replace('\\', "/"));
         assert_eq!(v["demos"][0]["clips"][0], json!({ "id": a1(), "steamid": ME, "start": 1000, "end": 2280 }));
         // the keys director.template.js reads, which src/clips/director.test.ts's fixture copies
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
@@ -713,7 +772,7 @@ mod tests {
     fn a_clip_id_must_name_its_demo_player_and_round() {
         let m = machine("bind");
         // the value clips/ids.ts gives the same match key, player and round (src/clips/ids.test.ts)
-        assert_eq!(clip_id_for("match730_0001.dem", ME, 3).unwrap(), "c-e3fad9374b01f517-r3");
+        assert_eq!(clip_id_for(DemoRoot::Replays, "match730_0001.dem", ME, 3).unwrap(), "c-e3fad9374b01f517-r3");
         let refused = |c: ClipReq| build(&req(&m, vec![c]), &m.env, ID, "t").unwrap_err();
         // match 1's round 3 id, with match 2's demo, another player, or another round
         for c in [ClipReq { demo: D2.into(), ..clip(D1, 3, 1000, 2000) }, ClipReq { steamid: "76561190000000002".into(), ..clip(D1, 3, 1000, 2000) }, ClipReq { round: 4, ..clip(D1, 3, 1000, 2000) }] {
@@ -769,16 +828,16 @@ mod tests {
     fn a_clip_must_end_within_its_demo() {
         let m = machine("length");
         // the fixture demos are 100,000 ticks long
-        assert_eq!(demo_playback_ticks(&m.env.replays.join(D1)).unwrap(), 100_000);
+        assert_eq!(demo_playback_ticks(&m.replays().join(D1)).unwrap(), 100_000);
         build(&req(&m, vec![clip(D1, 3, 99_000, 100_000)]), &m.env, ID, "t").unwrap();
         let e = build(&req(&m, vec![clip(D1, 3, 99_000, 100_001)]), &m.env, ID, "t").unwrap_err();
         assert!(e.contains("run past the end of the demo, 100000 ticks"), "{e}");
         // a file that is not a CS2 demo, and a demo whose file info is compressed, bound nothing: refused
-        fs::write(m.env.replays.join(D2), b"HL2DEMO\0................").unwrap();
+        fs::write(m.replays().join(D2), b"HL2DEMO\0................").unwrap();
         assert!(build(&req(&m, vec![clip(D2, 1, 200, 300)]), &m.env, ID, "t").unwrap_err().contains("not a CS2 demo"));
         let mut z = fake_demo(5000);
         z[64] = 2 | 64;
-        fs::write(m.env.replays.join(D2), z).unwrap();
+        fs::write(m.replays().join(D2), z).unwrap();
         assert!(build(&req(&m, vec![clip(D2, 1, 200, 300)]), &m.env, ID, "t").unwrap_err().contains("compressed"));
     }
 
@@ -852,11 +911,54 @@ mod tests {
         let m = machine("link");
         let elsewhere = m.root.join("elsewhere");
         fs::create_dir_all(&elsewhere).unwrap();
-        link(&elsewhere, &m.env.replays.join("evil.dem"));
+        link(&elsewhere, &m.replays().join("evil.dem"));
         let e = build(&req(&m, vec![ClipReq { demo: "evil.dem".into(), ..clip(D1, 3, 1000, 2000) }]), &m.env, ID, "t").unwrap_err();
         assert!(e.contains("demo evil.dem"), "{e}");
-        assert!(resolve_demo(&m.env.replays, "evil.dem").is_err());
-        assert!(resolve_demo(&m.env.replays, "match730_0001.dem").is_ok());
+        assert!(resolve_demo(DemoRoot::Replays, m.replays(), "evil.dem").is_err());
+        assert!(resolve_demo(DemoRoot::Replays, m.replays(), "match730_0001.dem").is_ok());
+    }
+
+    /// A clip of the recorded demo L1 in the demos store.
+    fn local_clip(round: u32) -> ClipReq {
+        let id = clip_id_for(DemoRoot::Demos, L1, ME, round).unwrap();
+        ClipReq { id, demo: L1.into(), root: DemoRoot::Demos, ..clip(D1, round, 1000, 2000) }
+    }
+
+    #[test]
+    fn a_recorded_demo_is_found_in_the_demos_store_and_named_by_its_own_source() {
+        // fails if a clip's demo is looked up in the replays folder whatever its root, or a recorded
+        // demo's clip id is the Valve key's (the app's ids.ts names it "local/<id>")
+        let m = machine("store");
+        let (plan, _) = build(&req(&m, vec![local_clip(3), clip(D1, 3, 1000, 2000)]), &m.env, ID, "t").unwrap();
+        let paths: Vec<&str> = plan.demos.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(paths, [m.store().join(L1).display().to_string(), m.replays().join(D1).display().to_string()]);
+        assert_eq!(clip_id_for(DemoRoot::Demos, L1, ME, 3).unwrap(), format!("c-{}-r3", fnv64(&format!("local/20261106T2010Z_de_dust2_abababab|{ME}"))));
+        assert_ne!(clip_id_for(DemoRoot::Demos, L1, ME, 3), clip_id_for(DemoRoot::Replays, L1, ME, 3));
+        // the same name in the other folder is not there: each root is its own folder
+        let e = build(&req(&m, vec![ClipReq { root: DemoRoot::Replays, id: clip_id_for(DemoRoot::Replays, L1, ME, 3).unwrap(), ..local_clip(3) }]), &m.env, ID, "t").unwrap_err();
+        assert!(e.contains(&format!("demo {L1}")), "{e}");
+        // an id made for the other root does not match the demo it names
+        let e = build(&req(&m, vec![ClipReq { id: clip_id_for(DemoRoot::Replays, L1, ME, 3).unwrap(), ..local_clip(3) }]), &m.env, ID, "t").unwrap_err();
+        assert!(e.contains("does not match its demo"), "{e}");
+        // a machine without the store refuses its clips by name
+        let none = JobEnv { demo_roots: vec![(DemoRoot::Replays, m.replays().to_path_buf())], ..m.env.clone() };
+        assert!(build(&req(&m, vec![local_clip(3)]), &none, ID, "t").unwrap_err().contains("the demos folder was not found"));
+        // a request saved before roots existed names its demo in the replays folder
+        let old: ClipReq = serde_json::from_value(json!({ "id": a1(), "demo": D1, "steamid": ME, "round": 3, "startTick": 1000, "endTick": 2000, "tickRate": 64.0, "reason": "r" })).unwrap();
+        assert_eq!(old.root, DemoRoot::Replays);
+    }
+
+    #[test]
+    fn a_link_named_like_a_demo_in_the_demos_store_is_refused() {
+        let m = machine("store-link");
+        let elsewhere = m.root.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let evil = "20261106T2011Z_de_dust2_cdcdcdcd.dem";
+        link(&elsewhere, &m.store().join(evil));
+        let e = build(&req(&m, vec![ClipReq { demo: evil.into(), id: clip_id_for(DemoRoot::Demos, evil, ME, 3).unwrap(), ..local_clip(3) }]), &m.env, ID, "t").unwrap_err();
+        assert!(e.contains(&format!("demo {evil}")), "{e}");
+        assert!(resolve_demo(DemoRoot::Demos, m.store(), evil).is_err());
+        assert!(resolve_demo(DemoRoot::Demos, m.store(), L1).is_ok());
     }
 
     #[test]
