@@ -8,23 +8,38 @@
 // through the side that team played in each round, read from the human or, when he has no side in a
 // round (not connected), from a teammate who has one in every round compared. Plugin 1.3.0 fills those rounds from the round_end event,
 // so in its files this rebuilds only what both sources left null (recon.unknownResult).
+import { bodyEntry, bodyLookup, type BodyAt } from "./bodies";
 import { KILL_FLAG, type MatchFile, type RoundHow, type Side } from "./schema";
+
+/** One body lookup per file: howFromEvidence asks it for every round it reads. */
+const lookups = new WeakMap<MatchFile, BodyAt>();
+const lookupOf = (m: MatchFile) => {
+  let at = lookups.get(m);
+  if (!at) lookups.set(m, (at = bodyLookup(m)));
+  return at;
+};
 
 const other = (s: Side): Side => (s === 2 ? 3 : 2);
 
 const count = (x: number | null | undefined): x is number => Number.isInteger(x) && x! >= 0;
 
 /**
- * The side the human's team played in each of `rounds`, read from one player of that team (by starting
- * side, which fixes the team) who has a side in all of them, the human first; null when none has.
+ * The side the human's team played in each of `rounds`, read from one player who has a side in all of
+ * them: the human, else a teammate (same starting side, which fixes the team), else an opponent, whose
+ * side is the other one. Null when no player has. A null start side is on no team (adapter.ts teamOf),
+ * so it names no teammate or opponent.
  */
 export function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
   const start = m.players.startSide[m.human];
-  // a null start side is on no team (adapter.ts teamOf), so it names no teammate
-  const team = [m.human, ...m.players.startSide.flatMap((s, pi) => (start !== null && s === start && pi !== m.human ? [pi] : []))];
-  for (const pi of team) {
-    const sides = rounds.map((ri) => m.rounds.side[ri]?.[pi] ?? null);
-    if (sides.every((x) => x !== null)) return sides as Side[];
+  const sidesOf = (pi: number) => rounds.map((ri) => m.rounds.side[ri]?.[pi] ?? null);
+  const all = (x: (Side | null)[]): x is Side[] => x.every((s) => s !== null);
+  const own = sidesOf(m.human);
+  if (all(own)) return own;
+  if (start === null) return null;
+  for (const [pi, s] of m.players.startSide.entries()) {
+    if (pi === m.human || s === null) continue;
+    const sides = sidesOf(pi);
+    if (all(sides)) return s === start ? sides : sides.map(other);
   }
   return null;
 }
@@ -80,7 +95,7 @@ function finalWinner(m: MatchFile): Side | null {
  * - survived, when rounds.equipEnd is above 0: the plugin writes the pawn's equipment value at
  *   round_end if it is alive, 0 if it is dead;
  * - dead, when the file records his death by body (kills.vBody, so a bot a human drove dies as
- *   itself) at or before the end tick, or his disconnect (leaves) after freeze end and at or before
+ *   itself; with the entry missing, the body the lookup in bodies.ts names) at or before the end tick, or his disconnect (leaves) after freeze end and at or before
  *   the end tick. Later removals are ignored: the bomb's blast kills CTs after round_end, and a player
  *   may leave after the round. A disconnect before freeze end is already in alive0;
  * - unknown otherwise, since equipEnd 0 without a recorded death may be a live player carrying
@@ -110,7 +125,9 @@ export function howFromEvidence(m: MatchFile, ri: number, win: Side): RoundHow |
   const dead = new Set<number>();
   const K = m.kills;
   for (let i = 0; i < K.ri.length; i++) {
-    if (K.ri[i] === ri && (K.flags[i] & KILL_FLAG.freeze) === 0 && K.tick[i] <= end) dead.add(K.vBody?.[i] ?? K.victim[i]);
+    if (K.ri[i] !== ri || (K.flags[i] & KILL_FLAG.freeze) !== 0 || K.tick[i] > end) continue;
+    const vb = bodyEntry(K.vBody, i);
+    dead.add(vb === undefined ? lookupOf(m)(K.victim[i], ri, K.tick[i]) ?? K.victim[i] : vb ?? K.victim[i]);
   }
   const L = m.leaves;
   for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri && L!.tick[i] > fe && L!.tick[i] <= end) dead.add(L!.pi[i]);

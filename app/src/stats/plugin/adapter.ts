@@ -15,7 +15,7 @@
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
 import { bodyEntry, bodyLookup } from "./bodies";
 import { roundResults, teamSides } from "./results";
-import { KILL_FLAG as FLAG, type GrenadeType, type MatchFile, type Side as SideCode } from "./schema";
+import { GRENADE_WEAPONS, KILL_FLAG as FLAG, type GrenadeType, type MatchFile, type Side as SideCode } from "./schema";
 
 const SIDE: Record<number, Side> = { 2: "T", 3: "CT" };
 const THROW_CLASS: Record<GrenadeType | "incgrenade", string> = {
@@ -37,9 +37,6 @@ function add<N extends TableName>(t: Table<N>, name: N, values: Record<string, u
   t.n++;
 }
 
-/** Weapons whose damage comes from a thrown grenade or its fire, so the body that dealt it is the one that threw it. */
-const GRENADE_DAMAGE = new Set(["hegrenade", "inferno", "molotov", "incgrenade", "smokegrenade", "flashbang", "decoy"]);
-
 /** Source engine hit group numbers, named as the demo parser names them. */
 const HITGROUP: Record<number, string> = { 1: "head", 2: "chest", 3: "stomach", 4: "left_arm", 5: "right_arm", 6: "left_leg", 7: "right_leg", 8: "neck" };
 
@@ -49,7 +46,7 @@ function finalScore(m: MatchFile, winSide: (SideCode | null)[]): [number, number
   const out: [number, number] = [0, 0];
   winSide.forEach((w, ri) => {
     const win = SIDE[w ?? -1];
-    // the human's team's side, through a teammate when he has none that round (results.ts teamSides)
+    // the human's team's side, through a teammate or an opponent when he has none (results.ts teamSides)
     const human = SIDE[teamSides(m, [ri])?.[0] ?? -1];
     if (!win || !human) return;
     const humanWon = win === human;
@@ -205,7 +202,9 @@ export function pluginToTables(m: MatchFile): MatchTables {
     if (fe === null || end === null) continue;
     const win = SIDE[results.winSide[ri] ?? -1] ?? null;
     const how = results.how[ri];
-    const ctIsHuman = sideOf(ri, m.human) === "CT";
+    // the human's team's side, through a teammate or an opponent when he has none that round; with
+    // no side at all, the team names stay null and derive reads the CT team from the CT players
+    const usSide = SIDE[teamSides(m, [ri])?.[0] ?? -1] ?? null;
     const plantTick = m.rounds.plantTick[ri];
     const planterPi = m.rounds.planter[ri];
     const defuserPi = m.rounds.defuser[ri];
@@ -213,7 +212,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const defuser = defuserPi === null ? null : bodyAt(defuserPi, ri, end);
     add(t.rounds, "rounds", {
       round: ri + 1, start_tick: fe, freeze_end_tick: fe, end_tick: end, winner_side: win,
-      reason: win && how ? REASON[how](win) : null, ct_team: ctIsHuman ? humanTeam : "Opponents", t_team: ctIsHuman ? "Opponents" : humanTeam,
+      reason: win && how ? REASON[how](win) : null, ct_team: usSide === null ? null : usSide === "CT" ? humanTeam : "Opponents", t_team: usSide === null ? null : usSide === "T" ? humanTeam : "Opponents",
       plant_tick: m.rounds.plantTick[ri], plant_site: m.rounds.bombSite[ri], planter_steamid: planter === null ? null : key[planter],
       defuse_tick: how === "defuse" ? end : null, defuser_steamid: defuser === null ? null : key[defuser],
       explode_tick: how === "bomb" ? end : null,
@@ -239,12 +238,23 @@ export function pluginToTables(m: MatchFile): MatchTables {
     // A kill or death in a bot's body (takeover) belongs to the bot, as in CS Demo Manager. kBody and
     // vBody record the body at the event and override the timeline; null in them means the player's
     // own body, and a kill whose killer the timeline puts in no body keeps its row with no attacker.
-    // Where the optional column is absent or short, the timeline decides.
+    // Where the optional column is absent or short, the timeline decides. A grenade or fire kill linked
+    // to its throw goes to the body that threw it, as its damage does: kBody is the killer's body at the
+    // kill, null when he has no pawn then (a grenade thrown before his death), which is not his own
+    // body. Unlinked, a kBody naming a bot stands, since nothing says when the grenade was thrown: on 41
+    // recorded files the game's round stats credit the one such kill (a molotov) to that bot. Unlinked
+    // with kBody null, only a body the file has observed by the kill counts.
     const tick = k.tick[i];
     const named = k.killer[i];
     const kb = bodyEntry(k.kBody, i);
     const vb = bodyEntry(k.vBody, i);
-    const killer = named === null ? null : kb === undefined ? bodyAt(named, ri, tick) : kb ?? (bodyAt(named, ri, tick) === null ? null : named);
+    const knade = k.nade?.[i] ?? null;
+    const grenade = knade !== null || GRENADE_WEAPONS.has(weapon(k.weapon[i]));
+    const g = grenade ? grenadeOf(knade, ri, named) : null;
+    const linked = g !== null && throwOf(g) !== null;
+    const killer = named === null ? null
+      : grenade ? (linked || typeof kb !== "number" ? throwerBody(named, ri, g, tick) : kb)
+      : kb === undefined ? bodyAt(named, ri, tick) : kb ?? (bodyAt(named, ri, tick) === null ? null : named);
     const victim = vb === undefined ? victimOf(k.victim[i], ri, tick) : vb ?? k.victim[i];
     // CS2 names one assister: the damage assister when there is one, else the flash assister. It stays
     // the controller the event names, the one exception to body credit: on 41 recorded files the game's
@@ -276,7 +286,7 @@ export function pluginToTables(m: MatchFile): MatchTables {
     const nade = d.nade?.[i] ?? null;
     const by = d.attacker[i];
     // grenade or fire damage with no link to its grenade still asks for the body that threw it
-    const thrown = nade !== null || GRENADE_DAMAGE.has(weapon(d.weapon[i]));
+    const thrown = nade !== null || GRENADE_WEAPONS.has(weapon(d.weapon[i]));
     const a = by === null ? null : thrown ? throwerBody(by, ri, grenadeOf(nade, ri, by), d.tick[i]) : bodyAt(by, ri, d.tick[i]);
     if (a === null && by !== null) continue;
     const v = victimOf(d.victim[i], ri, d.tick[i]);
