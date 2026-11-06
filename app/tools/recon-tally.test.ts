@@ -46,6 +46,15 @@ describe("the rebuilt recon tally", () => {
     expect(row("1.1.0")).toEqual([[1, 1, 100], [0, 0, 0]]);
     expect(row("1.3.0")).toEqual([[0, 1, 0], [1, 0, 100]]);
   });
+
+  it("names the body of a kill whose kBody entry is missing through the body lookup", () => {
+    // fails if a 1.3.0 file's missing entry falls back to the controller: the takeovers table puts the
+    // human in the mate from 1151, so the kill at 1300 is the mate's
+    const m = file("1.3.0");
+    m.kills = { ...m.kills, kBody: undefined };
+    m.takeovers = { ri: [0], tick: [1151], pi: [0], body: [1] };
+    expect([0, 1].map((pi) => tallies(m)(0, pi).k)).toEqual([0, 1]);
+  });
 });
 
 describe("recon round coverage", () => {

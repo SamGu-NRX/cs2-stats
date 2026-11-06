@@ -30,6 +30,7 @@ import shutil
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
@@ -1659,6 +1660,24 @@ class ReadableParser:
         return call
 
 
+def truncated_tick_rate(parser, ticks: list[int], fallback: float) -> float:
+    """Ticks per second from game time between the first and last of `ticks`, for a truncated demo, which has no
+    playback header. Measured between one freeze end and itself, it divided by zero; with fewer than two
+    distinct ticks, no game time read at both (a cut-off demo may return no rows, or no game_time column), or
+    no game time between them, it is `fallback` (Context's 64, CS2's only server rate)."""
+    t = sorted(set(ticks))
+    if len(t) < 2:
+        return fallback
+    df = parser.parse_ticks(["game_time"], ticks=[t[0], t[-1]])
+    if not {"tick", "game_time"} <= set(df.columns):
+        return fallback
+    gt = df.dropna(subset=["game_time"]).drop_duplicates("tick").set_index("tick").game_time
+    if t[0] not in gt.index or t[-1] not in gt.index:
+        return fallback
+    dt = float(gt[t[-1]] - gt[t[0]])
+    return round((t[-1] - t[0]) / dt, 3) if dt > 0 else fallback
+
+
 def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     from demoparser2 import DemoParser
 
@@ -1700,10 +1719,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         voided = merge_windows(set(voided) | {(t, t) for t in restores_pre_match})
         if ctx.truncated:
             # Without awpy's playback header, measure the tick rate from game time across the match.
-            fe_t = sorted(int(t) for t in ev("round_freeze_end").tick if t >= match_start)
-            gt = parser.parse_ticks(["game_time"], ticks=[fe_t[0], fe_t[-1]]).drop_duplicates("tick") \
-                .set_index("tick").game_time
-            rate = ctx.tick_rate = round((fe_t[-1] - fe_t[0]) / float(gt[fe_t[-1]] - gt[fe_t[0]]), 3)
+            # Freeze ends as before; a demo cut off before its second one adds its round ends.
+            marks = sorted({int(t) for t in ev("round_freeze_end").tick if t >= match_start})
+            if len(marks) < 2:
+                marks += [int(t) for t in real_ticks if t >= match_start]
+            rate = ctx.tick_rate = truncated_tick_rate(parser, marks, ctx.tick_rate)
         # A winnerless attempt (a backup restore) is never a counted round: it has no winner, and HLTV lists
         # only rounds with one. Its events are dropped even when the game kept some of its stats (one HLTV
         # demo: two restored attempts before round 1 left one player at 14 kills and 21 deaths on the
@@ -3103,30 +3123,89 @@ def teams_from_filename(dem: Path) -> tuple[str | None, str | None]:
     return (m["team1"], m["team2"]) if m else (None, None)
 
 
+# The name a recorded (source "local") demo is extracted under: local_import.py's id, then ".dem".
+LOCAL_NAME_RE = re.compile(r"^\d{8}T\d{4}Z_[a-z0-9_]+_[0-9a-f]{8}\.dem$")
+# tv_autorecord's name: auto-<yyyymmdd>-<hhmm>-<map>-<server name>; map names hold no '-'
+AUTO_NAME_RE = re.compile(r"^auto-\d{8}-\d{4}-[^-]+-(?P<host>.+)$")
+
+
+# Fields scrub_private leaves alone: generated from the id, the header's map or the caller's folder, never from
+# the file name, and read back by the importers and the app.
+SCRUB_KEEPS = frozenset({"demo", "out", "archive", "dem_file", "map", "map_name"})
+# Free text: messages that can quote anything the extractor or a parser read, the server name among it.
+FREE_TEXT = frozenset({"errors", "traceback", "validation", "failed_checks", "warnings", "pov_error"})
+
+
+def _scrub(value, pattern: re.Pattern, replacement: str, only_free: bool, key: str | None = None, free=False):
+    if isinstance(value, str):
+        return value if key in SCRUB_KEEPS or (only_free and not free) else pattern.sub(lambda _: replacement, value)
+    if isinstance(value, dict):
+        return {k: _scrub(v, pattern, replacement, only_free, k, free or k in FREE_TEXT) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_scrub(v, pattern, replacement, only_free, key, free) for v in value)
+    return value
+
+
+def scrub_private(value, dem: Path, name: str):
+    """`value` (a result or summary row: dicts, lists, strings) with no part of a recorded demo's file name: the
+    file name becomes `name` and its stem `name`'s stem, in every string but SCRUB_KEEPS' and dict keys. The
+    server name at the end of a tv_autorecord name, on a listen server the host's Steam name, is replaced too,
+    but only as a whole token of 2 or more characters and only in FREE_TEXT: a Steam name can be "ok" or "de",
+    and replaced everywhere it would rewrite the result's "ok" and the map "de_dust2"."""
+    value = _scrub(value, re.compile(re.escape(dem.name)), name, False)
+    value = _scrub(value, re.compile(re.escape(dem.stem)), Path(name).stem, False)
+    if (m := AUTO_NAME_RE.match(dem.stem)) and len(m["host"]) >= 2:
+        value = _scrub(value, re.compile(rf"(?<!\w){re.escape(m['host'])}(?!\w)"), Path(name).stem, True)
+    return value
+
+
 def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = None, archive: str = "",
-                 meta_extra: dict | None = None) -> dict:
-    """Parse one demo into out_dir. Returns a result dict; result['ok'] is the verdict."""
+                 meta_extra: dict | None = None, name: str | None = None,
+                 extra_from_players: Callable[[pd.DataFrame], dict] | None = None) -> dict:
+    """Parse one demo into out_dir. Returns a result dict; result['ok'] is the verdict.
+
+    name replaces the demo's file name wherever it is stored or read for team names. A recorded demo's own
+    name ends in the server's hostname, which on a listen server is the player's Steam name, so source
+    "local" needs a name of LOCAL_NAME_RE's form (local_import.py's id) and is refused without one; its
+    result then holds no part of the original name (scrub_private), in errors, checks or the traceback.
+    extra_from_players(players table) returns fields added to match.extra, for what only the parsed players
+    say, such as which of them recorded the demo."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
+    if source == "local" and not (name and LOCAL_NAME_RE.match(name)):
+        raise ValueError("source local needs name=<yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name "
+                         "ends in the host's Steam name, so it is never stored (extract it with local_import.py)")
+    if source == "local":
+        res = _extract(Path(dem), Path(out_dir), source, mapdata, archive, meta_extra, name, extra_from_players)
+        return scrub_private(res, Path(dem), name)
+    return _extract(Path(dem), Path(out_dir), source, mapdata, archive, meta_extra, name, extra_from_players)
+
+
+def _extract(dem: Path, out_dir: Path, source: str, mapdata: Path | None, archive: str, meta_extra: dict | None,
+             name: str | None, extra_from_players: Callable[[pd.DataFrame], dict] | None) -> dict:
     t0 = time.perf_counter()
     dem, out_dir = Path(dem), Path(out_dir)
-    ctx = Context(dem=dem, out=out_dir, archive=archive, meta_extra=meta_extra or {},
+    ctx = Context(dem=dem, out=out_dir, archive=archive, meta_extra=dict(meta_extra or {}),
                   mapdata=Path(mapdata) if mapdata else None)
-    team1, team2 = teams_from_filename(dem)
-    result = dict(archive=archive, extractor_version=EXTRACTOR_VERSION, dem_file=dem.name,
-                  dem_bytes=dem.stat().st_size, map=None, team1_file=team1,
+    named = Path(name) if name else dem
+    team1, team2 = teams_from_filename(named)
+    result = dict(archive=archive, extractor_version=EXTRACTOR_VERSION, dem_file=named.name,
+                  dem_bytes=None, map=None, team1_file=team1,
                   team2_file=team2, ok=False,
                   errors=[], timings=ctx.timings, rss_gb=ctx.rss_gb, rows={}, bytes={}, validation={})
     try:
-        for name, fn in STAGES:
-            with Timer(ctx, f"stage_{name}"):
-                ctx.tables[name] = fn(ctx)
+        # Every read of the file is inside the try: an error from it names the path, and a recorded demo's
+        # path ends in a Steam name, which extract_demo scrubs only from a result it returns.
+        result["dem_bytes"] = dem.stat().st_size
+        for stage, fn in STAGES:
+            with Timer(ctx, f"stage_{stage}"):
+                ctx.tables[stage] = fn(ctx)
         info = ctx.info
         info["awpy_checks"] = cross_check_awpy(ctx.tables["demoparser2"], ctx.tables["awpy"]) if not ctx.truncated \
             else [dict(check="truncated", expected=None, actual=info["rounds"], ok=True, fatal=False,
                        note=f"awpy: {info['awpy_error']}; validated through round {info['rounds']}")]
         header = info["header"]
-        result["map"] = map_key_for(dem, header.get("map_name", "unknown"))
+        result["map"] = map_key_for(named, header.get("map_name", "unknown"))
         result["map_name"] = header.get("map_name")
         result["tick_rate"] = ctx.tick_rate
         result["rounds"] = info["rounds"]
@@ -3138,6 +3217,10 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
         vis = info["visibility"]
         result["visibility"] = vis
         demo_sha256 = file_sha256(dem)
+        # A listen server's hostname convar is the host's Steam name, like its header server_name.
+        cvars = lambda d: {k: v for k, v in d.items() if not (source == "local" and str(k).lower() == "hostname")}
+        if extra_from_players:
+            ctx.meta_extra.update(extra_from_players(ctx.tables["demoparser2"]["players"]))
         match = dict(match_id=demo_sha256[:16], source=source, map=header.get("map_name"), tick_rate=ctx.tick_rate,
                     demo_sha256=demo_sha256, extractor_version=EXTRACTOR_VERSION, schema_version=SCHEMA_VERSION,
                     visibility_status=vis["status"], mesh_release=vis.get("release"),
@@ -3147,14 +3230,16 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     truncated=ctx.truncated,
                     velocity_source="position_diff" if ctx.truncated else "networked",
                     map_key=result["map"],
-                    dem_file=dem.name, dem_bytes=dem.stat().st_size, archive=archive,
+                    dem_file=named.name, dem_bytes=dem.stat().st_size, archive=archive,
                     team1_file=team1, team2_file=team2, team_ct_start=start_ct, team_t_start=start_t,
                     score_ct_start=info["final_score"].get(start_ct), score_t_start=info["final_score"].get(start_t),
                     n_rounds=info["rounds"], match_start_tick=info["match_start_tick"],
                     unattributed_damage_hp=info["unattributed_damage_hp"],
                     final_tick=info["final_tick"], playback_ticks=info["awpy_header"].get("playback_ticks"),
                     patch_version=header.get("patch_version"), build_num=info["awpy_header"].get("build_num"),
-                    server_name=header.get("server_name"), demo_version_guid=header.get("demo_version_guid"),
+                    # a listen server is named after the player hosting it, so a recorded demo's is not kept
+                    server_name="" if source == "local" else header.get("server_name"),
+                    demo_version_guid=header.get("demo_version_guid"),
                     demoparser2_version=pkg_version("demoparser2"), awpy_version=pkg_version("awpy"),
                     polars_version=pl.__version__, pandas_version=pd.__version__,
                     python_version=platform.python_version(),
@@ -3164,7 +3249,7 @@ def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = N
                     dropped_attempts=json.dumps(info["dropped_attempts"]),
                     excluded_players=json.dumps(info["excluded_players"], default=str), parts="[]",
                     departed=json.dumps(info["departed"]), scoreboard_taken=json.dumps(info["scoreboard_taken"]),
-                    convars=json.dumps(info["convars"]), awpy_convars=json.dumps(info.get("awpy_convars", {})),
+                    convars=json.dumps(cvars(info["convars"])), awpy_convars=json.dumps(cvars(info.get("awpy_convars", {}))),
                     unavailable_fields=json.dumps(UNAVAILABLE if "player_blind_check" not in info else {
                         **UNAVAILABLE, "blinds.source": "rebuilt from flash_duration changes, as for GOTV demos; "
                                                         "this demo's own player_blind events are the check "
@@ -3254,13 +3339,18 @@ def main(argv=None) -> int:
     ap.add_argument("--mapdata", type=Path, help="awpy-data release folder with geometry/<map>.mesh")
     ap.add_argument("--archive", default="")
     ap.add_argument("--meta", default="{}", help="JSON object stored in match.extra")
+    ap.add_argument("--name", help="the file name to store instead of the demo's own; source local requires "
+                                   "<yyyymmddThhmmZ>_<map>_<sha8>.dem (local_import.py chooses it)")
     ap.add_argument("--result", type=Path, help="write the result JSON here")
     a = ap.parse_args(argv)
     # both outputs are checked before the demo is parsed; the result names the match's players
     check_output(a.out_dir, private=True, what="the extracted tables")
     if a.result:
         check_output(a.result, private=True, what="the extraction result")
-    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta))
+    if a.source == "local" and not (a.name and LOCAL_NAME_RE.match(a.name)):
+        ap.error("--source local needs --name <yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name ends in "
+                 "the host's Steam name; local_import.py extracts these demos and chooses the name")
+    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta), name=a.name)
     if a.result:
         write_json(a.result, res, private=True, what="the extraction result", default=_json_default, indent=1)
     else:

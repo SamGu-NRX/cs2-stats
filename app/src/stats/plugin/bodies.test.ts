@@ -215,6 +215,44 @@ describe("rows made in a bot's body", () => {
     expect(hits(m)).toEqual(["1300 A>E2"]);
   });
 
+  it("credit an unlinked grenade kill with kBody null to the human only while his own body is alive", () => {
+    // fails if kBody null on an unlinked grenade kill is always read as his own pawn, or never: alive at
+    // 1140 his HE kill is his; after his death at 1150 he is in no body, so the kill at 1210 has no attacker
+    const kills: Kill[] = [[1140, H, E2, null, null], [1150, E1, H, null, null], [1210, H, E1, null, null]];
+    const m = round(kills, []);
+    m.kills.weapon = [1, 0, 1];
+    expect(pluginToTables(m).kills.attacker_steamid.map((a) => (a === null ? null : NAME[a]))).toEqual(["H", "E1", null]);
+  });
+
+  it("start the human's own body at his first own-body sighting when alive0 is missing", () => {
+    // fails if a round with no alive0 for the human leaves his own body unknown all round despite a gun
+    // kill with kBody null at 1300, or assumes it from round start: 1200 stays unresolved. A grenade kill
+    // is no such sighting
+    const at = (weapon: number) => {
+      const m = round([[1300, H, E2, null, null]], [[1200, H, E2], [1300, H, E2], [1400, H, E1]]);
+      m.rounds.alive0 = [[null, 1, 1, 1, 1]];
+      m.kills.weapon = [weapon];
+      return hits(m);
+    };
+    expect(at(0)).toEqual(["1300 H>E2", "1400 H>E1"]);
+    expect(at(1)).toEqual([]);
+  });
+
+  it("give a throw rebuilt from a detonation a bot body only once the file has named that bot", () => {
+    // fails if a file with no throw log credits a rebuilt throw by its detonation tick like a logged
+    // throw: A starts after the human's death at 1150 but is first named at 1300, so the throw rebuilt at
+    // 1250 is left out and the one at 1350 is A's
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E1, A, null], [1400, E2, H, null, A]];
+    const m = round(kills, [], { grenades: { ri: [0, 0], tick: [1250, 1350], thrower: [H, H], type: ["he", "he"], pos: [[0, 0, 0], [0, 0, 0]] }, throws: undefined });
+    const t = pluginToTables(m);
+    expect([t.grenade_throws!.tick, t.grenade_throws!.steamid.map((x) => NAME[x!])]).toEqual([[1350], ["A"]]);
+    // fails if grenades rows that link a throw while the file has no throw log make the adapter read the
+    // missing log (it would throw): the links name nothing, so the result is the same
+    const linked = round(kills, [], { grenades: { ri: [0, 0], tick: [1250, 1350], thrower: [H, H], type: ["he", "he"], pos: [[0, 0, 0], [0, 0, 0]], throw: [0, 1] }, throws: undefined });
+    const tl = pluginToTables(linked);
+    expect([tl.grenade_throws!.tick, tl.grenade_throws!.steamid.map((x) => NAME[x!])]).toEqual([[1350], ["A"]]);
+  });
+
   it("take no grenade kill with kBody null as evidence of the human's own body", () => {
     // fails if a posthumous HE kill extends his own body: alive at freeze end, he kills E1 with a gun at
     // 1100, his death is not recorded, his HE kills E2 at 1250 with kBody null (no pawn), and his kill at
@@ -321,6 +359,21 @@ describe("the takeovers table (plugin 1.3.0)", () => {
     expect(bad(takeovers([[1151, 9]]))).toThrow("takeovers.body[0] is 9, expected null or a bot's index");
     expect(bad({ ...takeovers([[1151, B]]), pi: [A] })).toThrow("takeovers.pi[0] is 1, expected the human's index 0");
     expect(bad({ ri: [0], tick: [1], pi: [H] } as unknown as Takeovers)).toThrow('column "takeovers.body" is missing or not an array');
+  });
+
+  it("rejects a kBody or vBody entry that is not null or a player index, and accepts an absent or short column", () => {
+    // fails if a bad body index loads and credits a player who does not exist
+    const kills: Kill[] = [[1150, E1, H, null, null], [1300, H, E2, A, null]];
+    const load = (k: Partial<MatchFile["kills"]>) => () => {
+      const m = round(kills, []);
+      m.kills = { ...m.kills, ...k };
+      return validateMatch(m, "t.json.gz");
+    };
+    expect(load({})).not.toThrow();
+    expect(load({ kBody: undefined, vBody: [null] })).not.toThrow();
+    expect(load({ kBody: [null, 9] })).toThrow("kills.kBody[1] is 9, expected null or a player index 0..4");
+    expect(load({ vBody: [1.5, null] })).toThrow("kills.vBody[0] is 1.5, expected null or a player index 0..4");
+    expect(load({ kBody: "A" as unknown as number[] })).toThrow('column "kills.kBody" is not an array');
   });
 
   it("accepts an end row after a bomb blast past the round's end, and bounds rows by the round's ticks", () => {
