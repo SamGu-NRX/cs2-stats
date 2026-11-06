@@ -7,15 +7,20 @@
 // the side and swap at half time and at each overtime half, so both are mapped to the human's team
 // through the human's side in each round. Plugin 1.3.0 fills those rounds from the round_end event,
 // so in its files this rebuilds only what both sources left null (recon.unknownResult).
-import type { MatchFile, RoundHow, Side } from "./schema";
+import { KILL_FLAG, type MatchFile, type RoundHow, type Side } from "./schema";
 
 const other = (s: Side): Side => (s === 2 ? 3 : 2);
 
-/** [human's team, other team] score at the start of round ri; null when the human has no side. */
+const count = (x: number | null | undefined): x is number => Number.isInteger(x) && x! >= 0;
+
+/**
+ * [human's team, other team] score at the start of round ri; null when the human has no side or
+ * either part of the score is missing, so a missing part is never read as 0.
+ */
 function teamScore(m: MatchFile, ri: number): [number, number] | null {
   const side = m.rounds.side[ri]?.[m.human] ?? null;
   const s = m.rounds.score[ri];
-  if (side === null || !s) return null;
+  if (side === null || !s || !count(s[0]) || !count(s[1])) return null;
   const [t, ct] = s;
   return side === 2 ? [t, ct] : [ct, t];
 }
@@ -50,11 +55,20 @@ function finalWinner(m: MatchFile): Side | null {
 }
 
 /**
- * How a round ended, from what the file holds about it: a defuser means a defuse; every player of the
- * losing side who was alive at freeze end dead by the round's end tick means elimination (deaths by
- * body, kills.vBody, so a bot a human took over counts as its own death; a death after the end tick is
- * the bomb's blast or a kill after time ran out); else a planted bomb means it exploded (T win) and no
- * plant means time ran out (CT win). Anything else is null.
+ * How a round ended, from what the file holds about it, or null when it does not settle it.
+ *
+ * - A defuser means a defuse.
+ * - Every player of the losing side who was alive at freeze end removed by the round's end tick means
+ *   elimination. A player is removed by a death (by body, kills.vBody, so a bot a human took over
+ *   counts as its own death) or a disconnect (leaves). Freeze-time kills do not count, since that
+ *   player respawned for the live round (rounds.alive0). A death after the end tick is the bomb's
+ *   blast or a kill after time ran out.
+ * - Otherwise a loser was still standing, and the round ran out of time (CT win, no plant) or the
+ *   bomb exploded (T win, planted). That is read only when a position row shows a standing loser
+ *   alive within the last second before the end tick. Bots get a position row once a second, so a
+ *   loser who was standing has one, and a death missing from the file is not taken for a survivor.
+ * - If the file lost kill or disconnect rows to a full buffer (recon.dropped), a death may be missing,
+ *   so only a defuse is read.
  *
  * Used only for rounds whose winner is rebuilt (roundResults). On 41 recorded files it gives the
  * game's reason on all 537 rounds the game reported one for (pnpm takeover-check prints the count).
@@ -64,19 +78,26 @@ function finalWinner(m: MatchFile): Side | null {
 export function howFromEvidence(m: MatchFile, ri: number, win: Side): RoundHow | null {
   const R = m.rounds;
   if (R.defuser[ri] !== null) return "defuse";
+  if (m.recon?.dropped?.kills || m.recon?.dropped?.leaves) return null;
   const fe = R.freezeTick[ri];
   const dur = R.durTicks[ri];
   if (fe === null || dur === null) return null;
   const end = fe + dur;
-  const losers = R.side[ri].flatMap((s, pi) => (s === other(win) && R.alive0?.[ri]?.[pi] !== 0 ? [pi] : []));
-  const died = new Map<number, number>();
+  const removed = new Map<number, number>();
+  const remove = (pi: number, tick: number) => removed.set(pi, Math.max(removed.get(pi) ?? -Infinity, tick));
   const K = m.kills;
   for (let i = 0; i < K.ri.length; i++) {
-    if (K.ri[i] !== ri) continue;
-    const body = K.vBody?.[i] ?? K.victim[i];
-    died.set(body, Math.max(died.get(body) ?? -Infinity, K.tick[i]));
+    if (K.ri[i] === ri && (K.flags[i] & KILL_FLAG.freeze) === 0) remove(K.vBody?.[i] ?? K.victim[i], K.tick[i]);
   }
-  if (losers.length && losers.every((p) => (died.get(p) ?? Infinity) <= end)) return "elim";
+  const L = m.leaves;
+  for (let i = 0; i < (L?.ri.length ?? 0); i++) if (L!.ri[i] === ri) remove(L!.pi[i], L!.tick[i]);
+  const losers = R.side[ri].flatMap((s, pi) => (s === other(win) && R.alive0?.[ri]?.[pi] !== 0 ? [pi] : []));
+  const standing = losers.filter((p) => !((removed.get(p) ?? Infinity) <= end));
+  if (losers.length && !standing.length) return "elim";
+  const P = m.pos;
+  const from = end - (m.env.tickrate || 64);
+  const seen = P.ri.some((r, i) => r === ri && P.alive[i] && P.tick[i] >= from && P.tick[i] <= end && standing.includes(P.pi[i]));
+  if (!seen) return null;
   if (R.plantTick[ri] !== null) return win === 2 ? "bomb" : null;
   return win === 3 ? "time" : null;
 }

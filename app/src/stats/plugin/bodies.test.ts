@@ -90,6 +90,30 @@ describe("rows made in a bot's body", () => {
     expect(pluginToTables(m).shots!.tick).toEqual([1100]);
   });
 
+  it("stay the human's after a freeze-time death he respawned from", () => {
+    // fails if a freeze-time death, which the kills table leaves out, starts a takeover: the human dies
+    // at 900 before freeze end, is alive at freeze end, and plays the live round in his own body, so
+    // his hit, shot and position at 1300 are his and not dropped
+    const m = round([[900, E1, H, null, null]], [[1300, H, E2]]);
+    m.kills.flags = [128];
+    m.rounds.alive0 = [[1, 1, 1, 1, 1]];
+    m.aim.shots = { ri: [0], tick: [1300], weapon: [0], burst: [0], idx: [1], speed: [0], maxSpeed: [215], scoped: [false], ducked: [false], target: [null], aimErr: [null], impact: [null], hit: [null] };
+    m.pos = { ri: [0], tick: [1300], pi: [H], x: [0], y: [0], z: [0], place: [null], alive: [true] };
+    const t = pluginToTables(m);
+    expect([hits(m), t.shots!.tick, t.positions!.steamid.map((x) => NAME[x])]).toEqual([["1300 H>E2"], [1300], ["H"]]);
+  });
+
+  it("give a human dead at freeze end only the bodies the kills name", () => {
+    // fails if a human with no body in the live round (rounds.alive0 = 0) keeps his rows: with A named
+    // by his kill at 1600, his hit at 1300 is A's; with no body named, it is left out
+    const named = round([[1600, H, E1, A, null]], [[1300, H, E2]]);
+    named.rounds.alive0 = [[0, 1, 1, 1, 1]];
+    expect(hits(named)).toEqual(["1300 A>E2"]);
+    const none = round([], [[1300, H, E2]]);
+    none.rounds.alive0 = [[0, 1, 1, 1, 1]];
+    expect(hits(none)).toEqual([]);
+  });
+
   it("stay the human's in a round where he died in his own body more than once (a respawn mode)", () => {
     // fails if the deathmatch-like sessions, where a death respawns the human, lose his damage after his first death
     expect(hits(round([[1150, E1, H, null, null], [1500, E1, H, null, null]], [[1300, H, E2]]))).toEqual(["1300 H>E2"]);

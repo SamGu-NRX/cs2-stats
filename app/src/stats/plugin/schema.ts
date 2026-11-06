@@ -4,6 +4,8 @@
 export type Side = 2 | 3; // 2 = T, 3 = CT
 
 export type RoundHow = "elim" | "defuse" | "time" | "bomb";
+/** kills.flags bits (SCHEMA.md); suicide and freeze are plugin 1.0.0 additions */
+export const KILL_FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32, suicide: 64, freeze: 128 } as const;
 export type GrenadeType = "he" | "flash" | "smoke" | "molotov" | "decoy";
 export type Vec3 = [number, number, number];
 /** [ctAlive, tAlive, ctHp, tHp, ctEquip, tEquip, planted(0/1), ticksSincePlant|null] */
@@ -60,7 +62,8 @@ export interface Rounds {
   planter: (number | null)[];
   defuser: (number | null)[];
   ctSetup: ([number, number, number, number, number] | null)[];
-  score: [number, number][];
+  /** [T, CT] score at the start of the round; the writer emits null for a round, or for a part, it could not read */
+  score: ([number | null, number | null] | null)[];
   side: (Side | null)[][];
   equip: (number | null)[][];
   money: (number | null)[][];

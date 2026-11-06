@@ -2,7 +2,7 @@
 // take over a living teammate bot. What he does in that body, and what is done to it, belongs to the
 // bot: the game's own per-round stats count it so, as CS Demo Manager does, and the plugin's kills
 // already name the body (kills.kBody, kills.vBody). Every table the adapter writes asks this one lookup.
-import type { MatchFile, Takeovers } from "./schema";
+import { KILL_FLAG, type MatchFile, type Takeovers } from "./schema";
 
 /**
  * The player whose body `pi` acted in at `tick` of round `ri`: pi itself, the bot it drove, or null
@@ -52,23 +52,33 @@ function fromTakeovers(t: Takeovers): BodyAt {
  * with that vBody, death tick included, or at round end. After the last body ends, no body is known:
  * he took over a bot that neither killed nor died, or none, and the lookup returns null.
  *
+ * Kills during freeze time are left out, as the adapter leaves them out of the kills table: a player
+ * who dies then and respawns plays the live round in his own body. A human dead at freeze end
+ * (rounds.alive0 = 0) has no own body in the live round, so only bodies the kills name are his there.
  * A round in which the human died in his own body more than once respawned him (the deathmatch-like
  * sessions the plugin also records), so a death there does not start a takeover and every row stays
- * his; so does a round with no own death. Bots never take over a body.
+ * his; so does a round where he was alive at freeze end and did not die. Bots never take over a body.
  */
 function fromKills(m: MatchFile): BodyAt {
   const K = m.kills;
   const order = K.ri.map((_, i) => i).sort((a, b) => K.ri[a] - K.ri[b] || K.tick[a] - K.tick[b] || a - b);
   /** per "ri:pi": the own death tick and the bodies after it, each with the tick its use ends */
   const plan = new Map<string, { death: number; bodies: { body: number; end: number }[] }>();
+  const live = order.filter((i) => (K.flags[i] & KILL_FLAG.freeze) === 0);
   const deaths = new Map<string, number[]>();
-  for (const i of order) {
+  for (const i of live) {
     if ((K.vBody?.[i] ?? null) !== null || m.players.isBot[K.victim[i]]) continue;
     const key = `${K.ri[i]}:${K.victim[i]}`;
     deaths.set(key, [...(deaths.get(key) ?? []), K.tick[i]]);
   }
-  for (const [key, ticks] of deaths) if (ticks.length === 1) plan.set(key, { death: ticks[0], bodies: [] });
-  for (const i of order) {
+  m.rounds.winSide.forEach((_, ri) => m.players.isBot.forEach((bot, pi) => {
+    const own = deaths.get(`${ri}:${pi}`) ?? [];
+    const deadAtStart = m.rounds.alive0?.[ri]?.[pi] === 0;
+    if (bot) return;
+    if (deadAtStart && own.length === 0) plan.set(`${ri}:${pi}`, { death: -Infinity, bodies: [] });
+    else if (!deadAtStart && own.length === 1) plan.set(`${ri}:${pi}`, { death: own[0], bodies: [] });
+  }));
+  for (const i of live) {
     const used: [number, number][] = [];
     if (K.killer[i] !== null && (K.kBody?.[i] ?? null) !== null) used.push([K.killer[i]!, K.kBody![i]!]);
     if ((K.vBody?.[i] ?? null) !== null) used.push([K.victim[i], K.vBody![i]!]);

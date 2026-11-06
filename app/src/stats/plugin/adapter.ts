@@ -15,9 +15,8 @@
 import { emptyTable, kindOf, SCHEMA, type MatchTables, type Side, type Table, type TableName } from "../tables";
 import { bodyLookup } from "./bodies";
 import { roundResults } from "./results";
-import type { GrenadeType, MatchFile, Side as SideCode } from "./schema";
+import { KILL_FLAG as FLAG, type GrenadeType, type MatchFile, type Side as SideCode } from "./schema";
 
-const FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32, suicide: 64, freeze: 128 } as const;
 const SIDE: Record<number, Side> = { 2: "T", 3: "CT" };
 const THROW_CLASS: Record<GrenadeType | "incgrenade", string> = {
   he: "hegrenade", flash: "flashbang", smoke: "smokegrenade", molotov: "molotov", incgrenade: "incgrenade", decoy: "decoy",
