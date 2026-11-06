@@ -42,12 +42,17 @@ export const SCHEMA = {
     v_active_weapon: "s?", v_best_primary: "s?", v_flash_duration: "f?", v_armor: "f?", v_helmet: "b?",
     v_equip_value_game: "f?",
     is_suicide: "b", is_teamkill: "b",
+    // the player controlling the attacker's and the victim's body, which in a takeover is not the body
+    // (plugin/bodies.ts); plugin files only (SOURCE_COLUMNS)
+    attacker_controller_steamid: "id?", victim_controller_steamid: "id?",
   },
   damages: {
     tick: "i", round: "i", attacker_steamid: "id?", victim_steamid: "id", weapon: "s?",
     dmg_health: "i?", dmg_health_capped: "i", dmg_armor: "i?", hitgroup: "s?", health_before: "i?", health_after: "i?",
     a_side: "s?", v_side: "s?", is_team_damage: "b", is_self: "b",
     a_x: "f?", a_y: "f?", a_z: "f?", v_x: "f?", v_y: "f?", v_z: "f?", distance: "f?", grenade_entity_id: "i?",
+    /** the player controlling the attacker's body (kills.attacker_controller_steamid); plugin files only (SOURCE_COLUMNS) */
+    attacker_controller_steamid: "id?",
   },
   shots: {
     tick: "i", round: "i", steamid: "id", weapon: "s", side: "s?", x: "f?", y: "f?", z: "f?", pitch: "f?", yaw: "f?",
@@ -107,12 +112,15 @@ export type TableName = keyof typeof SCHEMA;
  * Columns only some sources write. The plugin adapter fills these shots columns: the view's aim error
  * to the target's eye in degrees, [yaw, pitch] (the turn the view still needed), the target (the alive
  * enemy nearest the view within 10 degrees) and whether it was on screen at the shot (line of sight or
- * the spotted mask). The extractor's v1 files have no such columns; the loader reads them as null rather
- * than failing on them. Every other column must be in the file.
+ * the spotted mask). It also fills alive_at_start, and the controller of each kill's and hit's bodies,
+ * which differs from the body in a takeover. The extractor's v1 files have no such columns; the loader
+ * reads them as null rather than failing on them. Every other column must be in the file.
  */
 export const SOURCE_COLUMNS: Partial<Record<TableName, readonly string[]>> = {
   shots: ["aim_err_yaw", "aim_err_pitch", "target_steamid", "target_on_screen"],
   player_rounds: ["alive_at_start"],
+  kills: ["attacker_controller_steamid", "victim_controller_steamid"],
+  damages: ["attacker_controller_steamid"],
 };
 
 type Value<K> =

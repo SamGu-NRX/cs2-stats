@@ -6,7 +6,7 @@ import { decidingRounds, feedFor } from "./rounds";
 // One round, 2v2: players 0 and 1 are team 0 on T, players 2 and 3 are team 1 on CT.
 // 2 kills 0 (opening), leaving player 1 alone against two; 1 kills 2 (now player 3 is alone too), then 1 kills 3.
 const kill = (tick: number, killer: number, victim: number, credits: [number, number][], opening = false): KillFact => ({
-  ri: 0, tick, t: tick / 64, killer, victim, assister: null, flashAssist: false,
+  ri: 0, tick, t: tick / 64, killer, victim, killerController: null, victimController: null, assister: null, flashAssist: false,
   killerSide: killer < 2 ? "T" : "CT", victimSide: victim < 2 ? "T" : "CT", weapon: "ak47", victimWeapon: null,
   headshot: false, wallbang: false, smoke: false, noscope: false, killerBlind: false, killerInAir: false, kpos: null, vpos: null, place: null, enemy: true, opening,
   tradeKill: false, traded: false, ecoPoints: null, aGroup: null, vGroup: null, credits,

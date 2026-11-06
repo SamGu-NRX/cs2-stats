@@ -1,7 +1,8 @@
 // The worker's per-match calls (matchcalls.ts) on hand-built one-round matches, streamed the way the
 // worker streams them: each match with its own file.
-import { expect, it } from "vitest";
-import type { MatchFacts } from "../stats/facts";
+import { expect, it, vi } from "vitest";
+import { METRICS } from "../stats/metrics";
+import type { MatchFacts, Measures } from "../stats/facts";
 import { rollup } from "../stats/rollup";
 import { FREEZE_END, oneRound } from "../stats/testing/match";
 import { matchCalls } from "./matchcalls";
@@ -35,6 +36,28 @@ it("keeps each match's own file when two files hold the same match id", async ()
   expect((await calls.multiKills(q)).map((r) => [r.file, r.kills])).toEqual([["a.json", 3]]);
 });
 
+/** `f` with takeover measures on every round of player `who` (facts.ts takeover*: play made in a bot's body). */
+const tookOver = (f: MatchFacts, who: string, x: Partial<Measures>): MatchFacts =>
+  ({ ...f, pr: f.pr.map((r) => (f.players[r.pi].id === who ? { ...r, m: { ...r.m, ...x } } : r)) });
+
+it("gives sessions and personal bests under the takeover credit too, from the credited counts", async () => {
+  // a.json: 1 kill of his own and, in a bot's body, 3 kills (1 a headshot), 1 death and 200 damage;
+  // b.json: 2 kills, no takeover. Fails if a session's K-D or most kills, or the kills, headshot kills
+  // or damage best, ignores the takeover play under "You", or if a best "You" does not move (assists)
+  // or does not change (none here) carries a "You" figure
+  const a = tookOver(match(1, "2026-10-24T20:00:00Z"), "a", { takeoverKills: 3, takeoverHsKills: 1, takeoverDeaths: 1, takeoverDmg: 200 });
+  const calls = callsOver({ "a.json": a, "b.json": match(2, "2026-10-24T21:00:00Z") });
+  const q = { files: ["a.json", "b.json"], filter: { player: "a" } };
+  const [session] = await calls.sessions(q);
+  expect([session.kills, session.deaths, session.awards.mostKills]).toEqual([3, 0, { file: "b.json", kills: 2 }]);
+  expect(session.you).toEqual({ kills: 6, deaths: 1, mostKills: { file: "a.json", kills: 4 } });
+  const best = Object.fromEntries((await calls.personalBests(q)).map((b) => [b.id, b]));
+  expect(best.kills).toEqual({ id: "kills", value: 2, file: "b.json", you: { value: 4, file: "a.json" } });
+  expect(best.hsKills.you).toEqual({ value: 1, file: "a.json" });
+  expect(best.dmg.you).toEqual({ value: 200, file: "a.json" });
+  expect(best.assists.you).toBeUndefined();
+});
+
 it("builds sessions from the matches the query's filters keep", async () => {
   // fails if a filtered-out match joins a session or bridges two: with the Mirage match (20:00 to
   // 20:30) the Dust2 matches at 18:00 and 23:00 sit 1.5 and 2.5 hours from it, one session; under a
@@ -58,4 +81,30 @@ it("ranks moments across matches and within each, and names each clip by match, 
   expect(rows.map((r) => [r.file, r.kinds.join(" "), r.matchRank, r.round])).toEqual([["a.json", "3k clutch opening", 1, 1], ["b.json", "clutch opening", 1, 1]]);
   expect(rows[0].id).toMatch(/^c-[0-9a-f]{16}-r1$/);
   expect(rows[0].id).not.toBe(rows[1].id);
+});
+
+it("keeps a best that exists only under the takeover credit, flagged for You alone", async () => {
+  // twelve rounds with no kill of his own, and 20 kills (10 headshots) made in a bots' body: under the
+  // game's credit there is no headshot share to rank, under "You" it is 50%. Fails if that best is
+  // dropped because the game's pass had none
+  const a = tookOver(match(0, "2026-10-24T20:00:00Z"), "a", { rounds: 12, takeoverKills: 20, takeoverHsKills: 10 });
+  const hs = (await callsOver({ "a.json": a }).personalBests({ files: ["a.json"], filter: { player: "a" } })).find((b) => b.id === "hs");
+  expect(hs).toEqual({ id: "hs", value: 50, file: "a.json", you: { value: 50, file: "a.json" }, onlyYou: true });
+});
+
+it("reads only the bests the takeover credit moves in its pass, and none without a takeover", async () => {
+  // fails if the "You" pass evaluates every metric again (KAST, which no takeover moves, once more per
+  // match), or runs over a match with no takeover play
+  const kast = METRICS.find((m) => m.id === "kast")!;
+  const spy = vi.spyOn(kast, "value");
+  try {
+    const plain = { ...match(1, "2026-10-24T20:00:00Z"), pr: match(1, "2026-10-24T20:00:00Z").pr.map((r) => ({ ...r, m: { ...r.m, rounds: 12 } })) };
+    await callsOver({ "a.json": plain }).personalBests({ files: ["a.json"], filter: { player: "a" } });
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockClear();
+    await callsOver({ "a.json": tookOver(plain, "a", { takeoverKills: 2 }) }).personalBests({ files: ["a.json"], filter: { player: "a" } });
+    expect(spy).toHaveBeenCalledTimes(1);
+  } finally {
+    spy.mockRestore();
+  }
 });

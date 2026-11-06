@@ -281,6 +281,8 @@ export interface Session {
   /** Rating 3.0 over the session's rounds; null under the rating's gate */
   rating: number | null;
   awards: SessionAwards;
+  /** kills, deaths and the most-kills award under the takeover credit "You" (stats/takeover.ts); the rest is the same under either credit */
+  you: { kills: number; deaths: number; mostKills: SessionAwards["mostKills"] };
 }
 
 /** "Your match": every metric in this match against the player's recent matches (matchviews.ts yourMatch). */

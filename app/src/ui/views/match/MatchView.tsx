@@ -4,6 +4,8 @@
 import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { MapThumb, Num, SourceBadge } from "../../components/bits";
 import { MapAtmosphere } from "../../components/MapArt";
+import { Moved } from "../../components/Takeover";
+import { credited, useCredit } from "../../data/credit";
 import { entryLine, isOwn, ratingHeadline, statLine, teamsOf, type OwnEntry } from "../../data/engine";
 import { useMatch } from "../../data/hooks";
 import { mapAccent } from "../../data/maps";
@@ -123,11 +125,12 @@ function TabSkeleton({ tab }: { tab: MatchTab }) {
 
 function Hero({ s, v }: { s: OwnEntry | null; v: MatchModel | null }) {
   const e = s;
+  const credit = useCredit();
   if (!e) return <div className="mhero"><div className="skel" style={{ height: 96, margin: "16px var(--gutter)" }} /></div>;
   const { score, result } = e;
   const map = e.match.map;
   const src = sourceOf(e);
-  const line = entryLine(e);
+  const line = credited(entryLine(e), credit);
   const teams = teamsOf(e);
   const halves = (team: "us" | "them") => <Halves v={v} team={team} usStart={e.usStartSide} />;
   return (
@@ -169,10 +172,10 @@ function Hero({ s, v }: { s: OwnEntry | null; v: MatchModel | null }) {
         <span className="caps">You</span>
         <span className="mhero__stat"><span className="meta">{ratingHeadline()}</span><b className="num" style={{ color: ratingText(line.rating ?? 1) }}>{fmtRating(line.rating)}</b></span>
         <span className="mhero__stat"><span className="meta">Swing</span><b className="num" style={{ color: line.swing === null ? undefined : scoreText(swingScore(line.swing)) }} data-tip={swingSumTip(line.m)} tabIndex={0}><Num v={fmtSwing(line.swing)} /></b></span>
-        <span className="mhero__stat"><span className="meta">K–D</span><b className="num">{line.kills}<span className="faint">–</span>{line.deaths}</b></span>
-        <span className="mhero__stat"><span className="meta">ADR</span><b className="num">{fmtAdr(line.adr)}</b></span>
+        <span className="mhero__stat"><span className="meta">K–D</span><b className="num"><Moved l={line} f="kills" game={String(line.game.kills)}>{line.kills}</Moved><span className="faint">–</span><Moved l={line} f="deaths" game={String(line.game.deaths)}>{line.deaths}</Moved></b></span>
+        <span className="mhero__stat"><span className="meta">ADR</span><b className="num"><Moved l={line} f="adr" game={fmtAdr(line.game.adr)}>{fmtAdr(line.adr)}</Moved></b></span>
         <span className="mhero__stat"><span className="meta">KAST</span><b className="num"><Num v={fmtPct(line.kast)} /></b></span>
-        <span className="mhero__stat"><span className="meta">HS%</span><b className="num"><Num v={fmtPct(line.hs)} /></b></span>
+        <span className="mhero__stat"><span className="meta">HS%</span><b className="num"><Moved l={line} f="hs" game={fmtPct(line.game.hs)}><Num v={fmtPct(line.hs)} /></Moved></b></span>
       </div>
     </header>
   );

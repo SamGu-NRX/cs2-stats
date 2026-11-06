@@ -9,6 +9,7 @@ import { Card } from "../../components/Card";
 import { MetricList, MetricRow } from "../../components/MetricRow";
 import { APPROX_TIP } from "../../components/Percentile";
 import { botPopulation, fmtMetric, proPoolName, proPopulation, type BotPool, type SideKey } from "../../data/engine";
+import { CreditedRate } from "../../components/Takeover";
 import { useCall, useRollups } from "../../data/hooks";
 import { hasMetric, metric } from "../../data/meta";
 import { tipOf } from "../../data/tips";
@@ -135,8 +136,8 @@ export function BuySplitsCard({ q }: { q: Query }) {
                 <td className="l">{label}</td>
                 <td className="num">{s.m.rounds}</td>
                 <td className="num">{fmtRating(s.v.rating3 ?? null)}</td>
-                <td className="num">{fmtAdr(s.v.adr ?? null)}</td>
-                <td className="num">{fmtMetric("kpr", s.v.kpr ?? null)}</td>
+                <td className="num"><CreditedRate s={s} id="adr" fmt={fmtAdr} /></td>
+                <td className="num"><CreditedRate s={s} id="kpr" fmt={(v) => fmtMetric("kpr", v)} /></td>
                 <td className="num">{fmtPct(s.v.kast ?? null)}</td>
               </tr>
             ))}

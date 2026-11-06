@@ -59,7 +59,7 @@ export function PanelRow({ m, rank }: { m: PanelMetric; rank?: boolean }) {
 
 /** A metric with its value only, under an attribute's scored metrics (main's unscored rows): no track, since nothing ranks it. */
 export function ValueRow({ s, rank, n }: { s: Sub; rank?: boolean; n?: number }) {
-  return <MetricRow label={s.label} value={s.value === null ? null : s.text} n={n} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra />;
+  return <MetricRow label={s.label} value={s.value === null ? null : s.text} n={n} pct={null} kind="style" population="" tip={s.def} approx={s.status === "approx"} rank={rank} extra moved={s.moved} />;
 }
 
 /** The metric ranked highest, shown beside a closed attribute so its row says what drives the score. */

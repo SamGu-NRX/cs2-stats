@@ -261,13 +261,17 @@ function killFacts(c: Ctx): KillFact[][] {
     const out = kept.map((i): KillFact => {
       const killer = c.idOf(k.attacker_steamid[i]);
       const victim = c.pi.get(k.victim_steamid[i])!;
+      // a controller other than the body is a takeover; a killer in no body has no controller either
+      const kc = killer === null ? null : c.idOf(k.attacker_controller_steamid[i]);
+      const vc = c.idOf(k.victim_controller_steamid[i]);
       const killerSide = killer === null ? null : asSide(k.a_side[i]) ?? c.side[ri][killer];
       const victimSide = asSide(k.v_side[i]) ?? c.side[ri][victim];
       const fe = c.t.rounds.freeze_end_tick[ri];
       const xy = (x: number | null, y: number | null): [number, number] | null => (x === null || y === null ? null : [x, y]);
       return {
         ri, tick: k.tick[i], t: fe === null ? null : (k.tick[i] - fe) / c.tickRate,
-        killer, victim, assister: c.idOf(k.assister_steamid[i]), flashAssist: k.assistedflash[i] === true,
+        killer, victim, killerController: kc === killer ? null : kc, victimController: vc === victim ? null : vc,
+        assister: c.idOf(k.assister_steamid[i]), flashAssist: k.assistedflash[i] === true,
         killerSide, victimSide, weapon: k.weapon[i], victimWeapon: k.v_active_weapon[i],
         headshot: k.headshot[i], wallbang: (k.penetrated[i] ?? 0) > 0, smoke: k.thrusmoke[i] === true, noscope: k.noscope[i] === true,
         killerBlind: k.attackerblind[i], killerInAir: k.attackerinair[i],

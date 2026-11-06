@@ -28,6 +28,8 @@ import { metric, setMeta } from "../data/meta";
 import type { Data } from "../data/provider";
 import { sourceOf } from "../data/sources";
 import { TILES } from "../data/series";
+import { setCredit } from "../data/credit";
+import { BENCH, verdictOf } from "../lib/verdict";
 import { fmtPct } from "../lib/format";
 import { BarProvider } from "../shell/Bar";
 import ProfileView from "./Profile";
@@ -303,4 +305,38 @@ it("narrows the match table to one session and back", async () => {
   expect(files()).toEqual([...newest.files].sort());
   act(() => host.querySelector<HTMLButtonElement>(".sess")!.click());
   expect(files()).toEqual(everything);
+});
+
+it("judges a Home tile the takeover credit moved by the game's figure, and says so beside the verdict", () => {
+  // benchmarks are measured on the game's credit (Codex review, PR #93). Each career round here gets
+  // one kill made in a bot's body, a headshot, so HS% under "You" crosses the benchmark's band while
+  // the game's does not. Fails if the verdict reads the credited HS%, or does not say whose figure it reads
+  const career = converted.filter((s) => careerEntries([s.entry], null).length);
+  const took = career.map((s) => {
+    const pov = s.facts.match.pov;
+    const facts = { ...s.facts, pr: s.facts.pr.map((r) => (s.facts.players[r.pi].id === pov ? { ...r, m: { ...r.m, takeoverKills: 1, takeoverHsKills: 1 } } : r)) };
+    return { file: s.file, facts, entry: entryOf(s.file, s.entry.origin, facts) };
+  });
+  const was = took.map((s) => [s.file, factsOf.get(s.file)!] as const);
+  for (const s of took) factsOf.set(s.file, s.facts);
+  try {
+    use(took);
+    const list = careerEntries(took.map((s) => s.entry), null);
+    const m = summary(queryOf(took.filter((s) => list.some((e) => e.file === s.file)))).m;
+    const game = (100 * m.hsKills) / m.kills;
+    const you = (100 * (m.hsKills + m.takeoverHsKills)) / (m.kills + m.takeoverKills);
+    expect(verdictOf(you, BENCH.hs)).not.toBe(verdictOf(game, BENCH.hs));
+    const hs = () => byLabel(".tile", ".stat__l", "HS%")!;
+    act(() => { setCredit("bot"); });
+    render(<HomeView />);
+    expect([hs().querySelector(".verdict")?.getAttribute("data-v"), hs().querySelector(".tile__judged")]).toEqual([verdictOf(game, BENCH.hs), null]);
+    act(() => { setCredit("you"); });
+    render(<HomeView />);
+    expect(text(hs().querySelector(".tile__v .moved--on > span:first-child"))).toBe(fmtPct(you));
+    expect(hs().querySelector(".verdict")?.getAttribute("data-v")).toBe(verdictOf(game, BENCH.hs));
+    expect(hs().querySelector(".tile__judged")?.getAttribute("data-tip")).toBe(`The verdict reads the game's count, ${fmtPct(game)}: benchmarks are measured on the game's credit.`);
+  } finally {
+    act(() => { setCredit("bot"); });
+    for (const [file, f] of was) factsOf.set(file, f);
+  }
 });

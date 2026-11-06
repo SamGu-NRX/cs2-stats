@@ -257,6 +257,12 @@ pub fn is_id(s: &str) -> bool {
         && sha.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// The recording's start from a demo's id, to the minute: `<yyyymmddThhmmZ>_...` as
+/// `yyyy-mm-ddThh:mm:00Z`. The id has passed [`is_id`], so the digits are there.
+fn created_of_id(id: &str) -> String {
+    format!("{}-{}-{}T{}:{}:00Z", &id[0..4], &id[4..6], &id[6..8], &id[9..11], &id[11..13])
+}
+
 /// The id a recorded demo is stored under. The map is lowercased with anything but letters, digits
 /// and '_' turned to '_', as local_import.py does.
 pub fn demo_id(created: SystemTime, map: &str, sha256: &str) -> String {
@@ -389,11 +395,16 @@ fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &O
         let id = demo_id(info.created, map, &sha);
         let dst = dem_name(&id);
         if dir.exists(&dst) {
-            if store.read_meta(&id).is_ok_and(|have| have.sha256 == sha) {
-                ensure_cs2_closed(probe, Phase::Operation)?;
-                handle::delete(&f).map_err(|e| format!("{which}, already kept as {id}, could not be removed: {}", e.kind()))?;
-            } else {
-                out.refused.push(format!("{which} has the id of a different demo, {id}; it was left where it is"));
+            // the original goes only when the store's copy, opened and checked, hashes the same
+            match kept_copy_matches(dir, &dst, &sha) {
+                Ok(()) => {
+                    ensure_cs2_closed(probe, Phase::Operation)?;
+                    handle::delete(&f).map_err(|e| format!("{which}, already kept as {id}, could not be removed: {}", e.kind()))?;
+                }
+                Err(why) => {
+                    store.refused(&dst, &format!("the original in replays\\ was kept: {why}"));
+                    out.refused.push(format!("{which} has the id of {id}, but {why}; it was left where it is"));
+                }
             }
             continue;
         }
@@ -436,6 +447,19 @@ fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &O
         }
     }
     Ok(out)
+}
+
+/// Whether the store's `<id>.dem` is a copy of the demo hashing `sha`: opened and checked like every
+/// store file, and hashed through that handle. A sidecar's hash is not trusted for this, since the
+/// file beside it can have changed since.
+fn kept_copy_matches(dir: &handle::Dir, dst: &str, sha: &str) -> Result<(), String> {
+    let (mut f, _) = dir.open_file(dst, handle::Mode::Read)?.ok_or("the store's copy is gone")?;
+    let got = handle::hash(&mut f).map_err(|e| format!("the store's copy could not be read ({})", e.kind()))?;
+    if got == sha {
+        Ok(())
+    } else {
+        Err("the store's copy holds other bytes".into())
+    }
 }
 
 /// Copies the open demo `src` into the store as `<id>.dem`: a new temporary file, flushed, its hash
@@ -486,7 +510,9 @@ fn adopt_orphans(store: &Store, dir: &handle::Dir) -> Result<(), String> {
             sha256: sha,
             dem_bytes: info.size,
             map: id[15..id.len() - 9].to_string(),
-            created_utc: iso_utc(info.created),
+            // the file in the store can be a copy made after recording started (another volume), so
+            // its creation time is not the recording's; the id holds the recording's minute
+            created_utc: created_of_id(id),
             game_build: None,
             state: State::Taken,
             pinned: false,
@@ -516,11 +542,23 @@ impl Policy {
     }
 }
 
-/// What a sweep keeps (id to reason) and deletes (id and reason), in the order it deletes them.
+/// What a sweep keeps (id to reason) and deletes (id and reason), in the order it deletes them, and
+/// a breach of the cap or floor that only protected demos are left holding.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct Plan {
     pub kept: BTreeMap<String, String>,
     pub delete: Vec<(String, String)>,
+    pub held: Option<Held>,
+}
+
+/// The store is still over its cap, or the disk under the floor, after a sweep deleted everything it
+/// may: what is left is pinned, not yet extracted, or waiting for a newer extractor, and a sweep
+/// never deletes those. The floor stops the next recording; the card says which limit is breached.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Held {
+    pub over_cap: bool,
+    pub under_floor: bool,
 }
 
 /// Decides a sweep. `demos` are the sidecars (oldest first), `free` the bytes free on the store's
@@ -529,6 +567,10 @@ pub struct Plan {
 pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, reserve: u64, build: Option<&str>, extractor: Option<&str>) -> Plan {
     let live: Vec<&Meta> = demos.iter().filter(|m| m.state != State::Missing).collect();
     let recent: Vec<&str> = live.iter().rev().take(policy.keep_last).map(|m| m.id.as_str()).collect();
+    let retrying = |m: &Meta| m.state == State::Failed && m.failed_versions.len() == 1 && extractor.is_none_or(|v| m.failed_versions[0] == v);
+    // never deleted by a sweep, whatever the cap and floor: the user's pins, and demos whose tables
+    // do not exist yet (deleting one would lose its match)
+    let protected = |m: &Meta| m.pinned || m.state == State::Taken || retrying(m);
     let reason = |m: &Meta| -> Option<String> {
         if m.pinned {
             return Some("pinned".into());
@@ -541,9 +583,7 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
         }
         match m.state {
             State::Taken => Some("not extracted yet".into()),
-            State::Failed if m.failed_versions.len() == 1 && extractor.is_none_or(|v| m.failed_versions[0] == v) => {
-                Some("extraction failed; retried when the extractor changes".into())
-            }
+            State::Failed if retrying(m) => Some("extraction failed; retried when the extractor changes".into()),
             _ => None,
         }
     };
@@ -560,18 +600,18 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
             }
             None => {
                 plan.delete.push((m.id.clone(), "no reason to keep it".into()));
-                free += m.dem_bytes;
+                free = free.saturating_add(m.dem_bytes);
             }
         }
     }
-    // Under pressure: not pinned, extracted before not yet extracted, an older build before the
-    // current one, then oldest.
+    // Under pressure: only demos that are not protected, an older build before the current one,
+    // then oldest.
     let old_build = |m: &Meta| build.is_some_and(|b| m.game_build.as_deref().is_some_and(|g| g != b));
-    let mut order: Vec<&Meta> = kept.into_iter().filter(|m| !m.pinned).collect();
-    order.sort_by_key(|m| (m.state == State::Taken, !old_build(m), m.created_utc.clone()));
+    let mut order: Vec<&Meta> = kept.into_iter().filter(|m| !protected(m)).collect();
+    order.sort_by_key(|m| (!old_build(m), m.created_utc.clone()));
+    let breach = |used: u64, free: u64| (used + reserve > policy.cap, free < policy.floor + reserve);
     for m in order {
-        let over_cap = used + reserve > policy.cap;
-        let under_floor = free < policy.floor + reserve;
+        let (over_cap, under_floor) = breach(used, free);
         if !over_cap && !under_floor {
             break;
         }
@@ -584,8 +624,10 @@ pub fn plan_sweep(demos: &[Meta], keeps: &[Keep], policy: &Policy, free: u64, re
         };
         plan.delete.push((m.id.clone(), why.into()));
         used -= m.dem_bytes;
-        free += m.dem_bytes;
+        free = free.saturating_add(m.dem_bytes);
     }
+    let (over_cap, under_floor) = breach(used, free);
+    plan.held = (over_cap || under_floor).then_some(Held { over_cap, under_floor });
     plan
 }
 
@@ -796,6 +838,8 @@ pub struct DemoStore {
     pub demos: Vec<DemoRow>,
     /// The newest failed extraction: which demo and why.
     pub last_failure: Option<Failure>,
+    /// Over the cap or under the floor with nothing left a sweep may delete ([`Held`]); None otherwise.
+    pub held: Option<Held>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -831,7 +875,11 @@ pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
     };
     let present = |m: &Meta| m.state != State::Missing && store.has_dem(&m.id);
     let last_failure = metas.iter().rev().find(|m| m.state == State::Failed).map(|m| Failure { id: m.id.clone(), reason: m.fail_reason.clone(), detail: m.fail_detail.clone() });
+    // what a sweep now would leave; with free space unknown, only the cap is judged
+    let live: Vec<Meta> = metas.iter().filter(|m| present(m)).cloned().collect();
+    let held = plan_sweep(&live, &store.keeps()?, &p, free.unwrap_or(u64::MAX), 0, None, None).held;
     Ok(DemoStore {
+        held,
         folder: store.root.display().to_string(),
         used: metas.iter().filter(|m| present(m)).map(|m| m.dem_bytes).sum(),
         cap: p.cap,
@@ -896,10 +944,23 @@ pub async fn demos_status() -> Result<DemoStore, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Saves the cap, floor and keep-last and returns the store as the card shows it. `update_app` takes
+/// the operation lock for the write, so this holds none: taking it twice in one process fails, since
+/// the lock file is opened shared with no one.
+fn set_policy(layout: &Layout, policy: crate::botmode::settings::DemoPolicy, seen: Option<crate::botmode::settings::DemoPolicy>) -> Result<DemoStore, String> {
+    let s = crate::botmode::settings::set_demo_policy(layout, policy, seen)?;
+    status(&Store::of(layout)?, &s)
+}
+
 /// `seen` is the policy the card showed; refused when it has changed since.
 #[tauri::command]
 pub async fn demos_set_policy(policy: crate::botmode::settings::DemoPolicy, seen: Option<crate::botmode::settings::DemoPolicy>) -> Result<DemoStore, String> {
-    with_lock(move |ctx, _, _| crate::botmode::settings::set_demo_policy(&ctx.layout, policy, seen).map(|_| ())).await
+    tauri::async_runtime::spawn_blocking(move || {
+        let ctx = crate::botmode::Ctx::new(crate::botmode::Game::Steam, None)?;
+        set_policy(&ctx.layout, policy, seen)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1275,14 +1336,41 @@ mod tests {
     }
 
     #[test]
-    fn under_the_floor_a_sweep_frees_space_and_an_unextracted_demo_goes_last() {
+    fn under_pressure_a_sweep_frees_space_but_never_takes_a_demo_whose_tables_do_not_exist_yet() {
+        // fails if an unextracted demo, or a failed one waiting for a newer extractor, can be evicted to
+        // meet the cap or floor (its match would be lost), or a breach only they hold goes unreported
         let a = meta("20261101T1200Z_de_dust2_00000001", "2026-11-01T12:00:00Z", 2 * GB, "200", State::Taken);
         let b = meta("20261102T1200Z_de_dust2_00000002", "2026-11-02T12:00:00Z", 2 * GB, "200", State::Extracted);
+        let mut c = meta("20261103T1200Z_de_dust2_00000003", "2026-11-03T12:00:00Z", 2 * GB, "200", State::Failed);
+        c.failed_versions = vec!["1.18.0".into()];
         let plan = plan_sweep(&[a.clone(), b.clone()], &[], &policy(20, 10, 10), 9 * GB, 0, Some("200"), None);
+        assert_eq!((plan.delete, plan.held), (vec![(b.id.clone(), "under the free-space floor".to_string())], None));
+        // the extracted one goes, and the floor is still not met: nothing else is deleted, and it says so
+        let plan = plan_sweep(&[a.clone(), b.clone(), c.clone()], &[], &policy(20, 10, 10), 5 * GB, 0, Some("200"), Some("1.18.0"));
         assert_eq!(plan.delete, [(b.id.clone(), "under the free-space floor".to_string())]);
-        // a launch's reserve counts against the cap and the floor
-        let plan = plan_sweep(&[a, b.clone()], &[], &policy(4, 0, 10), 100 * GB, RESERVE, Some("200"), None);
-        assert_eq!(plan.delete, [(b.id, "over the cap".to_string())]);
+        assert_eq!(plan.held, Some(Held { over_cap: false, under_floor: true }));
+        assert!(plan.kept.contains_key(&a.id) && plan.kept.contains_key(&c.id));
+        // a launch's reserve counts against the cap; over it with only an unextracted demo, nothing goes
+        let plan = plan_sweep(&[a.clone()], &[], &policy(1, 0, 10), 100 * GB, RESERVE, Some("200"), None);
+        assert_eq!((plan.delete.len(), plan.held), (0, Some(Held { over_cap: true, under_floor: false })));
+        // once the extractor has changed, the failed demo is retried, not protected: it can go
+        let plan = plan_sweep(&[c.clone()], &[], &policy(1, 0, 0), 100 * GB, 0, None, Some("1.19.0"));
+        assert_eq!(plan.delete.len(), 1);
+    }
+
+    #[test]
+    fn the_card_hears_of_a_breach_only_protected_demos_hold() {
+        let s = Scratch::new("demos-held");
+        let layout = fake_game(&s);
+        let store = Store::of(&layout).unwrap();
+        stored(&store, "20261101T1200Z_de_dust2_00000001", State::Taken);
+        let tight = AppSettings { demo_cap_gb: 1.0, demo_floor_gb: 0.0, ..AppSettings::default() };
+        // the sidecar's size is what a sweep counts: say the demo takes 2 GB
+        let mut m = store.read_meta("20261101T1200Z_de_dust2_00000001").unwrap();
+        m.dem_bytes = 2 * GB;
+        store.write_meta(&m).unwrap();
+        assert_eq!(status(&store, &tight).unwrap().held, Some(Held { over_cap: true, under_floor: false }));
+        assert_eq!(status(&store, &AppSettings { demo_floor_gb: 0.0, ..AppSettings::default() }).unwrap().held, None);
     }
 
     #[test]
@@ -1541,6 +1629,69 @@ mod tests {
         let events: Vec<String> = text.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["event"].as_str().unwrap().to_string()).collect();
         assert_eq!(events, ["taken", "ledger_repaired", "extracted"]);
         assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn a_take_removes_the_original_only_when_the_stores_copy_hashes_the_same() {
+        // fails if a take trusts the sidecar's hash over the file beside it: a copy that changed, or a
+        // hard link standing in for it, would cost the only good copy of the demo
+        let s = Scratch::new("demos-dedupe");
+        let layout = fake_game(&s);
+        let src = settled(&layout, b"a recorded match");
+        let store = Store::of(&layout).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        // CS2 starts during a copy from another volume: the copy and its sidecar stand, the original stays
+        take_with(&store, &layout, &starts_after(2), &lock, SystemTime::now(), &other_volume).unwrap_err();
+        let id = store.metas().unwrap().remove(0).id;
+        fs::write(store.dem(&id), b"a recorded matcX").unwrap();
+        let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
+        assert!(src.exists(), "the original must stay while the store's copy differs");
+        assert!(t.refused[0].contains("other bytes"), "{:?}", t.refused);
+        assert!(fs::read_to_string(ledger(&store)).unwrap().contains("\"refused\""));
+
+        // a hard link in place of the copy is refused before it is read
+        fs::remove_file(store.dem(&id)).unwrap();
+        let elsewhere = s.0.join("same-bytes.dem");
+        fs::write(&elsewhere, b"a recorded match").unwrap();
+        fs::hard_link(&elsewhere, store.dem(&id)).unwrap();
+        let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
+        assert!(src.exists() && t.refused[0].contains("hard links"), "{:?}", t.refused);
+
+        // the real copy back: now the original goes
+        fs::remove_file(store.dem(&id)).unwrap();
+        fs::write(store.dem(&id), b"a recorded match").unwrap();
+        let t = take_with(&store, &layout, &CLOSED, &lock, SystemTime::now(), &other_volume).unwrap();
+        assert!(!src.exists() && t.refused.is_empty(), "{:?}", t.refused);
+    }
+
+    #[test]
+    fn an_orphan_demo_gets_its_recording_time_from_its_id() {
+        // fails if the sidecar takes the store file's creation time: a copy from another volume, or a
+        // file restored by hand, is created after the match was recorded
+        let s = Scratch::new("demos-orphan-time");
+        let layout = fake_game(&s);
+        fs::create_dir_all(layout.target("replays")).unwrap();
+        let store = Store::of(&layout).unwrap();
+        let id = "20261101T1205Z_de_dust2_00000001";
+        write(&store.dem(id), b"a demo");
+        take(&store, &layout, &CLOSED, &OpLock::acquire(&layout).unwrap(), later()).unwrap();
+        assert_eq!(store.read_meta(id).unwrap().created_utc, "2026-11-01T12:05:00Z");
+    }
+
+    #[test]
+    fn a_policy_set_from_the_card_is_saved() {
+        // fails if saving takes the operation lock that the settings write takes again: the lock file
+        // is opened shared with no one, so the second open fails and nothing is ever saved
+        let s = Scratch::new("demos-policy");
+        let layout = fake_game(&s);
+        let p = crate::botmode::settings::DemoPolicy { cap_gb: 7.5, floor_gb: 3.0, keep_last: 4 };
+        let shown = AppSettings::default().demo_policy();
+        let st = set_policy(&layout, p, Some(shown)).unwrap();
+        assert_eq!((st.cap, st.floor, st.keep_last), ((7.5 * GB as f64) as u64, 3 * GB, 4));
+        assert_eq!(crate::botmode::settings::load_app(&layout).unwrap().demo_policy(), p);
+        // what the card showed has changed since: refused, and the saved policy stays
+        assert!(set_policy(&layout, crate::botmode::settings::DemoPolicy { keep_last: 9, ..p }, Some(shown)).is_err());
+        assert_eq!(crate::botmode::settings::load_app(&layout).unwrap().demo_keep_last, 4);
     }
 
     #[test]
