@@ -216,22 +216,26 @@ def match_date(dem: Path) -> dict:
     return dict(date=at, started_at=at, date_source=source)
 
 
-def already_done(map_dir: Path, dem: Path, importer_version: int) -> bool:
-    """The map's current tables came from this exact file, this extractor version and this importer version."""
+def already_done(map_dir: Path, dem: Path, importer: str, importer_version: int) -> bool:
+    """The map's current tables came from this exact file, this extractor version, and this importer (its name
+    in match.extra, so another importer's tables for the same file are not taken as these) at this version."""
     d = extract.resolve_map_dir(map_dir) if map_dir.exists() else None
     if d is None:
         return False
     m = pl.read_parquet(d / "match.parquet", columns=["demo_sha256", "extractor_version", "extra"]).row(0, named=True)
+    extra = json.loads(m["extra"])
     return (m["extractor_version"] == extract.EXTRACTOR_VERSION and m["demo_sha256"] == extract.file_sha256(dem)
-            and json.loads(m["extra"]).get("importer_version") == importer_version)
+            and extra.get("importer") == importer and extra.get("importer_version") == importer_version)
 
 
-def extract_into(dem: Path, map_dir: Path, source: str, mapdata: Path | None, meta_extra: dict, force: bool,
-                 archive: str, name: str | None = None, extra_from_players=None) -> dict:
-    """One demo's part of an import result: skipped when its current tables are up to date (meta_extra's
-    importer_version), else extracted into map_dir. Shared by this importer and local_import.py."""
-    if not force and already_done(map_dir, dem, meta_extra["importer_version"]):
+def extract_into(dem: Path, map_dir: Path, source: str, mapdata: Path | None, importer: str, importer_version: int,
+                 meta, force: bool, archive: str, name: str | None = None, extra_from_players=None) -> dict:
+    """One demo's part of an import result: skipped when its current tables are up to date (already_done), else
+    extracted into map_dir. meta() returns the rest of match.extra; it runs only for a demo that is extracted, so
+    a rerun reads no .dem.info. Shared by this importer and local_import.py."""
+    if not force and already_done(map_dir, dem, importer, importer_version):
         return dict(ok=True, skipped="already extracted from this file by this extractor version")
+    meta_extra = dict(importer=importer, importer_version=importer_version, **meta())
     res = extract.extract_demo(dem, map_dir, source, mapdata=mapdata, archive=archive, meta_extra=meta_extra,
                                name=name, extra_from_players=extra_from_players)
     v = res.get("validation") or {}
@@ -258,9 +262,8 @@ def import_demos(demos: list[Path], out: Path, mapdata: Path | None, user: dict,
         row = dict(demo=dem.name, out=str(map_dir))
         if progress:
             progress(dict(event="start", i=i, n=len(demos), demo=dem.name))
-        row.update(extract_into(dem, map_dir, "valve", mapdata, force=force, archive=dem.stem,
-                                meta_extra=dict(importer="valve_import", importer_version=IMPORTER_VERSION,
-                                                **match_date(dem))))
+        row.update(extract_into(dem, map_dir, "valve", mapdata, "valve_import", IMPORTER_VERSION,
+                                lambda: match_date(dem), force=force, archive=dem.stem))
         row["user_in_match"] = user_in_match(map_dir, user["steamid"]) if row["ok"] else None
         rows.append(row)
         if progress:

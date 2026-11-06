@@ -20,6 +20,7 @@ Rejected:
 - **A listen server records at full rate.** A `tv_autorecord` demo from a Bot Mode session, written by CS2 1.41.9.2, sits in `game\csgo\replays\`, not `game\csgo\`. demoparser2 reads it as `valve_demo_2`: 2975 distinct ticks with every gap 1, so 64 snapshots a second and no tick missing.
 - **What that demo holds:** warmup, the warmup's `round_end`, `begin_new_match` on the next tick, one `round_freeze_end`, and then nothing. The extractor refuses it with `no round_end events after match start`, and `local_import.py` reports that as `no_rounds`. So recording works; a complete recorded match is not yet proven.
 - **The file name carries the Steam name.** `tv_autorecord` names the file `auto-<date>-<time>-<map>-<server name>.dem`, and a listen server is named after the player hosting it. The demo is renamed (see Storage), and the header's server name is not stored (`match.server_name` is empty for source `local`).
+- **What that rule covers, and what it does not.** The server name from the file name must never reach anything derived from the file name: team names, `dem_file`, the import result (`failed_checks`, `final_score`, errors) or a log. `extract_demo` enforces it for source `local`: it refuses to run without an id, and scrubs the original name from everything it returns. Player names are another matter. The tables hold them for a recorded demo exactly as they do for a Valve or plugin match: they stay on the user's PC, and the app's "hide personal info" setting governs whether they are shown.
 - **Expected size** (a hypothesis until a full match is recorded): about 70 to 150 MB a match, up to 300 MB at the HLTV rate.
   - The cut-off demo runs 587 bytes a tick, mostly warmup and freeze time.
   - Valve matchmaking demos (`match730_*.dem`) run 870 to 2040 bytes a tick (31 to 150 MB).
@@ -109,7 +110,7 @@ local\<id>\v-<ver>-<nonce>\  schema v1 tables, with CURRENT and COMPLETE as in v
 
 ## Failure modes
 
-- **Disk full mid-match:** the reserve check prevents it. A truncated demo beside a complete plugin file, with free space near zero, gets `disk_full_suspected`.
+- **Disk full mid-match:** the reserve check makes it unlikely, not impossible. It runs once, before the launch; another program can fill the disk during the match, and nothing in the app can stop that. The demo is then cut off where the disk ran out, and the extractor's truncated-demo path reads what it holds. With free space near zero, a truncated demo gets `disk_full_suspected` in the ledger. When its plugin file is complete, the plugin entry serves the match. When the plugin file is cut off too, each entry holds the rounds it recorded and shows as unfinished; nothing can recover the rest of that match.
 - **Crash:** the truncated-demo path.
 - **GOTV did not start:** no new `auto-*.dem` after a session with recording on. The app says so and names the console fallback.
 - **Extraction fails:** the ledger records the reason, the demo is kept, and the plugin entry serves the match.
