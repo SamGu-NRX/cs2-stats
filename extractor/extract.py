@@ -1660,6 +1660,20 @@ class ReadableParser:
         return call
 
 
+def truncated_tick_rate(parser, ticks: list[int], fallback: float) -> float:
+    """Ticks per second from game time between the first and last of `ticks`, for a truncated demo, which has no
+    playback header. Measured between one freeze end and itself, it divided by zero; with fewer than two
+    distinct ticks, or no game time between them, it is `fallback` (Context's 64, CS2's only server rate)."""
+    t = sorted(set(ticks))
+    if len(t) < 2:
+        return fallback
+    gt = parser.parse_ticks(["game_time"], ticks=[t[0], t[-1]]).drop_duplicates("tick").set_index("tick").game_time
+    if t[0] not in gt.index or t[-1] not in gt.index:
+        return fallback
+    dt = float(gt[t[-1]] - gt[t[0]])
+    return round((t[-1] - t[0]) / dt, 3) if dt > 0 else fallback
+
+
 def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
     from demoparser2 import DemoParser
 
@@ -1701,10 +1715,11 @@ def stage_demoparser2(ctx: Context) -> dict[str, pd.DataFrame]:
         voided = merge_windows(set(voided) | {(t, t) for t in restores_pre_match})
         if ctx.truncated:
             # Without awpy's playback header, measure the tick rate from game time across the match.
-            fe_t = sorted(int(t) for t in ev("round_freeze_end").tick if t >= match_start)
-            gt = parser.parse_ticks(["game_time"], ticks=[fe_t[0], fe_t[-1]]).drop_duplicates("tick") \
-                .set_index("tick").game_time
-            rate = ctx.tick_rate = round((fe_t[-1] - fe_t[0]) / float(gt[fe_t[-1]] - gt[fe_t[0]]), 3)
+            # Freeze ends as before; a demo cut off before its second one adds its round ends.
+            marks = sorted({int(t) for t in ev("round_freeze_end").tick if t >= match_start})
+            if len(marks) < 2:
+                marks += [int(t) for t in real_ticks if t >= match_start]
+            rate = ctx.tick_rate = truncated_tick_rate(parser, marks, ctx.tick_rate)
         # A winnerless attempt (a backup restore) is never a counted round: it has no winner, and HLTV lists
         # only rounds with one. Its events are dropped even when the game kept some of its stats (one HLTV
         # demo: two restored attempts before round 1 left one player at 14 kills and 21 deaths on the
@@ -3104,17 +3119,58 @@ def teams_from_filename(dem: Path) -> tuple[str | None, str | None]:
     return (m["team1"], m["team2"]) if m else (None, None)
 
 
+# The name a recorded (source "local") demo is extracted under: local_import.py's id, then ".dem".
+LOCAL_NAME_RE = re.compile(r"^\d{8}T\d{4}Z_[a-z0-9_]+_[0-9a-f]{8}\.dem$")
+# tv_autorecord's name: auto-<yyyymmdd>-<hhmm>-<map>-<server name>; map names hold no '-'
+AUTO_NAME_RE = re.compile(r"^auto-\d{8}-\d{4}-[^-]+-(?P<host>.+)$")
+
+
+def private_name_parts(dem: Path) -> list[str]:
+    """What of a recorded demo's file name must never be stored or shown: the name, its stem and, for a
+    tv_autorecord name, the server name at its end, which on a listen server is the host's Steam name."""
+    parts = [dem.name, dem.stem]
+    if m := AUTO_NAME_RE.match(dem.stem):
+        parts.append(m["host"])
+    return sorted({p for p in parts if p}, key=len, reverse=True)
+
+
+def scrub(value, secrets: list[str], replacement: str):
+    """`value` with every secret in its strings (dict keys too) replaced, longest first."""
+    if isinstance(value, str):
+        for s in secrets:
+            value = value.replace(s, replacement)
+        return value
+    if isinstance(value, dict):
+        return {scrub(k, secrets, replacement): scrub(v, secrets, replacement) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(scrub(v, secrets, replacement) for v in value)
+    return value
+
+
 def extract_demo(dem: Path, out_dir: Path, source: str, mapdata: Path | None = None, archive: str = "",
                  meta_extra: dict | None = None, name: str | None = None,
                  extra_from_players: Callable[[pd.DataFrame], dict] | None = None) -> dict:
     """Parse one demo into out_dir. Returns a result dict; result['ok'] is the verdict.
 
-    name replaces the demo's file name wherever it is stored or read for team names: a recorded demo's own
-    name ends in the server's hostname, which is the player's Steam name (local_import.py renames it).
+    name replaces the demo's file name wherever it is stored or read for team names. A recorded demo's own
+    name ends in the server's hostname, which on a listen server is the player's Steam name, so source
+    "local" needs a name of LOCAL_NAME_RE's form (local_import.py's id) and is refused without one; its
+    result then holds no part of the original name (private_name_parts), in errors, checks or the traceback.
     extra_from_players(players table) returns fields added to match.extra, for what only the parsed players
     say, such as which of them recorded the demo."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
+    if source == "local" and not (name and LOCAL_NAME_RE.match(name)):
+        raise ValueError("source local needs name=<yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name "
+                         "ends in the host's Steam name, so it is never stored (extract it with local_import.py)")
+    if source == "local":
+        res = _extract(Path(dem), Path(out_dir), source, mapdata, archive, meta_extra, name, extra_from_players)
+        return scrub(scrub(res, [Path(dem).name], name), private_name_parts(Path(dem)), Path(name).stem)
+    return _extract(Path(dem), Path(out_dir), source, mapdata, archive, meta_extra, name, extra_from_players)
+
+
+def _extract(dem: Path, out_dir: Path, source: str, mapdata: Path | None, archive: str, meta_extra: dict | None,
+             name: str | None, extra_from_players: Callable[[pd.DataFrame], dict] | None) -> dict:
     t0 = time.perf_counter()
     dem, out_dir = Path(dem), Path(out_dir)
     ctx = Context(dem=dem, out=out_dir, archive=archive, meta_extra=dict(meta_extra or {}),
@@ -3266,13 +3322,18 @@ def main(argv=None) -> int:
     ap.add_argument("--mapdata", type=Path, help="awpy-data release folder with geometry/<map>.mesh")
     ap.add_argument("--archive", default="")
     ap.add_argument("--meta", default="{}", help="JSON object stored in match.extra")
+    ap.add_argument("--name", help="the file name to store instead of the demo's own; source local requires "
+                                   "<yyyymmddThhmmZ>_<map>_<sha8>.dem (local_import.py chooses it)")
     ap.add_argument("--result", type=Path, help="write the result JSON here")
     a = ap.parse_args(argv)
+    if a.source == "local" and not (a.name and LOCAL_NAME_RE.match(a.name)):
+        ap.error("--source local needs --name <yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name ends in "
+                 "the host's Steam name; local_import.py extracts these demos and chooses the name")
     # both outputs are checked before the demo is parsed; the result names the match's players
     check_output(a.out_dir, private=True, what="the extracted tables")
     if a.result:
         check_output(a.result, private=True, what="the extraction result")
-    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta))
+    res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta), name=a.name)
     if a.result:
         write_json(a.result, res, private=True, what="the extraction result", default=_json_default, indent=1)
     else:

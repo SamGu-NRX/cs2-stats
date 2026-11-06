@@ -12,7 +12,7 @@ demo already named <id>.dem (the app's demos folder) keeps that id.
 The id replaces the file name everywhere, because CS2 names a recorded demo after the server, and a
 listen server is named after the player hosting it: auto-<date>-<time>-<map>-<Steam name>.dem. That
 name is never stored, printed or used for team names, and match.server_name is left empty for the same
-reason. Imports share valve_import.py's core: a demo whose current tables came from the same file,
+reason; extract.extract_demo refuses source "local" without an id and scrubs the name from its result. Imports share valve_import.py's core: a demo whose current tables came from the same file,
 extractor version and importer version is skipped unless --force.
 
 match.extra records "pov", the SteamID64 of the player who recorded the match: the only human in it
@@ -22,7 +22,9 @@ left out and the result says why.
 
 Prints a JSON summary (also written to --result); each result has "reason": null when the demo
 validated, "no_rounds" when it holds no round played after the match started (a demo cut off in warmup
-or freeze time), else "extract_failed". --progress writes one JSON line per demo start and end to
+or freeze time), "unreadable" for a demo that could not be read (named unreadable-<its place in the list>),
+else "extract_failed". A demo whose exact bytes were imported before reuses that folder, whatever its id
+would be now. --progress writes one JSON line per demo start and end to
 stderr. Exit code 0: every demo validated; 1: at least one failed; 2: bad arguments, an --out inside a
 repository, or no demo to import.
 """
@@ -86,57 +88,75 @@ def pov_of(players: pd.DataFrame, user: int | None) -> dict:
     return {}
 
 
-def scrub(text: str, original: str, demo: str) -> str:
-    """text with the demo's original file name (whose end is a Steam name) replaced by its id."""
-    return text.replace(original, demo) if original else text
+def existing_id(out: Path, sha256: str) -> str | None:
+    """The id of a folder in out whose current tables came from this exact demo (its full SHA-256), so a demo
+    imported again under another id (a copy with a later creation time, say) is never extracted twice."""
+    if not out.is_dir():
+        return None
+    for d in sorted(out.glob(f"*_{sha256[:8]}")):
+        if not (d.is_dir() and ID_RE.match(d.name)):
+            continue
+        cur = extract.resolve_map_dir(d)
+        if cur and pl.read_parquet(cur / "match.parquet", columns=["demo_sha256"])["demo_sha256"][0] == sha256:
+            return d.name
+    return None
 
 
-def stored_pov(map_dir: Path) -> str | None:
-    """match.extra's pov in the map's current tables."""
+def stored_pov(map_dir: Path) -> dict:
+    """pov and pov_error from match.extra in the map's current tables."""
     d = extract.resolve_map_dir(map_dir)
-    extra = pl.read_parquet(d / "match.parquet", columns=["extra"])["extra"][0] if d else "{}"
-    return json.loads(extra).get("pov")
+    extra = json.loads(pl.read_parquet(d / "match.parquet", columns=["extra"])["extra"][0]) if d else {}
+    return {k: extra.get(k) for k in ("pov", "pov_error") if extra.get(k) is not None}
 
 
 def import_local(demos: list[Path], out: Path, mapdata: Path | None, user_of, force: bool = False,
                  progress=None) -> list[dict]:
     """Extract each demo into out/<id>/. user_of() returns the user's SteamID64, or raises when it cannot be
-    found; it is asked only for a demo with more than one human. progress(event) hears each start and end."""
+    found; it is asked only for a demo with more than one human. progress(event) hears each start and end.
+    Every row is scrubbed of the demo's original name (extract.private_name_parts), and a demo that cannot
+    be read is reported by its place in the list, as unreadable-<i>, and the batch goes on."""
     rows = []
     for i, dem in enumerate(demos, 1):
-        sha = extract.file_sha256(dem)
-        did = demo_id(dem, sha)
+        try:
+            sha = extract.file_sha256(dem)
+            did = existing_id(out, sha) or demo_id(dem, sha)
+        except Exception as e:  # noqa: BLE001 - its message may hold the path, whose name ends in a Steam name
+            rows.append(dict(demo=f"unreadable-{i}", ok=False, reason="unreadable", pov=None,
+                             errors=[f"{type(e).__name__}: the demo could not be read"]))
+            if progress:
+                progress(dict(event="done", i=i, n=len(demos), demo=f"unreadable-{i}", ok=False, skipped=False))
+            continue
         map_dir = out / did
         if progress:
             progress(dict(event="start", i=i, n=len(demos), demo=did))
-        found: dict = {}
 
         def extra_from_players(players: pd.DataFrame) -> dict:
             humans = int((~players.is_bot.astype(bool)).sum())
-            user = None
+            user, why = None, None
             if humans > 1:
                 try:
                     user = user_of()
                 except Exception as e:  # noqa: BLE001 - reported in the result; the tables are still written
-                    found["pov_error"] = f"{type(e).__name__}: {e}"
-            found.update(pov_of(players, user))
+                    why = f"{type(e).__name__}: {e}"
+            found = pov_of(players, user)
             if "pov" not in found:
-                found.setdefault("pov_error", f"{humans} human players and the user is not among them")
-            return {k: found[k] for k in ("pov", "pov_source") if k in found}
+                found["pov_error"] = why or f"{humans} human players and the user is not among them"
+            return found
 
-        at = created_utc(dem).isoformat(timespec="seconds")
+        def meta() -> dict:
+            at = created_utc(dem).isoformat(timespec="seconds")
+            return dict(date=at, started_at=at, date_source="file creation time")
+
         row = dict(demo=did, out=str(map_dir))
-        row.update(vi.extract_into(dem, map_dir, "local", mapdata, force=force, archive=did, name=f"{did}.dem",
-                                   extra_from_players=extra_from_players,
-                                   meta_extra=dict(importer="local_import", importer_version=IMPORTER_VERSION,
-                                                   date=at, started_at=at, date_source="file creation time")))
-        row["errors"] = [scrub(e, dem.stem, did) for e in row.get("errors", [])]
+        row.update(vi.extract_into(dem, map_dir, "local", mapdata, "local_import", IMPORTER_VERSION, meta,
+                                   force=force, archive=did, name=f"{did}.dem", extra_from_players=extra_from_players))
         row["reason"] = None if row["ok"] else (
             "no_rounds" if any(NO_ROUNDS in e for e in row["errors"]) else "extract_failed")
-        row["pov"] = found.get("pov") if "skipped" not in row else stored_pov(map_dir)
-        if "pov_error" in found and row["ok"] and "skipped" not in row:
-            row["pov_error"] = scrub(found["pov_error"], dem.stem, did)
-        rows.append(row)
+        if row["ok"]:
+            row.update({"pov": None, **stored_pov(map_dir)})
+        else:
+            row["pov"] = None
+        rows.append(extract.scrub(row, extract.private_name_parts(dem), did))
         if progress:
             progress(dict(event="done", i=i, n=len(demos), demo=did, ok=row["ok"], skipped="skipped" in row))
     return rows

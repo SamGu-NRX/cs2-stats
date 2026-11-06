@@ -1,13 +1,15 @@
 """Demos CS2 recorded on this machine (local_import.py): the renamed id, the recording player, the reasons a
-demo fails, and the shared import core. Synthetic data, except two tests that read the private data folder and
-skip without it."""
+demo fails, and the shared import core. A fake demoparser2 parser drives the real extraction stage for the
+failure paths; one test extracts a real HLTV fixture from the private data folder and skips without it."""
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -24,24 +26,24 @@ import valve_import as vi  # noqa: E402
 DATA = Path(os.environ.get("CS2_STATS_DATA") or HERE.parents[2] / "cs2-stats-data")
 U1, U2 = vi.STEAMID64_MIN + 1000, vi.STEAMID64_MIN + 2000
 BOT_A, BOT_B = ex.bot_id(3, "Ringo"), ex.bot_id(4, "Vitaliy")
-# the shape of tv_autorecord's name, ending in the server name, which on a listen server is the host's Steam name
+# tv_autorecord's name shape: the server name, on a listen server the host's Steam name, comes last. This one
+# also parses as "<team1>-vs-<team2>-<map>", so a team name read from it would carry it.
 HOST = "Some-vs-the-persona"
 AUTO = f"auto-20261025-0335-de_dust2-{HOST}.dem"
+SECRET = "persona"
 
 
 def _players(*ids):
     return pd.DataFrame({"steamid": list(ids), "is_bot": [i < 2 ** 40 for i in ids]})
 
 
-def _fake_extractor(calls: list, players: pd.DataFrame, error: str | None = None):
+def _fake_extractor(calls: list, players: pd.DataFrame):
     """Stands in for extract.extract_demo: asks for the players' extra as the real one does, then publishes a
-    minimal map, or fails with `error`."""
+    minimal map."""
 
     def fake(dem, out_dir, source, mapdata=None, archive="", meta_extra=None, name=None, extra_from_players=None):
         calls.append(dict(dem=Path(dem).name, source=source, archive=archive, name=name))
-        if error:
-            return dict(ok=False, errors=[error], validation={})
-        extra = {**meta_extra, **extra_from_players(players)}
+        extra = {**meta_extra, **(extra_from_players(players) if extra_from_players else {})}
         with ex.map_lock(Path(out_dir)):
             tmp = Path(out_dir) / ".tmp-test"
             tmp.mkdir(parents=True)
@@ -50,6 +52,49 @@ def _fake_extractor(calls: list, players: pd.DataFrame, error: str | None = None
             ex.publish_version(tmp, Path(out_dir), ex.EXTRACTOR_VERSION, ["match.parquet"])
         return dict(ok=True, errors=[], validation={})
     return fake
+
+
+class WarmupParser:
+    """demoparser2's DemoParser over a recording that ends in round 1's freeze time, the shape of the first
+    tv_autorecord demo from a listen server: warmup's winnerless round_end at 1112, begin_new_match at 1113, one
+    round_freeze_end at 2488, then nothing. `fail` makes it fail to read, with the path in its message, as a
+    parser does for a file it cannot open."""
+
+    fail = False
+
+    def __init__(self, path):
+        self.path = path
+
+    def parse_header(self):
+        if self.fail:
+            raise RuntimeError(f"failed to read {self.path}")
+        return {"map_name": "de_dust2", "server_name": HOST}
+
+    def list_game_events(self):
+        return ["round_start", "round_end", "begin_new_match", "round_freeze_end"]
+
+    def parse_events(self, names, player=None, other=None):
+        events = {
+            "round_start": pd.DataFrame({"tick": [87]}),
+            "round_end": pd.DataFrame({"tick": [1112], "winner": [None], "reason": [None], "total_rounds_played": [0]}),
+            "begin_new_match": pd.DataFrame({"tick": [1113]}),
+            "round_freeze_end": pd.DataFrame({"tick": [2488]}),
+        }
+        return [(n, events[n]) for n in names if n in events]
+
+
+@pytest.fixture
+def warmup_demo(monkeypatch):
+    """The real extraction stage over WarmupParser, with awpy's stage reduced to the header it sets."""
+    import demoparser2
+
+    def awpy(ctx):
+        ctx.info["awpy_header"] = {}
+        return {}
+    monkeypatch.setattr(demoparser2, "DemoParser", WarmupParser)
+    monkeypatch.setattr(ex, "STAGES", [("awpy", awpy), ("demoparser2", ex.stage_demoparser2)])
+    monkeypatch.setattr(li, "demo_map", lambda dem: "de_dust2")
+    return WarmupParser
 
 
 def _demo(folder: Path, name: str = AUTO, body: bytes = b"a recorded demo") -> Path:
@@ -68,22 +113,59 @@ def dust2(monkeypatch):
     monkeypatch.setattr(li, "demo_map", lambda dem: "de_dust2")
 
 
-def test_the_original_name_which_ends_in_a_steam_name_is_never_stored_printed_or_read_for_teams(
-        tmp_path, monkeypatch, capsys, dust2):
-    calls = []
-    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1, BOT_A),
-                                                                   error=f"OSError: cannot read {AUTO}"))
+def test_a_recording_that_ends_before_a_round_reports_no_rounds(tmp_path, warmup_demo):
+    code, summary = _run([_demo(tmp_path / "replays")], tmp_path / "out")
+    row = summary["results"][0]
+    assert (code, summary["ok"], row["reason"]) == (1, 0, "no_rounds"), row["errors"]
+
+
+def test_the_original_name_reaches_no_result_summary_progress_line_or_log(tmp_path, warmup_demo, monkeypatch, capsys, caplog):
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(warmup_demo, "fail", True)
     dem = _demo(tmp_path / "replays")
-    out = tmp_path / "local"
-    li.main([str(dem), "--out", str(out), "--progress", "--result", str(tmp_path / "summary.json")])
-    did = calls[0]["archive"]
-    assert li.ID_RE.match(did) and calls == [dict(dem=AUTO, source="local", archive=did, name=f"{did}.dem")]
+    li.main([str(dem), "--out", str(tmp_path / "out"), "--progress", "--result", str(tmp_path / "summary.json")])
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    row = summary["results"][0]
+    # the parser's error named the file; the result names the id in its place
+    assert row["reason"] == "extract_failed" and row["demo"] in row["errors"][0], row["errors"]
     printed = capsys.readouterr()
-    for text in (printed.out, printed.err, (tmp_path / "summary.json").read_text(encoding="utf-8")):
-        assert "persona" not in text and did in text
-    # the original name parses as "<team1>-vs-<team2>-<map>"; the id the extractor is given does not
-    assert ex.teams_from_filename(Path(AUTO)) != (None, None)
-    assert ex.teams_from_filename(Path(calls[0]["name"])) == (None, None)
+    for text in (printed.out, printed.err, json.dumps(summary), caplog.text):
+        assert SECRET not in text
+
+    # the core itself: the result, its traceback included, and the team names read from the name it stores
+    res = ex.extract_demo(dem, tmp_path / "core", "local", name=f"{row['demo']}.dem")
+    assert SECRET not in json.dumps(res, default=str)
+    assert (res["dem_file"], res["team1_file"], res["team2_file"]) == (f"{row['demo']}.dem", None, None)
+    assert ex.teams_from_filename(dem) != (None, None)  # what the stored name would have given
+
+
+def test_the_core_refuses_a_recorded_demo_without_an_id_name(tmp_path, capsys):
+    dem = _demo(tmp_path)
+    for name in (None, AUTO, "anything.dem"):
+        with pytest.raises(ValueError, match="source local needs name=") as e:
+            ex.extract_demo(dem, tmp_path / "out", "local", name=name)
+        assert SECRET not in str(e.value)
+    with pytest.raises(SystemExit) as e:
+        ex.main([str(dem), str(tmp_path / "out"), "--source", "local"])
+    assert e.value.code == 2 and SECRET not in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_unreadable_demo_is_reported_by_place_and_the_batch_goes_on(tmp_path, monkeypatch, dust2):
+    calls = []
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1, BOT_A)))
+    bad, good = _demo(tmp_path / "a"), _demo(tmp_path / "b", "auto-20261025-0400-de_dust2-x.dem", b"another")
+    real = ex.file_sha256
+
+    def sha(path):
+        if Path(path) == bad:
+            raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+        return real(path)
+    monkeypatch.setattr(li.extract, "file_sha256", sha)
+    code, summary = _run([bad, good], tmp_path / "out")
+    assert [(r["demo"], r["ok"], r["reason"]) for r in summary["results"]][0] == ("unreadable-1", False, "unreadable")
+    assert summary["results"][1]["ok"] and len(calls) == 1 and code == 1
+    assert SECRET not in json.dumps(summary)
 
 
 def test_the_id_is_the_creation_time_the_header_map_and_the_hash_and_a_named_demo_keeps_its_own(
@@ -103,6 +185,20 @@ def test_the_id_is_the_creation_time_the_header_map_and_the_hash_and_a_named_dem
     assert li.demo_id(named, "0" * 64) == did
 
 
+def test_the_same_demo_under_another_creation_time_reuses_its_tables(tmp_path, monkeypatch, dust2):
+    # A copy of a demo keeps its bytes but not its creation time, so it would get another id and be
+    # extracted, and listed, twice.
+    calls = []
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1, BOT_A)))
+    times = iter([datetime(2026, 10, 25, 8, 35, tzinfo=timezone.utc), datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)])
+    monkeypatch.setattr(li, "created_utc", lambda dem: next(times))
+    dem, out = _demo(tmp_path / "replays"), tmp_path / "out"
+    first = _run([dem], out)[1]["results"][0]
+    again = _run([dem], out)[1]["results"][0]
+    assert (again["demo"], "skipped" in again, len(calls)) == (first["demo"], True, 1)
+    assert [p.name for p in out.iterdir() if p.is_dir()] == [first["demo"]]
+
+
 def test_the_recording_player_is_the_only_human_else_the_user_if_he_played():
     assert li.pov_of(_players(U1, BOT_A, BOT_B), U2) == dict(pov=str(U1), pov_source="the only human player")
     assert li.pov_of(_players(U1, U2, BOT_A), U2) == dict(pov=str(U2), pov_source="the user's SteamID64")
@@ -110,32 +206,23 @@ def test_the_recording_player_is_the_only_human_else_the_user_if_he_played():
     assert li.pov_of(_players(BOT_A, BOT_B), U1) == {}
 
 
-def test_a_bot_match_never_looks_the_user_up_and_a_failed_lookup_still_writes_the_tables(tmp_path, monkeypatch, dust2):
+def test_a_bot_match_never_looks_the_user_up_and_why_a_pov_is_missing_outlives_a_rerun(tmp_path, monkeypatch, dust2):
     def no_user():
         raise FileNotFoundError("no Steam install found; pass --steam")
     monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], _players(U1, BOT_A, BOT_B)))
     rows = li.import_local([_demo(tmp_path / "a")], tmp_path / "out", None, lambda: pytest.fail("looked up"))
     assert (rows[0]["ok"], rows[0]["pov"], "pov_error" in rows[0]) == (True, str(U1), False)
 
-    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], _players(U1, U2, BOT_A)))
-    rows = li.import_local([_demo(tmp_path / "b", body=b"another demo")], tmp_path / "out", None, no_user)
-    assert (rows[0]["ok"], rows[0]["pov"]) == (True, None)
-    assert rows[0]["pov_error"] == "FileNotFoundError: no Steam install found; pass --steam"
-    extra = json.loads(pl.read_parquet(ex.resolve_map_dir(Path(rows[0]["out"])) / "match.parquet")["extra"][0])
-    assert "pov" not in extra and extra["importer"] == "local_import"
+    calls = []
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1, U2, BOT_A)))
+    two = _demo(tmp_path / "b", body=b"another demo")
+    for _ in range(2):  # extracted, then skipped: the reason stays
+        row = li.import_local([two], tmp_path / "out", None, no_user)[0]
+        assert (row["ok"], row["pov"], row["pov_error"]) == (True, None, "FileNotFoundError: no Steam install found; pass --steam")
+    assert len(calls) == 1
 
 
-@pytest.mark.parametrize("error, reason", [
-    ("RuntimeError: no round_end events after match start", "no_rounds"),
-    ("ValidationFailed: 1 fatal validation checks failed", "extract_failed"),
-])
-def test_a_failed_demo_says_why_and_fails_the_run(tmp_path, monkeypatch, dust2, error, reason):
-    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], _players(U1), error=error))
-    code, summary = _run([_demo(tmp_path / "replays")], tmp_path / "out")
-    assert (code, summary["ok"], summary["results"][0]["reason"]) == (1, 0, reason)
-
-
-def test_a_rerun_skips_a_demo_until_the_local_importer_changes(tmp_path, monkeypatch, dust2):
+def test_a_rerun_skips_a_demo_until_the_local_importer_or_the_importer_itself_changes(tmp_path, monkeypatch, dust2):
     calls = []
     monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1, BOT_A)))
     dem, out = _demo(tmp_path / "replays"), tmp_path / "out"
@@ -144,6 +231,10 @@ def test_a_rerun_skips_a_demo_until_the_local_importer_changes(tmp_path, monkeyp
     assert (code, len(calls), summary["results"][0]["pov"]) == (0, 1, str(U1))  # skipped, its pov still reported
     monkeypatch.setattr(li, "IMPORTER_VERSION", li.IMPORTER_VERSION + 1)
     assert _run([dem], out)[0] == 0 and len(calls) == 2
+    # tables another importer wrote for this file at the same version number are not these
+    did = summary["results"][0]["demo"]
+    vi.extract_into(dem, out / did, "valve", None, "valve_import", li.IMPORTER_VERSION, dict, force=True, archive=did)
+    assert _run([dem], out)[0] == 0 and len(calls) == 4
 
 
 def test_with_no_demo_given_only_recorded_demos_in_the_replays_folder_are_imported(tmp_path, monkeypatch, dust2):
@@ -166,39 +257,54 @@ def test_the_importer_refuses_an_out_inside_a_repository(tmp_path, monkeypatch, 
     assert e.value.code == 2 and not out.exists()
 
 
-# --- real demos from the private data folder ---------------------------------
-
-def test_a_recording_cut_off_before_round_one_ends_reports_no_rounds(tmp_path):
-    # The first tv_autorecord demo from a listen server ends in round 1's freeze time.
-    found = sorted((DATA / "user-demos").glob("auto-*.dem"))
-    if not found:
-        pytest.skip(f"PRIVATE FIXTURE MISSING: no auto-*.dem in {DATA / 'user-demos'}; the cut-off demo is not checked")
-    code, summary = _run([found[0]], tmp_path / "out")
-    row = summary["results"][0]
-    assert (code, row["ok"], row["reason"]) == (1, False, "no_rounds")
-    assert found[0].stem.rsplit("-", 1)[-1] not in json.dumps(summary)
+def test_the_version_the_app_reads_is_the_bare_extractor_version(capsys):
+    # The host keeps a failed demo until this changes, and compares it with what its ledger stored.
+    with pytest.raises(SystemExit) as e:
+        li.main(["--version"])
+    assert (e.value.code, capsys.readouterr().out.strip()) == (0, ex.EXTRACTOR_VERSION)
 
 
-def test_a_demo_through_the_local_path_writes_tables_without_its_original_name(tmp_path):
+def test_a_truncated_demo_cut_off_before_its_second_freeze_end_still_gets_a_tick_rate():
+    # One complete round (freeze end 2488, round end 9000), then the recording stops: measuring between the one
+    # freeze end and itself divided by zero.
+    class Clock:
+        def parse_ticks(self, props, ticks):
+            return pd.DataFrame({"tick": ticks, "game_time": [t / 64 for t in ticks]})
+    assert ex.truncated_tick_rate(Clock(), [2488, 9000], 64.0) == 64.0
+    assert ex.truncated_tick_rate(Clock(), [2488], 64.0) == 64.0
+
+    class Frozen(Clock):
+        def parse_ticks(self, props, ticks):
+            return pd.DataFrame({"tick": ticks, "game_time": [40.0] * len(ticks)})
+    assert ex.truncated_tick_rate(Frozen(), [2488, 9000], 64.0) == 64.0
+
+
+# --- a real demo from the private data folder ----------------------------------
+
+def _strings(path: Path) -> str:
+    """Every string a parquet table holds, in any column, as one text."""
+    df = pl.read_parquet(path)
+    return json.dumps(df.select([c for c, t in df.schema.items() if t == pl.String or isinstance(t, pl.List)]).to_dicts(),
+                      default=str)
+
+
+def test_a_real_demo_through_the_local_path_writes_no_part_of_its_original_name(tmp_path, caplog):
     src = DATA / "fixtures" / "fixture-d-vs-split-m1-cache-p1.dem"  # an HLTV Cache map's first part, 4 rounds
     mapdata = DATA / "mapdata" / "2000935"
     if not src.exists() or not mapdata.exists():
-        pytest.skip(f"PRIVATE FIXTURE MISSING: {src} or {mapdata}; the local path is not checked on a real demo")
+        pytest.skip(f"PRIVATE FIXTURE MISSING: {src} or {mapdata}; the tables of a real demo are not grepped")
+    caplog.set_level(logging.DEBUG)
     dem = tmp_path / "replays" / f"auto-20261025-0335-de_cache-{HOST}.dem"
     dem.parent.mkdir()
     shutil.copyfile(src, dem)
     code, summary = _run([dem, "--user", str(U1), "--mapdata", mapdata], tmp_path / "out")
     row = summary["results"][0]
     assert (code, row["ok"], row["pov"]) == (0, True, None), (row["errors"], row.get("failed_checks"))  # ten humans, none of them the user
-    m = pl.read_parquet(ex.resolve_map_dir(Path(row["out"])) / "match.parquet").row(0, named=True)
+    tables = ex.resolve_map_dir(Path(row["out"]))
+    for t in sorted(tables.glob("*.parquet")):
+        assert SECRET not in _strings(t), t.name
+    assert SECRET not in json.dumps(summary) and SECRET not in caplog.text
+    m = pl.read_parquet(tables / "match.parquet").row(0, named=True)
     assert (m["source"], m["dem_file"], m["server_name"], m["team1_file"], m["team2_file"]) == (
         "local", f"{row['demo']}.dem", "", None, None)
     assert row["demo"].endswith(f"_de_cache_{m['demo_sha256'][:8]}")
-    assert json.loads(m["extra"])["importer"] == "local_import"
-
-
-def test_the_version_the_app_reads_is_the_bare_extractor_version(capsys):
-    # The host keeps a failed demo until this changes, and compares it with what its ledger stored.
-    with pytest.raises(SystemExit) as e:
-        li.main(["--version"])
-    assert (e.value.code, capsys.readouterr().out.strip()) == (0, ex.EXTRACTOR_VERSION)
