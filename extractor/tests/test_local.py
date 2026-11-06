@@ -180,6 +180,42 @@ def test_an_unreadable_demo_is_reported_by_place_and_the_batch_goes_on(tmp_path,
     assert not leaks(json.dumps(summary))
 
 
+def test_a_demo_that_vanishes_after_its_hash_fails_alone_and_without_its_name(tmp_path, monkeypatch, capsys):
+    # Its id needs the file's creation time, and so does its metadata, read only when it is extracted. Gone
+    # between the two, it raised an error naming its path, and the batch stopped.
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], _players(U1, BOT_A)))
+    monkeypatch.setattr(li, "demo_map", lambda dem: "de_dust2")
+    gone = _demo(tmp_path / "a", AUTO)
+    ok = _demo(tmp_path / "b", "auto-20261106-0100-de_dust2-x.dem", b"another")
+    real, seen = li.created_utc, []
+
+    def created(dem):
+        if dem == gone and dem in seen:
+            raise FileNotFoundError(f"[WinError 2] The system cannot find the file specified: '{dem}'")
+        seen.append(dem)
+        return real(dem)
+    monkeypatch.setattr(li, "created_utc", created)
+    code, summary = _run([gone, ok, "--progress"], tmp_path / "out")
+    first, second = summary["results"]
+    assert (first["ok"], first["reason"], li.ID_RE.match(first["demo"]) is not None) == (False, "unreadable", True)
+    assert first["errors"] == ["FileNotFoundError: the demo could not be read"] and second["ok"] and code == 1
+    printed = capsys.readouterr()
+    for text in (json.dumps(summary), printed.out, printed.err):
+        assert not leaks(text)
+
+
+@pytest.mark.parametrize("host", ["ok", "de"])
+def test_a_short_steam_name_is_scrubbed_without_rewriting_the_result(tmp_path, parsed_match, host):
+    # Replaced everywhere, "ok" rewrote the result's "ok" (its key and its visibility value), and "de" rewrote
+    # "de_dust2" in the id and the map.
+    dem = _demo(tmp_path / "replays", f"auto-20261106-0000-de_dust2-{host}.dem")
+    code, summary = _run([dem], tmp_path / "out")
+    row = summary["results"][0]
+    assert (code, row["ok"], row["map"], row["reason"], row["visibility"]) == (0, True, "de_dust2", None, "ok"), row
+    assert re.fullmatch(r"\d{8}T\d{4}Z_de_dust2_[0-9a-f]{8}", row["demo"])
+    assert pl.read_parquet(ex.resolve_map_dir(Path(row["out"])) / "match.parquet")["map"][0] == "de_dust2"
+
+
 def test_the_id_is_the_creation_time_the_header_map_and_the_hash_and_a_named_demo_keeps_its_own(
         tmp_path, monkeypatch):
     monkeypatch.setattr(li, "demo_map", lambda dem: "Workshop/De Mirage!")
@@ -194,7 +230,21 @@ def test_the_id_is_the_creation_time_the_header_map_and_the_hash_and_a_named_dem
         assert li.demo_id(dem, sha) == did
     named = dem.rename(dem.with_name(f"{did}.dem"))
     monkeypatch.setattr(li, "demo_map", lambda dem: pytest.fail("a demo named by its id is not read again"))
-    assert li.demo_id(named, "0" * 64) == did
+    assert li.demo_id(named, sha) == did
+
+
+def test_a_name_shaped_like_an_id_but_another_files_never_takes_that_matchs_folder(tmp_path, monkeypatch, dust2):
+    # A file named <id>.dem whose bytes are not that id's (renamed or overwritten by hand) would extract into the
+    # other match's folder and replace its tables.
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor([], _players(U1, BOT_A)))
+    out = tmp_path / "out"
+    first = li.import_local([_demo(tmp_path / "a")], out, None, lambda: None)[0]
+    impostor = _demo(tmp_path / "b", f"{first['demo']}.dem", b"another recording")
+    second = li.import_local([impostor], out, None, lambda: None)[0]
+    assert second["ok"] and second["demo"] != first["demo"]
+    assert second["demo"].endswith(hashlib.sha256(b"another recording").hexdigest()[:8])
+    kept = pl.read_parquet(ex.resolve_map_dir(out / first["demo"]) / "match.parquet")["demo_sha256"][0]
+    assert kept == hashlib.sha256(b"a recorded demo").hexdigest()
 
 
 def test_the_same_demo_under_another_creation_time_reuses_its_tables(tmp_path, monkeypatch, dust2):
@@ -289,6 +339,27 @@ def test_a_truncated_demo_cut_off_before_its_second_freeze_end_still_gets_a_tick
         def parse_ticks(self, props, ticks):
             return pd.DataFrame({"tick": ticks, "game_time": [40.0] * len(ticks)})
     assert ex.truncated_tick_rate(Frozen(), [2488, 9000], 64.0) == 64.0
+
+    # demoparser2 leaves the column out when it decoded no game time at either tick
+    class Undecoded(Clock):
+        def parse_ticks(self, props, ticks):
+            return pd.DataFrame({"tick": pd.Series([], dtype="int64")})
+    assert ex.truncated_tick_rate(Undecoded(), [2488, 9000], 64.0) == 64.0
+
+
+@pytest.mark.parametrize("extra", ["[]", "null", "{not json"])
+def test_tables_whose_match_extra_is_not_an_object_are_extracted_again(tmp_path, monkeypatch, extra):
+    calls = []
+    monkeypatch.setattr(vi.extract, "extract_demo", _fake_extractor(calls, _players(U1)))
+    dem, map_dir = _demo(tmp_path), tmp_path / "out" / "m"
+    with ex.map_lock(map_dir):
+        tmp = map_dir / ".tmp-test"
+        tmp.mkdir(parents=True)
+        pl.DataFrame({"demo_sha256": [ex.file_sha256(dem)], "extractor_version": [ex.EXTRACTOR_VERSION],
+                      "extra": [extra]}).write_parquet(tmp / "match.parquet")
+        ex.publish_version(tmp, map_dir, ex.EXTRACTOR_VERSION, ["match.parquet"])
+    row = vi.extract_into(dem, map_dir, "valve", None, "valve_import", vi.IMPORTER_VERSION, dict, force=False, archive="m")
+    assert row["ok"] and "skipped" not in row and len(calls) == 1
 
 
 def _row(table: str, **values) -> dict:
