@@ -216,6 +216,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
+            SyncHumanBody(Server.TickCount);
             var rec = _rec!;
             int tick = Server.TickCount;
             var victim = e.Userid;
@@ -273,6 +274,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
+            SyncHumanBody(Server.TickCount);
             var rec = _rec!;
             int v = PiOf(e.Userid);
             if (v == Nil.V) return EvEnd("player_hurt");
@@ -287,7 +289,8 @@ public sealed partial class BotMatchStatsPlugin
             int tick = Server.TickCount;
             rec.Hurt(tick, a, v, e.DmgHealth, e.DmgArmor, e.Health,
                 weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), e.Hitgroup,
-                WeaponNames.IsBulletWeapon(weapon), WeaponNames.NadeSourceOf(weapon));
+                WeaponNames.IsBulletWeapon(weapon), WeaponNames.NadeSourceOf(weapon),
+                attacker != null && attacker.IsValid ? BodyPi(attacker.Slot) : Nil.V, BodyPi(e.Userid!.Slot));
             if (a != Nil.V && a == rec.HumanPi)
             {
                 // Raw reads only: validation data for IsVisibleToHuman (aim.hitMask).
@@ -308,6 +311,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
+            SyncHumanBody(Server.TickCount);
             int v = PiOf(e.Userid);
             if (v != Nil.V)
                 _rec!.Blind(Server.TickCount, PiOf(e.Attacker), v, (int)Math.Round(e.BlindDuration * 1000f));
@@ -329,6 +333,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
+            SyncHumanBody(Server.TickCount);
             var rec = _rec!;
             nint pawn = PawnOfSlot(_humanSlot);
             if (pawn == 0) return EvEnd("weapon_fire");
@@ -376,6 +381,7 @@ public sealed partial class BotMatchStatsPlugin
         EvBegin();
         try
         {
+            SyncHumanBody(Server.TickCount);
             var c = e.Userid;
             int pi = PiOf(c);
             if (WeaponNames.TryUtilType(e.Weapon, out var type))
