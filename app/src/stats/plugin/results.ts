@@ -20,7 +20,8 @@ const count = (x: number | null | undefined): x is number => Number.isInteger(x)
  */
 export function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
   const start = m.players.startSide[m.human];
-  const team = [m.human, ...m.players.startSide.flatMap((s, pi) => (s === start && pi !== m.human ? [pi] : []))];
+  // a null start side is on no team (adapter.ts teamOf), so it names no teammate
+  const team = [m.human, ...m.players.startSide.flatMap((s, pi) => (start !== null && s === start && pi !== m.human ? [pi] : []))];
   for (const pi of team) {
     const sides = rounds.map((ri) => m.rounds.side[ri]?.[pi] ?? null);
     if (sides.every((x) => x !== null)) return sides as Side[];
