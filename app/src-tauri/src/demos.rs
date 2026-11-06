@@ -92,16 +92,41 @@ pub struct Keep {
     pub reason: String,
 }
 
-/// The store folder and its files.
+/// The store folder and its files. Only [`Store::of`] and [`Store::in_base`] make one, and both
+/// check it first, so every read and write goes through a store that is not a junction or link.
 pub struct Store {
     pub root: PathBuf,
+    /// The folder holding `demos\`: `%APPDATA%\BotMatchStats`.
+    base: PathBuf,
 }
 
 impl Store {
     /// `demos\` beside the Bot Mode folder: `%APPDATA%\BotMatchStats\demos`.
     pub fn of(layout: &Layout) -> Result<Store, String> {
         let parent = layout.data.parent().ok_or_else(|| format!("{}: no parent folder for the demos", layout.data.display()))?;
-        Ok(Store { root: parent.join("demos") })
+        Store::in_base(parent)
+    }
+
+    /// `demos\` in `base` (`%APPDATA%\BotMatchStats`), refused when either is a junction or link.
+    pub fn in_base(base: &Path) -> Result<Store, String> {
+        let s = Store { root: base.join("demos"), base: base.to_path_buf() };
+        s.check()?;
+        Ok(s)
+    }
+
+    /// Refuses a store reached through a junction or link: `demos\` itself or the folder above it,
+    /// up to `%APPDATA%\BotMatchStats`. A delete through one would remove files outside the store.
+    /// A folder not there yet passes; [`Store::ensure`] creates it and checks again.
+    fn check(&self) -> Result<(), String> {
+        for p in [&self.root, &self.base] {
+            match fs::symlink_metadata(p) {
+                Ok(m) if is_reparse(&m) => return Err(format!("{} is a junction or link; demos are not kept through one", p.display())),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", p.display())),
+            }
+        }
+        Ok(())
     }
     pub fn dem(&self, id: &str) -> PathBuf {
         self.root.join(format!("{id}.dem"))
@@ -118,12 +143,9 @@ impl Store {
 
     /// The store folder, created if missing; refused when it is a junction or link.
     fn ensure(&self) -> Result<(), String> {
+        self.check()?;
         fs::create_dir_all(&self.root).map_err(|e| format!("{}: {e}", self.root.display()))?;
-        let m = fs::symlink_metadata(&self.root).map_err(|e| format!("{}: {e}", self.root.display()))?;
-        if is_reparse(&m) {
-            return Err(format!("{} is a junction or link; demos are not kept through one", self.root.display()));
-        }
-        Ok(())
+        self.check()
     }
 
     pub fn read_meta(&self, id: &str) -> Result<Meta, String> {
@@ -131,6 +153,9 @@ impl Store {
             return Err(format!("{id}: not a demo id"));
         }
         let p = self.meta_path(id);
+        if fs::symlink_metadata(&p).is_ok_and(|m| is_reparse(&m)) {
+            return Err(format!("{} is a link; it is not read", p.display()));
+        }
         let text = fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
     }
@@ -160,15 +185,31 @@ impl Store {
         Ok(out)
     }
 
+    /// Appends one event to the ledger and flushes it to disk. A record cut off by a crash or a
+    /// power loss is an incomplete last line; it is dropped first and the drop is recorded, so the
+    /// next record does not run on from it into one line that reads as neither.
     fn log(&self, id: &str, event: &str, reason: Option<&str>) -> Result<(), String> {
-        let line = serde_json::json!({ "at": iso_utc(SystemTime::now()), "id": id, "event": event, "reason": reason });
+        use std::io::{Read, Seek, SeekFrom};
         let p = self.ledger();
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&p)
-            .and_then(|mut f| writeln!(f, "{line}"))
-            .map_err(|e| format!("{}: {e}", p.display()))
+        let fail = |e: std::io::Error| format!("{}: {e}", p.display());
+        let mut f = fs::OpenOptions::new().create(true).read(true).write(true).truncate(false).open(&p).map_err(fail)?;
+        let mut lines = Vec::new();
+        if f.metadata().map_err(fail)?.len() > 0 {
+            let mut last = [0u8];
+            f.seek(SeekFrom::End(-1)).and_then(|_| f.read_exact(&mut last)).map_err(fail)?;
+            if last[0] != b'\n' {
+                let mut text = Vec::new();
+                f.seek(SeekFrom::Start(0)).and_then(|_| f.read_to_end(&mut text)).map_err(fail)?;
+                let keep = text.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+                f.set_len(keep as u64).map_err(fail)?;
+                let why = format!("an incomplete last record of {} bytes was dropped", text.len() - keep);
+                lines.push(serde_json::json!({ "at": iso_utc(SystemTime::now()), "id": null, "event": "ledger_repaired", "reason": why }));
+            }
+        }
+        lines.push(serde_json::json!({ "at": iso_utc(SystemTime::now()), "id": id, "event": event, "reason": reason }));
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        f.seek(SeekFrom::End(0)).map_err(fail)?;
+        f.write_all(text.as_bytes()).and_then(|_| f.sync_all()).map_err(fail)
     }
 
     pub fn keeps(&self) -> Result<Vec<Keep>, String> {
@@ -270,7 +311,17 @@ pub struct Taken {
 /// Moves every settled `auto-*.dem` in `game\csgo\replays` into the store, with CS2 closed and
 /// the operation lock held. A demo already in the store (the same content under the same id) is
 /// removed from `replays\`. A sidecar left without its demo stays for [`sweep`] to mark missing.
-pub fn take(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, now: SystemTime) -> Result<Taken, String> {
+///
+/// CS2 can start while a take runs, and a demo can still be growing although its last write is
+/// older than [`SETTLE`]. So CS2 is checked again right before each move or removal, and a demo is
+/// taken only when its size and modified time are the same before and after it is hashed; one that
+/// changed waits for a later take.
+pub fn take(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, lock: &OpLock, now: SystemTime) -> Result<Taken, String> {
+    take_with(store, layout, probe, lock, now, &|p: &Path| hash::file(p))
+}
+
+/// [`take`] with the hash as a parameter, so a test can change a demo while it is hashed.
+fn take_with(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &OpLock, now: SystemTime, hash_file: &dyn Fn(&Path) -> Result<String, String>) -> Result<Taken, String> {
     ensure_cs2_closed(probe, Phase::Operation)?;
     let mut out = Taken::default();
     let replays = layout.csgo.join("replays");
@@ -311,13 +362,19 @@ pub fn take(store: &Store, layout: &Layout, probe: &dyn ProcessProbe, _lock: &Op
             out.waiting += 1;
             continue;
         }
-        let sha = match hash::file(&src) {
+        let sha = match hash_file(&src) {
             Ok(s) => s,
             Err(_) => {
                 out.refused.push(format!("{which} could not be read; it was left where it is"));
                 continue;
             }
         };
+        let after = fs::symlink_metadata(&src).ok();
+        if after.as_ref().map(|a| (a.len(), a.modified().ok())) != Some((m.len(), m.modified().ok())) {
+            out.waiting += 1;
+            continue;
+        }
+        ensure_cs2_closed(probe, Phase::Operation)?;
         let map = map_of_auto_name(&name).unwrap_or("unknown");
         let created = m.created().unwrap_or(modified);
         let id = demo_id(created, map, &sha);
@@ -655,12 +712,34 @@ pub fn gb(bytes: u64) -> String {
     if tenths % 10 == 0 { format!("{}", tenths / 10) } else { format!("{}.{}", tenths / 10, tenths % 10) }
 }
 
-/// The launch records when the setting is on and the disk has the floor plus [`RESERVE`] free.
+/// A GOTV setting in Steam's stored launch options that undoes [`TOKENS`], as "tv_enable 0" (a
+/// setting given no value reads as its name alone). Steam adds those options after the app's, so
+/// theirs win. Bot Mode never edits them; a launch with one records nothing and says why.
+pub fn steam_conflict(steam_options: &str) -> Option<String> {
+    let tokens = crate::botmode::launch::split(steam_options).unwrap_or_default();
+    let ours: Vec<(&str, &str)> = TOKENS.chunks(2).map(|c| (&c[0][1..], c[1])).collect();
+    for (i, t) in tokens.iter().enumerate() {
+        let Some(name) = t.strip_prefix('+') else { continue };
+        let Some(&(cvar, want)) = ours.iter().find(|(c, _)| c.eq_ignore_ascii_case(name)) else { continue };
+        let value = tokens.get(i + 1).filter(|v| !v.starts_with('+') && !v.starts_with('-'));
+        if value.map(String::as_str) != Some(want) {
+            return Some(value.map_or(cvar.to_string(), |v| format!("{cvar} {v}")));
+        }
+    }
+    None
+}
+
+/// The launch records when the setting is on, Steam's stored launch options (`steam_options`, when
+/// they could be read) do not undo the recording, and the disk has the floor plus [`RESERVE`] free.
 /// Otherwise the launch goes ahead without [`TOKENS`], and `blocked` says why.
-pub fn recording(s: &AppSettings, free: Result<u64, String>) -> Recording {
+pub fn recording(s: &AppSettings, free: Result<u64, String>, steam_options: Option<&str>) -> Recording {
     let floor = Policy::of(s).floor;
     let mut r = Recording { on: s.record_demos, tokens: Vec::new(), blocked: None, free: free.as_ref().ok().copied(), floor };
     if !s.record_demos {
+        return r;
+    }
+    if let Some(c) = steam_options.and_then(steam_conflict) {
+        r.blocked = Some(format!("Recording off this time: your Steam launch options set {c}."));
         return r;
     }
     match free {
@@ -766,8 +845,8 @@ pub fn status(store: &Store, s: &AppSettings) -> Result<DemoStore, String> {
 fn app_store() -> Result<(Store, AppSettings), String> {
     let data = crate::botmode::paths::default_data_dir()?;
     let settings = crate::botmode::settings::load_app_in(&data)?;
-    let root = data.parent().ok_or("the Bot Mode folder has no parent")?.join("demos");
-    Ok((Store { root }, settings))
+    let base = data.parent().ok_or("the Bot Mode folder has no parent")?;
+    Ok((Store::in_base(base)?, settings))
 }
 
 /// Runs `f` with CS2 found through Steam and the operation lock held, off the UI thread, then returns
@@ -856,7 +935,7 @@ pub async fn read_local(path: String) -> Result<tauri::ipc::Response, String> {
     crate::read_tables_in(&local_dir()?, &path, "recorded demos").map(tauri::ipc::Response::new)
 }
 
-/// What `import_local` did: the take, then the importer's run (none when nothing needed extracting).
+/// What an import did: the take, then the importer's run (none when nothing needed extracting).
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalImport {
@@ -866,6 +945,8 @@ pub struct LocalImport {
     pub extracted: Vec<String>,
     pub failed: Vec<String>,
     pub code: Option<i32>,
+    /// Why extraction did not run or did not finish: the importer is missing, or it failed. The
+    /// take and the sweep still ran.
     pub error: Option<String>,
 }
 
@@ -887,12 +968,119 @@ pub fn local_import_state() -> LocalImportState {
     local_state().clone()
 }
 
+/// One import of recorded demos at a time, across processes: the app's (at start, or the command)
+/// and a Bot Mode supervisor's at session end. A file in the Bot Mode folder opened with no sharing,
+/// as [`OpLock`] is; the OS closes it when the holder dies.
+struct ImportLock(#[allow(dead_code)] fs::File);
+
+impl ImportLock {
+    fn acquire(layout: &Layout) -> Result<ImportLock, String> {
+        fs::create_dir_all(&layout.data).map_err(|e| format!("{}: {e}", layout.data.display()))?;
+        let path = layout.data.join("demos-import.lock");
+        let mut opts = fs::OpenOptions::new();
+        opts.read(true).write(true).create(true).truncate(false);
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::share_mode(&mut opts, 0);
+        match opts.open(&path) {
+            Ok(f) => Ok(ImportLock(f)),
+            // ERROR_SHARING_VIOLATION: another import holds it
+            Err(e) if e.raw_os_error() == Some(32) => Err("an import of recorded demos is already running".into()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+}
+
+/// The operation lock, waited for up to five seconds: at app start, Bot Mode's own session cleanup
+/// takes it at the same moment.
+fn op_lock_soon(layout: &Layout) -> Result<OpLock, String> {
+    let mut last = String::new();
+    for _ in 0..20 {
+        match OpLock::acquire(layout) {
+            Ok(l) => return Ok(l),
+            Err(e) => last = e,
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(last)
+}
+
 /// Takes finished recordings out of `replays\` (only with CS2 closed), runs extractor/local_import.py
 /// on every demo not yet extracted (or failed under an older extractor), records each result, and
-/// sweeps. The app calls it at start and when a Bot Mode session ends. Progress lines go out as
-/// "local-import-progress" events.
-#[tauri::command]
-pub async fn import_local(app: tauri::AppHandle) -> Result<LocalImport, String> {
+/// sweeps. It runs at app start ([`on_app_start`]), when a Bot Mode session ends with CS2 exited (the
+/// supervisor, botmode/cli.rs), and from the `import_local` command. Without the importer the take
+/// and the sweep still run, so recorded demos never pile up in `replays\` or past the cap; `error`
+/// says why nothing was extracted. Until the app sends its keeps (`demos_sweep`), the sweep keeps
+/// pinned, unextracted, failed-once and the newest demos, under the cap and above the floor.
+pub fn run_import(layout: &Layout, probe: &dyn ProcessProbe, progress: &dyn Fn(serde_json::Value)) -> Result<LocalImport, String> {
+    run_import_with(layout, probe, &|| crate::Extractor::find("local_import.py"), progress)
+}
+
+/// [`run_import`] with the importer lookup as a parameter, so a test can run it without one.
+fn run_import_with(layout: &Layout, probe: &dyn ProcessProbe, find: &dyn Fn() -> Result<crate::Extractor, String>, progress: &dyn Fn(serde_json::Value)) -> Result<LocalImport, String> {
+    let _import = ImportLock::acquire(layout)?;
+    let store = Store::of(layout)?;
+    let take_result = op_lock_soon(layout).and_then(|lock| take(&store, layout, probe, &lock, SystemTime::now()));
+    let (taken, take_error) = match take_result {
+        Ok(t) => (Some(t), None),
+        Err(e) => (None, Some(e)),
+    };
+    let mut out = LocalImport { taken, take_error, extracted: Vec::new(), failed: Vec::new(), code: None, error: None };
+    let version = match find().and_then(|x| x.version().map(|v| (x, v))) {
+        Ok((x, version)) => {
+            if let Err(e) = extract(&store, layout, &x, &version, progress, &mut out) {
+                out.error = Some(e);
+            }
+            Some(version)
+        }
+        Err(e) => {
+            out.error = Some(e);
+            None
+        }
+    };
+    let lock = op_lock_soon(layout)?;
+    let s = crate::botmode::settings::load_app(layout)?;
+    sweep(&store, &lock, &Policy::of(&s), None, 0, game_build(layout).as_deref(), version.as_deref())?;
+    Ok(out)
+}
+
+/// Runs the importer on the demos [`to_extract`] names and records each one's result.
+fn extract(store: &Store, layout: &Layout, x: &crate::Extractor, version: &str, progress: &dyn Fn(serde_json::Value), out: &mut LocalImport) -> Result<(), String> {
+    let ids = to_extract(store, version)?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut args: Vec<std::ffi::OsString> = vec!["--out".into(), local_dir()?.into()];
+    if let Some(m) = &x.mapdata {
+        args.extend(["--mapdata".into(), m.clone().into_os_string()]);
+    }
+    // a demo with more than one human is the user's by the SteamID64 the Valve import saved
+    if let Ok(Some(user)) = crate::valve_dir().and_then(|d| crate::valve_user(&d)) {
+        args.extend(["--user".into(), user.into()]);
+    }
+    args.extend(ids.iter().map(|id| store.dem(id).into_os_string()));
+    let run = x.run(&args, progress)?;
+    let rows = run.summary.as_ref().and_then(|s| s.get("results")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let lock = op_lock_soon(layout)?;
+    for row in rows {
+        let Some(id) = row.get("demo").and_then(|d| d.as_str()).filter(|id| ids.iter().any(|x| x == id)) else { continue };
+        let ok = row.get("ok").and_then(|v| v.as_bool()) == Some(true);
+        let reason = row.get("reason").and_then(|v| v.as_str());
+        let detail = row.get("errors").and_then(|e| e.get(0)).and_then(|e| e.as_str());
+        record_import(store, &lock, id, ok, reason, detail, version)?;
+        if ok {
+            out.extracted.push(id.to_string());
+        } else {
+            out.failed.push(id.to_string());
+        }
+    }
+    out.code = run.code;
+    out.error = run.error;
+    Ok(())
+}
+
+/// [`run_import`] in the app's process, with its state kept for `local_import_state` and its progress
+/// sent as "local-import-progress" events.
+fn run_tracked(app: &tauri::AppHandle) -> Result<LocalImport, String> {
     use tauri::Emitter;
     {
         let mut s = local_state();
@@ -902,64 +1090,31 @@ pub async fn import_local(app: tauri::AppHandle) -> Result<LocalImport, String> 
         s.running = true;
         s.at = None;
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let ctx = crate::botmode::Ctx::new(crate::botmode::Game::Steam, None)?;
-        let store = Store::of(&ctx.layout)?;
-        let probe = crate::botmode::process::SystemProbe;
-        let take_result = OpLock::acquire(&ctx.layout).and_then(|lock| take(&store, &ctx.layout, &probe, &lock, SystemTime::now()));
-        let (taken, take_error) = match take_result {
-            Ok(t) => (Some(t), None),
-            Err(e) => (None, Some(e)),
-        };
-        let mut out = LocalImport { taken, take_error, extracted: Vec::new(), failed: Vec::new(), code: None, error: None };
-        let x = crate::Extractor::find("local_import.py")?;
-        let version = x.version()?;
-        let ids = to_extract(&store, &version)?;
-        if !ids.is_empty() {
-            let mut args: Vec<std::ffi::OsString> = vec!["--out".into(), local_dir()?.into()];
-            if let Some(m) = &x.mapdata {
-                args.extend(["--mapdata".into(), m.clone().into_os_string()]);
-            }
-            // a demo with more than one human is the user's by the SteamID64 the Valve import saved
-            if let Ok(Some(user)) = crate::valve_dir().and_then(|d| crate::valve_user(&d)) {
-                args.extend(["--user".into(), user.into()]);
-            }
-            args.extend(ids.iter().map(|id| store.dem(id).into_os_string()));
-            let run = x.run(&args, &|ev| {
-                local_state().at = Some(ev.clone());
-                let _ = app.emit("local-import-progress", ev);
-            })?;
-            let rows = run.summary.as_ref().and_then(|s| s.get("results")).and_then(|r| r.as_array()).cloned().unwrap_or_default();
-            let lock = OpLock::acquire(&ctx.layout)?;
-            for row in rows {
-                let Some(id) = row.get("demo").and_then(|d| d.as_str()).filter(|id| ids.iter().any(|x| x == id)) else { continue };
-                let ok = row.get("ok").and_then(|v| v.as_bool()) == Some(true);
-                let reason = row.get("reason").and_then(|v| v.as_str());
-                let detail = row.get("errors").and_then(|e| e.get(0)).and_then(|e| e.as_str());
-                record_import(&store, &lock, id, ok, reason, detail, &version)?;
-                if ok {
-                    out.extracted.push(id.to_string());
-                } else {
-                    out.failed.push(id.to_string());
-                }
-            }
-            out.code = run.code;
-            out.error = run.error;
-        }
-        let lock = OpLock::acquire(&ctx.layout)?;
-        let s = crate::botmode::settings::load_app(&ctx.layout)?;
-        sweep(&store, &lock, &Policy::of(&s), None, 0, game_build(&ctx.layout).as_deref(), Some(&version))?;
-        Ok(out)
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r);
+    let result = crate::botmode::Ctx::new(crate::botmode::Game::Steam, None).and_then(|ctx| {
+        run_import(&ctx.layout, &crate::botmode::process::SystemProbe, &|ev| {
+            local_state().at = Some(ev.clone());
+            let _ = app.emit("local-import-progress", ev);
+        })
+    });
     let mut s = local_state();
     s.running = false;
     if let Ok(r) = &result {
         s.last = Some(r.clone());
     }
     result
+}
+
+/// The import the app runs at start, off the UI thread, for demos a session left in `replays\` or
+/// the store while the app was closed.
+pub fn on_app_start(app: tauri::AppHandle) {
+    let _ = std::thread::Builder::new().name("demos-import".into()).spawn(move || {
+        let _ = run_tracked(&app);
+    });
+}
+
+#[tauri::command]
+pub async fn import_local(app: tauri::AppHandle) -> Result<LocalImport, String> {
+    tauri::async_runtime::spawn_blocking(move || run_tracked(&app)).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -1137,14 +1292,14 @@ mod tests {
     fn recording_needs_the_floor_plus_a_match_free_and_says_why_it_is_off() {
         let s = AppSettings::default();
         // free space is shown rounded down to the tenth, so it never reads as more than there is
-        let r = recording(&s, Ok(94 * GB / 10 + GB / 20));
+        let r = recording(&s, Ok(94 * GB / 10 + GB / 20), None);
         assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: 9.4 GB free, floor 10 GB.")));
-        let r = recording(&s, Ok(10 * GB + GB / 2));
+        let r = recording(&s, Ok(10 * GB + GB / 2), None);
         assert_eq!(r.blocked.as_deref(), Some("Recording off this time: 10.5 GB free, and a match needs 1 GB above the 10 GB floor."));
-        let r = recording(&s, Ok(11 * GB));
+        let r = recording(&s, Ok(11 * GB), None);
         assert_eq!((r.tokens, r.blocked), (TOKENS.map(String::from).to_vec(), None));
         let off = AppSettings { record_demos: false, ..AppSettings::default() };
-        assert_eq!((recording(&off, Ok(500 * GB)).tokens.len(), recording(&off, Ok(0)).blocked), (0, None));
+        assert_eq!((recording(&off, Ok(500 * GB), None).tokens.len(), recording(&off, Ok(0), None).blocked), (0, None));
     }
 
     #[test]
@@ -1173,5 +1328,117 @@ mod tests {
         write(&dir.join(v).join("COMPLETE"), br#"{"match.parquet": 3}"#);
         let l = list_local_in(&s.0).unwrap();
         assert_eq!(l.files.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(), [format!("local/20261025T0835Z_de_dust2_abababab/{v}")]);
+    }
+
+    /// A demo in the store as a take leaves it: the file and its sidecar.
+    fn stored(store: &Store, id: &str, state: State) {
+        write(&store.dem(id), b"a demo");
+        store.write_meta(&meta(id, "2026-11-01T12:00:00Z", 6, "200", state)).unwrap();
+    }
+
+    #[test]
+    fn a_store_reached_through_a_junction_is_refused_for_every_read_and_write() {
+        // fails if a store is opened without checking demos\ and the folder above it: a delete through
+        // the junction removes the target's files, outside the store
+        let s = Scratch::new("demos-store-junction");
+        let layout = fake_game(&s);
+        let elsewhere = Store { root: s.0.join("elsewhere"), base: s.0.clone() };
+        stored(&elsewhere, "20261101T1200Z_de_dust2_00000001", State::Extracted);
+        junction(&s.0.join("demos"), &elsewhere.root);
+        let e = Store::of(&layout).err().expect("a junctioned demos folder is refused");
+        assert!(e.contains("junction"), "{e}");
+        assert!(Store::in_base(&s.0).is_err());
+
+        // the folder above the store, %APPDATA%\BotMatchStats, through a junction too
+        let real = s.0.join("real");
+        fs::create_dir_all(real.join("demos")).unwrap();
+        junction(&s.0.join("linked"), &real);
+        let through = Layout { csgo: layout.csgo.clone(), data: s.0.join("linked").join("data") };
+        assert!(Store::of(&through).err().expect("a junctioned base is refused").contains("junction"));
+        assert!(elsewhere.dem("20261101T1200Z_de_dust2_00000001").exists());
+    }
+
+    /// CS2 closed for the first `closed` checks, then running.
+    struct StartsAfter(std::sync::atomic::AtomicUsize, usize);
+    impl ProcessProbe for StartsAfter {
+        fn cs2_running(&self, _phase: Phase) -> Result<bool, String> {
+            Ok(self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= self.1)
+        }
+    }
+
+    #[test]
+    fn a_demo_that_changes_while_it_is_hashed_waits_and_a_cs2_started_meanwhile_stops_the_take() {
+        // fails if a take trusts one look at the file (it would store half a demo), or checks CS2 only
+        // once (it would move a demo out from under a CS2 that started during the take)
+        let s = Scratch::new("demos-growing");
+        let layout = fake_game(&s);
+        let src = layout.target(&format!("replays/{AUTO}"));
+        write(&src, b"recording");
+        let store = Store::of(&layout).unwrap();
+        let lock = OpLock::acquire(&layout).unwrap();
+        let grows = |p: &Path| {
+            fs::OpenOptions::new().append(true).open(p).unwrap().write_all(b" more").unwrap();
+            hash::file(p)
+        };
+        let t = take_with(&store, &layout, &CLOSED, &lock, later(), &grows).unwrap();
+        assert_eq!((t.taken.len(), t.waiting), (0, 1));
+        assert!(src.exists() && store.metas().unwrap().is_empty());
+
+        let starts = StartsAfter(std::sync::atomic::AtomicUsize::new(0), 1);
+        assert!(take(&store, &layout, &starts, &lock, later()).unwrap_err().contains("CS2 is running"));
+        assert!(src.exists() && store.metas().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_ledger_record_cut_off_by_a_crash_is_dropped_and_the_drop_recorded() {
+        // fails if the next record is appended after the cut-off one: the two run into one line that
+        // parses as neither
+        let s = Scratch::new("demos-ledger");
+        let layout = fake_game(&s);
+        let store = Store::of(&layout).unwrap();
+        store.ensure().unwrap();
+        fs::write(store.ledger(), "{\"at\":\"2026-11-01T12:00:00Z\",\"id\":\"a\",\"event\":\"taken\",\"reason\":null}\n{\"at\":\"2026-11").unwrap();
+        store.log("20261101T1200Z_de_dust2_00000001", "extracted", None).unwrap();
+        let text = fs::read_to_string(store.ledger()).unwrap();
+        let events: Vec<String> = text.lines().map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["event"].as_str().unwrap().to_string()).collect();
+        assert_eq!(events, ["taken", "ledger_repaired", "extracted"]);
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn steam_options_that_undo_gotv_turn_recording_off_and_say_which() {
+        // fails if Steam's stored options are not read: Steam adds them after the app's tokens, so
+        // "+tv_enable 0" there turns recording off while the dialog says it is on
+        let s = AppSettings::default();
+        let r = recording(&s, Ok(500 * GB), Some("-novid +tv_enable 0"));
+        assert_eq!((r.tokens.len(), r.blocked.as_deref()), (0, Some("Recording off this time: your Steam launch options set tv_enable 0.")));
+        assert_eq!(steam_conflict("+TV_MAXCLIENTS 5 -high"), Some("tv_maxclients 5".to_string()));
+        assert_eq!(steam_conflict("+tv_autorecord"), Some("tv_autorecord".to_string()));
+        // the same values as the app's, or none of the three, leave recording on
+        assert_eq!(steam_conflict("-novid +tv_enable 1 +tv_autorecord 1 +tv_maxclients 0 +fps_max 0"), None);
+        assert_eq!(recording(&s, Ok(500 * GB), Some("-novid")).tokens.len(), TOKENS.len());
+    }
+
+    #[test]
+    fn without_the_importer_an_import_still_takes_the_demos_and_sweeps() {
+        // fails if a missing importer stops the import before its take and sweep: with recording on by
+        // default, demos would pile up in replays\ and past the cap
+        let s = Scratch::new("demos-no-importer");
+        let layout = fake_game(&s);
+        crate::botmode::settings::set_demo_policy(&layout, crate::botmode::settings::DemoPolicy { cap_gb: 20.0, floor_gb: 0.0, keep_last: 0 }, None).unwrap();
+        write(&layout.target(&format!("replays/{AUTO}")), b"a recorded match");
+        let store = Store::of(&layout).unwrap();
+        let old = "20261101T1200Z_de_dust2_00000001";
+        stored(&store, old, State::Extracted);
+        let settled = SystemTime::now() - Duration::from_secs(120);
+        fs::File::options().write(true).open(layout.target(&format!("replays/{AUTO}"))).unwrap().set_modified(settled).unwrap();
+        let r = run_import_with(&layout, &CLOSED, &|| Err("The importer is not installed".into()), &|_| {}).unwrap();
+        assert_eq!(r.error.as_deref(), Some("The importer is not installed"));
+        let taken = r.taken.unwrap().taken;
+        assert_eq!(taken.len(), 1);
+        // the new demo is kept until it is extracted; the extracted one nothing keeps is gone
+        let left: Vec<String> = store.metas().unwrap().into_iter().map(|m| m.id).collect();
+        assert_eq!(left, taken);
+        assert!(!store.dem(old).exists());
     }
 }

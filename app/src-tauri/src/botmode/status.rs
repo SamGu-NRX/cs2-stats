@@ -257,6 +257,7 @@ pub fn status(
         }
     }
     let app = settings::load_app(layout)?;
+    let recording = crate::demos::recording(&app, crate::demos::launch_free(layout), steam_launch_options.as_deref());
     let (difficulty, active_profile) = settings::active_profile(&layout.csgo)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),
@@ -271,7 +272,7 @@ pub fn status(
         active_profile,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
         steam_launch_options,
-        recording: crate::demos::recording(&app, crate::demos::launch_free(layout)),
+        recording,
         launch_options: app.launch_options,
         components: comps,
         protected: scan.protected,

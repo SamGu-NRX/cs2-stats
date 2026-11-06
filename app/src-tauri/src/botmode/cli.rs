@@ -114,6 +114,11 @@ fn supervise_session(a: &Args, ctx: &Ctx, probe: &SystemProbe) -> i32 {
     let run_id = a.run.clone().unwrap_or_else(session::new_run_id);
     let steam = ctx.steam_config();
     let status = session::supervise_session(&ctx.layout, probe, &monitor::Windows, steam.as_ref().ok(), mode, &run_id, &launch::spawn_steam);
+    // CS2 has exited and the lease is free: take, extract and sweep the demos the session recorded.
+    // The take checks again that CS2 is closed. Its outcome is in the store's sidecars and ledger.
+    if matches!(status.outcome, Some(monitor::Outcome::Exited { .. })) {
+        let _ = crate::demos::run_import(&ctx.layout, probe, &|_| {});
+    }
     if status.state == "done" && status.left_on.is_none() {
         0
     } else {
