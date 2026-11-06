@@ -2,6 +2,7 @@
 // numbers (K, D, KAST, ADR, opening K-D, multi-kills, traded deaths) are checked against it in
 // hltv-exact.test.ts and VALIDATION.md; the rest state their own definition.
 import { enemyHit, hitDamage, type Ctx } from "./derive";
+import type { KillFact, Measures } from "./facts";
 import { SWING_TRADE_WINDOW_S } from "./rating3";
 import { kastRound, liveLeaves, survives } from "./rules";
 
@@ -95,5 +96,35 @@ export function scoreboard(c: Ctx): void {
       m.savedTeammate = saved.get(p.pi)?.size ?? 0;
       for (const s of saved.values()) if (s.has(p.pi)) m.savedByTeammate++;
     }
+    takeovers(c, ri, list, dmgRows);
+  }
+}
+
+/**
+ * The kills, headshot kills, deaths and enemy damage a human made in a bot's body (a takeover), which
+ * the counts above credit to the bot, as the game's round stats do. Each is counted once more on both
+ * players, takeover* on the driver and driven* on the body, so a view can move it to the driver
+ * without deriving again (ui/data/credit.ts). It moves only between two players with a row this round,
+ * so moving it leaves every team total as it was.
+ */
+function takeovers(c: Ctx, ri: number, list: KillFact[], dmgRows: number[]): void {
+  const row = c.pr[ri];
+  const move = (driver: number | null, body: number | null, f: (to: Measures, from: Measures) => void) => {
+    const to = driver === null ? null : row[driver];
+    const from = body === null ? null : row[body];
+    if (to && from && to !== from) f(to.m, from.m);
+  };
+  for (const k of list) {
+    if (k.enemy) move(k.killerController, k.killer, (to, from) => {
+      to.takeoverKills++;
+      from.drivenKills++;
+      if (k.headshot) { to.takeoverHsKills++; from.drivenHsKills++; }
+    });
+    move(k.victimController, k.victim, (to, from) => { to.takeoverDeaths++; from.drivenDeaths++; });
+  }
+  const d = c.t.damages;
+  for (const i of dmgRows) {
+    const x = hitDamage(c.t, i);
+    move(c.idOf(d.attacker_controller_steamid[i]), c.idOf(d.attacker_steamid[i]), (to, from) => { to.takeoverDmg += x; from.drivenDmg += x; });
   }
 }
