@@ -43,10 +43,10 @@ export function Moved({ l, f, game, quiet = false, children }: {
   if (!l.moved || !s) return <span key={credit} className={`moved${fade}`}>{children}</span>;
   // the user's line gains what a bot's body loses; a line never does both
   const gained = s.kills + s.deaths + s.dmg > 0;
-  if (quiet) return <span key={credit} className={`moved moved--on${fade}`}>{children}</span>;
+  if (quiet) return <span key={credit} className={`moved moved--on${fade}`} data-f={f}>{children}</span>;
   const tip = `${gained ? "Includes your play in bots you took over" : "Without your play in this bot's body"}. The game's count: ${game}.`;
   return (
-    <span key={credit} className={`moved moved--on${fade}`} data-tip={tip} tabIndex={0}>
+    <span key={credit} className={`moved moved--on${fade}`} data-f={f} data-tip={tip} tabIndex={0}>
       {children}<span className="sr-only">, {gained ? "with" : "without"} takeover play; the game's count is {game}</span>
     </span>
   );
