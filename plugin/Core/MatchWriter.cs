@@ -134,9 +134,9 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
             WriteFile(_store, inProgress, inProgress: true);
             return;
         }
-        if (_store.RoundCount == 0)
+        if (_store.NothingPlayed)
         {
-            Post(MessageLevel.Info, $"Capture {_store.Meta.Id} ended ({_store.Meta.Status}) with no rounds; nothing written.");
+            Post(MessageLevel.Info, $"Capture {_store.Meta.Id} ended ({_store.Meta.Status}) with no round played; nothing written.");
         }
         else
         {
@@ -199,7 +199,7 @@ public sealed class MatchWriter : IRecorderSink, IDisposable
                 }
                 m.Status = "abandoned";
                 m.EndUtc = MatchCodec.IsoUtc(File.GetLastWriteTimeUtc(file));
-                if (_scratch.RoundCount > 0)
+                if (!_scratch.NothingPlayed)
                 {
                     string dest = Path.Combine(MatchesDir, m.Year, m.BaseName + ".json.gz");
                     WriteFile(_scratch, dest, inProgress: false);

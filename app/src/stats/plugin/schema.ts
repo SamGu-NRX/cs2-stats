@@ -46,7 +46,8 @@ export interface Players {
   key: string[];
   name: string[];
   isBot: boolean[];
-  startSide: Side[];
+  /** null for a player who never had a side, as in a session no match was played in */
+  startSide: (Side | null)[];
 }
 
 export interface Rounds {
