@@ -246,6 +246,11 @@ describe("rows made in a bot's body", () => {
     const m = round(kills, [], { grenades: { ri: [0, 0], tick: [1250, 1350], thrower: [H, H], type: ["he", "he"], pos: [[0, 0, 0], [0, 0, 0]] }, throws: undefined });
     const t = pluginToTables(m);
     expect([t.grenade_throws!.tick, t.grenade_throws!.steamid.map((x) => NAME[x!])]).toEqual([[1350], ["A"]]);
+    // fails if grenades rows that link a throw while the file has no throw log make the adapter read the
+    // missing log (it would throw): the links name nothing, so the result is the same
+    const linked = round(kills, [], { grenades: { ri: [0, 0], tick: [1250, 1350], thrower: [H, H], type: ["he", "he"], pos: [[0, 0, 0], [0, 0, 0]], throw: [0, 1] }, throws: undefined });
+    const tl = pluginToTables(linked);
+    expect([tl.grenade_throws!.tick, tl.grenade_throws!.steamid.map((x) => NAME[x!])]).toEqual([[1350], ["A"]]);
   });
 
   it("take no grenade kill with kBody null as evidence of the human's own body", () => {

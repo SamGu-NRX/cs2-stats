@@ -280,6 +280,20 @@ describe("scores in a round the human sat out", () => {
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
   });
 
+  it("use no teammate who never shared a round with the human, since nothing shows its team", () => {
+    // fails if a player with the human's starting side but no round where both have a side counts as a
+    // teammate: the human plays only round 1 and the teammate only rounds 2 and 3, so round 2 stays unknown
+    const m = file([true, true, true], [3, 3, 3], { maxrounds: 6 });
+    m.players = { ...m.players, key: [...m.players.key, "B:mate"], name: [...m.players.name, "mate"], isBot: [...m.players.isBot, true], startSide: [...m.players.startSide, 3] };
+    m.rounds.equip = [0, 1, 2].map(() => [4000, 4000, 4000]);
+    m.rounds.money = [0, 1, 2].map(() => [800, 800, 800]);
+    m.rounds.side = [[3, null, null], [null, null, 3], [null, null, 3]];
+    expect(roundResults(m).winSide[1]).toBeNull();
+    // with one shared round on the same side, the same teammate vouches for round 2
+    m.rounds.side[0] = [3, null, 3];
+    expect(roundResults(m).winSide[1]).toBe(3);
+  });
+
   it("name each round's teams from the side the human's team played, so derive keeps every player on his team", () => {
     // fails if a round the human sat out names the opponents as CT: derive reads the CT team from that
     // name, which would put his CT teammate on the other team and flip the round's team mapping
