@@ -12,6 +12,7 @@ import type { Careers, Line, Values } from "../../worker/protocol";
 import { fmtAdr, fmtDec, fmtDeg, fmtInt, fmtMoney, fmtMs, fmtPct, fmtRating, fmtSecs, plural } from "../lib/format";
 import type { MatchEntry } from "./match";
 import { isProFile, sourceOf } from "./sources";
+import { pairing } from "./local";
 import { metric, ratingInfo, winProbInfo } from "./meta";
 import type { AttributeId } from "./proPack";
 
@@ -328,8 +329,14 @@ export const isFinished = (e: MatchEntry) => e.match.complete;
  */
 export const isListed = (s: MatchEntry) => s.activity;
 
-/** What Matches lists: the matches in the filter that isListed keeps. */
-export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter(isListed);
+/**
+ * A plugin file paired with the demo CS2 recorded of the same match (data/local.ts): the demo entry is
+ * that match, so the plugin entry is in no list but aim's.
+ */
+export const isPairedPlugin = (all: MatchEntry[], e: MatchEntry) => pairing(all).byPlugin.has(e.file);
+
+/** What Matches lists: the matches in the filter that isListed keeps, a paired plugin file left out. */
+export const listedEntries = (all: MatchEntry[], map: string | null) => filterEntries(all, map).filter((e) => isListed(e) && !isPairedPlugin(all, e));
 
 /** The result is known: some round has a winner. A 0:0 with unknown winners is no draw, so it stays out of W-L. */
 export const hasKnownResult = (e: MatchEntry) => e.score.us + e.score.them > 0;
@@ -349,11 +356,26 @@ export const careerEntries = (all: MatchEntry[], map: string | null): OwnEntry[]
  * The matches Career aim reads: every one of the user's own matches that holds shots, wingman and
  * unfinished ones included. Aim does not depend on team size, the round limit, the result or the
  * kill-by-kill coverage that keep a match out of career totals (careerEntries).
+ *
+ * A match recorded both ways counts once here too. Aim keeps the plugin entry when it has shots: only
+ * the plugin's carry each shot's aim error, target and whether it was on screen. Otherwise it keeps the
+ * demo entry.
  */
-export const aimEntries = (all: MatchEntry[], map: string | null): OwnEntry[] => listedEntries(all, map).filter(isOwn).filter((s) => s.hasAim);
+export function aimEntries(all: MatchEntry[], map: string | null): OwnEntry[] {
+  const p = pairing(all);
+  const byFile = new Map(all.map((e) => [e.file, e]));
+  const pluginAim = (file: string) => { const e = byFile.get(file); return !!e && isListed(e) && isOwn(e) && e.hasAim; };
+  return filterEntries(all, map).filter(isListed).filter(isOwn).filter((s) => {
+    if (!s.hasAim) return false;
+    const asPlugin = p.byPlugin.get(s.file), asDemo = p.byDemo.get(s.file);
+    if (asPlugin) return true;
+    if (asDemo) return !pluginAim(asDemo.plugin);
+    return true;
+  });
+}
 
-/** Matches that count in a win-loss record: the user's own finished ones. A thin log still has a real result. */
-export const recordEntries = (list: MatchEntry[]): OwnEntry[] => list.filter(isOwn).filter((s) => isFinished(s) && hasKnownResult(s));
+/** Matches that count in a win-loss record: the user's own finished ones, a paired plugin file left out. A thin log still has a real result. */
+export const recordEntries = (list: MatchEntry[]): OwnEntry[] => list.filter(isOwn).filter((s) => isFinished(s) && hasKnownResult(s) && !isPairedPlugin(list, s));
 
 /** Why a match is left out of the career, for its row's tooltip; null when it counts. */
 export function notCountedText(e: MatchEntry): string | null {

@@ -11,7 +11,8 @@ import { DERIVE_VERSION } from "../stats/facts";
 // 2: MatchEntry.kills, 3: MatchEntry.activity, 4: a pro demo's entry has no recording player (you and
 // line null); a version-3 store holds a NoEntry record for every pro map, which must not stand
 // 5: a recording in which no match was played (views.ts noMatch) has an entry instead of a NoEntry record
-export const ENTRY_VERSION = 5;
+// 6: MatchEntry.freeze, the freeze-end ticks a recorded demo is paired by (data/local.ts)
+export const ENTRY_VERSION = 6;
 
 // A Valve match's facts are derived from the user's point of view (FileEntry.pov), so a different user is a
 // different key; a pro map's come from the library it was listed from (FileEntry.library), so another

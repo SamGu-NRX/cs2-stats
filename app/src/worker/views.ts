@@ -95,6 +95,7 @@ export function entryOf(file: string, origin: string, f: MatchFacts): MatchEntry
     hasAim: f.aim.some((a) => a.k === "shots"), hasPos: f.pr.some((r) => r.spawn !== null),
     shots: s ? s.aim.shots : 0, kills: f.kills.length, line: s && lineOf(s), played: f.players.map((p) => p.id).filter((id) => playedMatch(f, id)),
     activity: !empty && (f.rounds.some((r) => r.winner !== null) || f.kills.length > 0 || f.pr.some((r) => (r.m.dmg ?? 0) > 0)),
+    freeze: f.rounds.flatMap((r): [number, number][] => (r.freezeEndTick === null || f.match.totalsOnly.includes(r.number) ? [] : [[r.number, r.freezeEndTick]])),
   };
 }
 

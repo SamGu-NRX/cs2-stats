@@ -1,4 +1,4 @@
-// Where a match came from, and what that source can and cannot support. Four sources exist:
+// Where a match came from, and what that source can and cannot support. These sources exist:
 // - recorded: written by the capture plugin (aim, movement positions, economy, utility purchases);
 // - converted: an older console log converted to the plugin format (no aim, no movement;
 //   rounds held as totals only are left out);
@@ -8,11 +8,15 @@
 //   are never part of the user's career (data/engine.ts isOwn);
 // - synthetic: the generated demo match (?demo=synthetic);
 // - valve: one of the user's Valve matchmaking demos, extracted by extractor/valve_import.py
-//   (match.source "valve").
+//   (match.source "valve");
+// - local: a demo CS2 recorded during one of the user's Bot Mode matches, extracted by
+//   extractor/local_import.py ("local/<demo id>/<version>" paths, host.ts). Its tables say source
+//   "local", as the plugin adapter's do, so the path decides. When it pairs with a plugin file
+//   (data/local.ts), it is the match and the plugin file drops out of career views (engine.ts).
 import type { MatchEntry } from "./match";
 import { CACHE_TOO_NEW } from "../../worker/protocol";
 
-export type SourceId = "recorded" | "converted" | "pro" | "synthetic" | "valve";
+export type SourceId = "recorded" | "converted" | "pro" | "synthetic" | "valve" | "local";
 
 export interface SourceInfo {
   id: SourceId;
@@ -27,11 +31,18 @@ export interface SourceInfo {
  */
 export const isProFile = (file: string) => file.startsWith("pro/") || file.startsWith("dev/");
 
-export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic", valve: "Valve" };
+/** A recorded demo's tables: local_import.py's output as host.ts lists it. */
+export const isLocalFile = (file: string) => file.startsWith("local/");
 
-/** From the file's path (a pro demo), the match's source (a Valve demo), the plugin's own label for the file (env.plugin), and whether it holds shots and positions. */
+export const SOURCE_LABEL: Record<SourceId, string> = { recorded: "Recorded", converted: "Converted log", pro: "Pro demo", synthetic: "Synthetic", valve: "Valve", local: "Recorded demo" };
+
+/** From the file's path (a pro or recorded demo), the match's source (a Valve demo), the plugin's own label for the file (env.plugin), and whether it holds shots and positions. */
 export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "hasPos" | "match">): SourceInfo {
   if (isProFile(e.file)) return { id: "pro", label: SOURCE_LABEL.pro, missing: [] };
+  if (isLocalFile(e.file)) {
+    if (e.match.source !== "local") throw new Error(`${e.file}: a recorded demo's folder holds a "${e.match.source}" match`);
+    return { id: "local", label: SOURCE_LABEL.local, missing: [] };
+  }
   const id: SourceId = e.match.source === "valve" ? "valve" : e.origin === "legacy-convert" ? "converted" : e.origin === "synthetic-demo" ? "synthetic" : "recorded";
   if (id === "converted") return { id, label: SOURCE_LABEL[id], missing: ["aim", "movement"] };
   const missing: string[] = [];
@@ -41,16 +52,16 @@ export function sourceOf(e: Pick<MatchEntry, "file" | "origin" | "hasAim" | "has
 }
 
 /** Which stats each source supports, for Data & settings. A string is a partial yes, and says what is missing. */
-export const SUPPORT: { stat: string; recorded: boolean | string; converted: boolean | string; pro: boolean | string }[] = [
-  { stat: "Scoreboard: kills, deaths, assists, ADR, KAST, rating", recorded: true, converted: true, pro: true },
-  { stat: "Round swing", recorded: true, converted: "Only rounds where every player's equipment is known", pro: true },
-  { stat: "Kill-by-kill rounds", recorded: true, converted: "Rounds the log holds only as the game's totals are left out of every number", pro: true },
-  { stat: "Economy and buy types", recorded: true, converted: true, pro: true },
-  { stat: "Utility thrown and flashes", recorded: true, converted: true, pro: true },
-  { stat: "Kill and death positions", recorded: true, converted: true, pro: true },
-  { stat: "Accuracy and first bullet", recorded: true, converted: false, pro: true },
+export const SUPPORT: { stat: string; recorded: boolean | string; converted: boolean | string; pro: boolean | string; local: boolean | string }[] = [
+  { stat: "Scoreboard: kills, deaths, assists, ADR, KAST, rating", recorded: true, converted: true, pro: true, local: true },
+  { stat: "Round swing", recorded: true, converted: "Only rounds where every player's equipment is known", pro: true, local: true },
+  { stat: "Kill-by-kill rounds", recorded: true, converted: "Rounds the log holds only as the game's totals are left out of every number", pro: true, local: true },
+  { stat: "Economy and buy types", recorded: true, converted: true, pro: true, local: true },
+  { stat: "Utility thrown and flashes", recorded: true, converted: true, pro: true, local: true },
+  { stat: "Kill and death positions", recorded: true, converted: true, pro: true, local: true },
+  { stat: "Accuracy and first bullet", recorded: true, converted: false, pro: true, local: true },
   // plugin files carry no view angles or mesh line of sight, which these timings need
-  { stat: "Time to damage, reaction and crosshair placement", recorded: false, converted: false, pro: true },
+  { stat: "Time to damage, reaction and crosshair placement", recorded: false, converted: false, pro: true, local: true },
 ];
 
 /** Notes on rows, shown as footnotes under the support table. */

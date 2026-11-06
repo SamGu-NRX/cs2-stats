@@ -88,6 +88,7 @@ export function SourceBadge({ s, compact }: { s: SourceInfo; compact?: boolean }
     : s.id === "synthetic" ? "Generated demo data, not a real match."
     : s.id === "pro" ? "A pro match demo. It opens like any match but never counts toward your career."
     : s.id === "valve" ? "Your Valve matchmaking demo, extracted from the game's replays folder."
+    : s.id === "local" ? "The demo CS2 recorded of your Bot Mode match, extracted: aim with view angles, movement and economy. When the plugin recorded the same match, this is the one that counts."
     : s.missing.length ? `Recorded by the capture plugin, without ${s.missing.join(" or ")} data.` : "Recorded by the capture plugin: aim, movement, economy and utility.";
   return (
     <span className="src" data-src={s.id} data-tip={tip} tabIndex={0}>

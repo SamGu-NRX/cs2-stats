@@ -40,6 +40,12 @@ export interface MatchEntry {
   line: Line | null;
   /** ids of the players who played a round of the match (stats/roster.ts playedMatch) */
   played: string[];
+  /**
+   * [round number, freeze-end tick] for each round the file holds in full, in round order: rounds held
+   * only as totals (MatchInfo.totalsOnly, the plugin's partial rounds) and rounds with no freeze end are
+   * left out. data/local.ts pairs a recorded demo with its plugin file by the gaps between these ticks.
+   */
+  freeze: [number, number][];
 }
 
 /**
