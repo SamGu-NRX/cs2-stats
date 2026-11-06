@@ -1,6 +1,7 @@
 // Round winners rebuilt from the scores (results.ts), on synthetic two-player files: the human (pi 0)
 // and one opponent (pi 1), whose score is [T, CT] at the start of each round.
 import { describe, expect, it } from "vitest";
+import { pluginToTables } from "./adapter";
 import { howFromEvidence, roundResults } from "./results";
 import type { MatchFile, Side } from "./schema";
 
@@ -244,6 +245,8 @@ describe("scores in a round the human sat out", () => {
     m.rounds.equip = m.rounds.side.map(() => [4000, 4000, 4000]);
     m.rounds.money = m.rounds.side.map(() => [800, 800, 800]);
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([3, 3]);
+    // fails if the match score skips a rebuilt round the human sat out: all three go to his team
+    expect(JSON.parse(pluginToTables(m).match.extra[0]!).final_score).toEqual([3, 0]);
     m.rounds.side[1] = [null, 2, null];
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
   });

@@ -18,7 +18,7 @@ const count = (x: number | null | undefined): x is number => Number.isInteger(x)
  * The side the human's team played in each of `rounds`, read from one player of that team (by starting
  * side, which fixes the team) who has a side in all of them, the human first; null when none has.
  */
-function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
+export function teamSides(m: MatchFile, rounds: number[]): Side[] | null {
   const start = m.players.startSide[m.human];
   const team = [m.human, ...m.players.startSide.flatMap((s, pi) => (s === start && pi !== m.human ? [pi] : []))];
   for (const pi of team) {

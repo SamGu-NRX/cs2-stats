@@ -20,7 +20,9 @@ import type { Side } from "./tables";
 // 38: KAST's survival (the scoreboard's and the eco-adjusted) does not end at a world death (rules.ts worldDeath)
 // 39: plugin files credit what a human does in a takeover bot's body to the bot (plugin/bodies.ts) and
 // rebuild the null winners of overtime and unknown result codes from the scores (plugin/results.ts)
-export const DERIVE_VERSION = 39;
+// 40: plugin files resolve a takeover body through one timeline with a no-body state, respawns read
+// from the human's alive position rows (plugin/bodies.ts); also drops facts cached from the 39 preview
+export const DERIVE_VERSION = 40;
 
 export interface MatchInfo {
   id: string;

@@ -8,7 +8,8 @@
 // and uses it as the game's value off the mismatch list. A rebuilt tally that differs from a mismatch
 // row's "ours" is counted and printed, since the comparison then rests on a wrong reconstruction.
 // Rounds where the plugin could not read every player are skipped, because the file does not say which
-// players it read (recon-tally.ts coverage).
+// players it read, and so are rounds whose coverage this tool cannot read; both are counted in the
+// output (recon-tally.ts coverage).
 //
 // Damage agrees as the plugin's own check does (plugin/Core/Recon.cs): the game's figure may exceed
 // ours by up to one HP per hit. Off the mismatch list the game's figure is known only to lie in
@@ -45,6 +46,7 @@ const FIELDS: Field[] = ["k", "d", "a", "dmg"];
 const total = Object.fromEntries(FIELDS.map((f) => [f, { ok: 0, bad: 0, listedOk: 0, listed: 0 }])) as Record<Field, { ok: number; bad: number; listedOk: number; listed: number }>;
 const rules = { known: 0, agree: 0, disagree: 0, undecided: 0, finalKnown: 0, finalAgree: 0, finalDisagree: 0, finalUndecided: 0, howKnown: 0, howAgree: 0, howDisagree: 0, howUndecided: 0, recovered: 0, howRecovered: 0 };
 let skippedRounds = 0;
+let unknownRounds = 0;
 let badTally = 0;
 
 const fmt = (x: number) => x.toFixed(1);
@@ -99,9 +101,10 @@ for (const file of files.sort()) {
   const rr = m.recon?.rounds;
   for (let j = 0; j < (rr?.ri.length ?? 0); j++) {
     const ri = rr!.ri[j];
-    const { checked, expected } = coverage(rr!, j);
-    if (!checked) continue;
-    if (checked !== expected) { skippedRounds++; continue; }
+    const read = coverage(rr!, j);
+    if (read === "none") continue;
+    if (read === "partial") { skippedRounds++; continue; }
+    if (read === "unknown") { unknownRounds++; continue; }
     m.rounds.side[ri].forEach((side, pi) => {
       if (side === null) return;
       const a = ours.get(`${ri}:${pi}`) ?? { k: 0, d: 0, a: 0, dmg: 0, hits: 0 };
@@ -137,7 +140,7 @@ for (const x of FIELDS) {
   const t = total[x];
   console.log(`  ${x}: ${t.ok} of ${t.ok + t.bad} agree; on the mismatch list ${t.listedOk} of ${t.listed}, off it ${t.ok - t.listedOk} of ${t.ok + t.bad - t.listed}`);
 }
-console.log(`  rounds skipped because not every player was read: ${skippedRounds}; mismatch rows the rebuilt tally does not reproduce: ${badTally}`);
+console.log(`  rounds skipped because not every player was read: ${skippedRounds}; because the file's recon coverage could not be read: ${unknownRounds}; mismatch rows the rebuilt tally does not reproduce: ${badTally}`);
 console.log("\nround-result recovery checked on rounds the file holds:");
 console.log(`  from the next round's score: ${rules.agree} agree, ${rules.disagree} disagree, ${rules.undecided} undecided, of ${rules.known}`);
 console.log(`  final round of a complete match: ${rules.finalAgree} agree, ${rules.finalDisagree} disagree, ${rules.finalUndecided} undecided, of ${rules.finalKnown}`);

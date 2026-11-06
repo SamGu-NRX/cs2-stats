@@ -57,17 +57,26 @@ export function tallies(m: MatchFile): (ri: number, pi: number) => Tally {
 
 type ReconRounds = NonNullable<NonNullable<MatchFile["recon"]>["rounds"]>;
 
+/** How much of a recon round the plugin compared: every player, some, none, or a form this tool cannot read. */
+export type Coverage = "all" | "partial" | "none" | "unknown";
+
 /**
- * Players read, and players expected, in recon round j: checkedPlayers and expectedPlayers, or in early
- * plugin builds `checked` (a count, or true) and `missing` (a count, or the players not read). `true`
- * with nothing missing means every player was read, returned as 1 of 1.
+ * The coverage of recon round j: from checkedPlayers and expectedPlayers, or in early plugin builds
+ * from `checked` (a count, or a flag) and `missing` (a count, or the players not read). A count or flag
+ * without the other half says nothing about the players left out, so it is unknown, as is a round
+ * with neither form.
  */
-export function coverage(rr: ReconRounds, j: number): { checked: number; expected: number } {
-  if (rr.checkedPlayers) return { checked: rr.checkedPlayers[j] ?? 0, expected: rr.expectedPlayers?.[j] ?? 0 };
+export function coverage(rr: ReconRounds, j: number): Coverage {
+  const missingOf = (x: unknown) => (Array.isArray(x) ? x.length : typeof x === "number" ? x : null);
+  if (rr.checkedPlayers) {
+    const checked = rr.checkedPlayers[j];
+    const expected = rr.expectedPlayers?.[j];
+    if (typeof checked !== "number" || typeof expected !== "number") return "unknown";
+    return checked === 0 ? "none" : checked < expected ? "partial" : "all";
+  }
   const c = rr.checked?.[j];
-  const miss = rr.missing?.[j];
-  const missing = Array.isArray(miss) ? miss.length : typeof miss === "number" ? miss : miss == null ? 0 : NaN;
-  if (typeof c === "number") return { checked: c, expected: c + missing };
-  if (c === true && missing === 0) return { checked: 1, expected: 1 };
-  return { checked: 0, expected: 0 };
+  if (c === false || c === 0) return "none";
+  const missing = missingOf(rr.missing?.[j]);
+  if ((typeof c !== "number" && c !== true) || missing === null) return "unknown";
+  return missing === 0 ? "all" : "partial";
 }

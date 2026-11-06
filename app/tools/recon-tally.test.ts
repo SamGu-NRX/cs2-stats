@@ -50,13 +50,21 @@ describe("the rebuilt recon tally", () => {
 
 describe("recon round coverage", () => {
   it("reads checkedPlayers and expectedPlayers, and the early checked and missing fields", () => {
-    // fails if a fully read round in an early file is skipped as partly read, or a partly read one counts as full
-    expect(coverage({ ri: [0], checkedPlayers: [9], expectedPlayers: [10] }, 0)).toEqual({ checked: 9, expected: 10 });
-    expect(coverage({ ri: [0], checked: [10], missing: [0] }, 0)).toEqual({ checked: 10, expected: 10 });
-    expect(coverage({ ri: [0], checked: [10] }, 0)).toEqual({ checked: 10, expected: 10 });
-    expect(coverage({ ri: [0], checked: [9], missing: [[4]] }, 0)).toEqual({ checked: 9, expected: 10 });
-    expect(coverage({ ri: [0], checked: [true], missing: [[]] }, 0)).toEqual({ checked: 1, expected: 1 });
-    expect(coverage({ ri: [0], checked: [true], missing: [2] }, 0)).toEqual({ checked: 0, expected: 0 });
-    expect(coverage({ ri: [0], checked: [false] }, 0)).toEqual({ checked: 0, expected: 0 });
+    // fails if a fully read round in an early file is skipped as partly read, a partly read one counts
+    // as full, or a round whose coverage the file does not state is taken as read or as not compared
+    const c = (rr: Partial<Parameters<typeof coverage>[0]>) => coverage({ ri: [0], ...rr }, 0);
+    expect(c({ checkedPlayers: [10], expectedPlayers: [10] })).toBe("all");
+    expect(c({ checkedPlayers: [9], expectedPlayers: [10] })).toBe("partial");
+    expect(c({ checkedPlayers: [0], expectedPlayers: [10] })).toBe("none");
+    expect(c({ checkedPlayers: [9] })).toBe("unknown");
+    expect(c({ checked: [10], missing: [0] })).toBe("all");
+    expect(c({ checked: [9], missing: [[4]] })).toBe("partial");
+    expect(c({ checked: [true], missing: [[]] })).toBe("all");
+    expect(c({ checked: [true], missing: [2] })).toBe("partial");
+    expect(c({ checked: [false] })).toBe("none");
+    expect(c({ checked: [10] })).toBe("unknown");
+    expect(c({ checked: [true] })).toBe("unknown");
+    expect(c({ checked: ["yes"] as unknown as boolean[], missing: [0] })).toBe("unknown");
+    expect(c({})).toBe("unknown");
   });
 });
