@@ -87,6 +87,10 @@ public sealed class Recorder
     private bool _pendingImpactSet;
     private double _shotEyeX, _shotEyeY, _shotEyeZ, _shotPitch, _shotYaw;
     private int _eventWinner = Nil.V, _eventReason = Nil.V;
+    /// <summary>round_end was seen for the current round, so its result can be sealed even without the delayed Finalize.</summary>
+    private bool _roundEnded;
+    /// <summary>The resumed file's last takeovers row, applied by the next BeginRound of the same round.</summary>
+    private int _resumeRi = Nil.V, _resumePi = Nil.V, _resumeBody = Nil.V;
 
     // Utility links. Row indices are match-wide: rows handed off earlier plus the index in the current buffer.
     private const int DetTypes = 5;
@@ -154,6 +158,7 @@ public sealed class Recorder
         RoundActive = false;
         Ri = Nil.V;
         LastRound = Nil.V;
+        _resumeRi = Nil.V;
         Perf.Reset();
     }
 
@@ -169,6 +174,8 @@ public sealed class Recorder
         _unknownResults.AddRange(meta.UnknownResults);
         _burst = new BurstTracker(meta.NextBurst);
         LastRound = meta.RoundCount > 0 ? meta.RoundCount - 1 : Nil.V;
+        var t = meta.LastTakeover;
+        (_resumeRi, _resumePi, _resumeBody) = (t.Ri, t.Pi, t.Body);
     }
 
     /// <summary>
@@ -202,14 +209,19 @@ public sealed class Recorder
         _round.ScoreT = scoreT;
         _round.ScoreCt = scoreCt;
         Array.Clear(_tally);
-        // Every round starts with each player in its own pawn.
+        // Every round starts with each player in its own pawn. A round resumed midway continues the
+        // takeover its file left open, so SetBody writes a row only if the body changed during the reload.
         Array.Fill(_body, Nil.V);
+        if (partial && _resumeRi == ri && (uint)_resumePi < Limits.MaxPlayers && (uint)_resumeBody < Limits.MaxPlayers)
+            _body[_resumePi] = _resumeBody;
+        _resumeRi = Nil.V;
         Array.Fill(_hp, Nil.V);
         Array.Fill(_lastPreHp, Nil.V);
         Array.Fill(_lastHurtTick, Nil.V);
         Planted = false;
         _plantTick = Nil.V;
         _eventWinner = _eventReason = Nil.V;
+        _roundEnded = false;
         _eng.Reset();
         Los.Reset();
         Array.Fill(_lastDet, Nil.V);
@@ -447,7 +459,9 @@ public sealed class Recorder
             // The driven pawn died: the bot it belonged to is out of the round too, and the takeover ends.
             _alive[vc] = false;
             _hp[vc] = 0;
-            if (_body[v] == vc) AddTakeover(k.Tick, v, Nil.V);
+            // A row's tick is the first tick of its state: the body still acted on the death tick (the
+            // fatal hit, a same-tick trade), so the end row is stamped one tick later.
+            if (_body[v] == vc) AddTakeover(k.Tick + 1, v, Nil.V);
         }
     }
 
@@ -854,6 +868,7 @@ public sealed class Recorder
     {
         if (!RoundActive || RoundFinalized) return;
         Live = false;
+        _roundEnded = true;
         _eventWinner = eventWinner;
         _eventReason = eventReason;
         if (_round.FreezeTick != Nil.V) _round.DurTicks = tick - _round.FreezeTick;
@@ -968,8 +983,13 @@ public sealed class Recorder
         if (Capturing) Submit(JobKind.InProgress);
     }
 
-    /// <summary>Ends the capture and writes the final file. A round still open is sealed with a null result.</summary>
-    public void EndCapture(string status, string endUtc, int tick)
+    /// <summary>
+    /// Ends the capture and writes the final file. A round still open is sealed as partial. If its
+    /// round_end was seen (the capture ended before the delayed Finalize: map end, map change, the
+    /// human leaving), its result is chosen as Finalize does, from <paramref name="resultCode"/> (Nil
+    /// when the round has no slot) or else the event; otherwise winSide and how stay null.
+    /// </summary>
+    public void EndCapture(string status, string endUtc, int tick, int resultCode = Nil.V)
     {
         if (!Capturing) return;
         if (RoundActive && !RoundFinalized)
@@ -978,6 +998,7 @@ public sealed class Recorder
             RoundFinalized = true;
             _eng.CloseAll(tick, _buf.Engagements);
             Los.HideAll(Ri, tick, _buf.Los);
+            if (_roundEnded) SetResult(_round, Ri, resultCode, _eventWinner, _eventReason);
             _buf.AddRound(_round);
             _buf.Perf.Add(TakePerf());
         }

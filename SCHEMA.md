@@ -183,13 +183,15 @@ Additions to v1; the version stays `1` and every field may be absent. Files from
 - When a round has no slot, or its code is not one `RoundResult` knows, `winSide` is the `round_end` event's `winner` (2 or 3) and `how` is its `reason` mapped as below. A known code still wins over the event.
 - Reasons mapped: 1 `bomb`, 7 `defuse`, 8 and 9 `elim`, 12 `time`. These were seen in regulation rounds; which reasons overtime rounds send has not been checked in game. An unmapped reason leaves `how` null and the round in `recon.unknownResult`.
 - Rounds before capture began (plugin loaded mid-match) get their result only from the array, so those past index 29 keep `winSide` and `how` null.
+- A capture that ends after `round_end` but before the plugin seals the round 1 s later (map end, map change, the human leaving) still gives that round its result the same way. At a map boundary the array cannot be read, so the result comes from the event. The round stays in `recon.partial`.
 
 ### `takeovers`
-`ri, tick, pi, body`. Each row means that from `tick`, controller `pi` drives the pawn of bot `body`; `body` null means it is back in its own pawn or in none.
+`ri, tick, pi, body`. Each row means that from `tick`, controller `pi` drives the pawn of bot `body`; `body` null means it is back in its own pawn or in none. A row's `tick` is always the first tick of its state, so an event at tick T belongs to the last row with `tick` ≤ T.
 - Only the human can take over a bot (after dying, by taking control of a living teammate bot), so `pi` is always `human`.
-- The plugin reads `m_hOriginalControllerOfCurrentPawn` on the human's controller once per tick while a round is live and writes a row when the bot it names changes.
+- The plugin reads `m_hOriginalControllerOfCurrentPawn` on the human's controller once per tick while a round is live, and again at the start of every event the human can cause (`player_hurt`, `player_death`, `player_blind`, `weapon_fire`, `grenade_thrown`). It writes a row when the bot it names changes, so the takeover row is never later than the human's first event in that body.
 - Every round starts with every player in its own pawn, so the state resets at round start and a round has no row until the human takes over.
-- A takeover ends when the body dies (a null row at the death tick) or at round end (no row). A bot whose pawn died cannot be taken over again in that round.
+- A takeover ends when the body dies, with a null row at the death tick + 1: the body still acted on the death tick (the fatal hit, a same-tick trade). Like `aim.los`'s hidden rows, the row marks the first tick of the new state. At round end it ends without a row. A bot whose pawn died cannot be taken over again in that round.
+- A plugin reloaded mid-round continues the takeover its in-progress file left open, and writes a row at the resume tick only if the human's body changed during the reload.
 - `kills.kBody`/`vBody` name the body for kills; this table also covers damage, blinds, throws, grenades, shots and positions, whose rows name only the controller. A row with that controller and a tick inside a takeover was made with the body's pawn.
 - `recon.dropped.takeovers`: rows lost to a full per-round buffer (64).
 

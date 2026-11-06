@@ -528,6 +528,7 @@ public static class MatchCodec
         ReadPerf(root.GetProperty("perf"), s);
         m.GrenadeCount = s.Grenades.Count;
         m.RoundCount = s.RoundCount;
+        if (s.Takeovers.Count > 0) m.LastTakeover = s.Takeovers[s.Takeovers.Count - 1];
         m.ThrowCount = s.Throws.Count;
     }
 
