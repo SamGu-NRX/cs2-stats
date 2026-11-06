@@ -1,0 +1,58 @@
+/* The Recorded demos card (views/DemosCard.tsx). The bar is the store against its cap, cut by why
+   each demo is kept; the legend and the list use the same swatches, and each carries its words too.
+   Nothing here moves: the figures change in place when a demo is pinned, deleted or the limits change.
+   The buttons keep the shared press feedback (.press), which --mo removes under reduced motion. */
+
+.demos .card__aside, .demos__folder { min-width: 0; }
+.demos__folder { max-width: min(420px, 48vw); padding-top: 2px; padding-bottom: 2px; }
+
+/* the reason swatches, one per group (data/demos.ts KeptAs) */
+.demos [data-as] { --sw: var(--ink3); }
+.demos [data-as="pinned"] { --sw: var(--cream); }
+.demos [data-as="moment"] { --sw: var(--cream2); }
+.demos [data-as="recent"] { --sw: var(--tan); }
+.demos [data-as="waiting"] { --sw: var(--ink2); }
+.demos [data-as="retry"] { --sw: var(--below); }
+.demos [data-as="unswept"] { --sw: var(--ink3); }
+.demos [data-as="missing"] { --sw: transparent; }
+
+.demos__space { display: grid; gap: 8px; margin-bottom: 14px; }
+.demos__figures { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+.demos__used { font: var(--disp-weight) 20px/1 var(--disp); font-variation-settings: var(--disp-axes); color: var(--ink); }
+.demos__bar { position: relative; display: flex; height: 10px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.demos__seg { height: 100%; background: var(--sw); }
+.demos__seg + .demos__seg { box-shadow: inset 1px 0 0 var(--bg1); }
+/* over the cap: the bar is scaled to what is kept, and the cap is a line across it */
+.demos__cap { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--poor); }
+.demos__legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink2); }
+.demos__legend li { display: inline-flex; align-items: center; gap: 6px; }
+.demos__legend i, .demos__kept i { width: 8px; height: 8px; border-radius: 2px; background: var(--sw); flex: none; }
+.demos__legend [data-as="missing"], .demos__kept [data-as="missing"] { box-shadow: inset 0 0 0 1px var(--ink3); }
+
+.demos__held, .demos__failure { display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--r-ctl); background: var(--bg2); box-shadow: inset 0 0 0 1px var(--line2); font-size: 13px; color: var(--ink2); }
+.demos__held { box-shadow: inset 2px 0 0 var(--poor), inset 0 0 0 1px var(--line2); }
+.demos__held b, .demos__failure b { color: var(--ink); font-weight: 600; }
+.demos__failure p { margin: 0; }
+.demos__note, .demos__empty { margin: 0 0 12px; }
+
+.demos__limits { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 18px; margin-bottom: 14px; }
+.demos__limit { display: grid; gap: 4px; }
+.demos__input { display: inline-flex; align-items: center; gap: 6px; }
+.demos__input .input { width: 76px; text-align: right; }
+.demos__bad { flex-basis: 100%; margin: 0; }
+
+.demos__list td.l, .demos__list th.l { text-align: left; }
+.demos__demo { display: inline-flex; align-items: baseline; gap: 8px; }
+.demos__demo b { color: var(--ink); font-weight: 600; }
+.demos__match { display: inline-flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; border-radius: 3px; }
+.demos__match:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) { .demos__match:hover .scorecell { text-decoration: underline; text-underline-offset: 3px; } }
+.demos__paired { font-size: 11px; }
+.demos__moment { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.demos__kept { display: inline-flex; align-items: center; gap: 6px; color: var(--ink2); }
+.demos__list tr[data-as="missing"] td { color: var(--ink3); }
+.demos__actions, .demos__confirm { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.demos__actions .btn[aria-pressed="true"] { color: var(--cream); }
+.demos__warn { margin-right: 6px; font-size: 12px; white-space: normal; max-width: 260px; text-align: right; }
+.btn--danger { background: var(--poor); color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .btn--danger:hover { background: #e2574a; } }
