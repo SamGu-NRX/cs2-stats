@@ -2,7 +2,7 @@
 // take over a living teammate bot. What he does in that body, and what is done to it, belongs to the
 // bot: the game's own per-round stats count it so, as CS Demo Manager does, and the plugin's kills
 // already name the body (kills.kBody, kills.vBody). Every table the adapter writes asks this one lookup.
-import { KILL_FLAG, type MatchFile } from "./schema";
+import { GRENADE_WEAPONS, KILL_FLAG, type MatchFile } from "./schema";
 
 /**
  * The body player `pi` was in at `tick` of round `ri`: its own (pi), a bot it drove, or null for none,
@@ -74,9 +74,15 @@ export function bodyLookup(m: MatchFile): BodyAt {
     if (bot) return;
     const key = `${ri}:${pi}`;
     const kills = killsOf.get(ri) ?? [];
-    const deaths = kills.filter((i) => K.victim[i] === pi && bodyEntry(K.vBody, i) === null).map((i) => K.tick[i]);
     const rows = rowsOf.get(key) ?? [];
     const driving = (tick: number) => rows.reduce<number | null>((b, [from, body]) => (from <= tick ? body : b), null) !== null;
+    // his own deaths: vBody null, or with the entry missing, a death the takeovers table does not put
+    // in a bot (with no table, nothing else names a body, so the event's controller is taken as it)
+    const ownDeath = (i: number) => {
+      const vb = bodyEntry(K.vBody, i);
+      return vb === null || (vb === undefined && !(table && driving(K.tick[i])));
+    };
+    const deaths = kills.filter((i) => K.victim[i] === pi && ownDeath(i)).map((i) => K.tick[i]);
     const alive = (aliveAt.get(key) ?? []).filter((tick) => !table || !driving(tick));
     const own = lives(m.rounds.alive0?.[ri]?.[pi] === 1, deaths, alive);
     plan.set(key, table ? fromTable(rows, pi, own) : fromKills(m, kills, pi, own, alive));
@@ -88,6 +94,9 @@ export function bodyLookup(m: MatchFile): BodyAt {
     return !s || (o?.observed && tick < s.seen) ? null : s.body;
   };
 }
+
+/** A kill by a grenade or its fire: linked to its grenades row, or with a grenade weapon. */
+export const grenadeKill = (m: MatchFile, i: number) => (m.kills.nade?.[i] ?? null) !== null || GRENADE_WEAPONS.has(m.weapons[m.kills.weapon[i]] ?? "");
 
 /** His own body's lives in a round, from the alive-at-freeze-end flag, his own deaths and his alive position rows (all sorted). */
 function lives(aliveAtStart: boolean, deaths: number[], alive: number[]): Life[] {
@@ -139,8 +148,10 @@ function fromTable(rows: [number, number | null][], pi: number, own: Life[]): Se
  * a segment.
  *
  * - Own body: each life. A last life whose end is not recorded but after which the kills name a bot
- *   ends at his last own-body evidence before that bot: a kill with kBody null, or an alive position
- *   row (none, and a life from round start, leaves no own segment).
+ *   ends at his last own-body evidence before that bot: a gun or knife kill with kBody null, or an
+ *   alive position row (none, and a life from round start, leaves no own segment). A grenade or fire
+ *   kill with kBody null is no evidence: the plugin writes null there when he has no pawn at all, as
+ *   when the grenade outlives him.
  * - Each bot, in the order the kills name them: it starts the tick after the segment before it if that
  *   segment ended at a recorded death and the bot is new to the round, else at its first kills row (a
  *   bot seen again after another body starts again only at its next row). It ends at its death, death
@@ -162,7 +173,7 @@ function fromKills(m: MatchFile, kills: number[], pi: number, own: Life[], alive
     const firstBot = seen.find(([tick]) => tick > last.from)?.[0];
     if (firstBot !== undefined) {
       const evidence = [
-        ...kills.filter((i) => K.killer[i] === pi && bodyEntry(K.kBody, i) === null).map((i) => K.tick[i]),
+        ...kills.filter((i) => K.killer[i] === pi && bodyEntry(K.kBody, i) === null && !grenadeKill(m, i)).map((i) => K.tick[i]),
         ...alive,
       ].filter((t) => t >= last.from && t < firstBot);
       if (evidence.length) last.to = Math.max(...evidence);

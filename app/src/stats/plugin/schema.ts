@@ -4,6 +4,12 @@
 export type Side = 2 | 3; // 2 = T, 3 = CT
 
 export type RoundHow = "elim" | "defuse" | "time" | "bomb";
+/**
+ * Weapons whose damage or kill comes from a thrown grenade or its fire, so the body that dealt it is
+ * the one that threw it, which may differ from the body (or no body) the thrower is in at the hit.
+ */
+export const GRENADE_WEAPONS: ReadonlySet<string> = new Set(["hegrenade", "inferno", "molotov", "incgrenade", "smokegrenade", "flashbang", "decoy"]);
+
 /** kills.flags bits (SCHEMA.md); suicide and freeze are plugin 1.0.0 additions */
 export const KILL_FLAG = { headshot: 1, wallbang: 2, smoke: 4, blind: 8, noscope: 16, air: 32, suicide: 64, freeze: 128 } as const;
 export type GrenadeType = "he" | "flash" | "smoke" | "molotov" | "decoy";

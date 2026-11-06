@@ -205,6 +205,51 @@ describe("rows made in a bot's body", () => {
     expect(t({ kBody: [null, B, null], vBody: [null, null, null] })).toEqual(["E1>H", "B>E2", "E1>H"]);
   });
 
+  it("read a death with no vBody entry inside a takeover as the bot's, so the dead human stays dead after it", () => {
+    // fails if the missing entry at 1400 is taken for his own death, or his real death at 1150 is
+    // missed, either of which brings his own body back after the end row at 1401: his hit at 1450 is in
+    // no body and left out
+    const kills: Kill[] = [[1150, E1, H, null, null], [1400, E1, H, null, null]];
+    const m = round(kills, [[1300, H, E2], [1450, H, E2]], { takeovers: { ri: [0, 0], tick: [1151, 1401], pi: [H, H], body: [A, null] } });
+    m.kills = { ...m.kills, kBody: undefined, vBody: undefined };
+    expect(hits(m)).toEqual(["1300 A>E2"]);
+  });
+
+  it("take no grenade kill with kBody null as evidence of the human's own body", () => {
+    // fails if a posthumous HE kill extends his own body: alive at freeze end, he kills E1 with a gun at
+    // 1100, his death is not recorded, his HE kills E2 at 1250 with kBody null (no pawn), and his kill at
+    // 1600 names A. His own body ends at 1100, so the hit at 1200 is in no body and left out
+    const kills: Kill[] = [[1100, H, E1, null, null], [1250, H, E2, null, null], [1600, H, E2, A, null]];
+    const m = round(kills, [[1100, H, E1], [1200, H, E2], [1600, H, E2]]);
+    m.kills.weapon = [0, 1, 0];
+    expect(hits(m)).toEqual(["1100 H>E1", "1600 A>E2"]);
+  });
+
+  it("credit a grenade or fire kill to the body that threw it, even after the thrower died", () => {
+    // fails if a grenade kill's kBody null, which the plugin writes when the thrower has no pawn at all,
+    // is read as his own body (the timeline puts him in none, so the attacker is cleared), or if a kBody
+    // naming the bot he drives at the kill outranks the throw. He throws an HE at 1100 and a molotov at
+    // 1120, dies at 1150, and they kill at 1210 and 1300
+    const two = (o: { links?: (number | null)[]; kBody?: (number | null)[] } = {}) => {
+      const kills: Kill[] = [[1150, E1, H, null, null], [1210, H, E2, o.kBody?.[0] ?? null, null], [1300, H, E1, o.kBody?.[1] ?? null, null]];
+      const m = round(kills, [], {
+        weapons: ["ak47", "hegrenade", "inferno"],
+        grenades: { ri: [0, 0], tick: [1200, 1250], thrower: [H, H], type: ["he", "molotov"], pos: [[0, 0, 0], [0, 0, 0]], throw: [0, 1] },
+        throws: { ri: [0, 0], tick: [1100, 1120], thrower: [H, H], type: ["he", "molotov"], pos: [[0, 0, 0], [0, 0, 0]] },
+      });
+      m.kills.weapon = [0, 1, 2];
+      m.kills.nade = [null, ...(o.links ?? [0, 1])];
+      return pluginToTables(m).kills.attacker_steamid.map((a) => (a === null ? null : NAME[a]));
+    };
+    expect(two()).toEqual(["E1", "H", "H"]);
+    // unlinked, the kill tick stands in and he is in no body there: the kill keeps no attacker
+    expect(two({ links: [null, null] })).toEqual(["E1", null, null]);
+    // linked, a kBody naming A at the kill is where he is then, not where the grenades were thrown
+    expect(two({ kBody: [A, A] })).toEqual(["E1", "H", "H"]);
+    // unlinked, a kBody naming A stands: nothing says when they were thrown
+    expect(two({ links: [null, null], kBody: [A, A] })).toEqual(["E1", "A", "A"]);
+  });
+
   it("give grenade damage with no grenade link a bot body only once the file has named that bot", () => {
     // fails if HE damage whose damage.nade is null is read at its hit tick like a bullet: A starts the
     // tick after the human's death at 1150 but is first named by his kill at 1300, so the HE hit at 1250

@@ -1,6 +1,8 @@
 // Round winners rebuilt from the scores (results.ts), on synthetic two-player files: the human (pi 0)
 // and one opponent (pi 1), whose score is [T, CT] at the start of each round.
 import { describe, expect, it } from "vitest";
+import { CS2RB } from "../model-params";
+import { derive } from "../derive";
 import { pluginToTables } from "./adapter";
 import { howFromEvidence, roundResults } from "./results";
 import type { MatchFile, Side } from "./schema";
@@ -226,6 +228,16 @@ describe("how a rebuilt round ended, from the end state at round_end", () => {
     expect(how({ ...m, rounds: { ...m.rounds, equipEnd: undefined } })).toBeNull();
   });
 
+  it("reads a death with no vBody entry through the body lookup", () => {
+    // fails if the missing entry is read as the controller's death: T kills the human at 2000, then the
+    // mate whose body the takeovers table says he drove from 2001, at 3000. Both CTs are dead
+    const m = round(2, [0, 0, 4000, 4000]);
+    m.kills = { ...kills([[2000, 0], [3000, 0]]), vBody: undefined };
+    m.takeovers = { ri: [0, 0], tick: [2001, 3001], pi: [0, 0], body: [1, null] };
+    expect(how(m)).toBe("elim");
+    expect(how({ ...m, takeovers: undefined })).toBeNull();
+  });
+
   it("ignores a freeze-time death of a T who was alive at freeze end", () => {
     // fails if a T killed in freeze time and respawned for the live round counts as dead, which here
     // contradicts his equipment at the end
@@ -247,8 +259,27 @@ describe("scores in a round the human sat out", () => {
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([3, 3]);
     // fails if the match score skips a rebuilt round the human sat out: all three go to his team
     expect(JSON.parse(pluginToTables(m).match.extra[0]!).final_score).toEqual([3, 0]);
+    // through an opponent when no teammate has a side; with no side at all, nothing is rebuilt
     m.rounds.side[1] = [null, 2, null];
+    expect(roundResults(m).winSide.slice(0, 2)).toEqual([3, 3]);
+    m.rounds.side[1] = [null, null, null];
     expect(roundResults(m).winSide.slice(0, 2)).toEqual([null, null]);
+  });
+
+  it("name each round's teams from the side the human's team played, so derive keeps every player on his team", () => {
+    // fails if a round the human sat out names the opponents as CT: derive reads the CT team from that
+    // name, which would put his CT teammate on the other team and flip the round's team mapping
+    const m = file([true, true, true], [3, 3, 3], { maxrounds: 6 });
+    m.players = { ...m.players, key: [...m.players.key, "B:mate"], name: [...m.players.name, "mate"], isBot: [...m.players.isBot, true], startSide: [...m.players.startSide, 3] };
+    m.rounds.side = [[3, 2, 3], [null, 2, 3], [3, 2, 3]];
+    m.rounds.equip = m.rounds.side.map(() => [4000, 4000, 4000]);
+    m.rounds.money = m.rounds.side.map(() => [800, 800, 800]);
+    const f = derive(pluginToTables(m), CS2RB);
+    const us = f.players.find((p) => p.id === m.players.key[0])!.team;
+    const teamOf = (id: string) => f.pr.filter((r) => f.players[r.pi].id === id).map((r) => [r.ri, r.side, r.team]);
+    expect(f.rounds.map((r) => r.ctTeam)).toEqual([us, us, us]);
+    expect(teamOf("B:mate")).toEqual([[0, "CT", us], [1, "CT", us], [2, "CT", us]]);
+    expect(teamOf("B:bot")).toEqual([[0, "T", 1 - us!], [1, "T", 1 - us!], [2, "T", 1 - us!]]);
   });
 });
 
