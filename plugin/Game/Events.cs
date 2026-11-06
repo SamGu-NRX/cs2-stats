@@ -243,6 +243,7 @@ public sealed partial class BotMatchStatsPlugin
                 VictimUtil = vs.DeathUtilTick == tick && vs.DeathWeapons > 0 ? vs.DeathUtil : vs.Util,
                 VictimBody = BodyPi(vslot),
                 KillerBody = attacker != null && attacker.IsValid ? BodyPi(attacker.Slot) : Nil.V,
+                AssisterBody = e.Assister is { IsValid: true } asst ? BodyPi(asst.Slot) : Nil.V,
             };
             // The victim's own value comes from the pre-hook, so a weapon picked up just before death counts.
             if (vs.DeathEquipTick == tick && vs.DeathEquip != Nil.V) rec.SetEquipNow(v, vs.DeathEquip);
@@ -287,7 +288,8 @@ public sealed partial class BotMatchStatsPlugin
             int tick = Server.TickCount;
             rec.Hurt(tick, a, v, e.DmgHealth, e.DmgArmor, e.Health,
                 weapon.Length == 0 ? Nil.V : rec.Weapons.Get(weapon), e.Hitgroup,
-                WeaponNames.IsBulletWeapon(weapon), WeaponNames.NadeSourceOf(weapon));
+                WeaponNames.IsBulletWeapon(weapon), WeaponNames.NadeSourceOf(weapon),
+                attacker != null && attacker.IsValid ? BodyPi(attacker.Slot) : Nil.V, BodyPi(e.Userid!.Slot));
             if (a != Nil.V && a == rec.HumanPi)
             {
                 // Raw reads only: validation data for IsVisibleToHuman (aim.hitMask).

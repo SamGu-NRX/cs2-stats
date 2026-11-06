@@ -69,6 +69,12 @@ public struct LeaveRow
     public int Ri, Tick, Pi, Alive;
 }
 
+/// <summary>From <see cref="Tick"/>, controller <see cref="Pi"/> drives the pawn of bot <see cref="Body"/>; Nil means its own pawn or none.</summary>
+public struct TakeoverRow
+{
+    public int Ri, Tick, Pi, Body;
+}
+
 public struct DamageRow
 {
     public int Ri, Tick, Attacker, Victim, Dmg, DmgArmor, Weapon, Hitgroup;

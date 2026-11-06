@@ -151,13 +151,24 @@ public class RecorderTests
     }
 
     [Fact]
-    public void UnknownResultCodeIsNullAndLogged()
+    public void UnknownResultCodeFallsBackToTheEvent()
     {
         _r.RoundEnd(2500, 3, 8);
         _r.Finalize(2, 2564);
+        Assert.Equal((3, RoundResult.HowElim), (_sink.Store.Round(0).WinSide, _sink.Store.Round(0).How));
+        Assert.Empty(_sink.Store.Meta.UnknownResults);
+        Assert.DoesNotContain(_warnings, w => w.Contains("MatchStats_RoundResults code 2"));
+        _r.EndCapture("complete", "2026-10-24T18:00:00Z", 2600);
+        Assert.Single(_warnings, w => w.Contains("came from round_end") && w.Contains("0 (code 2, winner 3, reason 8)"));
+    }
+
+    [Fact]
+    public void UnknownResultCodeWithoutEventIsNullAndLogged()
+    {
+        _r.Finalize(2, 2564);
         Assert.Equal(Nil.V, _sink.Store.Round(0).WinSide);
         Assert.Equal(Nil.V, _sink.Store.Round(0).How);
-        Assert.Contains(_warnings, w => w.Contains("UNKNOWN MatchStats_RoundResults code 2"));
+        Assert.Contains(_warnings, w => w.Contains("MatchStats_RoundResults code 2, round_end winner null reason null"));
         Assert.Equal(new[] { 0 }, _sink.Store.Meta.UnknownResults);
     }
 
@@ -274,6 +285,7 @@ public class RecorderTests
                     f.Spot0 = ((t / 40) + pi) % 3 == 0 ? 1u : 0u;
                 }
                 var meter = AllocMeter.Start(exact: measure && t % 64 == 0);
+                r.SetBody(t, 0, t % 640 < 320 ? Nil.V : 1); // a takeover row every 320 ticks
                 r.Tick(t);
                 if (t % 7 == 0)
                 {
@@ -299,6 +311,7 @@ public class RecorderTests
         Round(1, measure: true);
         Assert.True(sink.Store.Engagements.Count > 10);
         Assert.True(sink.Store.Shots.Count > 500);
+        Assert.True(sink.Store.Takeovers.Count >= 40, $"{sink.Store.Takeovers.Count} takeover rows"); // 20 changes per round
         Assert.Contains(sink.Store.Shots.Span.ToArray(), x => x.Smoke == 1);
         Assert.Equal(0, allocated);
         Assert.True(paused < 64, $"{paused} of 6400 ticks were paused by a GC"); // the zero check still covers almost every tick

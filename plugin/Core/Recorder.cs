@@ -18,8 +18,11 @@ public struct KillInput
     public bool AssistedFlash, HasKillerPos;
     public float KX, KY, KZ, VX, VY, VZ;
     public UtilCounts VictimUtil;
-    /// <summary>pi of the bot whose pawn the killer / victim controlled, else Nil.</summary>
-    public int KillerBody, VictimBody;
+    /// <summary>pi of the bot whose pawn the killer / victim / assister drove at the kill, else Nil.</summary>
+    /// <remarks>Nil by default: 0 is a valid pi, and an omitted body must not credit player 0.</remarks>
+    public int KillerBody = Nil.V, VictimBody = Nil.V, AssisterBody = Nil.V;
+
+    public KillInput() { }
 }
 
 public struct ShotInput
@@ -59,6 +62,8 @@ public sealed class Recorder
     private readonly Dictionary<string, int> _playerByKey = new(StringComparer.Ordinal);
     private readonly List<int> _partial = new();
     private readonly List<int> _unknownResults = new();
+    /// <summary>Rounds whose winSide or how came from round_end, logged once at the end of the capture.</summary>
+    private readonly List<string> _eventResults = new();
 
     private readonly int[] _team = new int[Limits.MaxPlayers];
     private readonly bool[] _alive = new bool[Limits.MaxPlayers];
@@ -67,6 +72,8 @@ public sealed class Recorder
     private readonly int[] _lastHurtTick = new int[Limits.MaxPlayers];
     private readonly int[] _equipNow = new int[Limits.MaxPlayers];
     private readonly Tally[] _tally = new Tally[Limits.MaxPlayers];
+    /// <summary>Per controller: pi of the bot whose pawn it drives this round, else Nil (see <see cref="SetBody"/>).</summary>
+    private readonly int[] _body = new int[Limits.MaxPlayers];
 
     private readonly RoundRow _round = new();
     private readonly EngagementTracker _eng;
@@ -127,7 +134,7 @@ public sealed class Recorder
     public void StartCapture(MatchMeta meta)
     {
         Meta = meta;
-        _players.Clear(); _playerByKey.Clear(); _partial.Clear(); _unknownResults.Clear();
+        _players.Clear(); _playerByKey.Clear(); _partial.Clear(); _unknownResults.Clear(); _eventResults.Clear();
         Weapons.Clear(); Places.Clear();
         Places.SetMap(meta.Map);
         _burst = new BurstTracker(1);
@@ -173,14 +180,15 @@ public sealed class Recorder
 
     /// <summary>
     /// Adds a round that happened before capture began, known only from the game's round results.
-    /// Every field other than winSide and how is null.
+    /// Every field other than winSide and how is null. <paramref name="resultCode"/> is Nil when the
+    /// round has no result slot (overtime); the caller logs that once, so it is not warned per round.
     /// </summary>
     public void AddPriorRound(int ri, int resultCode)
     {
         if (!Capturing) return;
         var row = new RoundRow();
         row.Reset(ri);
-        SetResult(row, ri, resultCode, Nil.V);
+        SetResult(row, ri, resultCode, Nil.V, Nil.V);
         _buf.AddRound(row);
         if (!_partial.Contains(ri)) _partial.Add(ri);
         if (LastRound == Nil.V || ri > LastRound) LastRound = ri;
@@ -194,6 +202,8 @@ public sealed class Recorder
         _round.ScoreT = scoreT;
         _round.ScoreCt = scoreCt;
         Array.Clear(_tally);
+        // Every round starts with each player in its own pawn.
+        Array.Fill(_body, Nil.V);
         Array.Fill(_hp, Nil.V);
         Array.Fill(_lastPreHp, Nil.V);
         Array.Fill(_lastHurtTick, Nil.V);
@@ -407,16 +417,24 @@ public sealed class Recorder
         {
             row.KX = AimMath.Round(k.KX); row.KY = AimMath.Round(k.KY); row.KZ = AimMath.Round(k.KZ);
         }
-        FillState(ref row, k.Tick, v);
+        // The pawn that died: the victim's own, or the bot's it drove.
+        int vc = Credited(v, k.VictimBody);
+        FillState(ref row, k.Tick, vc);
         _buf.Kills.Add(row);
 
         if (killer != Nil.V && killer == Meta.Human && k.Bullet && IsEnemy(killer, v))
             MergePen(k.Tick, (k.Flags & KillFlagWallbang) != 0 ? 1 : 0);
 
-        _tally[v].Deaths++;
-        if (killer != Nil.V && (uint)killer < Limits.MaxPlayers && IsEnemy(killer, v)) _tally[killer].Kills++;
+        // The tally credits pawns, as CSPerRoundStats_t does: a controller driving a bot's pawn scores
+        // for that bot. The row above keeps the controllers player_death names.
+        _tally[vc].Deaths++;
+        if (killer != Nil.V && (uint)killer < Limits.MaxPlayers)
+        {
+            int kc = Credited(killer, row.KBody);
+            if (IsEnemy(kc, vc)) _tally[kc].Kills++;
+        }
         int anyAssist = assister != Nil.V ? assister : flash;
-        if ((uint)anyAssist < Limits.MaxPlayers) _tally[anyAssist].Assists++;
+        if ((uint)anyAssist < Limits.MaxPlayers) _tally[Credited(anyAssist, k.AssisterBody)].Assists++;
 
         int human = Meta.Human;
         if (v == human) _eng.HumanDied(k.Tick, _buf.Engagements);
@@ -424,6 +442,35 @@ public sealed class Recorder
 
         _alive[v] = false;
         _hp[v] = 0;
+        if (vc != v)
+        {
+            // The driven pawn died: the bot it belonged to is out of the round too, and the takeover ends.
+            _alive[vc] = false;
+            _hp[vc] = 0;
+            if (_body[v] == vc) AddTakeover(k.Tick, v, Nil.V);
+        }
+    }
+
+    /// <summary>The pi a stat is credited to: the bot whose pawn <paramref name="pi"/> drove, else <paramref name="pi"/>.</summary>
+    private static int Credited(int pi, int body) => (uint)body < Limits.MaxPlayers ? body : pi;
+
+    /// <summary>
+    /// Per tick while live: <paramref name="body"/> is the bot whose pawn controller <paramref name="pi"/>
+    /// drives now, or Nil for its own pawn or none. A row is written only when it changes. A bot that
+    /// died this round cannot be driven, so a handle still naming its pawn after the takeover ended
+    /// reads as Nil. Allocation-free.
+    /// </summary>
+    public void SetBody(int tick, int pi, int body)
+    {
+        if (!RoundActive || !Live || (uint)pi >= Limits.MaxPlayers) return;
+        if ((uint)body >= Limits.MaxPlayers || body == pi || !_alive[body]) body = Nil.V;
+        if (_body[pi] != body) AddTakeover(tick, pi, body);
+    }
+
+    private void AddTakeover(int tick, int pi, int body)
+    {
+        _body[pi] = body;
+        _buf.Takeovers.Add(new TakeoverRow { Ri = Ri, Tick = tick, Pi = pi, Body = body });
     }
 
     private bool IsEnemy(int a, int b)
@@ -464,13 +511,17 @@ public sealed class Recorder
     }
 
     /// <param name="nadeType">GrenadeType of the damaging grenade (HE or fire), else Nil.</param>
-    public void Hurt(int tick, int attacker, int victim, int dmgHealth, int dmgArmor, int healthAfter, int weapon, int hitgroup, bool bullet, int nadeType)
+    /// <param name="attackerBody">pi of the bot whose pawn the attacker drove at the hit, else Nil; the damage tally credits it.</param>
+    /// <param name="victimBody">pi of the bot whose pawn the victim drove, else Nil. HP is tracked per pawn, so a lethal hit on a driven pawn is capped at that pawn's HP.</param>
+    public void Hurt(int tick, int attacker, int victim, int dmgHealth, int dmgArmor, int healthAfter, int weapon, int hitgroup, bool bullet, int nadeType,
+        int attackerBody = Nil.V, int victimBody = Nil.V)
     {
         if (!RoundActive || (uint)victim >= Limits.MaxPlayers) return;
-        int dmg = DamageCap.Cap(dmgHealth, healthAfter, _hp[victim], out int preHp, out bool unknown);
-        _hp[victim] = Math.Max(healthAfter, 0);
-        _lastPreHp[victim] = preHp;
-        _lastHurtTick[victim] = tick;
+        int pawn = Credited(victim, victimBody);
+        int dmg = DamageCap.Cap(dmgHealth, healthAfter, _hp[pawn], out int preHp, out bool unknown);
+        _hp[pawn] = Math.Max(healthAfter, 0);
+        _lastPreHp[pawn] = preHp;
+        _lastHurtTick[pawn] = tick;
         if (attacker == Nil.V || attacker == victim || (uint)attacker >= Limits.MaxPlayers) return;
         if (unknown) _buf.CapUnknown++;
 
@@ -479,10 +530,11 @@ public sealed class Recorder
             Ri = Ri, Tick = tick, Attacker = attacker, Victim = victim, Dmg = dmg, DmgArmor = dmgArmor,
             Weapon = weapon, Hitgroup = hitgroup, Nade = LinkNade(attacker, nadeType, tick),
         });
-        if (IsEnemy(attacker, victim))
+        int ac = Credited(attacker, attackerBody);
+        if (IsEnemy(ac, victim))
         {
-            _tally[attacker].Damage += dmg;
-            _tally[attacker].Hits++;
+            _tally[ac].Damage += dmg;
+            _tally[ac].Hits++;
         }
         if (attacker == Meta.Human)
         {
@@ -817,7 +869,10 @@ public sealed class Recorder
         _round.SurvPrimary[pi] = survivedWithPrimary ? 1 : 0;
     }
 
-    /// <summary>Seals the round with the game's result code and hands it to the worker as an in-progress write.</summary>
+    /// <summary>
+    /// Seals the round with the game's result code (Nil when the round has no result slot) and hands
+    /// it to the worker as an in-progress write.
+    /// </summary>
     public void Finalize(int resultCode, int tick)
     {
         if (!RoundActive || RoundFinalized) return;
@@ -825,31 +880,44 @@ public sealed class Recorder
         Live = false;
         _eng.CloseAll(tick, _buf.Engagements);
         Los.HideAll(Ri, tick, _buf.Los);
-        SetResult(_round, Ri, resultCode, _eventWinner);
-        if (_eventReason != Nil.V && RoundResult.FromEventReason(_eventReason, out int evHow) && _round.How != Nil.V && evHow != _round.How)
-            _warn($"Round {Ri}: round_end reason {_eventReason} disagrees with MatchStats_RoundResults code {resultCode}; the file uses the result code.");
+        SetResult(_round, Ri, resultCode, _eventWinner, _eventReason);
         _buf.AddRound(_round);
         _buf.Perf.Add(TakePerf());
         Submit(JobKind.InProgress);
     }
 
-    private void SetResult(RoundRow row, int ri, int code, int eventWinner)
+    /// <summary>
+    /// winSide and how from the MatchStats_RoundResults code when it is known. Otherwise (no slot: the
+    /// array holds 30 rounds, so overtime has none; or an unmapped code) from the round_end event:
+    /// winner 2/3, and the reason mapped by <see cref="RoundResult.FromEventReason"/>. Whatever neither
+    /// gives stays null and the round is listed in unknownResult.
+    /// </summary>
+    private void SetResult(RoundRow row, int ri, int code, int eventWinner, int eventReason)
     {
+        bool haveEvHow = RoundResult.FromEventReason(eventReason, out int evHow);
         if (RoundResult.FromMatchStatsCode(code, out int win, out int how))
         {
             row.WinSide = win;
             row.How = how;
             if (eventWinner != Nil.V && eventWinner != win)
                 _warn($"Round {ri}: round_end winner {eventWinner} disagrees with MatchStats_RoundResults code {code} (side {win}); the file uses the result code.");
+            if (haveEvHow && evHow != how)
+                _warn($"Round {ri}: round_end reason {eventReason} disagrees with MatchStats_RoundResults code {code}; the file uses the result code.");
+            return;
         }
-        else
-        {
-            row.WinSide = Nil.V;
-            row.How = Nil.V;
-            if (!_unknownResults.Contains(ri)) _unknownResults.Add(ri);
-            _warn($"Round {ri}: UNKNOWN MatchStats_RoundResults code {code}; winSide and how are null. Add the code to RoundResult once its meaning is verified.");
-        }
+        row.WinSide = eventWinner == 2 || eventWinner == 3 ? eventWinner : Nil.V;
+        row.How = haveEvHow ? evHow : Nil.V;
+        string source = code == Nil.V ? "no slot" : $"code {code}";
+        if (row.WinSide != Nil.V || row.How != Nil.V)
+            _eventResults.Add($"{ri} ({source}, winner {Show(eventWinner)}, reason {Show(eventReason)})");
+        if (row.WinSide != Nil.V && row.How != Nil.V) return;
+        if (!_unknownResults.Contains(ri)) _unknownResults.Add(ri);
+        // A prior round without a slot has no event either; the caller logs those once.
+        if (code == Nil.V && eventWinner == Nil.V && eventReason == Nil.V) return;
+        _warn($"Round {ri}: MatchStats_RoundResults {source}, round_end winner {Show(eventWinner)} reason {Show(eventReason)}; winSide {Show(row.WinSide)}, how {(row.How == Nil.V ? "null" : RoundResult.HowNames[row.How])}. Add the code or reason to RoundResult once its meaning is verified.");
     }
+
+    private static string Show(int v) => v == Nil.V ? "null" : v.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Compares this round's tallies with the game's per-round stats. <paramref name="have"/>[pi] is
@@ -913,6 +981,8 @@ public sealed class Recorder
             _buf.AddRound(_round);
             _buf.Perf.Add(TakePerf());
         }
+        if (_eventResults.Count > 0)
+            _warn($"winSide/how came from round_end for rounds without a known MatchStats_RoundResults code: {string.Join(", ", _eventResults)}.");
         Meta.Status = status;
         Meta.EndUtc = endUtc;
         Submit(JobKind.Final);
@@ -964,6 +1034,7 @@ public sealed class Recorder
         Array.Fill(_lastHurtTick, Nil.V);
         Array.Fill(_equipNow, Nil.V);
         Array.Clear(_tally);
+        Array.Fill(_body, Nil.V);
         _pendingShot = -1;
         Planted = false;
         _plantTick = Nil.V;

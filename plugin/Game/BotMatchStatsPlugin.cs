@@ -20,7 +20,7 @@ namespace BotMatchStats.Game;
 public sealed partial class BotMatchStatsPlugin : BasePlugin
 {
     public override string ModuleName => "BotMatchStats";
-    public override string ModuleVersion => "1.2.0";
+    public override string ModuleVersion => "1.3.0";
     public override string ModuleDescription => "Records bot matches into compact columnar files";
 
     private const int MaxSlots = 64;
@@ -170,6 +170,9 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (_disabled || _rec == null || !_mapGate.EntitiesReady) return;
         if (!_rec.Capturing || !_rec.Live) return;
         _tick = Server.TickCount;
+        // Before the sample-due return below: a takeover is recorded at the tick it is first seen.
+        // Only the human can take over a bot, so only its controller is read.
+        if (_humanSlot >= 0) _rec.SetBody(_tick, _slots[_humanSlot].Pi, BodyPi(_humanSlot));
 
         bool aim = _rec.NeedsAim, humanPos = _rec.HumanPosDue(_tick), botPos = _rec.BotPosDue(_tick), ct = _rec.CtSetupDue(_tick);
         if (!aim && !humanPos && !botPos && !ct) return;
@@ -582,10 +585,17 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (!postRound) BeginRoundMidway(r);
     }
 
+    /// <summary>
+    /// Rounds before capture began, from MatchStats_RoundResults. The array has 30 slots, so overtime
+    /// rounds loaded this way keep winSide and how null; that is logged once per call.
+    /// </summary>
     private void AddPriorRounds(int from, int to)
     {
         var results = _rules!.MatchStats_RoundResults;
-        for (int ri = from; ri < to; ri++) _rec!.AddPriorRound(ri, ri < results.Length ? results[ri] : 0);
+        for (int ri = from; ri < to; ri++) _rec!.AddPriorRound(ri, ri < results.Length ? results[ri] : Nil.V);
+        int firstMissing = Math.Max(from, results.Length);
+        if (firstMissing < to)
+            Log(LogLevel.Warning, $"rounds {firstMissing}-{to - 1} happened before capture and have no MatchStats_RoundResults slot ({results.Length}); their winSide and how are null.");
     }
 
     private void BeginRoundMidway(int r)
@@ -602,7 +612,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         var rec = _rec!;
         if (!rec.RoundActive || rec.RoundFinalized) return;
         var results = _rules!.MatchStats_RoundResults;
-        int code = rec.Ri >= 0 && rec.Ri < results.Length ? results[rec.Ri] : 0;
+        // Nil past the array's 30 slots (overtime): the recorder then takes the result from round_end.
+        int code = rec.Ri >= 0 && rec.Ri < results.Length ? results[rec.Ri] : Nil.V;
         rec.Finalize(code, _tick);
     }
 
