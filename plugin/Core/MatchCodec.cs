@@ -118,6 +118,12 @@ public static class MatchCodec
         Col(w, "pi", lv, static r => r.Pi); Col(w, "alive", lv, static r => r.Alive);
         w.WriteEndObject();
 
+        var to = s.Takeovers.Span;
+        w.WriteStartObject("takeovers");
+        Col(w, "ri", to, static r => r.Ri); Col(w, "tick", to, static r => r.Tick);
+        Col(w, "pi", to, static r => r.Pi); Col(w, "body", to, static r => r.Body);
+        w.WriteEndObject();
+
         WritePos(w, s.Pos.Span);
 
         w.WriteStartObject("aim");
@@ -312,6 +318,7 @@ public static class MatchCodec
         w.WriteNumber("grenades", s.TotalDropped("grenades", s.Grenades.Dropped));
         w.WriteNumber("throws", s.TotalDropped("throws", s.Throws.Dropped));
         w.WriteNumber("leaves", s.TotalDropped("leaves", s.Leaves.Dropped));
+        w.WriteNumber("takeovers", s.TotalDropped("takeovers", s.Takeovers.Dropped));
         w.WriteNumber("hitMask", s.TotalDropped("hitMask", s.HitMask.Dropped));
         w.WriteNumber("los", s.TotalDropped("los", s.Los.Dropped));
         w.WriteNumber("pos", s.TotalDropped("pos", s.Pos.Dropped));
@@ -509,6 +516,8 @@ public static class MatchCodec
         ReadGrenades(root.GetProperty("grenades"), s);
         ReadThrows(root.GetProperty("throws"), s);
         ReadLeaves(root.GetProperty("leaves"), s);
+        // Absent from files written before plugin 1.3.0.
+        if (root.TryGetProperty("takeovers", out var toEl)) ReadTakeovers(toEl, s);
         ReadPos(root.GetProperty("pos"), s);
         var aim = root.GetProperty("aim");
         ReadEngagements(aim.GetProperty("engagements"), s);
@@ -519,6 +528,7 @@ public static class MatchCodec
         ReadPerf(root.GetProperty("perf"), s);
         m.GrenadeCount = s.Grenades.Count;
         m.RoundCount = s.RoundCount;
+        if (s.Takeovers.Count > 0) m.LastTakeover = s.Takeovers[s.Takeovers.Count - 1];
         m.ThrowCount = s.Throws.Count;
     }
 
@@ -689,6 +699,13 @@ public static class MatchCodec
         var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick"));
         var pi = Ints(t.GetProperty("pi")); var alive = Ints(t.GetProperty("alive"));
         for (int i = 0; i < ri.Length; i++) s.Leaves.Add(new LeaveRow { Ri = ri[i], Tick = tick[i], Pi = pi[i], Alive = alive[i] });
+    }
+
+    private static void ReadTakeovers(JsonElement t, MatchStore s)
+    {
+        var ri = Ints(t.GetProperty("ri")); var tick = Ints(t.GetProperty("tick"));
+        var pi = Ints(t.GetProperty("pi")); var body = Ints(t.GetProperty("body"));
+        for (int i = 0; i < ri.Length; i++) s.Takeovers.Add(new TakeoverRow { Ri = ri[i], Tick = tick[i], Pi = pi[i], Body = body[i] });
     }
 
     private static void ReadThrows(JsonElement t, MatchStore s)

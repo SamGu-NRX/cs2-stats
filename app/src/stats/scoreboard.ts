@@ -3,7 +3,7 @@
 // hltv-exact.test.ts and VALIDATION.md; the rest state their own definition.
 import { enemyHit, hitDamage, type Ctx } from "./derive";
 import { SWING_TRADE_WINDOW_S } from "./rating3";
-import { kastRound, liveLeaves } from "./rules";
+import { kastRound, liveLeaves, survives } from "./rules";
 
 /** "Saved a teammate": killing an enemy who had hit that teammate in the last 2 s, while the teammate lives. Our window. */
 export const SAVE_WINDOW_S = 2;
@@ -83,7 +83,8 @@ export function scoreboard(c: Ctx): void {
       else if (m.kast) {
         // the first of A, S, T that earned the round (K is killRounds)
         if (list.some((k) => k.enemy && k.assister === p.pi && !k.flashAssist)) m.kastA = 1;
-        else if (m.survived) m.kastS = 1;
+        // KAST's S, which unlike `survived` does not end at a world death (rules.ts worldDeath)
+        else if (survives(list, p.pi, left.has(p.pi))) m.kastS = 1;
         else m.kastT = 1;
       }
       if (m.kills >= 2) m.multiKillRounds = 1;

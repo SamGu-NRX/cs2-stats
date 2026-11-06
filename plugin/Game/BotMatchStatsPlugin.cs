@@ -20,7 +20,7 @@ namespace BotMatchStats.Game;
 public sealed partial class BotMatchStatsPlugin : BasePlugin
 {
     public override string ModuleName => "BotMatchStats";
-    public override string ModuleVersion => "1.2.0";
+    public override string ModuleVersion => "1.3.0";
     public override string ModuleDescription => "Records bot matches into compact columnar files";
 
     private const int MaxSlots = 64;
@@ -170,6 +170,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (_disabled || _rec == null || !_mapGate.EntitiesReady) return;
         if (!_rec.Capturing || !_rec.Live) return;
         _tick = Server.TickCount;
+        // Before the sample-due return below: a takeover is recorded at the tick it is first seen.
+        SyncHumanBody(_tick);
 
         bool aim = _rec.NeedsAim, humanPos = _rec.HumanPosDue(_tick), botPos = _rec.BotPosDue(_tick), ct = _rec.CtSetupDue(_tick);
         if (!aim && !humanPos && !botPos && !ct) return;
@@ -286,6 +288,16 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (orig == Mem.InvalidHandle || orig == s.Handle || Mem.ByHandle(orig) == 0) return Nil.V;
         int bodySlot = (int)(orig & 0x7FFF) - 1;
         return (uint)bodySlot < MaxSlots ? _slots[bodySlot].Pi : Nil.V;
+    }
+
+    /// <summary>
+    /// Records a change of the pawn the human drives. Only the human can take over a bot, so only its
+    /// controller is read. Runs every live tick and at the start of every event the human can cause,
+    /// so a takeover row always precedes the human's first event in that body. Allocation-free.
+    /// </summary>
+    private void SyncHumanBody(int tick)
+    {
+        if (_humanSlot >= 0 && _rec is { Live: true }) _rec.SetBody(tick, _slots[_humanSlot].Pi, BodyPi(_humanSlot));
     }
 
     private void ReadFrame(int slot, ref PlayerFrame f, bool place)
@@ -541,6 +553,10 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private void ResumeCapture(MatchMeta meta, int roundsInFile, int gen)
     {
         var rules = _rules!;
+        // Housekeeping drains worker messages before it refreshes _tick, so _tick can be from the init
+        // or the previous housekeeping run. Everything this path writes (the midway round, a takeover
+        // row at the resume tick, the match-end deadline) uses the tick of the resume itself.
+        _tick = Server.TickCount;
         meta.RoundCount = roundsInFile;
         if (!Lifecycle.AcceptResume(gen, _mapGate.ScanGen, meta, _map, rules.GameStartTime, rules.TotalRoundsPlayed, rules.WarmupPeriod))
         {
@@ -559,7 +575,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         bool postRound = rules.RoundWinStatus != 0;
         int r = rules.TotalRoundsPlayed;
         AddPriorRounds(roundsInFile, r);
-        if (!postRound && roundsInFile <= r) BeginRoundMidway(r);
+        if (!postRound && roundsInFile <= r) { BeginRoundMidway(r); InitMidRound(); }
         Log(LogLevel.Information, $"resumed {meta.Id}; last known round {_rec.LastRound}");
         if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase))
         {
@@ -575,17 +591,52 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         var rules = _rules;
         if (rules == null || rules.WarmupPeriod || !rules.HasMatchStarted || _humanSlot < 0) return;
         if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase)) return; // nothing left to record
+        _tick = Server.TickCount; // as in ResumeCapture: _tick may predate the scan
         int r = rules.TotalRoundsPlayed;
         bool postRound = rules.RoundWinStatus != 0;
         StartCapture(postRound ? r : r + 1);
         AddPriorRounds(0, r);
-        if (!postRound) BeginRoundMidway(r);
+        if (!postRound) { BeginRoundMidway(r); InitMidRound(); }
     }
 
+    /// <summary>
+    /// A round joined midway has no freeze-end snapshot, so alive state comes from the live pawns. While
+    /// the human drives a bot, its own pawn is dead and the pawn it holds is the bot's. Then the human's
+    /// current body is recorded: a resumed file's open takeover was restored by BeginRound, so this
+    /// writes a row at the resume tick only if the body changed during the reload.
+    /// </summary>
+    private void InitMidRound()
+    {
+        var rec = _rec!;
+        if (!rec.RoundActive) return;
+        int body = BodyPi(_humanSlot);
+        for (int slot = 0; slot < MaxSlots; slot++)
+        {
+            ref var s = ref _slots[slot];
+            if (!s.Valid || s.Pi == Nil.V || (s.Team != 2 && s.Team != 3)) continue;
+            nint pawn = PawnOfSlot(slot);
+            bool alive = pawn != 0 && Mem.Alive(pawn) && !(slot == _humanSlot && body != Nil.V);
+            rec.SetAlive(s.Pi, alive, pawn != 0 ? Mem.Read<int>(pawn, Mem.Health) : 0);
+        }
+        if (body != Nil.V)
+        {
+            nint held = PawnOfSlot(_humanSlot);
+            rec.SetAlive(body, held != 0 && Mem.Alive(held), held != 0 ? Mem.Read<int>(held, Mem.Health) : 0);
+        }
+        SyncHumanBody(_tick);
+    }
+
+    /// <summary>
+    /// Rounds before capture began, from MatchStats_RoundResults. The array has 30 slots, so overtime
+    /// rounds loaded this way keep winSide and how null; that is logged once per call.
+    /// </summary>
     private void AddPriorRounds(int from, int to)
     {
         var results = _rules!.MatchStats_RoundResults;
-        for (int ri = from; ri < to; ri++) _rec!.AddPriorRound(ri, ri < results.Length ? results[ri] : 0);
+        for (int ri = from; ri < to; ri++) _rec!.AddPriorRound(ri, ri < results.Length ? results[ri] : Nil.V);
+        int firstMissing = Math.Max(from, results.Length);
+        if (firstMissing < to)
+            Log(LogLevel.Warning, $"rounds {firstMissing}-{to - 1} happened before capture and have no MatchStats_RoundResults slot ({results.Length}); their winSide and how are null.");
     }
 
     private void BeginRoundMidway(int r)
@@ -601,9 +652,19 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     {
         var rec = _rec!;
         if (!rec.RoundActive || rec.RoundFinalized) return;
-        var results = _rules!.MatchStats_RoundResults;
-        int code = rec.Ri >= 0 && rec.Ri < results.Length ? results[rec.Ri] : 0;
-        rec.Finalize(code, _tick);
+        rec.Finalize(ResultCodeOf(rec.Ri), _tick);
+    }
+
+    /// <summary>
+    /// Round <paramref name="ri"/>'s MatchStats_RoundResults code. Nil past the array's 30 slots
+    /// (overtime), and at a map boundary, where the gate is closed and game rules must not be read;
+    /// the recorder then takes the result from round_end.
+    /// </summary>
+    private int ResultCodeOf(int ri)
+    {
+        if (_rules == null || !_mapGate.EntitiesReady) return Nil.V;
+        var results = _rules.MatchStats_RoundResults;
+        return ri >= 0 && ri < results.Length ? results[ri] : Nil.V;
     }
 
     private void Reconcile()
@@ -652,7 +713,8 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         if (!rec.Capturing) return;
         _finalizeAt = Nil.V;
         Log(LogLevel.Information, $"capture abandoned ({why})");
-        rec.EndCapture("abandoned", MatchCodec.IsoUtc(DateTime.UtcNow), _tick);
+        // A round that reached round_end but not its delayed finalize still gets its result.
+        rec.EndCapture("abandoned", MatchCodec.IsoUtc(DateTime.UtcNow), _tick, ResultCodeOf(rec.Ri));
     }
 
     // Asks the native entity list directly; unlike Utilities' cached accessor, a failure here is not remembered.

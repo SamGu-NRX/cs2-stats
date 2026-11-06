@@ -1,5 +1,6 @@
 // Derive workers for a scan that finds many underived files: a first scan, or the first scan after
-// DERIVE_VERSION or the model changed, which re-derives every match. Reading and deriving are
+// DERIVE_VERSION changed, which re-derives every match (a model change only rates the kept facts again,
+// cached-facts.ts). Reading and deriving are
 // CPU-bound: one thread took 24 minutes for 1,091 pro maps, 1.3 s each. The stats worker hands the
 // files to these workers instead and keeps answering the UI; each derives one file at a time with the
 // same code (derive-file.ts) and asks the stats worker for the bytes, which it relays from the UI

@@ -584,6 +584,32 @@ const SHOW_NORMAL: i32 = windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNOR
 #[cfg(not(windows))]
 const SHOW_NORMAL: i32 = 1;
 
+/// The desktop smoke test (tools/desktop-smoke.mjs, the Tests workflow) runs the app with
+/// CS2_STATS_SMOKE=1, on fixture files in a temporary APPDATA. Bot Mode finds Steam and reads the CS2
+/// folder, and its startup cleanup can change that folder, so none of it runs then (setup, smoke_gate).
+fn smoke() -> bool {
+    std::env::var_os("CS2_STATS_SMOKE").is_some_and(|v| v == "1")
+}
+
+/// Whether this run is the desktop smoke test (`smoke`): the page then starts a derive pool even on a
+/// small CI machine, which would otherwise derive in one thread and never reach the pool.
+#[tauri::command]
+fn smoke_test() -> bool {
+    smoke()
+}
+
+/// In the smoke test, every Bot Mode command is refused before it looks for Steam (`smoke`).
+fn smoke_gate<R: tauri::Runtime>(handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    let on = smoke();
+    move |invoke| {
+        if on && invoke.message.command().starts_with("botmode_") {
+            invoke.resolver.reject("Bot Mode is off in the desktop smoke test (CS2_STATS_SMOKE)");
+            return true;
+        }
+        handler(invoke)
+    }
+}
+
 /// Opens an outside link in the system's default browser; an error says why it did not open.
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
@@ -654,7 +680,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Bot Mode left on by a session that lost its supervisor is dealt with at once.
         .setup(|_app| {
-            botmode::commands::on_app_start();
+            if !smoke() {
+                botmode::commands::on_app_start();
+            }
             // FFmpeg part files a crashed finish left behind; off the UI's start path
             std::thread::spawn(clips::on_app_start);
             Ok(())
@@ -670,8 +698,9 @@ pub fn run() {
             #[cfg(not(windows))]
             let _ = (webview, payload);
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(smoke_gate(tauri::generate_handler![
             list_matches,
+            smoke_test,
             read_match,
             import_match,
             read_pack,
@@ -725,7 +754,7 @@ pub fn run() {
             botmode::commands::botmode_change_files,
             botmode::commands::botmode_mod_commands,
             botmode::commands::botmode_set_launch_options,
-        ])
+        ]))
         .run(tauri::generate_context!())
         .expect("error while running CS2 Stats");
 }

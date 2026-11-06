@@ -16,6 +16,8 @@ public sealed class RoundBuffer
     public readonly FixedBuffer<GrenadeRow> Grenades = new(256);
     public readonly FixedBuffer<ThrowRow> Throws = new(256);
     public readonly FixedBuffer<LeaveRow> Leaves = new(64);
+    // One human controller; a takeover and its end are two rows, and a round has at most four teammates to take over.
+    public readonly FixedBuffer<TakeoverRow> Takeovers = new(64);
     public readonly FixedBuffer<HitMaskRow> HitMask = new(512);
     // Line-of-sight transitions: a few dozen per enemy in a real round; 2048 covers worst-case flicker.
     public readonly FixedBuffer<LosRow> Los = new(2048);
@@ -44,7 +46,7 @@ public sealed class RoundBuffer
 
     public void Clear()
     {
-        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Leaves.Clear(); HitMask.Clear(); Los.Clear(); Pos.Clear();
+        Kills.Clear(); Damage.Clear(); Blinds.Clear(); Grenades.Clear(); Throws.Clear(); Leaves.Clear(); Takeovers.Clear(); HitMask.Clear(); Los.Clear(); Pos.Clear();
         Engagements.Clear(); Shots.Clear(); Mismatches.Clear(); ReconRounds.Clear(); Perf.Clear();
         RoundCount = 0;
         CapUnknown = 0;

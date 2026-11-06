@@ -4,7 +4,8 @@ import { CACHE_TOO_NEW } from "./protocol";
 
 const DB = "cs2-stats-cache";
 /**
- * facts: MatchFacts and the file's origin label, by file key; entries: the MatchEntry of the same file;
+ * facts: MatchFacts with their rating inputs and the file's origin label, by facts key (derive-file.ts
+ * Cached); entries: the MatchEntry of the same file;
  * presence: the worker's presence answers (a map's sampled shape), with the file keys they were folded from.
  */
 export const STORES = ["facts", "entries", "presence"] as const;

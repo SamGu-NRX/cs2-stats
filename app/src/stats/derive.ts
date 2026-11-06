@@ -9,18 +9,18 @@ import { luck } from "./luck";
 import { closing } from "./closing";
 import { duels } from "./duels";
 import { buyTier, classifyBuy, isPistolRound, type BuyClass, type BuyTier } from "./economy";
-import { DERIVE_VERSION, emptyMeasures, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
+import { DERIVE_VERSION, emptyMeasures, sparse, type KillFact, type MatchFacts, type Measures, type OnScreenSource, type PlayerInfo, type PlayerRound, type RoundFact, type TotalsRound } from "./facts";
 import { guns } from "./guns";
 import { deriveInfo } from "./information";
 import { deriveMove } from "./movement";
-import { ecoAdjust, valuedRounds } from "./rating3";
+import { ecoGroups } from "./rating3";
 import { positioning } from "./positioning";
 import { markOpening, markTrades } from "./rules";
 import { rosterTables, type RosterTables } from "./roster";
 import { scoreboard } from "./scoreboard";
 import { sniping } from "./sniping";
-import { swing } from "./swing";
-import { modelFingerprint, type WinProbSource } from "./model-params";
+import type { WinProbSource } from "./model-params";
+import { rate, ratingInputs, type BaseFacts, type RatingInputs } from "./rate";
 import type { MatchTables, Side } from "./tables";
 import { grenadeFacts, logThrowScoped, markUtility, utility } from "./utility";
 import { derivePresence } from "./positions";
@@ -117,8 +117,6 @@ export type WorkRound = Omit<PlayerRound, "m"> & { m: Measures };
 export interface Ctx {
   /** the match's tables with the roster applied (roster.ts): no event of a player off their round's roster */
   t: RosterTables;
-  /** the round win-probability source (model-params.ts) */
-  wp: WinProbSource;
   tickRate: number;
   nRounds: number;
   map: string;
@@ -144,7 +142,7 @@ export interface Ctx {
   riOf: (round: number) => number | undefined;
 }
 
-export function buildCtx(t: RosterTables, wp: WinProbSource): Ctx {
+export function buildCtx(t: RosterTables): Ctx {
   const tickRate = t.match.tick_rate[0];
   const nRounds = t.rounds.n;
   // Rounds are addressed by row. Demos cover every round, but a source may cover only some (the
@@ -232,7 +230,7 @@ export function buildCtx(t: RosterTables, wp: WinProbSource): Ctx {
   const idOf = (id: string | null) => (id === null ? null : pi.get(id) ?? null);
 
   return {
-    t, wp, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, sampleAt, idOf, riOf,
+    t, tickRate, nRounds, map: t.match.map[0], pi, players, side, ctTeam, rounds: [], kills: [], pr: [], byRound, posAt, sampleAt, idOf, riOf,
   };
 }
 
@@ -381,17 +379,10 @@ function ticksSpan(c: Ctx): number | null {
   return c.nRounds && first !== null ? (r.end_tick[c.nRounds - 1] - first) / c.tickRate : null;
 }
 
-const sparse = (m: Measures): Partial<Measures> => Object.fromEntries(Object.entries(m).filter(([, v]) => v !== 0));
-
-/**
- * One match's facts. `wp` is the round win-probability source (model-params.ts winProbSource: HLTV's
- * lookup when its pack is installed, else CS2RB); swing and the win-probability path depend on it, so
- * cache facts by it too.
- */
 /** The shared indexes with the rounds, kills and player-rounds filled, before any family runs: what derive starts from, and what tools that fit a family's parameters read. */
-export function contextOf(t: MatchTables, wp: WinProbSource): Ctx {
+export function contextOf(t: MatchTables): Ctx {
   // the roster is applied to the tables here, once: every family reads events of rostered players only
-  const c = buildCtx(rosterTables(t), wp);
+  const c = buildCtx(rosterTables(t));
   c.rounds = roundFacts(c);
   c.kills = killFacts(c);
   for (const rf of c.rounds) {
@@ -403,8 +394,19 @@ export function contextOf(t: MatchTables, wp: WinProbSource): Ctx {
   return c;
 }
 
+/**
+ * One match's facts. `wp` is the round win-probability source (model-params.ts winProbSource: HLTV's
+ * lookup when its pack is installed, else CS2RB); the rating passes depend on it and on the rating
+ * parameters (rate.ts).
+ */
 export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
-  const c = contextOf(t, wp);
+  const { facts, inputs } = deriveBase(t);
+  return rate(facts, inputs, wp);
+}
+
+/** One match's facts before the rating passes, with what they need from the tables (rate.ts). */
+export function deriveBase(t: MatchTables): { facts: BaseFacts; inputs: RatingInputs } {
+  const c = contextOf(t);
   const { date, maxRounds, otMaxRounds, pov, roundsPlayed, startedAt, durationS, finalScore, status, throws, onScreen, totalsOnly, totalsRaw } = matchMeta(t);
 
   scoreboard(c);
@@ -415,9 +417,7 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   positioning(c);
   utility(c);
   markUtility(c);
-  ecoAdjust(c);
-  swing(c);
-  valuedRounds(c);
+  const freeze = ecoGroups(c);
   markSight(c);
   handling(c);
   luck(c);
@@ -429,12 +429,12 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
   for (const rf of c.rounds) if (rf.winner) counted[rf.winner === "CT" ? rf.ctTeam : 1 - rf.ctTeam]++;
   const score = finalScore ?? counted;
   const complete = status !== null ? status === "complete" : Math.max(...score) > maxRounds / 2 || (score[0] === score[1] && 2 * score[0] >= maxRounds);
-  return {
+  const facts: BaseFacts = {
     v: DERIVE_VERSION,
     match: {
       id: t.match.match_id[0], source: t.match.source[0], map: c.map, date, tickRate: c.tickRate, maxRounds,
       teams: [t.match.team_ct_start[0], t.match.team_t_start[0]], score, complete, nRounds: c.nRounds, visibility: t.match.visibility_status[0], pov,
-      roundsPlayed: roundsPlayed ?? c.nRounds, totalsOnly, startedAt, durationS: durationS ?? ticksSpan(c), winProb: wp.kind, model: modelFingerprint(wp),
+      roundsPlayed: roundsPlayed ?? c.nRounds, totalsOnly, startedAt, durationS: durationS ?? ticksSpan(c),
       inputs: { throws: throws ?? (t.grenade_throws && t.grenade_throws.n ? "logged" : null), onScreen, offRoster: c.t.roster.removed },
     },
     players: c.players, rounds: c.rounds,
@@ -442,4 +442,5 @@ export function derive(t: MatchTables, wp: WinProbSource): MatchFacts {
     kills: c.kills.flat(), weapons, grenades: grenadeFacts(c), clutches, presence: derivePresence(c), totalsRounds: totalsRoundsOf(totalsRaw, c.pi),
     aim: deriveAim(c), movement: deriveMove(c), aggression: deriveAggro(c), information: deriveInfo(c), utilq: deriveUtilQ(c),
   };
+  return { facts, inputs: ratingInputs(c, freeze) };
 }

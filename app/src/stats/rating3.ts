@@ -7,8 +7,9 @@
 // by params.json's per-side curves; the total is the sides' round-weighted mean (sideRating3, rating3Of).
 import { liveLeaves, survives } from "./rules";
 import { PARAMS as params } from "./model-params";
-import { enemyHit, hitDamage, loadouts, type Ctx } from "./derive";
+import { loadouts, type Ctx } from "./derive";
 import type { MatchFacts, Measures } from "./facts";
+import type { RateCtx } from "./rate";
 import { coveredEnough } from "./coverage";
 import { rollup, type Filter, type Summary } from "./rollup";
 import type { Side } from "./tables";
@@ -58,24 +59,24 @@ function duelWinProb(a: EcoGroup, b: EcoGroup, killerSide: Side): number {
 export const killPoints = (a: EcoGroup, b: EcoGroup, killerSide: Side) => params.duel.kill_points_scale * (1 - duelWinProb(a, b, killerSide));
 
 /**
- * Kill points on every kill, and the eco-adjusted measures (ecoKills, ecoDeaths, ecoDmg, ecoKast) on
- * the player-rounds where every eco value they need is known (ecoRounds 1). A player's group at a kill
- * comes from the best primary they held then (kills.a_/v_best_primary), else their equipment value;
- * damage uses the freeze-end groups. A kill, assist, death or hit whose groups are unknown leaves the
- * player-round out of every eco measure instead of counting it at its raw value, so each eco input is
- * a sum over ecoRounds divided by ecoRounds (rating3.ts valuedRounds).
+ * What the eco adjustment reads from the tables, none of which depends on the rating model: each
+ * player-round's freeze-end group (PlayerRound.ecoGroup: the best primary, else the equipment value),
+ * each enemy kill's groups (KillFact.aGroup, vGroup: the best primary held at the kill, else the
+ * equipment value, else the freeze-end group), and the eco events counted for the pros' percentile
+ * (ecoEvents, ecoEventsKnown). Returns the freeze-end groups by round row and player, for the damage
+ * ecoAdjust values (rate.ts RatingInputs.freeze).
  */
-export function ecoAdjust(c: Ctx): void {
+export function ecoGroups(c: Ctx): (EcoGroup | null)[][] {
   const k = c.t.kills;
   const pr = c.t.player_rounds;
-  const freeze = new Map<number, EcoGroup>();
+  const freeze: (EcoGroup | null)[][] = Array.from({ length: c.nRounds }, () => new Array<EcoGroup | null>(c.players.length).fill(null));
   for (let i = 0; i < pr.n; i++) {
     const p = c.pi.get(pr.steamid[i])!;
     const prim = pr.best_primary[i] === null ? null : weaponGroup(classFromDisplay(pr.best_primary[i]!));
     const g = prim ?? (pr.equip_value_game[i] === null ? null : groupFromEquip(pr.equip_value_game[i]!));
     const ri = c.riOf(pr.round[i]);
     if (g && ri !== undefined) {
-      freeze.set(ri * 1024 + p, g);
+      freeze[ri][p] = g;
       const r = c.pr[ri]?.[p];
       if (r) r.ecoGroup = g;
     }
@@ -84,7 +85,7 @@ export function ecoAdjust(c: Ctx): void {
     const prim = primary === null ? null : weaponGroup(classFromDisplay(primary));
     if (prim) return prim;
     if (equip !== null) return groupFromEquip(equip);
-    return freeze.get(ri * 1024 + p) ?? null;
+    return freeze[ri][p];
   };
   // kill rows by (tick, victim) to read the kills table's state for each KillFact
   const row = new Map<string, number>();
@@ -92,13 +93,6 @@ export function ecoAdjust(c: Ctx): void {
 
   const known = loadouts(c);
   for (let ri = 0; ri < c.nRounds; ri++) {
-    // Players with an eco event this round whose value cannot be computed. An eco value counts as known
-    // when both economy groups can be worked out, from the weapon or else the equipment value; it does
-    // not need both loadouts recorded. That stricter rule would null every plugin match's rating
-    // (plugin files record no loadouts) and remove a metric the user relies on. The stricter rule
-    // gates only the comparison with pros (INPUT_COVERAGE.eco, the `both` count below), so plugin
-    // ratings keep a value and get no percentile.
-    const unknown = new Set<number>();
     for (const kf of c.kills[ri]) {
       if (!kf.enemy) continue;
       // percentile coverage only: both players' loadouts recorded (INPUT_COVERAGE.eco)
@@ -108,26 +102,48 @@ export function ecoAdjust(c: Ctx): void {
         if (r) { r.m.ecoEvents++; if (both) r.m.ecoEventsKnown++; }
       }
       const i = row.get(`${kf.tick}:${c.players[kf.victim].id}`)!;
-      const ga = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
-      const gb = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);
-      kf.ecoPoints = ga && gb ? killPoints(ga, gb, kf.killerSide!) : null;
-      kf.aGroup = ga;
-      kf.vGroup = gb;
+      kf.aGroup = groupAt(ri, kf.killer!, k.a_best_primary[i], k.a_equip_value_game[i]);
+      kf.vGroup = groupAt(ri, kf.victim, k.v_best_primary[i], k.v_equip_value_game[i]);
+    }
+  }
+  return freeze;
+}
+
+/**
+ * Kill points on every enemy kill whose groups ecoGroups found, and the eco-adjusted measures (ecoKills,
+ * ecoDeaths, ecoDmg, ecoKast) on the player-rounds where every eco value they need is known (ecoRounds
+ * 1); damage uses the freeze-end groups. A kill, assist, death or hit whose groups are unknown leaves the
+ * player-round out of every eco measure instead of counting it at its raw value, so each eco input is
+ * a sum over ecoRounds divided by ecoRounds (rating3.ts valuedRounds).
+ */
+export function ecoAdjust(c: RateCtx): void {
+  const D = c.inputs.damages;
+  for (let ri = 0; ri < c.nRounds; ri++) {
+    // Players with an eco event this round whose value cannot be computed. An eco value counts as known
+    // when both economy groups can be worked out, from the weapon or else the equipment value; it does
+    // not need both loadouts recorded. That stricter rule would null every plugin match's rating
+    // (plugin files record no loadouts) and remove a metric the user relies on. The stricter rule
+    // gates only the comparison with pros (INPUT_COVERAGE.eco, ecoGroups), so plugin ratings keep a
+    // value and get no percentile.
+    const unknown = new Set<number>();
+    for (const kf of c.kills[ri]) {
+      if (!kf.enemy) continue;
+      kf.ecoPoints = kf.aGroup && kf.vGroup ? killPoints(kf.aGroup, kf.vGroup, kf.killerSide!) : null;
       if (kf.ecoPoints === null) {
         unknown.add(kf.killer!).add(kf.victim);
         if (kf.assister !== null && !kf.flashAssist) unknown.add(kf.assister);
       }
     }
     const dmg = new Map<number, number>();
-    for (const i of c.byRound("damages")[ri]) {
-      if (!enemyHit(c.t, i)) continue;
-      const a = c.idOf(c.t.damages.attacker_steamid[i]);
-      const v = c.pi.get(c.t.damages.victim_steamid[i])!;
-      const side = c.side[ri][a ?? -1];
+    for (const i of c.damagesBy[ri]) {
+      if (!D.enemy[i]) continue;
+      const a = D.attacker[i];
+      const v = D.victim[i];
+      const side = c.inputs.side[ri][a ?? -1];
       if (a === null || !c.pr[ri][a] || !side) continue;
-      const ga = freeze.get(ri * 1024 + a);
-      const gb = freeze.get(ri * 1024 + v);
-      if (ga && gb) dmg.set(a, (dmg.get(a) ?? 0) + hitDamage(c.t, i) * killPoints(ga, gb, side));
+      const ga = c.inputs.freeze[ri][a];
+      const gb = v === null ? null : c.inputs.freeze[ri][v];
+      if (ga && gb) dmg.set(a, (dmg.get(a) ?? 0) + D.dmg[i] * killPoints(ga, gb, side));
       else unknown.add(a);
     }
     const left = new Set(liveLeaves(c.rounds[ri]).map((l) => l.pi));
@@ -174,7 +190,7 @@ export type R3Inputs = Record<Feature | KillRounds, number>;
  * and ecoRounds 1) into the v* measures and counts it in ratedRounds, so Rating 3.0's inputs average
  * over one set of rounds. Runs after swing.
  */
-export function valuedRounds(c: Ctx): void {
+export function valuedRounds(c: RateCtx): void {
   for (const rows of c.pr) for (const p of rows) {
     if (!p || !p.m.swingRounds || !p.m.ecoRounds) continue;
     const m = p.m;

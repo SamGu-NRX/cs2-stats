@@ -82,6 +82,8 @@ export interface ImportResult { imported: string[]; skipped: { name: string; rea
 
 export interface Host {
   kind: "tauri" | "web";
+  /** the desktop smoke test is running the app (CS2_STATS_SMOKE=1, lib.rs smoke_test) */
+  smoke?: boolean;
   /** the match folder, or null when it is unknown (a browser without the dev server) */
   folder: string | null;
   list(): Promise<FileEntry[]>;
@@ -171,8 +173,10 @@ async function tauriHost(): Promise<Host> {
       stop();
     }
   }, () => invoke("valve_import_state"));
+  const smoke = await invoke<boolean>("smoke_test");
   return {
     kind: "tauri",
+    smoke,
     get folder() { return folder; },
     get valve() { return valve; },
     get pro() { return pro; },

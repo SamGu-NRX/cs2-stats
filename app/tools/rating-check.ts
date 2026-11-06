@@ -11,11 +11,14 @@ import { rollup } from "../src/stats/rollup";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { acceptedJoins, joinFromRecord } from "./demo-joins";
-import { HLTV_DIR, parseHltvMap } from "./hltv";
+import { HLTV_DIR, hltvRound1, parseHltvMap } from "./hltv";
 import { DATA_DIR, WINPROB, mapLabel, proMaps } from "./node-read";
 
 const cols = { KPR: [[], []], eKPR: [[], []], DPR: [[], []], eDPR: [[], []], ADR: [[], []], eADR: [[], []], KAST: [[], []], eKAST: [[], []], swing: [[], []], rating: [[], []], "rating CT": [[], []], "rating T": [[], []] } as Record<string, [number[], number[]]>;
 let maps = 0;
+// player-maps whose raw KAST (at HLTV's display rounding) and traded deaths equal HLTV's exactly
+let kastExact = 0;
+let tradedExact = 0;
 const joins = acceptedJoins(JSON.parse(readFileSync(process.env.CS2_DEMO_JOINS ?? path.join(DATA_DIR, "model-rating3", "demo_joins.json"), "utf-8")));
 console.log(`win probability: ${WINPROB.label}; ${joins.size} accepted joins`);
 for await (const { dir, t } of proMaps()) {
@@ -37,6 +40,8 @@ for await (const { dir, t } of proMaps()) {
     put("DPR", m.deaths / m.rounds, h.total.d / m.rounds);
     put("ADR", m.dmg / m.rounds, h.total.adr);
     put("KAST", (100 * m.kast) / m.rounds, h.total.kast);
+    if (hltvRound1((100 * m.kast) / m.rounds) === h.total.kast) kastExact++;
+    if (m.tradedDeaths === h.total.td) tradedExact++;
     put("eKPR", q.kpr_eco, h.total.eK / m.rounds);
     put("eDPR", q.dpr_eco, h.total.eD / m.rounds);
     put("eADR", q.adr_eco, h.total.eAdr);
@@ -49,6 +54,7 @@ for await (const { dir, t } of proMaps()) {
 }
 const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
 console.log(`joined ${maps} maps, ${cols.rating[0].length} player-maps`);
+console.log(`exact: KAST ${kastExact}, traded deaths ${tradedExact}`);
 for (const [c, [ours, theirs]] of Object.entries(cols)) {
   const mae = mean(ours.map((x, i) => Math.abs(x - theirs[i])));
   console.log(`${c.padEnd(9)} MAE ${mae.toFixed(4)}  r ${pearson(ours, theirs)?.toFixed(4) ?? "– (no spread)"}  mean ours ${mean(ours).toFixed(3)} HLTV ${mean(theirs).toFixed(3)}`);

@@ -63,6 +63,41 @@ jobs:
       - run: cargo test --lib --locked
         working-directory: app/src-tauri
 
+  desktop-smoke:
+    name: Desktop smoke test (Windows, WebView2)
+    # Builds the desktop app and runs it on the committed sample matches, then checks through WebView2's
+    # debugging port that Home and Data & settings show them (app/tools/desktop-smoke.mjs). A browser test
+    # cannot catch a failure that only WebView2 has: #85's derive workers failed to load there.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.85.0
+      # a debug build of the binary, unlike the rust job's test build, so its own cache
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: app/src-tauri
+          key: desktop-smoke
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: node tools/desktop-smoke.mjs config "$env:RUNNER_TEMP\smoke.conf.json"
+      - run: pnpm tauri build --debug --no-bundle --config "$env:RUNNER_TEMP\smoke.conf.json"
+      - run: node tools/desktop-smoke.mjs run src-tauri/target/debug/cs2-stats.exe
+
   extractor:
     name: Extractor tests (pytest)
     runs-on: ubuntu-latest
