@@ -133,7 +133,7 @@ describe("Bot Mode states", () => {
     expect(text(".bm-knifepick")).toContain("the mod's own \\ spawns every knife");
     expect(Array.from(document.querySelectorAll(".seg__item[data-on='true']"), (x) => x.textContent)).toEqual(["Mixed", "More", "Medium"]);
     expect($<HTMLInputElement>("#bm-launch-opts")!.value).toBe("+exec botmode");
-    expect(text(".bm-line")).toBe("steam.exe -applaunch 730 -insecure +exec botmode then Steam's own -novid -fullscreen -w 1280 -h 960");
+    expect(text(".bm-line")).toBe("steam.exe -applaunch 730 -insecure +exec botmode +tv_enable 1 +tv_autorecord 1 +tv_maxclients 0 then Steam's own -novid -fullscreen -w 1280 -h 960");
     expect(text(".bm-session .card__title")).toBe("Last session");
     // the history: changes of the user's (not session toggles), newest first, the newest undoable
     expect(Array.from(document.querySelectorAll(".bm-hist__what b"), (b) => b.textContent)).toEqual(["Settings", "Your builds applied", "Install v1.4.7"]);
@@ -382,8 +382,8 @@ describe("settings", () => {
     backend.state.running = [];
     await click(button(/Check again/));
     await click(button(/Launch Bot Mode/));
-    expect(text("dialog .bm-line")).toBe("steam.exe -applaunch 730 -insecure -novid -tickrate 128 then Steam's own -novid -fullscreen -w 1280 -h 960");
-    expect(text(".bm-hero .bm-line")).toContain("-insecure -novid -tickrate 128 then");
+    expect(text("dialog .bm-line")).toBe("steam.exe -applaunch 730 -insecure -novid -tickrate 128 +tv_enable 1 +tv_autorecord 1 +tv_maxclients 0 then Steam's own -novid -fullscreen -w 1280 -h 960");
+    expect(text(".bm-hero .bm-line")).toContain("-insecure -novid -tickrate 128 +tv_enable");
   });
 
   it("a setting put back to its saved value is no change, and leaves no stale baseline", async () => {
@@ -1197,5 +1197,44 @@ describe("privacy", () => {
     expect(text(".bm-folder")).toBe("CS2 folder <path>");
     expect(text(".bm-checks__detail")).toBe("\"<path>\" -insecure -novid -fullscreen -w 1280 -h 960");
     expect(document.body.innerHTML).not.toContain("steamapps");
+  });
+});
+
+describe("recording demos", () => {
+  const TOKENS = "+tv_enable 1 +tv_autorecord 1 +tv_maxclients 0";
+  const recordSwitch = () => $<HTMLInputElement>("#bm-rec")!;
+  const records = () => {
+    const dt = Array.from(dialog()!.querySelectorAll(".bm-facts dt")).find((d) => d.textContent === "Records");
+    return dt?.nextElementSibling?.textContent ?? "";
+  };
+
+  it("on by default: the launch adds the GOTV tokens; turning it off sends what was shown and drops them", async () => {
+    await render("installed");
+    expect(recordSwitch().checked).toBe(true);
+    expect(text(".bm-hero .bm-line")).toContain(`+exec botmode ${TOKENS}`);
+    await click(recordSwitch());
+    expect(sent("botmode_set_recording")).toEqual({ on: false, seen: true });
+    expect(recordSwitch().checked).toBe(false);
+    expect(text(".bm-hero .bm-line")).not.toContain("+tv_enable");
+    await click(button("Launch Bot Mode…"));
+    expect(records()).toBe("Nothing: recording demos is off.");
+  });
+
+  it("a refused change puts the switch back and says why", async () => {
+    const why = "recording changed since it was read (now off); nothing was written";
+    await render("installed", { botmode_set_recording: why });
+    await click(recordSwitch());
+    expect(recordSwitch().checked).toBe(true);
+    expect(text(".bm-rec [role='alert']")).toBe(why);
+  });
+
+  it("a disk under the floor: the launch goes without the tokens, and the switch and the dialog say why", async () => {
+    await render("low-disk");
+    const why = "Recording off this time: 9.4 GB free, floor 10 GB.";
+    expect(recordSwitch().checked).toBe(true);
+    expect(text(".bm-rec__what")).toBe(why);
+    expect(text(".bm-hero .bm-line")).not.toContain("+tv_enable");
+    await click(button("Launch Bot Mode…"));
+    expect(records()).toBe(why);
   });
 });

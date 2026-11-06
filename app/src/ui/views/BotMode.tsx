@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { UNREACHABLE, type BotModeApi, type Recovery, type Catalog, type Change, type Checked, type GithubRelease, type OverlayPlan, type ReleaseIndex, type RepairPlan, type RunningCs2, type ServerSettings, type SessionView, type Status, type UndoPlan } from "../../botmode/commands";
 import { Card } from "../components/Card";
+import { Switch } from "../components/controls";
 import { onRecoveryAnswered, recoveryAnswered } from "../components/BotModeRecovery";
 import { OutsideLink } from "../components/OutsideLink";
 import { toast } from "../components/overlay";
@@ -217,7 +218,7 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
 
   return (
     <div className="view__in bm">
-      <Hero status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} cfgUnread={cfgUnread} onCheck={() => void bm.reload()}
+      <Hero api={api} reload={bm.reload} status={status} session={session} running={bm.running} state={state} blocker={blocker} checking={bm.checking} pending={pending} cfgUnread={cfgUnread} onCheck={() => void bm.reload()}
         leaving={leaving} onLeaveOn={() => void leaveOn()}
         onTurnOff={(r, e) => setDialog({ kind: "recover", recovery: r, instant: fromKeyboard(e) })}
         onLaunch={(e) => setDialog({ kind: "launch", instant: fromKeyboard(e) })}
@@ -290,6 +291,11 @@ function Ready({ api, bm, status }: { api: BotModeApi; bm: ReturnType<typeof use
               : <dd><span className="mono">gameinfo.gi</span>: two search paths turn Bot Mode on. When CS2 exits, the session takes them out again if the file still holds what it wrote; if another tool changed the file meanwhile, it is left as that tool set it.</dd>}
             <dt>Watches</dt>
             <dd>Every CS2 of this install until it exits. One started without <span className="mono">-insecure</span> is closed.</dd>
+            <dt>Records</dt>
+            <dd>{status.recording.tokens.length > 0
+              ? <>This match, with GOTV, into CS2's <span className="mono">replays</span> folder. When CS2 exits, the app moves the demo into its own demos folder and reads it.</>
+              : status.recording.on && status.recording.blocked ? status.recording.blocked
+              : "Nothing: recording demos is off."}</dd>
           </dl>
           {pending && pending.changed.length > 0 && <>
             <p className="bm-dialog__lead">First, your {plural(pending.changed.length, "kept change")}:</p>
@@ -315,7 +321,8 @@ const EMPTY_SERVER: ServerSettings = { cosmetics: { droppedKnifeSkins: false, dr
 
 // ---------------------------------------------------------------- hero
 
-function Hero({ status, session, running, state, blocker, checking, pending, cfgUnread, leaving, onCheck, onLaunch, onRollback, onTurnOff, onLeaveOn }: {
+function Hero({ api, reload, status, session, running, state, blocker, checking, pending, cfgUnread, leaving, onCheck, onLaunch, onRollback, onTurnOff, onLeaveOn }: {
+  api: BotModeApi; reload: () => Promise<void>;
   status: Status; session: SessionView | null; running: RunningCs2[] | null; state: InstallState; blocker: string | null; checking: boolean; pending: Pending | null;
   /** why Launch waits for the server cfg to read, or null */
   cfgUnread: string | null;
@@ -385,6 +392,7 @@ function Hero({ status, session, running, state, blocker, checking, pending, cfg
           </button>
         </div>
       )}
+      {!status.unfinished && !recovery && <RecordSwitch api={api} status={status} reload={reload} />}
       {launchWhy && !status.unfinished && (
         <p className="meta bm-hero__why" id="bm-launch-why">
           {shown(launchWhy)}
@@ -403,9 +411,48 @@ function Hero({ status, session, running, state, blocker, checking, pending, cfg
 }
 
 /**
+ * Record demos: an app setting that applies at once (no game file changes), so a switch rather than a
+ * row of the setup draft. While the change saves, the switch shows where it is going; a refusal puts
+ * it back and says why. With recording on, a disk under the floor turns it off for this launch only,
+ * and the reason shows here as it does in the launch dialog.
+ */
+function RecordSwitch({ api, status, reload }: { api: BotModeApi; status: Status; reload: () => Promise<void> }) {
+  const r = status.recording;
+  const [want, setWant] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // the next status read carries the saved value; until then the switch shows the one asked for
+  useEffect(() => { setWant(null); }, [r.on]);
+  const toggle = async (on: boolean) => {
+    setWant(on);
+    setError(null);
+    try {
+      await api.setRecording(on, r.on);
+      await reload();
+    } catch (e) {
+      setWant(null);
+      setError(errorText(e));
+    }
+  };
+  return (
+    <div className="bm-rec">
+      <Switch id="bm-rec" checked={want ?? r.on} busy={want !== null} onChange={(on) => void toggle(on)} describedBy="bm-rec-what">
+        Record demos <span className="faint">(GOTV)</span>
+      </Switch>
+      <p className="meta bm-rec__what" id="bm-rec-what">
+        {r.on && r.blocked
+          ? <span className="bm-rec__off">{r.blocked}</span>
+          : "Each match is about 100 MB. Demos stay while they have clips worth rendering, then go."}
+      </p>
+      {error && <p className="bm-problem selectable" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+/**
  * The command a launch runs, as the backend builds it: -insecure always first, then the app's
- * options; Steam adds CS2's own. `options`: the app's options the launch will use, which are the
- * kept ones when a change to them waits, since the launch applies those first.
+ * options, then the recording tokens when this launch records; Steam adds CS2's own. `options`: the
+ * app's options the launch will use, which are the kept ones when a change to them waits, since the
+ * launch applies those first.
  */
 function LaunchLine({ status, options }: { status: Status; options: string }) {
   const shown = useShown();
@@ -413,6 +460,7 @@ function LaunchLine({ status, options }: { status: Status; options: string }) {
     <p className="bm-line mono selectable" aria-label="Launch command">
       <span className="faint">steam.exe -applaunch 730</span> <b className="bm-flag">-insecure</b>
       {options && <> <span>{shown(options)}</span></>}
+      {status.recording.tokens.length > 0 && <> <span className="bm-line__rec">{status.recording.tokens.join(" ")}</span></>}
       {status.steamLaunchOptions && <> <span className="bm-line__steam"><span className="faint">then Steam's own</span> {shown(status.steamLaunchOptions)}</span></>}
     </p>
   );

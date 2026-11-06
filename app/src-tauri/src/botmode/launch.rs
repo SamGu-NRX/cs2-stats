@@ -76,12 +76,31 @@ pub fn steam_args(options: &str) -> Result<Vec<String>, String> {
 pub struct LaunchPlan {
     pub steam_exe: String,
     pub args: Vec<String>,
+    /// Whether this launch records the match; its tokens are the end of `args`.
+    pub recording: crate::demos::Recording,
+}
+
+/// Before a launch that records: the demo sweep, leaving room for this match
+/// (`demos::RESERVE`), then the free-space check. A sweep that fails turns recording off for this
+/// launch, so the store never grows past its cap unchecked; the launch itself goes ahead.
+fn pre_launch(layout: &Layout, lock: &OpLock, app: &settings::AppSettings, steam_options: &str) -> crate::demos::Recording {
+    use crate::demos;
+    if !app.record_demos || demos::steam_conflict(steam_options).is_some() {
+        return demos::recording(app, Ok(0), Some(steam_options));
+    }
+    let swept = demos::Store::of(layout).and_then(|store| {
+        demos::sweep(&store, lock, &demos::Policy::of(app), None, demos::RESERVE, demos::game_build(layout).as_deref(), None)
+    });
+    match swept {
+        Ok(_) => demos::recording(app, demos::launch_free(layout), Some(steam_options)),
+        Err(e) => demos::recording(app, Err(format!("the demos folder could not be swept: {e}")), Some(steam_options)),
+    }
 }
 
 /// What the check on the started game found.
 /// Reads Steam's own CS2 launch options and refuses them when any token turns VAC back on:
-/// Steam adds them to every start. Not being able to read them is also a refusal.
-fn check_steam_options(steam: &SteamConfig) -> Result<(), String> {
+/// Steam adds them to every start. Not being able to read them is also a refusal. Returns them.
+fn check_steam_options(steam: &SteamConfig) -> Result<String, String> {
     let opts = steam
         .read_options()
         .map_err(|e| format!("could not read CS2's launch options in Steam, so Bot Mode will not launch: {e}"))?;
@@ -90,7 +109,7 @@ fn check_steam_options(steam: &SteamConfig) -> Result<(), String> {
             "CS2's launch options in Steam contain {t} (\"{opts}\"). Steam adds them to every start, which would turn VAC on with the mod loaded. Remove it in Steam > Counter-Strike 2 > Properties > Launch options."
         ));
     }
-    Ok(())
+    Ok(opts)
 }
 
 /// An interrupted or partly undone change leaves the game folder half-written; never start the
@@ -118,11 +137,11 @@ fn check_closed(probe: &dyn ProcessProbe, phase: Phase, running: &str) -> Result
 /// options must not turn VAC on, the mod must be installed, and `gameinfo.gi` must be readable.
 /// Turning Bot Mode on is the session's job (`session::begin`), right before the spawn. The
 /// caller holds `lock` until the game has been handed to Steam.
-pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _lock: &OpLock) -> Result<LaunchPlan, String> {
+pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, lock: &OpLock) -> Result<LaunchPlan, String> {
     check_closed(probe, Phase::LaunchPrepare, "CS2 is already running. Close it, then launch Bot Mode, so the game starts with -insecure.")?;
     check_no_unfinished(layout)?;
     settings::check_knife_file(layout)?;
-    check_steam_options(steam)?;
+    let steam_options = check_steam_options(steam)?;
     let mut missing = Vec::new();
     for r in REQUIRED {
         if !layout.confined(r)?.is_file() {
@@ -132,7 +151,10 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _
     if !missing.is_empty() {
         return Err(format!("the mod is not installed ({} missing); run `botmode install <tag>` first", missing.join(", ")));
     }
-    let args = steam_args(&settings::load_app(layout)?.launch_options)?;
+    let app = settings::load_app(layout)?;
+    let mut args = steam_args(&app.launch_options)?;
+    let recording = pre_launch(layout, lock, &app, &steam_options);
+    args.extend(recording.tokens.iter().cloned());
     let gi_path = layout.confined("gameinfo.gi")?;
     let text = std::fs::read_to_string(&gi_path).map_err(|e| format!("{}: {e}", gi_path.display()))?;
     gameinfo::enable(&text)?;
@@ -140,7 +162,7 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _
     if !steam_exe.is_file() {
         return Err(format!("{} not found", steam_exe.display()));
     }
-    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args })
+    Ok(LaunchPlan { steam_exe: steam_exe.display().to_string(), args, recording })
 }
 
 /// The last checks before Steam is asked to start the game: CS2 has not started meanwhile, no
@@ -149,7 +171,14 @@ pub fn prepare(layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig, _
 pub fn check_start(plan: &LaunchPlan, layout: &Layout, probe: &dyn ProcessProbe, steam: &SteamConfig) -> Result<(), String> {
     check_closed(probe, Phase::LaunchStart, "CS2 started while Bot Mode was getting ready; it was not launched again.")?;
     check_no_unfinished(layout)?;
-    check_steam_options(steam)?;
+    let steam_options = check_steam_options(steam)?;
+    // Steam's options were read again: one that now undoes the recording would make the dialog's
+    // "recording" untrue, so the launch stops and is prepared again
+    if !plan.recording.tokens.is_empty() {
+        if let Some(c) = crate::demos::steam_conflict(&steam_options) {
+            return Err(format!("CS2's launch options in Steam changed while Bot Mode got ready and now set {c}, which stops the recording; launch again"));
+        }
+    }
     if plan.args.get(2).map(String::as_str) != Some("-insecure") {
         return Err("internal error: a launch without -insecure was refused".into());
     }

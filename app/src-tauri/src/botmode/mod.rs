@@ -31,7 +31,7 @@ pub mod steam;
 pub mod vdf;
 
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 #[cfg(test)]
 mod tests;
 

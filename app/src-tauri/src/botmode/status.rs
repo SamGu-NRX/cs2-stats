@@ -92,6 +92,8 @@ pub struct Status {
     pub steam_launch_options: Option<String>,
     /// The app's own launch options, added after `-insecure`.
     pub launch_options: String,
+    /// Whether the next launch records the match, and why not (`demos::recording`).
+    pub recording: crate::demos::Recording,
     pub components: Vec<Component>,
     /// Protected user files and their hashes. Bot Mode never replaces them.
     pub protected: BTreeMap<String, String>,
@@ -255,6 +257,7 @@ pub fn status(
         }
     }
     let app = settings::load_app(layout)?;
+    let recording = crate::demos::recording(&app, crate::demos::launch_free(layout), steam_launch_options.as_deref());
     let (difficulty, active_profile) = settings::active_profile(&layout.csgo)?;
     Ok(Status {
         csgo: layout.csgo.display().to_string(),
@@ -269,6 +272,7 @@ pub fn status(
         active_profile,
         cosmetics: settings::read_cosmetics(&layout.csgo)?,
         steam_launch_options,
+        recording,
         launch_options: app.launch_options,
         components: comps,
         protected: scan.protected,
@@ -323,7 +327,11 @@ pub fn render(s: &Status) -> String {
         ),
     );
     line("Steam launch options", s.steam_launch_options.clone().unwrap_or_else(|| "(none found)".into()));
-    line("Bot Mode launch", format!("steam.exe -applaunch 730 -insecure {}", s.launch_options).trim_end().to_string());
+    let launch = [s.launch_options.as_str(), &s.recording.tokens.join(" ")].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ");
+    line("Bot Mode launch", format!("steam.exe -applaunch 730 -insecure {launch}").trim_end().to_string());
+    if let Some(why) = s.recording.blocked.as_deref().filter(|_| s.recording.on) {
+        line("Recording", why.to_string());
+    }
 
     o.push_str("\nComponents\n");
     o.push_str(&format!("  {:<22}{:>6}  {:<13}{:<14}{}\n", "name", "files", "state", "sha256", "notes"));

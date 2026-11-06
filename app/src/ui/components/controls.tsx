@@ -195,3 +195,31 @@ export function Select<T extends string>({ options, value, onChange, label, pref
     </>
   );
 }
+
+/**
+ * A setting that applies the moment it is flipped. It is a native checkbox with role="switch", so
+ * Space toggles it and a screen reader says "on" or "off". Like the segmented thumb, its thumb slides
+ * on pointer input and jumps on keyboard input. `busy`: a change is being saved; the switch shows
+ * where it is going and ignores presses until then.
+ */
+export function Switch({ id, checked, onChange, busy, disabled, describedBy, children }: {
+  id: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  busy?: boolean;
+  disabled?: boolean;
+  describedBy?: string;
+  children: ReactNode;
+}) {
+  const [instant, setInstant] = useState(false);
+  return (
+    <label className="switch" htmlFor={id} data-busy={busy || undefined} data-instant={instant || undefined}>
+      <input id={id} type="checkbox" role="switch" className="switch__input" checked={checked} disabled={disabled}
+        aria-busy={busy || undefined} aria-describedby={describedBy}
+        onKeyDown={() => setInstant(true)} onPointerDown={() => setInstant(false)}
+        onChange={(e) => { if (!busy) onChange(e.target.checked); }} />
+      <span className="switch__track" aria-hidden><span className="switch__thumb" /></span>
+      <span className="switch__label">{children}</span>
+    </label>
+  );
+}

@@ -103,6 +103,7 @@ export interface Status {
   cosmetics: CosmeticsState;
   steamLaunchOptions: string | null;
   launchOptions: string;
+  recording: Recording;
   components: Component[];
   /** protected user files -> SHA-256; never replaced */
   protected: Record<string, string>;
@@ -244,7 +245,23 @@ export type RecoverAnswer = { action: "off"; expectHash: string } | { action: "l
 export const UNPROTECTED_NOTICE =
   "Launch Bot Mode from this app. Starting CS2 from Steam while Bot Mode is on is not protected.";
 
-export interface AppSettings { launchOptions: string }
+export interface AppSettings { launchOptions: string; recordDemos: boolean; demoCapGb: number; demoFloorGb: number; demoKeepLast: number }
+
+/** What Bot Mode adds to record a match (src-tauri demos.rs TOKENS). */
+export const RECORD_TOKENS = ["+tv_enable", "1", "+tv_autorecord", "1", "+tv_maxclients", "0"] as const;
+
+/** Whether the next launch records the match (src-tauri demos.rs `recording`). */
+export interface Recording {
+  /** the setting */
+  on: boolean;
+  /** what the launch adds after the app's options: RECORD_TOKENS, or none when off or blocked */
+  tokens: string[];
+  /** why a launch with recording on won't record this time, for the launch dialog */
+  blocked: string | null;
+  /** bytes free on the disk CS2 records to; null when it could not be read */
+  free: number | null;
+  floor: number;
+}
 
 /** The installed BotRandomizer's cosmetic_catalog.json, as botmode_catalog reads it. */
 export interface Catalog {
@@ -402,6 +419,8 @@ export function botmodeOver(call: Call) {
     setCosmetics: (cosmetics: Cosmetics, seen?: Cosmetics, t: Target = {}) => call<Change>("botmode_set_cosmetics", { ...t, cosmetics, seen }),
     /** `seen`: the options as the caller showed them; refused when they have changed. */
     setLaunchOptions: (options: string, seen?: string, t: Target = {}) => call<AppSettings>("botmode_set_launch_options", { ...t, options, seen }),
+    /** Turns recording on or off; `seen`, the switch as shown, refuses it when it has changed since. App settings only. */
+    setRecording: (on: boolean, seen?: boolean, t: Target = {}) => call<AppSettings>("botmode_set_recording", { ...t, on, seen }),
     /** null when BotRandomizer has no catalog in the game folder. */
     catalog: (t: Target = {}) => call<Catalog | null>("botmode_catalog", { ...t }),
     serverCfg: (t: Target = {}) => call<ServerSettings>("botmode_server_cfg", { ...t }),
