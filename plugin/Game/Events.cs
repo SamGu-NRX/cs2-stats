@@ -244,7 +244,6 @@ public sealed partial class BotMatchStatsPlugin
                 VictimUtil = vs.DeathUtilTick == tick && vs.DeathWeapons > 0 ? vs.DeathUtil : vs.Util,
                 VictimBody = BodyPi(vslot),
                 KillerBody = attacker != null && attacker.IsValid ? BodyPi(attacker.Slot) : Nil.V,
-                AssisterBody = e.Assister is { IsValid: true } asst ? BodyPi(asst.Slot) : Nil.V,
             };
             // The victim's own value comes from the pre-hook, so a weapon picked up just before death counts.
             if (vs.DeathEquipTick == tick && vs.DeathEquip != Nil.V) rec.SetEquipNow(v, vs.DeathEquip);

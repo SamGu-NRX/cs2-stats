@@ -142,18 +142,18 @@ public class TakeoverTests
     }
 
     [Fact]
-    public void TakeoverRoundReconcilesWhenTheGameCreditsTheBody()
+    public void TakeoverRoundReconcilesOnTheGamesBasis()
     {
         Begin(0, 1000);
         _r.Hurt(2100, E1, H, 100, 0, 0, 0, 1, true, Nil.V);
         _r.Kill(KillBy(2100, E1, H));
         _r.SetBody(2200, H, C1);
-        // Driving C1: damage, a kill, and an assist all belong to C1 in CSPerRoundStats_t.
+        // Driving C1: damage and a kill belong to C1 in CSPerRoundStats_t; an assist stays with the controller H.
         _r.Hurt(2300, H, E1, 100, 0, 0, 0, 1, true, Nil.V, attackerBody: C1);
         _r.Kill(new KillInput { Tick = 2300, Killer = H, KillerBody = C1, Victim = E1, Assister = Nil.V, Weapon = 0, NadeType = Nil.V });
         _r.Hurt(2400, H, E2, 40, 0, 60, 0, 2, true, Nil.V, attackerBody: C1);
         _r.Hurt(2410, C2, E2, 60, 0, 0, 0, 1, true, Nil.V);
-        _r.Kill(new KillInput { Tick = 2410, Killer = C2, Victim = E2, Assister = H, AssisterBody = C1, Weapon = 0, NadeType = Nil.V });
+        _r.Kill(new KillInput { Tick = 2410, Killer = C2, Victim = E2, Assister = H, Weapon = 0, NadeType = Nil.V });
         // Lethal on C1's pawn, which has full HP although the controller H is already dead.
         _r.Hurt(2500, E3, H, 100, 0, 0, 0, 1, true, Nil.V, victimBody: C1);
         _r.Kill(new KillInput { Tick = 2500, Killer = E3, Victim = H, VictimBody = C1, Assister = Nil.V, Weapon = 0, NadeType = Nil.V });
@@ -163,8 +163,8 @@ public class TakeoverTests
         var game = new GameRoundStats[Limits.MaxPlayers];
         var have = new bool[Limits.MaxPlayers];
         for (int pi = 0; pi <= E3; pi++) have[pi] = true;
-        game[H] = new GameRoundStats { Deaths = 1 };
-        game[C1] = new GameRoundStats { Kills = 1, Deaths = 1, Assists = 1, Damage = 140 };
+        game[H] = new GameRoundStats { Deaths = 1, Assists = 1 };
+        game[C1] = new GameRoundStats { Kills = 1, Deaths = 1, Damage = 140 };
         game[C2] = new GameRoundStats { Kills = 1, Damage = 60 };
         game[E1] = new GameRoundStats { Kills = 1, Deaths = 1, Damage = 100 };
         game[E2] = new GameRoundStats { Deaths = 1 };

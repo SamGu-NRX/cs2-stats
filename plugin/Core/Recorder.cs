@@ -18,9 +18,9 @@ public struct KillInput
     public bool AssistedFlash, HasKillerPos;
     public float KX, KY, KZ, VX, VY, VZ;
     public UtilCounts VictimUtil;
-    /// <summary>pi of the bot whose pawn the killer / victim / assister drove at the kill, else Nil.</summary>
+    /// <summary>pi of the bot whose pawn the killer / victim drove at the kill, else Nil.</summary>
     /// <remarks>Nil by default: 0 is a valid pi, and an omitted body must not credit player 0.</remarks>
-    public int KillerBody = Nil.V, VictimBody = Nil.V, AssisterBody = Nil.V;
+    public int KillerBody = Nil.V, VictimBody = Nil.V;
 
     public KillInput() { }
 }
@@ -437,8 +437,9 @@ public sealed class Recorder
         if (killer != Nil.V && killer == Meta.Human && k.Bullet && IsEnemy(killer, v))
             MergePen(k.Tick, (k.Flags & KillFlagWallbang) != 0 ? 1 : 0);
 
-        // The tally credits pawns, as CSPerRoundStats_t does: a controller driving a bot's pawn scores
-        // for that bot. The row above keeps the controllers player_death names.
+        // CSPerRoundStats_t credits kills and deaths to the pawn: a controller driving a bot's pawn scores
+        // for that bot. Assists it credits to the controller (see SCHEMA.md, "Reconciliation basis").
+        // The row above keeps the controllers player_death names.
         _tally[vc].Deaths++;
         if (killer != Nil.V && (uint)killer < Limits.MaxPlayers)
         {
@@ -446,7 +447,7 @@ public sealed class Recorder
             if (IsEnemy(kc, vc)) _tally[kc].Kills++;
         }
         int anyAssist = assister != Nil.V ? assister : flash;
-        if ((uint)anyAssist < Limits.MaxPlayers) _tally[Credited(anyAssist, k.AssisterBody)].Assists++;
+        if ((uint)anyAssist < Limits.MaxPlayers) _tally[anyAssist].Assists++;
 
         int human = Meta.Human;
         if (v == human) _eng.HumanDied(k.Tick, _buf.Engagements);

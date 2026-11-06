@@ -553,6 +553,10 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
     private void ResumeCapture(MatchMeta meta, int roundsInFile, int gen)
     {
         var rules = _rules!;
+        // Housekeeping drains worker messages before it refreshes _tick, so _tick can be from the init
+        // or the previous housekeeping run. Everything this path writes (the midway round, a takeover
+        // row at the resume tick, the match-end deadline) uses the tick of the resume itself.
+        _tick = Server.TickCount;
         meta.RoundCount = roundsInFile;
         if (!Lifecycle.AcceptResume(gen, _mapGate.ScanGen, meta, _map, rules.GameStartTime, rules.TotalRoundsPlayed, rules.WarmupPeriod))
         {
@@ -587,6 +591,7 @@ public sealed partial class BotMatchStatsPlugin : BasePlugin
         var rules = _rules;
         if (rules == null || rules.WarmupPeriod || !rules.HasMatchStarted || _humanSlot < 0) return;
         if (Lifecycle.MatchOverAtResume(_winPanelSeen, rules.GamePhase)) return; // nothing left to record
+        _tick = Server.TickCount; // as in ResumeCapture: _tick may predate the scan
         int r = rules.TotalRoundsPlayed;
         bool postRound = rules.RoundWinStatus != 0;
         StartCapture(postRound ? r : r + 1);
