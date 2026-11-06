@@ -3326,13 +3326,13 @@ def main(argv=None) -> int:
                                    "<yyyymmddThhmmZ>_<map>_<sha8>.dem (local_import.py chooses it)")
     ap.add_argument("--result", type=Path, help="write the result JSON here")
     a = ap.parse_args(argv)
-    if a.source == "local" and not (a.name and LOCAL_NAME_RE.match(a.name)):
-        ap.error("--source local needs --name <yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name ends in "
-                 "the host's Steam name; local_import.py extracts these demos and chooses the name")
     # both outputs are checked before the demo is parsed; the result names the match's players
     check_output(a.out_dir, private=True, what="the extracted tables")
     if a.result:
         check_output(a.result, private=True, what="the extraction result")
+    if a.source == "local" and not (a.name and LOCAL_NAME_RE.match(a.name)):
+        ap.error("--source local needs --name <yyyymmddThhmmZ>_<map>_<sha8>.dem: a recorded demo's file name ends in "
+                 "the host's Steam name; local_import.py extracts these demos and chooses the name")
     res = extract_demo(a.dem, a.out_dir, a.source, a.mapdata, a.archive, json.loads(a.meta), name=a.name)
     if a.result:
         write_json(a.result, res, private=True, what="the extraction result", default=_json_default, indent=1)

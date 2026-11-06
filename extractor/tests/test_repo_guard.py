@@ -68,7 +68,8 @@ class TestExtractor:
     def test_extract_gets_past_the_guard_outside_the_repository(self, tmp_path):
         # a missing demo fails after the guard, which shows the guard let both paths through
         with pytest.raises(Exception) as e:
-            ex.main([str(tmp_path / "no.dem"), str(tmp_path / "map"), "--source", "local", "--result", str(tmp_path / "r.json")])
+            ex.main([str(tmp_path / "no.dem"), str(tmp_path / "map"), "--source", "local",
+                     "--name", "20261025T0335Z_de_dust2_abcdef12.dem", "--result", str(tmp_path / "r.json")])
         assert not isinstance(e.value, rg.OutputRefused)
 
     def test_the_valve_import_refuses_this_repository_even_where_no_git_folder_marks_it(self, tmp_path, monkeypatch, capsys):
